@@ -195,17 +195,18 @@ void LLAutoUpdateChecker::checkUpdateCoro()
                         if (assetObj.contains("size"))
                         {
                             double sizeBytes = 0.0;
-                            if (assetObj.at("size").is_number())
+                            const auto& sizeVal = assetObj.at("size");
+                            if (sizeVal.is_int64())
                             {
-                                sizeBytes = assetObj.at("size").as_double();
+                                sizeBytes = static_cast<double>(sizeVal.as_int64());
                             }
-                            else if (assetObj.at("size").is_int64())
+                            else if (sizeVal.is_uint64())
                             {
-                                sizeBytes = (double)assetObj.at("size").as_int64();
+                                sizeBytes = static_cast<double>(sizeVal.as_uint64());
                             }
-                            else if (assetObj.at("size").is_uint64())
+                            else if (sizeVal.is_double())
                             {
-                                sizeBytes = (double)assetObj.at("size").as_uint64();
+                                sizeBytes = sizeVal.as_double();
                             }
                             fileSizeMB = sizeBytes / (1024.0 * 1024.0);
                         }
