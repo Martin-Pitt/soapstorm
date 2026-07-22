@@ -1294,6 +1294,14 @@ bool idle_startup()
         LL_DEBUGS("AppInit") << "Initializing Window, show_connect_box = "
                              << show_connect_box << LL_ENDL;
 
+        // Auto-update check - check once on startup
+        static bool sHasCheckedForUpdates = false;
+        if (!sHasCheckedForUpdates)
+        {
+            sHasCheckedForUpdates = true;
+            LLAutoUpdateChecker::instance().checkForUpdate();
+        }
+
         // if we've gone backwards in the login state machine, to this state where we show the UI
         // AND the debug setting to exit in this case is true, then go ahead and bail quickly
         if ( mLoginStatePastUI && gSavedSettings.getBOOL("QuitOnLoginActivated") )
@@ -1347,14 +1355,7 @@ bool idle_startup()
             FSPanelLogin::giveFocus();
             // </FS:Ansariel> [FS Login Panel]
 
-            // <FS:Beq/> Auto-update check - check once at login screen
-            static bool sHasCheckedForUpdates = false;
-            if (!sHasCheckedForUpdates)
-            {
-                sHasCheckedForUpdates = true;
-                LLAutoUpdateChecker::instance().checkForUpdate();
-            }
-            // </FS:Beq/>
+
 
             // MAINT-3231 Show first run dialog only for Desura viewer
             if (gSavedSettings.getString("sourceid") == "1208_desura")
