@@ -77,9 +77,11 @@ void LLAutoUpdateChecker::checkUpdateCoro()
 
     LL_INFOS("AutoUpdate") << "Fetching update info from: " << UPDATE_CHECK_URL << LL_ENDL;
 
-    // Add headers for User-Agent (required by GitHub API)
+    // Add headers for User-Agent (required by GitHub API) and JSON format
     LLCore::HttpHeaders::ptr_t headers = std::make_shared<LLCore::HttpHeaders>();
     headers->append(HTTP_OUT_HEADER_USER_AGENT, "Soapstorm-Viewer-Updater");
+    headers->append(HTTP_OUT_HEADER_ACCEPT, "application/json");
+    headers->append(HTTP_OUT_HEADER_CONTENT_TYPE, "application/json");
 
     // Use getRawAndSuspend to get raw JSON instead of getAndSuspend which expects LLSD format
     LLSD result = httpAdapter->getRawAndSuspend(httpRequest, UPDATE_CHECK_URL, httpOpts, headers);
