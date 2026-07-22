@@ -136,7 +136,12 @@ void LLAutoUpdateChecker::checkUpdateCoro()
         if (!tagName.empty())
         {
             remoteVersion = tagName;
-            if (remoteVersion[0] == 'v')
+            size_t vPos = remoteVersion.find_last_of('v');
+            if (vPos != std::string::npos && vPos + 1 < remoteVersion.length() && std::isdigit(static_cast<unsigned char>(remoteVersion[vPos + 1])))
+            {
+                remoteVersion = remoteVersion.substr(vPos + 1);
+            }
+            else if (remoteVersion[0] == 'v')
             {
                 remoteVersion = remoteVersion.substr(1);
             }
