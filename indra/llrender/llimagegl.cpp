@@ -1840,6 +1840,14 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
 
     S32 gl_discard = discard_level - mCurrentDiscardLevel;
 
+    //-----------------------------------------------------------------------------------------------
+    GLenum error ;
+    while((error = glGetError()) != GL_NO_ERROR)
+    {
+        LL_WARNS() << "GL Error happens before reading back texture. Error code: " << error << LL_ENDL ;
+    }
+    //-----------------------------------------------------------------------------------------------
+
     //explicitly unbind texture
     gGL.getTexUnit(0)->unbind(mBindTarget);
     llverify(gGL.getTexUnit(0)->bindManual(mBindTarget, mTexName));
@@ -1881,13 +1889,7 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
         glGetTexLevelParameteriv(mTarget, is_compressed, GL_TEXTURE_COMPRESSED, (GLint*)&is_compressed);
     }
 
-    //-----------------------------------------------------------------------------------------------
-    GLenum error ;
-    while((error = glGetError()) != GL_NO_ERROR)
-    {
-        LL_WARNS() << "GL Error happens before reading back texture. Error code: " << error << LL_ENDL ;
-    }
-    //-----------------------------------------------------------------------------------------------
+
 
     LLImageDataLock lock(imageraw);
 

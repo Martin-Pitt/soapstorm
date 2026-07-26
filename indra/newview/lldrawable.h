@@ -84,7 +84,7 @@ public:
     virtual void setVisible(LLCamera& camera_in, std::vector<LLDrawable*>* results = NULL, bool for_select = false);
 
     LLSpatialGroup* getSpatialGroup()const          {return (LLSpatialGroup*)getGroup();}
-    LLViewerRegion* getRegion()               const { return mVObjp->getRegion(); }
+    LLViewerRegion* getRegion()               const { return mVObjp ? mVObjp->getRegion() : nullptr; }
     const LLTextureEntry* getTextureEntry(U8 which) const { return mVObjp->getTE(which); }
     LLPointer<LLViewerObject>& getVObj()                              { return mVObjp; }
     const LLViewerObject *getVObj() const                         { return mVObjp; }

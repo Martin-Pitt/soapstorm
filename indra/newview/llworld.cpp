@@ -731,6 +731,9 @@ void LLWorld::removeRegion(LLViewerRegion* regionp)
 
     updateWaterObjects();
 
+    // Kill all objects in this region before double checking.
+    gObjectList.killObjects(regionp);
+
     //double check all objects of this region are removed.
     gObjectList.clearAllMapObjectsInRegion(regionp) ;
     //llassert_always(!gObjectList.hasMapObjectInRegion(regionp)) ;

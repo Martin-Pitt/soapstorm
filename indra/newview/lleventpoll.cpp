@@ -395,9 +395,13 @@ namespace Details
                             // convert data to string and pass that string.
                             const LLSD body = (*i)["body"];
                             (*i)["body"].clear();
-                            work = [this, msg_name, body]()
+                            std::weak_ptr<LLEventPollImpl> self = shared_from_this();
+                            work = [self, msg_name, body]()
                             {
-                                handleMessage(msg_name, body);
+                                if (auto shared_self = self.lock())
+                                {
+                                    shared_self->handleMessage(msg_name, body);
+                                }
                             };
                         }
                         main_queue->post(work);

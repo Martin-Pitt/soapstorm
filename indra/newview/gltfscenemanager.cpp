@@ -786,9 +786,24 @@ void GLTFSceneManager::bindTexture(Asset& asset, TextureType texture_type, Textu
                 if (channel != -1 && texture.mSampler != -1)
                 { // set sampler state
                     Sampler& sampler = asset.mSamplers[texture.mSampler];
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, sampler.mWrapS);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, sampler.mWrapT);
-                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, sampler.mMagFilter);
+                    GLint wrap_s = sampler.mWrapS;
+                    if (wrap_s != GL_CLAMP_TO_EDGE && wrap_s != GL_MIRRORED_REPEAT && wrap_s != GL_REPEAT)
+                    {
+                        wrap_s = GL_REPEAT;
+                    }
+                    GLint wrap_t = sampler.mWrapT;
+                    if (wrap_t != GL_CLAMP_TO_EDGE && wrap_t != GL_MIRRORED_REPEAT && wrap_t != GL_REPEAT)
+                    {
+                        wrap_t = GL_REPEAT;
+                    }
+                    GLint mag_filter = sampler.mMagFilter;
+                    if (mag_filter != GL_NEAREST && mag_filter != GL_LINEAR)
+                    {
+                        mag_filter = GL_LINEAR;
+                    }
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap_s);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_t);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag_filter);
 
                     // NOTE: do not set min filter.  Always respect client preference for min filter
                 }
