@@ -4654,11 +4654,7 @@ LLColor4 LLVOAvatar::getNameTagColor()
 
     LGGContactSets::getInstance()->hasFriendColorThatShouldShow(getID(), ContactSetType::TAG, color);
 
-    LLNetMap::getAvatarMarkColor(getID(), color);
-
     // Group-based nameplate tinting: override with group color if one is set.
-    // Contact set colors are checked first above; group color applies on top of base
-    // but contact sets take priority if they produce a non-default color.
     {
         LLUUID active_group = isSelf() ? gAgent.getGroupID() : mActiveGroupID;
         if (active_group.notNull())
@@ -4670,6 +4666,10 @@ LLColor4 LLVOAvatar::getNameTagColor()
             }
         }
     }
+
+    // A mark is an explicit per-avatar override, so it is applied last and wins
+    // over contact set and group tinting.
+    LLNetMap::getAvatarMarkColor(getID(), color);
 
     return color;
 }
