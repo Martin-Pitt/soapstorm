@@ -3174,10 +3174,12 @@ void LLViewerWindow::draw()
                                     targetName = avatarName.getCompleteName();
                                 }
 
-                                // Name color: contact set color first, then group-based
+                                // Name color: mark color first (an explicit per-avatar
+                                // override), then contact set color, then group-based
                                 // nameplate tint, then the default nameplate color.
                                 LLColor4 nameColor;
-                                if (!contact_sets.hasFriendColorThatShouldShow(targetKey, ContactSetType::MINIMAP, nameColor))
+                                if (!LLNetMap::getAvatarMarkColor(targetKey, nameColor) &&
+                                    !contact_sets.hasFriendColorThatShouldShow(targetKey, ContactSetType::MINIMAP, nameColor))
                                 {
                                     // Default nameplate color, same logic as LLVOAvatar::getNameTagColor()
                                     nameColor = LLUIColorTable::instance().getColor("NameTagLegacy", LLColor4::white);
