@@ -2910,6 +2910,8 @@ void LLAgent::endAnimationUpdateUI()
         {
         // </FS:PP>
 
+        if (!mViewsPushed)
+        {
         // clean up UI
         // first show anything hidden by UI toggle
         gViewerWindow->setUIVisibility(true);
@@ -2991,6 +2993,7 @@ void LLAgent::endAnimationUpdateUI()
 
         // <FS:PP> FIRE-8868: Show UI in mouselook
         gConsole->setVisible( true );
+        }
 
         } // Check ends here, anything below will be executed regardless of its state
 
