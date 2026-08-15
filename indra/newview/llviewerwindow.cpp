@@ -792,15 +792,15 @@ public:
             gPipeline.mNumVisibleNodes = LLPipeline::sVisibleLightCount = 0;
         }
 
-        // <SS:Nexii> Projectile stale/ghost probing
+        // <SS:Nexii> Projectile ghost probing
         static LLCachedControl<bool> debug_show_soapstorm_projectiles_info(gSavedSettings, "DebugShowSoapstormProjectilesInfo", false);
         if (debug_show_soapstorm_projectiles_info())
         {
             addText(xpos, ypos, llformat("Projectiles: %u", gObjectList.getNumLikelyProjectileObjects()));
             ypos += y_inc;
-            addText(xpos, ypos, llformat("Stale projectiles dropped: %u", gObjectList.getNumStaleProjectileObjectsDropped()));
+            addText(xpos, ypos, llformat("Ghost projectiles dropped: %u", gObjectList.getNumGhostProjectileObjectsDropped()));
             ypos += y_inc;
-            addText(xpos, ypos, llformat("Stale projectiles watched: %d", gObjectList.getNumStaleProjectileObjectsWatched()));
+            addText(xpos, ypos, llformat("Ghost projectiles watched: %d", gObjectList.getNumGhostProjectileObjectsWatched()));
             ypos += y_inc;
         }
         // </SS:Nexii>

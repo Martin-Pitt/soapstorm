@@ -138,13 +138,13 @@ public:
     
     // <SS:Nexii>
     U32 getNumLikelyProjectileObjects() const { return mNumLikelyProjectileObjects; }
-    U32 getNumStaleProjectileObjectsDropped() const { return mNumStaleProjectileObjectsDropped; }
-    void recordStaleProjectileDrop();
+    U32 getNumGhostProjectileObjectsDropped() const { return mNumGhostProjectileObjectsDropped; }
+    void recordGhostProjectileDrop();
     void updateProjectileObjectTracking(bool was_likely_projectile, bool is_likely_projectile);
-    S32 getNumStaleProjectileObjectsWatched() const { return (S32) mStaleProjectileWatchList.size(); }
-    void addToStaleProjectileWatch(LLViewerObject* objectp);
-    void removeFromStaleProjectileWatch(LLViewerObject* objectp);
-    void idleUpdateStaleProjectiles(const F64& frame_time);
+    S32 getNumGhostProjectileObjectsWatched() const { return (S32) mGhostProjectileWatchList.size(); }
+    void addToGhostProjectileWatch(LLViewerObject* objectp);
+    void removeFromGhostProjectileWatch(LLViewerObject* objectp);
+    void idleUpdateGhostProjectiles(const F64& frame_time);
     // </SS:Nexii>
 
     void addToMap(LLViewerObject *objectp);
@@ -215,8 +215,8 @@ public:
     
     // <SS:Nexii>
     U32 mNumLikelyProjectileObjects;
-    U32 mNumStaleProjectileObjectsDropped;
-    std::vector<LLPointer<LLViewerObject> > mStaleProjectileWatchList;
+    U32 mNumGhostProjectileObjectsDropped;
+    std::vector<LLPointer<LLViewerObject> > mGhostProjectileWatchList;
     // </SS:Nexii>
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects

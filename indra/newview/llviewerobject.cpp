@@ -293,9 +293,9 @@ LLViewerObject::LLViewerObject(const LLUUID &id, const LLPCode pcode, LLViewerRe
     mLastInterpUpdateSecs(0.f),
     mLastMessageUpdateSecs(0.f),
     mLastProjectileExistenceProbeSecs(0.f),
-    mStaleProjectileWatchStartSecs(0.f),
-    mStaleProjectileProbeCount(0),
-    mOnStaleProjectileWatch(false),
+    mGhostProjectileWatchStartSecs(0.f),
+    mGhostProjectileProbeCount(0),
+    mOnGhostProjectileWatch(false),
     mLatestRecvPacketID(0),
     mRegionCrossExpire(0),
     mData(NULL),
@@ -363,7 +363,7 @@ LLViewerObject::LLViewerObject(const LLUUID &id, const LLPCode pcode, LLViewerRe
     LLViewerObject::sNumObjects++;
 }
 
-// <SS:Nexii> Projectile stale/ghost probing
+// <SS:Nexii> Projectile ghost probing
 void LLViewerObject::updateProjectileHeuristicTag(const LLVector3& velocity)
 {
     const bool was_likely_projectile = mLikelyProjectileBullet;
@@ -407,14 +407,14 @@ void LLViewerObject::updateProjectileHeuristicTag(const LLVector3& velocity)
     gObjectList.updateProjectileObjectTracking(was_likely_projectile, mLikelyProjectileBullet);
 }
 
-F64Seconds LLViewerObject::getStaleProjectileProbeThreshold()
+F64Seconds LLViewerObject::getGhostProjectileProbeThreshold()
 {
     // Bullets legitimately go a long time between updates - the simulator sends one terse
     // update and the viewer interpolates the rest of the flight. Anything inside
     // sMaxUpdateInterpolationTime is normal traffic, so the ghost threshold starts where the
     // viewer's own interpolation gives up and adds a tunable grace period on top.
-    static LLCachedControl<F32> stale_projectile_probe_delay(gSavedSettings, "FSStaleProjectileProbeDelay", 2.f);
-    return sMaxUpdateInterpolationTime + F64Seconds(llmax(0.f, (F32)stale_projectile_probe_delay));
+    static LLCachedControl<F32> ghost_projectile_probe_delay(gSavedSettings, "FSSoapstormGhostProjectileProbeDelay", 2.f);
+    return sMaxUpdateInterpolationTime + F64Seconds(llmax(0.f, (F32)ghost_projectile_probe_delay));
 }
 
 // Briefly select and deselect the object server-side. An object the simulator no longer
@@ -431,12 +431,12 @@ void LLViewerObject::maybeRequestProjectileExistenceCheck(const F64SecondsImplic
 {
     if (!mLikelyProjectileBullet || !mRegionp || mDead || mLocalID == 0) return;
 
-    if (time_since_last_update < getStaleProjectileProbeThreshold()) return;
+    if (time_since_last_update < getGhostProjectileProbeThreshold()) return;
 
     const F64Seconds PROBE_INTERVAL(3.0);
     if (frame_time - mLastProjectileExistenceProbeSecs < PROBE_INTERVAL) return;
 
-    LL_DEBUGS("Projectile") << "Probing stale projectile " << getID() << " ("
+    LL_DEBUGS("Projectile") << "Probing ghost projectile " << getID() << " ("
                             << time_since_last_update.value() << "s since last update)" << LL_ENDL;
 
     mLastProjectileExistenceProbeSecs = frame_time;
@@ -447,18 +447,18 @@ void LLViewerObject::maybeRequestProjectileExistenceCheck(const F64SecondsImplic
 // rest or a region crossing leftover the simulator no longer knows about. Either way it is
 // about to go mStatic, which takes it out of interpolateLinearMotion() (and, for LLVOVolume,
 // off the active list entirely) so nothing probes it any more. Hand it to the object list.
-void LLViewerObject::beginStaleProjectileWatch()
+void LLViewerObject::beginGhostProjectileWatch()
 {
-    if (mOnStaleProjectileWatch || mDead || !mRegionp || mLocalID == 0) return;
+    if (mOnGhostProjectileWatch || mDead || !mRegionp || mLocalID == 0) return;
 
-    mStaleProjectileWatchStartSecs = F64Seconds(LLFrameTimer::getElapsedSeconds());
-    // mStaleProjectileProbeCount is deliberately not reset here - it is reset only when the
+    mGhostProjectileWatchStartSecs = F64Seconds(LLFrameTimer::getElapsedSeconds());
+    // mGhostProjectileProbeCount is deliberately not reset here - it is reset only when the
     // simulator sends a fresh update, so an object that already exhausted its probe budget
     // cannot be re-armed frame after frame.
-    gObjectList.addToStaleProjectileWatch(this);
+    gObjectList.addToGhostProjectileWatch(this);
 }
 
-bool LLViewerObject::idleUpdateStaleProjectile(const F64SecondsImplicit& frame_time)
+bool LLViewerObject::idleUpdateGhostProjectile(const F64SecondsImplicit& frame_time)
 {
     // Stop watching once the object is gone, stopped looking like a projectile, or started
     // moving again (in which case interpolateLinearMotion() covers it once more).
@@ -468,13 +468,13 @@ bool LLViewerObject::idleUpdateStaleProjectile(const F64SecondsImplicit& frame_t
         return false;
     }
 
-    const F64Seconds STALE_PROJECTILE_PROBE_INTERVAL(3.0);
-    const U32 STALE_PROJECTILE_MAX_PROBES = 3;
-    const F64Seconds stale_threshold = getStaleProjectileProbeThreshold();
+    const F64Seconds GHOST_PROJECTILE_PROBE_INTERVAL(3.0);
+    const U32 GHOST_PROJECTILE_MAX_PROBES = 3;
+    const F64Seconds ghost_threshold = getGhostProjectileProbeThreshold();
 
-    // Give the object the full probe budget after it goes stale before abandoning the watch.
-    if (frame_time - mStaleProjectileWatchStartSecs >
-        stale_threshold + STALE_PROJECTILE_PROBE_INTERVAL * (F64)(STALE_PROJECTILE_MAX_PROBES + 1))
+    // Give the object the full probe budget after it goes silent before abandoning the watch.
+    if (frame_time - mGhostProjectileWatchStartSecs >
+        ghost_threshold + GHOST_PROJECTILE_PROBE_INTERVAL * (F64)(GHOST_PROJECTILE_MAX_PROBES + 1))
     {
         mGhostedProjectileBullet = false;
         return false;
@@ -483,27 +483,27 @@ bool LLViewerObject::idleUpdateStaleProjectile(const F64SecondsImplicit& frame_t
     // Still hearing from the simulator about this object, so it is not a ghost yet. Keep
     // watching - it only becomes interesting once the updates stop for long enough.
     const F64Seconds time_since_last_update = frame_time - mLastMessageUpdateSecs;
-    if (time_since_last_update < stale_threshold) return true;
+    if (time_since_last_update < ghost_threshold) return true;
 
-    if (frame_time - mLastProjectileExistenceProbeSecs < STALE_PROJECTILE_PROBE_INTERVAL) return true;
+    if (frame_time - mLastProjectileExistenceProbeSecs < GHOST_PROJECTILE_PROBE_INTERVAL) return true;
 
-    if (mStaleProjectileProbeCount >= STALE_PROJECTILE_MAX_PROBES)
+    if (mGhostProjectileProbeCount >= GHOST_PROJECTILE_MAX_PROBES)
     {
         // Probed repeatedly without the simulator killing it or updating it. Stop generating
         // traffic for it.
         LL_DEBUGS("Projectile") << "Object " << getID() << " survived "
-                                << mStaleProjectileProbeCount
-                                << " existence probes, dropping stale projectile watch." << LL_ENDL;
+                                << mGhostProjectileProbeCount
+                                << " existence probes, dropping ghost projectile watch." << LL_ENDL;
         mGhostedProjectileBullet = false;
         return false;
     }
 
-    LL_DEBUGS("Projectile") << "Probing static stale projectile " << getID() << " (probe "
-                            << (mStaleProjectileProbeCount + 1) << ", "
+    LL_DEBUGS("Projectile") << "Probing static ghost projectile " << getID() << " (probe "
+                            << (mGhostProjectileProbeCount + 1) << ", "
                             << time_since_last_update.value() << "s since last update)" << LL_ENDL;
 
     mLastProjectileExistenceProbeSecs = frame_time;
-    ++mStaleProjectileProbeCount;
+    ++mGhostProjectileProbeCount;
     sendProjectileExistenceProbe();
     return true;
 }
@@ -2611,11 +2611,11 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
 
         // <SS:Nexii> A likely projectile that WAS !mStatic but is now static may have crossed a
         // region boundary and become a ghost. Setting mStatic here stops interpolateLinearMotion()
-        // from ever running for it again, so register it for stale probing before that happens.
+        // from ever running for it again, so register it for ghost probing before that happens.
         if (mLikelyProjectileBullet && !mStatic)
         {
             LL_DEBUGS("Projectile") << "Object " << getID() << " was a likely projectile bullet, but is now static.  It may have crossed a region boundary and become a ghost." << LL_ENDL;
-            beginStaleProjectileWatch();
+            beginGhostProjectileWatch();
         }
         // </SS:Nexii>
 
@@ -2687,10 +2687,10 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
         mDrawable->updateSpecialHoverCursor(special_hover_cursor);
     }
 
-    // <SS:Nexii> A fresh simulator update clears stale/ghost projectile state and re-arms the
-    // stale probe budget
+    // <SS:Nexii> A fresh simulator update clears ghost projectile state and re-arms the
+    // ghost probe budget
     mGhostedProjectileBullet = false;
-    mStaleProjectileProbeCount = 0;
+    mGhostProjectileProbeCount = 0;
     // </SS:Nexii>
 
     return retval;
@@ -2741,13 +2741,13 @@ void LLViewerObject::idleUpdate(LLAgent &agent, const F64 &frame_time)
             }
         }
         // <SS:Nexii> Static projectiles are skipped by interpolateLinearMotion() above, so a
-        // stale one has to be probed from here. Objects whose isActive() drops with mStatic are
+        // ghost one has to be probed from here. Objects whose isActive() drops with mStatic are
         // off the active list and never reach this - they are covered by the object list's
-        // stale projectile watch instead.
+        // ghost projectile watch instead.
         else if (mStatic && mLikelyProjectileBullet && !isSelected()
-                 && !mOnStaleProjectileWatch && mStaleProjectileProbeCount == 0)
+                 && !mOnGhostProjectileWatch && mGhostProjectileProbeCount == 0)
         {
-            beginStaleProjectileWatch();
+            beginGhostProjectileWatch();
         }
         // </SS:Nexii>
 
@@ -2775,7 +2775,7 @@ void LLViewerObject::interpolateLinearMotion(const F64SecondsImplicit& frame_tim
         return;
     }
 
-    // <SS:Nexii> Lightweight stale projectile existence probing. Placed ahead of the branches
+    // <SS:Nexii> Lightweight ghost projectile existence probing. Placed ahead of the branches
     // below so it covers moving, phased-out and fully stalled projectiles alike.
     maybeRequestProjectileExistenceCheck(frame_time, time_since_last_update);
     // </SS:Nexii>
