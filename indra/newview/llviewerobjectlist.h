@@ -135,6 +135,17 @@ public:
 
     inline S32 getNumObjects() { return (S32) mObjects.size(); }
     inline S32 getNumActiveObjects() { return (S32) mActiveObjects.size(); }
+    
+    // <SS:Nexii>
+    U32 getNumLikelyProjectileObjects() const { return mNumLikelyProjectileObjects; }
+    U32 getNumStaleProjectileObjectsDropped() const { return mNumStaleProjectileObjectsDropped; }
+    void recordStaleProjectileDrop();
+    void updateProjectileObjectTracking(bool was_likely_projectile, bool is_likely_projectile);
+    S32 getNumStaleProjectileObjectsWatched() const { return (S32) mStaleProjectileWatchList.size(); }
+    void addToStaleProjectileWatch(LLViewerObject* objectp);
+    void removeFromStaleProjectileWatch(LLViewerObject* objectp);
+    void idleUpdateStaleProjectiles(const F64& frame_time);
+    // </SS:Nexii>
 
     void addToMap(LLViewerObject *objectp);
     void removeFromMap(LLViewerObject *objectp);
@@ -173,7 +184,7 @@ public:
         U64 mParentInfo;
         LLUUID mChildInfo;
     };
-
+ 
 
     U32 mCurBin; // Current bin we're working on...
 
@@ -201,6 +212,12 @@ public:
     S32 mNumUnknownUpdates;
     S32 mNumDeadObjectUpdates;
     S32 mNumDeadObjects;
+    
+    // <SS:Nexii>
+    U32 mNumLikelyProjectileObjects;
+    U32 mNumStaleProjectileObjectsDropped;
+    std::vector<LLPointer<LLViewerObject> > mStaleProjectileWatchList;
+    // </SS:Nexii>
 protected:
     std::vector<U64>    mOrphanParents; // LocalID/ip,port of orphaned objects
     std::vector<OrphanInfo> mOrphanChildren;    // UUID's of orphaned objects

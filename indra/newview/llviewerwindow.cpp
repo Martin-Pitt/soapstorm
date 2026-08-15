@@ -791,6 +791,20 @@ public:
             // </FS:Beq>
             gPipeline.mNumVisibleNodes = LLPipeline::sVisibleLightCount = 0;
         }
+
+        // <SS:Nexii> Projectile stale/ghost probing
+        static LLCachedControl<bool> debug_show_soapstorm_projectiles_info(gSavedSettings, "DebugShowSoapstormProjectilesInfo", false);
+        if (debug_show_soapstorm_projectiles_info())
+        {
+            addText(xpos, ypos, llformat("Projectiles: %u", gObjectList.getNumLikelyProjectileObjects()));
+            ypos += y_inc;
+            addText(xpos, ypos, llformat("Stale projectiles dropped: %u", gObjectList.getNumStaleProjectileObjectsDropped()));
+            ypos += y_inc;
+            addText(xpos, ypos, llformat("Stale projectiles watched: %d", gObjectList.getNumStaleProjectileObjectsWatched()));
+            ypos += y_inc;
+        }
+        // </SS:Nexii>
+
         static LLCachedControl<bool> debug_show_avatar_render_info(gSavedSettings, "DebugShowAvatarRenderInfo", false);
         if (debug_show_avatar_render_info())
         {

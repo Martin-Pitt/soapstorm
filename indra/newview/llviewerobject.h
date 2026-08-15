@@ -757,6 +757,7 @@ private:
     // Motion prediction between updates
     void interpolateLinearMotion(const F64SecondsImplicit & frame_time, const F32SecondsImplicit & dt);
 
+public:
     static void initObjectDataMap();
 
     // forms task inventory request if none are pending, marks request as pending
@@ -1089,6 +1090,45 @@ public:
     LLViewerPartSourceScript* getPartSourceScript() { return mPartSourcep.get(); }
     bool getPhysicsShapeUnknown () { return mPhysicsShapeUnknown; }
     // </FS:Techwolf Lupindo>
+    
+    
+    // <SS:Nexii> Projectile heuristics
+    bool mLikelyProjectileBullet;
+    bool mProjectileHeuristicTagged;
+    bool mGhostedProjectileBullet;
+    bool isLikelyProjectileBullet() const { return mLikelyProjectileBullet; }
+    bool isGhostedProjectileBullet() const { return mGhostedProjectileBullet; }
+    void updateProjectileHeuristicTag(const LLVector3& velocity);
+
+    // A projectile that goes mStatic stops being interpolated, and for LLVOVolume it also
+    // drops off gObjectList's active list (LLVOVolume::isActive() is !mStatic), so
+    // idleUpdate()/interpolateLinearMotion() never run for it again. Put it on the object
+    // list's stale watch so it still gets probed.
+    void                beginStaleProjectileWatch();
+    bool                isOnStaleProjectileWatch() const { return mOnStaleProjectileWatch; }
+    void                setOnStaleProjectileWatch(bool on) { mOnStaleProjectileWatch = on; }
+    // Returns false when the object should be taken off the stale watch list.
+    bool                idleUpdateStaleProjectile(const F64SecondsImplicit& frame_time);
+    // How long a projectile must go without a simulator update before it is considered a
+    // ghost. Always longer than sMaxUpdateInterpolationTime - inside that window the viewer
+    // still interpolates happily and missing updates are ordinary, not evidence of a ghost.
+    static F64Seconds   getStaleProjectileProbeThreshold();
+    // </SS:Nexii>
+
+protected:
+    // <SS:Nexii> Last low-cost projectile existence probe
+    F64Seconds      mLastProjectileExistenceProbeSecs;
+    F64Seconds      mStaleProjectileWatchStartSecs;
+    U32             mStaleProjectileProbeCount;
+    bool            mOnStaleProjectileWatch;
+    // </SS:Nexii>
+
+private:
+    // <SS:Nexii> Projectile stale/ghost probing
+    void maybeRequestProjectileExistenceCheck(const F64SecondsImplicit& frame_time,
+                                              const F64Seconds& time_since_last_update);
+    void sendProjectileExistenceProbe();
+    // </SS:Nexii>
 };
 
 ///////////////////
