@@ -55,10 +55,7 @@ static F32  sClearedDuration  = 0.f;
 void FSRezQueue::onSimStat(U32 stat_id, F32 value)
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "FSRezQueueIndicator", false);
-    if (!enabled)
-    {
-        return;
-    }
+    if (!enabled) return;
 
     switch (stat_id)
     {
