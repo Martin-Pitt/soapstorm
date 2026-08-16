@@ -7020,7 +7020,13 @@ void LLViewerWindow::setup2DViewport(S32 x_offset, S32 y_offset)
 void LLViewerWindow::setup3DRender()
 {
     // setup perspective camera
-    LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), MAX_FAR_CLIP*2.f);
+    // <SS:Nexii> Draw distance beyond 1024m: the far plane was pinned to MAX_FAR_CLIP*2 (1024m) whatever the draw distance, so raising
+    // RenderFarClip past that moved culling but left everything beyond 1024m clipped by the projection. getRenderFarPlane() tracks the
+    // camera's far clip with the same 2x headroom (objects straddling the cull distance are not sliced) and the old 1024m floor.
+    //LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), MAX_FAR_CLIP*2.f);
+    const F32 far_clip = LLViewerCamera::getInstance()->getRenderFarPlane();
+    LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), far_clip);
+    // </SS:Nexii>
     setup3DViewport();
 }
 

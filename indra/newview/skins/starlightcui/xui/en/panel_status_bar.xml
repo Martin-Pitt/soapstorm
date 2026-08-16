@@ -371,7 +371,7 @@
      tool_tip="Maximum distance away from camera to be rezzed (meters)"
      top="3"
      left_pad="2"
-     max_val="1024"
+     max_val="2048"
      min_val="32"
      name="drawdistance" 
      top_delta="0"

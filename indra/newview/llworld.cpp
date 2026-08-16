@@ -1466,6 +1466,16 @@ void LLWorld::updateWaterObjects()
         (S32)(512 - (region_y - min_y)) };
 // </FS:CR> Fix water height on regions larger than 2048x2048
 
+    // <SS:Nexii> How far the void water reaches past the hole water box. Must clear the draw distance to fill the view, but stop short of
+    // the projection far plane - triangles it slices through rasterise black along the horizon. The tiles are a square ring, so the corner
+    // at sqrt(2) is what has to fit. mLandFarClip not the camera: setLandFarClip() assigns it before re-running us, the camera is a frame
+    // behind. Even whole metres so the tiles, offset by half of it, round to matching edges in LLVOWater::updateGeometry.
+    const F32 far_plane = LLViewerCamera::calcRenderFarPlane(getLandFarClip());
+    const F32 corner_room = far_plane * 0.7f - (F32)llmax(wx, wy);
+    const F32 stretch_wanted = llmin(getLandFarClip() * 2.f, corner_room);
+    const F32 water_stretch = llmax(2048.f, (F32)(2 * ll_round(stretch_wanted * 0.5f)));
+    // </SS:Nexii>
+
     S32 dir;
     for (dir = 0; dir < EDGE_WATER_OBJECTS_COUNT; dir++)
     {
@@ -1504,11 +1514,13 @@ void LLWorld::updateWaterObjects()
         LLVector3 water_scale((F32) dim[0], (F32) dim[1], 512.f);
 
         //stretch out to horizon
-        water_scale.mV[0] += fabsf(2048.f * gDirAxes[dir][0]);
-        water_scale.mV[1] += fabsf(2048.f * gDirAxes[dir][1]);
+        // <SS:Nexii> water_stretch is computed once above the loop.
+        water_scale.mV[0] += fabsf(water_stretch * gDirAxes[dir][0]);
+        water_scale.mV[1] += fabsf(water_stretch * gDirAxes[dir][1]);
 
-        water_pos.mdV[0] += 1024.f * gDirAxes[dir][0];
-        water_pos.mdV[1] += 1024.f * gDirAxes[dir][1];
+        water_pos.mdV[0] += (water_stretch * 0.5f) * gDirAxes[dir][0];
+        water_pos.mdV[1] += (water_stretch * 0.5f) * gDirAxes[dir][1];
+        // </SS:Nexii>
 
         waterp->setPositionGlobal(water_pos);
         waterp->setScale(water_scale);
