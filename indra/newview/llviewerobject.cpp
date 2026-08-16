@@ -3719,7 +3719,7 @@ bool LLViewerObject::loadTaskInvFile(const std::string& filename)
 {
     std::string filename_and_local_path = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, filename);
     llifstream ifs(filename_and_local_path.c_str());
-    if(ifs:good())
+    if(ifs.good())
     {
         U32 fail_count = 0;
         char buffer[MAX_STRING];    /* Flawfinder: ignore */
@@ -3733,9 +3733,9 @@ bool LLViewerObject::loadTaskInvFile(const std::string& filename)
         {
             mInventory = new LLInventoryObject::object_list_t;
         }
-        while(ifs:good())
+        while(ifs.good())
         {
-            ifs:getline(buffer, MAX_STRING);
+            ifs.getline(buffer, MAX_STRING);
             if (sscanf(buffer, " %254s", keyword) == EOF) /* Flawfinder: ignore */
             {
                 // Blank file?
@@ -3770,7 +3770,7 @@ bool LLViewerObject::loadTaskInvFile(const std::string& filename)
                         << keyword << "'" << LL_ENDL;
             }
         }
-        ifs:close();
+        ifs.close();
         LLFile::remove(filename_and_local_path);
     }
     else
