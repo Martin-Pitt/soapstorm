@@ -149,6 +149,7 @@
 #include "fsfloaterkillfeed.h"
 #include "fslslbridge.h"
 #include "fsmoneytracker.h"
+#include "fsrezqueue.h" // <SS:Nexii> Rez queue watch
 #include "llattachmentsmgr.h"
 #include "lleconomy.h"
 #include "llfloaterbump.h"
@@ -5302,6 +5303,11 @@ void process_sim_stats(LLMessageSystem *msg, void **user_data)
         F32 stat_value;
         msg->getU32("Stat", "StatID", stat_id, i);
         msg->getF32("Stat", "StatValue", stat_value, i);
+
+        // <SS:Nexii> Rez queue watch: track the region's pending asset queue
+        FSRezQueue::onSimStat(stat_id, stat_value);
+        // </SS:Nexii>
+
         auto measurementp = LLStatViewer::SimMeasurementSampler::getInstance((ESimStatID)stat_id);
 
         if (measurementp )

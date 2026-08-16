@@ -237,6 +237,7 @@
 #include "llgroupcolormap.h"
 #include "fsfloaterkillfeed.h"
 #include "fscombathitmarker.h"
+#include "fsrezqueue.h" // <SS:Nexii> Rez queue watch
 #include "fspanellogin.h"
 
 #include "lltracerecording.h"
@@ -3090,6 +3091,10 @@ void LLViewerWindow::draw()
         // below re-tints it when a target is identified under the crosshair.
         FSCombatHitMarker::setCrosshairTint(LLColor4::white);
         FSCombatHitMarker::draw();
+
+        // <SS:Nexii> Rez queue warning above the crosshair
+        FSRezQueue::draw();
+        // </SS:Nexii>
 
         if (inMouselook && fsMouselookCombatFeatures)
         {
