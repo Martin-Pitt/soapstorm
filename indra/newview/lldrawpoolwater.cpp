@@ -100,7 +100,14 @@ void LLDrawPoolWater::prerender()
 
 S32 LLDrawPoolWater::getNumPostDeferredPasses()
 {
-    if (LLViewerCamera::getInstance()->getOrigin().mV[2] < 1024.f)
+    // <SS:Nexii> Water is a post-deferred-only pool, so this gate drops the whole water surface render - waves, reflection, refraction and
+    // its atmospherics - leaving only the flat plane doWaterHaze() paints, the moment the camera passes a fixed 1024m dating from when that
+    // was the top of the skybox. Gate on the render far plane instead, where the water actually stops being visible; not the draw distance,
+    // which water is deliberately drawn past (its partition sets mInfiniteFarClip). Works out to the original 1024m at default draw distance.
+    //if (LLViewerCamera::getInstance()->getOrigin().mV[2] < 1024.f)
+    const F32 height_above_water = LLViewerCamera::getInstance()->getOrigin().mV[2] - LLEnvironment::instance().getWaterHeight();
+    if (height_above_water < LLViewerCamera::getInstance()->getRenderFarPlane())
+    // </SS:Nexii>
     {
         return 1;
     }

@@ -12546,6 +12546,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>256.0</real>
     </map>
+    <key>FSRenderNearClip</key>
+    <map>
+      <key>Comment</key>
+      <string>Distance of near clip plane from camera (meters). Depth precision scales inversely with this, so raising it reduces z-fighting at long draw distances; raising it too far clips geometry close to the camera (mouselook attachments, walls the OTS camera is pulled in against). Ramps down toward 0.01 when the third person camera is focused closer than 3m so alt-cam can zoom right up to a surface. Clamped to 0.01-1.0</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
     <key>RenderAutoMaskAlphaNonDeferred</key>
     <map>
       <key>Comment</key>
