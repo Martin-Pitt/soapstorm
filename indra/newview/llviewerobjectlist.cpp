@@ -119,6 +119,8 @@ LLViewerObjectList::LLViewerObjectList()
     mWasPaused = false;
     mNumDeadObjectUpdates = 0;
     mNumUnknownUpdates = 0;
+    mNumLikelyProjectileObjects = 0;
+    mNumGhostProjectileObjectsDropped = 0;
 }
 
 LLViewerObjectList::~LLViewerObjectList()
@@ -132,10 +134,70 @@ void LLViewerObjectList::destroy()
 
     resetObjectBeacons();
     mActiveObjects.clear();
+    mGhostProjectileWatchList.clear(); // <SS:Nexii>
     mDeadObjects.clear();
     mMapObjects.clear();
     mUUIDObjectMap.clear();
 }
+
+void LLViewerObjectList::recordGhostProjectileDrop()
+{
+    ++mNumGhostProjectileObjectsDropped;
+}
+
+void LLViewerObjectList::updateProjectileObjectTracking(bool was_likely_projectile, bool is_likely_projectile)
+{
+    if (was_likely_projectile == is_likely_projectile) return;
+
+    if (is_likely_projectile) ++mNumLikelyProjectileObjects;
+    else if (mNumLikelyProjectileObjects > 0) --mNumLikelyProjectileObjects;
+}
+
+// <SS:Nexii> Ghost projectile watch list
+void LLViewerObjectList::addToGhostProjectileWatch(LLViewerObject* objectp)
+{
+    if (!objectp || objectp->isDead() || objectp->isOnGhostProjectileWatch()) return;
+
+    objectp->setOnGhostProjectileWatch(true);
+    mGhostProjectileWatchList.push_back(objectp);
+}
+
+void LLViewerObjectList::removeFromGhostProjectileWatch(LLViewerObject* objectp)
+{
+    if (!objectp || !objectp->isOnGhostProjectileWatch()) return;
+
+    objectp->setOnGhostProjectileWatch(false);
+    for (auto iter = mGhostProjectileWatchList.begin(); iter != mGhostProjectileWatchList.end(); ++iter)
+    {
+        if (iter->get() == objectp)
+        {
+            mGhostProjectileWatchList.erase(iter);
+            break;
+        }
+    }
+}
+
+// Probes projectiles that went mStatic. They are no longer interpolated and, for LLVOVolume,
+// are no longer on the active list at all, so idleUpdate() cannot reach them.
+void LLViewerObjectList::idleUpdateGhostProjectiles(const F64& frame_time)
+{
+    if (mGhostProjectileWatchList.empty()) return;
+
+    // Iterate a copy: idleUpdateGhostProjectile() sends messages that can kill objects.
+    std::vector<LLPointer<LLViewerObject> > watch_list = mGhostProjectileWatchList;
+    for (auto& objectp : watch_list)
+    {
+        if (objectp.isNull()) continue;
+
+        if (!objectp->isOnGhostProjectileWatch()) continue; // already removed this frame
+
+        if (objectp->isDead() || !objectp->idleUpdateGhostProjectile(frame_time))
+        {
+            removeFromGhostProjectileWatch(objectp);
+        }
+    }
+}
+// </SS:Nexii>
 
 
 void LLViewerObjectList::getUUIDFromLocal(LLUUID &id,
@@ -1050,6 +1112,10 @@ void LLViewerObjectList::update(LLAgent &agent)
                 objectp->idleUpdate(agent, frame_time);
         }
 
+        // <SS:Nexii> Probe ghost projectiles that went static and dropped off the active list
+        idleUpdateGhostProjectiles(frame_time);
+        // </SS:Nexii>
+
         //update flexible objects
         LLVolumeImplFlexible::updateClass();
 
@@ -1450,6 +1516,17 @@ void LLViewerObjectList::clearDebugText()
 void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
+    
+    // <SS:Nexii> Ghost projectile handling
+    if (objectp->isGhostedProjectileBullet())
+    {
+        recordGhostProjectileDrop();
+        LL_DEBUGS("Projectile") << "Dropped projectile " << objectp->mID << " was ghosted" << LL_ENDL;
+    }
+    updateProjectileObjectTracking(objectp->isLikelyProjectileBullet(), false);
+    removeFromGhostProjectileWatch(objectp);
+    // </SS:Nexii>
+
     // <FS:Beq> FIRE-30694 DeadObject Spam - handle new_dead_object properly and closer to source
     // bool new_dead_object = true;
     if (mDeadObjects.find(objectp->mID) != mDeadObjects.end())
@@ -1586,11 +1663,13 @@ void LLViewerObjectList::killAllObjects()
     mIndexAndLocalIDToUUID.clear();
     mActiveObjects.clear();
     mMapObjects.clear();
+    mGhostProjectileWatchList.clear(); // <SS:Nexii>
 
     LLViewerObject *objectp;
     for (vobj_list_t::iterator iter = mObjects.begin(); iter != mObjects.end(); ++iter)
     {
         objectp = *iter;
+        objectp->setOnGhostProjectileWatch(false); // <SS:Nexii>
         objectp->setOnActiveList(false);
         objectp->setListIndex(-1);
         objectp->mRegionIndex = 0;

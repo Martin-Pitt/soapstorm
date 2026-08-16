@@ -4192,6 +4192,16 @@
                  parameter="DebugShowRenderInfo" />
             </menu_item_check>
             <menu_item_check
+             label="Show Projectile Info"
+             name="Show Projectile Info">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="DebugShowSoapstormProjectilesInfo" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="DebugShowSoapstormProjectilesInfo" />
+            </menu_item_check>
+            <menu_item_check
              label="Show Matrices"
              name="Show Matrices">
                 <menu_item_check.on_check
