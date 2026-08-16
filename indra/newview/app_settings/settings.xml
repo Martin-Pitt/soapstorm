@@ -25599,6 +25599,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <string>4cbf0d33-03ea-49b1-b671-fdfc37d98002</string>
     </map>
+    <key>FSRezQueueIndicator</key>
+      <map>
+      <key>Comment</key>
+      <string>Watch the region's pending asset downloads and show a rez queue warning next to the crosshair (mouselook and OTS) while the sim is refusing to rez objects</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSRezQueueThreshold</key>
+      <map>
+      <key>Comment</key>
+      <string>Pending downloads at or above which the region is treated as blocking rezzing</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.9</real>
+    </map>
     <key>FSKillFeedEnabled</key>
       <map>
       <key>Comment</key>

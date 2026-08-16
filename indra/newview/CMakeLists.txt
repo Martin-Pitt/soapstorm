@@ -187,6 +187,7 @@ set(viewer_SOURCE_FILES
     fsradarlistctrl.cpp
     fsradarmenu.cpp
     fsregioncross.cpp
+    fsrezqueue.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1057,6 +1058,7 @@ set(viewer_HEADER_FILES
     fsradarlistctrl.h
     fsradarmenu.h
     fsregioncross.h
+    fsrezqueue.h
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h
