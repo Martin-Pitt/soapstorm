@@ -1339,7 +1339,12 @@ bool LLAppViewer::init()
     gSimLastTime = gRenderStartTime.getElapsedTimeF32();
     gSimFrames = (F32)gFrameCount;
 
-    if (gSavedSettings.getBOOL("JoystickEnabled"))
+    // <SS:Nexii> Also init when a device was pinned but the enable got cleared, so a config already latched off by an older build recovers
+    // by itself instead of needing the floater opened and the device picked again. String id on Windows, map on macOS.
+    //if (gSavedSettings.getBOOL("JoystickEnabled"))
+    const LLSD joystick_id = gSavedSettings.getLLSD("JoystickDeviceUUID");
+    if (gSavedSettings.getBOOL("JoystickEnabled") || joystick_id.isMap() || !joystick_id.asString().empty())
+    // </SS:Nexii>
     {
         LLViewerJoystick::getInstance()->init(false);
     }
