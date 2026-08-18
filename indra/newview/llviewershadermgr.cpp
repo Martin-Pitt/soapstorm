@@ -179,6 +179,10 @@ LLGLSLShader            gDeferredAvatarShadowProgram;
 LLGLSLShader            gDeferredAvatarAlphaShadowProgram;
 LLGLSLShader            gDeferredAvatarAlphaMaskShadowProgram;
 LLGLSLShader            gDeferredAlphaProgram;
+// <SS:Nexii> Atmo Magic particle shaders
+LLGLSLShader            gSSPrecipRainProgram;
+LLGLSLShader            gSSPrecipLitProgram;
+// </SS:Nexii>
 LLGLSLShader            gHUDAlphaProgram;
 LLGLSLShader            gDeferredSkinnedAlphaProgram;
 LLGLSLShader            gDeferredAlphaImpostorProgram;
@@ -433,6 +437,10 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gHUDAlphaProgram);
     mShaderList.push_back(&gDeferredAlphaImpostorProgram);
     mShaderList.push_back(&gDeferredFullbrightProgram);
+    // <SS:Nexii> Atmo Magic: receive env/light uniform updates
+    mShaderList.push_back(&gSSPrecipRainProgram);
+    mShaderList.push_back(&gSSPrecipLitProgram);
+    // </SS:Nexii>
     mShaderList.push_back(&gHUDFullbrightProgram);
     mShaderList.push_back(&gDeferredFullbrightAlphaMaskProgram);
     mShaderList.push_back(&gHUDFullbrightAlphaMaskProgram);
@@ -1138,6 +1146,10 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gHUDAlphaProgram.unload();
         gDeferredSkinnedAlphaProgram.unload();
         gDeferredFullbrightProgram.unload();
+        // <SS:Nexii> Atmo Magic particle shaders
+        gSSPrecipRainProgram.unload();
+        gSSPrecipLitProgram.unload();
+        // </SS:Nexii>
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
         gHUDFullbrightAlphaMaskProgram.unload();
@@ -1951,6 +1963,63 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         success = gDeferredFullbrightProgram.createShader();
         llassert(success);
     }
+
+    // <SS:Nexii> Atmo Magic rain particles: refraction/env/specular water
+    // shader. Failure is non-fatal; the precipitation renderer falls back to
+    // the fullbright path when this program is incomplete.
+    if (success)
+    {
+        gSSPrecipRainProgram.mName = "SS Precipitation Rain Shader";
+        gSSPrecipRainProgram.mFeatures.calculatesAtmospherics = true;
+        gSSPrecipRainProgram.mFeatures.hasAtmospherics = true;
+        gSSPrecipRainProgram.mFeatures.hasGamma = true;
+        gSSPrecipRainProgram.mFeatures.hasSrgb = true;
+        gSSPrecipRainProgram.mFeatures.isAlphaLighting = true;
+        gSSPrecipRainProgram.mFeatures.hasReflectionProbes = true;
+        gSSPrecipRainProgram.mShaderFiles.clear();
+        gSSPrecipRainProgram.mShaderFiles.push_back(make_pair("deferred/ssPrecipRainV.glsl", GL_VERTEX_SHADER));
+        gSSPrecipRainProgram.mShaderFiles.push_back(make_pair("deferred/ssPrecipRainF.glsl", GL_FRAGMENT_SHADER));
+        gSSPrecipRainProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSPrecipRainProgram.clearPermutations();
+        add_common_permutations(&gSSPrecipRainProgram);
+        if (!gSSPrecipRainProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Precipitation rain shader failed to compile;"
+                               << " rain particles will use the fullbright fallback" << LL_ENDL;
+            gSSPrecipRainProgram.unload();
+        }
+    }
+
+    // Lit particle shader for non-emissive precipitation (snow, ripples):
+    // probe ambient plus shadowed sun. Same non-fatal fallback policy.
+    if (success)
+    {
+        gSSPrecipLitProgram.mName = "SS Precipitation Lit Shader";
+        gSSPrecipLitProgram.mFeatures.calculatesAtmospherics = true;
+        gSSPrecipLitProgram.mFeatures.hasAtmospherics = true;
+        gSSPrecipLitProgram.mFeatures.hasGamma = true;
+        gSSPrecipLitProgram.mFeatures.hasSrgb = true;
+        gSSPrecipLitProgram.mFeatures.isAlphaLighting = true;
+        gSSPrecipLitProgram.mFeatures.hasShadows = use_sun_shadow;
+        gSSPrecipLitProgram.mFeatures.hasReflectionProbes = true;
+        gSSPrecipLitProgram.mShaderFiles.clear();
+        gSSPrecipLitProgram.mShaderFiles.push_back(make_pair("deferred/ssPrecipRainV.glsl", GL_VERTEX_SHADER));
+        gSSPrecipLitProgram.mShaderFiles.push_back(make_pair("deferred/ssPrecipLitF.glsl", GL_FRAGMENT_SHADER));
+        gSSPrecipLitProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSPrecipLitProgram.clearPermutations();
+        if (use_sun_shadow)
+        {
+            gSSPrecipLitProgram.addPermutation("HAS_SUN_SHADOW", "1");
+        }
+        add_common_permutations(&gSSPrecipLitProgram);
+        if (!gSSPrecipLitProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Precipitation lit shader failed to compile;"
+                               << " non-emissive particles will use the fullbright fallback" << LL_ENDL;
+            gSSPrecipLitProgram.unload();
+        }
+    }
+    // </SS:Nexii>
 
     if (success)
     {

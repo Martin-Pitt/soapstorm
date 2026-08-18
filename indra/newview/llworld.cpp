@@ -50,6 +50,7 @@
 #include "llviewerparceloverlay.h"
 #include "llviewerregion.h"
 #include "llviewerstats.h"
+#include "ssatmomagic.h" // <SS:Nexii> Atmo Magic weather
 #include "llvlcomposition.h"
 #include "llvoavatar.h"
 #include "llvocache.h"
@@ -1540,6 +1541,10 @@ void LLWorld::shiftRegions(const LLVector3& offset)
     }
 
     LLViewerPartSim::getInstance()->shift(offset);
+
+    // <SS:Nexii> Atmo Magic particles and pending impacts live in agent space too
+    SSAtmoMagic::getInstance()->shift(offset);
+    // </SS:Nexii>
 }
 
 LLViewerTexture* LLWorld::getDefaultWaterTexture()

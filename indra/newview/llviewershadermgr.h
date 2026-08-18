@@ -273,6 +273,10 @@ extern LLGLSLShader         gDeferredAlphaProgram;
 extern LLGLSLShader         gHUDAlphaProgram;
 extern LLGLSLShader         gDeferredAlphaImpostorProgram;
 extern LLGLSLShader         gDeferredFullbrightProgram;
+// <SS:Nexii> Atmo Magic particle shaders
+extern LLGLSLShader         gSSPrecipRainProgram;
+extern LLGLSLShader         gSSPrecipLitProgram;
+// </SS:Nexii>
 extern LLGLSLShader         gHUDFullbrightProgram;
 extern LLGLSLShader         gDeferredFullbrightAlphaMaskProgram;
 extern LLGLSLShader         gHUDFullbrightAlphaMaskProgram;

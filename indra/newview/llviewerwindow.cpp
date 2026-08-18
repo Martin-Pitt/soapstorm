@@ -238,6 +238,7 @@
 #include "fsfloaterkillfeed.h"
 #include "fscombathitmarker.h"
 #include "fsrezqueue.h" // <SS:Nexii> Rez queue watch
+#include "ssatmomagic.h" // <SS:Nexii> Atmo Magic weather
 #include "fspanellogin.h"
 
 #include "lltracerecording.h"
@@ -3094,6 +3095,10 @@ void LLViewerWindow::draw()
 
         // <SS:Nexii> Rez queue warning above the crosshair
         FSRezQueue::draw();
+        // </SS:Nexii>
+
+        // <SS:Nexii> Atmo Magic diagnostic readout
+        SSAtmoMagic::drawInfo();
         // </SS:Nexii>
 
         if (inMouselook && fsMouselookCombatFeatures)

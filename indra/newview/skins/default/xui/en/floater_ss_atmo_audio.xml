@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="false"
+ height="330"
+ layout="topleft"
+ name="floater_ss_atmo_audio"
+ save_rect="true"
+ single_instance="true"
+ title="ATMO MAGIC - AUDIO MIX"
+ width="400">
+    <text
+     follows="left|top" layout="topleft" left="12" top="26"
+     height="14" width="376" name="mix_label" font="SansSerifSmallBold">
+        Mix
+    </text>
+    <slider
+     control_name="SSAtmoVolumeMaster"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="376" label="Master:" label_width="150"
+     min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+     tool_tip="Overall volume of every Atmo Magic sound" />
+    <slider
+     control_name="SSAtmoVolumeAmbient"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="376" label="Precipitation ambient:" label_width="150"
+     min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+     tool_tip="The outdoor beds and the rain-on-roof beds" />
+    <slider
+     control_name="SSAtmoVolumeWind"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="376" label="Wind loops:" label_width="150"
+     min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+     tool_tip="Wind is not tied to a precipitation type, so it mixes separately" />
+    <slider
+     control_name="SSAtmoSoundGain"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="376" label="Impacts:" label_width="150"
+     min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+     tool_tip="One-shot sounds played where precipitation lands" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="14"
+     height="14" width="376" name="space_label" font="SansSerifSmallBold">
+        Space
+    </text>
+    <check_box
+     control_name="SSAtmoSlapback"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="376" label="Slapback echo off nearby surfaces"
+     tool_tip="Outdoors, impact sounds bounce back off the nearest wall or cliff, delayed by its distance" />
+    <slider
+     control_name="SSAtmoSlapbackAmount"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="376" label="Echo amount:" label_width="150"
+     min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Strength of the bounced echo. The viewer has no reverb bus, so this is the closest available control over how reverberant a space sounds." />
+    <slider
+     control_name="SSAtmoSoundResponse"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="376" label="Fade speed:" label_width="150"
+     min_val="0.5" max_val="10" increment="0.1" decimal_digits="1" show_text="true"
+     tool_tip="How fast the beds crossfade when you move indoors or outdoors; higher is snappier" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="14"
+     height="14" width="376" name="assets_label" font="SansSerifSmallBold">
+        Assets
+    </text>
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="28" width="376" word_wrap="true" font="SansSerifSmall" name="assets_note">
+        Precipitation sound packs live in each preset. Wind loops are global and are set in the Assets floater.
+    </text>
+</floater>

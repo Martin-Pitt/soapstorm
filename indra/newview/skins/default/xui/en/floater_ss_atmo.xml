@@ -1,0 +1,241 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="false"
+ height="500"
+ layout="topleft"
+ name="floater_ss_atmo"
+ save_rect="true"
+ single_instance="true"
+ title="ATMO MAGIC"
+ width="360">
+    <check_box
+     control_name="SSAtmoEnabled"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top="26"
+     height="16"
+     width="336"
+     label="Enable Atmo Magic weather"
+     tool_tip="Client-side precipitation, synced across clients that share the same parameters and seed" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="10"
+     height="14"
+     width="336"
+     name="weather_label"
+     font="SansSerifSmallBold">
+        Weather
+    </text>
+    <slider
+     control_name="SSAtmoPrecipitation"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="15"
+     width="336"
+     label="Precipitation:"
+     label_width="110"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2"
+     show_text="true"
+     tool_tip="None, over drizzle, up to a full storm" />
+    <slider
+     control_name="SSAtmoTurbulence"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="15"
+     width="336"
+     label="Turbulence:"
+     label_width="110"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2"
+     show_text="true"
+     tool_tip="How gusty precipitation arrives: steady fall, or waves and bursts" />
+    <slider
+     control_name="SSAtmoWindDirection"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="15"
+     width="336"
+     label="Wind direction:"
+     label_width="110"
+     min_val="0"
+     max_val="360"
+     increment="1"
+     decimal_digits="0"
+     show_text="true"
+     tool_tip="Compass direction the wind blows toward, degrees" />
+    <slider
+     control_name="SSAtmoWindSpeed"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="15"
+     width="336"
+     label="Wind speed:"
+     label_width="110"
+     min_val="0"
+     max_val="20"
+     increment="0.25"
+     decimal_digits="2"
+     show_text="true"
+     tool_tip="Tilts the fall direction and drifts slow precipitation, m/s" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="12"
+     height="14"
+     width="90"
+     name="preset_label">
+        Preset:
+    </text>
+    <combo_box
+     control_name="SSAtmoPreset"
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="23"
+     width="150"
+     name="preset_combo"
+     allow_text_entry="false"
+     tool_tip="Which weather preset to run" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="0"
+     height="23"
+     width="76"
+     name="edit_preset_button"
+     label="Edit..."
+     tool_tip="Open the preset editor" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="12"
+     height="14"
+     width="336"
+     name="effects_label"
+     font="SansSerifSmallBold">
+        Impact effects
+    </text>
+    <check_box
+     control_name="SSAtmoRipples"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="16"
+     width="336"
+     label="Ripples and splashes where drops land" />
+    <check_box
+     control_name="SSAtmoSounds"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="16"
+     width="336"
+     label="Impact sounds (from the preset sound pack)" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="14"
+     height="14"
+     width="336"
+     name="shadow_label"
+     font="SansSerifSmallBold">
+        Rain shadow map
+    </text>
+    <slider
+     control_name="SSAtmoShadowRes"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="15"
+     width="336"
+     label="Resolution:"
+     label_width="110"
+     min_val="128"
+     max_val="2048"
+     increment="128"
+     decimal_digits="0"
+     show_text="true"
+     tool_tip="Texels across a region; 1024 is ~0.25m accuracy on a 256m region" />
+    <slider
+     control_name="SSAtmoShadowMaxAge"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="15"
+     width="336"
+     label="Refresh every:"
+     label_width="110"
+     min_val="5"
+     max_val="300"
+     increment="5"
+     decimal_digits="0"
+     show_text="true"
+     tool_tip="Seconds between full recaptures; local prim updates also queue one" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="10"
+     height="23"
+     width="160"
+     name="recapture_button"
+     label="Recapture now"
+     tool_tip="Drop all cached rain shadow maps and rebuild them" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="14"
+     height="23"
+     width="160"
+     name="fx_button"
+     label="Effects &amp; LOD..."
+     tool_tip="Density, particle budget, tier distances and ripple tuning" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="16"
+     top_delta="0"
+     height="23"
+     width="160"
+     name="assets_button"
+     label="Assets..."
+     tool_tip="Global wind loops and generated-texture options" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="8"
+     height="23"
+     width="160"
+     name="audio_button"
+     label="Audio mix..."
+     tool_tip="Volume of each sound category, echo amount and fade speed" />
+</floater>

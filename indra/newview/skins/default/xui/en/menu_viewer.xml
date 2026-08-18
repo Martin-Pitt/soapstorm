@@ -1480,6 +1480,15 @@
                  function="RLV.EnableIfNot"
                  parameter="setenv" />
             </menu_item_call>
+            <!-- <SS:Nexii> Atmo Magic weather -->
+            <menu_item_call
+             label="Atmo Magic..."
+             name="atmo_magic">
+                <menu_item_call.on_click
+                 function="Floater.Toggle"
+                 parameter="ss_atmo" />
+            </menu_item_call>
+            <!-- </SS:Nexii> -->
             <menu_item_separator/>
             <menu_item_check
              label="Pause Clouds"

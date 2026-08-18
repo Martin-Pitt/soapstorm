@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="false"
+ height="614"
+ layout="topleft"
+ name="floater_ss_atmo_preset"
+ save_rect="true"
+ single_instance="true"
+ title="ATMO MAGIC - PRESET EDITOR"
+ width="450">
+    <combo_box name="preset_combo" follows="left|top" layout="topleft"
+     left="10" top="26" height="23" width="290"
+     tool_tip="The preset being edited; selecting one also makes it the active weather" />
+    <button name="new_button" follows="left|top" layout="topleft"
+     left_pad="6" top_delta="0" height="23" width="56" label="Copy"
+     tool_tip="Save the current settings as a new preset" />
+    <button name="delete_button" follows="left|top" layout="topleft"
+     left="10" top_pad="6" height="21" width="80" label="Delete"
+     tool_tip="Delete this saved preset" />
+    <button name="revert_button" follows="left|top" layout="topleft"
+     left_pad="6" top_delta="0" height="21" width="120" label="Revert to default"
+     tool_tip="Discard saved edits and return a built-in preset to its shipped values" />
+
+    <tab_container name="preset_tabs" follows="all" halign="center" layout="topleft"
+     left="6" top="86" width="438" height="520"
+     tab_position="top" tab_height="21" tab_min_width="72" hide_scroll_arrows="true">
+
+        <panel name="tab_motion" label="Motion" follows="all" layout="topleft"
+         left="0" top="0" width="436" height="494">
+            <combo_box name="archetype_combo" follows="left|top" layout="topleft"
+             left="10" top="12" height="23" width="220"
+             tool_tip="How this weather moves and lands">
+                <combo_box.item label="Liquid (rain)" name="liquid" value="0" />
+                <combo_box.item label="Flake (snow, dust)" name="flake" value="1" />
+                <combo_box.item label="Solid (hail)" name="solid" value="2" />
+                <combo_box.item label="Riser (embers)" name="riser" value="3" />
+            </combo_box>
+            <slider name="fall_speed" follows="left|top" layout="topleft" left="10" top_pad="10"
+             height="15" width="410" label="Fall speed:" label_width="130"
+             min_val="0.1" max_val="40" increment="0.1" decimal_digits="2" show_text="true"
+             tool_tip="Terminal velocity in m/s; risers use this as their rise speed" />
+            <slider name="fall_lo" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Fall height min:" label_width="130"
+             min_val="1" max_val="80" increment="1" decimal_digits="0" show_text="true"
+             tool_tip="Metres above the landing point that particles appear" />
+            <slider name="fall_hi" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Fall height max:" label_width="130"
+             min_val="1" max_val="80" increment="1" decimal_digits="0" show_text="true" />
+            <slider name="sway" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Sway:" label_width="130"
+             min_val="0" max_val="4" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="Lateral wander while falling; above 1.5 it also bobs vertically" />
+            <slider name="wind_response" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Wind response:" label_width="130"
+             min_val="0" max_val="4" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="How strongly horizontal wind carries it" />
+            <text name="density_label" follows="left|top" layout="topleft" left="10" top_pad="16"
+             height="14" width="410" font="SansSerifSmallBold">Density</text>
+            <slider name="rate" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Rate:" label_width="130"
+             min_val="0" max_val="1" increment="0.005" decimal_digits="3" show_text="true"
+             tool_tip="Drops per square metre per second at full precipitation" />
+            <slider name="intensity_size" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Intensity sizing:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="How much the global precipitation slider grows the drops rather than only adding more of them" />
+        </panel>
+
+        <panel name="tab_look" label="Look" follows="all" layout="topleft"
+         left="0" top="0" width="436" height="494">
+            <text name="tint_label" follows="left|top" layout="topleft" left="10" top="16"
+             height="14" width="120">Tint:</text>
+            <color_swatch name="tint" can_apply_immediately="true" follows="left|top"
+             layout="topleft" left_pad="4" top_delta="-5" height="22" width="60" label_height="0"
+             tool_tip="Multiplies whatever the texture or PBR material supplies" />
+            <text name="drop_shape_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="120">Drop shape:</text>
+            <combo_box name="drop_shape" follows="left|top" layout="topleft" left_pad="4"
+             top_delta="-4" height="23" width="170"
+             tool_tip="Silhouette of one drop in the generated textures. Teardrop reads as liquid, so it suits rain rather than flakes or crystals.">
+                <combo_box.item label="Round mote" name="dot" value="0" />
+                <combo_box.item label="Teardrop" name="teardrop" value="1" />
+                <combo_box.item label="Sliver" name="sliver" value="2" />
+            </combo_box>
+            <slider name="glow" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="15" width="410" label="Glow:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="Emissive strength, scaled by the global glow master" />
+            <check_box name="emissive" follows="left|top" layout="topleft" left="10" top_pad="12"
+             height="16" width="410" label="Emissive (additive, blooms)"
+             tool_tip="Light sources add to the scene and write the glow channel" />
+            <check_box name="water_shading" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="16" width="410" label="Water shading (refraction, reflections)"
+             tool_tip="Runs through the rain shader; only sensible for liquids" />
+        </panel>
+
+        <panel name="tab_tiers" label="Tiers" follows="all" layout="topleft"
+         left="0" top="0" width="436" height="494">
+            <text name="drops_label" follows="left|top" layout="topleft" left="10" top="12"
+             height="14" width="410" font="SansSerifSmallBold">Individual drops</text>
+            <check_box name="drops_enabled" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="16" width="90" label="Enabled" />
+            <combo_box name="drops_kind" follows="left|top" layout="topleft" left_pad="4"
+             top_delta="-4" height="23" width="130">
+                <combo_box.item label="Streak" name="drops_streak" value="0" />
+                <combo_box.item label="Round" name="drops_round" value="1" />
+                <combo_box.item label="Sheet" name="drops_sheet" value="2" />
+            </combo_box>
+            <slider name="drops_size_x" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="15" width="410" label="Half width:" label_width="130"
+             min_val="0.005" max_val="12" increment="0.005" decimal_digits="3" show_text="true" />
+            <slider name="drops_size_y" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Half height:" label_width="130"
+             min_val="0.005" max_val="24" increment="0.005" decimal_digits="3" show_text="true" />
+            <slider name="drops_alpha" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Opacity:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true" />
+            <slider name="drops_radius" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Reach:" label_width="130"
+             min_val="0" max_val="512" increment="1" decimal_digits="0" show_text="true"
+             tool_tip="Metres from the camera this tier covers" />
+
+            <text name="clusters_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="410" font="SansSerifSmallBold">Drop clusters</text>
+            <check_box name="clusters_enabled" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="16" width="90" label="Enabled" />
+            <combo_box name="clusters_kind" follows="left|top" layout="topleft" left_pad="4"
+             top_delta="-4" height="23" width="130">
+                <combo_box.item label="Streak" name="clusters_streak" value="0" />
+                <combo_box.item label="Round" name="clusters_round" value="1" />
+                <combo_box.item label="Sheet" name="clusters_sheet" value="2" />
+            </combo_box>
+            <slider name="clusters_size_x" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="15" width="410" label="Half width:" label_width="130"
+             min_val="0.005" max_val="12" increment="0.005" decimal_digits="3" show_text="true" />
+            <slider name="clusters_size_y" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Half height:" label_width="130"
+             min_val="0.005" max_val="24" increment="0.005" decimal_digits="3" show_text="true" />
+            <slider name="clusters_alpha" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Opacity:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true" />
+            <slider name="clusters_radius" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Reach:" label_width="130"
+             min_val="0" max_val="512" increment="1" decimal_digits="0" show_text="true" />
+
+            <text name="sheets_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="410" font="SansSerifSmallBold">Shower sheets</text>
+            <check_box name="sheets_enabled" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="16" width="90" label="Enabled" />
+            <combo_box name="sheets_kind" follows="left|top" layout="topleft" left_pad="4"
+             top_delta="-4" height="23" width="130">
+                <combo_box.item label="Streak" name="sheets_streak" value="0" />
+                <combo_box.item label="Round" name="sheets_round" value="1" />
+                <combo_box.item label="Sheet" name="sheets_sheet" value="2" />
+            </combo_box>
+            <slider name="sheets_size_x" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="15" width="410" label="Half width:" label_width="130"
+             min_val="0.005" max_val="12" increment="0.005" decimal_digits="3" show_text="true" />
+            <slider name="sheets_size_y" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Half height:" label_width="130"
+             min_val="0.005" max_val="24" increment="0.005" decimal_digits="3" show_text="true" />
+            <slider name="sheets_alpha" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Opacity:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true" />
+            <slider name="sheets_radius" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="15" width="410" label="Reach:" label_width="130"
+             min_val="0" max_val="512" increment="1" decimal_digits="0" show_text="true" />
+        </panel>
+
+        <panel name="tab_impact" label="Impact" follows="all" layout="topleft"
+         left="0" top="0" width="436" height="494">
+            <slider name="impact_strength" follows="left|top" layout="topleft" left="10" top="16"
+             height="15" width="410" label="Impact strength:" label_width="130"
+             min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="Zero means it never lands: no ripples, splashes or impact sounds" />
+            <check_box name="shatter" follows="left|top" layout="topleft" left="10" top_pad="12"
+             height="16" width="410" label="Shatter into shards on impact"
+             tool_tip="Throws glowing shards off the surface at the speed it hit" />
+            <text name="riser_label" follows="left|top" layout="topleft" left="10" top_pad="18"
+             height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Riser flavour mix - only applies to the Riser behaviour</text>
+            <slider name="dark_mix" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Dark flecks:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="Fraction rendered as small dark sharp flecks" />
+            <slider name="puff_mix" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Vague clouds:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="Fraction rendered as large soft clouds" />
+        </panel>
+
+        <panel name="tab_assets" label="Assets" follows="all" layout="topleft"
+         left="0" top="0" width="436" height="494">
+            <text name="tex_label" follows="left|top" layout="topleft" left="10" top="12"
+             height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Textures - comma separated UUIDs, or pbr:UUID. Empty generates splatter textures.</text>
+            <line_editor name="textures" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="20" width="410" label="Particle textures" />
+            <line_editor name="ripple_texture" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Ripple ring" />
+            <line_editor name="dark_texture" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Riser dark flecks" />
+            <line_editor name="puff_texture" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Riser clouds" />
+            <text name="snd_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Sound pack - comma separated UUIDs play end to end as a sequence</text>
+            <line_editor name="snd_impacts" follows="left|top" layout="topleft" left="10" top_pad="4"
+             height="20" width="410" label="Impact one-shots" />
+            <line_editor name="snd_medium" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Ambient (required)" />
+            <line_editor name="snd_light" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Ambient light (optional)" />
+            <line_editor name="snd_heavy" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Ambient heavy (optional)" />
+            <line_editor name="snd_roof_open" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Roof, outside" />
+            <line_editor name="snd_roof_small" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Roof, small room" />
+            <line_editor name="snd_roof_medium" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Roof, medium room" />
+            <line_editor name="snd_roof_big" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="20" width="410" label="Roof, big hall" />
+        </panel>
+    </tab_container>
+</floater>

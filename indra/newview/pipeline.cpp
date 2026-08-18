@@ -103,6 +103,7 @@
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
+#include "sspreciprenderer.h" // <SS:Nexii> Atmo Magic weather
 #include "llspatialpartition.h"
 #include "llmutelist.h"
 #include "lltoolpie.h"
@@ -4502,6 +4503,11 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
 
     if (!gCubeSnapshot)
     {
+        // <SS:Nexii> Atmo Magic precipitation: late translucent pass after
+        // all pools, depth-tested against the finished scene
+        SSPrecipRenderer::getInstance()->render();
+        // </SS:Nexii>
+
         // debug displays
         renderHighlights();
         mHighlightFaces.clear();
@@ -7419,7 +7425,8 @@ LLViewerObject* LLPipeline::lineSegmentIntersectInWorld(const LLVector4a& start,
 // trees, grass or nametags, so a ray starting inside the wearer's own body
 // is safe. Used by the OTS shoulder camera for collision.
 LLDrawable* LLPipeline::lineSegmentIntersectWorldGeometry(const LLVector4a& start, const LLVector4a& end,
-                                                          LLVector4a* intersection, bool skip_phantom)
+                                                          LLVector4a* intersection, bool skip_phantom,
+                                                          bool pick_transparent)
 {
     static const U32 world_partitions[] =
     {
@@ -7452,7 +7459,7 @@ LLDrawable* LLPipeline::lineSegmentIntersectWorldGeometry(const LLVector4a& star
                 LLSpatialPartition* part = region->getSpatialPartition(j);
                 if (part && hasRenderType(part->mDrawableType))
                 {
-                    LLDrawable* hit = part->lineSegmentIntersect(seg_start, local_end, false, false, false, false, NULL, &position);
+                    LLDrawable* hit = part->lineSegmentIntersect(seg_start, local_end, pick_transparent, false, false, false, NULL, &position);
                     if (hit)
                     {
                         drawable = hit;

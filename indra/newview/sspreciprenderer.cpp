@@ -1,0 +1,403 @@
+/**
+ * @file sspreciprenderer.cpp
+ * @brief Atmo Magic precipitation renderer implementation.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Phoenix Firestorm Viewer Source Code
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "sspreciprenderer.h"
+#include "ssatmomagic.h"
+
+#include "lldrawpoolalpha.h"
+#include "llglstates.h"
+#include "llrender.h"
+#include "llfasttimer.h"
+#include "llstaticstringtable.h"
+#include "llviewercamera.h"
+#include "llviewercontrol.h"
+#include "llviewershadermgr.h"
+#include "llviewertexture.h"
+#include "pipeline.h"
+
+// <SS:Nexii> Atmo Magic precipitation renderer
+
+extern bool gCubeSnapshot;
+
+// Fast timer breakdown: the build pass is CPU (culling, fade maths, vertex
+// writes) while the draw pass is the GL submission, so a jitter can be told
+// apart from a stall
+static LLTrace::BlockTimerStatHandle FTM_SS_PRECIP_RENDER("Atmo Magic Render");
+static LLTrace::BlockTimerStatHandle FTM_SS_PRECIP_BUILD("Build Quads");
+static LLTrace::BlockTimerStatHandle FTM_SS_PRECIP_DRAW("Draw");
+
+// Indices are uploaded as 32 bit (see ensureBuffer): 16 bit would top out at
+// 16383 quads, well under the combined tier caps.
+static const U32 MAX_QUADS = 48000;
+static const U32 VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR;
+
+static inline F32 smooth01(F32 t)
+{
+    t = llclamp(t, 0.f, 1.f);
+    return t * t * (3.f - 2.f * t);
+}
+
+// Cross-fade against the live camera distance; tiers hand off in the
+// overlap bands so moving through them never pops
+static F32 bandFade(F32 dist, const F32* band)
+{
+    const F32 f_in = (band[1] > band[0]) ? smooth01((dist - band[0]) / (band[1] - band[0])) : 1.f;
+    const F32 f_out = smooth01((band[3] - dist) / llmax(0.01f, band[3] - band[2]));
+    return llmin(f_in, f_out);
+}
+
+static F32 ageFade(const SSPrecipParticle& p)
+{
+    const bool slow = p.mTier == TIER_SHEETS;
+    const F32 t_in = slow ? 0.8f : 0.15f;
+    const F32 t_out = slow ? 0.8f : 0.25f;
+    return llmin(1.f, p.mAge / t_in) * llclamp((p.mMaxAge - p.mAge) / t_out, 0.f, 1.f);
+}
+
+bool SSPrecipRenderer::ensureBuffer(U32 quads)
+{
+    if (mVB.notNull() && mVBQuads >= quads) return true;
+
+    U32 alloc = llmax(1024u, mVBQuads);
+    while (alloc < quads) alloc *= 2;
+    alloc = llmin(alloc, MAX_QUADS);
+
+    mVB = new LLVertexBuffer(VB_MASK);
+    // Double the index count: buffers allocate in 16 bit units and halve the
+    // count when switched to 32 bit indices by setIndexData
+    if (!mVB->allocateBuffer(alloc * 4, alloc * 6 * 2))
+    {
+        mVB = nullptr;
+        mVBQuads = 0;
+        return false;
+    }
+
+    // Index pattern and texture coordinates never change per quad slot
+    std::vector<U32> indices((size_t)alloc * 6);
+    U32 vtx = 0;
+    for (U32 i = 0, o = 0; i < alloc; ++i, o += 6, vtx += 4)
+    {
+        indices[o + 0] = vtx + 0;
+        indices[o + 1] = vtx + 1;
+        indices[o + 2] = vtx + 2;
+        indices[o + 3] = vtx + 1;
+        indices[o + 4] = vtx + 3;
+        indices[o + 5] = vtx + 2;
+    }
+    mVB->setIndexData(indices.data(), 0, (U32)indices.size());
+
+    LLStrider<LLVector2> texcoordsp;
+    mVB->getTexCoord0Strider(texcoordsp);
+    for (U32 i = 0; i < alloc; ++i)
+    {
+        *texcoordsp++ = LLVector2(0.f, 1.f);
+        *texcoordsp++ = LLVector2(0.f, 0.f);
+        *texcoordsp++ = LLVector2(1.f, 1.f);
+        *texcoordsp++ = LLVector2(1.f, 0.f);
+    }
+    mVB->unmapBuffer();
+
+    mVBQuads = alloc;
+    return true;
+}
+
+void SSPrecipRenderer::drawMaterial(SSPrecipSim* sim, S32 material)
+{
+    U32 quads_total = 0;
+    for (U32 t = 0; t < SS_PRECIP_MAX_TEXTURES; ++t)
+    {
+        quads_total += mRanges[material][t].mQuads;
+    }
+    if (quads_total == 0) return;
+
+    for (U32 t = 0; t < SS_PRECIP_MAX_TEXTURES; ++t)
+    {
+        const Range& range = mRanges[material][t];
+        if (range.mQuads == 0) continue;
+
+        LLViewerTexture* texturep = sim->texture((U8)t);
+        if (!texturep) continue; // default particle texture not created yet
+        texturep->addTextureStats(128.f * 128.f);
+        gGL.getTexUnit(0)->bind(texturep);
+
+        // Rebind for every draw: the texture bind above flushes gGL, which
+        // can swap LLRender's own vertex buffer in underneath us
+        mVB->setBuffer();
+        mVB->drawRange(LLRender::TRIANGLES,
+                       range.mStartQuad * 4,
+                       (range.mStartQuad + range.mQuads) * 4 - 1,
+                       range.mQuads * 6,
+                       range.mStartQuad * 6);
+    }
+}
+
+void SSPrecipRenderer::render()
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_PRECIP_RENDER);
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    SSPrecipSim* sim = atmo->sim();
+    if (!sim || sim->empty()) return;
+
+    if (LLViewerCamera::sCurCameraID != LLViewerCamera::CAMERA_WORLD) return;
+    if (LLPipeline::sRenderingHUDs || LLPipeline::sImpostorRender || LLPipeline::sShadowRender || gCubeSnapshot) return;
+
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    if (camera->cameraUnderWater()) return;
+
+    const LLVector3 cam_pos = camera->getOrigin();
+    const LLVector3 cam_right = -camera->getLeftAxis();
+    const LLVector3 cam_up = camera->getUpAxis();
+
+    // Fade bands against the active preset's radii; particles left over from
+    // a previous preset just ride the same bands out
+    const SSPrecipPreset& preset = atmo->preset();
+    F32 bands[TIER_COUNT][4];
+    for (S32 t = 0; t < TIER_COUNT; ++t)
+    {
+        SSPrecipSim::tierBands((SSPrecipTier)t, preset, bands[t][0], bands[t][1], bands[t][2], bands[t][3]);
+    }
+
+    for (S32 m = 0; m < MAT_COUNT; ++m)
+    {
+        for (U32 t = 0; t < SS_PRECIP_MAX_TEXTURES; ++t)
+        {
+            mBuckets[m][t].clear();
+        }
+    }
+
+    // Live opacity tweaks, applied at draw time so the sliders affect
+    // particles already in the air
+    static LLCachedControl<F32> drop_alpha_setting(gSavedSettings, "SSAtmoDropAlpha", 1.f);
+    static LLCachedControl<F32> ripple_alpha_setting(gSavedSettings, "SSAtmoRippleAlpha", 1.f);
+    const F32 drop_alpha = llclamp((F32)drop_alpha_setting, 0.f, 2.f);
+    const F32 ripple_alpha = llclamp((F32)ripple_alpha_setting, 0.f, 2.f);
+
+    for (const SSPrecipParticle& p : sim->particles())
+    {
+        const F32 dx = p.mPos.mV[VX] - cam_pos.mV[VX];
+        const F32 dy = p.mPos.mV[VY] - cam_pos.mV[VY];
+        const F32 dist = sqrtf(dx * dx + dy * dy);
+        const F32 alpha = p.mAlpha * drop_alpha * ageFade(p) * bandFade(dist, bands[p.mTier]);
+        if (alpha < 0.004f) continue;
+        mBuckets[p.mMaterial % MAT_COUNT][p.mTex % SS_PRECIP_MAX_TEXTURES].push_back({ &p, llmin(alpha, 1.f) });
+    }
+
+    for (const SSPrecipParticle& p : sim->ripples())
+    {
+        const F32 t = p.mAge / p.mMaxAge;
+        const F32 alpha = p.mAlpha * ripple_alpha * (1.f - t);
+        if (alpha < 0.004f) continue;
+        // Impact effects carry their own material too: mana shards are emissive
+        mBuckets[p.mMaterial % MAT_COUNT][p.mTex % SS_PRECIP_MAX_TEXTURES].push_back({ &p, llmin(alpha, 1.f) });
+    }
+
+    U32 total = 0;
+    for (S32 m = 0; m < MAT_COUNT; ++m)
+    {
+        for (U32 t = 0; t < SS_PRECIP_MAX_TEXTURES; ++t)
+        {
+            total += (U32)mBuckets[m][t].size();
+        }
+    }
+    total = llmin(total, MAX_QUADS);
+    if (total == 0) return;
+
+    if (!ensureBuffer(total)) return;
+
+    {
+    LL_RECORD_BLOCK_TIME(FTM_SS_PRECIP_BUILD);
+    LLStrider<LLVector3> verticesp;
+    LLStrider<LLColor4U> colorsp;
+    mVB->getVertexStrider(verticesp, 0, total * 4);
+    mVB->getColorStrider(colorsp, 0, total * 4);
+
+    U32 written = 0;
+    for (S32 m = 0; m < MAT_COUNT; ++m)
+    {
+        for (U32 t = 0; t < SS_PRECIP_MAX_TEXTURES; ++t)
+        {
+            Range& range = mRanges[m][t];
+            range.mStartQuad = written;
+            U32 quads = 0;
+            for (const Item& item : mBuckets[m][t])
+            {
+                if (written + quads >= total) break;
+                const SSPrecipParticle& p = *item.mPart;
+
+                LLVector3 x_axis, y_axis;
+                LLVector3 pos = p.mPos;
+                switch (p.mKind)
+                {
+                    case KIND_STREAK:
+                    case KIND_SHEET:
+                    {
+                        // Texture-up runs against the motion so a streak's
+                        // bright head leads the fall
+                        y_axis = -p.mVel;
+                        if (y_axis.normVec() < 0.0001f) y_axis = LLVector3::z_axis;
+                        x_axis = y_axis % (pos - cam_pos);
+                        if (x_axis.normVec() < 0.0001f) x_axis = cam_right;
+                        x_axis *= p.mSizeX;
+                        y_axis *= p.mSizeY;
+                        break;
+                    }
+                    case KIND_FLAT:
+                    {
+                        // Surface-aligned expanding ring with fast-out ease
+                        F32 tt = p.mAge / p.mMaxAge;
+                        tt = 1.f - (1.f - tt) * (1.f - tt);
+                        const F32 s = lerp(p.mSizeX, p.mSizeY, tt);
+                        x_axis = p.mNormal % LLVector3::z_axis;
+                        if (x_axis.normVec() < 0.0001f) x_axis = LLVector3::x_axis;
+                        y_axis = p.mNormal % x_axis;
+                        y_axis.normVec();
+                        x_axis *= s;
+                        y_axis *= s;
+                        break;
+                    }
+                    default: // KIND_ROUND
+                        x_axis = cam_right * p.mSizeX;
+                        y_axis = cam_up * p.mSizeY;
+                        break;
+                }
+
+                *verticesp++ = pos - x_axis + y_axis;
+                *verticesp++ = pos - x_axis - y_axis;
+                *verticesp++ = pos + x_axis + y_axis;
+                *verticesp++ = pos + x_axis - y_axis;
+
+                // Emissive types brighten through their tint. Large abstraction
+                // quads get less of it: they are additively blended, so a full
+                // boost on a 16x32m sheet saturates into a blob.
+                const F32 tier_boost = (p.mTier == TIER_DROPS) ? 1.f
+                                     : (p.mTier == TIER_CLUSTERS) ? 0.55f : 0.3f;
+                const F32 boost = 1.f + p.mGlow * 1.5f * tier_boost;
+                LLColor4U col((U8)llmin((S32)(p.mTint.mV[0] * boost), 255),
+                              (U8)llmin((S32)(p.mTint.mV[1] * boost), 255),
+                              (U8)llmin((S32)(p.mTint.mV[2] * boost), 255),
+                              (U8)llclamp((S32)(item.mAlpha * 255.f), 0, 255));
+                *colorsp++ = col;
+                *colorsp++ = col;
+                *colorsp++ = col;
+                *colorsp++ = col;
+
+                ++quads;
+            }
+            range.mQuads = quads;
+            written += quads;
+        }
+    }
+    mVB->unmapBuffer();
+    }
+
+    // Late translucent pass: depth-tested against the scene, no depth
+    // writes, glow buffer protected
+    {
+    LL_RECORD_BLOCK_TIME(FTM_SS_PRECIP_DRAW);
+    LL_PROFILE_GPU_ZONE("atmo precip");
+    LLGLSPipelineAlpha gls_pipeline_alpha;
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    LLGLDisable cull(GL_CULL_FACE);
+    gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA,
+                  LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+
+    // Shared fullbright setup: the emissive pass and every fallback path
+    // run through it
+    auto bind_fullbright = []()
+    {
+        LLGLSLShader* shader = &gDeferredFullbrightProgram;
+        shader->bind();
+
+        static LLCachedControl<F32> displayGamma(gSavedSettings, "RenderDeferredDisplayGamma");
+        const F32 gamma = displayGamma;
+        shader->uniform1f(LLShaderMgr::DISPLAY_GAMMA, (gamma > 0.1f) ? 1.0f / gamma : (1.0f / 2.2f));
+        static LLStaticHashedString waterSign("waterSign");
+        shader->uniform1f(waterSign, 1.f);
+        shader->uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
+        shader->setMinimumAlpha(0.f);
+    };
+
+    // Lit pass: non-emissive particles (snow, ripples) shaded like other
+    // lit alpha objects: probe ambient plus shadowed sun. The deferred bind
+    // supplies shadow maps, probes and environment uniforms.
+    {
+        LLGLSLShader* lit = &gSSPrecipLitProgram;
+        if (lit->isComplete())
+        {
+            gPipeline.bindDeferredShaderFast(*lit);
+            lit->uniform2f(LLShaderMgr::DEFERRED_SCREEN_RES, (F32)gGLViewport[2], (F32)gGLViewport[3]);
+            drawMaterial(sim, MAT_LIT);
+        }
+        else
+        {
+            bind_fullbright();
+            drawMaterial(sim, MAT_LIT);
+        }
+    }
+
+    // Emissive pass: embers, mana hail and PBR emissives are light sources
+    // themselves, so they add to the scene rather than occluding it, and
+    // write into the glow channel so post-process bloom picks them up
+    gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE,
+                  LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE);
+    bind_fullbright();
+    drawMaterial(sim, MAT_EMISSIVE);
+    gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA,
+                  LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+
+    // Water pass: rain family through the refraction/env/specular shader,
+    // falling back to the (still bound) fullbright path when it didn't
+    // compile or is toggled off
+    {
+        static LLCachedControl<bool> use_rain_shader(gSavedSettings, "SSAtmoRainShader", true);
+        LLGLSLShader* rain = &gSSPrecipRainProgram;
+        if (use_rain_shader && rain->isComplete())
+        {
+            rain->bind();
+            rain->uniform2f(LLShaderMgr::DEFERRED_SCREEN_RES, (F32)gGLViewport[2], (F32)gGLViewport[3]);
+
+            // sceneMap only exists with SSR enabled; without it the shader
+            // transmits probe irradiance instead
+            static LLStaticHashedString ssRefract("ss_refract_strength");
+            const bool has_scene = gPipeline.mSceneMap.getWidth() > 0;
+            rain->uniform1f(ssRefract, has_scene ? 0.035f : 0.f);
+
+            gPipeline.bindReflectionProbes(*rain);
+            drawMaterial(sim, MAT_WATER);
+            gPipeline.unbindReflectionProbes(*rain);
+        }
+        else
+        {
+            drawMaterial(sim, MAT_WATER);
+        }
+    }
+
+    LLGLSLShader::unbind();
+    gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+    }
+}
+
+// </SS:Nexii>

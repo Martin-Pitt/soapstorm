@@ -1,0 +1,311 @@
+/**
+ * @file ssfloaterpreset.cpp
+ * @brief Atmo Magic preset editor implementation.
+ *
+ * $LicenseInfo:firstyear=2026&license=viewerlgpl$
+ * Phoenix Firestorm Viewer Source Code
+ *
+ * This library is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU Lesser General Public
+ * License as published by the Free Software Foundation;
+ * version 2.1 of the License only.
+ *
+ * This library is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * Lesser General Public License for more details.
+ *
+ * You should have received a copy of the GNU Lesser General Public
+ * License along with this library; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
+ * $/LicenseInfo$
+ */
+
+#include "llviewerprecompiledheaders.h"
+
+#include "ssfloaterpreset.h"
+#include "ssprecipvariants.h"
+
+#include "llbutton.h"
+#include "llcheckboxctrl.h"
+#include "llcolorswatch.h"
+#include "llcombobox.h"
+#include "lllineeditor.h"
+#include "llnotificationsutil.h"
+#include "llsliderctrl.h"
+#include "llviewercontrol.h"
+#include "llviewertexture.h"
+
+// <SS:Nexii> Atmo Magic preset editor
+
+static const char* TIER_PREFIX[TIER_COUNT] = { "drops", "clusters", "sheets" };
+
+SSFloaterPreset::SSFloaterPreset(const LLSD& key) :
+    LLFloater(key)
+{
+}
+
+bool SSFloaterPreset::postBuild()
+{
+    getChild<LLComboBox>("preset_combo")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onSelectPreset(); });
+
+    getChild<LLButton>("new_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickNew(); });
+    getChild<LLButton>("delete_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickDelete(); });
+    getChild<LLButton>("revert_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickRevert(); });
+
+    // Every editable widget funnels through one handler: read the whole form
+    // back into the preset, save it, and let the sim pick it up next frame
+    static const char* widgets[] = {
+        "archetype_combo", "fall_speed", "fall_lo", "fall_hi", "sway",
+        "wind_response", "rate", "intensity_size", "tint", "glow", "drop_shape",
+        "emissive", "water_shading", "impact_strength", "shatter",
+        "dark_mix", "puff_mix", "textures", "ripple_texture",
+        "dark_texture", "puff_texture",
+        "snd_impacts", "snd_light", "snd_medium", "snd_heavy",
+        "snd_roof_open", "snd_roof_small", "snd_roof_medium", "snd_roof_big",
+    };
+    for (const char* name : widgets)
+    {
+        if (LLUICtrl* ctrl = findChild<LLUICtrl>(name))
+        {
+            ctrl->setCommitCallback([this](LLUICtrl*, const LLSD&) { onCommitAny(); });
+        }
+    }
+
+    for (S32 t = 0; t < TIER_COUNT; ++t)
+    {
+        static const char* suffixes[] = { "enabled", "kind", "size_x", "size_y", "alpha", "radius" };
+        for (const char* suffix : suffixes)
+        {
+            const std::string name = std::string(TIER_PREFIX[t]) + "_" + suffix;
+            if (LLUICtrl* ctrl = findChild<LLUICtrl>(name))
+            {
+                ctrl->setCommitCallback([this](LLUICtrl*, const LLSD&) { onCommitAny(); });
+            }
+        }
+    }
+
+    refreshPresetList();
+    return true;
+}
+
+void SSFloaterPreset::onOpen(const LLSD& key)
+{
+    refreshPresetList();
+
+    // Open on whatever the weather is currently running, unless told otherwise
+    std::string want = key.isString() ? key.asString() : std::string();
+    if (want.empty())
+    {
+        want = gSavedSettings.getString("SSAtmoPreset");
+    }
+    if (want.empty())
+    {
+        want = SSAtmoMagic::getInstance()->preset().mName;
+    }
+    loadPreset(want);
+}
+
+void SSFloaterPreset::refreshPresetList()
+{
+    LLComboBox* combo = getChild<LLComboBox>("preset_combo");
+    const std::string selected = combo->getSelectedItemLabel();
+
+    combo->removeall();
+    for (const SSPrecipPreset& p : SSPrecipPresetMgr::instance().presets())
+    {
+        combo->add(p.mName, p.mName);
+    }
+    if (!selected.empty())
+    {
+        combo->selectByValue(selected);
+    }
+}
+
+void SSFloaterPreset::loadPreset(const std::string& name)
+{
+    const SSPrecipPreset* found = SSPrecipPresetMgr::instance().find(name);
+    if (!found) return;
+
+    mEdited = *found;
+    getChild<LLComboBox>("preset_combo")->selectByValue(mEdited.mName);
+    presetToControls();
+}
+
+void SSFloaterPreset::presetToControls()
+{
+    mUpdating = true;
+
+    getChild<LLUICtrl>("archetype_combo")->setValue((S32)mEdited.mArchetype);
+    getChild<LLUICtrl>("fall_speed")->setValue(mEdited.mFallSpeed);
+    getChild<LLUICtrl>("fall_lo")->setValue(mEdited.mFallLo);
+    getChild<LLUICtrl>("fall_hi")->setValue(mEdited.mFallHi);
+    getChild<LLUICtrl>("sway")->setValue(mEdited.mSway);
+    getChild<LLUICtrl>("wind_response")->setValue(mEdited.mWindResponse);
+    getChild<LLUICtrl>("rate")->setValue(mEdited.mRate);
+    getChild<LLUICtrl>("intensity_size")->setValue(mEdited.mIntensitySize);
+
+    getChild<LLColorSwatchCtrl>("tint")->set(mEdited.mTint);
+    getChild<LLUICtrl>("glow")->setValue(mEdited.mGlow);
+    getChild<LLUICtrl>("drop_shape")->setValue((S32)mEdited.mDropShape);
+    getChild<LLUICtrl>("emissive")->setValue(mEdited.mEmissive);
+    getChild<LLUICtrl>("water_shading")->setValue(mEdited.mWaterShading);
+
+    getChild<LLUICtrl>("impact_strength")->setValue(mEdited.mImpactStrength);
+    getChild<LLUICtrl>("shatter")->setValue(mEdited.mShatter);
+    getChild<LLUICtrl>("dark_mix")->setValue(mEdited.mDarkMix);
+    getChild<LLUICtrl>("puff_mix")->setValue(mEdited.mPuffMix);
+
+    for (S32 t = 0; t < TIER_COUNT; ++t)
+    {
+        const std::string prefix = TIER_PREFIX[t];
+        getChild<LLUICtrl>(prefix + "_enabled")->setValue(mEdited.mTiers[t].mEnabled);
+        getChild<LLUICtrl>(prefix + "_kind")->setValue((S32)mEdited.mTiers[t].mKind);
+        getChild<LLUICtrl>(prefix + "_size_x")->setValue(mEdited.mTiers[t].mSizeX);
+        getChild<LLUICtrl>(prefix + "_size_y")->setValue(mEdited.mTiers[t].mSizeY);
+        getChild<LLUICtrl>(prefix + "_alpha")->setValue(mEdited.mTiers[t].mAlpha);
+        getChild<LLUICtrl>(prefix + "_radius")->setValue(mEdited.mTiers[t].mRadius);
+    }
+
+    getChild<LLUICtrl>("textures")->setValue(mEdited.mTextures);
+    getChild<LLUICtrl>("ripple_texture")->setValue(mEdited.mRippleTexture);
+    getChild<LLUICtrl>("dark_texture")->setValue(mEdited.mDarkTexture);
+    getChild<LLUICtrl>("puff_texture")->setValue(mEdited.mPuffTexture);
+
+    getChild<LLUICtrl>("snd_impacts")->setValue(mEdited.mSounds.mImpacts);
+    getChild<LLUICtrl>("snd_light")->setValue(mEdited.mSounds.mAmbientLight);
+    getChild<LLUICtrl>("snd_medium")->setValue(mEdited.mSounds.mAmbientMedium);
+    getChild<LLUICtrl>("snd_heavy")->setValue(mEdited.mSounds.mAmbientHeavy);
+    getChild<LLUICtrl>("snd_roof_open")->setValue(mEdited.mSounds.mRoofOpen);
+    getChild<LLUICtrl>("snd_roof_small")->setValue(mEdited.mSounds.mRoofSmall);
+    getChild<LLUICtrl>("snd_roof_medium")->setValue(mEdited.mSounds.mRoofMedium);
+    getChild<LLUICtrl>("snd_roof_big")->setValue(mEdited.mSounds.mRoofBig);
+
+    mUpdating = false;
+}
+
+void SSFloaterPreset::controlsToPreset()
+{
+    mEdited.mArchetype = (SSPrecipArchetype)llclamp(getChild<LLUICtrl>("archetype_combo")->getValue().asInteger(),
+                                                    0, (S32)SSPrecipArchetype::COUNT - 1);
+    mEdited.mFallSpeed = (F32)getChild<LLUICtrl>("fall_speed")->getValue().asReal();
+    mEdited.mFallLo = (F32)getChild<LLUICtrl>("fall_lo")->getValue().asReal();
+    mEdited.mFallHi = llmax(mEdited.mFallLo, (F32)getChild<LLUICtrl>("fall_hi")->getValue().asReal());
+    mEdited.mSway = (F32)getChild<LLUICtrl>("sway")->getValue().asReal();
+    mEdited.mWindResponse = (F32)getChild<LLUICtrl>("wind_response")->getValue().asReal();
+    mEdited.mRate = (F32)getChild<LLUICtrl>("rate")->getValue().asReal();
+    mEdited.mIntensitySize = (F32)getChild<LLUICtrl>("intensity_size")->getValue().asReal();
+
+    mEdited.mTint = getChild<LLColorSwatchCtrl>("tint")->get();
+    mEdited.mGlow = (F32)getChild<LLUICtrl>("glow")->getValue().asReal();
+    mEdited.mDropShape = (U8)llclamp(getChild<LLUICtrl>("drop_shape")->getValue().asInteger(), 0, 2);
+    mEdited.mEmissive = getChild<LLUICtrl>("emissive")->getValue().asBoolean();
+    mEdited.mWaterShading = getChild<LLUICtrl>("water_shading")->getValue().asBoolean();
+
+    mEdited.mImpactStrength = (F32)getChild<LLUICtrl>("impact_strength")->getValue().asReal();
+    mEdited.mShatter = getChild<LLUICtrl>("shatter")->getValue().asBoolean();
+    mEdited.mDarkMix = (F32)getChild<LLUICtrl>("dark_mix")->getValue().asReal();
+    mEdited.mPuffMix = (F32)getChild<LLUICtrl>("puff_mix")->getValue().asReal();
+
+    for (S32 t = 0; t < TIER_COUNT; ++t)
+    {
+        const std::string prefix = TIER_PREFIX[t];
+        mEdited.mTiers[t].mEnabled = getChild<LLUICtrl>(prefix + "_enabled")->getValue().asBoolean();
+        mEdited.mTiers[t].mKind = (U8)llclamp(getChild<LLUICtrl>(prefix + "_kind")->getValue().asInteger(), 0, 3);
+        mEdited.mTiers[t].mSizeX = (F32)getChild<LLUICtrl>(prefix + "_size_x")->getValue().asReal();
+        mEdited.mTiers[t].mSizeY = (F32)getChild<LLUICtrl>(prefix + "_size_y")->getValue().asReal();
+        mEdited.mTiers[t].mAlpha = (F32)getChild<LLUICtrl>(prefix + "_alpha")->getValue().asReal();
+        mEdited.mTiers[t].mRadius = (F32)getChild<LLUICtrl>(prefix + "_radius")->getValue().asReal();
+    }
+
+    mEdited.mTextures = getChild<LLUICtrl>("textures")->getValue().asString();
+    mEdited.mRippleTexture = getChild<LLUICtrl>("ripple_texture")->getValue().asString();
+    mEdited.mDarkTexture = getChild<LLUICtrl>("dark_texture")->getValue().asString();
+    mEdited.mPuffTexture = getChild<LLUICtrl>("puff_texture")->getValue().asString();
+
+    mEdited.mSounds.mImpacts = getChild<LLUICtrl>("snd_impacts")->getValue().asString();
+    mEdited.mSounds.mAmbientLight = getChild<LLUICtrl>("snd_light")->getValue().asString();
+    mEdited.mSounds.mAmbientMedium = getChild<LLUICtrl>("snd_medium")->getValue().asString();
+    mEdited.mSounds.mAmbientHeavy = getChild<LLUICtrl>("snd_heavy")->getValue().asString();
+    mEdited.mSounds.mRoofOpen = getChild<LLUICtrl>("snd_roof_open")->getValue().asString();
+    mEdited.mSounds.mRoofSmall = getChild<LLUICtrl>("snd_roof_small")->getValue().asString();
+    mEdited.mSounds.mRoofMedium = getChild<LLUICtrl>("snd_roof_medium")->getValue().asString();
+    mEdited.mSounds.mRoofBig = getChild<LLUICtrl>("snd_roof_big")->getValue().asString();
+}
+
+void SSFloaterPreset::applyLive()
+{
+    SSPrecipPresetMgr::instance().save(mEdited);
+
+    // Sizes and shapes are baked into the splatter textures, so drop the
+    // bakes; they are keyed on the shape fields and would otherwise linger
+    SSPrecipVariants::instance().clearCache();
+
+    // Editing a preset implies you want to see it
+    gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+}
+
+void SSFloaterPreset::onCommitAny()
+{
+    if (mUpdating) return;
+    controlsToPreset();
+    applyLive();
+}
+
+void SSFloaterPreset::onSelectPreset()
+{
+    loadPreset(getChild<LLComboBox>("preset_combo")->getValue().asString());
+    gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+}
+
+void SSFloaterPreset::onClickNew()
+{
+    // Copy the preset on screen under a new name; built-ins stay untouched
+    std::string base = mEdited.mName + " copy";
+    std::string name = base;
+    for (S32 i = 2; SSPrecipPresetMgr::instance().find(name) && i < 100; ++i)
+    {
+        name = base + " " + llformat("%d", i);
+    }
+
+    mEdited.mName = name;
+    mEdited.mBuiltIn = false;
+    applyLive();
+    refreshPresetList();
+    getChild<LLComboBox>("preset_combo")->selectByValue(name);
+}
+
+void SSFloaterPreset::onClickDelete()
+{
+    const std::string name = mEdited.mName;
+    if (!SSPrecipPresetMgr::instance().remove(name))
+    {
+        // Built-ins have no file unless they were overridden, so there is
+        // nothing to remove
+        LLNotificationsUtil::add("GenericAlert",
+            LLSD().with("MESSAGE", "This preset has no saved copy to delete."));
+        return;
+    }
+
+    refreshPresetList();
+    const auto& presets = SSPrecipPresetMgr::instance().presets();
+    if (!presets.empty())
+    {
+        loadPreset(presets.front().mName);
+    }
+}
+
+void SSFloaterPreset::onClickRevert()
+{
+    // Drop the saved override so a built-in returns to its shipped values
+    SSPrecipPresetMgr::instance().remove(mEdited.mName);
+    SSPrecipVariants::instance().clearCache();
+    refreshPresetList();
+    loadPreset(mEdited.mName);
+}
+
+// </SS:Nexii>

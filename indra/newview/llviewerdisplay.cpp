@@ -86,6 +86,10 @@
 #include "llvograss.h"
 #include "llworld.h"
 #include "pipeline.h"
+// <SS:Nexii> Atmo Magic weather
+#include "ssatmomagic.h"
+#include "ssrainshadow.h"
+// </SS:Nexii>
 
 #include <boost/json.hpp>
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
@@ -975,6 +979,13 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                 { //for some reason, ATI 4800 series will error out if you
                   //try to generate a shadow before the first frame is through
                     gPipeline.generateSunShadow(*LLViewerCamera::getInstance());
+
+                    // <SS:Nexii> Atmo Magic: parameters/impacts tick, then at
+                    // most one rain shadow tile capture, here where the
+                    // pipeline is in the same state the sun shadows render in
+                    SSAtmoMagic::getInstance()->idle();
+                    SSRainShadowMap::getInstance()->capture();
+                    // </SS:Nexii>
                 }
 
                 LLVertexBuffer::unbind();

@@ -229,8 +229,11 @@ public:
     // skip_phantom: re-cast past phantom prims so they never block the camera
     // or the aim convergence (phantom objects have no physics, so the bullet
     // and the camera should pass straight through them).
+    // pick_transparent: count alpha-blended faces as solid. The camera wants
+    // to ignore them, but a glass roof or window still shelters from rain.
     LLDrawable* lineSegmentIntersectWorldGeometry(const LLVector4a& start, const LLVector4a& end,
-                                                  LLVector4a* intersection, bool skip_phantom = false);
+                                                  LLVector4a* intersection, bool skip_phantom = false,
+                                                  bool pick_transparent = false);
 
     //get the closest particle to start between start and end, returns the LLVOPartGroup and particle index
     LLVOPartGroup* lineSegmentIntersectParticle(const LLVector4a& start, const LLVector4a& end, LLVector4a* intersection,

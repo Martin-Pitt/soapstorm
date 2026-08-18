@@ -25632,6 +25632,358 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.9</real>
     </map>
+    <key>SSAtmoEnabled</key>
+      <map>
+      <key>Comment</key>
+      <string>Enable the Atmo Magic client-side weather system (deterministic precipitation synced across clients sharing parameters and seed)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoPreset</key>
+      <map>
+      <key>Comment</key>
+      <string>Name of the active weather preset</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string>Rain</string>
+    </map>
+    <key>SSAtmoPrecipitation</key>
+      <map>
+      <key>Comment</key>
+      <string>Precipitation strength: 0 none, over drizzle, up to a full storm at 1</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.5</real>
+    </map>
+    <key>SSAtmoTurbulence</key>
+      <map>
+      <key>Comment</key>
+      <string>Gustiness of precipitation arrival: 0 steady fall, 1 pronounced waves and bursts</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.3</real>
+    </map>
+    <key>SSAtmoWindDirection</key>
+      <map>
+      <key>Comment</key>
+      <string>Compass direction the wind blows toward, in degrees; tilts the fall direction</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>225.0</real>
+    </map>
+    <key>SSAtmoWindSpeed</key>
+      <map>
+      <key>Comment</key>
+      <string>Wind speed in m/s; tilts fast precipitation slightly and drifts slow types hard</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>4.0</real>
+    </map>
+    <key>SSAtmoRipples</key>
+      <map>
+      <key>Comment</key>
+      <string>Spawn ripple/splash particles where precipitation lands near the camera</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoSounds</key>
+      <map>
+      <key>Comment</key>
+      <string>Play impact sound samples from SSAtmoImpactSounds for landings near the camera</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoSoundGain</key>
+      <map>
+      <key>Comment</key>
+      <string>Base gain of precipitation impact sounds</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.6</real>
+    </map>
+    <key>SSAtmoShadowRes</key>
+      <map>
+      <key>Comment</key>
+      <string>Rain shadow map texels across a region tile; 1024 over a 256m region is ~0.25m accuracy</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>1024</integer>
+    </map>
+    <key>SSAtmoShadowMaxAge</key>
+      <map>
+      <key>Comment</key>
+      <string>Seconds before a cached rain shadow tile is recaptured even without prim updates</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>60.0</real>
+    </map>
+    <key>SSAtmoGlowScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Master multiplier on the glow of all emissive precipitation</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoDensity</key>
+      <map>
+      <key>Comment</key>
+      <string>Global multiplier on precipitation particle spawn density</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoParticleBudget</key>
+      <map>
+      <key>Comment</key>
+      <string>Scales the per-tier particle count caps (drops/clusters/sheets)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoLodDrops</key>
+      <map>
+      <key>Comment</key>
+      <string>Meters around the camera covered by fully modelled individual drops (rain-family reference; slow types scale down)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>28.0</real>
+    </map>
+    <key>SSAtmoLodClusters</key>
+      <map>
+      <key>Comment</key>
+      <string>Meters out to which clustered multi-drop particles carry precipitation</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>96.0</real>
+    </map>
+    <key>SSAtmoLodSheets</key>
+      <map>
+      <key>Comment</key>
+      <string>Meters out to which large distant shower sheets are drawn</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>224.0</real>
+    </map>
+    <key>SSAtmoRippleScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Scales landing ripple rings and splash crowns</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoRippleSpeed</key>
+      <map>
+      <key>Comment</key>
+      <string>How quickly landing ripples expand and fade; higher is snappier</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSAtmoDropAlpha</key>
+      <map>
+      <key>Comment</key>
+      <string>Opacity multiplier for precipitation particles (all tiers)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoRippleAlpha</key>
+      <map>
+      <key>Comment</key>
+      <string>Opacity multiplier for landing ripple rings and splash crowns</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoTeardropFlip</key>
+      <map>
+      <key>Comment</key>
+      <string>Flip which end of a generated raindrop carries the rounded head; use if drops appear to fall point-first</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoShowInfo</key>
+      <map>
+      <key>Comment</key>
+      <string>Draw the Atmo Magic diagnostic readout: live weather values, particle counts, impact rate and the indoor/outdoor probe classification</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoVolumeMaster</key>
+      <map>
+      <key>Comment</key>
+      <string>Overall volume of every Atmo Magic sound</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.8</real>
+    </map>
+    <key>SSAtmoVolumeAmbient</key>
+      <map>
+      <key>Comment</key>
+      <string>Volume of the precipitation ambient beds, indoor and out</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoVolumeWind</key>
+      <map>
+      <key>Comment</key>
+      <string>Volume of the wind loops</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSlapbackAmount</key>
+      <map>
+      <key>Comment</key>
+      <string>Strength of the slapback echo bounced off nearby surfaces</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSlapback</key>
+      <map>
+      <key>Comment</key>
+      <string>Outdoors, bounce impact sounds off the nearest wall or cliff as a delayed echo positioned at that surface</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoSoundResponse</key>
+      <map>
+      <key>Comment</key>
+      <string>How quickly ambient weather loops fade toward their target volume when the situation changes, per second; higher is snappier</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.0</real>
+    </map>
+    <key>SSAtmoRainShader</key>
+      <map>
+      <key>Comment</key>
+      <string>Render rain-family particles with the refraction/environment/specular water shader instead of the plain fullbright path</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoLoopWindLight</key>
+      <map>
+      <key>Comment</key>
+      <string>Comma-separated sound UUID sequence: light wind ambient loop; entries chain end-to-end</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string />
+    </map>
+    <key>SSAtmoLoopWindStrong</key>
+      <map>
+      <key>Comment</key>
+      <string>Comma-separated sound UUID sequence: strong wind ambient loop with gusts; entries chain end-to-end</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string />
+    </map>
     <key>FSKillFeedEnabled</key>
       <map>
       <key>Comment</key>

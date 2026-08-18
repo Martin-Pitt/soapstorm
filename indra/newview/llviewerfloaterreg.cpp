@@ -239,6 +239,8 @@
 #include "llsidepanelinventory.h"
 #include "NACLfloaterexploresounds.h"
 #include "particleeditor.h"
+#include "ssfloateratmo.h" // <SS:Nexii> Atmo Magic weather
+#include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
 #include "quickprefs.h"
 #include "vjfloaterlocalmesh.h" // local mesh
 #include "fsfloaterwhitelisthelper.h" // fs whitelist helper
@@ -678,6 +680,13 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("money_tracker", "floater_fs_money_tracker.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSMoneyTracker>);
     LLFloaterReg::add("omnifilter", "floater_omnifilter.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<Omnifilter>);        // <FS:Zi> Omnifilter support
     LLFloaterReg::add("particle_editor","floater_particle_editor.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ParticleEditor>);
+    // <SS:Nexii> Atmo Magic weather
+    LLFloaterReg::add("ss_atmo", "floater_ss_atmo.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoMagic>);
+    LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
+    LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    // </SS:Nexii>
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).
 	// LLFloaterReg::add(PHOTOTOOLS_FLOATER, "floater_phototools.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FloaterQuickPrefs>); // Original line with likely typo

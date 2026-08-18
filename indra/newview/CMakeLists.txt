@@ -188,6 +188,15 @@ set(viewer_SOURCE_FILES
     fsradarmenu.cpp
     fsregioncross.cpp
     fsrezqueue.cpp
+    ssatmomagic.cpp
+    ssfloateratmo.cpp
+    ssfloaterpreset.cpp
+    ssprecippreset.cpp
+    ssprecipitation.cpp
+    ssprecipvariants.cpp
+    sspreciprenderer.cpp
+    ssrainshadow.cpp
+    ssweathersounds.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1059,6 +1068,15 @@ set(viewer_HEADER_FILES
     fsradarmenu.h
     fsregioncross.h
     fsrezqueue.h
+    ssatmomagic.h
+    ssfloateratmo.h
+    ssfloaterpreset.h
+    ssprecippreset.h
+    ssprecipitation.h
+    ssprecipvariants.h
+    sspreciprenderer.h
+    ssrainshadow.h
+    ssweathersounds.h
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h

@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="false"
+ height="480"
+ layout="topleft"
+ name="floater_ss_atmo_fx"
+ save_rect="true"
+ single_instance="true"
+ title="ATMO MAGIC - EFFECTS &amp; LOD"
+ width="380">
+    <text
+     follows="left|top" layout="topleft" left="12" top="26"
+     height="14" width="356" name="density_label" font="SansSerifSmallBold">
+        Density
+    </text>
+    <slider
+     control_name="SSAtmoDensity"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Rain density:" label_width="130"
+     min_val="0.1" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Global multiplier on how many particles spawn per square meter" />
+    <slider
+     control_name="SSAtmoParticleBudget"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Particle budget:" label_width="130"
+     min_val="0.25" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Scales the hard particle caps per detail tier (drops/clusters/sheets)" />
+    <slider
+     control_name="SSAtmoDropAlpha"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Drop opacity:" label_width="130"
+     min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Opacity multiplier for all precipitation particles, applied live" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="356" name="lod_label" font="SansSerifSmallBold">
+        Detail tier distances
+    </text>
+    <slider
+     control_name="SSAtmoLodDrops"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Individual drops:" label_width="130"
+     min_val="8" max_val="96" increment="1" decimal_digits="0" show_text="true"
+     tool_tip="Meters around the camera with fully modelled individual drops" />
+    <slider
+     control_name="SSAtmoLodClusters"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Drop clusters:" label_width="130"
+     min_val="24" max_val="256" increment="2" decimal_digits="0" show_text="true"
+     tool_tip="Meters out to which clustered multi-drop particles carry the rain" />
+    <slider
+     control_name="SSAtmoLodSheets"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Shower sheets:" label_width="130"
+     min_val="64" max_val="512" increment="4" decimal_digits="0" show_text="true"
+     tool_tip="Meters out to which large distant shower curtains are drawn" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="356" name="impact_label" font="SansSerifSmallBold">
+        Impacts
+    </text>
+    <slider
+     control_name="SSAtmoRippleScale"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Ripple size:" label_width="130"
+     min_val="0.25" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Scales the landing rings and splash crowns" />
+    <slider
+     control_name="SSAtmoRippleSpeed"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Ripple speed:" label_width="130"
+     min_val="0.5" max_val="5" increment="0.1" decimal_digits="1" show_text="true"
+     tool_tip="How quickly rings expand and splashes pop; higher is snappier" />
+    <slider
+     control_name="SSAtmoRippleAlpha"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="15" width="356" label="Ripple opacity:" label_width="130"
+     min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Opacity multiplier for landing rings and splash crowns, applied live" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="356" name="shading_label" font="SansSerifSmallBold">
+        Shading
+    </text>
+    <check_box
+     control_name="SSAtmoRainShader"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356"
+     label="Water shader for rain (refraction, reflections, glints)"
+     tool_tip="Off renders rain through the plain textured path; also falls back automatically if the shader failed to compile (see log)" />
+    <slider
+     control_name="SSAtmoGlowScale"
+     follows="left|top" layout="topleft" left="12" top_pad="8"
+     height="15" width="356" label="Glow master:" label_width="130"
+     min_val="0" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
+     tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="356" name="debug_label" font="SansSerifSmallBold">
+        Diagnostics
+    </text>
+    <check_box
+     control_name="SSAtmoShowInfo"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356"
+     label="Show info overlay"
+     tool_tip="On-screen readout of weather values, particle counts, impact rate and the indoor/outdoor probe result" />
+</floater>
