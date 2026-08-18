@@ -97,6 +97,7 @@ class LLVOAvatar :
 public:
     friend class LLVOAvatarSelf;
     friend class LLAvatarCheckImpostorMode;
+    friend class LLVisualParamHint;
 
 /********************************************************************************
  **                                                                            **
