@@ -25698,6 +25698,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>4.0</real>
     </map>
+    <key>SSAtmoRespawnOnImpact</key>
+      <map>
+      <key>Comment</key>
+      <string>Put a fresh drop, cluster or sheet in the air the moment one lands, instead of waiting for the next spawn tick. Keeps rain continuous rather than arriving in pulses</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
     <key>SSAtmoRipples</key>
       <map>
       <key>Comment</key>
@@ -25720,16 +25731,16 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>SSAtmoSoundGain</key>
+    <key>SSAtmoShadowDebugStep</key>
       <map>
       <key>Comment</key>
-      <string>Base gain of precipitation impact sounds</string>
+      <string>Render Metadata rain shadow debug: spacing in meters of the grid the shadow is draped on. Smaller is sharper and slower to rebake</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>0.6</real>
+      <real>2.0</real>
     </map>
     <key>SSAtmoShadowRes</key>
       <map>
@@ -25778,13 +25789,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoParticleBudget</key>
       <map>
       <key>Comment</key>
-      <string>Scales the per-tier particle count caps (drops/clusters/sheets)</string>
+      <string>Total precipitation particles allowed in the air at once, split between the drop, cluster and sheet tiers. A ceiling, not a target: the weather only reaches it in a downpour</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
-      <string>F32</string>
+      <string>U32</string>
       <key>Value</key>
-      <real>1.0</real>
+      <integer>40000</integer>
     </map>
     <key>SSAtmoLodDrops</key>
       <map>
@@ -25833,13 +25844,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoRippleSpeed</key>
       <map>
       <key>Comment</key>
-      <string>How quickly landing ripples expand and fade; higher is snappier</string>
+      <string>Taste multiplier on how quickly landing ripples and splash crowns expand and fade; higher is snappier. Divides the preset's own ripple and crown lifetimes, so at 2 a preset asking for a 0.4s ring gets 0.2s</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>2.0</real>
+      <real>1.0</real>
     </map>
     <key>SSAtmoDropAlpha</key>
       <map>
@@ -25863,17 +25874,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>1.0</real>
     </map>
-    <key>SSAtmoTeardropFlip</key>
-      <map>
-      <key>Comment</key>
-      <string>Flip which end of a generated raindrop carries the rounded head; use if drops appear to fall point-first</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>0</integer>
-    </map>
     <key>SSAtmoShowInfo</key>
       <map>
       <key>Comment</key>
@@ -25884,6 +25884,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>SSAtmoTrackConfig</key>
+      <map>
+      <key>Comment</key>
+      <string>Local Atmo Magic per-track weather configuration (LLSD notation). Only consulted where the parcel description does not point at an Atmo notecard; edited through the Atmo Magic floater rather than by hand</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string></string>
     </map>
     <key>SSAtmoVolumeMaster</key>
       <map>
@@ -25918,10 +25929,32 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>1.0</real>
     </map>
-    <key>SSAtmoSlapbackAmount</key>
+    <key>SSAtmoWindFlow</key>
       <map>
       <key>Comment</key>
-      <string>Strength of the slapback echo bounced off nearby surfaces</string>
+      <string>Solve a wind flowmap around nearby geometry, so wind speeds up through alleys, stalls against windward faces and goes calm in courtyards. Needs OpenGL 4.3; falls back to a single uniform wind vector without it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowAdvect</key>
+      <map>
+      <key>Comment</key>
+      <string>Let the wind flowmap carry precipitation, so rain and snow curve around buildings and funnel down alleys instead of drifting uniformly</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowCell</key>
+      <map>
+      <key>Comment</key>
+      <string>Target cell size of the wind flowmap in meters. An alley has to be a few cells wide before air can be pushed down it, so this wants to be well under the narrowest gap that should funnel. A region too wide to reach this at the resolution cap gets coarser cells rather than a runaway solve</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25929,16 +25962,269 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>1.0</real>
     </map>
-    <key>SSAtmoSlapback</key>
+    <key>SSAtmoWindFlowDebugStyle</key>
       <map>
       <key>Comment</key>
-      <string>Outdoors, bounce impact sounds off the nearest wall or cliff as a delayed echo positioned at that surface</string>
+      <string>Render Metadata wind flow debug: 0 draws one arrow per solved cell, 1 traces flow lines through the field. Lines do not branch, but seeded densely they read as branching, because neighbouring lines diverge around an obstacle and converge again through a gap</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoWindFlowDebugLineTint</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: how flow lines are coloured. 1 tints by speed against the ambient wind, cold for sheltered through neutral to hot for a jet, leaving direction to the line's own path. 0 uses the same direction hue the arrows use</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowDebugAspect</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: how much further upwind than sideways flow lines are seeded. The seed footprint is stretched along the wind, so lines start well upwind and arrive already shaped by what they have passed through, instead of being short stubs coming in from every side</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.0</real>
+    </map>
+    <key>SSAtmoWindFlowDebugSeed</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: cells between flow line seeds. Lower is denser and slower; the seeding is limited to the area around the camera either way</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>6</integer>
+    </map>
+    <key>SSAtmoWindFlowDebugLength</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: how many steps a flow line is traced for before it is dropped. A step is three quarters of a cell, so this has to be long enough to carry a line from the upwind edge of the seed footprint to the camera</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>96</integer>
+    </map>
+    <key>SSAtmoWindFlowDebugFade</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: how much of its opacity a slab keeps per slab of distance from the one the camera is in. Compounding, so 0.5 draws the neighbouring slab at half strength and the one beyond it at a quarter. Lower separates the layers harder and buries the distant ones sooner; 1 disables the fade</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.5</real>
+    </map>
+    <key>SSAtmoWindFlowDebugCapture</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: which capture pass to draw instead of the flow field. 0 the solved flow, 1 the overhead heightmap, 2 to 5 the four oblique probes. Each pass is drawn as the world points it actually saw, so a direction missing whole swathes of a region shows up as a hole</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoWindFlowDebugRange</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata wind flow debug: distance from the camera drawn at full texel density. Beyond it the arrow field decimates so the far side of the domain still costs something sane</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>24.0</real>
+    </map>
+    <key>SSAtmoWindFlowStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>How far the solved wind is allowed to depart from the ambient wind. 1 is the physical solve, below 1 pulls the field back toward a uniform wind, above 1 exaggerates every deflection, lee and alley jet without changing the wind speed itself</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSAtmoWindFlowSolidCurve</key>
+      <map>
+      <key>Comment</key>
+      <string>Exponent on a slab's fractional solid occupancy. 1 is the true fraction, so a building filling a third of a thick slab blocks a third of the air. Below 1 makes partial cover behave more like a solid wall, which is what a low roofline needs when the slabs are thicker than the building</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoWindFlowShelterAmount</key>
+      <map>
+      <key>Comment</key>
+      <string>How much of the wind the lee of a building takes away, 0 to 1. Works with SSAtmoWindFlowShelterSteps, which sets how far upwind cover is looked for</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.4</real>
+    </map>
+    <key>SSAtmoWindFlowMaxGain</key>
+      <map>
+      <key>Comment</key>
+      <string>Ceiling on how fast the flow may run relative to the ambient wind for its slab. A gap between two buildings accelerates the air through it; this is how much of that jet is kept. Set high to leave it unbounded</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>4.0</real>
+    </map>
+    <key>SSAtmoWindFlowGradient</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmospheric boundary layer exponent. Wind rises with height above the ground following a power law; 0 is a uniform wind at all altitudes, 0.25 is typical over built-up ground, 0.4 is a dense city</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>SSAtmoWindFlowHeight</key>
+      <map>
+      <key>Comment</key>
+      <string>Nominal height in meters of the wind flowmap band above the ground. A starting guess only: the capture probes four times this far up and settles the ceiling on how tall the region actually builds</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>192.0</real>
+    </map>
+    <key>SSAtmoWindFlowIterations</key>
+      <map>
+      <key>Comment</key>
+      <string>Pressure solver passes for the wind flowmap. Jacobi carries information one cell per pass, so this wants to be of the same order as the texel count or the flow barely notices buildings</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>128</integer>
+    </map>
+    <key>SSAtmoWindFlowMargin</key>
+      <map>
+      <key>Comment</key>
+      <string>How far in meters a region's wind flowmap reaches into its neighbours. The overlap is what keeps wind continuous across a sim border instead of stopping dead at it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>64.0</real>
+    </map>
+    <key>SSAtmoWindFlowProbeRes</key>
+      <map>
+      <key>Comment</key>
+      <string>Wind flowmap: probe capture resolution as a multiple of the mask resolution, 1 to 4. The probe box is wider than the region and the ground inside it is foreshortened by the tilt, so at 1 a probe texel covers several mask cells and a cell tests against a ray that does not pass through it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSAtmoWindFlowProbes</key>
+      <map>
+      <key>Comment</key>
+      <string>Wind flowmap: let the oblique probes carve open the space under overhangs. Turn off to use the plain overhead heightmap, where everything below a rooftop is solid; useful for telling a bad probe capture apart from a bad solve</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowPassageGap</key>
+      <map>
+      <key>Comment</key>
+      <string>Wind flowmap: how many cells of unseen ground a discovered passage may be carried across. The probes open the mouths of an underpass and leave the middle solid because no ray reaches that far; a solid cell with carved cells on both sides along an axis is inside the passage. Requiring both sides is what keeps this out of buildings. 0 disables it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>4</integer>
+    </map>
+    <key>SSAtmoWindFlowProbeAngle</key>
+      <map>
+      <key>Comment</key>
+      <string>Wind flowmap: elevation in degrees of the four oblique probes that look in under overhangs. The overhead capture alone treats everything below a rooftop as solid; the probes carve back whatever they can see from the side, so a shallower angle reaches further under a deck at the cost of a wider capture footprint</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>30.0</real>
+    </map>
+    <key>SSAtmoWindFlowRes</key>
+      <map>
+      <key>Comment</key>
+      <string>Maximum texels per axis of a region's wind flowmap. A ceiling on the solve, not the resolution itself: cell size comes from SSAtmoWindFlowCell, and this is what stops a wide varregion or a very small cell size from running away. Memory and solve time both go with the square of it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>384</integer>
+    </map>
+    <key>SSAtmoWindFlowShelterSteps</key>
+      <map>
+      <key>Comment</key>
+      <string>How many cells upwind the solver looks for cover when working out lee sheltering. Zero disables the calm pocket behind buildings</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSAtmoWindFlowSliceMax</key>
+      <map>
+      <key>Comment</key>
+      <string>Upper bound on vertical slabs in the wind flowmap, 2 to 16. Slab count is derived from the captured height range; this only caps it. Too few slabs smear a building across a slab thick enough that the air flows through it instead of around it, so this is the first thing to raise if the flow ignores buildings</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>12</integer>
+    </map>
+    <key>SSAtmoWindFlowSliceMin</key>
+      <map>
+      <key>Comment</key>
+      <string>Minimum separation between wind flowmap slabs in meters. Below roughly the horizontal cell size extra slabs cannot resolve anything new</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.0</real>
     </map>
     <key>SSAtmoSoundResponse</key>
       <map>

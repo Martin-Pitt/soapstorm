@@ -70,9 +70,8 @@ static F32 bandFade(F32 dist, const F32* band)
 
 static F32 ageFade(const SSPrecipParticle& p)
 {
-    const bool slow = p.mTier == TIER_SHEETS;
-    const F32 t_in = slow ? 0.8f : 0.15f;
-    const F32 t_out = slow ? 0.8f : 0.25f;
+    const F32 t_in = (p.mTier == TIER_SHEETS) ? 0.8f : 0.15f;
+    const F32 t_out = ssPrecipFadeOut(p.mTier);
     return llmin(1.f, p.mAge / t_in) * llclamp((p.mMaxAge - p.mAge) / t_out, 0.f, 1.f);
 }
 

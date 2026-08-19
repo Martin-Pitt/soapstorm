@@ -15,72 +15,249 @@
      height="14" width="356" name="density_label" font="SansSerifSmallBold">
         Density
     </text>
-    <slider
-     control_name="SSAtmoDensity"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Rain density:" label_width="130"
-     min_val="0.1" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
-     tool_tip="Global multiplier on how many particles spawn per square meter" />
-    <slider
-     control_name="SSAtmoParticleBudget"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Particle budget:" label_width="130"
-     min_val="0.25" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
-     tool_tip="Scales the hard particle caps per detail tier (drops/clusters/sheets)" />
-    <slider
-     control_name="SSAtmoDropAlpha"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Drop opacity:" label_width="130"
-     min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
-     tool_tip="Opacity multiplier for all precipitation particles, applied live" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoDensity"
+      tool_tip="Global multiplier on how many particles spawn per square meter">
+        Rain density:
+    </text>
+    <slider_bar
+      control_name="SSAtmoDensity" name="SB_SSAtmoDensity"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0.1" max_val="3" increment="0.05" decimal_digits="2"
+      tool_tip="Global multiplier on how many particles spawn per square meter" />
+    <spinner
+      control_name="SSAtmoDensity" name="S_SSAtmoDensity"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0.1" max_val="3" increment="0.05" decimal_digits="2"
+      tool_tip="Global multiplier on how many particles spawn per square meter" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoDensity" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoDensity" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoParticleBudget"
+      tool_tip="Total particles allowed in the air at once, across drops, clusters and sheets">
+        Particle budget:
+    </text>
+    <slider_bar
+      control_name="SSAtmoParticleBudget" name="SB_SSAtmoParticleBudget"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="500" max_val="120000" increment="500" decimal_digits="0"
+      tool_tip="Total particles allowed in the air at once, across drops, clusters and sheets" />
+    <spinner
+      control_name="SSAtmoParticleBudget" name="S_SSAtmoParticleBudget"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="500" max_val="200000" increment="500" decimal_digits="0"
+      tool_tip="Total particles allowed in the air at once, across drops, clusters and sheets" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoParticleBudget" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoParticleBudget" />
+    </button>
+    <check_box
+     control_name="SSAtmoRespawnOnImpact"
+     follows="left|top" layout="topleft" left="12" top_pad="8"
+     height="16" width="356" name="respawn_check"
+     label="Replace drops the moment they land"
+     tool_tip="Keeps rain continuous instead of arriving in pulses at the spawn tick rate" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoDropAlpha"
+      tool_tip="Opacity multiplier for all precipitation particles, applied live">
+        Drop opacity:
+    </text>
+    <slider_bar
+      control_name="SSAtmoDropAlpha" name="SB_SSAtmoDropAlpha"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="Opacity multiplier for all precipitation particles, applied live" />
+    <spinner
+      control_name="SSAtmoDropAlpha" name="S_SSAtmoDropAlpha"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="Opacity multiplier for all precipitation particles, applied live" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoDropAlpha" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoDropAlpha" />
+    </button>
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
      height="14" width="356" name="lod_label" font="SansSerifSmallBold">
         Detail tier distances
     </text>
-    <slider
-     control_name="SSAtmoLodDrops"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Individual drops:" label_width="130"
-     min_val="8" max_val="96" increment="1" decimal_digits="0" show_text="true"
-     tool_tip="Meters around the camera with fully modelled individual drops" />
-    <slider
-     control_name="SSAtmoLodClusters"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Drop clusters:" label_width="130"
-     min_val="24" max_val="256" increment="2" decimal_digits="0" show_text="true"
-     tool_tip="Meters out to which clustered multi-drop particles carry the rain" />
-    <slider
-     control_name="SSAtmoLodSheets"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Shower sheets:" label_width="130"
-     min_val="64" max_val="512" increment="4" decimal_digits="0" show_text="true"
-     tool_tip="Meters out to which large distant shower curtains are drawn" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoLodDrops"
+      tool_tip="Meters around the camera with fully modelled individual drops">
+        Individual drops:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLodDrops" name="SB_SSAtmoLodDrops"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="8" max_val="96" increment="1" decimal_digits="0"
+      tool_tip="Meters around the camera with fully modelled individual drops" />
+    <spinner
+      control_name="SSAtmoLodDrops" name="S_SSAtmoLodDrops"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="8" max_val="96" increment="1" decimal_digits="0"
+      tool_tip="Meters around the camera with fully modelled individual drops" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLodDrops" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLodDrops" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoLodClusters"
+      tool_tip="Meters out to which clustered multi-drop particles carry the rain">
+        Drop clusters:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLodClusters" name="SB_SSAtmoLodClusters"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="24" max_val="256" increment="2" decimal_digits="0"
+      tool_tip="Meters out to which clustered multi-drop particles carry the rain" />
+    <spinner
+      control_name="SSAtmoLodClusters" name="S_SSAtmoLodClusters"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="24" max_val="256" increment="2" decimal_digits="0"
+      tool_tip="Meters out to which clustered multi-drop particles carry the rain" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLodClusters" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLodClusters" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoLodSheets"
+      tool_tip="Meters out to which large distant shower curtains are drawn">
+        Shower sheets:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLodSheets" name="SB_SSAtmoLodSheets"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="64" max_val="512" increment="4" decimal_digits="0"
+      tool_tip="Meters out to which large distant shower curtains are drawn" />
+    <spinner
+      control_name="SSAtmoLodSheets" name="S_SSAtmoLodSheets"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="64" max_val="512" increment="4" decimal_digits="0"
+      tool_tip="Meters out to which large distant shower curtains are drawn" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLodSheets" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLodSheets" />
+    </button>
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
      height="14" width="356" name="impact_label" font="SansSerifSmallBold">
         Impacts
     </text>
-    <slider
-     control_name="SSAtmoRippleScale"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Ripple size:" label_width="130"
-     min_val="0.25" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
-     tool_tip="Scales the landing rings and splash crowns" />
-    <slider
-     control_name="SSAtmoRippleSpeed"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Ripple speed:" label_width="130"
-     min_val="0.5" max_val="5" increment="0.1" decimal_digits="1" show_text="true"
-     tool_tip="How quickly rings expand and splashes pop; higher is snappier" />
-    <slider
-     control_name="SSAtmoRippleAlpha"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="15" width="356" label="Ripple opacity:" label_width="130"
-     min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
-     tool_tip="Opacity multiplier for landing rings and splash crowns, applied live" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoRippleScale"
+      tool_tip="Scales the landing rings and splash crowns">
+        Ripple size:
+    </text>
+    <slider_bar
+      control_name="SSAtmoRippleScale" name="SB_SSAtmoRippleScale"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0.25" max_val="3" increment="0.05" decimal_digits="2"
+      tool_tip="Scales the landing rings and splash crowns" />
+    <spinner
+      control_name="SSAtmoRippleScale" name="S_SSAtmoRippleScale"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0.25" max_val="3" increment="0.05" decimal_digits="2"
+      tool_tip="Scales the landing rings and splash crowns" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoRippleScale" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoRippleScale" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoRippleSpeed"
+      tool_tip="How quickly rings expand and splashes pop; higher is snappier">
+        Ripple speed:
+    </text>
+    <slider_bar
+      control_name="SSAtmoRippleSpeed" name="SB_SSAtmoRippleSpeed"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0.5" max_val="5" increment="0.1" decimal_digits="1"
+      tool_tip="How quickly rings expand and splashes pop; higher is snappier" />
+    <spinner
+      control_name="SSAtmoRippleSpeed" name="S_SSAtmoRippleSpeed"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0.5" max_val="5" increment="0.1" decimal_digits="1"
+      tool_tip="How quickly rings expand and splashes pop; higher is snappier" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoRippleSpeed" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoRippleSpeed" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoRippleAlpha"
+      tool_tip="Opacity multiplier for landing rings and splash crowns, applied live">
+        Ripple opacity:
+    </text>
+    <slider_bar
+      control_name="SSAtmoRippleAlpha" name="SB_SSAtmoRippleAlpha"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="Opacity multiplier for landing rings and splash crowns, applied live" />
+    <spinner
+      control_name="SSAtmoRippleAlpha" name="S_SSAtmoRippleAlpha"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="Opacity multiplier for landing rings and splash crowns, applied live" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoRippleAlpha" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoRippleAlpha" />
+    </button>
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
@@ -93,12 +270,31 @@
      height="16" width="356"
      label="Water shader for rain (refraction, reflections, glints)"
      tool_tip="Off renders rain through the plain textured path; also falls back automatically if the shader failed to compile (see log)" />
-    <slider
-     control_name="SSAtmoGlowScale"
-     follows="left|top" layout="topleft" left="12" top_pad="8"
-     height="15" width="356" label="Glow master:" label_width="130"
-     min_val="0" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
-     tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoGlowScale"
+      tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor">
+        Glow master:
+    </text>
+    <slider_bar
+      control_name="SSAtmoGlowScale" name="SB_SSAtmoGlowScale"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="3" increment="0.05" decimal_digits="2"
+      tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor" />
+    <spinner
+      control_name="SSAtmoGlowScale" name="S_SSAtmoGlowScale"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="3" increment="0.05" decimal_digits="2"
+      tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoGlowScale" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoGlowScale" />
+    </button>
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"

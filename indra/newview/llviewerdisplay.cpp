@@ -89,6 +89,7 @@
 // <SS:Nexii> Atmo Magic weather
 #include "ssatmomagic.h"
 #include "ssrainshadow.h"
+#include "sswindflow.h"
 // </SS:Nexii>
 
 #include <boost/json.hpp>
@@ -985,6 +986,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     // pipeline is in the same state the sun shadows render in
                     SSAtmoMagic::getInstance()->idle();
                     SSRainShadowMap::getInstance()->capture();
+                    SSWindFlowMap::getInstance()->update();
                     // </SS:Nexii>
                 }
 

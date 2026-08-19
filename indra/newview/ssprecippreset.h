@@ -100,7 +100,6 @@ struct SSPrecipTierParams
 // medium, so a one-sound pack still fades correctly with intensity.
 struct SSPrecipSounds
 {
-    std::string mImpacts;         // CSV one-shots played at landings
     std::string mAmbientLight;    // optional
     std::string mAmbientMedium;   // the default bed
     std::string mAmbientHeavy;    // optional
@@ -138,11 +137,30 @@ struct SSPrecipPreset
     bool mEmissive = false;
     bool mWaterShading = false;
 
+    // Size of one drop as baked into the cluster and sheet textures, relative
+    // to the individual-drop tier size those stand in for. Only the far tiers
+    // draw drops inside their quad, so this leaves the near drops alone.
+    F32 mDropScale = 1.f;
+
     SSPrecipTierParams mTiers[TIER_COUNT];
 
     // Impact
     F32 mImpactStrength = 0.7f;
     bool mShatter = false;
+
+    // Landing ring: a surface-aligned ripple that spreads from a point out to
+    // its end size and fades. Sizes are half-sizes in metres at full impact
+    // strength; water spreads wider and lingers longer than a hard surface.
+    F32 mRippleSize = 0.35f;    // end half-size on land
+    F32 mRippleAlpha = 0.4f;    // opacity at birth, before the surface gate
+    F32 mRippleLife = 0.45f;    // seconds to spread on land
+
+    // Splash crown: a small mote thrown along the surface normal, then
+    // ballistic. Zero size or opacity leaves the ring on its own.
+    F32 mCrownSize = 0.05f;     // half-size, metres
+    F32 mCrownAlpha = 0.35f;
+    F32 mCrownSpeed = 0.6f;     // launch speed along the normal, m/s
+    F32 mCrownLife = 0.3f;      // seconds
 
     // Riser flavour mix (mana embers and anything like them)
     F32 mDarkMix = 0.f;
@@ -160,6 +178,8 @@ struct SSPrecipPreset
 
     bool risesFromGround() const { return mArchetype == SSPrecipArchetype::RISER; }
     bool makesImpacts() const { return mImpactStrength > 0.f && !risesFromGround(); }
+    bool makesRipples() const { return mRippleSize > 0.f && mRippleAlpha > 0.f && mRippleLife > 0.f; }
+    bool makesCrowns() const { return mCrownSize > 0.f && mCrownAlpha > 0.f && mCrownLife > 0.f; }
     U8 material() const { return mEmissive ? MAT_EMISSIVE : (mWaterShading ? MAT_WATER : MAT_LIT); }
 
     static const char* archetypeName(SSPrecipArchetype a);
@@ -185,6 +205,19 @@ public:
     bool save(const SSPrecipPreset& preset);   // writes to disk, refreshes
     bool remove(const std::string& name);
 
+    // Apply an edit to the live weather without writing it to disk. The editor
+    // stages every keystroke so the preset can be dialled in while watching it
+    // fall, and only commits when asked; the asterisk in the editor title is
+    // the difference between the two.
+    void stage(const SSPrecipPreset& preset);
+
+    // Whether the in-memory preset differs from the one on disk (or, for a
+    // built-in with no user file, from its shipped values)
+    bool isModified(const std::string& name) const;
+
+    // The preset as last written, for reverting a staged edit
+    const SSPrecipPreset* findSaved(const std::string& name) const;
+
     static std::string presetDir();
 
 private:
@@ -192,6 +225,9 @@ private:
     void loadUserPresets();
 
     std::vector<SSPrecipPreset> mPresets;
+
+    // Snapshot of mPresets as of the last refresh, i.e. what is on disk
+    std::vector<SSPrecipPreset> mSaved;
 };
 
 // </SS:Nexii>

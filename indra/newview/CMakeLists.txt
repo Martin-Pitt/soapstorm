@@ -189,14 +189,17 @@ set(viewer_SOURCE_FILES
     fsregioncross.cpp
     fsrezqueue.cpp
     ssatmomagic.cpp
+    ssatmotrack.cpp
     ssfloateratmo.cpp
     ssfloaterpreset.cpp
+    ssfloatersim.cpp
     ssprecippreset.cpp
     ssprecipitation.cpp
     ssprecipvariants.cpp
     sspreciprenderer.cpp
     ssrainshadow.cpp
     ssweathersounds.cpp
+    sswindflow.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1069,14 +1072,17 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
+    ssatmotrack.h
     ssfloateratmo.h
     ssfloaterpreset.h
+    ssfloatersim.h
     ssprecippreset.h
     ssprecipitation.h
     ssprecipvariants.h
     sspreciprenderer.h
     ssrainshadow.h
     ssweathersounds.h
+    sswindflow.h
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h

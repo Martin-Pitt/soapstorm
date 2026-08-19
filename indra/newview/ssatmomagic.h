@@ -122,6 +122,31 @@ public:
     F32 windSpeed() const { return mWindSpeed; }
     LLVector3 windXY() const { return mWindXY; } // horizontal, m/s
 
+    // Full wind vector including any vertical component. Track configs store
+    // direction as a rotation off north, so wind can tilt up or down; the
+    // horizontal projection above is what precipitation drift and the
+    // deterministic area field use.
+    LLVector3 wind() const { return mWind; }
+
+    // EEP sky track the camera is in (1..4). Weather is configured per track
+    // and only ever runs for this one, so a rainy ground level can sit under
+    // a clear skybox band.
+    S32 track() const { return mTrack; }
+
+    // Ground zero for the active track: terrain/water at ground level, the
+    // track's base altitude (or a configured platform height) up in the sky.
+    F32 groundZero() const { return mGroundZero; }
+    bool isSkyTrack() const { return mSkyTrack; }
+
+    // Fraction of drops that survive reaching a sky track's floor with no
+    // platform under them; the rest fade out on the way down rather than
+    // piling up on an invisible plane.
+    F32 fallThrough() const { return mFallThrough; }
+
+    // Track-change crossfade, 0..1. Precipitation is scaled by this so
+    // crossing a band boundary eases instead of snapping.
+    F32 trackBlend() const { return mBlend; }
+
     // The preset currently driving the weather, and whether it is actually
     // precipitating. All per-type constants live in the preset now.
     const SSPrecipPreset& preset() const { return mPreset; }
@@ -150,7 +175,6 @@ public:
     // First valid UUID in a comma separated list, fetched; null when the list
     // holds nothing usable, so callers can fall back to a generated shape
     static LLViewerTexture* textureFromList(const std::string& csv);
-    LLUUID pickImpactSound(SSRandStream& rng);
 
     // Landing events scheduled at spawn time; processed here once due so
     // ripples/sounds fire even when the drop itself was throttled away.
@@ -188,9 +212,22 @@ private:
     F32 mTurbulence = 0.f;
     F32 mWindSpeed = 0.f;
     LLVector3 mWindXY;
+    LLVector3 mWind;
     LLVector3 mRainDirection;
     SSPrecipPreset mPreset;
     bool mHasWeather = false;
+
+    // Per-track state
+    S32 mTrack = 1;
+    F32 mGroundZero = 0.f;
+    bool mSkyTrack = false;
+    F32 mFallThrough = 1.f;
+
+    // Crossfade: the preset cannot be blended, so precipitation eases to zero
+    // before a swap and back up afterwards. mPresetName is what mPreset was
+    // resolved from, so a track or notecard change is detectable.
+    F32 mBlend = 0.f;
+    std::string mPresetName;
 
     std::unique_ptr<SSPrecipSim> mSim;
 
@@ -207,7 +244,6 @@ private:
 
     // Parsed asset lists, re-read when the setting strings change
     std::vector<SSAtmoAsset> mTextureAssets;
-    std::vector<LLUUID> mImpactSounds;
     LLPointer<LLViewerTexture> mRippleTexture;
     std::string mAssetsFingerprint;
     F64 mLastAssetPoll = 0.0;

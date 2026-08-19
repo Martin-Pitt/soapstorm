@@ -25,6 +25,7 @@
 
 #include "ssweathersounds.h"
 #include "ssatmomagic.h"
+#include "sswindflow.h"
 #include "ssprecippreset.h"
 
 #include "llagent.h"
@@ -48,9 +49,6 @@ static const F32 MEDIUM_SPACE_AVG = 30.f;
 static const F32 IMPACT_RATE_FULL = 22.f;  // impact strength/sec that reads as full loudness
 static const F32 IMPACT_RATE_TAU  = 1.5f;  // seconds, decay of the impact rate EMA
 static const F32 COVER_BLEND_RATE = 8.f;   // per second, indoor/outdoor crossfade
-static const F32 SPEED_OF_SOUND   = 343.f; // m/s, for slapback delay
-static const F32 SLAPBACK_MIN     = 10.f;  // closer than this the echo is not separable
-static const F32 SLAPBACK_MAX     = 90.f;  // beyond this it is too quiet and too late
 
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO("Atmo Magic Audio");
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO_PROBE("Cover Probes");
@@ -103,7 +101,6 @@ void SSWeatherSounds::stopAll()
     {
         releaseLoop(loop);
     }
-    mEchoes.clear();
     mImpactRate = 0.f;
 }
 
@@ -302,60 +299,6 @@ F32 SSWeatherSounds::occlusionGain(const LLVector3& source_pos) const
     return lerp(0.6f, 0.22f, mCoverSmooth);
 }
 
-void SSWeatherSounds::scheduleSlapback(const LLUUID& sound, const LLVector3& source_pos, F32 gain)
-{
-    static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoSlapback", true);
-    if (!enabled || sound.isNull() || mCovered) return;
-    if (mEchoes.size() > 64) return;
-
-    static const LLVector3 cardinals[4] = {
-        LLVector3(1.f, 0.f, 0.f), LLVector3(-1.f, 0.f, 0.f),
-        LLVector3(0.f, 1.f, 0.f), LLVector3(0.f, -1.f, 0.f)
-    };
-
-    // Nearest wall within the usable band wins: a close rock answers almost
-    // immediately, a distant cliff comes back roughly half a second later
-    S32 best = -1;
-    for (S32 i = 0; i < 4; ++i)
-    {
-        if (mSideDist[i] < SLAPBACK_MIN || mSideDist[i] > SLAPBACK_MAX) continue;
-        if (best < 0 || mSideDist[i] < mSideDist[best]) best = i;
-    }
-    if (best < 0) return;
-
-    const F32 dist = mSideDist[best];
-    // Out to the surface and back again
-    const F64 delay = (F64)(2.f * dist) / SPEED_OF_SOUND;
-    static LLCachedControl<F32> amount(gSavedSettings, "SSAtmoSlapbackAmount", 1.f);
-    const F32 echo_gain = gain * 0.4f * llclamp((F32)amount, 0.f, 2.f) * (1.f - dist / SLAPBACK_MAX);
-    if (echo_gain < 0.01f) return;
-
-    // Placed at the reflecting surface: the near ear hears it first through
-    // ordinary 3D panning, which is what a per-channel delay would fake
-    const LLVector3 wall = mProbeOrigin + cardinals[best] * dist;
-
-    Echo echo;
-    echo.mSound = sound;
-    echo.mPosGlobal = gAgent.getPosGlobalFromAgent(wall);
-    echo.mGain = echo_gain;
-    mEchoes.emplace(SSAtmoMagic::getInstance()->sharedTime() + delay, echo);
-}
-
-void SSWeatherSounds::processEchoes(F64 now)
-{
-    while (!mEchoes.empty() && mEchoes.begin()->first <= now)
-    {
-        const Echo echo = mEchoes.begin()->second;
-        mEchoes.erase(mEchoes.begin());
-
-        if (gAudiop)
-        {
-            gAudiop->triggerSound(echo.mSound, gAgent.getID(), echo.mGain,
-                                  LLAudioEngine::AUDIO_TYPE_AMBIENT, echo.mPosGlobal);
-        }
-    }
-}
-
 F32 SSWeatherSounds::impactRate() const
 {
     // mImpactRate is an exponentially decayed sum of impact strengths; its
@@ -471,8 +414,16 @@ void SSWeatherSounds::updateLoops(F64 now, F32 dt)
     const F32 impact_wet = llclamp(mImpactRate / IMPACT_RATE_FULL, 0.f, 1.f);
     const F32 wet = llclamp(0.55f * param_wet + 0.45f * impact_wet, 0.f, 1.f);
 
-    // Wind rides speed, turbulence and the live gust envelope
-    const F32 wind = llclamp(atmo->windSpeed() / 14.f, 0.f, 1.f)
+    // Wind rides speed, turbulence and the live gust envelope. The speed is
+    // the locally solved one where a flowmap exists, so a courtyard is quiet
+    // and a gap the wind is squeezing through is loud, rather than everywhere
+    // hearing the same parameter.
+    const LLVector3 cam_pos = LLViewerCamera::getInstance()->getOrigin();
+    SSWindFlowMap* flow = SSWindFlowMap::getInstance();
+    const F32 local_speed = flow->isValid() ? flow->sample(cam_pos).magVec()
+                                            : atmo->windSpeed();
+
+    const F32 wind = llclamp(local_speed / 14.f, 0.f, 1.f)
                    * (0.55f + 0.45f * llclamp(env, 0.f, 2.f) * 0.5f)
                    * (0.6f + 0.4f * atmo->turbulence());
 
@@ -506,9 +457,16 @@ void SSWeatherSounds::updateLoops(F64 now, F32 dt)
     targets[LOOP_ROOF_BIG]    = (mSpace == SPACE_BIG && mCovered) ? roof : 0.f;
 
     // A tight outdoor space - an alley, a ravine - carries less wind than
-    // open ground even with nothing overhead
-    const F32 outdoor_openness = (mOutdoorSize == SIZE_SMALL)  ? 0.55f
-                               : (mOutdoorSize == SIZE_MEDIUM) ? 0.8f : 1.f;
+    // open ground even with nothing overhead. The flowmap answers this
+    // properly where it exists: it is continuous rather than a three-way step,
+    // and it separates an alley lined up with the wind (which is louder than
+    // open ground) from one across it. The probe classification stays as the
+    // fallback for hardware without compute.
+    const F32 probe_openness = (mOutdoorSize == SIZE_SMALL)  ? 0.55f
+                             : (mOutdoorSize == SIZE_MEDIUM) ? 0.8f : 1.f;
+    const F32 outdoor_openness = flow->isValid()
+        ? llclamp(flow->exposure(cam_pos), 0.f, 1.5f)
+        : probe_openness;
     const F32 wind_indoor = (1.f - (sheltered ? 0.3f : 0.75f) * mCoverSmooth)
                           * lerp(outdoor_openness, 1.f, mCoverSmooth);
     targets[LOOP_WIND_LIGHT]  = tri(wind, 0.02f, 0.3f, 0.75f) * wind_indoor;
@@ -573,7 +531,6 @@ void SSWeatherSounds::idle()
     }
 
     updateProbes(now);
-    processEchoes(now);
     updateLoops(now, dt);
 }
 

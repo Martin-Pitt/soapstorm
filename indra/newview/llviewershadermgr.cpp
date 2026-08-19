@@ -49,6 +49,8 @@
 #include "lljoint.h"
 #include "llskinningutil.h"
 
+#include <filesystem>   // <SS:Nexii> shader cache keyed on shader source
+
 static LLStaticHashedString sTexture0("texture0");
 static LLStaticHashedString sTexture1("texture1");
 static LLStaticHashedString sTex0("tex0");
@@ -182,6 +184,13 @@ LLGLSLShader            gDeferredAlphaProgram;
 // <SS:Nexii> Atmo Magic particle shaders
 LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
+LLGLSLShader            gSSWindInitProgram;
+LLGLSLShader            gSSWindDivProgram;
+LLGLSLShader            gSSWindJacobiProgram;
+LLGLSLShader            gSSWindProjectProgram;
+LLGLSLShader            gSSWindSeedProgram;
+LLGLSLShader            gSSWindRestrictProgram;
+LLGLSLShader            gSSWindProlongProgram;
 // </SS:Nexii>
 LLGLSLShader            gHUDAlphaProgram;
 LLGLSLShader            gDeferredSkinnedAlphaProgram;
@@ -533,6 +542,70 @@ S32 LLViewerShaderMgr::getShaderLevel(S32 type)
 //============================================================================
 // Shader Management
 
+// <SS:Nexii> A digest of every shader source file's size and write time.
+// Walked once per session, next to a shader load that reads all of them
+// anyway, so the directory scan is not worth caching.
+static std::string ssShaderTreeSignature()
+{
+    const std::string root =
+        gDirUtilp->getExpandedFilename(LL_PATH_APP_SETTINGS, "shaders");
+
+    std::error_code ec;
+    std::filesystem::recursive_directory_iterator it{ std::filesystem::path(root), ec };
+    if (ec)
+    {
+        return root;    // unreadable: fall back to version-only behaviour
+    }
+
+    // Stepped by hand rather than with a range-for: the iterator's throwing
+    // increment would take an unreadable subdirectory all the way out of
+    // startup, and a shader cache key is not worth that.
+    std::vector<std::string> parts;
+    const std::filesystem::recursive_directory_iterator end;
+    for (; it != end; it.increment(ec))
+    {
+        if (ec)
+        {
+            break;
+        }
+
+        const auto& entry = *it;
+        const bool is_file = entry.is_regular_file(ec);
+        if (ec || !is_file)
+        {
+            ec.clear();
+            continue;
+        }
+
+        const auto written = std::filesystem::last_write_time(entry, ec);
+        const auto bytes = std::filesystem::file_size(entry, ec);
+        if (ec)
+        {
+            ec.clear();
+            continue;
+        }
+
+        // The path goes in as a hash: its native encoding is wide on Windows
+        // and narrow elsewhere, and nothing here needs to read it back.
+        parts.push_back(std::to_string(std::filesystem::hash_value(entry.path())) + "|"
+            + std::to_string(written.time_since_epoch().count()) + "|"
+            + std::to_string(bytes));
+    }
+
+    // Sorted, so a filesystem that hands entries back in a different order
+    // between runs does not look like an edit and throw the cache away.
+    std::sort(parts.begin(), parts.end());
+
+    std::string signature;
+    for (const auto& part : parts)
+    {
+        signature += part;
+        signature += '\n';
+    }
+    return signature;
+}
+// </SS:Nexii>
+
 void LLViewerShaderMgr::setShaders()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -561,6 +634,14 @@ void LLViewerShaderMgr::setShaders()
         {
             HBXXH128 hash_obj;
             hash_obj.update(LLVersionInfo::instance().getVersion());
+            // <SS:Nexii> The compiled-program cache was keyed on the viewer
+            // version alone, so an edited .glsl inside an unchanged build was
+            // never recompiled: the old binary came back and every uniform
+            // added since read as location -1, making its upload a silent
+            // no-op. Fold the shader tree's contents into the key so editing
+            // any shader invalidates the cache exactly once.
+            hash_obj.update(ssShaderTreeSignature());
+            // </SS:Nexii>
             current_cache_version = hash_obj.digest();
 
             old_cache_version = LLUUID(gSavedSettings.getString("RenderShaderCacheVersion"));
@@ -2017,6 +2098,48 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             LL_WARNS("Shader") << "SS Precipitation lit shader failed to compile;"
                                << " non-emissive particles will use the fullbright fallback" << LL_ENDL;
             gSSPrecipLitProgram.unload();
+        }
+    }
+
+    // Wind flowmap compute passes. Compute is GL 4.3; below that the flowmap
+    // stays off and every consumer falls back to the uniform ambient wind, so
+    // a failure here is not fatal to anything else.
+    if (success && gGLManager.mGLVersion >= 4.29f && glDispatchCompute != nullptr)
+    {
+        struct { LLGLSLShader* prog; const char* name; const char* file; } wind_passes[] = {
+            { &gSSWindInitProgram,    "SS Wind Flow Init",      "deferred/ssWindInitC.glsl" },
+            { &gSSWindDivProgram,     "SS Wind Flow Divergence","deferred/ssWindDivC.glsl" },
+            { &gSSWindJacobiProgram,  "SS Wind Flow Jacobi",    "deferred/ssWindJacobiC.glsl" },
+            { &gSSWindProjectProgram, "SS Wind Flow Project",   "deferred/ssWindProjectC.glsl" },
+            { &gSSWindSeedProgram,    "SS Wind Flow Seed",      "deferred/ssWindSeedC.glsl" },
+            { &gSSWindRestrictProgram,"SS Wind Flow Restrict",  "deferred/ssWindRestrictC.glsl" },
+            { &gSSWindProlongProgram, "SS Wind Flow Prolong",   "deferred/ssWindProlongC.glsl" },
+        };
+
+        for (auto& pass : wind_passes)
+        {
+            pass.prog->mName = pass.name;
+
+            // A GL program may not mix a compute stage with any other, and
+            // attachShaderFeatures hangs objects/nonindexedTextureV.glsl off
+            // every shader that does not use indexed textures. attachNothing
+            // is the only way to keep the program pure compute.
+            pass.prog->mFeatures.attachNothing = true;
+
+            pass.prog->mShaderFiles.clear();
+            pass.prog->mShaderFiles.push_back(make_pair(pass.file, GL_COMPUTE_SHADER));
+
+            // These only exist under class1, and a failure has no lower level
+            // worth retrying at; anything higher just repeats the same error.
+            pass.prog->mShaderLevel = 1;
+            pass.prog->clearPermutations();
+
+            if (!pass.prog->createShader())
+            {
+                LL_WARNS("Shader") << pass.name << " failed to compile;"
+                                   << " the wind flowmap will stay disabled" << LL_ENDL;
+                pass.prog->unload();
+            }
         }
     }
     // </SS:Nexii>

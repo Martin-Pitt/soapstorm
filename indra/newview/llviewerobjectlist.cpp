@@ -43,6 +43,7 @@
 #include "llagentcamera.h"
 #include "pipeline.h"
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
+#include "sswindflow.h"   // <SS:Nexii> Atmo Magic wind flowmap
 #include "llspatialpartition.h"
 #include "lltooltip.h"
 #include "llworld.h"
@@ -334,6 +335,7 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
     // <SS:Nexii> Prim changes near a cached rain shadow tile queue a lazy
     // recapture; the callee filters out avatars, attachments and tiny objects
     SSRainShadowMap::onObjectUpdate(objectp);
+    SSWindFlowMap::onObjectUpdate(objectp);
     // </SS:Nexii>
 
     if (just_created)

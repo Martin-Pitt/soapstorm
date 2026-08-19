@@ -44,8 +44,9 @@ class LLViewerTexture;
 
 enum SSPrecipFlags : U8
 {
-    PART_SWAY  = 0x01,  // lateral wander while falling (snow, dust, embers)
-    PART_GUSTY = 0x02   // stronger wander (blizzard)
+    PART_SWAY   = 0x01, // lateral wander while falling (snow, dust, embers)
+    PART_GUSTY  = 0x02, // stronger wander (blizzard)
+    PART_LANDED = 0x04  // settled on a surface, fading out where it stopped
 };
 
 // Sim-wide texture table size; the renderer's bucket count matches this.
@@ -60,6 +61,7 @@ struct SSPrecipParticle
     LLVector3 mVel;
     LLVector3 mNormal = LLVector3(0.f, 0.f, 1.f); // surface basis for KIND_FLAT, impact plane for shards
     F32 mPlaneD = -FLT_MAX;  // shards die when they fall back through this plane
+    F32 mFloorZ = -FLT_MAX;  // surface last resolved under a drifting particle
     F32 mAge = 0.f;
     F32 mMaxAge = 1.f;
     F32 mSizeX = 0.05f;     // half-width; for KIND_FLAT the start half-size
@@ -68,12 +70,21 @@ struct SSPrecipParticle
     F32 mGlow = 0.f;
     F32 mPhase = 0.f;
     LLColor4U mTint = LLColor4U(255, 255, 255, 255);
+    U32 mSeed = 0;          // this particle's visual stream, and the seed its
+                            // replacement is derived from when it lands
     U8 mKind = KIND_ROUND;
     U8 mTex = 0;
     U8 mTier = TIER_DROPS;
     U8 mFlags = 0;
     U8 mMaterial = MAT_LIT;
 };
+
+// Seconds a particle spends fading out at the end of its life. The renderer
+// applies it; the sim needs the same number so a particle that has just met
+// the ground can be given exactly that much life left and fade out on the
+// surface instead of popping. Sheets are large enough that a quick fade
+// reads as a flicker, so they take longer over it.
+inline F32 ssPrecipFadeOut(U8 tier) { return (tier == TIER_SHEETS) ? 0.8f : 0.25f; }
 
 class SSPrecipSim
 {
@@ -89,6 +100,20 @@ public:
     // crown thrown along the surface normal
     void spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_water,
                      const LLVector3& normal, SSRandStream& rng);
+
+    // One drip shed off an eave by the runoff network: a fat drop released at
+    // the lip with the flow still pushing it outward, ballistic down to the
+    // landing point, and an impact scheduled for when it gets there so the
+    // street answers with a ripple and a sound like any other landing.
+    // volume is how many raindrops' worth of collected water it carries.
+    void spawnDrip(const LLVector3& lip_agent, const LLVector3& out_dir,
+                   const LLVector3& land_agent, F32 volume, SSRandStream& rng);
+
+    // Drops per square metre per second the individual-drop tier is asking
+    // for over this spot, gusts and the area field included. This is the rate
+    // a roof collects water at, which is what the runoff network turns into
+    // catchment.
+    static F32 dropRateAt(const LLVector3& pos_agent);
 
     // Mana hail shatters on landing: a handful of glowing shards thrown off
     // the surface carrying the impact speed, then pulled down by gravity
@@ -123,8 +148,12 @@ private:
     void spawnTier(SSPrecipTier tier, U64 tick, F64 tick_time);
     void spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 cx, S32 cy, F32 env,
                        const LLVector3& cam_agent, const LLVector3d& agent_origin_global);
+    // has_floor is false for a sky band column with nothing under it: the
+    // particle falls through the imaginary track floor and fades rather than
+    // settling on it
     void emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 fall_len, F32 gust,
-                      F32 size_jitter, F32 phase, F32 riser_age, F32 gust_jitter, U32 vis_seed);
+                      F32 size_jitter, F32 phase, F32 riser_age, F32 gust_jitter, U32 vis_seed,
+                      bool has_floor);
     U8 textureIndex(LLViewerTexture* texturep);
     void resetTextureTable();
     // Riser presets can mix in small dark sharp flecks and large vague
@@ -133,10 +162,18 @@ private:
                           const SSPrecipPreset& preset);
     void pushRipple(const SSPrecipParticle& part);
 
+    // Put a fresh particle in the air where one just landed. Derived from the
+    // dying particle's own seed, so every client holding that particle grows
+    // the same replacement.
+    void respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& impact_pos, F32 env);
+
     std::vector<SSPrecipParticle> mParticles;
     std::vector<SSPrecipParticle> mRipples;
     std::vector<LLPointer<LLViewerTexture>> mTextures;
     S32 mTierCount[TIER_COUNT];
+    F32 mTierTarget[TIER_COUNT] = { 0.f };      // population the current rate sustains
+    F32 mTierSpawnAccum[TIER_COUNT] = { 0.f };  // per-tick scratch behind it
+    F32 mMeanLife[TIER_COUNT] = { 0.f };        // measured air time, feeding the target
     U64 mLastTick[TIER_COUNT];
     size_t mRippleCursor = 0;
 };

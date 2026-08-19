@@ -276,6 +276,14 @@ extern LLGLSLShader         gDeferredFullbrightProgram;
 // <SS:Nexii> Atmo Magic particle shaders
 extern LLGLSLShader         gSSPrecipRainProgram;
 extern LLGLSLShader         gSSPrecipLitProgram;
+// Wind flowmap compute passes; only created when GL 4.3 is present
+extern LLGLSLShader         gSSWindInitProgram;
+extern LLGLSLShader         gSSWindDivProgram;
+extern LLGLSLShader         gSSWindJacobiProgram;
+extern LLGLSLShader         gSSWindProjectProgram;
+extern LLGLSLShader         gSSWindSeedProgram;
+extern LLGLSLShader         gSSWindRestrictProgram;
+extern LLGLSLShader         gSSWindProlongProgram;
 // </SS:Nexii>
 extern LLGLSLShader         gHUDFullbrightProgram;
 extern LLGLSLShader         gDeferredFullbrightAlphaMaskProgram;

@@ -1,8 +1,10 @@
 /**
  * @file ssfloateratmo.h
- * @brief Atmo Magic floater: local testing / user override panel driving the
- *        weather parameters, standing in for EEP-style shared environments
- *        until parameters can arrive from LSL/notecards.
+ * @brief Atmo Magic floater: per-track weather authoring. Weather is defined
+ *        per EEP sky track and normally comes from a notecard the parcel
+ *        description points at. Editing follows the environment floaters: the
+ *        loaded config is the baseline, edits on top are marked with an
+ *        asterisk, and they can be reverted or saved back out to a notecard.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -37,10 +39,40 @@ public:
 
     bool postBuild() override;
     void onOpen(const LLSD& key) override;
+    void draw() override;
+
+    // Dropping a notecard anywhere on the floater loads it as the config
+    bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
+                           EDragAndDropType cargo_type, void* cargo_data,
+                           EAcceptance* accept, std::string& tooltip_msg) override;
 
 private:
-    void onClickRecapture();
+    void onClickEditPreset();
+    void onClickReload();
+    void onClickLoad();
+    void onClickSave();
+    void onClickRevert();
+    void onClickDefaults();
+
     void refreshPresets();
+
+    // Rebuild the track selector, including each band's altitude range
+    void refreshTrackList();
+
+    // Pull the selected track's config into the widgets
+    void refreshTrackUI();
+
+    // Title, status line and the modified asterisk
+    void refreshStatus();
+
+    // Push widget values back into the working config and persist
+    void onCommitTrackField();
+    void onCommitTrackSelect();
+
+    S32  mTrack = 1;
+    bool mFollowCamera = true;
+    bool mUpdating = false;     // guards commit callbacks during refresh
+    F64  mLastPoll = 0.0;
 };
 
 // </SS:Nexii>

@@ -659,7 +659,11 @@ public:
         RENDER_DEBUG_IMPOSTORS          = 0x100000000,
         RENDER_DEBUG_REFLECTION_PROBES  = 0x200000000,
         RENDER_DEBUG_PROBE_UPDATES      = 0x400000000,
-        RENDER_DEBUG_TEXTURE_SIZE       = 0x800000000
+        RENDER_DEBUG_TEXTURE_SIZE       = 0x800000000,
+        // <SS:Nexii> Atmo Magic wind flowmap
+        RENDER_DEBUG_WIND_FLOW          = 0x1000000000,
+        RENDER_DEBUG_RAIN_SHADOW        = 0x2000000000
+        // </SS:Nexii>
     };
 
 public:

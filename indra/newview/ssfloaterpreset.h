@@ -50,8 +50,16 @@ private:
     void onSelectPreset();
     void onCommitAny();
     void onClickNew();
+    void onClickBlank();
+    void onClickRename();
     void onClickDelete();
     void onClickRevert();
+    void onClickSave();
+    void onClickDiscard();
+
+    // Title carries the preset name and an asterisk while edits are staged
+    // but not written to disk
+    void refreshTitle();
 
     SSPrecipPreset mEdited;
     bool mUpdating = false;    // guards presetToControls against commit echo

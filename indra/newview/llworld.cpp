@@ -1542,7 +1542,9 @@ void LLWorld::shiftRegions(const LLVector3& offset)
 
     LLViewerPartSim::getInstance()->shift(offset);
 
-    // <SS:Nexii> Atmo Magic particles and pending impacts live in agent space too
+    // <SS:Nexii> Atmo Magic particles and pending impacts live in agent space too.
+    // The wind flowmap does not need shifting: its tiles are stored in
+    // region-local coordinates precisely so a crossing cannot move them.
     SSAtmoMagic::getInstance()->shift(offset);
     // </SS:Nexii>
 }

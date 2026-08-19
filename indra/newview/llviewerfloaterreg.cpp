@@ -241,6 +241,7 @@
 #include "particleeditor.h"
 #include "ssfloateratmo.h" // <SS:Nexii> Atmo Magic weather
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
+#include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
 #include "quickprefs.h"
 #include "vjfloaterlocalmesh.h" // local mesh
 #include "fsfloaterwhitelisthelper.h" // fs whitelist helper
@@ -686,6 +687,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
     LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    LLFloaterReg::add("ss_atmo_sim", "floater_ss_atmo_sim.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSimulation>);
     // </SS:Nexii>
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).

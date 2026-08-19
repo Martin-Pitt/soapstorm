@@ -24,6 +24,9 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "ssatmomagic.h"
+#include "ssatmotrack.h"
+#include "ssrainshadow.h"
+#include "sswindflow.h"
 #include "ssprecipitation.h"
 #include "ssweathersounds.h"
 
@@ -46,7 +49,6 @@
 
 // <SS:Nexii> Atmo Magic weather system
 
-static const F32 IMPACT_HEAR_RADIUS = 20.f;  // sounds only from impacts this close
 static const F32 IMPACT_SEE_RADIUS  = 32.f;  // ripples only this close
 static const F64 ASSET_POLL_PERIOD  = 2.0;   // re-check asset list settings this often
 
@@ -121,6 +123,12 @@ F32 fbm2(F32 x, F32 y, U32 seed, S32 octaves)
 
 } // namespace SSAtmoNoise
 
+// Track crossfade rates, per second. Precipitation swaps need to be quick
+// enough not to feel like a bug and slow enough to read as weather; wind eases
+// faster because the audio bed follows it directly.
+static const F32 TRACK_FADE_RATE = 0.45f;
+static const F32 WIND_FADE_RATE  = 0.8f;
+
 SSAtmoMagic::SSAtmoMagic()
 {
 }
@@ -144,21 +152,66 @@ F32 SSAtmoMagic::voidWaterHeight()
 void SSAtmoMagic::refreshParams()
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoEnabled", false);
-    static LLCachedControl<F32>  precipitation(gSavedSettings, "SSAtmoPrecipitation", 0.5f);
-    static LLCachedControl<F32>  turbulence(gSavedSettings, "SSAtmoTurbulence", 0.3f);
-    static LLCachedControl<F32>  wind_direction(gSavedSettings, "SSAtmoWindDirection", 225.f);
-    static LLCachedControl<F32>  wind_speed(gSavedSettings, "SSAtmoWindSpeed", 4.f);
 
-    mEnabled = enabled;
-    mPrecipitation = llclamp((F32)precipitation, 0.f, 1.f);
-    mTurbulence = llclamp((F32)turbulence, 0.f, 1.f);
-    mWindSpeed = llmax(0.f, (F32)wind_speed);
+    // Weather is configured per EEP sky track and only runs for the track the
+    // camera is in. Nothing is defined by default, so a track without a config
+    // stays clear no matter what the master switch says.
+    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    mTrack = tracks->currentTrack();
+    const SSAtmoTrackConfig& cfg = tracks->config(mTrack);
 
-    const F32 rad = (F32)wind_direction * DEG_TO_RAD;
-    mWindXY.set(sinf(rad) * mWindSpeed, cosf(rad) * mWindSpeed, 0.f);
+    const bool track_runs = enabled && cfg.runs();
 
-    // Everything type specific now comes from the active preset
-    mPreset = SSPrecipPresetMgr::instance().active();
+    // The preset this track asks for; an empty or unrecognised name falls back
+    // to whatever the preset editor currently has selected.
+    SSPrecipPresetMgr& mgr = SSPrecipPresetMgr::instance();
+    const SSPrecipPreset* named = cfg.mPreset.empty() ? nullptr : mgr.find(cfg.mPreset);
+    const SSPrecipPreset& target_preset = named ? *named : mgr.active();
+
+    // Crossfade. A preset cannot be interpolated, so precipitation eases to
+    // nothing before a swap and back up afterwards: crossing a band boundary,
+    // or a notecard arriving mid-session, reads as the weather changing rather
+    // than teleporting.
+    const F32 dt = llclamp((F32)gFrameIntervalSeconds, 0.f, 0.25f);
+    const bool preset_changed = (target_preset.mName != mPresetName);
+
+    const F32 blend_target = (track_runs && !preset_changed) ? 1.f : 0.f;
+    mBlend += (blend_target - mBlend) * llclamp(TRACK_FADE_RATE * dt, 0.f, 1.f);
+
+    if (preset_changed && mBlend <= 0.02f)
+    {
+        // Fully faded out; adopt the incoming preset and let it rise again
+        mPreset = target_preset;
+        mPresetName = target_preset.mName;
+        mBlend = 0.f;
+    }
+    else if (!preset_changed)
+    {
+        // Same preset: keep tracking it so edits in the preset editor stay live
+        mPreset = target_preset;
+    }
+
+    // Stay enabled while fading out, otherwise the sim is torn down before the
+    // fade can be seen
+    mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
+
+    mPrecipitation = llclamp(cfg.mPrecipitation, 0.f, 1.f) * mBlend;
+    mTurbulence = llclamp(cfg.mTurbulence, 0.f, 1.f);
+
+    // Ease the wind vector rather than the orientation, so a direction change
+    // cannot sweep the long way round the compass
+    const F32 target_speed = track_runs ? llmax(0.f, cfg.mWindSpeed) : 0.f;
+    const LLVector3 target_wind = cfg.windDirection() * target_speed;
+    mWind += (target_wind - mWind) * llclamp(WIND_FADE_RATE * dt, 0.f, 1.f);
+    mWindXY.set(mWind.mV[VX], mWind.mV[VY], 0.f);
+    mWindSpeed = mWind.magVec();
+
+    // Ground zero for this track: terrain and water at ground level, the band's
+    // own base altitude up in the sky unless the config pins it to a platform
+    mSkyTrack = tracks->isSkyTrack(mTrack);
+    mGroundZero = cfg.mHasGround ? cfg.mGround : tracks->trackFloor(mTrack);
+    mFallThrough = llclamp(cfg.mFallThrough, 0.f, 1.f);
+
     mHasWeather = mEnabled && mPrecipitation > 0.02f;
 
     // Mean fall direction: wind tilt over fall speed; slow types drift hard.
@@ -176,7 +229,7 @@ void SSAtmoMagic::refreshParams()
     }
     else
     {
-        const F32 tilt = llclamp(mWindSpeed * mPreset.mWindResponse / fall, 0.f, 2.f);
+        const F32 tilt = llclamp(mWindXY.magVec() * mPreset.mWindResponse / fall, 0.f, 2.f);
         LLVector3 dir_xy = mWindXY;
         dir_xy.normVec();
         mRainDirection = dir_xy * tilt;
@@ -250,7 +303,7 @@ void SSAtmoMagic::refreshAssets()
     // Keyed on the preset name plus its asset strings, so switching or
     // editing a preset re-parses and anything else is a cheap no-op
     const std::string fingerprint = mPreset.mName + "|" + mPreset.mTextures + "|"
-                                  + mPreset.mRippleTexture + "|" + mPreset.mSounds.mImpacts;
+                                  + mPreset.mRippleTexture;
     if (fingerprint == mAssetsFingerprint) return;
     mAssetsFingerprint = fingerprint;
 
@@ -264,17 +317,6 @@ void SSAtmoMagic::refreshAssets()
         mRippleTexture = LLViewerTextureManager::getFetchedTexture(ripple[0].mID);
     }
 
-    std::vector<SSAtmoAsset> sounds;
-    parseAssetList(mPreset.mSounds.mImpacts, sounds);
-    mImpactSounds.clear();
-    for (const SSAtmoAsset& snd : sounds)
-    {
-        mImpactSounds.push_back(snd.mID);
-        if (gAudiop)
-        {
-            gAudiop->preloadSound(snd.mID);
-        }
-    }
 }
 
 LLViewerTexture* SSAtmoMagic::textureFor(const SSAtmoAsset& asset, LLColor4& tint, F32& glow)
@@ -321,12 +363,6 @@ LLViewerTexture* SSAtmoMagic::rippleTexture()
     return mRippleTexture;
 }
 
-LLUUID SSAtmoMagic::pickImpactSound(SSRandStream& rng)
-{
-    if (mImpactSounds.empty()) return LLUUID::null;
-    return mImpactSounds[rng.rand((S32)mImpactSounds.size())];
-}
-
 void SSAtmoMagic::ensureSim()
 {
     if (mEnabled)
@@ -358,8 +394,17 @@ void SSAtmoMagic::shift(const LLVector3& offset)
 void SSAtmoMagic::queueImpact(F64 time, const LLVector3& pos_agent, F32 strength, bool on_water,
                               const LLVector3& normal, const LLVector3& velocity, bool shatter)
 {
-    // Bounded so a hitch or bad parameters can't grow this without limit
-    if (mImpacts.size() > 2048) return;
+    // Bounded so a hitch or bad parameters can't grow this without limit.
+    //
+    // The bound has to hold everything in flight, not everything landing this
+    // second: an impact is queued when its drop is spawned and dispatched when
+    // it arrives, so the queue depth is the landing rate times the whole fall
+    // time. Rain falling 16 to 26 metres at 9.5 m/s is better than two seconds
+    // in the air, and a few thousand landings a second across the impact radius
+    // puts ten thousand entries in here in steady state. The old bound of two
+    // thousand was reached almost immediately and silently threw the rest away,
+    // which is why the ripples read as a fraction of the drops.
+    if (mImpacts.size() > 16384) return;
     mImpacts.emplace(time, Impact{ pos_agent, normal, velocity, strength, on_water, shatter });
 }
 
@@ -368,9 +413,6 @@ void SSAtmoMagic::processImpacts()
     LL_RECORD_BLOCK_TIME(FTM_SS_ATMO_IMPACTS);
 
     static LLCachedControl<bool> ripples(gSavedSettings, "SSAtmoRipples", true);
-    static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
-    static LLCachedControl<F32>  sound_gain(gSavedSettings, "SSAtmoSoundGain", 0.6f);
-    static LLCachedControl<F32>  master_vol(gSavedSettings, "SSAtmoVolumeMaster", 0.8f);
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
@@ -387,8 +429,8 @@ void SSAtmoMagic::processImpacts()
         SSWeatherSounds::getInstance()->notifyImpact(
             impact.mStrength * (1.f - dist / IMPACT_SEE_RADIUS));
 
-        // Deterministic per-impact stream so sound choice/probability lines
-        // up across clients hearing the same landing
+        // Deterministic per-impact stream so the ripple and any shatter look
+        // the same on every client watching the same landing
         SSRandStream rng(SSAtmoNoise::combine(SS_ATMO_SEED,
             SSAtmoNoise::combine((U32)(S32)(impact.mPosAgent.mV[VX] * 16.f),
                                  (U32)(S32)(impact.mPosAgent.mV[VY] * 16.f))));
@@ -404,29 +446,13 @@ void SSAtmoMagic::processImpacts()
             }
         }
 
-        if (sounds && gAudiop && dist < IMPACT_HEAR_RADIUS && !mImpactSounds.empty())
-        {
-            const F32 closeness = 1.f - dist / IMPACT_HEAR_RADIUS;
-            if (rng.frand() < 0.12f * impact.mStrength * closeness)
-            {
-                const LLUUID sound_id = pickImpactSound(rng);
-                // Landings beyond a wall are heard through it, not around it
-                const F32 occlusion = SSWeatherSounds::getInstance()->occlusionGain(impact.mPosAgent);
-                const F32 gain = llclamp((F32)sound_gain * (F32)master_vol * impact.mStrength
-                                         * closeness * occlusion, 0.f, 1.f);
-                gAudiop->triggerSound(sound_id, gAgent.getID(), gain,
-                                      LLAudioEngine::AUDIO_TYPE_AMBIENT,
-                                      gAgent.getPosGlobalFromAgent(impact.mPosAgent));
-
-                // A sharp sound outdoors bounces off whatever wall or cliff
-                // is nearest; only a fraction get one so the field of drops
-                // does not turn into a wash of echoes
-                if (occlusion > 0.9f && rng.frand() < 0.25f)
-                {
-                    SSWeatherSounds::getInstance()->scheduleSlapback(sound_id, impact.mPosAgent, gain);
-                }
-            }
-        }
+        // No per-landing one-shot. A field of individually triggered drops
+        // never resolved into rain: the trigger rate had to stay low enough to
+        // be affordable, which left it sounding like a handful of taps rather
+        // than a downpour, and each sound fought the ambient bed instead of
+        // adding to it. The bed carries the rain now, and notifyImpact above is
+        // what makes it answer to how much is actually landing where you are
+        // standing rather than to the weather parameters alone.
     }
 }
 
@@ -435,6 +461,11 @@ void SSAtmoMagic::idle()
     LL_RECORD_BLOCK_TIME(FTM_SS_ATMO);
 
     mNow = LLDate::now().secondsSinceEpoch();
+
+    // Parcel description polling and notecard fetch; must run before params
+    // are resolved so a config landing this frame is picked up immediately
+    SSAtmoTrackMgr::getInstance()->idle();
+
     refreshParams();
 
     if (mEnabled && mNow - mLastAssetPoll > ASSET_POLL_PERIOD)
@@ -480,6 +511,14 @@ void SSAtmoMagic::drawInfo()
 
     std::vector<std::string> lines;
     lines.push_back(llformat("ATMO MAGIC  %s", atmo->isEnabled() ? "[enabled]" : "[disabled]"));
+    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    lines.push_back(llformat("track      %d of 4   %s   ground zero %.0fm%s",
+                             atmo->track(), tracks->statusText().c_str(),
+                             atmo->groundZero(), atmo->isSkyTrack() ? " (sky)" : ""));
+    if (atmo->trackBlend() < 0.99f)
+    {
+        lines.push_back(llformat("crossfade  %.2f", atmo->trackBlend()));
+    }
     lines.push_back(llformat("preset     %s (%s)", preset.mName.c_str(),
                              SSPrecipPreset::archetypeName(preset.mArchetype)));
     lines.push_back(llformat("precip     %.2f    turbulence %.2f",
@@ -508,6 +547,70 @@ void SSAtmoMagic::drawInfo()
                              shader_live ? "water" : "fallback",
                              gSSPrecipLitProgram.isComplete() ? "on" : "fallback",
                              gPipeline.mSceneMap.getWidth() > 0 ? "on" : "off"));
+
+    lines.push_back("-- wind flow --");
+    SSWindFlowMap* flow = SSWindFlowMap::getInstance();
+    if (!SSWindFlowMap::isSupported())
+    {
+        lines.push_back("flowmap    unavailable (needs OpenGL 4.3)");
+    }
+    else if (!flow->isValid())
+    {
+        lines.push_back("flowmap    idle");
+    }
+    else
+    {
+        // Age and build count together: the map is meant to be static, so a
+        // count that climbs while you stand still means something is churning
+        lines.push_back(llformat("domain     %.0fm at %d texels (%.1fm/cell)  %d tiles",
+                                 flow->extent(), flow->resolution(),
+                                 flow->cellSize(), flow->tileCount()));
+        lines.push_back(llformat("solved     %.0fs ago   builds %u",
+                                 (F32)flow->age(), flow->buildCount()));
+
+        std::string slabs;
+        for (S32 i = 0; i <= flow->sliceCount(); ++i)
+        {
+            slabs += llformat("%s%.0f", i ? " / " : "", flow->sliceAltitude(i));
+        }
+        lines.push_back(llformat("slabs      %d   %s", flow->sliceCount(), slabs.c_str()));
+
+        const LLVector3 local = flow->sample(cam);
+        lines.push_back(llformat("local wind %.1f %.1f %.1f  (%.1f m/s)  exposure %.2f",
+                                 local.mV[VX], local.mV[VY], local.mV[VZ],
+                                 local.magVec(), flow->exposure(cam)));
+        lines.push_back(llformat("build      %.1f ms", flow->lastSolveMS()));
+
+        // What the mask holds over this exact spot. A column with nothing
+        // captured over it, or a volume that is barely solid anywhere, both
+        // mean the air has nothing to flow around however many passes it gets.
+        F32 top = 0.f;
+        if (flow->surfaceAt(cam, top))
+        {
+            lines.push_back(llformat("surface    %.1fm top   %.0f%% solid   %.1f%% under the surface",
+                                     top, flow->solidFill() * 100.f,
+                                     flow->carvedFraction() * 100.f));
+        }
+        else
+        {
+            lines.push_back(llformat("surface    open column, nothing captured   %.0f%% solid",
+                                     flow->solidFill() * 100.f));
+        }
+    }
+
+    // What the rain shadow answers for the same column. Most land here is mesh
+    // and prims, so the difference between a surface the capture saw and the
+    // terrain heightmap it falls back to is the difference between rain landing
+    // on the roof over you and rain starting inside the room.
+    {
+        LLVector3 hit;
+        bool on_water = false;
+        const bool mapped = SSRainShadowMap::getInstance()->resolveColumn(cam, hit, on_water);
+        lines.push_back(llformat("column     %s at %.1fm (%+.1fm)%s",
+                                 mapped ? "mapped surface" : "heightmap guess",
+                                 hit.mV[VZ], hit.mV[VZ] - cam.mV[VZ],
+                                 on_water ? ", water" : ""));
+    }
 
     lines.push_back("-- audio --");
     lines.push_back(llformat("cover      %s   space %s%s",

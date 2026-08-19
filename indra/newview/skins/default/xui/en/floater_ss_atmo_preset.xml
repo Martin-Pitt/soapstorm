@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="614"
+ height="671"
  layout="topleft"
  name="floater_ss_atmo_preset"
  save_rect="true"
@@ -16,15 +16,30 @@
     <button name="new_button" follows="left|top" layout="topleft"
      left_pad="6" top_delta="0" height="23" width="56" label="Copy"
      tool_tip="Save the current settings as a new preset" />
+    <line_editor name="preset_name_editor" follows="left|top" layout="topleft"
+     left="10" top_pad="6" height="21" width="290" max_length_chars="63"
+     tool_tip="Name for this preset; use Rename to apply it" />
+    <button name="rename_button" follows="left|top" layout="topleft"
+     left_pad="6" top_delta="0" height="21" width="56" label="Rename"
+     tool_tip="Rename this preset, updating any track that refers to it" />
+    <button name="blank_button" follows="left|top" layout="topleft"
+     left="10" top_pad="6" height="21" width="56" label="New"
+     tool_tip="Create a new preset with default values" />
     <button name="delete_button" follows="left|top" layout="topleft"
-     left="10" top_pad="6" height="21" width="80" label="Delete"
+     left_pad="6" top_delta="0" height="21" width="80" label="Delete"
      tool_tip="Delete this saved preset" />
     <button name="revert_button" follows="left|top" layout="topleft"
      left_pad="6" top_delta="0" height="21" width="120" label="Revert to default"
      tool_tip="Discard saved edits and return a built-in preset to its shipped values" />
+    <button name="save_button" follows="left|top" layout="topleft"
+     left="10" top_pad="6" height="21" width="80" label="Save"
+     tool_tip="Write this preset to disk. Edits apply live before this, but only survive a restart once saved" />
+    <button name="discard_button" follows="left|top" layout="topleft"
+     left_pad="6" top_delta="0" height="21" width="110" label="Discard changes"
+     tool_tip="Drop unsaved edits and go back to the version on disk" />
 
     <tab_container name="preset_tabs" follows="all" halign="center" layout="topleft"
-     left="6" top="86" width="438" height="520"
+     left="6" top="143" width="438" height="520"
      tab_position="top" tab_height="21" tab_min_width="72" hide_scroll_arrows="true">
 
         <panel name="tab_motion" label="Motion" follows="all" layout="topleft"
@@ -84,6 +99,10 @@
                 <combo_box.item label="Teardrop" name="teardrop" value="1" />
                 <combo_box.item label="Sliver" name="sliver" value="2" />
             </combo_box>
+            <slider name="drop_scale" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="15" width="410" label="Particle size:" label_width="130"
+             min_val="0.1" max_val="8" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="Size of the individual drops painted into cluster and sheet particles, relative to the near-drop tier size they stand in for. The near drops keep their own tier size." />
             <slider name="glow" follows="left|top" layout="topleft" left="10" top_pad="14"
              height="15" width="410" label="Glow:" label_width="130"
              min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
@@ -178,6 +197,39 @@
             <check_box name="shatter" follows="left|top" layout="topleft" left="10" top_pad="12"
              height="16" width="410" label="Shatter into shards on impact"
              tool_tip="Throws glowing shards off the surface at the speed it hit" />
+
+            <text name="ripple_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="410" font="SansSerifSmallBold">Landing ring</text>
+            <slider name="ripple_size" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Ring size:" label_width="130"
+             min_val="0" max_val="3" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="Half-size the ring spreads out to, in metres. Water spreads wider. Zero drops the ring." />
+            <slider name="ripple_alpha" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Ring opacity:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="Opacity the ring starts at; it fades out as it spreads, and dims on surfaces tipping toward vertical" />
+            <slider name="ripple_life" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Ring life:" label_width="130"
+             min_val="0" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="Seconds the ring takes to spread and fade on a hard surface; water holds it longer" />
+
+            <text name="crown_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="410" font="SansSerifSmallBold">Splash crown</text>
+            <slider name="crown_size" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Crown size:" label_width="130"
+             min_val="0" max_val="1" increment="0.005" decimal_digits="3" show_text="true"
+             tool_tip="Half-size of the mote thrown off the surface, in metres. Zero leaves the ring on its own." />
+            <slider name="crown_alpha" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Crown opacity:" label_width="130"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true" />
+            <slider name="crown_speed" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Crown speed:" label_width="130"
+             min_val="0" max_val="6" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="How fast it leaves along the surface normal, in m/s, before gravity takes it back" />
+            <slider name="crown_life" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Crown life:" label_width="130"
+             min_val="0" max_val="3" increment="0.05" decimal_digits="2" show_text="true" />
+
             <text name="riser_label" follows="left|top" layout="topleft" left="10" top_pad="18"
              height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Riser flavour mix - only applies to the Riser behaviour</text>
             <slider name="dark_mix" follows="left|top" layout="topleft" left="10" top_pad="6"
@@ -204,22 +256,20 @@
              height="20" width="410" label="Riser clouds" />
             <text name="snd_label" follows="left|top" layout="topleft" left="10" top_pad="14"
              height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Sound pack - comma separated UUIDs play end to end as a sequence</text>
-            <line_editor name="snd_impacts" follows="left|top" layout="topleft" left="10" top_pad="4"
-             height="20" width="410" label="Impact one-shots" />
-            <line_editor name="snd_medium" follows="left|top" layout="topleft" left="10" top_pad="6"
+            <line_editor name="snd_medium" follows="left|top" layout="topleft" left="10" top_pad="4"
              height="20" width="410" label="Ambient (required)" />
             <line_editor name="snd_light" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="20" width="410" label="Ambient light (optional)" />
             <line_editor name="snd_heavy" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="20" width="410" label="Ambient heavy (optional)" />
             <line_editor name="snd_roof_open" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Roof, outside" />
+             height="20" width="410" label="Inside, Sheltered" />
             <line_editor name="snd_roof_small" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Roof, small room" />
+             height="20" width="410" label="Inside, small room" />
             <line_editor name="snd_roof_medium" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Roof, medium room" />
+             height="20" width="410" label="Inside, medium room" />
             <line_editor name="snd_roof_big" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Roof, big hall" />
+             height="20" width="410" label="Inside, big hall" />
         </panel>
     </tab_container>
 </floater>

@@ -104,6 +104,8 @@
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
 #include "sspreciprenderer.h" // <SS:Nexii> Atmo Magic weather
+#include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
+#include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "llspatialpartition.h"
 #include "llmutelist.h"
 #include "lltoolpie.h"
@@ -5643,6 +5645,21 @@ void LLPipeline::renderDebug()
     {
         gAgent.getRegion()->mWind.renderVectors();
     }
+
+    // <SS:Nexii> Atmo Magic wind flowmap: every slab translucently, plus an
+    // arrow field on the slab the camera is in
+    if (mRenderDebugMask & RENDER_DEBUG_WIND_FLOW)
+    {
+        SSWindFlowMap::getInstance()->renderDebug();
+    }
+
+    // Atmo Magic rain shadow: each cached tile projected back onto the region
+    // along the fall direction
+    if (mRenderDebugMask & RENDER_DEBUG_RAIN_SHADOW)
+    {
+        SSRainShadowMap::getInstance()->renderDebug();
+    }
+    // </SS:Nexii>
 
     if (mRenderDebugMask & RENDER_DEBUG_COMPOSITION)
     {

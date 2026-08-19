@@ -28,9 +28,4 @@
      control_name="SSAtmoLoopWindStrong"
      follows="left|top" layout="topleft" left="12" top_pad="4"
      height="20" width="416" label="Wind, strong" name="loop_wind_strong" />
-    <check_box
-     control_name="SSAtmoTeardropFlip"
-     follows="left|top" layout="topleft" left="12" top_pad="10"
-     height="16" width="416" label="Flip generated raindrop head"
-     tool_tip="Use if generated drops appear to fall point first" />
 </floater>

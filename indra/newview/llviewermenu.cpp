@@ -1364,6 +1364,16 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_WIND_VECTORS;
     }
+    // <SS:Nexii> Atmo Magic wind flowmap
+    else if ("wind flow" == info_display)
+    {
+        return LLPipeline::RENDER_DEBUG_WIND_FLOW;
+    }
+    else if ("rain shadow" == info_display)
+    {
+        return LLPipeline::RENDER_DEBUG_RAIN_SHADOW;
+    }
+    // </SS:Nexii>
     else if ("texel density" == info_display)
     {
         return LLPipeline::RENDER_DEBUG_TEXEL_DENSITY;

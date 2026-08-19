@@ -28,6 +28,7 @@
 #include "lldir.h"
 #include "llfile.h"
 #include "llsdserialize.h"
+#include "llsdutil.h"
 #include "llviewercontrol.h"
 
 // <SS:Nexii> Atmo Magic weather presets
@@ -62,6 +63,7 @@ LLSD SSPrecipPreset::asLLSD() const
     sd["tint"] = mTint.getValue();
     sd["glow"] = mGlow;
     sd["drop_shape"] = (S32)mDropShape;
+    sd["drop_scale"] = mDropScale;
     sd["emissive"] = mEmissive;
     sd["water_shading"] = mWaterShading;
 
@@ -79,6 +81,13 @@ LLSD SSPrecipPreset::asLLSD() const
 
     sd["impact_strength"] = mImpactStrength;
     sd["shatter"] = mShatter;
+    sd["ripple_size"] = mRippleSize;
+    sd["ripple_alpha"] = mRippleAlpha;
+    sd["ripple_life"] = mRippleLife;
+    sd["crown_size"] = mCrownSize;
+    sd["crown_alpha"] = mCrownAlpha;
+    sd["crown_speed"] = mCrownSpeed;
+    sd["crown_life"] = mCrownLife;
     sd["dark_mix"] = mDarkMix;
     sd["puff_mix"] = mPuffMix;
 
@@ -87,7 +96,6 @@ LLSD SSPrecipPreset::asLLSD() const
     sd["dark_texture"] = mDarkTexture;
     sd["puff_texture"] = mPuffTexture;
 
-    sd["snd_impacts"] = mSounds.mImpacts;
     sd["snd_light"] = mSounds.mAmbientLight;
     sd["snd_medium"] = mSounds.mAmbientMedium;
     sd["snd_heavy"] = mSounds.mAmbientHeavy;
@@ -120,6 +128,7 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     if (sd.has("tint")) mTint.setValue(sd["tint"]);
     if (sd.has("glow")) mGlow = (F32)sd["glow"].asReal();
     if (sd.has("drop_shape")) mDropShape = (U8)llclamp(sd["drop_shape"].asInteger(), 0, 2);
+    if (sd.has("drop_scale")) mDropScale = (F32)sd["drop_scale"].asReal();
     if (sd.has("emissive")) mEmissive = sd["emissive"].asBoolean();
     if (sd.has("water_shading")) mWaterShading = sd["water_shading"].asBoolean();
 
@@ -140,6 +149,15 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
 
     if (sd.has("impact_strength")) mImpactStrength = (F32)sd["impact_strength"].asReal();
     if (sd.has("shatter")) mShatter = sd["shatter"].asBoolean();
+    // Presets written before these existed keep the defaults, which are the
+    // values the splash used when it was hardcoded
+    if (sd.has("ripple_size")) mRippleSize = (F32)sd["ripple_size"].asReal();
+    if (sd.has("ripple_alpha")) mRippleAlpha = (F32)sd["ripple_alpha"].asReal();
+    if (sd.has("ripple_life")) mRippleLife = (F32)sd["ripple_life"].asReal();
+    if (sd.has("crown_size")) mCrownSize = (F32)sd["crown_size"].asReal();
+    if (sd.has("crown_alpha")) mCrownAlpha = (F32)sd["crown_alpha"].asReal();
+    if (sd.has("crown_speed")) mCrownSpeed = (F32)sd["crown_speed"].asReal();
+    if (sd.has("crown_life")) mCrownLife = (F32)sd["crown_life"].asReal();
     if (sd.has("dark_mix")) mDarkMix = (F32)sd["dark_mix"].asReal();
     if (sd.has("puff_mix")) mPuffMix = (F32)sd["puff_mix"].asReal();
 
@@ -148,7 +166,6 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     if (sd.has("dark_texture")) mDarkTexture = sd["dark_texture"].asString();
     if (sd.has("puff_texture")) mPuffTexture = sd["puff_texture"].asString();
 
-    if (sd.has("snd_impacts")) mSounds.mImpacts = sd["snd_impacts"].asString();
     if (sd.has("snd_light")) mSounds.mAmbientLight = sd["snd_light"].asString();
     if (sd.has("snd_medium")) mSounds.mAmbientMedium = sd["snd_medium"].asString();
     if (sd.has("snd_heavy")) mSounds.mAmbientHeavy = sd["snd_heavy"].asString();
@@ -174,6 +191,46 @@ void SSPrecipPresetMgr::refresh()
     mPresets.clear();
     buildDefaults();
     loadUserPresets();
+
+    // Everything just came from disk, so nothing is staged
+    mSaved = mPresets;
+}
+
+void SSPrecipPresetMgr::stage(const SSPrecipPreset& preset)
+{
+    if (preset.mName.empty()) return;
+
+    for (SSPrecipPreset& existing : mPresets)
+    {
+        if (existing.mName == preset.mName)
+        {
+            existing = preset;
+            return;
+        }
+    }
+    mPresets.push_back(preset);
+}
+
+const SSPrecipPreset* SSPrecipPresetMgr::findSaved(const std::string& name) const
+{
+    for (const SSPrecipPreset& p : mSaved)
+    {
+        if (p.mName == name) return &p;
+    }
+    return nullptr;
+}
+
+bool SSPrecipPresetMgr::isModified(const std::string& name) const
+{
+    const SSPrecipPreset* live = find(name);
+    if (!live) return false;
+
+    const SSPrecipPreset* saved = findSaved(name);
+    if (!saved) return true;    // brand new, never written
+
+    // Compared through the serialisation rather than field by field, so a
+    // preset gaining a field cannot silently stop counting as modified
+    return !llsd_equals(live->asLLSD(), saved->asLLSD());
 }
 
 const SSPrecipPreset* SSPrecipPresetMgr::find(const std::string& name) const
@@ -280,14 +337,17 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mFallSpeed = 9.5f;
         p.mFallLo = 16.f;  p.mFallHi = 26.f;
         p.mWindResponse = 1.f;
-        p.mRate = 0.20f;
+        p.mRate = 0.5f;
         p.mIntensitySize = 1.f;
         p.mWaterShading = true;
         p.mDropShape = DROP_TEARDROP;
-        p.mImpactStrength = 0.8f;
-        p.mTiers[TIER_DROPS]    = { true, KIND_STREAK, 0.028f, 0.55f, 0.32f, 28.f };
-        p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.15f, 96.f };
-        p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  9.f,    18.f,  0.07f, 224.f };
+        p.mImpactStrength = 1.0f;
+        p.mRippleSize = 0.3f;   p.mRippleAlpha = 0.15f;  p.mRippleLife = 0.4f;
+        p.mCrownSize  = 0.16f;  p.mCrownAlpha  = 0.11f;
+        p.mCrownSpeed = 0.65f;  p.mCrownLife   = 0.4f;
+        p.mTiers[TIER_DROPS]    = { true, KIND_STREAK, 0.028f, 0.55f, 0.8f, 18.f };
+        p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.5f, 96.f };
+        p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  9.f,    18.f,  0.3f, 224.f };
         mPresets.push_back(p);
     }
 
@@ -300,7 +360,7 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mFallLo = 5.f;  p.mFallHi = 9.f;
         p.mSway = 0.6f;
         p.mWindResponse = 1.f;
-        p.mRate = 0.12f;
+        p.mRate = 0.40f;
         p.mImpactStrength = 0.f;
         p.mTiers[TIER_DROPS]    = { true, KIND_ROUND, 0.055f, 0.055f, 0.85f, 24.f };
         p.mTiers[TIER_CLUSTERS] = { true, KIND_ROUND, 0.35f,  0.35f,  0.35f, 64.f };

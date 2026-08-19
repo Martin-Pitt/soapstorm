@@ -56,6 +56,45 @@ public:
     void markDirty(const LLVector3& pos_agent, F32 radius);
     void clearCache();
 
+    // How many regions currently have a map cached, for the simulation floater
+    S32 tileCount() const { return (S32)mTiles.size(); }
+    U32 resolution() const;
+
+    // Render Metadata > Rain Shadow: casts the map onto the region as an
+    // actual shadow, draped over the ground where the rain does not reach.
+    void renderDebug();
+
+    // A captured tile resampled down to a coarse world-space surface: for a
+    // regular grid of columns, the point precipitation lands on. This is the
+    // same answer resolveColumn gives, taken for the whole region in one pass
+    // so a consumer that needs the surface as a connected field - rather than
+    // one column at a time - can have it without a quarter of a million
+    // separate lookups. Region-local so it survives the agent-origin shift on
+    // a region crossing, the way the tiles themselves do.
+    enum
+    {
+        SURF_MAPPED = 0x01,     // the capture saw a real surface here
+        SURF_WATER  = 0x02      // the column ends on the water plane
+    };
+
+    struct SurfaceGrid
+    {
+        U64 mRegionHandle = 0;
+        S32 mN = 0;                     // samples per axis
+        F32 mCell = 0.f;                // spacing across the footprint, metres
+        std::vector<LLVector3> mPos;    // region-local landing point per cell
+        std::vector<U8> mFlags;         // SURF_* above
+        F64 mCaptureTime = -1.0;        // the tile capture this was built from
+    };
+
+    // Resample the cached tile for a region into the grid above. False when
+    // that region has no valid tile yet.
+    bool buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& out);
+
+    // Regions holding a valid tile, paired with when it was captured, so a
+    // consumer can tell when data it derived from one has gone stale.
+    void validTiles(std::vector<std::pair<U64, F64> >& out) const;
+
     // Find where the precipitation column through pos_agent first hits
     // something, walking along the current fall direction. Falls back to
     // terrain/water height when no map covers the point; the result is
@@ -86,12 +125,34 @@ private:
         F64 mLastTouched = 0.0;         // for LRU eviction
     };
 
+    // Debug shadow, draped over the region. A regular grid in region-local XY
+    // holding the receiving surface and how much rain reaches it; region-local
+    // so it survives the agent-origin shift on a region crossing, and cached
+    // so the per-sample column resolve happens on capture rather than per
+    // frame.
+    struct ShadowMesh
+    {
+        S32 mN = 0;                     // samples per axis
+        std::vector<LLVector3> mPos;    // region-local receiver points
+        std::vector<F32> mShade;        // 0 heightmap guess, 1 surface the capture saw
+
+        // What it was baked against, so it can tell when it has gone stale
+        F64 mBuiltFrom = -1.0;
+        LLVector3 mBuiltDir;
+        F32 mBuiltStep = 0.f;
+        F32 mBuiltFloor = 0.f;
+        bool mBuiltSky = false;
+    };
+
+    void buildShadowMesh(const Tile& tile, ShadowMesh& mesh);
+
     Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
     bool needsCapture(const Tile& tile) const;
     bool captureTile(Tile& tile);
     void evict();
 
     std::map<U64, Tile> mTiles;
+    std::map<U64, ShadowMesh> mDebugMesh;
     LLRenderTarget mTarget;
     F64 mLastCapture = 0.0;
 };

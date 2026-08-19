@@ -26,9 +26,11 @@
 #include "ssprecipitation.h"
 #include "ssprecipvariants.h"
 #include "ssrainshadow.h"
+#include "sswindflow.h"
 
 #include "llagent.h"
 #include "llfasttimer.h"
+#include "llrand.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
@@ -41,9 +43,32 @@ static const U64 MAX_CATCHUP_TICKS = 4;
 static const F32 VIS_BAND = 75.f;           // skip drops entirely above/below the camera by this much
 static const F32 IMPACT_QUEUE_RADIUS = 32.f;
 static const F32 MAX_FRAME_DT = 0.2f;
-static const size_t RIPPLE_CAP = 1024;
+// Ring and crown are separate entries, and both live for well under a second,
+// so this is landings per second times their life times two. It has to clear
+// what the impact queue can now deliver or the ring buffer simply overwrites
+// live splashes with newer ones and the count sits pinned at the cap.
+static const size_t RIPPLE_CAP = 4096;
 static const F32 MAX_SPAWN_DRIFT = 12.f;    // cap on upwind spawn offset for impacting types
 static const U32 GROUND_CHECK_SLICES = 8;   // frames a full ground re-check is spread over
+
+// Travel budget for a non-impacting particle, as a fall distance beyond its
+// own spawn column. These are retired by the floor they are actually over,
+// so the budget is only a backstop, and a mean one is what made snow fade out
+// overhead. The base covers the drop from a roof to the street below it; the
+// wind term covers how much ground a flake crosses on the way down, since the
+// harder it is pushed the further it can travel over surfaces that have
+// nothing to do with the column it grew from.
+static const F32 IMPACT_OVERSHOOT = 2.f;        // metres past the predicted landing
+static const F32 DRIFT_FALL_SLACK = 40.f;       // metres, before wind
+static const F32 DRIFT_SLACK_PER_WIND = 6.f;    // extra metres per m/s of wind
+static const F32 DRIFT_MAX_AGE = 90.f;          // absolute ceiling, seconds
+
+// A particle sitting this far under the surface resolved above it is not
+// landing on anything - it is indoors, or under a bridge or overhang
+static const F32 COVER_TOLERANCE = 2.f;
+
+// How quickly the measured air time follows the population it is measuring
+static const F32 LIFE_EMA = 0.02f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_SIM("Atmo Magic Sim");
 static LLTrace::BlockTimerStatHandle FTM_SS_SIM_INTEGRATE("Integrate");
@@ -56,16 +81,44 @@ struct SSTierSpec
     F32 mCell;
     F64 mHz;
     F32 mRateScale;
-    S32 mCap;
+    F32 mCapShare;      // fraction of the total particle budget this tier may hold
 };
 static const SSTierSpec TIER_SPEC[TIER_COUNT] = {
-    {  8.f, 8.0, 1.f,   24000 }, // TIER_DROPS
-    { 16.f, 4.0, 0.14f, 12000 }, // TIER_CLUSTERS
-    { 32.f, 2.0, 0.004f, 3200 }, // TIER_SHEETS
+    {  8.f, 8.0, 1.f,    0.61f }, // TIER_DROPS
+    { 16.f, 4.0, 0.14f,  0.31f }, // TIER_CLUSTERS
+    { 32.f, 2.0, 0.004f, 0.08f }, // TIER_SHEETS
 };
+
+// SSAtmoParticleBudget is the total number of precipitation particles allowed
+// in the air, split between the tiers by the shares above. It used to be a
+// multiplier on three separate hard caps, which meant the number it controlled
+// was never written down anywhere the user could see.
+static S32 tierCap(SSPrecipTier tier)
+{
+    static LLCachedControl<U32> budget(gSavedSettings, "SSAtmoParticleBudget", 40000);
+    const S32 total = (S32)llclamp((U32)budget, 500u, 200000u);
+    return llmax(16, (S32)((F32)total * TIER_SPEC[tier].mCapShare));
+}
 
 // LOD handoff radii come from the preset, scaled by the global LOD sliders
 // relative to the rain-family reference distances.
+// Horizontal wind at a point. With the flowmap solved this is the local field,
+// so drops funnel down alleys, lean around windward faces and go slack in the
+// lee of a building; without it, the single ambient vector as before.
+static LLVector3 windAt(const LLVector3& pos_agent)
+{
+    static LLCachedControl<bool> advect(gSavedSettings, "SSAtmoWindFlowAdvect", true);
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    if (!advect || !SSWindFlowMap::getInstance()->isValid())
+    {
+        return atmo->windXY();
+    }
+
+    const LLVector3 v = SSWindFlowMap::getInstance()->sample(pos_agent);
+    return LLVector3(v.mV[VX], v.mV[VY], 0.f);
+}
+
 static void tierRadii(const SSPrecipPreset& preset, F32& r0, F32& r1, F32& r2)
 {
     r0 = preset.mTiers[TIER_DROPS].mRadius;
@@ -144,6 +197,8 @@ SSPrecipSim::SSPrecipSim()
     for (S32 i = 0; i < TIER_COUNT; ++i)
     {
         mTierCount[i] = 0;
+        mTierTarget[i] = 0.f;
+        mMeanLife[i] = 0.f;
         mLastTick[i] = 0;
     }
 }
@@ -189,6 +244,8 @@ void SSPrecipSim::resetTextureTable()
     for (S32 i = 0; i < TIER_COUNT; ++i)
     {
         mTierCount[i] = 0;
+        mTierTarget[i] = 0.f;
+        mMeanLife[i] = 0.f;
     }
 }
 
@@ -201,6 +258,7 @@ void SSPrecipSim::clear()
     for (S32 i = 0; i < TIER_COUNT; ++i)
     {
         mTierCount[i] = 0;
+        mTierTarget[i] = 0.f;
         mLastTick[i] = 0;
     }
 }
@@ -225,6 +283,44 @@ void SSPrecipSim::update(F32 dt)
     static U32 sSlicePhase = 0;
     const U32 slice_phase = sSlicePhase++ % GROUND_CHECK_SLICES;
     const bool slice_check = !SSAtmoMagic::getInstance()->preset().makesImpacts();
+    const bool sky_track = SSAtmoMagic::getInstance()->isSkyTrack();
+
+    // Replace particles the moment they land rather than waiting for the next
+    // spawn tick, so rain stays continuous instead of arriving in pulses at the
+    // tier's tick rate. Collected here and emitted after the loop: emitParticle
+    // pushes to the same vector being walked.
+    static LLCachedControl<bool> respawn_setting(gSavedSettings, "SSAtmoRespawnOnImpact", true);
+    const F32 respawn_env = SSAtmoMagic::getInstance()->gustEnvelopeAt(
+        SSAtmoMagic::getInstance()->sharedTime());
+    struct Respawn { SSPrecipTier mTier; U32 mSeed; LLVector3 mPos; };
+    std::vector<Respawn> respawns;
+
+    // Distance past which a particle is nobody's business any more.
+    //
+    // The spawner re-centres its annulus on the camera every tick, so it does
+    // aim ahead - but nothing ever retired what it left behind. Those keep
+    // their full lifetime, keep counting toward the tier population, and the
+    // spawner's own easing reads that count as "full" and stops emitting. Walk
+    // across a region and the budget stays spent on snow behind you while the
+    // cells in front go hungry, which reads as the fall thinning out ahead and
+    // never catching up. Snow shows it worst because its travel budget lets it
+    // live for the better part of a minute.
+    const LLVector3 cull_cam = LLViewerCamera::getInstance()->getOrigin();
+    F32 cull_r2[TIER_COUNT];
+    {
+        const SSPrecipPreset& cull_preset = SSAtmoMagic::getInstance()->preset();
+        for (S32 t = 0; t < TIER_COUNT; ++t)
+        {
+            F32 in_lo, in_hi, out_lo, out_hi;
+            tierBands((SSPrecipTier)t, cull_preset, in_lo, in_hi, out_lo, out_hi);
+
+            // Beyond the spawn annulus by a couple of cells. The tier has
+            // already faded to nothing out there, so this frees budget without
+            // taking anything off the screen.
+            const F32 r = out_hi + TIER_SPEC[t].mCell * 2.f;
+            cull_r2[t] = r * r;
+        }
+    }
 
     // Integrate; dead particles swap-pop out (draw order is rebuilt per
     // frame by the renderer, so order here doesn't matter)
@@ -232,24 +328,17 @@ void SSPrecipSim::update(F32 dt)
     {
         SSPrecipParticle& p = mParticles[i];
         p.mAge += dt;
-        if (p.mAge >= p.mMaxAge)
+
         {
-            --mTierCount[p.mTier];
-            p = mParticles.back();
-            mParticles.pop_back();
-            continue;
-        }
-        // Non-impacting types are only given a lifetime, so wind and sway can
-        // carry them over a roof and straight down through it. Re-resolve the
-        // column for a rotating slice of the population each frame and retire
-        // anything that has sunk below the surface it is now over.
-        if ((slice_check && (i % GROUND_CHECK_SLICES) == slice_phase) && p.mVel.mV[VZ] < 0.f)
-        {
-            LLVector3 hit;
-            bool on_water = false;
-            SSRainShadowMap::getInstance()->resolveColumn(p.mPos, hit, on_water);
-            if (p.mPos.mV[VZ] < hit.mV[VZ])
+            const F32 dx = p.mPos.mV[VX] - cull_cam.mV[VX];
+            const F32 dy = p.mPos.mV[VY] - cull_cam.mV[VY];
+            if (dx * dx + dy * dy > cull_r2[p.mTier])
             {
+                // Left behind rather than landed. It never finished its fall,
+                // so it must not feed the mean life the population target is
+                // derived from, and it must not trigger a respawn either: the
+                // spawner will fill the cells that are still in range, and
+                // respawning here would put the particle back out of sight.
                 --mTierCount[p.mTier];
                 p = mParticles.back();
                 mParticles.pop_back();
@@ -257,18 +346,105 @@ void SSPrecipSim::update(F32 dt)
             }
         }
 
-        if (p.mFlags & (PART_SWAY | PART_GUSTY))
+        if (p.mAge >= p.mMaxAge)
         {
-            const F32 amp = (p.mFlags & PART_GUSTY) ? 2.2f : 0.6f;
-            p.mVel.mV[VX] += cosf(p.mAge * 1.4f + p.mPhase) * amp * dt;
-            p.mVel.mV[VY] += sinf(p.mAge * 1.1f + p.mPhase * 1.7f) * amp * dt;
-            if (p.mFlags & PART_GUSTY)
+            // What the particle actually managed to stay up for, which the
+            // population target is derived from. A non-impacting type is
+            // retired against whatever ground it has drifted over rather than
+            // the column it grew from, so over a city it stays up well past
+            // the fall the preset describes.
+            mMeanLife[p.mTier] = (mMeanLife[p.mTier] <= 0.f)
+                               ? p.mAge : lerp(mMeanLife[p.mTier], p.mAge, LIFE_EMA);
+
+            // Reaching full age is the landing. Top the tier back up to what
+            // the current rate sustains, and no further: replacing one for one
+            // regardless would freeze the population at whatever it happened to
+            // reach and leave the density controls doing nothing.
+            if (respawn_setting && respawn_env > 0.f &&
+                (F32)mTierCount[p.mTier] <= mTierTarget[p.mTier])
             {
-                p.mVel.mV[VZ] += sinf(p.mAge * 2.7f + p.mPhase) * 0.8f * dt;
+                respawns.push_back({ (SSPrecipTier)p.mTier, p.mSeed, p.mPos });
+            }
+
+            --mTierCount[p.mTier];
+            p = mParticles.back();
+            mParticles.pop_back();
+            continue;
+        }
+        // Non-impacting types carry a travel budget rather than a landing
+        // time, so wind and sway can take them over a roof and straight down
+        // through it. Re-resolve the column for a rotating slice of the
+        // population each frame and settle anything that has reached the
+        // surface it is now over.
+        if ((slice_check && (i % GROUND_CHECK_SLICES) == slice_phase) &&
+            !(p.mFlags & PART_LANDED) && p.mVel.mV[VZ] < 0.f)
+        {
+            LLVector3 hit;
+            bool on_water = false;
+            const bool found = SSRainShadowMap::getInstance()->resolveColumn(p.mPos, hit, on_water);
+
+            if (sky_track && !found)
+            {
+                // Open air under a sky band: nothing to land on, so it runs
+                // its budget out and fades where it is
+                p.mFloorZ = -FLT_MAX;
+            }
+            else if (hit.mV[VZ] - p.mPos.mV[VZ] > COVER_TOLERANCE)
+            {
+                // Well under the surface over it: it has drifted in through a
+                // doorway, under a bridge, or the map has only just learned
+                // about the building it is standing in. Nothing it could be
+                // landing on, so drop it rather than leave snow hanging in a
+                // room.
+                --mTierCount[p.mTier];
+                p = mParticles.back();
+                mParticles.pop_back();
+                continue;
+            }
+
+            else
+            {
+                // This is the surface it is going to land on, tested every
+                // frame below. Re-resolving is what lets a drifting particle
+                // follow the ground down a cliff or up onto a roof.
+                p.mFloorZ = hit.mV[VZ];
             }
         }
-        p.mPos += p.mVel * dt;
+
+        if (!(p.mFlags & PART_LANDED) && p.mPos.mV[VZ] <= p.mFloorZ)
+        {
+            // Landed. Leave it exactly its fade-out window rather than
+            // dropping it on the spot, so it settles onto the surface instead
+            // of blinking off, and it goes through the normal end-of-life path
+            // that tops the tier back up. It stops where it stopped: carrying
+            // on down would take it through the roof it just met and into the
+            // room underneath.
+            p.mMaxAge = llmin(p.mMaxAge, p.mAge + ssPrecipFadeOut(p.mTier));
+            p.mFlags |= PART_LANDED;
+        }
+
+        // A settled particle keeps its velocity, which is what orients a
+        // streak, but neither drifts nor sways while it fades
+        if (!(p.mFlags & PART_LANDED))
+        {
+            if (p.mFlags & (PART_SWAY | PART_GUSTY))
+            {
+                const F32 amp = (p.mFlags & PART_GUSTY) ? 2.2f : 0.6f;
+                p.mVel.mV[VX] += cosf(p.mAge * 1.4f + p.mPhase) * amp * dt;
+                p.mVel.mV[VY] += sinf(p.mAge * 1.1f + p.mPhase * 1.7f) * amp * dt;
+                if (p.mFlags & PART_GUSTY)
+                {
+                    p.mVel.mV[VZ] += sinf(p.mAge * 2.7f + p.mPhase) * 0.8f * dt;
+                }
+            }
+            p.mPos += p.mVel * dt;
+        }
         ++i;
+    }
+
+    for (const Respawn& r : respawns)
+    {
+        respawnParticle(r.mTier, r.mSeed, r.mPos, respawn_env);
     }
 
     for (size_t i = 0; i < mRipples.size();)
@@ -334,10 +510,15 @@ void SSPrecipSim::spawnTier(SSPrecipTier tier, U64 tick, F64 tick_time)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const SSPrecipPreset& preset = atmo->preset();
-    if (!preset.mTiers[tier].mEnabled) return;
+
+    // A disabled tier or a gust lull has no target, which is what stops
+    // respawn-on-impact from keeping a stopped shower alive
+    if (!preset.mTiers[tier].mEnabled) { mTierTarget[tier] = 0.f; return; }
 
     const F32 env = atmo->gustEnvelopeAt(tick_time);
-    if (env <= 0.f) return;
+    if (env <= 0.f) { mTierTarget[tier] = 0.f; return; }
+
+    mTierSpawnAccum[tier] = 0.f;
 
     // Spawn annulus: the tier's fade band plus one cell of margin
     F32 in_lo, in_hi, out_lo, out_hi;
@@ -382,6 +563,27 @@ void SSPrecipSim::spawnTier(SSPrecipTier tier, U64 tick, F64 tick_time)
             spawnTierCell(tier, tick, tick_time, cx, cy, env, cam, agent_origin_global);
         }
     }
+
+    // Population this rate sustains: spawns per second times how long one
+    // particle lives. Both the spawn easing and respawn-on-impact aim at it,
+    // so they hold the same level between them instead of stacking.
+    F32 fall_lo, fall_hi;
+    fallLength(preset, tier, fall_lo, fall_hi);
+    const F32 nominal_life = preset.risesFromGround()
+        ? 2.25f      // risers get a flat lifetime, not a fall distance
+        : ((fall_lo + fall_hi) * 0.5f) / llmax(0.1f, preset.mFallSpeed);
+
+    // The fall the preset describes is only the nominal case: over rooftops a
+    // drifting flake keeps falling to the street below, and a target derived
+    // from the nominal fall alone would throttle the spawner exactly where the
+    // snow has furthest to come. Use what the population is actually
+    // achieving, bounded so an odd run cannot run the target away.
+    const F32 mean_life = (mMeanLife[tier] > 0.f)
+        ? llclamp(mMeanLife[tier], nominal_life * 0.5f, nominal_life * 8.f)
+        : nominal_life;
+
+    mTierTarget[tier] = llmin(mTierSpawnAccum[tier] * (F32)TIER_SPEC[tier].mHz * mean_life,
+                              (F32)tierCap(tier));
 }
 
 void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 cx, S32 cy, F32 env,
@@ -400,25 +602,26 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
     rng.next();
 
     static LLCachedControl<F32> density(gSavedSettings, "SSAtmoDensity", 1.f);
-    static LLCachedControl<F32> budget_setting(gSavedSettings, "SSAtmoParticleBudget", 1.f);
 
-    // Ease the spawn rate off as the tier fills so the budget is shared
-    // evenly by every cell. Hitting the hard cap instead would simply cut
-    // off whichever cells are visited last.
-    const S32 cap = (S32)(spec.mCap * llclamp((F32)budget_setting, 0.25f, 2.f));
-    const F32 fill = (F32)mTierCount[tier] / (F32)llmax(1, cap);
+    // Ease the spawn rate off as the tier fills so the budget is shared evenly
+    // by every cell. Hitting the cap instead would simply cut off whichever
+    // cells are visited last. The target is what the current rate sustains, and
+    // the cap is only a ceiling on it.
+    const S32 cap = tierCap(tier);
+    const F32 target = llmin(mTierTarget[tier] > 1.f ? mTierTarget[tier] : (F32)cap, (F32)cap);
+    const F32 fill = (F32)mTierCount[tier] / llmax(1.f, target);
     const F32 headroom = (fill < 0.7f) ? 1.f : llmax(0.f, (1.f - fill) / 0.3f);
-    if (headroom <= 0.f) return;
 
     const F32 area_factor = atmo->areaFactorAt((cx + 0.5) * spec.mCell, (cy + 0.5) * spec.mCell);
     const F32 p = powf(atmo->precipitation(), 1.4f);
-    const F32 mean = preset.mRate * spec.mRateScale * p * area_factor * env * headroom
-                     * llclamp((F32)density, 0.1f, 3.f)
-                     * spec.mCell * spec.mCell / (F32)spec.mHz;
 
-    S32 count = (S32)mean;
-    if (rng.frand() < mean - (F32)count) ++count;
-    if (count <= 0) return;
+    // Unthrottled rate first: the target has to be derived from what the
+    // weather is asking for, not from what the easing let through, or the two
+    // chase each other down to nothing
+    const F32 mean_full = preset.mRate * spec.mRateScale * p * area_factor * env
+                          * llclamp((F32)density, 0.1f, 3.f)
+                          * spec.mCell * spec.mCell / (F32)spec.mHz;
+    mTierSpawnAccum[tier] += mean_full;
 
     // Ray anchor height must be shared between clients: the region's water
     // height is, camera height is not. Cells over the void beyond region
@@ -426,9 +629,42 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
     // the sim edge.
     const F32 cell_agent_x = (F32)((F64)cx * spec.mCell - agent_origin_global.mdV[VX]);
     const F32 cell_agent_y = (F32)((F64)cy * spec.mCell - agent_origin_global.mdV[VY]);
+
+    // Whether landings from this cell could be seen or heard at all. The
+    // impact schedule is the only source of ripples and impact sounds, and it
+    // has to run at the rate the weather is actually asking for - not at
+    // whatever rate the local particle population happens to leave room for.
+    //
+    // Those are not the same thing, and the difference is not small. Respawn
+    // on impact replaces each drop as it lands and stops exactly at the
+    // population target, which parks the easing at zero headroom more or less
+    // permanently. The tier stays full of drops, the spawner stops being asked
+    // for new ones, and the impacts stop with it: rain everywhere and nothing
+    // landing. So the eased rate governs how many particles are emitted, and
+    // the full rate governs how many landings are scheduled.
+    const F32 impact_reach = IMPACT_QUEUE_RADIUS + spec.mCell * 1.5f;
+    const F32 cell_dx = cell_agent_x + spec.mCell * 0.5f - cam_agent.mV[VX];
+    const F32 cell_dy = cell_agent_y + spec.mCell * 0.5f - cam_agent.mV[VY];
+    const bool impacts_here = (tier == TIER_DROPS) && preset.makesImpacts()
+                            && (cell_dx * cell_dx + cell_dy * cell_dy) < impact_reach * impact_reach;
+
+    if (headroom <= 0.f && !impacts_here) return;
+
+    const F32 mean = impacts_here ? mean_full : (mean_full * headroom);
+
+    S32 count = (S32)mean;
+    if (rng.frand() < mean - (F32)count) ++count;
+    if (count <= 0) return;
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(
         LLVector3(cell_agent_x, cell_agent_y, cam_agent.mV[VZ]));
-    const F32 anchor_z = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
+
+    // In a sky band the track's own ground zero is the anchor: it is derived
+    // from the region altitudes and the shared config, so it stays identical
+    // across clients the way the water height does at ground level.
+    const bool sky = atmo->isSkyTrack();
+    const F32 fall_through = atmo->fallThrough();
+    const F32 anchor_z = sky ? atmo->groundZero()
+                             : (regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight());
 
     F32 fall_lo, fall_hi;
     fallLength(preset, tier, fall_lo, fall_hi);
@@ -448,29 +684,48 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
         const F32 phase = rng.frand(0.f, F_TWO_PI);
         const F32 riser_age = rng.frand(1.5f, 3.f);
         const F32 gust_jitter = rng.frand(0.f, 1.f);
+        const F32 platform_roll = rng.frand(0.f, 1.f);
         const U32 vis_seed = rng.next();
 
         const LLVector3 anchor(cell_agent_x + ox, cell_agent_y + oy, anchor_z);
         LLVector3 hit;
         LLVector3 normal;
         bool on_water = false;
-        SSRainShadowMap::getInstance()->resolveColumn(anchor, hit, on_water, &normal);
+        const bool found_surface =
+            SSRainShadowMap::getInstance()->resolveColumn(anchor, hit, on_water, &normal);
+
+        // A sky band is mostly empty air. Where a column found no real surface
+        // there is nothing to catch the drop, so it falls through the track
+        // floor and fades instead of landing on an imaginary plane. Only a
+        // fraction are drawn at all, otherwise open sky reads as solid rain
+        // going nowhere.
+        const bool no_platform = sky && !found_surface;
+        if (no_platform && platform_roll > fall_through) continue;
 
         // Shared impact schedule, from the individual-drop tier only;
         // ripples/sounds fire on time even when the drop itself is culled
-        if (tier == TIER_DROPS)
+        if (tier == TIER_DROPS && !no_platform)
         {
             const F32 strength = preset.mImpactStrength;
             if (strength > 0.f && (hit - cam_agent).magVec() < IMPACT_QUEUE_RADIUS)
             {
                 // Landing velocity, reconstructed the same way emitParticle
-                // builds it, so shards fly off at the speed that actually hit
-                const LLVector3 wind_h = atmo->windXY() * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f));
+                // builds it, wind response included, so shards fly off at the
+                // speed that actually hit
+                const LLVector3 wind_h = windAt(hit) * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f))
+                                       * llmax(0.f, preset.mWindResponse);
                 const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -v_fall);
                 atmo->queueImpact(tick_time + fall_len / v_fall, hit, strength * strength_jitter,
                                   on_water, normal, impact_vel, preset.mShatter);
             }
         }
+
+        // Emission is throttled where the schedule is not. Rolled locally and
+        // deliberately not from the shared stream: how full this client's tier
+        // happens to be is a local matter, and drawing it from the shared
+        // stream would push every other client's draws out of step.
+        if (headroom <= 0.f) continue;
+        if (headroom < 1.f && ll_frand() > headroom) continue;
 
         // Locally invisible: landing far overhead or materializing far below
         const F32 spawn_z = rises ? hit.mV[VZ] : hit.mV[VZ] + fall_len;
@@ -480,12 +735,14 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
 
         if (mTierCount[tier] >= cap) continue; // hard backstop; the easing above normally keeps us clear
 
-        emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed);
+        emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
+                     found_surface || !sky);
     }
 }
 
 void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 fall_len, F32 gust,
-                               F32 size_jitter, F32 phase, F32 riser_age, F32 gust_jitter, U32 vis_seed)
+                               F32 size_jitter, F32 phase, F32 riser_age, F32 gust_jitter, U32 vis_seed,
+                               bool has_floor)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const SSPrecipPreset& preset = atmo->preset();
@@ -518,6 +775,7 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
     const bool rises = preset.risesFromGround();
 
     SSPrecipParticle part;
+    part.mSeed = vis_seed;
     part.mTier = (U8)tier;
     part.mKind = visual.mKind;
     part.mFlags = (preset.mSway >= 1.5f) ? PART_GUSTY : (preset.mSway > 0.f ? PART_SWAY : 0);
@@ -536,16 +794,25 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
     part.mTex = textureIndex(texturep);
     part.mMaterial = preset.material();
 
-    // Vertical speed is the type's terminal velocity; horizontal speed
-    // rides the wind, surging with the gust envelope so bursts also lean
-    const LLVector3 wind_h = atmo->windXY()
+    // Vertical speed is the type's terminal velocity; horizontal speed rides
+    // the wind, surging with the gust envelope so bursts also lean. The
+    // preset's wind response scales how much of that wind this type actually
+    // takes, so a heavy drop can shrug off the same gale that carries a flake
+    // away without touching the wind itself. It is the same factor the fall
+    // direction is tilted by, so the column the map resolves and the path the
+    // particle takes stay the same path.
+    const LLVector3 wind_h = windAt(hit_pos)
         * (0.55f + 0.45f * llclamp(gust, 0.f, 2.5f))
-        * (0.8f + 0.4f * gust_jitter);
+        * (0.8f + 0.4f * gust_jitter)
+        * llmax(0.f, preset.mWindResponse);
 
     if (rises)
     {
         part.mPos = hit_pos;
-        part.mVel = LLVector3(wind_h.mV[VX] * 0.15f, wind_h.mV[VY] * 0.15f, v_fall);
+        // Risers used to take a flat 15% of the wind. That fraction is what
+        // the response slider is for now, and the ember preset carries 0.15,
+        // so it drifts exactly as it did while any other riser gets a dial.
+        part.mVel = LLVector3(wind_h.mV[VX], wind_h.mV[VY], v_fall);
         part.mMaxAge = riser_age;
     }
     else
@@ -565,6 +832,24 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
                 fall_time *= MAX_SPAWN_DRIFT / drift;
             }
             part.mPos = hit_pos - part.mVel * fall_time;
+
+            // The surface it was aimed at, so the landing test can retire it
+            // there. Without this an impacting type has no floor at all and
+            // simply expires in mid-air at the end of its predicted fall.
+            part.mFloorZ = hit_pos.mV[VZ];
+
+            // Back-projection makes it arrive exactly as its age runs out, and
+            // the age is tested before the step that would have landed it - so
+            // the frame that should put it on the ground is the frame that
+            // removes it, a frame's travel short of the surface. At hail speeds
+            // that gap is most of a metre. Carry it far enough past the arrival
+            // to actually cross the floor; the landing test then retires it on
+            // contact, so this is a margin rather than a longer life.
+            //
+            // Added after the back-projection on purpose: the spawn point still
+            // has to be the one the shared impact schedule predicts, or the
+            // sound and the splash part company with the drop.
+            fall_time += IMPACT_OVERSHOOT / llmax(0.1f, v_fall);
         }
         else
         {
@@ -582,8 +867,21 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
                 lead *= (MAX_SPAWN_DRIFT * 0.5f) / lead_len;
             }
             part.mPos = hit_pos - lead + LLVector3(0.f, 0.f, fall_len);
+
+            // Sized to the spawn height alone, a flake expired at the altitude
+            // of the column it grew from. Over a rooftop that is a storey
+            // above the ground the camera is standing on, so snow crossing a
+            // roof faded out in mid-air on the way down. Give it enough age to
+            // carry on well past its own column, scaled by how hard the wind
+            // is pushing it, and let the floor it is actually over retire it.
+            const F32 slack = DRIFT_FALL_SLACK + wind_h.magVec() * DRIFT_SLACK_PER_WIND;
+            fall_time = (fall_len + slack) / llmax(0.1f, v_fall);
+
+            // The floor it is heading for, re-resolved as it drifts. A sky
+            // band column with nothing under it has no floor to land on.
+            if (has_floor) part.mFloorZ = hit_pos.mV[VZ];
         }
-        part.mMaxAge = llclamp(fall_time, 0.2f, 25.f);
+        part.mMaxAge = llclamp(fall_time, 0.2f, preset.makesImpacts() ? 25.f : DRIFT_MAX_AGE);
     }
 
     if (preset.risesFromGround() && tier != TIER_SHEETS &&
@@ -598,6 +896,79 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
 
     mParticles.push_back(part);
     ++mTierCount[tier];
+}
+
+void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& impact_pos, F32 env)
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const SSPrecipPreset& preset = atmo->preset();
+    const SSTierSpec& spec = TIER_SPEC[tier];
+
+    if (mTierCount[tier] >= tierCap(tier)) return;
+
+    // Chained off the dying particle's own stream, so this is reproducible:
+    // any client holding that particle grows the same replacement from it.
+    SSRandStream rng(SSAtmoNoise::combine(seed, 0x5F3A21C7u));
+    rng.next();
+
+    // A fresh column within a cell of where the last one landed, so successive
+    // drops do not retrace the same line down
+    const F32 ox = rng.frand(-spec.mCell, spec.mCell);
+    const F32 oy = rng.frand(-spec.mCell, spec.mCell);
+
+    F32 fall_lo, fall_hi;
+    fallLength(preset, tier, fall_lo, fall_hi);
+    const F32 fall_len = rng.frand(fall_lo, fall_hi);
+    const F32 strength_jitter = rng.frand(0.7f, 1.f);
+    const F32 size_jitter = rng.frand(0.75f, 1.25f);
+    const F32 phase = rng.frand(0.f, F_TWO_PI);
+    const F32 riser_age = rng.frand(1.5f, 3.f);
+    const F32 gust_jitter = rng.frand(0.f, 1.f);
+    const U32 vis_seed = rng.next();
+
+    const LLVector3 anchor(impact_pos.mV[VX] + ox, impact_pos.mV[VY] + oy, impact_pos.mV[VZ]);
+    LLVector3 hit;
+    LLVector3 normal;
+    bool on_water = false;
+    const bool found_surface =
+        SSRainShadowMap::getInstance()->resolveColumn(anchor, hit, on_water, &normal);
+
+    // Same rule as the tick spawner: in a sky band a column with nothing under
+    // it has no drop to draw
+    if (atmo->isSkyTrack() && !found_surface) return;
+
+    // Schedule this one's landing too.
+    //
+    // This used to be left out on the grounds that the impact schedule is
+    // built in the shared cell stream, and a locally grown replacement adding
+    // to it would put a splash on one screen and not the next. That reasoning
+    // does not survive contact with the numbers: respawn supplies most of the
+    // drop population, so leaving it out meant most of the rain you can see
+    // landed silently and without a ripple, which is a far larger discrepancy
+    // than the one it was avoiding.
+    //
+    // It is also less inconsistent than it looks. The replacement is grown
+    // from the dying particle's own stream, so any client holding that
+    // particle grows the same one and now schedules the same landing. A client
+    // that never had the parent already had neither the drop nor its splash.
+    // Tying the splash to the drop is what makes those two agree.
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    if (tier == TIER_DROPS && preset.makesImpacts()
+        && (hit - cam).magVec() < IMPACT_QUEUE_RADIUS)
+    {
+        // Landing velocity reconstructed exactly as the tick spawner does it,
+        // wind response included, so shards fly off at the speed that hit
+        const LLVector3 wind_h = windAt(hit) * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f))
+                               * llmax(0.f, preset.mWindResponse);
+        const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -preset.mFallSpeed);
+
+        atmo->queueImpact(atmo->sharedTime() + fall_len / llmax(0.1f, preset.mFallSpeed),
+                          hit, preset.mImpactStrength * strength_jitter,
+                          on_water, normal, impact_vel, preset.mShatter);
+    }
+
+    emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
+                 found_surface || !atmo->isSkyTrack());
 }
 
 void SSPrecipSim::pushRipple(const SSPrecipParticle& part)
@@ -638,31 +1009,44 @@ void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_
     const F32 ripple_scale = llclamp((F32)ripple_scale_setting, 0.25f, 3.f);
     const F32 ripple_speed = llclamp((F32)ripple_speed_setting, 0.5f, 5.f);
 
-    if (ring_gate > 0.05f)
+    // The preset gives the splash its shape; the two settings above stay a
+    // taste knob on top of whatever the preset asked for
+    const SSPrecipPreset& preset = SSAtmoMagic::getInstance()->preset();
+
+    // Water takes the ring wider and holds it longer than a hard surface
+    const F32 water_spread = on_water ? 1.7f : 1.f;
+    const F32 water_linger = on_water ? 1.55f : 1.f;
+
+    if (ring_gate > 0.05f && preset.makesRipples())
     {
-        // Surface-aligned expanding ring, lifted a hair along the normal
+        // Surface-aligned expanding ring, lifted a hair along the normal.
+        // It opens from a point, so the start half-size is a fixed fraction
+        // of where it ends up rather than its own dial.
+        const F32 ring_end = preset.mRippleSize * water_spread * strength * ripple_scale;
         SSPrecipParticle ring;
         ring.mKind = KIND_FLAT;
         ring.mPos = pos_agent + n * 0.02f;
         ring.mNormal = n;
-        ring.mSizeX = 0.05f * strength * ripple_scale;                     // start half-size
-        ring.mSizeY = (on_water ? 0.6f : 0.35f) * strength * ripple_scale; // end half-size
-        ring.mMaxAge = (on_water ? 0.7f : 0.45f) / ripple_speed;
-        ring.mAlpha = 0.4f * strength * ring_gate;
+        ring.mSizeX = ring_end * 0.15f;    // start half-size
+        ring.mSizeY = ring_end;            // end half-size
+        ring.mMaxAge = preset.mRippleLife * water_linger / ripple_speed;
+        ring.mAlpha = preset.mRippleAlpha * strength * ring_gate;
         ring.mPhase = rng.frand(0.f, F_TWO_PI);
         ring.mTex = textureIndex(ripple_tex);
         pushRipple(ring);
     }
+
+    if (!preset.makesCrowns()) return;
 
     // Small splash crown thrown along the surface normal: up off floors,
     // outward off slopes and walls; ballistic under gravity from update()
     SSPrecipParticle crown;
     crown.mKind = KIND_ROUND;
     crown.mPos = pos_agent + n * 0.03f;
-    crown.mVel = n * 0.6f * strength * ripple_scale * sqrtf(ripple_speed);
-    crown.mSizeX = crown.mSizeY = 0.05f * strength * ripple_scale;
-    crown.mMaxAge = 0.3f / ripple_speed;
-    crown.mAlpha = 0.35f * strength;
+    crown.mVel = n * preset.mCrownSpeed * strength * ripple_scale * sqrtf(ripple_speed);
+    crown.mSizeX = crown.mSizeY = preset.mCrownSize * strength * ripple_scale;
+    crown.mMaxAge = preset.mCrownLife / ripple_speed;
+    crown.mAlpha = preset.mCrownAlpha * strength;
     crown.mPhase = rng.frand(0.f, F_TWO_PI);
     crown.mTex = textureIndex(SSPrecipVariants::getInstance()->utility(SSPrecipVariants::UTIL_DOT));
     pushRipple(crown);
@@ -831,6 +1215,16 @@ bool SSPrecipSim::tierSprite(const SSPrecipPreset& preset, SSPrecipTier tier,
     quad_y = preset.mTiers[tier].mSizeY;
     drop_x = preset.mTiers[TIER_DROPS].mSizeX;
     drop_y = preset.mTiers[TIER_DROPS].mSizeY;
+
+    // A cluster or sheet paints the drops it stands in for into its own quad,
+    // so the drop scale reads there. The near tier is one drop filling its
+    // quad, and shrinking that inside its own sprite would just blur it.
+    if (tier != TIER_DROPS)
+    {
+        const F32 drop_scale = llmax(0.f, preset.mDropScale);
+        drop_x *= drop_scale;
+        drop_y *= drop_scale;
+    }
 
     // How many individual drops one particle of this tier stands in for.
     // Returned uncapped: the texture builder converts it into a splat count

@@ -94,7 +94,6 @@ public:
     // Schedules a delayed, quieter copy of a one-shot bounced off the nearest
     // wall. Positioned at the reflecting surface, so the ear that hears it
     // first falls out of normal 3D panning rather than a channel delay.
-    void scheduleSlapback(const LLUUID& sound, const LLVector3& source_pos, F32 gain);
     F32 impactRate() const;   // landings per second near the camera
     F32 coverBlend() const { return mCoverSmooth; }
     S32 wallCount() const { return mWallCount; }
@@ -138,15 +137,8 @@ private:
         F32 mTarget = 0.f;
     };
 
-    struct Echo
-    {
-        LLUUID mSound;
-        LLVector3d mPosGlobal;
-        F32 mGain;
-    };
 
     void updateProbes(F64 now);
-    void processEchoes(F64 now);
     bool castUpProbe(S32 index, F32& hit_dist);
     F32 castSideProbe(S32 index);
     void updateLoops(F64 now, F32 dt);
@@ -170,7 +162,6 @@ private:
     ESpace mSpace = SPACE_OUTDOOR;
     ESize mOutdoorSize = SIZE_LARGE;
     LLVector3 mProbeOrigin;             // where mSideDist was measured from
-    std::multimap<F64, Echo> mEchoes;   // scheduled slapbacks, keyed on due time
     F32 mCoverSmooth = 0.f;
 
     // Exponential moving rate of impact strength near the camera

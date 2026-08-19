@@ -4759,6 +4759,26 @@
            function="Advanced.ToggleInfoDisplay"
            parameter="wind vectors" />
         </menu_item_check>
+        <menu_item_check
+         label="Wind Flow (Atmo Magic)"
+         name="Wind Flow">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="wind flow" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="wind flow" />
+        </menu_item_check>
+        <menu_item_check
+         label="Rain Shadow (Atmo Magic)"
+         name="Rain Shadow">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="rain shadow" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="rain shadow" />
+        </menu_item_check>
 		<menu_item_check
          label="Sculpt"
          name="Sculpt">

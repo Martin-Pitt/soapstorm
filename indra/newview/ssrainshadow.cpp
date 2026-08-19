@@ -38,6 +38,8 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <cfloat>
+
 // <SS:Nexii> Atmo Magic rain shadow maps
 
 static const F64 CAPTURE_INTERVAL   = 0.25;  // at most one tile capture this often
@@ -51,10 +53,23 @@ static const U32 MAX_TILES          = 4;
 static const F32 DEPTH_MISS         = 0.9999f; // readback values at/above this hit nothing
 
 static LLTrace::BlockTimerStatHandle FTM_SS_SHADOW("Atmo Magic Shadow Map");
+static LLTrace::BlockTimerStatHandle FTM_SS_SHADOW_GRID("Atmo Magic Surface Grid");
+
+U32 SSRainShadowMap::resolution() const
+{
+    // The resolution a tile was actually captured at, which lags the setting
+    // until the next capture
+    for (const auto& entry : mTiles)
+    {
+        if (entry.second.mValid) return entry.second.mRes;
+    }
+    return 0;
+}
 
 void SSRainShadowMap::clearCache()
 {
     mTiles.clear();
+    mDebugMesh.clear();
 }
 
 // static
@@ -319,6 +334,369 @@ void SSRainShadowMap::capture()
     evict();
 }
 
+//-----------------------------------------------------------------------------
+// Debug visualisation
+//-----------------------------------------------------------------------------
+
+static const F32 DEBUG_DIR_EPSILON = 0.9995f;
+
+void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
+{
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    if (!regionp)
+    {
+        mesh.mN = 0;
+        return;
+    }
+
+    static LLCachedControl<F32> step_setting(gSavedSettings, "SSAtmoShadowDebugStep", 2.f);
+    const F32 step = llclamp((F32)step_setting, 0.5f, 16.f);
+
+    const F32 width = regionp->getWidth();
+    const S32 n = llclamp((S32)(width / step) + 1, 2, 1025);
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const bool sky = atmo->isSkyTrack();
+    const F32 sky_floor = atmo->groundZero();
+    const LLVector3 region_origin = regionp->getOriginAgent();
+
+    mesh.mN = n;
+    mesh.mPos.resize((size_t)n * n);
+    mesh.mShade.resize((size_t)n * n);
+
+    for (S32 j = 0; j < n; ++j)
+    {
+        for (S32 i = 0; i < n; ++i)
+        {
+            const F32 lx = llmin((F32)i * step, width);
+            const F32 ly = llmin((F32)j * step, width);
+
+            // Drop a column from the top of the captured band. Seeding at the
+            // heightmap instead put the sample on a different column wherever
+            // the real ground is mesh, which is nearly everywhere, and then
+            // drew the answer down at the dirt where a mesh floor hid it.
+            const LLVector3 start(region_origin.mV[VX] + lx,
+                                  region_origin.mV[VY] + ly,
+                                  tile.mBandTop);
+
+            // Ask the real function rather than re-deriving it here. Whatever
+            // precipitation sees is what gets drawn, including its mistakes,
+            // which is the entire point of a debug view.
+            LLVector3 hit;
+            bool on_water = false;
+            resolveColumn(start, hit, on_water);
+
+            // That column started over this patch, so under a tilted fall it
+            // landed a long way downwind of it - the whole sheet slid off the
+            // region, and the upwind edge was left with no samples at all, by
+            // further the stronger the wind and the higher the camera. Step
+            // the seed back upwind by the offset it just measured and ask
+            // again, so what gets drawn is the column that lands here rather
+            // than the one that leaves here.
+            const LLVector3 corrected(2.f * start.mV[VX] - hit.mV[VX],
+                                      2.f * start.mV[VY] - hit.mV[VY],
+                                      tile.mBandTop);
+            const bool mapped = resolveColumn(corrected, hit, on_water);
+
+            const size_t idx = (size_t)j * n + i;
+
+            // Sits on the surface the column actually found - a roof, a mesh
+            // floor, terrain, the water - at that surface's own position, and
+            // lifted a hair so it does not fight the geometry it describes.
+            // Where a roof catches the column the sample climbs onto the roof
+            // and sits upwind of the patch it was sheltering, which is the
+            // offset the fall angle is asking for.
+            mesh.mPos[idx].set(hit.mV[VX] - region_origin.mV[VX],
+                               hit.mV[VY] - region_origin.mV[VY],
+                               hit.mV[VZ] + 0.12f);
+
+            // Not shelter any more: whether this came out of the depth
+            // capture or out of the heightmap it falls back to. Real geometry
+            // is what the drop lands on; a fallback is a guess, and seeing
+            // where the guesses are is the whole point of looking.
+            mesh.mShade[idx] = mapped ? 1.f : 0.f;
+        }
+    }
+
+    mesh.mBuiltFrom  = tile.mCaptureTime;
+    mesh.mBuiltDir   = atmo->rainDirection();
+    mesh.mBuiltStep  = step;
+    mesh.mBuiltFloor = sky ? sky_floor : 0.f;
+    mesh.mBuiltSky   = sky;
+}
+
+void SSRainShadowMap::renderDebug()
+{
+    if (mTiles.empty())
+    {
+        mDebugMesh.clear();
+        return;
+    }
+
+    // Cast the map back onto the world rather than drawing the texture in mid
+    // air. Each sample drops a column through the region and draws the surface
+    // it lands on, so the sheet follows the geometry precipitation is actually
+    // using - over roofs, over mesh floors, down onto terrain and water - and
+    // offsets downwind exactly as far as the fall angle says it should. Cool
+    // and faint is a surface the capture saw; warm and solid is a column with
+    // no depth behind it, guessing from the heightmap.
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const LLVector3 dir = atmo->rainDirection();
+    const bool sky = atmo->isSkyTrack();
+    const F32 sky_floor = atmo->groundZero();
+
+    static LLCachedControl<F32> step_setting(gSavedSettings, "SSAtmoShadowDebugStep", 2.f);
+    const F32 step = llclamp((F32)step_setting, 0.5f, 16.f);
+
+    // Snapshot the handles: rebuilding a mesh calls resolveColumn, which walks
+    // the tile map, and iterating it at the same time is asking for trouble
+    std::vector<U64> handles;
+    handles.reserve(mTiles.size());
+    for (const auto& entry : mTiles)
+    {
+        if (entry.second.mValid && !entry.second.mDepth.empty())
+        {
+            handles.push_back(entry.first);
+        }
+    }
+
+    // Drop meshes for tiles that have gone
+    for (auto it = mDebugMesh.begin(); it != mDebugMesh.end(); )
+    {
+        it = (mTiles.count(it->first) == 0) ? mDebugMesh.erase(it) : std::next(it);
+    }
+
+    for (U64 handle : handles)
+    {
+        const Tile& tile = mTiles[handle];
+        ShadowMesh& mesh = mDebugMesh[handle];
+
+        // Rebuild only when what it was baked against has actually changed.
+        // Rebaking every frame would mean a quarter of a million column
+        // resolves a second for no new information.
+        const bool stale = mesh.mN == 0
+                        || mesh.mBuiltFrom != tile.mCaptureTime
+                        || fabsf(mesh.mBuiltStep - step) > 0.01f
+                        || mesh.mBuiltSky != sky
+                        || (sky && fabsf(mesh.mBuiltFloor - sky_floor) > 0.5f)
+                        || mesh.mBuiltDir * dir < DEBUG_DIR_EPSILON;
+
+        if (stale)
+        {
+            buildShadowMesh(tile, mesh);
+        }
+    }
+
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);     // test against the world, do not write
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    for (U64 handle : handles)
+    {
+        const ShadowMesh& mesh = mDebugMesh[handle];
+        if (mesh.mN < 2) continue;
+
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(handle);
+        if (!regionp) continue;
+
+        const LLVector3 base = regionp->getOriginAgent();
+        const S32 n = mesh.mN;
+
+        auto vert = [&](S32 i, S32 j)
+        {
+            const size_t idx = (size_t)j * n + i;
+            const F32 s = mesh.mShade[idx];
+
+            // Cool near-black where the column found real geometry, warm and
+            // heavier where it fell back to the heightmap. Interpolating
+            // across the grid gives the boundary a soft falloff for free.
+            gGL.color4f(lerp(0.85f, 0.04f, s),
+                        lerp(0.40f, 0.07f, s),
+                        lerp(0.10f, 0.16f, s),
+                        lerp(0.60f, 0.30f, s));
+
+            const LLVector3& p = mesh.mPos[idx];
+            gGL.vertex3f(base.mV[VX] + p.mV[VX], base.mV[VY] + p.mV[VY], p.mV[VZ]);
+        };
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 j = 0; j + 1 < n; ++j)
+        {
+            for (S32 i = 0; i + 1 < n; ++i)
+            {
+                // A roof edge puts two corners of this cell metres apart in
+                // height. Bridging them would hang a curtain down the side of
+                // every building; leaving the gap draws the roof and the
+                // ground as the separate surfaces they are.
+                const F32 z00 = mesh.mPos[(size_t)j * n + i].mV[VZ];
+                const F32 z10 = mesh.mPos[(size_t)j * n + i + 1].mV[VZ];
+                const F32 z01 = mesh.mPos[(size_t)(j + 1) * n + i].mV[VZ];
+                const F32 z11 = mesh.mPos[(size_t)(j + 1) * n + i + 1].mV[VZ];
+                const F32 spread = llmax(llmax(z00, z10), llmax(z01, z11))
+                                 - llmin(llmin(z00, z10), llmin(z01, z11));
+                if (spread > llmax(4.f, step * 4.f)) continue;
+
+                vert(i, j);     vert(i + 1, j);     vert(i + 1, j + 1);
+                vert(i, j);     vert(i + 1, j + 1); vert(i, j + 1);
+            }
+        }
+        gGL.end();
+    }
+
+    // Fall direction at the camera, so the offset between a building and its
+    // shadow reads as an angle rather than as a mystery
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const F32 land = sky ? sky_floor : LLWorld::getInstance()->resolveLandHeightAgent(cam);
+    const LLVector3 marker(cam.mV[VX], cam.mV[VY], land + 0.2f);
+
+    gGL.begin(LLRender::LINES);
+    gGL.color4f(0.4f, 0.7f, 1.f, 0.7f);
+    gGL.vertex3fv(marker.mV);
+    gGL.vertex3fv((marker - dir * 20.f).mV);
+    gGL.end();
+
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+}
+
+void SSRainShadowMap::validTiles(std::vector<std::pair<U64, F64> >& out) const
+{
+    out.clear();
+    out.reserve(mTiles.size());
+    for (const auto& entry : mTiles)
+    {
+        if (entry.second.mValid && !entry.second.mDepth.empty())
+        {
+            out.emplace_back(entry.first, entry.second.mCaptureTime);
+        }
+    }
+}
+
+bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& out)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_SHADOW_GRID);
+
+    auto it = mTiles.find(region_handle);
+    if (it == mTiles.end() || !it->second.mValid || it->second.mDepth.empty()) return false;
+
+    const Tile& tile = it->second;
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp) return false;
+
+    n = llclamp(n, 16, (S32)tile.mRes);
+
+    out.mRegionHandle = region_handle;
+    out.mN = n;
+    out.mCell = 2.f * tile.mHalfW / (F32)n;
+    out.mCaptureTime = tile.mCaptureTime;
+    out.mPos.assign((size_t)n * n, LLVector3());
+    out.mFlags.assign((size_t)n * n, 0);
+
+    const LLVector3 origin = regionp->getOriginAgent();
+    const LLVector3 eye = origin + tile.mEyeRegion;
+    const F32 range = tile.mFar - tile.mNear;
+    const F32 water_z = regionp->getWaterHeight();
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const bool sky = atmo->isSkyTrack();
+    const F32 sky_floor = atmo->groundZero();
+
+    // Each output cell covers a block of texels. Take the nearest depth in the
+    // block: that is the first thing a column through it meets, so a roof edge
+    // stays a roof for the whole cell it touches rather than being averaged
+    // down into the street. One linear pass over the depth buffer, which is
+    // what makes this affordable at all compared with n^2 column resolves.
+    const U32 res = tile.mRes;
+    std::vector<F32> best((size_t)n * n, FLT_MAX);
+    for (U32 ty = 0; ty < res; ++ty)
+    {
+        const S32 gy = llmin((S32)((U64)ty * n / res), n - 1);
+        const F32* row = &tile.mDepth[(size_t)ty * res];
+        F32* dst = &best[(size_t)gy * n];
+        for (U32 tx = 0; tx < res; ++tx)
+        {
+            const F32 d = row[tx];
+            if (d >= DEPTH_MISS) continue;
+            const S32 gx = llmin((S32)((U64)tx * n / res), n - 1);
+            if (d < dst[gx]) dst[gx] = d;
+        }
+    }
+
+    for (S32 gy = 0; gy < n; ++gy)
+    {
+        const F32 v = ((F32)gy + 0.5f) / (F32)n - 0.5f;
+        for (S32 gx = 0; gx < n; ++gx)
+        {
+            const F32 u = ((F32)gx + 0.5f) / (F32)n - 0.5f;
+            const size_t idx = (size_t)gy * n + gx;
+
+            // Where the column for this cell enters the capture band
+            const LLVector3 start = eye + tile.mRight * (u * 2.f * tile.mHalfW)
+                                        + tile.mUp * (v * 2.f * tile.mHalfH);
+
+            const F32 depth = best[idx];
+            LLVector3 hit;
+            U8 flags = 0;
+
+            if (depth < FLT_MAX)
+            {
+                hit = start + tile.mDir * (tile.mNear + depth * range);
+                flags |= SURF_MAPPED;
+            }
+
+            // Same floor rule resolveColumn uses, so the grid and the drops
+            // agree about where a column with nothing over it ends up: the
+            // water plane at ground level, the track's own base in a sky band.
+            F32 floor_z;
+            bool floor_is_water = false;
+            if (sky)
+            {
+                floor_z = sky_floor;
+            }
+            else if (flags & SURF_MAPPED)
+            {
+                floor_z = water_z;
+                floor_is_water = true;
+            }
+            else
+            {
+                // Nothing captured here at all, so the heightmap is the only
+                // answer there is. Aim the column at the water plane first,
+                // then re-resolve the land under wherever that landed.
+                const F32 dz = tile.mDir.mV[VZ];
+                LLVector3 guess = start;
+                if (fabsf(dz) > 0.01f)
+                {
+                    guess = start + tile.mDir * ((water_z - start.mV[VZ]) / dz);
+                }
+                const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(guess);
+                floor_is_water = water_z > land;
+                floor_z = llmax(land, water_z);
+            }
+
+            if (!(flags & SURF_MAPPED) || (!sky && hit.mV[VZ] < floor_z))
+            {
+                const F32 dz = tile.mDir.mV[VZ];
+                if (fabsf(dz) < 0.01f)
+                {
+                    hit = start;
+                    hit.mV[VZ] = floor_z;
+                }
+                else
+                {
+                    hit = start + tile.mDir * ((floor_z - start.mV[VZ]) / dz);
+                }
+                if (floor_is_water) flags |= SURF_WATER;
+            }
+
+            out.mPos[idx] = hit - origin;
+            out.mFlags[idx] = flags;
+        }
+    }
+
+    return true;
+}
+
 bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_pos_agent, bool& on_water,
                                     LLVector3* hit_normal)
 {
@@ -383,17 +761,52 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
         }
     }
 
-    // Terrain/water floor: fallback when unmapped, clamp when the depth ray
-    // slipped past ground level (terrain is in the capture, but a miss at
-    // steep tilt or band edges is possible). Columns over the void beyond
-    // region borders land on the void water surface, so rain carries on
-    // past the sim edge instead of stopping there.
-    const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(from_map ? hit : pos_agent);
-    const F32 water = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
-    const F32 floor_z = llmax(land, water);
+    // Floor of the active track. At ground level that is terrain and water as
+    // before; in a sky band it is the track's own ground zero, because the
+    // terrain thousands of metres below is not what precipitation up there
+    // should be landing on.
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const bool sky = atmo->isSkyTrack();
+
+    F32 floor_z;
+    bool floor_is_water = false;
+    if (sky)
+    {
+        floor_z = atmo->groundZero();
+    }
+    else if (from_map)
+    {
+        // The capture already contains whatever the ground is actually built
+        // from - mesh, prims and the terrain alike - so a hit is the answer.
+        // The heightmap underneath it is a relic that says nothing about where
+        // a build's floor is, and clamping a real hit up to it can only ever
+        // move a drop onto a surface that is not there. The one surface the
+        // depth pass does not draw is water, so a hit under the waterline is
+        // the seabed and the drop belongs on the water above it.
+        floor_z = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
+        floor_is_water = true;
+    }
+    else
+    {
+        // No depth for this column at all: outside the captured footprint, or
+        // a region with no tile yet. The heightmap is a poor stand-in for
+        // ground that is usually built rather than sculpted, but without the
+        // map it is the only answer there is. Columns over the void beyond
+        // region borders land on the void water surface, so rain carries on
+        // past the sim edge instead of stopping there.
+        const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(pos_agent);
+        const F32 water = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
+        floor_is_water = water > land;
+        floor_z = llmax(land, water);
+    }
 
     on_water = false;
-    if (!from_map || hit.mV[VZ] < floor_z)
+
+    // Either there was no hit to use, or the hit is below the surface the
+    // drop should have landed on: the water at ground level, and nothing at
+    // all in a sky band, where a real hit below the imaginary floor is a
+    // platform hanging under the band base and stays authoritative.
+    if (!from_map || (!sky && hit.mV[VZ] < floor_z))
     {
         const F32 dz = dir.mV[VZ];
         if (fabsf(dz) < 0.01f)
@@ -405,11 +818,11 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
         {
             hit = pos_agent + dir * ((floor_z - pos_agent.mV[VZ]) / dz);
         }
-        on_water = water > land;
+        on_water = floor_is_water;
 
         if (hit_normal)
         {
-            if (on_water)
+            if (sky || on_water)
             {
                 hit_normal->set(0.f, 0.f, 1.f);
             }
@@ -421,6 +834,9 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
     }
 
     hit_pos_agent = hit;
+
+    // false here means the column found no real surface. Callers in a sky
+    // track use that to fade the drop out instead of landing it on nothing.
     return from_map;
 }
 

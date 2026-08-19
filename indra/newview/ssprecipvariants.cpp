@@ -75,17 +75,19 @@ static inline F32 teardropWidth(F32 t)
 }
 
 // Falling raindrop: round head leading the fall, tapering to a thin tail.
-// head_low_v puts the head at v = 0; which end that is on screen depends on
-// the raw image row order, so it is settable (see SSAtmoTeardropFlip).
+//
+// The head goes at the low v end. The renderer builds a streak with its
+// texture-up axis against the motion, so the +v end of the quad is the
+// trailing end and v = 0 is the end that leads the fall. Baking the head at
+// high v instead flies the drop tail first, which reads as upside down on any
+// preset whose silhouette is legible at all.
 static void drawTeardrop(U8* data, S32 res, F32 cx, F32 cy, F32 hw, F32 hh,
-                         F32 brightness, bool head_low_v)
+                         F32 brightness)
 {
     const S32 y0 = (S32)floorf(cy - hh), y1 = (S32)ceilf(cy + hh);
     for (S32 y = y0; y <= y1; ++y)
     {
-        F32 t = ((F32)y - (cy - hh)) / llmax(1.f, 2.f * hh);
-        t = llclamp(t, 0.f, 1.f);
-        if (!head_low_v) t = 1.f - t;
+        const F32 t = llclamp(((F32)y - (cy - hh)) / llmax(1.f, 2.f * hh), 0.f, 1.f);
 
         const F32 w = teardropWidth(t) * hw;
         if (w <= 0.f) continue;
@@ -137,6 +139,7 @@ static U32 presetKey(const SSPrecipPreset& preset)
     // serving the previous silhouette
     h ^= (U32)(preset.mTiers[TIER_DROPS].mSizeX * 1000.f);
     h ^= (U32)(preset.mTiers[TIER_DROPS].mSizeY * 1000.f) << 8;
+    h ^= (U32)(preset.mDropScale * 1000.f) << 16;
     h ^= (U32)preset.mArchetype << 24;
     h ^= (U32)preset.mDropShape << 28;
     return h & 0x000fffffu;
@@ -173,11 +176,9 @@ LLViewerTexture* SSPrecipVariants::get(const SSPrecipPreset& preset, SSPrecipTie
                                        LLViewerTexture* custom_drop)
 {
     variant %= VARIANT_COUNT;
-    static LLCachedControl<bool> flip_head(gSavedSettings, "SSAtmoTeardropFlip", false);
     // Keyed on the preset name: editing sizes or shapes has to rebake, and
     // two presets must never share a bake
-    U64 key = ((U64)presetKey(preset) << 20) | ((U64)tier << 4) | variant
-            | (flip_head ? 0x1000ull : 0ull);
+    U64 key = ((U64)presetKey(preset) << 20) | ((U64)tier << 4) | variant;
     if (custom_drop)
     {
         // Key on the source texture so swapping the configured texture
@@ -342,9 +343,6 @@ LLPointer<LLViewerTexture> SSPrecipVariants::build(const SSPrecipPreset& preset,
                 hw, hh, count);
 
 
-    static LLCachedControl<bool> flip_setting(gSavedSettings, "SSAtmoTeardropFlip", false);
-    const bool flip_head = flip_setting;
-
     // Fixed seed, not the user's weather seed: same textures on every
     // client and no cache churn when the seed slider moves
     SSRandStream rng(SSAtmoNoise::combine(0x5EEDF00Du,
@@ -361,7 +359,7 @@ LLPointer<LLViewerTexture> SSPrecipVariants::build(const SSPrecipPreset& preset,
         switch (preset.mDropShape)
         {
             case DROP_TEARDROP:
-                drawTeardrop(data, res, cx, cy, hw * size, hh * size, brightness, !flip_head);
+                drawTeardrop(data, res, cx, cy, hw * size, hh * size, brightness);
                 break;
             case DROP_SLIVER:
                 drawSliver(data, res, cx, cy, hw * size, hh * size, brightness);
