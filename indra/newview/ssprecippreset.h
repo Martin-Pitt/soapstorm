@@ -62,6 +62,8 @@ enum SSPrecipMaterial : U8
     MAT_LIT = 0,        // probe ambient + shadowed sun
     MAT_WATER,          // refraction/env/specular rain shader
     MAT_EMISSIVE,       // additive, writes glow
+    MAT_DECAL,          // surface-aligned: lit like MAT_LIT, but also picks up
+                        // the light already on the surface it is lying on
     MAT_COUNT
 };
 

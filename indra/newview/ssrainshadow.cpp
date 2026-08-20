@@ -823,30 +823,70 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
             if (depth < DEPTH_MISS)
             {
                 const F32 range = tile->mFar - tile->mNear;
-                const F32 hit_d = tile->mNear + depth * range;
+                const F32 texel_u = 2.f * tile->mHalfW / (F32)tile->mRes;
+                const F32 texel_v = 2.f * tile->mHalfH / (F32)tile->mRes;
+
+                // How far a neighbouring texel may differ before it is treated
+                // as a different surface rather than a slope of this one:
+                // one texel across, four along, which is the same ~76 degree
+                // ceiling the normal below is clamped to.
+                const F32 max_step = (texel_u * 4.f) / llmax(range, 0.01f);
+
+                // Depth at a texel, in the surface this sample landed on:
+                // misses and anything across a discontinuity - the lip of a
+                // roof, the side of a prim - are pulled back to the texel that
+                // was actually hit, so an edge stays an edge instead of
+                // smearing a ramp out into the air beside it.
+                auto tap = [&](S32 ix, S32 iy) -> F32
+                {
+                    ix = llclamp(ix, 0, (S32)tile->mRes - 1);
+                    iy = llclamp(iy, 0, (S32)tile->mRes - 1);
+                    const F32 d = tile->mDepth[(size_t)iy * tile->mRes + ix];
+                    if (d >= DEPTH_MISS) return depth;
+                    return llclamp(d, depth - max_step, depth + max_step);
+                };
+
+                // Interpolate the depth across the four texels around the
+                // sample rather than taking the one it fell in. A nearest
+                // lookup reports the height of the texel centre, so on a slope
+                // the impact is placed up to a texel's worth of rise off the
+                // real surface - half the time below it - and at a quarter of
+                // a metre per texel that is enough to bury a ripple in the
+                // ground it is supposed to be lying on. This is the same
+                // reconstruction the gradients below assume.
+                const F32 fx = u * (F32)tile->mRes - 0.5f;
+                const F32 fy = v * (F32)tile->mRes - 0.5f;
+                const S32 x0 = (S32)floorf(fx);
+                const S32 y0 = (S32)floorf(fy);
+                const F32 wx = fx - (F32)x0;
+                const F32 wy = fy - (F32)y0;
+
+                const F32 d00 = tap(x0,     y0);
+                const F32 d10 = tap(x0 + 1, y0);
+                const F32 d01 = tap(x0,     y0 + 1);
+                const F32 d11 = tap(x0 + 1, y0 + 1);
+                const F32 d_lerped = lerp(lerp(d00, d10, wx), lerp(d01, d11, wx), wy);
+
+                const F32 hit_d = tile->mNear + d_lerped * range;
                 const F32 pos_d = rel * tile->mDir;
                 hit = pos_agent + dir * (hit_d - pos_d);
                 from_map = true;
 
                 if (hit_normal)
                 {
-                    // Surface normal from the depth gradients: forward
-                    // differences to the +u/+v texels, slope-clamped so
-                    // depth discontinuities at roof edges stay plausible
-                    const U32 tx1 = llmin(tx + 1, tile->mRes - 1);
-                    const U32 ty1 = llmin(ty + 1, tile->mRes - 1);
-                    F32 d_u = tile->mDepth[(size_t)ty * tile->mRes + tx1];
-                    F32 d_v = tile->mDepth[(size_t)ty1 * tile->mRes + tx];
-                    if (d_u >= DEPTH_MISS) d_u = depth;
-                    if (d_v >= DEPTH_MISS) d_v = depth;
+                    // Surface normal from the depth gradients. Centred
+                    // differences rather than forward ones: a forward
+                    // difference is the slope half a texel downhill of the
+                    // sample, which tilts every normal the same way and leans
+                    // the ripple into the surface on one side.
+                    const F32 max_dd = texel_u * 4.f; // ~76 degrees max slope
+                    const F32 dd_u = llclamp((tap((S32)tx + 1, (S32)ty) - tap((S32)tx - 1, (S32)ty)) * range * 0.5f,
+                                             -max_dd, max_dd);
+                    const F32 dd_v = llclamp((tap((S32)tx, (S32)ty + 1) - tap((S32)tx, (S32)ty - 1)) * range * 0.5f,
+                                             -max_dd, max_dd);
 
-                    const F32 texel = 2.f * tile->mHalfW / (F32)tile->mRes;
-                    const F32 max_dd = texel * 4.f; // ~76 degrees max slope
-                    const F32 dd_u = llclamp((d_u - depth) * range, -max_dd, max_dd);
-                    const F32 dd_v = llclamp((d_v - depth) * range, -max_dd, max_dd);
-
-                    LLVector3 t_u = tile->mRight * texel + tile->mDir * dd_u;
-                    LLVector3 t_v = tile->mUp * texel + tile->mDir * dd_v;
+                    LLVector3 t_u = tile->mRight * texel_u + tile->mDir * dd_u;
+                    LLVector3 t_v = tile->mUp * texel_v + tile->mDir * dd_v;
                     LLVector3 normal = t_u % t_v;
                     normal.normVec();
                     if (normal * tile->mDir > 0.f)

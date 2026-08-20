@@ -26,6 +26,7 @@
 #include "sspreciprenderer.h"
 #include "ssatmomagic.h"
 
+#include "lldrawable.h"
 #include "lldrawpoolalpha.h"
 #include "llglstates.h"
 #include "llrender.h"
@@ -35,6 +36,7 @@
 #include "llviewercontrol.h"
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
+#include "llvovolume.h"
 #include "pipeline.h"
 
 // <SS:Nexii> Atmo Magic precipitation renderer
@@ -51,7 +53,36 @@ static LLTrace::BlockTimerStatHandle FTM_SS_PRECIP_DRAW("Draw");
 // Indices are uploaded as 32 bit (see ensureBuffer): 16 bit would top out at
 // 16383 quads, well under the combined tier caps.
 static const U32 MAX_QUADS = 48000;
-static const U32 VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR;
+static const U32 VB_MASK = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_NORMAL
+                         | LLVertexBuffer::MAP_TANGENT
+                         | LLVertexBuffer::MAP_TEXCOORD0 | LLVertexBuffer::MAP_COLOR;
+
+// How far a surface-aligned ripple is pushed along the view ray, as a
+// fraction of its distance from the camera, and the least it is ever pushed.
+//
+// The lift along the surface normal a ripple is spawned with is enough to
+// keep it out of the ground it sits on geometrically, but not enough to win
+// the depth test: a decal lying nearly parallel to the surface under it has
+// almost no depth separation from that surface at a grazing angle, which is
+// exactly the angle most ripples are seen at, and they drop out in patches.
+// Sliding the quad along the ray to the camera is a pure depth bias - a point
+// moved toward the eye along its own view ray does not move on screen at all -
+// and taking it as a fraction of the distance keeps the bias constant in the
+// depth buffer's own terms rather than vanishing into precision out at range.
+static const F32 RIPPLE_DEPTH_BIAS = 0.0035f;
+static const F32 RIPPLE_DEPTH_BIAS_MIN = 0.02f;
+
+// Extra lift along the surface normal, as a fraction of the ring's current
+// half-size. Tolerates roughly five degrees of disagreement between the plane
+// the ripple was given and the ground actually under its far edge.
+static const F32 RIPPLE_NORMAL_LIFT = 0.09f;
+
+// What a splash crown's size is worth at each end of its life, against the
+// preset's crown size. It starts as near a point as it can be seen at and
+// spreads past the nominal size as it goes, so the preset's number reads as
+// the size the crown passes through rather than a cap on it.
+static const F32 CROWN_START_SCALE = 0.15f;
+static const F32 CROWN_END_SCALE = 1.5f;
 
 static inline F32 smooth01(F32 t)
 {
@@ -103,9 +134,16 @@ U32 SSPrecipRenderer::emitStream(const SSPrecipParticle& p, F32 alpha, F32 stret
     // Along the lip: at right angles to the way the water leaves the edge,
     // which is where the exit velocity points. Taken from the particle rather
     // than stored, because they are the same direction by construction.
+    //
+    // Which of the two right angles matters, because the pitch below is signed
+    // along this axis and the runoff network measured it along the other one.
+    // The network's run axis is z cross out; taking out cross z here instead
+    // gave the same line pointing the other way, so a curtain off a rake
+    // leaned up where the rake went down and every stream on a gable was
+    // mirrored about the horizontal.
     LLVector3 along(p.mVel.mV[VX], p.mVel.mV[VY], 0.f);
     if (along.normVec() < 0.0001f) along = LLVector3::x_axis;
-    along = along % LLVector3::z_axis;
+    along = LLVector3::z_axis % along;
     if (along.normVec() < 0.0001f) along = LLVector3::y_axis;
 
     // And up the lip's own pitch, because plenty of eaves are not level. A
@@ -301,7 +339,16 @@ void SSPrecipRenderer::drawMaterial(SSPrecipSim* sim, S32 material)
         LLViewerTexture* texturep = sim->texture((U8)t);
         if (!texturep) continue; // default particle texture not created yet
         texturep->addTextureStats(128.f * 128.f);
-        gGL.getTexUnit(0)->bind(texturep);
+
+        // Ask the bound shader which unit its diffuseMap landed on rather than
+        // assuming zero. Every one of these passes carries a different set of
+        // samplers - the projector pass pulls in the whole of deferredUtil for
+        // its projection maths - and the channel a sampler is assigned depends
+        // on which others are present.
+        LLGLSLShader* cur = LLGLSLShader::sCurBoundShaderPtr;
+        S32 tex_channel = cur ? cur->getTextureChannel(LLShaderMgr::DIFFUSE_MAP) : 0;
+        if (tex_channel < 0) tex_channel = 0;
+        gGL.getTexUnit(tex_channel)->bind(texturep);
 
         // Rebind for every draw: the texture bind above flushes gGL, which
         // can swap LLRender's own vertex buffer in underneath us
@@ -422,11 +469,29 @@ void SSPrecipRenderer::render()
     {
     LL_RECORD_BLOCK_TIME(FTM_SS_PRECIP_BUILD);
     LLStrider<LLVector3> verticesp;
+    LLStrider<LLVector3> normalsp;
+    LLStrider<LLVector4a> tangentsp;
     LLStrider<LLColor4U> colorsp;
     LLStrider<LLVector2> texcoordsp;
     mVB->getVertexStrider(verticesp, 0, total * 4);
+    mVB->getNormalStrider(normalsp, 0, total * 4);
+    mVB->getTangentStrider(tangentsp, 0, total * 4);
     mVB->getColorStrider(colorsp, 0, total * 4);
     mVB->getTexCoord0Strider(texcoordsp, 0, total * 4);
+
+    // The normal the next quad goes out with. Billboards carry the direction
+    // to the camera, which is the normal the lit shader used to assume for
+    // everything; a ripple carries the normal of the surface it is lying on,
+    // so it takes the sun and the shadow map the way that surface does rather
+    // than the way a flake hanging in the air does.
+    LLVector3 emit_normal(0.f, 0.f, 1.f);
+
+    // The quad's long axis, alongside the normal. A billboard is a flat card
+    // standing in for something round, and the rain shader needs to know which
+    // way that something is lying to shade it as water rather than as a
+    // screen-aligned smear: for a streak it is the fall, for a ribbon the run
+    // of the water down it.
+    LLVector3 emit_axis(0.f, 0.f, 1.f);
 
     // One quad's worth of geometry, colour and texture span. Streams call this
     // once per segment with a different slice of the texture each time;
@@ -453,6 +518,17 @@ void SSPrecipRenderer::render()
         *verticesp++ = bot + across * half;
         *verticesp++ = top + across * half;
 
+        *normalsp++ = emit_normal;
+        *normalsp++ = emit_normal;
+        *normalsp++ = emit_normal;
+        *normalsp++ = emit_normal;
+
+        const LLVector4a axis4(emit_axis.mV[VX], emit_axis.mV[VY], emit_axis.mV[VZ], 1.f);
+        *tangentsp++ = axis4;
+        *tangentsp++ = axis4;
+        *tangentsp++ = axis4;
+        *tangentsp++ = axis4;
+
         *texcoordsp++ = LLVector2(u0, v_bot);
         *texcoordsp++ = LLVector2(u0, v_top);
         *texcoordsp++ = LLVector2(u1, v_bot);
@@ -472,6 +548,17 @@ void SSPrecipRenderer::render()
         *verticesp++ = pos - x_axis - y_axis;
         *verticesp++ = pos + x_axis + y_axis;
         *verticesp++ = pos + x_axis - y_axis;
+
+        *normalsp++ = emit_normal;
+        *normalsp++ = emit_normal;
+        *normalsp++ = emit_normal;
+        *normalsp++ = emit_normal;
+
+        const LLVector4a axis4(emit_axis.mV[VX], emit_axis.mV[VY], emit_axis.mV[VZ], 1.f);
+        *tangentsp++ = axis4;
+        *tangentsp++ = axis4;
+        *tangentsp++ = axis4;
+        *tangentsp++ = axis4;
 
         *texcoordsp++ = LLVector2(u0, v1);
         *texcoordsp++ = LLVector2(u0, v0);
@@ -504,10 +591,21 @@ void SSPrecipRenderer::render()
 
                 LLVector3 x_axis, y_axis;
                 LLVector3 pos = p.mPos;
+
+                // Everything but a ripple is a billboard of some sort, so it
+                // starts out facing the eye and the flat case overwrites it
+                LLVector3 to_cam = cam_pos - pos;
+                const F32 cam_dist = to_cam.normVec();
+                emit_normal = (cam_dist > 0.0001f) ? to_cam : LLVector3::z_axis;
+                emit_axis = LLVector3::z_axis;
+
                 switch (p.mKind)
                 {
                     case KIND_STREAM:
                     {
+                        // A ribbon hangs in the plane of its own fall, so the
+                        // water runs down it rather than across
+                        emit_axis = LLVector3::z_axis;
                         quads += emitStream(p, item.mAlpha, stream_stretch, emitRibbon);
                         continue;
                     }
@@ -520,6 +618,12 @@ void SSPrecipRenderer::render()
                         if (y_axis.normVec() < 0.0001f) y_axis = LLVector3::z_axis;
                         x_axis = y_axis % (pos - cam_pos);
                         if (x_axis.normVec() < 0.0001f) x_axis = cam_right;
+
+                        // Captured before the axes are scaled: this is the
+                        // thread of water the rain shader wraps its droplet
+                        // normal around
+                        emit_axis = y_axis;
+
                         x_axis *= p.mSizeX;
                         y_axis *= p.mSizeY;
                         break;
@@ -536,12 +640,56 @@ void SSPrecipRenderer::render()
                         y_axis.normVec();
                         x_axis *= s;
                         y_axis *= s;
+
+                        // Lit as the surface it lies on, not as a billboard
+                        emit_normal = p.mNormal;
+                        emit_axis = x_axis;
+
+                        // Lift along the normal, growing with the ring. The
+                        // spawn lift is a fixed clearance for a point; a ring
+                        // that has opened to a third of a metre reaches well
+                        // past the sample its normal was measured at, and the
+                        // surface under the far side of it is only ever
+                        // approximately the plane it was handed. This buys a
+                        // few degrees of that divergence across the whole
+                        // disc, which is what a flat quad on real ground
+                        // needs and what a depth bias alone cannot give it.
+                        pos += p.mNormal * (RIPPLE_NORMAL_LIFT * s);
+
+                        // Depth bias along the view ray. A ring that has grown
+                        // wide reaches further over ground that is not flat
+                        // under all of it, so the floor of the bias grows with
+                        // it rather than staying at the spawn lift.
+                        pos += to_cam * llmax(RIPPLE_DEPTH_BIAS_MIN + s * 0.1f,
+                                              cam_dist * RIPPLE_DEPTH_BIAS);
                         break;
                     }
                     default: // KIND_ROUND
-                        x_axis = cam_right * p.mSizeX;
-                        y_axis = cam_up * p.mSizeY;
+                    {
+                        // A splash crown opens from a point the way the ring
+                        // beside it does, and keeps growing past its nominal
+                        // size as it fades: the water thrown up spreads as it
+                        // goes, so a crown that held one size read as a dot
+                        // being switched off rather than a splash dispersing.
+                        // Every other round particle is a drop and holds the
+                        // size it was spawned at.
+                        F32 scale = 1.f;
+                        if (p.mFlags & PART_CROWN)
+                        {
+                            F32 tt = llclamp(p.mAge / p.mMaxAge, 0.f, 1.f);
+                            tt = 1.f - (1.f - tt) * (1.f - tt);  // fast out
+                            scale = lerp(CROWN_START_SCALE, CROWN_END_SCALE, tt);
+                        }
+                        // A round drop stands for a sphere, so which way its
+                        // axis points barely matters, but the fall is the one
+                        // direction it is actually stretched along
+                        emit_axis = (p.mVel.magVecSquared() > 0.0001f)
+                                  ? -p.mVel * (1.f / p.mVel.magVec()) : LLVector3::z_axis;
+
+                        x_axis = cam_right * (p.mSizeX * scale);
+                        y_axis = cam_up * (p.mSizeY * scale);
                         break;
+                    }
                 }
 
                 // Emissive types brighten through their tint. Large abstraction
@@ -576,6 +724,34 @@ void SSPrecipRenderer::render()
     gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA,
                   LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
 
+    // The drop's own surface, shared by the daylight and the projector passes.
+    // Both shade the same water off the same coverage gradient, so they read
+    // the same dials: a drop that is round in the sun cannot flatten out the
+    // moment a spotlight crosses it.
+    auto bind_drop_shading = [](LLGLSLShader* shader)
+    {
+        static LLCachedControl<F32> drop_bulge(gSavedSettings, "SSAtmoDropBulge", 0.35f);
+        static LLCachedControl<F32> drop_core(gSavedSettings, "SSAtmoDropCore", 2.0f);
+        static LLCachedControl<F32> drop_sparkle(gSavedSettings, "SSAtmoDropSparkle", 6.0f);
+
+        static LLStaticHashedString ssDropBulge("ss_drop_bulge");
+        static LLStaticHashedString ssDropCore("ss_drop_core");
+        static LLStaticHashedString ssDropSparkle("ss_drop_sparkle");
+
+        shader->uniform1f(ssDropBulge, llclamp((F32)drop_bulge, 0.f, 4.f));
+        shader->uniform1f(ssDropCore, llclamp((F32)drop_core, 0.f, 8.f));
+        shader->uniform1f(ssDropSparkle, llclamp((F32)drop_sparkle, 0.f, 64.f));
+    };
+
+    // Whether the ring art bound for the decal pass is the one that is baked
+    // here, which carries the wave's tangent-space normal in its colour
+    // channels. A developer-set ripple texture is ordinary art whose colour is
+    // a colour, so the shaders have to be told which they are looking at, and
+    // since every decal in the buffer is a ripple that is one flag for the
+    // whole pass rather than one per batch.
+    const F32 decal_normals = atmo->rippleTexture() ? 0.f : 1.f;
+    static LLStaticHashedString ssDecalNormals("ss_decal_normals");
+
     // Shared fullbright setup: the emissive pass and every fallback path
     // run through it
     auto bind_fullbright = []()
@@ -595,18 +771,54 @@ void SSPrecipRenderer::render()
     // Lit pass: non-emissive particles (snow, ripples) shaded like other
     // lit alpha objects: probe ambient plus shadowed sun. The deferred bind
     // supplies shadow maps, probes and environment uniforms.
+    //
+    // Ripples go through the same shader with the decal flag set, which adds
+    // the light already sitting on the surface they are lying on. Two draws
+    // rather than one so the flag can differ; the program stays bound across
+    // both, so it is a uniform change and a second submission, not a rebind.
     {
+        static LLStaticHashedString ssDecal("ss_decal");
+        static LLStaticHashedString ssSceneLit("ss_scene_lit");
         LLGLSLShader* lit = &gSSPrecipLitProgram;
         if (lit->isComplete())
         {
+            // Force the full bind. The fast path re-binds the light function,
+            // the shadow maps and the probes but leaves the environment
+            // uniforms - sun direction, shadow matrices, shadow bias - at
+            // whatever the last full bind left on the program, and those go
+            // stale the moment the camera or the sun moves. Sampling the
+            // shadow map through last frame's matrices is what left ripples
+            // looking the same in sun and in shade. LLDrawPoolAlpha clears
+            // the flag for its own deferred-environment shaders for exactly
+            // this reason.
+            lit->mCanBindFast = false;
             gPipeline.bindDeferredShaderFast(*lit);
             lit->uniform2f(LLShaderMgr::DEFERRED_SCREEN_RES, (F32)gGLViewport[2], (F32)gGLViewport[3]);
+
+            // The scene map is only allocated with HDR on; without it there is
+            // no lit scene to read back off the ground
+            lit->uniform1f(ssSceneLit, (gPipeline.mSceneMap.getWidth() > 0) ? 1.f : 0.f);
+
+            lit->uniform1f(ssDecalNormals, decal_normals);
+
+            lit->uniform1f(ssDecal, 0.f);
             drawMaterial(sim, MAT_LIT);
+
+            lit->uniform1f(ssDecal, 1.f);
+            drawMaterial(sim, MAT_DECAL);
+            lit->uniform1f(ssDecal, 0.f);
         }
         else
         {
+            // Fallback for a lit program that would not compile. The ring's
+            // colour channels are a normal here and the fullbright path has no
+            // way to be told that, so it multiplies them through as a tint and
+            // the ripples come out pale blue. Left as it is rather than baking
+            // and tracking a second flat ring for a path that has already given
+            // up every other part of the shading; the log says why it is on.
             bind_fullbright();
             drawMaterial(sim, MAT_LIT);
+            drawMaterial(sim, MAT_DECAL);
         }
     }
 
@@ -636,6 +848,7 @@ void SSPrecipRenderer::render()
             static LLStaticHashedString ssRefract("ss_refract_strength");
             const bool has_scene = gPipeline.mSceneMap.getWidth() > 0;
             rain->uniform1f(ssRefract, has_scene ? 0.035f : 0.f);
+            bind_drop_shading(rain);
 
             gPipeline.bindReflectionProbes(*rain);
             drawMaterial(sim, MAT_WATER);
@@ -644,6 +857,105 @@ void SSPrecipRenderer::render()
         else
         {
             drawMaterial(sim, MAT_WATER);
+        }
+    }
+
+    // Projector pass: one additive draw of everything per nearby projected
+    // light, so a spotlight picks itself out against heavy rain the way it
+    // does against fog. Batched particles have no per-object light list to run
+    // a forward light loop over - one buffer spans the whole visible scene -
+    // so the light is iterated instead of the geometry, which is the same
+    // trade the deferred pipeline makes for opaque surfaces.
+    //
+    // Bounded hard: it is a full redraw of the precipitation buffer per light,
+    // and heavy rain is tens of thousands of quads.
+    {
+        static LLCachedControl<bool> use_projectors(gSavedSettings, "SSAtmoProjectorLights", true);
+        static LLCachedControl<U32> max_projectors(gSavedSettings, "SSAtmoProjectorLightCount", 2);
+        static LLCachedControl<F32> scatter_gain(gSavedSettings, "SSAtmoProjectorGain", 0.1f);
+        static LLCachedControl<F32> scatter_aniso(gSavedSettings, "SSAtmoProjectorAnisotropy", 0.3f);
+
+        LLGLSLShader* proj = &gSSPrecipProjProgram;
+        const U32 want = llclamp((U32)max_projectors, 0u, 8u);
+
+        if (use_projectors && want > 0 && proj->isComplete())
+        {
+            std::vector<LLDrawable*> projectors;
+            gPipeline.getNearbyProjectors(projectors, want);
+
+            if (!projectors.empty())
+            {
+                LL_PROFILE_GPU_ZONE("atmo precip projectors");
+
+                // Additive: a beam adds light to the drops, it does not
+                // replace what they were already shaded with. Glow is left
+                // alone - rain lit by a spotlight is not itself a bloom
+                // source, and writing it would haze the whole beam.
+                gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE,
+                              LLRender::BF_ZERO, LLRender::BF_ONE);
+
+                proj->bind();
+                proj->uniform2f(LLShaderMgr::DEFERRED_SCREEN_RES, (F32)gGLViewport[2], (F32)gGLViewport[3]);
+
+                static LLStaticHashedString ssScatterGain("ss_scatter_gain");
+                static LLStaticHashedString ssScatterAniso("ss_scatter_aniso");
+                static LLStaticHashedString ssProjDecal("ss_decal");
+                proj->uniform1f(ssScatterGain, llclamp((F32)scatter_gain, 0.f, 2.f));
+                proj->uniform1f(ssScatterAniso, llclamp((F32)scatter_aniso, 0.f, 0.95f));
+                bind_drop_shading(proj);
+                proj->uniform1f(ssDecalNormals, decal_normals);
+
+                const glm::mat4 view = get_current_modelview();
+
+                for (LLDrawable* drawablep : projectors)
+                {
+                    LLVOVolume* volume = drawablep->getVOVolume();
+                    if (!volume) continue;
+
+                    // Everything the projector maths needs: matrix, near plane,
+                    // range, ambiance and the projection texture. Shared with
+                    // the deferred spot pass rather than reimplemented, so the
+                    // beam lands in the same place on the rain as it does on
+                    // the wall behind it.
+                    gPipeline.setupSpotLight(*proj, drawablep);
+
+                    // The deferred pass carries the light centre as a varying
+                    // off the light volume it draws; there is no volume here,
+                    // so it goes in already transformed.
+                    const LLVector3 center_agent = drawablep->getPositionAgent();
+                    const glm::vec3 c = mul_mat4_vec3(view, glm::vec3(center_agent.mV[VX],
+                                                                      center_agent.mV[VY],
+                                                                      center_agent.mV[VZ]));
+                    const LLVector3 center_view(c.x, c.y, c.z);
+
+                    const LLColor3 col = volume->getLightLinearColor();
+
+                    proj->uniform3fv(LLShaderMgr::LIGHT_CENTER, 1, center_view.mV);
+                    proj->uniform1f(LLShaderMgr::LIGHT_SIZE, volume->getLightRadius() * 1.5f);
+                    proj->uniform3fv(LLShaderMgr::DIFFUSE_COLOR, 1, col.mV);
+                    // 0.5 is the DEFERRED_LIGHT_FALLOFF the deferred passes
+                    // use; it is a file-local constant over in pipeline.cpp,
+                    // so it is spelled out rather than shared
+                    proj->uniform1f(LLShaderMgr::LIGHT_FALLOFF, volume->getLightFalloff(0.5f));
+
+                    // Emissive particles are light sources in their own
+                    // right; shining a spotlight on one adds nothing.
+                    //
+                    // The ripples go in with the decal flag up: they are wet
+                    // ground being lit, not drops scattering the beam on the
+                    // way through, and the shader shades them accordingly.
+                    proj->uniform1f(ssProjDecal, 0.f);
+                    drawMaterial(sim, MAT_LIT);
+                    drawMaterial(sim, MAT_WATER);
+
+                    proj->uniform1f(ssProjDecal, 1.f);
+                    drawMaterial(sim, MAT_DECAL);
+                }
+
+                proj->disableTexture(LLShaderMgr::DEFERRED_PROJECTION);
+                gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA,
+                              LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+            }
         }
     }
 

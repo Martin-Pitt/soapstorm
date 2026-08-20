@@ -407,7 +407,10 @@ LLPointer<LLViewerTexture> SSPrecipVariants::build(const SSPrecipPreset& preset,
 
 LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
 {
-    const S32 res = 64;
+    // The ring is baked at twice the rest: it carries a normal now, and the
+    // wave's band is only a tenth of the texture wide, so at 64 the whole of
+    // the relief was six texels of it
+    const S32 res = (kind == UTIL_RING) ? 128 : 64;
     LLPointer<LLImageRaw> raw = new LLImageRaw((U16)res, (U16)res, 4);
     U8* data = raw->getData();
     for (size_t i = 0; i < (size_t)res * res; ++i)
@@ -454,19 +457,80 @@ LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
     }
     else if (kind == UTIL_RING)
     {
-        // Soft annulus for the expanding surface ripple
+        // Soft annulus for the expanding surface ripple, with the shape of the
+        // wave itself baked into the colour channels as a tangent-space normal.
+        //
+        // A ripple is a raised crest of water travelling outward, and until now
+        // the only thing said about it was where it was opaque: the lit pass
+        // shaded the whole ring with the flat normal of the ground under it, so
+        // it took the sun as evenly as the concrete did and read as a painted
+        // circle rather than as water standing up off it. The crest has real
+        // relief and it is the same relief everywhere around the ring, only
+        // rotated - purely a function of how far across the band a texel sits -
+        // so it bakes exactly rather than being approximated at runtime the way
+        // the drops' normals are.
+        //
+        // The RGB the other utility shapes leave white is a tint the lit shader
+        // multiplies through, so this one is read as a normal only where the
+        // renderer says the generated ring is what is actually bound; a
+        // developer-set ripple texture keeps the old meaning.
         const F32 radius = res * 0.36f;
         const F32 width = res * 0.1f;
+
+        // How tall the crest stands, in units of the band's own half width.
+        // Slope, not height, is what survives into the normal, so this is the
+        // dial that decides whether the ring catches a light along its flanks
+        // or lies down flat like the ground it is on.
+        const F32 relief = 0.8f;
+
         for (S32 y = 0; y < res; ++y)
         {
             for (S32 x = 0; x < res; ++x)
             {
-                const F32 d = sqrtf((x - c) * (x - c) + (y - c) * (y - c));
-                const F32 band = 1.f - fabsf(d - radius) / width;
-                if (band > 0.f)
+                U8* px = data + ((size_t)y * res + x) * 4;
+
+                const F32 rx = (F32)x - c;
+                const F32 ry = (F32)y - c;
+                const F32 d = sqrtf(rx * rx + ry * ry);
+
+                // Signed position across the band: -1 at the inner edge, 0 on
+                // the crest, +1 at the outer
+                const F32 sp = (d - radius) / width;
+                const F32 band = 1.f - fabsf(sp);
+                if (band <= 0.f)
                 {
-                    splatAlpha(data, res, x, y, band * band * 0.9f);
+                    // Flat, so the filtering either side of the band has
+                    // something meaning "level ground" to blend toward rather
+                    // than the white that would decode as a normal pointing
+                    // off in all three axes at once
+                    px[0] = 128;
+                    px[1] = 128;
+                    px[2] = 255;
+                    continue;
                 }
+
+                splatAlpha(data, res, x, y, band * band * 0.9f);
+
+                // Height across the band is the same profile as the coverage,
+                // so the relief and the visible ring are the one wave. Its
+                // slope runs radially: uphill toward the crest from both
+                // sides, which tilts the surface inward on the outer flank and
+                // outward on the inner.
+                const F32 dh_ds = -2.f * band * ((sp < 0.f) ? -1.f : 1.f);
+                const F32 slope = dh_ds * relief;
+
+                const F32 inv_d = (d > 0.5f) ? 1.f / d : 0.f;
+                F32 nx = -slope * rx * inv_d;
+                F32 ny = -slope * ry * inv_d;
+                F32 nz = 1.f;
+                const F32 inv_len = 1.f / sqrtf(nx * nx + ny * ny + nz * nz);
+                nx *= inv_len;
+                ny *= inv_len;
+                nz *= inv_len;
+
+                px[0] = (U8)llclamp((S32)((nx * 0.5f + 0.5f) * 255.f + 0.5f), 0, 255);
+                px[1] = (U8)llclamp((S32)((ny * 0.5f + 0.5f) * 255.f + 0.5f), 0, 255);
+                px[2] = (U8)llclamp((S32)((nz * 0.5f + 0.5f) * 255.f + 0.5f), 0, 255);
             }
         }
     }

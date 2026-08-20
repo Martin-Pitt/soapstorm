@@ -184,6 +184,7 @@ LLGLSLShader            gDeferredAlphaProgram;
 // <SS:Nexii> Atmo Magic particle shaders
 LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
+LLGLSLShader            gSSPrecipProjProgram;
 LLGLSLShader            gSSWindInitProgram;
 LLGLSLShader            gSSWindDivProgram;
 LLGLSLShader            gSSWindJacobiProgram;
@@ -449,6 +450,7 @@ void LLViewerShaderMgr::finalizeShaderList()
     // <SS:Nexii> Atmo Magic: receive env/light uniform updates
     mShaderList.push_back(&gSSPrecipRainProgram);
     mShaderList.push_back(&gSSPrecipLitProgram);
+    mShaderList.push_back(&gSSPrecipProjProgram);
     // </SS:Nexii>
     mShaderList.push_back(&gHUDFullbrightProgram);
     mShaderList.push_back(&gDeferredFullbrightAlphaMaskProgram);
@@ -1230,6 +1232,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         // <SS:Nexii> Atmo Magic particle shaders
         gSSPrecipRainProgram.unload();
         gSSPrecipLitProgram.unload();
+        gSSPrecipProjProgram.unload();
         // </SS:Nexii>
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
@@ -2098,6 +2101,33 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             LL_WARNS("Shader") << "SS Precipitation lit shader failed to compile;"
                                << " non-emissive particles will use the fullbright fallback" << LL_ENDL;
             gSSPrecipLitProgram.unload();
+        }
+    }
+
+    // Projected spotlight over precipitation. One pass per projector, added
+    // on top of whatever the particles were already shaded with, so a beam
+    // picks itself out against heavy rain. Needs deferredUtil for the
+    // projector maths, which comes in with the reflection probe feature.
+    if (success)
+    {
+        gSSPrecipProjProgram.mName = "SS Precipitation Projector Shader";
+        // Shares the precipitation vertex shader, which calls calcAtmospherics,
+        // so the atmospherics vertex objects have to come along even though
+        // nothing in the fragment stage reads what they produce
+        gSSPrecipProjProgram.mFeatures.calculatesAtmospherics = true;
+        gSSPrecipProjProgram.mFeatures.hasSrgb = true;
+        gSSPrecipProjProgram.mFeatures.hasReflectionProbes = true;
+        gSSPrecipProjProgram.mShaderFiles.clear();
+        gSSPrecipProjProgram.mShaderFiles.push_back(make_pair("deferred/ssPrecipRainV.glsl", GL_VERTEX_SHADER));
+        gSSPrecipProjProgram.mShaderFiles.push_back(make_pair("deferred/ssPrecipProjF.glsl", GL_FRAGMENT_SHADER));
+        gSSPrecipProjProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSPrecipProjProgram.clearPermutations();
+        add_common_permutations(&gSSPrecipProjProgram);
+        if (!gSSPrecipProjProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Precipitation projector shader failed to compile;"
+                               << " projected lights will not show up in precipitation" << LL_ENDL;
+            gSSPrecipProjProgram.unload();
         }
     }
 

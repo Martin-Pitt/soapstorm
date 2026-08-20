@@ -48,7 +48,9 @@ enum SSPrecipFlags : U8
     PART_GUSTY  = 0x02, // stronger wander (blizzard)
     PART_LANDED = 0x04, // settled on a surface, fading out where it stopped
     PART_DRIP   = 0x08, // shed off an eave: holds its alpha for the whole fall
-    PART_STREAM = 0x10  // a running sheet off an eave rather than a single drip
+    PART_STREAM = 0x10, // a running sheet off an eave rather than a single drip
+    PART_CROWN  = 0x20  // splash crown: opens from a point over its life like
+                        // the ring beside it, rather than holding one size
 };
 
 // Segments a stream is drawn as. It leaves the lip along the flow and bends

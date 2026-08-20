@@ -26358,6 +26358,83 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>SSAtmoProjectorLights</key>
+      <map>
+      <key>Comment</key>
+      <string>Let projected spotlights light precipitation, so a beam shows up against heavy rain; costs one extra draw of the precipitation buffer per light</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoProjectorLightCount</key>
+      <map>
+      <key>Comment</key>
+      <string>How many of the nearest projected spotlights may light precipitation at once, 0 to 4</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSAtmoProjectorGain</key>
+      <map>
+      <key>Comment</key>
+      <string>How much of a projector's beam precipitation scatters back toward the eye; small on purpose, since drops add a sparkle to a beam rather than turning opaque in it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.3</real>
+    </map>
+    <key>SSAtmoProjectorAnisotropy</key>
+      <map>
+      <key>Comment</key>
+      <string>How forward-biased that scattering is (Henyey-Greenstein g, 0 to 0.95). Higher makes a beam bright when looked into and near-invisible from the side</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.3</real>
+    </map>
+    <key>SSAtmoDropBulge</key>
+      <map>
+      <key>Comment</key>
+      <string>How round a drop's water surface reads, taken off the gradient of the sprite's coverage. 0 is a flat card facing the eye; higher wraps the highlight further around the sides of the drop</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.35</real>
+    </map>
+    <key>SSAtmoDropCore</key>
+      <map>
+      <key>Comment</key>
+      <string>How tightly the light a drop throws back is pulled onto its spine. Drops are drawn fatter than life so they read on screen; 1 spreads the highlight over the whole of that, higher collapses it to a thin bright streak inside a dark body</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.0</real>
+    </map>
+    <key>SSAtmoDropSparkle</key>
+      <map>
+      <key>Comment</key>
+      <string>Strength of the narrow glint lobe on drops, in sun and in beams alike. It only lands where a drop is very nearly mirroring the light, so it picks a few drops at a time out of the rain and twinkles off them as they fall; 0 leaves only the broad wet sheen</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>6.0</real>
+    </map>
     <key>SSAtmoLoopWindLight</key>
       <map>
       <key>Comment</key>

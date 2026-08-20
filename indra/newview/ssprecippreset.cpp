@@ -369,11 +369,11 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mWaterShading = true;
         p.mDropShape = DROP_TEARDROP;
         p.mImpactStrength = 1.0f;
-        p.mRippleSize = 0.3f;   p.mRippleAlpha = 0.15f;  p.mRippleLife = 0.4f;
-        p.mCrownSize  = 0.16f;  p.mCrownAlpha  = 0.11f;
-        p.mCrownSpeed = 0.65f;  p.mCrownLife   = 0.4f;
-        p.mTiers[TIER_DROPS]    = { true, KIND_STREAK, 0.028f, 0.55f, 0.8f, 18.f };
-        p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.5f, 96.f };
+        p.mRippleSize = 0.3f;   p.mRippleAlpha = 0.3f;   p.mRippleLife = 0.4f;
+        p.mCrownSize  = 0.3f;   p.mCrownAlpha  = 0.15f;
+        p.mCrownSpeed = 1.0f;   p.mCrownLife   = 0.4f;
+        p.mTiers[TIER_DROPS]    = { true, KIND_STREAK, 0.028f, 0.55f, 0.3f, 18.f };
+        p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.4f, 96.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  9.f,    18.f,  0.3f, 224.f };
 
         // Sound pack. Each slot is a comma separated sequence played through

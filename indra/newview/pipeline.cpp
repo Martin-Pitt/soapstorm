@@ -10235,6 +10235,34 @@ void LLPipeline::doWaterExclusionMask()
     glClearColor(0, 0, 0, 0);
 }
 
+// <SS:Nexii> Atmo Magic
+void LLPipeline::getNearbyProjectors(std::vector<LLDrawable*>& out, U32 max_count) const
+{
+    out.clear();
+    if (max_count == 0) return;
+
+    // mNearbyLights is ordered by distance, so taking the first few that pass
+    // gives the nearest projectors without a sort of our own. The tests match
+    // the ones renderDeferredLighting applies before it pushes a drawable into
+    // its spot_lights list: a light the deferred pass has decided not to draw
+    // is not one precipitation should be picking up either.
+    for (light_set_t::const_iterator iter = mNearbyLights.begin(); iter != mNearbyLights.end(); ++iter)
+    {
+        LLDrawable* drawablep = iter->drawable;
+        if (!drawablep) continue;
+
+        LLVOVolume* volume = drawablep->getVOVolume();
+        if (!volume || !volume->isLightSpotlight()) continue;
+        if (volume->isAttachment() && !sRenderAttachedLights) continue;
+        if (volume->getLightRadius() * 1.5f <= 0.001f) continue;
+        if (volume->getLightLinearColor().magVecSquared() < 0.001f) continue;
+
+        out.push_back(drawablep);
+        if (out.size() >= max_count) break;
+    }
+}
+// </SS:Nexii>
+
 void LLPipeline::setupSpotLight(LLGLSLShader& shader, LLDrawable* drawablep)
 {
     //construct frustum

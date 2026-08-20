@@ -92,6 +92,13 @@ static const F32 WIND_SHED_MAX    = 0.6f;
 // wrapping the whole roof, with a mean direction belonging to neither.
 static const F32 RUN_JOIN_ALIGN   = 0.5f;
 
+// And how far the lip of a run may wander off a straight line before the run
+// is cut in two, as a gradient across the length it has wandered over. Runs
+// are gathered by how their cells shed, which two rakes either side of a ridge
+// agree on completely while running in opposite directions - so shape is a
+// separate question from direction, and this is what answers it.
+static const F32 RUN_SHAPE_TAN    = 0.176f;     // tan(10 degrees)
+
 // Where separate drips give way to a running stream. Below the first figure an
 // edge drips and nothing else; by the second it is a continuous fall and the
 // drips are only the spatter around it.
@@ -372,6 +379,114 @@ bool SSRunoff::startTrace(U64 region_handle, S32 res, bool want_debug)
     return true;
 }
 
+// A run comes off the trace as a staircase. The cells are square and axis
+// aligned; a roof is under no obligation to be, and an eave lying at any
+// angle to the grid comes back as lip points alternating half a cell either
+// side of the line the edge is really on. Each one is a legitimate cell
+// centre and the set of them is a zig-zag, which is then made worse by the
+// refinement, since that moves every lip independently along the shed
+// direction and so keeps none of its neighbours' company.
+//
+// Nothing downstream wants the staircase. The run has already been cut
+// wherever its lip stops being one straight line, so what is left is a
+// straight line measured badly: fit it and put the points back on it. The
+// axis is the principal one of the lips in plan rather than the mean of the
+// cells' shed directions, because those are quantised to eight compass
+// points and the fit is not.
+static void straightenRun(SSRunoffEave& run)
+{
+    const size_t count = run.mLip.size();
+    if (count < 3) return;
+
+    LLVector3 centre;
+    for (const LLVector3& p : run.mLip) centre += p;
+    centre *= 1.f / (F32)count;
+
+    F32 sxx = 0.f, sxy = 0.f, syy = 0.f;
+    for (const LLVector3& p : run.mLip)
+    {
+        const F32 dx = p.mV[VX] - centre.mV[VX];
+        const F32 dy = p.mV[VY] - centre.mV[VY];
+        sxx += dx * dx;
+        sxy += dx * dy;
+        syy += dy * dy;
+    }
+
+    // Larger eigenvector of the 2x2 scatter. Both forms of the eigenvector
+    // are kept because either can come out degenerate on its own: the first
+    // vanishes on a run lying along x, the second on one lying along y.
+    const F32 trace = sxx + syy;
+    const F32 det = sxx * syy - sxy * sxy;
+    const F32 disc = llmax(0.f, trace * trace * 0.25f - det);
+    const F32 lambda = trace * 0.5f + sqrtf(disc);
+
+    LLVector3 axis(sxy, lambda - sxx, 0.f);
+    if (axis.magVec() < 1e-4f) axis.set(lambda - syy, sxy, 0.f);
+    if (axis.normVec() < 1e-4f) return;
+
+    // The renderer hangs its curtain along mRun and signs the pitch below
+    // along it, so the fit may aim the axis but not turn it round.
+    if (axis * run.mRun < 0.f) axis = -axis;
+
+    std::vector<F32> along(count);
+    F32 lo = F32_MAX, hi = -F32_MAX;
+    for (size_t i = 0; i < count; ++i)
+    {
+        along[i] = (run.mLip[i] - centre) * axis;
+        lo = llmin(lo, along[i]);
+        hi = llmax(hi, along[i]);
+    }
+    if (hi - lo < 1e-3f) return;    // no extent to fit a line to
+
+    // Height along the run, fitted the same way. A gutter comes out level and
+    // a rake comes out climbing at its own pitch, which is the whole reason
+    // this is a fit and not a flattening.
+    F32 stt = 0.f, stz = 0.f;
+    for (size_t i = 0; i < count; ++i)
+    {
+        stt += along[i] * along[i];
+        stz += along[i] * (run.mLip[i].mV[VZ] - centre.mV[VZ]);
+    }
+    const F32 slope = (stt > 1e-6f) ? (stz / stt) : 0.f;
+
+    // The staircase also scrambles the order: neighbouring cells on a
+    // diagonal edge project onto the axis within rounding of each other, so
+    // the sort that ordered the run is only as good as the points it sorted.
+    std::vector<size_t> order(count);
+    for (size_t i = 0; i < count; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return along[a] < along[b]; });
+
+    std::vector<LLVector3> lip, land;
+    lip.reserve(count);
+    land.reserve(count);
+    for (size_t i : order)
+    {
+        LLVector3 fitted = centre + axis * along[i];
+        fitted.mV[VZ] = centre.mV[VZ] + slope * along[i];
+        // The drip still comes down where its own cell said it did; only the
+        // part of the move that is horizontal carries over, because the
+        // ground under the eave has a shape of its own to keep.
+        LLVector3 down = run.mLand[i];
+        down.mV[VX] += fitted.mV[VX] - run.mLip[i].mV[VX];
+        down.mV[VY] += fitted.mV[VY] - run.mLip[i].mV[VY];
+
+        lip.push_back(fitted);
+        land.push_back(down);
+    }
+
+    run.mLip.swap(lip);
+    run.mLand.swap(land);
+    run.mRun = axis;
+    run.mOut.set(axis.mV[VY], -axis.mV[VX], 0.f);
+
+    // Measured along the fitted line rather than assumed to be one cell. A
+    // diagonal edge steps corner to corner, so its lips are a cell and a half
+    // apart and a run made of them is half as long again as the grid spacing
+    // says - which is the length the streams are spread over.
+    run.mSpacing = (hi - lo) / (F32)(count - 1);
+}
+
 // Worker. Pure arithmetic over the snapshot: no GL, no region list, no
 // singletons beyond the job it was handed.
 void SSRunoff::traceNetwork(Trace& job)
@@ -578,42 +693,114 @@ void SSRunoff::traceNetwork(Trace& job)
     std::vector<S32> label(count, -1);
     std::vector<SSRunoffEave> runs;
     std::vector<S32> stack;
+    std::vector<S32> cells;
+
+    // One edge cell's lip point, the point the water off it comes down at, and
+    // the horizontal direction it leaves by. The fill gathers cells now and the
+    // runs are built from them afterwards, so these are needed in both places.
+    auto lipOf = [&](S32 i)
+    {
+        return LLVector3(grid.axis(i % n), grid.axis(i / n), grid.mZ[i]);
+    };
+    auto landOf = [&](S32 i)
+    {
+        // Where it leaves, not where the surface carries on. On a partial edge
+        // those are different cells, and it is the spill that says which way
+        // the drip goes.
+        const S32 d = (spill[i] >= 0) ? spill[i] : i;
+        return LLVector3(grid.axis(d % n), grid.axis(d / n), grid.mZ[d]);
+    };
+    auto outOf = [&](S32 i)
+    {
+        const LLVector3 lip = lipOf(i);
+        const LLVector3 land = landOf(i);
+        LLVector3 o(land.mV[VX] - lip.mV[VX], land.mV[VY] - lip.mV[VY], 0.f);
+        if (o.normVec() < 0.01f) o.set(1.f, 0.f, 0.f);
+        return o;
+    };
+
+    // Turn one stretch of edge cells into a run. The stretch arrives roughly in
+    // order along the lip, from the patch's mean axis; this works out the axis
+    // the stretch itself has and puts the cells in order along that, because a
+    // piece cut off the end of a patch does not have to point the way the whole
+    // patch did.
+    auto addRun = [&](std::vector<S32>::const_iterator first,
+                      std::vector<S32>::const_iterator last)
+    {
+        if (first == last) return;
+
+        SSRunoffEave run;
+        run.mSpacing = cell;
+
+        LLVector3 out_sum;
+        for (auto it = first; it != last; ++it) out_sum += outOf(*it);
+
+        run.mOut = out_sum;
+        if (run.mOut.normVec() < 0.01f) run.mOut.set(1.f, 0.f, 0.f);
+
+        // Along the edge, at right angles to the way the water leaves it. The
+        // renderer hangs the curtain along this same axis and the pitch below
+        // is signed along it, so the handedness of this cross product is not
+        // free to change.
+        run.mRun.set(-run.mOut.mV[VY], run.mOut.mV[VX], 0.f);
+
+        // Put the lips in order along the edge. They arrive in whatever order
+        // the flood fill happened to pop them off its stack, which is fine for
+        // picking a random point to drip from and no use at all for anything
+        // that has to treat the run as a line: the overlay drew a scatter of
+        // unconnected ticks, the thinning below strided across the run rather
+        // than along it, and a stream has no path to follow. Runs are cut
+        // where their line turns, so a projection onto the along-edge axis is
+        // enough to order one.
+        std::vector<S32> ordered(first, last);
+        const LLVector3 axis = run.mRun;
+        std::sort(ordered.begin(), ordered.end(),
+                  [&](S32 a, S32 b) { return lipOf(a) * axis < lipOf(b) * axis; });
+
+        run.mLip.reserve(ordered.size());
+        run.mLand.reserve(ordered.size());
+        for (S32 i : ordered)
+        {
+            run.mLip.push_back(lipOf(i));
+            run.mLand.push_back(landOf(i));
+            run.mCatchment += shed_here[i];
+            run.mShedSum += shed_frac[i];
+        }
+
+        run.mShed = run.mShedSum / (F32)ordered.size();
+
+        // Off the grid's staircase and onto the line the edge is really on
+        straightenRun(run);
+
+        runs.push_back(std::move(run));
+    };
 
     for (size_t seed = 0; seed < count; ++seed)
     {
         if (!is_edge[seed] || label[seed] >= 0) continue;
 
-        const S32 id = (S32)runs.size();
-        runs.emplace_back();
-        LLVector3 out_sum;
+        cells.clear();
+
+        // The cell the patch started from. Neighbours are held against this as
+        // well as against the cell they joined through, because agreeing with
+        // your neighbour is a chain and a chain has no limit: a run creeping
+        // round a rotunda or a chamfered corner turns a few degrees per cell,
+        // never fails a local test, and comes back as one run whose mean
+        // direction belongs nowhere on it.
+        const LLVector3 seed_out = outOf((S32)seed);
 
         stack.push_back((S32)seed);
-        label[seed] = id;
+        label[seed] = 1;
 
         while (!stack.empty())
         {
             const S32 i = stack.back();
             stack.pop_back();
+            cells.push_back(i);
 
             const S32 x = i % n;
             const S32 y = i / n;
-
-            // Where it leaves, not where the surface carries on. On a partial
-            // edge those are different cells, and it is the spill that says
-            // which way the drip goes.
-            const S32 down = spill[i];
-
-            const LLVector3 lip(grid.axis(x), grid.axis(y), grid.mZ[i]);
-            const LLVector3 land(grid.axis(down % n), grid.axis(down / n), grid.mZ[down]);
-
-            LLVector3 out(land.mV[VX] - lip.mV[VX], land.mV[VY] - lip.mV[VY], 0.f);
-            if (out.normVec() < 0.01f) out.set(1.f, 0.f, 0.f);
-
-            runs[id].mLip.push_back(lip);
-            runs[id].mLand.push_back(land);
-            runs[id].mCatchment += shed_here[i];
-            runs[id].mShedSum += shed_frac[i];
-            out_sum += out;
+            const LLVector3 out = outOf(i);
 
             for (S32 d = 0; d < 8; ++d)
             {
@@ -638,55 +825,88 @@ void SSRunoff::traceNetwork(Trace& job)
                                grid.axis(jd / n) - grid.axis(ny), 0.f);
                 if (jout.normVec() < 0.01f) continue;
                 if (jout * out < RUN_JOIN_ALIGN) continue;
+                if (jout * seed_out < RUN_JOIN_ALIGN) continue;
 
-                label[j] = id;
+                label[j] = 1;
                 stack.push_back((S32)j);
             }
         }
 
-        runs[id].mShed = runs[id].mLip.empty()
-            ? 0.f : runs[id].mShedSum / (F32)runs[id].mLip.size();
+        if (cells.empty()) continue;
 
-        runs[id].mOut = out_sum;
-        if (runs[id].mOut.normVec() < 0.01f) runs[id].mOut.set(1.f, 0.f, 0.f);
+        // Order the patch along its own mean edge axis, so what follows can
+        // read it as a line. Provisional only - each piece the cut hands back
+        // works out its own axis from the cells it ended up with.
+        LLVector3 patch_out;
+        for (S32 i : cells) patch_out += outOf(i);
+        if (patch_out.normVec() < 0.01f) patch_out.set(1.f, 0.f, 0.f);
 
-        // Along the edge, at right angles to the way the water leaves it
-        runs[id].mRun.set(-runs[id].mOut.mV[VY], runs[id].mOut.mV[VX], 0.f);
-        runs[id].mSpacing = cell;
+        const LLVector3 patch_axis(-patch_out.mV[VY], patch_out.mV[VX], 0.f);
+        std::sort(cells.begin(), cells.end(),
+                  [&](S32 a, S32 b)
+                  {
+                      return lipOf(a) * patch_axis < lipOf(b) * patch_axis;
+                  });
 
-        // Put the lips in order along the edge. They arrive in whatever order
-        // the flood fill happened to pop them off its stack, which is fine for
-        // picking a random point to drip from and no use at all for anything
-        // that has to treat the run as a line: the overlay drew a scatter of
-        // unconnected ticks, the thinning below strided across the run rather
-        // than along it, and a stream has no path to follow. Runs are split
-        // where their direction turns now, so a projection onto the mean
-        // along-edge axis is enough to order one.
+        // Cut the patch wherever its lip stops being one straight line.
+        //
+        // Shedding the same way is not the same as running the same way, and
+        // the gable is the case that shows it. The two rakes either side of a
+        // ridge shed off the same gable end, in the same horizontal direction,
+        // and they meet at the apex at much the same height - so every test
+        // above passes and the fill hands back both arms as one run. Its lips
+        // then climb to the ridge and come back down, its pitch measured end
+        // to end is nothing like either arm, and the stream hung along it is a
+        // curtain across a peak: level where the roof is steepest, cutting
+        // through the tiles at both ends. The same is true, less dramatically,
+        // of an edge that bends a few degrees along its length.
+        //
+        // So a line is tracked along the ordered lips and the patch is cut
+        // where a lip departs from it. The tolerance grows with distance from
+        // the anchor of that line, which is what makes it an angle rather than
+        // a width, and it never falls below a cell: the trace works on a grid,
+        // and an edge not running along one of its axes staircases about half
+        // a cell either side of the line it is really on.
+        size_t start = 0;
+        LLVector3 anchor = lipOf(cells[0]);
+        LLVector3 dir;
+        bool have_dir = false;
+
+        for (size_t k = 1; k < cells.size(); ++k)
         {
-            SSRunoffEave& run = runs[id];
-            const size_t lips = run.mLip.size();
+            const LLVector3 lip = lipOf(cells[k]);
+            const LLVector3 v = lip - anchor;
 
-            std::vector<size_t> order_idx(lips);
-            for (size_t k = 0; k < lips; ++k) order_idx[k] = k;
-
-            const LLVector3 axis = run.mRun;
-            std::sort(order_idx.begin(), order_idx.end(),
-                      [&](size_t a, size_t b)
-                      {
-                          return run.mLip[a] * axis < run.mLip[b] * axis;
-                      });
-
-            std::vector<LLVector3> lip_sorted, land_sorted;
-            lip_sorted.reserve(lips);
-            land_sorted.reserve(lips);
-            for (size_t k : order_idx)
+            if (!have_dir)
             {
-                lip_sorted.push_back(run.mLip[k]);
-                land_sorted.push_back(run.mLand[k]);
+                // A direction taken from two neighbouring cells is a direction
+                // taken from the staircase, so the line is not aimed until
+                // there is a baseline long enough to aim it along.
+                if (v.magVec() >= cell * 2.f)
+                {
+                    dir = v;
+                    dir.normVec();
+                    have_dir = true;
+                }
+                continue;
             }
-            run.mLip.swap(lip_sorted);
-            run.mLand.swap(land_sorted);
+
+            const F32 along = v * dir;
+            const F32 off = (v - dir * along).magVec();
+
+            if (off > llmax(cell, RUN_SHAPE_TAN * fabsf(along)))
+            {
+                // The piece ends at the lip before this one, and this one
+                // anchors the next: the cells are in order along the edge, so
+                // the two pieces meet rather than leaving a gap.
+                addRun(cells.begin() + start, cells.begin() + k);
+                start = k;
+                anchor = lip;
+                have_dir = false;
+            }
         }
+
+        addRun(cells.begin() + start, cells.end());
     }
 
     for (SSRunoffEave& run : runs)
@@ -706,7 +926,7 @@ void SSRunoff::traceNetwork(Trace& job)
             }
             run.mLip.swap(lip);
             run.mLand.swap(land);
-            run.mSpacing = cell * (F32)stride;
+            run.mSpacing *= (F32)stride;
         }
 
         // The lip refinement is left to the main thread: it reads the shadow
@@ -776,6 +996,15 @@ void SSRunoff::finishTrace(const std::shared_ptr<Trace>& job)
                 run.mLip[i] = refined - origin;
             }
         }
+
+        // Refinement moves each lip on its own, against whatever the map holds
+        // under it, so a run that arrived straight does not stay that way: a
+        // lip that finds the edge a centimetre early and its neighbour that
+        // finds it a centimetre late put a kink between them. The fit is the
+        // same one the trace made and it keeps the part of the refinement that
+        // was agreed on - where the run sits and which way it points - while
+        // dropping the part each lip made up by itself.
+        straightenRun(run);
     }
 
     // Put the water that was standing on the roofs back, shared out by

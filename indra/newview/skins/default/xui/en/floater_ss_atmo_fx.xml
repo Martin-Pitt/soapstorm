@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="440"
+ height="560"
  layout="topleft"
  name="floater_ss_atmo_fx"
  save_rect="true"
@@ -294,6 +294,84 @@
       name="D_SSAtmoGlowScale" label="D"
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoGlowScale" />
+    </button>
+
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoDropBulge"
+      tool_tip="How far the highlight wraps around the sides of a drop. 0 shades it as a flat card facing you">
+        Drop roundness:
+    </text>
+    <slider_bar
+      control_name="SSAtmoDropBulge" name="SB_SSAtmoDropBulge"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
+      tool_tip="How far the highlight wraps around the sides of a drop. 0 shades it as a flat card facing you" />
+    <spinner
+      control_name="SSAtmoDropBulge" name="S_SSAtmoDropBulge"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
+      tool_tip="How far the highlight wraps around the sides of a drop. 0 shades it as a flat card facing you" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoDropBulge" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoDropBulge" />
+    </button>
+
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoDropCore"
+      tool_tip="How tightly the light a drop throws back is pulled onto its spine. Higher gives a thin bright streak inside a dark body instead of an evenly lit blob">
+        Streak contrast:
+    </text>
+    <slider_bar
+      control_name="SSAtmoDropCore" name="SB_SSAtmoDropCore"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="8" increment="0.1" decimal_digits="1"
+      tool_tip="How tightly the light a drop throws back is pulled onto its spine. Higher gives a thin bright streak inside a dark body instead of an evenly lit blob" />
+    <spinner
+      control_name="SSAtmoDropCore" name="S_SSAtmoDropCore"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="8" increment="0.1" decimal_digits="1"
+      tool_tip="How tightly the light a drop throws back is pulled onto its spine. Higher gives a thin bright streak inside a dark body instead of an evenly lit blob" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoDropCore" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoDropCore" />
+    </button>
+
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoDropSparkle"
+      tool_tip="Strength of the narrow glint that lands on a few drops at a time and twinkles off them as they fall. 0 leaves only the broad wet sheen">
+        Sparkle:
+    </text>
+    <slider_bar
+      control_name="SSAtmoDropSparkle" name="SB_SSAtmoDropSparkle"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="32" increment="0.5" decimal_digits="1"
+      tool_tip="Strength of the narrow glint that lands on a few drops at a time and twinkles off them as they fall. 0 leaves only the broad wet sheen" />
+    <spinner
+      control_name="SSAtmoDropSparkle" name="S_SSAtmoDropSparkle"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="32" increment="0.5" decimal_digits="1"
+      tool_tip="Strength of the narrow glint that lands on a few drops at a time and twinkles off them as they fall. 0 leaves only the broad wet sheen" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoDropSparkle" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoDropSparkle" />
     </button>
 
 </floater>

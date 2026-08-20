@@ -332,6 +332,14 @@ public:
     void bindDeferredShader(LLGLSLShader& shader, LLRenderTarget* light_target = nullptr, LLRenderTarget* depth_target = nullptr);
     void setupSpotLight(LLGLSLShader& shader, LLDrawable* drawablep);
 
+    // <SS:Nexii> Atmo Magic: the nearest projector lights that are worth
+    // lighting precipitation with, nearest first. mNearbyLights and the set
+    // type it is held in are protected, and the point of this is to hand out
+    // the few lights a caller wants rather than the whole list, so the
+    // filtering that the deferred pass does per light lives here too.
+    void getNearbyProjectors(std::vector<LLDrawable*>& out, U32 max_count) const;
+    // </SS:Nexii>
+
     void unbindDeferredShader(LLGLSLShader& shader);
 
     // set env_mat parameter in given shader

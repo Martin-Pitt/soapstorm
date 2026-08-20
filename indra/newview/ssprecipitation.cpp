@@ -1078,6 +1078,8 @@ void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_
         const F32 ring_end = preset.mRippleSize * water_spread * strength * ripple_scale;
         SSPrecipParticle ring;
         ring.mKind = KIND_FLAT;
+        ring.mMaterial = MAT_DECAL;  // lies on a surface, so it takes that
+                                     // surface's light as well as the sky's
         ring.mPos = pos_agent + n * 0.02f;
         ring.mNormal = n;
         ring.mSizeX = ring_end * 0.15f;    // start half-size
@@ -1098,6 +1100,8 @@ void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_
     crown.mPos = pos_agent + n * 0.03f;
     crown.mVel = n * preset.mCrownSpeed * strength * ripple_scale * sqrtf(ripple_speed);
     crown.mSizeX = crown.mSizeY = preset.mCrownSize * strength * ripple_scale;
+    crown.mFlags |= PART_CROWN;  // the renderer opens it from a point; the
+                                 // size here is the one it is measured against
     crown.mMaxAge = preset.mCrownLife / ripple_speed;
     crown.mAlpha = preset.mCrownAlpha * strength;
     crown.mPhase = rng.frand(0.f, F_TWO_PI);
