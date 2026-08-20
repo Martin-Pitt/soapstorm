@@ -242,6 +242,48 @@
              tool_tip="Fraction rendered as large soft clouds" />
         </panel>
 
+        <panel name="tab_runoff" label="Runoff" follows="all" layout="topleft"
+         left="0" top="0" width="436" height="494">
+            <text name="runoff_intro" follows="left|top" layout="topleft" left="10" top="12"
+             height="42" width="410" word_wrap="true">Rain that lands on a roof runs down it and comes off the eaves. Only presets that land at all shed runoff, so these do nothing for snow or embers.</text>
+
+            <text name="stream_label" follows="left|top" layout="topleft" left="10" top_pad="10"
+             height="14" width="410" font="SansSerifSmallBold">Streams</text>
+            <text name="stream_intro" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="28" width="410" word_wrap="true">Past a certain flow an eave stops shedding separate drips and runs as a continuous fall. One stream spans its stretch of the gutter.</text>
+            <slider name="stream_alpha" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="15" width="410" label="Stream opacity:" label_width="130"
+             min_val="0" max_val="3" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="How opaque a stream is. A stream already fades up as its gutter runs harder; this scales that. Zero turns streams off and leaves the eave dripping instead." />
+            <slider name="stream_span" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Stream width:" label_width="130"
+             min_val="0" max_val="24" increment="0.5" decimal_digits="1" show_text="true"
+             tool_tip="Metres of eave one stream spans; a longer run is cut into several side by side. Zero uses the width of the sheet tier's quad, which is the size that texture was drawn for." />
+            <slider name="stream_length" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Stream length:" label_width="130"
+             min_val="0.5" max_val="20" increment="0.5" decimal_digits="1" show_text="true"
+             tool_tip="Metres of fall a stream is drawn over. The ground cuts it shorter, so a low eave still meets the street; off a tower it fades out in mid air, which is what a long drop does as it breaks into spray. A stream the wind bends into a wall ends before it gets there." />
+            <slider name="stream_stretch" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Stream stretch:" label_width="130"
+             min_val="0" max_val="1" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="One pins the water to the texture, so it speeds up as it falls and the column draws out toward the bottom the way real falling water does. Zero pins the texture to the fall instead: it holds one size all the way down but runs at a steady speed." />
+            <slider name="stream_wind" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Stream wind:" label_width="130"
+             min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="How strongly the local wind bends a stream. It is applied down the length of the fall rather than at the lip, so the water curves away instead of leaving the roof sideways." />
+            <slider name="stream_scale" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Stream drop size:" label_width="130"
+             min_val="0.1" max_val="4" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="Size of the drops that make up a stream. One is life size. The far tiers bake their drops larger than life so a distant curtain of rain is not sub-texel, and a stream undoes that by tiling finer." />
+
+            <text name="drip_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="410" font="SansSerifSmallBold">Drips</text>
+            <slider name="drip_scale" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Drip size:" label_width="130"
+             min_val="0.1" max_val="4" increment="0.05" decimal_digits="2" show_text="true"
+             tool_tip="Size of the separate drips off an eave. They are already fattened by how much water each one stands in for; this scales that." />
+        </panel>
+
         <panel name="tab_assets" label="Assets" follows="all" layout="topleft"
          left="0" top="0" width="436" height="494">
             <text name="tex_label" follows="left|top" layout="topleft" left="10" top="12"

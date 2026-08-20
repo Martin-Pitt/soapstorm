@@ -73,6 +73,15 @@ struct SSAtmoTrackConfig
     LLQuaternion mWindRot;
     F32 mWindSpeed = 4.f;       // m/s
 
+    // How the wind arrives rather than how hard it blows. The flowmap solves a
+    // steady wind and layers these on top of it as waves carried along with the
+    // air, so a surge crosses the region downwind at wind speed instead of the
+    // whole build gusting in unison. Depth is scaled by mTurbulence, so a calm
+    // track stays a steady draught however these are set.
+    F32 mGustDepth  = 1.f;      // 0 steady, 1 near-lull to about double
+    F32 mGustLength = 140.f;    // metres between fronts, along the wind
+    F32 mGustVeer   = 14.f;     // degrees the wind swings as a front passes
+
     // Sky tracks need a floor to fall onto. By default that is the track's
     // own base altitude (its "ground zero"), but a config can pin it to a
     // platform's actual height when the band's base sits well below the build.

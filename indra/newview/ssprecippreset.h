@@ -52,7 +52,8 @@ enum SSPrecipKind : U8
     KIND_STREAK = 0,    // stretched along velocity, billboarded around that axis
     KIND_ROUND,         // camera-facing
     KIND_SHEET,         // like STREAK but around the mean fall direction
-    KIND_FLAT           // surface-aligned, grows and fades (ripples)
+    KIND_FLAT,          // surface-aligned, grows and fades (ripples)
+    KIND_STREAM         // ribbon off an eave: many quads, UVs scrolling down it
 };
 
 // Which shading path the renderer uses
@@ -108,6 +109,12 @@ struct SSPrecipSounds
     std::string mRoofMedium;
     std::string mRoofBig;
 };
+
+// Longest fall a stream may be drawn over, in metres, and the top of the
+// slider that sets it. Past this the water off an eave is spray rather than a
+// column, so there is nothing to draw down there anyway - and the ground cuts
+// the fall shorter than this on all but the tallest builds.
+static const F32 SS_STREAM_LENGTH_MAX = 20.f;
 
 struct SSPrecipPreset
 {
@@ -165,6 +172,22 @@ struct SSPrecipPreset
     // Riser flavour mix (mana embers and anything like them)
     F32 mDarkMix = 0.f;
     F32 mPuffMix = 0.f;
+
+    // Roof runoff: the drips off an eave and the running streams a gutter puts
+    // up when it is shedding faster than drips can carry. Only presets that
+    // make impacts shed at all - snow settles on a roof and embers rise off
+    // it - so these are dead weight on the rest, and cost nothing there.
+    //
+    // A stream is water seen from a few metres away, unlike every other use of
+    // this art, which is why it wants its own dials rather than inheriting the
+    // sheet tier's: that tier is drawn for a shower across a field.
+    F32 mStreamSpan = 0.f;      // metres of lip one sheet spans; 0 takes the sheet tier's own quad width
+    F32 mStreamAlpha = 1.f;     // multiplier on how solid a running stream looks
+    F32 mStreamLength = 6.f;    // metres of fall drawn, cut short by the ground or by anything in the way
+    F32 mStreamStretch = 1.f;   // 1 the texture travels with the water and elongates, 0 it is pinned to the fall
+    F32 mStreamWind = 0.35f;    // how strongly the local wind bends the fall
+    F32 mStreamScale = 1.f;     // size of the drops within a stream; below one shrinks them
+    F32 mDripScale = 1.f;       // size of the individual drips off an eave
 
     // Assets
     std::string mTextures;      // CSV texture UUIDs, or pbr:UUID

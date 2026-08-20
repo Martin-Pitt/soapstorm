@@ -37,6 +37,8 @@
 #include "llviewertexture.h"
 #include "llworld.h"
 
+#include <algorithm>
+
 // <SS:Nexii> Atmo Magic precipitation simulation
 
 static const U64 MAX_CATCHUP_TICKS = 4;
@@ -239,8 +241,10 @@ void SSPrecipSim::resetTextureTable()
 {
     mParticles.clear();
     mRipples.clear();
+    mStreams.clear();
     mTextures.clear();
     mRippleCursor = 0;
+    mDripCount = 0;
     for (S32 i = 0; i < TIER_COUNT; ++i)
     {
         mTierCount[i] = 0;
@@ -253,8 +257,10 @@ void SSPrecipSim::clear()
 {
     mParticles.clear();
     mRipples.clear();
+    mStreams.clear();
     mTextures.clear();
     mRippleCursor = 0;
+    mDripCount = 0;
     for (S32 i = 0; i < TIER_COUNT; ++i)
     {
         mTierCount[i] = 0;
@@ -267,6 +273,42 @@ void SSPrecipSim::shift(const LLVector3& offset)
 {
     for (SSPrecipParticle& p : mParticles) p.mPos += offset;
     for (SSPrecipParticle& p : mRipples) p.mPos += offset;
+    for (SSPrecipParticle& p : mStreams) p.mPos += offset;
+}
+
+// Streams are anchored, so nothing integrates: they age, they scroll their
+// texture, and they go when their eave stops asking for them.
+void SSPrecipSim::updateStreams(F32 dt)
+{
+    for (size_t i = 0; i < mStreams.size(); )
+    {
+        SSPrecipParticle& s = mStreams[i];
+        s.mAge += dt;
+
+        if (s.mAge >= s.mMaxAge)
+        {
+            // Erased in place rather than swapped with the back: the list is
+            // held in key order so a stream can be found by binary search, and
+            // there are only ever a handful of these a frame
+            mStreams.erase(mStreams.begin() + (S32)i);
+            continue;
+        }
+
+        // Scroll the texture down the stream at the speed the water is
+        // running. The rate comes from the repeat count the stream carries,
+        // because that is what decides how far one unit of phase moves a
+        // feature; working it out separately here had the water crawling on a
+        // short fall and racing on a long one.
+        s.mPhase += dt * ssStreamScroll(llmax(0.05f, s.mFloorZ), s.mPlaneD);
+
+        // The phase only ever enters the texture coordinate as an offset, and
+        // the art tiles, so a whole repeat can come off it without the stream
+        // moving. A gutter that runs for an hour would otherwise be scrolling
+        // a number too big to hold the fraction that matters.
+        if (s.mPhase > 1.f) s.mPhase -= 1.f;
+
+        ++i;
+    }
 }
 
 void SSPrecipSim::update(F32 dt)
@@ -274,6 +316,8 @@ void SSPrecipSim::update(F32 dt)
     LL_RECORD_BLOCK_TIME(FTM_SS_SIM);
 
     dt = llclamp(dt, 0.f, MAX_FRAME_DT);
+
+    updateStreams(dt);
 
     {
     LL_RECORD_BLOCK_TIME(FTM_SS_SIM_INTEGRATE);
@@ -453,6 +497,7 @@ void SSPrecipSim::update(F32 dt)
         p.mAge += dt;
         if (p.mAge >= p.mMaxAge)
         {
+            if (p.mFlags & PART_DRIP) --mDripCount;
             if (mRippleCursor == mRipples.size() - 1) mRippleCursor = i;
             p = mRipples.back();
             mRipples.pop_back();
@@ -470,6 +515,7 @@ void SSPrecipSim::update(F32 dt)
         // gravity pulled them back. Retire them at the impact plane instead.
         if (p.mPlaneD > -FLT_MAX && (p.mPos * p.mNormal) < p.mPlaneD)
         {
+            if (p.mFlags & PART_DRIP) --mDripCount;
             p = mRipples.back();
             mRipples.pop_back();
             continue;
@@ -979,9 +1025,12 @@ void SSPrecipSim::pushRipple(const SSPrecipParticle& part)
     }
     else
     {
+        // The slot being recycled may be holding a drip, which is counted
+        if (mRipples[mRippleCursor].mFlags & PART_DRIP) --mDripCount;
         mRipples[mRippleCursor] = part;
         mRippleCursor = (mRippleCursor + 1) % RIPPLE_CAP;
     }
+    if (part.mFlags & PART_DRIP) ++mDripCount;
 }
 
 void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_water,
@@ -993,9 +1042,13 @@ void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_
         n.set(0.f, 0.f, 1.f);
     }
 
-    // Spreading rings belong to flat-ish surfaces; fade the ring out as the
-    // surface tips toward vertical, and drop it entirely on walls
-    const F32 horiz = llclamp((n.mV[VZ] - 0.35f) / 0.4f, 0.f, 1.f);
+    // Spreading rings only read as rings on ground the water could actually
+    // pool on: full strength up to a 20 degree tilt, faded out by 30, and
+    // gone on anything steeper. Crowns below are left ungated - a splash
+    // throws itself off a slope or a wall just as happily.
+    static const F32 RING_TILT_FULL = 0.9397f;   // cos(20 degrees)
+    static const F32 RING_TILT_NONE = 0.8660f;   // cos(30 degrees)
+    const F32 horiz = llclamp((n.mV[VZ] - RING_TILT_NONE) / (RING_TILT_FULL - RING_TILT_NONE), 0.f, 1.f);
     const F32 ring_gate = horiz * horiz * (3.f - 2.f * horiz);
 
     LLViewerTexture* ripple_tex = SSAtmoMagic::getInstance()->rippleTexture();
@@ -1050,6 +1103,405 @@ void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_
     crown.mPhase = rng.frand(0.f, F_TWO_PI);
     crown.mTex = textureIndex(SSPrecipVariants::getInstance()->utility(SSPrecipVariants::UTIL_DOT));
     pushRipple(crown);
+}
+
+// static
+F32 SSPrecipSim::dropRateAt(const LLVector3& pos_agent)
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    if (!atmo->hasWeather()) return 0.f;
+
+    const SSPrecipPreset& preset = atmo->preset();
+    if (!preset.mTiers[TIER_DROPS].mEnabled) return 0.f;
+
+    static LLCachedControl<F32> density(gSavedSettings, "SSAtmoDensity", 1.f);
+
+    // Same expression spawnTierCell builds its per-cell mean from, minus the
+    // cell area and the tick rate: what is left is a plain rate per square
+    // metre per second, which is the only part a catchment cares about.
+    const LLVector3d global = gAgent.getPosGlobalFromAgent(pos_agent);
+    const F32 area_factor = atmo->areaFactorAt(global.mdV[VX], global.mdV[VY]);
+    const F32 p = powf(atmo->precipitation(), 1.4f);
+
+    return preset.mRate * TIER_SPEC[TIER_DROPS].mRateScale * p * area_factor
+         * atmo->gustEnvelopeAt(atmo->sharedTime())
+         * llclamp((F32)density, 0.1f, 3.f);
+}
+
+// Seconds a stream keeps running after its eave stops asking for it. Long
+// enough that a gust lull does not blink it out, short enough that walking
+// out of a shower does not leave water hanging off the roof.
+static const F32 STREAM_LINGER = 1.2f;
+
+// Streams alive at once, across every eave in sight. Hundreds is the right
+// number in a dense build - every gutter on every roof around you is running
+// in a downpour, and that is what it should look like - so this only has to
+// stop a whole region of bridge decks from running away with the frame. Eight
+// quads each, and the list is kept in key order so finding one is a binary
+// search rather than a walk. Runs are offered in descending catchment, so a
+// cap that simply refuses new ones spends the budget on the biggest gutters.
+static const size_t MAX_LIVE_STREAMS = 512;
+
+// Which tier's art suits a stream this size. "Sheets or clusters" is the right
+// instinct and neither answer holds on its own: rain's sheets are curtains
+// 18 m by 36 m, drawn for a shower seen across a field, and its clusters are
+// 0.76 by 3.8 - so a two metre fall off a cottage eave wants clusters and the
+// twenty metre one off a bridge deck wants sheets. Rather than pick a tier and
+// live with it, take whichever quad is closest in size to the water actually
+// being drawn, measured as a ratio so being half the size counts the same as
+// being twice it.
+static SSPrecipTier streamTier(const SSPrecipPreset& preset, F32 span, F32 fall)
+{
+    SSPrecipTier best = TIER_DROPS;
+    F32 best_miss = FLT_MAX;
+
+    for (S32 t = 0; t < TIER_COUNT; ++t)
+    {
+        const SSPrecipTierParams& tier = preset.mTiers[t];
+        if (!tier.mEnabled) continue;
+
+        const F32 quad_x = tier.mSizeX * 2.f;
+        const F32 quad_y = tier.mSizeY * 2.f;
+        if (quad_x < 0.001f || quad_y < 0.001f) continue;
+
+        const F32 miss = fabsf(logf(llmax(span, 0.01f) / quad_x))
+                       + fabsf(logf(llmax(fall, 0.01f) / quad_y));
+        if (miss < best_miss)
+        {
+            best_miss = miss;
+            best = (SSPrecipTier)t;
+        }
+    }
+
+    return best;
+}
+
+// Gravity a stream falls under, and the speed it parts from the lip at. Water
+// does not leave an edge at rest, and the renderer walks the same path from
+// the same two numbers, so they live here rather than at each use.
+static const F32 SS_STREAM_G  = 9.81f;
+static const F32 SS_STREAM_V0 = 1.f;
+
+// Seconds to fall a given height from the lip, ballistically. The inverse of
+// the drawn length, which is what lets a length in metres be turned back into
+// the time the path is walked over.
+static F32 ssStreamFallTime(F32 height)
+{
+    return (sqrtf(SS_STREAM_V0 * SS_STREAM_V0 + 2.f * SS_STREAM_G * llmax(0.f, height))
+            - SS_STREAM_V0) / SS_STREAM_G;
+}
+
+// How long a wind-bent stream may fall before it runs into something.
+//
+// A stream leaves the lip going outward and is then bent back by the wind, and
+// on a building with any overhang at all that curve takes it back over the
+// wall and draws a curtain of water down the inside of the front room. Rather
+// than flatten the path - which is the one thing water in a gale does not do -
+// the fall is ended before it arrives, and the tail fade the renderer already
+// applies over the last third turns it into spray against the wall.
+//
+// The test is the same one the drips land by: the surface over a column is
+// whatever the shadow map's depth capture saw first from above, so a sample
+// that sits below it is inside the building rather than in the air beside it.
+static F32 ssStreamClearTime(const LLVector3& start, const LLVector3& vel,
+                             const LLVector3& drift, F32 fall_time)
+{
+    // Roof texels are decimetres across and the lip sits a few centimetres
+    // clear of one, so the surface at the start column is the roof itself and
+    // reads as marginally above the water leaving it. Anything the stream
+    // genuinely runs into is a wall or a lower roof, metres out of that noise.
+    const F32 MARGIN = 0.5f;
+    const S32 SAMPLES = 8;
+
+    SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
+
+    for (S32 k = 1; k <= SAMPLES; ++k)
+    {
+        const F32 t = fall_time * (F32)k / (F32)SAMPLES;
+        const LLVector3 pos = start + vel * t + drift * (0.5f * t * t)
+                            - LLVector3(0.f, 0.f, 0.5f * SS_STREAM_G * t * t);
+
+        LLVector3 hit;
+        bool on_water = false;
+        if (!shadow->resolveColumn(pos, hit, on_water)) continue;   // no map here to be blocked by
+
+        if (hit.mV[VZ] > pos.mV[VZ] + MARGIN)
+        {
+            // Ends at the last sample still in open air. Half a step of slack
+            // either way is nothing against a fade that runs over a third of
+            // the fall.
+            return fall_time * (F32)(k - 1) / (F32)SAMPLES;
+        }
+    }
+
+    return fall_time;
+}
+
+void SSPrecipSim::refreshStream(U32 key, const LLVector3& lip_agent, const LLVector3& out_dir,
+                                const LLVector3& land_agent, F32 strength, F32 width,
+                                F32 run_slope, SSRandStream& rng)
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const SSPrecipPreset& preset = atmo->preset();
+
+    const LLVector3 start = lip_agent + out_dir * 0.06f - LLVector3(0.f, 0.f, 0.04f);
+    const F32 drop = start.mV[VZ] - land_agent.mV[VZ];
+    if (drop < 0.5f) return;    // too short to read as a fall
+
+    // How far the water is drawn falling, in metres, and never further than
+    // the ground it is falling towards: a long fall breaks into spray well
+    // before it arrives, so the preset says where to stop and the tail fade
+    // carries it out, but a cottage eave two metres up still meets the street.
+    const F32 length = llmin(drop, llclamp(preset.mStreamLength, 0.5f, SS_STREAM_LENGTH_MAX));
+
+    // Ballistic, same as a drip: it leaves with a little downward speed and
+    // the flow still carrying it out over the edge. The drawn drop follows
+    // from the time rather than the other way about, because the fall is not
+    // linear in either and the renderer walks it in time.
+    const F32 g = SS_STREAM_G;
+    const F32 v0 = SS_STREAM_V0;
+    F32 fall_time = ssStreamFallTime(length);
+
+    // Bent by the wind over its length, as an acceleration so the ribbon
+    // curves into it rather than leaving the lip already sideways
+    const LLVector3 drift = atmo->windXY() * llmax(0.f, preset.mStreamWind);
+    const LLVector3 exit_vel = out_dir * llclamp(0.3f + strength * 0.5f, 0.25f, 1.2f)
+                             - LLVector3(0.f, 0.f, v0);
+
+    // Only worth asking where the water goes when it goes somewhere other than
+    // straight down. Within half a metre of the lip's own column the fall is
+    // the one the eave's landing point was already resolved down, and there is
+    // nothing new to find for the cost of the lookups.
+    const LLVector3 sideways = LLVector3(exit_vel.mV[VX], exit_vel.mV[VY], 0.f) * fall_time
+                             + drift * (0.5f * fall_time * fall_time);
+    if (sideways.magVecSquared() > 0.5f * 0.5f)
+    {
+        fall_time = ssStreamClearTime(start, exit_vel, drift, fall_time);
+    }
+
+    const F32 drawn = v0 * fall_time + 0.5f * g * fall_time * fall_time;
+    if (drawn < 0.5f) return;   // whatever is in the way starts at the lip
+
+    // Kept in key order, so this is a binary search rather than a walk over
+    // every running gutter in sight for every one of them
+    auto slot = std::lower_bound(mStreams.begin(), mStreams.end(), key,
+                                 [](const SSPrecipParticle& s, U32 k) { return s.mSeed < k; });
+    SSPrecipParticle* existing = (slot != mStreams.end() && slot->mSeed == key)
+                               ? &(*slot) : nullptr;
+
+    if (!existing)
+    {
+        if (mStreams.size() >= MAX_LIVE_STREAMS) return;
+
+        SSPrecipParticle s;
+        s.mSeed = key;
+        s.mKind = KIND_STREAM;
+        s.mFlags = PART_STREAM;
+
+        // Sheets fade in and out over the best part of a second, which is what
+        // a body of water this size wants; a drop's quarter second reads as a
+        // flicker on something several metres long.
+        s.mTier = TIER_SHEETS;
+        s.mAge = 0.f;
+
+        // Where in the texture's cycle this one starts. Streams down one
+        // gutter are the same length and so run at the same speed, and a row
+        // of them started at zero scrolls in lockstep like a row of copies of
+        // one animation - which is what they would be. The phase enters the
+        // texture coordinate as an offset and the art tiles, so a whole
+        // repeat's worth of offset covers every distinct starting point there
+        // is. Taken from the key rather than off the shared draw sequence: it
+        // is a property of this stream, and hanging it off the order the
+        // draws happen to come in ties it to code above it that has nothing
+        // to do with it.
+        s.mPhase = SSAtmoNoise::hash01(key ^ 0x7A3C15E9u);
+
+        // Same asset path the drops take, so the water off an eave is visibly
+        // the same water that was falling on the roof. A configured drop
+        // texture goes through the same bake rather than being used whole:
+        // laid on directly it was one drop the size of the whole fall.
+        LLColor4 tint;
+        F32 pbr_glow = 0.f;
+        LLViewerTexture* custom = atmo->pickParticleTexture(rng, tint, pbr_glow);
+        SSPrecipVariants* variants = SSPrecipVariants::getInstance();
+
+        // Which bake of the art this one wears, from the key for the same
+        // reason as the phase. Every stream in sight drawing the one variant
+        // is the difference between a wet roof and a row of stencils, and the
+        // whole set is already baked for the tier the drops are using.
+        const U32 variant = SSAtmoNoise::hashU32(key ^ 0x1F83D9ABu)
+                          % SSPrecipVariants::VARIANT_COUNT;
+
+        const SSPrecipTier art = streamTier(preset, width, drawn);
+        LLViewerTexture* texturep = variants->get(preset, art, variant, custom);
+        if (!texturep) texturep = variants->get(preset, TIER_DROPS, variant, custom);
+        if (!texturep) texturep = custom;
+        s.mArt = (U8)art;
+        tint.mV[0] *= preset.mTint.mV[0];
+        tint.mV[1] *= preset.mTint.mV[1];
+        tint.mV[2] *= preset.mTint.mV[2];
+        s.mTex = textureIndex(texturep);
+        s.mTint.setVec((U8)llclamp((S32)(tint.mV[0] * 255.f), 0, 255),
+                       (U8)llclamp((S32)(tint.mV[1] * 255.f), 0, 255),
+                       (U8)llclamp((S32)(tint.mV[2] * 255.f), 0, 255),
+                       255);
+        s.mGlow = llmax(presetGlow(preset), pbr_glow);
+        s.mMaterial = preset.material();
+
+        existing = &(*mStreams.insert(slot, s));
+    }
+
+    SSPrecipParticle& s = *existing;
+    const SSPrecipTier art = (SSPrecipTier)llclamp((S32)s.mArt, 0, (S32)TIER_COUNT - 1);
+
+    // Which way the lip runs, so the curtain hangs along it. Level is the
+    // common case and steeper than a roof pitch is a run the trace has no
+    // business calling one edge, so it is held to something a roof could be.
+    s.mRunSlope = llclamp(run_slope, -4.f, 4.f);
+
+    s.mPos = start;
+    s.mVel = exit_vel;
+    s.mPlaneD = fall_time;
+    s.mNormal = drift;
+
+    // The stream spans its slot of the lip. Widths vary a fraction per stream,
+    // keyed off the seed so one keeps its own gauge frame to frame: slots cut
+    // to exactly the same width butt together into one flat wall of water, and
+    // a hand's breadth of daylight between them is what makes them read as
+    // separate falls off one gutter. A fraction is all it can be - a slot is a
+    // whole quad wide, and a tenth off that is a metre of dry eave.
+    const F32 gauge = 0.97f + 0.03f * SSAtmoNoise::hash01(s.mSeed ^ 0x2C1B3A5Du);
+    const F32 span = llmax(0.1f, width * gauge);
+    s.mSizeX = span * 0.5f;
+
+    // Repeats across the stream and down the fall, so the art tiles at the size
+    // it was drawn for. Its tier's own quad is that size - the variants are
+    // baked with the drops in them scaled against it - so one repeat covers
+    // one quad's worth of world either way, and the drops in a stream come out
+    // the size of the drops falling past it. Sizes are half extents, hence the
+    // doubling.
+    //
+    // Fractions below one are the point, not an accident to be clamped away.
+    // A stream is usually smaller than the quad its art was drawn for, so it
+    // shows part of that art at true scale; forcing at least a whole repeat
+    // squeezed the entire texture into the stream instead and shrank every
+    // drop in it by whatever the ratio happened to be - on rain, whose sheets
+    // are curtains 18 m by 36 m, by about ten.
+    F32 tex_x = preset.mTiers[art].mSizeX * 2.f;
+    F32 tex_y = preset.mTiers[art].mSizeY * 2.f;
+    if (tex_x < 0.05f) tex_x = SS_STREAM_TEX_METRES;
+    if (tex_y < 0.05f) tex_y = SS_STREAM_TEX_METRES;
+
+    // The drops in that bake are not at life size: the far tiers floor their
+    // splats so a curtain seen across a field is not sub-texel, and on rain that
+    // makes them four and a half times too wide. A stream is the one thing
+    // drawn from arm's length, so it tiles that much finer and puts them back
+    // where they belong. mStreamScale is the preset's own say over it on top.
+    F32 fat_x = 1.f, fat_y = 1.f;
+    SSPrecipVariants::getInstance()->splatInflation(preset, art, fat_x, fat_y);
+
+    const F32 art_scale = llclamp(preset.mStreamScale, 0.1f, 4.f);
+    tex_x = tex_x * art_scale / fat_x;
+    tex_y = tex_y * art_scale / fat_y;
+
+    s.mSizeY = llclamp(span / tex_x, 0.02f, 16.f);
+
+    // Vertical repeats ride on the particle rather than being worked out on
+    // each side, because the scroll rate is derived from them and the two have
+    // to agree. mFloorZ is dead weight on a stream - nothing here drifts down
+    // onto a surface - so it carries them.
+    s.mFloorZ = llclamp(drawn / tex_y, 0.02f, 16.f);
+
+    // Thinner than a strand of water would be, because there is a lot more of
+    // it: this covers metres of lip, and the density that read as a thread at
+    // that size is a wall of paint at this one. The preset scales it, since
+    // how solid a fall of water looks is a property of the weather
+    // rather than of the roof.
+    s.mAlpha = llclamp((0.2f + strength * 0.4f) * llmax(0.f, preset.mStreamAlpha), 0.f, 1.f);
+
+    // Kept alive by being asked for. Stop asking and it fades.
+    s.mMaxAge = s.mAge + STREAM_LINGER;
+}
+
+void SSPrecipSim::spawnDrip(const LLVector3& lip_agent, const LLVector3& out_dir,
+                            const LLVector3& land_agent, F32 volume, SSRandStream& rng)
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const SSPrecipPreset& preset = atmo->preset();
+
+    // Where it actually comes down. The network's own answer is a cell centre
+    // resolved at capture time; re-resolving the column gives the exact point
+    // and the surface normal the splash needs, and it is only a handful of
+    // lookups a second at drip rates.
+    LLVector3 land = land_agent;
+    LLVector3 normal(0.f, 0.f, 1.f);
+    bool on_water = false;
+    SSRainShadowMap::getInstance()->resolveColumn(land_agent + LLVector3(0.f, 0.f, 0.5f),
+                                                  land, on_water, &normal);
+
+    // Released just clear of the lip so it does not start inside the roof
+    const LLVector3 start = lip_agent + out_dir * 0.06f - LLVector3(0.f, 0.f, 0.04f);
+
+    const F32 drop = start.mV[VZ] - land.mV[VZ];
+    if (drop < 0.35f) return;   // nothing worth watching fall
+
+    // Ballistic from the lip: the flow only pushes it sideways, gravity does
+    // the rest. It leaves with a little downward speed already - water does
+    // not part from an edge at rest, and a streak is oriented by its velocity,
+    // so starting purely sideways would draw the first frames lying flat.
+    const F32 g = 9.81f;
+    const F32 v0 = rng.frand(0.8f, 1.6f);
+    const F32 fall_time = (sqrtf(v0 * v0 + 2.f * g * drop) - v0) / g;
+
+    SSPrecipParticle p;
+    p.mKind = KIND_STREAK;
+    p.mFlags = PART_DRIP;
+    p.mMaterial = preset.material();
+    p.mPos = start;
+    p.mVel = out_dir * rng.frand(0.25f, 0.7f) - LLVector3(0.f, 0.f, v0);
+
+    // A drip is several drops' worth of collected water arriving as one, so
+    // it is fatter than a raindrop - by volume, not by count, or a big roof
+    // would shed boulders
+    const F32 fat = llclamp(powf(llmax(1.f, volume), 1.f / 3.f), 1.f, 2.6f) * rng.frand(0.85f, 1.15f)
+                  * llclamp(preset.mDripScale, 0.1f, 4.f);
+    const SSPrecipTierParams& tier = preset.mTiers[TIER_DROPS];
+    p.mSizeX = tier.mSizeX * fat;
+    p.mSizeY = tier.mSizeY * fat;
+    p.mAlpha = llmin(1.f, tier.mAlpha * 1.3f);
+    p.mMaxAge = fall_time;
+    p.mPhase = rng.frand(0.f, F_TWO_PI);
+    p.mSeed = rng.next();
+
+    // Same asset path the individual drops take, so a drip off the eave is
+    // visibly the same water that was falling on the roof
+    LLColor4 tint;
+    F32 pbr_glow = 0.f;
+    LLViewerTexture* custom = atmo->pickParticleTexture(rng, tint, pbr_glow);
+    LLViewerTexture* texturep = custom ? custom
+        : SSPrecipVariants::getInstance()->get(preset, TIER_DROPS,
+                                               (U32)rng.rand((S32)SSPrecipVariants::VARIANT_COUNT));
+    tint.mV[0] *= preset.mTint.mV[0];
+    tint.mV[1] *= preset.mTint.mV[1];
+    tint.mV[2] *= preset.mTint.mV[2];
+    p.mTex = textureIndex(texturep);
+    p.mTint.setVec((U8)llclamp((S32)(tint.mV[0] * 255.f), 0, 255),
+                   (U8)llclamp((S32)(tint.mV[1] * 255.f), 0, 255),
+                   (U8)llclamp((S32)(tint.mV[2] * 255.f), 0, 255),
+                   255);
+    p.mGlow = llmax(presetGlow(preset), pbr_glow);
+
+    pushRipple(p);
+
+    // The street answers: same ripple, splash and ambient contribution any
+    // other landing gets, so a busy eave sounds like one
+    if (preset.makesImpacts())
+    {
+        atmo->queueImpact(atmo->sharedTime() + fall_time, land,
+                          preset.mImpactStrength * llclamp(volume * 0.25f, 0.6f, 1.4f),
+                          on_water, normal, LLVector3(0.f, 0.f, -g * fall_time), preset.mShatter,
+                          true);
+    }
 }
 
 void SSPrecipSim::applyEmberFlavor(SSPrecipParticle& part, LLColor4& tint, SSRandStream& vis,

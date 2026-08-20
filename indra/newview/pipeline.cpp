@@ -106,6 +106,8 @@
 #include "sspreciprenderer.h" // <SS:Nexii> Atmo Magic weather
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
+#include "ssrunoff.h" // <SS:Nexii> Atmo Magic roof runoff
+#include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
 #include "llmutelist.h"
 #include "lltoolpie.h"
@@ -5658,6 +5660,20 @@ void LLPipeline::renderDebug()
     if (mRenderDebugMask & RENDER_DEBUG_RAIN_SHADOW)
     {
         SSRainShadowMap::getInstance()->renderDebug();
+    }
+
+    // Atmo Magic roof runoff: the drainage network traced over that same
+    // surface, with the eaves it sheds from marked by catchment
+    if (mRenderDebugMask & RENDER_DEBUG_ROOF_RUNOFF)
+    {
+        SSRunoff::getInstance()->renderDebug();
+    }
+
+    // Atmo Magic geometry settling: a beacon over every prim change still
+    // waiting to be believed, so a queue that never drains can be walked to
+    if (mRenderDebugMask & RENDER_DEBUG_GEOM_SETTLE)
+    {
+        SSAtmoMagic::getInstance()->renderDebug();
     }
     // </SS:Nexii>
 

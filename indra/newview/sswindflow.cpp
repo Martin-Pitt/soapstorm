@@ -41,6 +41,7 @@
 #include "llviewershadermgr.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "workqueue.h"
 
 #include <algorithm>
 #include <functional>
@@ -211,6 +212,15 @@ static U32 tuningSignature()
 // Resources
 //-----------------------------------------------------------------------------
 
+// glGetError reports one error from a queue the whole frame shares, so an
+// error left behind by unrelated code reads back here as ours. Emptying the
+// queue first is what makes the checks below mean anything: during login in
+// particular there is plenty of other GL traffic to inherit a stale error from.
+static void drainGLErrors()
+{
+    for (S32 guard = 0; guard < 32 && glGetError() != GL_NO_ERROR; ++guard) {}
+}
+
 static U32 createVolume(S32 res, S32 slices, GLenum format)
 {
     U32 tex = 0;
@@ -233,20 +243,34 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
 
     releaseResources();
 
+    drainGLErrors();
+
+    // Named per allocation rather than once at the end: a failure here is
+    // nearly always one specific texture being too large for the driver, and
+    // the whole point of the warning is to say which one.
+    const char* step = nullptr;
+    auto failed = [&step](const char* what)
+    {
+        if (!step && glGetError() != GL_NO_ERROR) step = what;
+    };
+
     glGenTextures(1, &mHeightTex);
     glBindTexture(GL_TEXTURE_2D, mHeightTex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_R32F, res, res);
     glBindTexture(GL_TEXTURE_2D, 0);
+    failed("the heightfield");
 
     glGenTextures(1, &mProbeTex);
     glBindTexture(GL_TEXTURE_2D_ARRAY, mProbeTex);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    const S32 probe_res = llmax(mProbeRes, res);
     glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_R32F,
-                   llmax(mProbeRes, res), llmax(mProbeRes, res), SS_WIND_PROBES);
+                   probe_res, probe_res, SS_WIND_PROBES);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+    failed("the probe array");
 
     // Each level is a quarter of the one above it, so the whole pyramid costs
     // about a third again on top of the full-resolution grid.
@@ -259,17 +283,23 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
         mDivTex[L]         = createVolume(r, slices, GL_R32F);
         mPressureTex[L][0] = createVolume(r, slices, GL_R32F);
         mPressureTex[L][1] = createVolume(r, slices, GL_R32F);
+        failed("the pressure pyramid");
+    }
+
+    if (step)
+    {
+        LL_WARNS("AtmoMagic") << "Wind flowmap could not allocate " << step
+                              << " at " << res << "x" << res << "x" << slices
+                              << " (probes " << probe_res << ")" << LL_ENDL;
+        releaseResources();
+        return false;
     }
 
     mTexRes = res;
     mTexSlices = slices;
-
-    if (glGetError() != GL_NO_ERROR)
-    {
-        LL_WARNS("AtmoMagic") << "Wind flowmap could not allocate its volumes" << LL_ENDL;
-        releaseResources();
-        return false;
-    }
+    // Without this the size check at the top can never be satisfied and every
+    // solve throws the whole set away and builds it again.
+    mProbeTexRes = probe_res;
     return true;
 }
 
@@ -299,6 +329,18 @@ void SSWindFlowMap::releaseResources()
 
 void SSWindFlowMap::clear()
 {
+    // Whatever is in flight is now for a world that has gone
+    abandonBuild();
+
+    if (mWorkerBusy)
+    {
+        // The worker holds a reference into mTiles and reads the scratch.
+        // Erasing either out from under it is the one thing that is not safe,
+        // so this finishes in the completion handler instead.
+        mClearPending = true;
+        return;
+    }
+
     mTiles.clear();
     mTop.clear();
     mHidden.clear();
@@ -317,6 +359,9 @@ void SSWindFlowMap::rebuildAll()
         entry.second.mBuildTime = 0.0;
     }
     mLastBuild = 0.0;
+
+    // Anything part-built was built against the settings that just changed
+    abandonBuild();
 }
 
 bool SSWindFlowMap::ensureShaders()
@@ -379,28 +424,33 @@ bool SSWindFlowMap::isValid() const
     return cameraTile() != nullptr;
 }
 
+// static
+bool SSWindFlowMap::drivesWind()
+{
+    return SSAtmoMagic::instanceExists()
+        && SSAtmoMagic::getInstance()->isEnabled()
+        && SSWindFlowMap::instanceExists()
+        && SSWindFlowMap::getInstance()->isValid();
+}
+
 //-----------------------------------------------------------------------------
 // Staleness
 //-----------------------------------------------------------------------------
 
 // static
-void SSWindFlowMap::onObjectUpdate(LLViewerObject* objectp)
+//
+// Called from SSAtmoMagic::settleEdits, not from the object update itself: an
+// edit has to have held still for a few seconds before it is allowed to cost a
+// solve. See the note on SSAtmoMagic::onObjectUpdate.
+void SSWindFlowMap::markDirty(const LLVector3& pos, F32 radius)
 {
-    if (!SSAtmoMagic::getInstance()->isEnabled()) return;
-    if (!objectp || objectp->isDead() || objectp->isAvatar() || objectp->isAttachment()) return;
-
     SSWindFlowMap* self = getInstance();
     if (self->mTiles.empty()) return;
-
-    const LLVector3 scale = objectp->getScale();
-    if (llmax(scale.mV[VX], scale.mV[VY], scale.mV[VZ]) < 1.f) return;
+    if (radius < 0.5f) return;
 
     // Bounding-box overlap against each domain rather than a point-in-region
     // test, so a sim surround megaprim whose centre is in the next region over
     // still dirties the tile it actually covers
-    const LLVector3 pos = objectp->getRenderPosition();
-    const F32 radius = scale.magVec() * 0.5f;
-
     for (auto& entry : self->mTiles)
     {
         Tile& tile = entry.second;
@@ -650,7 +700,9 @@ bool SSWindFlowMap::captureHeights(Tile& tile)
         if (h > NO_SURFACE * 0.5f) h = llmin(h, tile.mBandTop);
     }
 
-    return captureProbes(tile);
+    // The probes follow, one per frame, driven by the build state machine
+    beginProbes(tile);
+    return true;
 }
 
 void SSWindFlowMap::auditProbes(const Tile& tile) const
@@ -725,13 +777,11 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
     }
 }
 
-bool SSWindFlowMap::captureProbes(Tile& tile)
+// Set up for the probe passes. The captures themselves are one per frame from
+// here on, so what they all share is settled once, up front.
+void SSWindFlowMap::beginProbes(Tile& tile)
 {
-    static LLCachedControl<F32> elevation(gSavedSettings, "SSAtmoWindFlowProbeAngle", 30.f);
     static LLCachedControl<U32> probe_mult(gSavedSettings, "SSAtmoWindFlowProbeRes", 2);
-
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp) return false;
 
     // The box is wider than the region and the ground inside it is
     // foreshortened, so matching the mask's resolution would leave a probe
@@ -745,6 +795,26 @@ bool SSWindFlowMap::captureProbes(Tile& tile)
         mProbeMiss[i] = 1.f;
     }
 
+    // What the capture debug view will draw until the next build replaces it,
+    // and what the reconstruction resolves its hits against. Settled here
+    // rather than after the last probe, because the reconstruction runs on a
+    // worker and must not be reaching into LLWorld for the region.
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    mCaptureRegion = tile.mRegionHandle;
+    mCaptureRes = tile.mRes;
+    mCaptureCell = tile.mExtent / (F32)tile.mRes;
+    mCaptureOrigin = (regionp ? regionp->getOriginAgent() : LLVector3::zero) + tile.mOriginRegion;
+}
+
+// One oblique probe: a full scene render and a depth readback, which is why
+// only one of them happens per frame.
+bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
+{
+    static LLCachedControl<F32> elevation(gSavedSettings, "SSAtmoWindFlowProbeAngle", 30.f);
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    if (!regionp) return false;
+
     const F32 half_extent = tile.mExtent * 0.5f;
     const LLVector3 region_origin = regionp->getOriginAgent();
 
@@ -756,7 +826,6 @@ bool SSWindFlowMap::captureProbes(Tile& tile)
     const F32 ce = cosf(elev);
     const F32 se = sinf(elev);
 
-    for (S32 i = 0; i < SS_WIND_PROBES; ++i)
     {
         const F32 z_lo = band_lo;
         const F32 z_hi = band_hi;
@@ -820,19 +889,40 @@ bool SSWindFlowMap::captureProbes(Tile& tile)
             LL_WARNS("AtmoMagic") << "Wind flow probe " << i << " saw nothing ("
                                   << llformat("%.1f%%", miss_frac * 100.f)
                                   << " miss); dropping it" << LL_ENDL;
-            continue;
+            return true;
         }
 
         mProbeUsable[i] = true;
+    }
 
-        // Reconstruct where each ray landed. A hit well below the overhead
-        // surface for that column is by definition something the overhead pass
-        // could not see: either the underside of an overhang or the ground
-        // beneath it. Both are altitudes the slicer needs.
-        const F32 cell = tile.mExtent / (F32)tile.mRes;
-        const LLVector3 grid_origin = region_origin + tile.mOriginRegion;
+    return true;
+}
+
+// CPU, worker: reconstruct where every probe ray landed. A hit well below the
+// overhead surface for that column is by definition something the overhead
+// pass could not see - either the underside of an overhang or the ground
+// beneath it - and both are altitudes the slicer needs.
+//
+// Four probes at up to 1536 texels each is nine million rays to walk, which is
+// the largest single CPU cost in a build and the reason this is off the main
+// thread rather than inline in the capture.
+void SSWindFlowMap::reconstructHidden(Tile& tile)
+{
+    mHidden.clear();
+
+    const F32 cell = tile.mExtent / (F32)tile.mRes;
+    const LLVector3 grid_origin = mCaptureOrigin;
+
+    for (S32 i = 0; i < SS_WIND_PROBES; ++i)
+    {
+        if (!mProbeUsable[i]) continue;
+        if ((S32)mProbeDepth[i].size() < mProbeRes * mProbeRes) continue;
+
+        const LLVector3& eye = mProbeFrame[i].mEye;
+        const LLVector3& dir = mProbeFrame[i].mDir;
         const LLVector3& fr = mProbeFrame[i].mRight;
         const LLVector3& fu = mProbeFrame[i].mUp;
+        const F32 half = mProbeHalf[i];
 
         for (S32 y = 0; y < mProbeRes; ++y)
         {
@@ -860,17 +950,6 @@ bool SSWindFlowMap::captureProbes(Tile& tile)
 
     const F32 samples = (F32)mProbeRes * (F32)mProbeRes * (F32)SS_WIND_PROBES;
     tile.mCarved = (samples > 0.f) ? (F32)mHidden.size() / samples : 0.f;
-
-    // What the capture debug view will draw until the next build replaces it
-    mCaptureRegion = tile.mRegionHandle;
-    mCaptureRes = tile.mRes;
-    mCaptureCell = tile.mExtent / (F32)tile.mRes;
-    mCaptureOrigin = region_origin + tile.mOriginRegion;
-
-    auditProbes(tile);
-    buildCarveFlags(tile);
-
-    return true;
 }
 
 //-----------------------------------------------------------------------------
@@ -1195,21 +1274,46 @@ void SSWindFlowMap::placeSlices(Tile& tile)
 // against the case that kills every looser rule - the ring of overhang carved
 // around a building, which has open air outside it and solid building inside,
 // and so never presents evidence on both sides of anything.
+// GL half, main thread: pull the mask the init pass produced. Split out from
+// the bridge itself so the pass over the volume can run on a worker.
+void SSWindFlowMap::readMaskForBridge(const Tile& tile)
+{
+    mMaskRaw.clear();
+    mMaskBridged.clear();
+    mMaskChanged = false;
+
+    static LLCachedControl<U32> gap(gSavedSettings, "SSAtmoWindFlowPassageGap", 4);
+    if (llclamp((S32)gap, 0, 16) == 0) return;
+
+    const size_t allocated = (size_t)mTexRes * mTexRes * mTexSlices;
+    mMaskRaw.assign(allocated, 0);
+    glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
+    glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_UNSIGNED_BYTE, mMaskRaw.data());
+    glBindTexture(GL_TEXTURE_3D, 0);
+}
+
+// GL half, main thread: put back whatever the bridge opened
+void SSWindFlowMap::uploadBridgedMask(const Tile& tile)
+{
+    if (!mMaskChanged || mMaskBridged.empty()) return;
+
+    glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
+    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, tile.mRes, tile.mRes, tile.mSlices,
+                    GL_RED, GL_UNSIGNED_BYTE, mMaskBridged.data());
+    glBindTexture(GL_TEXTURE_3D, 0);
+}
+
 void SSWindFlowMap::bridgePassages(const Tile& tile)
 {
     static LLCachedControl<U32> gap(gSavedSettings, "SSAtmoWindFlowPassageGap", 4);
     const S32 reach = llclamp((S32)gap, 0, 16);
-    if (reach == 0) return;
+    if (reach == 0 || mMaskRaw.empty()) return;
 
     const S32 res = tile.mRes;
     const S32 slices = tile.mSlices;
     const size_t active = (size_t)res * res * slices;
-    const size_t allocated = (size_t)mTexRes * mTexRes * mTexSlices;
 
-    std::vector<U8> solid(allocated, 0);
-    glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
-    glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_UNSIGNED_BYTE, solid.data());
-    glBindTexture(GL_TEXTURE_3D, 0);
+    const std::vector<U8>& solid = mMaskRaw;
 
     // A cell counts as carved only where the heightmap called it solid and the
     // carve opened it. Air above the rooftops is open too and is no evidence of
@@ -1237,7 +1341,8 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
         return carved[index(tile, x, y, k)] != 0;
     };
 
-    std::vector<U8> bridged(solid.begin(), solid.begin() + active);
+    mMaskBridged.assign(solid.begin(), solid.begin() + active);
+    std::vector<U8>& bridged = mMaskBridged;
     size_t opened = 0;
 
     static const S32 AXES[3][3] = { { 1, 0, 0 }, { 0, 1, 0 }, { 0, 0, 1 } };
@@ -1274,12 +1379,14 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
         }
     }
 
-    if (opened == 0) return;
+    if (opened == 0)
+    {
+        mMaskBridged.clear();
+        return;
+    }
 
-    glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
-    glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, res, res, slices,
-                    GL_RED, GL_UNSIGNED_BYTE, bridged.data());
-    glBindTexture(GL_TEXTURE_3D, 0);
+    // The upload is GL, so it waits for solveRun back on the main thread
+    mMaskChanged = true;
 
     LL_INFOS("AtmoMagic") << "Wind flow bridged " << opened
                           << llformat(" cells (%.2f%% of the volume)",
@@ -1352,23 +1459,12 @@ static void setAmbient(LLGLSLShader& shader, const LLVector3* ambient, S32 slice
     glUniform3fv(uniformLoc(shader, "uAmbient"), slices, amb);
 }
 
-bool SSWindFlowMap::solve(const Tile& tile)
+bool SSWindFlowMap::solveInit(const Tile& tile)
 {
-    LL_PROFILE_GPU_ZONE("atmo wind flow solve");
-
-    // Passes per level. Jacobi settles a feature of wavelength L cells in
-    // something like L^2 passes, so this alone decides how large a structure
-    // the pressure field can see: at a metre per cell a hundred or so passes
-    // resolves the few metres around a corner and nothing wider. The pyramid
-    // is what covers the rest - each level below sees the same lane at half
-    // the wavelength, for a quarter of the cost - so this is a detail budget
-    // now rather than a reach budget.
-    static LLCachedControl<U32> iterations(gSavedSettings, "SSAtmoWindFlowIterations", 128);
-    const S32 iters = llclamp((S32)iterations, 4, 512);
+    LL_PROFILE_GPU_ZONE("atmo wind flow init");
 
     const S32 res = tile.mRes;
     const S32 slices = tile.mSlices;
-    const S32 levels = llmin(mTexLevels, levelCount(res));
 
     // Upload the captured height field and the oblique probe depths
     glBindTexture(GL_TEXTURE_2D, mHeightTex);
@@ -1449,10 +1545,42 @@ bool SSWindFlowMap::solve(const Tile& tile)
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
     // --- infer the parts of a passage no probe could reach ---
-    // This edits the mask behind the init pass, so the velocity it seeded from
-    // the old mask is stale wherever a cell was opened. Re-seed rather than
-    // leave dead air sitting in the middle of a passage that now exists.
-    bridgePassages(tile);
+    // Read the mask out here and stop. Joining the passages up is a pass over
+    // the whole volume against three axes, which is the single largest CPU
+    // cost in a build, so it runs on a worker and solveRun picks up from what
+    // it produced. It edits the mask behind the init pass, so the velocity
+    // seeded from the old mask is stale wherever a cell was opened - which is
+    // why solveRun re-seeds rather than leaving dead air in a passage that now
+    // exists.
+    readMaskForBridge(tile);
+    return true;
+}
+
+bool SSWindFlowMap::solveRun(const Tile& tile)
+{
+    LL_PROFILE_GPU_ZONE("atmo wind flow solve");
+
+    // This pass reports its result through glGetError at the end, so it has to
+    // start from an empty queue or it inherits somebody else's failure.
+    drainGLErrors();
+
+    // Passes per level. Jacobi settles a feature of wavelength L cells in
+    // something like L^2 passes, so this alone decides how large a structure
+    // the pressure field can see: at a metre per cell a hundred or so passes
+    // resolves the few metres around a corner and nothing wider. The pyramid
+    // is what covers the rest - each level below sees the same lane at half
+    // the wavelength, for a quarter of the cost - so this is a detail budget
+    // now rather than a reach budget.
+    static LLCachedControl<U32> iterations(gSavedSettings, "SSAtmoWindFlowIterations", 128);
+    const S32 iters = llclamp((S32)iterations, 4, 512);
+
+    const S32 res = tile.mRes;
+    const S32 slices = tile.mSlices;
+    const S32 levels = llmin(mTexLevels, levelCount(res));
+
+    auto groupsFor = [](S32 r) { return (GLuint)((r + 7) / 8); };
+
+    uploadBridgedMask(tile);
 
     gSSWindSeedProgram.bind();
     setGrid(gSSWindSeedProgram, res, slices);
@@ -1571,68 +1699,201 @@ bool SSWindFlowMap::solve(const Tile& tile)
     return glGetError() == GL_NO_ERROR;
 }
 
+// GL half, main thread. The audio mix and precipitation advection both sample
+// on the CPU, so the solved volume has to come back once per build.
+//
+// glGetTexImage returns the entire level, not the part we dispatched over. The
+// volumes are allocated at the maximum slab count and only the first mSlices
+// are solved, so the staging buffers have to cover all of them.
 void SSWindFlowMap::readback(Tile& tile)
 {
-    // The audio mix and precipitation advection both sample on the CPU, so the
-    // solved volume comes back once per build. A region is solved once and then
-    // left alone, so a synchronous read is cheaper than the machinery to avoid
-    // it.
-    // glGetTexImage returns the entire level, not the part we dispatched over.
-    // The volumes are allocated at the maximum slab count and only the first
-    // mSlices are solved, so the staging buffer has to cover all of them.
-    const size_t active = (size_t)tile.mRes * tile.mRes * tile.mSlices;
     const size_t allocated = (size_t)mTexRes * mTexRes * mTexSlices;
-    std::vector<F32> raw(allocated * 4);
 
+    mVolumeRaw.resize(allocated * 4);
     glBindTexture(GL_TEXTURE_3D, mVelTex[0]);
-    glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, raw.data());
+    glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, mVolumeRaw.data());
     glBindTexture(GL_TEXTURE_3D, 0);
-
-    tile.mFlow.resize(active);
-    for (size_t i = 0; i < active; ++i)
-    {
-        tile.mFlow[i].set(raw[i * 4], raw[i * 4 + 1], raw[i * 4 + 2], raw[i * 4 + 3]);
-    }
 
     // And the mask, so "is this point inside a building" is answerable. A lee
     // and a wall both have almost no velocity in them, and telling them apart
     // from the velocity alone is not possible.
-    std::vector<U8> solid(allocated, 0);
+    mSolidRaw.assign(allocated, 0);
     glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
-    glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_UNSIGNED_BYTE, solid.data());
+    glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_UNSIGNED_BYTE, mSolidRaw.data());
     glBindTexture(GL_TEXTURE_3D, 0);
+}
 
-    tile.mSolid.assign(solid.begin(), solid.begin() + active);
+// CPU half, worker: unpack the staged volume into the tile. A quarter of a
+// million LLVector4 stores at a typical resolution, and nothing about it needs
+// the GL context.
+void SSWindFlowMap::unpackVolume(Tile& tile)
+{
+    const size_t active = (size_t)tile.mRes * tile.mRes * tile.mSlices;
+    if (mVolumeRaw.size() < active * 4 || mSolidRaw.size() < active) return;
+
+    tile.mFlow.resize(active);
+    for (size_t i = 0; i < active; ++i)
+    {
+        tile.mFlow[i].set(mVolumeRaw[i * 4], mVolumeRaw[i * 4 + 1],
+                          mVolumeRaw[i * 4 + 2], mVolumeRaw[i * 4 + 3]);
+    }
+
+    tile.mSolid.assign(mSolidRaw.begin(), mSolidRaw.begin() + active);
 }
 
 //-----------------------------------------------------------------------------
 // Build
 //-----------------------------------------------------------------------------
 
-bool SSWindFlowMap::buildTile(Tile& tile)
+//-----------------------------------------------------------------------------
+// Staged build
+//-----------------------------------------------------------------------------
+//
+// A build used to run start to finish inside one update(). That is five full
+// scene renders, three GPU readbacks and several passes over a res*res*slices
+// grid, all charged to the same frame - tens of milliseconds, every time a
+// region resolves. Regions resolve whenever anything near the camera rezzes,
+// so in a busy place it was a hitch every few seconds.
+//
+// The same work now runs one stage per update(), and the stages that touch no
+// GL run on the general work queue. Only ever one build is in flight, so the
+// scratch buffers stay single owner and need no locking: while a worker stage
+// holds them the main thread does not touch them, and abandoning a build waits
+// for the worker to report back before anything is freed.
+
+SSWindFlowMap::Tile* SSWindFlowMap::buildTile()
+{
+    if (mBuildRegion == 0) return nullptr;
+    auto it = mTiles.find(mBuildRegion);
+    return (it == mTiles.end()) ? nullptr : &it->second;
+}
+
+void SSWindFlowMap::releaseScratch()
+{
+    // The staging tile is scratch too: it carries a full mFlow and mSolid, and
+    // an abandoned build has no reason to keep either
+    mBuild = Tile();
+
+    mMaskRaw.clear();
+    mMaskRaw.shrink_to_fit();
+    mMaskBridged.clear();
+    mMaskBridged.shrink_to_fit();
+    mVolumeRaw.clear();
+    mVolumeRaw.shrink_to_fit();
+    mSolidRaw.clear();
+    mSolidRaw.shrink_to_fit();
+    mMaskChanged = false;
+}
+
+void SSWindFlowMap::abandonBuild()
+{
+    // The generation is what a worker completion checks itself against, so
+    // bumping it here is what makes a stale one land harmlessly
+    ++mBuildGeneration;
+    mStage = EStage::IDLE;
+    mBuildRegion = 0;
+    mBuildProbe = 0;
+
+    // A worker still holding the scratch frees it when it reports back
+    if (!mWorkerBusy) releaseScratch();
+}
+
+void SSWindFlowMap::postWorker(std::function<void()> work, EStage next)
+{
+    LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
+    LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
+
+    if (!general || !main)
+    {
+        // No pool to hand it to: run it here rather than stalling the build
+        work();
+        mStage = next;
+        return;
+    }
+
+    mWorkerBusy = true;
+    const U32 generation = mBuildGeneration;
+
+    main->postTo(
+        general,
+        [work]()            // worker
+        {
+            work();
+            return true;
+        },
+        [this, generation, next](bool)   // back on the main thread
+        {
+            mWorkerBusy = false;
+
+            // A clear() that arrived mid-stage had to leave the map alone;
+            // now that the worker has let go, it can finish
+            if (mClearPending)
+            {
+                mClearPending = false;
+                clear();
+                return;
+            }
+
+            // rebuildAll(), or a region going away, while this was out
+            if (generation != mBuildGeneration)
+            {
+                releaseScratch();
+                return;
+            }
+            mStage = next;
+        });
+}
+
+bool SSWindFlowMap::beginBuild(Tile& tile)
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp) return false;
 
-    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
-    LLTimer timer;
-
     S32 res; F32 extent, margin;
     desiredGeometry(regionp, res, extent, margin);
 
-    tile.mRes = res;
-    tile.mExtent = extent;
-    tile.mMargin = margin;
-    tile.mOriginRegion.set(-margin, -margin, 0.f);
+    // Fresh staging tile. The live one is left exactly as it is - still valid,
+    // still self-consistent, still being sampled - until COMMIT swaps the
+    // finished result in.
+    mBuild = Tile();
+    mBuild.mRegionHandle = tile.mRegionHandle;
+    mBuild.mRes = res;
+    mBuild.mExtent = extent;
+    mBuild.mMargin = margin;
+    mBuild.mOriginRegion.set(-margin, -margin, 0.f);
 
-    chooseBand(tile, regionp);
+    chooseBand(mBuild, regionp);
 
-    if (!captureHeights(tile))
-    {
-        tile.mValid = false;
-        return false;
-    }
+    // Anything that dirties the region from here on is a change this build has
+    // not seen, so clear it now and let it re-arm. Clearing it at COMMIT
+    // instead would swallow every edit made while the solve was running.
+    tile.mDirty = false;
 
+    mBuildRegion = tile.mRegionHandle;
+    mBuildProbe = 0;
+    mBuildStart = LLTimer::getElapsedSeconds();
+    mStage = EStage::CAPTURE_TOP;
+    return true;
+}
+
+bool SSWindFlowMap::stageCaptureTop(Tile& tile)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    return captureHeights(tile);
+}
+
+bool SSWindFlowMap::stageCaptureProbe(Tile& tile, S32 which)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    return captureProbe(tile, which);
+}
+
+// Worker. Everything between the last capture and the first dispatch that does
+// not need the context: nine million probe rays turned back into altitudes,
+// the slab placement that reads them, and the solid fill measurement.
+void SSWindFlowMap::stageReduce(Tile& tile)
+{
+    reconstructHidden(tile);
     placeSlices(tile);
 
     // Hold on to what the capture saw, and to how much of the volume it filled.
@@ -1662,31 +1923,69 @@ bool SSWindFlowMap::buildTile(Tile& tile)
         const F64 total = (F64)cells * (F64)llmax(tile.mSlices, 1);
         if (total > 0.0) tile.mSolidFill = (F32)(sum / total);
     }
+}
 
-    if (!ensureResources(tile.mRes, SS_WIND_MAX_SLICES))
-    {
-        tile.mValid = false;
-        return false;
-    }
+bool SSWindFlowMap::stageSolveInit(Tile& tile)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
 
-    if (!solve(tile))
-    {
-        LL_WARNS("AtmoMagic") << "Wind flowmap solve failed; disabling" << LL_ENDL;
-        mShaderFailed = true;
-        tile.mValid = false;
-        return false;
-    }
+    if (!ensureResources(tile.mRes, SS_WIND_MAX_SLICES)) return false;
+    return solveInit(tile);
+}
 
+// Worker: joining passages up is a pass over the whole volume against three
+// axes, the largest CPU cost left in a build
+void SSWindFlowMap::stageBridge(Tile& tile)
+{
+    bridgePassages(tile);
+}
+
+bool SSWindFlowMap::stageSolveRun(Tile& tile)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    return solveRun(tile);
+}
+
+bool SSWindFlowMap::stageReadback(Tile& tile)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
     readback(tile);
+    return true;
+}
 
-    tile.mBuiltWind = SSAtmoMagic::getInstance()->wind();
-    tile.mTuning = tuningSignature();
-    tile.mBuildTime = SSAtmoMagic::getInstance()->sharedTime();
-    tile.mDirty = false;
-    tile.mValid = true;
+// Worker: unpack the staged volume, and repeat the carve for the debug view if
+// that view is the one selected
+void SSWindFlowMap::stageConvert(Tile& tile)
+{
+    unpackVolume(tile);
+    buildCarveFlags(tile);
+}
+
+void SSWindFlowMap::stageCommit(Tile& live)
+{
+    mBuild.mBuiltWind = SSAtmoMagic::getInstance()->wind();
+    mBuild.mTuning = tuningSignature();
+    mBuild.mBuildTime = SSAtmoMagic::getInstance()->sharedTime();
+    mBuild.mValid = true;
+
+    // Anything that dirtied the region while the solve was running describes a
+    // build this result never saw, so it carries over and asks for another.
+    mBuild.mDirty = live.mDirty;
+    mBuild.mLastTouched = live.mLastTouched;
+
+    // The one point at which the live tile changes shape. Everything about it
+    // - resolution, slab count, slab altitudes, the field itself - moves in a
+    // single assignment, so a sampler either gets the whole of the old solve or
+    // the whole of the new one and never a mix of the two.
+    live = std::move(mBuild);
+    mBuild = Tile();
+
+    Tile& tile = live;
 
     ++mBuildCount;
-    mSolveMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
+    mSolveMS = (F32)((LLTimer::getElapsedSeconds() - mBuildStart) * 1000.0);
+
+    auditProbes(tile);
 
     LL_INFOS("AtmoMagic") << "Wind flow solved region " << tile.mRegionHandle
                           << ": " << tile.mRes << " cells, " << tile.mSlices << " slabs, "
@@ -1696,13 +1995,118 @@ bool SSWindFlowMap::buildTile(Tile& tile)
                           << llformat("%.0f/%.0f/%.0f/%.0f%%",
                                       mProbeMiss[0] * 100.f, mProbeMiss[1] * 100.f,
                                       mProbeMiss[2] * 100.f, mProbeMiss[3] * 100.f)
-                          << ", " << llformat("%.0fms", mSolveMS) << LL_ENDL;
-
-    return true;
+                          << ", " << llformat("%.0fms wall", mSolveMS) << LL_ENDL;
 }
 
+// One stage per call. Returns true while a build is in flight, so update()
+// knows not to look for another tile to start.
+bool SSWindFlowMap::advanceBuild()
+{
+    if (mStage == EStage::IDLE) return false;
+
+    // A worker stage is out; nothing to do here until it reports back
+    if (mWorkerBusy) return true;
+
+    // The live tile is only needed to commit into; every stage before that
+    // works on the staging tile
+    Tile* livep = buildTile();
+    if (!livep)
+    {
+        // The region went away underneath the build
+        abandonBuild();
+        return false;
+    }
+
+    Tile& tile = mBuild;
+
+    auto fail = [&](const char* why)
+    {
+        // The live tile keeps whatever it had. A failed build produces no
+        // result rather than invalidating a solve that was working.
+        LL_WARNS("AtmoMagic") << "Wind flow build abandoned at " << why << LL_ENDL;
+        abandonBuild();
+        return false;
+    };
+
+    switch (mStage)
+    {
+        case EStage::CAPTURE_TOP:
+            if (!stageCaptureTop(tile)) return fail("the overhead capture");
+            mBuildProbe = 0;
+            mStage = EStage::CAPTURE_PROBE;
+            return true;
+
+        case EStage::CAPTURE_PROBE:
+            if (!stageCaptureProbe(tile, mBuildProbe)) return fail("an oblique probe");
+            if (++mBuildProbe < SS_WIND_PROBES) return true;
+            postWorker([this, &tile]() { stageReduce(tile); }, EStage::SOLVE_INIT);
+            mStage = EStage::REDUCE;
+            return true;
+
+        case EStage::REDUCE:
+            // Held by the worker; the completion moves us on
+            return true;
+
+        case EStage::SOLVE_INIT:
+            if (!stageSolveInit(tile))
+            {
+                // A failed solve is a broken shader, not a broken region, so
+                // stop trying rather than spinning on it
+                mShaderFailed = true;
+                return fail("the mask init pass");
+            }
+            postWorker([this, &tile]() { stageBridge(tile); }, EStage::SOLVE_RUN);
+            mStage = EStage::BRIDGE;
+            return true;
+
+        case EStage::BRIDGE:
+            return true;
+
+        case EStage::SOLVE_RUN:
+            if (!stageSolveRun(tile))
+            {
+                mShaderFailed = true;
+                return fail("the pressure solve");
+            }
+            mStage = EStage::READBACK;
+            return true;
+
+        case EStage::READBACK:
+            if (!stageReadback(tile)) return fail("the volume readback");
+            postWorker([this, &tile]() { stageConvert(tile); }, EStage::COMMIT);
+            mStage = EStage::CONVERT;
+            return true;
+
+        case EStage::CONVERT:
+            return true;
+
+        case EStage::COMMIT:
+            // Everything downstream indexes mFlow by mRes and mSlices, so the
+            // three have to agree before this is allowed to become the tile
+            // people sample. A short readback publishes as "valid but empty",
+            // which reads as dead calm rather than as the failure it is.
+            if (mBuild.mFlow.size() != (size_t)mBuild.mRes * mBuild.mRes * mBuild.mSlices)
+            {
+                return fail("the volume unpack: the field came back the wrong size");
+            }
+            stageCommit(*livep);
+            mStage = EStage::IDLE;
+            mBuildRegion = 0;
+            releaseScratch();
+            return false;
+
+        default:
+            abandonBuild();
+            return false;
+    }
+}
 void SSWindFlowMap::evict()
 {
+    // A worker stage holds a reference into the map. Inserting into a std::map
+    // leaves existing references alone, but erasing from it does not, so no
+    // tile goes anywhere until the build in flight has let go.
+    if (mWorkerBusy) return;
+
     // Drop tiles for regions that left the world, then the least recently
     // touched ones beyond the cache cap
     for (auto it = mTiles.begin(); it != mTiles.end();)
@@ -1738,6 +2142,10 @@ void SSWindFlowMap::update()
     }
 
     if (!ensureShaders()) return;
+
+    // A build in flight gets one stage per frame and nothing else happens.
+    // Evicting mid-build would pull the tile out from under it.
+    if (advanceBuild()) return;
 
     const F64 now = SSAtmoMagic::getInstance()->sharedTime();
     if (now - mLastBuild < BUILD_MIN_INTERVAL) return;
@@ -1792,7 +2200,8 @@ void SSWindFlowMap::update()
     if (best)
     {
         mLastBuild = now;
-        buildTile(*best);
+        // Only sets the build going; the stages run one per frame from here
+        beginBuild(*best);
     }
 
     evict();
@@ -1892,15 +2301,139 @@ F32 SSWindFlowMap::solidFill() const
     return tile ? tile->mSolidFill : 0.f;
 }
 
+//-----------------------------------------------------------------------------
+// Travelling gusts
+//-----------------------------------------------------------------------------
+
+// The solve is deliberately static: it says how a build bends a steady wind,
+// and it is far too expensive to re-run at anything like a frame rate. On its
+// own though it blows at one unvarying strength forever, everywhere at once,
+// and that is the one thing a storm never does.
+//
+// So the rhythm is layered on at sample time, as frozen turbulence: a noise
+// field fixed in the moving air rather than in the world. Standing still, the
+// pattern is carried past at the wind's own speed and the wind rises and falls
+// as it goes by; watched from above, a surge enters the region on the windward
+// side and walks across it, reaching the far edge as much later as the air
+// takes to get there. Nothing about it is a clock - it is one field, and where
+// you are in it is where the air has carried it to.
+//
+// The field is anisotropic, long across the wind and short along it, because a
+// gust front arrives as a line rather than a blob, and it veers as well as
+// surges: a gust that only changed speed reads as the whole world pulsing.
+void SSWindFlowMap::gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32& veer) const
+{
+    // Depth, spacing and veer are the track's own weather, alongside its
+    // turbulence and wind speed; only how fast a front travels relative to the
+    // air is a viewer-side tuning knob.
+    static LLCachedControl<F32> travel_setting(gSavedSettings, "SSAtmoWindGustTravel", 1.f);
+
+    scale = 1.f;
+    veer = 0.f;
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+
+    // Already scaled by the track's turbulence: at zero the track is asking for
+    // a steady draught and there is nothing to modulate
+    const F32 depth = atmo->gustDepth();
+    if (depth <= 0.001f) return;
+
+    const LLVector3 wind = atmo->windXY();
+    const F32 speed = wind.magVec();
+    if (speed < 0.05f) return;
+
+    const LLVector3 dir = wind / speed;
+
+    // Grid coordinates, so a front crosses a region border without a seam.
+    // Wrapped far outside anything visible across, on a region multiple so the
+    // wrap lands on a border rather than through the middle of a build.
+    const LLVector3d global = gAgent.getPosGlobalFromAgent(pos_agent);
+    const F32 gx = (F32)fmod(global.mdV[VX], 8192.0);
+    const F32 gy = (F32)fmod(global.mdV[VY], 8192.0);
+
+    // Distance along and across the wind, the along axis carried backwards by
+    // however far the air has travelled. That subtraction is the whole trick:
+    // it is what sweeps the pattern downwind at exactly wind speed.
+    const F64 drift = atmo->windDrift() * (F64)llclamp((F32)travel_setting, 0.f, 4.f);
+    const F64 along = (F64)(gx * dir.mV[VX] + gy * dir.mV[VY]) - drift;
+    const F32 across = -gx * dir.mV[VY] + gy * dir.mV[VX];
+
+    const F32 wavelength = atmo->gustLength();
+    const U32 seed = atmo->seed();
+
+    // Frozen turbulence is only ever an approximation: a real eddy changes as
+    // it travels, so a pattern that never did would repeat itself out of a
+    // steady wind. A slow crosswind slide on the shared clock decorrelates it
+    // over a couple of minutes without disturbing the downwind travel.
+    const F32 evolve = (F32)fmod(time, 4096.0) * 0.006f;
+
+    // The surge itself, and a shorter channel riding on it so a wave has some
+    // texture rather than passing as one clean swell
+    const F32 su = (F32)(along / (F64)wavelength);
+    const F32 sv = across / (wavelength * 2.4f) + evolve;
+    const F32 wave = SSAtmoNoise::fbm2(su, sv, seed ^ 0x57055EE1u, 2);
+
+    const F32 ru = (F32)(along / (F64)(wavelength * 0.27f));
+    const F32 rv = across / (wavelength * 0.65f) + evolve * 3.f;
+    const F32 ripple = SSAtmoNoise::value2(ru, rv, seed ^ 0x9F17E2B3u);
+
+    // Leaned toward the peaks: a windy day spends longer in the lulls between
+    // gusts than it does inside them, and a symmetric field reads as breathing
+    F32 g = 0.8f * wave + 0.3f * ripple;
+    g = (g > 0.f) ? g * 1.35f : g * 0.8f;
+
+    scale = llclamp(1.f + depth * g, 0.1f, 3.f);
+
+    // Backing and veering a few degrees either side of the mean as the front
+    // goes through. Slower and broader than the speed channel, so the air
+    // swings once per gust instead of jittering.
+    const F32 swing = SSAtmoNoise::value2(su * 0.7f, sv * 0.7f, seed ^ 0x2C0FFE55u);
+    veer = swing * depth * atmo->gustVeer();
+}
+
+F32 SSWindFlowMap::gust(const LLVector3& pos_agent) const
+{
+    F32 scale, veer;
+    gustAt(pos_agent, SSAtmoMagic::getInstance()->sharedTime(), scale, veer);
+    return scale;
+}
+
+// Turn a horizontal wind by an angle, leaving any vertical component alone:
+// air going over a roof still goes over it, gust or no gust
+static LLVector3 veerWind(const LLVector3& v, F32 angle)
+{
+    if (fabsf(angle) < 0.001f) return v;
+    const F32 c = cosf(angle), s = sinf(angle);
+    return LLVector3(v.mV[VX] * c - v.mV[VY] * s,
+                     v.mV[VX] * s + v.mV[VY] * c,
+                     v.mV[VZ]);
+}
+
 LLVector3 SSWindFlowMap::sample(const LLVector3& pos_agent) const
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
+    // The gust rides on whatever the wind at this point turns out to be, so
+    // the ambient fallback surges along with the solved field rather than the
+    // two disagreeing either side of a tile border
+    F32 gust_scale, gust_veer;
+    gustAt(pos_agent, atmo->sharedTime(), gust_scale, gust_veer);
+    auto gusted = [&](const LLVector3& v, F32 shelter)
+    {
+        // A courtyard the wind barely reaches does not get the gust either: it
+        // feels the surges as a distant swell rather than as the front itself
+        const F32 felt = 1.f + (gust_scale - 1.f) * shelter;
+        return veerWind(v * felt, gust_veer * shelter);
+    };
+
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
-    if (!regionp) return atmo->wind();
+    if (!regionp) return gusted(atmo->wind(), 1.f);
 
     auto it = mTiles.find(regionp->getHandle());
-    if (it == mTiles.end() || !it->second.mValid || it->second.mFlow.empty()) return atmo->wind();
+    if (it == mTiles.end() || !it->second.mValid || it->second.mFlow.empty())
+    {
+        return gusted(atmo->wind(), 1.f);
+    }
 
     const Tile& tile = it->second;
     const LLVector3 origin = regionp->getOriginAgent() + tile.mOriginRegion;
@@ -1911,7 +2444,7 @@ LLVector3 SSWindFlowMap::sample(const LLVector3& pos_agent) const
 
     if (fx < 0.f || fy < 0.f || fx >= (F32)(tile.mRes - 1) || fy >= (F32)(tile.mRes - 1))
     {
-        return atmo->wind();    // outside the domain, undisturbed
+        return gusted(atmo->wind(), 1.f);   // outside the domain, undisturbed
     }
 
     const S32 x0 = (S32)fx, y0 = (S32)fy;
@@ -1921,6 +2454,8 @@ LLVector3 SSWindFlowMap::sample(const LLVector3& pos_agent) const
     sliceAt(tile, pos_agent.mV[VZ], k, tz);
     const S32 k1 = llmin(k + 1, tile.mSlices - 1);
 
+    // Velocity in xyz and exposure in w interpolated together: the gust wants
+    // the exposure at the same point, and it is already sitting in the cell
     auto bilinear = [&](S32 slab)
     {
         const LLVector4& a = tile.mFlow[index(tile, x0,     y0,     slab)];
@@ -1928,14 +2463,15 @@ LLVector3 SSWindFlowMap::sample(const LLVector3& pos_agent) const
         const LLVector4& c = tile.mFlow[index(tile, x0,     y0 + 1, slab)];
         const LLVector4& d = tile.mFlow[index(tile, x0 + 1, y0 + 1, slab)];
 
-        LLVector3 top = LLVector3(a.mV[0], a.mV[1], a.mV[2]) * (1.f - tx)
-                      + LLVector3(b.mV[0], b.mV[1], b.mV[2]) * tx;
-        LLVector3 bot = LLVector3(c.mV[0], c.mV[1], c.mV[2]) * (1.f - tx)
-                      + LLVector3(d.mV[0], d.mV[1], d.mV[2]) * tx;
+        const LLVector4 top = a * (1.f - tx) + b * tx;
+        const LLVector4 bot = c * (1.f - tx) + d * tx;
         return top * (1.f - ty) + bot * ty;
     };
 
-    return bilinear(k) * (1.f - tz) + bilinear(k1) * tz;
+    const LLVector4 cell_v = bilinear(k) * (1.f - tz) + bilinear(k1) * tz;
+
+    return gusted(LLVector3(cell_v.mV[0], cell_v.mV[1], cell_v.mV[2]),
+                  llclamp(cell_v.mV[3], 0.f, 1.f));
 }
 
 F32 SSWindFlowMap::exposure(const LLVector3& pos_agent) const

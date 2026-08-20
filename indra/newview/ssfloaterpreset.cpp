@@ -74,7 +74,10 @@ bool SSFloaterPreset::postBuild()
         "drop_scale", "emissive", "water_shading", "impact_strength", "shatter",
         "ripple_size", "ripple_alpha", "ripple_life",
         "crown_size", "crown_alpha", "crown_speed", "crown_life",
-        "dark_mix", "puff_mix", "textures", "ripple_texture",
+        "dark_mix", "puff_mix",
+        "stream_alpha", "stream_span", "stream_length", "stream_wind",
+        "stream_scale", "stream_stretch", "drip_scale",
+        "textures", "ripple_texture",
         "dark_texture", "puff_texture",
         "snd_light", "snd_medium", "snd_heavy",
         "snd_roof_open", "snd_roof_small", "snd_roof_medium", "snd_roof_big",
@@ -181,6 +184,14 @@ void SSFloaterPreset::presetToControls()
     getChild<LLUICtrl>("dark_mix")->setValue(mEdited.mDarkMix);
     getChild<LLUICtrl>("puff_mix")->setValue(mEdited.mPuffMix);
 
+    getChild<LLUICtrl>("stream_alpha")->setValue(mEdited.mStreamAlpha);
+    getChild<LLUICtrl>("stream_span")->setValue(mEdited.mStreamSpan);
+    getChild<LLUICtrl>("stream_length")->setValue(mEdited.mStreamLength);
+    getChild<LLUICtrl>("stream_stretch")->setValue(mEdited.mStreamStretch);
+    getChild<LLUICtrl>("stream_wind")->setValue(mEdited.mStreamWind);
+    getChild<LLUICtrl>("stream_scale")->setValue(mEdited.mStreamScale);
+    getChild<LLUICtrl>("drip_scale")->setValue(mEdited.mDripScale);
+
     for (S32 t = 0; t < TIER_COUNT; ++t)
     {
         const std::string prefix = TIER_PREFIX[t];
@@ -238,6 +249,14 @@ void SSFloaterPreset::controlsToPreset()
     mEdited.mCrownLife = (F32)getChild<LLUICtrl>("crown_life")->getValue().asReal();
     mEdited.mDarkMix = (F32)getChild<LLUICtrl>("dark_mix")->getValue().asReal();
     mEdited.mPuffMix = (F32)getChild<LLUICtrl>("puff_mix")->getValue().asReal();
+
+    mEdited.mStreamAlpha = (F32)getChild<LLUICtrl>("stream_alpha")->getValue().asReal();
+    mEdited.mStreamSpan = (F32)getChild<LLUICtrl>("stream_span")->getValue().asReal();
+    mEdited.mStreamLength = (F32)getChild<LLUICtrl>("stream_length")->getValue().asReal();
+    mEdited.mStreamStretch = (F32)getChild<LLUICtrl>("stream_stretch")->getValue().asReal();
+    mEdited.mStreamWind = (F32)getChild<LLUICtrl>("stream_wind")->getValue().asReal();
+    mEdited.mStreamScale = (F32)getChild<LLUICtrl>("stream_scale")->getValue().asReal();
+    mEdited.mDripScale = (F32)getChild<LLUICtrl>("drip_scale")->getValue().asReal();
 
     for (S32 t = 0; t < TIER_COUNT; ++t)
     {

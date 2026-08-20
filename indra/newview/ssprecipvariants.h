@@ -54,6 +54,19 @@ public:
     LLViewerTexture* get(const SSPrecipPreset& preset, SSPrecipTier tier, U32 variant,
                          LLViewerTexture* custom_drop = nullptr);
 
+    // How much bigger than life the drops in a (type, tier) bake came out.
+    //
+    // The splat layout floors each splat at a minimum share of the quad, or
+    // the far tiers bake out as near-empty textures: a raindrop on an 18 by
+    // 36 metre sheet is a third of a texel, and a curtain of those seen across
+    // a field would be nothing at all. That floor is right for the thing those
+    // quads are for and wrong for anything drawn close up - on rain's sheets
+    // it makes every drop four and a half times too wide. Anything that draws
+    // this art at arm's length can divide it back out, per axis, because the
+    // floor bites on one axis and not the other.
+    void splatInflation(const SSPrecipPreset& preset, SSPrecipTier tier,
+                        F32& scale_x, F32& scale_y);
+
     // Impact helper shapes
     enum EUtility
     {

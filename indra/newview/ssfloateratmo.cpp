@@ -94,6 +94,7 @@ bool SSFloaterAtmoMagic::postBuild()
     const char* fields[] = {
         "track_enabled_check", "precip_slider", "turbulence_slider",
         "wind_heading_slider", "wind_elevation_slider", "windspeed_slider",
+        "gust_depth_slider", "gust_length_slider", "gust_veer_slider",
         "preset_combo", "ground_check", "ground_spinner", "fallthrough_slider"
     };
     for (const char* name : fields)
@@ -239,6 +240,9 @@ void SSFloaterAtmoMagic::refreshTrackUI()
     getChild<LLUICtrl>("wind_heading_slider")->setValue(cfg.heading());
     getChild<LLUICtrl>("wind_elevation_slider")->setValue(cfg.elevation());
     getChild<LLUICtrl>("windspeed_slider")->setValue(cfg.mWindSpeed);
+    getChild<LLUICtrl>("gust_depth_slider")->setValue(cfg.mGustDepth);
+    getChild<LLUICtrl>("gust_length_slider")->setValue(cfg.mGustLength);
+    getChild<LLUICtrl>("gust_veer_slider")->setValue(cfg.mGustVeer);
     getChild<LLUICtrl>("ground_check")->setValue(cfg.mHasGround);
     getChild<LLUICtrl>("fallthrough_slider")->setValue(cfg.mFallThrough);
 
@@ -260,7 +264,8 @@ void SSFloaterAtmoMagic::refreshTrackUI()
 
     const char* weather_fields[] = {
         "precip_slider", "turbulence_slider", "wind_heading_slider",
-        "wind_elevation_slider", "windspeed_slider", "preset_combo"
+        "wind_elevation_slider", "windspeed_slider", "gust_depth_slider",
+        "gust_length_slider", "gust_veer_slider", "preset_combo"
     };
     for (const char* name : weather_fields)
     {
@@ -335,6 +340,9 @@ void SSFloaterAtmoMagic::onCommitTrackField()
     cfg.mPrecipitation = (F32)getChild<LLUICtrl>("precip_slider")->getValue().asReal();
     cfg.mTurbulence    = (F32)getChild<LLUICtrl>("turbulence_slider")->getValue().asReal();
     cfg.mWindSpeed     = (F32)getChild<LLUICtrl>("windspeed_slider")->getValue().asReal();
+    cfg.mGustDepth     = (F32)getChild<LLUICtrl>("gust_depth_slider")->getValue().asReal();
+    cfg.mGustLength    = (F32)getChild<LLUICtrl>("gust_length_slider")->getValue().asReal();
+    cfg.mGustVeer      = (F32)getChild<LLUICtrl>("gust_veer_slider")->getValue().asReal();
     cfg.mPreset        = getChild<LLComboBox>("preset_combo")->getSelectedValue().asString();
     cfg.mHasGround     = getChild<LLUICtrl>("ground_check")->getValue().asBoolean();
     cfg.mGround        = (F32)getChild<LLUICtrl>("ground_spinner")->getValue().asReal();

@@ -99,6 +99,19 @@ public:
     S32 wallCount() const { return mWallCount; }
     F32 wallDistance() const { return mWallAvg; }
     F32 roofDistance() const { return mRoofDist; }
+
+    // How much build stands between the ceiling overhead and the open sky, in
+    // metres. The up ray finds the ceiling of the room you are in; the wind
+    // flowmap's overhead capture knows the top of the whole column. The gap
+    // between the two is everything stacked above you - the storeys of a
+    // building, or the ground over a basement - and it is what separates
+    // standing in a ground floor room from standing in a cellar under it.
+    F32 burialDepth() const { return mBuriedSmooth; }
+
+    // 0 at the ceiling, approaching 1 deep under the build. What the rain bed
+    // is attenuated by.
+    F32 burialOcclusion() const;
+
     S32 activeLoops() const;
     F64 lastProbeAge() const;
 
@@ -163,6 +176,12 @@ private:
     ESize mOutdoorSize = SIZE_LARGE;
     LLVector3 mProbeOrigin;             // where mSideDist was measured from
     F32 mCoverSmooth = 0.f;
+
+    // Build standing above the ceiling, measured at the last probe cycle and
+    // eased the same way cover is, so walking down a stair ramps the rain out
+    // rather than stepping it
+    F32 mBuriedDepth = 0.f;
+    F32 mBuriedSmooth = 0.f;
 
     // Exponential moving rate of impact strength near the camera
     F32 mImpactRate = 0.f;

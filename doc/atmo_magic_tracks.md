@@ -113,6 +113,9 @@ be switched off without deleting its settings.
 | `wind_elevation` | Real | Degrees off horizontal; positive blows upward |
 | `wind_rot` | Array | Explicit quaternion, overrides heading/elevation |
 | `wind_speed` | Real | m/s |
+| `gust_depth` | Real | 0–3, how hard the wind surges and drops as a gust front passes; scaled by `turbulence` |
+| `gust_length` | Real | Metres between gust fronts along the wind; divided by `wind_speed` this is how often a surge arrives |
+| `gust_veer` | Real | Degrees the wind swings either side of its heading as a front goes through |
 | `ground` | Real | Pins the track's floor to an explicit altitude |
 | `fallthrough` | Real | 0–1, how much precipitation is drawn where nothing catches it |
 

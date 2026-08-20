@@ -110,6 +110,9 @@ LLSD SSAtmoTrackConfig::asLLSD() const
     sd["wind_heading"]   = (LLSD::Real)heading();
     sd["wind_elevation"] = (LLSD::Real)elevation();
     sd["wind_speed"]     = (LLSD::Real)mWindSpeed;
+    sd["gust_depth"]     = (LLSD::Real)mGustDepth;
+    sd["gust_length"]    = (LLSD::Real)mGustLength;
+    sd["gust_veer"]      = (LLSD::Real)mGustVeer;
     sd["fallthrough"]    = (LLSD::Real)mFallThrough;
     if (mHasGround)
     {
@@ -131,6 +134,9 @@ void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
     if (sd.has("precipitation")) mPrecipitation = llclamp((F32)sd["precipitation"].asReal(), 0.f, 1.f);
     if (sd.has("turbulence"))    mTurbulence    = llclamp((F32)sd["turbulence"].asReal(), 0.f, 1.f);
     if (sd.has("wind_speed"))    mWindSpeed     = llmax(0.f, (F32)sd["wind_speed"].asReal());
+    if (sd.has("gust_depth"))    mGustDepth     = llclamp((F32)sd["gust_depth"].asReal(), 0.f, 3.f);
+    if (sd.has("gust_length"))   mGustLength    = llclamp((F32)sd["gust_length"].asReal(), 8.f, 2000.f);
+    if (sd.has("gust_veer"))     mGustVeer      = llclamp((F32)sd["gust_veer"].asReal(), 0.f, 90.f);
     if (sd.has("fallthrough"))   mFallThrough   = llclamp((F32)sd["fallthrough"].asReal(), 0.f, 1.f);
 
     if (sd.has("wind_rot"))
@@ -163,6 +169,9 @@ bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
         && alike(mPrecipitation, rhs.mPrecipitation)
         && alike(mTurbulence, rhs.mTurbulence)
         && alike(mWindSpeed, rhs.mWindSpeed)
+        && alike(mGustDepth, rhs.mGustDepth)
+        && alike(mGustLength, rhs.mGustLength)
+        && alike(mGustVeer, rhs.mGustVeer)
         && alike(mFallThrough, rhs.mFallThrough)
         && mHasGround == rhs.mHasGround
         && (!mHasGround || alike(mGround, rhs.mGround))

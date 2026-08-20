@@ -48,6 +48,7 @@
 
 #include <glm/mat4x4.hpp>
 
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -94,9 +95,11 @@ public:
     // throttled, picking the stalest or dirtiest tile near the camera.
     void update();
 
-    // Object update hook, mirroring the rain shadow's: marks a region's tile
-    // stale when geometry inside its domain moves.
-    static void onObjectUpdate(LLViewerObject* objectp);
+    // Marks a region's tile stale when geometry inside its domain has changed.
+    // Driven from SSAtmoMagic's settle queue rather than straight off an object
+    // update: a solve is far too expensive to spend on a prim that is still
+    // moving, or on one that will be gone in a second.
+    static void markDirty(const LLVector3& pos_agent, F32 radius);
 
     void clear();
 
@@ -109,6 +112,14 @@ public:
     // this to decide whether sampling will tell them anything.
     bool isValid() const;
 
+    // Whether anything that would otherwise read LLViewerRegion::mWind should
+    // be reading this instead: Atmo Magic running, and a tile solved under the
+    // camera. Where that holds the flowmap replaces the sim's wind field
+    // outright rather than blending with it - two wind fields averaged
+    // together are a third field that is neither, and the first thing that
+    // loses is the courtyard the solve says is still.
+    static bool drivesWind();
+
     // Wind velocity at a point, m/s. Falls back to the ambient wind where no
     // tile covers the point, so callers never need to branch.
     LLVector3 sample(const LLVector3& pos_agent) const;
@@ -116,6 +127,15 @@ public:
     // How much of the ambient wind reaches this point, roughly 0..1. Below 1
     // is sheltered, above 1 is a gap the wind is being squeezed through.
     F32 exposure(const LLVector3& pos_agent) const;
+
+    // The travelling gust at a point: a multiplier on the solved speed, and
+    // the veer in radians that comes with it. The solve itself is static, so
+    // this is what gives a storm its rhythm - a surge walks in from upwind,
+    // crosses the build at the speed of the air carrying it, and the lull
+    // behind it follows. Already applied by sample(); public so a consumer
+    // that wants the rhythm without the field (a diagnostic, a sound) can ask.
+    void gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32& veer) const;
+    F32 gust(const LLVector3& pos_agent) const;
 
     // Render Metadata > Wind Flow: one arrow per solved cell, on every slab,
     // at the density the solve actually ran at.
@@ -197,8 +217,59 @@ private:
     const Tile* cameraTile() const;
 
     bool needsSolve(const Tile& tile) const;
-    bool buildTile(Tile& tile);
     void evict();
+
+    // A build used to run start to finish inside one update(): five full scene
+    // renders, three GPU readbacks and several passes over a res*res*slices
+    // grid, all landing in the same frame. That is tens of milliseconds, and it
+    // happens every time a region resolves - which is every time anything near
+    // the camera rezzes. It is spread over frames instead, one stage per call,
+    // and the stages that touch no GL run on the general work queue.
+    //
+    // Only ever one build in flight, so the scratch buffers below stay single
+    // owner and need no locking: the main thread does not touch them while a
+    // worker stage holds them, and abandoning a build waits for the worker to
+    // report back before the scratch is freed.
+    enum class EStage
+    {
+        IDLE,
+        CAPTURE_TOP,    // GL: overhead ortho depth pass
+        CAPTURE_PROBE,  // GL: one oblique probe per call, mBuildProbe says which
+        REDUCE,         // worker: probe reconstruction, slab placement, solid fill
+        SOLVE_INIT,     // GL: upload, mask init pass, read the mask back
+        BRIDGE,         // worker: infer passages through the stretch no probe saw
+        SOLVE_RUN,      // GL: upload the bridged mask, seed, pyramid, project
+        READBACK,       // GL: pull the solved volume back
+        CONVERT,        // worker: unpack the raw volume into the tile
+        COMMIT          // main: publish the tile and the debug scratch
+    };
+
+    // Drives the state machine. Returns true while a build is in flight, so
+    // update() knows not to start another.
+    bool advanceBuild();
+    bool beginBuild(Tile& tile);
+
+    // Drop whatever is in flight. The scratch is only released once the worker
+    // has let go of it, so this is safe to call from clear() at any moment.
+    void abandonBuild();
+    void releaseScratch();
+
+    // Hand a stage to the general queue and step to `next` when it reports
+    // back. A completion for a build that has since been abandoned is dropped.
+    void postWorker(std::function<void()> work, EStage next);
+
+    // The tile currently being built, or null if it went away underneath us
+    Tile* buildTile();
+
+    bool stageCaptureTop(Tile& tile);
+    bool stageCaptureProbe(Tile& tile, S32 which);
+    void stageReduce(Tile& tile);           // worker
+    bool stageSolveInit(Tile& tile);
+    void stageBridge(Tile& tile);           // worker
+    bool stageSolveRun(Tile& tile);
+    bool stageReadback(Tile& tile);
+    void stageConvert(Tile& tile);          // worker
+    void stageCommit(Tile& tile);
 
     bool ensureResources(S32 res, S32 slices);
     void releaseResources();
@@ -221,8 +292,13 @@ private:
                       const LLVector3& dir, const LLVector3& eye,
                       F32 half, F32 range, std::vector<F32>& out, glm::mat4& view_out);
 
-    // The four oblique probes, and the height field they refine
-    bool captureProbes(Tile& tile);
+    // The four oblique probes, and the height field they refine. Each probe is
+    // a full scene render and a depth readback, so they go one per frame, and
+    // the pass that turns nine million rays back into altitudes runs on a
+    // worker once they are all in.
+    void beginProbes(Tile& tile);
+    bool captureProbe(Tile& tile, S32 which);
+    void reconstructHidden(Tile& tile);
 
     // Run the shader's visibility test on the CPU for one known-solid column
     // and log every intermediate. The carve has no way to report itself from
@@ -247,22 +323,33 @@ private:
     void buildCarveFlags(const Tile& tile);
 
     // Carry a discovered passage through the stretch of it no probe could see,
-    // by opening solid cells that have carved cells on both sides. Reads the
-    // mask back, works on it, and writes it out again between the init pass and
-    // the solve.
+    // by opening solid cells that have carved cells on both sides. Runs between
+    // the init pass and the solve, on a worker: the two GL halves either side
+    // of it are separate so the pass over the volume never touches the context.
+    void readMaskForBridge(const Tile& tile);
     void bridgePassages(const Tile& tile);
+    void uploadBridgedMask(const Tile& tile);
 
     // Choose slab boundaries from the captured heights: bounded count, a
     // minimum separation, quantile placement where the geometry actually
     // varies, and forced boundaries at EEP track altitudes.
     void placeSlices(Tile& tile);
 
-    bool solve(const Tile& tile);
+    // The solve is split either side of bridgePassages, which is where the
+    // mask comes back to the CPU to have its passages joined up. Phase one
+    // ends with that readback; phase two starts by uploading what the bridge
+    // produced. Splitting there is what lets the bridge run on a worker.
+    bool solveInit(const Tile& tile);
+    bool solveRun(const Tile& tile);
 
     // Resolution of a pyramid level, and how many levels a grid supports
     static S32 levelRes(S32 res, S32 level) { return res >> level; }
     static S32 levelCount(S32 res);
+
+    // Split the same way the bridge is: readback is the GL pull, unpackVolume
+    // is the pass over a quarter of a million cells that follows it
     void readback(Tile& tile);
+    void unpackVolume(Tile& tile);
 
     // Flat index into a tile's mFlow
     static size_t index(const Tile& tile, S32 x, S32 y, S32 k)
@@ -347,6 +434,41 @@ private:
     F64 mLastBuild = 0.0;
     F32 mSolveMS = 0.f;
     U32 mBuildCount = 0;
+
+    // --- staged build state ---
+    EStage mStage = EStage::IDLE;
+
+    // Every stage writes here, never into the live tile. A build spans frames
+    // now, and a tile is sampled on every one of them: writing mRes and
+    // mSlices into a tile that still holds the previous solve's mFlow leaves
+    // the two disagreeing about the array's shape, and sample() walks straight
+    // off the end of it. The staging tile is published in one assignment at
+    // COMMIT, so a sampler only ever sees a consistent one.
+    //
+    // It is also what makes the worker stages safe: they touch this and the
+    // scratch buffers, and nothing else can see either.
+    Tile mBuild;
+
+    U64 mBuildRegion = 0;       // which live tile the result belongs to
+    S32 mBuildProbe = 0;        // probe index the capture stage is up to
+    F64 mBuildStart = 0.0;      // wall clock, for the reported solve time
+    bool mWorkerBusy = false;   // a worker stage holds the scratch
+    bool mClearPending = false; // a clear() that arrived while it did
+
+    // Bumped by anything that invalidates the build in flight. A worker
+    // completion carrying a stale generation is dropped rather than applied,
+    // which is what makes clear() and rebuildAll() safe mid-build.
+    U32 mBuildGeneration = 0;
+
+    // Staging for the two halves of the mask bridge, which straddle a worker
+    // stage and so cannot live as locals in solve()
+    std::vector<U8> mMaskRaw;       // read back after the init pass
+    std::vector<U8> mMaskBridged;   // what the bridge produced, uploaded after
+    bool mMaskChanged = false;
+
+    // Staging for the solved volume, unpacked into the tile by the worker
+    std::vector<F32> mVolumeRaw;
+    std::vector<U8> mSolidRaw;
 };
 
 // </SS:Nexii>

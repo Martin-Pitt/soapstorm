@@ -72,19 +72,10 @@ void SSRainShadowMap::clearCache()
     mDebugMesh.clear();
 }
 
-// static
-void SSRainShadowMap::onObjectUpdate(LLViewerObject* objectp)
-{
-    if (!SSAtmoMagic::getInstance()->isEnabled()) return;
-    if (!objectp || objectp->isDead() || objectp->isAvatar() || objectp->isAttachment()) return;
-
-    const LLVector3 scale = objectp->getScale();
-    const F32 dim = llmax(scale.mV[VX], scale.mV[VY], scale.mV[VZ]);
-    if (dim < 0.5f) return; // too small to matter at map resolution
-
-    getInstance()->markDirty(objectp->getRenderPosition(), scale.magVec() * 0.5f);
-}
-
+// Driven from SSAtmoMagic's settle queue rather than straight off an object
+// update. See the note on SSAtmoMagic::onObjectUpdate: an object has to have
+// held still for a few seconds before a recapture is spent on it, so a
+// projectile or a combat rez never triggers one.
 void SSRainShadowMap::markDirty(const LLVector3& pos_agent, F32 radius)
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
@@ -101,6 +92,13 @@ void SSRainShadowMap::markDirty(const LLVector3& pos_agent, F32 radius)
     if (z + radius < tile.mBandBottom || z - radius > tile.mBandTop + 40.f) return;
 
     tile.mDirty = true;
+
+    // This is the only place the region's shape is known to have changed. The
+    // other reasons a tile gets recaptured - the camera climbing out of the
+    // band, the wind swinging the fall direction - produce a new capture of the
+    // same build, and anything derived from the map should not be thrown away
+    // for those.
+    ++tile.mGeomSerial;
 }
 
 SSRainShadowMap::Tile* SSRainShadowMap::tileFor(LLViewerRegion* regionp, bool allow_create)
@@ -179,11 +177,28 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     const F32 inv_z = 1.f / llmax(0.2f, fabsf(dir.mV[VZ]));
     const F32 tilt = sqrtf(llmax(0.f, 1.f - dir.mV[VZ] * dir.mV[VZ]));
     const F32 half = width * 0.5f + (band_top - band_bottom) * tilt * inv_z * 0.5f + 8.f;
-    const F32 range = (band_top - band_bottom) * inv_z + 40.f;
 
-    const LLVector3 eye(region_origin.mV[VX] + width * 0.5f,
-                        region_origin.mV[VY] + width * 0.5f,
-                        band_top);
+    // How far upwind the near plane has to start. The plane is perpendicular
+    // to the fall direction, so once the wind tilts it, it is no longer level:
+    // sitting it on the eye clips away everything upwind of a diagonal cutting
+    // through the region, and rain enters those buildings through an angled
+    // slice with nothing recorded to shelter it. The furthest a point in the
+    // footprint can lie upwind of the centre is the box half-diagonal, and
+    // only its horizontal part is foreshortened by the tilt.
+    const F32 lead = half * F_SQRT2 * tilt + 16.f;
+
+    // Deep enough to cross the band and to come back out the far side, on top
+    // of the lead-in
+    const F32 range = lead + (band_top - band_bottom) * inv_z + half * F_SQRT2 * tilt + 40.f;
+
+    // Backed off along the fall direction by the lead, so the whole region and
+    // its band sit in front of the near plane whatever the wind is doing.
+    // Everything downstream measures depth from this point, so moving it is
+    // self-consistent: resolveColumn's u/v run along right/up, which are
+    // perpendicular to dir and so unchanged by it.
+    const LLVector3 eye = LLVector3(region_origin.mV[VX] + width * 0.5f,
+                                    region_origin.mV[VY] + width * 0.5f,
+                                    band_top) - dir * lead;
 
     // Ortho depth render along the fall direction, reusing the sun shadow
     // machinery; save/restore the render matrices around it
@@ -248,6 +263,10 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     tile.mCaptureTime = SSAtmoMagic::getInstance()->sharedTime();
     tile.mDirty = false;
     tile.mValid = true;
+
+    // Whatever the reason for this capture, the depth in hand now reflects the
+    // region as of this revision
+    tile.mCapturedSerial = tile.mGeomSerial;
 
     return true;
 }
@@ -328,10 +347,37 @@ void SSRainShadowMap::capture()
     if (best)
     {
         mLastCapture = now;
+
+        // Recorded before the capture clears it: a recapture forced by
+        // geometry changing is the interesting one, and it is the only kind
+        // that means anything derived from the map has to be retraced.
+        const bool was_dirty = best->mDirty;
+
+        LLTimer timer;
         captureTile(*best);
+
+        mLastCaptureMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
+        ++mCaptureCount;
+        if (was_dirty) ++mDirtyCaptures;
     }
 
     evict();
+}
+
+U32 SSRainShadowMap::dirtyTileCount() const
+{
+    U32 n = 0;
+    for (const auto& entry : mTiles)
+    {
+        if (entry.second.mValid && entry.second.mDirty) ++n;
+    }
+    return n;
+}
+
+F64 SSRainShadowMap::lastCaptureAge() const
+{
+    if (mLastCapture <= 0.0) return 0.0;
+    return SSAtmoMagic::getInstance()->sharedTime() - mLastCapture;
 }
 
 //-----------------------------------------------------------------------------
@@ -559,7 +605,7 @@ void SSRainShadowMap::renderDebug()
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
 }
 
-void SSRainShadowMap::validTiles(std::vector<std::pair<U64, F64> >& out) const
+void SSRainShadowMap::validTiles(std::vector<std::pair<U64, U32> >& out) const
 {
     out.clear();
     out.reserve(mTiles.size());
@@ -567,7 +613,7 @@ void SSRainShadowMap::validTiles(std::vector<std::pair<U64, F64> >& out) const
     {
         if (entry.second.mValid && !entry.second.mDepth.empty())
         {
-            out.emplace_back(entry.first, entry.second.mCaptureTime);
+            out.emplace_back(entry.first, entry.second.mCapturedSerial);
         }
     }
 }
@@ -583,16 +629,18 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
     if (!regionp) return false;
 
-    n = llclamp(n, 16, (S32)tile.mRes);
+    n = llclamp(n, 16, 512);
+
+    const LLVector3 origin = regionp->getOriginAgent();
+    const F32 width = regionp->getWidth();
 
     out.mRegionHandle = region_handle;
     out.mN = n;
-    out.mCell = 2.f * tile.mHalfW / (F32)n;
-    out.mCaptureTime = tile.mCaptureTime;
-    out.mPos.assign((size_t)n * n, LLVector3());
+    out.mCell = width / (F32)n;
+    out.mGeomSerial = tile.mCapturedSerial;
+    out.mZ.assign((size_t)n * n, -FLT_MAX);
     out.mFlags.assign((size_t)n * n, 0);
 
-    const LLVector3 origin = regionp->getOriginAgent();
     const LLVector3 eye = origin + tile.mEyeRegion;
     const F32 range = tile.mFar - tile.mNear;
     const F32 water_z = regionp->getWaterHeight();
@@ -601,97 +649,147 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
     const bool sky = atmo->isSkyTrack();
     const F32 sky_floor = atmo->groundZero();
 
-    // Each output cell covers a block of texels. Take the nearest depth in the
-    // block: that is the first thing a column through it meets, so a roof edge
-    // stays a roof for the whole cell it touches rather than being averaged
-    // down into the street. One linear pass over the depth buffer, which is
-    // what makes this affordable at all compared with n^2 column resolves.
+    // Scatter, not gather. Every texel is projected to where it actually landed
+    // in the world and dropped into the region cell it fell in, keeping the
+    // highest hit per cell - the first thing a falling drop would meet.
+    //
+    // Gathering instead (one output cell reads a block of texels) would be
+    // marginally cheaper but wrong: the tile is an oblique projection taken
+    // around the camera, so a block of texels is not a column of world space,
+    // and the mapping between the two shifts every time the tile is recaptured.
     const U32 res = tile.mRes;
-    std::vector<F32> best((size_t)n * n, FLT_MAX);
+    const F32 su = 2.f * tile.mHalfW / (F32)res;
+    const F32 sv = 2.f * tile.mHalfH / (F32)res;
+    const LLVector3 right_step = tile.mRight * su;
+    const LLVector3 up_step = tile.mUp * sv;
+    const LLVector3 dir_range = tile.mDir * range;
+    const LLVector3 row_start = eye
+        + tile.mRight * (-tile.mHalfW + 0.5f * su)
+        + tile.mUp * (-tile.mHalfH + 0.5f * sv)
+        + tile.mDir * tile.mNear;
+
+    const F32 inv_cell = 1.f / out.mCell;
+    F32* zbuf = out.mZ.data();
+
     for (U32 ty = 0; ty < res; ++ty)
     {
-        const S32 gy = llmin((S32)((U64)ty * n / res), n - 1);
         const F32* row = &tile.mDepth[(size_t)ty * res];
-        F32* dst = &best[(size_t)gy * n];
-        for (U32 tx = 0; tx < res; ++tx)
+        LLVector3 p = row_start + up_step * (F32)ty;
+
+        for (U32 tx = 0; tx < res; ++tx, p += right_step)
         {
             const F32 d = row[tx];
             if (d >= DEPTH_MISS) continue;
-            const S32 gx = llmin((S32)((U64)tx * n / res), n - 1);
-            if (d < dst[gx]) dst[gx] = d;
+
+            const F32 hx = p.mV[VX] + dir_range.mV[VX] * d;
+            const F32 hy = p.mV[VY] + dir_range.mV[VY] * d;
+            const F32 hz = p.mV[VZ] + dir_range.mV[VZ] * d;
+
+            const F32 lx = hx - origin.mV[VX];
+            const F32 ly = hy - origin.mV[VY];
+            if (lx < 0.f || ly < 0.f) continue;
+
+            const S32 gx = (S32)(lx * inv_cell);
+            const S32 gy = (S32)(ly * inv_cell);
+            if (gx >= n || gy >= n) continue;
+
+            F32& slot = zbuf[(size_t)gy * n + gx];
+            if (hz > slot) slot = hz;
         }
     }
 
+    // Resolve what each cell ended up being. Water is the one surface the depth
+    // pass does not draw, so a hit under the waterline is the seabed and the
+    // cell belongs to the water above it.
+    LLWorld* worldp = LLWorld::getInstance();
     for (S32 gy = 0; gy < n; ++gy)
     {
-        const F32 v = ((F32)gy + 0.5f) / (F32)n - 0.5f;
         for (S32 gx = 0; gx < n; ++gx)
         {
-            const F32 u = ((F32)gx + 0.5f) / (F32)n - 0.5f;
             const size_t idx = (size_t)gy * n + gx;
+            F32 z = out.mZ[idx];
 
-            // Where the column for this cell enters the capture band
-            const LLVector3 start = eye + tile.mRight * (u * 2.f * tile.mHalfW)
-                                        + tile.mUp * (v * 2.f * tile.mHalfH);
-
-            const F32 depth = best[idx];
-            LLVector3 hit;
-            U8 flags = 0;
-
-            if (depth < FLT_MAX)
+            if (z > -FLT_MAX)
             {
-                hit = start + tile.mDir * (tile.mNear + depth * range);
-                flags |= SURF_MAPPED;
-            }
-
-            // Same floor rule resolveColumn uses, so the grid and the drops
-            // agree about where a column with nothing over it ends up: the
-            // water plane at ground level, the track's own base in a sky band.
-            F32 floor_z;
-            bool floor_is_water = false;
-            if (sky)
-            {
-                floor_z = sky_floor;
-            }
-            else if (flags & SURF_MAPPED)
-            {
-                floor_z = water_z;
-                floor_is_water = true;
-            }
-            else
-            {
-                // Nothing captured here at all, so the heightmap is the only
-                // answer there is. Aim the column at the water plane first,
-                // then re-resolve the land under wherever that landed.
-                const F32 dz = tile.mDir.mV[VZ];
-                LLVector3 guess = start;
-                if (fabsf(dz) > 0.01f)
+                if (!sky && z < water_z)
                 {
-                    guess = start + tile.mDir * ((water_z - start.mV[VZ]) / dz);
-                }
-                const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(guess);
-                floor_is_water = water_z > land;
-                floor_z = llmax(land, water_z);
-            }
-
-            if (!(flags & SURF_MAPPED) || (!sky && hit.mV[VZ] < floor_z))
-            {
-                const F32 dz = tile.mDir.mV[VZ];
-                if (fabsf(dz) < 0.01f)
-                {
-                    hit = start;
-                    hit.mV[VZ] = floor_z;
+                    out.mZ[idx] = water_z;
+                    out.mFlags[idx] = SURF_MAPPED | SURF_WATER;
                 }
                 else
                 {
-                    hit = start + tile.mDir * ((floor_z - start.mV[VZ]) / dz);
+                    out.mFlags[idx] = SURF_MAPPED;
                 }
-                if (floor_is_water) flags |= SURF_WATER;
+                continue;
             }
 
-            out.mPos[idx] = hit - origin;
-            out.mFlags[idx] = flags;
+            // Nothing captured in this cell. In a sky band that is open air and
+            // stays empty; at ground level the heightmap and the water plane
+            // are the only answer there is, and it is only reached where the
+            // capture missed, which is rare enough to afford the lookup.
+            if (sky)
+            {
+                out.mZ[idx] = sky_floor;
+                out.mFlags[idx] = 0;    // no real surface: nothing to drain
+                continue;
+            }
+
+            const LLVector3 centre(origin.mV[VX] + out.axis(gx),
+                                   origin.mV[VY] + out.axis(gy),
+                                   water_z);
+            const F32 land = worldp->resolveLandHeightAgent(centre);
+            out.mZ[idx] = llmax(land, water_z);
+            out.mFlags[idx] = SURF_FALLBACK | ((water_z > land) ? SURF_WATER : 0);
         }
+    }
+
+    return true;
+}
+
+bool SSRainShadowMap::refineEdge(U64 region_handle, const LLVector3& from_agent,
+                                 const LLVector3& out_dir, F32 max_dist, F32 tolerance,
+                                 LLVector3& refined_agent) const
+{
+    auto it = mTiles.find(region_handle);
+    if (it == mTiles.end() || !it->second.mValid || it->second.mDepth.empty()) return false;
+
+    const Tile& tile = it->second;
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp) return false;
+
+    const LLVector3 eye = regionp->getOriginAgent() + tile.mEyeRegion;
+    const F32 range = tile.mFar - tile.mNear;
+    const F32 texel = 2.f * tile.mHalfW / (F32)tile.mRes;
+
+    // Sample the map for the column through a point, exactly as resolveColumn
+    // does, and hand back where that column meets the surface
+    auto sample = [&](const LLVector3& probe, LLVector3& hit) -> bool
+    {
+        const LLVector3 rel = probe - eye;
+        const F32 u = (rel * tile.mRight) / (2.f * tile.mHalfW) + 0.5f;
+        const F32 v = (rel * tile.mUp) / (2.f * tile.mHalfH) + 0.5f;
+        if (u < 0.f || u >= 1.f || v < 0.f || v >= 1.f) return false;
+
+        const U32 tx = llmin((U32)(u * tile.mRes), tile.mRes - 1);
+        const U32 ty = llmin((U32)(v * tile.mRes), tile.mRes - 1);
+        const F32 depth = tile.mDepth[(size_t)ty * tile.mRes + tx];
+        if (depth >= DEPTH_MISS) return false;
+
+        hit = probe + tile.mDir * ((tile.mNear + depth * range) - (rel * tile.mDir));
+        return true;
+    };
+
+    refined_agent = from_agent;
+
+    // Step outward a texel at a time and stop where the surface does. The last
+    // step that stayed level with the start is the lip.
+    const S32 steps = llclamp((S32)(max_dist / llmax(0.01f, texel)), 1, 64);
+    for (S32 i = 1; i <= steps; ++i)
+    {
+        LLVector3 hit;
+        if (!sample(from_agent + out_dir * (texel * (F32)i), hit)) break;
+        if (from_agent.mV[VZ] - hit.mV[VZ] > tolerance) break;
+        refined_agent = hit;
     }
 
     return true;

@@ -25742,6 +25742,72 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>2.0</real>
     </map>
+    <key>SSAtmoRunoff</key>
+      <map>
+      <key>Comment</key>
+      <string>Shed collected rain off roof edges and other overhangs into the street below</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoRunoffScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Multiplier on how much water the roof drainage network sheds; 0 disables shedding</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoRunoffMerge</key>
+      <map>
+      <key>Comment</key>
+      <string>Raindrops of catchment one visible drip stands in for; higher is fewer, fatter drips</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>12.0</real>
+    </map>
+    <key>SSAtmoRunoffRadius</key>
+      <map>
+      <key>Comment</key>
+      <string>Metres from the camera within which roof edges shed drips</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>48.0</real>
+    </map>
+    <key>SSAtmoRunoffRes</key>
+      <map>
+      <key>Comment</key>
+      <string>Drainage network samples across a region; 256 over a 256m region is 1m cells</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>256</integer>
+    </map>
+    <key>SSAtmoRunoffEdge</key>
+      <map>
+      <key>Comment</key>
+      <string>Slope (rise over run) between adjacent samples that counts as a roof edge rather than a steep roof</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
     <key>SSAtmoShadowRes</key>
       <map>
       <key>Comment</key>
@@ -25950,6 +26016,39 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowParticles</key>
+      <map>
+      <key>Comment</key>
+      <string>Let the wind flowmap drive ordinary in-world particles that are flagged to follow the wind, so smoke, dust and leaves funnel down alleys and lift over rooftops instead of drifting on the sim's uniform breeze</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowViewerWind</key>
+      <map>
+      <key>Comment</key>
+      <string>Let the wind flowmap stand in for the sim's wind field everywhere else the viewer reads it: the wind heard in the headphones, and how flexible prims blow. Off falls back to the region wind, which is a smooth region-wide breeze that knows nothing about the build standing in it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowParticleResponse</key>
+      <map>
+      <key>Comment</key>
+      <string>How fast wind-tagged in-world particles take up the wind flowmap around them, as a multiple of the viewer's own rate. The viewer settles a particle onto the wind over about ten seconds, which is fine for a uniform region breeze and smooths away the alley draughts and rooftop updrafts a solved field is made of. Only applies while the flowmap is driving; 1 is the viewer's own behaviour</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>4.0</real>
     </map>
     <key>SSAtmoWindFlowCell</key>
       <map>
@@ -26225,6 +26324,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>3.0</real>
+    </map>
+    <key>SSAtmoWindGustTravel</key>
+      <map>
+      <key>Comment</key>
+      <string>How fast gust fronts sweep across the region relative to the wind itself. 1 carries the pattern along with the air, which is what makes a surge reach the far side of a region as late as the air takes to get there. 0 pins the pattern to the ground, so the wind rises and falls in place instead of in waves</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
     </map>
     <key>SSAtmoSoundResponse</key>
       <map>

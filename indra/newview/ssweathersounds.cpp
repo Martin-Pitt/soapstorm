@@ -50,6 +50,15 @@ static const F32 IMPACT_RATE_FULL = 22.f;  // impact strength/sec that reads as 
 static const F32 IMPACT_RATE_TAU  = 1.5f;  // seconds, decay of the impact rate EMA
 static const F32 COVER_BLEND_RATE = 8.f;   // per second, indoor/outdoor crossfade
 
+// Burial. The depth at which build overhead has taken most of the rain bed
+// away, and how much of it it may take at the limit. Not all of it: a cellar
+// under a downpour is not silent, and a drain or a light well carries some of
+// it down. Eased more slowly than cover because it describes moving through a
+// building rather than through a doorway.
+static const F32 BURIAL_FULL       = 12.f;  // metres of build above the ceiling
+static const F32 BURIAL_MAX_DUCK   = 0.85f; // most of the rain bed it may remove
+static const F32 BURIAL_BLEND_RATE = 2.5f;  // per second
+
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO("Atmo Magic Audio");
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO_PROBE("Cover Probes");
 
@@ -199,6 +208,29 @@ void SSWeatherSounds::updateProbes(F64 now)
     mCovered = (up_hits == UP_RAY_COUNT);
     mRoofDist = mCovered ? roof_dist : 0.f;
 
+    // How much build is stacked above the ceiling. The up ray stops at the
+    // first thing over your head, which in a stairwell or a ground floor room
+    // is one slab; the flowmap's overhead capture knows where the column
+    // actually ends against the sky. The difference is the rest of the
+    // building, or the hillside over a cellar.
+    //
+    // The up ray is also short, so a room whose ceiling is beyond its reach
+    // reads as uncovered and this stays at zero - which is right, because a
+    // space that open is not muffling anything either.
+    mBuriedDepth = 0.f;
+    if (mCovered)
+    {
+        F32 column_top = 0.f;
+        if (SSWindFlowMap::getInstance()->surfaceAt(cam, column_top))
+        {
+            // Everything above the ceiling the ray found. The ceiling itself
+            // is not burial: one roof between you and the sky is an ordinary
+            // indoor space, and mCoverSmooth already handles that.
+            const F32 ceiling = cam.mV[VZ] + roof_dist;
+            mBuriedDepth = llmax(0.f, column_top - ceiling);
+        }
+    }
+
     S32 walls = 0;
     F32 sum = 0.f;
     for (S32 i = 0; i < 4; ++i)
@@ -238,6 +270,16 @@ void SSWeatherSounds::updateProbes(F64 now)
     {
         mSpace = SPACE_BIG;
     }
+}
+
+// Smooth ramp rather than a linear one: the first couple of metres of build
+// over a ceiling should barely register, because that is an ordinary floor
+// slab and you can still plainly hear the storm. It is being under several of
+// them that takes the rain away.
+F32 SSWeatherSounds::burialOcclusion() const
+{
+    const F32 t = llclamp(mBuriedSmooth / BURIAL_FULL, 0.f, 1.f);
+    return t * t * (3.f - 2.f * t);
 }
 
 // static
@@ -405,6 +447,7 @@ void SSWeatherSounds::updateLoops(F64 now, F32 dt)
     // Indoor factor eases so walking under a roof crossfades instead of
     // cutting
     mCoverSmooth = lerp(mCoverSmooth, mCovered ? 1.f : 0.f, llclamp(COVER_BLEND_RATE * dt, 0.f, 1.f));
+    mBuriedSmooth = lerp(mBuriedSmooth, mBuriedDepth, llclamp(BURIAL_BLEND_RATE * dt, 0.f, 1.f));
 
     // Local wetness: the parameter-side intensity blended with the actually
     // observed impact rate around the camera, so shelter reads quieter
@@ -430,7 +473,15 @@ void SSWeatherSounds::updateLoops(F64 now, F32 dt)
     // An open shelter (roof, no walls) barely muffles the surrounding rain
     // and wind; enclosed rooms duck them hard
     const bool sheltered = (mSpace == SPACE_SHELTERED);
-    const F32 outdoor = 1.f - (sheltered ? 0.4f : 0.85f) * mCoverSmooth;
+
+    // And on top of that, everything stacked between the ceiling and the sky.
+    // Cover alone cannot tell a ground floor room from the cellar under it -
+    // both have a ceiling a couple of metres up - but the flowmap's height
+    // capture can, and rain you have four storeys of building between you and
+    // should not sound like rain on the roof directly overhead.
+    const F32 buried = burialOcclusion();
+    const F32 outdoor = (1.f - (sheltered ? 0.4f : 0.85f) * mCoverSmooth)
+                      * (1.f - BURIAL_MAX_DUCK * buried);
 
     // Outdoor bed: only the medium variant is required. When light or heavy
     // are not configured their share of the blend folds back into medium, so
@@ -449,8 +500,10 @@ void SSWeatherSounds::updateLoops(F64 now, F32 dt)
     targets[LOOP_AMBIENT_HEAVY]  = w_heavy * outdoor;
 
     // Rain-on-roof bed for the current situation; needs both cover and
-    // actual precipitation coming down outside
-    const F32 roof = mCoverSmooth * wet;
+    // actual precipitation coming down outside. Burial takes this one too:
+    // what you hear drumming on a roof is the roof over your head, and in a
+    // basement that surface is storeys away with a building damping it.
+    const F32 roof = mCoverSmooth * wet * (1.f - BURIAL_MAX_DUCK * buried);
     targets[LOOP_ROOF_OPEN]   = sheltered ? roof : 0.f;
     targets[LOOP_ROOF_SMALL]  = (mSpace == SPACE_SMALL) ? roof : 0.f;
     targets[LOOP_ROOF_MEDIUM] = (mSpace == SPACE_MEDIUM) ? roof : 0.f;

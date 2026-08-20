@@ -26,6 +26,7 @@
 #include "ssfloatersim.h"
 
 #include "ssrainshadow.h"
+#include "ssrunoff.h"
 #include "sswindflow.h"
 
 #include "llbutton.h"
@@ -58,8 +59,13 @@ bool SSFloaterSimulation::postBuild()
     // Watch the settings, not the widgets. Each value is reachable from a
     // slider, a spinner, a reset button and the debug console, and every one of
     // them has to invalidate the map it tunes.
-    watch("SSAtmoShadowRes", true);
-    watch("SSAtmoShadowMaxAge", true);
+    watch("SSAtmoShadowRes", EInvalidate::SHADOW);
+    watch("SSAtmoShadowMaxAge", EInvalidate::SHADOW);
+
+    // The two that shape the drainage network itself. Amount, merge and radius
+    // are read live every frame, so only these need to drop what was traced.
+    watch("SSAtmoRunoffRes", EInvalidate::RUNOFF);
+    watch("SSAtmoRunoffEdge", EInvalidate::RUNOFF);
 
     const char* flow_controls[] = {
         "SSAtmoWindFlow", "SSAtmoWindFlowCell", "SSAtmoWindFlowRes",
@@ -70,7 +76,7 @@ bool SSFloaterSimulation::postBuild()
     };
     for (const char* name : flow_controls)
     {
-        watch(name, false);
+        watch(name, EInvalidate::FLOW);
     }
 
     // The overlays live in the render debug mask rather than in a setting, so
@@ -81,12 +87,16 @@ bool SSFloaterSimulation::postBuild()
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WIND_FLOW); });
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->setCommitCallback(
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW); });
+    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->setCommitCallback(
+        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF); });
+    getChild<LLCheckBoxCtrl>("settle_overlay_check")->setCommitCallback(
+        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_GEOM_SETTLE); });
 
     refreshStatus();
     return true;
 }
 
-void SSFloaterSimulation::watch(const std::string& control, bool shadow)
+void SSFloaterSimulation::watch(const std::string& control, EInvalidate what)
 {
     LLControlVariable* var = gSavedSettings.getControl(control);
     if (!var)
@@ -98,9 +108,16 @@ void SSFloaterSimulation::watch(const std::string& control, bool shadow)
 
     // Scoped, so the connections go when the floater does
     mConnections.emplace_back(var->getSignal()->connect(
-        [this, shadow](LLControlVariable*, const LLSD&, const LLSD&)
+        [this, what](LLControlVariable*, const LLSD&, const LLSD&)
         {
-            if (shadow)
+            if (what == EInvalidate::RUNOFF)
+            {
+                // The network is traced from the shadow map, not captured, so
+                // this only has to throw away what was traced. It is rebuilt
+                // from the map already in hand on the next refresh.
+                SSRunoff::getInstance()->clear();
+            }
+            else if (what == EInvalidate::SHADOW)
             {
                 // Resolution is read at capture time and the refresh interval
                 // only governs the next one, so neither takes effect until the
@@ -140,6 +157,8 @@ void SSFloaterSimulation::draw()
 void SSFloaterSimulation::onClickRecaptureShadow()
 {
     SSRainShadowMap::getInstance()->clearCache();
+    // Traced from the maps that just went, so it has nothing left to stand on
+    SSRunoff::getInstance()->clear();
     refreshStatus();
 }
 
@@ -192,13 +211,34 @@ void SSFloaterSimulation::refreshStatus()
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WIND_FLOW));
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_RAIN_SHADOW));
+    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
+        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
+    getChild<LLCheckBoxCtrl>("settle_overlay_check")->set(
+        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
+
+    SSRunoff* runoff = SSRunoff::getInstance();
+    getChild<LLTextBox>("runoff_status")->setText(
+        runoff->eaveCount() == 0
+            ? std::string("no drainage traced yet")
+            : llformat("%d eave%s over %d region%s, shedding %.1f drips/s. "
+                       "Traced %u time%s in %.0fms, delivered rain x%.2f",
+                       runoff->eaveCount(), runoff->eaveCount() == 1 ? "" : "s",
+                       runoff->networkCount(), runoff->networkCount() == 1 ? "" : "s",
+                       runoff->dripRate(),
+                       runoff->buildCount(), runoff->buildCount() == 1 ? "" : "s",
+                       runoff->lastBuildMS(), runoff->delivery()));
 
     LLTextBox* capture_status = getChild<LLTextBox>("flow_capture_status");
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);
 
+    // Nothing to say while the field itself is what is drawn: the combo above
+    // already reads "Solved flow field", and repeating it back is a line of
+    // text that only ever states its own control's value.
+    capture_status->setVisible(capture_view != 0);
+
     if (capture_view == 0)
     {
-        capture_status->setText(std::string("off, drawing the solved flow field"));
+        // leave the last text in place; it is hidden
     }
     else if (flow->capturedRegion() == 0)
     {

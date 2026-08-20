@@ -91,6 +91,14 @@ LLSD SSPrecipPreset::asLLSD() const
     sd["dark_mix"] = mDarkMix;
     sd["puff_mix"] = mPuffMix;
 
+    sd["stream_span"] = mStreamSpan;
+    sd["stream_alpha"] = mStreamAlpha;
+    sd["stream_length"] = mStreamLength;
+    sd["stream_stretch"] = mStreamStretch;
+    sd["stream_wind"] = mStreamWind;
+    sd["stream_scale"] = mStreamScale;
+    sd["drip_scale"] = mDripScale;
+
     sd["textures"] = mTextures;
     sd["ripple_texture"] = mRippleTexture;
     sd["dark_texture"] = mDarkTexture;
@@ -160,6 +168,25 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     if (sd.has("crown_life")) mCrownLife = (F32)sd["crown_life"].asReal();
     if (sd.has("dark_mix")) mDarkMix = (F32)sd["dark_mix"].asReal();
     if (sd.has("puff_mix")) mPuffMix = (F32)sd["puff_mix"].asReal();
+
+    if (sd.has("stream_span")) mStreamSpan = (F32)sd["stream_span"].asReal();
+    if (sd.has("stream_alpha")) mStreamAlpha = (F32)sd["stream_alpha"].asReal();
+    if (sd.has("stream_length"))
+    {
+        mStreamLength = (F32)sd["stream_length"].asReal();
+    }
+    else if (sd.has("stream_reach"))
+    {
+        // Presets written before the length was in metres carried a fraction
+        // of the way to the ground instead. There is no roof to measure it
+        // against here, so it is taken against the tallest fall the slider
+        // offers: a preset that reached all the way down still does.
+        mStreamLength = llclamp((F32)sd["stream_reach"].asReal(), 0.05f, 1.f) * SS_STREAM_LENGTH_MAX;
+    }
+    if (sd.has("stream_stretch")) mStreamStretch = (F32)sd["stream_stretch"].asReal();
+    if (sd.has("stream_wind")) mStreamWind = (F32)sd["stream_wind"].asReal();
+    if (sd.has("stream_scale")) mStreamScale = (F32)sd["stream_scale"].asReal();
+    if (sd.has("drip_scale")) mDripScale = (F32)sd["drip_scale"].asReal();
 
     if (sd.has("textures")) mTextures = sd["textures"].asString();
     if (sd.has("ripple_texture")) mRippleTexture = sd["ripple_texture"].asString();
@@ -348,6 +375,42 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mTiers[TIER_DROPS]    = { true, KIND_STREAK, 0.028f, 0.55f, 0.8f, 18.f };
         p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.5f, 96.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  9.f,    18.f,  0.3f, 224.f };
+
+        // Sound pack. Each slot is a comma separated sequence played through
+        // in order rather than a single looping asset, so the bed does not
+        // settle into an audible 30 second repeat. Light is left empty: its
+        // share folds back into the medium bed.
+        p.mSounds.mAmbientMedium =
+            "599c2146-48cf-d94f-b065-4266c2647f05,"
+            "c2feb9c1-2b54-f42b-0f32-4cadcf48c6e4,"
+            "c8cd50e0-6def-572f-872f-cc95a0cc275f,"
+            "28aab769-2d8e-1225-eaeb-b2ae38b4ed69,"
+            "39513c26-db70-cbd0-e32c-29619d9e2451,"
+            "2f8d4ead-390e-fafe-3942-1b311afb5126";
+        p.mSounds.mAmbientHeavy =
+            "438e134b-93cf-9d1b-54b0-b0fec06364cd,"
+            "1f8c2c1a-ebc1-fd1e-e669-575913cc155e,"
+            "d1518660-67d3-e667-8422-4a25448e740e,"
+            "48d30d8e-599c-d87e-2e40-aa3c93f9eba9";
+        p.mSounds.mRoofOpen =
+            "8ca2fb89-43f3-baa0-b4de-fdc1ef748239,"
+            "6979e7e5-dfa8-fc4c-65fa-5e10149c5e9b,"
+            "ba3728fc-545c-0c1d-7181-89559cb8e5f3,"
+            "775af013-66af-df1b-db87-01d55afe4161,"
+            "f2481ef2-c06c-2b3a-5a8a-29f10087aea1,"
+            "0025b87e-3ff8-5f59-85a7-adef2d15b131";
+        p.mSounds.mRoofSmall =
+            "507a6b0d-d935-eb37-9e87-682970052c22";
+        p.mSounds.mRoofMedium =
+            "e1eda37b-4b1b-fd3a-f54f-67a83bd31ef4,"
+            "5a9c8089-f637-dab2-f5dc-dcf87f95f775,"
+            "d82b7010-ff2d-6163-c664-6a4c3feb19ed,"
+            "64f24176-e927-3a48-8196-d45cb9176555,"
+            "8c15d427-84a7-d07e-228a-0a539d374063";
+        p.mSounds.mRoofBig =
+            "3056a7c3-f0af-7ffd-3208-52a3b401d18c,"
+            "e30cf3a1-c0c8-907a-04c7-06bb70945601";
+
         mPresets.push_back(p);
     }
 

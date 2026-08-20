@@ -42,8 +42,7 @@
 #include "llagent.h"
 #include "llagentcamera.h"
 #include "pipeline.h"
-#include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
-#include "sswindflow.h"   // <SS:Nexii> Atmo Magic wind flowmap
+#include "ssatmomagic.h"  // <SS:Nexii> Atmo Magic geometry-change settling
 #include "llspatialpartition.h"
 #include "lltooltip.h"
 #include "llworld.h"
@@ -332,10 +331,13 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
 
     updateActive(objectp);
 
-    // <SS:Nexii> Prim changes near a cached rain shadow tile queue a lazy
-    // recapture; the callee filters out avatars, attachments and tiny objects
-    SSRainShadowMap::onObjectUpdate(objectp);
-    SSWindFlowMap::onObjectUpdate(objectp);
+    // <SS:Nexii> Prim changes queue a lazy recapture of the rain shadow map and
+    // a resolve of the wind flowmap. The callee filters out avatars,
+    // attachments, tiny objects and anything still moving, and holds the rest
+    // for a few seconds before either map hears about it - a prim thrower or a
+    // combat rez would otherwise have both rebuilding continuously for
+    // geometry that is gone before the rebuild finishes.
+    SSAtmoMagic::onObjectUpdate(objectp);
     // </SS:Nexii>
 
     if (just_created)

@@ -41,6 +41,7 @@
 #include <memory>
 #include <vector>
 
+class LLViewerObject;
 class LLViewerTexture;
 class SSPrecipSim;
 
@@ -110,6 +111,21 @@ public:
     // source lifetime, the impact (ripple/sound) queue and asset refresh.
     void idle();
 
+    // Object update hook, from LLViewerObjectList::processUpdateCore. Both the
+    // rain shadow map and the wind flowmap rebuild when the build under them
+    // changes, and both used to be told the moment an update arrived. In a
+    // quiet place that is right. In a busy one it is most of a frame's work
+    // thrown away every few seconds: a prim thrower fills the scene with long
+    // thin objects that exist for under a second, combat rezzes and derezzes
+    // constantly, and a build rezzing in moves everything it owns several
+    // times before it settles.
+    //
+    // So an update does not dirty anything. It joins a queue, and only an
+    // object that is still there, still where it was, and has been for a few
+    // seconds gets to invalidate a map. A projectile is gone long before its
+    // entry matures and never costs a rebuild at all.
+    static void onObjectUpdate(LLViewerObject* objectp);
+
     bool isEnabled() const { return mEnabled; }
 
     // Shared wall clock all deterministic streams are keyed on
@@ -120,6 +136,14 @@ public:
     F32 precipitation() const { return mPrecipitation; }
     F32 turbulence() const { return mTurbulence; }
     F32 windSpeed() const { return mWindSpeed; }
+
+    // Gust shape for the active track: how deep the surges run, how far apart
+    // their fronts are along the wind, and how far the wind swings as one goes
+    // through. Depth is already multiplied by turbulence here, so a consumer
+    // gets one number rather than having to remember to combine them.
+    F32 gustDepth() const { return mGustDepth; }
+    F32 gustLength() const { return mGustLength; }
+    F32 gustVeer() const { return mGustVeer; }
     LLVector3 windXY() const { return mWindXY; } // horizontal, m/s
 
     // Full wind vector including any vertical component. Track configs store
@@ -163,6 +187,12 @@ public:
 
     // Deterministic wave/burst envelope at a shared timestamp
     F32 gustEnvelopeAt(F64 time) const;
+
+    // Metres the air mass has travelled since the wind started blowing, for
+    // patterns that are carried along with it rather than fixed in the world.
+    // The wind flowmap's gust waves phase off this, which is what makes a
+    // surge arrive downwind as late as the air takes to get there.
+    F64 windDrift() const { return mWindDrift; }
     // Slow-drifting noise field that raises/lowers precipitation per area,
     // sampled with global (grid) coordinates
     F32 areaFactorAt(F64 global_x, F64 global_y) const;
@@ -182,8 +212,14 @@ public:
     // surfaces.
     // velocity is the drop's motion at the moment it lands; shattering types
     // hand it to the shards so they fly off carrying the impact speed.
+    // from_runoff marks a landing that came off an eave rather than out of the
+    // sky. It still makes a splash and still feeds the ambient bed, but it is
+    // kept out of the measurement the runoff system takes of how much rain is
+    // actually being delivered - otherwise the drips would be counted as
+    // evidence for more drips.
     void queueImpact(F64 time, const LLVector3& pos_agent, F32 strength, bool on_water,
-                     const LLVector3& normal, const LLVector3& velocity, bool shatter);
+                     const LLVector3& normal, const LLVector3& velocity, bool shatter,
+                     bool from_runoff = false);
 
     // The live particle simulation (null while disabled); the renderer
     // draws straight from it
@@ -198,6 +234,12 @@ public:
     static void drawInfo();
     size_t pendingImpacts() const { return mImpacts.size(); }
 
+    // In-world overlay marking every geometry change still waiting out its
+    // settle delay, so a queue that never drains can be walked to rather than
+    // guessed at. Drawn from LLPipeline::renderDebug under
+    // RENDER_DEBUG_GEOM_SETTLE.
+    void renderDebug();
+
 private:
     void refreshParams();
     void refreshAssets();
@@ -205,12 +247,59 @@ private:
     void processImpacts();
     LLViewerTexture* textureFor(const SSAtmoAsset& asset, LLColor4& tint, F32& glow);
 
+    // A geometry change waiting to be believed. It is only handed to the maps
+    // once the object it describes has held still for SETTLE_SECONDS; an
+    // object that moves again restarts its own clock, and one that has gone by
+    // the time its entry matures is dropped without a rebuild.
+    struct PendingEdit
+    {
+        LLVector3 mPos;
+        F32 mRadius = 0.f;
+        F64 mSettleAt = 0.0;
+
+        // When it first joined the queue, and how many times it has pushed its
+        // own settle time back since. Together these separate the two ways the
+        // queue stays busy: a stream of different objects passing through, and
+        // a handful of the same objects never holding still long enough to
+        // mature. Only the second is worth chasing down, and only these two
+        // numbers tell them apart.
+        F64 mFirstSeen = 0.0;
+        U32 mResets = 0;
+    };
+
+    void settleEdits();
+
+    // Marker colour for one queued edit: how close it is to maturing in the
+    // alpha, how many times it has re-armed in the hue
+    static LLColor4 colorForEdit(const PendingEdit& edit);
+
+public:
+    // Info overlay: how many geometry changes are waiting out their settle
+    // delay, and how many have been believed. A queue that never drains, or a
+    // settled count stuck at zero while a region rezzes around you, means the
+    // maps are not hearing about the build.
+    size_t pendingEdits() const { return mPendingEdits.size(); }
+    U32 settledEdits() const { return mSettledEdits; }
+
+private:
+
+    // Keyed by object, because an update arrives per object per message and a
+    // rezzing region sends thousands. A linear scan here is quadratic in the
+    // exact case this whole queue exists to survive.
+    std::map<LLUUID, PendingEdit> mPendingEdits;
+    U32 mSettledEdits = 0;
+
     F64 mNow = 0.0;
     bool mEnabled = false;
 
     F32 mPrecipitation = 0.f;
     F32 mTurbulence = 0.f;
     F32 mWindSpeed = 0.f;
+    F32 mGustDepth = 0.f;
+    F32 mGustLength = 140.f;
+    F32 mGustVeer = 0.f;
+    F64 mWindDrift = 0.0;
+    bool mWindDriftSeeded = false;
     LLVector3 mWindXY;
     LLVector3 mWind;
     LLVector3 mRainDirection;
@@ -239,6 +328,7 @@ private:
         F32 mStrength;
         bool mOnWater;
         bool mShatter;
+        bool mRunoff;
     };
     std::multimap<F64, Impact> mImpacts;
 

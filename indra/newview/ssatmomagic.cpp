@@ -26,7 +26,11 @@
 #include "ssatmomagic.h"
 #include "ssatmotrack.h"
 #include "ssrainshadow.h"
+#include "ssrunoff.h"
 #include "sswindflow.h"
+
+#include "llviewerobject.h"
+#include "llviewerobjectlist.h"
 #include "ssprecipitation.h"
 #include "ssweathersounds.h"
 
@@ -46,6 +50,8 @@
 #include "llviewertexture.h"
 #include "llviewerwindow.h"
 #include "pipeline.h"
+
+#include <algorithm>
 
 // <SS:Nexii> Atmo Magic weather system
 
@@ -129,6 +135,10 @@ F32 fbm2(F32 x, F32 y, U32 seed, S32 octaves)
 static const F32 TRACK_FADE_RATE = 0.45f;
 static const F32 WIND_FADE_RATE  = 0.8f;
 
+// Wrap on the accumulated wind drift, metres. Far outside anything a gust
+// pattern is sampled across, and a multiple of the region grid.
+static const F64 WIND_DRIFT_WRAP = 1048576.0;
+
 SSAtmoMagic::SSAtmoMagic()
 {
 }
@@ -198,6 +208,13 @@ void SSAtmoMagic::refreshParams()
     mPrecipitation = llclamp(cfg.mPrecipitation, 0.f, 1.f) * mBlend;
     mTurbulence = llclamp(cfg.mTurbulence, 0.f, 1.f);
 
+    // Gust shape, folded into one depth figure with the turbulence it scales
+    // by. Eased along with the crossfade so crossing a band boundary does not
+    // step from a steady wind into a squall between frames.
+    mGustDepth = llclamp(cfg.mGustDepth, 0.f, 3.f) * mTurbulence * mBlend;
+    mGustLength = llclamp(cfg.mGustLength, 8.f, 2000.f);
+    mGustVeer = llclamp(cfg.mGustVeer, 0.f, 90.f) * DEG_TO_RAD;
+
     // Ease the wind vector rather than the orientation, so a direction change
     // cannot sweep the long way round the compass
     const F32 target_speed = track_runs ? llmax(0.f, cfg.mWindSpeed) : 0.f;
@@ -205,6 +222,26 @@ void SSAtmoMagic::refreshParams()
     mWind += (target_wind - mWind) * llclamp(WIND_FADE_RATE * dt, 0.f, 1.f);
     mWindXY.set(mWind.mV[VX], mWind.mV[VY], 0.f);
     mWindSpeed = mWind.magVec();
+
+    // How far the air itself has travelled. Anything keyed to a pattern that
+    // rides along with the wind - the flowmap's gust waves - phases off this
+    // rather than off speed times the clock, which would jump the whole field
+    // bodily every time the wind eased to a different speed.
+    //
+    // Seeded from the shared clock so two clients that have been standing in
+    // the same steady wind agree on where in the cycle it is; after that they
+    // only diverge by the history of speed changes they each saw. Wrapped a
+    // long way out to keep the single precision the field is sampled at, at
+    // the cost of one phase jump per several hours of hard wind.
+    if (mWindDriftSeeded)
+    {
+        mWindDrift = fmod(mWindDrift + (F64)mWindSpeed * dt, WIND_DRIFT_WRAP);
+    }
+    else if (target_speed > 0.f)
+    {
+        mWindDrift = fmod(mNow * (F64)target_speed, WIND_DRIFT_WRAP);
+        mWindDriftSeeded = true;
+    }
 
     // Ground zero for this track: terrain and water at ground level, the band's
     // own base altitude up in the sky unless the config pins it to a platform
@@ -389,10 +426,21 @@ void SSAtmoMagic::shift(const LLVector3& offset)
     {
         impact.second.mPosAgent += offset;
     }
+
+    // Queued edits are agent-space too. Left unshifted they would mature into
+    // a dirty mark a region's width away from the object that caused it, and
+    // every one of them would look like it had moved on the next settle pass
+    // and re-arm, so a region crossing would both miss the real geometry and
+    // stall the queue.
+    for (auto& entry : mPendingEdits)
+    {
+        entry.second.mPos += offset;
+    }
 }
 
 void SSAtmoMagic::queueImpact(F64 time, const LLVector3& pos_agent, F32 strength, bool on_water,
-                              const LLVector3& normal, const LLVector3& velocity, bool shatter)
+                              const LLVector3& normal, const LLVector3& velocity, bool shatter,
+                              bool from_runoff)
 {
     // Bounded so a hitch or bad parameters can't grow this without limit.
     //
@@ -405,7 +453,7 @@ void SSAtmoMagic::queueImpact(F64 time, const LLVector3& pos_agent, F32 strength
     // thousand was reached almost immediately and silently threw the rest away,
     // which is why the ripples read as a fraction of the drops.
     if (mImpacts.size() > 16384) return;
-    mImpacts.emplace(time, Impact{ pos_agent, normal, velocity, strength, on_water, shatter });
+    mImpacts.emplace(time, Impact{ pos_agent, normal, velocity, strength, on_water, shatter, from_runoff });
 }
 
 void SSAtmoMagic::processImpacts()
@@ -428,6 +476,15 @@ void SSAtmoMagic::processImpacts()
         // landings and sound quieter at the same weather parameters
         SSWeatherSounds::getInstance()->notifyImpact(
             impact.mStrength * (1.f - dist / IMPACT_SEE_RADIUS));
+
+        // Ground truth for the runoff system: a landing that actually arrived,
+        // after every throttle and cull between the weather parameters and the
+        // screen. Drips off an eave are excluded - they are the output of that
+        // system, not evidence about the rain feeding it.
+        if (!impact.mRunoff)
+        {
+            SSRunoff::getInstance()->notifyImpact(impact.mPosAgent, IMPACT_SEE_RADIUS);
+        }
 
         // Deterministic per-impact stream so the ripple and any shatter look
         // the same on every client watching the same landing
@@ -474,12 +531,20 @@ void SSAtmoMagic::idle()
         refreshAssets();
     }
 
+    // Geometry changes that have held still long enough to be believed. Before
+    // the maps update, so a settled edit is picked up by this frame's capture.
+    settleEdits();
+
     ensureSim();
 
     if (mSim)
     {
         mSim->update(gFrameIntervalSeconds);
     }
+
+    // Roof drainage. Runs before the impacts it schedules are dispatched, so a
+    // drip released this frame is queued in time to be seen landing.
+    SSRunoff::getInstance()->idle(gFrameIntervalSeconds);
 
     if (mEnabled)
     {
@@ -491,6 +556,267 @@ void SSAtmoMagic::idle()
     SSWeatherSounds::getInstance()->idle();
 }
 
+
+//-----------------------------------------------------------------------------
+// Geometry change settling
+//-----------------------------------------------------------------------------
+
+// How long an object has to stay put before either map will rebuild for it.
+// Long enough that a thrown prim, a bullet or a combat rez is gone before its
+// entry matures; short enough that editing a roof shows up while you are still
+// looking at it.
+static const F64 EDIT_SETTLE_SECONDS = 4.0;
+
+// A rezzing region can produce updates faster than they settle, and it holds
+// thousands of prims, so this has to be roomy: an entry is a few dozen bytes
+// and the cap exists to bound a pathological case, not to ration normal use.
+//
+// When it is hit the entry *furthest* from maturing is the one dropped. This
+// was the other way round once, and dropping the oldest meant that under heavy
+// rezzing - exactly when the maps most need to hear about the new geometry -
+// the entries about to be confirmed were the ones thrown away, so nothing ever
+// matured and the shadow map never learned the buildings were there. Rain fell
+// straight through their roofs until the periodic full recapture caught up.
+static const size_t MAX_PENDING_EDITS = 4096;
+
+// Confirmations per frame. Each one dirties two maps; doing thousands in the
+// frame a big build finishes settling would be its own hitch.
+static const size_t MAX_SETTLE_PER_FRAME = 64;
+
+// How far an object may drift and still count as the same resting object.
+// Interpolation and terse updates jitter a stationary prim by centimetres.
+static const F32 EDIT_SETTLE_SLOP = 0.25f;
+
+// static
+void SSAtmoMagic::onObjectUpdate(LLViewerObject* objectp)
+{
+    SSAtmoMagic* self = getInstance();
+    if (!self->mEnabled) return;
+    if (!objectp || objectp->isDead() || objectp->isAvatar() || objectp->isAttachment()) return;
+
+    const LLVector3 scale = objectp->getScale();
+    const F32 dim = llmax(scale.mV[VX], scale.mV[VY], scale.mV[VZ]);
+    if (dim < 0.5f) return;     // too small to matter at either map's resolution
+
+    // Already tagged as a bullet by its shape: long, thin, and almost always
+    // gone within the second. Nothing shaped like that shelters anything from
+    // rain or blocks any wind worth solving for.
+    if (objectp->isLikelyProjectileBullet()) return;
+
+    const LLVector3 pos = objectp->getRenderPosition();
+    const F32 radius = scale.magVec() * 0.5f;
+
+    // Note what is moving, do not discard it. Something in flight is not part
+    // of the build yet, but it may be about to become part of it - a prim
+    // being dragged into place, a physical object settling - and an object
+    // whose last update carried a velocity would otherwise never be queued at
+    // all, so the maps would never hear about it. The settle pass re-checks
+    // position and keeps deferring until it actually stops; a projectile is
+    // gone before that happens and is dropped without ever costing a rebuild.
+    const bool moving = objectp->getVelocity().magVecSquared() > 0.25f
+                     || objectp->getAngularVelocity().magVecSquared() > 0.25f;
+
+    auto it = self->mPendingEdits.find(objectp->getID());
+    if (it != self->mPendingEdits.end())
+    {
+        PendingEdit& edit = it->second;
+
+        // Moved again, so it has not settled. Restart its clock rather than
+        // letting a slow drag mature partway through.
+        if (moving || (edit.mPos - pos).magVecSquared() > EDIT_SETTLE_SLOP * EDIT_SETTLE_SLOP)
+        {
+            edit.mPos = pos;
+            edit.mRadius = radius;
+            edit.mSettleAt = self->mNow + EDIT_SETTLE_SECONDS;
+            ++edit.mResets;
+        }
+        return;
+    }
+
+    if (self->mPendingEdits.size() >= MAX_PENDING_EDITS)
+    {
+        // Drop whatever is furthest from being believed, never what is closest
+        auto worst = self->mPendingEdits.begin();
+        for (auto e = self->mPendingEdits.begin(); e != self->mPendingEdits.end(); ++e)
+        {
+            if (e->second.mSettleAt > worst->second.mSettleAt) worst = e;
+        }
+        if (worst->second.mSettleAt <= self->mNow + EDIT_SETTLE_SECONDS) return;
+        self->mPendingEdits.erase(worst);
+    }
+
+    PendingEdit edit;
+    edit.mPos = pos;
+    edit.mRadius = radius;
+    edit.mSettleAt = self->mNow + EDIT_SETTLE_SECONDS;
+    edit.mFirstSeen = self->mNow;
+    self->mPendingEdits[objectp->getID()] = edit;
+}
+
+void SSAtmoMagic::settleEdits()
+{
+    if (mPendingEdits.empty()) return;
+
+    size_t confirmed = 0;
+
+    for (auto it = mPendingEdits.begin(); it != mPendingEdits.end(); )
+    {
+        if (mNow < it->second.mSettleAt)
+        {
+            ++it;
+            continue;
+        }
+
+        LLViewerObject* objectp = gObjectList.findObject(it->first);
+
+        if (!objectp || objectp->isDead())
+        {
+            // Rezzed, did whatever it was doing, and went. This is the whole
+            // point of the delay: a projectile never gets this far, so it never
+            // costs a rebuild.
+            it = mPendingEdits.erase(it);
+            continue;
+        }
+
+        const LLVector3 pos = objectp->getRenderPosition();
+        if ((pos - it->second.mPos).magVecSquared() > EDIT_SETTLE_SLOP * EDIT_SETTLE_SLOP)
+        {
+            // Still moving, just not sending updates fast enough to have reset
+            // the clock. Give it another window.
+            it->second.mPos = pos;
+            it->second.mRadius = objectp->getScale().magVec() * 0.5f;
+            it->second.mSettleAt = mNow + EDIT_SETTLE_SECONDS;
+            ++it->second.mResets;
+            ++it;
+            continue;
+        }
+
+        // It is part of the build now. Both maps hear about it once.
+        SSRainShadowMap::getInstance()->markDirty(it->second.mPos, it->second.mRadius);
+        SSWindFlowMap::markDirty(it->second.mPos, it->second.mRadius);
+        ++mSettledEdits;
+
+        it = mPendingEdits.erase(it);
+
+        // The rest keep until next frame. They are already past their settle
+        // time, so nothing is lost by finishing them a frame later.
+        if (++confirmed >= MAX_SETTLE_PER_FRAME) break;
+    }
+}
+
+//-----------------------------------------------------------------------------
+// Geometry settling overlay
+//-----------------------------------------------------------------------------
+
+// A beacon over every entry still waiting out its settle delay. The counts in
+// the info overlay say the queue is busy but not what is keeping it busy, and
+// the two causes look identical from a number: a stream of short-lived objects
+// passing through costs nothing, while a few objects that never hold still are
+// a permanent tax on both maps. This puts each entry where you can walk to it
+// and see what it actually is.
+void SSAtmoMagic::renderDebug()
+{
+    if (mPendingEdits.empty()) return;
+
+    LLGLEnable blend(GL_BLEND);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    // How tall the beacons stand. Tall enough to clear the roof of whatever is
+    // holding the entry, since the offender is usually a prim inside a build
+    // rather than something out in the open.
+    static const F32 BEACON_HEIGHT = 24.f;
+
+    // The box is depth tested against the world, so a marker inside a wall
+    // reads as inside it. The beacon above it is not: its whole job is to be
+    // findable from across the region.
+    {
+        LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+        gGL.begin(LLRender::LINES);
+        for (const auto& entry : mPendingEdits)
+        {
+            const PendingEdit& edit = entry.second;
+
+            // Green means it is about to mature and cost one rebuild, which is
+            // the queue working. Amber means it has pushed itself back a few
+            // times. Red means it has been re-arming for long enough that it is
+            // never going to settle on its own - a swaying tree, a hovering
+            // vehicle, a scripted prim nudging itself - and that is what this
+            // overlay exists to find.
+            LLColor4 color = colorForEdit(edit);
+
+            const LLVector3& p = edit.mPos;
+            const F32 r = llmax(edit.mRadius, 0.25f);
+
+            // Axis-aligned box at the size the maps were told to dirty, not at
+            // the object's own bounds: an entry that dirties far more than the
+            // thing causing it is worth seeing as such.
+            gGL.color4fv(color.mV);
+            const LLVector3 lo = p - LLVector3(r, r, r);
+            const LLVector3 hi = p + LLVector3(r, r, r);
+            const F32 xs[2] = { lo.mV[VX], hi.mV[VX] };
+            const F32 ys[2] = { lo.mV[VY], hi.mV[VY] };
+            const F32 zs[2] = { lo.mV[VZ], hi.mV[VZ] };
+            for (S32 a = 0; a < 2; ++a)
+            {
+                for (S32 b = 0; b < 2; ++b)
+                {
+                    // One edge along each axis per corner pair: twelve in all
+                    gGL.vertex3f(xs[0], ys[a], zs[b]);  gGL.vertex3f(xs[1], ys[a], zs[b]);
+                    gGL.vertex3f(xs[a], ys[0], zs[b]);  gGL.vertex3f(xs[a], ys[1], zs[b]);
+                    gGL.vertex3f(xs[a], ys[b], zs[0]);  gGL.vertex3f(xs[a], ys[b], zs[1]);
+                }
+            }
+        }
+        gGL.end();
+    }
+
+    {
+        LLGLDepthTest depth(GL_FALSE);
+        gGL.begin(LLRender::LINES);
+        for (const auto& entry : mPendingEdits)
+        {
+            const PendingEdit& edit = entry.second;
+            LLColor4 color = colorForEdit(edit);
+
+            // The column fades out with height so a screen full of them still
+            // reads as a set of points on the ground rather than as bars
+            const LLVector3& p = edit.mPos;
+            const S32 steps = 6;
+            for (S32 i = 0; i < steps; ++i)
+            {
+                const F32 t0 = (F32)i / (F32)steps;
+                const F32 t1 = (F32)(i + 1) / (F32)steps;
+                gGL.color4f(color.mV[VRED], color.mV[VGREEN], color.mV[VBLUE],
+                            color.mV[VALPHA] * (1.f - t0));
+                gGL.vertex3f(p.mV[VX], p.mV[VY], p.mV[VZ] + BEACON_HEIGHT * t0);
+                gGL.color4f(color.mV[VRED], color.mV[VGREEN], color.mV[VBLUE],
+                            color.mV[VALPHA] * (1.f - t1));
+                gGL.vertex3f(p.mV[VX], p.mV[VY], p.mV[VZ] + BEACON_HEIGHT * t1);
+            }
+        }
+        gGL.end();
+    }
+
+    gGL.flush();
+}
+
+// Shared by the boxes, the beacons and the info overlay's offender list, so
+// the colour in the readout is the colour standing over the object.
+// static
+LLColor4 SSAtmoMagic::colorForEdit(const PendingEdit& edit)
+{
+    SSAtmoMagic* self = getInstance();
+
+    // Fully bright as it comes due, dimmer while it still has time to run, so
+    // a marker brightening and vanishing is a normal edit being believed
+    const F32 remaining = (F32)llclamp((edit.mSettleAt - self->mNow) / EDIT_SETTLE_SECONDS, 0.0, 1.0);
+    const F32 alpha = 0.35f + 0.55f * (1.f - remaining);
+
+    if (edit.mResets >= 10)  return LLColor4(1.f, 0.2f, 0.15f, alpha);
+    if (edit.mResets >= 2)   return LLColor4(1.f, 0.7f, 0.15f, alpha);
+    return LLColor4(0.3f, 1.f, 0.4f, alpha);
+}
 
 // static
 void SSAtmoMagic::drawInfo()
@@ -548,6 +874,53 @@ void SSAtmoMagic::drawInfo()
                              gSSPrecipLitProgram.isComplete() ? "on" : "fallback",
                              gPipeline.mSceneMap.getWidth() > 0 ? "on" : "off"));
 
+    // Feeds both maps below, so it sits ahead of them rather than inside
+    // either. A prim change is held here until it has stayed put long enough
+    // to be worth rebuilding for; "settling" high with "believed" flat means
+    // neither map is hearing about the build at all.
+    lines.push_back("-- geometry edits --");
+    lines.push_back(llformat("queue      %d settling   %u believed",
+                             (S32)atmo->pendingEdits(), atmo->settledEdits()));
+
+    // A queue that sits at a steady handful is either harmless churn or the
+    // same few objects re-arming forever, and the count alone cannot tell you
+    // which. List the ones that have pushed themselves back the most, with
+    // where to go and look; the beacon overlay marks these same entries in
+    // world in the same colours.
+    {
+        std::vector<const std::pair<const LLUUID, PendingEdit>*> worst;
+        for (const auto& entry : atmo->mPendingEdits)
+        {
+            if (entry.second.mResets >= 2) worst.push_back(&entry);
+        }
+        std::sort(worst.begin(), worst.end(),
+                  [](const std::pair<const LLUUID, PendingEdit>* a,
+                     const std::pair<const LLUUID, PendingEdit>* b)
+                  { return a->second.mResets > b->second.mResets; });
+
+        if (worst.empty())
+        {
+            lines.push_back("           nothing re-arming, queue is passing through");
+        }
+        else
+        {
+            lines.push_back(llformat("re-arming  %d of %d never settling",
+                                     (S32)worst.size(), (S32)atmo->pendingEdits()));
+        }
+
+        for (size_t i = 0; i < worst.size() && i < 5; ++i)
+        {
+            const PendingEdit& edit = worst[i]->second;
+            const LLVector3 delta = edit.mPos - cam;
+            lines.push_back(llformat("  %s  x%u in %.0fs   %.0fm away   %.0f %.0f %.0f  r%.1f",
+                                     worst[i]->first.asString().substr(0, 8).c_str(),
+                                     edit.mResets, (F32)(atmo->mNow - edit.mFirstSeen),
+                                     delta.magVec(),
+                                     edit.mPos.mV[VX], edit.mPos.mV[VY], edit.mPos.mV[VZ],
+                                     edit.mRadius));
+        }
+    }
+
     lines.push_back("-- wind flow --");
     SSWindFlowMap* flow = SSWindFlowMap::getInstance();
     if (!SSWindFlowMap::isSupported())
@@ -579,6 +952,21 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("local wind %.1f %.1f %.1f  (%.1f m/s)  exposure %.2f",
                                  local.mV[VX], local.mV[VY], local.mV[VZ],
                                  local.magVec(), flow->exposure(cam)));
+
+        // The travelling gust at this spot, and how long a wave takes to reach
+        // here from the region's windward edge. Watch the multiplier and you
+        // are watching the surge arrive.
+        static LLCachedControl<F32> gust_travel(gSavedSettings, "SSAtmoWindGustTravel", 1.f);
+
+        F32 gust_scale = 1.f, gust_veer = 0.f;
+        flow->gustAt(cam, atmo->sharedTime(), gust_scale, gust_veer);
+
+        const F32 gust_length = atmo->gustLength();
+        const F32 gust_speed = llmax(0.1f, atmo->windSpeed()
+                                           * llclamp((F32)gust_travel, 0.01f, 4.f));
+        lines.push_back(llformat("gust wave  x%.2f   veer %+.0f deg   fronts every %.1fs",
+                                 gust_scale, gust_veer * RAD_TO_DEG,
+                                 gust_length / gust_speed));
         lines.push_back(llformat("build      %.1f ms", flow->lastSolveMS()));
 
         // What the mask holds over this exact spot. A column with nothing
@@ -598,6 +986,8 @@ void SSAtmoMagic::drawInfo()
         }
     }
 
+    lines.push_back("-- rain shadow --");
+
     // What the rain shadow answers for the same column. Most land here is mesh
     // and prims, so the difference between a surface the capture saw and the
     // terrain heightmap it falls back to is the difference between rain landing
@@ -612,6 +1002,35 @@ void SSAtmoMagic::drawInfo()
                                  on_water ? ", water" : ""));
     }
 
+    // How hard the map is working. "heightmap guess" above with a capture age
+    // climbing past the refresh interval means it has not caught up with the
+    // build; a forced count that never moves while a region rezzes around you
+    // means it is not being told the build changed at all.
+    {
+        SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
+        lines.push_back(llformat("shadow     %d regions at %d texels   %d dirty",
+                                 shadow->tileCount(), (S32)shadow->resolution(),
+                                 (S32)shadow->dirtyTileCount()));
+        lines.push_back(llformat("captures   %u total, %u forced by edits   last %.1fs ago, %.1f ms",
+                                 shadow->captureCount(), shadow->dirtyCaptureCount(),
+                                 (F32)shadow->lastCaptureAge(), shadow->lastCaptureMS()));
+    }
+
+    lines.push_back("-- runoff --");
+
+    {
+        SSRunoff* runoff = SSRunoff::getInstance();
+        lines.push_back(llformat("runoff     %d eaves over %d regions   %.1f drips/s   %d streams",
+                                 runoff->eaveCount(), runoff->networkCount(),
+                                 runoff->dripRate(),
+                                 sim ? sim->streamCount() : 0));
+        // Traces should be rare: the count climbing while you stand still means
+        // something is churning the geometry serial
+        lines.push_back(llformat("drainage   delivery x%.2f   traced %.1f ms   traces %u",
+                                 runoff->delivery(), runoff->lastBuildMS(),
+                                 runoff->buildCount()));
+    }
+
     lines.push_back("-- audio --");
     lines.push_back(llformat("cover      %s   space %s%s",
                              audio->isCovered() ? "ROOFED" : "open sky",
@@ -620,7 +1039,12 @@ void SSAtmoMagic::drawInfo()
                                  : (std::string(" / ") + SSWeatherSounds::sizeName(audio->outdoorSize())).c_str()));
     if (audio->isCovered())
     {
-        lines.push_back(llformat("roof       %.1fm above", audio->roofDistance()));
+        // Ceiling from the up ray, and how much more build the flowmap's
+        // height capture says is stacked on top of it. A cellar reads as a
+        // couple of metres of ceiling with storeys of burial above it.
+        lines.push_back(llformat("roof       %.1fm above   buried %.1fm   occlusion %.2f",
+                                 audio->roofDistance(), audio->burialDepth(),
+                                 audio->burialOcclusion()));
     }
     lines.push_back(llformat("walls      %d hit   avg %.1fm   blend %.2f",
                              audio->wallCount(), audio->wallDistance(), audio->coverBlend()));

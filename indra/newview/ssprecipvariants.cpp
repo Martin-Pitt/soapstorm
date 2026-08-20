@@ -172,6 +172,35 @@ static void splatLayout(F32 quad_x, F32 quad_y, F32 drop_x, F32 drop_y, S32 res,
     hh = llclamp(hh_true * scale, min_splat, res * 0.45f);
 }
 
+void SSPrecipVariants::splatInflation(const SSPrecipPreset& preset, SSPrecipTier tier,
+                                      F32& scale_x, F32& scale_y)
+{
+    scale_x = 1.f;
+    scale_y = 1.f;
+
+    F32 quad_x, quad_y, drop_x, drop_y;
+    S32 splats;
+    if (!SSPrecipSim::tierSprite(preset, tier, quad_x, quad_y, drop_x, drop_y, splats)) return;
+
+    // Same arithmetic the bake runs, at the same resolution, so the answer is
+    // the ratio the bake actually applied rather than an estimate of it
+    const S32 res = 256;
+    F32 hw, hh;
+    S32 count;
+    splatLayout(quad_x, quad_y, drop_x, drop_y, res, splats,
+                (tier == TIER_DROPS) ? 1 : (tier == TIER_CLUSTERS) ? 14 : 90,
+                hw, hh, count);
+
+    const F32 px_x = (F32)res / (2.f * llmax(0.001f, quad_x));
+    const F32 px_y = (F32)res / (2.f * llmax(0.001f, quad_y));
+    const F32 shrink = sqrtf((F32)splats / (F32)llmax(1, count));
+    const F32 hw_true = llmax(0.01f, drop_x * px_x) * shrink;
+    const F32 hh_true = llmax(0.01f, drop_y * px_y) * shrink;
+
+    if (hw_true > 0.f) scale_x = llmax(1.f, hw / hw_true);
+    if (hh_true > 0.f) scale_y = llmax(1.f, hh / hh_true);
+}
+
 LLViewerTexture* SSPrecipVariants::get(const SSPrecipPreset& preset, SSPrecipTier tier, U32 variant,
                                        LLViewerTexture* custom_drop)
 {

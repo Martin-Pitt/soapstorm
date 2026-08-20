@@ -1373,6 +1373,14 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_RAIN_SHADOW;
     }
+    else if ("roof runoff" == info_display)
+    {
+        return LLPipeline::RENDER_DEBUG_ROOF_RUNOFF;
+    }
+    else if ("geometry settling" == info_display)
+    {
+        return LLPipeline::RENDER_DEBUG_GEOM_SETTLE;
+    }
     // </SS:Nexii>
     else if ("texel density" == info_display)
     {

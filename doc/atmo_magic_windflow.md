@@ -198,6 +198,67 @@ This is why getting above the roofline should feel exposed, and it is measured
 from the *low* end of the captured surfaces rather than the mean — the mean
 would be dragged upward by the very rooftops the gradient is measuring from.
 
+### 7. Travelling gusts
+
+The solve is static, and a storm built out of it alone blows at one unvarying
+strength forever, everywhere at once. The rhythm is layered on at sample time
+instead, in `SSWindFlowMap::gustAt()`, as *frozen turbulence*: a deterministic
+noise field fixed in the moving air rather than in the world.
+
+Sampling point `p` at time `t` projects `p`'s grid coordinates onto the wind
+axis and subtracts how far the air has travelled:
+
+```
+along  = dot(p_xy, wind_dir) - drift      drift = SSAtmoMagic::windDrift()
+across = cross(p_xy, wind_dir)
+gust   = 1 + depth * (0.8 * fbm2(along/L, across/2.4L) + 0.3 * value2(along/0.27L, across/0.65L))
+```
+
+That subtraction is the whole trick. Standing still, the pattern is carried past
+at the wind's own speed and the wind rises and falls as it goes by; watched from
+above, a surge enters on the windward side of the region and walks across it,
+reaching the far edge as much later as the air takes to get there. Nothing about
+it is a clock — it is one field, and where you are in it is where the air has
+carried it to. Fronts arrive every `gust_length / windspeed` seconds: 140 m in
+a 14 m/s wind is a wave every ten seconds.
+
+Depth, spacing and veer are the track's own weather, edited on the main Atmo
+Magic window next to turbulence and wind speed and serialized into the parcel
+notecard (`gust_depth`, `gust_length`, `gust_veer` — see
+[atmo_magic_tracks.md](atmo_magic_tracks.md)). Only `SSAtmoWindGustTravel`, how
+fast a front moves relative to the air, is a viewer-side dial.
+
+Details that matter:
+
+- **Anisotropy.** The field is long across the wind and short along it, because
+  a gust front arrives as a line, not a blob.
+- **Veer.** A third channel swings the wind a few degrees either side of its
+  mean as the front goes through (`gust_veer`). A gust that only
+  changed speed reads as the whole world pulsing rather than as weather.
+- **Asymmetry.** Peaks are stretched and troughs compressed, so the wind spends
+  longer in the lulls between gusts than inside them.
+- **Shelter.** The modulation is scaled by the cell's exposure, so a courtyard
+  the wind barely reaches feels the surges as a distant swell rather than as the
+  front itself.
+- **Depth follows turbulence.** The track's turbulence parameter scales its
+  gust depth, so a calm track still gets a steady draught however deep the
+  gusts are set, and the crossfade eases both, so crossing a band boundary
+  cannot step from still air into a squall between frames.
+- **Drift, not `speed * time`.** `windDrift()` integrates `|wind| * dt`. Phasing
+  off speed times the clock instead would shift the entire field bodily every
+  time the wind eased to a different speed. It is seeded from the shared clock,
+  so two clients standing in the same steady wind agree on where in the cycle
+  they are, and wraps at 2^20 m — one phase jump per several hours of hard wind.
+- **Slow evolution.** A real eddy changes as it travels; a crosswind slide on
+  the shared clock decorrelates the field over a couple of minutes so a steady
+  wind does not visibly repeat itself.
+
+`sample()` applies the gust to whatever it is about to return, including the
+ambient fallback outside a solved tile, so the wind does not surge on one side
+of a tile border and hold steady on the other. Every consumer — precipitation
+advection, in-world particles, the wind audio bed — gets the rhythm for free and
+gets it in step.
+
 ## Output and consumers
 
 One `RGBA16F` volume: `RG B` = velocity m/s, `A` = exposure (how much of the
@@ -228,6 +289,48 @@ their border.
 - **Precipitation** (`ssprecipitation.cpp`) — `windAt()` samples the flowmap, so
   drops curve around buildings and funnel down alleys. Toggle with
   `SSAtmoWindFlowAdvect`.
+- **In-world particles** (`llviewerpartsim.cpp`) — anything flagged
+  `LL_PART_WIND_MASK` takes its wind from the flowmap instead of
+  `LLViewerRegion::mWind`, so scripted smoke, dust, leaves and steam blow the
+  way the rain does. This is a **replacement, not a blend**: while Atmo Magic is
+  running and the camera's region has a solved tile, the sim's wind field is not
+  consulted at all — averaging the two gives a third field that is neither, and
+  the first thing it loses is the courtyard the solve says is still. Calm
+  weather is not a handover either; when the weather says the air is still, the
+  air is still. Toggle with `SSAtmoWindFlowParticles`.
+
+  The rate a particle takes up that wind had to move with it. The viewer settles
+  a wind-tagged particle onto the wind at a tenth per second — a ten second time
+  constant — which is fine against a region-wide breeze, since the whole region
+  *is* that one wind and being slow to reach it costs only a lag. A solved field
+  is the opposite: alley mouths, rooftop updrafts and the lee behind a wall are
+  metres across and seconds apart, so a particle smoothing over ten seconds of
+  them feels their average, which is the uniform breeze the solve was supposed
+  to replace. `SSAtmoWindFlowParticleResponse` multiplies that rate while the
+  flowmap is driving, defaulting to 4 (a 2.5 s constant); at 1 the viewer's own
+  behaviour is back. The take-up and the drag are the same number either way, so
+  a particle still settles at the speed of the air around it and no faster.
+
+- **`gWindVec`** (`llappviewer.cpp`) — the viewer's global wind vector, which is
+  what the wind heard in the headphones is built from. It now samples the
+  flowmap at the avatar rather than the region field, so the wind you hear is
+  the one blowing down the alley you are standing in. The **water** is
+  deliberately left on a region-scale wind — `gSky.setWind()` takes the
+  undisturbed weather wind, because the local field around one build says
+  nothing about how the sea beyond it should run.
+- **Flexible prims** (`llflexibleobject.cpp`) — a hanging banner in an alley
+  feels the draught coming down it. Sampled **once per prim**, not per section:
+  the field's cells are metres across and a flexi is a couple of metres end to
+  end, so its sections would be reading one cell between them anyway, and this
+  runs for every flexi in sight every frame.
+
+Both are behind `SSAtmoWindFlowViewerWind`. With that off, or with no solved
+tile under the camera, they fall back to `LLViewerRegion::mWind` exactly as
+before.
+
+`SSWindFlowMap::drivesWind()` is the single gate all of these ask — Atmo Magic
+running, and a tile solved under the camera — so there is one answer to "is the
+flowmap the wind right now" rather than four subtly different ones.
 
 This does not introduce a new cross-client divergence class: impacts already
 depend on local geometry through the rain shadow map. The deterministic streams
@@ -287,7 +390,11 @@ something is churning.
 | `SSAtmoWindFlowShelterSteps` | 6 | Upwind reach for lee sheltering |
 | `SSAtmoWindFlowGradient` | 0.25 | Boundary-layer exponent |
 | `SSAtmoWindFlowAdvect` | on | Let the flowmap carry precipitation |
+| `SSAtmoWindFlowParticles` | on | Let the flowmap drive wind-tagged in-world particles |
+| `SSAtmoWindFlowViewerWind` | on | Let the flowmap drive the wind audio bed and flexible prims |
+| `SSAtmoWindFlowParticleResponse` | 4.0 | How fast those particles take up the local wind, against the viewer's own rate |
 | `SSAtmoWindFlowDebugRange` | 128 | Debug arrows at full texel density within this range |
+| `SSAtmoWindGustTravel` | 1.0 | Front speed relative to the air; 0 pins the pattern to the ground |
 
 ## Known limitations
 
@@ -305,6 +412,9 @@ something is churning.
   linear in the pass count rather than the near-constant a multigrid solve would
   give. That is what makes the pass count a tuning problem instead of an
   implementation detail.
+- **Gusts do not re-solve.** The rhythm scales and veers the solved field; it
+  does not re-run the pressure solve for the gusted wind, so a gust does not
+  find a new path through the build, only a stronger one through the same one.
 - **Band height.** A build taller than the probe range (four times
   `SSAtmoWindFlowHeight`, so 768 m by default) is clipped at the ceiling and
   reads as solid above it.

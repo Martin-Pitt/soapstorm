@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="480"
+ height="440"
  layout="topleft"
  name="floater_ss_atmo_fx"
  save_rect="true"
@@ -296,15 +296,4 @@
         <button.commit_callback function="ResetControl" parameter="SSAtmoGlowScale" />
     </button>
 
-    <text
-     follows="left|top" layout="topleft" left="12" top_pad="12"
-     height="14" width="356" name="debug_label" font="SansSerifSmallBold">
-        Diagnostics
-    </text>
-    <check_box
-     control_name="SSAtmoShowInfo"
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="16" width="356"
-     label="Show info overlay"
-     tool_tip="On-screen readout of weather values, particle counts, impact rate and the indoor/outdoor probe result" />
 </floater>
