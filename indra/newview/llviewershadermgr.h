@@ -277,6 +277,8 @@ extern LLGLSLShader         gDeferredFullbrightProgram;
 extern LLGLSLShader         gSSPrecipRainProgram;
 extern LLGLSLShader         gSSPrecipLitProgram;
 extern LLGLSLShader         gSSPrecipProjProgram;
+extern LLGLSLShader         gSSSurfaceWetProgram;
+extern LLGLSLShader         gSSSurfaceCommitProgram;
 // Wind flowmap compute passes; only created when GL 4.3 is present
 extern LLGLSLShader         gSSWindInitProgram;
 extern LLGLSLShader         gSSWindDivProgram;

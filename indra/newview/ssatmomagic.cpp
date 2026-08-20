@@ -27,6 +27,7 @@
 #include "ssatmotrack.h"
 #include "ssrainshadow.h"
 #include "ssrunoff.h"
+#include "sssurfacefield.h"
 #include "sswindflow.h"
 
 #include "llviewerobject.h"
@@ -546,6 +547,10 @@ void SSAtmoMagic::idle()
     // drip released this frame is queued in time to be seen landing.
     SSRunoff::getInstance()->idle(gFrameIntervalSeconds);
 
+    // What the weather is leaving on the surface, integrated over the network
+    // the line above just refreshed. Reads it, never writes it.
+    SSSurfaceField::getInstance()->idle(gFrameIntervalSeconds);
+
     if (mEnabled)
     {
         processImpacts();
@@ -1029,6 +1034,17 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("drainage   delivery x%.2f   traced %.1f ms   traces %u",
                                  runoff->delivery(), runoff->lastBuildMS(),
                                  runoff->buildCount()));
+
+        // What the drainage has been used for besides shedding. Peaks rather
+        // than means: a mean over a whole region is mostly the open ground
+        // nothing has happened to, and reads as zero long after the streets
+        // have gone dark.
+        SSSurfaceField* surface = SSSurfaceField::getInstance();
+        lines.push_back(llformat("surface    %d fields   wet %.2f   snow %.0f mm   puddle %.0f mm   %.1f ms",
+                                 surface->fieldCount(), surface->peakWet(),
+                                 surface->peakSnow() * 1000.f,
+                                 surface->peakPuddle() * 1000.f,
+                                 surface->lastTickMS()));
     }
 
     lines.push_back("-- audio --");

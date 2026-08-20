@@ -199,6 +199,7 @@ set(viewer_SOURCE_FILES
     sspreciprenderer.cpp
     ssrainshadow.cpp
     ssrunoff.cpp
+    sssurfacefield.cpp
     ssweathersounds.cpp
     sswindflow.cpp
     fsscriptlibrary.cpp
@@ -1083,6 +1084,7 @@ set(viewer_HEADER_FILES
     sspreciprenderer.h
     ssrainshadow.h
     ssrunoff.h
+    sssurfacefield.h
     ssweathersounds.h
     sswindflow.h
     fsscriptlibrary.h

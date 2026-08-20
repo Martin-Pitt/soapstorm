@@ -107,6 +107,7 @@
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssrunoff.h" // <SS:Nexii> Atmo Magic roof runoff
+#include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
 #include "llmutelist.h"
@@ -5669,6 +5670,14 @@ void LLPipeline::renderDebug()
         SSRunoff::getInstance()->renderDebug();
     }
 
+    // Atmo Magic surface field: what the weather has worked into that surface
+    // over time - damp, settled snow, standing water - washed over the cells
+    // it is held in
+    if (mRenderDebugMask & RENDER_DEBUG_SURFACE_FIELD)
+    {
+        SSSurfaceField::getInstance()->renderDebug();
+    }
+
     // Atmo Magic geometry settling: a beacon over every prim change still
     // waiting to be believed, so a queue that never drains can be walked to
     if (mRenderDebugMask & RENDER_DEBUG_GEOM_SETTLE)
@@ -9717,6 +9726,13 @@ void LLPipeline::renderDeferredLighting()
             deferred_light_target->flush();
             unbindDeferredShader(gDeferredBlurLightProgram);
         }
+
+        // <SS:Nexii> Atmo Magic wet surfaces. Ahead of every lighting pass
+        // below, so the sun, the local lights, the projectors and the probes
+        // all read one consistent gbuffer rather than each being taught about
+        // the weather on its own.
+        SSSurfaceField::getInstance()->renderWetPass();
+        // </SS:Nexii>
 
         screen_target->bindTarget();
         // clear color buffer here - zeroing alpha (glow) is important or it will accumulate against sky

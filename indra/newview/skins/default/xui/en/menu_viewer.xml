@@ -4790,6 +4790,16 @@
            parameter="roof runoff" />
         </menu_item_check>
         <menu_item_check
+         label="Surface Field (Atmo Magic)"
+         name="Surface Field">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="surface field" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="surface field" />
+        </menu_item_check>
+        <menu_item_check
          label="Geometry Settling (Atmo Magic)"
          name="Geometry Settling">
           <menu_item_check.on_check

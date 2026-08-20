@@ -99,6 +99,16 @@ LLSD SSPrecipPreset::asLLSD() const
     sd["stream_scale"] = mStreamScale;
     sd["drip_scale"] = mDripScale;
 
+    sd["wet_rate"] = mWetRate;
+    sd["dry_rate"] = mDryRate;
+    sd["snow_rate"] = mSnowRate;
+    sd["snow_melt"] = mSnowMelt;
+    sd["snow_depth"] = mSnowDepth;
+    sd["snow_repose"] = mSnowRepose;
+    sd["puddle_rate"] = mPuddleRate;
+    sd["puddle_depth"] = mPuddleDepth;
+    sd["puddle_drain"] = mPuddleDrain;
+
     sd["textures"] = mTextures;
     sd["ripple_texture"] = mRippleTexture;
     sd["dark_texture"] = mDarkTexture;
@@ -187,6 +197,16 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     if (sd.has("stream_wind")) mStreamWind = (F32)sd["stream_wind"].asReal();
     if (sd.has("stream_scale")) mStreamScale = (F32)sd["stream_scale"].asReal();
     if (sd.has("drip_scale")) mDripScale = (F32)sd["drip_scale"].asReal();
+
+    if (sd.has("wet_rate")) mWetRate = (F32)sd["wet_rate"].asReal();
+    if (sd.has("dry_rate")) mDryRate = (F32)sd["dry_rate"].asReal();
+    if (sd.has("snow_rate")) mSnowRate = (F32)sd["snow_rate"].asReal();
+    if (sd.has("snow_melt")) mSnowMelt = (F32)sd["snow_melt"].asReal();
+    if (sd.has("snow_depth")) mSnowDepth = (F32)sd["snow_depth"].asReal();
+    if (sd.has("snow_repose")) mSnowRepose = (F32)sd["snow_repose"].asReal();
+    if (sd.has("puddle_rate")) mPuddleRate = (F32)sd["puddle_rate"].asReal();
+    if (sd.has("puddle_depth")) mPuddleDepth = (F32)sd["puddle_depth"].asReal();
+    if (sd.has("puddle_drain")) mPuddleDrain = (F32)sd["puddle_drain"].asReal();
 
     if (sd.has("textures")) mTextures = sd["textures"].asString();
     if (sd.has("ripple_texture")) mRippleTexture = sd["ripple_texture"].asString();
@@ -376,6 +396,13 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.4f, 96.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  9.f,    18.f,  0.3f, 224.f };
 
+        // A street darkens under a shower in about a minute and stays damp for
+        // the best part of an hour, so the pair is deliberately lopsided.
+        // Puddles fill far more slowly than the surface wets: standing water
+        // is the last thing to arrive in a downpour and the last to leave.
+        p.mWetRate = 0.02f;   p.mDryRate = 0.0025f;
+        p.mPuddleRate = 0.0016f; p.mPuddleDepth = 0.035f; p.mPuddleDrain = 0.00012f;
+
         // Sound pack. Each slot is a comma separated sequence played through
         // in order rather than a single looping asset, so the bed does not
         // settle into an audible 30 second repeat. Light is left empty: its
@@ -428,6 +455,16 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mTiers[TIER_DROPS]    = { true, KIND_ROUND, 0.055f, 0.055f, 0.85f, 24.f };
         p.mTiers[TIER_CLUSTERS] = { true, KIND_ROUND, 0.35f,  0.35f,  0.35f, 64.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET, 4.f,    8.f,    0.10f, 128.f };
+
+        // Roughly a centimetre every four minutes at full intensity, to a hand's
+        // depth. Melt is an order slower again: snow that took an hour to lie
+        // does not go in ten minutes.
+        p.mSnowRate = 0.00004f; p.mSnowMelt = 0.0000045f;
+        p.mSnowDepth = 0.09f;   p.mSnowRepose = 46.f;
+
+        // Snow damps what it does not cover - the bare edges of a roof it is
+        // sitting on are wet, not dry
+        p.mWetRate = 0.004f;    p.mDryRate = 0.0015f;
         mPresets.push_back(p);
     }
 
@@ -445,6 +482,12 @@ void SSPrecipPresetMgr::buildDefaults()
         p.mTiers[TIER_DROPS]    = { true, KIND_ROUND, 0.04f, 0.04f, 0.70f, 24.f };
         p.mTiers[TIER_CLUSTERS] = { true, KIND_ROUND, 0.4f,  0.4f,  0.30f, 64.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET, 8.f,   10.f,  0.12f, 128.f };
+
+        // Piles faster and deeper than snow, and packs down harder on a slope
+        // before it slides
+        p.mSnowRate = 0.00013f; p.mSnowMelt = 0.0000035f;
+        p.mSnowDepth = 0.22f;   p.mSnowRepose = 52.f;
+        p.mWetRate = 0.003f;    p.mDryRate = 0.0012f;
         mPresets.push_back(p);
     }
 

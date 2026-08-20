@@ -184,6 +184,8 @@ LLGLSLShader            gDeferredAlphaProgram;
 // <SS:Nexii> Atmo Magic particle shaders
 LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
+LLGLSLShader            gSSSurfaceWetProgram;
+LLGLSLShader            gSSSurfaceCommitProgram;
 LLGLSLShader            gSSPrecipProjProgram;
 LLGLSLShader            gSSWindInitProgram;
 LLGLSLShader            gSSWindDivProgram;
@@ -450,6 +452,8 @@ void LLViewerShaderMgr::finalizeShaderList()
     // <SS:Nexii> Atmo Magic: receive env/light uniform updates
     mShaderList.push_back(&gSSPrecipRainProgram);
     mShaderList.push_back(&gSSPrecipLitProgram);
+    mShaderList.push_back(&gSSSurfaceWetProgram);
+    mShaderList.push_back(&gSSSurfaceCommitProgram);
     mShaderList.push_back(&gSSPrecipProjProgram);
     // </SS:Nexii>
     mShaderList.push_back(&gHUDFullbrightProgram);
@@ -1233,6 +1237,8 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSPrecipRainProgram.unload();
         gSSPrecipLitProgram.unload();
         gSSPrecipProjProgram.unload();
+        gSSSurfaceWetProgram.unload();
+        gSSSurfaceCommitProgram.unload();
         // </SS:Nexii>
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
@@ -2128,6 +2134,56 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             LL_WARNS("Shader") << "SS Precipitation projector shader failed to compile;"
                                << " projected lights will not show up in precipitation" << LL_ENDL;
             gSSPrecipProjProgram.unload();
+        }
+    }
+
+    // Wet surfaces. A screen space pass over the gbuffer that tightens the
+    // specular lobe of whatever the weather has been landing on, using the
+    // surface field stitched from the drainage network.
+    //
+    // Deferred only, not the full gbuffer feature: this reads the specular
+    // buffer directly and declares that sampler itself, the way the screen
+    // space reflection post pass does. Pulling gbufferUtil in as well would
+    // declare the same sampler a second time and fetch two more attachments
+    // per fragment that nothing here looks at.
+    if (success)
+    {
+        gSSSurfaceWetProgram.mName = "SS Surface Wetness Shader";
+        gSSSurfaceWetProgram.mFeatures.isDeferred = true;
+        gSSSurfaceWetProgram.mShaderFiles.clear();
+        gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceWetF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceWetProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSSurfaceWetProgram.clearPermutations();
+        add_common_permutations(&gSSSurfaceWetProgram);
+        if (!gSSSurfaceWetProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Surface wetness shader failed to compile;"
+                               << " surfaces will not respond to the weather" << LL_ENDL;
+            gSSSurfaceWetProgram.unload();
+        }
+    }
+
+    // Puts the reworked specular buffer back into the gbuffer. Nothing but a
+    // textured blit, but it has to exist as a draw rather than a copy: writing
+    // through the framebuffer is the only way to name the destination that
+    // does not go through the renderer's texture unit cache.
+    if (success && gSSSurfaceWetProgram.isComplete())
+    {
+        gSSSurfaceCommitProgram.mName = "SS Surface Commit Shader";
+        gSSSurfaceCommitProgram.mShaderFiles.clear();
+        gSSSurfaceCommitProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSSurfaceCommitProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceCommitF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceCommitProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSSurfaceCommitProgram.clearPermutations();
+        add_common_permutations(&gSSSurfaceCommitProgram);
+        if (!gSSSurfaceCommitProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Surface commit shader failed to compile;"
+                               << " surfaces will not respond to the weather" << LL_ENDL;
+            gSSSurfaceCommitProgram.unload();
+            gSSSurfaceWetProgram.unload();
         }
     }
 

@@ -1381,6 +1381,10 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_GEOM_SETTLE;
     }
+    else if ("surface field" == info_display)
+    {
+        return LLPipeline::RENDER_DEBUG_SURFACE_FIELD;
+    }
     // </SS:Nexii>
     else if ("texel density" == info_display)
     {

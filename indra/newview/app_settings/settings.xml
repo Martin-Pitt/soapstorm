@@ -25786,6 +25786,105 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>48.0</real>
     </map>
+    <key>SSAtmoWetDebugForce</key>
+      <map>
+      <key>Comment</key>
+      <string>Diagnostic: above zero, soaks every surface this much regardless of the weather or shelter</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.0</real>
+    </map>
+    <key>SSAtmoWetRoughness</key>
+      <map>
+      <key>Comment</key>
+      <string>What a soaked PBR surface&apos;s roughness is multiplied by; lower is glossier, 0 is a mirror</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>SSAtmoWetRoughMin</key>
+      <map>
+      <key>Comment</key>
+      <string>Floor a wet surface&apos;s roughness may not go below; guards the screen space reflections</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.04</real>
+    </map>
+    <key>SSAtmoWetGloss</key>
+      <map>
+      <key>Comment</key>
+      <string>Glossiness a soaked legacy surface converges on</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.55</real>
+    </map>
+    <key>SSAtmoWetSpecular</key>
+      <map>
+      <key>Comment</key>
+      <string>Specular colour a water film puts on a legacy surface that had none</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>SSAtmoWetStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>How strongly wet surfaces tighten their specular response; 0 disables the effect</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoWetSpread</key>
+      <map>
+      <key>Comment</key>
+      <string>How far a gust spreads the fall direction, softening the edge of shelter under an overhang</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.35</real>
+    </map>
+    <key>SSAtmoWetFacing</key>
+      <map>
+      <key>Comment</key>
+      <string>How much a surface facing away from the weather is spared it; 0 wets every face alike</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.6</real>
+    </map>
+    <key>SSAtmoSurfaceRadius</key>
+      <map>
+      <key>Comment</key>
+      <string>Metres from the camera the surface field overlay is drawn within</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>64.0</real>
+    </map>
     <key>SSAtmoRunoffRes</key>
       <map>
       <key>Comment</key>

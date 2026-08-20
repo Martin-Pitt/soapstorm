@@ -143,7 +143,6 @@ void SSRunoff::clear()
     mNetworks.clear();
     mLastRefresh = 0.0;
     mDripRate = 0.f;
-    mDebugBuilt = false;
     mImpactCount = 0.f;
     mExpectedCount = 0.f;
     mSampleRadius = 0.f;
@@ -155,6 +154,38 @@ S32 SSRunoff::eaveCount() const
     S32 total = 0;
     for (const auto& entry : mNetworks) total += (S32)entry.second.mEaves.size();
     return total;
+}
+
+SSRunoffField SSRunoff::field(U64 region_handle) const
+{
+    SSRunoffField out;
+
+    auto it = mNetworks.find(region_handle);
+    if (it == mNetworks.end()) return out;
+
+    const Network& net = it->second;
+    if (net.mFieldN <= 0 || net.mFieldZ.empty()) return out;
+
+    out.mN = net.mFieldN;
+    out.mCell = net.mFieldCell;
+    out.mZ = net.mFieldZ.data();
+    out.mFlow = net.mFieldFlow.data();
+    out.mEdge = net.mFieldEdge.data();
+    out.mCatch = net.mFieldCatch.data();
+    out.mFlags = net.mFieldFlags.data();
+    return out;
+}
+
+void SSRunoff::tracedRegions(std::vector<std::pair<U64, U32> >& out) const
+{
+    out.clear();
+    for (const auto& entry : mNetworks)
+    {
+        if (entry.second.mFieldN > 0 && !entry.second.mFieldZ.empty())
+        {
+            out.push_back(std::make_pair(entry.first, entry.second.mBuiltSerial));
+        }
+    }
 }
 
 // Whether runoff means anything for the weather currently running. Water runs
@@ -195,7 +226,7 @@ void SSRunoff::idle(F32 dt)
         return;
     }
 
-    refreshNetworks(false);
+    refreshNetworks();
     measureDelivery(dt);
     shed(dt);
 }
@@ -233,7 +264,7 @@ void SSRunoff::measureDelivery(F32 dt)
     mExpectedCount = 0.f;
 }
 
-void SSRunoff::refreshNetworks(bool want_debug)
+void SSRunoff::refreshNetworks()
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const F64 now = atmo->sharedTime();
@@ -263,14 +294,6 @@ void SSRunoff::refreshNetworks(bool want_debug)
                        [&](const std::pair<U64, U32>& t) { return t.first == it->first; });
         }
         it = keep ? std::next(it) : mNetworks.erase(it);
-    }
-
-    // The debug draw needs fields the normal path does not keep. Asking for
-    // them once is enough to make every trace from here on carry them.
-    if (want_debug && !mDebugBuilt)
-    {
-        for (auto& entry : mNetworks) entry.second.mBuiltSerial = 0xFFFFFFFFu;
-        mDebugBuilt = true;
     }
 
     if (now - mLastRefresh < REFRESH_INTERVAL) return;
@@ -315,19 +338,18 @@ void SSRunoff::refreshNetworks(bool want_debug)
     if (stalest == 0) return;
 
     mLastRefresh = now;
-    startTrace(stalest, res, mDebugBuilt);
+    startTrace(stalest, res);
 }
 
 // Main thread: snapshot everything the trace reads, then hand it to the pool.
 // The shadow map's tiles and the region list are only safe to touch here.
-bool SSRunoff::startTrace(U64 region_handle, S32 res, bool want_debug)
+bool SSRunoff::startTrace(U64 region_handle, S32 res)
 {
     if (mTraceBusy) return false;
 
     auto job = std::make_shared<Trace>();
     job->mRegionHandle = region_handle;
     job->mRes = res;
-    job->mWantDebug = want_debug;
 
     if (!SSRainShadowMap::getInstance()->buildSurfaceGrid(region_handle, res, job->mGrid))
     {
@@ -938,23 +960,16 @@ void SSRunoff::traceNetwork(Trace& job)
               [](const SSRunoffEave& a, const SSRunoffEave& b) { return a.mCatchment > b.mCatchment; });
     if (job.mEaves.size() > MAX_EAVES) job.mEaves.resize(MAX_EAVES);
 
-    if (job.mWantDebug)
-    {
-        job.mDebugN = n;
-        job.mDebugZ = grid.mZ;
-        job.mDebugFlow.assign(flow.begin(), flow.end());
-        job.mDebugCatch.swap(catchment);
-
-        // Eaves are folded into the same array as an offset negative index, so
-        // the draw can tell them from ordinary flow without a second array.
-        // -1 is already taken: it is what a pooling cell carries, and over open
-        // terrain and water that is most of the region, so the encoding starts
-        // at -2 to leave it alone.
-        for (size_t i = 0; i < count; ++i)
-        {
-            if (is_edge[i]) job.mDebugFlow[i] = -2 - job.mDebugFlow[i];
-        }
-    }
+    // The solved surface is kept whole. The eaves above are the part that
+    // sheds; this is the part that everything dressing the surface reads, and
+    // it is the same arithmetic either way - the only cost of keeping it is
+    // the memory, about a megabyte a region at the default resolution.
+    job.mFieldN = n;
+    job.mFieldZ = grid.mZ;
+    job.mFieldFlow.assign(flow.begin(), flow.end());
+    job.mFieldEdge.assign(is_edge.begin(), is_edge.end());
+    job.mFieldCatch.swap(catchment);
+    job.mFieldFlags = grid.mFlags;
 
     job.mMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
 }
@@ -1019,10 +1034,13 @@ void SSRunoff::finishTrace(const std::shared_ptr<Trace>& job)
         }
     }
 
-    net.mDebugN = job->mDebugN;
-    net.mDebugZ = std::move(job->mDebugZ);
-    net.mDebugFlow = std::move(job->mDebugFlow);
-    net.mDebugCatch = std::move(job->mDebugCatch);
+    net.mFieldN = job->mFieldN;
+    net.mFieldCell = job->mGrid.mCell;
+    net.mFieldZ = std::move(job->mFieldZ);
+    net.mFieldFlow = std::move(job->mFieldFlow);
+    net.mFieldEdge = std::move(job->mFieldEdge);
+    net.mFieldCatch = std::move(job->mFieldCatch);
+    net.mFieldFlags = std::move(job->mFieldFlags);
 
     mLastBuildMS = job->mMS;
 }
@@ -1263,7 +1281,7 @@ void SSRunoff::renderDebug()
 {
     if (!runoffApplies()) return;
 
-    refreshNetworks(true);
+    refreshNetworks();
 
     LLGLEnable blend(GL_BLEND);
     LLGLDepthTest depth(GL_TRUE, GL_FALSE);     // test against the world, do not write
@@ -1278,32 +1296,34 @@ void SSRunoff::renderDebug()
     {
         const Network& net = entry.second;
         LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
-        if (!regionp || net.mDebugN < 2) continue;
+        if (!regionp || net.mFieldN < 2) continue;
 
         const LLVector3 origin = regionp->getOriginAgent();
-        const S32 n = net.mDebugN;
+        const S32 n = net.mFieldN;
         const F32 cell = regionp->getWidth() / (F32)n;
 
         auto cellPos = [&](S32 i)
         {
             return LLVector3(origin.mV[VX] + ((F32)(i % n) + 0.5f) * cell,
                              origin.mV[VY] + ((F32)(i / n) + 0.5f) * cell,
-                             net.mDebugZ[i] + 0.05f);
+                             net.mFieldZ[i] + 0.05f);
         };
 
         // Flow arrows, brightening with how much drains through each cell
         gGL.begin(LLRender::LINES);
-        for (S32 i = 0; i < (S32)net.mDebugZ.size(); ++i)
+        for (S32 i = 0; i < (S32)net.mFieldZ.size(); ++i)
         {
-            const S32 raw = net.mDebugFlow[i];
-            if (raw == -1) continue;    // pools here, so there is no flow to draw
+            const S32 down = net.mFieldFlow[i];
+            const bool eave = net.mFieldEdge[i] != 0;
+
+            // Nowhere to draw to: water stands here, or it goes over a lip
+            // that the trace found no landing for
+            if (down < 0) continue;
 
             const LLVector3 p = cellPos(i);
             if ((p - cam).magVecSquared() > reach * reach) continue;
 
-            const bool eave = raw < -1;
-            const S32 down = eave ? (-2 - raw) : raw;
-            const F32 strength = llclamp(net.mDebugCatch[i] / 60.f, 0.05f, 1.f);
+            const F32 strength = llclamp(net.mFieldCatch[i] / 60.f, 0.05f, 1.f);
             const LLVector3 q = cellPos(down);
 
             if (eave)

@@ -37,6 +37,39 @@
 #include <memory>
 #include <vector>
 
+// A borrowed view of one region's traced drainage, for the systems that dress
+// the surface rather than shed off it. Laid out exactly like the SurfaceGrid
+// it came from - cell (x, y) sits at ((x + 0.5) * mCell, (y + 0.5) * mCell) in
+// region-local XY - so a consumer can walk it against its own copy of the same
+// grid without resampling anything.
+//
+// The pointers belong to the network and are only good until the region is
+// retraced, which happens on the main thread between idles. Read it, use it,
+// do not keep it.
+struct SSRunoffField
+{
+    S32 mN = 0;
+    F32 mCell = 0.f;
+    const F32* mZ = nullptr;        // surface height, agent-space
+    const S32* mFlow = nullptr;     // downstream cell index, or -1 where water stands
+    const U8*  mEdge = nullptr;     // 1 where the cell sheds over a lip
+    const F32* mCatch = nullptr;    // square metres draining through the cell
+    const U8*  mFlags = nullptr;    // SSRainShadowMap::SURF_*, 0 where the column found nothing
+
+    bool valid() const { return mN > 0 && mZ && mFlow && mEdge && mCatch && mFlags; }
+    size_t count() const { return (size_t)mN * mN; }
+
+    bool solid(size_t i) const { return mFlags[i] != 0; }
+    bool water(size_t i) const { return (mFlags[i] & SSRainShadowMap::SURF_WATER) != 0; }
+
+    // Water stands here: nothing adjacent is lower, and it does not shed over
+    // an edge either. This is the puddle test, and it is why mEdge is a
+    // separate array rather than folded into mFlow as a negative index - the
+    // lip of a flat roof has no downstream cell *and* sheds, and packing the
+    // two together made that common case indistinguishable from a hollow.
+    bool pools(size_t i) const { return mFlow[i] < 0 && !mEdge[i]; }
+};
+
 // A run of roof edge that sheds as one thing: the lip of a gable, the length
 // of an awning, the side of a bridge deck. Water does not leave a roof at a
 // few isolated points, it leaves along a line, so the cells that make up one
@@ -82,6 +115,16 @@ public:
 
     void clear();
 
+    // The traced drainage for one region, or an invalid view when that region
+    // has not been traced yet. Cheap: it hands out pointers into the network.
+    SSRunoffField field(U64 region_handle) const;
+
+    // Regions holding a traced field, paired with the geometry revision it was
+    // built from - the same pairing SSRainShadowMap::validTiles gives for the
+    // captures underneath, and used the same way, to tell "there is something
+    // new here" from "this has been rebuilt for reasons of its own".
+    void tracedRegions(std::vector<std::pair<U64, U32> >& out) const;
+
     // Render Metadata > Roof Runoff (Atmo Magic): the drainage network drawn
     // as flow arrows over the surface, with the eaves marked by catchment.
     void renderDebug();
@@ -109,12 +152,18 @@ private:
 
         std::vector<SSRunoffEave> mEaves;   // sorted by catchment, largest first
 
-        // Kept for the debug draw only: the traced surface and where each cell
-        // sends its water. Only populated once the overlay has been asked for.
-        S32 mDebugN = 0;
-        std::vector<F32> mDebugZ;
-        std::vector<S32> mDebugFlow;    // downstream cell, -1 pools, <-1 an eave
-        std::vector<F32> mDebugCatch;
+        // The traced surface itself. The eaves are what the drips come off,
+        // but they are a summary: the field below is the whole answer, and
+        // everything that dresses the surface rather than falling off it -
+        // wetness, snow depth, where water stands, which way it runs - reads
+        // this rather than retracing its own copy.
+        F32 mFieldCell = 0.f;
+        S32 mFieldN = 0;
+        std::vector<F32> mFieldZ;
+        std::vector<S32> mFieldFlow;    // downstream cell, or -1 where water stands
+        std::vector<U8>  mFieldEdge;    // 1 where the cell sheds over a lip
+        std::vector<F32> mFieldCatch;
+        std::vector<U8>  mFieldFlags;   // SurfaceGrid flags, carried through as-is
     };
 
     // One region's trace, in flight. The drainage solve is a flow accumulation
@@ -130,7 +179,6 @@ private:
     {
         U64 mRegionHandle = 0;
         S32 mRes = 0;
-        bool mWantDebug = false;
 
         // Snapshot taken on the main thread, where the shadow map and the
         // region list are safe to read
@@ -146,16 +194,18 @@ private:
 
         // What the worker produced
         std::vector<SSRunoffEave> mEaves;
-        std::vector<F32> mDebugZ;
-        std::vector<S32> mDebugFlow;
-        std::vector<F32> mDebugCatch;
-        S32 mDebugN = 0;
+        std::vector<F32> mFieldZ;
+        std::vector<S32> mFieldFlow;
+        std::vector<U8>  mFieldEdge;
+        std::vector<F32> mFieldCatch;
+        std::vector<U8>  mFieldFlags;
+        S32 mFieldN = 0;
         F32 mMS = 0.f;
     };
 
-    void refreshNetworks(bool want_debug);
+    void refreshNetworks();
 
-    bool startTrace(U64 region_handle, S32 res, bool want_debug);
+    bool startTrace(U64 region_handle, S32 res);
     static void traceNetwork(Trace& job);            // worker
     void finishTrace(const std::shared_ptr<Trace>& job);
 
@@ -181,7 +231,6 @@ private:
     F32 mLastBuildMS = 0.f;
     U32 mBuildCount = 0;
     F32 mDripRate = 0.f;        // drips per second currently being shed
-    bool mDebugBuilt = false;   // networks carry their debug fields
 
     // Delivered-rainfall measurement. Impacts are counted over a window and
     // compared with what the weather parameters say should have landed in the

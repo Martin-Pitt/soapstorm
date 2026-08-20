@@ -191,6 +191,26 @@ struct SSPrecipPreset
     F32 mStreamScale = 1.f;     // size of the drops within a stream; below one shrinks them
     F32 mDripScale = 1.f;       // size of the individual drips off an eave
 
+    // Surface response: what the weather leaves on what it lands on, rather
+    // than what it does on the way down. These drive a field over the drainage
+    // network and nothing else reads them, so a preset that leaves them at
+    // zero simply never marks the world - which is the default, and what every
+    // preset written before this did.
+    //
+    // Rates are per second of falling weather at full intensity, and are
+    // scaled by how hard it is actually coming down. The pairs are deliberately
+    // lopsided: everything here arrives faster than it leaves, because a
+    // shower wets a street in a minute and the street stays damp for an hour.
+    F32 mWetRate = 0.f;         // toward fully wet, per second
+    F32 mDryRate = 0.f;         // back toward dry once it stops, per second
+    F32 mSnowRate = 0.f;        // settled depth gained, metres per second
+    F32 mSnowMelt = 0.f;        // depth lost once it stops, metres per second
+    F32 mSnowDepth = 0.f;       // metres it may reach on the flat; slopes hold less
+    F32 mSnowRepose = 45.f;     // degrees past which it slides off instead of settling
+    F32 mPuddleRate = 0.f;      // standing depth gained where water collects, m/s
+    F32 mPuddleDepth = 0.f;     // metres a hollow may stand before it stops filling
+    F32 mPuddleDrain = 0.f;     // depth lost once it stops, metres per second
+
     // Assets
     std::string mTextures;      // CSV texture UUIDs, or pbr:UUID
     std::string mRippleTexture;
@@ -205,6 +225,15 @@ struct SSPrecipPreset
     bool makesImpacts() const { return mImpactStrength > 0.f && !risesFromGround(); }
     bool makesRipples() const { return mRippleSize > 0.f && mRippleAlpha > 0.f && mRippleLife > 0.f; }
     bool makesCrowns() const { return mCrownSize > 0.f && mCrownAlpha > 0.f && mCrownLife > 0.f; }
+
+    // Whether this preset marks the surface at all. Checked before the field
+    // is ticked, so a preset that leaves the world alone costs nothing.
+    bool marksSurface() const
+    {
+        return mWetRate > 0.f
+            || (mSnowRate > 0.f && mSnowDepth > 0.f)
+            || (mPuddleRate > 0.f && mPuddleDepth > 0.f);
+    }
     U8 material() const { return mEmissive ? MAT_EMISSIVE : (mWaterShading ? MAT_WATER : MAT_LIT); }
 
     static const char* archetypeName(SSPrecipArchetype a);
