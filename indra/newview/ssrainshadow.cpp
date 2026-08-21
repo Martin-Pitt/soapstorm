@@ -244,11 +244,13 @@ bool SSRainShadowMap::captureTile(Tile& tile)
         // for - so without this an avatar walking through the capture area
         // presses a person-shaped dent into the drainage trace, one that
         // moves as they do and drives spurious sheltering and puddle shape
-        // for as long as the tile stays cached. Attachments still get
-        // through this: they render as ordinary RENDER_TYPE_VOLUME, sharing
-        // a type with every rezzed prim in the world, so there is no
-        // type-level way to exclude what someone is wearing without also
-        // excluding the ground they are standing on. That half stays open.
+        // for as long as the tile stays cached. This also covers what they
+        // are wearing: an attachment's drawable gets an LLAvatarBridge as
+        // its spatial bridge (the root of its attachment linkset's, to be
+        // precise), and that bridge is itself typed RENDER_TYPE_AVATAR, not
+        // RENDER_TYPE_VOLUME - so clearing the one type mask drops the
+        // avatar and everything worn on it together, with no separate
+        // handling needed.
         gPipeline.pushRenderTypeMask();
         gPipeline.clearRenderTypeMask(LLPipeline::RENDER_TYPE_AVATAR,
                                       LLPipeline::RENDER_TYPE_CONTROL_AV,

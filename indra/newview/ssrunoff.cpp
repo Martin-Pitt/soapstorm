@@ -526,6 +526,25 @@ void SSRunoff::traceNetwork(Trace& job)
     const F32 cliff_slope = job.mCliffSlope;
     const F32 min_drop = 0.75f;
 
+    // Below this, a height difference between neighbours is the capture's
+    // own noise rather than real relief - a level street reads as a field of
+    // sub-millimetre ties, not a field of exact equality, and letting any of
+    // that decide a downhill direction is what put a puddle in the flow
+    // solve at all: the "lowest" neighbour changes with whichever way the
+    // noise fell on a given trace, so the direction - and with it whether
+    // the cell pools or drains - could flip from one retrace to the next
+    // with the ground never having moved. See the plateau pass below for
+    // what a cell that clears no neighbour by this much does instead.
+    static const F32 FLAT_NOISE_EPS = 0.02f;
+
+    // How far off level a water neighbour is still trusted to be the same
+    // waterline the ground beside it was built to, rather than a lower body
+    // this column merely happens to overlook. Generous next to the capture's
+    // own noise, because dock and canal edges are rarely modelled perfectly
+    // flush, but nowhere near generous enough to reach a genuinely lower
+    // drop - that is what the cliff/edge system below is for.
+    static const F32 WATER_FLUSH_TOLERANCE = 0.5f;
+
     std::vector<S32> flow(count, -1);       // downstream cell on the surface
     std::vector<S32> spill(count, -1);      // where it lands when it leaves
     std::vector<U8> is_edge(count, 0);
@@ -576,8 +595,31 @@ void SSRunoff::traceNetwork(Trace& job)
                 const size_t j = (size_t)ny * n + nx;
                 if (!solid(j)) continue;
 
+                // Water is a free sink at the waterline, not at any height:
+                // a dock or canal edge is ordinarily built flush with the
+                // water, near enough that the two surfaces were authored to
+                // already agree rather than to measurably disagree, and it
+                // is that near-agreement the ordinary drop test below is too
+                // strict to see through. It is not a licence to drain into
+                // any water anywhere near this column - a terrace three
+                // storeys above a lake is not "flush" with it just because
+                // the lake happens to be the nearest thing lower down, and
+                // treating it as if it were would skip the eave/shed system
+                // that already exists for a genuine drop into water,
+                // teleporting the water down rather than letting it fall.
+                // Past this tolerance a water neighbour is judged exactly
+                // like any other drop - most such drops still end up
+                // classified as cliffs, and a cliff spilling onto water
+                // already lands correctly without this shortcut's help.
+                if (water(j) && fabsf(pz - grid.mZ[j]) <= WATER_FLUSH_TOLERANCE)
+                {
+                    gentle = (S32)j;
+                    gentle_slope = 1.0e6f;
+                    continue;
+                }
+
                 const F32 drop = pz - grid.mZ[j];
-                if (drop <= 0.f) continue;
+                if (drop <= FLAT_NOISE_EPS) continue;
 
                 // The grid is axis aligned and regular, so the separation is
                 // the cell size on the cardinals and its diagonal otherwise
@@ -674,14 +716,86 @@ void SSRunoff::traceNetwork(Trace& job)
         }
     }
 
+    // The plateau pass. Every cell above found no neighbour more than
+    // FLAT_NOISE_EPS lower than itself is still sitting at flow[i] == -1 -
+    // not because it has nowhere to drain, but because the loop above only
+    // ever asks its own eight neighbours, and on level ground the real
+    // answer is "the same way everything else on this plateau goes", which
+    // is not a question one cell's own neighbourhood can answer. Water on a
+    // real street does not stay put for want of a local gradient either; it
+    // piles up until the surface tilts enough to move it toward wherever it
+    // can actually leave, which in practice is the nearest edge of the flat
+    // stretch it is sitting on.
+    //
+    // Grown as a breadth-first flood from every cell that DID resolve a real
+    // direction, out across same-height neighbours one ring at a time. That
+    // gives three things a purely local re-guess at the tie could not: the
+    // direction found is always toward the nearest real exit rather than a
+    // noise-driven guess, it is the same direction every time the trace
+    // reruns over unchanged geometry because the flood order depends only on
+    // the (fixed) grid and never on which way noise happened to break a tie,
+    // and it chains a landing between two ramps on to the second ramp
+    // exactly the way it chains a street on to the drain at the end of it -
+    // both are just a flat cell one ring out from a cell that already knows
+    // where to go.
+    std::vector<S32> plateau_queue;
+    plateau_queue.reserve(count);
+    for (size_t i = 0; i < count; ++i)
+    {
+        if (flow[i] >= 0) plateau_queue.push_back((S32)i);
+    }
+
+    std::vector<S32> plateau_chain;   // discovery order, oldest (nearest a real exit) first
+    for (size_t qhead = 0; qhead < plateau_queue.size(); ++qhead)
+    {
+        const S32 i = plateau_queue[qhead];
+        const S32 ix = i % n, iy = i / n;
+
+        for (S32 d = 0; d < 8; ++d)
+        {
+            const S32 nx = ix + DX[d];
+            const S32 ny = iy + DY[d];
+            if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+            const size_t j = (size_t)ny * n + nx;
+            if (!solid(j) || water(j) || flow[j] >= 0) continue;
+            if (fabsf(grid.mZ[j] - grid.mZ[i]) > FLAT_NOISE_EPS) continue;
+
+            flow[j] = i;
+            plateau_queue.push_back((S32)j);
+            plateau_chain.push_back((S32)j);
+        }
+    }
+
+    // Carried leaf-to-root: the reverse of the order the flood discovered
+    // them in, so a cell's catchment has already reached the neighbour it
+    // flows into before that neighbour's own turn to pass anything on. The
+    // height-sorted pass below gets this ordering for free from strictly
+    // decreasing height; two plateau cells at the same height cannot, which
+    // is exactly why they are settled here first and left out of that pass
+    // entirely rather than trusted to fall in the right place in it.
+    for (auto it = plateau_chain.rbegin(); it != plateau_chain.rend(); ++it)
+    {
+        const S32 i = *it;
+        const F32 carried = catchment[i];
+        const S32 down = flow[i];
+        if (down >= 0 && carried > 0.f) catchment[down] += carried;
+    }
+
+    std::vector<U8> is_plateau(count, 0);
+    for (S32 i : plateau_chain) is_plateau[i] = 1;
+
     // Flow accumulation. Water only ever moves to a strictly lower cell, so
     // walking the grid from the top down visits every cell after everything
     // that drains into it: no cycles to guard against, and one pass to do it.
+    // Plateau cells are excluded - the flood above already settled them, in
+    // the order that same-height ties actually need and this sort cannot
+    // give them.
     std::vector<S32> order;
     order.reserve(count);
     for (size_t i = 0; i < count; ++i)
     {
-        if (solid(i)) order.push_back((S32)i);
+        if (solid(i) && !is_plateau[i]) order.push_back((S32)i);
     }
     std::sort(order.begin(), order.end(), [&](S32 a, S32 b) { return grid.mZ[a] > grid.mZ[b]; });
 

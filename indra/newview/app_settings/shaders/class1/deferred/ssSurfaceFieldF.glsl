@@ -63,6 +63,27 @@ vec4 ssFieldFetch(vec2 xy_agent)
     return texture(ssFieldMap, uv);
 }
 
+// The flow window, on the same lattice as the field above and sampled by
+// whichever pass needs to know which way water on a cell is running rather
+// than merely how much of it there is. Only the two consumers that actually
+// animate anything bind ssFieldFlowMap at all, so this is declared here
+// rather than assumed present.
+uniform sampler2D ssFieldFlowMap;
+
+// xy: agent-space unit flow direction, downstream. z: how much of the cell
+// is drainage passing through rather than caught by it, 0 to 1.
+vec3 ssFieldFetchFlow(vec2 xy_agent)
+{
+    float span = ssFieldOrigin.z * ssFieldOrigin.w;
+    vec2 uv = (xy_agent - ssFieldOrigin.xy) / span;
+
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0))))
+    {
+        return vec3(0.0);
+    }
+    return texture(ssFieldFlowMap, uv).xyz;
+}
+
 // Cheap per-fragment hash, stable in world space so the pattern it drives
 // does not swim as the camera moves - unlike a screen-space hash, which
 // would.
@@ -100,8 +121,18 @@ vec4 ssFieldAt(vec3 p_agent, vec3 n_agent)
     vec4 here = ssFieldFetch(p_agent.xy);
     if (here.x < -1.0e5) return vec4(0.0, 0.0, 0.0, -1.0);
 
+    // Whether this fragment IS the surface the column's stored height
+    // belongs to, as opposed to something else standing at the same agent
+    // XY but a different Z - the wall of a box beside a puddle shares the
+    // puddle cell's column exactly this way, at every height from the
+    // ground to the roofline, and without this test the puddle depth
+    // fetched above would paint the whole wall rather than just the ground
+    // at its foot: the lookup is purely XY, so nothing else here would ever
+    // notice the wall was not where the water actually sits.
+    bool on_top = p_agent.z >= here.x - cell * 0.5;
+
     float exposure;
-    if (p_agent.z >= here.x - cell * 0.5)
+    if (on_top)
     {
         // The top surface of its own column, so nothing can be sheltering it.
         // Most of what is on screen at any moment is ground or roof, which
@@ -154,7 +185,15 @@ vec4 ssFieldAt(vec3 p_agent, vec3 n_agent)
     float facing = mix(1.0, clamp(dot(n_agent, -ssFieldFall), 0.0, 1.0), ssFieldFacing);
     exposure *= facing;
 
-    return vec4(here.y, here.z, here.w, exposure);
+    // Settled snow and standing water both belong to the top of the column,
+    // not to whatever else happens to sit under the same XY - wetness is the
+    // one value here a wall legitimately earns on its own account, from rain
+    // actually reaching it, which is exactly what the exposure march above
+    // already answers for it.
+    float snow_out = on_top ? here.z : 0.0;
+    float puddle_out = on_top ? here.w : 0.0;
+
+    return vec4(here.y, snow_out, puddle_out, exposure);
 }
 
 // </SS:Nexii>

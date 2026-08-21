@@ -66,6 +66,21 @@ uniform float ssWetSpecular;
 // slightly lower amount of the same thing.
 uniform float ssWetSpecularMatte;
 
+// Standing water is not the same thing as a damp surface, and reusing the
+// wetness dials for it would have made the two impossible to tune apart: a
+// puddle is a pool of actual water sitting on top of the material rather
+// than a film soaked into it, so it wants to read as close to a mirror as
+// this pass can make it, independent of how shiny the material underneath
+// would ever get from being merely rained on. Driven off the drainage's own
+// standing-depth channel rather than a second wetness figure, because a
+// puddle is a place water collects and stays, which is exactly what that
+// channel already tracks.
+uniform float ssWetPuddleDepthFull;   // standing depth, metres, that reads as a full puddle
+uniform float ssWetPuddleRoughness;   // PBR roughness multiplier at full puddle
+uniform float ssWetPuddleRoughMin;    // PBR roughness floor at full puddle
+uniform float ssWetPuddleSpecular;    // legacy specular colour target at full puddle
+uniform float ssWetPuddleGloss;       // legacy gloss target at full puddle
+
 // Diagnostic. Above zero this is used as the wetness for every fragment the
 // pass reaches, ignoring the field, the exposure and the shelter march
 // entirely. It answers one question and only one: does anything this pass
@@ -117,9 +132,11 @@ void main()
     vec3 n = normalize(mat3(ssFieldInvView) * norm.xyz);
 
     float wet;
+    float puddle;
     if (ssWetDebugForce > 0.0)
     {
         wet = ssWetDebugForce;
+        puddle = ssWetDebugForce;
     }
     else if (ssWetSkipExposure > 0.0)
     {
@@ -131,7 +148,8 @@ void main()
             return;
         }
         wet = raw.y * ssWetStrength;
-        if (wet < 0.004)
+        puddle = clamp(raw.w / ssWetPuddleDepthFull, 0.0, 1.0);
+        if (wet < 0.004 && puddle < 0.004)
         {
             frag_color = spec;
             return;
@@ -144,12 +162,24 @@ void main()
         // Outside the window, or nothing has fallen here yet. Either way the
         // surface is left exactly as the material author wrote it.
         wet = field.x * field.w * ssWetStrength;
-        if (field.w < 0.0 || wet < 0.004)
+
+        // Standing depth is not scaled by exposure the way wet is: a puddle
+        // under an eave was filled by water that ran there, not by rain
+        // falling on that exact spot, so whether the sky above it is open
+        // right now says nothing about whether it is still full.
+        puddle = clamp(field.z / ssWetPuddleDepthFull, 0.0, 1.0);
+        if (field.w < 0.0 || (wet < 0.004 && puddle < 0.004))
         {
             frag_color = spec;
             return;
         }
     }
+
+    // What actually drives the blend toward the wet/puddle look below - a
+    // spot can be a full puddle while the general wetness pass call for this
+    // frame is low (just after the rain stopped, say), and it should still
+    // shine like standing water rather than fade with the film around it.
+    float wetBlend = max(wet, puddle);
 
     if (GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_HAS_PBR))
     {
@@ -161,7 +191,9 @@ void main()
         // added to the light budget. That is the whole reason this is the one
         // channel worth touching - it reads as wet without overwriting a
         // single thing the creator authored.
-        spec.g = max(mix(spec.g, spec.g * ssWetRoughness, wet), ssWetRoughMin);
+        float rough_mul = mix(ssWetRoughness, ssWetPuddleRoughness, puddle);
+        float rough_min = mix(ssWetRoughMin, ssWetPuddleRoughMin, puddle);
+        spec.g = max(mix(spec.g, spec.g * rough_mul, wetBlend), rough_min);
     }
     else
     {
@@ -194,9 +226,11 @@ void main()
         // did to spec this frame.
         bool matte = max(max(spec.r, spec.g), max(spec.b, spec.a)) < 0.02;
         float target = matte ? ssWetSpecularMatte : ssWetSpecular;
+        target = mix(target, ssWetPuddleSpecular, puddle);
+        float gloss_target = mix(ssWetGlossTarget, ssWetPuddleGloss, puddle);
 
-        spec.rgb = mix(spec.rgb, max(spec.rgb, vec3(target)), wet);
-        spec.a = mix(spec.a, max(spec.a, ssWetGlossTarget), wet);
+        spec.rgb = mix(spec.rgb, max(spec.rgb, vec3(target)), wetBlend);
+        spec.a = mix(spec.a, max(spec.a, gloss_target), wetBlend);
     }
 
     frag_color = spec;

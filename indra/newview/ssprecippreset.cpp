@@ -33,6 +33,58 @@
 
 // <SS:Nexii> Atmo Magic weather presets
 
+// Short keys used both for LLSD serialization ("step_" + surface + "_" +
+// action) and to build widget names in the preset editor, so the two never
+// drift apart.
+static const char* STEP_SURFACE_KEY[STEP_SURFACE_COUNT] =
+{
+    "terrain_dry", "terrain_wet", "terrain_puddle",
+    "outside_dry", "outside_wet", "outside_puddle",
+    "inside_dry"
+};
+static const char* STEP_ACTION_KEY[STEP_ACTION_COUNT] = { "walk", "run", "jump", "land" };
+
+// static
+const char* SSFootstepSounds::surfaceName(SSStepSurface s)
+{
+    switch (s)
+    {
+        case STEP_TERRAIN_DRY:     return "Terrain - Dry";
+        case STEP_TERRAIN_WET:     return "Terrain - Wet";
+        case STEP_TERRAIN_PUDDLE:  return "Terrain - Puddle";
+        case STEP_OUTSIDE_DRY:     return "Outside - Dry";
+        case STEP_OUTSIDE_WET:     return "Outside - Wet";
+        case STEP_OUTSIDE_PUDDLE:  return "Outside - Puddle";
+        case STEP_INSIDE_DRY:      return "Inside";
+        default:                   return "?";
+    }
+}
+
+// static
+const char* SSFootstepSounds::actionName(SSStepAction a)
+{
+    switch (a)
+    {
+        case STEP_WALK: return "Walk";
+        case STEP_RUN:  return "Run";
+        case STEP_JUMP: return "Jump";
+        case STEP_LAND: return "Land";
+        default:        return "?";
+    }
+}
+
+// static
+const char* SSFootstepSounds::surfaceKey(SSStepSurface s)
+{
+    return (s < STEP_SURFACE_COUNT) ? STEP_SURFACE_KEY[s] : "";
+}
+
+// static
+const char* SSFootstepSounds::actionKey(SSStepAction a)
+{
+    return (a < STEP_ACTION_COUNT) ? STEP_ACTION_KEY[a] : "";
+}
+
 // static
 const char* SSPrecipPreset::archetypeName(SSPrecipArchetype a)
 {
@@ -121,6 +173,15 @@ LLSD SSPrecipPreset::asLLSD() const
     sd["snd_roof_small"] = mSounds.mRoofSmall;
     sd["snd_roof_medium"] = mSounds.mRoofMedium;
     sd["snd_roof_big"] = mSounds.mRoofBig;
+
+    for (S32 s = 0; s < STEP_SURFACE_COUNT; ++s)
+    {
+        for (S32 a = 0; a < STEP_ACTION_COUNT; ++a)
+        {
+            const std::string key = std::string("step_") + STEP_SURFACE_KEY[s] + "_" + STEP_ACTION_KEY[a];
+            sd[key] = mFootsteps.mSounds[s][a];
+        }
+    }
 
     return sd;
 }
@@ -220,6 +281,15 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     if (sd.has("snd_roof_small")) mSounds.mRoofSmall = sd["snd_roof_small"].asString();
     if (sd.has("snd_roof_medium")) mSounds.mRoofMedium = sd["snd_roof_medium"].asString();
     if (sd.has("snd_roof_big")) mSounds.mRoofBig = sd["snd_roof_big"].asString();
+
+    for (S32 s = 0; s < STEP_SURFACE_COUNT; ++s)
+    {
+        for (S32 a = 0; a < STEP_ACTION_COUNT; ++a)
+        {
+            const std::string key = std::string("step_") + STEP_SURFACE_KEY[s] + "_" + STEP_ACTION_KEY[a];
+            if (sd.has(key)) mFootsteps.mSounds[s][a] = sd[key].asString();
+        }
+    }
 }
 
 SSPrecipPresetMgr::SSPrecipPresetMgr()

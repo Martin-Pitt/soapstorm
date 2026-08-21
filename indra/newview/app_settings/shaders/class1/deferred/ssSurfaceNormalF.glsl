@@ -61,6 +61,41 @@ uniform float ssWetNormalFlatten;
 uniform float ssWetFlattenCosFull;
 uniform float ssWetFlattenCosZero;
 
+// Standing water flattens on its own terms, the same way it earns its own
+// specular treatment in ssSurfaceWetF.glsl: a puddle's surface is level
+// because it is a pool, not because the wall/roof slope test here happened
+// to allow it, so it bypasses that gate entirely rather than being scaled by
+// it. ssWetPuddleDepthFull is the same figure the wetness pass uses, so a
+// spot the two shaders agree is a full puddle reads as one consistently.
+uniform float ssWetPuddleDepthFull;
+uniform float ssWetPuddleFlatten;
+
+// Flow motion: water visibly running along the drainage rather than merely
+// sitting on it. Reuses the same tileable wave-normal texture the water
+// plane itself scrolls for its own ripples, rather than authoring a second
+// one - the look this is chasing is exactly that texture's, just carried by
+// the flow direction of a channel instead of the wind blowing the lake.
+uniform sampler2D ssWaveMap;
+uniform float ssTime;
+uniform float ssWetFlowScale;     // metres per tile of the wave texture
+uniform float ssWetFlowSpeed;     // metres per second the pattern scrolls
+uniform float ssWetFlowStrength;  // how far a fully flowing cell blends toward it
+
+// Surface tension's stand-in: how wet (or how full a pool) a channel cell
+// has to be before it counts as spilling at all, below which it stays a
+// still, undisturbed film. 0 disables the threshold outright.
+uniform float ssWetFlowMinWet;
+
+// The wave texture was authored for the water plane's own UV convention, not
+// for a tangent frame built straight off a drainage flow vector - whichever
+// way its streaks actually run, there is no reason to expect it lines up
+// with "downstream" in this frame. Turning the sampled normal's tangent-
+// plane components by this before they are laid onto the flow-aligned
+// frame is exactly the same fix as rotating the texture itself would be,
+// without a second copy of it rotated on disk.
+uniform float ssWetFlowRotSin;
+uniform float ssWetFlowRotCos;
+
 float getDepth(vec2 pos_screen);
 vec4 getPositionWithDepth(vec2 pos_screen, float depth);
 vec4 getNormRaw(vec2 screenpos);
@@ -68,6 +103,7 @@ vec4 decodeNormal(vec4 norm);
 vec4 encodeNormal(vec3 n, float env, float gbuffer_flag);
 vec4 ssFieldAt(vec3 p_agent, vec3 n_agent);
 vec4 ssFieldFetch(vec2 xy_agent);
+vec3 ssFieldFetchFlow(vec2 xy_agent);
 
 void main()
 {
@@ -99,9 +135,11 @@ void main()
     vec3 n_world = normalize(mat3(ssFieldInvView) * n_view);
 
     float wet;
+    float puddle;
     if (ssWetDebugForce > 0.0)
     {
         wet = ssWetDebugForce;
+        puddle = ssWetDebugForce;
     }
     else if (ssWetSkipExposure > 0.0)
     {
@@ -112,7 +150,8 @@ void main()
             return;
         }
         wet = field.y * ssWetStrength;
-        if (wet < 0.004)
+        puddle = clamp(field.w / ssWetPuddleDepthFull, 0.0, 1.0);
+        if (wet < 0.004 && puddle < 0.004)
         {
             frag_color = raw;
             return;
@@ -122,7 +161,8 @@ void main()
     {
         vec4 field = ssFieldAt(p, n_world);
         wet = field.x * field.w * ssWetStrength;
-        if (field.w < 0.0 || wet < 0.004)
+        puddle = clamp(field.z / ssWetPuddleDepthFull, 0.0, 1.0);
+        if (field.w < 0.0 || (wet < 0.004 && puddle < 0.004))
         {
             frag_color = raw;
             return;
@@ -158,8 +198,55 @@ void main()
     // tilts its highlight the way a real film of water lying or running on
     // it would - the water's surface answers to gravity, not to whatever the
     // material underneath happens to be shaped like.
-    float flatten = clamp(wet * ssWetNormalFlatten * slope_factor, 0.0, 1.0);
+    float flatten_wet = wet * ssWetNormalFlatten * slope_factor;
+    float flatten_puddle = puddle * ssWetPuddleFlatten;
+    float flatten = clamp(max(flatten_wet, flatten_puddle), 0.0, 1.0);
     vec3 flat_world = normalize(mix(n_world, vec3(0.0, 0.0, 1.0), flatten));
+
+    // Water actually running along a channel, laid over the flattened normal
+    // above rather than instead of it - a stream is still a flat film first,
+    // moving ripples second.
+    //
+    // A first few drops on a dry gutter do not run, they cling - surface
+    // tension holds a thin film in place until enough has gathered to break
+    // free and move as a body, and a channel with any wetness on it at all
+    // showing full flow the instant rain starts is exactly the "damp reads
+    // as a rushing stream" that skipping this would leave in. wet and puddle
+    // are the only per-cell figures that build up over time at all here, so
+    // this is asking the same question of whichever of them is greater
+    // rather than of an actual depth a channel cell does not otherwise keep.
+    vec3 flow = ssFieldFetchFlow(p.xy);
+    float wet_for_flow = smoothstep(ssWetFlowMinWet, 1.0, max(wet, puddle));
+    float flow_vis = flow.z * wet_for_flow * ssWetFlowStrength;
+    if (flow_vis > 0.004)
+    {
+        // A fixed world-XY tangent frame - the same choice the water plane
+        // itself makes for this texture, and for the same reason: water is
+        // flat, so world X and Y already are its tangent and bitangent, and
+        // nothing about which way it happens to be flowing needs to turn
+        // that frame. Building it from the flow direction instead, tried
+        // first, seemed like the more careful thing to do until it went to
+        // a diagonal run: flow is one of eight discrete directions, one per
+        // drainage cell, and a tangent frame that spins with it reinterprets
+        // the very same sampled ripple texel completely differently in two
+        // neighbouring cells that disagree - which reads as broken seams,
+        // worst exactly on the diagonals where neighbours disagree most
+        // often. The rotate dial still turns this frame, just once, the
+        // same way for every fragment, so it stays free to correct the
+        // texture's own orientation without ever depending on flow.
+        vec3 t = vec3(ssWetFlowRotCos, ssWetFlowRotSin, 0.0);
+        vec3 b = vec3(-ssWetFlowRotSin, ssWetFlowRotCos, 0.0);
+
+        // Only the sample position moves with the flow direction - sliding
+        // the same fixed pattern along it is what reads as the water
+        // actually running that way, diagonals included, without the
+        // pattern itself ever having to turn.
+        vec2 uv = (p.xy - flow.xy * (ssTime * ssWetFlowSpeed)) / ssWetFlowScale;
+        vec3 ripple = texture(ssWaveMap, uv).xyz * 2.0 - 1.0;
+        vec3 flowed = normalize(t * ripple.x + b * ripple.y + flat_world * ripple.z);
+
+        flat_world = normalize(mix(flat_world, flowed, clamp(flow_vis, 0.0, 1.0)));
+    }
 
     // Back to view space the same way the exposure march's normal input got
     // to world space in the first place, undone: ssFieldInvView's rotational

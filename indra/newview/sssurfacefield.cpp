@@ -30,14 +30,18 @@
 #include "ssprecippreset.h"
 #include "ssrainshadow.h"
 
+#include "llappviewer.h"
+#include "llenvironment.h"
 #include "llfasttimer.h"
 #include "llglslshader.h"
 #include "llrender.h"
+#include "llsettingswater.h"
 #include "lltimer.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
+#include "llviewertexture.h"
 #include "llworld.h"
 #include "pipeline.h"
 
@@ -72,6 +76,14 @@ static const F32 SLOPE_STEP_MAX  = 3.f;     // multiples of the cell size
 // full depth. A cell catching only itself gets a film; one taking a whole roof
 // face gets the puddle.
 static const F32 PUDDLE_CATCH_FULL = 12.f;  // multiples of the cell area
+
+// How much a cell has to be draining through it before it reads as a channel
+// worth animating, in the same units as PUDDLE_CATCH_FULL above. Lower than
+// that figure on purpose: a run of water crossing a cell on its way
+// somewhere else is visibly moving long before it has gathered enough to
+// stand as a puddle, and the two effects are meant to hand off to each other
+// rather than switch on together.
+static const F32 FLOW_CATCH_FULL = 5.f;
 
 // The stitched window handed to the shaders. 256 cells at the drainage
 // resolution is 256 metres around the camera on a standard region, which is
@@ -156,6 +168,17 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
     const F32 snow_loss   = (preset.mSnowMelt > 0.f ? preset.mSnowMelt : FALLBACK_MELT) * dt;
     const F32 puddle_gain = preset.mPuddleRate * intensity * dt;
     const F32 puddle_loss = (preset.mPuddleDrain > 0.f ? preset.mPuddleDrain : FALLBACK_DRAIN) * dt;
+
+    // A ceiling on top of whatever a preset authors, independent of it,
+    // because nothing here actually models a body of standing water yet -
+    // no shared level, no volume, no spilling into the next hollow over once
+    // one fills. A single deep hollow with a whole roof draining into it
+    // will happily be told to stand as deep as the preset's own figure lets
+    // it, and until there is a real basin-fill simulation to make that mean
+    // something, an unbounded depth just means an increasingly wrong-looking
+    // one. This is meant to come out again once that simulation exists.
+    static LLCachedControl<F32> pool_depth_max(gSavedSettings, "SSAtmoWetPoolDepthMax", 0.15f);
+    const F32 puddle_depth_ceiling = llmin(preset.mPuddleDepth, llmax((F32)pool_depth_max, 0.f));
 
     F32 peak_wet = 0.f, peak_snow = 0.f, peak_puddle = 0.f;
 
@@ -276,7 +299,7 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
             if (pooling && src.pools(i))
             {
                 const F32 share = llclamp(src.mCatch[i] / (cell_area * PUDDLE_CATCH_FULL), 0.f, 1.f);
-                fld.mPuddle[i] = llmin(preset.mPuddleDepth * share, fld.mPuddle[i] + puddle_gain);
+                fld.mPuddle[i] = llmin(puddle_depth_ceiling * share, fld.mPuddle[i] + puddle_gain);
             }
             else if (fld.mPuddle[i] > 0.f)
             {
@@ -439,6 +462,7 @@ void SSSurfaceField::updateWindow()
     {
         mWindowData[t * 4] = WINDOW_NO_SURFACE;
     }
+    mWindowFlowData.assign((size_t)WINDOW_RES * WINDOW_RES * 4, 0.f);
 
     bool any = false;
     for (const auto& entry : mFields)
@@ -459,17 +483,51 @@ void SSSurfaceField::updateWindow()
         const S32 y0 = llmax(0, off_y), y1 = llmin(WINDOW_RES, off_y + fld.mN);
         if (x0 >= x1 || y0 >= y1) continue;
 
+        // The drainage network itself, fetched fresh rather than cached on
+        // the Field: geometry-derived and already owned by SSRunoff, so
+        // copying flow and catchment into the integrator alongside wet/snow/
+        // puddle would only be a second copy of data that already exists and
+        // could go stale between the two.
+        const SSRunoffField src = SSRunoff::getInstance()->field(entry.first);
+        const bool have_flow = src.valid() && src.mN == fld.mN;
+
         for (S32 wy = y0; wy < y1; ++wy)
         {
             const S32 fy = wy - off_y;
             for (S32 wx = x0; wx < x1; ++wx)
             {
-                const size_t fi = (size_t)fy * fld.mN + (wx - off_x);
+                const S32 fx = wx - off_x;
+                const size_t fi = (size_t)fy * fld.mN + fx;
                 const size_t wi = ((size_t)wy * WINDOW_RES + wx) * 4;
                 mWindowData[wi]     = fld.mZ[fi];
                 mWindowData[wi + 1] = fld.mWet[fi];
                 mWindowData[wi + 2] = fld.mSnow[fi];
                 mWindowData[wi + 3] = fld.mPuddle[fi];
+
+                if (have_flow && src.solid(fi) && !src.water(fi))
+                {
+                    const S32 down = src.mFlow[fi];
+                    if (down >= 0)
+                    {
+                        const S32 dx = (down % fld.mN) - fx;
+                        const S32 dy = (down / fld.mN) - fy;
+                        const F32 len = sqrtf((F32)(dx * dx + dy * dy));
+                        if (len > 0.f)
+                        {
+                            // How much of this cell's own footprint is
+                            // drainage passing through rather than caught by
+                            // it - a run counts as a channel worth animating
+                            // well before it would count as a full puddle,
+                            // which is why this uses its own, smaller figure
+                            // rather than PUDDLE_CATCH_FULL.
+                            const F32 strength = llclamp(
+                                src.mCatch[fi] / (cell * cell * FLOW_CATCH_FULL), 0.f, 1.f);
+                            mWindowFlowData[wi]     = (F32)dx / len;
+                            mWindowFlowData[wi + 1] = (F32)dy / len;
+                            mWindowFlowData[wi + 2] = strength;
+                        }
+                    }
+                }
             }
         }
         any = true;
@@ -511,6 +569,26 @@ void SSSurfaceField::updateWindow()
         glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
         glBindTexture(GL_TEXTURE_2D, 0);
 
+        glGenTextures(1, &mWindowFlowTex);
+        glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
+
+        // Nearest, deliberately unlike the main window: height, wetness and
+        // depth are all quantities that mean something halfway between two
+        // neighbouring cells, but flow direction is not. A roof valley has
+        // two channels meeting nearly head-on, and an eave has a cell mid-
+        // channel sitting right next to one that sheds and carries no
+        // direction at all - blending either pair of unit vectors gives a
+        // shrunken vector pointing somewhere between two real answers and
+        // meaning neither, which is exactly the broken-looking band this
+        // was leaving right at every valley and eave. A hard cut between
+        // whole cells is a far smaller visible seam than that.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
         const GLenum err = glGetError();
         if (err != GL_NO_ERROR)
         {
@@ -530,6 +608,11 @@ void SSSurfaceField::updateWindow()
     glBindTexture(GL_TEXTURE_2D, mWindowTex);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
                     GL_RGBA, GL_FLOAT, mWindowData.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                    GL_RGBA, GL_FLOAT, mWindowFlowData.data());
     glBindTexture(GL_TEXTURE_2D, 0);
 
     mWindowCell = cell;
@@ -555,12 +638,32 @@ bool SSSurfaceField::bindForShader(LLGLSLShader& shader, S32 channel)
     return true;
 }
 
+bool SSSurfaceField::bindFlowForShader(LLGLSLShader& shader, S32 channel)
+{
+    if (!hasFlowWindow() || channel < 0) return false;
+
+    static LLStaticHashedString field_flow_map("ssFieldFlowMap");
+
+    gGL.getTexUnit(channel)->activate();
+    gGL.getTexUnit(channel)->bindManual(LLTexUnit::TT_TEXTURE, mWindowFlowTex);
+    shader.uniform1i(field_flow_map, channel);
+
+    // Same lattice as the main window - ssFieldOrigin, already bound by
+    // bindForShader, is all either texture needs to be sampled.
+    return true;
+}
+
 void SSSurfaceField::releaseGL()
 {
     if (mWindowTex)
     {
         glDeleteTextures(1, &mWindowTex);
         mWindowTex = 0;
+    }
+    if (mWindowFlowTex)
+    {
+        glDeleteTextures(1, &mWindowFlowTex);
+        mWindowFlowTex = 0;
     }
     mWindowRes = 0;
     mWindowValid = false;
@@ -663,6 +766,11 @@ void SSSurfaceField::renderWetPass()
     static LLStaticHashedString wet_spec("ssWetSpecular");
     static LLStaticHashedString wet_spec_matte("ssWetSpecularMatte");
     static LLStaticHashedString wet_debug("ssWetDebugForce");
+    static LLStaticHashedString wet_puddle_depth("ssWetPuddleDepthFull");
+    static LLStaticHashedString wet_puddle_rough("ssWetPuddleRoughness");
+    static LLStaticHashedString wet_puddle_rough_min("ssWetPuddleRoughMin");
+    static LLStaticHashedString wet_puddle_spec("ssWetPuddleSpecular");
+    static LLStaticHashedString wet_puddle_gloss("ssWetPuddleGloss");
 
     const glm::mat4 inv = glm::inverse(get_current_modelview());
     gSSSurfaceWetProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
@@ -704,6 +812,22 @@ void SSSurfaceField::renderWetPass()
     gSSSurfaceWetProgram.uniform1f(wet_gloss, llclamp((F32)gloss_target, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_spec, llclamp((F32)spec_target, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_spec_matte, llclamp((F32)spec_matte, 0.f, 1.f));
+
+    // Standing water. The depth figure is shared verbatim with the normal
+    // flatten pass below so the two agree on what counts as a full puddle;
+    // everything else here is this pass's own look, tuned independently of
+    // the general wetness dials above it.
+    static LLCachedControl<F32> puddle_depth_full(gSavedSettings, "SSAtmoWetPuddleDepthFull", 0.02f);
+    static LLCachedControl<F32> puddle_rough(gSavedSettings, "SSAtmoWetPuddleRoughness", 0.02f);
+    static LLCachedControl<F32> puddle_rough_min(gSavedSettings, "SSAtmoWetPuddleRoughMin", 0.02f);
+    static LLCachedControl<F32> puddle_spec(gSavedSettings, "SSAtmoWetPuddleSpecular", 0.9f);
+    static LLCachedControl<F32> puddle_gloss(gSavedSettings, "SSAtmoWetPuddleGloss", 0.9f);
+    const F32 puddle_depth_full_m = llmax((F32)puddle_depth_full, 0.001f);
+    gSSSurfaceWetProgram.uniform1f(wet_puddle_depth, puddle_depth_full_m);
+    gSSSurfaceWetProgram.uniform1f(wet_puddle_rough, llclamp((F32)puddle_rough, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_puddle_rough_min, llclamp((F32)puddle_rough_min, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_puddle_spec, llclamp((F32)puddle_spec, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_puddle_gloss, llclamp((F32)puddle_gloss, 0.f, 1.f));
 
     // Diagnostic override: soaks every fragment the pass reaches, whatever the
     // field says. Separates "the pass writes nothing anyone can see" from "the
@@ -798,6 +922,31 @@ void SSSurfaceField::renderWetPass()
 
         const S32 normal_field_channel = gSSSurfaceNormalProgram.mActiveTextureChannels;
         bindForShader(gSSSurfaceNormalProgram, normal_field_channel);
+        const S32 flow_field_channel = normal_field_channel + 1;
+        bindFlowForShader(gSSSurfaceNormalProgram, flow_field_channel);
+
+        // The same tileable wave-normal texture the water plane itself uses
+        // for ripples - fetched by UUID each pass rather than cached on this
+        // object, the same way LLDrawPoolWater picks it up, so a region
+        // changing its water settings changes what streams look like too
+        // without this needing to be told. The texture manager's own cache
+        // keyed on that UUID is what keeps this cheap.
+        const S32 wave_channel = flow_field_channel + 1;
+        LLSettingsWater::ptr_t pwater = LLEnvironment::instance().getCurrentWater();
+        LLUUID wave_id = pwater ? pwater->getNormalMapID() : LLUUID::null;
+        if (wave_id.isNull()) wave_id = LLSettingsWater::GetDefaultWaterNormalAssetId();
+        LLViewerFetchedTexture* wave_tex = LLViewerTextureManager::getFetchedTexture(wave_id);
+
+        static LLStaticHashedString wave_map("ssWaveMap");
+        bool have_wave = false;
+        if (wave_tex)
+        {
+            wave_tex->addTextureStats(1024.f * 1024.f);
+            gGL.getTexUnit(wave_channel)->activate();
+            gGL.getTexUnit(wave_channel)->bindManual(LLTexUnit::TT_TEXTURE, wave_tex->getTexName());
+            gSSSurfaceNormalProgram.uniform1i(wave_map, wave_channel);
+            have_wave = true;
+        }
 
         static LLStaticHashedString norm_inv_view("ssFieldInvView");
         static LLStaticHashedString norm_wet_str("ssWetStrength");
@@ -806,6 +955,8 @@ void SSSurfaceField::renderWetPass()
         static LLStaticHashedString norm_flatten("ssWetNormalFlatten");
         static LLStaticHashedString norm_cos_full("ssWetFlattenCosFull");
         static LLStaticHashedString norm_cos_zero("ssWetFlattenCosZero");
+        static LLStaticHashedString norm_puddle_depth("ssWetPuddleDepthFull");
+        static LLStaticHashedString norm_puddle_flatten("ssWetPuddleFlatten");
 
         gSSSurfaceNormalProgram.uniformMatrix4fv(norm_inv_view, 1, GL_FALSE, glm::value_ptr(inv));
         gSSSurfaceNormalProgram.uniform1f(norm_wet_str, wet_strength);
@@ -827,6 +978,48 @@ void SSSurfaceField::renderWetPass()
         gSSSurfaceNormalProgram.uniform1f(norm_cos_full, cos_full);
         gSSSurfaceNormalProgram.uniform1f(norm_cos_zero, cos_zero);
 
+        // Same standing-depth figure the wetness pass just used, and its own
+        // flatten amount rather than a share of ssWetNormalFlatten - a puddle
+        // is meant to read as fully level water at full depth regardless of
+        // how far the ordinary wet-wall taper is dialled.
+        gSSSurfaceNormalProgram.uniform1f(norm_puddle_depth, puddle_depth_full_m);
+        static LLCachedControl<F32> puddle_flatten(gSavedSettings, "SSAtmoWetPuddleFlatten", 1.f);
+        gSSSurfaceNormalProgram.uniform1f(norm_puddle_flatten, llclamp((F32)puddle_flatten, 0.f, 1.f));
+
+        static LLStaticHashedString norm_time("ssTime");
+        static LLStaticHashedString norm_flow_scale("ssWetFlowScale");
+        static LLStaticHashedString norm_flow_speed("ssWetFlowSpeed");
+        static LLStaticHashedString norm_flow_strength("ssWetFlowStrength");
+        static LLStaticHashedString norm_flow_rot_sin("ssWetFlowRotSin");
+        static LLStaticHashedString norm_flow_rot_cos("ssWetFlowRotCos");
+        static LLStaticHashedString norm_flow_min_wet("ssWetFlowMinWet");
+        static LLCachedControl<F32> flow_scale(gSavedSettings, "SSAtmoWetFlowScale", 4.f);
+        static LLCachedControl<F32> flow_speed(gSavedSettings, "SSAtmoWetFlowSpeed", 0.6f);
+        static LLCachedControl<F32> flow_strength(gSavedSettings, "SSAtmoWetFlowStrength", 0.6f);
+        static LLCachedControl<F32> flow_rotate(gSavedSettings, "SSAtmoWetFlowRotate", 90.f);
+        static LLCachedControl<F32> flow_min_wet(gSavedSettings, "SSAtmoWetFlowMinWet", 0.3f);
+
+        // atmo->sharedTime() is seconds since the Unix epoch - a fine clock
+        // for scheduling, but a poor one to hand a shader: at that magnitude
+        // a 32-bit float's precision has already coarsened to better than a
+        // minute per step, which is exactly why nothing here looked like it
+        // was moving. gFrameTimeSeconds is the same continuous clock the
+        // rest of the viewer already animates against, rebased to zero at
+        // launch so it stays precise for hours.
+        gSSSurfaceNormalProgram.uniform1f(norm_time, gFrameTimeSeconds);
+        gSSSurfaceNormalProgram.uniform1f(norm_flow_scale, llmax((F32)flow_scale, 0.1f));
+        gSSSurfaceNormalProgram.uniform1f(norm_flow_speed, (F32)flow_speed);
+        const F32 flow_rot_rad = (F32)flow_rotate * DEG_TO_RAD;
+        gSSSurfaceNormalProgram.uniform1f(norm_flow_rot_sin, sinf(flow_rot_rad));
+        gSSSurfaceNormalProgram.uniform1f(norm_flow_rot_cos, cosf(flow_rot_rad));
+        // No wave texture bound leaves ssWaveMap sampling whatever texture
+        // unit wave_channel happened to hold last, so the strength that
+        // blends its result in has to drop to zero along with it rather than
+        // trusting the setting alone.
+        gSSSurfaceNormalProgram.uniform1f(norm_flow_strength,
+                                          have_wave ? llclamp((F32)flow_strength, 0.f, 1.f) : 0.f);
+        gSSSurfaceNormalProgram.uniform1f(norm_flow_min_wet, llclamp((F32)flow_min_wet, 0.f, 0.99f));
+
         {
             LLGLDepthTest depth(GL_FALSE);
             LLGLDisable blend(GL_BLEND);
@@ -836,6 +1029,8 @@ void SSSurfaceField::renderWetPass()
         }
 
         gGL.getTexUnit(normal_field_channel)->unbind(LLTexUnit::TT_TEXTURE);
+        gGL.getTexUnit(flow_field_channel)->unbind(LLTexUnit::TT_TEXTURE);
+        if (have_wave) gGL.getTexUnit(wave_channel)->unbind(LLTexUnit::TT_TEXTURE);
         gPipeline.unbindDeferredShader(gSSSurfaceNormalProgram);
 
         {

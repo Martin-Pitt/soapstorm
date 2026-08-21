@@ -25819,6 +25819,138 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.1</real>
     </map>
+    <key>SSAtmoWetPoolDepthMax</key>
+      <map>
+      <key>Comment</key>
+      <string>Ceiling on standing water depth, metres, on top of whatever a weather preset authors - a stopgap until puddles are a real basin-fill simulation rather than an unbounded per-cell figure</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.15</real>
+    </map>
+    <key>SSAtmoWetPuddleDepthFull</key>
+      <map>
+      <key>Comment</key>
+      <string>Standing water depth, in metres, that reads as a full puddle - see the drainage's standing-depth channel</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.02</real>
+    </map>
+    <key>SSAtmoWetPuddleRoughness</key>
+      <map>
+      <key>Comment</key>
+      <string>What a full puddle's PBR roughness is multiplied by; kept near a mirror, well below the plain-wet figure</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.02</real>
+    </map>
+    <key>SSAtmoWetPuddleRoughMin</key>
+      <map>
+      <key>Comment</key>
+      <string>Roughness floor for a full puddle's PBR surface</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.02</real>
+    </map>
+    <key>SSAtmoWetPuddleSpecular</key>
+      <map>
+      <key>Comment</key>
+      <string>Legacy specular colour target for a full puddle, replacing SSAtmoWetSpecular/SSAtmoWetSpecularMatte there</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.9</real>
+    </map>
+    <key>SSAtmoWetPuddleGloss</key>
+      <map>
+      <key>Comment</key>
+      <string>Legacy gloss target for a full puddle, replacing SSAtmoWetGloss there</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.9</real>
+    </map>
+    <key>SSAtmoWetPuddleFlatten</key>
+      <map>
+      <key>Comment</key>
+      <string>How far a full puddle's shading normal leans toward world up, independent of SSAtmoWetNormalFlatten and its slope gate</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoWetFlowScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Metres per tile of the wave-normal texture reused for water visibly running along drainage channels</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>4.0</real>
+    </map>
+    <key>SSAtmoWetFlowSpeed</key>
+      <map>
+      <key>Comment</key>
+      <string>Metres per second the flow-motion wave pattern scrolls along a channel's drainage direction</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.6</real>
+    </map>
+    <key>SSAtmoWetFlowStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>How far a fully flowing channel's normal blends toward the scrolling wave pattern; 0 disables flow motion entirely</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.6</real>
+    </map>
+    <key>SSAtmoWetFlowMinWet</key>
+      <map>
+      <key>Comment</key>
+      <string>Surface tension's stand-in: how wet or full a channel cell has to be before flow motion engages at all, below which it stays a still film. 0 disables the threshold</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.3</real>
+    </map>
+    <key>SSAtmoWetFlowRotate</key>
+      <map>
+      <key>Comment</key>
+      <string>Degrees to turn the reused wave texture's ripple direction by before laying it onto the drainage flow direction</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>90.0</real>
+    </map>
     <key>SSAtmoWetNormalFlatten</key>
       <map>
       <key>Comment</key>

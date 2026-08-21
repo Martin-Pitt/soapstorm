@@ -112,6 +112,54 @@ struct SSPrecipSounds
     std::string mRoofBig;
 };
 
+// Which ground condition an avatar's foot just landed on. Terrain and an
+// object underfoot (a wood floor, a sidewalk prim) are kept apart because
+// they usually want different palettes even at the same wetness; indoors
+// only has one bucket because SSSurfaceField never wets a covered cell, so
+// "indoor and wet" is not a state the world ever produces.
+enum SSStepSurface : U8
+{
+    STEP_TERRAIN_DRY = 0,
+    STEP_TERRAIN_WET,
+    STEP_TERRAIN_PUDDLE,
+    STEP_OUTSIDE_DRY,
+    STEP_OUTSIDE_WET,
+    STEP_OUTSIDE_PUDDLE,
+    STEP_INSIDE_DRY,
+    STEP_SURFACE_COUNT
+};
+
+// What the avatar's feet are doing. Jump is the push-off, not the landing -
+// that is Land - so a preset can give a distinct grunt-and-launch sound
+// separate from the touchdown.
+enum SSStepAction : U8
+{
+    STEP_WALK = 0,
+    STEP_RUN,
+    STEP_JUMP,
+    STEP_LAND,
+    STEP_ACTION_COUNT
+};
+
+// A footstep sound pack: one slot per surface/action pair, each an optional
+// comma separated list of sound UUIDs picked from at random for variation
+// (unlike the ambient loops, footsteps are one-shots fired in quick
+// succession, so a sequence that plays end to end would not keep up). An
+// empty slot falls back to the viewer's stock footstep sound, so a preset
+// that never fills this in behaves exactly as it always has.
+struct SSFootstepSounds
+{
+    std::string mSounds[STEP_SURFACE_COUNT][STEP_ACTION_COUNT];
+
+    std::string& at(SSStepSurface surface, SSStepAction action) { return mSounds[surface][action]; }
+    const std::string& at(SSStepSurface surface, SSStepAction action) const { return mSounds[surface][action]; }
+
+    static const char* surfaceName(SSStepSurface s);   // for UI labels
+    static const char* actionName(SSStepAction a);
+    static const char* surfaceKey(SSStepSurface s);    // for LLSD/widget names, e.g. "terrain_dry"
+    static const char* actionKey(SSStepAction a);      // e.g. "walk"
+};
+
 // Longest fall a stream may be drawn over, in metres, and the top of the
 // slider that sets it. Past this the water off an eave is spray rather than a
 // column, so there is nothing to draw down there anyway - and the ground cuts
@@ -217,6 +265,7 @@ struct SSPrecipPreset
     std::string mDarkTexture;   // riser flavour: small dark sharp flecks
     std::string mPuffTexture;   // riser flavour: large vague clouds
     SSPrecipSounds mSounds;
+    SSFootstepSounds mFootsteps;
 
     LLSD asLLSD() const;
     void fromLLSD(const LLSD& sd);

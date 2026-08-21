@@ -87,6 +87,17 @@ public:
     // no work to do either.
     bool bindForShader(LLGLSLShader& shader, S32 channel);
     bool hasWindow() const { return mWindowTex != 0 && mWindowValid; }
+
+    // A second stitched window, laid out exactly like the first, carrying
+    // where the drainage's own flow accumulation says water on this cell is
+    // headed and how much is passing through it - a channel, not a puddle.
+    // Kept apart from the main window rather than added as a third and
+    // fourth component on it: nothing but the flow-motion pass ever reads
+    // this, and every consumer of the main window would otherwise be
+    // uploading and sampling two floats a tick that it never touches.
+    bool bindFlowForShader(LLGLSLShader& shader, S32 channel);
+    bool hasFlowWindow() const { return mWindowFlowTex != 0 && mWindowValid; }
+
     void releaseGL();
 
     // The gbuffer pass. From renderDeferredLighting, before anything has read
@@ -160,6 +171,13 @@ private:
     LLVector3 mWindowOrigin;            // agent-space corner of texel (0, 0)
     std::vector<F32> mWindowData;       // staging, RGBA per texel
     bool mWindowValid = false;
+
+    // xy: agent-space unit flow direction, downstream. z: how much of the
+    // cell's own footprint is drainage passing through rather than caught by
+    // it, 0 to 1 - a channel, not a puddle. Same lattice, origin and cell as
+    // mWindowData, so one ssFieldOrigin uniform serves both.
+    U32 mWindowFlowTex = 0;
+    std::vector<F32> mWindowFlowData;   // staging, RGBA per texel
 
     F32 mLastTickMS = 0.f;
     F32 mPeakWet = 0.f;
