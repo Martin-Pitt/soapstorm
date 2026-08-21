@@ -185,6 +185,7 @@ LLGLSLShader            gDeferredAlphaProgram;
 LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
 LLGLSLShader            gSSSurfaceWetProgram;
+LLGLSLShader            gSSSurfaceNormalProgram;
 LLGLSLShader            gSSSurfaceCommitProgram;
 LLGLSLShader            gSSPrecipProjProgram;
 LLGLSLShader            gSSWindInitProgram;
@@ -453,6 +454,7 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSPrecipRainProgram);
     mShaderList.push_back(&gSSPrecipLitProgram);
     mShaderList.push_back(&gSSSurfaceWetProgram);
+    mShaderList.push_back(&gSSSurfaceNormalProgram);
     mShaderList.push_back(&gSSSurfaceCommitProgram);
     mShaderList.push_back(&gSSPrecipProjProgram);
     // </SS:Nexii>
@@ -1238,6 +1240,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSPrecipLitProgram.unload();
         gSSPrecipProjProgram.unload();
         gSSSurfaceWetProgram.unload();
+        gSSSurfaceNormalProgram.unload();
         gSSSurfaceCommitProgram.unload();
         // </SS:Nexii>
         gHUDFullbrightProgram.unload();
@@ -2165,6 +2168,31 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         }
     }
 
+    // Companion to the wetness shader above: flattens the shading normal
+    // toward up on the same surfaces, by the same wet value, as a second
+    // independent pass rather than a second output bolted onto the first -
+    // that shader's early returns are all proven correct already, and this
+    // way none of them needed touching to add a second thing they carry
+    // through unchanged.
+    if (success && gSSSurfaceWetProgram.isComplete())
+    {
+        gSSSurfaceNormalProgram.mName = "SS Surface Normal Flatten Shader";
+        gSSSurfaceNormalProgram.mFeatures.isDeferred = true;
+        gSSSurfaceNormalProgram.mShaderFiles.clear();
+        gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceNormalF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceNormalProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSSurfaceNormalProgram.clearPermutations();
+        add_common_permutations(&gSSSurfaceNormalProgram);
+        if (!gSSSurfaceNormalProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Surface normal flatten shader failed to compile;"
+                               << " wet surfaces will not flatten" << LL_ENDL;
+            gSSSurfaceNormalProgram.unload();
+        }
+    }
+
     // Puts the reworked specular buffer back into the gbuffer. Nothing but a
     // textured blit, but it has to exist as a draw rather than a copy: writing
     // through the framebuffer is the only way to name the destination that
@@ -2184,6 +2212,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
                                << " surfaces will not respond to the weather" << LL_ENDL;
             gSSSurfaceCommitProgram.unload();
             gSSSurfaceWetProgram.unload();
+            gSSSurfaceNormalProgram.unload();
         }
     }
 

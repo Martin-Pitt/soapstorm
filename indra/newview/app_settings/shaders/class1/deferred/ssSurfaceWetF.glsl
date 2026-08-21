@@ -55,16 +55,37 @@ uniform float ssWetGlossTarget;
 // here lands near the 0.04 a dielectric reflects once soften linearises it.
 uniform float ssWetSpecular;
 
+// A lower target for legacy surfaces that carried no baked specular data at
+// all - terrain always writes exactly zero here, by construction, and a
+// great deal of plain, matte content does too. A surface with nothing shiny
+// about it to begin with is unlikely to turn glossy under rain the way an
+// already-finished one does, and on terrain specifically the normal is
+// coherent over a large area with none of the micro-detail that breaks a
+// tight highlight into many small glints instead of one sliding blob - so it
+// wants noticeably less specular energy than ordinary content, not just a
+// slightly lower amount of the same thing.
+uniform float ssWetSpecularMatte;
+
 // Diagnostic. Above zero this is used as the wetness for every fragment the
 // pass reaches, ignoring the field, the exposure and the shelter march
 // entirely. It answers one question and only one: does anything this pass
 // writes reach the screen. Everything else here is downstream of that.
 uniform float ssWetDebugForce;
 
+// Diagnostic. Above zero, samples the REAL field texture for wetness at this
+// fragment's own position, but skips the exposure march entirely (treats
+// every fragment as fully exposed). Isolates the field lookup and coordinate
+// math from the shelter/overhang logic - the one piece of this shader that
+// has never been independently verified, everything else having been proven
+// tonight one layer at a time.
+uniform float ssWetSkipExposure;
+
 float getDepth(vec2 pos_screen);
 vec4 getPositionWithDepth(vec2 pos_screen, float depth);
-vec4 getNorm(vec2 screenpos);
+vec4 getNormRaw(vec2 screenpos);
+vec4 decodeNormal(vec4 norm);
 vec4 ssFieldAt(vec3 p_agent, vec3 n_agent);
+vec4 ssFieldFetch(vec2 xy_agent);
 
 void main()
 {
@@ -72,8 +93,15 @@ void main()
     vec4 spec = texture(specularRect, tc);
 
     float depth = getDepth(tc);
-    vec4 norm = getNorm(tc);
-    float flag = norm.w;
+
+    // decodeNormal() reconstructs xyz from the octahedral encoding but never
+    // assigns w - the flag channel comes along for the ride in the same
+    // texture but is not part of what that function decodes, and reading it
+    // off its result is uninitialised GLSL output. The flag has to come from
+    // the raw fetch; only the normal itself goes through decodeNormal.
+    vec4 raw = getNormRaw(tc);
+    float flag = raw.w;
+    vec4 norm = decodeNormal(raw);
 
     // Sky, stars, the sun disc, HDRI - none of them are surfaces and none of
     // them have a specular response to spoil
@@ -92,6 +120,22 @@ void main()
     if (ssWetDebugForce > 0.0)
     {
         wet = ssWetDebugForce;
+    }
+    else if (ssWetSkipExposure > 0.0)
+    {
+        vec4 raw = ssFieldFetch(p.xy);
+        if (raw.x < -1.0e5)
+        {
+            // Outside the stitched window entirely
+            frag_color = spec;
+            return;
+        }
+        wet = raw.y * ssWetStrength;
+        if (wet < 0.004)
+        {
+            frag_color = spec;
+            return;
+        }
     }
     else
     {
@@ -133,10 +177,25 @@ void main()
         // for no pixels.
         //
         // A water film is a weak neutral dielectric laid over whatever was
-        // underneath, so this is a floor rather than a blend: it puts a
-        // specular on a surface that had none and never takes one away from a
-        // surface whose author gave it one.
-        spec.rgb = max(spec.rgb, vec3(ssWetSpecular * wet));
+        // underneath, so the wet end of this is a floor rather than a cap: it
+        // puts a specular on a surface that had none and never takes one away
+        // from a surface whose author gave it one. But wet has to be the
+        // blend factor toward that floor, not baked into the floor itself -
+        // max(spec.rgb, ssWetSpecular*wet) makes the floor rise WITH wet,
+        // which means whether the transition looks smooth or like a switch
+        // depends on how bright the surface already was relative to that
+        // rising floor, different for every piece of content. Blending
+        // toward a fixed target the way the gloss line already does makes
+        // the ramp wet-driven and predictable regardless of what the
+        // surface started at.
+        // Terrain, and plain content like it, carries no baked specular at
+        // all to begin with - checked once, before wet moves anything, so
+        // the choice of target does not itself depend on what wet already
+        // did to spec this frame.
+        bool matte = max(max(spec.r, spec.g), max(spec.b, spec.a)) < 0.02;
+        float target = matte ? ssWetSpecularMatte : ssWetSpecular;
+
+        spec.rgb = mix(spec.rgb, max(spec.rgb, vec3(target)), wet);
         spec.a = mix(spec.a, max(spec.a, ssWetGlossTarget), wet);
     }
 

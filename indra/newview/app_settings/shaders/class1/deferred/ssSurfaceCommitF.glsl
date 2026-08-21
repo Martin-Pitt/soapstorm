@@ -42,9 +42,33 @@ in vec2 vary_fragcoord;
 
 uniform sampler2D ssCommitSource;
 
+// Diagnostic. Above zero, the diffuse attachment is painted a flat magenta as
+// well as the specular being written. Albedo multiplies straight into the
+// final colour on every path there is, so this cannot be mistaken for a subtle
+// lighting change, cannot be swallowed by an overcast sky, and cannot be
+// argued with. It separates "nothing this pass writes lands anywhere" from
+// "the specular buffer lands and the lighting does nothing with it", which are
+// the only two possibilities left and want opposite fixes.
+uniform float ssCommitDebugPaint;
+
 void main()
 {
     frag_data[1] = texture(ssCommitSource, vary_fragcoord.xy);
+
+    if (ssCommitDebugPaint > 0.0)
+    {
+        frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
+
+        // The diffuse paint above is already proven to reach the screen (the
+        // freeze-frame test). This is the same proof for the OTHER channel
+        // this pass writes - the one the wetness effect actually uses - which
+        // has never independently been checked. ORM = (0 occlusion, 0
+        // roughness, 1 metal): every PBR surface should go a hard mirror, and
+        // every legacy surface should carry a strange blue-tinted specular.
+        // If this channel reaches the screen the same way diffuse did, this
+        // is unmistakable regardless of lighting or haze.
+        frag_data[1] = vec4(0.0, 0.0, 1.0, 0.0);
+    }
 }
 
 // </SS:Nexii>

@@ -63,6 +63,14 @@ vec4 ssFieldFetch(vec2 xy_agent)
     return texture(ssFieldMap, uv);
 }
 
+// Cheap per-fragment hash, stable in world space so the pattern it drives
+// does not swim as the camera moves - unlike a screen-space hash, which
+// would.
+float ssFieldHash(vec2 p)
+{
+    return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
 // One ray back up the fall direction. Returns 1 where something is in the way.
 float ssFieldRay(vec3 origin, vec3 dir, float cell)
 {
@@ -111,16 +119,33 @@ vec4 ssFieldAt(vec3 p_agent, vec3 n_agent)
         // sheltered by the eave directly above it.
         vec3 origin = p_agent + n_agent * (cell * 0.75);
 
-        // Two rays either side of the fall direction rather than one down it.
-        // The spread is small, so this is not sampling a cone properly - it is
-        // buying the one thing a single ray cannot give, which is a soft edge
-        // where an overhang stops sheltering.
+        // Five rays across a small cone around the fall direction rather than
+        // two points on a line either side of it. Each ray is still a binary
+        // hit test, and five of them can only ever answer in sixths - on
+        // their own that reads as six clean, concentric stripes tracing the
+        // sheltering geometry's own silhouette, which is a worse look than
+        // the hard edge it replaced. Rotating the ray fan by a per-fragment
+        // random angle is what actually sells the softness: it does not add
+        // any more information at a single point, but it means neighbouring
+        // fragments right at the same true exposure level land on different
+        // sides of their own six-level answer, so the coherent stripe breaks
+        // up into noise - the same reason PCF shadow filters and SSAO jitter
+        // their kernels rather than using every fragment's sample points
+        // unrotated.
         vec3 tangent = normalize(cross(ssFieldFall, vec3(0.0, 0.0, 1.0)) + vec3(1.0e-4, 0.0, 0.0));
-        vec3 dir_a = normalize(ssFieldFall + tangent * ssFieldSpread);
-        vec3 dir_b = normalize(ssFieldFall - tangent * ssFieldSpread);
+        vec3 bitangent = cross(ssFieldFall, tangent);
 
-        float blocked = ssFieldRay(origin, dir_a, cell) + ssFieldRay(origin, dir_b, cell);
-        exposure = 1.0 - blocked * 0.5;
+        float ang = ssFieldHash(p_agent.xy) * 6.28318530718;
+        float ca = cos(ang), sa = sin(ang);
+        vec3 t = tangent * ca + bitangent * sa;
+        vec3 b = bitangent * ca - tangent * sa;
+
+        float blocked = ssFieldRay(origin, ssFieldFall, cell);
+        blocked += ssFieldRay(origin, normalize(ssFieldFall + t * ssFieldSpread), cell);
+        blocked += ssFieldRay(origin, normalize(ssFieldFall - t * ssFieldSpread), cell);
+        blocked += ssFieldRay(origin, normalize(ssFieldFall + b * ssFieldSpread), cell);
+        blocked += ssFieldRay(origin, normalize(ssFieldFall - b * ssFieldSpread), cell);
+        exposure = 1.0 - blocked * 0.2;
     }
 
     // Driven weather wets the face it can see and leaves the lee of it alone.

@@ -237,7 +237,24 @@ bool SSRainShadowMap::captureTile(Tile& tile)
 
     {
         static LLCullResult cull_result;
+
+        // Rain falls on the world's own shape, not on whoever happens to be
+        // standing in the capture band this frame. renderShadow() always
+        // includes avatars - correctly, for the real sun shadow it exists
+        // for - so without this an avatar walking through the capture area
+        // presses a person-shaped dent into the drainage trace, one that
+        // moves as they do and drives spurious sheltering and puddle shape
+        // for as long as the tile stays cached. Attachments still get
+        // through this: they render as ordinary RENDER_TYPE_VOLUME, sharing
+        // a type with every rezzed prim in the world, so there is no
+        // type-level way to exclude what someone is wearing without also
+        // excluding the ground they are standing on. That half stays open.
+        gPipeline.pushRenderTypeMask();
+        gPipeline.clearRenderTypeMask(LLPipeline::RENDER_TYPE_AVATAR,
+                                      LLPipeline::RENDER_TYPE_CONTROL_AV,
+                                      LLPipeline::END_RENDER_TYPES);
         gPipeline.renderShadow(view, proj, shadow_cam, cull_result, true);
+        gPipeline.popRenderTypeMask();
     }
 
     tile.mRes = res;

@@ -141,6 +141,15 @@ private:
     // is cheap next to finding out which drivers get away with it.
     LLRenderTarget mScratch;
 
+    // Same idea, for the flattened normal. Its own target rather than a
+    // second attachment on mScratch: the wetness shader's early returns are
+    // all proven correct as a single-output shader, and giving it a second
+    // output to carry through unchanged on every one of those paths would
+    // have meant touching every one of them to add it. A second pass over a
+    // second target costs one more full-screen triangle and touches none of
+    // that.
+    LLRenderTarget mScratchNormal;
+
     // The stitched window. Held as RGBA32F - the height channel is an agent
     // space Z that runs to a few thousand metres and is compared against
     // fragment positions to within a few centimetres, which is well past what

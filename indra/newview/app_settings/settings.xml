@@ -25786,10 +25786,76 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>48.0</real>
     </map>
+    <key>SSAtmoCommitDebugPaint</key>
+      <map>
+      <key>Comment</key>
+      <string>Diagnostic: above zero, paints diffuse magenta from the gbuffer commit pass to prove the write mechanism works</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.0</real>
+    </map>
     <key>SSAtmoWetDebugForce</key>
       <map>
       <key>Comment</key>
       <string>Diagnostic: above zero, soaks every surface this much regardless of the weather or shelter</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.0</real>
+    </map>
+    <key>SSAtmoWetSpecularMatte</key>
+      <map>
+      <key>Comment</key>
+      <string>Wet specular colour for legacy surfaces carrying no baked specular at all, terrain among them - lower than SSAtmoWetSpecular</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.1</real>
+    </map>
+    <key>SSAtmoWetNormalFlatten</key>
+      <map>
+      <key>Comment</key>
+      <string>How far a fully wet surface's shading normal leans toward world up; 0 leaves normals alone, 1 goes fully flat</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.95</real>
+    </map>
+    <key>SSAtmoWetFlattenAngleFull</key>
+      <map>
+      <key>Comment</key>
+      <string>Degrees from vertical-up below which a surface gets the full normal flatten amount</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>10.0</real>
+    </map>
+    <key>SSAtmoWetFlattenAngleZero</key>
+      <map>
+      <key>Comment</key>
+      <string>Degrees from vertical-up above which a surface gets none of the normal flatten amount</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>30.0</real>
+    </map>
+    <key>SSAtmoWetSkipExposure</key>
+      <map>
+      <key>Comment</key>
+      <string>Diagnostic: real field wetness, exposure/shelter march skipped entirely</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

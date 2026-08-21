@@ -732,7 +732,7 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
                           grid_origin.mV[VY] + ((F32)cy + 0.5f) * cell,
                           0.5f * (top + tile.mBandBottom));
 
-    LL_INFOS("AtmoMagic") << "Probe audit: tallest column (" << cx << "," << cy
+    LL_DEBUGS("AtmoMagic") << "Probe audit: tallest column (" << cx << "," << cy
                           << ") top " << llformat("%.1f", top)
                           << ", testing " << llformat("(%.1f, %.1f, %.1f)",
                                                       world.mV[VX], world.mV[VY], world.mV[VZ])
@@ -769,7 +769,7 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
                         : "blocked, correct";
         }
 
-        LL_INFOS("AtmoMagic") << "  probe " << i
+        LL_DEBUGS("AtmoMagic") << "  probe " << i
                               << llformat(" dist %.1f", dist)
                               << llformat(" uv (%.3f, %.3f)", u, w)
                               << (hit >= 0.f ? llformat(" hit %.1f", hit) : std::string())
@@ -1388,7 +1388,7 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
     // The upload is GL, so it waits for solveRun back on the main thread
     mMaskChanged = true;
 
-    LL_INFOS("AtmoMagic") << "Wind flow bridged " << opened
+    LL_DEBUGS("AtmoMagic") << "Wind flow bridged " << opened
                           << llformat(" cells (%.2f%% of the volume)",
                                       (F32)opened / (F32)llmax<size_t>(active, 1) * 100.f)
                           << " between carved ones" << LL_ENDL;

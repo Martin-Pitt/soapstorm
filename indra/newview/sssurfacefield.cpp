@@ -43,6 +43,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>
@@ -564,6 +565,7 @@ void SSSurfaceField::releaseGL()
     mWindowRes = 0;
     mWindowValid = false;
     mScratch.release();
+    mScratchNormal.release();
 }
 
 void SSSurfaceField::renderWetPass()
@@ -608,6 +610,18 @@ void SSSurfaceField::renderWetPass()
             note(5, "idle, could not allocate the scratch target");
             return;
         }
+
+        // allocate() returning true is not the same as the target actually
+        // holding a texture - addColorAttachment can decline quietly further
+        // down. Caught here, once, rather than discovered as a getTexture()
+        // warning three calls later with no context left to explain it.
+        if (mScratch.getNumTextures() < 1)
+        {
+            LL_WARNS("AtmoMagic") << "Surface wetness scratch target has no"
+                                     " colour attachment after allocate("
+                                  << w << "x" << h << ")" << LL_ENDL;
+            return;
+        }
     }
 
     if (s_state != 0)
@@ -647,6 +661,7 @@ void SSSurfaceField::renderWetPass()
     static LLStaticHashedString wet_rough_min("ssWetRoughMin");
     static LLStaticHashedString wet_gloss("ssWetGlossTarget");
     static LLStaticHashedString wet_spec("ssWetSpecular");
+    static LLStaticHashedString wet_spec_matte("ssWetSpecularMatte");
     static LLStaticHashedString wet_debug("ssWetDebugForce");
 
     const glm::mat4 inv = glm::inverse(get_current_modelview());
@@ -654,11 +669,15 @@ void SSSurfaceField::renderWetPass()
     gSSSurfaceWetProgram.uniform3fv(field_fall, 1, fall.mV);
 
     // Turbulence spreads the fall direction, and that spread is what softens
-    // the edge of an overhang. Taken from the gust the wind system is already
-    // running rather than invented, so a squall blurs the shelter line and
-    // still air leaves it crisp.
-    static LLCachedControl<F32> spread_scale(gSavedSettings, "SSAtmoWetSpread", 0.35f);
-    const F32 spread = llclamp((F32)spread_scale * atmo->gustEnvelopeAt(atmo->sharedTime()), 0.f, 1.f);
+    // the edge of an overhang. Tried tying this to the gust the wind system
+    // tracks, on the reasoning that a squall should blur the shelter line
+    // more than still air does - but a value that keeps changing frame to
+    // frame makes a perfectly static edge visibly breathe, which reads as a
+    // bug even though the reasoning behind it was sound. A single fixed
+    // width holds still, and that matters more here than the physical
+    // justification did.
+    static LLCachedControl<F32> spread_setting(gSavedSettings, "SSAtmoWetSpread", 0.35f);
+    const F32 spread = llclamp((F32)spread_setting, 0.f, 1.f);
     gSSSurfaceWetProgram.uniform1f(field_spread, spread);
 
     static LLCachedControl<F32> facing(gSavedSettings, "SSAtmoWetFacing", 0.6f);
@@ -674,11 +693,17 @@ void SSSurfaceField::renderWetPass()
     static LLCachedControl<F32> gloss_target(gSavedSettings, "SSAtmoWetGloss", 0.55f);
     static LLCachedControl<F32> spec_target(gSavedSettings, "SSAtmoWetSpecular", 0.25f);
 
+    // Terrain, and any legacy content like it, carries no baked specular at
+    // all - checked in the shader rather than here, since it depends on the
+    // gbuffer's own value at each fragment, not anything known on this side.
+    static LLCachedControl<F32> spec_matte(gSavedSettings, "SSAtmoWetSpecularMatte", 0.1f);
+
     gSSSurfaceWetProgram.uniform1f(wet_str, wet_strength);
     gSSSurfaceWetProgram.uniform1f(wet_rough, llclamp((F32)rough_mul, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_rough_min, llclamp((F32)rough_min, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_gloss, llclamp((F32)gloss_target, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_spec, llclamp((F32)spec_target, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_spec_matte, llclamp((F32)spec_matte, 0.f, 1.f));
 
     // Diagnostic override: soaks every fragment the pass reaches, whatever the
     // field says. Separates "the pass writes nothing anyone can see" from "the
@@ -686,16 +711,144 @@ void SSSurfaceField::renderWetPass()
     static LLCachedControl<F32> debug_force(gSavedSettings, "SSAtmoWetDebugForce", 0.f);
     gSSSurfaceWetProgram.uniform1f(wet_debug, llclamp((F32)debug_force, 0.f, 1.f));
 
+    // Diagnostic: real field lookup, exposure march skipped. Isolates the
+    // field texture/coordinate path from the shelter logic.
+    static LLStaticHashedString wet_skip_exposure("ssWetSkipExposure");
+    static LLCachedControl<F32> skip_exposure(gSavedSettings, "SSAtmoWetSkipExposure", 0.f);
+    gSSSurfaceWetProgram.uniform1f(wet_skip_exposure, llclamp((F32)skip_exposure, 0.f, 1.f));
+
     {
         LLGLDepthTest depth(GL_FALSE);
         LLGLDisable blend(GL_BLEND);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
     }
 
     gGL.getTexUnit(field_channel)->unbind(LLTexUnit::TT_TEXTURE);
     gPipeline.unbindDeferredShader(gSSSurfaceWetProgram);
+
+    {
+        const GLenum err = glGetError();
+        if (err != GL_NO_ERROR)
+        {
+            LL_WARNS("AtmoMagic") << "GL error 0x" << std::hex << (U32)err << std::dec
+                                  << " after the wetness draw" << LL_ENDL;
+        }
+    }
+
     mScratch.flush();
+
+    if (mScratch.getNumTextures() < 1)
+    {
+        LL_WARNS_ONCE("AtmoMagic") << "Surface wetness scratch target lost its"
+                                      " colour attachment before the commit"
+                                      " pass could read it" << LL_ENDL;
+    }
+
+    // Same field, same wet value, a second independent pass: flattens the
+    // shading normal toward up on the same surfaces the pass above just
+    // brightened, tapered off on anything steep enough that water on it runs
+    // as a sheet rather than pooling flat. Gated on its own shader having
+    // built, separately from the wetness one above - a compile failure here
+    // costs the flattening, not the wetness the surfaces already have.
+    static S32 s_normal_state = -1;
+    auto note_normal = [](S32 state, const char* what)
+    {
+        if (s_normal_state != state)
+        {
+            s_normal_state = state;
+            LL_INFOS("AtmoMagic") << "Surface normal flatten pass: " << what << LL_ENDL;
+        }
+    };
+
+    const bool do_normal = gSSSurfaceNormalProgram.isComplete();
+    if (!do_normal)
+    {
+        note_normal(1, "idle, shader did not build");
+    }
+    else
+    {
+        if (mScratchNormal.getWidth() != w || mScratchNormal.getHeight() != h)
+        {
+            mScratchNormal.release();
+            if (!mScratchNormal.allocate(w, h, GL_RGBA, false))
+            {
+                note_normal(2, "idle, could not allocate the scratch target");
+            }
+            else if (mScratchNormal.getNumTextures() < 1)
+            {
+                note_normal(3, "idle, allocate reported success but left no colour attachment");
+            }
+        }
+    }
+
+    if (do_normal && mScratchNormal.getNumTextures() >= 1)
+    {
+        if (s_normal_state != 0)
+        {
+            s_normal_state = 0;
+            LL_INFOS("AtmoMagic") << "Surface normal flatten pass running" << LL_ENDL;
+        }
+
+        LL_PROFILE_GPU_ZONE("atmo surface normal flatten");
+
+        mScratchNormal.bindTarget();
+        gPipeline.bindDeferredShader(gSSSurfaceNormalProgram);
+
+        const S32 normal_field_channel = gSSSurfaceNormalProgram.mActiveTextureChannels;
+        bindForShader(gSSSurfaceNormalProgram, normal_field_channel);
+
+        static LLStaticHashedString norm_inv_view("ssFieldInvView");
+        static LLStaticHashedString norm_wet_str("ssWetStrength");
+        static LLStaticHashedString norm_wet_debug("ssWetDebugForce");
+        static LLStaticHashedString norm_wet_skip_exposure("ssWetSkipExposure");
+        static LLStaticHashedString norm_flatten("ssWetNormalFlatten");
+        static LLStaticHashedString norm_cos_full("ssWetFlattenCosFull");
+        static LLStaticHashedString norm_cos_zero("ssWetFlattenCosZero");
+
+        gSSSurfaceNormalProgram.uniformMatrix4fv(norm_inv_view, 1, GL_FALSE, glm::value_ptr(inv));
+        gSSSurfaceNormalProgram.uniform1f(norm_wet_str, wet_strength);
+        gSSSurfaceNormalProgram.uniform1f(norm_wet_debug, llclamp((F32)debug_force, 0.f, 1.f));
+        gSSSurfaceNormalProgram.uniform1f(norm_wet_skip_exposure, llclamp((F32)skip_exposure, 0.f, 1.f));
+
+        static LLCachedControl<F32> flatten_amount(gSavedSettings, "SSAtmoWetNormalFlatten", 0.6f);
+        gSSSurfaceNormalProgram.uniform1f(norm_flatten, llclamp((F32)flatten_amount, 0.f, 1.f));
+
+        // Degrees from vertical-up, converted to cosines here rather than in
+        // the shader so a per-pixel inverse cosine is never needed - the
+        // shader already has a cosine on hand in the surface's own normal
+        // dotted with up, and comparing that against another cosine is
+        // exactly the smoothstep it already wanted to do.
+        static LLCachedControl<F32> flatten_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 25.f);
+        static LLCachedControl<F32> flatten_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 65.f);
+        const F32 cos_full = cosf(llclamp((F32)flatten_angle_full, 0.f, 89.f) * DEG_TO_RAD);
+        const F32 cos_zero = cosf(llclamp((F32)flatten_angle_zero, 1.f, 90.f) * DEG_TO_RAD);
+        gSSSurfaceNormalProgram.uniform1f(norm_cos_full, cos_full);
+        gSSSurfaceNormalProgram.uniform1f(norm_cos_zero, cos_zero);
+
+        {
+            LLGLDepthTest depth(GL_FALSE);
+            LLGLDisable blend(GL_BLEND);
+            LLGLDisable scissor(GL_SCISSOR_TEST);
+            gPipeline.mScreenTriangleVB->setBuffer();
+            gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+        }
+
+        gGL.getTexUnit(normal_field_channel)->unbind(LLTexUnit::TT_TEXTURE);
+        gPipeline.unbindDeferredShader(gSSSurfaceNormalProgram);
+
+        {
+            const GLenum err = glGetError();
+            if (err != GL_NO_ERROR)
+            {
+                LL_WARNS("AtmoMagic") << "GL error 0x" << std::hex << (U32)err << std::dec
+                                      << " after the normal flatten draw" << LL_ENDL;
+            }
+        }
+
+        mScratchNormal.flush();
+    }
 
     // The scratch now holds what the specular attachment should become. Put it
     // back by drawing into the gbuffer with every attachment but that one
@@ -707,26 +860,143 @@ void SSSurfaceField::renderWetPass()
     // work over. A draw names the destination through the framebuffer, which
     // nothing caches and nothing can quietly decline to do.
     static LLStaticHashedString commit_src("ssCommitSource");
+    static LLStaticHashedString commit_paint("ssCommitDebugPaint");
 
     gbuffer->bindTarget();
 
     const GLenum bufs[4] = { GL_NONE, GL_COLOR_ATTACHMENT1, GL_NONE, GL_NONE };
     glDrawBuffers(4, bufs);
 
+    {
+        const GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE)
+        {
+            LL_WARNS_ONCE("AtmoMagic") << "Gbuffer framebuffer incomplete for the"
+                                          " commit pass, status 0x" << std::hex
+                                       << (U32)status << std::dec << LL_ENDL;
+        }
+
+        static LLCachedControl<F32> commit_debug_paint_peek(gSavedSettings, "SSAtmoCommitDebugPaint", 0.f);
+        if ((F32)commit_debug_paint_peek > 0.f)
+        {
+            const GLboolean scissor_was_on = glIsEnabled(GL_SCISSOR_TEST);
+            GLint box[4] = { 0, 0, 0, 0 };
+            glGetIntegerv(GL_SCISSOR_BOX, box);
+            LL_INFOS("AtmoMagic") << "Scissor going into the commit draw: "
+                                  << (scissor_was_on ? "ON" : "off") << " box ("
+                                  << box[0] << "," << box[1] << "," << box[2]
+                                  << "," << box[3] << ")" << LL_ENDL;
+        }
+    }
+
     gSSSurfaceCommitProgram.bind();
     gGL.getTexUnit(0)->activate();
     gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratch.getTexture(0));
     gSSSurfaceCommitProgram.uniform1i(commit_src, 0);
 
+    // Same diagnostic idea as the debug force above, one stage further down
+    // the pipe: paints diffuse magenta from the commit pass itself, so a
+    // mechanism failure here shows up whether or not the wetness pass upstream
+    // of it wrote anything sensible to the scratch target.
+    static LLCachedControl<F32> commit_debug_paint_setting(gSavedSettings, "SSAtmoCommitDebugPaint", 0.f);
+    const F32 ssCommitDebugPaint = llclamp((F32)commit_debug_paint_setting, 0.f, 1.f);
+    gSSSurfaceCommitProgram.uniform1f(commit_paint, ssCommitDebugPaint);
+
     {
         LLGLDepthTest depth(GL_FALSE);
         LLGLDisable blend(GL_BLEND);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
         gPipeline.mScreenTriangleVB->setBuffer();
         gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
     }
 
+    {
+        const GLenum err = glGetError();
+        if (err != GL_NO_ERROR)
+        {
+            LL_WARNS("AtmoMagic") << "GL error 0x" << std::hex << (U32)err << std::dec
+                                  << " after the commit draw" << LL_ENDL;
+        }
+    }
+
+    // Ground truth. Everything checked so far says the draw succeeded and
+    // landed nowhere visible, which is a contradiction - one of those two
+    // things is not actually true. Reading the pixel back, while this FBO and
+    // this draw buffer are still current, settles which: it names the exact
+    // texture object the read comes from, so there is no scope left for "the
+    // write worked but not into what the screen shows" to hide in.
+    if (ssCommitDebugPaint > 0.f)
+    {
+        glReadBuffer(GL_COLOR_ATTACHMENT0);
+
+        GLint bound_fbo = 0;
+        glGetIntegerv(GL_FRAMEBUFFER_BINDING, &bound_fbo);
+
+        // Five points rather than one: if a leftover scissor rect clipped the
+        // draw to a corner of the screen, sampling only the centre could land
+        // inside it by chance and report a false all-clear. A pattern across
+        // corners and centre cannot be faked by a single narrow rect.
+        const S32 inset = 4;
+        const struct { const char* name; S32 x, y; } points[5] = {
+            { "centre", (S32)(w / 2), (S32)(h / 2) },
+            { "top-left",     inset,            (S32)h - 1 - inset },
+            { "top-right",    (S32)w - 1 - inset, (S32)h - 1 - inset },
+            { "bottom-left",  inset,            inset },
+            { "bottom-right", (S32)w - 1 - inset, inset },
+        };
+
+        std::ostringstream line;
+        line << "Commit readback, FBO " << bound_fbo << " tex "
+            << gbuffer->getTexture(0) << ":";
+        for (const auto& pt : points)
+        {
+            U8 px[4] = { 0, 0, 0, 0 };
+            glReadPixels(pt.x, pt.y, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, px);
+            line << " " << pt.name << "=(" << (int)px[0] << "," << (int)px[1]
+                << "," << (int)px[2] << "," << (int)px[3] << ")";
+        }
+        LL_INFOS("AtmoMagic") << line.str() << LL_ENDL;
+    }
+
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
     gSSSurfaceCommitProgram.unbind();
+
+    // Same shader, same draw, a different source and a different mask: the
+    // commit shader only ever does "copy this texture into whichever
+    // attachment glDrawBuffers points frag_data[1] at", which is exactly as
+    // true for the normal buffer as it was for the specular one. Nothing
+    // about this shader needed to know there would be a second caller.
+    if (do_normal && mScratchNormal.getNumTextures() >= 1)
+    {
+        const GLenum normal_bufs[4] = { GL_NONE, GL_COLOR_ATTACHMENT2, GL_NONE, GL_NONE };
+        glDrawBuffers(4, normal_bufs);
+
+        gSSSurfaceCommitProgram.bind();
+        gGL.getTexUnit(0)->activate();
+        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratchNormal.getTexture(0));
+        gSSSurfaceCommitProgram.uniform1i(commit_src, 0);
+        gSSSurfaceCommitProgram.uniform1f(commit_paint, 0.f); // never diagnostic-paint the normal
+
+        {
+            LLGLDepthTest depth(GL_FALSE);
+            LLGLDisable blend(GL_BLEND);
+            LLGLDisable scissor(GL_SCISSOR_TEST);
+            gPipeline.mScreenTriangleVB->setBuffer();
+            gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+        }
+
+        {
+            const GLenum err = glGetError();
+            if (err != GL_NO_ERROR)
+            {
+                LL_WARNS("AtmoMagic") << "GL error 0x" << std::hex << (U32)err << std::dec
+                                      << " after the normal commit draw" << LL_ENDL;
+            }
+        }
+
+        gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+        gSSSurfaceCommitProgram.unbind();
+    }
 
     // Handed back with every attachment live again, so the next thing to bind
     // this target does not inherit a mask it never asked for
