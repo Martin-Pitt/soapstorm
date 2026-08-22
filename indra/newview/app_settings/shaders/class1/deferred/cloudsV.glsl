@@ -67,6 +67,10 @@ uniform vec3 cloud_color;
 
 uniform float cloud_scale;
 
+// <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md)
+uniform vec2 region_offset;   // camera pos - region centre, metres, world X/Y
+// </SS:Nexii>
+
 // NOTE: Keep these in sync!
 //       indra\newview\app_settings\shaders\class1\deferred\skyV.glsl
 //       indra\newview\app_settings\shaders\class1\deferred\cloudsV.glsl
@@ -85,6 +89,11 @@ void main()
     vary_texcoord0.xy -= 0.5;
     vary_texcoord0.xy /= cloud_scale;
     vary_texcoord0.xy += 0.5;
+
+    // <SS:Nexii> Region-relative cloud parallax; normalised by max_y, faded out below real cloud-base altitude
+    float cloud_realism = smoothstep(1000.0, 1600.0, max_y);
+    vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) * (cloud_realism / (16.0 * max_y * cloud_scale));
+    // </SS:Nexii>
 
     vary_texcoord1 = vary_texcoord0;
     vary_texcoord1.x += lightnorm.x * 0.0125;

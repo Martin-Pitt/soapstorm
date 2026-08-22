@@ -44,11 +44,13 @@
 #include "llvowlsky.h"
 #include "llsettingsvo.h"
 #include "llviewercontrol.h"
+#include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
 
 extern bool gCubeSnapshot;
 
 static LLStaticHashedString sCamPosLocal("camPosLocal");
 static LLStaticHashedString sCustomAlpha("custom_alpha");
+static LLStaticHashedString sRegionOffset("region_offset"); // <SS:Nexii> cloud parallax
 
 static LLGLSLShader* cloud_shader = NULL;
 static LLGLSLShader* sky_shader   = NULL;
@@ -340,6 +342,14 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         cloudshader->uniform1f(LLShaderMgr::BLEND_FACTOR, blend_factor);
         cloudshader->uniform1f(LLShaderMgr::CLOUD_VARIANCE, cloud_variance);
         cloudshader->uniform1f(LLShaderMgr::SUN_MOON_GLOW_FACTOR, psky->getSunMoonGlowFactor());
+
+        // <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md)
+        LLViewerRegion* region       = gAgent.getRegion();
+        F32             region_width = region ? region->getWidth() : REGION_WIDTH_METERS;
+        F32             region_off_x = camPosLocal.mV[VX] - region_width * 0.5f;
+        F32             region_off_y = camPosLocal.mV[VY] - region_width * 0.5f;
+        cloudshader->uniform2f(sRegionOffset, region_off_x, region_off_y);
+        // </SS:Nexii>
 
         /// Render the skydome
         renderDome(camPosLocal, camHeightLocal, cloudshader);
