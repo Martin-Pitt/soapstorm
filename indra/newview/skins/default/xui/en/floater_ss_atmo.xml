@@ -3,13 +3,26 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="727"
+ height="280"
  layout="topleft"
  name="floater_ss_atmo"
  save_rect="true"
  single_instance="true"
- title="ATMO MAGIC"
+ title="ATMO MAGIC WEATHER (LEGACY)"
  width="360">
+    <!-- <SS:Nexii> Legacy Atmo Magic weather floater - deprecated in favour
+         of the Atmo Magic environment floater (ss_atmo_env), which covers
+         per-track weather authoring with its own asset and its own notion
+         of "track" instead of riding EEP's four sky tracks the way this
+         does. Trimmed down to what's still useful standalone: the shared
+         master switch and impact-effect toggles the renderer itself reads
+         regardless of which config source is driving it, the precipitation
+         preset picker/editor (kept as the reference point for comparing
+         Atmo Magic's own weather editor against, and there is no other way
+         to reach the preset editor), and the sub-floater launchers. The
+         per-track weather editing UI, and its own notecard load/save/
+         revert/defaults/reload-parcel-config, are gone - see
+         doc/atmo_magic_environment.md's "Relationship to what exists". -->
     <check_box
      control_name="SSAtmoEnabled"
      follows="left|top"
@@ -19,203 +32,23 @@
      height="16"
      width="336"
      label="Enable Atmo Magic weather"
-     tool_tip="Master switch. Weather still only runs on tracks that have been given a configuration" />
+     tool_tip="Master switch, shared by both Atmo Magic and this legacy layer. Weather still only runs where something actually configures it" />
     <text
      follows="left|top"
      layout="topleft"
      left="12"
-     top_pad="10"
+     top_pad="14"
      height="14"
      width="336"
-     name="track_label"
+     name="preset_label_header"
      font="SansSerifSmallBold">
-        Sky track
+        Precipitation preset
     </text>
-    <combo_box
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="23"
-     width="200"
-     name="track_combo"
-     allow_text_entry="false"
-     tool_tip="Weather is configured per EEP sky track and only runs for the track your camera is in" />
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left_pad="10"
-     top_delta="4"
-     height="16"
-     width="126"
-     name="track_follow_check"
-     label="Follow camera"
-     tool_tip="Keep this panel on whichever track the camera is currently in" />
     <text
      follows="left|top"
      layout="topleft"
      left="12"
-     top_pad="8"
-     height="14"
-     width="336"
-     name="track_status_text"
-     tool_tip="Where the configuration currently in force came from">
-        Source: no configuration
-    </text>
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="8"
-     height="16"
-     width="336"
-     name="track_enabled_check"
-     label="This track has weather"
-     tool_tip="Tracks have no weather until one is defined. Parcel notecards override anything set here" />
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="10"
-     height="14"
-     width="336"
-     name="weather_label"
-     font="SansSerifSmallBold">
-        Weather
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
      top_pad="6"
-     height="15"
-     width="336"
-     name="precip_slider"
-     label="Precipitation:"
-     label_width="110"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2"
-     show_text="true"
-     tool_tip="None, over drizzle, up to a full storm" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="turbulence_slider"
-     label="Turbulence:"
-     label_width="110"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2"
-     show_text="true"
-     tool_tip="How gusty precipitation arrives: steady fall, or waves and bursts" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="wind_heading_slider"
-     label="Wind heading:"
-     label_width="110"
-     min_val="0"
-     max_val="360"
-     increment="1"
-     decimal_digits="0"
-     show_text="true"
-     tool_tip="Compass direction the wind blows toward. 0 is north, 90 is east" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="wind_elevation_slider"
-     label="Wind elevation:"
-     label_width="110"
-     min_val="-89"
-     max_val="89"
-     increment="1"
-     decimal_digits="0"
-     show_text="true"
-     tool_tip="Tilt of the wind off horizontal, degrees. Positive blows upward" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="windspeed_slider"
-     label="Wind speed:"
-     label_width="110"
-     min_val="0"
-     max_val="20"
-     increment="0.25"
-     decimal_digits="2"
-     show_text="true"
-     tool_tip="Tilts the fall direction and drifts slow precipitation, m/s" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="gust_depth_slider"
-     label="Gust depth:"
-     label_width="110"
-     min_val="0"
-     max_val="3"
-     increment="0.05"
-     decimal_digits="2"
-     show_text="true"
-     tool_tip="How hard the wind surges and drops as a gust front passes, on top of the turbulence above. 0 is a steady wind, 1 goes from near-lull to about double strength" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="gust_length_slider"
-     label="Gust spacing:"
-     label_width="110"
-     min_val="20"
-     max_val="600"
-     increment="10"
-     decimal_digits="0"
-     show_text="true"
-     tool_tip="Metres between gust fronts along the wind. Divided by the wind speed this is how often a surge arrives: 140m in a 14m/s wind is a wave every ten seconds" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="15"
-     width="336"
-     name="gust_veer_slider"
-     label="Gust veer:"
-     label_width="110"
-     min_val="0"
-     max_val="45"
-     increment="1"
-     decimal_digits="0"
-     show_text="true"
-     tool_tip="Degrees the wind swings either side of its heading as a gust goes through. A gust that only changes speed reads as the world pulsing rather than as weather" />
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="12"
      height="14"
      width="90"
      name="preset_label">
@@ -230,7 +63,7 @@
      width="150"
      name="preset_combo"
      allow_text_entry="false"
-     tool_tip="Which weather preset this track runs" />
+     tool_tip="Which preset to open in the editor" />
     <button
      follows="left|top"
      layout="topleft"
@@ -246,56 +79,6 @@
      layout="topleft"
      left="12"
      top_pad="14"
-     height="14"
-     width="336"
-     name="ground_label"
-     font="SansSerifSmallBold">
-        Ground zero
-    </text>
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="16"
-     width="180"
-     name="ground_check"
-     label="Pin floor to altitude:"
-     tool_tip="By default a sky track uses its own base altitude as ground zero. Pin it when the platform sits well above that" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="20"
-     width="90"
-     name="ground_spinner"
-     min_val="0"
-     max_val="8192"
-     increment="1"
-     decimal_digits="0"
-     tool_tip="Altitude precipitation lands on for this track, metres" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="8"
-     height="15"
-     width="336"
-     name="fallthrough_slider"
-     label="Fall through:"
-     label_width="110"
-     min_val="0"
-     max_val="1"
-     increment="0.05"
-     decimal_digits="2"
-     show_text="true"
-     tool_tip="How much precipitation is still drawn where there is no platform to catch it. Sky tracks are mostly open air, so this thins it out" />
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="12"
      height="14"
      width="336"
      name="effects_label"
@@ -324,78 +107,7 @@
      follows="left|top"
      layout="topleft"
      left="12"
-     top_pad="14"
-     height="23"
-     width="336"
-     name="reload_button"
-     label="Reload parcel config"
-     tool_tip="Re-read the parcel description and refetch the Atmo notecard it points at" />
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="14"
-     height="14"
-     width="336"
-     name="config_label"
-     font="SansSerifSmallBold">
-        Configuration
-    </text>
-    <line_editor
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="20"
-     width="336"
-     name="config_name_editor"
-     max_length_chars="63"
-     tool_tip="Name for this configuration; used when saving it out to a notecard" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="23"
-     width="80"
-     name="load_button"
-     label="Load..."
-     tool_tip="Opens your inventory filtered to notecards. Drag an Atmo notecard onto this floater to load it" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="0"
-     height="23"
-     width="86"
-     name="save_button"
-     label="Save As..."
-     tool_tip="Write the current configuration out to a new notecard in your inventory" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="0"
-     height="23"
-     width="76"
-     name="revert_button"
-     label="Revert"
-     tool_tip="Discard local edits and go back to the loaded configuration" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="0"
-     height="23"
-     width="80"
-     name="defaults_button"
-     label="Defaults"
-     tool_tip="Clear everything back to system defaults: no track has weather" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="14"
+     top_pad="16"
      height="23"
      width="160"
      name="fx_button"
