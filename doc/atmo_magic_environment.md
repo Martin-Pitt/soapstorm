@@ -1,12 +1,13 @@
-# Atmo Magic v3: a unified, opt-in environment system (proposal)
+# Atmo Magic: a unified, opt-in environment system
 
-This is a design, not a build log — nothing here exists yet as its own
-system, though the logic it needs largely already exists, tangled into v2.
-It specifies a fully client-side, opt-in environment system that carries the
-Atmo Magic branding forward as a **complete, self-contained renderer**, cleanly
-separated from stock v2 (EEP/Windlight) rather than living inside it.
+This started as a design proposal (internally coded "v3" while it sat next to
+the v1/v2 code it was superseding); it's now the live system, and this
+document tracks it as such. It specifies a fully client-side, opt-in
+environment system that carries the Atmo Magic branding forward as a
+**complete, self-contained renderer**, cleanly separated from stock v2
+(EEP/Windlight) rather than living inside it.
 
-## Relationship to what exists — and the untangling this requires
+## Relationship to what exists
 
 - **v1** — Windlight: one flat, scrolling-noise cloud plane, one sky/water/day
   asset set per region.
@@ -14,24 +15,35 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
   up to four altitude-keyed sky tracks via
   `LLEnvironment::calculateSkyTrackForAltitude`. This is not Soapstorm's own
   system — it's Linden's, and it stays exactly as upstream ships it.
-- **Atmo Magic (current)** — the already-shipped weather layer (see
-  [`atmo_magic_tracks.md`](atmo_magic_tracks.md)) was built by injecting into
-  and modifying v2 in place, riding its four altitude tracks rather than
-  having its own. Its logic is what v3 is actually built from.
-- **v3** (this document) — Atmo Magic's branding, moved to a wholly
-  independent, fully parallel renderer with its own unified asset and its
-  own notion of "track", decoupled entirely from `LLEnvironment`.
+- **Atmo Magic Weather (legacy)** — the original weather layer (see
+  [`atmo_magic_tracks.md`](atmo_magic_tracks.md)), built by injecting into and
+  modifying v2 in place, riding its four altitude tracks rather than having
+  its own. Deprecated now that Atmo Magic (below) covers the same ground with
+  its own asset and its own notion of "track" — kept around, trimmed to its
+  still-useful parts (the precipitation preset editor, the simulation
+  floater), as a reference point for comparing feature-completeness against
+  while Atmo Magic catches up. `SSAtmoTrackMgr`/`SSAtmoTrackConfig`/
+  `ssfloateratmo.*` are its classes; `SSAtmoMagic`/`ssatmomagic.*` is the
+  shared particle/wind/rain renderer both this and Atmo Magic proper drive,
+  and isn't part of the deprecation - see `SSAtmoEnvBridge` below for how the
+  two connect.
+- **Atmo Magic** (this document) — the branding's primary system: a wholly
+  independent, fully parallel renderer with its own unified asset and its own
+  notion of "track", decoupled entirely from `LLEnvironment`. Classes/files
+  use an `Env` token (`SSAtmoEnvAsset`, `ssatmoenvmanager.cpp`,
+  `floater_ss_atmo_env.xml`, ...) to stay distinct from `SSAtmoMagic` the
+  renderer above, which is a different thing feeding off both this and the
+  legacy layer via `SSAtmoEnvBridge`.
 
-**The migration this implies, in order:**
-1. **Fork** — duplicate the current Atmo Magic (`ss`-prefixed) code into its
-   own independent v3 files. This starting point already contains working
-   weather-in-tracks logic; it just needs to stop depending on
-   `LLEnvironment` internals to run.
+**How it got here, for the archaeology:**
+1. **Fork** — the original weather layer's (`ss`-prefixed) logic was
+   duplicated into independent files, decoupled from `LLEnvironment`
+   internals to run standalone.
 2. **Untangle** — `git diff master...feature-atmo-magic` on every EEP-proper
    file (`llenvironment.*`, `llsettingsvo.*`, `llsettings{sky,water,day,base}.*`,
    `llpaneleditsky.cpp`, `llpaneleditwater.cpp`, `llfloaterenvironmentadjust.cpp`,
    `lllegacyatmospherics.*`, `llvosky.*`) comes back **empty** — v2/EEP is
-   already pristine, confirmed by both the diff and an absence of any
+   pristine, confirmed by both the diff and an absence of any
    `<SS:Nexii>`-tagged comment in those files. There is nothing to revert on
    the EEP side. The actual injection lives in roughly twenty core-engine
    files instead — `pipeline.cpp/h`, `llviewerdisplay.cpp`, `llagentcamera.cpp`,
@@ -42,18 +54,16 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
    `llviewerwindow.cpp`, `llviewercamera.h`, `llviewerfloaterreg.cpp`,
    `fsrezqueue.cpp/h` — each `<SS:Nexii>`-tagged hook reviewed in place rather
    than diffed against an upstream baseline.
-3. **Diverge** — v3's forked copy evolves independently from there, into
-   everything else this document specifies (multi-track, planetary system,
-   per-param keyframes, the weather cube, and so on).
-4. **Rename, once v2 is actually deleted.** The `V3`/`v3` in every class,
-   file, and floater name (`SSAtmoV3Asset`, `ssatmov3mgr.cpp`,
-   `floater_ss_atmo_v3.xml`, ...) exists only because the plain names
-   (`SSAtmoMagic`, `SSAtmoTrackMgr`, `ssfloateratmo`) are still owned by the
-   v2 code sitting next to it during the coexistence period - it is scaffolding,
-   not the intended final name. Once v2's files are actually removed as the
-   last step of the untangle, those names free up, and everything gets
-   renamed in one pass to drop the suffix - "Atmo Magic" plain, same as the
-   branding was always meant to read.
+3. **Diverge** — the fork evolved independently from there, into everything
+   else this document specifies (multi-track, planetary system, per-param
+   keyframes, the weather cube, and so on).
+4. **Rename** — once the fork was functional enough to be the primary system
+   rather than a parallel experiment, every class/file/floater dropped its
+   `V3`/`v3` scaffolding name in one pass, replaced with the `Env` token where
+   a plain `SSAtmoMagic`-style name would have collided with the still-live
+   renderer class of that name. The legacy v1/v2 authoring layer was
+   deprecated and trimmed in the same pass rather than deleted outright - see
+   above.
 
 ## Storage & discovery
 
@@ -64,8 +74,8 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
   track's sky/water/weather/planetary config, all keyframes — is one
   document.
 - **Parcel discovery:** reuses the same `atmo:<uuid>` marker convention
-  already used by the v2 weather layer, resolving to a v3 unified asset
-  instead. **Needs a disambiguator** — see Open Items.
+  already used by the v2 weather layer, resolving to an Atmo Magic unified
+  asset instead. **Needs a disambiguator** — see Open Items.
 - **Fetch protocol: a plain HTTP round trip through the existing Bridge
   plumbing, not a chunked chat relay.** An earlier pass in this doc
   specified `llOwnerSay`-chunked chat tags (`<Notecard:UUID:index.total>`);
@@ -81,12 +91,12 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
     the notecard synchronously (`llGetNotecardLineSync`, NAK-sleep-retry, a
     3-second timeout), then replies over `llHTTPResponse` with the body
     passed straight through when it already starts with `<llsd>` — true for
-    every v3 asset, since that's exactly what `LLSDSerialize::toPrettyXML`
+    every Atmo Magic asset, since that's exactly what `LLSDSerialize::toPrettyXML`
     emits — or wrapped as `<llsd><string>...</string></llsd>` otherwise.
-  - **Viewer side:** `SSAtmoV3DiscoveryMgr::requestFetch()` calls
+  - **Viewer side:** `SSAtmoEnvDiscoveryManager::requestFetch()` calls
     `FSLSLBridge::instance().viewerToLSL("FetchNotecard|" + uuid, callback)`.
     The HTTP layer already parses the `<llsd>` response body before the
-    callback ever sees it, so a v3 asset's own content arrives as a real
+    callback ever sees it, so an Atmo Magic asset's own content arrives as a real
     LLSD map directly — no text reassembly step of any kind. A response
     that isn't a map (the wrapped-string fallback path, or a hand-edited
     notecard) falls back to parsing it as LLSD-XML/notation text instead.
@@ -100,7 +110,7 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
 - **Creation has two entry points, same underlying action, no floater-side
   default.** There is no implicit environment that springs into existence
   just from opening the floater, and no "Defaults" button that resets to
-  some standing state — v3 is opt-in end to end, so nothing runs until
+  some standing state — Atmo Magic is opt-in end to end, so nothing runs until
   something has actually been created or loaded:
   1. **Inventory context menu.** The existing **New Settings** submenu
      (`menu_inventory_add.xml`, and its twin in the My Environments floater's
@@ -109,7 +119,7 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
      with a parameter string through `LLPanelMainInventory::doCreate()` →
      `menu_create_inventory_item(...)`. **New Atmo Magic** is a fourth entry
      in that same submenu, taking the same path except its creation branch
-     writes a plain Notecard pre-filled with the default v3 LLSD body,
+     writes a plain Notecard pre-filled with the default Atmo Magic LLSD body,
      instead of following Sky/Water/Day Cycle down the real
      Settings-asset-creation path. Kept because it's the discoverable,
      inventory-native way to start one — important on its own UX merits, not
@@ -125,8 +135,8 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
      Revert are the relevant buttons, not this one).
 
   Either path produces the same thing: a real, inert notecard in inventory,
-  pre-filled with the default v3 LLSD body, doing nothing until it's loaded.
-- **Auto-apply on parcel entry**, unless the v3 floater is currently open
+  pre-filled with the default Atmo Magic LLSD body, doing nothing until it's loaded.
+- **Auto-apply on parcel entry**, unless the Atmo Magic floater is currently open
   (treated as "mid-edit, don't clobber").
 
 ## Rendering model
@@ -134,14 +144,14 @@ separated from stock v2 (EEP/Windlight) rather than living inside it.
 - Fully parallel to `LLEnvironment` — borrows heavily from it rather than
   starting from scratch, but does not plug into its personal-override slot.
 - A master enable switch gates everything, mirroring the v2 layer's
-  `SSAtmoEnabled`: turning v3 support on doesn't load an environment by
+  `SSAtmoEnabled`: turning Atmo Magic support on doesn't load an environment by
   itself.
 
 ## Tracks
 
 - **1 mandatory (ground) + up to 3 optional — 4 total**, deliberately
-  matching the existing track count, but **not the same tracks**: v3 track
-  thresholds are freely author-defined, entirely decoupled from the region's
+  matching the existing track count, but **not the same tracks**: Atmo
+  Magic's track thresholds are freely author-defined, entirely decoupled from the region's
   actual EEP altitude-track settings. A skybox city at 900m can declare
   itself "ground zero" for its own isolated biome regardless of what the
   terrain below is doing.
@@ -329,14 +339,14 @@ also drives the Clouds tab's volumetric field, below):
 
 ## Open items needing one more decision
 
-- **Existing v2 notecards, on upgrade.** Since v3 retires the v2 weather
-  layer rather than running alongside it, there's no live tag collision to
-  disambiguate — but any `atmo:<uuid>` notecard already saved in the *old*
-  format will still be sitting on parcels out there the moment v3 ships.
-  Does a v3 viewer encountering one of those (i) silently ignore it and fall
-  back to no-weather, since it can't be told apart from a corrupt/foreign
-  document without inspecting it, (ii) auto-migrate it — read the old
-  `precipitation`/`turbulence`/`wind_*` keys and derive an equivalent
+- **Existing legacy notecards, on upgrade.** Since Atmo Magic retires the
+  legacy weather layer's format rather than running alongside it forever,
+  there's no live tag collision to disambiguate — but any `atmo:<uuid>`
+  notecard already saved in the *old* format is still sitting on parcels out
+  there. Does an Atmo Magic viewer encountering one of those (i) silently
+  ignore it and fall back to no-weather, since it can't be told apart from a
+  corrupt/foreign document without inspecting it, (ii) auto-migrate it — read
+  the old `precipitation`/`turbulence`/`wind_*` keys and derive an equivalent
   Moisture/Convection/Temperature-cube starting point — or (iii) is a clean
   break acceptable, since this is a personal client-side feature and not
   something anyone has a durable dependency on? Not decided yet.
@@ -349,14 +359,14 @@ that runs, not just sitting next to it.
 
 | Phase | Files | State |
 |---|---|---|
-| 1 — schema, notecard round-trip | `ssatmov3asset.*`, `ssatmov3mgr.*`, `ssfloateratmov3.*`, `floater_ss_atmo_v3.xml` | Done. Inventory `New Atmo Magic` creation wired into `llviewerinventory.cpp`. |
-| 3 — keyframe engine | `ssatmov3keyframe.h` | Done. Proven end-to-end on `SSAtmoV3Weather::mMoisture` in the floater. |
-| 4 — multi-track resolution | `ssatmov3trackstate.*` | Done. Not yet fed a live camera position — pure function, no agent hookup. |
-| 5 — weather derivation | `ssatmov3weatherstate.*` | Done. Forecast text wired into the floater as a proof. |
-| 6 — planetary | `ssatmov3planetarystate.*` | Done. No rendering (quad/billboard drawing) yet. |
-| 7 — cloud field | `ssatmov3cloudfieldstate.*` | Done. Derivation only — no noise field, no shader. |
-| bridge — v3→v2 renderer translator | `ssatmov3legacybridge.*`, spliced into `ssatmomagic.cpp`'s `refreshParams()` | **Verified live.** Loading a v3 environment and raising Moisture produces actual visible rain through the existing renderer - confirmed in a running client, not just compiled. |
-| 8 — parcel/Bridge discovery | `ssatmov3discovery.*`, calling `FSLSLBridge::viewerToLSL` (HTTP, not chat), bootstrapped from the existing per-frame Atmo Magic touch-point in `llviewerdisplay.cpp`; LSL side is the `FetchNotecard` command in `indra/newview/fs_resources/EBEDD1D2-...-D47BBCA5DFB.lsltxt` | **Verified live end-to-end.** A parcel's `atmo:<uuid>` marker triggers the Bridge fetch, the named environment loads, and it actually drives the renderer (see the bridge row above) - confirmed in a running client. |
+| 1 — schema, notecard round-trip | `ssatmoenvasset.*`, `ssatmoenvmanager.*`, `ssfloateratmoenv.*`, `floater_ss_atmo_env.xml` | Done. Inventory `New Atmo Magic` creation wired into `llviewerinventory.cpp`. |
+| 3 — keyframe engine | `ssatmoenvkeyframe.h` | Done. Proven end-to-end on `SSAtmoEnvWeather::mMoisture` in the floater. |
+| 4 — multi-track resolution | `ssatmoenvtrackstate.*` | Done. Not yet fed a live camera position — pure function, no agent hookup. |
+| 5 — weather derivation | `ssatmoenvweatherstate.*` | Done. Forecast text wired into the floater as a proof. |
+| 6 — planetary | `ssatmoenvplanetarystate.*` | Done. No rendering (quad/billboard drawing) yet. |
+| 7 — cloud field | `ssatmoenvcloudfieldstate.*` | Done. Derivation only — no noise field, no shader. |
+| bridge — Atmo Magic → shared renderer translator | `ssatmoenvbridge.*`, spliced into `ssatmomagic.cpp`'s `refreshParams()` | **Verified live.** Loading an Atmo Magic environment and raising Moisture produces actual visible rain through the shared `SSAtmoMagic` renderer - confirmed in a running client, not just compiled. |
+| 8 — parcel/Bridge discovery | `ssatmoenvdiscovery.*`, calling `FSLSLBridge::viewerToLSL` (HTTP, not chat), bootstrapped from the existing per-frame Atmo Magic touch-point in `llviewerdisplay.cpp`; LSL side is the `FetchNotecard` command in `indra/newview/fs_resources/EBEDD1D2-...-D47BBCA5DFB.lsltxt` | **Verified live end-to-end.** A parcel's `atmo:<uuid>` marker triggers the Bridge fetch, the named environment loads, and it actually drives the renderer (see the bridge row above) - confirmed in a running client. |
 
 Not yet done anywhere: actual rendering (bodies as quads, cloud noise field,
 rain shafts, lightning forks), the Atmosphere & Lighting tab (still opaque

@@ -119,10 +119,10 @@ typedef std::array<SSAtmoTrackConfig, SS_TRACK_COUNT> ss_track_set_t;
 // polled: descriptions almost never change, and the observer fires both when
 // the agent crosses into a different parcel and when the current parcel's
 // properties are re-sent after an edit.
-class SSAtmoTrackMgr : public LLSingleton<SSAtmoTrackMgr>, public LLParcelObserver
+class SSAtmoTrackManager : public LLSingleton<SSAtmoTrackManager>, public LLParcelObserver
 {
-    LLSINGLETON(SSAtmoTrackMgr);
-    ~SSAtmoTrackMgr();
+    LLSINGLETON(SSAtmoTrackManager);
+    ~SSAtmoTrackManager();
 
 public:
     // Where the baseline came from

@@ -240,7 +240,7 @@
 #include "NACLfloaterexploresounds.h"
 #include "particleeditor.h"
 #include "ssfloateratmo.h" // <SS:Nexii> Atmo Magic weather
-#include "ssfloateratmov3.h" // <SS:Nexii> Atmo Magic v3
+#include "ssfloateratmoenv.h" // <SS:Nexii> Atmo Magic
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
 #include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
 #include "quickprefs.h"
@@ -690,8 +690,8 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("ss_atmo_sim", "floater_ss_atmo_sim.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSimulation>);
     // </SS:Nexii>
-    // <SS:Nexii> Atmo Magic v3 unified environment (independent of v2 weather above)
-    LLFloaterReg::add("ss_atmo_v3", "floater_ss_atmo_v3.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoV3>);
+    // <SS:Nexii> Atmo Magic unified environment (independent of v2 weather above)
+    LLFloaterReg::add("ss_atmo_env", "floater_ss_atmo_env.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnv>);
     // </SS:Nexii>
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).

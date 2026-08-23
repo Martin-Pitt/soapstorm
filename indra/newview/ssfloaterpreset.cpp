@@ -130,7 +130,7 @@ void SSFloaterPreset::refreshPresetList()
     const std::string selected = combo->getSelectedItemLabel();
 
     combo->removeall();
-    for (const SSPrecipPreset& p : SSPrecipPresetMgr::instance().presets())
+    for (const SSPrecipPreset& p : SSPrecipPresetManager::instance().presets())
     {
         combo->add(p.mName, p.mName);
     }
@@ -142,7 +142,7 @@ void SSFloaterPreset::refreshPresetList()
 
 void SSFloaterPreset::loadPreset(const std::string& name)
 {
-    const SSPrecipPreset* found = SSPrecipPresetMgr::instance().find(name);
+    const SSPrecipPreset* found = SSPrecipPresetManager::instance().find(name);
     if (!found) return;
 
     mEdited = *found;
@@ -288,7 +288,7 @@ void SSFloaterPreset::applyLive()
     // Staged, not saved: the weather picks the edit up immediately so it can be
     // dialled in while watching it fall, but nothing reaches disk until Save.
     // The asterisk in the title is exactly that gap.
-    SSPrecipPresetMgr::instance().stage(mEdited);
+    SSPrecipPresetManager::instance().stage(mEdited);
 
     // Sizes and shapes are baked into the splatter textures, so drop the
     // bakes; they are keyed on the shape fields and would otherwise linger
@@ -302,14 +302,14 @@ void SSFloaterPreset::applyLive()
 
 void SSFloaterPreset::refreshTitle()
 {
-    const bool modified = SSPrecipPresetMgr::instance().isModified(mEdited.mName);
+    const bool modified = SSPrecipPresetManager::instance().isModified(mEdited.mName);
     setTitle("ATMO MAGIC - PRESET EDITOR - " + mEdited.mName + (modified ? " *" : ""));
     getChild<LLUICtrl>("save_button")->setEnabled(modified);
 }
 
 void SSFloaterPreset::onClickSave()
 {
-    SSPrecipPresetMgr::instance().save(mEdited);
+    SSPrecipPresetManager::instance().save(mEdited);
     refreshPresetList();
     refreshTitle();
 }
@@ -332,7 +332,7 @@ void SSFloaterPreset::onClickNew()
     // Copy the preset on screen under a new name; built-ins stay untouched
     std::string base = mEdited.mName + " copy";
     std::string name = base;
-    for (S32 i = 2; SSPrecipPresetMgr::instance().find(name) && i < 100; ++i)
+    for (S32 i = 2; SSPrecipPresetManager::instance().find(name) && i < 100; ++i)
     {
         name = base + " " + llformat("%d", i);
     }
@@ -348,7 +348,7 @@ void SSFloaterPreset::onClickNew()
 static std::string uniquePresetName(const std::string& base)
 {
     std::string name = base;
-    for (S32 i = 2; SSPrecipPresetMgr::instance().find(name) && i < 1000; ++i)
+    for (S32 i = 2; SSPrecipPresetManager::instance().find(name) && i < 1000; ++i)
     {
         name = base + " " + llformat("%d", i);
     }
@@ -375,7 +375,7 @@ void SSFloaterPreset::onClickRename()
 
     if (name.empty() || name == mEdited.mName) return;
 
-    if (SSPrecipPresetMgr::instance().find(name))
+    if (SSPrecipPresetManager::instance().find(name))
     {
         LLNotificationsUtil::add("GenericAlert",
             LLSD().with("MESSAGE", "A preset with that name already exists."));
@@ -389,12 +389,12 @@ void SSFloaterPreset::onClickRename()
     // the shipped one returns to the list untouched.
     mEdited.mName = name;
     mEdited.mBuiltIn = false;
-    SSPrecipPresetMgr::instance().save(mEdited);
-    SSPrecipPresetMgr::instance().remove(old_name);
+    SSPrecipPresetManager::instance().save(mEdited);
+    SSPrecipPresetManager::instance().remove(old_name);
 
     // Follow the rename everywhere the old name was referenced, otherwise a
     // track would silently fall back to the editor default
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     bool touched = false;
     for (S32 track = SS_TRACK_MIN; track <= SS_TRACK_MAX; ++track)
     {
@@ -420,7 +420,7 @@ void SSFloaterPreset::onClickRename()
 void SSFloaterPreset::onClickDelete()
 {
     const std::string name = mEdited.mName;
-    if (!SSPrecipPresetMgr::instance().remove(name))
+    if (!SSPrecipPresetManager::instance().remove(name))
     {
         // Built-ins have no file unless they were overridden, so there is
         // nothing to remove
@@ -430,7 +430,7 @@ void SSFloaterPreset::onClickDelete()
     }
 
     refreshPresetList();
-    const auto& presets = SSPrecipPresetMgr::instance().presets();
+    const auto& presets = SSPrecipPresetManager::instance().presets();
     if (!presets.empty())
     {
         loadPreset(presets.front().mName);
@@ -441,10 +441,10 @@ void SSFloaterPreset::onClickDiscard()
 {
     // Put the version on disk back, dropping whatever was staged. A preset that
     // has never been written has nothing to go back to.
-    const SSPrecipPreset* saved = SSPrecipPresetMgr::instance().findSaved(mEdited.mName);
+    const SSPrecipPreset* saved = SSPrecipPresetManager::instance().findSaved(mEdited.mName);
     if (!saved) return;
 
-    SSPrecipPresetMgr::instance().stage(*saved);
+    SSPrecipPresetManager::instance().stage(*saved);
     SSPrecipVariants::instance().clearCache();
     loadPreset(mEdited.mName);
 }
@@ -452,7 +452,7 @@ void SSFloaterPreset::onClickDiscard()
 void SSFloaterPreset::onClickRevert()
 {
     // Drop the saved override so a built-in returns to its shipped values
-    SSPrecipPresetMgr::instance().remove(mEdited.mName);
+    SSPrecipPresetManager::instance().remove(mEdited.mName);
     SSPrecipVariants::instance().clearCache();
     refreshPresetList();
     loadPreset(mEdited.mName);

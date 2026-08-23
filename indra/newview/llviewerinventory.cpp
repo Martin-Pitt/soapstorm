@@ -43,7 +43,7 @@
 #include "llconsole.h"
 #include "llinventorydefines.h"
 #include "llinventoryfunctions.h"
-#include "ssatmov3mgr.h" // <SS:Nexii> Atmo Magic v3
+#include "ssatmoenvmanager.h" // <SS:Nexii> Atmo Magic
 #include "llinventorymodel.h"
 #include "llinventorymodelbackgroundfetch.h"
 #include "llgesturemgr.h"
@@ -2352,18 +2352,18 @@ void menu_create_inventory_item(LLInventoryPanel* panel, LLUUID dest_id, const L
                       PERM_ALL,
                       created_cb);    // overridden in create_new_item
     }
-    // <SS:Nexii> Atmo Magic v3: a plain notecard, like "notecard" above, but
+    // <SS:Nexii> Atmo Magic: a plain notecard, like "notecard" above, but
     // pre-filled with the default v3 environment body rather than left
     // empty - there is no new asset type to hang this off, so the whole
     // unified environment lives in an ordinary notecard from the moment it
-    // is created. See doc/atmo_magic_v3_environment.md.
-    else if ("atmov3" == type_name)
+    // is created. See doc/atmo_magic_environment.md.
+    else if ("atmoenv" == type_name)
     {
         // created_cb only wants the item id (it's the generic
-        // inventory-panel rename-focus callback); SSAtmoV3Mgr's own
+        // inventory-panel rename-focus callback); SSAtmoEnvManager's own
         // creation callback also carries the asset id, once the upload has
         // actually finished, so the two ids are folded down to one here.
-        SSAtmoV3Mgr::createDefaultNotecard(dest_id,
+        SSAtmoEnvManager::createDefaultNotecard(dest_id,
             [created_cb](const LLUUID& item_id, const LLUUID&)
             {
                 if (created_cb) created_cb(item_id);

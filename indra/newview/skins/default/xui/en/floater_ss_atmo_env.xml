@@ -1,0 +1,288 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="true"
+ height="700"
+ layout="topleft"
+ min_height="560"
+ min_width="760"
+ name="floater_ss_atmo_env"
+ save_rect="true"
+ single_instance="true"
+ title="Edit Atmo Magic Environment"
+ width="800">
+    <!-- <SS:Nexii> Atmo Magic floater. Laid out to echo
+         floater_edit_ext_day_cycle.xml where the two overlap - same
+         vertical position for the name row, Load/Save/Revert docked at the
+         bottom the same way Save/Cancel are there, the same
+         SkipBackward_Off/SkipForward_Off step icons - since anyone who
+         already knows EEP's editor should feel at home here, not have to
+         relearn a different convention for the same kind of job. Where v3
+         actually differs (isolated per-track weather cubes, no shared
+         keyframe timeline) the layout differs too rather than forcing a
+         false parallel. -->
+
+    <!-- Shown only while nothing is loaded - the one-time bootstrap
+         affordance; there is no implicit default this floater falls back
+         to otherwise. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top="30"
+     height="32"
+     width="740"
+     name="no_asset_text"
+     wrap="true">
+        Nothing is loaded yet. Create a new environment, or drag a notecard
+        onto this floater to load one.
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="6"
+     height="23"
+     width="200"
+     name="create_new_button"
+     label="Create New Environment" />
+
+    <!-- Editing chrome - hidden until hasAsset() is true -->
+
+    <!-- Name row - same top="5" as floater_edit_ext_day_cycle.xml's "Day
+         Cycle Name:" row. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top="5"
+     height="14"
+     width="80"
+     name="name_label"
+     font="SansSerifSmallBold">
+        Name
+    </text>
+    <line_editor
+     follows="left|top"
+     layout="topleft"
+     left_pad="10"
+     top="5"
+     height="21"
+     width="360"
+     name="name_editor" />
+
+    <!-- Forecast - moved to the very top of the editing chrome (right under
+         the name row) so it stays visible regardless of which tab is
+         selected below, rather than buried inside the Weather tab it's
+         summarising. Purely a display convenience, never persisted - see
+         SSAtmoEnvWeatherResolver::generateForecastText(). -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="12"
+     height="16"
+     width="770"
+     name="forecast_text"
+     font="SansSerifSmallBold">
+        -
+    </text>
+
+    <!-- Preview time - above the tab container (and thus above whatever
+         "Weather" section header lives inside its tab), the same way EEP's
+         timeline sits above its own sky/water tab_container. Wider than
+         Edit Day Cycle's own 525px timeline slider since there's room to
+         spare and a longer scrub makes fine positioning easier. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="14"
+     height="14"
+     width="90"
+     name="preview_time_caption"
+     font="SansSerifSmall">
+        Preview time
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     top_delta="-2"
+     height="18"
+     width="560"
+     name="preview_time_slider"
+     show_text="false"
+     min_val="0.0"
+     max_val="4.0"
+     increment="0.125"
+     initial_val="0.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     height="14"
+     width="70"
+     name="preview_time_value_text"
+     font="SansSerifSmall">
+        0h 00m
+    </text>
+
+    <!-- Body: a vertical track list on the left (Environment-tab style,
+         not a table - see refreshTrackList()) and a tab container on the
+         right for per-track editing. Only Weather exists so far; Atmosphere
+         & Lighting / Clouds / Planetary are still to come, see
+         doc/atmo_magic_environment.md. -->
+    <panel
+     follows="left|top|bottom"
+     layout="topleft"
+     left="15"
+     top="96"
+     bottom="-50"
+     width="170"
+     name="track_panel"
+     background_visible="false"
+     border="false">
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="14"
+         width="170"
+         name="tracks_label"
+         font="SansSerifSmallBold">
+            Tracks
+        </text>
+
+        <!-- Up to SS_ATMOENV_MAX_TRACKS (4) fixed rows, shown/relabelled by
+             refreshTrackList() rather than built dynamically - see the
+             header comment on mSelectedTrackIndex. Each is a toggle button:
+             selected state drives Remove Track's enable state and doubles
+             as the highlight. -->
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="8"
+         height="32"
+         width="170"
+         is_toggle="true"
+         name="track_row_0"
+         label="Ground" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="2"
+         height="32"
+         width="170"
+         is_toggle="true"
+         name="track_row_1"
+         label="Track 2"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="2"
+         height="32"
+         width="170"
+         is_toggle="true"
+         name="track_row_2"
+         label="Track 3"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="2"
+         height="32"
+         width="170"
+         is_toggle="true"
+         name="track_row_3"
+         label="Track 4"
+         visible="false" />
+
+        <button
+         follows="left|bottom"
+         layout="topleft"
+         left="0"
+         top_pad="10"
+         height="23"
+         width="170"
+         name="add_track_button"
+         tool_tip="Up to four tracks total, the ground track plus three optional"
+         label="Add Track" />
+        <button
+         follows="left|bottom"
+         layout="topleft"
+         left="0"
+         top_pad="4"
+         height="23"
+         width="170"
+         name="remove_track_button"
+         tool_tip="Select a track above first; the ground track cannot be removed"
+         label="Remove Track" />
+    </panel>
+
+    <tab_container
+     follows="all"
+     layout="topleft"
+     left="199"
+     top="96"
+     bottom="-50"
+     width="586"
+     halign="left"
+     tab_position="top"
+     tab_width="140"
+     tab_padding_right="3"
+     name="atmo_tabs">
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="weather_tab"
+         label="Weather"
+         filename="panel_ss_atmo_env_weather.xml" />
+    </tab_container>
+
+    <!-- CRUD row, docked at the floater's bottom edge, same as Save/Cancel
+         on floater_edit_ext_day_cycle.xml. Save writes immediately using
+         the Name field above (no "As" dialog - there's nothing to pick,
+         the name is already right there); Load opens inventory and reveals
+         the "Atmo Magic" settings subfolder rather than filtering the whole
+         panel. -->
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left="15"
+     bottom="-14"
+     height="23"
+     width="100"
+     name="load_button"
+     tool_tip="Opens inventory to the Atmo Magic folder - drag a notecard onto this floater to load it"
+     label="Load..." />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="8"
+     bottom_delta="0"
+     height="23"
+     width="100"
+     name="save_button"
+     tool_tip="Saves the current environment - updates the notecard already loaded in place, or creates a new one if nothing owned is loaded yet"
+     label="Save" />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="8"
+     bottom_delta="0"
+     height="23"
+     width="100"
+     name="revert_button"
+     tool_tip="Discards edits, back to whatever was last loaded or saved"
+     label="Revert" />
+</floater>

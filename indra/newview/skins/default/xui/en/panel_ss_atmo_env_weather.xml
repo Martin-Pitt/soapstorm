@@ -1,0 +1,411 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<panel
+ border="true"
+ follows="all"
+ label="Weather"
+ layout="topleft"
+ left="0"
+ name="panel_ss_atmo_env_weather"
+ top="0"
+ width="580"
+ height="540">
+    <!-- <SS:Nexii> Atmo Magic: the moisture/convection/temperature cube,
+         AE-style keyframe rows - see ssatmoenvkeyframe.h and the FloatRow
+         comment in ssfloateratmoenv.h. Not the real Weather tab yet (still
+         no curve/HOLD controls) - see doc/atmo_magic_environment.md -
+         but the row mechanics (setValueAtHead's three-way rule, toggling a
+         keyframe, jumping between them) are the real thing. label(110) /
+         slider(280) / value_text(70) / prev(25) / keyframe(23) / next(25),
+         same column grid and shared row top on every row - same convention
+         the original single-column floater used, just wider. Prev/next use
+         the same SkipBackward_Off/SkipForward_Off icons as Edit Day
+         Cycle's step buttons; the keyframe diamond is its own thing
+         (unicode glyph, no icon) since there's no EEP equivalent to match. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top="8"
+     height="14"
+     width="560"
+     name="weather_ground_note"
+     font="SansSerifSmall"
+     text_color="LtGray">
+        Ground track only, for now.
+    </text>
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="moisture_label"
+     font="SansSerifSmall">
+        Moisture
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="moisture_slider"
+     show_text="false"
+     min_val="0.0"
+     max_val="1.0"
+     increment="0.001"
+     initial_val="0.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     height="14"
+     width="70"
+     name="moisture_value_text"
+     font="SansSerifSmall">
+        0.00
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-4"
+     height="25"
+     width="25"
+     name="moisture_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="moisture_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="moisture_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="convection_label"
+     font="SansSerifSmall">
+        Convection
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="convection_slider"
+     show_text="false"
+     min_val="0.0"
+     max_val="1.0"
+     increment="0.001"
+     initial_val="0.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     height="14"
+     width="70"
+     name="convection_value_text"
+     font="SansSerifSmall">
+        0.00
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-4"
+     height="25"
+     width="25"
+     name="convection_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="convection_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="convection_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="temperature_label"
+     font="SansSerifSmall">
+        Temperature
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="temperature_slider"
+     show_text="false"
+     min_val="-30.0"
+     max_val="40.0"
+     increment="1.0"
+     initial_val="15.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     height="14"
+     width="70"
+     name="temperature_value_text"
+     font="SansSerifSmall">
+        15C
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-4"
+     height="25"
+     width="25"
+     name="temperature_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="temperature_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="temperature_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="wind_heading_label"
+     font="SansSerifSmall">
+        Wind Heading
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="wind_heading_slider"
+     show_text="false"
+     min_val="0.0"
+     max_val="360.0"
+     increment="1.0"
+     initial_val="0.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     height="14"
+     width="70"
+     name="wind_heading_value_text"
+     font="SansSerifSmall">
+        0
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-4"
+     height="25"
+     width="25"
+     name="wind_heading_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_heading_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_heading_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="wind_speed_label"
+     font="SansSerifSmall">
+        Wind Speed
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="wind_speed_slider"
+     show_text="false"
+     min_val="0.0"
+     max_val="30.0"
+     increment="1.0"
+     initial_val="0.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     height="14"
+     width="70"
+     name="wind_speed_value_text"
+     font="SansSerifSmall">
+        0 m/s
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-4"
+     height="25"
+     width="25"
+     name="wind_speed_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_speed_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_speed_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+</panel>

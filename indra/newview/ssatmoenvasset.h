@@ -1,8 +1,8 @@
 /**
- * @file ssatmov3asset.h
- * @brief Atmo Magic v3: the unified environment asset. One document replaces
+ * @file ssatmoenvasset.h
+ * @brief Atmo Magic: the unified environment asset. One document replaces
  *        separate sky/water/day-cycle assets and the v2 per-track weather
- *        notecard - see doc/atmo_magic_v3_environment.md for the design this
+ *        notecard - see doc/atmo_magic_environment.md for the design this
  *        implements. Track/Water/Weather (phase 1), Planetary (phase 6) and
  *        the volumetric Cloud Field (phase 7) all have real typed schema
  *        now; only Atmosphere & Lighting is still an opaque LLSD blob,
@@ -27,10 +27,10 @@
  * $/LicenseInfo$
  */
 
-#ifndef SS_ATMOV3ASSET_H
-#define SS_ATMOV3ASSET_H
+#ifndef SS_ATMOENVASSET_H
+#define SS_ATMOENVASSET_H
 
-// <SS:Nexii> Atmo Magic v3: unified environment asset
+// <SS:Nexii> Atmo Magic: unified environment asset
 
 #include "llsd.h"
 #include "lluuid.h"
@@ -39,29 +39,29 @@
 #include <string>
 #include <vector>
 
-#include "ssatmov3keyframe.h"
+#include "ssatmoenvkeyframe.h"
 
 // Bumped whenever the on-disk shape changes in a way an older build cannot
 // make sense of. fromLLSD() refuses anything newer than this build
 // understands rather than guessing at a partial read.
-const S32 SS_ATMOV3_VERSION = 1;
+const S32 SS_ATMOENV_VERSION = 1;
 
 // Mandatory ground track (index 0) plus up to three optional tracks -
 // deliberately the same ceiling as v2's four EEP-altitude tracks, though a
 // v3 track's own floor/ceiling are freely authored rather than tied to the
 // region's altitude settings.
-const S32 SS_ATMOV3_MIN_TRACKS = 1;
-const S32 SS_ATMOV3_MAX_TRACKS = 4;
+const S32 SS_ATMOENV_MIN_TRACKS = 1;
+const S32 SS_ATMOENV_MAX_TRACKS = 4;
 
 // One track's moisture/convection/temperature cube plus wind. This is the
 // authored input side only - the precipitation-type formula, ground-state
 // table, and convection-threshold table from the design doc's Weather tab
 // are phase 5 (they read this struct, they do not live in it).
-struct SSAtmoV3Weather
+struct SSAtmoEnvWeather
 {
     // The core cube, plus wind heading/speed - keyframable, per the design
     // doc's "every parameterized slider ... has a keyframe icon" rule. See
-    // ssatmov3keyframe.h: no keyframes on a field is just its plain value,
+    // ssatmoenvkeyframe.h: no keyframes on a field is just its plain value,
     // exactly as if this were still a bare F32.
     //
     // Range clamping (0..1 for moisture/convection, -30..40 for
@@ -70,12 +70,12 @@ struct SSAtmoV3Weather
     // valid range, so that clamp is deferred to whatever reads these values
     // (phase 5) rather than half-implemented here. A hand-edited notecard
     // can put an out-of-range value in for now.
-    SSAtmoV3Keyframed<F32> mMoisture{0.f};      // 0..1
-    SSAtmoV3Keyframed<F32> mConvection{0.f};    // 0..1
-    SSAtmoV3Keyframed<F32> mTemperatureC{15.f}; // -30..40
+    SSAtmoEnvKeyframed<F32> mMoisture{0.f};      // 0..1
+    SSAtmoEnvKeyframed<F32> mConvection{0.f};    // 0..1
+    SSAtmoEnvKeyframed<F32> mTemperatureC{15.f}; // -30..40
 
-    SSAtmoV3Keyframed<F32> mWindHeading{0.f};   // degrees, 0 = north, 90 = east
-    SSAtmoV3Keyframed<F32> mWindSpeed{0.f};     // m/s
+    SSAtmoEnvKeyframed<F32> mWindHeading{0.f};   // degrees, 0 = north, 90 = east
+    SSAtmoEnvKeyframed<F32> mWindSpeed{0.f};     // m/s
 
     // Auto derives from the cube; false means mGust* below are authored
     // overrides rather than a computed default. Not yet keyframable - these
@@ -95,8 +95,8 @@ struct SSAtmoV3Weather
     // Rain/Hail, forced regardless of what the cube would otherwise pick.
     // Keyframed with the HOLD curve in mind: there is no sensible value
     // "between" Rain and Hail, so a keyframe here always steps rather than
-    // blends - see ss_atmov3_lerp<std::string>.
-    SSAtmoV3Keyframed<std::string> mPrecipitationOverride{std::string()};
+    // blends - see ss_atmoenv_lerp<std::string>.
+    SSAtmoEnvKeyframed<std::string> mPrecipitationOverride{std::string()};
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
@@ -105,7 +105,7 @@ struct SSAtmoV3Weather
 // A track's optional water plane. Height is independent of the track's own
 // floor/ceiling; only the lowest *enabled* track's plane is ever the one
 // globally visible one, regardless of which track the avatar is in.
-struct SSAtmoV3Water
+struct SSAtmoEnvWater
 {
     bool mEnabled = false;
     F32  mHeight  = 0.f;
@@ -119,7 +119,7 @@ struct SSAtmoV3Water
 // is always fixed/authored (radius + inclination + phase), never simulated;
 // orbital/rotation period are stored for a future "actually animate this"
 // toggle, unused by anything today.
-struct SSAtmoV3CelestialBody
+struct SSAtmoEnvCelestialBody
 {
     enum EKind { SUN = 0, PLANET = 1, MOON = 2 };
 
@@ -162,19 +162,19 @@ struct SSAtmoV3CelestialBody
     // the body. Only visibly affects anything once bodies render as
     // spheres rather than quads (not yet); the home body's tilt is also
     // what drives the computed primary sun's seasonal arc regardless of
-    // rendering mode - see SSAtmoV3PlanetaryResolver.
+    // rendering mode - see SSAtmoEnvPlanetaryResolver.
     F32 mAxialTiltDeg = 0.f;
     F64 mSpinPeriodSeconds = 0.0; // 0 = tidally locked (no visible self-rotation)
 
     // Exactly one body across the whole track's mBodies should have this
-    // set - enforced by SSAtmoV3Planetary::setHomeBody(), not by this
+    // set - enforced by SSAtmoEnvPlanetary::setHomeBody(), not by this
     // struct alone. The home body supplies mAxialTiltDeg to the primary
     // sun's computed arc and is never itself rendered (you don't see
     // yourself in the sky) or a light emitter.
     bool mIsHome = false;
 
     // At most two bodies across the whole track should have this set - see
-    // SSAtmoV3Planetary::canSetLightEmitter(). A body flagged home can
+    // SSAtmoEnvPlanetary::canSetLightEmitter(). A body flagged home can
     // never also be a light emitter.
     bool mIsLightEmitter = false;
 
@@ -184,7 +184,7 @@ struct SSAtmoV3CelestialBody
     // ever between two bodies with the same mParentIndex. True N-body
     // (3+ mutually orbiting) is out of scope; a third body orbits the
     // *pair's* combined point by giving it mParentIndex pointing at either
-    // paired body - see SSAtmoV3PlanetaryResolver for how that's resolved.
+    // paired body - see SSAtmoEnvPlanetaryResolver for how that's resolved.
     S32 mBoundPartnerIndex = -1;
 
     // Rendering: quad/billboard only for v1. An equirectangular texture on
@@ -205,9 +205,9 @@ struct SSAtmoV3CelestialBody
 // distance-scale dials that compress authored orbital *distances* (not any
 // body's own physical size) for effect - a nearby-looking ring system, a
 // moon that dominates the sky.
-struct SSAtmoV3Planetary
+struct SSAtmoEnvPlanetary
 {
-    std::vector<SSAtmoV3CelestialBody> mBodies;
+    std::vector<SSAtmoEnvCelestialBody> mBodies;
 
     // Compresses Sun<->Planet and Planet<->Moon orbital radii respectively,
     // multiplicatively (1.0 = authored distance, unmodified). Kept as two
@@ -236,11 +236,11 @@ struct SSAtmoV3Planetary
 
 // A track's volumetric storm-cloud tunables - the "Volumetric Field"
 // sub-tab. Separate from the legacy Windlight cloud layer (now cirrus-only,
-// see doc/atmo_magic_v3_environment.md), which needs none of this. Actual
+// see doc/atmo_magic_environment.md), which needs none of this. Actual
 // per-frame coverage/density/churn are derived from these plus the weather
-// cube's moisture/convection by SSAtmoV3CloudFieldResolver (phase 7); this
+// cube's moisture/convection by SSAtmoEnvCloudFieldResolver (phase 7); this
 // struct is only the artist's tunable baseline.
-struct SSAtmoV3CloudField
+struct SSAtmoEnvCloudField
 {
     // Metres. The band this track's storm clouds occupy at Convection 0 -
     // Stable phase is "flat, low to ground" per the design doc's convection
@@ -260,7 +260,7 @@ struct SSAtmoV3CloudField
 // One track: a complete, isolated environment - its own weather, its own
 // (eventual) sky, clouds and planetary system. Nothing blends across
 // tracks; a build's own floor/ceiling say when it is active, nothing more.
-struct SSAtmoV3Track
+struct SSAtmoEnvTrack
 {
     std::string mName = "Ground";
 
@@ -284,9 +284,9 @@ struct SSAtmoV3Track
     F64 mDayLengthSeconds = 4.0 * 60.0 * 60.0;
     F64 mDayOffsetSeconds = 0.0;
 
-    SSAtmoV3Water    mWater;
-    SSAtmoV3Weather  mWeather;
-    SSAtmoV3Planetary mPlanetary;
+    SSAtmoEnvWater    mWater;
+    SSAtmoEnvWeather  mWeather;
+    SSAtmoEnvPlanetary mPlanetary;
 
     // Atmosphere & Lighting, Clouds (+ Volumetric Field) - not yet real
     // fields, atmosphere for phase-6-adjacent reasons (it leans on whatever
@@ -294,7 +294,7 @@ struct SSAtmoV3Track
     // cloud field's own tunables below being deliberately kept separate
     // from the legacy cirrus-layer settings this LLSD still round-trips.
     LLSD mAtmosphere = LLSD::emptyMap();
-    SSAtmoV3CloudField mCloudField;
+    SSAtmoEnvCloudField mCloudField;
 
     // Seconds into this track's own day-cycle loop, right now - wraps
     // real-world UTC wall-clock time against mDayLengthSeconds/mDayOffsetSeconds,
@@ -310,21 +310,21 @@ struct SSAtmoV3Track
 };
 
 // The whole environment: one document, no separate sky/water/day-cycle
-// assets. See doc/atmo_magic_v3_environment.md for the full design.
-struct SSAtmoV3Asset
+// assets. See doc/atmo_magic_environment.md for the full design.
+struct SSAtmoEnvAsset
 {
     std::string mName = "New Atmo Environment";
 
     // Index 0 is always the mandatory ground track; size() is 1..4.
-    std::vector<SSAtmoV3Track> mTracks;
+    std::vector<SSAtmoEnvTrack> mTracks;
 
     // One ground track, calm weather, nothing keyframed - the "hello world"
     // both the inventory New Atmo Magic action and the floater's one-time
     // create button write out. See doc: "Creation has two entry points,
     // same underlying action, no floater-side default."
-    static SSAtmoV3Asset makeDefault();
+    static SSAtmoEnvAsset makeDefault();
 
-    // false if already at SS_ATMOV3_MAX_TRACKS
+    // false if already at SS_ATMOENV_MAX_TRACKS
     bool addTrack();
     // false for index 0 (the mandatory ground track is never removable) or
     // an out-of-range index
@@ -345,4 +345,4 @@ struct SSAtmoV3Asset
 
 // </SS:Nexii>
 
-#endif // SS_ATMOV3ASSET_H
+#endif // SS_ATMOENVASSET_H

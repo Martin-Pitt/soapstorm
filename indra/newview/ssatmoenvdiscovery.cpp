@@ -1,6 +1,6 @@
 /**
- * @file ssatmov3discovery.cpp
- * @brief Atmo Magic v3 parcel discovery and Bridge notecard fetch
+ * @file ssatmoenvdiscovery.cpp
+ * @brief Atmo Magic parcel discovery and Bridge notecard fetch
  *        implementation. See the header for the Bridge (LSL) contract this
  *        assumes - indra/newview/fs_resources/EBEDD1D2-...-D47BBCA5DFB.lsltxt's
  *        "FetchNotecard" command.
@@ -26,7 +26,7 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssatmov3discovery.h"
+#include "ssatmoenvdiscovery.h"
 
 #include "fslslbridge.h"
 #include "llcorehttputil.h"
@@ -36,11 +36,11 @@
 #include "llnotecard.h"
 #include "llparcel.h"
 #include "llsdserialize.h"
-#include "ssatmov3mgr.h"
+#include "ssatmoenvmanager.h"
 
 #include <sstream>
 
-// <SS:Nexii> Atmo Magic v3: parcel discovery and Bridge notecard fetch
+// <SS:Nexii> Atmo Magic: parcel discovery and Bridge notecard fetch
 
 namespace
 {
@@ -92,16 +92,16 @@ namespace
     }
 }
 
-SSAtmoV3DiscoveryMgr::SSAtmoV3DiscoveryMgr()
+SSAtmoEnvDiscoveryManager::SSAtmoEnvDiscoveryManager()
 {
     // Fires when the agent crosses into a different parcel and when the
     // current parcel's properties are re-sent, which is what an owner
     // editing the description produces - same event-driven pattern v2's
-    // own SSAtmoTrackMgr already uses, no polling needed.
+    // own SSAtmoTrackManager already uses, no polling needed.
     LLViewerParcelMgr::getInstance()->addObserver(this);
 }
 
-SSAtmoV3DiscoveryMgr::~SSAtmoV3DiscoveryMgr()
+SSAtmoEnvDiscoveryManager::~SSAtmoEnvDiscoveryManager()
 {
     if (LLViewerParcelMgr::instanceExists())
     {
@@ -110,10 +110,10 @@ SSAtmoV3DiscoveryMgr::~SSAtmoV3DiscoveryMgr()
 }
 
 // static
-LLUUID SSAtmoV3DiscoveryMgr::parseDescription(const std::string& desc)
+LLUUID SSAtmoEnvDiscoveryManager::parseDescription(const std::string& desc)
 {
     // Same scan-for-marker-then-next-36-characters approach as v2's own
-    // SSAtmoTrackMgr::parseDescription, same reason: keeps the marker
+    // SSAtmoTrackManager::parseDescription, same reason: keeps the marker
     // findable inside ordinary prose so a parcel description stays
     // readable rather than needing to be exactly the tag and nothing else.
     const std::string lower = utf8str_tolower(desc);
@@ -139,7 +139,7 @@ LLUUID SSAtmoV3DiscoveryMgr::parseDescription(const std::string& desc)
     return LLUUID::null;
 }
 
-void SSAtmoV3DiscoveryMgr::changed()
+void SSAtmoEnvDiscoveryManager::changed()
 {
     LLParcel* parcel = LLViewerParcelMgr::getInstance()->getAgentParcel();
     const std::string desc = parcel ? parcel->getDesc() : LLStringUtil::null;
@@ -156,7 +156,7 @@ void SSAtmoV3DiscoveryMgr::changed()
     requestFetch(asset_id);
 }
 
-void SSAtmoV3DiscoveryMgr::requestFetch(const LLUUID& asset_id)
+void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id)
 {
     // Notecards are immutable - the same uuid is always the same content,
     // forever - so a cache hit never needs the Bridge at all. If it can't
@@ -172,7 +172,7 @@ void SSAtmoV3DiscoveryMgr::requestFetch(const LLUUID& asset_id)
 
     if (!FSLSLBridge::instanceExists() || !FSLSLBridge::instance().canUseBridge())
     {
-        LL_INFOS("AtmoMagicV3") << "No SL Bridge available - cannot fetch parcel-referenced "
+        LL_INFOS("AtmoMagicEnv") << "No SL Bridge available - cannot fetch parcel-referenced "
                                    "Atmo v3 notecard " << asset_id << LL_ENDL;
         return;
     }
@@ -187,7 +187,7 @@ void SSAtmoV3DiscoveryMgr::requestFetch(const LLUUID& asset_id)
         [this, asset_id](const LLSD& data) { onFetchResult(asset_id, data); });
 }
 
-void SSAtmoV3DiscoveryMgr::onFetchResult(const LLUUID& asset_id, const LLSD& data)
+void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data)
 {
     // A newer request may have superseded this one while it was in flight.
     if (asset_id != mPendingAssetId) return;
@@ -195,7 +195,7 @@ void SSAtmoV3DiscoveryMgr::onFetchResult(const LLUUID& asset_id, const LLSD& dat
 
     if (!data.has(LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_CONTENT))
     {
-        LL_WARNS("AtmoMagicV3") << "Atmo v3 fetch for " << asset_id << " returned no content" << LL_ENDL;
+        LL_WARNS("AtmoMagicEnv") << "Atmo v3 fetch for " << asset_id << " returned no content" << LL_ENDL;
         return;
     }
 
@@ -228,20 +228,20 @@ void SSAtmoV3DiscoveryMgr::onFetchResult(const LLUUID& asset_id, const LLSD& dat
     applyText(asset_id, text);
 }
 
-bool SSAtmoV3DiscoveryMgr::applyText(const LLUUID& asset_id, const std::string& text)
+bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::string& text)
 {
     // Auto-apply is suppressed while the floater is open, exactly like the
     // "New Atmo Magic" creation flow's own "mid-edit, don't clobber" rule -
-    // see doc/atmo_magic_v3_environment.md.
-    LLFloater* floater = LLFloaterReg::findInstance("ss_atmo_v3");
+    // see doc/atmo_magic_environment.md.
+    LLFloater* floater = LLFloaterReg::findInstance("ss_atmo_env");
     if (floater && floater->getVisible())
     {
-        LL_INFOS("AtmoMagicV3") << "Atmo v3 environment " << asset_id
+        LL_INFOS("AtmoMagicEnv") << "Atmo v3 environment " << asset_id
                                  << " available but not applied - floater is open" << LL_ENDL;
         return false;
     }
 
-    const bool applied = SSAtmoV3Mgr::getInstance()->applyExternalNotecardText(asset_id, text);
+    const bool applied = SSAtmoEnvManager::getInstance()->applyExternalNotecardText(asset_id, text);
 
     // Only a genuine success marks this uuid as handled. A rejected/
     // invalid notecard is left retryable too - the alternative
@@ -253,7 +253,7 @@ bool SSAtmoV3DiscoveryMgr::applyText(const LLUUID& asset_id, const std::string& 
     }
     else
     {
-        LL_WARNS("AtmoMagicV3") << "Atmo v3 environment " << asset_id << " fetched but rejected" << LL_ENDL;
+        LL_WARNS("AtmoMagicEnv") << "Atmo v3 environment " << asset_id << " fetched but rejected" << LL_ENDL;
     }
     return applied;
 }

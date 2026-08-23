@@ -318,8 +318,8 @@ private:
     F32 mBlend = 0.f;
     std::string mPresetName;
 
-    // <SS:Nexii> Atmo Magic v3 bridge: frame-to-frame state refreshParams()
-    // needs to feed SSAtmoV3LegacyBridge::resolveActiveTrack() its
+    // <SS:Nexii> Atmo Magic bridge: frame-to-frame state refreshParams()
+    // needs to feed SSAtmoEnvBridge::resolveActiveTrack() its
     // world_z/prev_world_z/teleported inputs - see refreshParams() for
     // where these get read and updated. Region change or an implausibly
     // large single-frame jump both count as "teleported" (which also

@@ -288,9 +288,9 @@ struct SSPrecipPreset
     static const char* archetypeName(SSPrecipArchetype a);
 };
 
-class SSPrecipPresetMgr : public LLSingleton<SSPrecipPresetMgr>
+class SSPrecipPresetManager : public LLSingleton<SSPrecipPresetManager>
 {
-    LLSINGLETON(SSPrecipPresetMgr);
+    LLSINGLETON(SSPrecipPresetManager);
 
 public:
     // Built-in presets are recreated every run; user presets load from

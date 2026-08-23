@@ -1,6 +1,6 @@
 /**
- * @file ssatmov3legacybridge.cpp
- * @brief Atmo Magic v3 -> v2 renderer bridge implementation. See the header
+ * @file ssatmoenvbridge.cpp
+ * @brief Atmo Magic -> v2 renderer bridge implementation. See the header
  *        for why this file exists and why it's deliberately not called yet.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -24,17 +24,17 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssatmov3legacybridge.h"
+#include "ssatmoenvbridge.h"
 
 #include "ssatmotrack.h" // for SSAtmoTrackConfig
-#include "ssatmov3mgr.h"
-#include "ssatmov3trackstate.h"
-#include "ssatmov3weatherstate.h"
+#include "ssatmoenvmanager.h"
+#include "ssatmoenvtrackstate.h"
+#include "ssatmoenvweatherstate.h"
 
-// <SS:Nexii> Atmo Magic v3 -> v2 renderer bridge (temporary, see header)
+// <SS:Nexii> Atmo Magic -> v2 renderer bridge (temporary, see header)
 
 // static
-std::string SSAtmoV3LegacyBridge::presetNameForType(const std::string& v3_type)
+std::string SSAtmoEnvBridge::presetNameForType(const std::string& v3_type)
 {
     if (v3_type.empty())          return std::string();
     if (v3_type == "rain")        return "Rain";
@@ -51,20 +51,24 @@ std::string SSAtmoV3LegacyBridge::presetNameForType(const std::string& v3_type)
 }
 
 // static
-bool SSAtmoV3LegacyBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool teleported,
+bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool teleported,
                                                SSAtmoTrackConfig& out_cfg, bool& out_is_ground_track)
 {
-    SSAtmoV3Mgr* mgr = SSAtmoV3Mgr::getInstance();
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return false;
 
-    const SSAtmoV3Asset& asset = mgr->asset();
+    const SSAtmoEnvAsset& asset = mgr->asset();
 
-    const SSAtmoV3TrackBlend blend = SSAtmoV3TrackResolver::resolve(asset, world_z, prev_world_z, teleported);
-    const SSAtmoV3Track& track = asset.mTracks[blend.mPrimaryTrack];
+    const SSAtmoEnvTrackBlend blend = SSAtmoEnvTrackResolver::resolve(asset, world_z, prev_world_z, teleported);
+    const SSAtmoEnvTrack& track = asset.mTracks[blend.mPrimaryTrack];
     out_is_ground_track = (blend.mPrimaryTrack == 0);
 
-    const F64 time = track.currentDayCycleTime();
-    const SSAtmoV3WeatherState state = SSAtmoV3WeatherResolver::resolve(track.mWeather, time);
+    // The Atmo Magic floater's preview time slider overrides the real
+    // wall clock while it's open and visible, the same way EEP's Edit Day
+    // Cycle floater overrides LLEnvironment's live time - see
+    // SSAtmoEnvManager::setPreviewTimeOverride().
+    const F64 time = mgr->hasPreviewTimeOverride() ? mgr->previewTimeOverride() : track.currentDayCycleTime();
+    const SSAtmoEnvWeatherState state = SSAtmoEnvWeatherResolver::resolve(track.mWeather, time, track.mDayLengthSeconds);
 
     out_cfg = SSAtmoTrackConfig();
     out_cfg.mDefined = true;
@@ -82,7 +86,7 @@ bool SSAtmoV3LegacyBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, boo
     const F32 neighbor_fade = (blend.mNeighborTrack >= 0) ? (1.f - blend.mNeighborWeight) : 1.f;
 
     out_cfg.mPrecipitation = llclamp(state.mPrecipitationIntensity, 0.f, 1.f) * neighbor_fade;
-    out_cfg.mTurbulence = llclamp(track.mWeather.mConvection.valueAt(time), 0.f, 1.f);
+    out_cfg.mTurbulence = llclamp(track.mWeather.mConvection.valueAt(time, track.mDayLengthSeconds), 0.f, 1.f);
 
     out_cfg.mGustDepth = llclamp(state.mGustDepth, 0.f, 3.f);
     out_cfg.mGustLength = llclamp(state.mGustLength, 8.f, 2000.f);
@@ -99,7 +103,7 @@ bool SSAtmoV3LegacyBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, boo
     out_cfg.mHasGround = true;
     out_cfg.mGround = track.mFloorZ;
 
-    // Not yet an authored v3 field - see doc/atmo_magic_v3_environment.md's
+    // Not yet an authored v3 field - see doc/atmo_magic_environment.md's
     // Track schema. Defaulting to fully drawn rather than 0 so open-air v3
     // tracks are not silently invisible until this gets its own control.
     out_cfg.mFallThrough = 1.f;

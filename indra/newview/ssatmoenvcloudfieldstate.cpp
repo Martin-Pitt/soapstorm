@@ -1,6 +1,6 @@
 /**
- * @file ssatmov3cloudfieldstate.cpp
- * @brief Atmo Magic v3 volumetric cloud field derivation implementation.
+ * @file ssatmoenvcloudfieldstate.cpp
+ * @brief Atmo Magic volumetric cloud field derivation implementation.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -23,15 +23,15 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssatmov3cloudfieldstate.h"
+#include "ssatmoenvcloudfieldstate.h"
 
-// <SS:Nexii> Atmo Magic v3: volumetric cloud field derivation
+// <SS:Nexii> Atmo Magic: volumetric cloud field derivation
 
 // static
-SSAtmoV3CloudFieldState SSAtmoV3CloudFieldResolver::resolve(const SSAtmoV3CloudField& field,
+SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvCloudField& field,
                                                              F32 moisture, F32 convection)
 {
-    SSAtmoV3CloudFieldState state;
+    SSAtmoEnvCloudFieldState state;
 
     state.mCoverage = llclamp(moisture, 0.f, 1.f) * llmax(0.f, field.mCoverageScale);
 

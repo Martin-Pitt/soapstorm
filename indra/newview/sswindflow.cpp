@@ -28,6 +28,7 @@
 
 #include "ssatmomagic.h"
 #include "ssatmotrack.h"
+#include "ssatmoenvbridge.h"
 
 #include "llagent.h"
 #include "llenvironment.h"
@@ -485,7 +486,7 @@ bool SSWindFlowMap::needsSolve(const Tile& tile) const
 
     // The camera moved to a different sky track, so the band this was solved
     // for is not the one being flown in
-    if (tile.mTrack != SSAtmoTrackMgr::getInstance()->currentTrack()) return true;
+    if (tile.mTrack != SSAtmoTrackManager::getInstance()->currentTrack()) return true;
 
     // Ambient wind changed enough to matter. The map is static with respect to
     // a fixed inflow; change the inflow and it has to be solved again.
@@ -511,7 +512,7 @@ void SSWindFlowMap::chooseBand(Tile& tile, LLViewerRegion* regionp)
     static LLCachedControl<F32> height_setting(gSavedSettings, "SSAtmoWindFlowHeight", 192.f);
     const F32 nominal = llclamp((F32)height_setting, 48.f, 1024.f);
 
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     const S32 track = tracks->currentTrack();
 
     // Base of the band. At ground level that is the lowest land in the region,
@@ -1132,7 +1133,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
 
     // A slab may never straddle two EEP tracks: each carries its own ambient
     // wind. This one is a correctness constraint, so it goes in first.
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     for (S32 track = SS_TRACK_MIN; track <= SS_TRACK_MAX; ++track)
     {
         forced.push_back(tracks->trackFloor(track));
@@ -1236,17 +1237,39 @@ void SSWindFlowMap::placeSlices(Tile& tile)
     static LLCachedControl<F32> gradient(gSavedSettings, "SSAtmoWindFlowGradient", 0.25f);
     const F32 alpha = llclamp((F32)gradient, 0.f, 0.6f);
 
-    // Ambient wind per slab, from the track that slab sits in
+    // Ambient wind per slab, from the track that slab sits in. Tried as a v3
+    // altitude-band track first - resolveActiveTrack() returns false when
+    // v3 has no asset loaded, the same "is v3 actually driving anything"
+    // question SSAtmoMagic::refreshParams() asks before picking cfg there -
+    // so this stays in lockstep with whichever source is actually live
+    // rather than always reading v2's SSAtmoTrackManager regardless. Read from
+    // the wrong one and the solve keeps baking in whatever the legacy
+    // config's wind speed was (0, most likely, or whatever it was last
+    // left at) no matter what the v3 floater's Wind Speed slider says.
     for (S32 k = 0; k < tile.mSlices; ++k)
     {
         const F32 centre = 0.5f * (tile.mSliceZ[k] + tile.mSliceZ[k + 1]);
-        const S32 track = llclamp(
-            LLEnvironment::instance().calculateSkyTrackForAltitude((F64)centre),
-            SS_TRACK_MIN, SS_TRACK_MAX);
 
-        const SSAtmoTrackConfig& cfg = tracks->config(track);
-        tile.mAmbient[k] = cfg.runs() ? cfg.windDirection() * cfg.mWindSpeed
-                                      : SSAtmoMagic::getInstance()->wind();
+        SSAtmoTrackConfig v3_cfg;
+        bool v3_is_ground = false;
+        const bool v3_active = SSAtmoEnvBridge::resolveActiveTrack(
+            centre, centre, false, v3_cfg, v3_is_ground);
+
+        if (v3_active)
+        {
+            tile.mAmbient[k] = v3_cfg.runs() ? v3_cfg.windDirection() * v3_cfg.mWindSpeed
+                                              : SSAtmoMagic::getInstance()->wind();
+        }
+        else
+        {
+            const S32 track = llclamp(
+                LLEnvironment::instance().calculateSkyTrackForAltitude((F64)centre),
+                SS_TRACK_MIN, SS_TRACK_MAX);
+
+            const SSAtmoTrackConfig& cfg = tracks->config(track);
+            tile.mAmbient[k] = cfg.runs() ? cfg.windDirection() * cfg.mWindSpeed
+                                          : SSAtmoMagic::getInstance()->wind();
+        }
 
         // Atmospheric boundary layer. Ground drag slows the air near the
         // surface and releases it with height, which is why a rooftop is

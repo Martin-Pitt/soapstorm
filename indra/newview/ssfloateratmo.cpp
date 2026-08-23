@@ -132,7 +132,7 @@ void SSFloaterAtmoMagic::draw()
 
         if (mFollowCamera)
         {
-            const S32 camera_track = SSAtmoTrackMgr::getInstance()->currentTrack();
+            const S32 camera_track = SSAtmoTrackManager::getInstance()->currentTrack();
             if (camera_track != mTrack)
             {
                 mTrack = camera_track;
@@ -166,7 +166,7 @@ bool SSFloaterAtmoMagic::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     if (drop)
     {
         const LLInventoryItem* item = (const LLInventoryItem*)cargo_data;
-        if (SSAtmoTrackMgr::getInstance()->importFromInventory(item))
+        if (SSAtmoTrackManager::getInstance()->importFromInventory(item))
         {
             // The fetch is async; the status line reports the outcome
             refreshTrackUI();
@@ -183,7 +183,7 @@ bool SSFloaterAtmoMagic::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
 
 void SSFloaterAtmoMagic::refreshTrackList()
 {
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     LLComboBox* combo = getChild<LLComboBox>("track_combo");
 
     combo->removeall();
@@ -220,7 +220,7 @@ void SSFloaterAtmoMagic::refreshPresets()
     // An empty entry means "whatever the preset editor has selected", which is
     // what a track config that names no preset falls back to
     combo->add("(editor default)", LLSD(std::string()));
-    for (const SSPrecipPreset& preset : SSPrecipPresetMgr::instance().presets())
+    for (const SSPrecipPreset& preset : SSPrecipPresetManager::instance().presets())
     {
         combo->add(preset.mName, LLSD(preset.mName));
     }
@@ -229,7 +229,7 @@ void SSFloaterAtmoMagic::refreshPresets()
 
 void SSFloaterAtmoMagic::refreshTrackUI()
 {
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     const SSAtmoTrackConfig& cfg = tracks->config(mTrack);
 
     mUpdating = true;
@@ -283,7 +283,7 @@ void SSFloaterAtmoMagic::refreshTrackUI()
 
 void SSFloaterAtmoMagic::refreshStatus()
 {
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     const bool modified = tracks->isModified();
 
     // Same idiom as the environment floaters: an asterisk means the working
@@ -327,7 +327,7 @@ void SSFloaterAtmoMagic::onCommitTrackField()
 {
     if (mUpdating) return;
 
-    SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     SSAtmoTrackConfig& cfg = tracks->editable(mTrack);
 
     const bool on = getChild<LLUICtrl>("track_enabled_check")->getValue().asBoolean();
@@ -379,7 +379,7 @@ void SSFloaterAtmoMagic::onClickEditPreset()
 
 void SSFloaterAtmoMagic::onClickReload()
 {
-    SSAtmoTrackMgr::getInstance()->reload();
+    SSAtmoTrackManager::getInstance()->reload();
     refreshTrackUI();
     refreshStatus();
 }
@@ -406,20 +406,20 @@ void SSFloaterAtmoMagic::onClickSave()
     LLStringUtil::trim(name);
     if (name.empty()) name = "Atmo Weather";
 
-    SSAtmoTrackMgr::getInstance()->exportToNotecard(name);
+    SSAtmoTrackManager::getInstance()->exportToNotecard(name);
     refreshStatus();
 }
 
 void SSFloaterAtmoMagic::onClickRevert()
 {
-    SSAtmoTrackMgr::getInstance()->revertToBaseline();
+    SSAtmoTrackManager::getInstance()->revertToBaseline();
     refreshTrackUI();
     refreshStatus();
 }
 
 void SSFloaterAtmoMagic::onClickDefaults()
 {
-    SSAtmoTrackMgr::getInstance()->resetToDefaults();
+    SSAtmoTrackManager::getInstance()->resetToDefaults();
     refreshTrackUI();
     refreshStatus();
 }

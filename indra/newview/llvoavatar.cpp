@@ -5450,7 +5450,7 @@ LLUUID LLVOAvatar::footstepSoundOverride(const LLVector3& foot_pos_agent, S32 ac
         }
     }
 
-    const std::string& csv = SSPrecipPresetMgr::instance().active().mFootsteps.at(surface, (SSStepAction)action);
+    const std::string& csv = SSPrecipPresetManager::instance().active().mFootsteps.at(surface, (SSStepAction)action);
     if (csv.empty())
     {
         return LLUUID::null;

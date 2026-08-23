@@ -183,7 +183,7 @@ bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
 // Lifetime
 //-----------------------------------------------------------------------------
 
-SSAtmoTrackMgr::SSAtmoTrackMgr()
+SSAtmoTrackManager::SSAtmoTrackManager()
 {
     // Fires when the agent crosses into a different parcel and when the
     // current parcel's properties are re-sent, which is what an owner editing
@@ -191,7 +191,7 @@ SSAtmoTrackMgr::SSAtmoTrackMgr()
     LLViewerParcelMgr::getInstance()->addObserver(this);
 }
 
-SSAtmoTrackMgr::~SSAtmoTrackMgr()
+SSAtmoTrackManager::~SSAtmoTrackManager()
 {
     if (LLViewerParcelMgr::instanceExists())
     {
@@ -203,7 +203,7 @@ SSAtmoTrackMgr::~SSAtmoTrackMgr()
 // Track geometry
 //-----------------------------------------------------------------------------
 
-S32 SSAtmoTrackMgr::currentTrack() const
+S32 SSAtmoTrackManager::currentTrack() const
 {
     // The camera's altitude decides, not the avatar's: weather is a thing you
     // look at, and alt-camming up into a skybox band should show that band's
@@ -213,7 +213,7 @@ S32 SSAtmoTrackMgr::currentTrack() const
                    SS_TRACK_MIN, SS_TRACK_MAX);
 }
 
-F32 SSAtmoTrackMgr::trackFloor(S32 track) const
+F32 SSAtmoTrackManager::trackFloor(S32 track) const
 {
     // calculateSkyTrackForAltitude puts track N in (altitudes[N-1], altitudes[N]],
     // so the band's base is the previous entry. Track 1's base is the region's
@@ -222,7 +222,7 @@ F32 SSAtmoTrackMgr::trackFloor(S32 track) const
     return alts[llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX) - 1];
 }
 
-F32 SSAtmoTrackMgr::trackCeiling(S32 track) const
+F32 SSAtmoTrackManager::trackCeiling(S32 track) const
 {
     const LLEnvironment::altitude_list_t& alts = LLEnvironment::instance().getRegionAltitudes();
     const S32 t = llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX);
@@ -234,30 +234,30 @@ F32 SSAtmoTrackMgr::trackCeiling(S32 track) const
 // Config access
 //-----------------------------------------------------------------------------
 
-const SSAtmoTrackConfig& SSAtmoTrackMgr::config(S32 track) const
+const SSAtmoTrackConfig& SSAtmoTrackManager::config(S32 track) const
 {
     if (track < SS_TRACK_MIN || track > SS_TRACK_MAX) return sEmptyConfig;
     return mWorking[track - SS_TRACK_MIN];
 }
 
-SSAtmoTrackConfig& SSAtmoTrackMgr::editable(S32 track)
+SSAtmoTrackConfig& SSAtmoTrackManager::editable(S32 track)
 {
     return mWorking[llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX) - SS_TRACK_MIN];
 }
 
-void SSAtmoTrackMgr::commit()
+void SSAtmoTrackManager::commit()
 {
     saveWorking();
 }
 
-bool SSAtmoTrackMgr::isModified(S32 track) const
+bool SSAtmoTrackManager::isModified(S32 track) const
 {
     if (track < SS_TRACK_MIN || track > SS_TRACK_MAX) return false;
     const S32 i = track - SS_TRACK_MIN;
     return mWorking[i] != mBaseline[i];
 }
 
-bool SSAtmoTrackMgr::isModified() const
+bool SSAtmoTrackManager::isModified() const
 {
     for (S32 i = 0; i < SS_TRACK_COUNT; ++i)
     {
@@ -266,13 +266,13 @@ bool SSAtmoTrackMgr::isModified() const
     return false;
 }
 
-void SSAtmoTrackMgr::revertToBaseline()
+void SSAtmoTrackManager::revertToBaseline()
 {
     mWorking = mBaseline;
     saveWorking();
 }
 
-void SSAtmoTrackMgr::resetToDefaults()
+void SSAtmoTrackManager::resetToDefaults()
 {
     mBaseline.fill(SSAtmoTrackConfig());
     mWorking = mBaseline;
@@ -284,7 +284,7 @@ void SSAtmoTrackMgr::resetToDefaults()
     saveWorking();
 }
 
-void SSAtmoTrackMgr::adoptBaseline(const ss_track_set_t& set, ESource source, const std::string& name)
+void SSAtmoTrackManager::adoptBaseline(const ss_track_set_t& set, ESource source, const std::string& name)
 {
     mBaseline = set;
     mWorking = set;
@@ -315,7 +315,7 @@ void SSAtmoTrackMgr::adoptBaseline(const ss_track_set_t& set, ESource source, co
 // notecard does not need the wrapper.
 //-----------------------------------------------------------------------------
 
-LLSD SSAtmoTrackMgr::asLLSD() const
+LLSD SSAtmoTrackManager::asLLSD() const
 {
     LLSD tracks = LLSD::emptyMap();
     for (S32 track = SS_TRACK_MIN; track <= SS_TRACK_MAX; ++track)
@@ -332,7 +332,7 @@ LLSD SSAtmoTrackMgr::asLLSD() const
     return sd;
 }
 
-bool SSAtmoTrackMgr::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
+bool SSAtmoTrackManager::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
 {
     out.fill(SSAtmoTrackConfig());
     if (!sd.isMap()) return false;
@@ -368,7 +368,7 @@ bool SSAtmoTrackMgr::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
     return any;
 }
 
-void SSAtmoTrackMgr::applyNotecardText(const std::string& text)
+void SSAtmoTrackManager::applyNotecardText(const std::string& text)
 {
     LLSD sd;
     std::istringstream stream(text);
@@ -411,7 +411,7 @@ void SSAtmoTrackMgr::applyNotecardText(const std::string& text)
 //-----------------------------------------------------------------------------
 
 // static
-LLUUID SSAtmoTrackMgr::parseDescription(const std::string& desc)
+LLUUID SSAtmoTrackManager::parseDescription(const std::string& desc)
 {
     // Scan for "atmo:" in any case, then take the next 36 characters and try
     // them as a UUID. Keeps the marker findable inside prose, so a parcel
@@ -439,7 +439,7 @@ LLUUID SSAtmoTrackMgr::parseDescription(const std::string& desc)
     return LLUUID::null;
 }
 
-void SSAtmoTrackMgr::changed()
+void SSAtmoTrackManager::changed()
 {
     LLParcel* parcel = LLViewerParcelMgr::getInstance()->getAgentParcel();
     const std::string desc = parcel ? parcel->getDesc() : LLStringUtil::null;
@@ -462,7 +462,7 @@ void SSAtmoTrackMgr::changed()
     requestNotecard(asset_id, SOURCE_PARCEL, name);
 }
 
-void SSAtmoTrackMgr::reload()
+void SSAtmoTrackManager::reload()
 {
     mAssetID.setNull();
     mPendingID.setNull();
@@ -473,7 +473,7 @@ void SSAtmoTrackMgr::reload()
 // Notecard fetch
 //-----------------------------------------------------------------------------
 
-void SSAtmoTrackMgr::requestNotecard(const LLUUID& asset_id, ESource source, const std::string& name)
+void SSAtmoTrackManager::requestNotecard(const LLUUID& asset_id, ESource source, const std::string& name)
 {
     if (!gAssetStorage)
     {
@@ -487,10 +487,10 @@ void SSAtmoTrackMgr::requestNotecard(const LLUUID& asset_id, ESource source, con
     mStatus = "loading notecard...";
 
     gAssetStorage->getAssetData(asset_id, LLAssetType::AT_NOTECARD,
-                                &SSAtmoTrackMgr::onNotecardLoaded, nullptr, true);
+                                &SSAtmoTrackManager::onNotecardLoaded, nullptr, true);
 }
 
-bool SSAtmoTrackMgr::importFromInventory(const LLInventoryItem* item)
+bool SSAtmoTrackManager::importFromInventory(const LLInventoryItem* item)
 {
     if (!item || item->getAssetUUID().isNull()) return false;
 
@@ -506,10 +506,10 @@ bool SSAtmoTrackMgr::importFromInventory(const LLInventoryItem* item)
 }
 
 // static
-void SSAtmoTrackMgr::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::EType type,
+void SSAtmoTrackManager::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::EType type,
                                       void* user_data, S32 status, LLExtStat ext_status)
 {
-    SSAtmoTrackMgr* self = SSAtmoTrackMgr::getInstance();
+    SSAtmoTrackManager* self = SSAtmoTrackManager::getInstance();
 
     // A newer request may have superseded this fetch while it was in flight
     if (asset_id != self->mPendingID) return;
@@ -562,7 +562,7 @@ void SSAtmoTrackMgr::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::EType
 // Notecard export
 //-----------------------------------------------------------------------------
 
-void SSAtmoTrackMgr::exportToNotecard(const std::string& name)
+void SSAtmoTrackManager::exportToNotecard(const std::string& name)
 {
     LLSD sd = asLLSD();
     sd["name"] = name;
@@ -620,7 +620,7 @@ void SSAtmoTrackMgr::exportToNotecard(const std::string& name)
 // Working-set persistence
 //-----------------------------------------------------------------------------
 
-void SSAtmoTrackMgr::loadWorking()
+void SSAtmoTrackManager::loadWorking()
 {
     mLoaded = true;
 
@@ -662,7 +662,7 @@ void SSAtmoTrackMgr::loadWorking()
     }
 }
 
-void SSAtmoTrackMgr::saveWorking()
+void SSAtmoTrackManager::saveWorking()
 {
     LLSD sd = asLLSD();
     sd["source"] = (S32)mSource;
@@ -674,7 +674,7 @@ void SSAtmoTrackMgr::saveWorking()
 
 //-----------------------------------------------------------------------------
 
-void SSAtmoTrackMgr::idle()
+void SSAtmoTrackManager::idle()
 {
     if (!mLoaded)
     {

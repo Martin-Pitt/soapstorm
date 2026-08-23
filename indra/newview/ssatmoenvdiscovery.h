@@ -1,8 +1,8 @@
 /**
- * @file ssatmov3discovery.h
- * @brief Atmo Magic v3: parcel-description discovery ("atmo:<uuid>", the
+ * @file ssatmoenvdiscovery.h
+ * @brief Atmo Magic: parcel-description discovery ("atmo:<uuid>", the
  *        exact marker the now-retired v2 weather layer used - see
- *        doc/atmo_magic_v3_environment.md's untangle plan, there is no live
+ *        doc/atmo_magic_environment.md's untangle plan, there is no live
  *        collision to disambiguate once v2 is gone) and the notecard fetch
  *        this triggers over the SL Bridge. Phase 8.
  *
@@ -37,10 +37,10 @@
  * $/LicenseInfo$
  */
 
-#ifndef SS_ATMOV3DISCOVERY_H
-#define SS_ATMOV3DISCOVERY_H
+#ifndef SS_ATMOENVDISCOVERY_H
+#define SS_ATMOENVDISCOVERY_H
 
-// <SS:Nexii> Atmo Magic v3: parcel discovery and Bridge notecard fetch
+// <SS:Nexii> Atmo Magic: parcel discovery and Bridge notecard fetch
 
 #include "llsd.h"
 #include "llsingleton.h"
@@ -52,11 +52,11 @@
 // Watches the agent's current parcel for an "atmo:<uuid>" marker and
 // requests the matching notecard over the SL Bridge when one appears.
 // Auto-applies the result unless the v3 floater is open (treated as
-// "mid-edit, don't clobber") - see doc/atmo_magic_v3_environment.md.
-class SSAtmoV3DiscoveryMgr : public LLSingleton<SSAtmoV3DiscoveryMgr>, public LLParcelObserver
+// "mid-edit, don't clobber") - see doc/atmo_magic_environment.md.
+class SSAtmoEnvDiscoveryManager : public LLSingleton<SSAtmoEnvDiscoveryManager>, public LLParcelObserver
 {
-    LLSINGLETON(SSAtmoV3DiscoveryMgr);
-    ~SSAtmoV3DiscoveryMgr();
+    LLSINGLETON(SSAtmoEnvDiscoveryManager);
+    ~SSAtmoEnvDiscoveryManager();
 
 public:
     // LLParcelObserver: fires both on crossing into a different parcel and
@@ -76,13 +76,13 @@ public:
 
     // "atmo:<uuid>" out of a parcel description, in any position and case -
     // same convention, same tolerance, as v2's own
-    // SSAtmoTrackMgr::parseDescription.
+    // SSAtmoTrackManager::parseDescription.
     static LLUUID parseDescription(const std::string& desc);
 
 private:
     // Notecards are immutable once created - the same asset uuid is
     // always the same content, forever - so a fetch first checks the
-    // local cache (see ssatmov3discovery.cpp's cacheNotecardBody/
+    // local cache (see ssatmoenvdiscovery.cpp's cacheNotecardBody/
     // readCachedNotecardBody) and only asks the Bridge on a genuine miss.
     // Sends "FetchNotecard|<uuid>" via FSLSLBridge::viewerToLSL - an HTTP
     // POST under the hood, answered asynchronously by onFetchResult()
@@ -118,4 +118,4 @@ private:
 
 // </SS:Nexii>
 
-#endif // SS_ATMOV3DISCOVERY_H
+#endif // SS_ATMOENVDISCOVERY_H

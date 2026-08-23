@@ -1,6 +1,6 @@
 /**
- * @file ssatmov3asset.cpp
- * @brief Atmo Magic v3 unified environment asset: LLSD round-trip.
+ * @file ssatmoenvasset.cpp
+ * @brief Atmo Magic unified environment asset: LLSD round-trip.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -23,7 +23,7 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssatmov3asset.h"
+#include "ssatmoenvasset.h"
 
 #include "llagent.h"
 #include "llviewerregion.h"
@@ -31,13 +31,13 @@
 #include <cmath>
 #include <ctime>
 
-// <SS:Nexii> Atmo Magic v3: unified environment asset
+// <SS:Nexii> Atmo Magic: unified environment asset
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3Weather
+// SSAtmoEnvWeather
 //-----------------------------------------------------------------------------
 
-LLSD SSAtmoV3Weather::asLLSD() const
+LLSD SSAtmoEnvWeather::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["moisture"]      = mMoisture.asLLSD();
@@ -65,7 +65,7 @@ LLSD SSAtmoV3Weather::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3Weather::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
@@ -89,10 +89,10 @@ bool SSAtmoV3Weather::fromLLSD(const LLSD& sd)
 }
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3Water
+// SSAtmoEnvWater
 //-----------------------------------------------------------------------------
 
-LLSD SSAtmoV3Water::asLLSD() const
+LLSD SSAtmoEnvWater::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["enabled"] = mEnabled;
@@ -100,7 +100,7 @@ LLSD SSAtmoV3Water::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3Water::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvWater::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
     mEnabled = sd.has("enabled") ? sd["enabled"].asBoolean() : false;
@@ -109,10 +109,10 @@ bool SSAtmoV3Water::fromLLSD(const LLSD& sd)
 }
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3CelestialBody
+// SSAtmoEnvCelestialBody
 //-----------------------------------------------------------------------------
 
-LLSD SSAtmoV3CelestialBody::asLLSD() const
+LLSD SSAtmoEnvCelestialBody::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["kind"] = (S32)mKind;
@@ -148,7 +148,7 @@ LLSD SSAtmoV3CelestialBody::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3CelestialBody::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvCelestialBody::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
@@ -183,10 +183,10 @@ bool SSAtmoV3CelestialBody::fromLLSD(const LLSD& sd)
 }
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3Planetary
+// SSAtmoEnvPlanetary
 //-----------------------------------------------------------------------------
 
-S32 SSAtmoV3Planetary::homeBodyIndex() const
+S32 SSAtmoEnvPlanetary::homeBodyIndex() const
 {
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
@@ -195,13 +195,13 @@ S32 SSAtmoV3Planetary::homeBodyIndex() const
     return -1;
 }
 
-bool SSAtmoV3Planetary::setHomeBody(S32 index)
+bool SSAtmoEnvPlanetary::setHomeBody(S32 index)
 {
     if (index < 0 || index >= (S32)mBodies.size()) return false;
 
     // Exactly one home, ever - clearing everywhere else first rather than
     // trusting the caller to have already done so.
-    for (SSAtmoV3CelestialBody& body : mBodies)
+    for (SSAtmoEnvCelestialBody& body : mBodies)
     {
         body.mIsHome = false;
     }
@@ -212,7 +212,7 @@ bool SSAtmoV3Planetary::setHomeBody(S32 index)
     return true;
 }
 
-std::vector<S32> SSAtmoV3Planetary::lightEmitterIndices() const
+std::vector<S32> SSAtmoEnvPlanetary::lightEmitterIndices() const
 {
     std::vector<S32> out;
     for (size_t i = 0; i < mBodies.size(); ++i)
@@ -222,7 +222,7 @@ std::vector<S32> SSAtmoV3Planetary::lightEmitterIndices() const
     return out;
 }
 
-bool SSAtmoV3Planetary::canSetLightEmitter(S32 index) const
+bool SSAtmoEnvPlanetary::canSetLightEmitter(S32 index) const
 {
     if (index < 0 || index >= (S32)mBodies.size()) return false;
     if (mBodies[index].mIsHome) return false;
@@ -231,14 +231,14 @@ bool SSAtmoV3Planetary::canSetLightEmitter(S32 index) const
     return lightEmitterIndices().size() < 2;
 }
 
-LLSD SSAtmoV3Planetary::asLLSD() const
+LLSD SSAtmoEnvPlanetary::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["sun_planet_scale"] = (LLSD::Real)mSunPlanetScale;
     sd["planet_moon_scale"] = (LLSD::Real)mPlanetMoonScale;
 
     LLSD bodies = LLSD::emptyArray();
-    for (const SSAtmoV3CelestialBody& body : mBodies)
+    for (const SSAtmoEnvCelestialBody& body : mBodies)
     {
         bodies.append(body.asLLSD());
     }
@@ -246,7 +246,7 @@ LLSD SSAtmoV3Planetary::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3Planetary::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
 {
     mBodies.clear();
     if (!sd.isMap()) return false;
@@ -258,7 +258,7 @@ bool SSAtmoV3Planetary::fromLLSD(const LLSD& sd)
     {
         for (const LLSD& entry : llsd::inArray(sd["bodies"]))
         {
-            SSAtmoV3CelestialBody body;
+            SSAtmoEnvCelestialBody body;
             body.fromLLSD(entry);
             mBodies.push_back(body);
         }
@@ -269,7 +269,7 @@ bool SSAtmoV3Planetary::fromLLSD(const LLSD& sd)
     // degrade to "first one wins", not carry the contradiction forward.
     bool have_home = false;
     S32 emitters = 0;
-    for (SSAtmoV3CelestialBody& body : mBodies)
+    for (SSAtmoEnvCelestialBody& body : mBodies)
     {
         if (body.mIsHome)
         {
@@ -287,10 +287,10 @@ bool SSAtmoV3Planetary::fromLLSD(const LLSD& sd)
 }
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3CloudField
+// SSAtmoEnvCloudField
 //-----------------------------------------------------------------------------
 
-LLSD SSAtmoV3CloudField::asLLSD() const
+LLSD SSAtmoEnvCloudField::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["base_height_m"] = (LLSD::Real)mBaseHeightM;
@@ -299,7 +299,7 @@ LLSD SSAtmoV3CloudField::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3CloudField::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
     if (sd.has("base_height_m")) mBaseHeightM = (F32)sd["base_height_m"].asReal();
@@ -309,10 +309,10 @@ bool SSAtmoV3CloudField::fromLLSD(const LLSD& sd)
 }
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3Track
+// SSAtmoEnvTrack
 //-----------------------------------------------------------------------------
 
-LLSD SSAtmoV3Track::asLLSD() const
+LLSD SSAtmoEnvTrack::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["name"]       = mName;
@@ -341,7 +341,7 @@ LLSD SSAtmoV3Track::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3Track::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
@@ -364,7 +364,7 @@ bool SSAtmoV3Track::fromLLSD(const LLSD& sd)
     return true;
 }
 
-F64 SSAtmoV3Track::currentDayCycleTime() const
+F64 SSAtmoEnvTrack::currentDayCycleTime() const
 {
     if (mDayLengthSeconds <= 0.0) return 0.0;
 
@@ -379,16 +379,16 @@ F64 SSAtmoV3Track::currentDayCycleTime() const
 }
 
 //-----------------------------------------------------------------------------
-// SSAtmoV3Asset
+// SSAtmoEnvAsset
 //-----------------------------------------------------------------------------
 
 // static
-SSAtmoV3Asset SSAtmoV3Asset::makeDefault()
+SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
 {
-    SSAtmoV3Asset asset;
+    SSAtmoEnvAsset asset;
     asset.mName = "New Atmo Environment";
 
-    SSAtmoV3Track ground;
+    SSAtmoEnvTrack ground;
     ground.mName = "Ground";
     ground.mFloorZ = 0.f;
     ground.mCeilingZ = FLT_MAX;
@@ -396,7 +396,7 @@ SSAtmoV3Asset SSAtmoV3Asset::makeDefault()
     ground.mDayOffsetSeconds = 0.0;
     // Calm, clear default: moisture/convection both 0 is "bone dry, clear
     // skies" per the design doc's Weather tab.
-    ground.mWeather = SSAtmoV3Weather();
+    ground.mWeather = SSAtmoEnvWeather();
 
     // Water on by default at the ground track, at whatever height the
     // current region's water actually sits - same fallback SSAtmoMagic's
@@ -418,8 +418,8 @@ SSAtmoV3Asset SSAtmoV3Asset::makeDefault()
     // but the sun is flagged as the one light emitter so a freshly created
     // environment already has *something* lighting it rather than a black
     // sky by default.
-    SSAtmoV3CelestialBody sun;
-    sun.mKind = SSAtmoV3CelestialBody::SUN;
+    SSAtmoEnvCelestialBody sun;
+    sun.mKind = SSAtmoEnvCelestialBody::SUN;
     sun.mName = "Sun";
     sun.mParentIndex = -1;
     sun.mDiameterM = 1.392e9f;   // Sol, for scale
@@ -427,8 +427,8 @@ SSAtmoV3Asset SSAtmoV3Asset::makeDefault()
     sun.mIsLightEmitter = true;
     ground.mPlanetary.mBodies.push_back(sun);
 
-    SSAtmoV3CelestialBody home;
-    home.mKind = SSAtmoV3CelestialBody::PLANET;
+    SSAtmoEnvCelestialBody home;
+    home.mKind = SSAtmoEnvCelestialBody::PLANET;
     home.mName = "Home";
     home.mParentIndex = 0; // the sun above
     home.mDiameterM = 1.2742e7f; // Earth, for scale
@@ -440,11 +440,11 @@ SSAtmoV3Asset SSAtmoV3Asset::makeDefault()
     return asset;
 }
 
-bool SSAtmoV3Asset::addTrack()
+bool SSAtmoEnvAsset::addTrack()
 {
-    if ((S32)mTracks.size() >= SS_ATMOV3_MAX_TRACKS) return false;
+    if ((S32)mTracks.size() >= SS_ATMOENV_MAX_TRACKS) return false;
 
-    SSAtmoV3Track track;
+    SSAtmoEnvTrack track;
     track.mName = llformat("Track %d", (S32)mTracks.size() + 1);
     // New optional tracks default to starting where the previous one's
     // ceiling was, so a freshly-added track doesn't silently overlap or gap
@@ -457,7 +457,7 @@ bool SSAtmoV3Asset::addTrack()
     return true;
 }
 
-bool SSAtmoV3Asset::removeTrack(S32 index)
+bool SSAtmoEnvAsset::removeTrack(S32 index)
 {
     // Index 0 is the mandatory ground track - never removable.
     if (index <= 0 || index >= (S32)mTracks.size()) return false;
@@ -465,11 +465,11 @@ bool SSAtmoV3Asset::removeTrack(S32 index)
     return true;
 }
 
-bool SSAtmoV3Asset::visibleWaterHeight(F32& out_height) const
+bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
 {
     bool found = false;
     F32 lowest = FLT_MAX;
-    for (const SSAtmoV3Track& track : mTracks)
+    for (const SSAtmoEnvTrack& track : mTracks)
     {
         if (!track.mWater.mEnabled) continue;
         if (!found || track.mWater.mHeight < lowest)
@@ -482,14 +482,14 @@ bool SSAtmoV3Asset::visibleWaterHeight(F32& out_height) const
     return found;
 }
 
-LLSD SSAtmoV3Asset::asLLSD() const
+LLSD SSAtmoEnvAsset::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
-    sd["version"] = SS_ATMOV3_VERSION;
+    sd["version"] = SS_ATMOENV_VERSION;
     sd["name"] = mName;
 
     LLSD tracks = LLSD::emptyArray();
-    for (const SSAtmoV3Track& track : mTracks)
+    for (const SSAtmoEnvTrack& track : mTracks)
     {
         tracks.append(track.asLLSD());
     }
@@ -498,7 +498,7 @@ LLSD SSAtmoV3Asset::asLLSD() const
     return sd;
 }
 
-bool SSAtmoV3Asset::fromLLSD(const LLSD& sd, std::string& out_error)
+bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
 {
     if (!sd.isMap())
     {
@@ -514,10 +514,10 @@ bool SSAtmoV3Asset::fromLLSD(const LLSD& sd, std::string& out_error)
         *this = makeDefault();
         return false;
     }
-    if (version > SS_ATMOV3_VERSION)
+    if (version > SS_ATMOENV_VERSION)
     {
         out_error = llformat("asset version %d is newer than this viewer understands (%d)",
-                              version, SS_ATMOV3_VERSION);
+                              version, SS_ATMOENV_VERSION);
         *this = makeDefault();
         return false;
     }
@@ -529,14 +529,14 @@ bool SSAtmoV3Asset::fromLLSD(const LLSD& sd, std::string& out_error)
         return false;
     }
 
-    SSAtmoV3Asset parsed;
+    SSAtmoEnvAsset parsed;
     parsed.mName = sd.has("name") ? sd["name"].asString() : std::string("Untitled");
 
     const LLSD& tracks_sd = sd["tracks"];
-    const S32 count = llclamp((S32)tracks_sd.size(), SS_ATMOV3_MIN_TRACKS, SS_ATMOV3_MAX_TRACKS);
+    const S32 count = llclamp((S32)tracks_sd.size(), SS_ATMOENV_MIN_TRACKS, SS_ATMOENV_MAX_TRACKS);
     for (S32 i = 0; i < count; ++i)
     {
-        SSAtmoV3Track track;
+        SSAtmoEnvTrack track;
         track.fromLLSD(tracks_sd[i]);
         parsed.mTracks.push_back(track);
     }

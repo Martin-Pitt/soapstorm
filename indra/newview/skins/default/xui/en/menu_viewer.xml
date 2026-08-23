@@ -1493,7 +1493,7 @@
              name="atmo_magic_v3">
                 <menu_item_call.on_click
                  function="Floater.Toggle"
-                 parameter="ss_atmo_v3" />
+                 parameter="ss_atmo_env" />
             </menu_item_call>
             <!-- </SS:Nexii> -->
             <menu_item_separator/>

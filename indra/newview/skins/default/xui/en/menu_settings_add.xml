@@ -34,7 +34,7 @@
         <menu_item_call.on_enable
                 function="MyEnvironments.EnvironmentEnabled" />
     </menu_item_call>
-    <!-- <SS:Nexii> Atmo Magic v3: same "atmov3" creation branch as
+    <!-- <SS:Nexii> Atmo Magic: same "atmoenv" creation branch as
          menu_inventory_add.xml's New Settings submenu -->
     <menu_item_call
             label="New Atmo Magic"
@@ -42,7 +42,7 @@
             name="New Atmo Magic">
         <menu_item_call.on_click
                 function="MyEnvironments.DoCreate"
-                parameter="atmov3"/>
+                parameter="atmoenv"/>
     </menu_item_call>
     <!-- </SS:Nexii> -->
 </toggleable_menu>

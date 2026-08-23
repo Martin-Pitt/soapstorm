@@ -292,18 +292,18 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     }
 }
 
-SSPrecipPresetMgr::SSPrecipPresetMgr()
+SSPrecipPresetManager::SSPrecipPresetManager()
 {
     refresh();
 }
 
 // static
-std::string SSPrecipPresetMgr::presetDir()
+std::string SSPrecipPresetManager::presetDir()
 {
     return gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather");
 }
 
-void SSPrecipPresetMgr::refresh()
+void SSPrecipPresetManager::refresh()
 {
     mPresets.clear();
     buildDefaults();
@@ -313,7 +313,7 @@ void SSPrecipPresetMgr::refresh()
     mSaved = mPresets;
 }
 
-void SSPrecipPresetMgr::stage(const SSPrecipPreset& preset)
+void SSPrecipPresetManager::stage(const SSPrecipPreset& preset)
 {
     if (preset.mName.empty()) return;
 
@@ -328,7 +328,7 @@ void SSPrecipPresetMgr::stage(const SSPrecipPreset& preset)
     mPresets.push_back(preset);
 }
 
-const SSPrecipPreset* SSPrecipPresetMgr::findSaved(const std::string& name) const
+const SSPrecipPreset* SSPrecipPresetManager::findSaved(const std::string& name) const
 {
     for (const SSPrecipPreset& p : mSaved)
     {
@@ -337,7 +337,7 @@ const SSPrecipPreset* SSPrecipPresetMgr::findSaved(const std::string& name) cons
     return nullptr;
 }
 
-bool SSPrecipPresetMgr::isModified(const std::string& name) const
+bool SSPrecipPresetManager::isModified(const std::string& name) const
 {
     const SSPrecipPreset* live = find(name);
     if (!live) return false;
@@ -350,7 +350,7 @@ bool SSPrecipPresetMgr::isModified(const std::string& name) const
     return !llsd_equals(live->asLLSD(), saved->asLLSD());
 }
 
-const SSPrecipPreset* SSPrecipPresetMgr::find(const std::string& name) const
+const SSPrecipPreset* SSPrecipPresetManager::find(const std::string& name) const
 {
     for (const SSPrecipPreset& p : mPresets)
     {
@@ -359,7 +359,7 @@ const SSPrecipPreset* SSPrecipPresetMgr::find(const std::string& name) const
     return nullptr;
 }
 
-const SSPrecipPreset& SSPrecipPresetMgr::active() const
+const SSPrecipPreset& SSPrecipPresetManager::active() const
 {
     static LLCachedControl<std::string> selected(gSavedSettings, "SSAtmoPreset", "Rain");
     if (const SSPrecipPreset* p = find(selected))
@@ -369,7 +369,7 @@ const SSPrecipPreset& SSPrecipPresetMgr::active() const
     return mPresets.front();
 }
 
-bool SSPrecipPresetMgr::save(const SSPrecipPreset& preset)
+bool SSPrecipPresetManager::save(const SSPrecipPreset& preset)
 {
     if (preset.mName.empty()) return false;
 
@@ -390,7 +390,7 @@ bool SSPrecipPresetMgr::save(const SSPrecipPreset& preset)
     return true;
 }
 
-bool SSPrecipPresetMgr::remove(const std::string& name)
+bool SSPrecipPresetManager::remove(const std::string& name)
 {
     const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather",
                                                             name + ".xml");
@@ -401,7 +401,7 @@ bool SSPrecipPresetMgr::remove(const std::string& name)
     return true;
 }
 
-void SSPrecipPresetMgr::loadUserPresets()
+void SSPrecipPresetManager::loadUserPresets()
 {
     const std::string dir = presetDir();
     if (!gDirUtilp->fileExists(dir)) return;
@@ -442,7 +442,7 @@ void SSPrecipPresetMgr::loadUserPresets()
     }
 }
 
-void SSPrecipPresetMgr::buildDefaults()
+void SSPrecipPresetManager::buildDefaults()
 {
     // Rain: one preset spanning drizzle to downpour. mIntensitySize lets the
     // global precipitation slider grow the drops, not just add more of them.

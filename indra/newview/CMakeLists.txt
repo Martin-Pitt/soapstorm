@@ -190,16 +190,16 @@ set(viewer_SOURCE_FILES
     fsrezqueue.cpp
     ssatmomagic.cpp
     ssatmotrack.cpp
-    ssatmov3asset.cpp
-    ssatmov3mgr.cpp
-    ssatmov3cloudfieldstate.cpp
-    ssatmov3discovery.cpp
-    ssatmov3legacybridge.cpp
-    ssatmov3planetarystate.cpp
-    ssatmov3trackstate.cpp
-    ssatmov3weatherstate.cpp
+    ssatmoenvasset.cpp
+    ssatmoenvmanager.cpp
+    ssatmoenvcloudfieldstate.cpp
+    ssatmoenvdiscovery.cpp
+    ssatmoenvbridge.cpp
+    ssatmoenvplanetarystate.cpp
+    ssatmoenvtrackstate.cpp
+    ssatmoenvweatherstate.cpp
     ssfloateratmo.cpp
-    ssfloateratmov3.cpp
+    ssfloateratmoenv.cpp
     ssfloaterpreset.cpp
     ssfloatersim.cpp
     ssprecippreset.cpp
@@ -1084,17 +1084,17 @@ set(viewer_HEADER_FILES
     fsrezqueue.h
     ssatmomagic.h
     ssatmotrack.h
-    ssatmov3asset.h
-    ssatmov3keyframe.h
-    ssatmov3mgr.h
-    ssatmov3cloudfieldstate.h
-    ssatmov3discovery.h
-    ssatmov3legacybridge.h
-    ssatmov3planetarystate.h
-    ssatmov3trackstate.h
-    ssatmov3weatherstate.h
+    ssatmoenvasset.h
+    ssatmoenvkeyframe.h
+    ssatmoenvmanager.h
+    ssatmoenvcloudfieldstate.h
+    ssatmoenvdiscovery.h
+    ssatmoenvbridge.h
+    ssatmoenvplanetarystate.h
+    ssatmoenvtrackstate.h
+    ssatmoenvweatherstate.h
     ssfloateratmo.h
-    ssfloateratmov3.h
+    ssfloateratmoenv.h
     ssfloaterpreset.h
     ssfloatersim.h
     ssprecippreset.h

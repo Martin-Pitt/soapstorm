@@ -1,6 +1,6 @@
 /**
- * @file ssatmov3planetarystate.cpp
- * @brief Atmo Magic v3 planetary body resolution implementation.
+ * @file ssatmoenvplanetarystate.cpp
+ * @brief Atmo Magic planetary body resolution implementation.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -23,14 +23,14 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssatmov3planetarystate.h"
+#include "ssatmoenvplanetarystate.h"
 
 #include <cmath>
 
-// <SS:Nexii> Atmo Magic v3: planetary body resolution
+// <SS:Nexii> Atmo Magic: planetary body resolution
 
 // static
-LLVector3 SSAtmoV3PlanetaryResolver::orbitOffset(F32 radius, F32 inclination_deg, F32 phase_deg)
+LLVector3 SSAtmoEnvPlanetaryResolver::orbitOffset(F32 radius, F32 inclination_deg, F32 phase_deg)
 {
     const F32 phase_rad = phase_deg * DEG_TO_RAD;
     const F32 incl_rad  = inclination_deg * DEG_TO_RAD;
@@ -45,7 +45,7 @@ LLVector3 SSAtmoV3PlanetaryResolver::orbitOffset(F32 radius, F32 inclination_deg
 }
 
 // static
-std::vector<LLVector3> SSAtmoV3PlanetaryResolver::resolveWorldPositions(const SSAtmoV3Planetary& planetary)
+std::vector<LLVector3> SSAtmoEnvPlanetaryResolver::resolveWorldPositions(const SSAtmoEnvPlanetary& planetary)
 {
     const size_t n = planetary.mBodies.size();
     std::vector<LLVector3> positions(n, LLVector3::zero);
@@ -61,7 +61,7 @@ std::vector<LLVector3> SSAtmoV3PlanetaryResolver::resolveWorldPositions(const SS
         for (size_t i = 0; i < n; ++i)
         {
             if (resolved[i]) continue;
-            const SSAtmoV3CelestialBody& body = planetary.mBodies[i];
+            const SSAtmoEnvCelestialBody& body = planetary.mBodies[i];
 
             if (body.mParentIndex < 0)
             {
@@ -73,7 +73,7 @@ std::vector<LLVector3> SSAtmoV3PlanetaryResolver::resolveWorldPositions(const SS
             if (body.mParentIndex >= (S32)n || !resolved[body.mParentIndex]) continue;
 
             LLVector3 anchor = positions[body.mParentIndex];
-            const SSAtmoV3CelestialBody& parent = planetary.mBodies[body.mParentIndex];
+            const SSAtmoEnvCelestialBody& parent = planetary.mBodies[body.mParentIndex];
 
             // The parent being half of a bound pair means this body orbits
             // the pair's mass-weighted barycenter, not the named parent
@@ -82,7 +82,7 @@ std::vector<LLVector3> SSAtmoV3PlanetaryResolver::resolveWorldPositions(const SS
             if (parent.mBoundPartnerIndex >= 0 && parent.mBoundPartnerIndex < (S32)n
                 && resolved[parent.mBoundPartnerIndex])
             {
-                const SSAtmoV3CelestialBody& partner = planetary.mBodies[parent.mBoundPartnerIndex];
+                const SSAtmoEnvCelestialBody& partner = planetary.mBodies[parent.mBoundPartnerIndex];
                 const F32 total_mass = llmax(0.0001f, parent.mMassRelative + partner.mMassRelative);
                 anchor = (positions[body.mParentIndex] * parent.mMassRelative
                           + positions[parent.mBoundPartnerIndex] * partner.mMassRelative) / total_mass;
@@ -91,7 +91,7 @@ std::vector<LLVector3> SSAtmoV3PlanetaryResolver::resolveWorldPositions(const SS
             // Which scale dial applies is this body's own kind, not its
             // parent's - a moon orbiting a bound planet pair still uses
             // the Planet<->Moon dial, not Sun<->Planet.
-            const F32 scale = (body.mKind == SSAtmoV3CelestialBody::MOON)
+            const F32 scale = (body.mKind == SSAtmoEnvCelestialBody::MOON)
                 ? planetary.mPlanetMoonScale : planetary.mSunPlanetScale;
 
             positions[i] = anchor + orbitOffset(body.mOrbitalRadius * scale,
@@ -107,9 +107,9 @@ std::vector<LLVector3> SSAtmoV3PlanetaryResolver::resolveWorldPositions(const SS
 }
 
 // static
-std::vector<SSAtmoV3ResolvedBody> SSAtmoV3PlanetaryResolver::resolveSky(const SSAtmoV3Planetary& planetary)
+std::vector<SSAtmoEnvResolvedBody> SSAtmoEnvPlanetaryResolver::resolveSky(const SSAtmoEnvPlanetary& planetary)
 {
-    std::vector<SSAtmoV3ResolvedBody> out;
+    std::vector<SSAtmoEnvResolvedBody> out;
 
     const S32 home_index = planetary.homeBodyIndex();
     if (home_index < 0) return out;
@@ -125,7 +125,7 @@ std::vector<SSAtmoV3ResolvedBody> SSAtmoV3PlanetaryResolver::resolveSky(const SS
         const F32 distance = offset.magVec();
         if (distance < 0.0001f) continue; // coincident with home - degenerate, skip rather than divide by ~0
 
-        SSAtmoV3ResolvedBody resolved;
+        SSAtmoEnvResolvedBody resolved;
         resolved.mBodyIndex = (S32)i;
         offset.normVec();
         resolved.mDirection = offset;
@@ -141,7 +141,7 @@ std::vector<SSAtmoV3ResolvedBody> SSAtmoV3PlanetaryResolver::resolveSky(const SS
 }
 
 // static
-void SSAtmoV3PlanetaryResolver::resolvePrimarySunArc(F32 home_axial_tilt_deg, F64 day_length_seconds, F64 time,
+void SSAtmoEnvPlanetaryResolver::resolvePrimarySunArc(F32 home_axial_tilt_deg, F64 day_length_seconds, F64 time,
                                                       F32& out_azimuth_deg, F32& out_elevation_deg)
 {
     if (day_length_seconds <= 0.0)

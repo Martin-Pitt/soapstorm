@@ -1,6 +1,6 @@
 /**
- * @file ssatmov3trackstate.cpp
- * @brief Atmo Magic v3 track resolution implementation.
+ * @file ssatmoenvtrackstate.cpp
+ * @brief Atmo Magic track resolution implementation.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -23,28 +23,28 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssatmov3trackstate.h"
+#include "ssatmoenvtrackstate.h"
 
 #include <cmath>
 
-// <SS:Nexii> Atmo Magic v3: track resolution and crossing behaviour
+// <SS:Nexii> Atmo Magic: track resolution and crossing behaviour
 
 // static
-S32 SSAtmoV3TrackResolver::trackContaining(const SSAtmoV3Asset& asset, F32 world_z)
+S32 SSAtmoEnvTrackResolver::trackContaining(const SSAtmoEnvAsset& asset, F32 world_z)
 {
     // Ground (index 0) is deliberately checked last: it is whatever isn't
     // claimed by an optional track's own band, not a band with a floor/
     // ceiling of its own worth trusting literally.
     for (size_t i = 1; i < asset.mTracks.size(); ++i)
     {
-        const SSAtmoV3Track& t = asset.mTracks[i];
+        const SSAtmoEnvTrack& t = asset.mTracks[i];
         if (world_z >= t.mFloorZ && world_z < t.mCeilingZ) return (S32)i;
     }
     return 0;
 }
 
 // static
-bool SSAtmoV3TrackResolver::nearestBoundary(const SSAtmoV3Asset& asset, S32 primary, F32 world_z,
+bool SSAtmoEnvTrackResolver::nearestBoundary(const SSAtmoEnvAsset& asset, S32 primary, F32 world_z,
                                              S32& out_neighbor, F32& out_distance)
 {
     bool found = false;
@@ -54,7 +54,7 @@ bool SSAtmoV3TrackResolver::nearestBoundary(const SSAtmoV3Asset& asset, S32 prim
     for (size_t i = 0; i < asset.mTracks.size(); ++i)
     {
         if ((S32)i == primary) continue;
-        const SSAtmoV3Track& t = asset.mTracks[i];
+        const SSAtmoEnvTrack& t = asset.mTracks[i];
 
         const F32 floor_dist = std::fabs(world_z - t.mFloorZ);
         if (floor_dist < best)
@@ -88,10 +88,10 @@ bool SSAtmoV3TrackResolver::nearestBoundary(const SSAtmoV3Asset& asset, S32 prim
 }
 
 // static
-SSAtmoV3TrackBlend SSAtmoV3TrackResolver::resolve(const SSAtmoV3Asset& asset, F32 world_z,
+SSAtmoEnvTrackBlend SSAtmoEnvTrackResolver::resolve(const SSAtmoEnvAsset& asset, F32 world_z,
                                                    F32 prev_world_z, bool teleported)
 {
-    SSAtmoV3TrackBlend result;
+    SSAtmoEnvTrackBlend result;
     result.mPrimaryTrack = trackContaining(asset, world_z);
 
     // Checked ahead of the teleported flag so a teleport that happens to
@@ -111,7 +111,7 @@ SSAtmoV3TrackBlend SSAtmoV3TrackResolver::resolve(const SSAtmoV3Asset& asset, F3
 
     S32 neighbor = -1;
     F32 distance = 0.f;
-    const SSAtmoV3Track& primary_track = asset.mTracks[result.mPrimaryTrack];
+    const SSAtmoEnvTrack& primary_track = asset.mTracks[result.mPrimaryTrack];
     if (primary_track.mTransitionBuffer > 0.f &&
         nearestBoundary(asset, result.mPrimaryTrack, world_z, neighbor, distance) &&
         distance < primary_track.mTransitionBuffer)
