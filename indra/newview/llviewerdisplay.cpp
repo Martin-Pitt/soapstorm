@@ -88,6 +88,7 @@
 #include "pipeline.h"
 // <SS:Nexii> Atmo Magic weather
 #include "ssatmomagic.h"
+#include "ssatmov3discovery.h"
 #include "ssrainshadow.h"
 #include "sswindflow.h"
 // </SS:Nexii>
@@ -987,6 +988,14 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     SSAtmoMagic::getInstance()->idle();
                     SSRainShadowMap::getInstance()->capture();
                     SSWindFlowMap::getInstance()->update();
+
+                    // Atmo Magic v3: this singleton is otherwise never
+                    // touched (it is purely event-driven via
+                    // LLParcelObserver, no per-frame work of its own), so
+                    // this call exists only to bring it - and its parcel
+                    // observer registration - into existence on the first
+                    // frame the pipeline runs, rather than never at all.
+                    SSAtmoV3DiscoveryMgr::getInstance();
                     // </SS:Nexii>
                 }
 

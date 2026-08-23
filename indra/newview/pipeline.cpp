@@ -9762,18 +9762,6 @@ void LLPipeline::renderDeferredLighting()
 
             soften_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
 
-            // <SS:Nexii> Atmo Magic surface field: diagnostic probe, see
-            // ssWetCompositeProbe in softenLightF.glsl. Set on the shader we
-            // already have bound in this already-verified block, next to its
-            // other uniforms - adds no new bind, no new render target, no new
-            // call site.
-            {
-                static LLCachedControl<F32> wet_probe(gSavedSettings, "SSAtmoCommitDebugPaint", 0.f);
-                static LLStaticHashedString wet_probe_str("ssWetCompositeProbe");
-                soften_shader.uniform1f(wet_probe_str, (F32)wet_probe);
-            }
-            // </SS:Nexii>
-
             {
                 LLGLDepthTest depth(GL_FALSE);
                 LLGLDisable   blend(GL_BLEND);

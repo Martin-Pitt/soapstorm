@@ -25786,17 +25786,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>48.0</real>
     </map>
-    <key>SSAtmoCommitDebugPaint</key>
-      <map>
-      <key>Comment</key>
-      <string>Diagnostic: above zero, paints diffuse magenta from the gbuffer commit pass to prove the write mechanism works</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>0.0</real>
-    </map>
     <key>SSAtmoWetDebugForce</key>
       <map>
       <key>Comment</key>

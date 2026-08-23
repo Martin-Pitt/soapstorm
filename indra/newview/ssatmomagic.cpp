@@ -25,6 +25,7 @@
 
 #include "ssatmomagic.h"
 #include "ssatmotrack.h"
+#include "ssatmov3legacybridge.h"
 #include "ssrainshadow.h"
 #include "ssrunoff.h"
 #include "sssurfacefield.h"
@@ -164,12 +165,45 @@ void SSAtmoMagic::refreshParams()
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoEnabled", false);
 
+    // <SS:Nexii> Atmo Magic v3 bridge: a loaded v3 environment supersedes
+    // the v2 per-track weather layer entirely for this frame - see
+    // doc/atmo_magic_v3_environment.md's untangle plan. v3_cfg is left
+    // untouched and v3_active false whenever nothing is loaded, so the v2
+    // path below runs completely unmodified for anyone who hasn't opted
+    // into v3.
+    //
+    // world_z/prev_world_z/teleported are SSAtmoV3TrackResolver's own
+    // inputs (see ssatmov3trackstate.h) - tracked here frame to frame since
+    // nothing else in the viewer already carries "where was the avatar a
+    // moment ago". A region change or an implausibly large single-frame
+    // jump both count as "teleported", which is meant to also catch
+    // sit-teleport and region-position-change per the design doc's
+    // instant-cut rule - there is no dedicated completion event for any of
+    // those this hooks into instead.
+    SSAtmoTrackConfig v3_cfg;
+    bool v3_is_ground_track = true;
+    const F32 world_z = gAgent.getPositionAgent().mV[VZ];
+    LLViewerRegion* agent_region = gAgent.getRegion();
+    const LLUUID region_id = agent_region ? agent_region->getRegionID() : LLUUID::null;
+
+    const bool teleported = !mV3PrevWorldZValid
+        || region_id != mV3PrevRegionID
+        || fabsf(world_z - mV3PrevWorldZ) > 60.f;
+
+    const bool v3_active = SSAtmoV3LegacyBridge::resolveActiveTrack(
+        world_z, mV3PrevWorldZValid ? mV3PrevWorldZ : world_z, teleported, v3_cfg, v3_is_ground_track);
+
+    mV3PrevWorldZ = world_z;
+    mV3PrevWorldZValid = true;
+    mV3PrevRegionID = region_id;
+    // </SS:Nexii>
+
     // Weather is configured per EEP sky track and only runs for the track the
     // camera is in. Nothing is defined by default, so a track without a config
     // stays clear no matter what the master switch says.
     SSAtmoTrackMgr* tracks = SSAtmoTrackMgr::getInstance();
     mTrack = tracks->currentTrack();
-    const SSAtmoTrackConfig& cfg = tracks->config(mTrack);
+    const SSAtmoTrackConfig& cfg = v3_active ? v3_cfg : tracks->config(mTrack);
 
     const bool track_runs = enabled && cfg.runs();
 
@@ -245,8 +279,11 @@ void SSAtmoMagic::refreshParams()
     }
 
     // Ground zero for this track: terrain and water at ground level, the band's
-    // own base altitude up in the sky unless the config pins it to a platform
-    mSkyTrack = tracks->isSkyTrack(mTrack);
+    // own base altitude up in the sky unless the config pins it to a platform.
+    // (cfg.mHasGround is unconditionally true for a v3-resolved config, so
+    // tracks->trackFloor(mTrack) - which would read v2's meaningless-to-v3
+    // track number - is never actually reached in that case.)
+    mSkyTrack = v3_active ? !v3_is_ground_track : tracks->isSkyTrack(mTrack);
     mGroundZero = cfg.mHasGround ? cfg.mGround : tracks->trackFloor(mTrack);
     mFallThrough = llclamp(cfg.mFallThrough, 0.f, 1.f);
 

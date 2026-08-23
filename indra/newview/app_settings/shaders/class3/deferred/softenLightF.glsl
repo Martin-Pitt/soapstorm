@@ -29,14 +29,6 @@
 
 out vec4 frag_color;
 
-// <SS:Nexii> Atmo Magic surface field: diagnostic probe. Above zero, any
-// fragment whose sampled albedo is close to magenta outputs solid green as
-// the final composited colour instead of going through normal lighting. This
-// answers exactly one question: does this shader's own diffuseRect sample
-// see what the gbuffer commit pass wrote, at the point this shader actually
-// reads it. Nothing upstream of this file is touched to test that.
-uniform float ssWetCompositeProbe;
-
 const float M_PI = 3.14159265;
 
 #if defined(HAS_SUN_SHADOW) || defined(HAS_SSAO)
@@ -137,16 +129,6 @@ void main()
     vec3  light_dir   = (sun_up_factor == 1) ? sun_dir : moon_dir;
 
     vec4 baseColor     = gb.albedo;
-
-    // Unconditional for this test: removes "did baseColor actually contain
-    // magenta here" from the question entirely. If this shader's own output
-    // survives to the screen at all during normal play, every pixel it
-    // touches goes green - no exceptions, no threshold, nothing to reject.
-    if (ssWetCompositeProbe > 0.5)
-    {
-        frag_color = vec4(0.0, 1.0, 0.0, 1.0);
-        return;
-    }
     vec4 spec        = gb.specular; // NOTE: PBR linear Emissive
 
 #if defined(HAS_SUN_SHADOW) || defined(HAS_SSAO)
