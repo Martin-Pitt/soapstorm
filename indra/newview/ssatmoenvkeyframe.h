@@ -39,6 +39,9 @@
 
 #include "llsd.h"
 #include "llsdutil.h"
+#include "lluuid.h"
+#include "v2math.h"
+#include "v3color.h"
 
 #include <algorithm>
 #include <cmath>
@@ -77,6 +80,15 @@ inline SSAtmoEnvCurve ss_atmoenv_curve_from_name(const std::string& name)
 template <typename T>
 struct SSAtmoEnvKeyframe
 {
+    // Position in the day cycle as a fraction, 0.0 to 1.0 - never seconds.
+    // This is what makes a track's day length a pure playback-speed control:
+    // stretching the day cannot move a keyframe relative to the cycle,
+    // because a keyframe does not know how long the cycle is. (It used to
+    // be absolute seconds, and every one of the resulting bugs - the
+    // preview head sliding to a different time of day when day length
+    // changed, keyframes past the new length silently wrapping via fmod -
+    // was the same bug wearing a different hat.) Same reasoning EEP applies
+    // to its own day-cycle frames, which are also normalised.
     F64 mTime = 0.0;
     T mValue{};
     SSAtmoEnvCurve mCurve = SSAtmoEnvCurve::EASE;
@@ -96,6 +108,18 @@ inline T ss_atmoenv_lerp(const T& a, const T& b, F32 t)
 
 template <>
 inline std::string ss_atmoenv_lerp<std::string>(const std::string& a, const std::string& /*b*/, F32 /*t*/)
+{
+    return a;
+}
+
+// An asset id has no meaningful midpoint either - blending halfway between
+// two normal maps is not a texture, it is nonsense - so like std::string
+// this holds rather than interpolates regardless of the curve on the
+// keyframe. LLColor3/LLVector2 fall through to the generic template above:
+// both have the operator+/operator-/operator*(F32) it needs, and both
+// genuinely do interpolate componentwise.
+template <>
+inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 /*t*/)
 {
     return a;
 }
@@ -124,11 +148,48 @@ template <> inline bool ss_atmoenv_value_from_sd<bool>(const LLSD& sd, const boo
     return sd.isBoolean() ? sd.asBoolean() : fallback;
 }
 
-// A single keyframable parameter. Time is whatever unit the caller's
-// timeline uses (seconds into the day-cycle loop, in practice); valueAt()
-// takes the loop length explicitly since every real caller has one (a
-// track's own day length), and nextKeyframeTime()/prevKeyframeTime() wrap
-// to the first/last keyframe regardless, which needs no length at all.
+template <> inline LLSD ss_atmoenv_value_to_sd<LLUUID>(const LLUUID& v) { return v; }
+template <> inline LLUUID ss_atmoenv_value_from_sd<LLUUID>(const LLSD& sd, const LLUUID& fallback)
+{
+    return sd.isUUID() ? sd.asUUID() : fallback;
+}
+
+// Colour and 2D vector both serialise as a plain array of reals rather than
+// LLSD's own colour/vector types: an Atmo Magic notecard is meant to stay
+// hand-editable, and [0.1, 0.2, 0.3] reads as obviously-a-colour where a
+// packed binary blob does not.
+template <> inline LLSD ss_atmoenv_value_to_sd<LLColor3>(const LLColor3& v)
+{
+    LLSD sd = LLSD::emptyArray();
+    sd.append((LLSD::Real)v.mV[0]);
+    sd.append((LLSD::Real)v.mV[1]);
+    sd.append((LLSD::Real)v.mV[2]);
+    return sd;
+}
+template <> inline LLColor3 ss_atmoenv_value_from_sd<LLColor3>(const LLSD& sd, const LLColor3& fallback)
+{
+    if (!sd.isArray() || sd.size() < 3) return fallback;
+    return LLColor3((F32)sd[0].asReal(), (F32)sd[1].asReal(), (F32)sd[2].asReal());
+}
+
+template <> inline LLSD ss_atmoenv_value_to_sd<LLVector2>(const LLVector2& v)
+{
+    LLSD sd = LLSD::emptyArray();
+    sd.append((LLSD::Real)v.mV[0]);
+    sd.append((LLSD::Real)v.mV[1]);
+    return sd;
+}
+template <> inline LLVector2 ss_atmoenv_value_from_sd<LLVector2>(const LLSD& sd, const LLVector2& fallback)
+{
+    if (!sd.isArray() || sd.size() < 2) return fallback;
+    return LLVector2((F32)sd[0].asReal(), (F32)sd[1].asReal());
+}
+
+// A single keyframable parameter. Every time here is a phase in [0, 1) -
+// see SSAtmoEnvKeyframe::mTime. The loop length is therefore always exactly
+// 1.0 and never has to be passed in, which is what stops a caller from
+// evaluating a field against a different day length than the one its
+// keyframes were authored under.
 template <typename T>
 class SSAtmoEnvKeyframed
 {
@@ -139,65 +200,51 @@ public:
     size_t keyframeCount() const { return mKeyframes.size(); }
     const std::vector<SSAtmoEnvKeyframe<T>>& keyframes() const { return mKeyframes; }
 
-    // The evaluated value at an arbitrary time. loop_length > 0 treats the
-    // timeline as a loop (the day-cycle case every real caller actually
-    // has): the span from the last keyframe forward to the first keyframe
-    // of the *next* cycle is one more interpolated segment, not a flat
-    // hold - a keyframe near midnight and one near dawn should ease
-    // between each other through the wrap, the same as any other pair.
-    // loop_length <= 0 (the default) keeps the old clamp-at-the-ends
-    // behaviour, for a caller that genuinely isn't looping.
-    T valueAt(F64 time, F64 loop_length = 0.0) const
+    // The evaluated value at a point in the cycle. The span from the last
+    // keyframe forward to the first keyframe of the next cycle is one more
+    // interpolated segment, not a flat hold - a keyframe near midnight and
+    // one near dawn ease between each other through the wrap the same as
+    // any other pair.
+    T valueAt(F64 phase) const
     {
         if (mKeyframes.empty()) return mPlainValue;
         if (mKeyframes.size() == 1) return mKeyframes.front().mValue;
 
-        if (loop_length > 0.0)
+        phase = wrapPhase(phase);
+
+        const SSAtmoEnvKeyframe<T>& first = mKeyframes.front();
+        const SSAtmoEnvKeyframe<T>& last  = mKeyframes.back();
+
+        // Outside [first, last] means we're in the wrap segment - last,
+        // forward through the end of the cycle, to first-of-the-next.
+        // Shifting by one whole cycle puts both ends on the same continuous
+        // number line, so the interpolation below needs no special case for
+        // which side of the boundary we're actually on.
+        if (phase < first.mTime || phase > last.mTime)
         {
-            time = std::fmod(time, loop_length);
-            if (time < 0.0) time += loop_length;
+            if (last.mCurve == SSAtmoEnvCurve::HOLD) return last.mValue;
 
-            const SSAtmoEnvKeyframe<T>& first = mKeyframes.front();
-            const SSAtmoEnvKeyframe<T>& last = mKeyframes.back();
-
-            // Outside [first, last] means we're in the wrap segment -
-            // last, forward through the loop boundary, to first-of-the-
-            // next-cycle. Shifting time (and, for the "before first"
-            // case, the local position within the segment) by
-            // loop_length puts both ends on the same continuous number
-            // line so the interpolation math below doesn't need a special
-            // case for which side of midnight we're actually on.
-            if (time < first.mTime || time > last.mTime)
+            const F64 span = (first.mTime + 1.0) - last.mTime;
+            const F64 elapsed = (phase < first.mTime) ? (phase + 1.0 - last.mTime)
+                                                      : (phase - last.mTime);
+            F32 t = span > 0.0 ? (F32)(elapsed / span) : 0.f;
+            if (last.mCurve == SSAtmoEnvCurve::EASE)
             {
-                const F64 span = (first.mTime + loop_length) - last.mTime;
-                const F64 elapsed = (time < first.mTime) ? (time + loop_length - last.mTime)
-                                                          : (time - last.mTime);
-                if (last.mCurve == SSAtmoEnvCurve::HOLD) return last.mValue;
-
-                F32 t = span > 0.0 ? (F32)(elapsed / span) : 0.f;
-                if (last.mCurve == SSAtmoEnvCurve::EASE)
-                {
-                    t = t * t * (3.f - 2.f * t); // smoothstep
-                }
-                return ss_atmoenv_lerp(last.mValue, first.mValue, t);
+                t = t * t * (3.f - 2.f * t); // smoothstep
             }
-        }
-        else
-        {
-            if (time <= mKeyframes.front().mTime) return mKeyframes.front().mValue;
-            if (time >= mKeyframes.back().mTime) return mKeyframes.back().mValue;
+            return ss_atmoenv_lerp(last.mValue, first.mValue, t);
         }
 
         for (size_t i = 0; i + 1 < mKeyframes.size(); ++i)
         {
             const SSAtmoEnvKeyframe<T>& a = mKeyframes[i];
             const SSAtmoEnvKeyframe<T>& b = mKeyframes[i + 1];
-            if (time < a.mTime || time > b.mTime) continue;
+            if (phase < a.mTime || phase > b.mTime) continue;
 
             if (a.mCurve == SSAtmoEnvCurve::HOLD) return a.mValue;
 
             const F64 span = b.mTime - a.mTime;
-            F32 t = span > 0.0 ? (F32)((time - a.mTime) / span) : 0.f;
+            F32 t = span > 0.0 ? (F32)((phase - a.mTime) / span) : 0.f;
             if (a.mCurve == SSAtmoEnvCurve::EASE)
             {
                 t = t * t * (3.f - 2.f * t); // smoothstep
@@ -207,15 +254,20 @@ public:
         return mKeyframes.back().mValue;
     }
 
-    bool hasKeyframeAt(F64 time, F64 epsilon = 0.01) const
+    // Default tolerance for "is the head on this keyframe". A phase, so
+    // 0.001 is a thousandth of the cycle - about 14 seconds of a 4-hour day,
+    // and far finer than the 1/32 grid the floater's scrubber snaps to.
+    static constexpr F64 PHASE_EPSILON = 0.001;
+
+    bool hasKeyframeAt(F64 phase, F64 epsilon = PHASE_EPSILON) const
     {
-        return findAt(time, epsilon) >= 0;
+        return findAt(wrapPhase(phase), epsilon) >= 0;
     }
 
     // The editing rule from the design doc, in one place so every widget
     // that edits a keyframable field goes through the same logic rather
     // than each reimplementing "am I on a keyframe right now".
-    void setValueAtHead(F64 head_time, const T& value, F64 epsilon = 0.01)
+    void setValueAtHead(F64 head_phase, const T& value, F64 epsilon = PHASE_EPSILON)
     {
         if (mKeyframes.empty())
         {
@@ -223,68 +275,69 @@ public:
             return;
         }
 
-        const S32 at = findAt(head_time, epsilon);
+        head_phase = wrapPhase(head_phase);
+
+        const S32 at = findAt(head_phase, epsilon);
         if (at >= 0)
         {
             mKeyframes[at].mValue = value;
             return;
         }
 
-        insertKeyframe(head_time, value, SSAtmoEnvCurve::EASE);
+        insertKeyframe(head_phase, value, SSAtmoEnvCurve::EASE);
     }
 
     // The keyframe-diamond toggle. Adding one at a bare value promotes the
     // value at that instant into the first keyframe rather than reaching
     // back for whatever mPlainValue happened to hold; removing the last one
     // does the reverse, so toggling never causes a visible jump either way.
-    // loop_length must match whatever the caller evaluates this field with
-    // elsewhere (valueAt's own default of 0 would silently switch to
-    // clamp-at-the-ends semantics for the value captured here otherwise -
-    // wrong on a looping day cycle, which every real caller has).
-    void toggleKeyframeAtHead(F64 head_time, F64 loop_length = 0.0, F64 epsilon = 0.01)
+    void toggleKeyframeAtHead(F64 head_phase, F64 epsilon = PHASE_EPSILON)
     {
-        const S32 at = findAt(head_time, epsilon);
+        head_phase = wrapPhase(head_phase);
+
+        const S32 at = findAt(head_phase, epsilon);
         if (at >= 0)
         {
             mKeyframes.erase(mKeyframes.begin() + at);
             if (mKeyframes.empty())
             {
-                mPlainValue = valueAt(head_time, loop_length);
+                mPlainValue = valueAt(head_phase);
             }
             return;
         }
 
-        insertKeyframe(head_time, valueAt(head_time, loop_length), SSAtmoEnvCurve::EASE);
+        insertKeyframe(head_phase, valueAt(head_phase), SSAtmoEnvCurve::EASE);
     }
 
-    void setCurveAt(F64 time, SSAtmoEnvCurve curve, F64 epsilon = 0.01)
+    void setCurveAt(F64 phase, SSAtmoEnvCurve curve, F64 epsilon = PHASE_EPSILON)
     {
-        const S32 at = findAt(time, epsilon);
+        const S32 at = findAt(wrapPhase(phase), epsilon);
         if (at >= 0) mKeyframes[at].mCurve = curve;
     }
 
     // Chevron navigation: the nearest keyframe strictly after/before head.
     // Nothing found ahead wraps to the first keyframe (equivalently,
-    // nothing found behind wraps to the last) - the timeline itself loops,
-    // so "next" past the last keyframe is "the first one again" rather than
-    // a dead end. Returns head_time unchanged if there are no keyframes at
-    // all to jump to.
-    F64 nextKeyframeTime(F64 head_time) const
+    // nothing found behind wraps to the last) - the cycle loops, so "next"
+    // past the last keyframe is "the first one again" rather than a dead
+    // end. Returns head_phase unchanged if there are no keyframes at all.
+    F64 nextKeyframeTime(F64 head_phase) const
     {
-        if (mKeyframes.empty()) return head_time;
+        if (mKeyframes.empty()) return head_phase;
+        head_phase = wrapPhase(head_phase);
         for (const SSAtmoEnvKeyframe<T>& kf : mKeyframes)
         {
-            if (kf.mTime > head_time + 1e-6) return kf.mTime;
+            if (kf.mTime > head_phase + 1e-6) return kf.mTime;
         }
         return mKeyframes.front().mTime;
     }
 
-    F64 prevKeyframeTime(F64 head_time) const
+    F64 prevKeyframeTime(F64 head_phase) const
     {
-        if (mKeyframes.empty()) return head_time;
+        if (mKeyframes.empty()) return head_phase;
+        head_phase = wrapPhase(head_phase);
         for (auto it = mKeyframes.rbegin(); it != mKeyframes.rend(); ++it)
         {
-            if (it->mTime < head_time - 1e-6) return it->mTime;
+            if (it->mTime < head_phase - 1e-6) return it->mTime;
         }
         return mKeyframes.back().mTime;
     }
@@ -313,7 +366,13 @@ public:
         return sd;
     }
 
-    void fromLLSD(const LLSD& sd, const T& fallback)
+    // time_scale multiplies every stored time on read. It exists for one
+    // job: schema version 1 stored keyframe times as absolute seconds, so
+    // migrating one means dividing by the day length it was authored
+    // against - see SSAtmoEnvTrack::fromLLSD, which is the only place that
+    // knows both the version and the day length. Current-version assets
+    // pass 1.0 and read straight through.
+    void fromLLSD(const LLSD& sd, const T& fallback, F64 time_scale = 1.0)
     {
         mKeyframes.clear();
 
@@ -322,7 +381,7 @@ public:
             for (const LLSD& entry : llsd::inArray(sd["keyframes"]))
             {
                 SSAtmoEnvKeyframe<T> kf;
-                kf.mTime = entry.has("time") ? entry["time"].asReal() : 0.0;
+                kf.mTime = wrapPhase((entry.has("time") ? entry["time"].asReal() : 0.0) * time_scale);
                 kf.mValue = ss_atmoenv_value_from_sd<T>(entry["value"], fallback);
                 kf.mCurve = ss_atmoenv_curve_from_name(entry.has("curve") ? entry["curve"].asString() : "ease");
                 mKeyframes.push_back(kf);
@@ -341,6 +400,16 @@ public:
     }
 
 private:
+    // Any phase folded into [0, 1). Every public entry point runs its input
+    // through this, so callers can hand over a raw scrubber value or an
+    // accumulated wall-clock fraction without pre-normalising it.
+    static F64 wrapPhase(F64 phase)
+    {
+        phase = std::fmod(phase, 1.0);
+        if (phase < 0.0) phase += 1.0;
+        return phase;
+    }
+
     S32 findAt(F64 time, F64 epsilon) const
     {
         for (size_t i = 0; i < mKeyframes.size(); ++i)

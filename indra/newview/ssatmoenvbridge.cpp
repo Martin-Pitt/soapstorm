@@ -66,9 +66,10 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
     // The Atmo Magic floater's preview time slider overrides the real
     // wall clock while it's open and visible, the same way EEP's Edit Day
     // Cycle floater overrides LLEnvironment's live time - see
-    // SSAtmoEnvManager::setPreviewTimeOverride().
-    const F64 time = mgr->hasPreviewTimeOverride() ? mgr->previewTimeOverride() : track.currentDayCycleTime();
-    const SSAtmoEnvWeatherState state = SSAtmoEnvWeatherResolver::resolve(track.mWeather, time, track.mDayLengthSeconds);
+    // SSAtmoEnvManager::setPreviewPhaseOverride().
+    const F64 phase = mgr->hasPreviewPhaseOverride() ? mgr->previewPhaseOverride()
+                                                     : track.currentDayCyclePhase();
+    const SSAtmoEnvWeatherState state = SSAtmoEnvWeatherResolver::resolve(track.mWeather, phase);
 
     out_cfg = SSAtmoTrackConfig();
     out_cfg.mDefined = true;
@@ -86,7 +87,7 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
     const F32 neighbor_fade = (blend.mNeighborTrack >= 0) ? (1.f - blend.mNeighborWeight) : 1.f;
 
     out_cfg.mPrecipitation = llclamp(state.mPrecipitationIntensity, 0.f, 1.f) * neighbor_fade;
-    out_cfg.mTurbulence = llclamp(track.mWeather.mConvection.valueAt(time, track.mDayLengthSeconds), 0.f, 1.f);
+    out_cfg.mTurbulence = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
 
     out_cfg.mGustDepth = llclamp(state.mGustDepth, 0.f, 3.f);
     out_cfg.mGustLength = llclamp(state.mGustLength, 8.f, 2000.f);

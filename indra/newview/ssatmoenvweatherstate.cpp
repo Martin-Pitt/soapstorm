@@ -248,17 +248,17 @@ std::string SSAtmoEnvWeatherResolver::generateForecastText(const SSAtmoEnvWeathe
 }
 
 // static
-SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& weather, F64 time, F64 day_length_seconds)
+SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& weather, F64 phase)
 {
     SSAtmoEnvWeatherState state;
 
-    const F32 moisture    = weather.mMoisture.valueAt(time, day_length_seconds);
-    const F32 convection  = weather.mConvection.valueAt(time, day_length_seconds);
-    const F32 temperature = weather.mTemperatureC.valueAt(time, day_length_seconds);
+    const F32 moisture    = weather.mMoisture.valueAt(phase);
+    const F32 convection  = weather.mConvection.valueAt(phase);
+    const F32 temperature = weather.mTemperatureC.valueAt(phase);
 
     state.mConvectionPhase = convectionPhase(convection);
-    state.mWindHeading = weather.mWindHeading.valueAt(time, day_length_seconds);
-    state.mWindSpeed   = weather.mWindSpeed.valueAt(time, day_length_seconds);
+    state.mWindHeading = weather.mWindHeading.valueAt(phase);
+    state.mWindSpeed   = weather.mWindSpeed.valueAt(phase);
 
     state.mOktaCloudCover = oktaFromMoisture(moisture);
 
@@ -276,7 +276,7 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     }
     else
     {
-        const std::string override_type = weather.mPrecipitationOverride.valueAt(time, day_length_seconds);
+        const std::string override_type = weather.mPrecipitationOverride.valueAt(phase);
         state.mPrecipitationType = !override_type.empty()
             ? override_type
             : derivePrecipitationType(convection, temperature);

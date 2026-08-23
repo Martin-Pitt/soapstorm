@@ -44,14 +44,41 @@
 // Bumped whenever the on-disk shape changes in a way an older build cannot
 // make sense of. fromLLSD() refuses anything newer than this build
 // understands rather than guessing at a partial read.
-const S32 SS_ATMOENV_VERSION = 1;
+// 2: keyframe times became a phase in [0,1) rather than absolute seconds,
+//    so that a track's day length is purely a playback-speed control - see
+//    SSAtmoEnvKeyframe::mTime. Version 1 assets are migrated on read rather
+//    than rejected (SSAtmoEnvTrack::fromLLSD).
+const S32 SS_ATMOENV_VERSION = 2;
 
-// Mandatory ground track (index 0) plus up to three optional tracks -
-// deliberately the same ceiling as v2's four EEP-altitude tracks, though a
-// v3 track's own floor/ceiling are freely authored rather than tied to the
-// region's altitude settings.
+// Mandatory ground track (index 0) plus up to seven optional tracks. This
+// started out matching EEP's four altitude tracks, but there was never a
+// reason to inherit that limit: an Atmo Magic track's floor is freely
+// authored rather than tied to the region's altitude settings, so the real
+// constraint is how many markers the floater's rail can show without them
+// colliding - see the overlap_threshold on track_altitude_slider.
 const S32 SS_ATMOENV_MIN_TRACKS = 1;
-const S32 SS_ATMOENV_MAX_TRACKS = 4;
+const S32 SS_ATMOENV_MAX_TRACKS = 8;
+
+// Everything above the topmost track belongs to that track. 4096m is the
+// hard ceiling a region actually builds to, so a track floor can never be
+// authored above it and there is nothing meaningful past it to describe.
+const F32 SS_ATMOENV_REGION_CEILING = 4096.f;
+
+// The lowest floor an optional track may have. Ground owns everything below
+// it, so a track sitting at (or near) 0 would be claiming ground's own band
+// - and on the floater's rail its marker would collide with the ground
+// marker. Matches the minimum separation the rail enforces between any two
+// markers, so the spacing rule reads the same everywhere.
+const F32 SS_ATMOENV_MIN_TRACK_FLOOR = 256.f;
+
+// Highest water height the floater will let you author, matching the limit
+// SL puts on a region's own water (see panel_region_terrain.xml's
+// water_height_spin). Purely a UI bound: fromLLSD deliberately does not
+// enforce it, so a hand-written or generated notecard can put a track's
+// water anywhere up to the region ceiling - a skybox with its own sea at
+// 2000m is a legitimate thing to describe, just not something worth giving
+// up the useful resolution of a 0-100m slider for.
+const F32 SS_ATMOENV_WATER_CEILING = 100.f;
 
 // One track's moisture/convection/temperature cube plus wind. This is the
 // authored input side only - the precipitation-type formula, ground-state
@@ -99,19 +126,63 @@ struct SSAtmoEnvWeather
     SSAtmoEnvKeyframed<std::string> mPrecipitationOverride{std::string()};
 
     LLSD asLLSD() const;
-    bool fromLLSD(const LLSD& sd);
+    // from_version is the schema version the LLSD was written by, so
+    // pre-phase keyframe times can be migrated - see SSAtmoEnvTrack::fromLLSD.
+    bool fromLLSD(const LLSD& sd, F64 time_scale = 1.0);
 };
 
 // A track's optional water plane. Height is independent of the track's own
-// floor/ceiling; only the lowest *enabled* track's plane is ever the one
+// altitude band; only the lowest *enabled* track's plane is ever the one
 // globally visible one, regardless of which track the avatar is in.
+//
+// Every field below except mEnabled is keyframable, unlike EEP's water
+// settings which are a fixed snapshot per day-cycle frame: a tide that
+// rises over the day, fog that thickens toward dusk, and waves that pick
+// up with the weather are all things this is meant to be able to express
+// on its own. The parameter set deliberately mirrors EEP's own Water panel
+// (panel_settings_water.xml) one-for-one so anything authored there has a
+// direct equivalent here.
 struct SSAtmoEnvWater
 {
+    // Not keyframable: a water plane blinking in and out mid-cycle isn't a
+    // tide, it's a bug. Whether a track *has* water is a structural choice,
+    // not an animated one.
     bool mEnabled = false;
-    F32  mHeight  = 0.f;
+
+    SSAtmoEnvKeyframed<F32> mHeight{0.f};   // metres - the tide
+
+    // Fog: colour, how fast it thickens with depth, and how much stronger
+    // it reads once the camera is actually under the surface.
+    SSAtmoEnvKeyframed<LLColor3> mFogColor{LLColor3(0.f, 0.24f, 0.34f)};
+    SSAtmoEnvKeyframed<F32> mFogDensity{16.f};        // 0.001..100, exponent
+    SSAtmoEnvKeyframed<F32> mUnderwaterModifier{0.25f}; // 0..20
+
+    // Fresnel: how much the surface mirrors vs. sees through, by angle.
+    SSAtmoEnvKeyframed<F32> mFresnelScale{0.4f};   // 0..1
+    SSAtmoEnvKeyframed<F32> mFresnelOffset{0.5f};  // 0..1
+
+    // Surface normal map, and the two scrolling wave layers sampled from
+    // it. The map itself holds across a keyframe rather than blending -
+    // see ss_atmoenv_lerp<LLUUID>.
+    SSAtmoEnvKeyframed<LLUUID> mNormalMap{LLUUID::null};
+    SSAtmoEnvKeyframed<LLVector2> mLargeWaveSpeed{LLVector2(0.f, -0.2f)}; // -20..20 each
+    SSAtmoEnvKeyframed<LLVector2> mSmallWaveSpeed{LLVector2(0.f, -0.3f)};
+
+    // Reflection wavelet scale, per axis - EEP exposes these as three
+    // independent sliders rather than one vector control, and they are
+    // authored independently often enough that keeping them as three
+    // separately keyframable fields matches how they're actually used.
+    SSAtmoEnvKeyframed<F32> mNormalScaleX{2.f};  // 0..10
+    SSAtmoEnvKeyframed<F32> mNormalScaleY{2.f};
+    SSAtmoEnvKeyframed<F32> mNormalScaleZ{2.f};
+
+    // Refraction and blur.
+    SSAtmoEnvKeyframed<F32> mRefractionScaleAbove{0.03f}; // 0..3
+    SSAtmoEnvKeyframed<F32> mRefractionScaleBelow{0.2f};  // 0..3
+    SSAtmoEnvKeyframed<F32> mBlurMultiplier{0.04f};       // 0..0.5
 
     LLSD asLLSD() const;
-    bool fromLLSD(const LLSD& sd);
+    bool fromLLSD(const LLSD& sd, F64 time_scale = 1.0);
 };
 
 // One celestial body. Sun -> Planet -> Moon, exactly three levels, any
@@ -264,11 +335,16 @@ struct SSAtmoEnvTrack
 {
     std::string mName = "Ground";
 
-    // The ground track (index 0) has no floor of its own - it is simply
-    // whatever isn't claimed by an optional track above it. Optional tracks
-    // set both mFloorZ and mCeilingZ.
-    F32 mFloorZ   = 0.f;
-    F32 mCeilingZ = FLT_MAX;
+    // Where this track starts. There is deliberately no matching ceiling:
+    // exactly like EEP's own sky-track altitudes, a track simply runs up
+    // to wherever the next track begins, or to the top of the region if
+    // nothing is above it - see SSAtmoEnvAsset::trackCeilingZ(). Storing a
+    // ceiling too would let an author create gaps and overlaps that have
+    // no sensible answer for "which track is the avatar in".
+    //
+    // The ground track (index 0) is pinned at 0 and is simply whatever
+    // isn't claimed by an optional track above it.
+    F32 mFloorZ = 0.f;
 
     // Soft cross-fade zone, in metres, for physically crossing into or out
     // of this track. Teleport / sit-teleport / region-position-change, and
@@ -296,17 +372,19 @@ struct SSAtmoEnvTrack
     LLSD mAtmosphere = LLSD::emptyMap();
     SSAtmoEnvCloudField mCloudField;
 
-    // Seconds into this track's own day-cycle loop, right now - wraps
-    // real-world UTC wall-clock time against mDayLengthSeconds/mDayOffsetSeconds,
-    // per the design doc: two viewers with the same notecard loaded should
-    // see the same phase, not one keyed to whenever each of them happened
-    // to load it. The floater's own preview scrubber is a separate,
-    // explicit override of "what time to look at" and does not call this -
-    // this is only for a live (non-editing) evaluation.
-    F64 currentDayCycleTime() const;
+    // How far through this track's own day cycle it is right now, as a
+    // fraction in [0, 1) - the unit every keyframe is stored in, so this
+    // feeds SSAtmoEnvKeyframed::valueAt() directly. Wraps real-world UTC
+    // wall-clock time against mDayLengthSeconds/mDayOffsetSeconds, per the
+    // design doc: two viewers with the same notecard loaded should see the
+    // same phase, not one keyed to whenever each of them happened to load
+    // it. The floater's own preview scrubber is a separate, explicit
+    // override of "what point in the cycle to look at" and does not call
+    // this - this is only for a live (non-editing) evaluation.
+    F64 currentDayCyclePhase() const;
 
     LLSD asLLSD() const;
-    bool fromLLSD(const LLSD& sd);
+    bool fromLLSD(const LLSD& sd, S32 from_version = SS_ATMOENV_VERSION);
 };
 
 // The whole environment: one document, no separate sky/water/day-cycle
@@ -329,6 +407,36 @@ struct SSAtmoEnvAsset
     // false for index 0 (the mandatory ground track is never removable) or
     // an out-of-range index
     bool removeTrack(S32 index);
+
+    // Where the track at `index` stops: the lowest floor above its own, or
+    // SS_ATMOENV_REGION_CEILING if nothing sits above it. Derived rather
+    // than stored (see SSAtmoEnvTrack::mFloorZ), and computed by scanning
+    // rather than by assuming mTracks is sorted by altitude - dragging a
+    // marker on the floater's rail past another one is allowed and must
+    // not need a reordering pass to stay correct.
+    F32 trackCeilingZ(S32 index) const;
+
+    // Sorts mTracks by floor altitude, lowest first, so array order always
+    // matches what the floater's rail shows bottom-to-top (and what a saved
+    // notecard reads like). Ground is pinned at index 0 regardless - it is
+    // 0m by definition and is the catch-all band, not a peer of the others.
+    //
+    // Nothing functional depends on this: trackContaining() and
+    // trackCeilingZ() both scan rather than assuming an order, precisely so
+    // dragging a marker past another can never silently break band
+    // resolution. It is kept sorted anyway so the ordering can't become a
+    // source of confusion later. Returns the new index of the track that
+    // was at `follow_index`, so a caller holding a selection can keep
+    // pointing at the same track across the sort.
+    S32 sortTracksByAltitude(S32 follow_index = -1);
+
+    // The default name a newly added track gets: the lowest "Track N" not
+    // already in use, so adding after a delete doesn't collide with a name
+    // still on another track. Names are authored, never rewritten behind
+    // the user's back - a track keeps its identity when moved, which is the
+    // whole point of a track being a self-contained biome rather than a
+    // numbered slot (see doc/atmo_magic_environment.md).
+    std::string nextDefaultTrackName() const;
 
     // The one globally visible water plane: whichever *enabled* track sits
     // lowest, regardless of which track the avatar currently occupies - a

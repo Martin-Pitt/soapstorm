@@ -11,34 +11,17 @@
  height="540">
     <!-- <SS:Nexii> Atmo Magic: the moisture/convection/temperature cube,
          AE-style keyframe rows - see ssatmoenvkeyframe.h and the FloatRow
-         comment in ssfloateratmoenv.h. Not the real Weather tab yet (still
-         no curve/HOLD controls) - see doc/atmo_magic_environment.md -
-         but the row mechanics (setValueAtHead's three-way rule, toggling a
-         keyframe, jumping between them) are the real thing. label(110) /
-         slider(280) / value_text(70) / prev(25) / keyframe(23) / next(25),
-         same column grid and shared row top on every row - same convention
-         the original single-column floater used, just wider. Prev/next use
-         the same SkipBackward_Off/SkipForward_Off icons as Edit Day
-         Cycle's step buttons; the keyframe diamond is its own thing
-         (unicode glyph, no icon) since there's no EEP equivalent to match. -->
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top="8"
-     height="14"
-     width="560"
-     name="weather_ground_note"
-     font="SansSerifSmall"
-     text_color="LtGray">
-        Ground track only, for now.
-    </text>
+         comment in ssfloateratmoenv.h.
+
+         Units live in the parameter label rather than glued to the number.
+         That is what lets every tab share one right-aligned spinner column
+         instead of each number drifting by the width of its own suffix. -->
 
     <text
      follows="left|top"
      layout="topleft"
      left="10"
-     top_pad="10"
+     top="10"
      height="14"
      width="110"
      name="moisture_label"
@@ -54,25 +37,28 @@
      width="280"
      name="moisture_slider"
      show_text="false"
-     min_val="0.0"
-     max_val="1.0"
+     min_val="0"
+     max_val="1"
      increment="0.001"
-     initial_val="0.0" />
-    <text
+     initial_val="0" />
+    <spinner
      follows="left|top"
      layout="topleft"
      left_pad="6"
-     height="14"
+     top_delta="-1"
+     height="20"
      width="70"
-     name="moisture_value_text"
-     font="SansSerifSmall">
-        0.00
-    </text>
+     label_width="0"
+     name="moisture_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.001"
+     decimal_digits="2" />
     <button
      follows="left|top"
      layout="topleft"
      left_pad="4"
-     top_delta="-4"
+     top_delta="-3"
      height="25"
      width="25"
      name="moisture_prev_button"
@@ -129,25 +115,28 @@
      width="280"
      name="convection_slider"
      show_text="false"
-     min_val="0.0"
-     max_val="1.0"
+     min_val="0"
+     max_val="1"
      increment="0.001"
-     initial_val="0.0" />
-    <text
+     initial_val="0" />
+    <spinner
      follows="left|top"
      layout="topleft"
      left_pad="6"
-     height="14"
+     top_delta="-1"
+     height="20"
      width="70"
-     name="convection_value_text"
-     font="SansSerifSmall">
-        0.00
-    </text>
+     label_width="0"
+     name="convection_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.001"
+     decimal_digits="2" />
     <button
      follows="left|top"
      layout="topleft"
      left_pad="4"
-     top_delta="-4"
+     top_delta="-3"
      height="25"
      width="25"
      name="convection_prev_button"
@@ -193,7 +182,7 @@
      width="110"
      name="temperature_label"
      font="SansSerifSmall">
-        Temperature
+        Temperature (&#176;C)
     </text>
     <slider
      follows="left|top"
@@ -204,25 +193,28 @@
      width="280"
      name="temperature_slider"
      show_text="false"
-     min_val="-30.0"
-     max_val="40.0"
-     increment="1.0"
-     initial_val="15.0" />
-    <text
+     min_val="-30"
+     max_val="40"
+     increment="1"
+     initial_val="-30" />
+    <spinner
      follows="left|top"
      layout="topleft"
      left_pad="6"
-     height="14"
+     top_delta="-1"
+     height="20"
      width="70"
-     name="temperature_value_text"
-     font="SansSerifSmall">
-        15C
-    </text>
+     label_width="0"
+     name="temperature_value_spinner"
+     min_val="-30"
+     max_val="40"
+     increment="1"
+     decimal_digits="0" />
     <button
      follows="left|top"
      layout="topleft"
      left_pad="4"
-     top_delta="-4"
+     top_delta="-3"
      height="25"
      width="25"
      name="temperature_prev_button"
@@ -268,7 +260,7 @@
      width="110"
      name="wind_heading_label"
      font="SansSerifSmall">
-        Wind Heading
+        Wind Heading (&#176;)
     </text>
     <slider
      follows="left|top"
@@ -279,25 +271,28 @@
      width="280"
      name="wind_heading_slider"
      show_text="false"
-     min_val="0.0"
-     max_val="360.0"
-     increment="1.0"
-     initial_val="0.0" />
-    <text
+     min_val="0"
+     max_val="360"
+     increment="1"
+     initial_val="0" />
+    <spinner
      follows="left|top"
      layout="topleft"
      left_pad="6"
-     height="14"
+     top_delta="-1"
+     height="20"
      width="70"
-     name="wind_heading_value_text"
-     font="SansSerifSmall">
-        0
-    </text>
+     label_width="0"
+     name="wind_heading_value_spinner"
+     min_val="0"
+     max_val="360"
+     increment="1"
+     decimal_digits="0" />
     <button
      follows="left|top"
      layout="topleft"
      left_pad="4"
-     top_delta="-4"
+     top_delta="-3"
      height="25"
      width="25"
      name="wind_heading_prev_button"
@@ -343,7 +338,7 @@
      width="110"
      name="wind_speed_label"
      font="SansSerifSmall">
-        Wind Speed
+        Wind Speed (m/s)
     </text>
     <slider
      follows="left|top"
@@ -354,25 +349,28 @@
      width="280"
      name="wind_speed_slider"
      show_text="false"
-     min_val="0.0"
-     max_val="30.0"
-     increment="1.0"
-     initial_val="0.0" />
-    <text
+     min_val="0"
+     max_val="30"
+     increment="1"
+     initial_val="0" />
+    <spinner
      follows="left|top"
      layout="topleft"
      left_pad="6"
-     height="14"
+     top_delta="-1"
+     height="20"
      width="70"
-     name="wind_speed_value_text"
-     font="SansSerifSmall">
-        0 m/s
-    </text>
+     label_width="0"
+     name="wind_speed_value_spinner"
+     min_val="0"
+     max_val="30"
+     increment="1"
+     decimal_digits="0" />
     <button
      follows="left|top"
      layout="topleft"
      left_pad="4"
-     top_delta="-4"
+     top_delta="-3"
      height="25"
      width="25"
      name="wind_speed_prev_button"

@@ -69,7 +69,7 @@ public:
     // The computed primary sun arc, replacing a keyframed sun position
     // entirely per the design doc: driven by the home body's axial tilt
     // and the track's own day-length/offset (already wrapped into `time`
-    // by the caller - see SSAtmoEnvTrack::currentDayCycleTime()), not by any
+    // by the caller - see SSAtmoEnvTrack::currentDayCyclePhase()), not by any
     // body's authored orbital position. Stylised rather than
     // astronomically exact - see the .cpp - since there is no orbital
     // position around a star being tracked to derive a real solar

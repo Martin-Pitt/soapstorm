@@ -157,16 +157,16 @@ public:
     // Preview time override - what the Atmo Magic floater's preview time
     // slider actually does while it's open, mirroring EEP's Edit Day Cycle
     // floater overriding LLEnvironment's live time: SSAtmoEnvBridge
-    // uses this instead of SSAtmoEnvTrack::currentDayCycleTime()'s wall-clock
+    // uses this instead of SSAtmoEnvTrack::currentDayCyclePhase()'s wall-clock
     // formula whenever it's active, so scrubbing the floater's slider is
     // actually previewing what gets rendered, not just what the floater's
     // own widgets show. The floater sets this on every preview-time change
     // while visible and clears it on hide/close, so the real wall clock
     // silently takes back over the moment nobody's looking at a preview.
-    void setPreviewTimeOverride(F64 time_seconds) { mPreviewOverrideActive = true; mPreviewOverrideTime = time_seconds; }
-    void clearPreviewTimeOverride() { mPreviewOverrideActive = false; }
-    bool hasPreviewTimeOverride() const { return mPreviewOverrideActive; }
-    F64 previewTimeOverride() const { return mPreviewOverrideTime; }
+    void setPreviewPhaseOverride(F64 phase) { mPreviewOverrideActive = true; mPreviewOverridePhase = phase; }
+    void clearPreviewPhaseOverride() { mPreviewOverrideActive = false; }
+    bool hasPreviewPhaseOverride() const { return mPreviewOverrideActive; }
+    F64 previewPhaseOverride() const { return mPreviewOverridePhase; }
 
 private:
     static void onAssetLoaded(const LLUUID& asset_id, LLAssetType::EType type,
@@ -212,7 +212,7 @@ private:
     const std::string mNoAssetName = "(none)";
 
     bool mPreviewOverrideActive = false;
-    F64 mPreviewOverrideTime = 0.0;
+    F64 mPreviewOverridePhase = 0.0;
 };
 
 // </SS:Nexii>

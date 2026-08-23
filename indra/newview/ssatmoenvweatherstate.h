@@ -132,14 +132,16 @@ struct SSAtmoEnvWeatherState
 class SSAtmoEnvWeatherResolver
 {
 public:
-    // Evaluates the cube (via SSAtmoEnvKeyframed::valueAt(time, day_length_seconds))
-    // and derives everything above from it. Explicit per-field overrides
+    // Evaluates the cube (via SSAtmoEnvKeyframed::valueAt(phase)) and
+    // derives everything above from it. Explicit per-field overrides
     // (mPrecipitationOverride, mGustAuto/mLightningAuto false) win over the
-    // derivation for their own field, exactly as authored. day_length_seconds
-    // is the owning track's own SSAtmoEnvTrack::mDayLengthSeconds - passed
-    // through rather than read from the track directly so this stays a
-    // pure function of its own two inputs.
-    static SSAtmoEnvWeatherState resolve(const SSAtmoEnvWeather& weather, F64 time, F64 day_length_seconds);
+    // derivation for their own field, exactly as authored.
+    //
+    // phase is a position in the day cycle, [0, 1) - not seconds. The
+    // track's day length deliberately does not appear here at all: it is a
+    // playback-speed control and has no bearing on what the cube evaluates
+    // to at a given point in the cycle.
+    static SSAtmoEnvWeatherState resolve(const SSAtmoEnvWeather& weather, F64 phase);
 
     // Broken out because both the resolver and the floater's forecast-text
     // preview want it without evaluating the rest of the cube.

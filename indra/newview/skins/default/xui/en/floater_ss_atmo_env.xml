@@ -123,16 +123,22 @@
      layout="topleft"
      left_pad="8"
      height="14"
-     width="70"
+     width="120"
      name="preview_time_value_text"
      font="SansSerifSmall">
-        0h 00m
+        0:00 (0%)
     </text>
 
-    <!-- Body: a vertical track list on the left (Environment-tab style,
-         not a table - see refreshTrackList()) and a tab container on the
-         right for per-track editing. Only Weather exists so far; Atmosphere
-         & Lighting / Clouds / Planetary are still to come, see
+    <!-- Body: a vertical altitude rail on the left, same idiom as
+         pnl_environment_altitudes in panel_region_environment.xml (Region/
+         Estate floater's Environment tab) - a vertical multi_slider with a
+         floating altitude label per track, rather than a table or a plain
+         button list. Doubles as the track selector: dragging a thumb
+         repositions that track's floor, and mousing one down (whether or
+         not it's then dragged) selects that track for the tab_container on
+         the right. Ground has no floor of its own to drag (see
+         SSAtmoEnvTrack::mFloorZ) so it's a fixed row below the slider
+         instead, always present, never removable. See
          doc/atmo_magic_environment.md. -->
     <panel
      follows="left|top|bottom"
@@ -140,6 +146,7 @@
      left="15"
      top="96"
      bottom="-50"
+     height="554"
      width="170"
      name="track_panel"
      background_visible="false"
@@ -156,60 +163,274 @@
             Tracks
         </text>
 
-        <!-- Up to SS_ATMOENV_MAX_TRACKS (4) fixed rows, shown/relabelled by
-             refreshTrackList() rather than built dynamically - see the
-             header comment on mSelectedTrackIndex. Each is a toggle button:
-             selected state drives Remove Track's enable state and doubles
-             as the highlight. -->
+        <!-- Up to SS_ATMOENV_MAX_TRACKS-1 (3) optional-track markers,
+             added/removed at runtime (see refreshTrackRail()) rather than a
+             fixed set - unlike EEP's always-exactly-four sky tracks, Atmo
+             Magic tracks are 1-4 total, so nothing here is meaningful until
+             a track exists to show. draw_track gives the vertical rail line
+             from the region Environment tab this mirrors.
+
+             The rail is anchored top and bottom so it actually fills the
+             panel's height rather than collapsing to whatever a chained
+             top_pad left over; increment is 64m so it divides 4096 exactly
+             (dragging to the top used to land on 4100m, past the region
+             ceiling) and lands cleanly on the powers of two people build
+             around - 512/1024/2048 are all reachable exactly.
+
+             overlap_threshold is not the spacing it enforces: LLMultiSlider
+             stores it as (value - increment) and then compares against
+             (that + increment/4), so the gap it actually enforces is
+             overlap_threshold - 48 with a 64m increment. 304 is therefore
+             what asks for a real 256m minimum between markers - enough
+             that two 20px name buttons can't collide at this rail height.
+
+             thumb_width is the marker's thickness along the rail, not its
+             width across it, so 8 keeps the flat bar shape from the region
+             Environment tab; matching it to the control's own 17px width
+             made each marker square, which the rounded thumb image then
+             drew as a circle. Nothing in C++ depends on this number -
+             refreshAltitudeLabel() asks the control where the thumb
+             actually landed rather than recomputing it. -->
+        <multi_slider
+         follows="left|top|bottom"
+         layout="topleft"
+         left="100"
+         top="30"
+         bottom="-129"
+         height="395"
+         width="17"
+         name="track_altitude_slider"
+         orientation="vertical"
+         min_val="0"
+         max_val="4096"
+         increment="64"
+         decimal_digits="0"
+         max_sliders="7"
+         overlap_threshold="304"
+         show_text="false"
+         draw_track="true"
+         use_triangle="false"
+         thumb_width="8" />
+
+        <!-- Each marker carries a compact toggle button (the track's name,
+             left of the rail) and an altitude readout (right of it), both
+             repositioned in C++ to follow its thumb - see
+             refreshAltitudeLabel(). The button being a toggle is the point:
+             these *are* the tab selector for the panel on the right, so the
+             selected one has to look pressed rather than looking like an
+             inert caption. Initial top/left here are placeholders; the real
+             vertical position is altitude-derived.
+
+             One pair per optional track, so SS_ATMOENV_MAX_TRACKS - 1 of
+             them. Both are the same height and vertically centred so the
+             name and the altitude line up with each other and with the
+             thumb between them. -->
         <button
          follows="left|top"
          layout="topleft"
          left="0"
-         top_pad="8"
-         height="32"
-         width="170"
+         top="0"
+         height="20"
+         width="96"
          is_toggle="true"
-         name="track_row_0"
-         label="Ground" />
+         name="track_name_button_1"
+         font="SansSerifSmall"
+         label="Track 1"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_1"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
         <button
          follows="left|top"
          layout="topleft"
          left="0"
-         top_pad="2"
-         height="32"
-         width="170"
+         top="0"
+         height="20"
+         width="96"
          is_toggle="true"
-         name="track_row_1"
+         name="track_name_button_2"
+         font="SansSerifSmall"
          label="Track 2"
          visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_2"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
         <button
          follows="left|top"
          layout="topleft"
          left="0"
-         top_pad="2"
-         height="32"
-         width="170"
+         top="0"
+         height="20"
+         width="96"
          is_toggle="true"
-         name="track_row_2"
+         name="track_name_button_3"
+         font="SansSerifSmall"
          label="Track 3"
          visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_3"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
         <button
          follows="left|top"
          layout="topleft"
          left="0"
-         top_pad="2"
-         height="32"
-         width="170"
+         top="0"
+         height="20"
+         width="96"
          is_toggle="true"
-         name="track_row_3"
+         name="track_name_button_4"
+         font="SansSerifSmall"
          label="Track 4"
          visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_4"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="track_name_button_5"
+         font="SansSerifSmall"
+         label="Track 5"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_5"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="track_name_button_6"
+         font="SansSerifSmall"
+         label="Track 6"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_6"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="track_name_button_7"
+         font="SansSerifSmall"
+         label="Track 7"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="track_alt_label_7"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
 
+        <!-- Ground: the same compact toggle button and altitude readout as
+             a track marker, but pinned to the rail's 0m position rather
+             than draggable - it is always 0m by definition (see
+             SSAtmoEnvTrack::mFloorZ). The rail deliberately runs all the
+             way down to 0 so ground reads as part of the same scale as
+             every other track rather than as a footnote below it; what
+             stops an optional track being dragged onto ground's band is
+             SS_ATMOENV_MIN_TRACK_FLOOR, enforced in
+             SSFloaterAtmoEnv::onCommitAltitudeSlider(), not the rail's own
+             range. Positioned in C++ alongside the markers so it lines up
+             however the floater is resized. -->
         <button
          follows="left|bottom"
          layout="topleft"
          left="0"
-         top_pad="10"
+         bottom="-76"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="track_ground_button"
+         font="SansSerifSmall"
+         label="Ground" />
+        <text
+         follows="left|bottom"
+         layout="topleft"
+         left="122"
+         bottom="-76"
+         height="20"
+         width="48"
+         name="track_ground_alt_label"
+         font="SansSerifSmall"
+         text_valign="center">
+            0m
+        </text>
+
+        <!-- Bottom-docked with explicit "bottom" offsets, not top_pad
+             chained after the (resizable) rail above - chaining off a
+             resizable sibling was what let these overlap the Ground button
+             when the floater was shrunk vertically. -->
+        <button
+         follows="left|bottom"
+         layout="topleft"
+         left="0"
+         bottom="-41"
          height="23"
          width="170"
          name="add_track_button"
@@ -219,7 +440,7 @@
          follows="left|bottom"
          layout="topleft"
          left="0"
-         top_pad="4"
+         bottom="-14"
          height="23"
          width="170"
          name="remove_track_button"
@@ -239,6 +460,22 @@
      tab_width="140"
      tab_padding_right="3"
      name="atmo_tabs">
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="track_tab"
+         label="Track"
+         filename="panel_ss_atmo_env_track.xml" />
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="water_tab"
+         label="Water"
+         filename="panel_ss_atmo_env_water.xml" />
         <panel
          border="true"
          layout="topleft"

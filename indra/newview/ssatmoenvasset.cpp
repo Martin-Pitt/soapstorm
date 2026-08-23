@@ -28,6 +28,7 @@
 #include "llagent.h"
 #include "llviewerregion.h"
 
+#include <algorithm>
 #include <cmath>
 #include <ctime>
 
@@ -65,15 +66,15 @@ LLSD SSAtmoEnvWeather::asLLSD() const
     return sd;
 }
 
-bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd, F64 time_scale)
 {
     if (!sd.isMap()) return false;
 
-    if (sd.has("moisture"))      mMoisture.fromLLSD(sd["moisture"], 0.f);
-    if (sd.has("convection"))    mConvection.fromLLSD(sd["convection"], 0.f);
-    if (sd.has("temperature_c")) mTemperatureC.fromLLSD(sd["temperature_c"], 15.f);
-    if (sd.has("wind_heading"))  mWindHeading.fromLLSD(sd["wind_heading"], 0.f);
-    if (sd.has("wind_speed"))    mWindSpeed.fromLLSD(sd["wind_speed"], 0.f);
+    if (sd.has("moisture"))      mMoisture.fromLLSD(sd["moisture"], 0.f, time_scale);
+    if (sd.has("convection"))    mConvection.fromLLSD(sd["convection"], 0.f, time_scale);
+    if (sd.has("temperature_c")) mTemperatureC.fromLLSD(sd["temperature_c"], 15.f, time_scale);
+    if (sd.has("wind_heading"))  mWindHeading.fromLLSD(sd["wind_heading"], 0.f, time_scale);
+    if (sd.has("wind_speed"))    mWindSpeed.fromLLSD(sd["wind_speed"], 0.f, time_scale);
 
     mGustAuto = sd.has("gust_auto") ? sd["gust_auto"].asBoolean() : true;
     if (sd.has("gust_depth"))  mGustDepth  = (F32)sd["gust_depth"].asReal();
@@ -83,7 +84,7 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     mLightningAuto = sd.has("lightning_auto") ? sd["lightning_auto"].asBoolean() : true;
     if (sd.has("lightning_intensity")) mLightningIntensity = (F32)sd["lightning_intensity"].asReal();
 
-    if (sd.has("precipitation_override")) mPrecipitationOverride.fromLLSD(sd["precipitation_override"], std::string());
+    if (sd.has("precipitation_override")) mPrecipitationOverride.fromLLSD(sd["precipitation_override"], std::string(), time_scale);
 
     return true;
 }
@@ -96,15 +97,61 @@ LLSD SSAtmoEnvWater::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
     sd["enabled"] = mEnabled;
-    sd["height"]  = (LLSD::Real)mHeight;
+    sd["height"]  = mHeight.asLLSD();
+
+    sd["fog_color"]           = mFogColor.asLLSD();
+    sd["fog_density"]         = mFogDensity.asLLSD();
+    sd["underwater_modifier"] = mUnderwaterModifier.asLLSD();
+
+    sd["fresnel_scale"]  = mFresnelScale.asLLSD();
+    sd["fresnel_offset"] = mFresnelOffset.asLLSD();
+
+    sd["normal_map"]       = mNormalMap.asLLSD();
+    sd["large_wave_speed"] = mLargeWaveSpeed.asLLSD();
+    sd["small_wave_speed"] = mSmallWaveSpeed.asLLSD();
+
+    sd["normal_scale_x"] = mNormalScaleX.asLLSD();
+    sd["normal_scale_y"] = mNormalScaleY.asLLSD();
+    sd["normal_scale_z"] = mNormalScaleZ.asLLSD();
+
+    sd["refraction_scale_above"] = mRefractionScaleAbove.asLLSD();
+    sd["refraction_scale_below"] = mRefractionScaleBelow.asLLSD();
+    sd["blur_multiplier"]        = mBlurMultiplier.asLLSD();
     return sd;
 }
 
-bool SSAtmoEnvWater::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvWater::fromLLSD(const LLSD& sd, F64 time_scale)
 {
     if (!sd.isMap()) return false;
+
+    // Every field keeps whatever its constructor default was when the
+    // notecard doesn't mention it - a hand-written notecard that only sets
+    // height and fog colour is valid, and everything else stays at the
+    // sensible default rather than becoming zero.
+    const SSAtmoEnvWater def;
+
     mEnabled = sd.has("enabled") ? sd["enabled"].asBoolean() : false;
-    if (sd.has("height")) mHeight = (F32)sd["height"].asReal();
+
+    if (sd.has("height")) mHeight.fromLLSD(sd["height"], 0.f, time_scale);
+
+    if (sd.has("fog_color"))           mFogColor.fromLLSD(sd["fog_color"], def.mFogColor.valueAt(0.0), time_scale);
+    if (sd.has("fog_density"))         mFogDensity.fromLLSD(sd["fog_density"], def.mFogDensity.valueAt(0.0), time_scale);
+    if (sd.has("underwater_modifier")) mUnderwaterModifier.fromLLSD(sd["underwater_modifier"], def.mUnderwaterModifier.valueAt(0.0), time_scale);
+
+    if (sd.has("fresnel_scale"))  mFresnelScale.fromLLSD(sd["fresnel_scale"], def.mFresnelScale.valueAt(0.0), time_scale);
+    if (sd.has("fresnel_offset")) mFresnelOffset.fromLLSD(sd["fresnel_offset"], def.mFresnelOffset.valueAt(0.0), time_scale);
+
+    if (sd.has("normal_map"))       mNormalMap.fromLLSD(sd["normal_map"], LLUUID::null, time_scale);
+    if (sd.has("large_wave_speed")) mLargeWaveSpeed.fromLLSD(sd["large_wave_speed"], def.mLargeWaveSpeed.valueAt(0.0), time_scale);
+    if (sd.has("small_wave_speed")) mSmallWaveSpeed.fromLLSD(sd["small_wave_speed"], def.mSmallWaveSpeed.valueAt(0.0), time_scale);
+
+    if (sd.has("normal_scale_x")) mNormalScaleX.fromLLSD(sd["normal_scale_x"], def.mNormalScaleX.valueAt(0.0), time_scale);
+    if (sd.has("normal_scale_y")) mNormalScaleY.fromLLSD(sd["normal_scale_y"], def.mNormalScaleY.valueAt(0.0), time_scale);
+    if (sd.has("normal_scale_z")) mNormalScaleZ.fromLLSD(sd["normal_scale_z"], def.mNormalScaleZ.valueAt(0.0), time_scale);
+
+    if (sd.has("refraction_scale_above")) mRefractionScaleAbove.fromLLSD(sd["refraction_scale_above"], def.mRefractionScaleAbove.valueAt(0.0), time_scale);
+    if (sd.has("refraction_scale_below")) mRefractionScaleBelow.fromLLSD(sd["refraction_scale_below"], def.mRefractionScaleBelow.valueAt(0.0), time_scale);
+    if (sd.has("blur_multiplier"))        mBlurMultiplier.fromLLSD(sd["blur_multiplier"], def.mBlurMultiplier.valueAt(0.0), time_scale);
     return true;
 }
 
@@ -317,13 +364,6 @@ LLSD SSAtmoEnvTrack::asLLSD() const
     LLSD sd = LLSD::emptyMap();
     sd["name"]       = mName;
     sd["floor_z"]    = (LLSD::Real)mFloorZ;
-    // FLT_MAX does not round-trip through LLSD::Real cleanly on every
-    // platform; the ground track (the only one that uses the open-ended
-    // default) simply omits ceiling_z rather than writing a sentinel.
-    if (mCeilingZ < FLT_MAX)
-    {
-        sd["ceiling_z"] = (LLSD::Real)mCeilingZ;
-    }
     sd["transition_buffer"] = (LLSD::Real)mTransitionBuffer;
 
     sd["day_length_seconds"] = (LLSD::Real)mDayLengthSeconds;
@@ -341,21 +381,32 @@ LLSD SSAtmoEnvTrack::asLLSD() const
     return sd;
 }
 
-bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
+bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd, S32 from_version)
 {
     if (!sd.isMap()) return false;
 
     if (sd.has("name")) mName = sd["name"].asString();
     if (sd.has("floor_z")) mFloorZ = (F32)sd["floor_z"].asReal();
-    mCeilingZ = sd.has("ceiling_z") ? (F32)sd["ceiling_z"].asReal() : FLT_MAX;
+    // ceiling_z was a stored field in the very first schema revision and is
+    // now derived (see SSAtmoEnvAsset::trackCeilingZ) - an older notecard
+    // still carrying one is simply ignored rather than rejected.
     if (sd.has("transition_buffer")) mTransitionBuffer = llmax(0.f, (F32)sd["transition_buffer"].asReal());
 
     mDayLengthSeconds = sd.has("day_length_seconds")
         ? sd["day_length_seconds"].asReal() : (4.0 * 60.0 * 60.0);
     mDayOffsetSeconds = sd.has("day_offset_seconds") ? sd["day_offset_seconds"].asReal() : 0.0;
 
-    if (sd.has("water"))       mWater.fromLLSD(sd["water"]);
-    if (sd.has("weather"))     mWeather.fromLLSD(sd["weather"]);
+    // Schema 1 stored keyframe times as absolute seconds into this track's
+    // own day. Dividing by that day length turns them into the phase this
+    // build expects, which is why the migration has to happen here: this is
+    // the only scope that knows both the version and the day length. Note
+    // mDayLengthSeconds is read above, so it is already the value the old
+    // times were authored against.
+    const F64 time_scale = (from_version < 2 && mDayLengthSeconds > 0.0)
+        ? (1.0 / mDayLengthSeconds) : 1.0;
+
+    if (sd.has("water"))       mWater.fromLLSD(sd["water"], time_scale);
+    if (sd.has("weather"))     mWeather.fromLLSD(sd["weather"], time_scale);
     if (sd.has("planetary"))   mPlanetary.fromLLSD(sd["planetary"]);
     if (sd.has("cloud_field")) mCloudField.fromLLSD(sd["cloud_field"]);
 
@@ -364,7 +415,7 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
     return true;
 }
 
-F64 SSAtmoEnvTrack::currentDayCycleTime() const
+F64 SSAtmoEnvTrack::currentDayCyclePhase() const
 {
     if (mDayLengthSeconds <= 0.0) return 0.0;
 
@@ -375,7 +426,7 @@ F64 SSAtmoEnvTrack::currentDayCycleTime() const
     const F64 utc_now = (F64)time(nullptr);
     F64 t = fmod(utc_now - mDayOffsetSeconds, mDayLengthSeconds);
     if (t < 0.0) t += mDayLengthSeconds;
-    return t;
+    return t / mDayLengthSeconds;
 }
 
 //-----------------------------------------------------------------------------
@@ -391,7 +442,6 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
     SSAtmoEnvTrack ground;
     ground.mName = "Ground";
     ground.mFloorZ = 0.f;
-    ground.mCeilingZ = FLT_MAX;
     ground.mDayLengthSeconds = 4.0 * 60.0 * 60.0;
     ground.mDayOffsetSeconds = 0.0;
     // Calm, clear default: moisture/convection both 0 is "bone dry, clear
@@ -408,7 +458,7 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
     ground.mWater.mEnabled = true;
     {
         LLViewerRegion* region = gAgent.getRegion();
-        ground.mWater.mHeight = region ? region->getWaterHeight() : 20.f;
+        ground.mWater.mHeight = SSAtmoEnvKeyframed<F32>(region ? region->getWaterHeight() : 20.f);
     }
 
     // Default new asset per the design doc: an Earth-sized planet as home,
@@ -445,15 +495,24 @@ bool SSAtmoEnvAsset::addTrack()
     if ((S32)mTracks.size() >= SS_ATMOENV_MAX_TRACKS) return false;
 
     SSAtmoEnvTrack track;
-    track.mName = llformat("Track %d", (S32)mTracks.size() + 1);
-    // New optional tracks default to starting where the previous one's
-    // ceiling was, so a freshly-added track doesn't silently overlap or gap
-    // against what's already there; the author can still move it anywhere.
-    const F32 prev_ceiling = mTracks.empty() ? 0.f : mTracks.back().mCeilingZ;
-    track.mFloorZ = (prev_ceiling < FLT_MAX) ? prev_ceiling : 0.f;
-    track.mCeilingZ = track.mFloorZ + 1000.f;
+    // A new track starts above whatever is currently highest, far enough up
+    // that its marker on the floater's rail can't collide with the one below
+    // it (the rail enforces a minimum separation of its own and would
+    // otherwise refuse to place the marker), and clamped so it can never
+    // land on or above the region ceiling where it would have no band at
+    // all. The author can drag it anywhere afterwards.
+    F32 highest = 0.f;
+    for (const SSAtmoEnvTrack& t : mTracks) highest = llmax(highest, t.mFloorZ);
+
+    const F32 SPACING = SS_ATMOENV_MIN_TRACK_FLOOR; // == the rail's enforced minimum
+    track.mFloorZ = llclamp(highest + SPACING,
+                            SS_ATMOENV_MIN_TRACK_FLOOR,
+                            SS_ATMOENV_REGION_CEILING - SPACING);
+
+    track.mName = nextDefaultTrackName();
 
     mTracks.push_back(track);
+    sortTracksByAltitude();
     return true;
 }
 
@@ -462,7 +521,76 @@ bool SSAtmoEnvAsset::removeTrack(S32 index)
     // Index 0 is the mandatory ground track - never removable.
     if (index <= 0 || index >= (S32)mTracks.size()) return false;
     mTracks.erase(mTracks.begin() + index);
+    // Names are the author's, so nothing is rewritten here - the survivors
+    // keep whatever they were called. Only the ordering is maintained.
+    sortTracksByAltitude();
     return true;
+}
+
+std::string SSAtmoEnvAsset::nextDefaultTrackName() const
+{
+    // Lowest "Track N" not already taken, so adding a track after deleting
+    // one doesn't hand out a name another track is still using.
+    for (S32 n = 1; n <= SS_ATMOENV_MAX_TRACKS; ++n)
+    {
+        const std::string candidate = llformat("Track %d", n);
+
+        bool taken = false;
+        for (const SSAtmoEnvTrack& t : mTracks)
+        {
+            if (t.mName == candidate) { taken = true; break; }
+        }
+        if (!taken) return candidate;
+    }
+    return "Track";
+}
+
+S32 SSAtmoEnvAsset::sortTracksByAltitude(S32 follow_index)
+{
+    if (mTracks.size() < 2) return follow_index;
+
+    // Ground stays at index 0 - it is the catch-all band rather than a peer
+    // with a floor worth sorting on, and callers (and the notecard format)
+    // treat index 0 as ground unconditionally.
+    const SSAtmoEnvTrack* follow = (follow_index >= 0 && follow_index < (S32)mTracks.size())
+        ? &mTracks[follow_index] : nullptr;
+    const std::string follow_name = follow ? follow->mName : std::string();
+    const bool follow_is_ground = (follow_index == 0);
+
+    std::stable_sort(mTracks.begin() + 1, mTracks.end(),
+        [](const SSAtmoEnvTrack& a, const SSAtmoEnvTrack& b) { return a.mFloorZ < b.mFloorZ; });
+
+    if (follow_index < 0 || follow_is_ground) return follow_index;
+
+    // Track the caller's selection across the reorder by name. Names are
+    // authored and can in principle collide (nothing stops two tracks both
+    // being called "Sky"), so this is a best effort - a collision just
+    // leaves the selection on the first match, which is still a real track.
+    for (S32 i = 1; i < (S32)mTracks.size(); ++i)
+    {
+        if (mTracks[i].mName == follow_name) return i;
+    }
+    return follow_index;
+}
+
+F32 SSAtmoEnvAsset::trackCeilingZ(S32 index) const
+{
+    if (index < 0 || index >= (S32)mTracks.size()) return SS_ATMOENV_REGION_CEILING;
+
+    const F32 own_floor = mTracks[index].mFloorZ;
+
+    F32 ceiling = SS_ATMOENV_REGION_CEILING;
+    for (S32 i = 0; i < (S32)mTracks.size(); ++i)
+    {
+        if (i == index) continue;
+        const F32 other = mTracks[i].mFloorZ;
+        // Strictly above: two tracks sharing a floor exactly is degenerate
+        // either way, and treating one as the other's ceiling would give it
+        // a zero-height band rather than just letting the lower-indexed one
+        // win in trackContaining().
+        if (other > own_floor && other < ceiling) ceiling = other;
+    }
+    return ceiling;
 }
 
 bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
@@ -472,9 +600,16 @@ bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
     for (const SSAtmoEnvTrack& track : mTracks)
     {
         if (!track.mWater.mEnabled) continue;
-        if (!found || track.mWater.mHeight < lowest)
+
+        // Water height is a tide now, so "lowest" is a question about a
+        // particular instant. Each track's own day cycle decides what that
+        // instant is for it - the same evaluation a live (non-previewing)
+        // read of any other field on that track would do.
+        const F32 height = track.mWater.mHeight.valueAt(track.currentDayCyclePhase());
+
+        if (!found || height < lowest)
         {
-            lowest = track.mWater.mHeight;
+            lowest = height;
             found = true;
         }
     }
@@ -537,7 +672,7 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
     for (S32 i = 0; i < count; ++i)
     {
         SSAtmoEnvTrack track;
-        track.fromLLSD(tracks_sd[i]);
+        track.fromLLSD(tracks_sd[i], version);
         parsed.mTracks.push_back(track);
     }
 
@@ -547,6 +682,12 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
         *this = makeDefault();
         return false;
     }
+
+    // Names come from the notecard as authored - see nextDefaultTrackName()
+    // for why nothing is rewritten here. Ordering is normalised though, so
+    // a hand-edited notecard listing its tracks out of altitude order still
+    // reads bottom-to-top in the floater.
+    parsed.sortTracksByAltitude();
 
     *this = parsed;
     return true;

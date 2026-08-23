@@ -38,7 +38,7 @@ S32 SSAtmoEnvTrackResolver::trackContaining(const SSAtmoEnvAsset& asset, F32 wor
     for (size_t i = 1; i < asset.mTracks.size(); ++i)
     {
         const SSAtmoEnvTrack& t = asset.mTracks[i];
-        if (world_z >= t.mFloorZ && world_z < t.mCeilingZ) return (S32)i;
+        if (world_z >= t.mFloorZ && world_z < asset.trackCeilingZ((S32)i)) return (S32)i;
     }
     return 0;
 }
@@ -64,19 +64,11 @@ bool SSAtmoEnvTrackResolver::nearestBoundary(const SSAtmoEnvAsset& asset, S32 pr
             found = true;
         }
 
-        // FLT_MAX is "open ended" (the ground track's stored default, and
-        // any optional track's own default before it's given a real
-        // ceiling) - not a boundary that's actually there to cross.
-        if (t.mCeilingZ < FLT_MAX)
-        {
-            const F32 ceiling_dist = std::fabs(world_z - t.mCeilingZ);
-            if (ceiling_dist < best)
-            {
-                best = ceiling_dist;
-                best_idx = (S32)i;
-                found = true;
-            }
-        }
+        // A track's ceiling is derived - it *is* some other track's floor,
+        // or the region ceiling (see SSAtmoEnvAsset::trackCeilingZ). The
+        // former is already covered by that other track's own floor check
+        // above, and the latter is not a boundary anyone crosses, so
+        // nothing more to test here.
     }
 
     if (found)
