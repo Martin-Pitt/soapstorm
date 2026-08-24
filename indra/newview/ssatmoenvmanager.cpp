@@ -25,17 +25,23 @@
 
 #include "ssatmoenvmanager.h"
 
+#include "ssatmoenvplanetarystate.h"
+
+#include <algorithm>
 #include <cstring>
 #include <sstream>
 
 #include "llagent.h"
 #include "llassetstorage.h"
+#include "llenvironment.h"
 #include "llfilesystem.h"
 #include "llinventorymodel.h"
 #include "llnotecard.h"
 #include "llpermissionsflags.h"
 #include "llsdserialize.h"
 #include "llsdutil.h"
+#include "llsettingssky.h"
+#include "llsettingsvo.h"
 #include "llviewerassetupload.h"
 #include "llviewerinventory.h"
 #include "llviewerregion.h"
@@ -168,22 +174,407 @@ void SSAtmoEnvManager::atmoFolderId(std::function<void(const LLUUID&)> on_ready)
         });
 }
 
+namespace
+{
+    // The shared tail of createDefaultNotecard(): resolve the destination
+    // folder if the caller didn't name one, write, and hand the written
+    // asset itself back alongside the ids - see the header on why on_created
+    // must receive the exact object that was serialised rather than letting
+    // callers regenerate it.
+    void writeDefaultNotecard(const SSAtmoEnvAsset& def, const LLUUID& parent_id,
+                               std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
+    {
+        auto write = [def, on_created](const LLUUID& folder_id)
+        {
+            writeAssetAsNotecard(def, def.mName, folder_id,
+                [def, on_created](const LLUUID& item_id, const LLUUID& asset_id)
+                {
+                    if (on_created) on_created(item_id, asset_id, def);
+                });
+        };
+
+        if (parent_id.notNull())
+        {
+            write(parent_id);
+            return;
+        }
+        SSAtmoEnvManager::atmoFolderId(write);
+    }
+}
+
+namespace
+{
+    // Creation-time seeding fetches this set of PBR sky assets at once and
+    // keyframes each where the track's OWN sun actually puts it - see
+    // seedSkyPhases below.
+    //
+    // These are an authored set, not the viewer's stock skies. The four
+    // stock non-legacy ones this replaces are ARCHIVED here rather than
+    // deleted, since going back to them is a matter of swapping the list:
+    //
+    //     LLEnvironment::KNOWN_SKY_MIDNIGHT / _SUNRISE / _MIDDAY / _SUNSET
+    //
+    // Nothing below knows how many skies there are or what times of day
+    // they depict - the placement is measured, not assumed - so changing
+    // this list is the whole change.
+    const S32 SEED_SKY_COUNT = 7;
+    const char* const SEED_SKY_ID[SEED_SKY_COUNT] = {
+        "ece99f96-19e4-c620-3f26-2f25975ae885",  // Daylight 1
+        "7250bab8-0a2c-0cb7-8161-6717e194da43",  // Daylight 2
+        "8b03eac8-9405-8082-911f-56a348b0f021",  // Daylight 3
+        "164aa7bf-5cf2-abe6-48f6-53305479da0a",  // Dusk
+        "db8115a4-9549-9f7d-97ca-a791d0a99a0f",  // Night
+        "cd8afef7-4276-3f46-6122-6165d97f3e87",  // Sunrise
+        "7b43eefd-f390-0c79-c30e-a03b3e0ef9c8"   // Sunset
+    };
+
+    // Names for the log only. Nothing reads them to decide placement - the
+    // whole point of measuring each sky's own sun is that "Sunrise" lands at
+    // sunrise because its sun is at sunrise, not because of what it is
+    // called. They are here so a failed fetch or a nudged phase names the
+    // sky an author would recognise instead of an index.
+    const char* const SEED_SKY_NAME[SEED_SKY_COUNT] = {
+        "Daylight 1", "Daylight 2", "Daylight 3", "Dusk", "Night", "Sunrise", "Sunset"
+    };
+
+    // Used only when the track has no sun to measure the skies against (a
+    // homeless or emitterless world): spread evenly over the cycle in list
+    // order, which claims nothing about which sky is which time of day
+    // beyond the order they were listed in. Snapped like everything else
+    // here - see ss_atmoenv_snap_phase.
+    F64 seedSkyEvenPhase(S32 slot)
+    {
+        return ss_atmoenv_snap_phase((F64)slot / (F64)SEED_SKY_COUNT);
+    }
+
+    // Joins the concurrent getSettingsAsset() calls: each callback
+    // fills its own slot (or leaves it null on failure) and decrements
+    // mPending exactly once - mDone is the guard that makes "exactly once"
+    // hold even against a hypothetical double-fire - and whichever
+    // callback lands last builds and writes the asset. Held by shared_ptr
+    // so it survives however the fetches interleave, including a cached
+    // asset resolving synchronously inside the request call.
+    struct SeedSkyCollector
+    {
+        LLSettingsSky::ptr_t mSkies[SEED_SKY_COUNT];
+        bool mDone[SEED_SKY_COUNT] = { false };
+        S32 mPending = SEED_SKY_COUNT;
+    };
+
+    // Where the sun stands in a given sky, as a direction in the observer's
+    // sky frame. EEP stores it as a rotation carrying +X onto that
+    // direction (see convert_azimuth_and_altitude_to_quat in
+    // llsettingssky.cpp) - the same frame and the same convention the
+    // applier publishes ours in, so the two are directly comparable.
+    LLVector3 seedSkySunDirection(const LLSettingsSky& sky)
+    {
+        LLVector3 dir = LLVector3::x_axis * sky.getSunRotation();
+        if (dir.normalize() < 0.0001f) dir = LLVector3::z_axis;
+        return dir;
+    }
+
+    // Where each fetched sky belongs on this track's cycle, measured
+    // against the track's own sun rather than assumed.
+    //
+    // A sky was painted for a particular sun position and carries it, so
+    // the honest placement is "the phase at which OUR sun stands closest
+    // to where THAT sky's sun stands". Matching the whole direction rather
+    // than just its height is what makes this work for an arbitrary set of
+    // skies: every elevation below the peak happens twice a day, so
+    // elevation alone cannot tell a dawn sky from a dusk one, while their
+    // suns sit on opposite sides of the sky.
+    //
+    // Nothing here needs to know what a sky is called or which time of day
+    // it was meant to be. A set of six is placed the same way a set of two
+    // or twenty would be, and a sky whose sun sits higher than this world's
+    // sun ever climbs still lands at the closest approach rather than
+    // failing.
+    //
+    // This is also what makes seeding correct for a world whose noon is
+    // not at phase 0.5 - which is any world with an authored orbital
+    // phase, the default Earth included: with its 1 AU orbit the sun
+    // culminates at phase 0.75, so any fixed-phase placement would put
+    // every sky a quarter of a cycle from the sun it describes.
+    void seedSkyPhases(const SSAtmoEnvTrack& track, const SeedSkyCollector& skies,
+                       F64 (&out_phase)[SEED_SKY_COUNT])
+    {
+        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        {
+            out_phase[slot] = seedSkyEvenPhase(slot);
+        }
+
+        // Whichever body the renderer will actually light this world with -
+        // asked of the same function the applier asks, so seeding can never
+        // measure against a different "sun" than the one that rises.
+        SSAtmoEnvResolvedBody sun;
+        SSAtmoEnvResolvedBody moon;
+        SSAtmoEnvPlanetaryResolver::resolveLightRoles(track.mPlanetary, sun, moon);
+        if (sun.mBodyIndex < 0) return;
+
+        const S32 home = track.mPlanetary.homeBodyIndex();
+        const F32 tilt = (home >= 0)
+            ? track.mPlanetary.mBodies[static_cast<size_t>(home)].mAxialTiltDeg : 0.f;
+        const F32 lat = (home >= 0)
+            ? track.mPlanetary.mBodies[static_cast<size_t>(home)].mLatitudeDeg : 0.f;
+
+        F64 measured[SEED_SKY_COUNT];
+        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        {
+            measured[slot] = out_phase[slot];
+            if (!skies.mSkies[slot]) continue;   // never fetched; nothing will be stamped there anyway
+
+            // Snapped to the scrubber's own grid: a phase measured from a
+            // world's sun lands anywhere, and a keyframe an author cannot
+            // scrub onto is one they cannot edit. Half a stop of error in
+            // when a sky appears is invisible; a keyframe you can never
+            // select is not.
+            measured[slot] = ss_atmoenv_snap_phase(
+                SSAtmoEnvPlanetaryResolver::phaseForSunDirection(
+                    sun.mDirection, tilt, lat, seedSkySunDirection(*skies.mSkies[slot])));
+        }
+
+        // The sun's own daily curve, which the branch split below solves
+        // against - see SSAtmoEnvDiurnalArc.
+        const SSAtmoEnvDiurnalArc arc =
+            SSAtmoEnvPlanetaryResolver::diurnalArc(sun.mDirection, tilt, lat);
+
+        // Skies whose suns sit at the same height get put on OPPOSITE
+        // halves of the day before anything else is decided.
+        //
+        // A sunrise sky and a sunset sky are the same sun at the same
+        // elevation - that is what makes them look alike - so measuring
+        // the direction alone lands them within a few degrees of each
+        // other and the separation pass below then parks them side by
+        // side, which reads as the pair having been merged into one.
+        //
+        // The information that tells them apart is not in the sun's
+        // position at all: it is which way the sun is GOING. A static sky
+        // cannot say, so the list order decides - the earlier of a
+        // colliding low-sun pair takes the rising branch, the later takes
+        // the setting one. That is the one place a sky's position in the
+        // list is allowed to mean something, and only ever as a tie-break.
+        {
+            // "Low" is a sun within this of the horizon either way, which
+            // is the band the twilight skies live in and nothing else does.
+            const F32 LOW_SUN_SIN = 0.25f;   // about 14 degrees
+
+            for (S32 a = 0; a < SEED_SKY_COUNT; ++a)
+            {
+                if (!skies.mSkies[a]) continue;
+                const F32 sin_a = seedSkySunDirection(*skies.mSkies[a]).mV[VZ];
+                if (fabsf(sin_a) > LOW_SUN_SIN) continue;
+
+                for (S32 b = a + 1; b < SEED_SKY_COUNT; ++b)
+                {
+                    if (!skies.mSkies[b]) continue;
+                    const F32 sin_b = seedSkySunDirection(*skies.mSkies[b]).mV[VZ];
+                    if (fabsf(sin_b) > LOW_SUN_SIN) continue;
+
+                    F64 gap = std::fabs(measured[a] - measured[b]);
+                    gap = llmin(gap, 1.0 - gap);
+                    if (gap >= 0.08) continue;   // already well apart; leave them
+
+                    F64 rising = 0.0, setting = 0.0;
+                    SSAtmoEnvPlanetaryResolver::phaseForElevation(arc, sin_a, true, rising);
+                    SSAtmoEnvPlanetaryResolver::phaseForElevation(arc, sin_b, false, setting);
+
+                    LL_INFOS("AtmoMagicEnv") << "Seed skies " << SEED_SKY_NAME[a] << " and "
+                        << SEED_SKY_NAME[b] << " have their suns at the same height; putting "
+                        << SEED_SKY_NAME[a] << " on the rising side (" << rising << ") and "
+                        << SEED_SKY_NAME[b] << " on the setting side (" << setting << ")" << LL_ENDL;
+
+                    measured[a] = ss_atmoenv_snap_phase(rising);
+                    measured[b] = ss_atmoenv_snap_phase(setting);
+                }
+            }
+        }
+
+        // Two skies can measure to the same instant - a set with three
+        // daylight skies in it very likely has at least two suns within a
+        // few degrees of each other. That is not an error and not a reason
+        // to throw the measurement away: they really are at the same time of
+        // day, and what they differ in is the look. Separating them by the
+        // minimum readable gap, in measured order, keeps every sky in the
+        // cycle and keeps the order their suns actually put them in.
+        //
+        // (An earlier version abandoned the whole measurement and spread the
+        // set evenly on any collision. One pair landing together would then
+        // move every other sky off the phase its own sun asked for, which is
+        // a great deal of damage from a little ambiguity.)
+        // One scrubber stop: the closest two keyframes can sit and still be
+        // separately reachable. Anything finer would put them on the same
+        // stop, which is the collision this pass exists to resolve.
+        const F64 SEED_PHASE_MIN_GAP = 1.0 / (F64)SS_ATMOENV_PREVIEW_STEPS;
+
+        S32 order[SEED_SKY_COUNT];
+        S32 order_count = 0;
+        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        {
+            if (skies.mSkies[slot]) order[order_count++] = slot;
+        }
+        std::sort(order, order + order_count,
+                  [&measured](S32 a, S32 b) { return measured[a] < measured[b]; });
+
+        for (S32 k = 1; k < order_count; ++k)
+        {
+            const S32 prev = order[k - 1];
+            const S32 here = order[k];
+            const F64 gap = measured[here] - measured[prev];
+            if (gap >= SEED_PHASE_MIN_GAP) continue;
+
+            const F64 pushed = ss_atmoenv_snap_phase(measured[prev] + SEED_PHASE_MIN_GAP);
+            LL_INFOS("AtmoMagicEnv") << "Seed skies " << SEED_SKY_NAME[prev] << " and "
+                << SEED_SKY_NAME[here] << " measure to the same point in the cycle ("
+                << measured[here] << "); moving the second to " << pushed
+                << " so both survive" << LL_ENDL;
+            measured[here] = pushed;
+        }
+
+        // The last one may have been pushed past the end of the cycle by the
+        // pass above. Wrapping it would put it before the first sky and undo
+        // the ordering that pass just established, so it is clamped just
+        // inside instead: phases are a circle, but a keyframe at 1.0 and one
+        // at 0.0 are the same keyframe.
+        if (order_count > 0)
+        {
+            const S32 last = order[order_count - 1];
+            measured[last] = ss_atmoenv_snap_phase(
+                llmin(measured[last], 1.0 - SEED_PHASE_MIN_GAP));
+        }
+
+        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        {
+            out_phase[slot] = measured[slot];
+        }
+    }
+
+    // The fallback matrix, applied once every fetch has resolved:
+    //   two or more -> a day cycle, each arrived sky keyframed at its own
+    //                  measured phase; the cycle interpolates across
+    //                  whatever did not arrive
+    //   exactly 1   -> plain-seed from it - one sky cannot describe a
+    //                  cycle, so keyframing it would just wrap a constant
+    //                  in animation clothing
+    //   none        -> plain makeDefault(), warnings already logged per
+    //                  failed fetch
+    SSAtmoEnvAsset buildSeededDefault(const SeedSkyCollector& skies)
+    {
+        SSAtmoEnvAsset def = SSAtmoEnvAsset::makeDefault();
+        if (def.mTracks.empty()) return def;
+
+        S32 arrived = 0;
+        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        {
+            if (skies.mSkies[slot]) ++arrived;
+        }
+        if (arrived == 0) return def;
+
+        SSAtmoEnvTrack& ground = def.mTracks[0];
+        if (arrived == 1)
+        {
+            for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+            {
+                if (!skies.mSkies[slot]) continue;
+                // The sky's fields split across two structs (haze/lighting
+                // vs. the legacy cloud layer), so both seed here - one
+                // fetched sky, transcribed in full.
+                ground.mAtmosphere.fromSettingsSky(*skies.mSkies[slot]);
+                ground.mCloudDome.fromSettingsSky(*skies.mSkies[slot]);
+            }
+            return def;
+        }
+
+        // Measured placement for everything that arrived - see
+        // seedSkyPhases. Slots that failed to fetch carry a phase too, but
+        // nothing is stamped at them.
+        F64 phase[SEED_SKY_COUNT];
+        seedSkyPhases(ground, skies, phase);
+
+        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        {
+            if (!skies.mSkies[slot]) continue;
+            ground.mAtmosphere.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
+            ground.mCloudDome.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
+        }
+
+        // The stock skies each bring their own cloud map, and stamping seven
+        // of them leaves the deck changing texture through the day - which
+        // is a real thing skies do, but not one anybody asked this to do by
+        // default, and it reads as the clouds blinking between shapes rather
+        // than evolving. One map for the whole cycle, chosen for being a
+        // plausible everyday deck; an author who wants the changes back has
+        // a keyframed texture row to put them on.
+        ground.mCloudDome.mNoiseTexture =
+            SSAtmoEnvKeyframed<LLUUID>(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED));
+
+        // Cleanup pass: a field the stamped skies all agree on (the cloud
+        // noise map, most of the optics dials) collapses back to a plain
+        // value - a constant should not carry four redundant keyframes
+        // into every notecard this document ever saves.
+        ground.mAtmosphere.collapseConstantKeyframes();
+        ground.mCloudDome.collapseConstantKeyframes();
+        return def;
+    }
+}
+
 // static
 void SSAtmoEnvManager::createDefaultNotecard(const LLUUID& parent_id,
-                                         std::function<void(const LLUUID& item_id, const LLUUID& asset_id)> on_created)
+                                         std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
 {
-    const SSAtmoEnvAsset def = SSAtmoEnvAsset::makeDefault();
-
-    if (parent_id.notNull())
+    // Pre-step: fetch EEP's four stock non-legacy skies and seed the
+    // ground track's atmosphere + cloud dome as a full day cycle (see
+    // buildSeededDefault above), so a fresh environment opens on the
+    // Sunrise/Midday/Sunset/Midnight everyone already knows instead of
+    // LLSettingsSky's code-baked legacy defaults. Settings assets are
+    // immutable and getSettingsAsset() reads through the asset cache, so
+    // this is one round trip per sky per cache lifetime, not per creation.
+    // Any failure (no asset system, fetch error, or an asset that somehow
+    // isn't a sky) degrades per the fallback matrix rather than blocking -
+    // creation itself must never be hostage to a fetch.
+    if (!gAssetStorage)
     {
-        writeAssetAsNotecard(def, def.mName, parent_id, on_created);
+        LL_WARNS("AtmoMagicEnv") << "Asset system unavailable; creating Atmo v3 environment with built-in defaults instead of the stock sky cycle" << LL_ENDL;
+        writeDefaultNotecard(SSAtmoEnvAsset::makeDefault(), parent_id, on_created);
         return;
     }
 
-    atmoFolderId([def, on_created](const LLUUID& folder_id)
+    LLUUID known_ids[SEED_SKY_COUNT];
+    for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
     {
-        writeAssetAsNotecard(def, def.mName, folder_id, on_created);
-    });
+        known_ids[slot] = LLUUID(SEED_SKY_ID[slot]);
+    }
+
+    auto collector = std::make_shared<SeedSkyCollector>();
+    for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+    {
+        LLSettingsVOBase::getSettingsAsset(known_ids[slot],
+            [collector, slot, parent_id, on_created](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+            {
+                if (collector->mDone[slot]) return; // see SeedSkyCollector - each slot resolves exactly once
+                collector->mDone[slot] = true;
+
+                LLSettingsSky::ptr_t sky;
+                if (!status && settings)
+                {
+                    sky = std::dynamic_pointer_cast<LLSettingsSky>(settings);
+                }
+                if (sky)
+                {
+                    collector->mSkies[slot] = sky;
+                }
+                else
+                {
+                    LL_WARNS("AtmoMagicEnv") << "Could not fetch seed sky " << SEED_SKY_NAME[slot]
+                                             << " sky " << asset_id << " (status " << status
+                                             << "); seeding the new Atmo v3 environment without it" << LL_ENDL;
+                }
+
+                if (--collector->mPending > 0) return;
+
+                // Last fetch in - however they interleaved, this runs once.
+                writeDefaultNotecard(buildSeededDefault(*collector), parent_id, on_created);
+            });
+    }
 }
 
 void SSAtmoEnvManager::adoptCreated(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
@@ -191,6 +582,13 @@ void SSAtmoEnvManager::adoptCreated(const LLUUID& item_id, const LLUUID& asset_i
     mItemID = item_id;
     mAssetID = asset_id;
     mBaseline = asset;
+
+    // Adopted from somewhere. Assume the user put it here: discovery calls
+    // noteSource(id, true) straight after its own apply, so the parcel case
+    // corrects this a moment later, and everything else - a hand load, a
+    // drag-drop, a fresh creation - is correctly the user's and is left
+    // alone when they cross a parcel boundary.
+    mFromParcel = false;
     mWorking = asset;
     mHasAsset = true;
     mStatus = "Ready.";
@@ -432,6 +830,21 @@ bool SSAtmoEnvManager::applyExternalNotecardText(const LLUUID& source_id, const 
     mAssetID = source_id;
     mItemID.setNull();
     return applyNotecardText(text, false);
+}
+
+void SSAtmoEnvManager::unload()
+{
+    if (!mHasAsset) return;
+
+    LL_INFOS("AtmoMagicEnv") << "Unloading the Atmo Magic environment; the world"
+                                " falls back to the parcel or region setting" << LL_ENDL;
+
+    mHasAsset = false;
+    mWorking = SSAtmoEnvAsset();
+    mBaseline = SSAtmoEnvAsset();
+    mSourceAssetId.setNull();
+    mFromParcel = false;
+    clearPreviewPhaseOverride();
 }
 
 bool SSAtmoEnvManager::adoptParsedAsset(const LLSD& sd)

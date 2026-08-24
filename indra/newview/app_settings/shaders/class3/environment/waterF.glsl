@@ -93,6 +93,18 @@ uniform sampler2D exclusionTex;
 uniform int classic_mode;
 uniform vec3 lightDir;
 uniform vec3 specular;
+
+// <SS:Nexii> Angular radius of the body lighting the water, in radians.
+uniform float ss_light_angular_radius;
+
+// ...and the moon's own light, for when it is the only thing up.
+//
+// The punctual term below is scaled by sunlit, which is what the
+// ATMOSPHERE delivers from the sun - so with the sun below the horizon it
+// is zero and the moon laid down no glitter path at all, however bright the
+// disc in the sky. This is the light that replaces it at night.
+uniform vec3 ss_moonlit;
+uniform float ss_sun_up;
 uniform float blurMultiplier;
 uniform float refScale;
 uniform float kd;
@@ -290,6 +302,17 @@ void main()
 
     float metallic = 1.0;
     float perceptualRoughness = blurMultiplier;
+
+    // <SS:Nexii> Widen the specular lobe by the light's own angular size.
+    //
+    // pbrPunctual treats the light as a point, so on its own the glitter
+    // path is as narrow as the water is smooth however large the body in
+    // the sky is. This is the standard sphere-light approximation - fold
+    // the source's angular radius into the roughness - so a big authored
+    // moon lays down a broad soft path and a small one a tight bright
+    // streak, matching the disc actually drawn up there.
+    perceptualRoughness = clamp(perceptualRoughness + ss_light_angular_radius, 0.0, 1.0);
+    // </SS:Nexii>
     float gloss      = 1 - perceptualRoughness;
 
     vec3  irradiance = vec3(0);
@@ -322,7 +345,11 @@ void main()
 
     pbrPunctual(diffuseColor, specularColor, perceptualRoughness, metallic, normalize(wavef+up*max(dist, 32.0)/32.0*(1.0-vdu)), v, normalize(light_dir), nl, diffPunc, specPunc);
 
-    vec3 punctual = clamp(nl * (diffPunc + specPunc), vec3(0), vec3(10)) * sunlit_linear * shadow * atten;
+    // <SS:Nexii> Whichever body is actually up lights the water - see
+    // ss_moonlit. With the sun down this used to fall to zero and take the
+    // moon's reflection with it.
+    vec3 ss_punctual_light = mix(srgb_to_linear(ss_moonlit), sunlit_linear, ss_sun_up);
+    vec3 punctual = clamp(nl * (diffPunc + specPunc), vec3(0), vec3(10)) * ss_punctual_light * shadow * atten;
     radiance *= df2.y;
     //radiance = toneMapNoExposure(radiance);
     vec3 color = vec3(0);

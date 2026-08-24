@@ -27,7 +27,9 @@
 #include "sssurfacefield.h"
 
 #include "ssatmomagic.h"
+#include "ssavatarwet.h"
 #include "ssprecippreset.h"
+#include "ssprecipitation.h"
 #include "ssrainshadow.h"
 
 #include "llappviewer.h"
@@ -72,18 +74,6 @@ static const F32 REBUILD_DZ      = 0.35f;
 // the edge of a flat roof reads flat, which is what it is.
 static const F32 SLOPE_STEP_MAX  = 3.f;     // multiples of the cell size
 
-// How much more than its own footprint a hollow has to drain before it stands
-// full depth. A cell catching only itself gets a film; one taking a whole roof
-// face gets the puddle.
-static const F32 PUDDLE_CATCH_FULL = 12.f;  // multiples of the cell area
-
-// How much a cell has to be draining through it before it reads as a channel
-// worth animating, in the same units as PUDDLE_CATCH_FULL above. Lower than
-// that figure on purpose: a run of water crossing a cell on its way
-// somewhere else is visibly moving long before it has gathered enough to
-// stand as a puddle, and the two effects are meant to hand off to each other
-// rather than switch on together.
-static const F32 FLOW_CATCH_FULL = 5.f;
 
 // The stitched window handed to the shaders. 256 cells at the drainage
 // resolution is 256 metres around the camera on a standard region, which is
@@ -111,7 +101,458 @@ void SSSurfaceField::clear()
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
 }
 
-SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const SSRunoffField& src, F64 now)
+// The resolution the geometry is reduced to. The same figure the drainage
+// trace used, kept because it is what the Field lattice and the stitched
+// window are both built around - the window copies cells rather than
+// resampling them, which only works while everyone agrees on the cell size.
+// The gradient at which a surface is running water as hard as this system
+// draws it - about 40 degrees, a steep roof pitch. Anything steeper streaks
+// at full strength rather than more; there is no more to give.
+static const F32 SLOPE_RUN_FULL = 0.85f;
+
+// How far a neighbour has to sit below a cell before the cell counts as a
+// lip rather than a step. A kerb is not an eave; a roof edge over a two
+// storey drop is.
+static const F32 GEOM_EDGE_DROP = 1.5f;
+
+// Shedding. A lip catches the rain landing on its own footprint plus an
+// allowance for the surface feeding it from behind, and that allowance is
+// inferred from the local pitch rather than routed: a steep roof delivers
+// what lands on it to its eaves, a flat one mostly holds it. This is the
+// deliberate simplification that replaced the drainage solve - the number
+// is a plausible metres-squared, not an accounting of where water went.
+static const F32 SHED_FEED_FLAT  = 1.5f;    // cell footprints, on the level
+static const F32 SHED_FEED_STEEP = 9.f;     // cell footprints, at SLOPE_RUN_FULL
+
+// Drops that gather into one drip on the way down. Water arrives at an eave
+// as fewer, fatter drips than the rain that fed it, which is also what keeps
+// a warehouse roof from costing more particles than the rain landing on it.
+static const F32 SHED_MERGE = 12.f;
+
+// Where an edge stops shedding drops and starts running as a sheet, in drips
+// per second, and how far past that it takes to become one entirely.
+static const F32 SHED_STREAM_MIN  = 8.f;
+static const F32 SHED_STREAM_FULL = 24.f;
+
+// Ceilings, per lip cell and per frame. A downpour on a city block is
+// thousands of lips; the look does not improve past a handful of runs near
+// the camera, and the particle pool has ripples and splashes to serve too.
+static const F32 SHED_MAX_RATE = 40.f;      // drips per second from one lip
+static const S32 SHED_MAX_BURST = 4;        // drips one lip may start in a frame
+static const S32 SHED_VISIT_PER_FRAME = 96; // lip cells examined per region
+
+// Widest curtain a preset may ask for, so one stream cannot span a bridge.
+// Carried over from the shedder this replaced, where it bounded the same
+// preset field.
+static const F32 STREAM_SPAN_MAX = 24.f;
+
+static const S32 GEOM_RES = 128;
+
+// Above this gradient a cell is a wall rather than a surface anything lies
+// on. Water still runs down it (that is what the slope channel is for) but
+// nothing settles or stands.
+static const F32 GEOM_WALL_SLOPE = 1.2f;
+
+// A cell holds standing water when it is flatter than this and no neighbour
+// is meaningfully lower - "this is a dip", asked of the eight cells around
+// it and nothing further away. Deliberately strict: a puddle is a dip in the
+// ground, and the looser this gets the more a level plaza turns into one
+// enormous sheet of standing water.
+static const F32 GEOM_POOL_SLOPE = 0.06f;
+
+// Height differences below this are the capture's own noise rather than
+// relief. A level street reads as a field of sub-millimetre ties, and
+// letting that decide which way a cell drains is how a puddle ends up
+// somewhere different on every recapture.
+static const F32 GEOM_FLAT_NOISE = 0.02f;
+
+// static
+void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geometry& out)
+{
+    const S32 n = grid.mN;
+    const size_t count = (size_t)n * n;
+
+    out.mN = n;
+    out.mCell = grid.mCell;
+    out.mGeomSerial = grid.mGeomSerial;
+    out.mZ = grid.mZ;
+    out.mFlags = grid.mFlags;
+    out.mSlopeX.assign(count, 0.f);
+    out.mSlopeY.assign(count, 0.f);
+    out.mSlope.assign(count, 0.f);
+    out.mPool.assign(count, 0);
+    out.mEdge.assign(count, 0);
+    out.mEdgeX.assign(count, 0.f);
+    out.mEdgeY.assign(count, 0.f);
+    out.mEdgeCells.clear();
+
+    const F32 cell = grid.mCell;
+    if (n < 3 || cell <= 0.f) return;
+
+    // How far apart two neighbouring cells' heights may be and still be the
+    // same surface. Beyond it they are a roof and the ground below it, and a
+    // gradient across that pair would describe a cliff that no water follows
+    // - it would just be the lip.
+    const F32 step_max = cell * 3.f;
+
+    for (S32 y = 0; y < n; ++y)
+    {
+        for (S32 x = 0; x < n; ++x)
+        {
+            const size_t i = (size_t)y * n + x;
+            if (!out.solid(i) || out.water(i)) continue;
+
+            const F32 z0 = out.mZ[i];
+
+            // Central differences where both neighbours are on this surface,
+            // one-sided where only one is, zero at a lip. The result is the
+            // direction water on this cell runs - straight down the slope,
+            // which is all the directionality this system claims to model.
+            auto gradAlong = [&](S32 lo, S32 hi, bool have_lo, bool have_hi) -> F32
+            {
+                const bool ok_lo = have_lo && out.solid((size_t)lo)
+                    && fabsf(out.mZ[(size_t)lo] - z0) < step_max;
+                const bool ok_hi = have_hi && out.solid((size_t)hi)
+                    && fabsf(out.mZ[(size_t)hi] - z0) < step_max;
+
+                if (ok_lo && ok_hi) return (out.mZ[(size_t)hi] - out.mZ[(size_t)lo]) * 0.5f / cell;
+                if (ok_hi) return (out.mZ[(size_t)hi] - z0) / cell;
+                if (ok_lo) return (z0 - out.mZ[(size_t)lo]) / cell;
+                return 0.f;
+            };
+
+            const F32 gx = gradAlong((S32)i - 1, (S32)i + 1, x > 0, x < n - 1);
+            const F32 gy = gradAlong((S32)i - n, (S32)i + n, y > 0, y < n - 1);
+
+            const F32 mag = sqrtf(gx * gx + gy * gy);
+            out.mSlope[i] = mag;
+            if (mag > 0.0001f)
+            {
+                // Downhill is the negative gradient.
+                out.mSlopeX[i] = -gx / mag;
+                out.mSlopeY[i] = -gy / mag;
+            }
+
+            // Standing water: flat enough, and a dip rather than a shelf.
+            // Both halves matter - "flat" alone would flood every rooftop
+            // and pavement, which is exactly the runaway the size limit is
+            // meant to prevent.
+            if (mag > GEOM_POOL_SLOPE) continue;
+
+            bool dips = true;
+            for (S32 dy = -1; dy <= 1 && dips; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    const S32 nx = x + dx, ny = y + dy;
+                    if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+                    const size_t ni = (size_t)ny * n + nx;
+                    if (!out.solid(ni)) continue;
+                    if (fabsf(out.mZ[ni] - z0) > step_max) continue; // over a lip; not this surface
+
+                    if (out.mZ[ni] < z0 - GEOM_FLAT_NOISE)
+                    {
+                        dips = false;   // it drains that way instead
+                        break;
+                    }
+                }
+            }
+
+            out.mPool[i] = dips ? 1 : 0;
+        }
+    }
+
+    // Lips, in a second pass so it can read the slopes the first one wrote.
+    // A cell is a lip when a neighbour is open air or a long way below it:
+    // the edge of a roof, a balcony rail, a bridge deck. Water reaching one
+    // comes off it, and that is all the "drainage" this system needs to know
+    // - no network, no catchment, no routing. Which way it comes off is the
+    // sum of the directions the drops lie in.
+    for (S32 y = 0; y < n; ++y)
+    {
+        for (S32 x = 0; x < n; ++x)
+        {
+            const size_t i = (size_t)y * n + x;
+            if (!out.solid(i) || out.water(i)) continue;
+
+            const F32 z0 = out.mZ[i];
+            F32 ox = 0.f, oy = 0.f;
+
+            static const S32 DX[4] = { 1, -1, 0, 0 };
+            static const S32 DY[4] = { 0, 0, 1, -1 };
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const S32 nx = x + DX[d], ny = y + DY[d];
+                if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+                const size_t ni = (size_t)ny * n + nx;
+                const bool open = !out.solid(ni);
+                const bool below = out.solid(ni) && (z0 - out.mZ[ni]) > GEOM_EDGE_DROP;
+                if (!open && !below) continue;
+
+                ox += (F32)DX[d];
+                oy += (F32)DY[d];
+            }
+
+            const F32 len = sqrtf(ox * ox + oy * oy);
+            if (len < 0.0001f) continue;    // no drop beside it; not a lip
+
+            out.mEdge[i] = 1;
+            out.mEdgeX[i] = ox / len;
+            out.mEdgeY[i] = oy / len;
+            out.mEdgeCells.push_back((S32)i);
+        }
+    }
+}
+
+void SSSurfaceField::refreshGeometry()
+{
+    SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
+
+    std::vector<std::pair<U64, U32> > tiles;
+    shadow->validTiles(tiles);
+
+    for (const auto& entry : tiles)
+    {
+        Geometry& geom = mGeometry[entry.first];
+        // Keyed on the geometry revision, not the capture: the tile is
+        // recaptured whenever the camera climbs out of its band or the wind
+        // swings the fall direction, and neither of those changes the shape
+        // of a roof. Rebuilding on every capture would re-derive an identical
+        // answer several times a minute.
+        if (geom.valid() && geom.mGeomSerial == entry.second) continue;
+
+        SSRainShadowMap::SurfaceGrid grid;
+        if (!shadow->buildSurfaceGrid(entry.first, GEOM_RES, grid)) continue;
+
+        buildGeometry(grid, geom);
+    }
+
+    // Regions the shadow map has forgotten (walked out of range, or torn
+    // down) take their geometry with them - the Field on top of it is evicted
+    // separately, on its own idle timer.
+    for (auto it = mGeometry.begin(); it != mGeometry.end(); )
+    {
+        bool still_there = false;
+        for (const auto& entry : tiles)
+        {
+            if (entry.first == it->first) { still_there = true; break; }
+        }
+        it = still_there ? std::next(it) : mGeometry.erase(it);
+    }
+}
+
+// How long a lip takes to shed what it is holding, in seconds. This is what
+// keeps an eave running after the rain stops - and what keeps it running
+// THROUGH a gust lull, which is the failure the reservoir exists to prevent:
+// a shed rate taken straight off the instantaneous weather made every eave
+// in the region stutter in time with the gusts.
+static const F32 SHED_DRAIN_TAU = 6.f;
+
+// Ceiling on the reservoir, as multiples of what one second of the current
+// inflow adds. A roof holds a film, not a tank; without this a long storm
+// would bank hours of water and go on shedding it into a clear evening.
+static const F32 SHED_STORE_CEILING = 8.f;
+
+void SSSurfaceField::shedEdges(F32 dt)
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    SSPrecipSim* sim = atmo ? atmo->sim() : nullptr;
+    if (!sim || dt <= 0.f) return;
+
+    static LLCachedControl<F32> scale_setting(gSavedSettings, "SSAtmoRunoffScale", 1.f);
+    const F32 scale = llclamp((F32)scale_setting, 0.f, 4.f);
+    if (scale <= 0.f) return;
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+    // Drops per square metre per second the weather is actually delivering.
+    // Sampled once at the camera rather than per lip: the field it comes from
+    // drifts over hundreds of metres, so it says the same thing anywhere in
+    // the shedding radius.
+    const F32 rate_m2 = SSPrecipSim::dropRateAt(cam) * scale;
+
+    for (auto& entry : mFields)
+    {
+        auto geom_it = mGeometry.find(entry.first);
+        if (geom_it == mGeometry.end()) continue;
+
+        const Geometry& geom = geom_it->second;
+        Field& fld = entry.second;
+        if (!geom.valid() || geom.mN != fld.mN) continue;
+
+        shedRegion(entry.first, geom, fld, dt, rate_m2, cam);
+    }
+}
+
+void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& fld,
+                                F32 dt, F32 rate_m2, const LLVector3& camera_agent)
+{
+    if (geom.mEdgeCells.empty()) return;
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    SSPrecipSim* sim = atmo->sim();
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp) return;
+
+    const LLVector3 origin = regionp->getOriginAgent();
+    const F32 cell = geom.mCell;
+    const F32 cell_area = cell * cell;
+
+    static LLCachedControl<F32> radius_setting(gSavedSettings, "SSAtmoRunoffRadius", 48.f);
+    const F32 radius = llclamp((F32)radius_setting, 8.f, 128.f);
+    const F32 radius_sq = radius * radius;
+
+    // Drips share the effects pool with ripples and splash crowns, and in
+    // heavy rain the splashes alone can fill it - budgeting eaves against the
+    // whole pool shut them off exactly when it was raining hardest, which is
+    // precisely backwards. They are budgeted against their own share instead.
+    static const S32 DRIP_BUDGET = 220;
+    const S32 live = sim->dripCount();
+    const F32 budget = (live >= DRIP_BUDGET) ? 0.f
+                     : llmin(1.f, (F32)(DRIP_BUDGET - live) / (F32)(DRIP_BUDGET / 4));
+
+    const F64 now = atmo->sharedTime();
+
+    // Every lip integrates its reservoir every frame, wherever it is: a roof
+    // fills and drains whether or not anyone is watching it, and gating the
+    // accounting on distance would mean walking up to a building in a
+    // downpour and finding its eaves dry for the first few seconds. Only the
+    // shedding itself - the particles - is near-camera work, and only a slice
+    // of the lips are even considered for it in any one frame.
+    S32& cursor = mShedCursor[region_handle];
+    const S32 lip_count = (S32)geom.mEdgeCells.size();
+    if (cursor >= lip_count) cursor = 0;
+
+    S32 visited = 0;
+
+    for (S32 k = 0; k < lip_count; ++k)
+    {
+        const S32 i = geom.mEdgeCells[(size_t)k];
+        const size_t ui = (size_t)i;
+
+        // The catchment that is left: this cell's own footprint, plus an
+        // allowance for the pitch behind it. Statically inferred - a steep
+        // roof delivers what lands on it to its edge, a flat one mostly
+        // holds it - rather than accumulated through a flow network.
+        const F32 slope_norm = llclamp(geom.mSlope[ui] / SLOPE_RUN_FULL, 0.f, 1.f);
+        const F32 feed = cell_area * lerp(SHED_FEED_FLAT, SHED_FEED_STEEP, slope_norm);
+
+        const F32 inflow = feed * rate_m2;
+        fld.mStore[ui] = llmin(fld.mStore[ui] + inflow * dt,
+                               inflow * SHED_STORE_CEILING + 1.f);
+
+        const F32 outflow = fld.mStore[ui] / SHED_DRAIN_TAU;
+        fld.mStore[ui] = llmax(0.f, fld.mStore[ui] - outflow * dt);
+
+        // Nothing left to shed, and nothing arriving: skip the rest, which is
+        // all particle work.
+        if (outflow <= 0.01f)
+        {
+            fld.mAccum[ui] = 0.f;
+            continue;
+        }
+
+        // Only a slice of the lips gets as far as spawning anything in any
+        // one frame - see SHED_VISIT_PER_FRAME. The window starts at the
+        // rolling cursor and wraps, so over a few frames every lip gets its
+        // turn and none is starved.
+        const S32 offset = (k - cursor + lip_count) % lip_count;
+        if (offset >= SHED_VISIT_PER_FRAME) continue;
+        ++visited;
+
+        const S32 x = i % geom.mN;
+        const S32 y = i / geom.mN;
+        const LLVector3 lip = origin
+            + LLVector3(((F32)x + 0.5f) * cell, ((F32)y + 0.5f) * cell, 0.f);
+        const LLVector3 lip_agent(lip.mV[VX], lip.mV[VY], geom.mZ[ui]);
+
+        const LLVector3 delta = lip_agent - camera_agent;
+        if (delta.magVecSquared() > radius_sq)
+        {
+            fld.mAccum[ui] = 0.f;
+            continue;
+        }
+
+        const LLVector3 out_dir(geom.mEdgeX[ui], geom.mEdgeY[ui], 0.f);
+
+        // Where what comes off this lip lands. Resolved now rather than
+        // stored: only the handful of lips actually shedding this frame ask,
+        // and the answer changes whenever anything is built below them.
+        LLVector3 land = lip_agent;
+        bool on_water = false;
+        SSRainShadowMap::getInstance()->resolveColumn(
+            lip_agent + out_dir * (cell * 0.5f) - LLVector3(0.f, 0.f, 0.1f), land, on_water);
+
+        // Water gathers on the way down and arrives as fewer, fatter drips.
+        const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
+
+        // Past a point an edge stops shedding drops at all: a gutter in a
+        // downpour comes off as a continuous fall, and drawing that as more
+        // and more separate drips both reads wrong and costs a particle each.
+        const F32 stream_drive = llclamp(
+            (raw_rate - SHED_STREAM_MIN) / SHED_STREAM_FULL, 0.f, 1.f);
+
+        // One stream per lip cell, keyed stably on where it is, so the same
+        // edge is the same stream frame to frame and client to client.
+        const U32 key = SSAtmoNoise::combine(
+            SSAtmoNoise::combine((U32)region_handle, (U32)(region_handle >> 32)),
+            (U32)i);
+
+        SSRandStream rng(SSAtmoNoise::combine(atmo->seed(),
+            SSAtmoNoise::combine((U32)(S64)(now * 8.0), key)));
+        rng.next();
+
+        if (stream_drive > 0.f)
+        {
+            // The curtain spans this cell's own width by default, so a run of
+            // neighbouring lip cells puts up neighbouring curtains that meet
+            // end to end - a gutter, without anything having to know that the
+            // run exists. A preset asking for a particular span is taken at
+            // its word instead, the same way the old shedder took it.
+            const SSPrecipPreset& preset = atmo->preset();
+            const F32 width = (preset.mStreamSpan > 0.f)
+                ? llclamp(preset.mStreamSpan, 1.f, STREAM_SPAN_MAX) : cell;
+
+            sim->refreshStream(key, lip_agent, out_dir, land,
+                               stream_drive, width, 0.f, rng);
+        }
+
+        // Drips are the spatter around a running stream, not a second helping
+        // of it: once the stream is up it carries the water, and a full share
+        // of drips on top reads as the roof shedding twice.
+        const F32 drips_per_s = raw_rate * (1.f - 0.9f * stream_drive);
+        if (budget <= 0.f) continue;
+
+        fld.mAccum[ui] += drips_per_s * budget * dt;
+        S32 shed_now = (S32)fld.mAccum[ui];
+        if (shed_now <= 0) continue;
+
+        shed_now = llmin(shed_now, SHED_MAX_BURST);
+        fld.mAccum[ui] -= (F32)shed_now;
+
+        for (S32 d = 0; d < shed_now; ++d)
+        {
+            // Anywhere across the cell's width rather than exactly on its
+            // centre: a metre-wide lip shedding down one line reads as a
+            // dotted seam, which is the one thing a roof edge never looks
+            // like.
+            const LLVector3 along(-out_dir.mV[VY], out_dir.mV[VX], 0.f);
+            const LLVector3 jitter = along * (rng.frand(-0.5f, 0.5f) * cell);
+            sim->spawnDrip(lip_agent + jitter, out_dir, land + jitter, SHED_MERGE, rng);
+        }
+    }
+
+    // Advance by what was actually looked at, not by the window size: a
+    // region whose lips are all out of range would otherwise spin the cursor
+    // through them at a frame each for no reason.
+    cursor = (cursor + llmax(1, visited)) % lip_count;
+}
+
+SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const Geometry& geom, F64 now)
 {
     Field& fld = mFields[region_handle];
     fld.mRegionHandle = region_handle;
@@ -119,30 +560,32 @@ SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const SSRunof
 
     // A resolution change is a different grid, not a moved one, and there is
     // nothing sensible to carry across it
-    if (fld.mN != src.mN)
+    if (fld.mN != geom.mN)
     {
-        fld.mN = src.mN;
-        fld.mCell = src.mCell;
-        fld.mZ.assign(src.count(), 0.f);
-        fld.mWet.assign(src.count(), 0.f);
-        fld.mSnow.assign(src.count(), 0.f);
-        fld.mPuddle.assign(src.count(), 0.f);
+        fld.mN = geom.mN;
+        fld.mCell = geom.mCell;
+        fld.mZ.assign(geom.mZ.size(), 0.f);
+        fld.mWet.assign(geom.mZ.size(), 0.f);
+        fld.mSnow.assign(geom.mZ.size(), 0.f);
+        fld.mPuddle.assign(geom.mZ.size(), 0.f);
+        fld.mStore.assign(geom.mZ.size(), 0.f);
+        fld.mAccum.assign(geom.mZ.size(), 0.f);
 
         // Nothing has been standing in the weather yet, but the surface has to
-        // start out agreeing with the trace or the first tick would read every
-        // cell as freshly rebuilt and reset what it just cleared
-        std::copy(src.mZ, src.mZ + src.count(), fld.mZ.begin());
+        // start out agreeing with the geometry or the first tick would read
+        // every cell as freshly rebuilt and reset what it just cleared
+        fld.mZ = geom.mZ;
     }
 
-    fld.mCell = src.mCell;
+    fld.mCell = geom.mCell;
     return &fld;
 }
 
-void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
+void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
                           const SSPrecipPreset& preset, F32 intensity)
 {
-    const S32 n = src.mN;
-    const F32 cell = src.mCell;
+    const S32 n = geom.mN;
+    const F32 cell = geom.mCell;
     const F32 cell_area = cell * cell;
     const bool falling = intensity > 0.001f;
 
@@ -190,24 +633,24 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
 
             // Open air. Nothing to dress, and leaving stale values in the cell
             // would have them reappear if geometry came back under it.
-            if (!src.solid(i))
+            if (!geom.solid(i))
             {
                 fld.mWet[i] = fld.mSnow[i] = fld.mPuddle[i] = 0.f;
-                fld.mZ[i] = src.mZ[i];
+                fld.mZ[i] = geom.mZ[i];
                 continue;
             }
 
             // The surface moved: someone built here. Start it clean.
-            if (fabsf(src.mZ[i] - fld.mZ[i]) > REBUILD_DZ)
+            if (fabsf(geom.mZ[i] - fld.mZ[i]) > REBUILD_DZ)
             {
                 fld.mWet[i] = fld.mSnow[i] = fld.mPuddle[i] = 0.f;
-                fld.mZ[i] = src.mZ[i];
+                fld.mZ[i] = geom.mZ[i];
             }
 
             // Open water is not a surface the weather marks. It has its own
             // shading and its own response to rain, and a wet, snowed-over
             // lake would be neither.
-            if (src.water(i))
+            if (geom.water(i))
             {
                 fld.mWet[i] = fld.mSnow[i] = fld.mPuddle[i] = 0.f;
                 continue;
@@ -224,20 +667,20 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
             // is worth not doing on a wet night.
             auto lieHere = [&]()
             {
-                const F32 z0 = src.mZ[i];
+                const F32 z0 = geom.mZ[i];
                 const F32 limit = cell * SLOPE_STEP_MAX;
                 auto slopeAlong = [&](S32 lo_i, S32 hi_i, bool have_lo, bool have_hi)
                 {
                     F32 d_lo = 0.f, d_hi = 0.f;
                     bool ok_lo = false, ok_hi = false;
-                    if (have_lo && src.solid(lo_i) && fabsf(src.mZ[lo_i] - z0) < limit)
+                    if (have_lo && geom.solid(lo_i) && fabsf(geom.mZ[lo_i] - z0) < limit)
                     {
-                        d_lo = z0 - src.mZ[lo_i];
+                        d_lo = z0 - geom.mZ[lo_i];
                         ok_lo = true;
                     }
-                    if (have_hi && src.solid(hi_i) && fabsf(src.mZ[hi_i] - z0) < limit)
+                    if (have_hi && geom.solid(hi_i) && fabsf(geom.mZ[hi_i] - z0) < limit)
                     {
-                        d_hi = src.mZ[hi_i] - z0;
+                        d_hi = geom.mZ[hi_i] - z0;
                         ok_hi = true;
                     }
                     if (ok_lo && ok_hi) return (d_lo + d_hi) * 0.5f / cell;
@@ -257,11 +700,8 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
             // leaves the bare edges of it damp rather than dry.
             fld.mWet[i] += (wet_target - fld.mWet[i]) * wet_blend;
 
-            // Settled snow, up to what the slope will hold. What will not stay
-            // goes where the water off this cell would have gone, so a steep
-            // roof feeds the drift at the foot of it rather than simply
-            // refusing to take any - which is the drainage network answering a
-            // question it was not traced for, and getting it right anyway.
+            // Settled snow, up to what the slope will hold - and no further:
+            // a pitch too steep to hold snow stays bare.
             if (snowing)
             {
                 // Only what is arriving slides. Snow already lying does not
@@ -274,14 +714,12 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
                 }
                 else
                 {
-                    // Downstream may already have been visited this pass, in
-                    // which case it holds a little more than it should until
-                    // the next tick. At four a second against depths that take
-                    // minutes to build, that is not a difference anyone sees,
-                    // and an ordered second pass to avoid it would cost more
-                    // than the error does.
-                    const S32 down = src.mFlow[i];
-                    if (down >= 0) fld.mSnow[down] += snow_gain;
+                    // What will not lie here simply does not settle. It used
+                    // to be handed to the cell downhill, which was a water
+                    // -movement model in all but name; a steep roof now just
+                    // stays bare and the drift at the foot of it builds from
+                    // the snow landing there, which is where it was coming
+                    // from anyway.
                 }
             }
             else if (fld.mSnow[i] > 0.f)
@@ -291,20 +729,22 @@ void SSSurfaceField::tick(Field& fld, const SSRunoffField& src, F32 dt,
                 fld.mSnow[i] = llmax(0.f, fld.mSnow[i] - snow_loss);
             }
 
-            // Standing water, only where the trace says water stands. Depth is
-            // shared out by catchment: the hollow that drains a whole roof
-            // face stands full, the one that catches nothing but itself gets a
-            // film, and that is what puts puddles where a build would have
-            // them rather than evenly over every flat surface.
-            if (pooling && src.pools(i))
+            // Standing water, only in a cell the geometry says is a dip (see
+            // buildGeometry) and only up to the ceiling. There is no
+            // catchment term any more: a puddle is fed by the rain landing in
+            // it, not by water routed to it from a whole roof face, so its
+            // depth is bounded by the weather rather than by how much
+            // upstream a solver decided to hand it. That bound is the point -
+            // an unbounded catchment share is what let one hollow stand
+            // absurdly deep while the cell beside it stayed a film.
+            if (pooling && geom.mPool[i])
             {
-                const F32 share = llclamp(src.mCatch[i] / (cell_area * PUDDLE_CATCH_FULL), 0.f, 1.f);
-                fld.mPuddle[i] = llmin(puddle_depth_ceiling * share, fld.mPuddle[i] + puddle_gain);
+                fld.mPuddle[i] = llmin(puddle_depth_ceiling, fld.mPuddle[i] + puddle_gain);
             }
             else if (fld.mPuddle[i] > 0.f)
             {
-                // Either the weather has stopped delivering, or the trace has
-                // changed its mind about this cell being a hollow at all
+                // Either the weather has stopped delivering, or a rebuild has
+                // changed its mind about this cell being a dip at all
                 fld.mPuddle[i] = llmax(0.f, fld.mPuddle[i] - puddle_loss);
             }
 
@@ -372,19 +812,25 @@ void SSSurfaceField::idle(F32 dt)
 
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
 
-    std::vector<std::pair<U64, U32> > traced;
-    SSRunoff::getInstance()->tracedRegions(traced);
+    // Shape first, then what the weather has done to it: a region captured
+    // this frame is dressed this frame rather than next.
+    refreshGeometry();
 
-    for (const auto& entry : traced)
+    for (const auto& entry : mGeometry)
     {
-        const SSRunoffField src = SSRunoff::getInstance()->field(entry.first);
-        if (!src.valid()) continue;
+        const Geometry& geom = entry.second;
+        if (!geom.valid()) continue;
 
-        Field* fld = fieldFor(entry.first, src, now);
+        Field* fld = fieldFor(entry.first, geom, now);
         if (!fld) continue;
 
-        tick(*fld, src, step, preset, intensity);
+        tick(*fld, geom, step, preset, intensity);
     }
+
+    // Eaves: what the roofs are holding, and what comes off them. After the
+    // tick, so a lip sheds against this step's weather rather than last
+    // step's.
+    shedEdges(step);
 
     evict(now);
     updateWindow();
@@ -483,13 +929,14 @@ void SSSurfaceField::updateWindow()
         const S32 y0 = llmax(0, off_y), y1 = llmin(WINDOW_RES, off_y + fld.mN);
         if (x0 >= x1 || y0 >= y1) continue;
 
-        // The drainage network itself, fetched fresh rather than cached on
-        // the Field: geometry-derived and already owned by SSRunoff, so
-        // copying flow and catchment into the integrator alongside wet/snow/
-        // puddle would only be a second copy of data that already exists and
-        // could go stale between the two.
-        const SSRunoffField src = SSRunoff::getInstance()->field(entry.first);
-        const bool have_flow = src.valid() && src.mN == fld.mN;
+        // The surface's own shape, read fresh rather than cached on the
+        // Field: it is geometry, already owned by mGeometry, so copying the
+        // slope into the integrator alongside wet/snow/puddle would only be a
+        // second copy of data that already exists and could go stale between
+        // the two.
+        auto geom_it = mGeometry.find(entry.first);
+        const Geometry* geom = (geom_it != mGeometry.end()) ? &geom_it->second : nullptr;
+        const bool have_slope = geom && geom->valid() && geom->mN == fld.mN;
 
         for (S32 wy = y0; wy < y1; ++wy)
         {
@@ -504,29 +951,19 @@ void SSSurfaceField::updateWindow()
                 mWindowData[wi + 2] = fld.mSnow[fi];
                 mWindowData[wi + 3] = fld.mPuddle[fi];
 
-                if (have_flow && src.solid(fi) && !src.water(fi))
+                if (have_slope && geom->solid(fi) && !geom->water(fi))
                 {
-                    const S32 down = src.mFlow[fi];
-                    if (down >= 0)
-                    {
-                        const S32 dx = (down % fld.mN) - fx;
-                        const S32 dy = (down / fld.mN) - fy;
-                        const F32 len = sqrtf((F32)(dx * dx + dy * dy));
-                        if (len > 0.f)
-                        {
-                            // How much of this cell's own footprint is
-                            // drainage passing through rather than caught by
-                            // it - a run counts as a channel worth animating
-                            // well before it would count as a full puddle,
-                            // which is why this uses its own, smaller figure
-                            // rather than PUDDLE_CATCH_FULL.
-                            const F32 strength = llclamp(
-                                src.mCatch[fi] / (cell * cell * FLOW_CATCH_FULL), 0.f, 1.f);
-                            mWindowFlowData[wi]     = (F32)dx / len;
-                            mWindowFlowData[wi + 1] = (F32)dy / len;
-                            mWindowFlowData[wi + 2] = strength;
-                        }
-                    }
+                    // Which way water on this cell runs, and how hard it is
+                    // being pushed to run: the surface's own downslope
+                    // direction, and how steep it is against how much rain is
+                    // actually landing here. That product is the whole
+                    // directionality model - a steep roof in a downpour
+                    // streaks hard, the same roof in a drizzle barely does,
+                    // and a level floor never does however wet it gets.
+                    mWindowFlowData[wi]     = geom->mSlopeX[fi];
+                    mWindowFlowData[wi + 1] = geom->mSlopeY[fi];
+                    mWindowFlowData[wi + 2] =
+                        llclamp(geom->mSlope[fi] / SLOPE_RUN_FULL, 0.f, 1.f) * fld.mWet[fi];
                 }
             }
         }
@@ -572,18 +1009,16 @@ void SSSurfaceField::updateWindow()
         glGenTextures(1, &mWindowFlowTex);
         glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
 
-        // Nearest, deliberately unlike the main window: height, wetness and
-        // depth are all quantities that mean something halfway between two
-        // neighbouring cells, but flow direction is not. A roof valley has
-        // two channels meeting nearly head-on, and an eave has a cell mid-
-        // channel sitting right next to one that sheds and carries no
-        // direction at all - blending either pair of unit vectors gives a
-        // shrunken vector pointing somewhere between two real answers and
-        // meaning neither, which is exactly the broken-looking band this
-        // was leaving right at every valley and eave. A hard cut between
-        // whole cells is a far smaller visible seam than that.
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        // Linear, like the main window. This used to be nearest, because a
+        // routed flow field genuinely could not be interpolated: two channels
+        // meeting head-on in a roof valley blend to a shrunken vector that
+        // points somewhere between two real answers and means neither. A
+        // gradient field has no such discontinuities - neighbouring cells on
+        // one surface slope almost the same way, by construction - so it
+        // interpolates cleanly, and the hard cell edges that idiom cost are
+        // gone with it.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
@@ -751,6 +1186,12 @@ void SSSurfaceField::renderWetPass()
     // deferred unbind below only knows about the channels it claimed itself.
     const S32 field_channel = gSSSurfaceWetProgram.mActiveTextureChannels;
     bindForShader(gSSSurfaceWetProgram, field_channel);
+
+    // Avatar capsules, uploaded whether or not there are any: the shader
+    // reads ssAvatarCount before anything else, and a stale count from a
+    // previous frame would have it testing capsules that are no longer
+    // there.
+    SSAvatarWet::getInstance()->bindForShader(gSSSurfaceWetProgram);
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const LLVector3 fall = atmo->rainDirection();

@@ -313,9 +313,9 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     }
     else
     {
-        state.mGustDepth  = weather.mGustDepth;
-        state.mGustLength = weather.mGustLength;
-        state.mGustVeer   = weather.mGustVeer;
+        state.mGustDepth  = weather.mGustDepth.valueAt(phase);
+        state.mGustLength = weather.mGustLength.valueAt(phase);
+        state.mGustVeer   = weather.mGustVeer.valueAt(phase);
     }
 
     // Lightning: Stable/Breezy never strike regardless of override, since
@@ -344,7 +344,7 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     }
     else
     {
-        state.mLightningIntensity = weather.mLightningIntensity;
+        state.mLightningIntensity = weather.mLightningIntensity.valueAt(phase);
         // An explicit override still respects the Stable/Breezy "never"
         // rule - overriding the *intensity* is not the same as overriding
         // whether lightning is possible at all in a flat overcast.

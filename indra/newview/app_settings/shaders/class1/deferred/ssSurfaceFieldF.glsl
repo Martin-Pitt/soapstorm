@@ -129,6 +129,21 @@ vec4 ssFieldAt(vec3 p_agent, vec3 n_agent)
     // fetched above would paint the whole wall rather than just the ground
     // at its foot: the lookup is purely XY, so nothing else here would ever
     // notice the wall was not where the water actually sits.
+    // Anything standing ABOVE the stored surface is not the surface at all:
+    // it is something in the column, and the field has nothing to say about
+    // it. Avatars are the case that matters - they are not in the capture,
+    // so a fragment on someone's shoulder used to sail through the test
+    // below as "the top of its own column" and shade with the wetness of
+    // the pavement they were standing on. Their wetness has its own model
+    // now (see ssavatarwet.h); this hands back "no answer" so the two
+    // cannot fight over the same fragment.
+    //
+    // The tolerance is generous on purpose. The stored height is a metre
+    // -ish cell average, so a genuine surface can sit a little above the
+    // value it stored - a kerb, the crown of a road - and cutting those out
+    // would be worse than letting a low bench read as ground.
+    if (p_agent.z > here.x + cell * 1.5) return vec4(0.0, 0.0, 0.0, -1.0);
+
     bool on_top = p_agent.z >= here.x - cell * 0.5;
 
     float exposure;

@@ -185,6 +185,8 @@ LLGLSLShader            gDeferredAlphaProgram;
 LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
 LLGLSLShader            gSSSurfaceWetProgram;
+LLGLSLShader            gSSVolCloudProgram;
+LLGLSLShader            gSSCelestialProgram;
 LLGLSLShader            gSSSurfaceNormalProgram;
 LLGLSLShader            gSSSurfaceCommitProgram;
 LLGLSLShader            gSSPrecipProjProgram;
@@ -454,6 +456,8 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSPrecipRainProgram);
     mShaderList.push_back(&gSSPrecipLitProgram);
     mShaderList.push_back(&gSSSurfaceWetProgram);
+    mShaderList.push_back(&gSSVolCloudProgram);
+    mShaderList.push_back(&gSSCelestialProgram);
     mShaderList.push_back(&gSSSurfaceNormalProgram);
     mShaderList.push_back(&gSSSurfaceCommitProgram);
     mShaderList.push_back(&gSSPrecipProjProgram);
@@ -1240,6 +1244,8 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSPrecipLitProgram.unload();
         gSSPrecipProjProgram.unload();
         gSSSurfaceWetProgram.unload();
+        gSSVolCloudProgram.unload();
+        gSSCelestialProgram.unload();
         gSSSurfaceNormalProgram.unload();
         gSSSurfaceCommitProgram.unload();
         // </SS:Nexii>
@@ -2062,6 +2068,35 @@ bool LLViewerShaderMgr::loadShadersDeferred()
     // the fullbright path when this program is incomplete.
     if (success)
     {
+        gSSCelestialProgram.mName = "SS Celestial Disc Shader";
+        gSSCelestialProgram.mShaderFiles.clear();
+        gSSCelestialProgram.mShaderFiles.push_back(make_pair("deferred/ssCelestialV.glsl", GL_VERTEX_SHADER));
+        gSSCelestialProgram.mShaderFiles.push_back(make_pair("deferred/ssCelestialF.glsl", GL_FRAGMENT_SHADER));
+        gSSCelestialProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSCelestialProgram.clearPermutations();
+        add_common_permutations(&gSSCelestialProgram);
+        if (!gSSCelestialProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS celestial disc shader failed to compile;"
+                               << " Atmo Magic will fall back to the stock sun and moon shaders"
+                               << LL_ENDL;
+            gSSCelestialProgram.unload();
+        }
+
+        gSSVolCloudProgram.mName = "SS Volumetric Cloud Shader";
+        gSSVolCloudProgram.mShaderFiles.clear();
+        gSSVolCloudProgram.mShaderFiles.push_back(make_pair("deferred/ssVolCloudV.glsl", GL_VERTEX_SHADER));
+        gSSVolCloudProgram.mShaderFiles.push_back(make_pair("deferred/ssVolCloudF.glsl", GL_FRAGMENT_SHADER));
+        gSSVolCloudProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSVolCloudProgram.clearPermutations();
+        add_common_permutations(&gSSVolCloudProgram);
+        if (!gSSVolCloudProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS volumetric cloud shader failed to compile;"
+                               << " the volumetric layer will not draw" << LL_ENDL;
+            gSSVolCloudProgram.unload();
+        }
+
         gSSPrecipRainProgram.mName = "SS Precipitation Rain Shader";
         gSSPrecipRainProgram.mFeatures.calculatesAtmospherics = true;
         gSSPrecipRainProgram.mFeatures.hasAtmospherics = true;

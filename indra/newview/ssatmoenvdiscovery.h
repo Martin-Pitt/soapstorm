@@ -61,11 +61,18 @@ class SSAtmoEnvDiscoveryManager : public LLSingleton<SSAtmoEnvDiscoveryManager>,
 public:
     // LLParcelObserver: fires both on crossing into a different parcel and
     // when the current parcel's properties are re-sent (editing the
-    // description produces this too). Leaving a configured parcel does
-    // nothing special by design - unlike v2, there is no implicit default
-    // to fall back to, so a v3 environment picked up from a parcel just
-    // persists until something else replaces it, the same as one loaded by
-    // hand would.
+    // description produces this too).
+    //
+    // Leaving a configured parcel now RELEASES what that parcel put there,
+    // so the world falls back to EEP's own parcel/region environment. That
+    // is a deliberate change from the original "it just persists" rule,
+    // which meant walking off a themed parcel carried its weather with you
+    // across the whole region.
+    //
+    // Only an environment this class applied is released. One the user
+    // loaded or built by hand is theirs, and crossing a parcel boundary is
+    // no reason to throw it away - SSAtmoEnvManager::cameFromParcel() is
+    // what tells the two apart.
     //
     // Retries on every call until the referenced UUID has actually been
     // applied, not merely attempted - a fetch that was suppressed because
@@ -73,6 +80,10 @@ public:
     // it was asked for once; the next parcel event (crossing back in,
     // re-editing the description) is what gives it another chance.
     void changed() override;
+
+    // Whether the editor floater is open - see the .cpp. Public so both
+    // the apply and release paths ask the same question.
+    static bool editorIsOpen();
 
     // "atmo:<uuid>" out of a parcel description, in any position and case -
     // same convention, same tolerance, as v2's own

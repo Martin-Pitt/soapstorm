@@ -26028,7 +26028,18 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.25</real>
     </map>
-    <key>SSAtmoWetStrength</key>
+    <key>SSAtmoPlanetaryDebugOverlay</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: draw a ray and a label toward every celestial body in the sky, for checking where the System Designer is actually putting them</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSAtmoWetStrength</key>
       <map>
       <key>Comment</key>
       <string>How strongly wet surfaces tighten their specular response; 0 disables the effect</string>

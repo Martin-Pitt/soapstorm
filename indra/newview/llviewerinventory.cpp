@@ -2361,10 +2361,12 @@ void menu_create_inventory_item(LLInventoryPanel* panel, LLUUID dest_id, const L
     {
         // created_cb only wants the item id (it's the generic
         // inventory-panel rename-focus callback); SSAtmoEnvManager's own
-        // creation callback also carries the asset id, once the upload has
-        // actually finished, so the two ids are folded down to one here.
+        // creation callback also carries the asset id and the written
+        // asset itself, once the upload has actually finished - the asset
+        // matters only to a caller that adopts the result (the floater's
+        // create button), so everything but the item id is dropped here.
         SSAtmoEnvManager::createDefaultNotecard(dest_id,
-            [created_cb](const LLUUID& item_id, const LLUUID&)
+            [created_cb](const LLUUID& item_id, const LLUUID&, const SSAtmoEnvAsset&)
             {
                 if (created_cb) created_cb(item_id);
             });

@@ -102,6 +102,77 @@ vec4 decodeNormal(vec4 norm);
 vec4 ssFieldAt(vec3 p_agent, vec3 n_agent);
 vec4 ssFieldFetch(vec2 xy_agent);
 
+//-----------------------------------------------------------------------------
+// Avatars
+//
+// The field cannot answer for them - it is a 2D thing describing the top of
+// each column, and a person is something standing IN a column - so they carry
+// their own wetness, tested here as a capsule per avatar. See ssavatarwet.h.
+//-----------------------------------------------------------------------------
+
+#define SS_AVATAR_MAX 8
+
+uniform int ssAvatarCount;
+uniform vec4 ssAvatarPos[SS_AVATAR_MAX];    // xyz foot position, w radius
+uniform vec4 ssAvatarShape[SS_AVATAR_MAX];  // x height, y soak
+
+// How wet a point at height fraction t up a body is, given how soaked that
+// body is overall.
+//
+// Rain arrives from above, so the head and shoulders go first. The feet are
+// close behind them but for the opposite reason - they are being splashed
+// from the ground rather than rained on - and the middle of the body is last,
+// which is why a light shower reads as damp hair and wet boots on an
+// otherwise dry person while a downpour eventually soaks all of them.
+//
+// Each height has a soak threshold it starts wetting at; the two curves below
+// are "distance from the head" and "distance from the feet", and a band takes
+// whichever of the two reaches it first.
+float ssAvatarWetAt(float t, float soak)
+{
+    float from_head = mix(1.15, 0.04, smoothstep(0.30, 1.0, t));
+    float from_feet = mix(0.22, 1.15, smoothstep(0.0, 0.42, t));
+    float threshold = min(from_head, from_feet);
+
+    // The band wets over a range rather than switching on at its threshold,
+    // so the boundary between wet and dry is a gradient up the body instead
+    // of a waterline.
+    return smoothstep(threshold, threshold + 0.28, soak);
+}
+
+// Wetness from whichever avatar capsule contains this fragment, 0 if none.
+float ssAvatarWet(vec3 p_agent)
+{
+    float best = 0.0;
+
+    for (int i = 0; i < SS_AVATAR_MAX; ++i)
+    {
+        if (i >= ssAvatarCount) break;
+
+        vec3 foot = ssAvatarPos[i].xyz;
+        float radius = ssAvatarPos[i].w;
+        float height = ssAvatarShape[i].x;
+        float soak = ssAvatarShape[i].y;
+
+        // A little slack under the soles and over the head: hair, heels and
+        // a hovering avatar all sit slightly outside the measured body.
+        float rel = p_agent.z - foot.z;
+        if (rel < -0.15 || rel > height + 0.25) continue;
+
+        vec2 off = p_agent.xy - foot.xy;
+        if (dot(off, off) > radius * radius) continue;
+
+        float t = clamp(rel / max(height, 0.1), 0.0, 1.0);
+
+        // Softened at the capsule's rim so the edge of the test is not a
+        // visible cylinder cut across a shoulder.
+        float edge = 1.0 - smoothstep(radius * 0.75, radius, length(off));
+        best = max(best, ssAvatarWetAt(t, soak) * edge);
+    }
+
+    return best;
+}
+
 void main()
 {
     vec2 tc = vary_fragcoord.xy;
@@ -133,7 +204,19 @@ void main()
 
     float wet;
     float puddle;
-    if (ssWetDebugForce > 0.0)
+
+    // Avatars first: they stand in the same columns the field describes, and
+    // the field has just been taught to decline those fragments, so whichever
+    // of the two answers is the only one that will.
+    float avatar_wet = ssAvatarWet(p);
+    if (avatar_wet > 0.004)
+    {
+        // No puddle term: water stands on a floor, not on a person. What is
+        // on them is a film, which is exactly what the wet path below does.
+        wet = avatar_wet * ssWetStrength;
+        puddle = 0.0;
+    }
+    else if (ssWetDebugForce > 0.0)
     {
         wet = ssWetDebugForce;
         puddle = ssWetDebugForce;

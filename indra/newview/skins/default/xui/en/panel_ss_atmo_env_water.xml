@@ -8,7 +8,7 @@
  name="panel_ss_atmo_env_water"
  top="0"
  width="580"
- height="540">
+ height="580">
     <!-- <SS:Nexii> Atmo Magic: this track water plane. The parameter set
          mirrors EEP own Water panel (panel_settings_water.xml) one-for-one,
          the difference being that every one of them is keyframable.
@@ -54,8 +54,8 @@
      show_text="false"
      min_val="0"
      max_val="100"
-     increment="1"
-     initial_val="0" />
+     increment="0.01"
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -67,8 +67,8 @@
      name="water_height_value_spinner"
      min_val="0"
      max_val="100"
-     increment="1"
-     decimal_digits="0" />
+     increment="0.01"
+     decimal_digits="2" />
     <button
      follows="left|top"
      layout="topleft"
@@ -133,7 +133,7 @@
      min_val="0.001"
      max_val="100"
      increment="0.01"
-     initial_val="0.001" />
+     initial_value="0.001" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -211,7 +211,7 @@
      min_val="0"
      max_val="20"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -289,7 +289,7 @@
      min_val="0"
      max_val="1"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -367,7 +367,7 @@
      min_val="0"
      max_val="1"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -445,7 +445,7 @@
      min_val="0"
      max_val="10"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -523,7 +523,7 @@
      min_val="0"
      max_val="10"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -601,7 +601,7 @@
      min_val="0"
      max_val="10"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -679,7 +679,7 @@
      min_val="0"
      max_val="3"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -757,7 +757,7 @@
      min_val="0"
      max_val="3"
      increment="0.01"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -835,7 +835,7 @@
      min_val="0"
      max_val="0.5"
      increment="0.001"
-     initial_val="0" />
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -1215,4 +1215,27 @@
      image_unselected="PushButton_Off"
      hover_glow_amount="0.15"
      label="" />
+
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
+         sections grouped by the tab each mapping reaches) - the tuning
+         surface for how far this track's weather may bend the values on
+         this tab.
+
+         Positioned by an absolute top against the panel's own height rather
+         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
+         measured downward from the panel's top edge, so that put the button
+         at the very top of the panel, overlapping the rows there and
+         reading as a stray control floating above the tab. Only a negative
+         value would have meant "up from the bottom", and an absolute top is
+         plainer than relying on either reading. -->
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left="10"
+     top="549"
+     height="21"
+     width="170"
+     name="influence_button_water"
+     tool_tip="Choose how much the weather cube modulates the sky you authored"
+     label="Weather Influence..." />
 </panel>

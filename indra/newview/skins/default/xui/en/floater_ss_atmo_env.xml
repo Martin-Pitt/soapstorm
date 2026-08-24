@@ -3,9 +3,9 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- height="700"
+ height="740"
  layout="topleft"
- min_height="560"
+ min_height="600"
  min_width="760"
  name="floater_ss_atmo_env"
  save_rect="true"
@@ -93,12 +93,29 @@
          "Weather" section header lives inside its tab), the same way EEP's
          timeline sits above its own sky/water tab_container. Wider than
          Edit Day Cycle's own 525px timeline slider since there's room to
-         spare and a longer scrub makes fine positioning easier. -->
+         spare and a longer scrub makes fine positioning easier.
+
+         The generous clearance above and below is load-bearing: the ghost
+         keyframe overlay (drawKeyframeGhosts) renders value labels in two
+         lanes ~16px above and below the scrubber's own rect, so anything
+         packed tighter gets written over on hover.
+
+         The slider is a PERCENTAGE of the cycle, which is what a phase
+         actually is; the track's day length turns that into a time of day
+         afterwards, in the readout beside it. It used to say max 4.0 while
+         onCommitPreviewTime read the value as a phase directly, so the head
+         could be dragged to four whole cycles and every stop was an eighth
+         of one apart.
+
+         refreshPreview sets the same range in code, and the increment there
+         is 100/SS_ATMOENV_PREVIEW_STEPS - keep this in step with it, because
+         seeded keyframes snap to that grid so they land somewhere the head
+         can actually reach. -->
     <text
      follows="left|top"
      layout="topleft"
      left="15"
-     top_pad="14"
+     top_pad="26"
      height="14"
      width="90"
      name="preview_time_caption"
@@ -115,9 +132,9 @@
      name="preview_time_slider"
      show_text="false"
      min_val="0.0"
-     max_val="4.0"
-     increment="0.125"
-     initial_val="0.0" />
+     max_val="100.0"
+     increment="1.0"
+     initial_value="0.0" />
     <text
      follows="left|top"
      layout="topleft"
@@ -144,7 +161,7 @@
      follows="left|top|bottom"
      layout="topleft"
      left="15"
-     top="96"
+     top="122"
      bottom="-50"
      height="554"
      width="170"
@@ -452,14 +469,18 @@
      follows="all"
      layout="topleft"
      left="199"
-     top="96"
+     top="122"
      bottom="-50"
      width="586"
      halign="left"
      tab_position="top"
-     tab_width="140"
-     tab_padding_right="3"
+     tab_width="90"
+     tab_padding_right="2"
      name="atmo_tabs">
+        <!-- Tab order is altitude order, bottom to top, matching the rail
+             beside it: the track's own foundation, then water at sea level,
+             surface weather above that, the cloud deck, the sky itself, and
+             the celestial bodies at the top. -->
         <panel
          border="true"
          layout="topleft"
@@ -484,6 +505,30 @@
          name="weather_tab"
          label="Weather"
          filename="panel_ss_atmo_env_weather.xml" />
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="clouds_tab"
+         label="Clouds"
+         filename="panel_ss_atmo_env_clouds.xml" />
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="atmosphere_tab"
+         label="Atmosphere"
+         filename="panel_ss_atmo_env_atmosphere.xml" />
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="planetary_tab"
+         label="Planetary"
+         filename="panel_ss_atmo_env_planetary.xml" />
     </tab_container>
 
     <!-- CRUD row, docked at the floater's bottom edge, same as Save/Cancel
@@ -500,7 +545,7 @@
      height="23"
      width="100"
      name="load_button"
-     tool_tip="Opens inventory to the Atmo Magic folder - drag a notecard onto this floater to load it"
+     tool_tip="Opens inventory to the Atmo Magic folder - drag a notecard onto this floater to load it, or drop a full-perm EEP sky to stamp its look at the current preview time"
      label="Load..." />
     <button
      follows="left|bottom"
@@ -522,4 +567,19 @@
      name="revert_button"
      tool_tip="Discards edits, back to whatever was last loaded or saved"
      label="Revert" />
+
+    <!-- <SS:Nexii> Unload, beside Revert and deliberately distinct from it:
+         Revert restores the last saved state of THIS environment, Unload
+         leaves nothing loaded at all, so the world falls back to whatever
+         EEP's parcel or region setting publishes. -->
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="8"
+     bottom_delta="0"
+     height="23"
+     width="100"
+     name="unload_button"
+     tool_tip="Drop this environment and fall back to the parcel or region EEP setting. Does not delete the notecard"
+     label="Unload" />
 </floater>

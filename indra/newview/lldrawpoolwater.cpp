@@ -28,6 +28,8 @@
 #include "llfeaturemanager.h"
 #include "lldrawpoolwater.h"
 
+#include "ssatmoenvapplier.h" // <SS:Nexii> light size for the glitter path
+
 #include "llviewercontrol.h"
 #include "lldir.h"
 #include "llerror.h"
@@ -55,6 +57,11 @@ bool LLDrawPoolWater::sNeedsDistortionUpdate = true;
 F32 LLDrawPoolWater::sWaterFogEnd = 0.f;
 
 extern bool gCubeSnapshot;
+
+// <SS:Nexii> Angular radius of whichever body is lighting the water.
+static LLStaticHashedString sLightAngularRadius("ss_light_angular_radius");
+static LLStaticHashedString sMoonlit("ss_moonlit");
+static LLStaticHashedString sSunUp("ss_sun_up");
 
 LLDrawPoolWater::LLDrawPoolWater() : LLFacePool(POOL_WATER)
 {
@@ -183,7 +190,25 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // so only use this color when the moon alone is showing
     else if (moon_up)
     {
-        light_diffuse += psky->getMoonlightColor();
+        // <SS:Nexii> getMoonlightColor() is literally getSunlightColor() -
+        // "moon and sun share light color" (llsettingssky.cpp) - so this
+        // used to put the SUN's hue on the water at night, which is most of
+        // why a moon's glitter path read as a second sun. getMoonDiffuse()
+        // is the derived one: the same light through the atmosphere's
+        // transmittance and scaled by the moon's own brightness, which now
+        // carries its phase.
+        //
+        // Then shifted toward the scotopic blue EEP already keeps for moon
+        // ambient (moonlight_b in calculateLightSettings). Night vision is
+        // cool and desaturated; leaving the glitter warm is the tell that it
+        // is really sunlight in disguise. Magnitude is set below regardless,
+        // so this is purely about hue.
+        static const LLColor3 SS_SCOTOPIC(0.66f, 0.66f, 1.2f);
+        static const F32 SS_SCOTOPIC_MIX = 0.5f;
+
+        LLColor3 moon_hue = psky->getMoonDiffuse();
+        light_diffuse += lerp(moon_hue, SS_SCOTOPIC * moon_hue.length(), SS_SCOTOPIC_MIX);
+        // </SS:Nexii>
     }
 
     // Apply magic numbers translating light direction into intensities
@@ -194,8 +219,37 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
         light_diffuse *= (1.5f + (6.f * ground_proj_sq));
     }
 
+    // <SS:Nexii> Moonlight is not sunlight.
+    //
+    // The normalize() above throws the light colour's MAGNITUDE away and the
+    // line after it scales whatever is left to a fixed intensity - so the
+    // glitter path off the moon came out exactly as strong as the sun's,
+    // differing only in tint. On a dark sea that reads as a second sun: the
+    // one thing a moon's reflection should not look like.
+    //
+    // Scaled here rather than by fixing the normalize, because the code
+    // above is upstream's (its own comment says as much) and everything else
+    // downstream is tuned against the intensity it produces. The sky's own
+    // moon brightness drives it, so an author who has turned the moon up
+    // gets a stronger glade and one who has turned it off gets none.
+    if (!sun_up && moon_up)
+    {
+        // The moon's brightness now carries its PHASE as well as its
+        // authored level (see SSAtmoEnvApplier::applySky), so this scales
+        // with it: a crescent lays down a fainter path than a full moon,
+        // and a new moon lays down none. No floor for that reason - a floor
+        // would put a glitter path under a moon that is not there.
+        static const F32 MOON_GLINT_SPAN = 0.45f;  // a full moon, nothing like the sun
+        const F32 moon_bright = llclamp(psky->getMoonBrightness(), 0.f, 1.f);
+        light_diffuse *= MOON_GLINT_SPAN * moon_bright;
+    }
+    // </SS:Nexii>
+
     LLTexUnit::eTextureFilterOptions filter_mode = has_normal_mips ? LLTexUnit::TFO_ANISOTROPIC : LLTexUnit::TFO_POINT;
 
+    // NOTE: unused. Kept as upstream wrote it - like fog_color above, this
+    // local is computed and never read, so dimming it for the moon (as an
+    // earlier pass here did) achieved nothing but implying that it mattered.
     LLColor4      specular(sun_up ? psky->getSunlightColor() : psky->getMoonlightColor());
     F32           phase_time = (F32) LLFrameTimer::getElapsedSeconds() * 0.5f;
     LLGLSLShader *shader     = nullptr;
@@ -268,6 +322,37 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     shader->uniform2fv(LLShaderMgr::WATER_WAVE_DIR2, 1, pwater->getWave2Dir().mV);
 
     shader->uniform3fv(LLShaderMgr::WATER_LIGHT_DIR, 1, light_dir.mV);
+
+    // <SS:Nexii> How big the light in the sky actually is.
+    //
+    // The water shades with a PUNCTUAL light - a point, zero angular size -
+    // so the glitter path's spread comes entirely from surface roughness.
+    // That is the old single-sun assumption: a body drawn as a two-degree
+    // disc and one drawn at half a degree laid down exactly the same
+    // reflection, which is what made the water disagree with the sky above
+    // it. Handing the shader the angular radius lets it widen the specular
+    // lobe to match what is being reflected.
+    F32 light_angular_radius = 0.5f * 0.53f * DEG_TO_RAD;   // stock sun, near enough
+    if (SSAtmoEnvApplier::instance().isActive())
+    {
+        const F32 diameter_deg = sun_up
+            ? SSAtmoEnvApplier::instance().sunSlotAngularDeg()
+            : SSAtmoEnvApplier::instance().moonSlotAngularDeg();
+        light_angular_radius = 0.5f * llclamp(diameter_deg, 0.05f, 30.f) * DEG_TO_RAD;
+    }
+    shader->uniform1f(sLightAngularRadius, light_angular_radius);
+
+    // ...and what that body is shining with. The PBR water scales its
+    // punctual highlight by the atmosphere's SUNLIGHT, which is zero at
+    // night, so the moon reflected nothing at all. getMoonDiffuse() is the
+    // moon's own light after transmittance and brightness - the same figure
+    // the glitter colour above is built from - lifted enough to read as a
+    // path on the water rather than a suggestion of one.
+    static const F32 SS_MOON_PUNCTUAL_GAIN = 3.0f;
+    LLColor3 moonlit = psky->getMoonDiffuse() * SS_MOON_PUNCTUAL_GAIN;
+    shader->uniform3fv(sMoonlit, 1, moonlit.mV);
+    shader->uniform1f(sSunUp, sun_up ? 1.f : 0.f);
+    // </SS:Nexii>
 
     shader->uniform3fv(LLShaderMgr::WATER_NORM_SCALE, 1, pwater->getNormalScale().mV);
     shader->uniform1f(LLShaderMgr::WATER_FRESNEL_SCALE, pwater->getFresnelScale());

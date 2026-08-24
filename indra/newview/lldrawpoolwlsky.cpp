@@ -28,6 +28,10 @@
 
 #include "lldrawpoolwlsky.h"
 
+#include "llrendertarget.h"
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/type_ptr.hpp>
+
 #include "llerror.h"
 #include "llface.h"
 #include "llimage.h"
@@ -45,12 +49,83 @@
 #include "llsettingsvo.h"
 #include "llviewercontrol.h"
 #include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
+#include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic celestial billboards
+#include "ssvolcloud.h" // <SS:Nexii> Atmo Magic volumetric cloud field
 
 extern bool gCubeSnapshot;
 
 static LLStaticHashedString sCamPosLocal("camPosLocal");
 static LLStaticHashedString sCustomAlpha("custom_alpha");
 static LLStaticHashedString sRegionOffset("region_offset"); // <SS:Nexii> cloud parallax
+static LLStaticHashedString sCloudDrift("ss_cloud_drift"); // <SS:Nexii> wind-driven cloud travel
+
+// <SS:Nexii> Atmo Magic celestial discs - see ssCelestialF.glsl. Every look
+// constant lives in the shader; these are the per-body handles.
+static LLStaticHashedString sDiscColor("ss_disc_color");
+static LLStaticHashedString sBodyDir("ss_body_dir");
+static LLStaticHashedString sSunDir("ss_sun_dir");
+static LLStaticHashedString sQuadRight("ss_quad_right");
+static LLStaticHashedString sQuadUp("ss_quad_up");
+static LLStaticHashedString sSunlight("ss_sunlight");
+static LLStaticHashedString sEmissive("ss_emissive");
+static LLStaticHashedString sPhaseShaded("ss_phase_shaded");
+static LLStaticHashedString sAirlight("ss_airlight");
+
+// Whether Atmo Magic should draw the discs at all. Its own shader replaces
+// the stock sun and moon ones outright while it owns the sky, so a stock
+// environment goes through untouched code.
+static bool ss_atmo_discs_active()
+{
+    return SSAtmoEnvApplier::instance().isActive()
+        && gSSCelestialProgram.isComplete();
+}
+
+// The quad axes LLVOSky builds for a body at `dir`, rebuilt here because the
+// fragment shader has to put the sphere back together in the same frame the
+// vertices were laid out in (updateHeavenlyBodyGeometry: right = dir x z,
+// then up = right x dir).
+static void ss_quad_axes(const LLVector3& dir, LLVector3& out_right, LLVector3& out_up)
+{
+    out_right = dir % LLVector3::z_axis;
+    if (out_right.normalize() < 0.001f) out_right = LLVector3::x_axis;
+    out_up = out_right % dir;
+    out_up.normalize();
+}
+
+// One body's worth of uniforms.
+static void ss_bind_disc(const LLColor4& tint, const LLVector3& body_dir,
+                         const LLVector3& sun_dir, F32 sunlight,
+                         bool emissive, bool phase_shaded)
+{
+    LLVector3 right, up;
+    ss_quad_axes(body_dir, right, up);
+
+    gSSCelestialProgram.uniform4fv(sDiscColor, 1, tint.mV);
+    gSSCelestialProgram.uniform3fv(sBodyDir, 1, body_dir.mV);
+    gSSCelestialProgram.uniform3fv(sSunDir, 1, sun_dir.mV);
+    gSSCelestialProgram.uniform3fv(sQuadRight, 1, right.mV);
+    gSSCelestialProgram.uniform3fv(sQuadUp, 1, up.mV);
+    gSSCelestialProgram.uniform1f(sSunlight, sunlight);
+    gSSCelestialProgram.uniform1f(sEmissive, emissive ? 1.f : 0.f);
+    gSSCelestialProgram.uniform1f(sPhaseShaded, phase_shaded ? 1.f : 0.f);
+
+    // The haze between the eye and the body.
+    //
+    // getHazeColor() is the sky's own scattered-light colour - the thing
+    // the atmospherics pass adds to everything it touches - so it is what
+    // the disc would have been given had it not carried SKIP_ATMOS.
+    // Ambient stood in for it at first and was far too dark: a moon over a
+    // bright dusk sky picked up almost nothing and stayed crisp against it.
+    LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
+    LLColor3 airlight(0.f, 0.f, 0.f);
+    if (sky)
+    {
+        const LLColor4 haze = sky->getHazeColor();
+        airlight.setVec(haze.mV[0], haze.mV[1], haze.mV[2]);
+    }
+    gSSCelestialProgram.uniform3fv(sAirlight, 1, airlight.mV);
+}
+
 
 static LLGLSLShader* cloud_shader = NULL;
 static LLGLSLShader* sky_shader   = NULL;
@@ -94,7 +169,8 @@ void LLDrawPoolWLSky::endDeferredPass(S32 pass)
     glClear(GL_DEPTH_BUFFER_BIT);
 }
 
-void LLDrawPoolWLSky::renderDome(const LLVector3& camPosLocal, F32 camHeightLocal, LLGLSLShader * shader) const
+void LLDrawPoolWLSky::renderDome(const LLVector3& camPosLocal, F32 camHeightLocal, LLGLSLShader * shader,
+                                 F32 scale) const
 {
     llassert_always(NULL != shader);
 
@@ -116,7 +192,7 @@ void LLDrawPoolWLSky::renderDome(const LLVector3& camPosLocal, F32 camHeightLoca
     // where Y is up, so permute our basis vectors accordingly.
     gGL.rotatef(120.f, 1.f / F_SQRT3, 1.f / F_SQRT3, 1.f / F_SQRT3);
 
-    gGL.scalef(0.333f, 0.333f, 0.333f);
+    gGL.scalef(scale, scale, scale);
 
     gGL.translatef(0.f,-camHeightLocal, 0.f);
 
@@ -349,12 +425,36 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         F32             region_off_x = camPosLocal.mV[VX] - region_width * 0.5f;
         F32             region_off_y = camPosLocal.mV[VY] - region_width * 0.5f;
         cloudshader->uniform2f(sRegionOffset, region_off_x, region_off_y);
+
+        // ...and how far the deck itself has travelled on the wind. Zero
+        // unless an Atmo Magic environment is driving the sky, which is also
+        // the only thing that knows what the wind is doing.
+        const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+        cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
         // </SS:Nexii>
 
         /// Render the skydome
-        renderDome(camPosLocal, camHeightLocal, cloudshader);
+        // <SS:Nexii> The cloud layer is drawn a little nearer than the haze
+        // backdrop behind it: 0.3325 of the dome radius rather than the
+        // stock 0.333, which is about 4988m instead of 4995m - twelve
+        // metres, a fifth of one percent.
+        //
+        // Deliberately tiny. What actually stopped the sun flickering
+        // through cloud was giving the celestial discs the far end of the
+        // depth range (see ssCelestialV.glsl); this is only headroom on top
+        // of that, and headroom does not need to cost apparent cloud size
+        // or parallax. Earlier passes here took it to 0.22 and then 0.32,
+        // both of which moved the deck visibly to buy margin that was not
+        // in short supply.
+        renderDome(camPosLocal, camHeightLocal, cloudshader, 0.3325f);
 
         cloudshader->unbind();
+
+        // <SS:Nexii> The volumetric layer goes on top of the dome: the dome
+        // is the far backdrop with no altitude of its own, and these are
+        // actual bodies of cloud at a real height in front of it.
+        SSVolCloud::getInstance()->render();
+        // </SS:Nexii>
 
         gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
         gGL.getTexUnit(1)->unbind(LLTexUnit::TT_TEXTURE);
@@ -368,8 +468,32 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
     LLGLSPipelineBlendSkyBox gls_skybox(true, true); // SL-14113 we need moon to write to depth to clip stars behind
 
     LLVector3 const & origin = LLViewerCamera::getInstance()->getOrigin();
+
+    // <SS:Nexii> Celestial quads onto a true camera-centred shell.
+    //
+    // LLVOSky::updateHeavenlyBodyGeometry bakes mCameraPosAgent (the sky
+    // drawable's position, i.e. the camera) into the sun and moon face
+    // vertices, and this pass then translated by the camera origin as
+    // well - so every celestial quad sat at
+    //     camera + cameraPosAgent + dir * HEAVENLY_BODY_DIST
+    // instead of camera + dir * HEAVENLY_BODY_DIST. On the ground the
+    // extra term is small enough to pass for correct; at altitude it is
+    // not. In a 3000m skybox it threw the moon roughly 3000m out along
+    // the camera vector, putting the quad within a few hundred metres of
+    // the cloud dome (dome radius 15000 scaled by 0.333 in renderDome,
+    // so ~5000m out) - two surfaces at nearly the same depth, which is
+    // exactly the moon/cloud z-fighting this fixes.
+    //
+    // Subtracting the baked offset here rather than removing it from
+    // LLVOSky keeps the fix to the draw site: the faces' own vertex data
+    // is shared with the reflection and glow paths, which expect it in
+    // agent space. Our own billboards below add the same term for the
+    // same reason, so all three land on one shell.
+    // (gSky.mVOSkyp is non-null here - this function returns early above.)
+    const LLVector3 shell_origin = origin - gSky.mVOSkyp->getCameraPosAgent();
     gGL.pushMatrix();
-    gGL.translatef(origin.mV[0], origin.mV[1], origin.mV[2]);
+    gGL.translatef(shell_origin.mV[0], shell_origin.mV[1], shell_origin.mV[2]);
+    // </SS:Nexii>
 
     LLFace * face = gSky.mVOSkyp->mFace[LLVOSky::FACE_SUN];
 
@@ -389,8 +513,50 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
         // if we even have sun disc textures to work with...
         if (tex_a || tex_b)
         {
+            // <SS:Nexii> Atmo Magic draws its own discs - see
+            // ss_atmo_discs_active - so a stock environment goes through the
+            // untouched path below and this one never runs for it.
+            if (ss_atmo_discs_active())
+            {
+                SSAtmoEnvApplier& atmo = SSAtmoEnvApplier::instance();
+
+                gSSCelestialProgram.bind();
+                gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+                gSSCelestialProgram.bindTexture(LLShaderMgr::DIFFUSE_MAP,
+                    tex_a ? tex_a : tex_b, LLTexUnit::TT_TEXTURE);
+
+                LLSettingsSky::ptr_t atmo_sky = LLEnvironment::instance().getCurrentSky();
+                const LLVector3 body_dir = atmo_sky ? atmo_sky->getSunDirection()
+                                                    : LLVector3::z_axis;
+
+                // A star in the sun slot lights itself. A body that is not
+                // emissive gets the phase and eclipse treatment instead,
+                // which is what a moon standing in as someone's sun should
+                // look like.
+                // White, NOT getSun().getInterpColor().
+                //
+                // Neither stock disc shader reads the colour uniform the sky
+                // pass sets - sunDiscF writes its texture out verbatim and
+                // moonF only scales by moon brightness - so nothing has ever
+                // depended on that colour being sensible, and it is not: it
+                // comes through as black, which multiplied straight into a
+                // shader that DOES read it turned both discs black.
+                //
+                // The disc's own art carries its colour, and how bright it
+                // is comes from the light reaching it. A tint on top would
+                // be a third opinion; white leaves the other two alone.
+                ss_bind_disc(LLColor4::white,
+                             body_dir, atmo.sunSlotSunDirection(),
+                             atmo.sunSlotSunlight(),
+                             atmo.sunSlotEmissive(), atmo.sunSlotPhaseShaded());
+
+                face->renderIndexed();
+
+                gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+                gSSCelestialProgram.unbind();
+            }
             // if and only if we have a texture defined, render the sun disc
-            if (can_use_vertex_shaders && can_use_windlight_shaders)
+            else if (can_use_vertex_shaders && can_use_windlight_shaders)
             {
                 sun_shader->bind();
 
@@ -412,7 +578,6 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
                 }
 
                 LLColor4 color(gSky.mVOSkyp->getSun().getInterpColor());
-
                 sun_shader->uniform4fv(LLShaderMgr::DIFFUSE_COLOR, 1, color.mV);
                 sun_shader->uniform1f(LLShaderMgr::BLEND_FACTOR, blend_factor);
 
@@ -437,6 +602,31 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
 
         if (can_use_vertex_shaders && can_use_windlight_shaders && (tex_a || tex_b))
         {
+            LLSettingsSky::ptr_t moon_sky = LLEnvironment::instance().getCurrentSky();
+
+            // <SS:Nexii> Atmo Magic's own disc shader, when it owns the sky.
+            if (ss_atmo_discs_active() && moon_sky)
+            {
+                SSAtmoEnvApplier& atmo = SSAtmoEnvApplier::instance();
+
+                gSSCelestialProgram.bind();
+                gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+                gSSCelestialProgram.bindTexture(LLShaderMgr::DIFFUSE_MAP,
+                    tex_a ? tex_a : tex_b, LLTexUnit::TT_TEXTURE);
+
+                // White - see the note on the sun above.
+                ss_bind_disc(LLColor4::white, moon_sky->getMoonDirection(),
+                             atmo.moonSunDirection(), atmo.moonSlotSunlight(),
+                             atmo.moonSlotEmissive(), atmo.moonSlotPhaseShaded());
+
+                face->renderIndexed();
+
+                gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+                gSSCelestialProgram.unbind();
+            }
+            // </SS:Nexii>
+            else
+            {
             moon_shader->bind();
 
             if (tex_a && (!tex_b || (tex_a == tex_b)))
@@ -472,10 +662,222 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
             gGL.getTexUnit(1)->unbind(LLTexUnit::TT_TEXTURE);
 
             moon_shader->unbind();
+            }
         }
     }
 
+    // <SS:Nexii> Atmo Magic: the active track's non-emitter celestial
+    // bodies as camera-facing textured quads - the design doc Planetary
+    // section's "quad/billboard only for v1". The applier publishes an
+    // empty vector whenever it is inactive, so this whole block costs one
+    // emptiness check when Atmo Magic is off. Drawn after the sun and moon
+    // so their quads (and the moon's star-clipping depth write, SL-14113)
+    // always land first. The moon shader is reused wholesale: it is the
+    // one shader in this pass whose every uniform is per-body suppliable
+    // (moon_dir is just the body's direction), and it buys the same
+    // horizon fade, moon-brightness scaling, transparent-texel discard
+    // and star-clipping depth layer the moon itself gets - a sun-shader
+    // body would sit on the stars' depth layer instead and have them
+    // poke through it.
+    const std::vector<SSAtmoEnvBillboard>& billboards =
+        SSAtmoEnvApplier::instance().celestialBillboards();
+    if (!billboards.empty() && moon_shader
+        && can_use_vertex_shaders && can_use_windlight_shaders
+        && gSSCelestialProgram.isComplete())
+    {
+        LLSettingsSky::ptr_t psky = LLEnvironment::instance().getCurrentSky();
+
+        // Atmo Magic's own disc shader. The billboards are its own bodies, so
+        // unlike the two light slots there is no stock path to fall back to -
+        // the moon shader used to stand in here, which meant borrowing its
+        // moon-specific horizon fade and brightness and then fighting both.
+        gSSCelestialProgram.bind();
+
+        // White, for the same reason the two slots use it - see the note
+        // there. The body's art carries its colour and the light reaching it
+        // carries its brightness.
+        const LLColor4 bb_color(LLColor4::white);
+
+        // Sizing matches LLVOSky::updateHeavenlyBodyGeometry's chain for
+        // the moon (dist * factor * disk radius * disc scale, plus its
+        // near-horizon enlargement), with the disc scale coming from the
+        // same diameter mapping the applier feeds setMoonScale - so a
+        // billboard body and the moon at equal angular diameter render at
+        // equal size, through their whole arc.
+        const F32 disk_radius = gSky.mVOSkyp->getMoon().getDiskRadius();
+
+        for (const SSAtmoEnvBillboard& body : billboards)
+        {
+            const LLVector3& dir = body.mDirection;
+
+            // Camera-facing frame: horizon-aligned right, then up within
+            // the quad's plane, both perpendicular to the view direction.
+            // Near zenith/nadir the horizontal cross degenerates; a
+            // body's roll is arbitrary (it is a disc), so any fixed
+            // horizontal axis serves there.
+            LLVector3 bb_right = dir % LLVector3::z_axis;
+            if (bb_right.normalize() < 0.001f)
+            {
+                bb_right = LLVector3::x_axis;
+            }
+            LLVector3 bb_up = bb_right % dir;
+            bb_up.normalize();
+
+            const F32 enlargm_factor = 1.f - dir.mV[VZ];
+            const F32 horiz_enlargement = 1.f + enlargm_factor * 0.3f;
+            const F32 vert_enlargement = 1.f + enlargm_factor * 0.2f;
+            const F32 half_size =
+                SSAtmoEnvApplier::celestialDiscScale(body.mAngularDiameterDeg)
+                * HEAVENLY_BODY_DIST * HEAVENLY_BODY_FACTOR * disk_radius;
+
+            // Land on the SAME shell the sun/moon quads occupy, which
+            // means carrying the same mCameraPosAgent term their face
+            // vertices carry: this pass now subtracts it once from the
+            // whole matrix (see shell_origin above), so adding it here
+            // cancels out and every celestial quad ends up exactly
+            // HEAVENLY_BODY_DIST from the camera. Dropping it instead
+            // would put billboards a whole camera-position vector away
+            // from the sun and moon, and they would parallax against
+            // both as the camera moved.
+            const LLVector3 center = dir * HEAVENLY_BODY_DIST
+                + gSky.mVOSkyp->getCameraPosAgent();
+            const LLVector3 half_right = (horiz_enlargement * half_size) * bb_right;
+            const LLVector3 half_up = (vert_enlargement * half_size) * bb_up;
+
+            // A body without a custom texture still shows as a
+            // recognisable disc, chosen by the BODY's kind rather than
+            // any slot: sun-kind bodies get the stock sun disc, the rest
+            // the stock moon disc. The sun's stand-in is the blank-sun
+            // ASSET - GetDefaultSunTextureId() is null, meaning "EEP's
+            // built-in sun rendering", which a billboard cannot draw.
+            const LLUUID tex_id = body.mTexture.notNull()
+                ? body.mTexture
+                : body.mIsSun ? LLSettingsSky::GetBlankSunTextureId()
+                              : LLSettingsSky::GetDefaultMoonTextureId();
+            LLViewerFetchedTexture* tex = LLViewerTextureManager::getFetchedTexture(
+                tex_id, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
+            if (!tex)
+            {
+                continue;
+            }
+            // Keep the fetcher feeding full resolution, the way
+            // LLVOSky::updateTextures() does for the sun and moon; while
+            // still loading, binding draws whatever placeholder the
+            // fetched texture currently holds.
+            tex->addTextureStats(static_cast<F32>(MAX_IMAGE_AREA));
+
+            // Everything the disc shader needs about this body: where it is,
+            // where its own star is, how much of that star's light reaches
+            // it, and whether it lights itself or takes a phase.
+            //
+            // Brightness is a consequence of those rather than an authored
+            // dial - see SSAtmoEnvCelestialBody - and every look constant
+            // (emissive gain, earthshine, terminator softness) lives in the
+            // shader, so there is no magic number on this side at all.
+            ss_bind_disc(bb_color, dir, body.mSunDirection, body.mSunlight,
+                         body.mEmissive, body.mPhaseShaded);
+            gSSCelestialProgram.bindTexture(LLShaderMgr::DIFFUSE_MAP, tex,
+                                            LLTexUnit::TT_TEXTURE);
+
+            gGL.begin(LLRender::TRIANGLE_STRIP);
+            gGL.texCoord2f(0.f, 1.f);
+            gGL.vertex3fv((center - half_right + half_up).mV);
+            gGL.texCoord2f(0.f, 0.f);
+            gGL.vertex3fv((center - half_right - half_up).mV);
+            gGL.texCoord2f(1.f, 1.f);
+            gGL.vertex3fv((center + half_right + half_up).mV);
+            gGL.texCoord2f(1.f, 0.f);
+            gGL.vertex3fv((center + half_right - half_up).mV);
+            gGL.end();
+            // Flush while this body's texture and moon_dir are still
+            // bound - the next iteration rebinds both.
+            gGL.flush();
+        }
+
+        gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+        gSSCelestialProgram.unbind();
+    }
+    // </SS:Nexii>
+
     gGL.popMatrix();
+}
+
+// <SS:Nexii> See the header.
+bool LLDrawPoolWLSky::renderSkyProbe(LLRenderTarget& target, const LLVector3& heading,
+                                     F32 min_elev_deg, F32 max_elev_deg)
+{
+    if (!gPipeline.canUseWindLightShaders() || gSky.mVOSkyp.isNull() || gSky.mVOWLSkyp.isNull())
+    {
+        return false;
+    }
+    if (target.getWidth() == 0 || target.getHeight() == 0) return false;
+
+    // The same two programs the deferred pass uses. Set here rather than
+    // assumed, because a probe can run at a point in the frame where
+    // beginDeferredPass has not.
+    sky_shader = &gDeferredWLSkyProgram;
+    cloud_shader = &gDeferredWLCloudProgram;
+    if (!sky_shader->isComplete()) return false;
+
+    const F32 camHeightLocal = LLEnvironment::instance().getCamHeight();
+    const LLVector3 origin = LLViewerCamera::getInstance()->getOrigin();
+
+    // A synthetic camera: narrow across, tall enough to hold the whole
+    // elevation band, aimed along the heading at the middle of that band.
+    // Everything is centred on the real camera's position so the sky is the
+    // one that would be seen from where the avatar stands.
+    const F32 mid_elev = 0.5f * (min_elev_deg + max_elev_deg) * DEG_TO_RAD;
+    const F32 half_band = 0.5f * (max_elev_deg - min_elev_deg) * DEG_TO_RAD;
+    if (half_band < 0.001f) return false;
+
+    LLVector3 flat = heading;
+    flat.mV[VZ] = 0.f;
+    if (flat.normalize() < 0.001f) flat = LLVector3::x_axis;
+
+    const LLVector3 at = flat * cosf(mid_elev) + LLVector3::z_axis * sinf(mid_elev);
+    LLVector3 left = LLVector3::z_axis % at;
+    if (left.normalize() < 0.001f) left = LLVector3::y_axis;
+    const LLVector3 up = at % left;
+
+    // Save everything this is about to trample. The main render is midway
+    // through a frame and will not survive borrowed state.
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+
+    target.bindTarget();
+    target.clear();
+
+    const F32 aspect = (F32)target.getWidth() / (F32)target.getHeight();
+    const F32 near_clip = 0.5f;
+    const F32 far_clip = 100000.f;
+
+    glm::mat4 proj = glm::perspective(half_band * 2.f, aspect, near_clip, far_clip);
+    glm::mat4 view = glm::lookAt(
+        glm::vec3(0.f, 0.f, 0.f),
+        glm::vec3(at.mV[VX], at.mV[VY], at.mV[VZ]),
+        glm::vec3(up.mV[VX], up.mV[VY], up.mV[VZ]));
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.loadMatrix(glm::value_ptr(proj));
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.loadMatrix(glm::value_ptr(view));
+
+    // The sky itself, then the clouds on it - the same calls and the same
+    // order the deferred pass makes, so what lands in the strip is what
+    // would land on screen.
+    renderSkyHazeDeferred(origin, camHeightLocal);
+    renderSkyCloudsDeferred(origin, camHeightLocal, cloud_shader);
+
+    target.flush();
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+
+    return true;
 }
 
 void LLDrawPoolWLSky::renderDeferred(S32 pass)

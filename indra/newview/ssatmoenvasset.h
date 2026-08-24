@@ -3,10 +3,9 @@
  * @brief Atmo Magic: the unified environment asset. One document replaces
  *        separate sky/water/day-cycle assets and the v2 per-track weather
  *        notecard - see doc/atmo_magic_environment.md for the design this
- *        implements. Track/Water/Weather (phase 1), Planetary (phase 6) and
- *        the volumetric Cloud Field (phase 7) all have real typed schema
- *        now; only Atmosphere & Lighting is still an opaque LLSD blob,
- *        pending its own phase.
+ *        implements. Track/Water/Weather (phase 1), Planetary (phase 6),
+ *        the volumetric Cloud Field (phase 7), the legacy-layer Cloud
+ *        Dome and Atmosphere & Lighting all have real typed schema now.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -32,6 +31,8 @@
 
 // <SS:Nexii> Atmo Magic: unified environment asset
 
+#include <cmath>
+
 #include "llsd.h"
 #include "lluuid.h"
 
@@ -41,14 +42,15 @@
 
 #include "ssatmoenvkeyframe.h"
 
+class LLSettingsSky;
+
 // Bumped whenever the on-disk shape changes in a way an older build cannot
 // make sense of. fromLLSD() refuses anything newer than this build
-// understands rather than guessing at a partial read.
-// 2: keyframe times became a phase in [0,1) rather than absolute seconds,
-//    so that a track's day length is purely a playback-speed control - see
-//    SSAtmoEnvKeyframe::mTime. Version 1 assets are migrated on read rather
-//    than rejected (SSAtmoEnvTrack::fromLLSD).
-const S32 SS_ATMOENV_VERSION = 2;
+// understands rather than guessing at a partial read. There is no
+// migration machinery for older versions and none is planned until there
+// are actually notecards in the wild to migrate - pre-release schema
+// changes just change the format.
+const S32 SS_ATMOENV_VERSION = 1;
 
 // Mandatory ground track (index 0) plus up to seven optional tracks. This
 // started out matching EEP's four altitude tracks, but there was never a
@@ -80,6 +82,34 @@ const F32 SS_ATMOENV_MIN_TRACK_FLOOR = 256.f;
 // up the useful resolution of a 0-100m slider for.
 const F32 SS_ATMOENV_WATER_CEILING = 100.f;
 
+// How many positions the editor's preview scrubber can actually stop on,
+// over one full cycle. The slider runs 0..100 with an increment of
+// 100 / this, and anything that places a keyframe without a human dragging
+// that slider quantises to the same grid.
+//
+// That matters more than it sounds: the head only reads as sitting ON a
+// keyframe when it lands within PHASE_EPSILON of it, so a keyframe placed at
+// a phase the slider cannot reach is one an author can scrub past but never
+// onto - its diamond never fills, and the row it belongs to never offers to
+// edit it. Seeding measures phases from a world's own sun and those land
+// anywhere; this is what puts them somewhere reachable.
+//
+// 100 makes the scrubber a percentage of the cycle, which is what a phase
+// actually is - the day length only turns it into a time afterwards, and a
+// scrubber whose stops were durations would move whenever the track's day
+// length changed. One stop per percent is 2.4 minutes of a four-hour day.
+const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
+
+// Snap a phase to the nearest scrubber stop, wrapped into [0, 1).
+inline F64 ss_atmoenv_snap_phase(F64 phase)
+{
+    const F64 steps = (F64)SS_ATMOENV_PREVIEW_STEPS;
+    F64 snapped = std::floor(phase * steps + 0.5) / steps;
+    snapped = std::fmod(snapped, 1.0);
+    if (snapped < 0.0) snapped += 1.0;
+    return snapped;
+}
+
 // One track's moisture/convection/temperature cube plus wind. This is the
 // authored input side only - the precipitation-type formula, ground-state
 // table, and convection-threshold table from the design doc's Weather tab
@@ -105,17 +135,20 @@ struct SSAtmoEnvWeather
     SSAtmoEnvKeyframed<F32> mWindSpeed{0.f};     // m/s
 
     // Auto derives from the cube; false means mGust* below are authored
-    // overrides rather than a computed default. Not yet keyframable - these
-    // stay plain scalars until the Weather tab's real UI (phase 5) settles
-    // the exact field list; converting them then is the same mechanical
-    // change already proven on the fields above.
-    bool mGustAuto   = true;
-    F32  mGustDepth  = 0.f;
-    F32  mGustLength = 140.f;
-    F32  mGustVeer   = 0.f;
+    // overrides rather than a computed default. The Auto flags themselves
+    // stay plain bools - whether a field is hand-authored at all is a
+    // structural choice, like a water plane existing, not an animatable
+    // one - but the override values are keyframable like everything else
+    // on this tab. The container reads a bare scalar as a plain value, so
+    // notecards written while these were plain F32s load unchanged with no
+    // version bump.
+    bool mGustAuto = true;
+    SSAtmoEnvKeyframed<F32> mGustDepth{0.f};    // 0..3
+    SSAtmoEnvKeyframed<F32> mGustLength{140.f}; // metres between fronts
+    SSAtmoEnvKeyframed<F32> mGustVeer{0.f};     // degrees
 
-    bool mLightningAuto      = true;
-    F32  mLightningIntensity = 0.f;
+    bool mLightningAuto = true;
+    SSAtmoEnvKeyframed<F32> mLightningIntensity{0.f}; // 0..1
 
     // Empty means "Auto": derive from the cube via the precipitation-type
     // formula. Otherwise one of Snow/Blizzard/FreezingRain/Sleet/SlushMix/
@@ -126,9 +159,7 @@ struct SSAtmoEnvWeather
     SSAtmoEnvKeyframed<std::string> mPrecipitationOverride{std::string()};
 
     LLSD asLLSD() const;
-    // from_version is the schema version the LLSD was written by, so
-    // pre-phase keyframe times can be migrated - see SSAtmoEnvTrack::fromLLSD.
-    bool fromLLSD(const LLSD& sd, F64 time_scale = 1.0);
+    bool fromLLSD(const LLSD& sd);
 };
 
 // A track's optional water plane. Height is independent of the track's own
@@ -182,8 +213,14 @@ struct SSAtmoEnvWater
     SSAtmoEnvKeyframed<F32> mBlurMultiplier{0.04f};       // 0..0.5
 
     LLSD asLLSD() const;
-    bool fromLLSD(const LLSD& sd, F64 time_scale = 1.0);
+    bool fromLLSD(const LLSD& sd);
 };
+
+// Suns per system are capped: the canonical topology normalizeSunTopology()
+// enforces (a pair, then an outer pair orbiting the inner pair's barycenter)
+// only has slots for two pairs, and past four the diagram stops reading as
+// anything an author could reason about anyway.
+const S32 SS_ATMOENV_MAX_SUNS = 4;
 
 // One celestial body. Sun -> Planet -> Moon, exactly three levels, any
 // number of bodies per level - see the design doc's Planetary tab. Position
@@ -197,6 +234,14 @@ struct SSAtmoEnvCelestialBody
     EKind mKind = PLANET;
     std::string mName = "Body";
 
+    // False while the name is autoNameBodies()'s to manage ("Sol II",
+    // "Sol I.2"); flipped true the moment the user commits a name of their
+    // own, after which auto-naming never touches this body again. No
+    // version bump for the new key - there are no notecards in the wild,
+    // and an absent key just reads false (auto-named), which is right for
+    // anything older.
+    bool mNameCustom = false;
+
     // Index into the track's mBodies this one orbits - -1 for a root Sun,
     // which orbits nothing (it's "the centre of the universe" for this
     // system, per the design doc, since there's no mechanism to place one
@@ -205,20 +250,29 @@ struct SSAtmoEnvCelestialBody
     // beyond following mParentIndex, so a hand-edited notecard that breaks
     // the Sun->Planet->Moon rule degrades to "orbits whatever index it
     // says" rather than a hard failure.
+    // Ignored entirely for PLANET bodies - see
+    // SSAtmoEnvPlanetary::effectiveParent(); a planet belongs to the sun
+    // system as a whole, not to any authored parent.
     S32 mParentIndex = -1;
 
     // Physical size and mass. Diameter drives apparent angular size once a
     // distance is resolved; mass only matters for a bound pair's
     // barycenter (below).
+    //
+    // Mass is stored in per-LEVEL units so it reads naturally in the
+    // floater: solar masses for a sun, Earth masses for a planet or moon
+    // (Luna is 0.0123). Mixing units across levels is sound because only
+    // same-level ratios ever feed a barycenter - a bound pair is always
+    // two siblings of the same kind's scale.
     F32 mDiameterM = 1.0e7f; // metres; Earth-ish default
-    F32 mMassRelative = 1.f; // arbitrary units, only ratios between a bound pair matter
+    F32 mMassRelative = 1.f; // per-level units - see above
 
     // The authored, fixed orbital position: distance from parent (or from
     // a bound pair's shared barycenter - see mBoundPartnerIndex), how far
     // around the orbit (0-360, "phase"/true-anomaly analogue), and how
     // tilted that orbit's plane is relative to the parent's own reference
     // plane. Eccentricity is deferred per the design doc.
-    F32 mOrbitalRadius = 1.0e8f; // arbitrary distance units - see mSunPlanetScale/mPlanetMoonScale
+    F32 mOrbitalRadius = 1.0e8f; // metres - see mSunPlanetScale/mPlanetMoonScale; the floater displays AU/km per kind
     F32 mOrbitalInclinationDeg = 0.f;
     F32 mOrbitalPhaseDeg = 0.f;
 
@@ -234,7 +288,53 @@ struct SSAtmoEnvCelestialBody
     // spheres rather than quads (not yet); the home body's tilt is also
     // what drives the computed primary sun's seasonal arc regardless of
     // rendering mode - see SSAtmoEnvPlanetaryResolver.
+    // Obliquity: how far the body's own spin axis leans out of its orbital
+    // plane. On the HOME body this is what gives it seasons - it tips the
+    // sun's daily circle north and south of the celestial equator through
+    // the year - and it is NOT where the observer stands. That is
+    // mLatitudeDeg below.
     F32 mAxialTiltDeg = 0.f;
+
+    // Where on the home body the observer is standing, in degrees north of
+    // its equator. Meaningless on any other body.
+    //
+    // This is what sets the sky's whole geometry: the celestial pole sits
+    // exactly this far above the northern horizon, so at 0 the sun climbs
+    // through the zenith and every star rises vertically, at 90 nothing
+    // rises or sets at all, and in between the sky turns at an angle. It
+    // used to be conflated with mAxialTiltDeg, which made a world's seasons
+    // and its latitude the same dial and neither of them right.
+    //
+    // 50 degrees by default - a temperate northern latitude, where the sun
+    // reaches about 40 degrees at an equinox noon and the seasons are
+    // pronounced without the year collapsing into polar day and night.
+    F32 mLatitudeDeg = 50.f;
+
+    // Drawn at full brightness with no terminator: the body is a light
+    // source rather than something lit by one. On by default for suns and
+    // off for everything else (see addBody), but authored rather than
+    // derived - a glowing artificial moon, a lava world or a magical
+    // second sun that is technically a planet are all things a world might
+    // want, and deriving this from kind would make them unauthorable.
+    //
+    // Takes precedence over mPhaseShaded: something emitting its own light
+    // has no dark side to draw.
+    bool mEmissive = false;
+
+    // Shade the disc as the sphere it stands in for - N.L against the
+    // direction of this body's star, giving it a phase. On for anything not
+    // emissive by default.
+    //
+    // Toggleable because it is a look as much as a simulation: a stylised
+    // world may want its moons drawn as flat discs the way the stock sky
+    // does, and a body whose art already has a terminator painted into it
+    // would otherwise get a second one.
+    bool mPhaseShaded = true;
+
+    // (There is deliberately no per-body brightness dial. How bright a body
+    // looks is worked out from where it is - its phase, and whether its
+    // star is shining on it at all - and an authored multiplier on top of
+    // that was just a way to disagree with the geometry.)
     F64 mSpinPeriodSeconds = 0.0; // 0 = tidally locked (no visible self-rotation)
 
     // Exactly one body across the whole track's mBodies should have this
@@ -301,28 +401,361 @@ struct SSAtmoEnvPlanetary
     // than silently picking a top-2 at some other layer.
     bool canSetLightEmitter(S32 index) const;
 
+    // Appends a body of the given kind with per-kind physical defaults
+    // (Sol/Earth/Luna scale, matching makeDefault()'s own sun and planet);
+    // a planet or moon lands one step (1 AU / one Luna distance) outside
+    // its outermost sibling rather than at a fixed radius.
+    // Parenting is automatic, never the user's: suns get the canonical
+    // topology normalizeSunTopology() enforces; planets always parent to
+    // the first sun (whose barycenter rule makes that "orbits the inner
+    // pair" in a multi-sun system); a moon parents to
+    // preferred_parent_index when that names a planet, else the first
+    // planet, else starts orphaned. Returns the new body's index, or -1
+    // for a refused add (a fifth sun - see SS_ATMOENV_MAX_SUNS; other
+    // kinds are uncapped, there is no rail or renderer slot limit for
+    // them to collide with).
+    //
+    // Creation-time lighting defaults, never re-asserted afterwards: a
+    // second sun, or a moon of the home planet while there is no second
+    // sun, claims the free second light-emitter slot if one exists - a
+    // fresh binary gets both stars lighting the scene, and a lone-sun
+    // world that gains a moon gets the moon as its night light, matching
+    // the renderer's sun+moon light slots. Never steals: two existing
+    // emitters (or the home flag) mean the new body just isn't one, per
+    // canSetLightEmitter().
+    S32 addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferred_parent_index = -1);
+
+    // Removes the body and fixes up every survivor's mParentIndex and
+    // mBoundPartnerIndex: indices above the removed set shift down, and
+    // anything that pointed into it becomes -1. Removing a PLANET takes
+    // its moons with it - an orphaned moon used to be re-parentable in
+    // the floater, but with parenting now fully automatic there is no UI
+    // path back, so a stranded moon would just be clutter that can only
+    // be deleted anyway. Removing a SUN does NOT cascade: planets belong
+    // to the system, not to any one star - their lineage is derived by
+    // effectiveParent() and their position anchors at the sun group's
+    // barycenter, so no re-anchoring is even needed (a fully sunless
+    // system is legal). If the removed body was home, home is
+    // simply gone (-1 is a legal state - see homeBodyIndex()) rather than
+    // guessed at. Sun topology and auto names re-normalise afterwards, so
+    // removing half a sun pair can never leave the survivor an isolated
+    // star.
+    bool removeBody(S32 index);
+
+    // The parent a body hangs under for HIERARCHY purposes (scene graph,
+    // canvas grouping, moon ordinals). For a PLANET this is never the
+    // stored index: planets intrinsically belong to the sun system - the
+    // first sun stands in as their display parent, or -1 in a sunless
+    // system - and whatever mParentIndex happens to hold is ignored, which
+    // removes a whole class of stale-parent bugs (first sun removed, sun
+    // added to a sunless system) by never storing the answer at all. Note
+    // this is display lineage only: a planet's resolved POSITION anchors
+    // at the sun group's collective barycenter (the origin), not at the
+    // first sun - see SSAtmoEnvPlanetaryResolver::resolveWorldPositions.
+    // Suns and moons return their stored parent, degraded to -1 when out
+    // of range or self-referencing - the same forgiveness the resolver
+    // has always shown a hand-edited notecard.
+    S32 effectiveParent(S32 index) const;
+
+    // Enforces the one canonical sun topology, by star count: one sun is
+    // the root; two are a bound root pair; a third orbits that pair's
+    // barycenter (by parenting to the first sun - the resolver substitutes
+    // the pair's barycenter); a fourth pairs with the third, giving two
+    // pairs, the outer orbiting the inner's barycenter. Called after every
+    // sun add and every removeBody() so an isolated star - no orbit and no
+    // pair - is impossible to reach. A sun placed into an orbiting role
+    // with no authored separation yet (radius 0, the root default) gets a
+    // sensible one. "One pair orbiting a giant sun" needs no special case:
+    // it is just pair separations/masses that put the barycenter inside
+    // the primary.
+    void normalizeSunTopology();
+
+    // SpaceEngine-style automatic names for every body whose mNameCustom
+    // is false: first sun "Sol" (its name, custom or not, is the stem for
+    // everything below), further suns "Sol B"/"Sol C"/"Sol D" in structure
+    // order, planets "Sol I"/"Sol II"/... by orbital radius ascending
+    // across all planets, moons "<planet name>.1"/".2" by radius around
+    // their planet - a custom-named planet's moons still follow it
+    // ("Tatooine.1"). Called after every add/remove and every
+    // orbital-radius commit, since radius ordering is what the ordinals
+    // encode.
+    void autoNameBodies();
+
+    // Flags a and b as a hierarchical bound pair - see mBoundPartnerIndex.
+    // Only valid between two distinct bodies with the same mParentIndex;
+    // any existing partnership either one is in is dissolved first, so the
+    // symmetry invariant can never be left dangling on a third body.
+    bool setBoundPartner(S32 a, S32 b);
+    // Symmetric clear: the partner's own back-reference goes too.
+    bool clearBoundPartner(S32 index);
+
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
 };
 
 // A track's volumetric storm-cloud tunables - the "Volumetric Field"
-// sub-tab. Separate from the legacy Windlight cloud layer (now cirrus-only,
-// see doc/atmo_magic_environment.md), which needs none of this. Actual
+// sub-tab. Separate from the legacy Windlight cloud layer (now cirrus-only
+// and authored on the "Sky Dome" sub-tab - see SSAtmoEnvCloudDome), which
+// needs none of this. Actual
 // per-frame coverage/density/churn are derived from these plus the weather
 // cube's moisture/convection by SSAtmoEnvCloudFieldResolver (phase 7); this
 // struct is only the artist's tunable baseline.
 struct SSAtmoEnvCloudField
 {
+    // Auto derives the baseline below from the weather cube's moisture and
+    // convection - same split as the gust/lightning Auto flags: the toggle
+    // is a plain structural bool, the values it parks stay keyframable
+    // authored overrides. See SSAtmoEnvCloudFieldResolver::deriveAutoBaseline
+    // for what Auto actually computes.
+    bool mAuto = true;
+
     // Metres. The band this track's storm clouds occupy at Convection 0 -
     // Stable phase is "flat, low to ground" per the design doc's convection
     // table; height climbs from here as convection rises.
-    F32 mBaseHeightM = 800.f;
-    F32 mBaseThicknessM = 300.f;
+    //
+    // Keyframable like the weather cube's fields - the container reads a
+    // bare scalar as a plain value, so notecards written while these were
+    // plain F32s load unchanged with no version bump. The >= 0 clamps
+    // fromLLSD() used to apply moved to SSAtmoEnvCloudFieldResolver for
+    // the same reason the cube's moved out: the generic keyframe container
+    // has no notion of a field's valid range.
+    SSAtmoEnvKeyframed<F32> mBaseHeightM{800.f};
+    SSAtmoEnvKeyframed<F32> mBaseThicknessM{300.f};
 
     // Multiplies the derived coverage fraction - an artistic override for
     // "this track's storms are always more/less widespread than the cube
     // alone would suggest", independent of moisture.
-    F32 mCoverageScale = 1.f;
+    SSAtmoEnvKeyframed<F32> mCoverageScale{1.f};
+
+    LLSD asLLSD() const;
+    bool fromLLSD(const LLSD& sd);
+};
+
+// A track's Sky Dome: the classic Windlight/EEP cloud-layer parameters -
+// the legacy scrolling-noise plane, kept and demoted to cirrus duty above
+// the volumetric field (see doc/atmo_magic_environment.md). Every field is
+// keyframable. The parameter set deliberately mirrors EEP's own Clouds
+// panel (panel_settings_sky_clouds.xml) one-for-one, so anything authored
+// there has a direct equivalent here; defaults are LLSettingsSky's own.
+// Cloud colour lives here rather than with the Atmosphere colours: it
+// tints this layer and nothing else, so it moves with the layer it paints.
+struct SSAtmoEnvCloudDome
+{
+    SSAtmoEnvKeyframed<LLColor3> mColor{LLColor3(0.4099f, 0.4099f, 0.4099f)};
+
+    // EEP's "Cloud Coverage" slider actually drives cloud_shadow (see
+    // llpaneleditsky.cpp's onCloudCoverageChanged -> setCloudShadow); the
+    // UI-facing name is kept because it is what an author knows the dial
+    // as, and the shadow name only surfaces at the applier's setter call.
+    SSAtmoEnvKeyframed<F32> mCoverage{0.2699f}; // 0..1
+    SSAtmoEnvKeyframed<F32> mScale{0.4199f};    // 0.01..3
+    SSAtmoEnvKeyframed<F32> mVariance{0.f};     // 0..1
+
+    SSAtmoEnvKeyframed<LLVector2> mScrollRate{LLVector2(0.2f, 0.01f)}; // -30..30 each
+
+    // The main and detail noise samplings. EEP packs each triple into an
+    // LLColor3 for its setter, but authors edit them as three independent
+    // sliders - so, like the water wavelet scales, they are stored as
+    // three separately keyframable scalars and only fold into the packed
+    // form at the applier's setter call.
+    SSAtmoEnvKeyframed<F32> mDensityX{1.f};    // 0..1
+    SSAtmoEnvKeyframed<F32> mDensityY{0.526f}; // 0..1
+    SSAtmoEnvKeyframed<F32> mDensityD{1.f};    // 0..3
+    SSAtmoEnvKeyframed<F32> mDetailX{1.f};     // 0..1
+    SSAtmoEnvKeyframed<F32> mDetailY{0.526f};  // 0..1
+    SSAtmoEnvKeyframed<F32> mDetailD{1.f};     // 0..1
+
+    // Null means "the stock cloud noise" - same guard idiom as the water
+    // normal map; the applier substitutes GetDefaultCloudNoiseTextureId(),
+    // so a keyframe stepping back to null restores the default rather than
+    // silently keeping the last custom map.
+    SSAtmoEnvKeyframed<LLUUID> mNoiseTexture{LLUUID::null};
+
+    // Cloud art worth reaching for, named so an author can find them in the
+    // texture picker rather than having to know a UUID. Layered Clouds is
+    // what a new environment starts on (see makeSeededDefault); the other
+    // two are here because a sky wanting weight or structure wants a
+    // different map, not a different coverage number.
+    static const char* const CLOUD_TEXTURE_LAYERED;      // cirrus-like decks
+    static const char* const CLOUD_TEXTURE_CUMULONIMBUS; // storm towers
+    static const char* const CLOUD_TEXTURE_ALTOCUMULUS;  // broken mid-level
+
+    // Disc art for the bodies themselves. Named here beside the cloud maps
+    // for the same reason: an author should be able to find them in a
+    // picker rather than having to know a UUID.
+    static const char* const BODY_TEXTURE_SUN;
+    static const char* const BODY_TEXTURE_MOON;
+
+    // Repopulates every field above as a plain (un-keyframed) value read
+    // from a live EEP sky - the same creation-time seeding step
+    // SSAtmoEnvAtmosphere::fromSettingsSky performs for its own fields,
+    // called alongside it (see SSAtmoEnvManager::createDefaultNotecard).
+    // A noise texture equal to the stock one reads back as null so the
+    // "null = default" convention holds from the document's first save.
+    void fromSettingsSky(const LLSettingsSky& sky);
+
+    // The keyframed sibling of fromSettingsSky: stamps every field it
+    // covers as a keyframe at `phase` instead of replacing each container
+    // wholesale, so several skies stamped at several phases build a day
+    // cycle out of EEP presets. Same field set, same null-for-stock noise
+    // convention - see SSAtmoEnvAtmosphere::addKeyframesFromSky for the
+    // shared contract.
+    void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase);
+
+    // Post-seeding cleanup - see SSAtmoEnvAtmosphere::collapseConstantKeyframes.
+    void collapseConstantKeyframes();
+
+    LLSD asLLSD() const;
+    bool fromLLSD(const LLSD& sd);
+};
+
+// A track's Atmosphere & Lighting: the classic haze/gamma/glow set, every
+// field keyframable. The parameter set deliberately mirrors EEP's own
+// Atmosphere and Sun & Moon panels (panel_settings_sky_atmos.xml /
+// panel_settings_sky_sunmoon.xml) so anything authored there has a direct
+// equivalent here; defaults are LLSettingsSky's own. Sun/moon POSITION is
+// deliberately absent: azimuth/elevation are computed from the home body's
+// axial tilt and rotation by the Planetary tab's resolver, replacing EEP's
+// keyframed sun arc entirely - see the design doc's Planetary section.
+struct SSAtmoEnvAtmosphere
+{
+    // Colours. Ambient is the flat fill light, Blue Horizon/Density shape
+    // the sky's gradient and Sunlight tints the sun's direct light - all
+    // exactly EEP's meanings, so an EEP sky can be transcribed swatch for
+    // swatch. Cloud colour is deliberately not here: it tints the legacy
+    // cirrus layer and belongs to SSAtmoEnvCloudDome with the rest of that
+    // layer's parameters.
+    SSAtmoEnvKeyframed<LLColor3> mAmbientColor{LLColor3(0.25f, 0.25f, 0.25f)};
+    SSAtmoEnvKeyframed<LLColor3> mBlueHorizon{LLColor3(0.4954f, 0.4954f, 0.6399f)};
+    SSAtmoEnvKeyframed<LLColor3> mBlueDensity{LLColor3(0.2447f, 0.4487f, 0.7599f)};
+    SSAtmoEnvKeyframed<LLColor3> mSunlightColor{LLColor3(0.7342f, 0.7815f, 0.8999f)};
+
+    // Haze and atmospheric falloff, in EEP's own panel order. Ranges are
+    // the UI's (the floater's sliders match EEP's panel bounds); like
+    // every other keyframed field nothing here re-clamps on read - see
+    // the weather cube's comment.
+    SSAtmoEnvKeyframed<F32> mHazeHorizon{0.19f};         // 0..5
+    SSAtmoEnvKeyframed<F32> mHazeDensity{0.7f};          // 0..5
+
+    // The PBR-era optics dials, in the positions EEP's panel gives them.
+    // SKY moisture drives the rainbow/halo optics around the sun - an
+    // optical dial with nothing to do with the Weather cube's moisture,
+    // which drives precipitation; the field name keeps EEP's own Sky
+    // prefix so the two can never be confused in code either. Droplet
+    // radius is in micrometres.
+    SSAtmoEnvKeyframed<F32> mSkyMoistureLevel{0.f};      // 0..1
+    SSAtmoEnvKeyframed<F32> mSkyDropletRadius{800.f};    // um, 5..1000
+    SSAtmoEnvKeyframed<F32> mSkyIceLevel{0.f};           // 0..1
+
+    SSAtmoEnvKeyframed<F32> mDensityMultiplier{0.0001f}; // 0.0001..2
+    SSAtmoEnvKeyframed<F32> mDistanceMultiplier{0.8f};   // 0.05..1000
+    SSAtmoEnvKeyframed<F32> mMaxAltitude{1605.f};        // metres, 0..10000
+
+    // Non-zero switches EEP's lighting model to HDR (its own panel then
+    // relabels Brightness to "HDR Scale"). Stored and applied plainly:
+    // EEP's commit handler calls setReflectionProbeAmbiance with no
+    // gating, and the RenderSkyAutoAdjustLegacy-aware read its refresh
+    // does is a display convenience, not part of the authored value.
+    SSAtmoEnvKeyframed<F32> mReflectionProbeAmbiance{0.f}; // 0..10
+    SSAtmoEnvKeyframed<F32> mSceneGamma{1.f};            // 0..20
+
+    // Lighting: the stars, and the glow disc around a light emitter. Glow
+    // is stored in the same UI-space scale EEP's own sliders use rather
+    // than the renderer's packed glow colour (size 5.0 == UI 1.75, focus
+    // -0.48 == UI 0.096 via llpaneleditsky's SLIDER_SCALE_GLOW_R/B) - a
+    // notecard should read like the panel that authored it, and the
+    // packing is a renderer concern for the phase that consumes this.
+    SSAtmoEnvKeyframed<F32> mStarBrightness{250.f};      // 0..500
+    SSAtmoEnvKeyframed<F32> mGlowFocus{0.096f};          // -2..2
+    SSAtmoEnvKeyframed<F32> mGlowSize{1.75f};            // 0..1.99
+
+    // The moon DISC's own luminance (EEP's Brightness slider under Moon) -
+    // an appearance dial like the sunlight colour, so it lives here rather
+    // than on the Planetary tab: which body occupies the moon slot is
+    // planetary structure, how brightly its disc renders is lighting.
+    SSAtmoEnvKeyframed<F32> mMoonBrightness{0.5f};       // 0..1
+
+    // Repopulates every field above as a plain (un-keyframed) value read
+    // from a live EEP sky - the "transcribed swatch for swatch" promise in
+    // the colours comment, done in code. Used at creation time to seed a
+    // fresh environment from EEP's stock non-legacy Midday sky (see
+    // SSAtmoEnvManager::createDefaultNotecard); the constructor defaults
+    // above stay as the documented fallback when that fetch fails. Sun and
+    // moon rotations (and every other positional field the sky carries)
+    // are deliberately not read: position is the Planetary tab's resolver's
+    // to compute - see the struct comment.
+    void fromSettingsSky(const LLSettingsSky& sky);
+
+    // The keyframed sibling of fromSettingsSky: every field it covers gets
+    // a keyframe at `phase` holding the sky's value, leaving whatever is
+    // already authored at other phases alone. A field with no keyframes yet
+    // is promoted (its first keyframe is the stamp), because writing the
+    // plain value instead - what setValueAtHead alone would do - could not
+    // build a cycle out of repeated stamps. Used both by creation-time
+    // seeding from the four stock skies (SSAtmoEnvManager) and by dropping
+    // an EEP sky onto the floater (SSFloaterAtmoEnv::handleDragAndDrop).
+    void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase);
+
+    // Creation-seeding cleanup: collapseIfConstant() on every field
+    // addKeyframesFromSky covers, so a field the stamped skies all agree
+    // on goes back to being a plain value instead of carrying one
+    // redundant keyframe per sky into every notecard.
+    void collapseConstantKeyframes();
+
+    LLSD asLLSD() const;
+    bool fromLLSD(const LLSD& sd);
+};
+
+// How much the weather cube is allowed to push the authored sky around.
+//
+// MODULATION, NEVER MUTATION: nothing here edits an authored value. The
+// applier evaluates the keyframes exactly as written, then this config says
+// how far the derived weather state may bend the result on its way to the
+// renderer - so turning a mapping off returns precisely the authored sky,
+// and an author scrubbing the timeline always sees the values they typed.
+//
+// Deliberately NOT keyframable, unlike almost everything else in this
+// schema. These are a statement about how a world behaves ("storms darken
+// my sky by this much"), not about what it looks like at 3pm; keyframing
+// them would mean authoring the same storm twice, once in the weather cube
+// and once in its own influence. The per-mapping strengths are the tuning
+// surface instead - see SSFloaterAtmoWeatherInfluence.
+//
+// Each mapping is an independent enable + strength pair rather than one
+// global dial, because they answer to different tastes: an author who wants
+// storms to genuinely darken the world may still want the cloud layer to
+// hold exactly the scroll they authored.
+struct SSAtmoEnvWeatherInfluence
+{
+    // Master switch. Off means the applier skips the modulator entirely -
+    // not "all strengths at zero", which would still cost the derivation.
+    // On by default: a weather system whose weather does nothing to the sky
+    // is the surprising configuration, and every individual mapping can
+    // still be turned off underneath this.
+    bool mEnabled = true;
+
+    // Strengths are 0..1 scalings of each mapping's own full-effect range,
+    // NOT raw parameter deltas - the ranges themselves live in the
+    // modulator, so a strength means the same thing ("how much of it")
+    // everywhere and no author has to know that haze density happens to top
+    // out at 4.0.
+    bool mCloudCoverEnabled = true;
+    F32  mCloudCoverStrength = 1.f;    // okta cover -> cirrus dome coverage
+
+    bool mWindScrollEnabled = true;
+    F32  mWindScrollStrength = 1.f;    // wind heading/speed -> dome scroll
+
+    bool mHazeEnabled = true;
+    F32  mHazeStrength = 1.f;          // moisture -> haze density / distance / water fog
+
+    bool mStormDarkeningEnabled = true;
+    F32  mStormDarkeningStrength = 1.f; // convection -> variance up, gamma/ambient down
+
+    bool mColdSkyEnabled = true;
+    F32  mColdSkyStrength = 1.f;       // sub-freezing clear air -> ice level, bluer density
+
+    bool mRainbowEnabled = true;
+    F32  mRainbowStrength = 1.f;       // rain just stopped, sun up -> moisture-lit sky
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
@@ -364,13 +797,17 @@ struct SSAtmoEnvTrack
     SSAtmoEnvWeather  mWeather;
     SSAtmoEnvPlanetary mPlanetary;
 
-    // Atmosphere & Lighting, Clouds (+ Volumetric Field) - not yet real
-    // fields, atmosphere for phase-6-adjacent reasons (it leans on whatever
-    // rendering the planetary bodies end up needing) and the volumetric
-    // cloud field's own tunables below being deliberately kept separate
-    // from the legacy cirrus-layer settings this LLSD still round-trips.
-    LLSD mAtmosphere = LLSD::emptyMap();
+    // Per track, like the weather cube it reads: a storm at 2000m has no
+    // business dimming the sky at ground level, and a skybox track with no
+    // weather of its own should not inherit the ground's.
+    SSAtmoEnvWeatherInfluence mWeatherInfluence;
+
+    // Two cloud layers, two homes: the volumetric field's tunables and the
+    // legacy cirrus dome's parameters are deliberately separate structs,
+    // mirrored by the Clouds tab's two sub-tabs.
+    SSAtmoEnvAtmosphere mAtmosphere;
     SSAtmoEnvCloudField mCloudField;
+    SSAtmoEnvCloudDome  mCloudDome;
 
     // How far through this track's own day cycle it is right now, as a
     // fraction in [0, 1) - the unit every keyframe is stored in, so this
@@ -384,7 +821,7 @@ struct SSAtmoEnvTrack
     F64 currentDayCyclePhase() const;
 
     LLSD asLLSD() const;
-    bool fromLLSD(const LLSD& sd, S32 from_version = SS_ATMOENV_VERSION);
+    bool fromLLSD(const LLSD& sd);
 };
 
 // The whole environment: one document, no separate sky/water/day-cycle

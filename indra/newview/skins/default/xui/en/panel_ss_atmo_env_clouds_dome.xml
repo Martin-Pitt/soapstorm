@@ -1,0 +1,976 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<panel
+ border="true"
+ follows="all"
+ label="Sky Dome"
+ layout="topleft"
+ left="0"
+ name="panel_ss_atmo_env_clouds_dome"
+ top="0"
+ width="580"
+ height="580">
+    <!-- <SS:Nexii> Atmo Magic: Clouds > Sky Dome sub-tab - the legacy
+         Windlight/EEP cloud layer's full parameter set (see
+         SSAtmoEnvCloudDome), every field keyframable. Names, ranges and
+         increments mirror EEP's own Clouds panel
+         (panel_settings_sky_clouds.xml) one-for-one; "Coverage" really
+         drives cloud_shadow, exactly as EEP's slider does.
+
+         Same row grid as the Water and Atmosphere tabs: the colour swatch
+         and texture picker keep their usual proportions with their
+         keyframe cluster at the shared right edge, and the scroll vector
+         takes two rows on the Water tab's wave-row pattern. -->
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top="10"
+     height="14"
+     width="110"
+     name="dome_color_label"
+     font="SansSerifSmall">
+        Cloud Colour
+    </text>
+    <color_swatch
+     can_apply_immediately="true"
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-4"
+     height="22"
+     width="60"
+     label_height="0"
+     name="dome_color" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="-2"
+     height="25"
+     width="25"
+     name="dome_color_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="dome_color_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="dome_color_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_coverage_label"
+     font="SansSerifSmall">
+        Coverage
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_coverage_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="0.27" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_coverage_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_coverage_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_coverage_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_coverage_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_scale_label"
+     font="SansSerifSmall">
+        Scale
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_scale_slider"
+     show_text="false"
+     min_val="0.01"
+     max_val="3"
+     increment="0.01"
+     initial_value="0.42" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_scale_value_spinner"
+     min_val="0.01"
+     max_val="3"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_scale_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_scale_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_scale_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_variance_label"
+     font="SansSerifSmall">
+        Variance
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_variance_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="0" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_variance_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_variance_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_variance_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_variance_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_density_x_label"
+     font="SansSerifSmall">
+        Density X
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_density_x_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="1" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_density_x_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_density_x_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_density_x_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_density_x_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_density_y_label"
+     font="SansSerifSmall">
+        Density Y
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_density_y_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="0.53" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_density_y_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_density_y_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_density_y_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_density_y_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_density_d_label"
+     font="SansSerifSmall">
+        Density D
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_density_d_slider"
+     show_text="false"
+     min_val="0"
+     max_val="3"
+     increment="0.01"
+     initial_value="1" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_density_d_value_spinner"
+     min_val="0"
+     max_val="3"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_density_d_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_density_d_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_density_d_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_detail_x_label"
+     font="SansSerifSmall">
+        Detail X
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_detail_x_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="1" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_detail_x_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_detail_x_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_detail_x_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_detail_x_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_detail_y_label"
+     font="SansSerifSmall">
+        Detail Y
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_detail_y_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="0.53" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_detail_y_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_detail_y_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_detail_y_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_detail_y_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_detail_d_label"
+     font="SansSerifSmall">
+        Detail D
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="dome_detail_d_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     initial_value="1" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="dome_detail_d_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="dome_detail_d_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_detail_d_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="dome_detail_d_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="12"
+     height="14"
+     width="110"
+     name="dome_scroll_label"
+     font="SansSerifSmall">
+        Scroll Rate
+    </text>
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left="126"
+     top_delta="-3"
+     height="20"
+     width="70"
+     label="X"
+     label_width="14"
+     name="dome_scroll_x_spinner"
+     min_val="-30"
+     max_val="30"
+     increment="0.01"
+     decimal_digits="2" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left="126"
+     top_pad="4"
+     height="20"
+     width="70"
+     label="Y"
+     label_width="14"
+     name="dome_scroll_y_spinner"
+     min_val="-30"
+     max_val="30"
+     increment="0.01"
+     decimal_digits="2" />
+    <xy_vector
+     follows="left|top"
+     layout="topleft"
+     left="206"
+     top_delta="-24"
+     height="48"
+     width="48"
+     edit_bar_height="0"
+     padding="2"
+     name="dome_scroll"
+     min_val_x="-30"
+     max_val_x="30"
+     increment_x="0.01"
+     min_val_y="-30"
+     max_val_y="30"
+     increment_y="0.01"
+     arrow_color="white" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="12"
+     height="25"
+     width="25"
+     name="dome_scroll_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="dome_scroll_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="dome_scroll_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="dome_image_label"
+     font="SansSerifSmall">
+        Cloud Image
+    </text>
+    <texture_picker
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-4"
+     height="22"
+     width="30"
+     show_caption="false"
+     name="dome_image"
+     tool_tip="Noise texture the cloud layer is drawn from; None restores the stock cloud noise" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="-2"
+     height="25"
+     width="25"
+     name="dome_image_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="dome_image_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="dome_image_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
+         sections grouped by the tab each mapping reaches) - the tuning
+         surface for how far this track's weather may bend the values on
+         this tab.
+
+         Positioned by an absolute top against the panel's own height rather
+         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
+         measured downward from the panel's top edge, so that put the button
+         at the very top of the panel, overlapping the rows there and
+         reading as a stray control floating above the tab. Only a negative
+         value would have meant "up from the bottom", and an absolute top is
+         plainer than relying on either reading. -->
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left="10"
+     top="549"
+     height="21"
+     width="170"
+     name="influence_button_clouds"
+     tool_tip="Choose how much the weather cube modulates the sky you authored"
+     label="Weather Influence..." />
+</panel>

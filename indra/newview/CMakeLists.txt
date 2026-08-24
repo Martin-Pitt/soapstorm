@@ -190,16 +190,24 @@ set(viewer_SOURCE_FILES
     fsrezqueue.cpp
     ssatmomagic.cpp
     ssatmotrack.cpp
+    ssatmoenvapplier.cpp
+    ssavatarwet.cpp
     ssatmoenvasset.cpp
     ssatmoenvmanager.cpp
+    ssatmomatch.cpp
     ssatmoenvcloudfieldstate.cpp
     ssatmoenvdiscovery.cpp
     ssatmoenvbridge.cpp
     ssatmoenvplanetarystate.cpp
+    ssatmoenvskymodulator.cpp
     ssatmoenvtrackstate.cpp
+    ssvolcloud.cpp
     ssatmoenvweatherstate.cpp
     ssfloateratmo.cpp
     ssfloateratmoenv.cpp
+    ssfloateratmoinfluence.cpp
+    ssfloateratmomatch.cpp
+    ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
     ssfloatersim.cpp
     ssprecippreset.cpp
@@ -207,7 +215,6 @@ set(viewer_SOURCE_FILES
     ssprecipvariants.cpp
     sspreciprenderer.cpp
     ssrainshadow.cpp
-    ssrunoff.cpp
     sssurfacefield.cpp
     ssweathersounds.cpp
     sswindflow.cpp
@@ -1084,17 +1091,25 @@ set(viewer_HEADER_FILES
     fsrezqueue.h
     ssatmomagic.h
     ssatmotrack.h
+    ssatmoenvapplier.h
+    ssavatarwet.h
     ssatmoenvasset.h
     ssatmoenvkeyframe.h
     ssatmoenvmanager.h
+    ssatmomatch.h
     ssatmoenvcloudfieldstate.h
     ssatmoenvdiscovery.h
     ssatmoenvbridge.h
     ssatmoenvplanetarystate.h
+    ssatmoenvskymodulator.h
     ssatmoenvtrackstate.h
+    ssvolcloud.h
     ssatmoenvweatherstate.h
     ssfloateratmo.h
     ssfloateratmoenv.h
+    ssfloateratmoinfluence.h
+    ssfloateratmomatch.h
+    ssfloateratmoplanetary.h
     ssfloaterpreset.h
     ssfloatersim.h
     ssprecippreset.h
@@ -1102,7 +1117,6 @@ set(viewer_HEADER_FILES
     ssprecipvariants.h
     sspreciprenderer.h
     ssrainshadow.h
-    ssrunoff.h
     sssurfacefield.h
     ssweathersounds.h
     sswindflow.h

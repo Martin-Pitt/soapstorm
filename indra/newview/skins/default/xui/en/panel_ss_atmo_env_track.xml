@@ -8,7 +8,7 @@
  name="panel_ss_atmo_env_track"
  top="0"
  width="580"
- height="540">
+ height="580">
     <!-- <SS:Nexii> Atmo Magic: per-track, non-weather settings for whichever
          track is selected on the altitude rail (see
          SSFloaterAtmoEnv::mSelectedTrackIndex).
@@ -77,7 +77,7 @@
      min_val="0.5"
      max_val="24.0"
      increment="0.25"
-     initial_val="0.5"
+     initial_value="0.5"
      tool_tip="How long this track own day-night cycle takes - independent of every other track" />
     <spinner
      follows="left|top"
@@ -115,7 +115,7 @@
      min_val="-11.5"
      max_val="12.0"
      increment="0.25"
-     initial_val="-11.5"
+     initial_value="-11.5"
      tool_tip="Shifts where in the cycle time zero sits" />
     <spinner
      follows="left|top"

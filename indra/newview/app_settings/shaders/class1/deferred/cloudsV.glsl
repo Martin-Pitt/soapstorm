@@ -67,6 +67,11 @@ uniform vec3 cloud_color;
 
 uniform float cloud_scale;
 
+// <SS:Nexii> Metres the cloud layer has travelled on the wind, east and
+// north. See the drift block in main().
+uniform vec2 ss_cloud_drift;
+// </SS:Nexii>
+
 // <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md)
 uniform vec2 region_offset;   // camera pos - region centre, metres, world X/Y
 // </SS:Nexii>
@@ -92,7 +97,19 @@ void main()
 
     // <SS:Nexii> Region-relative cloud parallax; normalised by max_y, faded out below real cloud-base altitude
     float cloud_realism = smoothstep(1000.0, 1600.0, max_y);
-    vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) * (cloud_realism / (16.0 * max_y * cloud_scale));
+    float metres_per_uv = 16.0 * max_y * cloud_scale;
+    vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) * (cloud_realism / metres_per_uv);
+
+    // ...and the layer's own travel on the wind, in the same terms. This is
+    // the sky actually moving over the world, which the cloud scroll rate is
+    // NOT: that is added to cloud_pos_density1 alone, so it slides the large
+    // cloud texture against the small one and the pattern boils in place.
+    // Applied here, before the other three texcoords are derived from this
+    // one, so every layer travels together and the deck moves as one thing.
+    //
+    // Clouds moving one way looks like the camera moving the other, which is
+    // where the signs come from - they are the parallax term's, negated.
+    vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
     // </SS:Nexii>
 
     vary_texcoord1 = vary_texcoord0;

@@ -112,6 +112,18 @@ inline std::string ss_atmoenv_lerp<std::string>(const std::string& a, const std:
     return a;
 }
 
+// Curve a freshly created keyframe gets, per value type - the companion of
+// the lerp trait above. A type that cannot blend (a string enum, an asset
+// id) gets HOLD, so the stored curve tells the truth about what evaluation
+// will actually do, rather than recording an "ease" the lerp specialisation
+// silently ignores - which also lets the floater's ghost overlay draw these
+// as the value-in-force-across-a-span markers they really are.
+template <typename T>
+inline SSAtmoEnvCurve ss_atmoenv_default_curve() { return SSAtmoEnvCurve::EASE; }
+
+template <>
+inline SSAtmoEnvCurve ss_atmoenv_default_curve<std::string>() { return SSAtmoEnvCurve::HOLD; }
+
 // An asset id has no meaningful midpoint either - blending halfway between
 // two normal maps is not a texture, it is nonsense - so like std::string
 // this holds rather than interpolates regardless of the curve on the
@@ -122,6 +134,47 @@ template <>
 inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 /*t*/)
 {
     return a;
+}
+
+template <>
+inline SSAtmoEnvCurve ss_atmoenv_default_curve<LLUUID>() { return SSAtmoEnvCurve::HOLD; }
+
+// Near-equality trait, the companion collapseIfConstant() compares with.
+// The generic form is for plain scalars; colours and vectors compare
+// componentwise; an asset id or a string enum has no meaningful epsilon,
+// so those compare exactly (their specialisations ignore it), the same
+// way their lerp specialisations hold rather than blend.
+template <typename T>
+inline bool ss_atmoenv_near_equal(const T& a, const T& b, F32 epsilon)
+{
+    return std::fabs((F64)(a - b)) <= (F64)epsilon;
+}
+
+template <>
+inline bool ss_atmoenv_near_equal<LLColor3>(const LLColor3& a, const LLColor3& b, F32 epsilon)
+{
+    return std::fabs(a.mV[0] - b.mV[0]) <= epsilon
+        && std::fabs(a.mV[1] - b.mV[1]) <= epsilon
+        && std::fabs(a.mV[2] - b.mV[2]) <= epsilon;
+}
+
+template <>
+inline bool ss_atmoenv_near_equal<LLVector2>(const LLVector2& a, const LLVector2& b, F32 epsilon)
+{
+    return std::fabs(a.mV[0] - b.mV[0]) <= epsilon
+        && std::fabs(a.mV[1] - b.mV[1]) <= epsilon;
+}
+
+template <>
+inline bool ss_atmoenv_near_equal<LLUUID>(const LLUUID& a, const LLUUID& b, F32 /*epsilon*/)
+{
+    return a == b;
+}
+
+template <>
+inline bool ss_atmoenv_near_equal<std::string>(const std::string& a, const std::string& b, F32 /*epsilon*/)
+{
+    return a == b;
 }
 
 // value_to_sd / value_from_sd traits - specialise per stored type. Kept as
@@ -284,7 +337,7 @@ public:
             return;
         }
 
-        insertKeyframe(head_phase, value, SSAtmoEnvCurve::EASE);
+        insertKeyframe(head_phase, value, ss_atmoenv_default_curve<T>());
     }
 
     // The keyframe-diamond toggle. Adding one at a bare value promotes the
@@ -306,7 +359,27 @@ public:
             return;
         }
 
-        insertKeyframe(head_phase, valueAt(head_phase), SSAtmoEnvCurve::EASE);
+        insertKeyframe(head_phase, valueAt(head_phase), ss_atmoenv_default_curve<T>());
+    }
+
+    // Bulk-seeding companion (see addKeyframesFromSky): if every keyframe
+    // holds effectively the same value, the field is a constant wearing
+    // animation clothing - collapse it back to a plain value so it doesn't
+    // carry N redundant keyframes into every notecard it's saved to.
+    // Comparison is the type's near-equality trait: componentwise for
+    // colours/vectors, exact for ids and strings (see ss_atmoenv_near_equal).
+    // A single keyframe collapses too - it evaluates identically everywhere
+    // by definition.
+    void collapseIfConstant(F32 epsilon)
+    {
+        if (mKeyframes.empty()) return;
+        const T first = mKeyframes.front().mValue;
+        for (size_t i = 1; i < mKeyframes.size(); ++i)
+        {
+            if (!ss_atmoenv_near_equal(mKeyframes[i].mValue, first, epsilon)) return;
+        }
+        mPlainValue = first;
+        mKeyframes.clear();
     }
 
     void setCurveAt(F64 phase, SSAtmoEnvCurve curve, F64 epsilon = PHASE_EPSILON)
@@ -366,13 +439,7 @@ public:
         return sd;
     }
 
-    // time_scale multiplies every stored time on read. It exists for one
-    // job: schema version 1 stored keyframe times as absolute seconds, so
-    // migrating one means dividing by the day length it was authored
-    // against - see SSAtmoEnvTrack::fromLLSD, which is the only place that
-    // knows both the version and the day length. Current-version assets
-    // pass 1.0 and read straight through.
-    void fromLLSD(const LLSD& sd, const T& fallback, F64 time_scale = 1.0)
+    void fromLLSD(const LLSD& sd, const T& fallback)
     {
         mKeyframes.clear();
 
@@ -381,7 +448,7 @@ public:
             for (const LLSD& entry : llsd::inArray(sd["keyframes"]))
             {
                 SSAtmoEnvKeyframe<T> kf;
-                kf.mTime = wrapPhase((entry.has("time") ? entry["time"].asReal() : 0.0) * time_scale);
+                kf.mTime = wrapPhase(entry.has("time") ? entry["time"].asReal() : 0.0);
                 kf.mValue = ss_atmoenv_value_from_sd<T>(entry["value"], fallback);
                 kf.mCurve = ss_atmoenv_curve_from_name(entry.has("curve") ? entry["curve"].asString() : "ease");
                 mKeyframes.push_back(kf);

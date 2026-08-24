@@ -2,8 +2,9 @@
  * @file ssfloateratmoenv.h
  * @brief Atmo Magic floater: create/load/save/revert, a vertical altitude
  *        rail for track selection, and per-track editing tabs (Track,
- *        Weather so far - Atmosphere & Lighting / Clouds / Planetary still
- *        to come). See doc/atmo_magic_environment.md.
+ *        Weather, Water, Clouds, Atmosphere & Lighting, Planetary - the
+ *        last opening the SSFloaterAtmoPlanetary designer for its bodies).
+ *        See doc/atmo_magic_environment.md.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -35,6 +36,8 @@
 #include <functional>
 #include <vector>
 
+class LLInventoryItem;
+
 class SSFloaterAtmoEnv : public LLFloater
 {
 public:
@@ -46,12 +49,30 @@ public:
     void onVisibilityChange(bool new_visibility) override;
     void draw() override;
 
-    // Dropping a notecard anywhere on the floater loads it
+    // The rail's markers are POSITIONED IN C++ against the slider's own
+    // geometry, so a resize has to reposition them. Doing it only on the
+    // periodic poll was not enough: that poll deliberately skips while any
+    // widget holds mouse capture, and dragging a resize handle IS mouse
+    // capture - so through the whole drag the Ground marker sat wherever
+    // its follows="bottom" put it while the thumbs moved with the rail, and
+    // the two drifted apart.
+    void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+
+    // Dropping a notecard anywhere on the floater loads it; dropping a
+    // full-perm EEP sky settings item (only once an asset is loaded)
+    // stamps that sky's look as keyframes at the current preview head -
+    // see handleSettingsDrop.
     bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                            EDragAndDropType cargo_type, void* cargo_data,
                            EAcceptance* accept, std::string& tooltip_msg) override;
 
 private:
+    // The DAD_SETTINGS drop path: full-perm gate, fetch, sky-only type
+    // check, then addKeyframesFromSky at mPreviewPhase into the selected
+    // track's atmosphere + cloud dome. The fetch is async, so the apply
+    // half guards against the floater having closed and the asset having
+    // been replaced or reshaped in the meantime.
+    void handleSettingsDrop(const LLInventoryItem* item);
     // hasAsset() false: only the create button is meaningful, per the
     // no-implicit-default rule. True: the normal editing chrome.
     void refreshVisibility();
@@ -62,6 +83,10 @@ private:
     void onClickLoad();
     void onClickSave();
     void onClickRevert();
+
+    // Drops the environment entirely, falling back to EEP - distinct from
+    // Revert, which restores the last saved state of this one.
+    void onClickUnload();
     void onClickAddTrack();
     void onClickRemoveTrack();
     void onCommitName();
@@ -83,6 +108,14 @@ private:
     // rebuild the whole rail out from under an active drag.
     void refreshTrackRail();
 
+    // The positioning half of refreshTrackRail, without the rebuild: where
+    // Ground sits and where each track's labels sit, both derived from the
+    // rail's current geometry. Safe to call as often as the layout changes,
+    // which is what reshape() does - rebuilding the slider set that often
+    // would hand an in-progress drag to a different thumb (see
+    // refreshTrackRail's own note).
+    void repositionRailMarkers();
+
     // One thumb's live-drag commit: writes the dragged value straight into
     // that track's mFloorZ, selects that track, and repositions just that
     // one marker's labels - see refreshTrackRail()'s comment for why this
@@ -100,6 +133,10 @@ private:
     void onMouseUpAltitudeSlider();
 
     void onClickGroundRow();
+
+    // Opens the shared Weather Influence editor on the selected track -
+    // wired to the identical button on each tab weather can reach.
+    void onClickWeatherInfluence();
 
     // Positions track_alt_label_<slot> (1-based, matching both the slider
     // name "track<slot>" and mTracks[slot] directly - there's no thumb
@@ -153,6 +190,71 @@ private:
 
     void onCommitWaterEnabled();
 
+    // True when the selected track has no water plane, which makes every
+    // water parameter meaningless: the whole tab below the checkbox greys
+    // out and stops ghosting keyframes, exactly as an Auto-owned row does.
+    // The values stay in the asset untouched - turning water back on
+    // restores the plane the author had, rather than a default one.
+    bool waterRowsInactive() const;
+
+    // Greys (or restores) every "water_" row's controls and keyframe
+    // cluster to match waterRowsInactive(). Runs from the same pass
+    // refreshAutoRows() does, and for the same reason: the generic row
+    // refresh re-enables controls by keyframe count, so this verdict has
+    // to be applied after it.
+    void refreshWaterRows();
+
+    // Weather tab's structural toggles - like the water enable, plain
+    // bools rather than keyframe rows. When an Auto is on its manual rows
+    // grey out (sliders/spinners disabled) rather than hide: the derived
+    // behaviour still exists, those rows just aren't the author of it.
+    void onCommitGustAuto();
+    void onCommitLightningAuto();
+    // One pass over every Auto-owned row group (gust, lightning, clouds):
+    // enables/disables the manual controls - slider, spinner, AND the
+    // keyframe diamond, since inserting a keyframe into a field Auto is
+    // ignoring only parks confusion for later - and, while Auto owns a
+    // group, writes the values Auto computed for the current preview
+    // instant into the greyed controls, so they read as a live preview of
+    // what Auto decided rather than a stale parked override. Chevrons stay
+    // live: they navigate the preview head, which is never wrong to do.
+    // Runs at the end of refreshPreview() so the computed values
+    // track the scrub; the checkbox values themselves refresh with the
+    // structural state in refreshTrackTab().
+    void refreshAutoRows();
+    void onCommitCloudAuto();
+
+    // Whether `prefix` names a row an Auto flag currently owns. Auto-owned
+    // rows suppress their keyframe ghosts entirely (scrubber overlay and
+    // slider value marks both): the parked keyframes do nothing while Auto
+    // drives the field, and drawing them beside a computed readout that
+    // says something different reads as a contradiction, not information.
+    // The precipitation override row is deliberately NOT in this set even
+    // while it sits on "Auto" - its keyframes are what schedule when Auto
+    // vs a forced type applies across the cycle, so they are never inert.
+    bool rowAutoOwned(const std::string& prefix) const;
+
+    //-------------------------------------------------------------------
+    // Planetary tab - mSelectedTrackIndex's two distance-scale dials plus
+    // the button that opens the System Designer sub-floater
+    // (SSFloaterAtmoPlanetary), which is where the celestial bodies
+    // themselves are edited now. Nothing here is keyframed: a solar system
+    // is structural, like a water plane existing, not something to tween
+    // mid-cycle. See panel_ss_atmo_env_planetary.xml.
+    //-------------------------------------------------------------------
+
+    // The two per-track distance-scale dials' display refresh - the tab's
+    // only remaining per-track state now the body editing lives in the
+    // designer.
+    void refreshPlanetaryScales();
+
+    // Slider+spinner pairs sharing one handler the same way the day-cycle
+    // rows do.
+    void onCommitPlanetaryScales();
+
+    // Opens (or retargets) the designer for mSelectedTrackIndex.
+    void onClickOpenPlanetaryDesigner();
+
     // mSelectedTrackIndex's Weather cube, one AE-style row per keyframable
     // field: label, slider, keyframe diamond, prev/next chevrons. Still no
     // curve/HOLD controls - see doc/atmo_magic_environment.md - but the row
@@ -189,12 +291,28 @@ private:
     {
         std::string mPrefix; // also the control's own widget name, not just a prefix
         std::function<SSAtmoEnvKeyframed<T>&()> mField;
+
+        // Display scale, for the colours EEP stores outside 0..1.
+        //
+        // Several sky colours are HDR in the settings: blue horizon and blue
+        // density run to 2, sunlight and ambient to 3. A colour swatch is a
+        // 0..255 control, so EEP's own editor divides by these on the way in
+        // and multiplies on the way out (SLIDER_SCALE_* in
+        // llpaneleditsky.cpp), and anything showing the stored value raw
+        // reports a white sunlight as <765, 765, 765>. Storage stays in
+        // EEP's own space - the applier hands these straight to the setters
+        // - so this is a display convention and nothing more.
+        F32 mScale = 1.f;
     };
     std::vector<KeyRow<LLColor3>>  mColorRows;
     std::vector<KeyRow<LLVector2>> mVectorRows;
     std::vector<KeyRow<LLUUID>>    mTextureRows;
+    // A dropdown over a keyframed string (the precipitation override) -
+    // holds across a keyframe rather than blending, since the value type's
+    // lerp does; see ss_atmoenv_lerp<std::string>.
+    std::vector<KeyRow<std::string>> mStringRows;
 
-    void refreshKeyframeProof();
+    void refreshPreview();
     void onCommitPreviewTime();
 
     //-------------------------------------------------------------------
@@ -261,6 +379,18 @@ private:
     static void buildGhosts(const std::vector<SSAtmoEnvKeyframe<T>>& keyframes,
                             FormatFn format, std::vector<GhostKeyframe>& out);
 
+    // Rect, left travel origin and travel width of the preview scrubber,
+    // in the space the post-children overlays draw in. False when the
+    // scrubber is missing, hidden, or too narrow to place anything on.
+    bool scrubberGeometry(LLRect& out_rect, S32& out_left_edge, S32& out_travel) const;
+
+    // Where the selected track's sun and moon cross the horizon, drawn on
+    // the scrubber as up/down triangles: full-size warm amber for the sun,
+    // small moonlit blue-white for the moon. Unlike the ghosts these are
+    // always on - they annotate the timeline itself, the way tick marks
+    // do, rather than answering a hover.
+    void drawRiseSetMarkers();
+
     void drawKeyframeGhosts();
 
     // The other half of the same idea, on the other axis. The scrubber
@@ -309,6 +439,8 @@ private:
     void commitVectorSpinners(const KeyRow<LLVector2>& row);
     void refreshTextureRow(const KeyRow<LLUUID>& row, F64 phase);
     void commitTextureRow(const KeyRow<LLUUID>& row);
+    void refreshStringRow(const KeyRow<std::string>& row, F64 phase);
+    void commitStringRow(const KeyRow<std::string>& row);
 
     // Position in the selected track's day cycle as a fraction in [0, 1) -
     // the timeline head every keyframe operation above reads and writes

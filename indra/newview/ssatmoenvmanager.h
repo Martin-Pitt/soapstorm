@@ -54,6 +54,27 @@ public:
     // create button, not an edit panel, is what a caller should be showing.
     bool hasAsset() const { return mHasAsset; }
 
+    // Drop the loaded environment entirely: no asset, no baseline, no
+    // source notecard. The applier watches hasAsset() and releases EEP's
+    // local slot on the next frame, so the world falls back to whatever
+    // the parcel or region is publishing - which is the point.
+    //
+    // Deliberately NOT the same as reverting: revert restores what was
+    // last saved, this leaves nothing behind at all.
+    void unload();
+
+    // Which notecard the current environment came from, and whether it was
+    // a parcel that put it there. Discovery uses this to decide whether an
+    // environment is still the right one after crossing into a new parcel -
+    // one the user loaded by hand is theirs and is left alone.
+    const LLUUID& sourceAssetId() const { return mSourceAssetId; }
+    bool cameFromParcel() const { return mFromParcel; }
+    void noteSource(const LLUUID& asset_id, bool from_parcel)
+    {
+        mSourceAssetId = asset_id;
+        mFromParcel = from_parcel;
+    }
+
     const SSAtmoEnvAsset& asset() const { return mWorking; }
     // Caller must check hasAsset() first; mutating before anything exists
     // would silently manufacture the implicit default this deliberately
@@ -75,14 +96,32 @@ public:
     // under the Settings system folder (see atmoFolderId() below), created
     // first if it doesn't exist yet.
     //
+    // Before writing, the ground track's atmosphere and cloud dome are
+    // seeded as a full day cycle from EEP's four stock non-legacy skies
+    // (LLEnvironment::KNOWN_SKY_MIDNIGHT/SUNRISE/MIDDAY/SUNSET, keyframed
+    // at phases 0.0/0.25/0.5/0.75 and fetched concurrently via
+    // LLSettingsVOBase::getSettingsAsset - cached, so only the genuine
+    // first use pays round trips), with fields all four skies agree on
+    // collapsed back to plain values. Fetch failures degrade rather than
+    // block: whatever subset arrives is keyframed at its phases, a single
+    // survivor plain-seeds the old Midday-only way, and none at all falls
+    // back to the schema's constructor defaults - a new environment must
+    // never fail to create just because an asset fetch did. See
+    // createDefaultNotecard's buildSeededDefault for the full matrix.
+    //
     // on_created fires only once the asset body has actually finished
     // uploading, with both the item id and the asset id - not right after
     // the bare inventory-item-metadata create step, which was the bug an
     // earlier version of this had: the item existed but its content
     // hadn't landed yet, so an immediate load attempt against it could
-    // silently do nothing. Either id may be null on failure.
+    // silently do nothing. Either id may be null on failure. The asset
+    // argument is the exact object that was serialised into the notecard:
+    // the Midday seeding makes the written content fetch-dependent, so a
+    // caller that wants to adopt what was just created (the floater's
+    // create button) must take this rather than regenerate makeDefault(),
+    // which no longer matches what landed on the server.
     static void createDefaultNotecard(const LLUUID& parent_id,
-                                       std::function<void(const LLUUID& item_id, const LLUUID& asset_id)> on_created);
+                                       std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
 
     // Adopts a just-created notecard (createDefaultNotecard's own callback)
     // as the active asset, recording its item id as well as its asset id -
@@ -201,6 +240,11 @@ private:
     SSAtmoEnvAsset mBaseline;
     SSAtmoEnvAsset mWorking;
     bool mHasAsset = false;
+
+    // See noteSource(). Null id means "loaded from somewhere with no asset
+    // behind it", which a hand-built environment is until it is saved.
+    LLUUID mSourceAssetId;
+    bool mFromParcel = false;
 
     LLUUID mAssetID;      // notecard currently applied; null if none
     LLUUID mItemID;       // inventory item backing mAssetID, if the agent owns one; null if none (e.g. a parcel-discovered notecard nobody handed a copy of)

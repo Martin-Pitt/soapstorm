@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<panel
+ border="true"
+ follows="all"
+ label="Planetary"
+ layout="topleft"
+ left="0"
+ name="panel_ss_atmo_env_planetary"
+ top="0"
+ width="580"
+ height="580">
+    <!-- <SS:Nexii> Atmo Magic: this track celestial bodies. The body
+         hierarchy itself is edited in the dedicated System Designer
+         sub-floater (floater_ss_atmo_planetary.xml) - an orbital map with
+         the sun at centre - opened by the button below. Only the two
+         per-track distance-scale dials stay on this tab: they are dials on
+         the track, not on any one body, and belong beside the track's
+         other per-track controls. Nothing on this tab is keyframed: a
+         solar system is structural, like a water plane existing. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top="10"
+     height="14"
+     width="110"
+     name="sun_planet_scale_label"
+     font="SansSerifSmall">
+        Sun-Planet Scale
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="sun_planet_scale_slider"
+     show_text="false"
+     min_val="0.01"
+     max_val="1.0"
+     increment="0.01"
+     initial_value="1.0"
+     tool_tip="Compresses every Sun-Planet orbital distance for artistic effect - 1.0 is the authored distance, unmodified. Body sizes are untouched" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="sun_planet_scale_spinner"
+     min_val="0.01"
+     max_val="1.0"
+     increment="0.01"
+     decimal_digits="2" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="planet_moon_scale_label"
+     font="SansSerifSmall">
+        Planet-Moon Scale
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="planet_moon_scale_slider"
+     show_text="false"
+     min_val="0.01"
+     max_val="1.0"
+     increment="0.01"
+     initial_value="1.0"
+     tool_tip="Compresses every Planet-Moon orbital distance - a moon that looms large in the sky without touching its authored size" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="planet_moon_scale_spinner"
+     min_val="0.01"
+     max_val="1.0"
+     increment="0.01"
+     decimal_digits="2" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="18"
+     height="42"
+     width="560"
+     name="planetary_designer_text"
+     wrap="true"
+     font="SansSerifSmall">
+        This track's suns, planets and moons are edited in the System
+        Designer - an orbital map of the whole system where bodies are
+        selected by clicking them and repositioned by dragging them along
+        their rings. The designer follows whichever track is selected here.
+    </text>
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="8"
+     height="23"
+     width="560"
+     name="open_planetary_designer_button"
+     label="Open System Designer..."
+     tool_tip="Open the planetary system designer for this track" />
+</panel>

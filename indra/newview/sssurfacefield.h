@@ -31,7 +31,7 @@
 
 #include "llrendertarget.h"
 #include "llsingleton.h"
-#include "ssrunoff.h"
+#include "ssrainshadow.h"
 #include "v3math.h"
 
 #include <map>
@@ -45,18 +45,27 @@ class LLGLSLShader;
 // frames, which is the whole point of keeping it rather than deriving it from
 // the rain shadow every time it is asked for.
 //
-// The field is laid out on - and only exists for - regions the runoff trace
-// has solved. That is deliberate rather than convenient: the trace already
-// answers where the surface is, which way water runs off it and where it
-// stands, and every one of those is something this needs. Improving the trace
-// improves what sits on top of it for free.
+// The field is laid out on - and only exists for - regions the rain shadow
+// map has captured a surface for. What the surface IS (height, what kind of
+// material, which way it slopes, whether it can hold water) is read straight
+// off that capture and reduced to the per-cell Geometry below.
+//
+// There is deliberately no water-movement model here any more. An earlier
+// version traced a full drainage network per region - flow accumulation,
+// flood fill, eaves, streams running off lips - and it was far more
+// machinery than the look it bought. Water on a slope is now a static
+// consequence of the slope and of how much rain is landing on it, which is
+// what a viewer actually shows: a wet roof streaks downhill because it is
+// steep and being rained on, not because a solver routed a catchment through
+// it. See doc/atmo_magic_environment.md.
 class SSSurfaceField : public LLSingleton<SSSurfaceField>
 {
     LLSINGLETON_EMPTY_CTOR(SSSurfaceField);
 
 public:
-    // From SSAtmoMagic::idle, after the runoff network has been refreshed so a
-    // region traced this frame is dressed this frame rather than next.
+    // From SSAtmoMagic::idle, after the rain shadow map has had its chance to
+    // capture, so a region captured this frame is dressed this frame rather
+    // than next.
     void idle(F32 dt);
 
     void clear();
@@ -88,10 +97,11 @@ public:
     bool bindForShader(LLGLSLShader& shader, S32 channel);
     bool hasWindow() const { return mWindowTex != 0 && mWindowValid; }
 
-    // A second stitched window, laid out exactly like the first, carrying
-    // where the drainage's own flow accumulation says water on this cell is
-    // headed and how much is passing through it - a channel, not a puddle.
-    // Kept apart from the main window rather than added as a third and
+    // A second stitched window, laid out exactly like the first, carrying the
+    // cell's downslope direction and how steep it is - which way a film of
+    // water on this cell would run, and how hard. Static: it comes from the
+    // surface's own local gradient, not from any simulation of where water
+    // went. Kept apart from the main window rather than added as a third and
     // fourth component on it: nothing but the flow-motion pass ever reads
     // this, and every consumer of the main window would otherwise be
     // uploading and sampling two floats a tick that it never touches.
@@ -114,6 +124,60 @@ public:
     F32 peakPuddle() const { return mPeakPuddle; }
 
 private:
+    // One region's surface, reduced from the rain shadow map's capture to
+    // exactly what dressing it needs. Rebuilt when the capture's geometry
+    // serial changes and not otherwise: none of this is weather, all of it is
+    // shape.
+    struct Geometry
+    {
+        S32 mN = 0;
+        F32 mCell = 0.f;
+        U32 mGeomSerial = 0xFFFFFFFFu;
+
+        std::vector<F32> mZ;        // agent-space surface height per cell
+        std::vector<U8> mFlags;     // SSRainShadowMap::SURF_*; 0 = no surface
+
+        // Local downslope direction and steepness, from the height field's
+        // own gradient. This is the whole of the directionality model: a
+        // pitched roof knows which way is down, and how steeply, and that is
+        // enough to streak water down it.
+        std::vector<F32> mSlopeX;
+        std::vector<F32> mSlopeY;
+        std::vector<F32> mSlope;    // rise over run, 0 on the level
+
+        // Lips: a cell on the surface with open air, or a long drop, beside
+        // it - the edge of a roof, a balcony, a bridge deck. Water that
+        // reaches one comes off it, so this is where drips and streams are
+        // shed from. Found by looking at a cell's own neighbours and nothing
+        // further: no network, no catchment, no routing. mEdgeX/Y point
+        // outward, over the drop.
+        std::vector<U8> mEdge;
+        std::vector<F32> mEdgeX;
+        std::vector<F32> mEdgeY;
+
+        // Flat list of the cells mEdge marks, so shedding walks the lips
+        // rather than the whole grid looking for them - a region is 16k
+        // cells and a few hundred of them are edges.
+        std::vector<S32> mEdgeCells;
+
+        // Where water can stand: a cell flat enough to hold it that no
+        // neighbour drains it away. A purely local test - "is this a dip" -
+        // not a routed basin, so a puddle appears where the ground actually
+        // dips rather than wherever a catchment happened to terminate.
+        std::vector<U8> mPool;
+
+        bool valid() const { return mN > 0 && !mZ.empty(); }
+        bool solid(size_t i) const { return mFlags[i] != 0; }
+        bool water(size_t i) const { return (mFlags[i] & SSRainShadowMap::SURF_WATER) != 0; }
+    };
+
+    // Builds/refreshes the Geometry for every region the shadow map has a
+    // surface for, and drops the ones it no longer does.
+    void refreshGeometry();
+    static void buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geometry& out);
+
+    std::map<U64, Geometry> mGeometry;
+
     struct Field
     {
         U64 mRegionHandle = 0;
@@ -130,12 +194,41 @@ private:
         std::vector<F32> mSnow;
         std::vector<F32> mPuddle;
 
+        // What a lip cell is holding, in drips' worth of water, and the
+        // fractional drip it is owed. This is the roof's reservoir: rain
+        // fills it, it drains on its own time constant, and what drains is
+        // what the eave sheds. It lives here rather than in Geometry
+        // because it is weather, not shape - a rebuild of the surface must
+        // not empty a roof that has been standing in a downpour.
+        //
+        // It is also the whole of what remains of "water moves": water
+        // gathers where it lands and leaves at the nearest edge to it.
+        // Nothing carries it sideways from cell to cell.
+        std::vector<F32> mStore;
+        std::vector<F32> mAccum;
+
         F64 mLastTouched = 0.0;
     };
 
-    Field* fieldFor(U64 region_handle, const SSRunoffField& src, F64 now);
+    // Sheds drips and streams off the lips the geometry found, at a rate set
+    // by how much rain is actually landing there and how steeply the surface
+    // behind the lip feeds it.
+    //
+    // This is what replaced the drainage simulation. The old system traced a
+    // flow network per region, accumulated catchment through it and shed what
+    // arrived at each eave; this asks two local questions instead - is this
+    // an edge, and is it raining on it - which is what the result actually
+    // looked like anyway. A roof sheds because it is a roof in the rain, not
+    // because a solver routed six hundred cells of catchment to its gutter.
+    void shedEdges(F32 dt);
+
+    // One region's worth of the above.
+    void shedRegion(U64 region_handle, const Geometry& geom, Field& fld,
+                    F32 dt, F32 rate_m2, const LLVector3& camera_agent);
+
+    Field* fieldFor(U64 region_handle, const Geometry& geom, F64 now);
     void updateWindow();
-    void tick(Field& fld, const SSRunoffField& src, F32 dt,
+    void tick(Field& fld, const Geometry& geom, F32 dt,
               const SSPrecipPreset& preset, F32 intensity);
     void evict(F64 now);
 
@@ -178,6 +271,11 @@ private:
     // mWindowData, so one ssFieldOrigin uniform serves both.
     U32 mWindowFlowTex = 0;
     std::vector<F32> mWindowFlowData;   // staging, RGBA per texel
+
+    // Rolling cursor over each region's lip cells, so a frame visits a slice
+    // of them rather than all of them: shedding is throttled by how many
+    // stream slots and drips a frame may start, not by how many lips exist.
+    std::map<U64, S32> mShedCursor;
 
     F32 mLastTickMS = 0.f;
     F32 mPeakWet = 0.f;

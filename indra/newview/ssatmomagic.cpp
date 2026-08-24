@@ -27,7 +27,8 @@
 #include "ssatmotrack.h"
 #include "ssatmoenvbridge.h"
 #include "ssrainshadow.h"
-#include "ssrunoff.h"
+#include "ssavatarwet.h"
+#include "ssvolcloud.h"
 #include "sssurfacefield.h"
 #include "sswindflow.h"
 
@@ -515,15 +516,6 @@ void SSAtmoMagic::processImpacts()
         SSWeatherSounds::getInstance()->notifyImpact(
             impact.mStrength * (1.f - dist / IMPACT_SEE_RADIUS));
 
-        // Ground truth for the runoff system: a landing that actually arrived,
-        // after every throttle and cull between the weather parameters and the
-        // screen. Drips off an eave are excluded - they are the output of that
-        // system, not evidence about the rain feeding it.
-        if (!impact.mRunoff)
-        {
-            SSRunoff::getInstance()->notifyImpact(impact.mPosAgent, IMPACT_SEE_RADIUS);
-        }
-
         // Deterministic per-impact stream so the ripple and any shatter look
         // the same on every client watching the same landing
         SSRandStream rng(SSAtmoNoise::combine(SS_ATMO_SEED,
@@ -580,13 +572,17 @@ void SSAtmoMagic::idle()
         mSim->update(gFrameIntervalSeconds);
     }
 
-    // Roof drainage. Runs before the impacts it schedules are dispatched, so a
-    // drip released this frame is queued in time to be seen landing.
-    SSRunoff::getInstance()->idle(gFrameIntervalSeconds);
-
-    // What the weather is leaving on the surface, integrated over the network
-    // the line above just refreshed. Reads it, never writes it.
+    // What the weather is leaving on the surface. Reads the rain shadow
+    // map's captured geometry, never writes it.
     SSSurfaceField::getInstance()->idle(gFrameIntervalSeconds);
+
+    // ...and on the people standing in it. After the surface field, which is
+    // what answers whether anything is over their heads.
+    SSAvatarWet::getInstance()->idle(gFrameIntervalSeconds);
+
+    // The volumetric cloud layer, rebuilt from the active track's field
+    // state. Drawn by the sky pass; this is only the field behind it.
+    SSVolCloud::getInstance()->update(gFrameIntervalSeconds);
 
     if (mEnabled)
     {
@@ -1058,24 +1054,12 @@ void SSAtmoMagic::drawInfo()
                                  (F32)shadow->lastCaptureAge(), shadow->lastCaptureMS()));
     }
 
-    lines.push_back("-- runoff --");
+    lines.push_back("-- surface --");
 
     {
-        SSRunoff* runoff = SSRunoff::getInstance();
-        lines.push_back(llformat("runoff     %d eaves over %d regions   %.1f drips/s   %d streams",
-                                 runoff->eaveCount(), runoff->networkCount(),
-                                 runoff->dripRate(),
-                                 sim ? sim->streamCount() : 0));
-        // Traces should be rare: the count climbing while you stand still means
-        // something is churning the geometry serial
-        lines.push_back(llformat("drainage   delivery x%.2f   traced %.1f ms   traces %u",
-                                 runoff->delivery(), runoff->lastBuildMS(),
-                                 runoff->buildCount()));
-
-        // What the drainage has been used for besides shedding. Peaks rather
-        // than means: a mean over a whole region is mostly the open ground
-        // nothing has happened to, and reads as zero long after the streets
-        // have gone dark.
+        // Peaks rather than means: a mean over a whole region is mostly the
+        // open ground nothing has happened to, and reads as zero long after
+        // the streets have gone dark.
         SSSurfaceField* surface = SSSurfaceField::getInstance();
         lines.push_back(llformat("surface    %d fields   wet %.2f   snow %.0f mm   puddle %.0f mm   %.1f ms",
                                  surface->fieldCount(), surface->peakWet(),

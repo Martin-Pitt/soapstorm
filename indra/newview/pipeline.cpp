@@ -106,7 +106,8 @@
 #include "sspreciprenderer.h" // <SS:Nexii> Atmo Magic weather
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
-#include "ssrunoff.h" // <SS:Nexii> Atmo Magic roof runoff
+#include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
+#include "ssatmomatch.h" // <SS:Nexii> sky match sample overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
@@ -5663,12 +5664,22 @@ void LLPipeline::renderDebug()
         SSRainShadowMap::getInstance()->renderDebug();
     }
 
-    // Atmo Magic roof runoff: the drainage network traced over that same
-    // surface, with the eaves it sheds from marked by catchment
-    if (mRenderDebugMask & RENDER_DEBUG_ROOF_RUNOFF)
+    // <SS:Nexii> Atmo Magic celestial debug: a ray and a label per body in
+    // the sky. Toggled from the System Designer rather than from Render
+    // Metadata, because it is an authoring aid for the floater beside it -
+    // hence a setting rather than a debug mask.
     {
-        SSRunoff::getInstance()->renderDebug();
+        static LLCachedControl<bool> celestial_debug(gSavedSettings, "SSAtmoPlanetaryDebugOverlay", false);
+        if (celestial_debug)
+        {
+            SSAtmoEnvApplier::getInstance()->renderCelestialDebug();
+        }
     }
+
+    // <SS:Nexii> Atmo Magic sky match: where the fit is sampling from, while
+    // it is running. Not behind a debug mask - it is on screen only during
+    // a match, and during one it is the whole point.
+    SSAtmoMatch::getInstance()->renderDebug();
 
     // Atmo Magic surface field: what the weather has worked into that surface
     // over time - damp, settled snow, standing water - washed over the cells

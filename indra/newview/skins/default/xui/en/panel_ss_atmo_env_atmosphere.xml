@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<panel
+ border="true"
+ follows="all"
+ label="Atmosphere"
+ layout="topleft"
+ left="0"
+ name="panel_ss_atmo_env_atmosphere"
+ top="0"
+ width="580"
+ height="580">
+    <!-- <SS:Nexii> Atmo Magic: Atmosphere tab - a thin container for two
+         sub-tabs, mirroring EEP's own Fixed Environment split: Atmosphere
+         (panel_settings_sky_atmos.xml's parameter set, PBR dials
+         included) and Sun and Moon (the non-positional lighting dials
+         from panel_settings_sky_sunmoon.xml). One page could not hold the
+         full EEP-parity row set at the floater's default height, and
+         EEP's own tab split is the precedent to follow anyway - same
+         nesting idiom as the Clouds tab's sub-tabs. Both load by
+         filename exactly like the main tab_container's panels. -->
+    <tab_container
+     follows="all"
+     layout="topleft"
+     left="4"
+     top="4"
+     right="-4"
+     bottom="-4"
+     halign="left"
+     tab_position="top"
+     tab_width="110"
+     tab_padding_right="2"
+     name="atmosphere_sub_tabs">
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="atmosphere_sky_tab"
+         label="Atmosphere"
+         filename="panel_ss_atmo_env_atmosphere_sky.xml" />
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="atmosphere_lighting_tab"
+         label="Sun &amp; Moon"
+         filename="panel_ss_atmo_env_atmosphere_lighting.xml" />
+    </tab_container>
+</panel>

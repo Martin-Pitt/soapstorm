@@ -145,13 +145,43 @@ void SSAtmoEnvDiscoveryManager::changed()
     const std::string desc = parcel ? parcel->getDesc() : LLStringUtil::null;
     const LLUUID asset_id = parseDescription(desc);
 
-    // Leaving a configured parcel does nothing special - see the header:
-    // unlike v2 there is no implicit default to fall back to, so whatever
-    // is loaded just stays loaded.
-    if (asset_id.isNull()) return;
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
 
-    if (asset_id == mAppliedAssetId) return; // already successfully applied - genuinely nothing to do
+    // Mid-edit is mid-edit, in both directions: the same courtesy that
+    // stops a parcel's environment clobbering an open editor also stops a
+    // parcel boundary yanking one away while it is being worked on.
+    const bool editing = editorIsOpen();
+
+    if (asset_id.isNull())
+    {
+        // No marker here. Release what a parcel put on us, and only that -
+        // see the header.
+        if (!editing && mgr->hasAsset() && mgr->cameFromParcel())
+        {
+            LL_INFOS("AtmoMagicEnv") << "Left the parcel that supplied the Atmo Magic"
+                                        " environment; falling back to the EEP setting" << LL_ENDL;
+            mgr->unload();
+            mAppliedAssetId.setNull();
+            mPendingAssetId.setNull();
+        }
+        return;
+    }
+
+    if (asset_id == mAppliedAssetId && mgr->hasAsset())
+    {
+        return; // already applied and still loaded - genuinely nothing to do
+    }
     if (asset_id == mPendingAssetId) return; // already asked, still waiting on the reply
+
+    // A DIFFERENT parcel environment: the one in hand is not the one this
+    // parcel is asking for, so it goes. Dropping it before the fetch rather
+    // than after means crossing onto a parcel whose notecard cannot be
+    // reached shows the EEP fallback instead of the previous parcel's sky.
+    if (!editing && mgr->hasAsset() && mgr->cameFromParcel() && mAppliedAssetId != asset_id)
+    {
+        mgr->unload();
+        mAppliedAssetId.setNull();
+    }
 
     requestFetch(asset_id);
 }
@@ -228,13 +258,20 @@ void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD
     applyText(asset_id, text);
 }
 
+// Whether the editor is open on screen. Auto-apply is suppressed while it
+// is - the "New Atmo Magic" creation flow's own "mid-edit, don't clobber"
+// rule, see doc/atmo_magic_environment.md - and so is the release that
+// happens on leaving a configured parcel: an author working on a notecard
+// should not have it taken away because they walked over a line.
+bool SSAtmoEnvDiscoveryManager::editorIsOpen()
+{
+    LLFloater* floater = LLFloaterReg::findInstance("ss_atmo_env");
+    return floater && floater->getVisible();
+}
+
 bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::string& text)
 {
-    // Auto-apply is suppressed while the floater is open, exactly like the
-    // "New Atmo Magic" creation flow's own "mid-edit, don't clobber" rule -
-    // see doc/atmo_magic_environment.md.
-    LLFloater* floater = LLFloaterReg::findInstance("ss_atmo_env");
-    if (floater && floater->getVisible())
+    if (editorIsOpen())
     {
         LL_INFOS("AtmoMagicEnv") << "Atmo v3 environment " << asset_id
                                  << " available but not applied - floater is open" << LL_ENDL;
@@ -250,6 +287,10 @@ bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::str
     if (applied)
     {
         mAppliedAssetId = asset_id;
+
+        // Marks this environment as the PARCEL's rather than the user's, so
+        // leaving the parcel knows it may release it - see changed().
+        SSAtmoEnvManager::getInstance()->noteSource(asset_id, true);
     }
     else
     {

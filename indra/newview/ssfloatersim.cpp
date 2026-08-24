@@ -26,7 +26,7 @@
 #include "ssfloatersim.h"
 
 #include "ssrainshadow.h"
-#include "ssrunoff.h"
+#include "sssurfacefield.h"
 #include "sswindflow.h"
 
 #include "llbutton.h"
@@ -87,8 +87,6 @@ bool SSFloaterSimulation::postBuild()
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WIND_FLOW); });
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->setCommitCallback(
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW); });
-    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->setCommitCallback(
-        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF); });
     getChild<LLCheckBoxCtrl>("settle_overlay_check")->setCommitCallback(
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_GEOM_SETTLE); });
 
@@ -115,7 +113,6 @@ void SSFloaterSimulation::watch(const std::string& control, EInvalidate what)
                 // The network is traced from the shadow map, not captured, so
                 // this only has to throw away what was traced. It is rebuilt
                 // from the map already in hand on the next refresh.
-                SSRunoff::getInstance()->clear();
             }
             else if (what == EInvalidate::SHADOW)
             {
@@ -158,7 +155,6 @@ void SSFloaterSimulation::onClickRecaptureShadow()
 {
     SSRainShadowMap::getInstance()->clearCache();
     // Traced from the maps that just went, so it has nothing left to stand on
-    SSRunoff::getInstance()->clear();
     refreshStatus();
 }
 
@@ -211,22 +207,21 @@ void SSFloaterSimulation::refreshStatus()
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WIND_FLOW));
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_RAIN_SHADOW));
-    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
     getChild<LLCheckBoxCtrl>("settle_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
 
-    SSRunoff* runoff = SSRunoff::getInstance();
+    // What the weather has worked into the surface. There is no drainage
+    // network to report any more - the runoff simulation was retracted, and
+    // what replaced it is geometry rather than a solve, so there is nothing
+    // in flight to watch.
+    SSSurfaceField* surface = SSSurfaceField::getInstance();
     getChild<LLTextBox>("runoff_status")->setText(
-        runoff->eaveCount() == 0
-            ? std::string("no drainage traced yet")
-            : llformat("%d eave%s over %d region%s, shedding %.1f drips/s. "
-                       "Traced %u time%s in %.0fms, delivered rain x%.2f",
-                       runoff->eaveCount(), runoff->eaveCount() == 1 ? "" : "s",
-                       runoff->networkCount(), runoff->networkCount() == 1 ? "" : "s",
-                       runoff->dripRate(),
-                       runoff->buildCount(), runoff->buildCount() == 1 ? "" : "s",
-                       runoff->lastBuildMS(), runoff->delivery()));
+        surface->fieldCount() == 0
+            ? std::string("no surface dressed yet")
+            : llformat("%d region%s dressed. Peak wet %.2f, snow %.0f mm, puddle %.0f mm, in %.1f ms",
+                       surface->fieldCount(), surface->fieldCount() == 1 ? "" : "s",
+                       surface->peakWet(), surface->peakSnow() * 1000.f,
+                       surface->peakPuddle() * 1000.f, surface->lastTickMS()));
 
     LLTextBox* capture_status = getChild<LLTextBox>("flow_capture_status");
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);

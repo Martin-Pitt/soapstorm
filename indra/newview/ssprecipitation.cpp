@@ -847,7 +847,24 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
     // away without touching the wind itself. It is the same factor the fall
     // direction is tilted by, so the column the map resolves and the path the
     // particle takes stay the same path.
-    const LLVector3 wind_h = windAt(hit_pos)
+    // Sampled at the MIDDLE of the column this particle falls down, not at
+    // its landing point. The flow solve shelters the air near the ground -
+    // correctly, that is what buildings and terrain do to wind - so a cell
+    // at the foot of the column can be nearly still while the air the
+    // particle spends most of its fall in is at full ambient speed. Drops
+    // fall a few metres and barely notice; a sheet spans a hundred metres
+    // of air (fallLength multiplies the column by 2.4 for that tier) and
+    // took its entire lean from the one sheltered cell it happened to land
+    // in - which is why distant sheets fell vertically through a gale
+    // while the drops overhead leaned properly.
+    //
+    // Risers keep sampling at ground level: an ember leaving a fire really
+    // is in the sheltered air at the bottom of its own column.
+    const LLVector3 wind_pos = rises
+        ? hit_pos
+        : hit_pos + LLVector3(0.f, 0.f, fall_len * 0.5f);
+
+    const LLVector3 wind_h = windAt(wind_pos)
         * (0.55f + 0.45f * llclamp(gust, 0.f, 2.5f))
         * (0.8f + 0.4f * gust_jitter)
         * llmax(0.f, preset.mWindResponse);

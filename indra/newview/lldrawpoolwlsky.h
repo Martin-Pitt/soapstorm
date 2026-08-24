@@ -50,6 +50,21 @@ public:
     /*virtual*/ void endDeferredPass(S32 pass);
     /*virtual*/ void renderDeferred(S32 pass);
 
+    // <SS:Nexii> Render JUST the sky into `target`, looking along a given
+    // heading, covering a band of elevation.
+    //
+    // For the photo matcher: it needs to score a candidate sky without
+    // showing it, and reading the main framebuffer meant mutating the live
+    // sky on screen (the whole view flashing through every candidate) and
+    // demanding the camera be aimed at open sky. A narrow offscreen strip
+    // costs a fraction of a frame, can be run several times per frame, and
+    // is looking wherever it wants regardless of the user's camera.
+    //
+    // Only the haze dome and the cloud layer are drawn - no bodies, no
+    // stars - because those are what the fit is fitting.
+    bool renderSkyProbe(class LLRenderTarget& target, const LLVector3& heading,
+                        F32 min_elev_deg, F32 max_elev_deg);
+
     /*virtual*/ LLViewerTexture *getDebugTexture();
     /*virtual*/ U32 getVertexDataMask() { return SKY_VERTEX_DATA_MASK; }
     /*virtual*/ bool verify() const { return true; }        // Verify that all data in the draw pool is correct!
@@ -64,7 +79,11 @@ public:
     static void cleanupGL();
     static void restoreGL();
 private:
-    void renderDome(const LLVector3& camPosLocal, F32 camHeightLocal, LLGLSLShader * shader) const;
+    // scale shrinks the dome toward the camera. Stock is 0.333 for both the
+    // haze backdrop and the cloud layer drawn on it; the cloud pass alone
+    // passes a slightly smaller one - see its call site.
+    void renderDome(const LLVector3& camPosLocal, F32 camHeightLocal, LLGLSLShader * shader,
+                    F32 scale = 0.333f) const;
 
     void renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 camHeightLocal) const;
     void renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 camHeightLocal, LLGLSLShader* cloudshader) const;

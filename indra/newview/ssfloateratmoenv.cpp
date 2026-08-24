@@ -26,10 +26,16 @@
 #include "ssfloateratmoenv.h"
 #include "ssatmoenvmanager.h"
 #include "ssatmoenvweatherstate.h"
+#include "ssatmoenvcloudfieldstate.h"
+#include "ssatmoenvplanetarystate.h"
+#include "ssfloateratmoplanetary.h"
+#include "ssfloateratmoinfluence.h"
 
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
 #include "llcolorswatch.h"
+#include "llfloatercolorpicker.h"
+#include "llcombobox.h"
 #include "llfloaterreg.h"
 #include "llfloatersidepanelcontainer.h"
 #include "llfocusmgr.h"
@@ -39,6 +45,9 @@
 #include "lllineeditor.h"
 #include "llmultisliderctrl.h"
 #include "llnotificationsutil.h"
+#include "llpermissionsflags.h"
+#include "llsettingssky.h"
+#include "llsettingsvo.h"
 #include "llsliderctrl.h"
 #include "llspinctrl.h"
 #include "lltexturectrl.h"
@@ -58,6 +67,23 @@ static const F64 STATUS_POLL_INTERVAL = 0.5;
 // C3A2 C297 C286, which is E2 97 86 decoded as latin-1 and re-encoded.
 static const char* const FILLED_DIAMOND = "\xE2\x97\x86";
 static const char* const HOLLOW_DIAMOND = "\xE2\x97\x87";
+
+// Rise/set markers on the preview scrubber. Same escaped-UTF-8 treatment as
+// the diamonds above, and the same Geometric Shapes block they come from:
+// U+25B2/U+25BC are the full-size up/down triangles, U+25B4/U+25BE their
+// small siblings. Big = the sun, small = the moon, so which body a marker
+// belongs to reads at a glance without a legend, in the same way the sun is
+// the bigger light in the sky.
+static const char* const RISE_TRIANGLE = "\xE2\x96\xB2";
+static const char* const SET_TRIANGLE = "\xE2\x96\xBC";
+static const char* const RISE_TRIANGLE_SMALL = "\xE2\x96\xB4";
+static const char* const SET_TRIANGLE_SMALL = "\xE2\x96\xBE";
+
+// Warm daylight amber against a pale moonlit blue-white - the two lights'
+// own colours, kept dim enough that markers annotate the scrubber rather
+// than competing with the keyframe ghosts drawn on the same strip.
+static const LLColor4 SUN_MARKER_COLOUR(1.f, 0.8f, 0.4f, 0.8f);
+static const LLColor4 MOON_MARKER_COLOUR(0.72f, 0.78f, 0.95f, 0.75f);
 
 // How far outside the preview scrubber still counts as hovering it, for the
 // whole-tab keyframe overview. The scrubber is an 18px strip in a busy
@@ -81,6 +107,8 @@ bool SSFloaterAtmoEnv::postBuild()
         [this](LLUICtrl*, const LLSD&) { onClickSave(); });
     getChild<LLButton>("revert_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickRevert(); });
+    getChild<LLButton>("unload_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickUnload(); });
     getChild<LLButton>("add_track_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickAddTrack(); });
     getChild<LLButton>("remove_track_button")->setClickedCallback(
@@ -112,6 +140,34 @@ bool SSFloaterAtmoEnv::postBuild()
     getChild<LLUICtrl>("name_editor")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitName(); });
 
+    // The Weather Influence editor is reachable from every tab whose
+    // parameters weather can modulate; all four buttons open the one
+    // floater. findChild rather than getChild: a tab whose panel failed
+    // to load should not take the whole floater down with it.
+    static const char* const INFLUENCE_BUTTONS[] = {
+        "influence_button_weather", "influence_button_water",
+        "influence_button_clouds", "influence_button_atmosphere"
+    };
+    for (const char* button_name : INFLUENCE_BUTTONS)
+    {
+        LLUICtrl* button = findChild<LLUICtrl>(button_name);
+        if (button)
+        {
+            button->setCommitCallback(
+                [this](LLUICtrl*, const LLSD&) { onClickWeatherInfluence(); });
+        }
+    }
+
+    {
+        LLUICtrl* match_button = findChild<LLUICtrl>("match_button_atmosphere");
+        if (match_button)
+        {
+            match_button->setCommitCallback(
+                [this](LLUICtrl*, const LLSD&)
+                { LLFloaterReg::showInstance("ss_atmo_match", LLSD(mSelectedTrackIndex)); });
+        }
+    }
+
     getChild<LLUICtrl>("preview_time_slider")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitPreviewTime(); });
 
@@ -126,10 +182,31 @@ bool SSFloaterAtmoEnv::postBuild()
             [this](LLUICtrl*, const LLSD&) { onCommitDayCycle(); });
     }
 
+    // Planetary tab - just the two scale dials and the designer button;
+    // the bodies themselves are edited in SSFloaterAtmoPlanetary.
+    const char* planetary_scale_fields[] = { "sun_planet_scale_slider", "sun_planet_scale_spinner",
+                                             "planet_moon_scale_slider", "planet_moon_scale_spinner" };
+    for (const char* name : planetary_scale_fields)
+    {
+        getChild<LLUICtrl>(name)->setCommitCallback(
+            [this](LLUICtrl*, const LLSD&) { onCommitPlanetaryScales(); });
+    }
+    getChild<LLButton>("open_planetary_designer_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickOpenPlanetaryDesigner(); });
+
     // Water tab - the one non-keyframed control; everything else on that
     // tab is a keyframe row set up alongside the Weather cube's below.
     getChild<LLUICtrl>("water_enabled_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitWaterEnabled(); });
+
+    // The Auto structural toggles - see refreshAutoRows() for what
+    // flipping one greys out and what fills the greyed rows in.
+    getChild<LLUICtrl>("gust_auto_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitGustAuto(); });
+    getChild<LLUICtrl>("lightning_auto_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitLightningAuto(); });
+    getChild<LLUICtrl>("cloud_auto_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitCloudAuto(); });
 
     // mSelectedTrackIndex's Weather cube, one AE-style row per field - see
     // the FloatRow comment in the header. mField captures `this` rather
@@ -142,6 +219,10 @@ bool SSFloaterAtmoEnv::postBuild()
         { "temperature",  [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mTemperatureC; }, true },
         { "wind_heading", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mWindHeading; },  true },
         { "wind_speed",   [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mWindSpeed; },    true },
+        { "gust_depth",   [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mGustDepth; },    false },
+        { "gust_length",  [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mGustLength; },   true },
+        { "gust_veer",    [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mGustVeer; },     true },
+        { "lightning_intensity", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mLightningIntensity; }, false },
     };
 
     // The Water tab's own scalar rows - same mechanics, same widget naming
@@ -150,7 +231,7 @@ bool SSFloaterAtmoEnv::postBuild()
         return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWater;
     };
     const std::vector<FloatRow> water_rows = {
-        { "water_height",           [water]() -> SSAtmoEnvKeyframed<F32>& { return water().mHeight; },               true },
+        { "water_height",           [water]() -> SSAtmoEnvKeyframed<F32>& { return water().mHeight; },               false },
         { "water_fog_density",      [water]() -> SSAtmoEnvKeyframed<F32>& { return water().mFogDensity; },           false },
         { "water_underwater_mod",   [water]() -> SSAtmoEnvKeyframed<F32>& { return water().mUnderwaterModifier; },   false },
         { "water_fresnel_scale",    [water]() -> SSAtmoEnvKeyframed<F32>& { return water().mFresnelScale; },         false },
@@ -164,12 +245,72 @@ bool SSFloaterAtmoEnv::postBuild()
     };
     mFloatRows.insert(mFloatRows.end(), water_rows.begin(), water_rows.end());
 
+    // The Clouds tab's Volumetric Field sub-tab rows - the storm layer's
+    // artist baseline. Live coverage/density derive from these plus the
+    // weather cube (see ssatmoenvcloudfieldstate); the legacy Windlight
+    // cloud plane (cirrus) is the Sky Dome sub-tab's below, a separate
+    // thing these rows never touch.
+    auto clouds = [this]() -> SSAtmoEnvCloudField& {
+        return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mCloudField;
+    };
+    const std::vector<FloatRow> cloud_rows = {
+        { "cloud_base_height", [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mBaseHeightM; },    true },
+        { "cloud_thickness",   [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mBaseThicknessM; }, true },
+        { "cloud_coverage",    [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mCoverageScale; },  false },
+    };
+    mFloatRows.insert(mFloatRows.end(), cloud_rows.begin(), cloud_rows.end());
+
+    // The Sky Dome sub-tab's scalar rows - the legacy cirrus layer's EEP
+    // parameter set (see SSAtmoEnvCloudDome). The non-scalar rows (colour,
+    // scroll vector, noise texture) join their typed lists below.
+    auto dome = [this]() -> SSAtmoEnvCloudDome& {
+        return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mCloudDome;
+    };
+    const std::vector<FloatRow> dome_rows = {
+        { "dome_coverage",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mCoverage; }, false },
+        { "dome_scale",     [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mScale; },    false },
+        { "dome_variance",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mVariance; }, false },
+        { "dome_density_x", [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mDensityX; }, false },
+        { "dome_density_y", [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mDensityY; }, false },
+        { "dome_density_d", [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mDensityD; }, false },
+        { "dome_detail_x",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mDetailX; },  false },
+        { "dome_detail_y",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mDetailY; },  false },
+        { "dome_detail_d",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mDetailD; },  false },
+    };
+    mFloatRows.insert(mFloatRows.end(), dome_rows.begin(), dome_rows.end());
+
+    // The Atmosphere & Lighting tab's scalar rows - the EEP haze/gamma/glow
+    // set (see SSAtmoEnvAtmosphere). No azimuth/elevation rows anywhere
+    // here, deliberately: sun/moon position is computed from the Planetary
+    // tab's home body, not keyframed on this tab. The colour half of the
+    // tab joins mColorRows below.
+    auto atmos = [this]() -> SSAtmoEnvAtmosphere& {
+        return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mAtmosphere;
+    };
+    const std::vector<FloatRow> atmos_rows = {
+        { "atmo_haze_horizon",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeHorizon; },        false },
+        { "atmo_haze_density",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeDensity; },        false },
+        { "atmo_moisture_level",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyMoistureLevel; },   false },
+        { "atmo_droplet_radius",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyDropletRadius; },   false },
+        { "atmo_ice_level",       [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyIceLevel; },        false },
+        { "atmo_density_mult",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mDensityMultiplier; },  false },
+        { "atmo_distance_mult",   [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mDistanceMultiplier; }, false },
+        { "atmo_max_altitude",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mMaxAltitude; },        true },
+        { "atmo_probe_ambiance",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mReflectionProbeAmbiance; }, false },
+        { "atmo_scene_gamma",     [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSceneGamma; },         false },
+        { "atmo_glow_focus",      [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mGlowFocus; },          false },
+        { "atmo_glow_size",       [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mGlowSize; },           false },
+        { "atmo_star_brightness", [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mStarBrightness; },     true },
+        { "atmo_moon_brightness", [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mMoonBrightness; },     false },
+    };
+    mFloatRows.insert(mFloatRows.end(), atmos_rows.begin(), atmos_rows.end());
+
     for (const FloatRow& row : mFloatRows)
     {
         getChild<LLUICtrl>(row.mPrefix + "_slider")->setCommitCallback(
-            [this, row](LLUICtrl*, const LLSD&) { commitFloatRow(row); refreshKeyframeProof(); refreshStatus(); });
+            [this, row](LLUICtrl*, const LLSD&) { commitFloatRow(row); refreshPreview(); refreshStatus(); });
         getChild<LLUICtrl>(row.mPrefix + "_value_spinner")->setCommitCallback(
-            [this, row](LLUICtrl*, const LLSD&) { commitFloatRowSpinner(row); refreshKeyframeProof(); refreshStatus(); });
+            [this, row](LLUICtrl*, const LLSD&) { commitFloatRowSpinner(row); refreshPreview(); refreshStatus(); });
         bindKeyframeButtons<F32>(row.mPrefix, row.mField);
     }
 
@@ -183,47 +324,85 @@ bool SSFloaterAtmoEnv::postBuild()
 
     // The Water tab's non-scalar keyframed controls. Split by type rather
     // than crammed into one list - see the KeyRow comment in the header.
+    // The HDR scales EEP's own editor uses - see KeyRow::mScale.
+    static const F32 SCALE_SUN_AMBIENT = 3.f;
+    static const F32 SCALE_BLUE = 2.f;
+
     mColorRows = {
         { "water_fog_color", [water]() -> SSAtmoEnvKeyframed<LLColor3>& { return water().mFogColor; } },
+        // Atmosphere & Lighting's colour half - same swatch row the water
+        // fog colour uses, one entry per EEP colour. Cloud colour is the
+        // Sky Dome's row below, not this tab's - it moved out with the
+        // rest of the legacy layer's parameters.
+        { "atmo_ambient",        [atmos]() -> SSAtmoEnvKeyframed<LLColor3>& { return atmos().mAmbientColor; }, SCALE_SUN_AMBIENT },
+        { "atmo_blue_horizon",   [atmos]() -> SSAtmoEnvKeyframed<LLColor3>& { return atmos().mBlueHorizon; }, SCALE_BLUE },
+        { "atmo_blue_density",   [atmos]() -> SSAtmoEnvKeyframed<LLColor3>& { return atmos().mBlueDensity; }, SCALE_BLUE },
+        { "atmo_sunlight_color", [atmos]() -> SSAtmoEnvKeyframed<LLColor3>& { return atmos().mSunlightColor; }, SCALE_SUN_AMBIENT },
+        { "dome_color",          [dome]() -> SSAtmoEnvKeyframed<LLColor3>& { return dome().mColor; } },
     };
     for (const KeyRow<LLColor3>& row : mColorRows)
     {
         getChild<LLUICtrl>(row.mPrefix)->setCommitCallback(
-            [this, row](LLUICtrl*, const LLSD&) { commitColorRow(row); refreshKeyframeProof(); refreshStatus(); });
+            [this, row](LLUICtrl*, const LLSD&) { commitColorRow(row); refreshPreview(); refreshStatus(); });
         bindKeyframeButtons<LLColor3>(row.mPrefix, row.mField);
     }
 
     mVectorRows = {
         { "water_large_wave", [water]() -> SSAtmoEnvKeyframed<LLVector2>& { return water().mLargeWaveSpeed; } },
         { "water_small_wave", [water]() -> SSAtmoEnvKeyframed<LLVector2>& { return water().mSmallWaveSpeed; } },
+        { "dome_scroll",      [dome]() -> SSAtmoEnvKeyframed<LLVector2>& { return dome().mScrollRate; } },
     };
     for (const KeyRow<LLVector2>& row : mVectorRows)
     {
         getChild<LLUICtrl>(row.mPrefix)->setCommitCallback(
-            [this, row](LLUICtrl*, const LLSD&) { commitVectorRow(row); refreshKeyframeProof(); refreshStatus(); });
+            [this, row](LLUICtrl*, const LLSD&) { commitVectorRow(row); refreshPreview(); refreshStatus(); });
         for (const char* axis : { "_x_spinner", "_y_spinner" })
         {
             getChild<LLUICtrl>(row.mPrefix + axis)->setCommitCallback(
-                [this, row](LLUICtrl*, const LLSD&) { commitVectorSpinners(row); refreshKeyframeProof(); refreshStatus(); });
+                [this, row](LLUICtrl*, const LLSD&) { commitVectorSpinners(row); refreshPreview(); refreshStatus(); });
         }
         bindKeyframeButtons<LLVector2>(row.mPrefix, row.mField);
     }
 
     mTextureRows = {
         { "water_normal_map", [water]() -> SSAtmoEnvKeyframed<LLUUID>& { return water().mNormalMap; } },
+        { "dome_image",       [dome]() -> SSAtmoEnvKeyframed<LLUUID>& { return dome().mNoiseTexture; } },
     };
     for (const KeyRow<LLUUID>& row : mTextureRows)
     {
         getChild<LLUICtrl>(row.mPrefix)->setCommitCallback(
-            [this, row](LLUICtrl*, const LLSD&) { commitTextureRow(row); refreshKeyframeProof(); refreshStatus(); });
+            [this, row](LLUICtrl*, const LLSD&) { commitTextureRow(row); refreshPreview(); refreshStatus(); });
         bindKeyframeButtons<LLUUID>(row.mPrefix, row.mField);
+    }
+
+    // The dome's noise picker previews the stock cloud noise for a null
+    // value and allows None - null IS the schema's "default noise" value
+    // (see SSAtmoEnvCloudDome::mNoiseTexture), so without an explicit None
+    // choice an author could never step a keyframe back to the default.
+    // Same pair of calls EEP's own clouds panel makes on its picker.
+    LLTextureCtrl* dome_image = getChild<LLTextureCtrl>("dome_image");
+    dome_image->setDefaultImageAssetID(LLSettingsSky::GetDefaultCloudNoiseTextureId());
+    dome_image->setAllowNoTexture(true);
+
+    // The Weather tab's precipitation override - a dropdown over a
+    // keyframed string. Same cluster machinery as every other row; the
+    // string's own lerp is what makes its keyframes hold rather than blend.
+    mStringRows = {
+        { "precipitation_combo", [this]() -> SSAtmoEnvKeyframed<std::string>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mPrecipitationOverride; } },
+    };
+    for (const KeyRow<std::string>& row : mStringRows)
+    {
+        getChild<LLUICtrl>(row.mPrefix)->setCommitCallback(
+            [this, row](LLUICtrl*, const LLSD&) { commitStringRow(row); refreshPreview(); refreshStatus(); });
+        bindKeyframeButtons<std::string>(row.mPrefix, row.mField);
     }
 
     refreshVisibility();
     refreshTrackRail();
     refreshTrackTab();
+    refreshPlanetaryScales();
     refreshStatus();
-    refreshKeyframeProof();
+    refreshPreview();
     return true;
 }
 
@@ -232,8 +411,9 @@ void SSFloaterAtmoEnv::onOpen(const LLSD& key)
     refreshVisibility();
     refreshTrackRail();
     refreshTrackTab();
+    refreshPlanetaryScales();
     refreshStatus();
-    refreshKeyframeProof();
+    refreshPreview();
 }
 
 void SSFloaterAtmoEnv::onClose(bool app_quitting)
@@ -255,12 +435,22 @@ void SSFloaterAtmoEnv::onVisibilityChange(bool new_visibility)
         // Re-establish the override immediately rather than waiting for
         // draw()'s next 0.5s poll tick, so reopening the floater doesn't
         // leave the live scene on the real wall clock for a moment first.
-        refreshKeyframeProof();
+        refreshPreview();
     }
     else
     {
         SSAtmoEnvManager::getInstance()->clearPreviewPhaseOverride();
     }
+}
+
+void SSFloaterAtmoEnv::reshape(S32 width, S32 height, bool called_from_parent)
+{
+    LLFloater::reshape(width, height, called_from_parent);
+
+    // After the base class has moved everything the layout owns, put the
+    // rail's own markers back where the rail now says they belong. See the
+    // header on why the periodic refresh cannot cover this.
+    repositionRailMarkers();
 }
 
 void SSFloaterAtmoEnv::draw()
@@ -291,14 +481,18 @@ void SSFloaterAtmoEnv::draw()
         if (!captured || !captured->hasAncestor(this))
         {
             refreshTrackRail();
-            refreshKeyframeProof();
+            refreshPlanetaryScales();
+            refreshPreview();
         }
     }
 
     LLFloater::draw();
 
     // After the children, so the ghosts sit on top of the scrubber they
-    // annotate rather than being painted over by it.
+    // annotate rather than being painted over by it. Rise/set markers go
+    // down first: they are permanent furniture, and a keyframe ghost
+    // landing on the same pixel is the more urgent of the two to read.
+    drawRiseSetMarkers();
     drawKeyframeGhosts();
     drawSliderValueGhosts();
 }
@@ -311,6 +505,25 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                         EDragAndDropType cargo_type, void* cargo_data,
                                         EAcceptance* accept, std::string& tooltip_msg)
 {
+    // Type dispatch: a notecard drop loads a whole environment (below,
+    // unchanged); a settings drop imports one EEP sky into the loaded one,
+    // so it needs an asset to import into - with nothing loaded there is
+    // no selected track to stamp, and the drop is refused at hover time.
+    if (cargo_type == DAD_SETTINGS)
+    {
+        if (!SSAtmoEnvManager::getInstance()->hasAsset())
+        {
+            *accept = ACCEPT_NO;
+            return false;
+        }
+        *accept = ACCEPT_YES_SINGLE;
+        if (drop)
+        {
+            handleSettingsDrop((const LLInventoryItem*)cargo_data);
+        }
+        return true;
+    }
+
     if (cargo_type != DAD_NOTECARD)
     {
         *accept = ACCEPT_NO;
@@ -339,7 +552,8 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                 mSelectedTrackIndex = 0;
                 refreshTrackRail();
                 refreshTrackTab();
-                refreshKeyframeProof();
+                refreshPlanetaryScales();
+                refreshPreview();
             });
         if (started)
         {
@@ -356,6 +570,93 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     }
 
     return true;
+}
+
+void SSFloaterAtmoEnv::handleSettingsDrop(const LLInventoryItem* drop_item)
+{
+    // Re-read through the model rather than trusting the drag's raw
+    // pointer - same guard LLSettingsDropTarget applies to its own
+    // DAD_SETTINGS drops.
+    const LLViewerInventoryItem* item =
+        drop_item ? gInventory.getItem(drop_item->getUUID()) : nullptr;
+    if (!item || item->getAssetUUID().isNull()) return;
+
+    // FULL-PERM GATE: import means transcribing someone's settings asset
+    // into a plain notecard the author can then hand around, so only an
+    // item the owner holds copy + modify + transfer on may come in - the
+    // same PERM_ITEM_UNRESTRICTED check the texture-save and
+    // copy-asset-id gates use (see LLViewerInventoryItem::checkPermissionsSet).
+    if (!item->checkPermissionsSet(PERM_ITEM_UNRESTRICTED))
+    {
+        LLNotificationsUtil::add("GenericAlert", LLSD().with(
+            "MESSAGE", "That setting isn't full permission - only full-perm settings can be imported."));
+        return;
+    }
+
+    // Capture what the author saw at drop time: the track they had
+    // selected and where the preview head sat. The fetch below is async,
+    // so resolving against live members instead would stamp wherever the
+    // author happened to have scrubbed to by the time it lands.
+    const S32 track_index = mSelectedTrackIndex;
+    const F64 phase = mPreviewPhase;
+    LLHandle<LLFloater> handle = getHandle();
+
+    LLSettingsVOBase::getSettingsAsset(item->getAssetUUID(),
+        [handle, track_index, phase](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+        {
+            // The floater may have closed while the fetch was in flight -
+            // a dead handle means nobody is editing any more, so the drop
+            // just evaporates.
+            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+            if (!self) return;
+
+            if (status || !settings)
+            {
+                LL_WARNS("AtmoMagicEnv") << "Dropped settings asset " << asset_id
+                                         << " failed to load, status " << status << LL_ENDL;
+                LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                    "MESSAGE", "That setting could not be loaded."));
+                return;
+            }
+
+            LLSettingsSky::ptr_t sky = std::dynamic_pointer_cast<LLSettingsSky>(settings);
+            if (!sky)
+            {
+                // A water or day-cycle settings item. Water would be a
+                // trivial follow-up - SSAtmoEnvWater mirrors EEP's water
+                // panel one-for-one, it just needs its own
+                // addKeyframesFromWater transcription - while a day cycle
+                // is a bigger lift (each of its frames would expand into a
+                // stamp of its own), so both are refused for now.
+                LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                    "MESSAGE", "Only sky settings can be imported for now."));
+                return;
+            }
+
+            // The loaded asset may have been replaced or reshaped (tracks
+            // removed) while the fetch was in flight - re-read through the
+            // manager and re-check the captured index rather than assuming
+            // anything about what's loaded now.
+            SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+            if (!mgr->hasAsset()
+                || track_index < 0 || track_index >= (S32)mgr->editable().mTracks.size())
+            {
+                return;
+            }
+
+            // Dropping a sky stamps its look as keyframes at the preview
+            // head: the author scrubs to a time, drops a sky, and that
+            // instant now looks like that sky - repeatable at other phases
+            // to build a whole day out of EEP presets. Both structs stamp
+            // because a sky's fields split across them, exactly as in
+            // creation-time seeding.
+            SSAtmoEnvTrack& track = mgr->editable().mTracks[track_index];
+            track.mAtmosphere.addKeyframesFromSky(*sky, phase);
+            track.mCloudDome.addKeyframesFromSky(*sky, phase);
+
+            self->refreshPreview();
+            self->refreshStatus(); // the modified asterisk lights up here
+        });
 }
 
 //-----------------------------------------------------------------------------
@@ -376,7 +677,7 @@ void SSFloaterAtmoEnv::refreshVisibility()
     // direct floater children. load_button stays out of this list, same as
     // before - it works with nothing loaded yet, so it's always visible.
     const char* editing_widgets[] = {
-        "name_editor", "save_button", "revert_button",
+        "name_editor", "save_button", "revert_button", "unload_button",
         "track_panel", "atmo_tabs",
         "preview_time_caption", "preview_time_slider", "preview_time_value_text",
         "forecast_text"
@@ -455,16 +756,7 @@ void SSFloaterAtmoEnv::refreshTrackRail()
         refreshAltitudeLabel(slot);
     }
 
-    // Ground is pinned to the rail's own 0m position rather than being a
-    // draggable thumb - it is 0m by definition. The rail runs all the way
-    // down to 0 so ground sits on the same scale as every other track
-    // rather than reading as a footnote below it, and it is placed by the
-    // same routine a real marker is, so "where 0m is" is answered once.
-    {
-        const S32 centre = railCentreForValue(0.f);
-        centreViewOn(getChild<LLUICtrl>("track_ground_button"), centre);
-        centreViewOn(getChild<LLUICtrl>("track_ground_alt_label"), centre);
-    }
+    repositionRailMarkers();
     getChild<LLButton>("track_ground_button")->setToggleState(mSelectedTrackIndex == 0);
 
     getChild<LLUICtrl>("add_track_button")->setEnabled(
@@ -475,6 +767,33 @@ void SSFloaterAtmoEnv::refreshTrackRail()
     if (!name_editor->hasFocus())
     {
         name_editor->setText(asset.mName);
+    }
+}
+
+void SSFloaterAtmoEnv::repositionRailMarkers()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    // Ground is pinned to the rail's own 0m position rather than being a
+    // draggable thumb - it is 0m by definition. The rail runs all the way
+    // down to 0 so ground sits on the same scale as every other track
+    // rather than reading as a footnote below it, and it is placed by the
+    // same arithmetic a real marker is, so "where 0m is" is answered once.
+    //
+    // Its XML follows="left|bottom" would otherwise park it a fixed
+    // distance above the panel's bottom edge, which is only where 0m
+    // happens to be at one particular floater height.
+    const S32 centre = railCentreForValue(0.f);
+    centreViewOn(getChild<LLUICtrl>("track_ground_button"), centre);
+    centreViewOn(getChild<LLUICtrl>("track_ground_alt_label"), centre);
+
+    // ...and each optional track's own labels, which are likewise placed
+    // against the thumb rather than anchored.
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    for (S32 slot = 1; slot < (S32)asset.mTracks.size() && slot < SS_ATMOENV_MAX_TRACKS; ++slot)
+    {
+        refreshAltitudeLabel(slot);
     }
 }
 
@@ -616,7 +935,34 @@ void SSFloaterAtmoEnv::onMouseUpAltitudeSlider()
     mSelectedTrackIndex = mgr->editable().sortTracksByAltitude(mSelectedTrackIndex);
     refreshTrackRail();
     refreshTrackTab();
+    refreshPlanetaryScales();
     refreshStatus();
+
+    // The sort can have renumbered every track; an open designer must
+    // follow the same track to its new index rather than silently editing
+    // whichever one now sits at the old number.
+    SSFloaterAtmoPlanetary* designer =
+        LLFloaterReg::findTypedInstance<SSFloaterAtmoPlanetary>("ss_atmo_planetary");
+    if (designer)
+    {
+        designer->setTrack(mSelectedTrackIndex);
+    }
+
+    SSFloaterAtmoInfluence* influence =
+        LLFloaterReg::findTypedInstance<SSFloaterAtmoInfluence>("ss_atmo_influence");
+    if (influence)
+    {
+        influence->setTrack(mSelectedTrackIndex);
+    }
+}
+
+void SSFloaterAtmoEnv::onClickWeatherInfluence()
+{
+    // One floater, opened from four places - see
+    // floater_ss_atmo_weather_influence.xml on why the mappings are not
+    // split across the tabs they affect. Keyed on the selected track, the
+    // same way the System Designer is.
+    LLFloaterReg::showInstance("ss_atmo_influence", LLSD(mSelectedTrackIndex));
 }
 
 void SSFloaterAtmoEnv::onClickGroundRow()
@@ -641,7 +987,27 @@ void SSFloaterAtmoEnv::selectTrack(S32 index)
     getChild<LLUICtrl>("remove_track_button")->setEnabled(index > 0);
 
     refreshTrackTab();
-    refreshKeyframeProof();
+    refreshPlanetaryScales();
+    refreshPreview();
+
+    // An open System Designer follows the selection - each track is its
+    // own planetary system, and the designer editing a track this floater
+    // is no longer looking at would be two views silently disagreeing.
+    SSFloaterAtmoPlanetary* designer =
+        LLFloaterReg::findTypedInstance<SSFloaterAtmoPlanetary>("ss_atmo_planetary");
+    if (designer)
+    {
+        designer->setTrack(index);
+    }
+
+    // ...and so does the Weather Influence editor, for the same reason:
+    // influence is per track, like the weather cube it reads.
+    SSFloaterAtmoInfluence* influence =
+        LLFloaterReg::findTypedInstance<SSFloaterAtmoInfluence>("ss_atmo_influence");
+    if (influence)
+    {
+        influence->setTrack(index);
+    }
 }
 
 void SSFloaterAtmoEnv::refreshStatus()
@@ -669,14 +1035,17 @@ void SSFloaterAtmoEnv::onClickCreateNew()
     // Deliberately does not re-fetch the notecard we just wrote to load it
     // back - gInventory.getItem()/loadFromInventory() would work, but only
     // once local inventory has actually caught up with the new item, which
-    // is one more race to fall into for no reason: SSAtmoEnvAsset::makeDefault()
-    // is deterministic, so regenerating it here and adopting it directly
-    // is exactly the content that was written, no read-back needed at all.
+    // is one more race to fall into for no reason. Nor does it regenerate
+    // SSAtmoEnvAsset::makeDefault() here: that used to be safe because
+    // makeDefault() was deterministic, but creation now seeds the
+    // atmosphere from a fetched Midday sky (see createDefaultNotecard),
+    // so only the asset the callback hands back is guaranteed to be the
+    // content that was actually written.
     SSAtmoEnvManager::createDefaultNotecard(LLUUID::null,
-        [](const LLUUID& item_id, const LLUUID& asset_id)
+        [](const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
         {
             if (item_id.isNull() || asset_id.isNull()) return;
-            SSAtmoEnvManager::getInstance()->adoptCreated(item_id, asset_id, SSAtmoEnvAsset::makeDefault());
+            SSAtmoEnvManager::getInstance()->adoptCreated(item_id, asset_id, asset);
         });
 }
 
@@ -711,14 +1080,35 @@ void SSFloaterAtmoEnv::onClickSave()
     refreshStatus();
 }
 
+void SSFloaterAtmoEnv::onClickUnload()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    // No confirmation prompt: nothing is destroyed. The notecard is still
+    // in inventory and the parcel still references it - this only stops
+    // this viewer showing it, and the applier hands EEP's local slot back
+    // on the next frame because hasAsset() has gone false.
+    mgr->unload();
+
+    // The rail, the tabs and the preview all read the asset, so they have
+    // to be told it is gone rather than discovering it a poll later.
+    mSelectedTrackIndex = 0;
+    refreshVisibility();
+    refreshTrackRail();
+    refreshTrackTab();
+    refreshStatus();
+}
+
 void SSFloaterAtmoEnv::onClickRevert()
 {
     SSAtmoEnvManager::getInstance()->revertToBaseline();
     mSelectedTrackIndex = 0; // may not exist in the reverted-to track set otherwise
     refreshTrackRail();
     refreshTrackTab();
+    refreshPlanetaryScales();
     refreshStatus();
-    refreshKeyframeProof();
+    refreshPreview();
 }
 
 void SSFloaterAtmoEnv::onClickAddTrack()
@@ -734,8 +1124,9 @@ void SSFloaterAtmoEnv::onClickAddTrack()
     mSelectedTrackIndex = (S32)asset.mTracks.size() - 1;
     refreshTrackRail();
     refreshTrackTab();
+    refreshPlanetaryScales();
     refreshStatus();
-    refreshKeyframeProof();
+    refreshPreview();
 }
 
 void SSFloaterAtmoEnv::onClickRemoveTrack()
@@ -748,8 +1139,9 @@ void SSFloaterAtmoEnv::onClickRemoveTrack()
     mSelectedTrackIndex = 0; // back to the one track that's always there
     refreshTrackRail();
     refreshTrackTab();
+    refreshPlanetaryScales();
     refreshStatus();
-    refreshKeyframeProof();
+    refreshPreview();
 }
 
 void SSFloaterAtmoEnv::onCommitName()
@@ -799,8 +1191,15 @@ void SSFloaterAtmoEnv::refreshTrackTab()
 
     // Water tab: the enable checkbox is the one control there that isn't a
     // keyframe row, so it refreshes here with the rest of the per-track
-    // structural state rather than in refreshKeyframeProof().
+    // structural state rather than in refreshPreview().
     getChild<LLUICtrl>("water_enabled_check")->setValue(track.mWater.mEnabled);
+
+    // Weather and Clouds tabs: same rule for their Auto toggles.
+    getChild<LLUICtrl>("gust_auto_check")->setValue(track.mWeather.mGustAuto);
+    getChild<LLUICtrl>("lightning_auto_check")->setValue(track.mWeather.mLightningAuto);
+    getChild<LLUICtrl>("cloud_auto_check")->setValue(track.mCloudField.mAuto);
+    refreshAutoRows();
+    refreshWaterRows();
 }
 
 void SSFloaterAtmoEnv::onCommitTrackName()
@@ -864,14 +1263,298 @@ void SSFloaterAtmoEnv::onCommitWaterEnabled()
 
     asset.mTracks[mSelectedTrackIndex].mWater.mEnabled =
         getChild<LLUICtrl>("water_enabled_check")->getValue().asBoolean();
+    refreshWaterRows();
     refreshStatus();
 }
 
+void SSFloaterAtmoEnv::onCommitGustAuto()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mWeather.mGustAuto =
+        getChild<LLUICtrl>("gust_auto_check")->getValue().asBoolean();
+    refreshAutoRows();
+    refreshStatus();
+}
+
+void SSFloaterAtmoEnv::onCommitLightningAuto()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mWeather.mLightningAuto =
+        getChild<LLUICtrl>("lightning_auto_check")->getValue().asBoolean();
+    refreshAutoRows();
+    refreshStatus();
+}
+
+void SSFloaterAtmoEnv::onCommitCloudAuto()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mCloudField.mAuto =
+        getChild<LLUICtrl>("cloud_auto_check")->getValue().asBoolean();
+    refreshAutoRows();
+    refreshStatus();
+}
+
+namespace
+{
+    // Defined with the other display helpers further down; forward declared
+    // so refreshAutoRows can share the same name mapping the combo items
+    // and ghost labels use.
+    std::string precipDisplayName(const std::string& value);
+}
+
+void SSFloaterAtmoEnv::refreshAutoRows()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+    if (mSelectedTrackIndex >= (S32)mgr->asset().mTracks.size()) return;
+
+    const SSAtmoEnvTrack& track = mgr->asset().mTracks[mSelectedTrackIndex];
+    const SSAtmoEnvWeather& weather = track.mWeather;
+
+    // One evaluation feeds every computed readout below - the gust and
+    // lightning figures Auto derived, and the precipitation type - so they
+    // can never describe different instants.
+    const SSAtmoEnvWeatherState resolved = SSAtmoEnvWeatherResolver::resolve(weather, mPreviewPhase);
+
+    F32 auto_height = 0.f, auto_thickness = 0.f, auto_coverage = 0.f;
+    SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(
+        weather.mMoisture.valueAt(mPreviewPhase),
+        weather.mConvection.valueAt(mPreviewPhase),
+        auto_height, auto_thickness, auto_coverage);
+
+    const struct { const char* mPrefix; bool mAuto; F32 mComputed; } rows[] = {
+        { "gust_depth",          weather.mGustAuto,       resolved.mGustDepth },
+        { "gust_length",         weather.mGustAuto,       resolved.mGustLength },
+        { "gust_veer",           weather.mGustAuto,       resolved.mGustVeer },
+        { "lightning_intensity", weather.mLightningAuto,  resolved.mLightningIntensity },
+        { "cloud_base_height",   track.mCloudField.mAuto, auto_height },
+        { "cloud_thickness",     track.mCloudField.mAuto, auto_thickness },
+        { "cloud_coverage",      track.mCloudField.mAuto, auto_coverage },
+    };
+    for (const auto& row : rows)
+    {
+        const std::string prefix(row.mPrefix);
+        getChild<LLUICtrl>(prefix + "_slider")->setEnabled(!row.mAuto);
+        getChild<LLUICtrl>(prefix + "_value_spinner")->setEnabled(!row.mAuto);
+        // The whole keyframe cluster too: a keyframe inserted into a field
+        // Auto is ignoring only parks confusion for later, and chevrons
+        // stepping the head between keyframes that visibly do nothing read
+        // as broken rather than parked. This runs after the generic row
+        // refresh re-enabled them by keyframe count, so this verdict wins.
+        getChild<LLUICtrl>(prefix + "_keyframe_button")->setEnabled(!row.mAuto);
+        getChild<LLUICtrl>(prefix + "_prev_button")->setEnabled(!row.mAuto);
+        getChild<LLUICtrl>(prefix + "_next_button")->setEnabled(!row.mAuto);
+
+        if (row.mAuto)
+        {
+            // The greyed controls become a live readout of what Auto
+            // decided for this instant (refreshFloatRow already wrote the
+            // parked authored value moments ago; this deliberately
+            // overwrites it). A disabled spinner cannot hold focus, so no
+            // focus guard is needed here.
+            getChild<LLUICtrl>(prefix + "_slider")->setValue(row.mComputed);
+            getChild<LLUICtrl>(prefix + "_value_spinner")->setValue(row.mComputed);
+        }
+    }
+
+    // What Auto would drop at this instant, beside the combo - only while
+    // the combo actually says Auto; a forced type makes it redundant.
+    const std::string override_now = weather.mPrecipitationOverride.valueAt(mPreviewPhase);
+    std::string auto_text;
+    if (override_now.empty())
+    {
+        auto_text = resolved.mPrecipitationType.empty()
+            ? std::string("Clear")
+            : precipDisplayName(resolved.mPrecipitationType);
+    }
+    getChild<LLTextBox>("precipitation_auto_text")->setText(auto_text);
+}
+
+bool SSFloaterAtmoEnv::waterRowsInactive() const
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return false;
+    if (mSelectedTrackIndex >= (S32)mgr->asset().mTracks.size()) return false;
+
+    return !mgr->asset().mTracks[mSelectedTrackIndex].mWater.mEnabled;
+}
+
+void SSFloaterAtmoEnv::refreshWaterRows()
+{
+    const bool enabled = !waterRowsInactive();
+
+    // Every water control is named "water_..." - the prefix IS the
+    // grouping, so this walks the row lists rather than naming thirty
+    // widgets and going stale the next time one is added.
+    auto setRow = [this, enabled](const std::string& prefix, LLUICtrl* primary)
+    {
+        if (primary) primary->setEnabled(enabled);
+
+        // The keyframe cluster too: a keyframe on a plane that does not
+        // exist is confusion parked for later, and chevrons stepping
+        // between keyframes that visibly do nothing read as broken.
+        static const char* const CLUSTER[] = {
+            "_keyframe_button", "_prev_button", "_next_button"
+        };
+        for (const char* suffix : CLUSTER)
+        {
+            LLUICtrl* part = findChild<LLUICtrl>(prefix + suffix);
+            if (part) part->setEnabled(enabled);
+        }
+    };
+
+    auto isWater = [](const std::string& prefix)
+    {
+        return prefix.compare(0, 6, "water_") == 0;
+    };
+
+    for (const FloatRow& row : mFloatRows)
+    {
+        if (!isWater(row.mPrefix)) continue;
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix + "_slider"));
+        LLUICtrl* spinner = findChild<LLUICtrl>(row.mPrefix + "_value_spinner");
+        if (spinner) spinner->setEnabled(enabled);
+    }
+    for (const KeyRow<LLColor3>& row : mColorRows)
+    {
+        if (!isWater(row.mPrefix)) continue;
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix));
+    }
+    for (const KeyRow<LLVector2>& row : mVectorRows)
+    {
+        if (!isWater(row.mPrefix)) continue;
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix));
+        for (const char* suffix : { "_x_spinner", "_y_spinner" })
+        {
+            LLUICtrl* part = findChild<LLUICtrl>(row.mPrefix + suffix);
+            if (part) part->setEnabled(enabled);
+        }
+    }
+    for (const KeyRow<LLUUID>& row : mTextureRows)
+    {
+        if (!isWater(row.mPrefix)) continue;
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix));
+    }
+}
+
+bool SSFloaterAtmoEnv::rowAutoOwned(const std::string& prefix) const
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return false;
+    if (mSelectedTrackIndex >= (S32)mgr->asset().mTracks.size()) return false;
+
+    const SSAtmoEnvTrack& track = mgr->asset().mTracks[mSelectedTrackIndex];
+
+    if (prefix == "gust_depth" || prefix == "gust_length" || prefix == "gust_veer")
+    {
+        return track.mWeather.mGustAuto;
+    }
+    if (prefix == "lightning_intensity")
+    {
+        return track.mWeather.mLightningAuto;
+    }
+    if (prefix == "cloud_base_height" || prefix == "cloud_thickness" || prefix == "cloud_coverage")
+    {
+        return track.mCloudField.mAuto;
+    }
+    // Water with no plane is inactive in exactly the sense this function
+    // exists to describe: the field is real and keyframed, but nothing is
+    // reading it, so it neither edits nor ghosts.
+    if (prefix.compare(0, 6, "water_") == 0)
+    {
+        return !track.mWater.mEnabled;
+    }
+    return false;
+}
+
 //-----------------------------------------------------------------------------
-// mSelectedTrackIndex's Weather cube - AE-style keyframe rows. See
+// Planetary tab - the two per-track distance-scale dials and the button
+// into the System Designer (SSFloaterAtmoPlanetary), which is where the
+// celestial bodies themselves are edited now. See
+// panel_ss_atmo_env_planetary.xml.
+//-----------------------------------------------------------------------------
+
+void SSFloaterAtmoEnv::refreshPlanetaryScales()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+    if (mSelectedTrackIndex >= (S32)mgr->asset().mTracks.size()) return;
+
+    const SSAtmoEnvPlanetary& planetary = mgr->asset().mTracks[mSelectedTrackIndex].mPlanetary;
+
+    // Slider and spinner are two views of one value, spinner left alone
+    // while focused, same as every other slider/spinner pair.
+    getChild<LLUICtrl>("sun_planet_scale_slider")->setValue(planetary.mSunPlanetScale);
+    getChild<LLUICtrl>("planet_moon_scale_slider")->setValue(planetary.mPlanetMoonScale);
+    if (!getChild<LLUICtrl>("sun_planet_scale_spinner")->hasFocus())
+    {
+        getChild<LLUICtrl>("sun_planet_scale_spinner")->setValue(planetary.mSunPlanetScale);
+    }
+    if (!getChild<LLUICtrl>("planet_moon_scale_spinner")->hasFocus())
+    {
+        getChild<LLUICtrl>("planet_moon_scale_spinner")->setValue(planetary.mPlanetMoonScale);
+    }
+}
+
+void SSFloaterAtmoEnv::onCommitPlanetaryScales()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    SSAtmoEnvPlanetary& planetary = asset.mTracks[mSelectedTrackIndex].mPlanetary;
+
+    // Whichever of the pair the user just touched is the authority - the
+    // same rule onCommitDayCycle() applies.
+    const bool from_spinner =
+        getChild<LLUICtrl>("sun_planet_scale_spinner")->hasFocus() ||
+        getChild<LLUICtrl>("planet_moon_scale_spinner")->hasFocus();
+    const char* sun_src  = from_spinner ? "sun_planet_scale_spinner"  : "sun_planet_scale_slider";
+    const char* moon_src = from_spinner ? "planet_moon_scale_spinner" : "planet_moon_scale_slider";
+
+    planetary.mSunPlanetScale  = (F32)getChild<LLUICtrl>(sun_src)->getValue().asReal();
+    planetary.mPlanetMoonScale = (F32)getChild<LLUICtrl>(moon_src)->getValue().asReal();
+
+    refreshPlanetaryScales();
+    refreshStatus();
+}
+
+void SSFloaterAtmoEnv::onClickOpenPlanetaryDesigner()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    // The designer's key is the track to edit; selectTrack() keeps an
+    // already-open instance following this floater's selection from
+    // there on.
+    LLFloaterReg::showInstance("ss_atmo_planetary", LLSD(mSelectedTrackIndex));
+}
+
+//-----------------------------------------------------------------------------
+// Keyframe rows - AE-style, one per animatable field across every tab. See
 // ssatmoenvkeyframe.h for the container every row exercises, and the
 // FloatRow comment in the header for why mField is a fresh accessor rather
-// than a cached reference.
+// than a cached reference. refreshPreview() is the one entry point that
+// re-reads everything driven by the preview phase; its name used to be
+// refreshKeyframeProof, a fossil from when this was a one-slider proof of
+// concept.
 //-----------------------------------------------------------------------------
 
 namespace
@@ -911,6 +1594,23 @@ namespace
 
         return llformat("%d:%02d%s (%d%%)", hour, minute, ap.c_str(), (S32)(frac * 100.0));
     }
+
+    // Display names for the precipitation override's stored values, matching
+    // the combo's own item labels so a ghost keyframe and the combo read the
+    // same. Empty is the Auto entry; anything unrecognised (a hand-edited
+    // notecard) shows its raw value rather than nothing.
+    std::string precipDisplayName(const std::string& value)
+    {
+        if (value.empty())            return "Auto";
+        if (value == "rain")          return "Rain";
+        if (value == "snow")          return "Snow";
+        if (value == "hail")          return "Hail";
+        if (value == "blizzard")      return "Blizzard";
+        if (value == "sleet")         return "Sleet";
+        if (value == "freezing_rain") return "Freezing Rain";
+        if (value == "slush_mix")     return "Wintry Mix";
+        return value;
+    }
 }
 
 //-----------------------------------------------------------------------------
@@ -948,7 +1648,7 @@ void SSFloaterAtmoEnv::toggleKeyframe(SSAtmoEnvKeyframed<T>& field)
 template <typename T>
 void SSFloaterAtmoEnv::jumpKeyframe(const SSAtmoEnvKeyframed<T>& field, bool next)
 {
-    // refreshKeyframeProof() (called by every caller of this) is what
+    // refreshPreview() (called by every caller of this) is what
     // actually re-reads every control from mPreviewPhase - one place that
     // converts time to what the controls show, not one per row.
     mPreviewPhase = next ? field.nextKeyframeTime(mPreviewPhase)
@@ -961,29 +1661,63 @@ void SSFloaterAtmoEnv::bindKeyframeButtons(const std::string& prefix,
 {
     getChild<LLButton>(prefix + "_keyframe_button")->setClickedCallback(
         [this, field](LLUICtrl*, const LLSD&)
-        { toggleKeyframe<T>(field()); refreshKeyframeProof(); refreshStatus(); });
+        { toggleKeyframe<T>(field()); refreshPreview(); refreshStatus(); });
     getChild<LLButton>(prefix + "_prev_button")->setClickedCallback(
         [this, field](LLUICtrl*, const LLSD&)
-        { jumpKeyframe<T>(field(), false); refreshKeyframeProof(); });
+        { jumpKeyframe<T>(field(), false); refreshPreview(); });
     getChild<LLButton>(prefix + "_next_button")->setClickedCallback(
         [this, field](LLUICtrl*, const LLSD&)
-        { jumpKeyframe<T>(field(), true); refreshKeyframeProof(); });
+        { jumpKeyframe<T>(field(), true); refreshPreview(); });
 }
 
 //-----------------------------------------------------------------------------
 // Per-type control <-> field plumbing for the Water tab's non-scalar rows.
 //-----------------------------------------------------------------------------
 
+// Whether a colour picker is open anywhere.
+//
+// The picker is a separate floater that a swatch owns through a protected
+// handle, so a swatch cannot be asked directly. Walking the floater view
+// for a visible one answers the same question and is not fussy about which
+// swatch opened it - which is what we want, since any open picker is one
+// somebody is typing into.
+static bool ss_color_picker_open()
+{
+    if (!gFloaterView) return false;
+
+    for (LLView* child : *gFloaterView->getChildList())
+    {
+        LLFloaterColorPicker* picker = dynamic_cast<LLFloaterColorPicker*>(child);
+        if (picker && picker->getVisible())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void SSFloaterAtmoEnv::refreshColorRow(const KeyRow<LLColor3>& row, F64 phase)
 {
     const SSAtmoEnvKeyframed<LLColor3>& field = row.mField();
-    const LLColor3 value = field.valueAt(phase);
 
-    // The swatch is an LLColor4 control; water fog colour has no meaningful
-    // alpha of its own, so it round-trips through a fully opaque colour and
-    // only the RGB is ever stored.
-    getChild<LLColorSwatchCtrl>(row.mPrefix)->setValue(
-        LLColor4(value.mV[0], value.mV[1], value.mV[2], 1.f).getValue());
+    // Divided into the swatch's own 0..1 space - see KeyRow::mScale. The
+    // stored value is EEP's, which for several of these runs past 1.
+    const F32 inv = (row.mScale > 0.f) ? (1.f / row.mScale) : 1.f;
+    const LLColor3 value = field.valueAt(phase) * inv;
+
+    // The swatch is an LLColor4 control; none of the keyframed colours has
+    // a meaningful alpha of its own, so each round-trips through a fully
+    // opaque colour and only the RGB is ever stored.
+    //
+    // Skipped entirely while a colour picker is open. The periodic refresh
+    // would otherwise write the swatch every half second, the picker would
+    // resync its own fields from it, and a hex code being typed in would be
+    // replaced mid-keystroke - which is exactly what it looked like.
+    if (!ss_color_picker_open())
+    {
+        getChild<LLColorSwatchCtrl>(row.mPrefix)->setValue(
+            LLColor4(value.mV[0], value.mV[1], value.mV[2], 1.f).getValue());
+    }
 
     refreshKeyframeControls<LLColor3>(row.mPrefix, field, phase);
 }
@@ -993,8 +1727,10 @@ void SSFloaterAtmoEnv::commitColorRow(const KeyRow<LLColor3>& row)
     const LLSD sd = getChild<LLColorSwatchCtrl>(row.mPrefix)->getValue();
     if (!sd.isArray() || sd.size() < 3) return;
 
+    // ...and multiplied back out of it on the way in, so what is stored is
+    // always EEP's own value whatever the swatch had to show.
     row.mField().setValueAtHead(mPreviewPhase,
-        LLColor3((F32)sd[0].asReal(), (F32)sd[1].asReal(), (F32)sd[2].asReal()));
+        LLColor3((F32)sd[0].asReal(), (F32)sd[1].asReal(), (F32)sd[2].asReal()) * row.mScale);
 }
 
 void SSFloaterAtmoEnv::refreshVectorRow(const KeyRow<LLVector2>& row, F64 phase)
@@ -1053,6 +1789,29 @@ void SSFloaterAtmoEnv::commitTextureRow(const KeyRow<LLUUID>& row)
         getChild<LLTextureCtrl>(row.mPrefix)->getValue().asUUID());
 }
 
+void SSFloaterAtmoEnv::refreshStringRow(const KeyRow<std::string>& row, F64 phase)
+{
+    const SSAtmoEnvKeyframed<std::string>& field = row.mField();
+
+    // A value outside the combo's vocabulary (a hand-edited notecard, or
+    // one from a build with a wider list) displays as Auto rather than
+    // leaving the combo on whatever it showed last. Only the display: the
+    // stored value is untouched until the user actually commits something.
+    LLComboBox* combo = getChild<LLComboBox>(row.mPrefix);
+    if (!combo->setSelectedByValue(field.valueAt(phase), true))
+    {
+        combo->setSelectedByValue(std::string(), true);
+    }
+
+    refreshKeyframeControls<std::string>(row.mPrefix, field, phase);
+}
+
+void SSFloaterAtmoEnv::commitStringRow(const KeyRow<std::string>& row)
+{
+    row.mField().setValueAtHead(mPreviewPhase,
+        getChild<LLComboBox>(row.mPrefix)->getSelectedValue().asString());
+}
+
 void SSFloaterAtmoEnv::refreshFloatRow(const FloatRow& row, F64 phase)
 {
     const SSAtmoEnvKeyframed<F32>& field = row.mField();
@@ -1103,7 +1862,7 @@ void SSFloaterAtmoEnv::jumpFloatRowNext(const FloatRow& row)
     jumpKeyframe<F32>(row.mField(), true);
 }
 
-void SSFloaterAtmoEnv::refreshKeyframeProof()
+void SSFloaterAtmoEnv::refreshPreview()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
@@ -1123,11 +1882,17 @@ void SSFloaterAtmoEnv::refreshKeyframeProof()
     // in - so changing a track's day length rescales nothing here and moves
     // nothing. It still snaps to the design doc's 32 slots across the
     // cycle; that grid is a fraction of the cycle too, not a duration.
+    // The scrubber is a PERCENTAGE of the cycle, because that is what a
+    // phase is: the track's day length scales it into a time of day
+    // afterwards (see formatApparentTime) and has no business deciding what
+    // the control's own range means. A scrubber calibrated in hours would
+    // have to be rebuilt whenever a track's day length changed, and two
+    // tracks running different day lengths could not share one.
     LLSliderCtrl* time_slider = getChild<LLSliderCtrl>("preview_time_slider");
     time_slider->setMinValue(0.f);
-    time_slider->setMaxValue(1.f);
-    time_slider->setIncrement(1.f / 32.f);
-    time_slider->setValue((F32)llclamp(mPreviewPhase, 0.0, 1.0));
+    time_slider->setMaxValue(100.f);
+    time_slider->setIncrement(100.f / (F32)SS_ATMOENV_PREVIEW_STEPS);
+    time_slider->setValue((F32)(llclamp(mPreviewPhase, 0.0, 1.0) * 100.0));
 
     getChild<LLTextBox>("preview_time_value_text")->setText(formatApparentTime(mPreviewPhase));
 
@@ -1147,12 +1912,23 @@ void SSFloaterAtmoEnv::refreshKeyframeProof()
     {
         refreshTextureRow(row, mPreviewPhase);
     }
+    for (const KeyRow<std::string>& row : mStringRows)
+    {
+        refreshStringRow(row, mPreviewPhase);
+    }
 
     // Phase 5 proof: the same resolve() call phase 5's renderer hookup will
     // eventually feed the particle/cloud/audio systems from.
     const SSAtmoEnvWeatherState resolved = SSAtmoEnvWeatherResolver::resolve(
         mgr->editable().mTracks[mSelectedTrackIndex].mWeather, mPreviewPhase);
     getChild<LLTextBox>("forecast_text")->setText(resolved.mForecastText);
+
+    // Last, so the Auto groups can overwrite the authored values the row
+    // loops above just displayed - see refreshAutoRows() - and so the
+    // water tab's greying survives the row loops having just re-enabled
+    // every keyframe cluster by keyframe count.
+    refreshAutoRows();
+    refreshWaterRows();
 }
 
 //-----------------------------------------------------------------------------
@@ -1257,6 +2033,8 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
 
     auto wanted = [this, overview](const std::string& prefix)
     {
+        // Auto-owned rows ghost nothing in either mode - see rowAutoOwned().
+        if (rowAutoOwned(prefix)) return false;
         if (!overview) return rowHovered(prefix);
         LLView* probe = findChild<LLView>(prefix + "_keyframe_button");
         return probe && probe->isInVisibleChain();
@@ -1281,11 +2059,15 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
     for (const KeyRow<LLColor3>& row : mColorRows)
     {
         if (!wanted(row.mPrefix)) continue;
+        // Same scale the swatch shows, so a ghost and the control under it
+        // read the same number - this is where <765, 765, 765> was coming
+        // from for a plain white sunlight.
+        const F32 ghost_inv = (row.mScale > 0.f) ? (255.f / row.mScale) : 255.f;
         buildGhosts<LLColor3>(row.mField().keyframes(),
-            [](const LLColor3& v) {
-                return llformat("%d %d %d", (S32)llround(v.mV[0] * 255.f),
-                                            (S32)llround(v.mV[1] * 255.f),
-                                            (S32)llround(v.mV[2] * 255.f));
+            [ghost_inv](const LLColor3& v) {
+                return llformat("%d %d %d", (S32)llround(v.mV[0] * ghost_inv),
+                                            (S32)llround(v.mV[1] * ghost_inv),
+                                            (S32)llround(v.mV[2] * ghost_inv));
             }, out);
         found = true;
         if (!overview) return true;
@@ -1309,7 +2091,99 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
         if (!overview) return true;
     }
 
+    for (const KeyRow<std::string>& row : mStringRows)
+    {
+        if (!wanted(row.mPrefix)) continue;
+        buildGhosts<std::string>(row.mField().keyframes(),
+            [](const std::string& v) { return precipDisplayName(v); }, out);
+        found = true;
+        if (!overview) return true;
+    }
+
     return found;
+}
+
+bool SSFloaterAtmoEnv::scrubberGeometry(LLRect& out_rect, S32& out_left_edge, S32& out_travel) const
+{
+    LLView* scrubber = findChild<LLView>("preview_time_slider");
+    if (!scrubber || !scrubber->getVisible()) return false;
+
+    // The scrubber is a direct child of the floater, so its rect is already
+    // in the space these overlays draw in (LLFloater::draw has left the
+    // origin at the floater's own bottom-left).
+    out_rect = scrubber->getRect();
+
+    // Match LLSlider::updateThumbRect()'s travel exactly, so an overlay
+    // sits on the pixel the thumb would occupy at that phase rather than
+    // merely near it. The thumb image is the one named by slider_bar.xml;
+    // its width is the inset at each end.
+    LLPointer<LLUIImage> thumb = LLUI::getUIImage("SliderThumb_Off");
+    const S32 thumb_width = thumb.notNull() ? thumb->getWidth() : 16;
+    out_left_edge = out_rect.mLeft + (thumb_width / 2);
+    out_travel = (out_rect.mRight - (thumb_width / 2)) - out_left_edge;
+    return out_travel > 0;
+}
+
+void SSFloaterAtmoEnv::drawRiseSetMarkers()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    const SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    const SSAtmoEnvPlanetary& planetary = asset.mTracks[mSelectedTrackIndex].mPlanetary;
+    const S32 home = planetary.homeBodyIndex();
+    if (home < 0) return; // no vantage point, so nothing rises or sets
+
+    // The same two bodies the renderer will light the world with - asked of
+    // the resolver rather than picked here, so a marker can never annotate
+    // a different "sun" than the one that actually comes up.
+    SSAtmoEnvResolvedBody sun;
+    SSAtmoEnvResolvedBody moon;
+    SSAtmoEnvPlanetaryResolver::resolveLightRoles(planetary, sun, moon);
+    if (sun.mBodyIndex < 0 && moon.mBodyIndex < 0) return;
+
+    LLRect rect;
+    S32 left_edge = 0;
+    S32 travel = 0;
+    if (!scrubberGeometry(rect, left_edge, travel)) return;
+
+    const SSAtmoEnvCelestialBody& home_body = planetary.mBodies[static_cast<size_t>(home)];
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    const S32 glyph_y = rect.getCenterY();
+
+    // On the track line itself, HCENTER/VCENTER exactly like the ghost
+    // diamonds - the ghosts' value labels live in the lanes above and
+    // below, so the two overlays share the strip without colliding.
+    auto mark = [&](const SSAtmoEnvResolvedBody& body, const LLColor4& colour,
+                    const char* rise_glyph, const char* set_glyph)
+    {
+        if (body.mBodyIndex < 0) return;
+
+        F64 rise = 0.0;
+        F64 set = 0.0;
+        // A body that never crosses the horizon draws nothing rather than
+        // being pinned to an edge: on a world where the sun never sets
+        // there is no sunrise to point at, and a marker parked at phase 0
+        // would be a straight-up lie about that world.
+        if (!SSAtmoEnvPlanetaryResolver::riseSetPhases(body.mDirection,
+                home_body.mAxialTiltDeg, home_body.mLatitudeDeg, rise, set)) return;
+
+        const S32 rise_x = left_edge + (S32)(llclamp(rise, 0.0, 1.0) * (F64)travel);
+        const S32 set_x  = left_edge + (S32)(llclamp(set,  0.0, 1.0) * (F64)travel);
+
+        font->renderUTF8(std::string(rise_glyph), 0, rise_x, glyph_y, colour,
+                         LLFontGL::HCENTER, LLFontGL::VCENTER);
+        font->renderUTF8(std::string(set_glyph), 0, set_x, glyph_y, colour,
+                         LLFontGL::HCENTER, LLFontGL::VCENTER);
+    };
+
+    // Moon first: where the two coincide (a body rising as the other sets,
+    // or a tight double), the sun's larger glyph reads through the smaller
+    // one rather than the other way round.
+    mark(moon, MOON_MARKER_COLOUR, RISE_TRIANGLE_SMALL, SET_TRIANGLE_SMALL);
+    mark(sun, SUN_MARKER_COLOUR, RISE_TRIANGLE, SET_TRIANGLE);
 }
 
 void SSFloaterAtmoEnv::drawKeyframeGhosts()
@@ -1320,24 +2194,10 @@ void SSFloaterAtmoEnv::drawKeyframeGhosts()
     bool show_labels = true;
     if (!collectHoveredKeyframes(ghosts, show_labels) || ghosts.empty()) return;
 
-    LLView* scrubber = findChild<LLView>("preview_time_slider");
-    if (!scrubber || !scrubber->getVisible()) return;
-
-    // The scrubber is a direct child of the floater, so its rect is already
-    // in the space this draws in (LLFloater::draw has left the origin at
-    // the floater's own bottom-left).
-    const LLRect rect = scrubber->getRect();
-
-    // Match LLSlider::updateThumbRect()'s travel exactly, so a ghost sits
-    // on the pixel the thumb would occupy at that phase rather than merely
-    // near it. The thumb image is the one named by slider_bar.xml; its
-    // width is the inset at each end.
-    LLPointer<LLUIImage> thumb = LLUI::getUIImage("SliderThumb_Off");
-    const S32 thumb_width = thumb.notNull() ? thumb->getWidth() : 16;
-    const S32 left_edge  = rect.mLeft + (thumb_width / 2);
-    const S32 right_edge = rect.mRight - (thumb_width / 2);
-    const S32 travel = right_edge - left_edge;
-    if (travel <= 0) return;
+    LLRect rect;
+    S32 left_edge = 0;
+    S32 travel = 0;
+    if (!scrubberGeometry(rect, left_edge, travel)) return;
 
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
     const S32 glyph_y = rect.getCenterY();
@@ -1423,6 +2283,9 @@ void SSFloaterAtmoEnv::drawSliderValueGhosts()
 
     for (const FloatRow& row : mFloatRows)
     {
+        // Same suppression as the scrubber overlay - see rowAutoOwned().
+        if (rowAutoOwned(row.mPrefix)) continue;
+
         LLSliderCtrl* slider = findChild<LLSliderCtrl>(row.mPrefix + "_slider");
         if (!slider || !slider->isInVisibleChain()) continue;
 
@@ -1471,10 +2334,12 @@ void SSFloaterAtmoEnv::onCommitPreviewTime()
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
 
-    // Straight through: the slider is the phase (see refreshKeyframeProof).
-    // The readout beside it is what turns that into a legible time of day.
-    mPreviewPhase = getChild<LLUICtrl>("preview_time_slider")->getValue().asReal();
-    refreshKeyframeProof();
+    // Percent in, phase out - see refreshPreview for why the control is
+    // calibrated that way. The readout beside it is what turns the phase
+    // into a legible time of day.
+    mPreviewPhase = llclamp(
+        getChild<LLUICtrl>("preview_time_slider")->getValue().asReal() * 0.01, 0.0, 1.0);
+    refreshPreview();
 }
 
 // </SS:Nexii>

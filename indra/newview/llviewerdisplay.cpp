@@ -88,6 +88,7 @@
 #include "pipeline.h"
 // <SS:Nexii> Atmo Magic weather
 #include "ssatmomagic.h"
+#include "ssatmoenvapplier.h"
 #include "ssatmoenvdiscovery.h"
 #include "ssrainshadow.h"
 #include "sswindflow.h"
@@ -986,6 +987,14 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     // most one rain shadow tile capture, here where the
                     // pipeline is in the same state the sun shadows render in
                     SSAtmoMagic::getInstance()->idle();
+
+                    // Atmo Magic: the environment applier drives EEP's
+                    // ENV_LOCAL sky/water from the loaded asset - runs
+                    // right after the weather tick so both read the same
+                    // frame's resolved track. Gates itself on the same
+                    // SSAtmoEnabled master switch.
+                    SSAtmoEnvApplier::getInstance()->apply();
+
                     SSRainShadowMap::getInstance()->capture();
                     SSWindFlowMap::getInstance()->update();
 

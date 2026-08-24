@@ -60,7 +60,25 @@ public:
     // Weather tab: 0 is "clear skies", 1 is "thick, black clouds");
     // convection drives height/thickness/churn/anvil (the shape and
     // instability side, kept separate from how much of it there is).
-    static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field, F32 moisture, F32 convection);
+    //
+    // phase is a position in the day cycle, [0, 1) - same convention as
+    // SSAtmoEnvWeatherResolver::resolve. The field's own tunables are
+    // keyframable, and they must be evaluated at the same instant the
+    // caller derived its moisture/convection from, or a keyframed baseline
+    // would drift against the cube it modulates.
+    static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field, F32 moisture, F32 convection, F64 phase);
+
+    // What SSAtmoEnvCloudField::mAuto actually computes: an artistic
+    // baseline from the same two cube inputs resolve() consumes. Public and
+    // separate from resolve() because the floater shows these numbers in
+    // the (disabled) baseline rows while Auto owns them - the user should
+    // see what Auto decided, not a parked authored value it is ignoring.
+    // Heavier weather pulls the cloud base down and thickens the deck
+    // (thickness is the pre-convection baseline; resolve() still applies
+    // the convective height factor on top); coverage scale stays neutral
+    // because coverage already tracks moisture inside resolve().
+    static void deriveAutoBaseline(F32 moisture, F32 convection,
+                                   F32& out_base_height, F32& out_thickness, F32& out_coverage_scale);
 };
 
 // </SS:Nexii>

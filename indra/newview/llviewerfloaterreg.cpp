@@ -241,6 +241,9 @@
 #include "particleeditor.h"
 #include "ssfloateratmo.h" // <SS:Nexii> Atmo Magic weather
 #include "ssfloateratmoenv.h" // <SS:Nexii> Atmo Magic
+#include "ssfloateratmoplanetary.h"
+#include "ssfloateratmoinfluence.h"
+#include "ssfloateratmomatch.h" // <SS:Nexii> Atmo Magic planetary designer
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
 #include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
 #include "quickprefs.h"
@@ -692,6 +695,9 @@ void LLViewerFloaterReg::registerFloaters()
     // </SS:Nexii>
     // <SS:Nexii> Atmo Magic unified environment (independent of v2 weather above)
     LLFloaterReg::add("ss_atmo_env", "floater_ss_atmo_env.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnv>);
+    LLFloaterReg::add("ss_atmo_planetary", "floater_ss_atmo_planetary.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoPlanetary>);
+    LLFloaterReg::add("ss_atmo_influence", "floater_ss_atmo_weather_influence.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoInfluence>);
+    LLFloaterReg::add("ss_atmo_match", "floater_ss_atmo_match.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoMatch>);
     // </SS:Nexii>
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).
