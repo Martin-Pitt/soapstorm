@@ -995,6 +995,20 @@ void SSSurfaceField::updateWindow()
             return;
         }
 
+        // Drain whatever is already queued before allocating anything.
+        //
+        // GL errors are sticky: glGetError reports the OLDEST unretrieved
+        // error and clears one flag per call, so a failure raised anywhere
+        // earlier in the frame is still sitting there when the check below
+        // runs. It then attributes somebody else's mistake to these two
+        // allocations, tears the field down and leaves nothing shading wet
+        // for the rest of the session - over a texture that was created
+        // perfectly well.
+        //
+        // Cheap insurance, and the only way for this check to mean what it
+        // says: after this loop, any error the check sees is genuinely ours.
+        while (glGetError() != GL_NO_ERROR) { }
+
         glGenTextures(1, &mWindowTex);
         glBindTexture(GL_TEXTURE_2D, mWindowTex);
 

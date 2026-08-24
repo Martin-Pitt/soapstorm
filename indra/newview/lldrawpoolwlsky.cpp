@@ -488,11 +488,12 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
 
         cloudshader->unbind();
 
-        // <SS:Nexii> The volumetric layer goes on top of the dome: the dome
-        // is the far backdrop with no altitude of its own, and these are
-        // actual bodies of cloud at a real height in front of it.
-        SSVolCloud::getInstance()->render();
-        // </SS:Nexii>
+        // <SS:Nexii> The volumetric layer used to be drawn here, on top of
+        // the dome. It is now a late translucent pass instead - see
+        // LLPipeline::renderGeomPostDeferred. Drawn in the sky pass it could
+        // only ever be part of the backdrop: everything rendered afterwards,
+        // water included, painted straight over it, and it had no scene
+        // depth to soften itself against.
 
         gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
         gGL.getTexUnit(1)->unbind(LLTexUnit::TT_TEXTURE);

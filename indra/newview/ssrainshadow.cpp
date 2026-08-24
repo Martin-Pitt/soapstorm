@@ -418,7 +418,19 @@ void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
     const F32 step = llclamp((F32)step_setting, 0.5f, 16.f);
 
     const F32 width = regionp->getWidth();
+
+    // The grid is capped at 1025 a side, and the spacing has to follow that
+    // cap rather than ignore it.
+    //
+    // Taking the requested step and clamping only the COUNT meant the mesh
+    // simply stopped once it ran out of samples: at 2m over a 1024m region
+    // that is 2048 wanted against 1025 allowed, so it covered half the width
+    // and half the depth - a quarter of the region, with the rest of the map
+    // silently missing. Deriving the spacing back from the clamped count
+    // keeps the whole region covered and spends the cap on resolution
+    // instead of on area.
     const S32 n = llclamp((S32)(width / step) + 1, 2, 1025);
+    const F32 grid_step = width / (F32)(n - 1);
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const bool sky = atmo->isSkyTrack();
@@ -433,8 +445,8 @@ void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
     {
         for (S32 i = 0; i < n; ++i)
         {
-            const F32 lx = llmin((F32)i * step, width);
-            const F32 ly = llmin((F32)j * step, width);
+            const F32 lx = llmin((F32)i * grid_step, width);
+            const F32 ly = llmin((F32)j * grid_step, width);
 
             // Drop a column from the top of the captured band. Seeding at the
             // heightmap instead put the sample on a different column wherever

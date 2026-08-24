@@ -32,6 +32,11 @@ in vec4 diffuse_color;
 out vec2 vary_texcoord0;
 out vec4 vary_color;
 
+// Where this fragment is in the world, for the noise lookup. The map is a
+// field the whole sky is carved out of, not a picture of one puff, so it
+// has to be sampled by position - see ssVolCloudF.glsl.
+out vec3 vary_world;
+
 void main()
 {
     // The quads arrive already built in world space - the puff field turns
@@ -41,6 +46,7 @@ void main()
 
     vary_texcoord0 = texcoord0;
     vary_color = diffuse_color;
+    vary_world = position.xyz;
 }
 
 // </SS:Nexii>

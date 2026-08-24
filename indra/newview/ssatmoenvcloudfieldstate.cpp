@@ -51,7 +51,24 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     // The >= 0 clamps sit here rather than in the schema's fromLLSD because
     // the generic keyframe container has no notion of a field's valid range
     // - the same deferral the weather cube documents on its own fields.
-    state.mCoverage = llclamp(moisture, 0.f, 1.f) * llmax(0.f, coverage_scale);
+    // Coverage climbs much faster than moisture does, and saturates early.
+    //
+    // Straight proportion was wrong against the rest of the system. The
+    // weather resolver calls moisture 0.35-0.65 MODERATE rain and 0.65-0.85
+    // HEAVY (classifyIntensity), so a linear map had moderate rain falling
+    // out of a sky half full of holes - and heavy rain out of a sky with
+    // a third of it still open. Rain does not work that way round: by the
+    // time a deck is precipitating properly it is overcast, and what rises
+    // after that is how hard it falls, not how much of the sky is left.
+    //
+    // 1 - (1-m)^3 gives that shape against those same bands: about 0.49
+    // covered where drizzle is turning into light rain, 0.73 at the start of
+    // moderate, 0.96 by heavy, and effectively solid past that. The author's
+    // coverage_scale still multiplies through, so a track can still ask for a
+    // broken sky in the wet if it wants one.
+    const F32 m = llclamp(moisture, 0.f, 1.f);
+    const F32 dry = 1.f - m;
+    state.mCoverage = (1.f - dry * dry * dry) * llmax(0.f, coverage_scale);
 
     // Height and thickness climb with convection - Stable sits at the
     // baseline ("minimal cloud height, flat overcast" per the design doc),
@@ -61,8 +78,35 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     state.mBaseHeightM = base_height;
     state.mThicknessM = llmax(0.f, thickness) * height_factor;
 
+    state.mBaseTexture = field.mBaseTexture.valueAt(phase);
+    state.mDetailTexture = field.mDetailTexture.valueAt(phase);
+
+    state.mTextureMix = llclamp(field.mTextureMix.valueAt(phase), 0.f, 1.f);
+    state.mPuffDensity = llclamp(field.mPuffDensity.valueAt(phase), 0.f, 1.f);
+    state.mDetailScale = llmax(0.01f, field.mDetailScale.valueAt(phase));
+    state.mDriftRate = llmax(0.f, field.mDriftRate.valueAt(phase));
+
+    // The author says how dark a storm gets; convection says how much of a
+    // storm this is.
+    // Allowed past 1, and clamped at the other end instead.
+    //
+    // Darkening the body while the rim stays lit is what gives a puff its
+    // form - the two together are the whole of its shape - so the top of the
+    // range turned out to be where the field looks most solid rather than
+    // merely dim. Capping darkening at 1 capped that. The floor is on the
+    // RESULT: however hard a storm is pushed, cloud that reaches pure black
+    // has stopped being cloud.
+    const F32 darkening = llclamp(field.mStormDarkening.valueAt(phase), 0.f, 2.f);
+    state.mGloom = llmax(0.08f, 1.f - darkening * llclamp(convection, 0.f, 1.f));
+
     state.mChurn = llclamp(convection, 0.f, 1.f);
     state.mHasAnvil = convection >= 0.75f;
+
+    // Anvils are not a switch that flips at 0.75. A tower spreads at its top
+    // as it approaches the inversion and flattens harder the harder it is
+    // driven, so this ramps in either side of that threshold and the shape
+    // arrives gradually.
+    state.mAnvil = llclamp((convection - 0.6f) / 0.3f, 0.f, 1.f);
 
     return state;
 }

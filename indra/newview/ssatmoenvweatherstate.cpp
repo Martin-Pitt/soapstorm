@@ -107,7 +107,22 @@ std::string SSAtmoEnvWeatherResolver::derivePrecipitationType(F32 convection, F3
     {
         return "slush_mix";
     }
-    return (convection > 0.8f) ? "hail" : "rain";
+    // Hail wants a genuinely severe storm, not merely a convective one.
+    //
+    // Raised from 0.8, which turned out to be a fifth of the whole
+    // convection range - far too much of the sky's life spent hailing, when
+    // hail at the surface is rare even under storms that are perfectly
+    // capable of producing it. 0.92 puts it above where the anvil has fully
+    // formed (mAnvil ramps 0.6 to 0.9), so it falls only from towers that
+    // have reached the inversion and spread - which is the shape that
+    // actually makes it.
+    //
+    // It matters more than a naming detail, because hail does not just look
+    // different: it falls at 20 m/s against rain's 9.5 (see ssprecippreset),
+    // and slant is wind over fall speed. The same gale that lays rain flat
+    // barely tilts hail. Switching to it at 0.8 meant the windiest weather
+    // in the system was also the weather least able to show the wind.
+    return (convection > 0.92f) ? "hail" : "rain";
 }
 
 // static

@@ -502,6 +502,8 @@ struct SSAtmoEnvPlanetary
 // struct is only the artist's tunable baseline.
 struct SSAtmoEnvCloudField
 {
+    SSAtmoEnvCloudField();
+
     // Auto derives the baseline below from the weather cube's moisture and
     // convection - same split as the gust/lightning Auto flags: the toggle
     // is a plain structural bool, the values it parks stay keyframable
@@ -526,6 +528,69 @@ struct SSAtmoEnvCloudField
     // "this track's storms are always more/less widespread than the cube
     // alone would suggest", independent of moisture.
     SSAtmoEnvKeyframed<F32> mCoverageScale{1.f};
+
+    // The map the puffs are cut from, and the finer one laid over it.
+    //
+    // Authored rather than picked from the weather, which is what this used
+    // to do - convection above 0.6 swapped in the cumulonimbus map and
+    // everything else got altocumulus. That is a reasonable default and a
+    // poor rule: it fires on a number that also drives height, churn and the
+    // anvil, so an author reaching for a taller cloud got a different cloud,
+    // with no way to say otherwise.
+    //
+    // Both default to a real map rather than to null.
+    //
+    // Null still works and still means "pick one for me", but it is a poor
+    // thing to SHOW: an author opening the panel found two empty pickers and
+    // no way to tell what was actually being drawn, or what to put back if
+    // they changed it. Filling them in makes the default legible and
+    // editable, which an implicit rule never is.
+    //
+    // Set in the constructor because these live in SSAtmoEnvCloudDome, which
+    // is declared further down this file.
+    SSAtmoEnvKeyframed<LLUUID> mBaseTexture;
+    SSAtmoEnvKeyframed<LLUUID> mDetailTexture;
+
+    // How far the field leans toward the detail map rather than the base
+    // one, before height and position have their say.
+    //
+    // A bias, not a switch. The two maps are mixed per fragment, weighted by
+    // where in the layer it sits and by a slow wander across the field, so a
+    // sky can be mostly one kind of cloud with the other showing through in
+    // patches - which is what an actual sky does. This moves the whole
+    // balance.
+    SSAtmoEnvKeyframed<F32> mTextureMix{0.4f};
+
+    // Ceiling on a single puff's opacity, 0..1. The difference between thin
+    // fair-weather cloud you can see sky through and a solid wall.
+    SSAtmoEnvKeyframed<F32> mPuffDensity{0.8f};
+
+    // Multiplies the size of the detail octave. Below 1 curdles the surface
+    // finer, above 1 makes it broad.
+    //
+    // Defaulting to 3 because that is where it looks right, not because the
+    // number is tidy. At 1 the octave sat far finer than the puffs carrying
+    // it and read as grain; a default that has to be corrected before the
+    // thing looks like cloud is not a default.
+    //
+    // Worth knowing what 3 means: the detail octave ends up coarser than the
+    // base one - 1850m against 880m. The two have effectively traded jobs,
+    // the "detail" supplying the broad moving structure and the base the
+    // finer standing texture, which is worth remembering before either is
+    // retuned.
+    SSAtmoEnvKeyframed<F32> mDetailScale{3.f};
+
+    // Multiplies how fast those octaves slide across each other - the boil.
+    // Convection still drives it; this says how much boil a given amount of
+    // convection is worth on this track.
+    SSAtmoEnvKeyframed<F32> mDriftRate{1.f};
+
+    // How much darker the cloud goes at full convection, 0..1.
+    //
+    // Authored and THEN modulated, rather than derived: the storm-grey of a
+    // cloud is a look, and tying it to convection alone meant the only way
+    // to get a dark sky was to also get a violently churning one.
+    SSAtmoEnvKeyframed<F32> mStormDarkening{0.85f};
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);

@@ -28,7 +28,10 @@
 // <SS:Nexii> Atmo Magic volumetric cloud field
 
 #include "llsingleton.h"
+#include "llpointer.h"
 #include "lluuid.h"
+#include "llrendertarget.h"
+#include "llviewertexture.h"
 #include "v3color.h"
 #include "v3math.h"
 
@@ -81,6 +84,56 @@ private:
 
     std::vector<Puff> mPuffs;
     LLUUID mTexture;
+
+    // Held rather than looked up per frame, and kept resident. Re-fetching
+    // by UUID every frame let the texture be evicted and re-streamed between
+    // frames, and a texture partway back up its mip chain is a flat average
+    // of itself - which for a noise map is featureless grey. That was the
+    // field going blank every so often.
+    LLPointer<LLViewerFetchedTexture> mTextureRef;
+
+    // The sky dome's OWN cloud map, held the same way.
+    //
+    // Shared with the dome deliberately: the two systems are meant to be the
+    // same weather seen at two ranges, and nothing sells that like being cut
+    // from the same cloth. Whatever the author puts on the dome shows up in
+    // the volume.
+    // The track's own choice for the detail octaves, if it made one.
+    LLUUID mAuthoredDetail;
+
+    LLUUID mDomeTexture;
+    LLPointer<LLViewerFetchedTexture> mDomeTexRef;
+
+    // What the field's convection was on the last build, for the boil.
+    F32 mChurn = 0.f;
+
+    // Where the layer's underside sits, and how deep it is - the flat base,
+    // and the height each fragment sits at within the layer.
+    F32 mBaseZ = 0.f;
+    F32 mThicknessM = 1.f;
+
+    // The authored look, straight through to the shader.
+    F32 mAnvil = 0.f;
+    F32 mTextureMix = 0.f;
+    F32 mPuffDensity = 0.8f;
+    F32 mDetailScale = 1.f;
+    F32 mDriftRate = 1.f;
+
+    // The lighting the field was built under, kept for the fragment shader:
+    // a puff needs shape, and shape needs a light direction per fragment
+    // rather than one colour per quad.
+    LLVector3 mLightDir;
+    LLColor3 mSunColor;
+    LLColor3 mHaze;
+
+    // A copy of the scene's depth, taken just before the puffs are drawn.
+    //
+    // A copy and not the buffer itself: this pass draws into a target that
+    // has the scene depth attached to it, and a shader that samples the very
+    // texture its own pass has bound as depth is undefined - which on a GPU
+    // means flicker. Blitting it out first costs one depth blit and makes
+    // the read legal.
+    LLRenderTarget mDepthCopy;
     F32 mLastBuildMS = 0.f;
 };
 

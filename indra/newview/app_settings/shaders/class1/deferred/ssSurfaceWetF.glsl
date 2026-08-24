@@ -112,6 +112,11 @@ vec4 ssFieldFetch(vec2 xy_agent);
 
 #define SS_AVATAR_MAX 8
 
+// How far above the stored surface a fragment has to stand before it counts
+// as something other than the surface itself. The field's own heights are
+// cell averages, so a real floor can sit a little either side of one.
+const float SS_AVATAR_LIFT = 0.15;
+
 uniform int ssAvatarCount;
 uniform vec4 ssAvatarPos[SS_AVATAR_MAX];    // xyz foot position, w radius
 uniform vec4 ssAvatarShape[SS_AVATAR_MAX];  // x height, y soak
@@ -130,14 +135,25 @@ uniform vec4 ssAvatarShape[SS_AVATAR_MAX];  // x height, y soak
 // whichever of the two reaches it first.
 float ssAvatarWetAt(float t, float soak)
 {
-    float from_head = mix(1.15, 0.04, smoothstep(0.30, 1.0, t));
-    float from_feet = mix(0.22, 1.15, smoothstep(0.0, 0.42, t));
+    // Every threshold has to be reachable, which these did not used to be.
+    //
+    // Soak runs 0 to 1, and the old curves peaked at 1.15 - so the middle of
+    // a body needed more soak than exists and could never wet at all, however
+    // long someone stood in a downpour. Only the two ends came within range,
+    // and the band between them switched on all at once at whatever soak
+    // finally crossed it, which is the hard edge with no gradient.
+    //
+    // Now the far end of both curves is 0.72: the last part of a body to wet
+    // does so around three quarters soaked, and is fully wet before soak
+    // reaches 1.
+    float from_head = mix(0.72, 0.02, smoothstep(0.25, 1.0, t));
+    float from_feet = mix(0.12, 0.72, smoothstep(0.0, 0.40, t));
     float threshold = min(from_head, from_feet);
 
     // The band wets over a range rather than switching on at its threshold,
     // so the boundary between wet and dry is a gradient up the body instead
     // of a waterline.
-    return smoothstep(threshold, threshold + 0.28, soak);
+    return smoothstep(threshold, threshold + 0.30, soak);
 }
 
 // Wetness from whichever avatar capsule contains this fragment, 0 if none.
@@ -154,10 +170,17 @@ float ssAvatarWet(vec3 p_agent)
         float height = ssAvatarShape[i].x;
         float soak = ssAvatarShape[i].y;
 
-        // A little slack under the soles and over the head: hair, heels and
-        // a hovering avatar all sit slightly outside the measured body.
+        // Generous slack under the soles and over the head.
+        //
+        // mBodySize is the shape's own measurement of a body, and what gets
+        // drawn is not only that: hair, hats, heels, a hovering avatar and
+        // anything rigged past the skeleton all sit outside it. With only
+        // 15cm underneath and 25cm above, the capsule ended somewhere around
+        // the shoulders and started above the shoes - so the feet and the
+        // head fell outside it entirely and a band across the legs was the
+        // only part that could wet. Hence knees, and nothing else.
         float rel = p_agent.z - foot.z;
-        if (rel < -0.15 || rel > height + 0.25) continue;
+        if (rel < -0.40 || rel > height * 1.15 + 0.50) continue;
 
         vec2 off = p_agent.xy - foot.xy;
         if (dot(off, off) > radius * radius) continue;
@@ -205,10 +228,26 @@ void main()
     float wet;
     float puddle;
 
-    // Avatars first: they stand in the same columns the field describes, and
-    // the field has just been taught to decline those fragments, so whichever
-    // of the two answers is the only one that will.
-    float avatar_wet = ssAvatarWet(p);
+    // Avatars first - but only where the field genuinely has nothing to say.
+    //
+    // The capsule is a screen-space pass's only way of asking "is this
+    // fragment a person": there is no per-object identity in a G-buffer, so
+    // a world-space cylinder stands in for one. It cannot tell a shin from
+    // the floor between two feet, and on its own it claimed both - handing
+    // the ground the avatar's soak and zeroing its puddle. That is the dry
+    // island that followed people around.
+    //
+    // The field already draws the line the capsule cannot: ssFieldAt rejects
+    // anything standing ABOVE the stored surface height, which is exactly
+    // what an avatar's body is and exactly what the floor is not. Pairing the
+    // two makes them complementary rather than overlapping - the capsule
+    // answers only for fragments the field has declined, and the ground under
+    // someone stays as wet as the ground beside them.
+    vec4 field_here = ssFieldFetch(p.xy);
+    bool field_knows = field_here.x > -1.0e5;
+    bool on_surface = field_knows && (p.z <= field_here.x + SS_AVATAR_LIFT);
+
+    float avatar_wet = on_surface ? 0.0 : ssAvatarWet(p);
     if (avatar_wet > 0.004)
     {
         // No puddle term: water stands on a floor, not on a person. What is

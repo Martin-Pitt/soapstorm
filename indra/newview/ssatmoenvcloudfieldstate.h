@@ -51,6 +51,25 @@ struct SSAtmoEnvCloudFieldState
     // The iconic cumulonimbus anvil top, only once convection reaches the
     // Severe phase - a shape detail, not a physical simulation of one.
     bool mHasAnvil = false;
+
+    // How far into anvil the tower has gone, 0..1 - a ramp rather than the
+    // flag above, which is a threshold and cannot express "nearly".
+    F32 mAnvil = 0.f;
+
+    // What the field is drawn with, resolved at this phase. Null means "the
+    // sensible default for this slot" - see SSAtmoEnvCloudField.
+    LLUUID mBaseTexture;
+    LLUUID mDetailTexture;
+
+    // Authored look, resolved at this phase - see SSAtmoEnvCloudField.
+    F32 mTextureMix = 0.f;
+    F32 mPuffDensity = 0.8f;
+    F32 mDetailScale = 1.f;
+    F32 mDriftRate = 1.f;
+
+    // Already folded together: how dark the cloud is drawn, authored
+    // darkening applied to this instant's convection.
+    F32 mGloom = 1.f;
 };
 
 class SSAtmoEnvCloudFieldResolver

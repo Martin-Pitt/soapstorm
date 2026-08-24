@@ -250,6 +250,11 @@ bool SSFloaterAtmoEnv::postBuild()
         { "cloud_base_height", [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mBaseHeightM; },    true },
         { "cloud_thickness",   [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mBaseThicknessM; }, true },
         { "cloud_coverage",    [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mCoverageScale; },  false },
+        { "cloud_puff_density",[clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mPuffDensity; },     false },
+        { "cloud_storm_dark",  [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mStormDarkening; },  false },
+        { "cloud_texture_mix", [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mTextureMix; },      false },
+        { "cloud_detail_scale",[clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mDetailScale; },     false },
+        { "cloud_drift_rate",  [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mDriftRate; },       false },
     };
     mFloatRows.insert(mFloatRows.end(), cloud_rows.begin(), cloud_rows.end());
 
@@ -360,6 +365,8 @@ bool SSFloaterAtmoEnv::postBuild()
     mTextureRows = {
         { "water_normal_map", [water]() -> SSAtmoEnvKeyframed<LLUUID>& { return water().mNormalMap; } },
         { "dome_image",       [dome]() -> SSAtmoEnvKeyframed<LLUUID>& { return dome().mNoiseTexture; } },
+        { "cloud_field_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mBaseTexture; } },
+        { "cloud_detail_image",[clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mDetailTexture; } },
     };
     for (const KeyRow<LLUUID>& row : mTextureRows)
     {

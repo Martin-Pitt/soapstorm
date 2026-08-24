@@ -85,7 +85,29 @@ uniform vec2 region_offset;   // camera pos - region centre, metres, world X/Y
 void main()
 {
     // World / view / projection
-    gl_Position = modelview_projection_matrix * vec4(position.xyz, 1.0);
+    // <SS:Nexii> The cloud layer's own depth slot.
+    //
+    // LLGLSPipelineSkyBox's LLGLSquashToFarClip would otherwise put this on
+    // 0.99999 along with the haze dome and everything else in the sky, which
+    // leaves no room to order the sky's layers against each other - and the
+    // celestial discs need to be ordered against this one, since a disc is
+    // added to the sky rather than composited over it and so can only be
+    // hidden by depth.
+    //
+    // Its layer parameter cannot express this: it steps in units of 0.0001
+    // (0.99999 - 0.0001 * layer, see setProjectionMatrix), and what is
+    // wanted here is one step of 0.00001.
+    //
+    // Set in the same FORM the disc shader uses - w times a constant, in a
+    // vertex shader - and that matters as much as the value. Reaching the
+    // same number by two different routes (a multiply here, a rewritten
+    // projection row there) leaves the two disagreeing in the last bits, so
+    // the depth test flips per pixel and the layers speckle through each
+    // other. Same expression, same result, no fight.
+    vec4 cloud_pos = modelview_projection_matrix * vec4(position.xyz, 1.0);
+    cloud_pos.z = cloud_pos.w * 0.99998;
+    gl_Position = cloud_pos;
+    // </SS:Nexii>
 
     // Texture coords
     // SL-13084 EEP added support for custom cloud textures -- flip them horizontally to match the preview of Clouds > Cloud Scroll

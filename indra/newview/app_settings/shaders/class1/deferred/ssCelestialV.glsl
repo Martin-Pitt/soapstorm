@@ -64,21 +64,35 @@ void main()
     // atmosphere shader and the true direction - stayed put.
     vec4 pos = modelview_projection_matrix * vec4(position.xyz, 1.0);
 
-    // Smashed to the far end of the depth range - the value the stock SUN
-    // uses, not the moon's.
+    // The sky's depth layers, and this disc's place in them.
     //
-    // The three sky depths are stars at 1.0, sun at 0.999999 and moon at
-    // 0.999991, and the clouds are at their real geometry depth. That last
-    // one is the catch: the dome is ~5000m out, and this near the far plane
-    // the depth curve is so compressed that 5000m lands BETWEEN the moon's
-    // value and the sun's. A disc at the moon's depth is therefore nearer
-    // than the clouds, so it drew in front of them and z-fought wherever
-    // the two nearly coincided - the sun flickering through cloud.
+    // Every skybox pass runs under LLGLSPipelineSkyBox, whose
+    // LLGLSquashToFarClip replaces the projection's z row with its w row
+    // times 0.99999 (llgl.cpp, setProjectionMatrix) - so the haze dome and,
+    // by default, everything else in the sky land on that single value
+    // whatever their geometry says. The dome's real ~5000m never reaches the
+    // depth buffer at all, which is why arguing about where 5000m falls on
+    // the depth curve only ever produced numbers that happened to work.
     //
-    // At the sun's value every disc is comfortably behind the cloud layer
-    // (which is the whole separation this needs) and still in front of the
-    // stars at 1.0, so a disc continues to occlude the stars behind it.
-    pos.z = pos.w * 0.999999;
+    // With cloudsV.glsl now taking 0.99998 for itself, the sky reads:
+    //
+    //     0.99998   cloud layer
+    //     0.99999   haze dome, and these discs
+    //     1.0       stars (starsV.glsl)
+    //
+    // A disc has to sit clear of the clouds so they can cover it - it is
+    // ADDED to the sky, so depth is the only thing that can hide it - and
+    // clear of the stars so its depth write still clips them.
+    //
+    // Sharing the haze dome's exact value is the one thing to watch. LEQUAL
+    // passes on equality, and the disc is drawn after the dome, so it draws.
+    // But the dome reaches 0.99999 through the rewritten projection while
+    // this reaches it by multiplying, and if those disagree in the last bits
+    // the disc will speckle against the HAZE - the same failure as before,
+    // moved one layer along. If that shows up, the fix is to move these
+    // discs to 0.999995, midway between the dome and the stars, rather than
+    // to move the clouds again.
+    pos.z = pos.w * 0.99999;
     gl_Position = pos;
 
     vary_texcoord0 = texcoord0;

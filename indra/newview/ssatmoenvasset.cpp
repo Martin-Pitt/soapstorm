@@ -807,6 +807,24 @@ bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
 // SSAtmoEnvCloudField
 //-----------------------------------------------------------------------------
 
+// Defined here rather than in the header: the texture ids belong to
+// SSAtmoEnvCloudDome, which is declared after this struct.
+//
+// Cumulonimbus for the body, altocumulus over it.
+//
+// Chosen by looking rather than by reasoning about what each map is called.
+// The pairing works because of what the two layers now DO: the body carries
+// the broad shape of a cloud mass, which the storm map has plenty of, while
+// the detail supplies the moving structure across it, which the broken
+// mid-level map breaks up far better than the layered one did. Layered is a
+// deck seen from below - it belongs on the dome, where it still is by
+// default, and reads as too even here.
+SSAtmoEnvCloudField::SSAtmoEnvCloudField()
+    : mBaseTexture(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS))
+    , mDetailTexture(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS))
+{
+}
+
 LLSD SSAtmoEnvCloudField::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -814,6 +832,13 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
     sd["base_height_m"] = mBaseHeightM.asLLSD();
     sd["base_thickness_m"] = mBaseThicknessM.asLLSD();
     sd["coverage_scale"] = mCoverageScale.asLLSD();
+    sd["base_texture"] = mBaseTexture.asLLSD();
+    sd["detail_texture"] = mDetailTexture.asLLSD();
+    sd["texture_mix"] = mTextureMix.asLLSD();
+    sd["puff_density"] = mPuffDensity.asLLSD();
+    sd["detail_scale"] = mDetailScale.asLLSD();
+    sd["drift_rate"] = mDriftRate.asLLSD();
+    sd["storm_darkening"] = mStormDarkening.asLLSD();
     return sd;
 }
 
@@ -828,6 +853,16 @@ bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
     if (sd.has("base_height_m")) mBaseHeightM.fromLLSD(sd["base_height_m"], 800.f);
     if (sd.has("base_thickness_m")) mBaseThicknessM.fromLLSD(sd["base_thickness_m"], 300.f);
     if (sd.has("coverage_scale")) mCoverageScale.fromLLSD(sd["coverage_scale"], 1.f);
+    // Falling back to the constructor's choice, not to null - a malformed
+    // entry should land on the default rather than on "pick one for me".
+    const SSAtmoEnvCloudField def;
+    if (sd.has("base_texture")) mBaseTexture.fromLLSD(sd["base_texture"], def.mBaseTexture.valueAt(0.0));
+    if (sd.has("detail_texture")) mDetailTexture.fromLLSD(sd["detail_texture"], def.mDetailTexture.valueAt(0.0));
+    if (sd.has("texture_mix")) mTextureMix.fromLLSD(sd["texture_mix"], 0.4f);
+    if (sd.has("puff_density")) mPuffDensity.fromLLSD(sd["puff_density"], 0.8f);
+    if (sd.has("detail_scale")) mDetailScale.fromLLSD(sd["detail_scale"], 3.f);
+    if (sd.has("drift_rate")) mDriftRate.fromLLSD(sd["drift_rate"], 1.f);
+    if (sd.has("storm_darkening")) mStormDarkening.fromLLSD(sd["storm_darkening"], 0.85f);
     return true;
 }
 

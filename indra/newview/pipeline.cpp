@@ -103,7 +103,8 @@
 #include "llviewerstats.h"
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
-#include "sspreciprenderer.h" // <SS:Nexii> Atmo Magic weather
+#include "sspreciprenderer.h"
+#include "ssvolcloud.h" // <SS:Nexii> Atmo Magic weather
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
@@ -4508,8 +4509,20 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
 
     if (!gCubeSnapshot)
     {
-        // <SS:Nexii> Atmo Magic precipitation: late translucent pass after
-        // all pools, depth-tested against the finished scene
+        // <SS:Nexii> Atmo Magic volumetric cloud: a late translucent pass,
+        // for the same reason precipitation is one, and before it - rain
+        // falls out of the cloud, so the cloud is behind it.
+        //
+        // It cannot live in the sky pass. There it was part of the backdrop:
+        // drawn before the water and before every post-deferred pool, so
+        // anything rendered afterwards painted over it whether it was in
+        // front or not. Here the scene is finished, which is also what lets
+        // a puff soften itself against the geometry it meets rather than
+        // slicing through it.
+        SSVolCloud::getInstance()->render();
+
+        // Atmo Magic precipitation: late translucent pass after all pools,
+        // depth-tested against the finished scene
         SSPrecipRenderer::getInstance()->render();
         // </SS:Nexii>
 
