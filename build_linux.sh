@@ -22,6 +22,7 @@ AVX2=true
 PACKAGE=true
 CREATE_RPM=true
 OUTPUT_DIR=""
+PURGE=false
 
 # ============================================================
 # Argument parsing
@@ -31,6 +32,7 @@ usage() {
     echo ""
     echo "Options:"
     echo "  --clean               Remove build directory before building"
+    echo "  --purge               Completely delete native Linux temp source/build workspace and exit"
     echo "  --configure           Run configure step only"
     echo "  --build               Run build step only"
     echo "  --all                 Run both configure and build (default)"
@@ -47,6 +49,7 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --clean)        CLEAN=true ;;
+        --purge)        PURGE=true ;;
         --configure)    CONFIGURE=true ;;
         --build)        BUILD=true ;;
         --all)          ALL=true ;;
@@ -65,7 +68,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Default to All if neither --configure nor --build was given
-if ! $CONFIGURE && ! $BUILD; then
+if ! $CONFIGURE && ! $BUILD && ! $PURGE; then
     ALL=true
 fi
 
@@ -74,6 +77,21 @@ fi
 # ============================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORIG_DIR="$SCRIPT_DIR"
+
+if $PURGE; then
+    NATIVE_SRC_DIR="/tmp/soapstorm-src-$(basename "$SCRIPT_DIR")"
+    echo "Purging native Linux source directory and build artifacts: $NATIVE_SRC_DIR"
+    if [[ -d "$NATIVE_SRC_DIR" ]]; then
+        rm -rf "$NATIVE_SRC_DIR"
+        echo "Successfully removed $NATIVE_SRC_DIR"
+    else
+        echo "Directory $NATIVE_SRC_DIR does not exist, nothing to purge"
+    fi
+    # Also clean up build wrapper files in /tmp
+    rm -rf /tmp/wsl-build-tools /tmp/wsl-bash-env.sh
+    echo "WSL build wrapper files cleaned up"
+    exit 0
+fi
 
 if [[ "$SCRIPT_DIR" == /mnt/c/* ]] || [[ "$SCRIPT_DIR" == /mnt/d/* ]] || [[ "$SCRIPT_DIR" == /mnt/e/* ]]; then
     # We are on a Windows mount, which has NTFS symlink issues in WSL.

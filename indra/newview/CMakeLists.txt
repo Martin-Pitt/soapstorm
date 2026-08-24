@@ -761,6 +761,7 @@ set(viewer_SOURCE_FILES
     llsnapshotlivepreview.cpp
     llsoundnotecardupload.cpp
     llspatialpartition.cpp
+    llstatslistener.cpp
     llspeakers.cpp
     llspeakingindicatormanager.cpp
     llsplitbutton.cpp
@@ -1654,6 +1655,7 @@ set(viewer_HEADER_FILES
     llsnapshotmodel.h
     llsoundnotecardupload.h
     llspatialpartition.h
+    llstatslistener.h
     llspeakers.h
     llspeakingindicatormanager.h
     llsplitbutton.h
