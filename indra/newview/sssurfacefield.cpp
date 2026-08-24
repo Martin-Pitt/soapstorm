@@ -362,6 +362,9 @@ void SSSurfaceField::shedEdges(F32 dt)
     SSPrecipSim* sim = atmo ? atmo->sim() : nullptr;
     if (!sim || dt <= 0.f) return;
 
+    static LLCachedControl<bool> shed_enabled(gSavedSettings, "SSAtmoRunoff", true);
+    if (!shed_enabled) return;
+
     static LLCachedControl<F32> scale_setting(gSavedSettings, "SSAtmoRunoffScale", 1.f);
     const F32 scale = llclamp((F32)scale_setting, 0.f, 4.f);
     if (scale <= 0.f) return;

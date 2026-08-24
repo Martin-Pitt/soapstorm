@@ -122,13 +122,33 @@
      font="SansSerifSmall">
         Preview time
     </text>
-    <slider
+    <!-- Runs the head around the cycle - the same control Edit Day Cycle
+         has, and the same sixty seconds a lap it uses
+         (llfloatereditextdaycycle.cpp's DAY_CYCLE_PLAY_TIME_SECONDS), so a
+         four-hour authored day is still watchable. -->
+    <button
      follows="left|top"
      layout="topleft"
      left_pad="8"
-     top_delta="-2"
+     top_delta="-4"
+     height="22"
+     width="22"
+     name="preview_play_button"
+     tool_tip="Run the preview through the cycle"
+     image_overlay="Play_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="2"
      height="18"
-     width="560"
+     width="530"
      name="preview_time_slider"
      show_text="false"
      min_val="0.0"

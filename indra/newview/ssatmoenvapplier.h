@@ -150,6 +150,15 @@ public:
     F32 sunSlotAngularDeg() const { return mSunSlotAngularDeg; }
     F32 moonSlotAngularDeg() const { return mMoonSlotAngularDeg; }
 
+    // Where the home body's rotation axis points, in the same observer frame
+    // the disc directions are given in: due north, elevation equal to the
+    // observer's latitude.
+    //
+    // The sky turns about this, so it is what a body's own face is fixed
+    // relative to - the sky pass rotates the disc art by the angle between
+    // it and the zenith. See ss_bind_disc.
+    const LLVector3& observerPole() const { return mObserverPole; }
+
     // Debug overlay, toggled from the System Designer: a ray toward every
     // body in the sky with its name and reading beside it, so where a body
     // actually IS can be checked against where the designer says it is.
@@ -233,6 +242,7 @@ private:
     LLVector3 mSunSlotSunDir;
     F32 mSunSlotSunlight = 1.f;
     F32 mMoonSlotSunlight = 1.f;
+    LLVector3 mObserverPole = LLVector3::z_axis;
     F32 mSunSlotAngularDeg = 0.53f;
     F32 mMoonSlotAngularDeg = 0.53f;
 

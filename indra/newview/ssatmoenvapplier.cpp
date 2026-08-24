@@ -29,7 +29,6 @@
 #include "ssatmoenvapplier.h"
 
 #include "ssatmoenvweatherstate.h"
-#include "ssatmomatch.h"
 
 #include "llhudobject.h"
 #include "llfontgl.h"
@@ -203,11 +202,6 @@ void SSAtmoEnvApplier::apply()
     const F64 phase = mgr->hasPreviewPhaseOverride()
         ? mgr->previewPhaseOverride()
         : track.currentDayCyclePhase();
-
-    // The photo matcher, if one is running: it scores the frame that has
-    // just been drawn, so it has to run before this frame's values are
-    // written - see ssatmomatch.h.
-    SSAtmoMatch::getInstance()->idle();
 
     const SSAtmoEnvSkyModulation mod = computeModulation(track, phase);
 
@@ -916,6 +910,15 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     const F32 lat_deg = (home_index >= 0)
         ? planetary.mBodies[static_cast<size_t>(home_index)].mLatitudeDeg
         : 0.f;
+
+    // The celestial pole, in the (east, north, up) frame resolveObserverDirection
+    // hands back. It is (0,0,1) in the equatorial frame, so its components
+    // here are its dots with those three axes - which come out as due north
+    // at an elevation of the latitude, as they should.
+    {
+        const F32 lat = lat_deg * DEG_TO_RAD;
+        mObserverPole.setVec(0.f, cosf(lat), sinf(lat));
+    }
 
     // Re-resolved from the asset every frame like everything else - no
     // cached positions survive an asset replacement. Without a home there

@@ -62,10 +62,8 @@ bool SSFloaterSimulation::postBuild()
     watch("SSAtmoShadowRes", EInvalidate::SHADOW);
     watch("SSAtmoShadowMaxAge", EInvalidate::SHADOW);
 
-    // The two that shape the drainage network itself. Amount, merge and radius
-    // are read live every frame, so only these need to drop what was traced.
-    watch("SSAtmoRunoffRes", EInvalidate::RUNOFF);
-    watch("SSAtmoRunoffEdge", EInvalidate::RUNOFF);
+    // Nothing to watch for the eaves: amount and radius are read live every
+    // frame, so a change to either shows up in the next one on its own.
 
     const char* flow_controls[] = {
         "SSAtmoWindFlow", "SSAtmoWindFlowCell", "SSAtmoWindFlowRes",
@@ -108,13 +106,7 @@ void SSFloaterSimulation::watch(const std::string& control, EInvalidate what)
     mConnections.emplace_back(var->getSignal()->connect(
         [this, what](LLControlVariable*, const LLSD&, const LLSD&)
         {
-            if (what == EInvalidate::RUNOFF)
-            {
-                // The network is traced from the shadow map, not captured, so
-                // this only has to throw away what was traced. It is rebuilt
-                // from the map already in hand on the next refresh.
-            }
-            else if (what == EInvalidate::SHADOW)
+            if (what == EInvalidate::SHADOW)
             {
                 // Resolution is read at capture time and the refresh interval
                 // only governs the next one, so neither takes effect until the

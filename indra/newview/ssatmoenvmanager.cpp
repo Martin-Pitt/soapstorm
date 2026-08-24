@@ -217,12 +217,9 @@ namespace
     // Nothing below knows how many skies there are or what times of day
     // they depict - the placement is measured, not assumed - so changing
     // this list is the whole change.
-    const S32 SEED_SKY_COUNT = 7;
+    const S32 SEED_SKY_COUNT = 4;
     const char* const SEED_SKY_ID[SEED_SKY_COUNT] = {
-        "ece99f96-19e4-c620-3f26-2f25975ae885",  // Daylight 1
-        "7250bab8-0a2c-0cb7-8161-6717e194da43",  // Daylight 2
-        "8b03eac8-9405-8082-911f-56a348b0f021",  // Daylight 3
-        "164aa7bf-5cf2-abe6-48f6-53305479da0a",  // Dusk
+        "7250bab8-0a2c-0cb7-8161-6717e194da43",  // Daylight
         "db8115a4-9549-9f7d-97ca-a791d0a99a0f",  // Night
         "cd8afef7-4276-3f46-6122-6165d97f3e87",  // Sunrise
         "7b43eefd-f390-0c79-c30e-a03b3e0ef9c8"   // Sunset
@@ -234,7 +231,7 @@ namespace
     // called. They are here so a failed fetch or a nudged phase names the
     // sky an author would recognise instead of an index.
     const char* const SEED_SKY_NAME[SEED_SKY_COUNT] = {
-        "Daylight 1", "Daylight 2", "Daylight 3", "Dusk", "Night", "Sunrise", "Sunset"
+        "Daylight", "Night", "Sunrise", "Sunset"
     };
 
     // Used only when the track has no sun to measure the skies against (a

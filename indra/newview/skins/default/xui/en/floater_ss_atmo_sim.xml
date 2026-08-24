@@ -34,7 +34,7 @@
      left="0"
      top="0"
      width="406"
-     height="1240"
+     height="1174"
      background_visible="false">
 
     <text
@@ -155,7 +155,7 @@
      name="runoff_help"
      word_wrap="true"
      font="SansSerifSmall">
-        The rain shadow surface traced downhill, so every roof knows how much water reaches each of its edges and sheds it off the eaves into the street.
+        Rain that lands on a roof runs to its edges and drips off the eaves into the street below. Only the roofs near the camera shed, and only while it is actually raining.
     </text>
     <check_box
      follows="left|top"
@@ -196,31 +196,6 @@
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="16" width="106"
-      name="T_runoff_merge"
-      tool_tip="Raindrops of catchment one visible drip stands in for; higher is fewer, fatter drips">
-        Drops per drip:
-    </text>
-    <slider_bar
-      control_name="SSAtmoRunoffMerge" name="SB_runoff_merge"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="1" max_val="60" increment="1" decimal_digits="0"
-      tool_tip="Raindrops of catchment one visible drip stands in for; higher is fewer, fatter drips" />
-    <spinner
-      control_name="SSAtmoRunoffMerge" name="S_runoff_merge"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="1" max_val="60" increment="1" decimal_digits="0"
-      tool_tip="Raindrops of catchment one visible drip stands in for; higher is fewer, fatter drips" />
-    <button
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="20" width="24"
-      name="D_runoff_merge" label="D"
-      tool_tip="Reset to the default value">
-        <button.commit_callback function="ResetControl" parameter="SSAtmoRunoffMerge" />
-    </button>
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="6" height="16" width="106"
       name="T_runoff_radius"
       tool_tip="Metres from the camera within which roof edges shed drips">
         Shed within:
@@ -242,56 +217,6 @@
       name="D_runoff_radius" label="D"
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoRunoffRadius" />
-    </button>
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="6" height="16" width="106"
-      name="T_runoff_res"
-      tool_tip="Drainage samples across a region; 256 over a 256m region is 1m cells">
-        Network detail:
-    </text>
-    <slider_bar
-      control_name="SSAtmoRunoffRes" name="SB_runoff_res"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="64" max_val="512" increment="32" decimal_digits="0"
-      tool_tip="Drainage samples across a region; 256 over a 256m region is 1m cells" />
-    <spinner
-      control_name="SSAtmoRunoffRes" name="S_runoff_res"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="64" max_val="512" increment="32" decimal_digits="0"
-      tool_tip="Drainage samples across a region; 256 over a 256m region is 1m cells" />
-    <button
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="20" width="24"
-      name="D_runoff_res" label="D"
-      tool_tip="Reset to the default value">
-        <button.commit_callback function="ResetControl" parameter="SSAtmoRunoffRes" />
-    </button>
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="6" height="16" width="106"
-      name="T_runoff_edge"
-      tool_tip="How steep a step has to be to count as a roof edge rather than a steep roof">
-        Edge slope:
-    </text>
-    <slider_bar
-      control_name="SSAtmoRunoffEdge" name="SB_runoff_edge"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0.75" max_val="8" increment="0.25" decimal_digits="2"
-      tool_tip="How steep a step has to be to count as a roof edge rather than a steep roof" />
-    <spinner
-      control_name="SSAtmoRunoffEdge" name="S_runoff_edge"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0.75" max_val="8" increment="0.25" decimal_digits="2"
-      tool_tip="How steep a step has to be to count as a roof edge rather than a steep roof" />
-    <button
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="20" width="24"
-      name="D_runoff_edge" label="D"
-      tool_tip="Reset to the default value">
-        <button.commit_callback function="ResetControl" parameter="SSAtmoRunoffEdge" />
     </button>
     <text
      follows="left|top"

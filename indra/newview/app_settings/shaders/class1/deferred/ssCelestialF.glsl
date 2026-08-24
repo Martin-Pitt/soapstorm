@@ -40,12 +40,8 @@ uniform vec3 ss_quad_up;         // quad's +v axis, world space
 uniform float ss_sunlight;       // 0 eclipsed, 1 in open sunlight
 uniform float ss_emissive;       // 1 the body makes its own light
 uniform float ss_phase_shaded;   // 1 shade it as a sphere
-
-// The sky's own haze colour. These discs carry GBUFFER_FLAG_SKIP_ATMOS -
-// the deferred atmospheric pass skips them entirely, the way the stock sun
-// and moon do - so everything the atmosphere would have done to them has to
-// happen here, from this one colour and the body's own elevation.
-uniform vec3 ss_airlight;
+uniform float ss_daylight;       // 0 the observer is in night, 1 in full day
+uniform vec2 ss_face_rot;        // (cos, sin) of the body's roll on its quad
 
 in vec2 vary_texcoord0;
 
@@ -55,9 +51,31 @@ in vec2 vary_texcoord0;
 // plain textured sun looked like against EEP's scattering.
 const float SS_EMISSIVE_GAIN = 4.0;
 
-// How lit the unlit side is left. Not zero - a new moon is not a hole in
-// the sky, it is a disc lit by the light its own planet throws back at it.
+// How lit the unlit side is left, at its very best: a new moon, at night.
+// Not zero - a new moon is not a hole in the sky, it is a disc lit by the
+// light its own planet throws back at it.
+//
+// Generous at 0.06. Real earthshine is a fraction of a percent of the
+// sunlit side, and rendering it at that would be rendering nothing: it is
+// visible to us at all only because an eye adapted to a dark sky has
+// enormous range, and none of that survives being written into a frame
+// buffer. So the value is what it takes to read as a faintly lit disc
+// rather than a bite out of the sky.
+//
+// Which is exactly why it cannot be left standing in every other case.
+// Held at 0.06 through the day it becomes a real error: the unlit part of a
+// daytime moon is not dim, it is GONE - the sky is thousands of times
+// brighter than earthshine, so a photograph shows a lit crescent with
+// nothing beside it, its dark side indistinguishable from the blue around
+// it. Adding the disc to the sky gets most of the way there on its own;
+// the gates below close the rest, because the exaggeration that makes the
+// night case readable is the one thing standing in the way of the day case.
 const float SS_EARTHSHINE = 0.06;
+
+// The phase this side of which earthshine is not worth drawing, as a
+// fraction of the PLANET's lit face seen from the body. Half - so a half
+// moon shows none of it, and only crescents do.
+const float SS_EARTHSHINE_ONSET = 0.5;
 
 // How much brighter a reflecting body is drawn than its own art.
 //
@@ -68,34 +86,36 @@ const float SS_EARTHSHINE = 0.06;
 // rebuilding from rock.
 const float SS_LUNAR_GAIN = 1.5;
 
-// How much a reflecting body's extinction is treated as hue rather than
-// dimming, 0 fully physical and 1 hue-only.
-//
-// A dark-adapted eye does not see a horizon moon as three magnitudes down;
-// it sees a big warm disc. Taking extinction literally - which is right for
-// a daylight object, and is what the sun's own path deliberately avoids -
-// left the moon dimmer than the sky it was sitting in front of. This keeps
-// most of its brightness while still shifting it warm and letting the haze
-// wash over it.
-const float SS_LUNAR_ADAPT = 0.6;
-
 // Terminator softness, in cosine either side of the boundary. A hard N.L cut
 // on a disc a few dozen pixels across reads as a bite taken out of it; real
 // ones are softened by the star's angular size anyway.
 const float SS_TERMINATOR_SOFT = 0.15;
 
-// Aerial perspective, the standard form:
+// Aerial perspective, done by ADDING the disc to the sky rather than by
+// mixing the two:
 //
-//     seen = own * T + airlight * (1 - T)
+//     seen = own * T + airlight,   drawn as  dst + src * T
 //
-// What the atmosphere takes out of a body's light it PUTS BACK as its own
-// glow. That is the whole reason a rising moon is pale salmon and washed
-// out rather than dark red: extinction has removed most of its own light,
-// and what fills the disc instead is the dusk sky in front of it.
+// The whole atmosphere is in front of a celestial body - there is no air
+// behind the moon - so the airlight over its disc is the entire column,
+// which is precisely the sky already drawn there. Adding to it is therefore
+// not an approximation of the physics, it IS the physics, and it costs a
+// blend mode instead of a second copy of the haze model.
 //
-// Modelling those two halves separately - dim the disc, then add a little
-// haze on top - is what made a horizon moon come out DARKER than the sky
-// behind it, which is the one thing it never is.
+// It also fixes the thing every previous attempt here got wrong. A disc
+// composited as `own * T + haze * (1 - T)` replaces the sky it covers, so
+// its dark parts are dark: the maria came out as grey patches sitting in
+// front of a bright sky, and the whole moon read as a sticker. Added, the
+// dark parts contribute nothing and the sky simply shows at full strength -
+// which is why a daytime half-moon's unlit half is not a dark half, it is
+// no half at all, indistinguishable from the sky around it. Nothing in the
+// sky can ever be darker than the sky, and additive is what makes that
+// true by construction instead of by tuning.
+//
+// The pass sets BT_ADD_WITH_ALPHA for this - see renderHeavenlyBodies. The
+// attachments this shader does not contribute to are written as zero so the
+// same add leaves them exactly as the sky dome left them, which is how the
+// G-buffer flags survive being blended.
 
 // Per-channel extinction through one airmass. Blue scatters out hardest,
 // which is why a low body is orange and a high one keeps its own colour.
@@ -112,11 +132,43 @@ float ss_airmass(float sin_alt)
 
 void main()
 {
-    vec4 c = texture(diffuseMap, vary_texcoord0.xy);
+    // The art, turned by the body's roll on the quad - see ss_face_rot in
+    // lldrawpoolwlsky.cpp. About the disc's centre, so the disc itself is
+    // unmoved (a circle rotated about its middle is the same circle) and
+    // only the features on it turn.
+    //
+    // The SURFACE only. Everything geometric below - the sphere normal, and
+    // so the terminator - keeps using the raw texcoord, because that is the
+    // quad's actual shape in the world and rolling the art does not change
+    // where the quad is. Rotating both would turn the terminator with the
+    // maria and leave the lit side no longer facing the sun.
+    vec2 uv = vary_texcoord0.xy - 0.5;
+    uv = vec2(uv.x * ss_face_rot.x - uv.y * ss_face_rot.y,
+              uv.x * ss_face_rot.y + uv.y * ss_face_rot.x) + 0.5;
+
+    // A rotated corner samples outside the art. Those corners are the
+    // quad's transparent margin either way, and dropping them is cheaper
+    // and surer than depending on how the sampler was left clamped.
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0))))
+    {
+        discard;
+    }
+
+    vec4 c = texture(diffuseMap, uv);
 
     // The stock moon art carries transparent pixels at <0x55,0x55,0x55,0x00>;
     // dropping them rather than blending keeps the quad's corners from
     // hazing over whatever is behind them.
+    //
+    // This threshold is also what decides which pixels OCCLUDE, and it has
+    // to stay tied to the art's alpha rather than to how bright the result
+    // comes out. The pass writes depth (see renderHeavenlyBodies) and the
+    // stars are drawn after it, so a disc hides the stars behind it by
+    // failing their depth test - nothing to do with the colour blend. A new
+    // moon's dark limb adds no light at all yet is still a solid body: it
+    // has full alpha here, so it still writes depth, and the stars behind it
+    // still go out. Discarding on luminance instead would make the night
+    // sky show straight through the moon.
     if (c.a <= 2.0 / 255.0)
     {
         discard;
@@ -166,7 +218,34 @@ void main()
 
             float lit = smoothstep(-SS_TERMINATOR_SOFT, SS_TERMINATOR_SOFT,
                                    dot(n, ss_sun_dir));
-            c.rgb *= mix(SS_EARTHSHINE, 1.0, lit);
+
+            // Earthshine, gated by the two things that actually govern it.
+            //
+            // A dark sky, first - see SS_EARTHSHINE.
+            //
+            // Then the body's own phase, because earthshine is the light of
+            // a PLANET, and that planet has a phase too - exactly the
+            // complement of this one. Seen from a full moon the Earth is
+            // new and lights nothing; seen from a new moon it is full and
+            // throws back enough to fill the whole unlit face. That is why
+            // the old moon in the new moon's arms is a thin crescent's
+            // companion and never a half's.
+            //
+            // dot(sun_dir, body_dir) carries the geometry directly: +1 when
+            // the star is behind the body (this body new, its planet full),
+            // -1 when the star is behind the observer (this body full, its
+            // planet new).
+            //
+            // Taken through a threshold rather than straight, though. The
+            // planet's lit fraction is linear in that dot, but what can be
+            // SEEN of the light it sends back is not: the wider this body's
+            // own crescent grows, the more its glare drowns the ash-grey
+            // beside it, in an eye and in a lens alike. Half is where that
+            // has already won.
+            float planet_phase = (1.0 + dot(ss_sun_dir, ss_body_dir)) * 0.5;
+            float earthshine = SS_EARTHSHINE * (1.0 - ss_daylight)
+                             * smoothstep(SS_EARTHSHINE_ONSET, 1.0, planet_phase);
+            c.rgb *= mix(earthshine, 1.0, lit);
         }
 
         // ...and dimmed by whatever its planet's shadow leaves of the light
@@ -179,46 +258,40 @@ void main()
         c.rgb *= SS_LUNAR_GAIN;
     }
 
-    // The atmosphere - but the two kinds of body see it differently, and
-    // the difference is saturation rather than physics.
+    // Extinction, for reflecting bodies only, and taken literally now.
     //
-    // A setting SUN is still far too bright to look at: its light is
-    // reddened on the way in like everything else, but the disc is so far
-    // past what an eye or a sensor can hold that the core clips to white
-    // regardless, and only the dimmer limb shows the colour. Photographs of
-    // sunsets show exactly that - a white-hot disc with an orange rim, in a
-    // sky that carries all the colour.
+    // Literally, because the failure it used to cause cannot happen any
+    // more. Full extinction once made a horizon moon come out darker than
+    // the sky in front of it - impossible, and the reason a fudge factor
+    // sat here pulling most of the dimming back out. Adding the disc to the
+    // sky makes that structural: however hard the air dims a moon, the
+    // worst it can reach is contributing nothing, and a moon that
+    // contributes nothing is a moon that has become the sky. Which is what
+    // a moon lost in daylight haze actually does.
     //
-    // So an emissive body keeps its full brightness and takes only the HUE
-    // of the transmittance (normalised on its strongest channel), and gets
-    // no airlight added: nothing the air glows with competes with a star.
-    // A reflecting body takes the transmittance as it is and has the air's
-    // glow fill in what was removed, which is what makes a rising moon pale
-    // salmon rather than dark red.
-    // Reflecting bodies only. What the air takes out of a moon's light it
-    // puts back as its own glow, which is what makes a rising one pale
-    // salmon rather than dark red - see the note above on why a star is
-    // left alone.
+    // A star skips this for its own reasons - see the emissive branch.
     if (ss_emissive <= 0.5)
     {
-        // Eye adaptation first - see SS_LUNAR_ADAPT. Normalising toward the
-        // strongest channel keeps the warm cast while giving back most of
-        // the brightness a literal extinction would have taken.
-        float peak = max(max(transmittance.r, transmittance.g), transmittance.b);
-        vec3 t = mix(transmittance, transmittance / max(peak, 1.0e-4), SS_LUNAR_ADAPT);
-
-        c.rgb = c.rgb * t + ss_airlight * (1.0 - t);
+        c.rgb *= transmittance;
     }
 
+    // Zero, not the flag: this pass ADDS, so anything written here would be
+    // added to what the sky dome already put in the G-buffer. The sky has
+    // written SKIP_ATMOS across every pixel a disc can land on - the discs
+    // are drawn after the haze dome and only ever over it - so contributing
+    // nothing leaves exactly the right flag in place, where contributing
+    // the flag itself would double it.
     frag_data[0] = vec4(0);
     frag_data[1] = vec4(0);
-    frag_data[2] = vec4(0, 0, 0, GBUFFER_FLAG_SKIP_ATMOS);
+    frag_data[2] = vec4(0);
 
 #if defined(HAS_EMISSIVE)
     frag_data[3] = c;
 #else
     frag_data[0] = c;
 #endif
+    // c.a stays as the art's own: the blend multiplies the contribution by
+    // it, so a soft disc edge fades into the sky instead of ending on one.
 }
 
 // </SS:Nexii>

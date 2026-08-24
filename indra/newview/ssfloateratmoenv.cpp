@@ -158,18 +158,11 @@ bool SSFloaterAtmoEnv::postBuild()
         }
     }
 
-    {
-        LLUICtrl* match_button = findChild<LLUICtrl>("match_button_atmosphere");
-        if (match_button)
-        {
-            match_button->setCommitCallback(
-                [this](LLUICtrl*, const LLSD&)
-                { LLFloaterReg::showInstance("ss_atmo_match", LLSD(mSelectedTrackIndex)); });
-        }
-    }
-
     getChild<LLUICtrl>("preview_time_slider")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitPreviewTime(); });
+
+    getChild<LLUICtrl>("preview_play_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickPreviewPlay(); });
 
     // Track tab - see the header comment above refreshTrackTab().
     getChild<LLUICtrl>("track_name_editor")->setCommitCallback(
@@ -293,7 +286,7 @@ bool SSFloaterAtmoEnv::postBuild()
         { "atmo_moisture_level",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyMoistureLevel; },   false },
         { "atmo_droplet_radius",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyDropletRadius; },   false },
         { "atmo_ice_level",       [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyIceLevel; },        false },
-        { "atmo_density_mult",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mDensityMultiplier; },  false },
+        { "atmo_density_mult",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mDensityMultiplier; },  false, 0.001f },
         { "atmo_distance_mult",   [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mDistanceMultiplier; }, false },
         { "atmo_max_altitude",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mMaxAltitude; },        true },
         { "atmo_probe_ambiance",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mReflectionProbeAmbiance; }, false },
@@ -455,6 +448,8 @@ void SSFloaterAtmoEnv::reshape(S32 width, S32 height, bool called_from_parent)
 
 void SSFloaterAtmoEnv::draw()
 {
+    advancePreviewPlayback();
+
     const F64 now = LLTimer::getElapsedSeconds();
     if (now - mLastPoll > STATUS_POLL_INTERVAL)
     {
@@ -679,7 +674,8 @@ void SSFloaterAtmoEnv::refreshVisibility()
     const char* editing_widgets[] = {
         "name_editor", "save_button", "revert_button", "unload_button",
         "track_panel", "atmo_tabs",
-        "preview_time_caption", "preview_time_slider", "preview_time_value_text",
+        "preview_time_caption", "preview_play_button", "preview_time_slider",
+        "preview_time_value_text",
         "forecast_text"
     };
     for (const char* name : editing_widgets)
@@ -1815,7 +1811,10 @@ void SSFloaterAtmoEnv::commitStringRow(const KeyRow<std::string>& row)
 void SSFloaterAtmoEnv::refreshFloatRow(const FloatRow& row, F64 phase)
 {
     const SSAtmoEnvKeyframed<F32>& field = row.mField();
-    const F32 value = field.valueAt(phase);
+
+    // Into the control's own units - see FloatRow::mScale.
+    const F32 inv = (row.mScale > 0.f) ? (1.f / row.mScale) : 1.f;
+    const F32 value = field.valueAt(phase) * inv;
 
     getChild<LLUICtrl>(row.mPrefix + "_slider")->setValue(value);
 
@@ -1834,12 +1833,12 @@ void SSFloaterAtmoEnv::refreshFloatRow(const FloatRow& row, F64 phase)
 void SSFloaterAtmoEnv::commitFloatRowSpinner(const FloatRow& row)
 {
     row.mField().setValueAtHead(mPreviewPhase,
-        (F32)getChild<LLUICtrl>(row.mPrefix + "_value_spinner")->getValue().asReal());
+        (F32)getChild<LLUICtrl>(row.mPrefix + "_value_spinner")->getValue().asReal() * row.mScale);
 }
 
 void SSFloaterAtmoEnv::commitFloatRow(const FloatRow& row)
 {
-    const F32 value = (F32)getChild<LLUICtrl>(row.mPrefix + "_slider")->getValue().asReal();
+    const F32 value = (F32)getChild<LLUICtrl>(row.mPrefix + "_slider")->getValue().asReal() * row.mScale;
 
     // This one call is the entire editing rule from the design doc: no
     // keyframes yet, this just becomes the plain value; head on an existing
@@ -2048,9 +2047,11 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
         // Formatted exactly as this row's own readout is, so a ghost and
         // the live value can be compared without mentally converting
         // between two notations.
+        const F32 ghost_inv = (row.mScale > 0.f) ? (1.f / row.mScale) : 1.f;
         buildGhosts<F32>(row.mField().keyframes(),
-            [&row](const F32& v) {
-                return row.mIntegerDisplay ? llformat("%.0f", v) : llformat("%.2f", v);
+            [&row, ghost_inv](const F32& v) {
+                const F32 shown = v * ghost_inv;
+                return row.mIntegerDisplay ? llformat("%.0f", shown) : llformat("%.2f", shown);
             }, out);
         found = true;
         if (!overview) return true;
@@ -2329,8 +2330,61 @@ void SSFloaterAtmoEnv::drawSliderValueGhosts()
     }
 }
 
+void SSFloaterAtmoEnv::onClickPreviewPlay()
+{
+    mPreviewPlaying = !mPreviewPlaying;
+    mPreviewPlayLast = LLTimer::getElapsedSeconds();
+
+    LLButton* button = getChild<LLButton>("preview_play_button");
+    button->setImageOverlay(mPreviewPlaying ? "Pause_Off" : "Play_Off");
+    button->setToolTip(std::string(mPreviewPlaying
+        ? "Stop the preview where it is"
+        : "Run the preview through the cycle"));
+}
+
+void SSFloaterAtmoEnv::advancePreviewPlayback()
+{
+    if (!mPreviewPlaying) return;
+
+    // Unloading the asset takes the scrubber with it, so the head has
+    // nothing left to run along.
+    if (!SSAtmoEnvManager::getInstance()->hasAsset())
+    {
+        onClickPreviewPlay();
+        return;
+    }
+
+    // One lap a minute, matching Edit Day Cycle. Deliberately not the
+    // track's authored day length: that is hours, and the point of the
+    // button is to see the whole cycle rather than to sit through it.
+    static const F64 PLAY_LAP_SECONDS = 60.0;
+
+    const F64 now = LLTimer::getElapsedSeconds();
+    const F64 elapsed = now - mPreviewPlayLast;
+    mPreviewPlayLast = now;
+
+    // A pause - the floater unfocused, a texture load stalling the frame -
+    // would otherwise jump the head across a chunk of the cycle it never
+    // showed. Better to lose the time than to skip the sky.
+    if (elapsed <= 0.0 || elapsed > 1.0) return;
+
+    mPreviewPhase += elapsed / PLAY_LAP_SECONDS;
+    while (mPreviewPhase >= 1.0) mPreviewPhase -= 1.0;
+
+    // Straight to refreshPreview rather than through the slider: this is
+    // the same head move the scrubber makes, and routing it through the
+    // control would fight the poll below that writes the control FROM the
+    // phase.
+    refreshPreview();
+}
+
 void SSFloaterAtmoEnv::onCommitPreviewTime()
 {
+    // Dragging the scrubber takes over - a head that carried on running
+    // out from under the drag would be unusable.
+    if (mPreviewPlaying) onClickPreviewPlay();
+
+
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
 

@@ -25654,50 +25654,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <string>Rain</string>
     </map>
-    <key>SSAtmoPrecipitation</key>
-      <map>
-      <key>Comment</key>
-      <string>Precipitation strength: 0 none, over drizzle, up to a full storm at 1</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>0.5</real>
-    </map>
-    <key>SSAtmoTurbulence</key>
-      <map>
-      <key>Comment</key>
-      <string>Gustiness of precipitation arrival: 0 steady fall, 1 pronounced waves and bursts</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>0.3</real>
-    </map>
-    <key>SSAtmoWindDirection</key>
-      <map>
-      <key>Comment</key>
-      <string>Compass direction the wind blows toward, in degrees; tilts the fall direction</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>225.0</real>
-    </map>
-    <key>SSAtmoWindSpeed</key>
-      <map>
-      <key>Comment</key>
-      <string>Wind speed in m/s; tilts fast precipitation slightly and drifts slow types hard</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>4.0</real>
-    </map>
     <key>SSAtmoRespawnOnImpact</key>
       <map>
       <key>Comment</key>
@@ -25764,17 +25720,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>1.0</real>
     </map>
-    <key>SSAtmoRunoffMerge</key>
-      <map>
-      <key>Comment</key>
-      <string>Raindrops of catchment one visible drip stands in for; higher is fewer, fatter drips</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>12.0</real>
-    </map>
     <key>SSAtmoRunoffRadius</key>
       <map>
       <key>Comment</key>
@@ -25786,12 +25731,23 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>48.0</real>
     </map>
+    <key>SSAtmoCommitDebugPaint</key>
+      <map>
+      <key>Comment</key>
+      <string>Diagnostic: above zero, the surface commit pass paints diffuse magenta over everything it touches, so a failure there shows up whether or not the wetness pass upstream wrote anything sensible</string>
+      <key>Persist</key>
+      <integer>0</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.0</real>
+    </map>
     <key>SSAtmoWetDebugForce</key>
       <map>
       <key>Comment</key>
       <string>Diagnostic: above zero, soaks every surface this much regardless of the weather or shelter</string>
       <key>Persist</key>
-      <integer>1</integer>
+      <integer>0</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
@@ -26029,17 +25985,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <real>0.25</real>
     </map>
     <key>SSAtmoPlanetaryDebugOverlay</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: draw a ray and a label toward every celestial body in the sky, for checking where the System Designer is actually putting them</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>Boolean</string>
-    <key>Value</key>
-    <integer>0</integer>
-  </map>
-  <key>SSAtmoWetStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: draw a ray and a label toward every celestial body in the sky, for checking where the System Designer is actually putting them</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoWetStrength</key>
       <map>
       <key>Comment</key>
       <string>How strongly wet surfaces tighten their specular response; 0 disables the effect</string>
@@ -26053,7 +26009,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWetSpread</key>
       <map>
       <key>Comment</key>
-      <string>How far a gust spreads the fall direction, softening the edge of shelter under an overhang</string>
+      <string>How far the wet field is smeared outward past the edge of a soaked patch, so a puddle fades into dry ground instead of ending at a hard line</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26082,28 +26038,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>64.0</real>
-    </map>
-    <key>SSAtmoRunoffRes</key>
-      <map>
-      <key>Comment</key>
-      <string>Drainage network samples across a region; 256 over a 256m region is 1m cells</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>U32</string>
-      <key>Value</key>
-      <integer>256</integer>
-    </map>
-    <key>SSAtmoRunoffEdge</key>
-      <map>
-      <key>Comment</key>
-      <string>Slope (rise over run) between adjacent samples that counts as a roof edge rather than a steep roof</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>2.0</real>
     </map>
     <key>SSAtmoShadowRes</key>
       <map>

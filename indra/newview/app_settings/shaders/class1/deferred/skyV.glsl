@@ -82,14 +82,29 @@ void main()
     vary_position = pos;
 #endif
 
-    // Adj position vector to clamp altitude
+    // <SS:Nexii> Below the horizon, mirror the ray instead of collapsing it.
+    //
+    // Stock stretches a below-horizon ray to 32000 units, and separately the
+    // sunlight term below clamps its elevation with max(0., rel_pos_norm.y).
+    // Together those make the lower dome black: full extinction over an
+    // enormous path, lit by ambient alone.
+    //
+    // That is invisible as long as land or water covers the lower dome, and
+    // it does not. A flat sea of radius R seen from height h ends atan(h/R)
+    // below eye level, so there is always a wedge between the water's edge
+    // and the true horizon - about two degrees at twenty metres up - with
+    // nothing in it but lower dome. Hence the black band under a sunset,
+    // widening as you climb, papered over only when cloud coverage is high
+    // enough to fill it.
+    //
+    // Mirroring shades a ray a degree below the horizon exactly like one a
+    // degree above, so the haze simply carries on down. Continuous at the
+    // horizon, and truer than black: what is actually down there is the
+    // same air, seen along the same sort of path.
+    rel_pos.y = abs(rel_pos.y);
     if (rel_pos.y > 0.)
     {
         rel_pos *= (max_y / rel_pos.y);
-    }
-    if (rel_pos.y < 0.)
-    {
-        rel_pos *= (-32000. / rel_pos.y);
     }
 
     // Normalized

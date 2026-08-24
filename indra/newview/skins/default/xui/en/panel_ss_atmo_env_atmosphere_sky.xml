@@ -1025,20 +1025,6 @@
      label="" />
 
 
-    <!-- <SS:Nexii> Fit this tab's parameters to a reference photograph -
-         see ssatmomatch.h. Sits beside the Weather Influence button because
-         both are "something else drives these values" doors. -->
-    <button
-     follows="left|bottom"
-     layout="topleft"
-     left="190"
-     top="509"
-     height="21"
-     width="170"
-     name="match_button_atmosphere"
-     tool_tip="Fit the horizon and haze to a photograph by rendering and comparing"
-     label="Match from Photo..." />
-
     <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
          sections grouped by the tab each mapping reaches) - the tuning
          surface for how far this track's weather may bend the values on

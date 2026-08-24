@@ -69,7 +69,8 @@ static LLStaticHashedString sQuadUp("ss_quad_up");
 static LLStaticHashedString sSunlight("ss_sunlight");
 static LLStaticHashedString sEmissive("ss_emissive");
 static LLStaticHashedString sPhaseShaded("ss_phase_shaded");
-static LLStaticHashedString sAirlight("ss_airlight");
+static LLStaticHashedString sDaylight("ss_daylight");
+static LLStaticHashedString sFaceRot("ss_face_rot");
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
 // the stock sun and moon ones outright while it owns the sky, so a stock
@@ -109,21 +110,58 @@ static void ss_bind_disc(const LLColor4& tint, const LLVector3& body_dir,
     gSSCelestialProgram.uniform1f(sEmissive, emissive ? 1.f : 0.f);
     gSSCelestialProgram.uniform1f(sPhaseShaded, phase_shaded ? 1.f : 0.f);
 
-    // The haze between the eye and the body.
+    // How far this body's face is turned, relative to the quad it is drawn
+    // on: the parallactic angle.
     //
-    // getHazeColor() is the sky's own scattered-light colour - the thing
-    // the atmospherics pass adds to everything it touches - so it is what
-    // the disc would have been given had it not carried SKIP_ATMOS.
-    // Ambient stood in for it at first and was far too dark: a moon over a
-    // bright dusk sky picked up almost nothing and stayed crisp against it.
-    LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
-    LLColor3 airlight(0.f, 0.f, 0.f);
-    if (sky)
+    // The quad is a billboard whose up axis points at the zenith (see
+    // ss_quad_axes), so without this the art is pinned to the HORIZON - the
+    // maria in the same place on screen at moonrise as at moonset, while
+    // the terminator sweeps across them because that is computed from the
+    // sun's real direction. Half the face fixed to the ground and half to
+    // the sky, which is a worse answer than either alone.
+    //
+    // A tidally locked body does keep one face turned toward its planet, so
+    // the billboard is right about WHICH face. What it cannot know is the
+    // roll: a real moon's north points at the celestial pole, not at the
+    // observer's zenith, and the angle between those two is nothing at
+    // culmination and tens of degrees near rise and set at temperate
+    // latitudes. That rotation is why a crescent sits like a bowl low in
+    // the sky and tips over as it climbs.
+    //
+    // Measured about the view direction, from the quad's own up axis to the
+    // pole-ward one.
+    const LLVector3 pole = SSAtmoEnvApplier::instance().observerPole();
+    LLVector3 pole_tangent = pole - body_dir * (pole * body_dir);
+    F32 cos_q = 1.f;
+    F32 sin_q = 0.f;
+    if (pole_tangent.normalize() > 0.001f)
     {
-        const LLColor4 haze = sky->getHazeColor();
-        airlight.setVec(haze.mV[0], haze.mV[1], haze.mV[2]);
+        cos_q = pole_tangent * up;
+        sin_q = (up % pole_tangent) * body_dir;
     }
-    gSSCelestialProgram.uniform3fv(sAirlight, 1, airlight.mV);
+    gSSCelestialProgram.uniform2f(sFaceRot, cos_q, sin_q);
+
+    // How much daylight the OBSERVER is standing in - nothing to do with
+    // this body, which is why it is the sun's own elevation rather than
+    // anything in the arguments. The shader uses it to fade earthshine out;
+    // see SS_EARTHSHINE.
+    //
+    // From the sky's sun rather than the applier's resolved slot so that it
+    // matches the sky actually being drawn even mid-transition, when the two
+    // can briefly disagree.
+    LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
+    const F32 sun_alt = sky ? sky->getSunDirection().mV[VZ] : 0.f;
+
+    // Across the same band twilight happens in: full night by about six
+    // degrees below the horizon, full day by about nine above.
+    const F32 daylight = llclamp((sun_alt + 0.1f) / 0.25f, 0.f, 1.f);
+    gSSCelestialProgram.uniform1f(sDaylight, daylight * daylight * (3.f - 2.f * daylight));
+
+    // No airlight uniform any more. Estimating the haze over a disc from a
+    // single sky-wide colour was always going to be wrong somewhere - it
+    // was far too dark against a bright daytime sky, leaving the moon
+    // crisp and pasted-on - and there is no need to estimate it at all now
+    // that the disc is added to the sky the dome has already drawn.
 }
 
 
@@ -467,6 +505,19 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
 
     LLGLSPipelineBlendSkyBox gls_skybox(true, true); // SL-14113 we need moon to write to depth to clip stars behind
 
+    // <SS:Nexii> Atmo Magic's discs are ADDED to the sky rather than
+    // composited over it - the whole atmosphere is in front of a celestial
+    // body, so the sky already drawn at those pixels is exactly the airlight
+    // over the disc. See the note in ssCelestialF.glsl.
+    //
+    // Only when Atmo Magic owns the sky: the stock discs are built to be
+    // composited and would come out as bright smears added to it.
+    const bool ss_additive_discs = ss_atmo_discs_active();
+    if (ss_additive_discs)
+    {
+        gGL.setSceneBlendType(LLRender::BT_ADD_WITH_ALPHA);
+    }
+
     LLVector3 const & origin = LLViewerCamera::getInstance()->getOrigin();
 
     // <SS:Nexii> Celestial quads onto a true camera-centred shell.
@@ -799,85 +850,13 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
     }
     // </SS:Nexii>
 
-    gGL.popMatrix();
-}
-
-// <SS:Nexii> See the header.
-bool LLDrawPoolWLSky::renderSkyProbe(LLRenderTarget& target, const LLVector3& heading,
-                                     F32 min_elev_deg, F32 max_elev_deg)
-{
-    if (!gPipeline.canUseWindLightShaders() || gSky.mVOSkyp.isNull() || gSky.mVOWLSkyp.isNull())
+    // <SS:Nexii> Back to ordinary compositing for whatever draws next.
+    if (ss_additive_discs)
     {
-        return false;
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
     }
-    if (target.getWidth() == 0 || target.getHeight() == 0) return false;
 
-    // The same two programs the deferred pass uses. Set here rather than
-    // assumed, because a probe can run at a point in the frame where
-    // beginDeferredPass has not.
-    sky_shader = &gDeferredWLSkyProgram;
-    cloud_shader = &gDeferredWLCloudProgram;
-    if (!sky_shader->isComplete()) return false;
-
-    const F32 camHeightLocal = LLEnvironment::instance().getCamHeight();
-    const LLVector3 origin = LLViewerCamera::getInstance()->getOrigin();
-
-    // A synthetic camera: narrow across, tall enough to hold the whole
-    // elevation band, aimed along the heading at the middle of that band.
-    // Everything is centred on the real camera's position so the sky is the
-    // one that would be seen from where the avatar stands.
-    const F32 mid_elev = 0.5f * (min_elev_deg + max_elev_deg) * DEG_TO_RAD;
-    const F32 half_band = 0.5f * (max_elev_deg - min_elev_deg) * DEG_TO_RAD;
-    if (half_band < 0.001f) return false;
-
-    LLVector3 flat = heading;
-    flat.mV[VZ] = 0.f;
-    if (flat.normalize() < 0.001f) flat = LLVector3::x_axis;
-
-    const LLVector3 at = flat * cosf(mid_elev) + LLVector3::z_axis * sinf(mid_elev);
-    LLVector3 left = LLVector3::z_axis % at;
-    if (left.normalize() < 0.001f) left = LLVector3::y_axis;
-    const LLVector3 up = at % left;
-
-    // Save everything this is about to trample. The main render is midway
-    // through a frame and will not survive borrowed state.
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.pushMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.pushMatrix();
-
-    target.bindTarget();
-    target.clear();
-
-    const F32 aspect = (F32)target.getWidth() / (F32)target.getHeight();
-    const F32 near_clip = 0.5f;
-    const F32 far_clip = 100000.f;
-
-    glm::mat4 proj = glm::perspective(half_band * 2.f, aspect, near_clip, far_clip);
-    glm::mat4 view = glm::lookAt(
-        glm::vec3(0.f, 0.f, 0.f),
-        glm::vec3(at.mV[VX], at.mV[VY], at.mV[VZ]),
-        glm::vec3(up.mV[VX], up.mV[VY], up.mV[VZ]));
-
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.loadMatrix(glm::value_ptr(proj));
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.loadMatrix(glm::value_ptr(view));
-
-    // The sky itself, then the clouds on it - the same calls and the same
-    // order the deferred pass makes, so what lands in the strip is what
-    // would land on screen.
-    renderSkyHazeDeferred(origin, camHeightLocal);
-    renderSkyCloudsDeferred(origin, camHeightLocal, cloud_shader);
-
-    target.flush();
-
-    gGL.matrixMode(LLRender::MM_PROJECTION);
     gGL.popMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.popMatrix();
-
-    return true;
 }
 
 void LLDrawPoolWLSky::renderDeferred(S32 pass)

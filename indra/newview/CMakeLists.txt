@@ -194,7 +194,6 @@ set(viewer_SOURCE_FILES
     ssavatarwet.cpp
     ssatmoenvasset.cpp
     ssatmoenvmanager.cpp
-    ssatmomatch.cpp
     ssatmoenvcloudfieldstate.cpp
     ssatmoenvdiscovery.cpp
     ssatmoenvbridge.cpp
@@ -206,7 +205,6 @@ set(viewer_SOURCE_FILES
     ssfloateratmo.cpp
     ssfloateratmoenv.cpp
     ssfloateratmoinfluence.cpp
-    ssfloateratmomatch.cpp
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
     ssfloatersim.cpp
@@ -1096,7 +1094,6 @@ set(viewer_HEADER_FILES
     ssatmoenvasset.h
     ssatmoenvkeyframe.h
     ssatmoenvmanager.h
-    ssatmomatch.h
     ssatmoenvcloudfieldstate.h
     ssatmoenvdiscovery.h
     ssatmoenvbridge.h
@@ -1108,7 +1105,6 @@ set(viewer_HEADER_FILES
     ssfloateratmo.h
     ssfloateratmoenv.h
     ssfloateratmoinfluence.h
-    ssfloateratmomatch.h
     ssfloateratmoplanetary.h
     ssfloaterpreset.h
     ssfloatersim.h

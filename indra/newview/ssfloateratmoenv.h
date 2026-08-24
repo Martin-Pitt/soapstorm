@@ -278,6 +278,21 @@ private:
         // which is what stopped the numbers being right-aligned against
         // a column of their peers.
         bool mIntegerDisplay = false;
+
+        // Stored value per displayed unit, for the fields EEP's own editor
+        // does not show raw - the same idea as KeyRow::mScale, and for the
+        // same reason: the schema keeps LLSettingsSky's units so seeding
+        // from a sky and writing back to one are both the identity, while
+        // the controls read the way the EEP editor's do.
+        //
+        // Only density multiplier needs it today (llpaneleditsky.cpp's
+        // SLIDER_SCALE_DENSITY_MULTIPLIER), and it needs it badly: a
+        // thousandth. Left at 1 the control is not merely differently
+        // labelled, it is unusable - the settings range that does anything
+        // is about 1e-5 to 5e-4, so every sky worth having lives in the
+        // bottom thirtieth of one percent of the slider and one press of
+        // the spinner steps clean over the whole of it.
+        F32 mScale = 1.f;
     };
     std::vector<FloatRow> mFloatRows;
 
@@ -449,6 +464,14 @@ private:
     // different point in the cycle whenever day length changes, which is
     // the bug phase-based keyframes exist to eliminate.
     F64 mPreviewPhase = 0.0;
+
+    // Whether the head is running, and when it was last advanced. Real
+    // elapsed time rather than a per-frame increment, so the lap takes the
+    // same minute however the frame rate is doing.
+    bool mPreviewPlaying = false;
+    F64 mPreviewPlayLast = 0.0;
+    void onClickPreviewPlay();
+    void advancePreviewPlayback();
 
     F64 mLastPoll = 0.0;
 };

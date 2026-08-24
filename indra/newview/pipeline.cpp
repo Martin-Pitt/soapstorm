@@ -107,7 +107,6 @@
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
-#include "ssatmomatch.h" // <SS:Nexii> sky match sample overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
@@ -5675,11 +5674,6 @@ void LLPipeline::renderDebug()
             SSAtmoEnvApplier::getInstance()->renderCelestialDebug();
         }
     }
-
-    // <SS:Nexii> Atmo Magic sky match: where the fit is sampling from, while
-    // it is running. Not behind a debug mask - it is on screen only during
-    // a match, and during one it is the whole point.
-    SSAtmoMatch::getInstance()->renderDebug();
 
     // Atmo Magic surface field: what the weather has worked into that surface
     // over time - damp, settled snow, standing water - washed over the cells
