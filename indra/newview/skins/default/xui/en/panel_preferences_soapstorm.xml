@@ -38,6 +38,14 @@
      help_topic="preferences_soapstorm_tab"
      name="soapstorm_login" />
 
+    <panel
+     class="panel_preference"
+     filename="panel_preferences_soapstorm_sounds.xml"
+     label="Sounds"
+     layout="topleft"
+     help_topic="preferences_soapstorm_tab"
+     name="soapstorm_sounds" />
+
 </tab_container>
 
 </panel>

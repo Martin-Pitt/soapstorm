@@ -2432,6 +2432,22 @@ Audio file is too long ([MAX_LENGTH] second maximum):
   <tag>fail</tag>
   </notification>
 
+  <!-- <SS:Nexii> long sound upload split confirmation -->
+  <notification
+   icon="alertmodal.tga"
+   name="SoundFileSplitUpload"
+   type="alertmodal">
+Audio file is longer than the [MAX_LENGTH] second limit:
+[FILE]
+
+Split it into [COUNT] numbered parts and upload for L$[COST]?
+  <tag>confirm</tag>
+    <usetemplate
+     name="okcancelbuttons"
+     notext="Cancel"
+     yestext="Upload Parts"/>
+  </notification>
+
   <notification
    icon="alertmodal.tga"
    name="ProblemWithFile"
