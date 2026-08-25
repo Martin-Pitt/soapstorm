@@ -440,7 +440,7 @@ void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 mast
 
     source->setGain(gain);
     source->setPositionGlobal(gAgent.getPosGlobalFromAgent(
-        LLViewerCamera::getInstance()->getOrigin()));
+        LLViewerCamera::getInstance()->getOrigin() + loop.mOffset));
 }
 
 void SSSoundscape::updateLoops(F64 now, F32 dt)
@@ -556,6 +556,18 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
         gSavedSettings.getString("SSAtmoLoopWindStrong"),
     };
 
+    // The wind loops sit upwind of the head - see Loop::mOffset. Local
+    // flow, not the global vector: standing in an alley the wind you hear
+    // should come down the alley, which is exactly what the flowmap knows.
+    {
+        LLVector3 local = flow->isValid() ? flow->sample(cam_pos)
+                                          : atmo->windXY();
+        const F32 speed = local.normalize();
+        const LLVector3 upwind = (speed > 0.4f) ? local * -6.f : LLVector3::zero;
+        mLoops[LOOP_WIND_LIGHT].mOffset = upwind;
+        mLoops[LOOP_WIND_STRONG].mOffset = upwind;
+    }
+
     for (S32 i = 0; i < LOOP_COUNT; ++i)
     {
         mLoops[i].mTarget = llclamp(targets[i], 0.f, 1.f);
@@ -564,13 +576,250 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 }
 
 //-----------------------------------------------------------------------------
+// Thunder
+//-----------------------------------------------------------------------------
+namespace
+{
+    // Speed of sound in the air the environment authored. Temperature moves
+    // it by about 0.6 m/s per degree - across the -30C blizzard to +40C
+    // desert an authorable sky spans, that is a tenth of the figure, which
+    // over ten kilometres of thunder delay is a couple of counted seconds.
+    F32 speed_of_sound_ms()
+    {
+        return 331.3f + 0.606f * SSAtmoMagic::getInstance()->temperatureC();
+    }
+
+    // Beyond this a clap is all rumble, below it all crack. Not a hard
+    // switch: the two packs cross-fade across the range, because a strike at
+    // the boundary is genuinely both.
+    const F32 THUNDER_CRACK_M = 1500.f;
+    const F32 THUNDER_RUMBLE_M = 6000.f;
+
+    // Pick one at random from a comma separated setting.
+    LLUUID pick_from_setting(const std::string& setting, SSRandStream& rng)
+    {
+        const std::string csv = gSavedSettings.getString(setting);
+        if (csv.empty()) return LLUUID::null;
+
+        std::vector<std::string> tokens;
+        LLStringUtil::getTokens(csv, tokens, ",");
+
+        std::vector<LLUUID> ids;
+        for (const std::string& tok : tokens)
+        {
+            LLUUID id(tok);
+            if (id.notNull()) ids.push_back(id);
+        }
+        if (ids.empty()) return LLUUID::null;
+        return ids[rng.rand((S32)ids.size())];
+    }
+
+    // Where the bang is inside a recording, in milliseconds.
+    //
+    // A thunder sample almost never starts at its own event: there is
+    // leading air, a fade in, a breath of the field recording before
+    // anything happens. Playing at the moment the physics says the sound
+    // arrives therefore lands the actual clap however long that preamble
+    // happens to be too late - and since it differs per asset, the error is
+    // not even consistent enough to dial out by hand.
+    //
+    // The engine analyses the decoded PCM once and remembers the answer, so
+    // this is a lookup after the first call. It needs the buffer to exist,
+    // which is why the pack is preloaded when a strike is scheduled rather
+    // than when it is heard: for a near strike the delay is close to zero,
+    // and that is exactly when the timing matters most.
+    U32 sound_onset_ms(const LLUUID& id)
+    {
+        if (id.isNull() || !gAudiop) return 0;
+
+        LLAudioData* data = gAudiop->getAudioData(id);
+        if (!data || !data->hasDecodedData()) return 0;
+
+        LLAudioBuffer* buffer = data->getBuffer();
+        if (!buffer)
+        {
+            gAudiop->updateBufferForData(data, id);
+            buffer = data->getBuffer();
+        }
+        return buffer ? buffer->getOnsetMS() : 0;
+    }
+}
+
+void SSSoundscape::playCharge(const LLVector3& pos_agent, F32 intensity)
+{
+    static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
+    if (!sounds || !gAudiop) return;
+
+    SSRandStream rng((U32)(SSAtmoMagic::getInstance()->sharedTime() * 8171.0));
+    const LLUUID sound = pick_from_setting("SSAtmoLightningCharge", rng);
+    if (sound.isNull()) return;
+
+    gAudiop->triggerSound(sound, gAgentID, llclamp(intensity, 0.f, 1.f),
+                          LLAudioEngine::AUDIO_TYPE_AMBIENT,
+                          gAgent.getPosGlobalFromAgent(pos_agent));
+}
+
+F32 SSSoundscape::windCarryGain(const LLVector3& source_pos_agent) const
+{
+    const LLVector3 listener = LLViewerCamera::getInstance()->getOrigin();
+    LLVector3 to_listener = listener - source_pos_agent;
+    const F32 dist = to_listener.normalize();
+    if (dist < 50.f) return 1.f;    // too close for refraction to matter
+
+    LLVector3 wind = SSAtmoMagic::getInstance()->wind();
+    const F32 speed = wind.normalize();
+    if (speed < 0.5f) return 1.f;
+
+    // +1 with the wind blowing from the source toward the listener.
+    const F32 along = wind * to_listener;
+
+    // Refraction accumulates over kilometres and saturates; a gale bends
+    // harder than a breeze but not without limit. The floor is well above
+    // zero on purpose - upwind thunder is muffled and shortened, not erased,
+    // and erasing it entirely would read as the strike having no sound at
+    // all rather than as the wind eating it.
+    const F32 range = llmin(dist / 3000.f, 1.f);
+    const F32 strength = llmin(speed / 12.f, 1.f);
+    return llclamp(1.f + along * range * strength * 0.8f, 0.25f, 1.6f);
+}
+
+void SSSoundscape::scheduleThunder(const LLVector3& pos_agent, F32 distance_m,
+                                   F32 intensity, F64 fire_at)
+{
+    static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
+    if (!sounds || !gAudiop) return;
+
+    SSRandStream rng((U32)(fire_at * 6151.0) ^ (U32)distance_m);
+
+    // The delay everyone knows: light is instant, sound is not. Roughly
+    // three seconds per kilometre, which is the rule of thumb people count
+    // out loud, arrived at here from the actual speed rather than from the
+    // rule. fire_at is usually in the future - a strike is prepared before
+    // it happens - which is what lets a near clap start its own run-up
+    // before the flash rather than being clipped into.
+    const F64 travel = (F64)(distance_m / speed_of_sound_ms());
+    const F64 heard_at = fire_at + travel;
+
+    // Crack and rumble are LAYERED, not chosen between.
+    //
+    // They are not two versions of one sound, and they are not near and far
+    // variants either - they are two parts of the same event. Thunder is
+    // generated along the whole channel at once, and the channel is
+    // kilometres long, so its near end and its far end reach a listener at
+    // different times. The near end arrives first and sharpest: that is the
+    // crack. Everything behind it keeps arriving for as long as the channel
+    // is deep: that is the rumble. Both are present in every strike.
+    //
+    // What distance changes is the BALANCE, and it changes it in a way no
+    // crossfade between whole sounds could: air absorbs high frequencies at
+    // a rate that rises with the square of the frequency, so by a few
+    // kilometres the crack is simply gone while the low roll behind it
+    // carries on. Near, the crack dominates and the roll is a tail on it.
+    // Far, there is no crack left to hear at all.
+    const F32 crack_gain = 1.f - llclamp(
+        (distance_m - THUNDER_CRACK_M) / (THUNDER_RUMBLE_M - THUNDER_CRACK_M), 0.f, 1.f);
+
+    // Distance attenuation on top of the 3D falloff the audio engine already
+    // applies, since the source is placed at the strike and a strike can be
+    // ten kilometres off - well past anything the engine's rolloff was ever
+    // tuned for.
+    const F32 fade = 1.f / (1.f + (distance_m / 3000.f));
+    const F32 gain = llclamp(intensity * fade * windCarryGain(pos_agent), 0.f, 1.f);
+
+    if (crack_gain > 0.02f)
+    {
+        queueThunder(pick_from_setting("SSAtmoThunderCrack", rng),
+                     pos_agent, distance_m, gain * crack_gain, heard_at);
+    }
+
+    // The roll comes in behind the crack, by however long the channel takes
+    // to finish arriving. A rough stand-in for the channel's own depth:
+    // several kilometres of it, so several seconds, and more of it for a
+    // fiercer strike. This one number is what makes near thunder a crack
+    // with a tail and distant thunder a roll on its own.
+    const F64 spread = (F64)(rng.frand(2000.f, 5000.f) * (0.6f + intensity * 0.7f)
+                             / speed_of_sound_ms());
+
+    queueThunder(pick_from_setting("SSAtmoThunderRumble", rng),
+                 pos_agent, distance_m, gain * (0.5f + 0.5f * (1.f - crack_gain)),
+                 heard_at + spread * (F64)(1.f - crack_gain));
+}
+
+void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
+                                F32 distance_m, F32 gain, F64 heard_at)
+{
+    if (sound.isNull() || gain <= 0.f) return;
+
+    // Fetched the moment it is queued rather than when it plays. Measuring
+    // where the bang sits inside it needs a decoded buffer, and the whole
+    // reason a strike is prepared ahead of time is to give that fetch room.
+    gAudiop->preloadSound(sound);
+
+    PendingThunder pending;
+    pending.mPos = pos_agent;
+    pending.mDistanceM = distance_m;
+    pending.mSound = sound;
+    pending.mGain = gain;
+    pending.mHeardAt = heard_at;
+    pending.mPlayAt = heard_at;      // moved earlier once the onset is known
+
+    mThunder.push_back(pending);
+}
+
+void SSSoundscape::updateThunder(F64 now)
+{
+    for (size_t i = 0; i < mThunder.size(); )
+    {
+        PendingThunder& p = mThunder[i];
+
+        // The onset is resolved as late as possible, because the asset may
+        // still have been fetching when the strike happened. Once known it
+        // moves the start time EARLIER by that much, so the bang itself
+        // lands where the physics put it rather than the file's first
+        // sample landing there.
+        if (!p.mAligned)
+        {
+            // Resolved as late as it can be, because the asset may still
+            // have been fetching when the strike was prepared - and as early
+            // as it must be, because the answer moves the start time
+            // earlier and a start time already passed cannot be honoured.
+            const U32 onset = sound_onset_ms(p.mSound);
+            if (onset > 0)
+            {
+                p.mPlayAt = p.mHeardAt - (F64)onset / 1000.0;
+                p.mAligned = true;
+            }
+            else if (now >= p.mHeardAt - 0.05)
+            {
+                // Out of time to find out. The asset never decoded, or has
+                // no clear onset; play it as it is rather than hold it.
+                p.mAligned = true;
+            }
+        }
+
+        if (now < p.mPlayAt) { ++i; continue; }
+
+        if (gAudiop)
+        {
+            gAudiop->triggerSound(p.mSound, gAgentID, p.mGain,
+                                  LLAudioEngine::AUDIO_TYPE_AMBIENT,
+                                  gAgent.getPosGlobalFromAgent(p.mPos));
+        }
+
+        mThunder.erase(mThunder.begin() + i);
+    }
+}
+
+//-----------------------------------------------------------------------------
 // Footsteps
 //-----------------------------------------------------------------------------
-LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action)
+LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action,
+                                   bool is_self)
 {
-    mStepDebug = StepDebug();
-    mStepDebug.mWhen = SSAtmoMagic::getInstance()->sharedTime();
-    mStepDebug.mAction = action;
+    StepDebug& dbg = is_self ? mStepSelf : mStepOther;
+    dbg = StepDebug();
+    dbg.mWhen = SSAtmoMagic::getInstance()->sharedTime();
+    dbg.mAction = action;
     // Switched on, not running: isEnabled() is false whenever no weather
     // track is active, and dry ground is exactly the surface you walk on
     // when none is. Gating these on it silenced every footstep in fair
@@ -578,7 +827,7 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
     static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
     if (!SSAtmoMagic::getInstance()->isSwitchedOn() || !sounds)
     {
-        mStepDebug.mWhyNot = SSAtmoMagic::getInstance()->isSwitchedOn()
+        dbg.mWhyNot = SSAtmoMagic::getInstance()->isSwitchedOn()
             ? "SSAtmoSounds off" : "Atmo Magic off";
         return LLUUID::null;
     }
@@ -594,7 +843,7 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
     const bool indoors = SSWindFlowMap::getInstance()->surfaceAt(foot_pos_agent, column_top)
         && (column_top - foot_pos_agent.mV[VZ] > 0.75f);
 
-    mStepDebug.mIndoors = indoors;
+    dbg.mIndoors = indoors;
 
     SSStepSurface surface;
     if (indoors)
@@ -607,9 +856,9 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
         const bool puddle = wet.mValid && wet.mPuddle > 0.005f;
         const bool damp = wet.mValid && wet.mWet > 0.3f;
 
-        mStepDebug.mFieldValid = wet.mValid;
-        mStepDebug.mWet = wet.mWet;
-        mStepDebug.mPuddle = wet.mPuddle;
+        dbg.mFieldValid = wet.mValid;
+        dbg.mWet = wet.mWet;
+        dbg.mPuddle = wet.mPuddle;
 
         if (on_land)
         {
@@ -625,18 +874,18 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
     // preset - see SSFootstepSounds::surfaceIsGlobal. Asked here rather than
     // resolved earlier because this is the only place that knows which
     // surface was decided on.
-    mStepDebug.mSurface = surface;
-    mStepDebug.mGlobal = SSFootstepSounds::surfaceIsGlobal(surface);
+    dbg.mSurface = surface;
+    dbg.mGlobal = SSFootstepSounds::surfaceIsGlobal(surface);
 
     std::string csv;
-    if (mStepDebug.mGlobal)
+    if (dbg.mGlobal)
     {
-        mStepDebug.mSource = SSFootstepSounds::globalSettingName(surface, (SSStepAction)action);
-        csv = gSavedSettings.getString(mStepDebug.mSource);
+        dbg.mSource = SSFootstepSounds::globalSettingName(surface, (SSStepAction)action);
+        csv = gSavedSettings.getString(dbg.mSource);
     }
     else
     {
-        mStepDebug.mSource = std::string(SSPrecipPresetManager::instance().active().mName)
+        dbg.mSource = std::string(SSPrecipPresetManager::instance().active().mName)
             + "/" + SSFootstepSounds::surfaceKey(surface)
             + "_" + SSFootstepSounds::actionKey((SSStepAction)action);
         csv = SSPrecipPresetManager::instance().active().mFootsteps.at(surface, (SSStepAction)action);
@@ -644,7 +893,7 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
 
     if (csv.empty())
     {
-        mStepDebug.mWhyNot = "slot empty";
+        dbg.mWhyNot = "slot empty";
         return LLUUID::null;
     }
 
@@ -657,18 +906,18 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
         LLUUID id(tok);
         if (id.notNull()) ids.push_back(id);
     }
-    mStepDebug.mListSize = (S32)ids.size();
+    dbg.mListSize = (S32)ids.size();
     if (ids.empty())
     {
-        mStepDebug.mWhyNot = "no valid UUIDs";
+        dbg.mWhyNot = "no valid UUIDs";
         return LLUUID::null;
     }
 
     // A different drop each step, the way the ambient sequences avoid an
     // audible repeat - but picked at random rather than walked in order,
     // since footsteps fire far too quickly for a long sequence to matter.
-    mStepDebug.mPicked = ids[ll_rand((S32)ids.size())];
-    return mStepDebug.mPicked;
+    dbg.mPicked = ids[ll_rand((S32)ids.size())];
+    return dbg.mPicked;
 }
 
 void SSSoundscape::idle()
@@ -680,6 +929,12 @@ void SSSoundscape::idle()
     F32 dt = (mLastIdle > 0.0) ? (F32)(now - mLastIdle) : 0.f;
     dt = llclamp(dt, 0.f, 0.25f);
     mLastIdle = now;
+
+    // Before the gate below: a clap already on its way must still arrive.
+    // The strike happened - the sky clearing in the eight seconds since does
+    // not un-happen it, and swallowing the sound is a worse artefact than
+    // hearing thunder from a sky that has moved on.
+    updateThunder(now);
 
     static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
     if (!atmo->isEnabled() || !sounds || !gAudiop)

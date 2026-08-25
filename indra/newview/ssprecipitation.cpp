@@ -1284,8 +1284,12 @@ void SSPrecipSim::refreshStream(U32 key, const LLVector3& lip_agent, const LLVec
     F32 fall_time = ssStreamFallTime(length);
 
     // Bent by the wind over its length, as an acceleration so the ribbon
-    // curves into it rather than leaving the lip already sideways
-    const LLVector3 drift = atmo->windXY() * llmax(0.f, preset.mStreamWind);
+    // curves into it rather than leaving the lip already sideways. The
+    // LOCAL wind, from the flowmap, not the global vector: a stream off a
+    // sheltered lee eave should fall near-straight while one on the
+    // windward face is torn sideways, and the flowmap is the thing that
+    // knows which is which.
+    const LLVector3 drift = windAt(lip_agent) * llmax(0.f, preset.mStreamWind);
     const LLVector3 exit_vel = out_dir * llclamp(0.3f + strength * 0.5f, 0.25f, 1.2f)
                              - LLVector3(0.f, 0.f, v0);
 

@@ -626,6 +626,47 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
     static LLCachedControl<F32> pool_depth_max(gSavedSettings, "SSAtmoWetPoolDepthMax", 0.15f);
     const F32 puddle_depth_ceiling = llmin(preset.mPuddleDepth, llmax((F32)pool_depth_max, 0.f));
 
+    // Where puddles are ALLOWED, as a smooth patch mask over the region.
+    //
+    // The pool test above is geometric - "does this cell lie in a dip" - and
+    // over the flat ground most regions are mostly made of, everywhere
+    // passes it at once. That is what made standing water arrive as square
+    // fields of shine butted against the hard channels of the rain shadow,
+    // instead of as the scattered pools the word puddle means. The mask is
+    // value noise over the cell lattice, thresholded softly, so water
+    // stands in patches with dry ground between them and shallow rims where
+    // a patch fades out.
+    //
+    // Seeded from the cell coordinates alone: region-local, so the pattern
+    // holds still across sessions and region crossings, and every viewer
+    // watching the same rain sees the same pools.
+    static LLCachedControl<F32> mask_strength(gSavedSettings, "SSAtmoWetPuddleMask", 0.75f);
+    static LLCachedControl<F32> mask_scale(gSavedSettings, "SSAtmoWetPuddleMaskScale", 7.f);
+    const F32 mask_amt = llclamp((F32)mask_strength, 0.f, 1.f);
+    const F32 mask_wave = llmax((F32)mask_scale, 1.f) / llmax(cell, 0.25f);
+
+    auto latticeHash = [](S32 cx, S32 cy)
+    {
+        U32 h = (U32)cx * 374761393u + (U32)cy * 668265263u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return (F32)((h ^ (h >> 16)) & 0xffffffu) / (F32)0x1000000;
+    };
+    auto puddleMask = [&](S32 cx, S32 cy)
+    {
+        const F32 fx = (F32)cx / mask_wave;
+        const F32 fy = (F32)cy / mask_wave;
+        const S32 ix = (S32)floorf(fx);
+        const S32 iy = (S32)floorf(fy);
+        const F32 tx = fx - (F32)ix;
+        const F32 ty = fy - (F32)iy;
+        const F32 sx = tx * tx * (3.f - 2.f * tx);
+        const F32 sy = ty * ty * (3.f - 2.f * ty);
+        const F32 v = lerp(lerp(latticeHash(ix, iy),     latticeHash(ix + 1, iy),     sx),
+                           lerp(latticeHash(ix, iy + 1), latticeHash(ix + 1, iy + 1), sx), sy);
+        const F32 patch = llclamp((v - 0.42f) / 0.28f, 0.f, 1.f);
+        return lerp(1.f, patch * patch * (3.f - 2.f * patch), mask_amt);
+    };
+
     F32 peak_wet = 0.f, peak_snow = 0.f, peak_puddle = 0.f;
 
     for (S32 y = 0; y < n; ++y)
@@ -742,7 +783,12 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
             // absurdly deep while the cell beside it stayed a film.
             if (pooling && geom.mPool[i])
             {
-                fld.mPuddle[i] = llmin(puddle_depth_ceiling, fld.mPuddle[i] + puddle_gain);
+                // Gain and ceiling both wear the mask: a partially-masked
+                // cell fills slowly AND stays shallow, which is what gives a
+                // pool its thin fading rim instead of a cliff edge.
+                const F32 mask = puddleMask(x, y);
+                fld.mPuddle[i] = llmin(puddle_depth_ceiling * mask,
+                                       fld.mPuddle[i] + puddle_gain * mask);
             }
             else if (fld.mPuddle[i] > 0.f)
             {
@@ -1488,8 +1534,15 @@ void SSSurfaceField::renderWetPass()
         // unit wave_channel happened to hold last, so the strength that
         // blends its result in has to drop to zero along with it rather than
         // trusting the setting alone.
+        // Scaled by the wind, so standing water shivers when a gust crosses
+        // it and lies glassy in a lull. Cheap in the truest sense: the
+        // shader already animates the wave normal, and this only decides how
+        // hard - so a gust becomes visible ON THE GROUND, through a channel
+        // (the gust envelope) that until now only the ears got.
+        const F32 shiver = llclamp(0.3f + SSAtmoMagic::getInstance()->wind().magVec() / 7.f,
+                                   0.3f, 1.6f);
         gSSSurfaceNormalProgram.uniform1f(norm_flow_strength,
-                                          have_wave ? llclamp((F32)flow_strength, 0.f, 1.f) : 0.f);
+                                          have_wave ? llclamp((F32)flow_strength * shiver, 0.f, 1.6f) : 0.f);
         gSSSurfaceNormalProgram.uniform1f(norm_flow_min_wet, llclamp((F32)flow_min_wet, 0.f, 0.99f));
 
         {

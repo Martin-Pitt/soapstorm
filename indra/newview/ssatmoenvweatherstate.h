@@ -121,6 +121,16 @@ struct SSAtmoEnvWeatherState
     F32 mLightningIntervalMaxSeconds = 0.f;
     F32 mLightningIntensity = 0.f;
 
+    // Carried straight through from the track rather than derived - see
+    // SSAtmoEnvWeather. A renderer needs to know whether to run the
+    // optional effects, and the phase says nothing about that.
+    LLColor3 mLightningColor{0.62f, 0.55f, 1.f};
+    F32 mLightningCoreWhite = 0.85f;
+
+    bool mLightningEnabled = true;
+    bool mLightningCharge = false;
+    bool mLightningSparks = false;
+
     // Purely a display convenience - a compact natural-language reading of
     // what the moisture/convection/temperature sliders currently add up to
     // (e.g. "Thundery showers and a gentle breeze"), recomputed fresh every

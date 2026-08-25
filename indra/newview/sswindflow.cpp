@@ -2312,6 +2312,59 @@ bool SSWindFlowMap::surfaceAt(const LLVector3& pos_agent, F32& top) const
     return top > NO_SURFACE * 0.5f;
 }
 
+// <SS:Nexii>
+S32 SSWindFlowMap::forEachColumn(const LLVector3& center_agent, F32 radius_m,
+                                 const std::function<void(const LLVector3&, F32)>& fn) const
+{
+    const Tile* tile = tileAt(center_agent);
+    if (!tile || !tile->mValid || tile->mSurfaceTop.empty()) return 0;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(center_agent);
+    if (!regionp) return 0;
+
+    const LLVector3 origin = regionp->getOriginAgent() + tile->mOriginRegion;
+    const F32 cell = tile->mExtent / (F32)tile->mRes;
+    if (cell <= 0.f) return 0;
+
+    // The square that bounds the circle, clamped to the tile. Walking the
+    // square and rejecting the corners is cheaper than being clever about
+    // circle rasterisation for a grid this small.
+    const S32 span = (S32)(radius_m / cell) + 1;
+    const S32 cx = (S32)((center_agent.mV[VX] - origin.mV[VX]) / cell);
+    const S32 cy = (S32)((center_agent.mV[VY] - origin.mV[VY]) / cell);
+
+    const S32 x0 = llmax(cx - span, 0);
+    const S32 x1 = llmin(cx + span, tile->mRes - 1);
+    const S32 y0 = llmax(cy - span, 0);
+    const S32 y1 = llmin(cy + span, tile->mRes - 1);
+
+    const F32 r2 = radius_m * radius_m;
+
+    S32 visited = 0;
+    for (S32 y = y0; y <= y1; ++y)
+    {
+        for (S32 x = x0; x <= x1; ++x)
+        {
+            const F32 top = tile->mSurfaceTop[(size_t)y * tile->mRes + x];
+            if (top <= NO_SURFACE * 0.5f) continue;    // nothing stood here
+
+            const LLVector3 pos(origin.mV[VX] + ((F32)x + 0.5f) * cell,
+                                origin.mV[VY] + ((F32)y + 0.5f) * cell,
+                                top);
+
+            const F32 dx = pos.mV[VX] - center_agent.mV[VX];
+            const F32 dy = pos.mV[VY] - center_agent.mV[VY];
+            if (dx * dx + dy * dy > r2) continue;
+
+            fn(pos, top);
+            ++visited;
+        }
+    }
+
+    return visited;
+}
+// </SS:Nexii>
+
 F32 SSWindFlowMap::carvedFraction() const
 {
     const Tile* tile = cameraTile();

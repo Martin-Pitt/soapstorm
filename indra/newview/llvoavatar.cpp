@@ -5398,7 +5398,8 @@ void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
 {
     const F32 STEP_VOLUME = 0.1f;
 
-    LLUUID step_sound_id = SSSoundscape::getInstance()->footstepSound(foot_pos_agent, mStepOnLand, action);
+    LLUUID step_sound_id = SSSoundscape::getInstance()->footstepSound(
+        foot_pos_agent, mStepOnLand, action, isSelf());
     if (step_sound_id.isNull())
     {
         step_sound_id = getStepSound();

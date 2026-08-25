@@ -104,7 +104,8 @@
 #include "llviewerjoystick.h"
 #include "llviewerdisplay.h"
 #include "sspreciprenderer.h"
-#include "ssvolcloud.h" // <SS:Nexii> Atmo Magic weather
+#include "ssvolcloud.h"
+#include "sslightningrender.h" // <SS:Nexii> Atmo Magic weather
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
@@ -4523,6 +4524,13 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         // front or not. Here the scene is finished, which is also what lets
         // a puff soften itself against the geometry it meets rather than
         // slicing through it.
+        // Lightning first, deliberately: every puff drawn after it blends
+        // over the channel, so the in-cloud reach of a bolt is veiled into
+        // a glow by exactly as much cloud as stands in front of it, shows
+        // bare through gaps, and is naked below cloud base. The field is
+        // the diffuser; no occlusion is computed anywhere.
+        SSLightningRender::getInstance()->render();
+
         SSVolCloud::getInstance()->render();
 
         // Atmo Magic precipitation: late translucent pass after all pools,

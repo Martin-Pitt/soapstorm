@@ -521,6 +521,23 @@ public:
     // and callers get the honest zero rather than a build break.
     virtual U32 getLengthMS() { return 0; }
 
+    // <SS:Nexii> Where the sound's main event begins, in milliseconds from
+    // the start, or 0 when the backend cannot say or there is no clear one.
+    //
+    // "Begins", not "peaks": what a listener hears as the moment a thunder
+    // clap happened is the ONSET of the bang, not the instant of greatest
+    // energy some way into it. A caller that wants a sound's bang to land at
+    // a particular time starts playback that much earlier.
+    //
+    // Exists because a recording rarely starts at its own event - there is
+    // leading air, a breath of room tone, a fade-in - and none of that is
+    // knowable from the asset UUID. Thunder is the case that needs it: the
+    // flash and the clap are separated by a delay computed from distance,
+    // and an unknown offset inside the file corrupts that delay by however
+    // long the file's own preamble happens to be.
+    virtual U32 getOnsetMS() { return 0; }
+    // </SS:Nexii>
+
     friend class LLAudioEngine;
     friend class LLAudioChannel;
     friend class LLAudioData;

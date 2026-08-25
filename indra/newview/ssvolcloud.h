@@ -34,6 +34,7 @@
 #include "llviewertexture.h"
 #include "v3color.h"
 #include "v3math.h"
+#include "v4math.h"
 
 #include <vector>
 
@@ -52,6 +53,11 @@
 // and worth naming - a raymarch would light correctly from inside and this
 // cannot - but it draws in one pass on any hardware the viewer already
 // runs on, it sits at true world altitudes, and it travels with the wind.
+// As many strikes as can light the deck at once. Past a few they stop
+// being separable anyway, and each one costs every cloud fragment a
+// distance and a dot product.
+static const S32 SS_MAX_STRIKE_LIGHTS = 4;
+
 class SSVolCloud : public LLSingleton<SSVolCloud>
 {
     LLSINGLETON_EMPTY_CTOR(SSVolCloud);
@@ -67,6 +73,14 @@ public:
     void render();
 
     void clear();
+
+    // The band the rendered layer actually occupies, for anything that has
+    // to put something inside it - lightning starts its channels here rather
+    // than at a guessed altitude. Base and top of the last built field;
+    // meaningless while empty() is true.
+    F32 cloudBaseZ() const { return mBaseZ; }
+    F32 cloudTopZ() const { return mBaseZ + mThicknessM; }
+    bool empty() const { return mPuffs.empty(); }
 
     // Simulation floater / info overlay
     S32 puffCount() const { return (S32)mPuffs.size(); }
@@ -134,6 +148,11 @@ private:
     // means flicker. Blitting it out first costs one depth blit and makes
     // the read legal.
     LLRenderTarget mDepthCopy;
+
+    // Strikes lighting the field this frame: xyz agent position, w
+    // brightness. Gathered in update(), bound in render().
+    std::vector<LLVector4> mStrikeLights;
+
     F32 mLastBuildMS = 0.f;
 };
 

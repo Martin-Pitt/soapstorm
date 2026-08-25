@@ -29,6 +29,7 @@
 #include "ssrainshadow.h"
 #include "ssavatarwet.h"
 #include "ssvolcloud.h"
+#include "sslightning.h"
 #include "sssurfacefield.h"
 #include "sswindflow.h"
 
@@ -242,6 +243,18 @@ void SSAtmoMagic::refreshParams()
     // fade can be seen
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
     mSwitchedOn = enabled;
+
+    mTemperatureC = cfg.mTemperatureC;
+
+    mLightningColor = cfg.mLightningColor;
+    mLightningCoreWhite = cfg.mLightningCoreWhite;
+
+    mLightning = cfg.mLightning;
+    mLightningCharge = cfg.mLightningCharge;
+    mLightningSparks = cfg.mLightningSparks;
+    mLightningIntervalMin = cfg.mLightningIntervalMin;
+    mLightningIntervalMax = cfg.mLightningIntervalMax;
+    mLightningIntensity = cfg.mLightningIntensity;
 
     mPrecipitation = llclamp(cfg.mPrecipitation, 0.f, 1.f) * mBlend;
     mTurbulence = llclamp(cfg.mTurbulence, 0.f, 1.f);
@@ -584,6 +597,14 @@ void SSAtmoMagic::idle()
 
     // The volumetric cloud layer, rebuilt from the active track's field
     // state. Drawn by the sky pass; this is only the field behind it.
+    // Strikes: scheduling, the leader/return-stroke phases, and handing each
+    // clap to the soundscape at the moment it fires rather than the moment
+    // it is heard. Before the cloud field's update, which reads the strikes
+    // to light its puffs from inside - after it, the deck's flicker would
+    // run a frame behind the bolt, and at return-stroke timescales a frame
+    // is most of a stroke.
+    SSLightning::getInstance()->idle(gFrameIntervalSeconds);
+
     SSVolCloud::getInstance()->update(gFrameIntervalSeconds);
 
     if (mEnabled)
@@ -1087,44 +1108,65 @@ void SSAtmoMagic::drawInfo()
     }
     lines.push_back(llformat("walls      %d hit   avg %.1fm   blend %.2f",
                              audio->wallCount(), audio->wallDistance(), audio->coverBlend()));
-    // Footsteps: the last lookup, whatever it decided. Held rather than
-    // sampled live because a step is an event - by the time anyone reads
-    // this line the foot has long since landed.
     {
-        const SSSoundscape::StepDebug& st = audio->lastStep();
+        SSLightning* lit = SSLightning::getInstance();
+        const F64 next = lit->nextStrikeIn();
+        lines.push_back(llformat("lightning  %d live   flash %.2f   %s   %d thunder pending",
+                                 lit->liveCount(), lit->flash(),
+                                 next < 0.0 ? "not thundery"
+                                            : llformat("next in %.0fs", next).c_str(),
+                                 audio->pendingThunder()));
+        for (const SSStrike& st : lit->strikes())
+        {
+            lines.push_back(llformat("  %-6s %5.0fm   %+.2fs   leader %.2f   bright %.2f%s",
+                                     SSLightning::kindName(st.mKind),
+                                     st.mDistanceM, st.mT,
+                                     st.mLeaderProgress, st.mChannelBrightness,
+                                     st.mAudible ? "" : "   [silent, shadow zone]"));
+        }
+    }
+
+    // Footsteps: the last lookup for you and the last for anyone else,
+    // held rather than sampled live because a step is an event - by the
+    // time anyone reads this the foot has long since landed. Yours gets
+    // the full readout; it is the one being debugged.
+    for (S32 self = 1; self >= 0; --self)
+    {
+        const SSSoundscape::StepDebug& st = audio->lastStep(self != 0);
+        const char* who = self ? "you " : "them";
+
         if (st.mWhen < 0.0)
         {
-            lines.push_back("footstep   none yet");
+            lines.push_back(llformat("step %s  none yet", who));
+            continue;
+        }
+
+        static const char* ACTION[] = { "walk", "run", "jump", "land" };
+        const char* act = (st.mAction >= 0 && st.mAction < 4) ? ACTION[st.mAction] : "?";
+
+        std::string surface("(not reached)");
+        if (st.mSurface >= 0)
+        {
+            surface = SSFootstepSounds::surfaceKey((SSStepSurface)st.mSurface);
+        }
+
+        lines.push_back(llformat("step %s  %.1fs ago   %s / %s   %s   wet %.2f%s",
+                                 who,
+                                 (F32)(atmo->sharedTime() - st.mWhen),
+                                 surface.c_str(), act,
+                                 st.mIndoors ? "in" : "out",
+                                 st.mWet,
+                                 st.mFieldValid ? "" : "   [field: NO ANSWER]"));
+        if (st.mWhyNot[0])
+        {
+            lines.push_back(llformat("  SILENT   %s   [%s]",
+                                     st.mWhyNot, st.mSource.c_str()));
         }
         else
         {
-            static const char* ACTION[] = { "walk", "run", "jump", "land" };
-            const char* act = (st.mAction >= 0 && st.mAction < 4) ? ACTION[st.mAction] : "?";
-
-            std::string surface("(not reached)");
-            if (st.mSurface >= 0)
-            {
-                surface = SSFootstepSounds::surfaceKey((SSStepSurface)st.mSurface);
-            }
-
-            lines.push_back(llformat("footstep   %.1fs ago   %s / %s   %s",
-                                     (F32)(atmo->sharedTime() - st.mWhen),
-                                     surface.c_str(), act,
-                                     st.mIndoors ? "indoors" : "outdoors"));
-            lines.push_back(llformat("  field    %s   wet %.2f   puddle %.0f mm",
-                                     st.mFieldValid ? "valid" : "NO ANSWER",
-                                     st.mWet, st.mPuddle * 1000.f));
-            if (st.mWhyNot[0])
-            {
-                lines.push_back(llformat("  SILENT   %s   [%s]",
-                                         st.mWhyNot, st.mSource.c_str()));
-            }
-            else
-            {
-                lines.push_back(llformat("  played   %s of %d   [%s]",
-                                         st.mPicked.asString().substr(0, 8).c_str(),
-                                         st.mListSize, st.mSource.c_str()));
-            }
+            lines.push_back(llformat("  played   %s of %d   [%s]",
+                                     st.mPicked.asString().substr(0, 8).c_str(),
+                                     st.mListSize, st.mSource.c_str()));
         }
     }
 

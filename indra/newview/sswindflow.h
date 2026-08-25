@@ -158,6 +158,23 @@ public:
     // volume came out solid. Both answer the same question from either side -
     // whether the solve has any geometry in it to flow around.
     bool surfaceAt(const LLVector3& pos_agent, F32& top) const;
+
+    // <SS:Nexii> Every captured column within radius of a point, as agent-space
+    // XY and the height of whatever stands there - terrain, roof, tower, tree.
+    //
+    // A visitor rather than a "tallest point" call because callers disagree
+    // about what tall MEANS. Lightning wants the column that would attach a
+    // leader, which is not the highest one: a modest roof underfoot beats a
+    // spire two hundred metres away. Answering that here would put one
+    // caller's physics inside the capture; handing over what was captured
+    // lets each decide for itself.
+    //
+    // Only covers regions with a solved tile, so the radius is effectively
+    // capped at the loaded world. Returns the number of columns visited, 0
+    // when there is no capture here to walk.
+    S32 forEachColumn(const LLVector3& center_agent, F32 radius_m,
+                      const std::function<void(const LLVector3& pos_agent, F32 top)>& fn) const;
+    // </SS:Nexii>
     F32 carvedFraction() const;
     F32 solidFill() const;
     F64 age() const;

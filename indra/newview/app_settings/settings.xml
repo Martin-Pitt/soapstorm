@@ -26792,6 +26792,182 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <string />
   </map>
+  <key>SSAtmoThunderCrack</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: thunder sounds for a near strike - the sharp crack. Comma separated sound UUIDs, one picked at random. Global rather than per-preset: thunder is thunder whatever is falling.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoThunderRumble</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: thunder sounds for a distant strike - the long roll. Comma separated sound UUIDs, one picked at random. Distance cross-fades between this pack and the crack pack.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoLightning</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: draw and sound lightning at all. Stable and breezy skies never strike regardless.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoLightningCharge</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: the crackle that gathers before a strike, for the anticipation effect. Comma separated sound UUIDs, one picked at random. Only heard when Lightning Anticipation is above zero.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoLightningAnticipation</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: seconds of gathering charge before a strike - crackle and sparks at the point about to be hit. Zero is what real weather does; higher values are a fantasy-weather effect that telegraphs the strike.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.0</real>
+  </map>
+  <key>SSAtmoLightningAttachBias</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how strongly lightning is drawn to tall structures. Metres of lateral reach bought per metre of height, from the wind flowmap's height capture. 1 is the one-to-one rule real lightning protection uses; 0 makes strikes land wherever they were aimed regardless of what is there.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningRate</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: multiplier on how often lightning strikes. 1 is the meteorological interval for the sky's convection; 2 is twice as often.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningBranchDepth</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how many generations of forking a lightning channel grows. 0 is a bare channel with no branches; 3 is the default and looks like lightning; higher gets dense and costs geometry. Branch counts fall off with each generation, so this is not a linear cost.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>S32</string>
+    <key>Value</key>
+    <integer>3</integer>
+  </map>
+  <key>SSAtmoLightningGlow</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how much bloom a lightning channel sheds, as the peak glow of a single ribbon quad. Additive, so overlapping segments and stacked ribbon strokes accumulate beyond this. 0 keeps lightning out of the glow buffer entirely.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.15</real>
+  </map>
+  <key>SSAtmoLightningRibbonDrift</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how far the wind carries the ionised channel between return strokes, as a multiple of the physical drift. 1 is honest ribbon lightning; 2-3 makes the ribbon legible at a distance; 0 disables it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoWetPuddleMask</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how strongly standing water is confined to scattered patches rather than filling every eligible cell. 0 is the old square-field behaviour, 1 is fully patchy.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.75</real>
+  </map>
+  <key>SSAtmoWetPuddleMaskScale</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: the size of the puddle patches, in metres. Smaller scatters many small pools; larger makes fewer, broader sheets.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>7.0</real>
+  </map>
+  <key>SSAtmoLightningTexture</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: optional electric-line texture for the bolt, tiled along the channel (alpha is the shape, red any filament detail). Empty draws a procedural filament, which is always available.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoLightningWeightSheet</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: relative frequency of in-cloud (sheet) strikes, which light the cloud from within and show no channel. Highest by default because most real discharges never leave the cloud.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>6.0</real>
+  </map>
+  <key>SSAtmoLightningWeightFork</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: relative frequency of forked cloud-to-cloud strikes, which show a visible branching channel that terminates in mid-air.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>3.0</real>
+  </map>
+  <key>SSAtmoLightningWeightGround</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: relative frequency of cloud-to-ground strikes - the ones with a descending leader, a return stroke and sparks at the impact.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
   <key>SSAtmoLoopWindLight</key>
       <map>
       <key>Comment</key>

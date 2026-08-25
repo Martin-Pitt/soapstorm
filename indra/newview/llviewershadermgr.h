@@ -278,6 +278,7 @@ extern LLGLSLShader         gSSPrecipLitProgram;
 extern LLGLSLShader         gSSPrecipProjProgram;
 extern LLGLSLShader         gSSSurfaceWetProgram;
 extern LLGLSLShader         gSSVolCloudProgram;
+extern LLGLSLShader         gSSLightningProgram;
 extern LLGLSLShader         gSSCelestialProgram;
 extern LLGLSLShader         gSSSurfaceNormalProgram;
 extern LLGLSLShader         gSSSurfaceCommitProgram;

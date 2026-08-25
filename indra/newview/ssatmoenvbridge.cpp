@@ -89,6 +89,18 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
     out_cfg.mPrecipitation = llclamp(state.mPrecipitationIntensity, 0.f, 1.f) * neighbor_fade;
     out_cfg.mTurbulence = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
 
+    out_cfg.mTemperatureC = llclamp(track.mWeather.mTemperatureC.valueAt(phase), -60.f, 60.f);
+
+    out_cfg.mLightningColor = state.mLightningColor;
+    out_cfg.mLightningCoreWhite = state.mLightningCoreWhite;
+
+    out_cfg.mLightning = state.mLightningEnabled;
+    out_cfg.mLightningCharge = state.mLightningCharge;
+    out_cfg.mLightningSparks = state.mLightningSparks;
+    out_cfg.mLightningIntervalMin = state.mLightningIntervalMinSeconds;
+    out_cfg.mLightningIntervalMax = state.mLightningIntervalMaxSeconds;
+    out_cfg.mLightningIntensity = state.mLightningIntensity;
+
     out_cfg.mGustDepth = llclamp(state.mGustDepth, 0.f, 3.f);
     out_cfg.mGustLength = llclamp(state.mGustLength, 8.f, 2000.f);
     out_cfg.mGustVeer = llclamp(state.mGustVeer, 0.f, 90.f);

@@ -52,6 +52,7 @@ private:
     static std::string stepWidgetName(SSStepSurface surface, SSStepAction action);
 
     void onCommitWind();
+    void onCommitThunder();
     void onCommitSteps();
 };
 

@@ -147,8 +147,44 @@ struct SSAtmoEnvWeather
     SSAtmoEnvKeyframed<F32> mGustLength{140.f}; // metres between fronts
     SSAtmoEnvKeyframed<F32> mGustVeer{0.f};     // degrees
 
+    // Whether this track has lightning at all, and whether the two optional
+    // effects around a strike run.
+    //
+    // Structural rather than keyframed, like mGustAuto: "does this sky have
+    // lightning" is a property of the weather being authored, not a value
+    // that animates through the day. How OFTEN and how FIERCE animate, and
+    // those are the keyframed ones below.
+    //
+    // The charge and the sparks are off by default because neither is a
+    // thing real weather does - nothing announces a strike before it
+    // happens, and a bolt does not scatter embers where it lands. They are
+    // here for skies that are not trying to be real.
+    bool mLightningEnabled = true;
+    bool mLightningCharge = false;   // crackle and sparks gathering beforehand
+    bool mLightningSparks = false;   // sparks thrown at the impact point
+
     bool mLightningAuto = true;
     SSAtmoEnvKeyframed<F32> mLightningIntensity{0.f}; // 0..1
+
+    // What colour the discharge is.
+    //
+    // One colour, not two, because a bolt only has one: the channel core is
+    // a blackbody at some thirty thousand kelvin and comes out white
+    // whatever else is going on, and the colour anyone actually names when
+    // they describe lightning belongs to the glow around it - ionised
+    // nitrogen, which is why real lightning reads violet-blue. So this is
+    // the SHEATH colour, and the core is pulled toward white from it by the
+    // whiteness below.
+    //
+    // Keyframed like everything else here, which is more useful than it
+    // sounds: a storm can turn colour as it builds.
+    SSAtmoEnvKeyframed<LLColor3> mLightningColor{LLColor3(0.62f, 0.55f, 1.f)};
+
+    // How white the core stays against that colour. 1 is a white-hot channel
+    // in a coloured sheath, which is what nature does. 0 tints the core to
+    // match, for a bolt that is green or orange all the way through - which
+    // nature does not do, and which is the entire point of having the dial.
+    SSAtmoEnvKeyframed<F32> mLightningCoreWhite{0.85f};
 
     // Empty means "Auto": derive from the cube via the precipitation-type
     // formula. Otherwise one of Snow/Blizzard/FreezingRain/Sleet/SlushMix/

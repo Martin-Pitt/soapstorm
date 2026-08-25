@@ -333,6 +333,13 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
         state.mGustVeer   = weather.mGustVeer.valueAt(phase);
     }
 
+    state.mLightningColor = weather.mLightningColor.valueAt(phase);
+    state.mLightningCoreWhite = llclamp(weather.mLightningCoreWhite.valueAt(phase), 0.f, 1.f);
+
+    state.mLightningEnabled = weather.mLightningEnabled;
+    state.mLightningCharge  = weather.mLightningCharge;
+    state.mLightningSparks  = weather.mLightningSparks;
+
     // Lightning: Stable/Breezy never strike regardless of override, since
     // there is nothing to override toward - the design doc is explicit that
     // lightning probability is strictly 0% below the Turbulent phase.

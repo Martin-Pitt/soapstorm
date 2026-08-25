@@ -57,8 +57,13 @@ LLSD SSAtmoEnvWeather::asLLSD() const
     sd["gust_length"] = mGustLength.asLLSD();
     sd["gust_veer"]   = mGustVeer.asLLSD();
 
+    sd["lightning_enabled"]   = mLightningEnabled;
+    sd["lightning_charge"]    = mLightningCharge;
+    sd["lightning_sparks"]    = mLightningSparks;
     sd["lightning_auto"]      = mLightningAuto;
     sd["lightning_intensity"] = mLightningIntensity.asLLSD();
+    sd["lightning_color"] = mLightningColor.asLLSD();
+    sd["lightning_core_white"] = mLightningCoreWhite.asLLSD();
 
     sd["precipitation_override"] = mPrecipitationOverride.asLLSD();
 
@@ -83,8 +88,17 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     if (sd.has("gust_length")) mGustLength.fromLLSD(sd["gust_length"], 140.f);
     if (sd.has("gust_veer"))   mGustVeer.fromLLSD(sd["gust_veer"], 0.f);
 
+    // Absent in anything written before these existed, and the defaults are
+    // what those environments were already doing: lightning on, neither
+    // embellishment running.
+    mLightningEnabled = sd.has("lightning_enabled") ? sd["lightning_enabled"].asBoolean() : true;
+    mLightningCharge  = sd.has("lightning_charge")  ? sd["lightning_charge"].asBoolean()  : false;
+    mLightningSparks  = sd.has("lightning_sparks")  ? sd["lightning_sparks"].asBoolean()  : false;
+
     mLightningAuto = sd.has("lightning_auto") ? sd["lightning_auto"].asBoolean() : true;
     if (sd.has("lightning_intensity")) mLightningIntensity.fromLLSD(sd["lightning_intensity"], 0.f);
+    if (sd.has("lightning_color")) mLightningColor.fromLLSD(sd["lightning_color"], LLColor3(0.62f, 0.55f, 1.f));
+    if (sd.has("lightning_core_white")) mLightningCoreWhite.fromLLSD(sd["lightning_core_white"], 0.85f);
 
     if (sd.has("precipitation_override")) mPrecipitationOverride.fromLLSD(sd["precipitation_override"], std::string());
 

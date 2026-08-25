@@ -218,6 +218,8 @@ set(viewer_SOURCE_FILES
     sspreciprenderer.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
+    sslightning.cpp
+    sslightningrender.cpp
     sssoundscape.cpp
     sswindflow.cpp
     fsscriptlibrary.cpp
@@ -1123,6 +1125,8 @@ set(viewer_HEADER_FILES
     sspreciprenderer.h
     ssrainshadow.h
     sssurfacefield.h
+    sslightning.h
+    sslightningrender.h
     sssoundscape.h
     sswindflow.h
     fsscriptlibrary.h

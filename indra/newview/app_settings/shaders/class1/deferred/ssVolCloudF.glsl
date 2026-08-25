@@ -49,6 +49,30 @@ uniform vec2 ss_clip;           // near and far plane, for linearising depth
 uniform float ss_soft_m;        // metres of fade; 0 disables it
 
 uniform vec3 ss_light_dir;  // toward whatever is lighting the sky
+
+// Strikes lighting the deck from inside, as point lights: xyz agent-space
+// position, w brightness. Up to four, because that is as many as can be
+// glowing at once before they stop being distinguishable anyway.
+//
+// Point lights rather than a per-puff colour the CPU worked out, because a
+// discharge inside a cloud is a LOCAL source and the puffs are spheres: the
+// face turned toward it lights and the far face does not. A flat brightness
+// added per puff cannot express that - and worse, it then gets shaped by
+// the sphere term belonging to the SUN, so a strike under a night deck was
+// dimmed by SS_FORM_DARK on exactly the underside it should have lit.
+#define SS_MAX_STRIKES 4
+uniform vec4 ss_strike[SS_MAX_STRIKES];
+uniform int ss_strike_count;
+
+// What colour the discharge lights the deck. The sheath colour rather than
+// the core's: what reaches a puff has been through cloud, and the core is
+// the part that does not get out.
+uniform vec3 ss_strike_color;
+
+// How far a discharge reaches through the deck, in metres. Not an inverse
+// square: cloud scatters, so the light spreads much further and much more
+// softly than it would through clear air.
+#define SS_STRIKE_REACH 700.0
 uniform vec3 ss_sun_color;  // its colour
 uniform vec3 ss_haze;       // the sky's own scattered light
 uniform vec3 ss_cam_pos;
@@ -625,6 +649,31 @@ void main()
     // through it - see SS_RIM.
     float thin = 1.0 - density;
     body += ss_sun_color * (SS_RIM * wrap * thin * thin * thin);
+
+    // Lightning inside the deck. Each strike is a point source, so it gets
+    // its own wrapped sphere term against ITS direction - which is the whole
+    // difference between a puff that brightens and a puff that is lit from
+    // somewhere. Wrapped rather than clamped for the same reason the sun is:
+    // light goes through cloud, so the far side dims, it does not go black.
+    for (int i = 0; i < ss_strike_count; ++i)
+    {
+        vec3 to_strike = ss_strike[i].xyz - vary_world;
+        float dist = length(to_strike);
+        if (dist < 0.001) continue;
+
+        float reach = SS_STRIKE_REACH * SS_STRIKE_REACH;
+        float atten = reach / (reach + dist * dist * 4.0);
+
+        float lit = 0.5 + 0.5 * dot(sphere_n, to_strike / dist);
+        lit = mix(SS_FORM_DARK, 1.0, lit);
+
+        // A thin edge of puff with a discharge behind it glows through,
+        // exactly as it does with the sun - and this is what a bolt seen
+        // THROUGH cloud actually looks like from below.
+        float through = 1.0 + SS_RIM * thin * thin;
+
+        body += ss_strike_color * (ss_strike[i].w * atten * lit * through);
+    }
 
     // ...and then the atmosphere, over distance, exactly as it treats
     // everything else in the world. This is what lets a far puff sit IN the

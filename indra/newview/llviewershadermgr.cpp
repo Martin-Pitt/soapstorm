@@ -185,6 +185,7 @@ LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
 LLGLSLShader            gSSSurfaceWetProgram;
 LLGLSLShader            gSSVolCloudProgram;
+LLGLSLShader            gSSLightningProgram;
 LLGLSLShader            gSSCelestialProgram;
 LLGLSLShader            gSSSurfaceNormalProgram;
 LLGLSLShader            gSSSurfaceCommitProgram;
@@ -455,6 +456,7 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSPrecipLitProgram);
     mShaderList.push_back(&gSSSurfaceWetProgram);
     mShaderList.push_back(&gSSVolCloudProgram);
+    mShaderList.push_back(&gSSLightningProgram);
     mShaderList.push_back(&gSSCelestialProgram);
     mShaderList.push_back(&gSSSurfaceNormalProgram);
     mShaderList.push_back(&gSSSurfaceCommitProgram);
@@ -1246,6 +1248,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSPrecipProjProgram.unload();
         gSSSurfaceWetProgram.unload();
         gSSVolCloudProgram.unload();
+        gSSLightningProgram.unload();
         gSSCelestialProgram.unload();
         gSSSurfaceNormalProgram.unload();
         gSSSurfaceCommitProgram.unload();
@@ -2096,6 +2099,20 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             LL_WARNS("Shader") << "SS volumetric cloud shader failed to compile;"
                                << " the volumetric layer will not draw" << LL_ENDL;
             gSSVolCloudProgram.unload();
+        }
+
+        gSSLightningProgram.mName = "SS Lightning Shader";
+        gSSLightningProgram.mShaderFiles.clear();
+        gSSLightningProgram.mShaderFiles.push_back(make_pair("deferred/ssLightningV.glsl", GL_VERTEX_SHADER));
+        gSSLightningProgram.mShaderFiles.push_back(make_pair("deferred/ssLightningF.glsl", GL_FRAGMENT_SHADER));
+        gSSLightningProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSLightningProgram.clearPermutations();
+        add_common_permutations(&gSSLightningProgram);
+        if (!gSSLightningProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS lightning shader failed to compile;"
+                               << " strikes will not draw" << LL_ENDL;
+            gSSLightningProgram.unload();
         }
 
         gSSPrecipRainProgram.mName = "SS Precipitation Rain Shader";

@@ -30,6 +30,7 @@
 #include "ssatmoenvmanager.h"
 #include "ssatmoenvtrackstate.h"
 #include "ssatmomagic.h"
+#include "sslightning.h"
 
 #include "llenvironment.h"
 #include "llglslshader.h"
@@ -450,6 +451,30 @@ void SSVolCloud::update(F32 dt)
         }
     }
 
+    // Strikes light the cloud from inside - see the loop in ssVolCloudF.
+    //
+    // This is what sheet lightning IS: the great majority of discharges
+    // never leave the cloud, and what an observer sees is the deck glowing
+    // from within around a point they cannot see.
+    //
+    // Collected here, applied in the shader. The first attempt added a flat
+    // colour per puff on the CPU, which lit every fragment of a puff by the
+    // same amount - so a puff brightened rather than being lit from
+    // anywhere, and the sphere term it then passed through belonged to the
+    // sun, which dimmed the underside of a night deck exactly where a strike
+    // beneath it should have been brightest.
+    mStrikeLights.clear();
+    for (const SSStrike& strike : SSLightning::getInstance()->strikes())
+    {
+        const F32 b = strike.mChannelBrightness * strike.mIntensity;
+        if (b <= 0.004f) continue;
+
+        mStrikeLights.push_back(LLVector4(strike.mOrigin.mV[VX],
+                                          strike.mOrigin.mV[VY],
+                                          strike.mOrigin.mV[VZ], b));
+        if ((S32)mStrikeLights.size() >= SS_MAX_STRIKE_LIGHTS) break;
+    }
+
     // Back to front, because they are alpha blended against each other.
     std::sort(mPuffs.begin(), mPuffs.end(),
               [](const Puff& a, const Puff& b) { return a.mCamDistSq > b.mCamDistSq; });
@@ -689,6 +714,26 @@ void SSVolCloud::render()
     gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
     // Lighting, for the per-fragment shape - see SS_FORM_DARK.
+    // The strikes lighting the deck this frame. Bound even when there are
+    // none, because a stale count would leave the last flash burnt into the
+    // cloud until the next one.
+    {
+        static LLStaticHashedString s_strike("ss_strike");
+        static LLStaticHashedString s_strike_count("ss_strike_count");
+
+        static LLStaticHashedString s_strike_color("ss_strike_color");
+        const LLColor3 lit = SSAtmoMagic::getInstance()->lightningColor();
+        gSSVolCloudProgram.uniform3fv(s_strike_color, 1, lit.mV);
+
+        const S32 count = llmin((S32)mStrikeLights.size(), SS_MAX_STRIKE_LIGHTS);
+        gSSVolCloudProgram.uniform1i(s_strike_count, count);
+        if (count > 0)
+        {
+            gSSVolCloudProgram.uniform4fv(s_strike, count,
+                                          (F32*)mStrikeLights.data());
+        }
+    }
+
     static LLStaticHashedString s_light_dir("ss_light_dir");
     static LLStaticHashedString s_sun_color("ss_sun_color");
     static LLStaticHashedString s_haze("ss_haze");

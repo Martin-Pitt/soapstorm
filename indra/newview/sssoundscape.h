@@ -66,7 +66,8 @@ public:
     // turning the system off returns the viewer to its vanilla footsteps
     // rather than silence. action is an SSStepAction; on_land whether the
     // foot is on terrain rather than an object.
-    LLUUID footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action);
+    LLUUID footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action,
+                         bool is_self);
 
     // What the last footstep lookup decided, for the info overlay. Every
     // stage of the walk is recorded, including the ones that returned
@@ -88,7 +89,40 @@ public:
         LLUUID mPicked;
         const char* mWhyNot = "";   // empty when a sound was returned
     };
-    const StepDebug& lastStep() const { return mStepDebug; }
+    // Kept separately for your own avatar and for everyone else's. Footsteps
+    // fire for every avatar in earshot, so a single "last lookup" was
+    // overwritten by whoever stepped most recently - which in a crowd is
+    // never you, and you are the one being debugged.
+    const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
+
+    // A strike happened at pos, this far away, this fierce. The clap is held
+    // and played when the sound would actually have arrived - the caller
+    // says WHEN IT STRUCK, not when it should be heard, because only this
+    // side knows how long sound takes to cover the distance or how far into
+    // the chosen recording its own bang sits.
+    void scheduleThunder(const LLVector3& pos_agent, F32 distance_m, F32 intensity,
+                         F64 fire_at);
+
+    // The crackle that gathers before a strike, for the anticipation effect.
+    // Played immediately - it is meant to be heard building, so there is
+    // nothing to delay.
+    void playCharge(const LLVector3& pos_agent, F32 intensity);
+
+    // How much better or worse a sound at this position carries to the
+    // listener, given the wind. Downwind of a source the wind gradient
+    // refracts sound back toward the ground and it carries further; upwind
+    // it bends up and away, which is the classic "saw the flash, heard
+    // nothing" of a windy day. Grows with distance because the refraction
+    // accumulates over it - next to the source the wind changes nothing.
+    //
+    // A general answer offered to everything the soundscape plays; thunder
+    // is the first consumer because kilometres are where the effect lives.
+    F32 windCarryGain(const LLVector3& source_pos_agent) const;
+
+    // How many claps are still on their way. For the info overlay: a sky
+    // that has gone quiet with four pending is a storm you are about to
+    // hear, not a bug.
+    S32 pendingThunder() const { return (S32)mThunder.size(); }
 
     enum ESpace
     {
@@ -149,7 +183,25 @@ public:
     F64 lastProbeAge() const;
 
 private:
-    StepDebug mStepDebug;
+    StepDebug mStepSelf;
+    StepDebug mStepOther;
+
+    // A clap that has been fired but not yet heard.
+    struct PendingThunder
+    {
+        F64 mHeardAt = 0.0;     // when the bang itself should land
+        F64 mPlayAt = 0.0;      // when to start the file, so that it does
+        LLVector3 mPos;
+        F32 mGain = 1.f;
+        F32 mDistanceM = 0.f;
+        LLUUID mSound;
+        bool mAligned = false;  // the onset has been measured, or given up on
+    };
+    std::vector<PendingThunder> mThunder;
+
+    void queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
+                      F32 distance_m, F32 gain, F64 heard_at);
+    void updateThunder(F64 now);
 
     // Ambient loop slots; each maps to one developer-configured sound UUID
     // Outdoor beds are a light/medium/heavy set where only medium is
@@ -183,6 +235,13 @@ private:
         LLUUID mSourceID;
         F32 mGain = 0.f;
         F32 mTarget = 0.f;
+
+        // Where the source sits relative to the listener's head. Zero for
+        // the beds, which surround you; the wind loops sit a few metres
+        // UPWIND, so the engine's own 3D panning puts the wind in the
+        // correct ear and it audibly swings as the local flow bends around
+        // buildings. Following the flowmap back, in the literal sense.
+        LLVector3 mOffset;
     };
 
 

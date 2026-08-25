@@ -199,6 +199,12 @@ bool SSFloaterAtmoEnv::postBuild()
     // flipping one greys out and what fills the greyed rows in.
     getChild<LLUICtrl>("gust_auto_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitGustAuto(); });
+    getChild<LLUICtrl>("lightning_enabled_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitLightningFlags(); });
+    getChild<LLUICtrl>("lightning_charge_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitLightningFlags(); });
+    getChild<LLUICtrl>("lightning_sparks_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitLightningFlags(); });
     getChild<LLUICtrl>("lightning_auto_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitLightningAuto(); });
     getChild<LLUICtrl>("cloud_auto_check")->setCommitCallback(
@@ -219,6 +225,7 @@ bool SSFloaterAtmoEnv::postBuild()
         { "gust_length",  [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mGustLength; },   true },
         { "gust_veer",    [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mGustVeer; },     true },
         { "lightning_intensity", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mLightningIntensity; }, false },
+        { "lightning_core_white", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mLightningCoreWhite; }, false },
     };
 
     // The Water tab's own scalar rows - same mechanics, same widget naming
@@ -340,6 +347,7 @@ bool SSFloaterAtmoEnv::postBuild()
         { "atmo_blue_density",   [atmos]() -> SSAtmoEnvKeyframed<LLColor3>& { return atmos().mBlueDensity; }, SCALE_BLUE },
         { "atmo_sunlight_color", [atmos]() -> SSAtmoEnvKeyframed<LLColor3>& { return atmos().mSunlightColor; }, SCALE_SUN_AMBIENT },
         { "dome_color",          [dome]() -> SSAtmoEnvKeyframed<LLColor3>& { return dome().mColor; } },
+        { "lightning_color",     [this]() -> SSAtmoEnvKeyframed<LLColor3>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mLightningColor; } },
     };
     for (const KeyRow<LLColor3>& row : mColorRows)
     {
@@ -1202,9 +1210,13 @@ void SSFloaterAtmoEnv::refreshTrackTab()
 
     // Weather and Clouds tabs: same rule for their Auto toggles.
     getChild<LLUICtrl>("gust_auto_check")->setValue(track.mWeather.mGustAuto);
+    getChild<LLUICtrl>("lightning_enabled_check")->setValue(track.mWeather.mLightningEnabled);
+    getChild<LLUICtrl>("lightning_charge_check")->setValue(track.mWeather.mLightningCharge);
+    getChild<LLUICtrl>("lightning_sparks_check")->setValue(track.mWeather.mLightningSparks);
     getChild<LLUICtrl>("lightning_auto_check")->setValue(track.mWeather.mLightningAuto);
     getChild<LLUICtrl>("cloud_auto_check")->setValue(track.mCloudField.mAuto);
     refreshAutoRows();
+    refreshLightningRows();
     refreshWaterRows();
 }
 
@@ -1285,6 +1297,38 @@ void SSFloaterAtmoEnv::onCommitGustAuto()
         getChild<LLUICtrl>("gust_auto_check")->getValue().asBoolean();
     refreshAutoRows();
     refreshStatus();
+}
+
+// The three structural lightning switches. One handler for all of them
+// because they are read and written together and none of them means
+// anything without the others - the charge and the sparks are effects
+// AROUND a strike, so they are moot on a sky that has no lightning.
+void SSFloaterAtmoEnv::onCommitLightningFlags()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    SSAtmoEnvWeather& weather = asset.mTracks[mSelectedTrackIndex].mWeather;
+    weather.mLightningEnabled =
+        getChild<LLUICtrl>("lightning_enabled_check")->getValue().asBoolean();
+    weather.mLightningCharge =
+        getChild<LLUICtrl>("lightning_charge_check")->getValue().asBoolean();
+    weather.mLightningSparks =
+        getChild<LLUICtrl>("lightning_sparks_check")->getValue().asBoolean();
+
+    refreshLightningRows();
+    refreshStatus();
+}
+
+// The two embellishments are only meaningful when the sky strikes at all.
+void SSFloaterAtmoEnv::refreshLightningRows()
+{
+    const bool on = getChild<LLUICtrl>("lightning_enabled_check")->getValue().asBoolean();
+    getChild<LLUICtrl>("lightning_charge_check")->setEnabled(on);
+    getChild<LLUICtrl>("lightning_sparks_check")->setEnabled(on);
 }
 
 void SSFloaterAtmoEnv::onCommitLightningAuto()

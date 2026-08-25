@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="410"
+ height="500"
  layout="topleft"
  name="floater_ss_atmo_assets"
  save_rect="true"
@@ -41,6 +41,33 @@
     <ss_sound_list
      follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
      height="20" width="316" mode="sequence" name="loop_wind_strong" />
+
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="14"
+     height="14" width="416" name="thunder_label" font="SansSerifSmallBold">
+        Thunder
+    </text>
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="2"
+     height="28" width="416" word_wrap="true" name="thunder_desc" font="SansSerifSmall">
+        One picked at random per strike, delayed by its distance. Near strikes take from Crack, distant ones from Rumble.
+    </text>
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="8"
+     height="14" width="90" name="thunder_crack_label" font="SansSerifSmall">
+        Crack, near
+    </text>
+    <ss_sound_list
+     follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+     height="20" width="316" mode="random" name="thunder_crack" />
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="8"
+     height="14" width="90" name="thunder_rumble_label" font="SansSerifSmall">
+        Rumble, far
+    </text>
+    <ss_sound_list
+     follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+     height="20" width="316" mode="random" name="thunder_rumble" />
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="14"

@@ -149,6 +149,32 @@ public:
     // their fronts are along the wind, and how far the wind swings as one goes
     // through. Depth is already multiplied by turbulence here, so a consumer
     // gets one number rather than having to remember to combine them.
+    // Air temperature the active environment authored, degrees C. 15 - a
+    // shirtsleeve default - whenever nothing said.
+    F32 temperatureC() const { return mTemperatureC; }
+
+    // Lightning, as the active environment authored it. The intervals are
+    // negative when nothing said - see SSAtmoTrackConfig.
+    bool lightningOn() const { return mLightning; }
+
+    // The discharge's colour, and its core pulled toward white by however
+    // much the track asked for. Two calls rather than one so a caller that
+    // only wants the sheath - the cloud glow, the sparks - does not have to
+    // know the core exists.
+    const LLColor3& lightningColor() const { return mLightningColor; }
+    LLColor3 lightningCoreColor() const
+    {
+        const F32 w = llclamp(mLightningCoreWhite, 0.f, 1.f);
+        return LLColor3(lerp(mLightningColor.mV[0], 1.f, w),
+                        lerp(mLightningColor.mV[1], 1.f, w),
+                        lerp(mLightningColor.mV[2], 1.f, w));
+    }
+    bool lightningCharge() const { return mLightningCharge; }
+    bool lightningSparks() const { return mLightningSparks; }
+    F32 lightningIntervalMin() const { return mLightningIntervalMin; }
+    F32 lightningIntervalMax() const { return mLightningIntervalMax; }
+    F32 lightningIntensity() const { return mLightningIntensity; }
+
     F32 gustDepth() const { return mGustDepth; }
     F32 gustLength() const { return mGustLength; }
     F32 gustVeer() const { return mGustVeer; }
@@ -300,6 +326,18 @@ private:
     F64 mNow = 0.0;
     bool mEnabled = false;
     bool mSwitchedOn = false;
+
+    F32 mTemperatureC = 15.f;
+
+    LLColor3 mLightningColor{0.62f, 0.55f, 1.f};
+    F32 mLightningCoreWhite = 0.85f;
+
+    bool mLightning = true;
+    bool mLightningCharge = false;
+    bool mLightningSparks = false;
+    F32 mLightningIntervalMin = -1.f;
+    F32 mLightningIntervalMax = -1.f;
+    F32 mLightningIntensity = -1.f;
 
     F32 mPrecipitation = 0.f;
     F32 mTurbulence = 0.f;

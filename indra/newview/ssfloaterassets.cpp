@@ -35,6 +35,8 @@
 
 namespace
 {
+    const char* THUNDER_CRACK_SETTING = "SSAtmoThunderCrack";
+    const char* THUNDER_RUMBLE_SETTING = "SSAtmoThunderRumble";
     const char* WIND_LIGHT_SETTING = "SSAtmoLoopWindLight";
     const char* WIND_STRONG_SETTING = "SSAtmoLoopWindStrong";
 }
@@ -50,6 +52,11 @@ bool SSFloaterAssets::postBuild()
         [this](LLUICtrl*, const LLSD&) { onCommitWind(); });
     getChild<LLUICtrl>("loop_wind_strong")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitWind(); });
+
+    getChild<SSSoundListCtrl>("thunder_crack")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitThunder(); });
+    getChild<SSSoundListCtrl>("thunder_rumble")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitThunder(); });
 
     // The dry-ground footstep grid - see SSFootstepSounds::surfaceIsGlobal.
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
@@ -77,8 +84,21 @@ std::string SSFloaterAssets::stepWidgetName(SSStepSurface surface, SSStepAction 
          + "_" + SSFootstepSounds::actionKey(action);
 }
 
+void SSFloaterAssets::onCommitThunder()
+{
+    gSavedSettings.setString(THUNDER_CRACK_SETTING,
+        ss_asset_list_str(getChild<SSSoundListCtrl>("thunder_crack")->getList()));
+    gSavedSettings.setString(THUNDER_RUMBLE_SETTING,
+        ss_asset_list_str(getChild<SSSoundListCtrl>("thunder_rumble")->getList()));
+}
+
 void SSFloaterAssets::onCommitSteps()
 {
+    getChild<SSSoundListCtrl>("thunder_crack")->setList(
+        ss_asset_list_parse(gSavedSettings.getString(THUNDER_CRACK_SETTING)));
+    getChild<SSSoundListCtrl>("thunder_rumble")->setList(
+        ss_asset_list_parse(gSavedSettings.getString(THUNDER_RUMBLE_SETTING)));
+
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {
         const SSStepSurface surface = (SSStepSurface)sf;

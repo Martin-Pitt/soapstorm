@@ -41,6 +41,7 @@
 #include "lluuid.h"
 #include "llviewerparcelmgr.h"
 #include "v3math.h"
+#include "v3color.h"
 
 #include <array>
 #include <string>
@@ -78,6 +79,26 @@ struct SSAtmoTrackConfig
     // air, so a surge crosses the region downwind at wind speed instead of the
     // whole build gusting in unison. Depth is scaled by mTurbulence, so a calm
     // track stays a steady draught however these are set.
+    // Lightning, as the environment authored it. The intervals are -1 for
+    // "nothing said" - a v2 notecard has no lightning fields at all, and the
+    // strike scheduler derives them from turbulence in that case rather than
+    // treating silence as "never".
+    // Air temperature, degrees C. Sound speed, and eventually freezing,
+    // hang off this; a v2 notecard never says, so 15 stands in.
+    F32 mTemperatureC = 15.f;
+
+    // The discharge colour and how white its core stays - see
+    // SSAtmoEnvWeather::mLightningColor.
+    LLColor3 mLightningColor{0.62f, 0.55f, 1.f};
+    F32 mLightningCoreWhite = 0.85f;
+
+    bool mLightning = true;
+    bool mLightningCharge = false;
+    bool mLightningSparks = false;
+    F32 mLightningIntervalMin = -1.f;
+    F32 mLightningIntervalMax = -1.f;
+    F32 mLightningIntensity = -1.f;
+
     F32 mGustDepth  = 1.f;      // 0 steady, 1 near-lull to about double
     F32 mGustLength = 140.f;    // metres between fronts, along the wind
     F32 mGustVeer   = 14.f;     // degrees the wind swings as a front passes

@@ -210,6 +210,8 @@ private:
     // behaviour still exists, those rows just aren't the author of it.
     void onCommitGustAuto();
     void onCommitLightningAuto();
+    void onCommitLightningFlags();
+    void refreshLightningRows();
     // One pass over every Auto-owned row group (gust, lightning, clouds):
     // enables/disables the manual controls - slider, spinner, AND the
     // keyframe diamond, since inserting a keyframe into a field Auto is
