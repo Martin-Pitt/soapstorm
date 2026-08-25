@@ -509,7 +509,17 @@ class LLAudioBuffer
 public:
     virtual ~LLAudioBuffer() {};
     virtual bool loadWAV(const std::string& filename) = 0;
+
+    // Length in PCM BYTES - which is what it has always returned, and worth
+    // saying out loud: read as any unit of time it is wrong by whatever the
+    // sample rate and channel count happen to be.
     virtual U32 getLength() = 0;
+
+    // Length in milliseconds, or 0 when the backend cannot say.
+    //
+    // Not pure, so a backend that has no answer simply does not override it
+    // and callers get the honest zero rather than a build break.
+    virtual U32 getLengthMS() { return 0; }
 
     friend class LLAudioEngine;
     friend class LLAudioChannel;

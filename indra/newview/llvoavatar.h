@@ -1337,7 +1337,6 @@ private:
     // action codes here (0=walk, 1=run, 2=jump, 3=land, matching SSStepAction
     // in ssprecippreset.h) so this header does not need to pull that one in.
     void        playFootstepSound(const LLVector3& foot_pos_agent, S32 action);
-    LLUUID      footstepSoundOverride(const LLVector3& foot_pos_agent, S32 action) const;
     bool        mWasJumping = false;
     // </SS:Nexii>
 

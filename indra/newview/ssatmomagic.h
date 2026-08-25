@@ -128,6 +128,14 @@ public:
 
     bool isEnabled() const { return mEnabled; }
 
+    // Whether the system is switched on at all - as opposed to isEnabled(),
+    // which also asks whether weather is currently running. The distinction
+    // exists for the things Atmo Magic owns that are not weather: dry-ground
+    // footsteps are the case, since they are what plays precisely when
+    // nothing is falling. Gating those on isEnabled() silences them in fair
+    // weather, which is the only weather they were ever for.
+    bool isSwitchedOn() const { return mSwitchedOn; }
+
     // Shared wall clock all deterministic streams are keyed on
     F64 sharedTime() const { return mNow; }
     U32 seed() const;
@@ -291,6 +299,7 @@ private:
 
     F64 mNow = 0.0;
     bool mEnabled = false;
+    bool mSwitchedOn = false;
 
     F32 mPrecipitation = 0.f;
     F32 mTurbulence = 0.f;

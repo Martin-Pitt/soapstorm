@@ -161,6 +161,9 @@ bool SSFloaterAtmoEnv::postBuild()
     getChild<LLUICtrl>("preview_time_slider")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitPreviewTime(); });
 
+    getChild<LLUICtrl>("settings_button")->setCommitCallback(
+        [](LLUICtrl*, const LLSD&) { LLFloaterReg::showInstance("ss_atmo"); });
+
     getChild<LLUICtrl>("preview_play_button")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onClickPreviewPlay(); });
 

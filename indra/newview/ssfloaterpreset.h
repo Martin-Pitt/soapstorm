@@ -38,6 +38,8 @@ public:
     SSFloaterPreset(const LLSD& key);
 
     bool postBuild() override;
+
+    static std::string stepWidgetName(SSStepSurface surface, SSStepAction action);
     void onOpen(const LLSD& key) override;
 
 private:

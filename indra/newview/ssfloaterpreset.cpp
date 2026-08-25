@@ -24,6 +24,8 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "ssfloaterpreset.h"
+
+#include "ssfloatersoundlist.h"
 #include "ssatmotrack.h"
 #include "ssprecipvariants.h"
 
@@ -44,6 +46,17 @@ static const char* TIER_PREFIX[TIER_COUNT] = { "drops", "clusters", "sheets" };
 SSFloaterPreset::SSFloaterPreset(const LLSD& key) :
     LLFloater(key)
 {
+}
+
+// The widget name for a footstep slot.
+//
+// Built from the SAME keys the preset serialises with, so a slot's control,
+// its LLSD entry and its tooltip cannot drift apart - there is only one
+// spelling of "outside_wet" in the system and this is it.
+std::string SSFloaterPreset::stepWidgetName(SSStepSurface surface, SSStepAction action)
+{
+    return std::string("step_") + SSFootstepSounds::surfaceKey(surface)
+         + "_" + SSFootstepSounds::actionKey(action);
 }
 
 bool SSFloaterPreset::postBuild()
@@ -87,6 +100,23 @@ bool SSFloaterPreset::postBuild()
         if (LLUICtrl* ctrl = findChild<LLUICtrl>(name))
         {
             ctrl->setCommitCallback([this](LLUICtrl*, const LLSD&) { onCommitAny(); });
+        }
+    }
+
+    // The footstep grid, by the same names its slots serialise under - so the
+    // panel and the file agree by construction rather than by two lists being
+    // kept in step by hand.
+    for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
+    {
+        for (S32 ac = 0; ac < STEP_ACTION_COUNT; ++ac)
+        {
+            if (SSFootstepSounds::surfaceIsGlobal((SSStepSurface)sf)) continue;
+
+            const std::string name = stepWidgetName((SSStepSurface)sf, (SSStepAction)ac);
+            if (LLUICtrl* ctrl = findChild<LLUICtrl>(name))
+            {
+                ctrl->setCommitCallback([this](LLUICtrl*, const LLSD&) { onCommitAny(); });
+            }
         }
     }
 
@@ -208,13 +238,33 @@ void SSFloaterPreset::presetToControls()
     getChild<LLUICtrl>("dark_texture")->setValue(mEdited.mDarkTexture);
     getChild<LLUICtrl>("puff_texture")->setValue(mEdited.mPuffTexture);
 
-    getChild<LLUICtrl>("snd_light")->setValue(mEdited.mSounds.mAmbientLight);
-    getChild<LLUICtrl>("snd_medium")->setValue(mEdited.mSounds.mAmbientMedium);
-    getChild<LLUICtrl>("snd_heavy")->setValue(mEdited.mSounds.mAmbientHeavy);
-    getChild<LLUICtrl>("snd_roof_open")->setValue(mEdited.mSounds.mRoofOpen);
-    getChild<LLUICtrl>("snd_roof_small")->setValue(mEdited.mSounds.mRoofSmall);
-    getChild<LLUICtrl>("snd_roof_medium")->setValue(mEdited.mSounds.mRoofMedium);
-    getChild<LLUICtrl>("snd_roof_big")->setValue(mEdited.mSounds.mRoofBig);
+    getChild<SSSoundListCtrl>("snd_light")->setList(ss_asset_list_parse(mEdited.mSounds.mAmbientLight));
+    getChild<SSSoundListCtrl>("snd_medium")->setList(ss_asset_list_parse(mEdited.mSounds.mAmbientMedium));
+    getChild<SSSoundListCtrl>("snd_heavy")->setList(ss_asset_list_parse(mEdited.mSounds.mAmbientHeavy));
+    getChild<SSSoundListCtrl>("snd_roof_open")->setList(ss_asset_list_parse(mEdited.mSounds.mRoofOpen));
+    getChild<SSSoundListCtrl>("snd_roof_small")->setList(ss_asset_list_parse(mEdited.mSounds.mRoofSmall));
+    getChild<SSSoundListCtrl>("snd_roof_medium")->setList(ss_asset_list_parse(mEdited.mSounds.mRoofMedium));
+    getChild<SSSoundListCtrl>("snd_roof_big")->setList(ss_asset_list_parse(mEdited.mSounds.mRoofBig));
+
+    for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
+    {
+        for (S32 ac = 0; ac < STEP_ACTION_COUNT; ++ac)
+        {
+            const SSStepSurface surface = (SSStepSurface)sf;
+            const SSStepAction action = (SSStepAction)ac;
+
+            // The dry surfaces are not in this window - see surfaceIsGlobal.
+            if (SSFootstepSounds::surfaceIsGlobal(surface)) continue;
+
+            if (SSSoundListCtrl* ctrl =
+                    findChild<SSSoundListCtrl>(stepWidgetName(surface, action)))
+            {
+                ctrl->setList(ss_asset_list_parse(mEdited.mFootsteps.at(surface, action)));
+                ctrl->setSlotLabel(std::string(SSFootstepSounds::surfaceName(surface))
+                                   + " - " + SSFootstepSounds::actionName(action));
+            }
+        }
+    }
 
     mUpdating = false;
 }
@@ -274,13 +324,29 @@ void SSFloaterPreset::controlsToPreset()
     mEdited.mDarkTexture = getChild<LLUICtrl>("dark_texture")->getValue().asString();
     mEdited.mPuffTexture = getChild<LLUICtrl>("puff_texture")->getValue().asString();
 
-    mEdited.mSounds.mAmbientLight = getChild<LLUICtrl>("snd_light")->getValue().asString();
-    mEdited.mSounds.mAmbientMedium = getChild<LLUICtrl>("snd_medium")->getValue().asString();
-    mEdited.mSounds.mAmbientHeavy = getChild<LLUICtrl>("snd_heavy")->getValue().asString();
-    mEdited.mSounds.mRoofOpen = getChild<LLUICtrl>("snd_roof_open")->getValue().asString();
-    mEdited.mSounds.mRoofSmall = getChild<LLUICtrl>("snd_roof_small")->getValue().asString();
-    mEdited.mSounds.mRoofMedium = getChild<LLUICtrl>("snd_roof_medium")->getValue().asString();
-    mEdited.mSounds.mRoofBig = getChild<LLUICtrl>("snd_roof_big")->getValue().asString();
+    mEdited.mSounds.mAmbientLight = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_light")->getList());
+    mEdited.mSounds.mAmbientMedium = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_medium")->getList());
+    mEdited.mSounds.mAmbientHeavy = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_heavy")->getList());
+    mEdited.mSounds.mRoofOpen = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_roof_open")->getList());
+    mEdited.mSounds.mRoofSmall = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_roof_small")->getList());
+    mEdited.mSounds.mRoofMedium = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_roof_medium")->getList());
+    mEdited.mSounds.mRoofBig = ss_asset_list_str(getChild<SSSoundListCtrl>("snd_roof_big")->getList());
+
+    for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
+    {
+        for (S32 ac = 0; ac < STEP_ACTION_COUNT; ++ac)
+        {
+            const SSStepSurface surface = (SSStepSurface)sf;
+            const SSStepAction action = (SSStepAction)ac;
+            if (SSFootstepSounds::surfaceIsGlobal(surface)) continue;
+
+            if (SSSoundListCtrl* ctrl =
+                    findChild<SSSoundListCtrl>(stepWidgetName(surface, action)))
+            {
+                mEdited.mFootsteps.at(surface, action) = ss_asset_list_str(ctrl->getList());
+            }
+        }
+    }
 }
 
 void SSFloaterPreset::applyLive()
@@ -303,7 +369,7 @@ void SSFloaterPreset::applyLive()
 void SSFloaterPreset::refreshTitle()
 {
     const bool modified = SSPrecipPresetManager::instance().isModified(mEdited.mName);
-    setTitle("ATMO MAGIC - PRESET EDITOR - " + mEdited.mName + (modified ? " *" : ""));
+    setTitle("Edit Atmo Magic Preset - " + mEdited.mName + (modified ? " - Unsaved changes*" : ""));
     getChild<LLUICtrl>("save_button")->setEnabled(modified);
 }
 

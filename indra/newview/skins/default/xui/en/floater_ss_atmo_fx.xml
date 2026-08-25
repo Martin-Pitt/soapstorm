@@ -3,12 +3,12 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="560"
+ height="620"
  layout="topleft"
  name="floater_ss_atmo_fx"
  save_rect="true"
  single_instance="true"
- title="ATMO MAGIC - EFFECTS &amp; LOD"
+ title="Effects &amp; LOD"
  width="380">
     <text
      follows="left|top" layout="topleft" left="12" top="26"
@@ -65,6 +65,27 @@
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoParticleBudget" />
     </button>
+    <!-- <SS:Nexii> The impact toggles, moved here from the settings window.
+         Everything around them is about what happens when a drop lands -
+         ripple tuning, the tier the splash is drawn at, how long it lasts -
+         so the two switches that decide whether any of it happens at all
+         belong with it rather than one window away from it. -->
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="356" name="impact_label" font="SansSerifSmallBold">
+        Impact Effects
+    </text>
+    <check_box
+     control_name="SSAtmoRipples"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="ripples_check"
+     label="Ripples and splashes where drops land" />
+    <check_box
+     control_name="SSAtmoSounds"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="impact_sounds_check"
+     label="Impact sounds (from the preset sound pack)" />
+
     <check_box
      control_name="SSAtmoRespawnOnImpact"
      follows="left|top" layout="topleft" left="12" top_pad="8"
@@ -100,7 +121,7 @@
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
      height="14" width="356" name="lod_label" font="SansSerifSmallBold">
-        Detail tier distances
+        Detail Tier Distances
     </text>
     <text
       follows="left|top" layout="topleft"

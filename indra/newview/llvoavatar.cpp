@@ -101,8 +101,7 @@
 
 // <SS:Nexii> Atmo Magic surface-aware footstep sounds
 #include "ssprecippreset.h"
-#include "sssurfacefield.h"
-#include "sswindflow.h"
+#include "sssoundscape.h"
 // </SS:Nexii>
 #include "llviewershadermgr.h"
 #include "llsky.h"
@@ -5399,7 +5398,7 @@ void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
 {
     const F32 STEP_VOLUME = 0.1f;
 
-    LLUUID step_sound_id = footstepSoundOverride(foot_pos_agent, action);
+    LLUUID step_sound_id = SSSoundscape::getInstance()->footstepSound(foot_pos_agent, mStepOnLand, action);
     if (step_sound_id.isNull())
     {
         step_sound_id = getStepSound();
@@ -5414,71 +5413,6 @@ void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
     }
 }
 
-//-----------------------------------------------------------------------------
-// footstepSoundOverride()
-// Looks up the active Atmo Magic preset's footstep pack for the surface
-// underfoot, returning a null UUID when nothing is configured for that
-// surface/action so the caller falls back to the stock footstep sound.
-//-----------------------------------------------------------------------------
-LLUUID LLVOAvatar::footstepSoundOverride(const LLVector3& foot_pos_agent, S32 action) const
-{
-    // Indoors: the wind flowmap already builds a topdown capture of the
-    // topmost surface in every column (roof, floor slab, or open ground) to
-    // drive the rain sound's burial depth. Reusing it here is one grid
-    // lookup, no raycast, and - unlike the camera-anchored cover probe the
-    // rain sound uses - it is evaluated at each avatar's own feet, so a
-    // crowd standing half in and half out of a doorway reads correctly
-    // instead of everyone sharing the camera's verdict.
-    F32 column_top = 0.f;
-    const bool indoors = SSWindFlowMap::getInstance()->surfaceAt(foot_pos_agent, column_top)
-        && (column_top - foot_pos_agent.mV[VZ] > 0.75f);
-
-    SSStepSurface surface;
-    if (indoors)
-    {
-        surface = STEP_INSIDE_DRY;
-    }
-    else
-    {
-        const SSSurfaceField::Sample wet = SSSurfaceField::instance().sample(foot_pos_agent);
-        const bool puddle = wet.mValid && wet.mPuddle > 0.005f;
-        const bool damp = wet.mValid && wet.mWet > 0.3f;
-
-        if (mStepOnLand)
-        {
-            surface = puddle ? STEP_TERRAIN_PUDDLE : (damp ? STEP_TERRAIN_WET : STEP_TERRAIN_DRY);
-        }
-        else
-        {
-            surface = puddle ? STEP_OUTSIDE_PUDDLE : (damp ? STEP_OUTSIDE_WET : STEP_OUTSIDE_DRY);
-        }
-    }
-
-    const std::string& csv = SSPrecipPresetManager::instance().active().mFootsteps.at(surface, (SSStepAction)action);
-    if (csv.empty())
-    {
-        return LLUUID::null;
-    }
-
-    std::vector<std::string> tokens;
-    LLStringUtil::getTokens(csv, tokens, ",");
-    std::vector<LLUUID> ids;
-    ids.reserve(tokens.size());
-    for (const std::string& tok : tokens)
-    {
-        LLUUID id(tok);
-        if (id.notNull()) ids.push_back(id);
-    }
-    if (ids.empty())
-    {
-        return LLUUID::null;
-    }
-
-    // A different drop each step, the way the ambient sequences avoid an
-    // audible repeat - but picked at random rather than walked in order,
-    // since footsteps fire far too quickly for a long sequence to matter.
-    return ids[ll_rand((S32)ids.size())];
-}
 // </SS:Nexii>
 
 //------------------------------------------------------------------------

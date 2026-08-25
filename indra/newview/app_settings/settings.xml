@@ -26660,7 +26660,139 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>6.0</real>
     </map>
-    <key>SSAtmoLoopWindLight</key>
+    <key>SSAtmoStepTerrainDryWalk</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Terrain, dry, walk. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepTerrainDryRun</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Terrain, dry, run. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepTerrainDryJump</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Terrain, dry, jump. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepTerrainDryLand</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Terrain, dry, land. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepOutsideDryWalk</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Outside, dry, walk. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepOutsideDryRun</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Outside, dry, run. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepOutsideDryJump</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Outside, dry, jump. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepOutsideDryLand</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Outside, dry, land. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepInsideDryWalk</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Inside, walk. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepInsideDryRun</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Inside, run. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepInsideDryJump</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Inside, jump. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoStepInsideDryLand</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: footstep sounds for Inside, land. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>String</string>
+    <key>Value</key>
+    <string />
+  </map>
+  <key>SSAtmoLoopWindLight</key>
       <map>
       <key>Comment</key>
       <string>Comma-separated sound UUID sequence: light wind ambient loop; entries chain end-to-end</string>

@@ -205,6 +205,10 @@ set(viewer_SOURCE_FILES
     ssfloateratmo.cpp
     ssfloateratmoenv.cpp
     ssfloateratmoinfluence.cpp
+    ssassetlist.cpp
+    ssfloaterassets.cpp
+    ssfloatersoundlist.cpp
+    ssfloatertexturelist.cpp
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
     ssfloatersim.cpp
@@ -214,7 +218,7 @@ set(viewer_SOURCE_FILES
     sspreciprenderer.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
-    ssweathersounds.cpp
+    sssoundscape.cpp
     sswindflow.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
@@ -1106,6 +1110,10 @@ set(viewer_HEADER_FILES
     ssfloateratmo.h
     ssfloateratmoenv.h
     ssfloateratmoinfluence.h
+    ssassetlist.h
+    ssfloaterassets.h
+    ssfloatersoundlist.h
+    ssfloatertexturelist.h
     ssfloateratmoplanetary.h
     ssfloaterpreset.h
     ssfloatersim.h
@@ -1115,7 +1123,7 @@ set(viewer_HEADER_FILES
     sspreciprenderer.h
     ssrainshadow.h
     sssurfacefield.h
-    ssweathersounds.h
+    sssoundscape.h
     sswindflow.h
     fsscriptlibrary.h
     fsscrolllistctrl.h

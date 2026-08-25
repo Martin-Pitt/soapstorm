@@ -183,7 +183,6 @@
      left="15"
      top="122"
      bottom="-50"
-     height="554"
      width="170"
      name="track_panel"
      background_visible="false"
@@ -209,7 +208,14 @@
 
              The rail is anchored top and bottom so it actually fills the
              panel's height rather than collapsing to whatever a chained
-             top_pad left over; increment is 64m so it divides 4096 exactly
+             top_pad left over - and carries NO height of its own, which is
+             what makes that work. Given both, the rect is built from top
+             plus height and the bottom is never consulted, so the rail was
+             a fixed 395px however tall the floater grew: the ground row
+             below it followed the bottom edge, the rail did not, and every
+             altitude on it drifted out of step with its own labels. A
+             follows flag cannot rescue a rect that has already been
+             resolved from a height; increment is 64m so it divides 4096 exactly
              (dragging to the top used to land on 4100m, past the region
              ceiling) and lands cleanly on the powers of two people build
              around - 512/1024/2048 are all reachable exactly.
@@ -234,7 +240,6 @@
          left="100"
          top="30"
          bottom="-129"
-         height="395"
          width="17"
          name="track_altitude_slider"
          orientation="vertical"
@@ -602,4 +607,19 @@
      name="unload_button"
      tool_tip="Drop this environment and fall back to the parcel or region EEP setting. Does not delete the notecard"
      label="Unload" />
+
+    <!-- <SS:Nexii> The way into the settings that are not part of an
+         environment - presets, global assets, the older weather controls.
+         Anchored bottom RIGHT, away from Save/Revert/Unload: those three act
+         on the document in front of you, and this one leaves it entirely. -->
+    <button
+     follows="right|bottom"
+     layout="topleft"
+     right="-12"
+     bottom_delta="0"
+     height="23"
+     width="100"
+     name="settings_button"
+     tool_tip="Precipitation presets, global assets and the rest of Atmo Magic's settings"
+     label="Settings..." />
 </floater>

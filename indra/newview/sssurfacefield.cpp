@@ -1287,6 +1287,20 @@ void SSSurfaceField::renderWetPass()
     gSSSurfaceWetProgram.uniform1f(wet_puddle_spec, llclamp((F32)puddle_spec, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_puddle_gloss, llclamp((F32)puddle_gloss, 0.f, 1.f));
 
+    // How level a surface has to be to hold standing water. The same pair the
+    // normal flatten pass reads below, deliberately from the same settings:
+    // both passes decide whether this fragment is a puddle, and a fragment
+    // shaded as one but not flattened as one (or the reverse) is worse than
+    // either choice made consistently.
+    static LLStaticHashedString wet_cos_full("ssWetFlattenCosFull");
+    static LLStaticHashedString wet_cos_zero("ssWetFlattenCosZero");
+    static LLCachedControl<F32> wet_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 25.f);
+    static LLCachedControl<F32> wet_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 65.f);
+    gSSSurfaceWetProgram.uniform1f(wet_cos_full,
+        cosf(llclamp((F32)wet_angle_full, 0.f, 89.f) * DEG_TO_RAD));
+    gSSSurfaceWetProgram.uniform1f(wet_cos_zero,
+        cosf(llclamp((F32)wet_angle_zero, 1.f, 90.f) * DEG_TO_RAD));
+
     // Diagnostic override: soaks every fragment the pass reaches, whatever the
     // field says. Separates "the pass writes nothing anyone can see" from "the
     // field is not reaching the shader", which look identical from a chair.

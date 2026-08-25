@@ -134,6 +134,7 @@ public:
 
     /*virtual*/ bool loadWAV(const std::string& filename);
     /*virtual*/ U32 getLength();
+    /*virtual*/ U32 getLengthMS();
     friend class LLAudioChannelFMODSTUDIO;
 protected:
     FMOD::System *getSystem()   const {return mSystemp;}

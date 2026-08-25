@@ -1,10 +1,12 @@
 /**
- * @file ssweathersounds.h
- * @brief Atmo Magic environmental weather audio: layered ambient loops for
- *        rain and wind, driven by the live impact rate around the camera
- *        and by raycast probes that detect roof cover and how large the
- *        indoor space is, crossfading between outdoor beds and
- *        rain-on-roof beds per space size.
+ * @file sssoundscape.h
+ * @brief The Atmo Magic soundscape: everything the weather system makes
+ *        audible. Layered ambient loops for rain and wind, driven by the
+ *        live impact rate around the camera and by raycast probes that
+ *        detect roof cover and how large the indoor space is, crossfading
+ *        between outdoor beds and rain-on-roof beds per space size; and
+ *        the surface-aware footstep voices, selected here so their gating
+ *        lives with the rest of the audio rather than in the avatar.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -25,10 +27,10 @@
  * $/LicenseInfo$
  */
 
-#ifndef SS_WEATHERSOUNDS_H
-#define SS_WEATHERSOUNDS_H
+#ifndef SS_SOUNDSCAPE_H
+#define SS_SOUNDSCAPE_H
 
-// <SS:Nexii> Atmo Magic environmental weather audio
+// <SS:Nexii> Atmo Magic soundscape
 
 #include "llsingleton.h"
 #include "lluuid.h"
@@ -40,9 +42,9 @@
 
 class LLAudioSource;
 
-class SSWeatherSounds : public LLSingleton<SSWeatherSounds>
+class SSSoundscape : public LLSingleton<SSSoundscape>
 {
-    LLSINGLETON_EMPTY_CTOR(SSWeatherSounds);
+    LLSINGLETON_EMPTY_CTOR(SSSoundscape);
 
 public:
     // Per-frame driver, called from the manager's idle after parameters
@@ -56,6 +58,37 @@ public:
 
     // Fade out and release every loop (system disabled, teleport, etc.)
     void stopAll();
+
+    // The footstep voice for a foot at this position, from the surface
+    // underfoot - dry, wet, puddle, indoors - or null when the soundscape
+    // has nothing to say: slot unconfigured, or Atmo Magic off. Null tells
+    // the avatar to fall back to the stock per-avatar step sound, so
+    // turning the system off returns the viewer to its vanilla footsteps
+    // rather than silence. action is an SSStepAction; on_land whether the
+    // foot is on terrain rather than an object.
+    LLUUID footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action);
+
+    // What the last footstep lookup decided, for the info overlay. Every
+    // stage of the walk is recorded, including the ones that returned
+    // nothing, because "no sound played" has half a dozen causes that are
+    // indistinguishable from a chair: system off, wrong surface picked, slot
+    // empty, list unparseable.
+    struct StepDebug
+    {
+        F64 mWhen = -1.0;           // sharedTime of the lookup, -1 for never
+        S32 mSurface = -1;          // SSStepSurface, or -1 if not reached
+        S32 mAction = -1;
+        bool mIndoors = false;
+        bool mFieldValid = false;   // the surface field had an answer
+        F32 mWet = 0.f;
+        F32 mPuddle = 0.f;
+        bool mGlobal = false;       // read from settings rather than the preset
+        std::string mSource;        // setting name or preset slot key
+        S32 mListSize = 0;
+        LLUUID mPicked;
+        const char* mWhyNot = "";   // empty when a sound was returned
+    };
+    const StepDebug& lastStep() const { return mStepDebug; }
 
     enum ESpace
     {
@@ -116,6 +149,8 @@ public:
     F64 lastProbeAge() const;
 
 private:
+    StepDebug mStepDebug;
+
     // Ambient loop slots; each maps to one developer-configured sound UUID
     // Outdoor beds are a light/medium/heavy set where only medium is
     // required; the roof beds are one per indoor space size. Wind is not
@@ -190,4 +225,4 @@ private:
 
 // </SS:Nexii>
 
-#endif // SS_WEATHERSOUNDS_H
+#endif // SS_SOUNDSCAPE_H

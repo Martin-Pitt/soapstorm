@@ -10,7 +10,7 @@
  name="floater_ss_atmo_sim"
  save_rect="true"
  single_instance="true"
- title="ATMO MAGIC - SIMULATION"
+ title="Simulation"
  width="424">
 
     <!-- Every row below is laid out against the panel, not the floater. The
@@ -37,6 +37,12 @@
      height="1174"
      background_visible="false">
 
+    <!-- <SS:Nexii> Debug views first.
+         Everything below this is a dial, and a dial is only worth turning
+         once you can see what it did - these are the overlays that show it.
+         They were at the bottom of a panel long enough to need scrolling,
+         which put the thing you reach for most behind the things you reach
+         for least. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -44,9 +50,121 @@
      top="10"
      height="14"
      width="382"
+     name="debug_label"
+     font="SansSerifSmallBold">
+        Debug Views
+    </text>
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="44"
+     width="382"
+     name="debug_help"
+     word_wrap="true"
+     font="SansSerifSmall">
+        Density and detail are debug settings: SSAtmoWindFlowDebugRange and SSAtmoShadowDebugStep. These are the same overlays as Develop &gt; Render Metadata, and toggling either place moves both.
+    </text>
+    <check_box
+     control_name="SSAtmoShowInfo"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="16"
+     width="382"
+     name="info_overlay_check"
+     label="Show info overlay"
+     tool_tip="On-screen readout of weather values, particle counts, impact rate and the indoor/outdoor probe result" />
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="flow_overlay_check"
+     label="Draw the wind flowmap"
+     tool_tip="Same overlay as Develop &gt; Render Metadata &gt; Wind flow" />
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="shadow_overlay_check"
+     label="Draw the rain shadow map"
+     tool_tip="Same overlay as Develop &gt; Render Metadata &gt; Rain shadow" />
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="settle_overlay_check"
+     label="Mark geometry changes waiting to settle"
+     tool_tip="A beacon over every prim change still waiting out its settle delay, green as it comes due and red once it has re-armed too often to ever settle. Same overlay as Develop &gt; Render Metadata &gt; Geometry settling" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="10" height="16" width="106"
+      name="T_flow_style"
+      tool_tip="Arrows read one cell at a time; flow lines read where the air goes">
+        Flow drawn as:
+    </text>
+    <combo_box
+      control_name="SSAtmoWindFlowDebugStyle" name="C_flow_style"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="250">
+        <combo_box.item label="Arrows, one per cell" value="0" name="style_arrows" />
+        <combo_box.item label="Flow lines" value="1" name="style_lines" />
+    </combo_box>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="10" height="16" width="106"
+      name="T_flow_capture"
+      tool_tip="Draw one capture pass in place of the flow field, as the world points that pass actually saw">
+        Capture view:
+    </text>
+    <combo_box
+      control_name="SSAtmoWindFlowDebugCapture" name="C_flow_capture"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="250"
+      tool_tip="Each pass is drawn where it saw geometry, so a direction that missed a whole swathe of the region shows as a hole rather than as nothing at all">
+        <combo_box.item label="Solved flow field" value="0" name="cap_flow" />
+        <combo_box.item label="Overhead heightmap" value="1" name="cap_top" />
+        <combo_box.item label="Probe 0 (from south)" value="2" name="cap_p0" />
+        <combo_box.item label="Probe 1 (from west)" value="3" name="cap_p1" />
+        <combo_box.item label="Probe 2 (from north)" value="4" name="cap_p2" />
+        <combo_box.item label="Probe 3 (from east)" value="5" name="cap_p3" />
+        <combo_box.item label="Carve candidates" value="6" name="cap_cand" />
+    </combo_box>
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="44"
+     width="382"
+     name="flow_capture_status"
+     word_wrap="true"
+     font="SansSerifSmall"
+     tool_tip="The capture buffers are overwritten by every build, so this view can only show the region solved most recently">
+        nothing captured yet. Carve candidates: green opened by a probe, amber no probe could see it, dim red correctly blocked.
+    </text>
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="16"
+     height="14"
+     width="382"
      name="shadow_label"
      font="SansSerifSmallBold">
-        Rain shadow map
+        Rain Shadow Map
     </text>
     <text
      follows="left|top"
@@ -240,7 +358,7 @@
      width="382"
      name="flow_label"
      font="SansSerifSmallBold">
-        Wind flowmap
+        Wind Flowmap
     </text>
     <text
      follows="left|top"
@@ -584,117 +702,6 @@
         no regions solved yet
     </text>
 
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="14"
-     height="14"
-     width="382"
-     name="debug_label"
-     font="SansSerifSmallBold">
-        Debug views
-    </text>
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="4"
-     height="44"
-     width="382"
-     name="debug_help"
-     word_wrap="true"
-     font="SansSerifSmall">
-        Density and detail are debug settings: SSAtmoWindFlowDebugRange and SSAtmoShadowDebugStep. These are the same overlays as Develop &gt; Render Metadata, and toggling either place moves both.
-    </text>
-    <check_box
-     control_name="SSAtmoShowInfo"
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="16"
-     width="382"
-     name="info_overlay_check"
-     label="Show info overlay"
-     tool_tip="On-screen readout of weather values, particle counts, impact rate and the indoor/outdoor probe result" />
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="4"
-     height="16"
-     width="382"
-     name="flow_overlay_check"
-     label="Draw the wind flowmap"
-     tool_tip="Same overlay as Develop &gt; Render Metadata &gt; Wind flow" />
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="4"
-     height="16"
-     width="382"
-     name="shadow_overlay_check"
-     label="Draw the rain shadow map"
-     tool_tip="Same overlay as Develop &gt; Render Metadata &gt; Rain shadow" />
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="4"
-     height="16"
-     width="382"
-     name="settle_overlay_check"
-     label="Mark geometry changes waiting to settle"
-     tool_tip="A beacon over every prim change still waiting out its settle delay, green as it comes due and red once it has re-armed too often to ever settle. Same overlay as Develop &gt; Render Metadata &gt; Geometry settling" />
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="10" height="16" width="106"
-      name="T_flow_style"
-      tool_tip="Arrows read one cell at a time; flow lines read where the air goes">
-        Flow drawn as:
-    </text>
-    <combo_box
-      control_name="SSAtmoWindFlowDebugStyle" name="C_flow_style"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="250">
-        <combo_box.item label="Arrows, one per cell" value="0" name="style_arrows" />
-        <combo_box.item label="Flow lines" value="1" name="style_lines" />
-    </combo_box>
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="10" height="16" width="106"
-      name="T_flow_capture"
-      tool_tip="Draw one capture pass in place of the flow field, as the world points that pass actually saw">
-        Capture view:
-    </text>
-    <combo_box
-      control_name="SSAtmoWindFlowDebugCapture" name="C_flow_capture"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="250"
-      tool_tip="Each pass is drawn where it saw geometry, so a direction that missed a whole swathe of the region shows as a hole rather than as nothing at all">
-        <combo_box.item label="Solved flow field" value="0" name="cap_flow" />
-        <combo_box.item label="Overhead heightmap" value="1" name="cap_top" />
-        <combo_box.item label="Probe 0 (from south)" value="2" name="cap_p0" />
-        <combo_box.item label="Probe 1 (from west)" value="3" name="cap_p1" />
-        <combo_box.item label="Probe 2 (from north)" value="4" name="cap_p2" />
-        <combo_box.item label="Probe 3 (from east)" value="5" name="cap_p3" />
-        <combo_box.item label="Carve candidates" value="6" name="cap_cand" />
-    </combo_box>
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="12"
-     top_pad="6"
-     height="44"
-     width="382"
-     name="flow_capture_status"
-     word_wrap="true"
-     font="SansSerifSmall"
-     tool_tip="The capture buffers are overwritten by every build, so this view can only show the region solved most recently">
-        nothing captured yet. Carve candidates: green opened by a probe, amber no probe could see it, dim red correctly blocked.
-    </text>
     </panel>
     </scroll_container>
 </floater>

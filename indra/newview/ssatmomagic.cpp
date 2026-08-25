@@ -35,7 +35,8 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "ssprecipitation.h"
-#include "ssweathersounds.h"
+#include "ssprecippreset.h"
+#include "sssoundscape.h"
 
 #include "llagent.h"
 #include "llappviewer.h"
@@ -240,6 +241,7 @@ void SSAtmoMagic::refreshParams()
     // Stay enabled while fading out, otherwise the sim is torn down before the
     // fade can be seen
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
+    mSwitchedOn = enabled;
 
     mPrecipitation = llclamp(cfg.mPrecipitation, 0.f, 1.f) * mBlend;
     mTurbulence = llclamp(cfg.mTurbulence, 0.f, 1.f);
@@ -513,7 +515,7 @@ void SSAtmoMagic::processImpacts()
 
         // Feeds the ambient loop loudness: sheltered spots see fewer
         // landings and sound quieter at the same weather parameters
-        SSWeatherSounds::getInstance()->notifyImpact(
+        SSSoundscape::getInstance()->notifyImpact(
             impact.mStrength * (1.f - dist / IMPACT_SEE_RADIUS));
 
         // Deterministic per-impact stream so the ripple and any shatter look
@@ -591,7 +593,7 @@ void SSAtmoMagic::idle()
 
     // Ambient rain/wind loops and the indoor probe cycle; fades everything
     // out itself when the system is off
-    SSWeatherSounds::getInstance()->idle();
+    SSSoundscape::getInstance()->idle();
 }
 
 
@@ -863,7 +865,7 @@ void SSAtmoMagic::drawInfo()
     if (!show_info) return;
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
-    SSWeatherSounds* audio = SSWeatherSounds::getInstance();
+    SSSoundscape* audio = SSSoundscape::getInstance();
     SSPrecipSim* sim = atmo->sim();
 
     const SSPrecipPreset& preset = atmo->preset();
@@ -1071,9 +1073,9 @@ void SSAtmoMagic::drawInfo()
     lines.push_back("-- audio --");
     lines.push_back(llformat("cover      %s   space %s%s",
                              audio->isCovered() ? "ROOFED" : "open sky",
-                             SSWeatherSounds::spaceName(audio->space()),
+                             SSSoundscape::spaceName(audio->space()),
                              audio->isCovered() ? ""
-                                 : (std::string(" / ") + SSWeatherSounds::sizeName(audio->outdoorSize())).c_str()));
+                                 : (std::string(" / ") + SSSoundscape::sizeName(audio->outdoorSize())).c_str()));
     if (audio->isCovered())
     {
         // Ceiling from the up ray, and how much more build the flowmap's
@@ -1085,6 +1087,47 @@ void SSAtmoMagic::drawInfo()
     }
     lines.push_back(llformat("walls      %d hit   avg %.1fm   blend %.2f",
                              audio->wallCount(), audio->wallDistance(), audio->coverBlend()));
+    // Footsteps: the last lookup, whatever it decided. Held rather than
+    // sampled live because a step is an event - by the time anyone reads
+    // this line the foot has long since landed.
+    {
+        const SSSoundscape::StepDebug& st = audio->lastStep();
+        if (st.mWhen < 0.0)
+        {
+            lines.push_back("footstep   none yet");
+        }
+        else
+        {
+            static const char* ACTION[] = { "walk", "run", "jump", "land" };
+            const char* act = (st.mAction >= 0 && st.mAction < 4) ? ACTION[st.mAction] : "?";
+
+            std::string surface("(not reached)");
+            if (st.mSurface >= 0)
+            {
+                surface = SSFootstepSounds::surfaceKey((SSStepSurface)st.mSurface);
+            }
+
+            lines.push_back(llformat("footstep   %.1fs ago   %s / %s   %s",
+                                     (F32)(atmo->sharedTime() - st.mWhen),
+                                     surface.c_str(), act,
+                                     st.mIndoors ? "indoors" : "outdoors"));
+            lines.push_back(llformat("  field    %s   wet %.2f   puddle %.0f mm",
+                                     st.mFieldValid ? "valid" : "NO ANSWER",
+                                     st.mWet, st.mPuddle * 1000.f));
+            if (st.mWhyNot[0])
+            {
+                lines.push_back(llformat("  SILENT   %s   [%s]",
+                                         st.mWhyNot, st.mSource.c_str()));
+            }
+            else
+            {
+                lines.push_back(llformat("  played   %s of %d   [%s]",
+                                         st.mPicked.asString().substr(0, 8).c_str(),
+                                         st.mListSize, st.mSource.c_str()));
+            }
+        }
+    }
+
     lines.push_back(llformat("impacts    %.1f/s   %d queued   loops %d",
                              audio->impactRate(), (S32)atmo->pendingImpacts(), audio->activeLoops()));
     lines.push_back(llformat("probe age  %.2fs", (F32)audio->lastProbeAge()));

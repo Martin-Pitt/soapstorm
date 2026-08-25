@@ -8,7 +8,7 @@
  name="floater_ss_atmo_preset"
  save_rect="true"
  single_instance="true"
- title="ATMO MAGIC - PRESET EDITOR"
+ title="Edit Atmo Magic Preset"
  width="450">
     <combo_box name="preset_combo" follows="left|top" layout="topleft"
      left="10" top="26" height="23" width="290"
@@ -118,7 +118,7 @@
         <panel name="tab_tiers" label="Tiers" follows="all" layout="topleft"
          left="0" top="0" width="436" height="494">
             <text name="drops_label" follows="left|top" layout="topleft" left="10" top="12"
-             height="14" width="410" font="SansSerifSmallBold">Individual drops</text>
+             height="14" width="410" font="SansSerifSmallBold">Individual Drops</text>
             <check_box name="drops_enabled" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="16" width="90" label="Enabled" />
             <combo_box name="drops_kind" follows="left|top" layout="topleft" left_pad="4"
@@ -142,7 +142,7 @@
              tool_tip="Metres from the camera this tier covers" />
 
             <text name="clusters_label" follows="left|top" layout="topleft" left="10" top_pad="14"
-             height="14" width="410" font="SansSerifSmallBold">Drop clusters</text>
+             height="14" width="410" font="SansSerifSmallBold">Drop Clusters</text>
             <check_box name="clusters_enabled" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="16" width="90" label="Enabled" />
             <combo_box name="clusters_kind" follows="left|top" layout="topleft" left_pad="4"
@@ -165,7 +165,7 @@
              min_val="0" max_val="512" increment="1" decimal_digits="0" show_text="true" />
 
             <text name="sheets_label" follows="left|top" layout="topleft" left="10" top_pad="14"
-             height="14" width="410" font="SansSerifSmallBold">Shower sheets</text>
+             height="14" width="410" font="SansSerifSmallBold">Shower Sheets</text>
             <check_box name="sheets_enabled" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="16" width="90" label="Enabled" />
             <combo_box name="sheets_kind" follows="left|top" layout="topleft" left_pad="4"
@@ -199,7 +199,7 @@
              tool_tip="Throws glowing shards off the surface at the speed it hit" />
 
             <text name="ripple_label" follows="left|top" layout="topleft" left="10" top_pad="14"
-             height="14" width="410" font="SansSerifSmallBold">Landing ring</text>
+             height="14" width="410" font="SansSerifSmallBold">Landing Ring</text>
             <slider name="ripple_size" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="15" width="410" label="Ring size:" label_width="130"
              min_val="0" max_val="3" increment="0.01" decimal_digits="2" show_text="true"
@@ -214,7 +214,7 @@
              tool_tip="Seconds the ring takes to spread and fade on a hard surface; water holds it longer" />
 
             <text name="crown_label" follows="left|top" layout="topleft" left="10" top_pad="14"
-             height="14" width="410" font="SansSerifSmallBold">Splash crown</text>
+             height="14" width="410" font="SansSerifSmallBold">Splash Crown</text>
             <slider name="crown_size" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="15" width="410" label="Crown size:" label_width="130"
              min_val="0" max_val="1" increment="0.005" decimal_digits="3" show_text="true"
@@ -231,7 +231,9 @@
              min_val="0" max_val="3" increment="0.05" decimal_digits="2" show_text="true" />
 
             <text name="riser_label" follows="left|top" layout="topleft" left="10" top_pad="18"
-             height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Riser flavour mix - only applies to the Riser behaviour</text>
+             height="14" width="410" font="SansSerifSmallBold">Riser Flavour Mix</text>
+            <text name="riser_desc" follows="left|top" layout="topleft" left="10" top_pad="2"
+             height="14" width="410" font="SansSerifSmall">Only applies to the Riser behaviour.</text>
             <slider name="dark_mix" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="15" width="410" label="Dark flecks:" label_width="130"
              min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
@@ -286,8 +288,33 @@
 
         <panel name="tab_assets" label="Assets" follows="all" layout="topleft"
          left="0" top="0" width="436" height="494">
+
+        <!-- <SS:Nexii> The content is taller than the tab and has to scroll.
+             Same arrangement the sim floater uses: an inner panel of fixed
+             height carrying everything, and a container that follows the
+             window and scrolls it. The rows are laid out against the PANEL,
+             so its height is the sum of what it holds rather than whatever
+             the floater happens to be - which is what stopped the footstep
+             grid being cut off at the bottom, and stops the next thing added
+             here from being cut off either. -->
+        <scroll_container
+         color="DkGray2"
+         opaque="true"
+         follows="all"
+         layout="topleft"
+         left="0"
+         top="0"
+         width="436"
+         height="494"
+         name="assets_scroll"
+         reserve_scroll_corner="false">
+        <panel name="assets_panel" follows="left|top" layout="topleft"
+         left="0" top="0" width="418" height="732"
+         background_visible="false">
             <text name="tex_label" follows="left|top" layout="topleft" left="10" top="12"
-             height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Textures - comma separated UUIDs, or pbr:UUID. Empty generates splatter textures.</text>
+             height="14" width="410" font="SansSerifSmallBold">Textures</text>
+            <text name="tex_desc" follows="left|top" layout="topleft" left="10" top_pad="2"
+             height="28" width="410" word_wrap="true" font="SansSerifSmall">Comma separated UUIDs, or pbr:UUID. Empty generates splatter textures.</text>
             <line_editor name="textures" follows="left|top" layout="topleft" left="10" top_pad="4"
              height="20" width="410" label="Particle textures" />
             <line_editor name="ripple_texture" follows="left|top" layout="topleft" left="10" top_pad="6"
@@ -297,21 +324,125 @@
             <line_editor name="puff_texture" follows="left|top" layout="topleft" left="10" top_pad="6"
              height="20" width="410" label="Riser clouds" />
             <text name="snd_label" follows="left|top" layout="topleft" left="10" top_pad="14"
-             height="28" width="410" word_wrap="true" font="SansSerifSmallBold">Sound pack - comma separated UUIDs play end to end as a sequence</text>
-            <line_editor name="snd_medium" follows="left|top" layout="topleft" left="10" top_pad="4"
-             height="20" width="410" label="Ambient (required)" />
-            <line_editor name="snd_light" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Ambient light (optional)" />
-            <line_editor name="snd_heavy" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Ambient heavy (optional)" />
-            <line_editor name="snd_roof_open" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Inside, Sheltered" />
-            <line_editor name="snd_roof_small" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Inside, small room" />
-            <line_editor name="snd_roof_medium" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Inside, medium room" />
-            <line_editor name="snd_roof_big" follows="left|top" layout="topleft" left="10" top_pad="6"
-             height="20" width="410" label="Inside, big hall" />
+             height="14" width="410" font="SansSerifSmallBold">Sound Pack</text>
+            <text name="snd_desc" follows="left|top" layout="topleft" left="10" top_pad="2"
+             height="14" width="410" font="SansSerifSmall">Each slot is a list of sounds played end to end.</text>
+            <text name="snd_medium_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Ambient (required)</text>
+            <ss_sound_list name="snd_medium" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="snd_light_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Ambient light (optional)</text>
+            <ss_sound_list name="snd_light" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="snd_heavy_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Ambient heavy (optional)</text>
+            <ss_sound_list name="snd_heavy" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="snd_roof_open_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Inside, Sheltered</text>
+            <ss_sound_list name="snd_roof_open" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="snd_roof_small_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Inside, small room</text>
+            <ss_sound_list name="snd_roof_small" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="snd_roof_medium_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Inside, medium room</text>
+            <ss_sound_list name="snd_roof_medium" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="snd_roof_big_label" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="14" width="150" font="SansSerifSmall">Inside, big hall</text>
+            <ss_sound_list name="snd_roof_big" follows="left|top" layout="topleft" left_pad="4" top_delta="-4"
+             height="20" width="254" mode="sequence" />
+            <text name="steps_label" follows="left|top" layout="topleft" left="10" top_pad="12"
+             height="14" width="410" font="SansSerifSmallBold">Footsteps on Wet Ground</text>
+            <text name="steps_desc" follows="left|top" layout="topleft" left="10" top_pad="2"
+             height="28" width="410" word_wrap="true" font="SansSerifSmall">One list per surface and action, drawn from at random. Dry ground is in Global Assets.</text>
+
+            <!-- <SS:Nexii> A grid, and so laid out as one: every cell carries
+                 its own absolute left and top inside this panel.
+                 Chaining would work here too, with care - the trouble is
+                 what it costs to get wrong. left_pad measures from the
+                 previous sibling and top_delta from its top, so every cell
+                 inherits its neighbour's mistakes: a stray top_delta of -3 on
+                 each chip walked three pixels higher across every row, and
+                 each surface label, chained off the last chip of the row
+                 above, arrived carrying the whole accumulated drift and
+                 climbed into the row before it. One wrong number, twenty-eight
+                 wrong positions. Absolute coordinates are not more capable,
+                 only independent - which for a grid that will grow a surface
+                 or an action later is the property worth having. -->
+            <panel name="steps_panel" follows="left|top" layout="topleft"
+             left="6" top_pad="4" width="424" height="114"
+             background_visible="false" border="false">
+                <text name="step_head_walk" follows="left|top" layout="topleft"
+                 left="100" top="0" height="12" width="78" font="SansSerifSmall">Walk</text>
+                <text name="step_head_run" follows="left|top" layout="topleft"
+                 left="182" top="0" height="12" width="78" font="SansSerifSmall">Run</text>
+                <text name="step_head_jump" follows="left|top" layout="topleft"
+                 left="264" top="0" height="12" width="78" font="SansSerifSmall">Jump</text>
+                <text name="step_head_land" follows="left|top" layout="topleft"
+                 left="346" top="0" height="12" width="78" font="SansSerifSmall">Land</text>
+                <text name="step_terrain_wet_label" follows="left|top" layout="topleft"
+                 left="0" top="17" height="14" width="100" font="SansSerifSmall">Terrain, wet</text>
+                <ss_sound_list name="step_terrain_wet_walk" follows="left|top" layout="topleft"
+                 left="100" top="14" height="20" width="78" mode="random"
+                 tool_tip="Terrain, wet, Walk" />
+                <ss_sound_list name="step_terrain_wet_run" follows="left|top" layout="topleft"
+                 left="182" top="14" height="20" width="78" mode="random"
+                 tool_tip="Terrain, wet, Run" />
+                <ss_sound_list name="step_terrain_wet_jump" follows="left|top" layout="topleft"
+                 left="264" top="14" height="20" width="78" mode="random"
+                 tool_tip="Terrain, wet, Jump" />
+                <ss_sound_list name="step_terrain_wet_land" follows="left|top" layout="topleft"
+                 left="346" top="14" height="20" width="78" mode="random"
+                 tool_tip="Terrain, wet, Land" />
+                <text name="step_terrain_puddle_label" follows="left|top" layout="topleft"
+                 left="0" top="42" height="14" width="100" font="SansSerifSmall">Terrain, puddle</text>
+                <ss_sound_list name="step_terrain_puddle_walk" follows="left|top" layout="topleft"
+                 left="100" top="39" height="20" width="78" mode="random"
+                 tool_tip="Terrain, puddle, Walk" />
+                <ss_sound_list name="step_terrain_puddle_run" follows="left|top" layout="topleft"
+                 left="182" top="39" height="20" width="78" mode="random"
+                 tool_tip="Terrain, puddle, Run" />
+                <ss_sound_list name="step_terrain_puddle_jump" follows="left|top" layout="topleft"
+                 left="264" top="39" height="20" width="78" mode="random"
+                 tool_tip="Terrain, puddle, Jump" />
+                <ss_sound_list name="step_terrain_puddle_land" follows="left|top" layout="topleft"
+                 left="346" top="39" height="20" width="78" mode="random"
+                 tool_tip="Terrain, puddle, Land" />
+                <text name="step_outside_wet_label" follows="left|top" layout="topleft"
+                 left="0" top="67" height="14" width="100" font="SansSerifSmall">Outside, wet</text>
+                <ss_sound_list name="step_outside_wet_walk" follows="left|top" layout="topleft"
+                 left="100" top="64" height="20" width="78" mode="random"
+                 tool_tip="Outside, wet, Walk" />
+                <ss_sound_list name="step_outside_wet_run" follows="left|top" layout="topleft"
+                 left="182" top="64" height="20" width="78" mode="random"
+                 tool_tip="Outside, wet, Run" />
+                <ss_sound_list name="step_outside_wet_jump" follows="left|top" layout="topleft"
+                 left="264" top="64" height="20" width="78" mode="random"
+                 tool_tip="Outside, wet, Jump" />
+                <ss_sound_list name="step_outside_wet_land" follows="left|top" layout="topleft"
+                 left="346" top="64" height="20" width="78" mode="random"
+                 tool_tip="Outside, wet, Land" />
+                <text name="step_outside_puddle_label" follows="left|top" layout="topleft"
+                 left="0" top="92" height="14" width="100" font="SansSerifSmall">Outside, puddle</text>
+                <ss_sound_list name="step_outside_puddle_walk" follows="left|top" layout="topleft"
+                 left="100" top="89" height="20" width="78" mode="random"
+                 tool_tip="Outside, puddle, Walk" />
+                <ss_sound_list name="step_outside_puddle_run" follows="left|top" layout="topleft"
+                 left="182" top="89" height="20" width="78" mode="random"
+                 tool_tip="Outside, puddle, Run" />
+                <ss_sound_list name="step_outside_puddle_jump" follows="left|top" layout="topleft"
+                 left="264" top="89" height="20" width="78" mode="random"
+                 tool_tip="Outside, puddle, Jump" />
+                <ss_sound_list name="step_outside_puddle_land" follows="left|top" layout="topleft"
+                 left="346" top="89" height="20" width="78" mode="random"
+                 tool_tip="Outside, puddle, Land" />
+            </panel>
+        </panel>
+        </scroll_container>
         </panel>
     </tab_container>
 </floater>

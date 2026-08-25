@@ -1,5 +1,5 @@
 /**
- * @file ssweathersounds.cpp
+ * @file sssoundscape.cpp
  * @brief Atmo Magic environmental weather audio implementation.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
@@ -23,10 +23,13 @@
 
 #include "llviewerprecompiledheaders.h"
 
-#include "ssweathersounds.h"
+#include "sssoundscape.h"
 #include "ssatmomagic.h"
 #include "sswindflow.h"
 #include "ssprecippreset.h"
+#include "sssurfacefield.h"
+
+#include "llrand.h"
 
 #include "llagent.h"
 #include "llfasttimer.h"
@@ -89,7 +92,7 @@ static void parseSoundList(const std::string& value, std::vector<LLUUID>& out)
     }
 }
 
-void SSWeatherSounds::releaseLoop(Loop& loop)
+void SSSoundscape::releaseLoop(Loop& loop)
 {
     if (gAudiop && loop.mSourceID.notNull())
     {
@@ -104,7 +107,7 @@ void SSWeatherSounds::releaseLoop(Loop& loop)
     loop.mTarget = 0.f;
 }
 
-void SSWeatherSounds::stopAll()
+void SSSoundscape::stopAll()
 {
     for (Loop& loop : mLoops)
     {
@@ -113,12 +116,12 @@ void SSWeatherSounds::stopAll()
     mImpactRate = 0.f;
 }
 
-void SSWeatherSounds::notifyImpact(F32 strength)
+void SSSoundscape::notifyImpact(F32 strength)
 {
     mImpactRate += strength;
 }
 
-bool SSWeatherSounds::castUpProbe(S32 index, F32& hit_dist)
+bool SSSoundscape::castUpProbe(S32 index, F32& hit_dist)
 {
     // Three rays leaning slightly off vertical, evenly spaced around the
     // camera. Tilting them rather than firing straight up is what stops a
@@ -147,7 +150,7 @@ bool SSWeatherSounds::castUpProbe(S32 index, F32& hit_dist)
     return false;
 }
 
-F32 SSWeatherSounds::castSideProbe(S32 index)
+F32 SSSoundscape::castSideProbe(S32 index)
 {
     static const LLVector3 cardinals[4] = {
         LLVector3(1.f, 0.f, 0.f), LLVector3(-1.f, 0.f, 0.f),
@@ -169,7 +172,7 @@ F32 SSWeatherSounds::castSideProbe(S32 index)
     return SIDE_RAY_LENGTH;
 }
 
-void SSWeatherSounds::updateProbes(F64 now)
+void SSSoundscape::updateProbes(F64 now)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_AUDIO_PROBE);
 
@@ -276,14 +279,14 @@ void SSWeatherSounds::updateProbes(F64 now)
 // over a ceiling should barely register, because that is an ordinary floor
 // slab and you can still plainly hear the storm. It is being under several of
 // them that takes the rain away.
-F32 SSWeatherSounds::burialOcclusion() const
+F32 SSSoundscape::burialOcclusion() const
 {
     const F32 t = llclamp(mBuriedSmooth / BURIAL_FULL, 0.f, 1.f);
     return t * t * (3.f - 2.f * t);
 }
 
 // static
-const char* SSWeatherSounds::spaceName(ESpace space)
+const char* SSSoundscape::spaceName(ESpace space)
 {
     switch (space)
     {
@@ -296,7 +299,7 @@ const char* SSWeatherSounds::spaceName(ESpace space)
 }
 
 // static
-const char* SSWeatherSounds::sizeName(ESize size)
+const char* SSSoundscape::sizeName(ESize size)
 {
     switch (size)
     {
@@ -306,7 +309,7 @@ const char* SSWeatherSounds::sizeName(ESize size)
     }
 }
 
-F32 SSWeatherSounds::wallDistanceToward(const LLVector3& dir_horizontal) const
+F32 SSSoundscape::wallDistanceToward(const LLVector3& dir_horizontal) const
 {
     static const LLVector3 cardinals[4] = {
         LLVector3(1.f, 0.f, 0.f), LLVector3(-1.f, 0.f, 0.f),
@@ -326,7 +329,7 @@ F32 SSWeatherSounds::wallDistanceToward(const LLVector3& dir_horizontal) const
     return (total > 0.f) ? (weighted / total) : SIDE_RAY_LENGTH;
 }
 
-F32 SSWeatherSounds::occlusionGain(const LLVector3& source_pos) const
+F32 SSSoundscape::occlusionGain(const LLVector3& source_pos) const
 {
     LLVector3 to_source = source_pos - mProbeOrigin;
     to_source.mV[VZ] = 0.f;
@@ -341,14 +344,14 @@ F32 SSWeatherSounds::occlusionGain(const LLVector3& source_pos) const
     return lerp(0.6f, 0.22f, mCoverSmooth);
 }
 
-F32 SSWeatherSounds::impactRate() const
+F32 SSSoundscape::impactRate() const
 {
     // mImpactRate is an exponentially decayed sum of impact strengths; its
     // steady state is (rate * tau), so undo the tau for a real per-second figure
     return mImpactRate / IMPACT_RATE_TAU;
 }
 
-S32 SSWeatherSounds::activeLoops() const
+S32 SSSoundscape::activeLoops() const
 {
     S32 count = 0;
     for (const Loop& loop : mLoops)
@@ -358,12 +361,12 @@ S32 SSWeatherSounds::activeLoops() const
     return count;
 }
 
-F64 SSWeatherSounds::lastProbeAge() const
+F64 SSSoundscape::lastProbeAge() const
 {
     return SSAtmoMagic::getInstance()->sharedTime() - mLastCycleDone;
 }
 
-void SSWeatherSounds::applyLoop(Loop& loop, const std::string& configured, F32 master, F32 dt)
+void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 master, F32 dt)
 {
     if (configured != loop.mConfigured)
     {
@@ -440,7 +443,7 @@ void SSWeatherSounds::applyLoop(Loop& loop, const std::string& configured, F32 m
         LLViewerCamera::getInstance()->getOrigin()));
 }
 
-void SSWeatherSounds::updateLoops(F64 now, F32 dt)
+void SSSoundscape::updateLoops(F64 now, F32 dt)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
@@ -560,7 +563,115 @@ void SSWeatherSounds::updateLoops(F64 now, F32 dt)
     }
 }
 
-void SSWeatherSounds::idle()
+//-----------------------------------------------------------------------------
+// Footsteps
+//-----------------------------------------------------------------------------
+LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action)
+{
+    mStepDebug = StepDebug();
+    mStepDebug.mWhen = SSAtmoMagic::getInstance()->sharedTime();
+    mStepDebug.mAction = action;
+    // Switched on, not running: isEnabled() is false whenever no weather
+    // track is active, and dry ground is exactly the surface you walk on
+    // when none is. Gating these on it silenced every footstep in fair
+    // weather - which is all of them, most of the time.
+    static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
+    if (!SSAtmoMagic::getInstance()->isSwitchedOn() || !sounds)
+    {
+        mStepDebug.mWhyNot = SSAtmoMagic::getInstance()->isSwitchedOn()
+            ? "SSAtmoSounds off" : "Atmo Magic off";
+        return LLUUID::null;
+    }
+
+    // Indoors: the wind flowmap already builds a topdown capture of the
+    // topmost surface in every column (roof, floor slab, or open ground) to
+    // drive the rain sound's burial depth. Reusing it here is one grid
+    // lookup, no raycast, and - unlike the camera-anchored cover probe the
+    // rain sound uses - it is evaluated at each avatar's own feet, so a
+    // crowd standing half in and half out of a doorway reads correctly
+    // instead of everyone sharing the camera's verdict.
+    F32 column_top = 0.f;
+    const bool indoors = SSWindFlowMap::getInstance()->surfaceAt(foot_pos_agent, column_top)
+        && (column_top - foot_pos_agent.mV[VZ] > 0.75f);
+
+    mStepDebug.mIndoors = indoors;
+
+    SSStepSurface surface;
+    if (indoors)
+    {
+        surface = STEP_INSIDE_DRY;
+    }
+    else
+    {
+        const SSSurfaceField::Sample wet = SSSurfaceField::instance().sample(foot_pos_agent);
+        const bool puddle = wet.mValid && wet.mPuddle > 0.005f;
+        const bool damp = wet.mValid && wet.mWet > 0.3f;
+
+        mStepDebug.mFieldValid = wet.mValid;
+        mStepDebug.mWet = wet.mWet;
+        mStepDebug.mPuddle = wet.mPuddle;
+
+        if (on_land)
+        {
+            surface = puddle ? STEP_TERRAIN_PUDDLE : (damp ? STEP_TERRAIN_WET : STEP_TERRAIN_DRY);
+        }
+        else
+        {
+            surface = puddle ? STEP_OUTSIDE_PUDDLE : (damp ? STEP_OUTSIDE_WET : STEP_OUTSIDE_DRY);
+        }
+    }
+
+    // Dry ground comes from the global settings, everything else from the
+    // preset - see SSFootstepSounds::surfaceIsGlobal. Asked here rather than
+    // resolved earlier because this is the only place that knows which
+    // surface was decided on.
+    mStepDebug.mSurface = surface;
+    mStepDebug.mGlobal = SSFootstepSounds::surfaceIsGlobal(surface);
+
+    std::string csv;
+    if (mStepDebug.mGlobal)
+    {
+        mStepDebug.mSource = SSFootstepSounds::globalSettingName(surface, (SSStepAction)action);
+        csv = gSavedSettings.getString(mStepDebug.mSource);
+    }
+    else
+    {
+        mStepDebug.mSource = std::string(SSPrecipPresetManager::instance().active().mName)
+            + "/" + SSFootstepSounds::surfaceKey(surface)
+            + "_" + SSFootstepSounds::actionKey((SSStepAction)action);
+        csv = SSPrecipPresetManager::instance().active().mFootsteps.at(surface, (SSStepAction)action);
+    }
+
+    if (csv.empty())
+    {
+        mStepDebug.mWhyNot = "slot empty";
+        return LLUUID::null;
+    }
+
+    std::vector<std::string> tokens;
+    LLStringUtil::getTokens(csv, tokens, ",");
+    std::vector<LLUUID> ids;
+    ids.reserve(tokens.size());
+    for (const std::string& tok : tokens)
+    {
+        LLUUID id(tok);
+        if (id.notNull()) ids.push_back(id);
+    }
+    mStepDebug.mListSize = (S32)ids.size();
+    if (ids.empty())
+    {
+        mStepDebug.mWhyNot = "no valid UUIDs";
+        return LLUUID::null;
+    }
+
+    // A different drop each step, the way the ambient sequences avoid an
+    // audible repeat - but picked at random rather than walked in order,
+    // since footsteps fire far too quickly for a long sequence to matter.
+    mStepDebug.mPicked = ids[ll_rand((S32)ids.size())];
+    return mStepDebug.mPicked;
+}
+
+void SSSoundscape::idle()
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_AUDIO);
 

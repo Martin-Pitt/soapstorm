@@ -955,6 +955,23 @@ U32 LLAudioBufferFMODSTUDIO::getLength()
 }
 
 
+U32 LLAudioBufferFMODSTUDIO::getLengthMS()
+{
+    if (!mSoundp)
+    {
+        return 0;
+    }
+
+    // Asked for in milliseconds directly rather than derived from the byte
+    // count above. FMOD knows the sample rate and channel count; nothing
+    // outside it does, so any conversion done by a caller is a guess at two
+    // numbers it cannot see.
+    U32 length_ms = 0;
+    Check_FMOD_Error(mSoundp->getLength(&length_ms, FMOD_TIMEUNIT_MS), "FMOD::Sound::getLength");
+    return length_ms;
+}
+
+
 void LLAudioChannelFMODSTUDIO::set3DMode(bool use3d)
 {
     FMOD_MODE current_mode;

@@ -74,6 +74,40 @@ const char* SSFootstepSounds::actionName(SSStepAction a)
 }
 
 // static
+bool SSFootstepSounds::surfaceIsGlobal(SSStepSurface s)
+{
+    return s == STEP_TERRAIN_DRY || s == STEP_OUTSIDE_DRY || s == STEP_INSIDE_DRY;
+}
+
+// static
+std::string SSFootstepSounds::globalSettingName(SSStepSurface s, SSStepAction a)
+{
+    if (!surfaceIsGlobal(s)) return std::string();
+
+    // Built from the same keys everything else uses, capitalised into the
+    // house style for settings - so there is still only one spelling of
+    // "outside_dry" in the system and this is derived from it.
+    std::string name("SSAtmoStep");
+
+    bool upper = true;
+    const std::string surface(surfaceKey(s));
+    for (char c : surface)
+    {
+        if (c == '_') { upper = true; continue; }
+        name += upper ? (char)toupper((unsigned char)c) : c;
+        upper = false;
+    }
+
+    const std::string action(actionKey(a));
+    for (size_t i = 0; i < action.size(); ++i)
+    {
+        name += (i == 0) ? (char)toupper((unsigned char)action[i]) : action[i];
+    }
+
+    return name;
+}
+
+// static
 const char* SSFootstepSounds::surfaceKey(SSStepSurface s)
 {
     return (s < STEP_SURFACE_COUNT) ? STEP_SURFACE_KEY[s] : "";
@@ -178,6 +212,8 @@ LLSD SSPrecipPreset::asLLSD() const
     {
         for (S32 a = 0; a < STEP_ACTION_COUNT; ++a)
         {
+            if (SSFootstepSounds::surfaceIsGlobal((SSStepSurface)s)) continue;
+
             const std::string key = std::string("step_") + STEP_SURFACE_KEY[s] + "_" + STEP_ACTION_KEY[a];
             sd[key] = mFootsteps.mSounds[s][a];
         }
@@ -287,7 +323,28 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
         for (S32 a = 0; a < STEP_ACTION_COUNT; ++a)
         {
             const std::string key = std::string("step_") + STEP_SURFACE_KEY[s] + "_" + STEP_ACTION_KEY[a];
-            if (sd.has(key)) mFootsteps.mSounds[s][a] = sd[key].asString();
+            if (!sd.has(key)) continue;
+
+            if (SSFootstepSounds::surfaceIsGlobal((SSStepSurface)s))
+            {
+                // These slots moved out of the preset into the global
+                // SSAtmoStep* settings. A preset saved before the move still
+                // carries them, so adopt its values - once, into settings
+                // still empty - rather than letting configured footsteps go
+                // silent across the change. Not written back out (see the
+                // skip in asLLSD), so the preset sheds them on its next save.
+                const std::string setting = SSFootstepSounds::globalSettingName(
+                    (SSStepSurface)s, (SSStepAction)a);
+                const std::string val = sd[key].asString();
+                if (!val.empty() && gSavedSettings.getString(setting).empty())
+                {
+                    gSavedSettings.setString(setting, val);
+                }
+            }
+            else
+            {
+                mFootsteps.mSounds[s][a] = sd[key].asString();
+            }
         }
     }
 }

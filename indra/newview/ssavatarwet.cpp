@@ -156,13 +156,41 @@ void SSAvatarWet::idle(F32 dt)
         LLVector3 foot = pos;
         foot.mV[VZ] -= avatar->getPelvisToFoot();
 
+        const F32 target = exposureAt(foot, height);
+
+        auto found = mAvatars.find(avatar->getID());
+        const bool first_sight = (found == mAvatars.end());
+
         State& state = mAvatars[avatar->getID()];
         state.mLastSeen = now;
 
-        // Exposure eases rather than switching - see EXPOSURE_TAU.
-        const F32 target = exposureAt(foot, height);
-        state.mExposure += (target - state.mExposure)
-            * llclamp(dt / EXPOSURE_TAU, 0.f, 1.f);
+        if (first_sight)
+        {
+            // Somebody who walks into range has a past.
+            //
+            // Starting them bone dry and easing up from zero says they were
+            // created at the edge of the tracking radius, which is visibly
+            // wrong: an avatar rezzing in, or simply walking closer, spends
+            // its first half minute drying out in reverse while the weather
+            // catches up. Worse, the tracking radius is small enough that
+            // ordinary movement crosses it, so the same person could arrive
+            // dry more than once in one downpour.
+            //
+            // So assume they have been where they are for a while, and give
+            // them the wetness that implies. Exposure takes its measured
+            // value outright rather than fading in from sheltered, and soak
+            // takes what standing in this much rain at this much exposure
+            // would have reached - which is exactly what the loop below
+            // would have converged on anyway, arrived at immediately.
+            state.mExposure = target;
+            state.mSoak = llclamp(target * intensity, 0.f, 1.f);
+        }
+        else
+        {
+            // Exposure eases rather than switching - see EXPOSURE_TAU.
+            state.mExposure += (target - state.mExposure)
+                * llclamp(dt / EXPOSURE_TAU, 0.f, 1.f);
+        }
 
         // Soaking and drying are one exponential approach each, toward a wet
         // target while it is raining on them and toward dry when it is not.
@@ -216,9 +244,15 @@ void SSAvatarWet::idle(F32 dt)
 
 bool SSAvatarWet::bindForShader(LLGLSLShader& shader) const
 {
+    static LLStaticHashedString rain_dir("ssRainDir");
     static LLStaticHashedString avatar_count("ssAvatarCount");
     static LLStaticHashedString avatar_pos("ssAvatarPos");
     static LLStaticHashedString avatar_shape("ssAvatarShape");
+
+    // Which way the rain is going, so the windward side of a body wets first.
+    LLVector3 dir = SSAtmoMagic::getInstance()->rainDirection();
+    if (dir.normVec() < 0.001f) dir.setVec(0.f, 0.f, -1.f);
+    shader.uniform3fv(rain_dir, 1, dir.mV);
 
     const S32 count = llmin((S32)mShaded.size(), MAX_SHADED);
     shader.uniform1i(avatar_count, count);

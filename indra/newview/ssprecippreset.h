@@ -156,6 +156,22 @@ struct SSFootstepSounds
 
     static const char* surfaceName(SSStepSurface s);   // for UI labels
     static const char* actionName(SSStepAction a);
+    // Whether a surface's sounds are global rather than per-preset.
+    //
+    // Dry ground sounds the same whatever is not falling on it, so those
+    // slots live in settings and are shared by every preset. Wet and puddle
+    // surfaces genuinely differ with what made them wet, and stay here.
+    //
+    // Asked rather than assumed, in one place, because three things have to
+    // agree about it: the preset editor (which must not show them), the
+    // global assets floater (which must), and the avatar (which has to read
+    // whichever holds the answer).
+    static bool surfaceIsGlobal(SSStepSurface s);
+
+    // The setting a global slot is stored under, or empty for one that is
+    // not global.
+    static std::string globalSettingName(SSStepSurface s, SSStepAction a);
+
     static const char* surfaceKey(SSStepSurface s);    // for LLSD/widget names, e.g. "terrain_dry"
     static const char* actionKey(SSStepAction a);      // e.g. "walk"
 };

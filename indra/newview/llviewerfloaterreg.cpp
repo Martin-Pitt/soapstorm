@@ -243,6 +243,9 @@
 #include "ssfloateratmoenv.h" // <SS:Nexii> Atmo Magic
 #include "ssfloateratmoplanetary.h"
 #include "ssfloateratmoinfluence.h"
+#include "ssfloatersoundlist.h" // <SS:Nexii> Atmo Magic sound sequences
+#include "ssfloatertexturelist.h" // <SS:Nexii> Atmo Magic texture lists
+#include "ssfloaterassets.h" // <SS:Nexii> Atmo Magic global assets
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
 #include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
 #include "quickprefs.h"
@@ -687,7 +690,7 @@ void LLViewerFloaterReg::registerFloaters()
     // <SS:Nexii> Atmo Magic weather
     LLFloaterReg::add("ss_atmo", "floater_ss_atmo.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoMagic>);
     LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
-    LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAssets>);
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
     LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("ss_atmo_sim", "floater_ss_atmo_sim.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSimulation>);
@@ -696,6 +699,8 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_env", "floater_ss_atmo_env.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnv>);
     LLFloaterReg::add("ss_atmo_planetary", "floater_ss_atmo_planetary.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoPlanetary>);
     LLFloaterReg::add("ss_atmo_influence", "floater_ss_atmo_weather_influence.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoInfluence>);
+    LLFloaterReg::add("ss_sound_list", "floater_ss_sound_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSoundList>);
+    LLFloaterReg::add("ss_texture_list", "floater_ss_texture_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterTextureList>);
     // </SS:Nexii>
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).
