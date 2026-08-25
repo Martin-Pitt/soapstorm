@@ -858,6 +858,27 @@ void LLAudioChannelFMODSTUDIO::playSynced(LLAudioChannel *channelp)
 }
 
 
+// <SS:Nexii> pcm byte position for in-flight loudness patches
+U32 LLAudioChannelFMODSTUDIO::getPositionBytes()
+{
+    if (!mChannelp) return 0;
+    U32 pos = 0;
+    Check_FMOD_Error(mChannelp->getPosition(&pos, FMOD_TIMEUNIT_PCMBYTES), "FMOD::Channel::getPosition");
+    return pos;
+}
+
+void LLAudioChannelFMODSTUDIO::setPositionBytes(U32 bytes)
+{
+    if (!mChannelp) return;
+    if (mCurrentBufferp && mCurrentBufferp->getLength())
+    {
+        bytes %= mCurrentBufferp->getLength();
+    }
+    Check_FMOD_Error(mChannelp->setPosition(bytes, FMOD_TIMEUNIT_PCMBYTES), "FMOD::Channel::setPosition");
+    mLastSamplePos = (S32)bytes; // keep the loop detector from seeing a false wrap
+}
+// </SS:Nexii>
+
 bool LLAudioChannelFMODSTUDIO::isPlaying()
 {
     if (!mChannelp)

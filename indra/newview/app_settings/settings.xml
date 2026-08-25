@@ -25610,6 +25610,50 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <string>4cbf0d33-03ea-49b1-b671-fdfc37d98002</string>
     </map>
+    <key>FSNormalizeSoundUploads</key>
+      <map>
+      <key>Comment</key>
+      <string>Loudness-normalize sound uploads to the FSSoundTargetLUFS perceived loudness (ITU-R BS.1770) before encoding</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSNormalizeDownloadedSounds</key>
+      <map>
+      <key>Comment</key>
+      <string>Background-normalize downloaded sound assets to FSSoundTargetLUFS on the thread pool; playing sounds are hot-patched in place and the sound cache updated. Viewer UI sounds are never processed</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSSoundTargetLUFS</key>
+      <map>
+      <key>Comment</key>
+      <string>Target integrated loudness in LUFS for sound normalization (-23 matches the EBU R128 / games loudness standard)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>-23.0</real>
+    </map>
+    <key>FSLongSoundUploadEqualSplits</key>
+      <map>
+      <key>Comment</key>
+      <string>Split long sound uploads into equal-length parts instead of max-length parts with a shorter tail</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>FSRezQueueIndicator</key>
       <map>
       <key>Comment</key>

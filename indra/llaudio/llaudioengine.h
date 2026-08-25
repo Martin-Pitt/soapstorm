@@ -31,6 +31,7 @@
 #include <list>
 #include <map>
 #include <array>
+#include <set> // <SS:Nexii> loudness normalization bookkeeping
 
 #include "v3math.h"
 #include "v3dmath.h"
@@ -187,6 +188,17 @@ public:
     bool updateBufferForData(LLAudioData *adp, const LLUUID &audio_uuid = LLUUID::null);
 
 
+    // <SS:Nexii> downloaded-sound loudness normalization; values pushed in from viewer settings
+    void setSoundNormalization(bool enabled, F32 target_lufs)          { mNormalizeSounds = enabled; mNormalizeTargetLUFS = target_lufs; }
+    void setSoundNormalizationExempt(const uuid_vec_t& ids)            { mNormalizeExempt.clear(); mNormalizeExempt.insert(ids.begin(), ids.end()); }
+    bool isSoundNormalizationEnabled() const                           { return mNormalizeSounds; }
+    F32  getSoundNormalizationTarget() const                           { return mNormalizeTargetLUFS; }
+    bool isSoundNormalizationExempt(const LLUUID& id) const            { return mNormalizeExempt.find(id) != mNormalizeExempt.end(); }
+    void markLoudnessChecked(const LLUUID& id)                         { mLoudnessChecked.insert(id); }
+    void scheduleLoudnessCheck(const LLUUID& id); // background-check a cached decoded sound, then in-flight patch it
+    void reloadSoundBuffer(const LLUUID& id);     // swap the loaded buffer for the rewritten cache file, preserving playback state
+    // </SS:Nexii>
+
     // <FS:Ansariel> Asset blacklisting
     void removeAudioData(const LLUUID& audio_uuid);
 
@@ -274,6 +286,13 @@ protected:
 
     // <FS:Ansariel> Output device selection
     output_device_list_changed_callback_t mOutputDeviceListChangedCallback;
+
+    // <SS:Nexii> downloaded-sound loudness normalization state
+    bool mNormalizeSounds;
+    F32 mNormalizeTargetLUFS;
+    std::set<LLUUID> mNormalizeExempt;   // viewer UI sounds etc, never processed
+    std::set<LLUUID> mLoudnessChecked;   // checked or normalized this session
+    // </SS:Nexii>
 
 private:
     void setDefaults();
@@ -488,6 +507,10 @@ protected:
     virtual bool updateBuffer(); // Check to see if the buffer associated with the source changed, and update if necessary.
     virtual void update3DPosition() = 0;
     virtual void updateLoop() = 0; // Update your loop/completion status, for use by queueing/syncing.
+    // <SS:Nexii> pcm byte position for in-flight loudness patches; engines without seek just restart
+    virtual U32 getPositionBytes()                  { return 0; }
+    virtual void setPositionBytes(U32 bytes)        { }
+    // </SS:Nexii>
 protected:
     LLAudioSource   *mCurrentSourcep;
     LLAudioBuffer   *mCurrentBufferp;

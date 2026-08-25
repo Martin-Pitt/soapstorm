@@ -27,6 +27,9 @@
 #ifndef LL_VORBISENCODE_H
 #define LL_VORBISENCODE_H
 
+#include <string>
+#include <vector>
+
 const S32 LLVORBISENC_NOERR                        = 0; // no error
 const S32 LLVORBISENC_SOURCE_OPEN_ERR              = 1; // error opening source
 const S32 LLVORBISENC_DEST_OPEN_ERR                = 2; // error opening destination
@@ -41,6 +44,7 @@ const S32 LLVORBISENC_CLIP_TOO_LONG                = 10; // source file is too l
 const S32 LLVORBISENC_CHUNK_SIZE_ERR               = 11; // chunk size is wrong
 
 const F32 LLVORBIS_CLIP_MAX_TIME                               = 30.0f;
+const F32 LLVORBIS_CLIP_FADE_TIME                              = 0.01f; // <SS:Nexii> 10ms micro fade at clip edges to kill clicks
 const F32 LLVORBIS_CLIP_MAX_TIME_OPENSIM                       = 60.0f; // <FS:Ansariel> FIRE-17812: Increase sounds length to 60s on OpenSim
 const U8  LLVORBIS_CLIP_MAX_CHANNELS                   = 2;
 const U32 LLVORBIS_CLIP_SAMPLE_RATE                            = 44100;
@@ -58,8 +62,15 @@ const size_t LLVORBIS_CLIP_REJECT_SIZE                 = LLVORBIS_CLIP_MAX_SAMPL
 //S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname);
 // <OTS> out_clip_length, when non-null, receives the clip length in seconds (used by the bulk sound->notecard upload)
 S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& error_msg, bool is_in_secondlife, F32* out_clip_length = nullptr);
-S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname, bool is_in_secondlife);
+// <SS:Nexii> gain is a linear loudness-normalization factor applied to every sample before the edge fades
+S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname, bool is_in_secondlife, F32 gain = 1.f);
 // </FS:Ansariel>
+
+// <SS:Nexii> integrated LUFS of the mono downmix the encoder will upload; same return codes as the wav checks
+S32 measure_wav_lufs(const std::string& in_fname, F32& out_lufs);
+
+// <SS:Nexii> splits an over-long PCM wav into temp wav segments no longer than max_clip_time each; equal_splits cuts near-equal parts instead of max-length parts with a shorter tail; encoder fades then de-click the cut points
+S32 split_wav_file(const std::string& in_fname, F32 max_clip_time, bool equal_splits, std::vector<std::string>& out_fnames);
 
 #endif
 

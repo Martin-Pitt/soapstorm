@@ -78,6 +78,7 @@
 #include "lltransactiontypes.h"
 #include "lluuid.h"
 #include "llvorbisencode.h"
+#include "sslufs.h" // <SS:Nexii> upload loudness normalization
 #include "message.h"
 
 // system libraries
@@ -488,6 +489,72 @@ const bool check_file_extension(const std::string& filename, LLFilePicker::ELoad
     return true;
 }
 
+// <SS:Nexii> long sound upload: true when the wav is valid except for exceeding the grid clip limit; out_num_parts gets the split count (1 if no split needed)
+static bool wav_exceeds_clip_limit(const std::string& filename, S32* out_num_parts)
+{
+    F32 clip_length = 0.f;
+    std::string error_msg;
+    S32 result = check_for_invalid_wav_formats(filename, error_msg, LLGridManager::instance().isInSecondLife(), &clip_length);
+    if (out_num_parts) *out_num_parts = 1;
+    if (result != LLVORBISENC_CLIP_TOO_LONG || error_msg != "SoundFileInvalidTooLong") return false;
+    F32 max_time = LLGridManager::instance().isInSecondLife() ? LLVORBIS_CLIP_MAX_TIME : LLVORBIS_CLIP_MAX_TIME_OPENSIM;
+    if (out_num_parts) *out_num_parts = (S32)ceilf(clip_length / max_time);
+    return true;
+}
+
+// <SS:Nexii> long sound upload: split into temp wav segments and upload each as "name ##"
+static void upload_split_sound(const std::string& filename, const LLUUID& dest)
+{
+    F32 max_time = LLGridManager::instance().isInSecondLife() ? LLVORBIS_CLIP_MAX_TIME : LLVORBIS_CLIP_MAX_TIME_OPENSIM;
+    static LLCachedControl<bool> equal_splits(gSavedSettings, "FSLongSoundUploadEqualSplits", false);
+    std::vector<std::string> segments;
+    if (split_wav_file(filename, max_time, equal_splits, segments) != LLVORBISENC_NOERR || segments.empty())
+    {
+        LLSD args;
+        args["FILE"] = filename;
+        LLNotificationsUtil::add("CannotUploadSoundFile", args);
+        return;
+    }
+
+    // same asset name scrubbing as do_bulk_upload
+    std::string asset_name = gDirUtilp->getBaseFileName(filename, true);
+    LLStringUtil::replaceNonstandardASCII(asset_name, '?');
+    LLStringUtil::replaceChar(asset_name, '|', '?');
+    LLStringUtil::stripNonprintable(asset_name);
+    LLStringUtil::trim(asset_name);
+
+    // <SS:Nexii> measure loudness over the whole original once so every part gets the same gain and levels match across the cuts
+    F32 gain = 1.f;
+    static LLCachedControl<bool> normalize(gSavedSettings, "FSNormalizeSoundUploads", true);
+    static LLCachedControl<F32> target_lufs(gSavedSettings, "FSSoundTargetLUFS", -23.f);
+    F32 lufs = SS_LUFS_SILENCE;
+    if (normalize && measure_wav_lufs(filename, lufs) == LLVORBISENC_NOERR && lufs > SS_LUFS_SILENCE)
+    {
+        gain = ss_lufs_gain_for_target(lufs, (F32)target_lufs);
+    }
+    // </SS:Nexii>
+
+    S32 cost = LLAgentBenefitsMgr::current().getSoundUploadCost();
+    for (size_t i = 0; i < segments.size(); ++i)
+    {
+        std::string part_name = asset_name + llformat(" %02d", (S32)(i + 1));
+        std::shared_ptr<LLNewFileResourceUploadInfo> fileInfo = std::make_shared<LLNewFileResourceUploadInfo>(
+            segments[i],
+            part_name,
+            part_name, 0,
+            LLFolderType::FT_NONE, LLInventoryType::IT_NONE,
+            LLFloaterPerms::getNextOwnerPerms("Uploads"),
+            LLFloaterPerms::getGroupPerms("Uploads"),
+            LLFloaterPerms::getEveryonePerms("Uploads"),
+            cost,
+            dest);
+        fileInfo->setSoundGain(gain); // <SS:Nexii> whole-file gain, skips per-part re-measure
+        LLResourceUploadInfo::ptr_t uploadInfo = fileInfo; // upload_new_resource wants an lvalue of the base ptr type
+        upload_new_resource(uploadInfo);
+    }
+}
+// </SS:Nexii>
+
 void upload_single_file(
     const std::vector<std::string>& filenames,
     LLFilePicker::ELoadFilter type,
@@ -507,6 +574,26 @@ void upload_single_file(
             std::string error_msg;
             if (check_for_invalid_wav_formats(filename, error_msg, LLGridManager::instance().isInSecondLife()))
             {
+                // <SS:Nexii> over-long sounds get offered as a ##-suffixed split upload instead of a hard error
+                S32 num_parts = 1;
+                if (error_msg == "SoundFileInvalidTooLong" && wav_exceeds_clip_limit(filename, &num_parts))
+                {
+                    LLSD split_args;
+                    split_args["FILE"] = gDirUtilp->getBaseFileName(filename);
+                    split_args["MAX_LENGTH"] = llformat("%.0f", (LLGridManager::instance().isInSecondLife() ? LLVORBIS_CLIP_MAX_TIME : LLVORBIS_CLIP_MAX_TIME_OPENSIM));
+                    split_args["COUNT"] = num_parts;
+                    split_args["COST"] = LLAgentBenefitsMgr::current().getSoundUploadCost() * num_parts;
+                    LLNotificationsUtil::add("SoundFileSplitUpload", split_args, LLSD(),
+                        [filename, dest](const LLSD& notification, const LLSD& response)
+                        {
+                            if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
+                            {
+                                upload_split_sound(filename, dest);
+                            }
+                        });
+                    return;
+                }
+                // </SS:Nexii>
                 LL_INFOS() << error_msg << ": " << filename << LL_ENDL;
                 LLSD args;
                 args["FILE"] = filename;
@@ -684,6 +771,13 @@ void do_bulk_upload(std::vector<std::string> filenames, bool allow_2k, const LLU
                 }
                 else
                 {
+                    // <SS:Nexii> split over-long sounds into ## parts instead of failing at encode
+                    if (asset_type == LLAssetType::AT_SOUND && wav_exceeds_clip_limit(filename, nullptr))
+                    {
+                        upload_split_sound(filename, dest);
+                        continue;
+                    }
+                    // </SS:Nexii>
                     LLResourceUploadInfo::ptr_t uploadInfo = std::make_shared<LLNewFileResourceUploadInfo>(
                         filename,
                         asset_name,
@@ -801,8 +895,15 @@ bool get_bulk_upload_expected_cost(
             }
             else if (LLAgentBenefitsMgr::current().findUploadCost(asset_type, cost))
             {
-                total_cost += cost;
-                file_count++;
+                // <SS:Nexii> long sounds bulk-upload as multiple split parts, so cost scales with the part count
+                S32 parts = 1;
+                if (asset_type == LLAssetType::AT_SOUND)
+                {
+                    wav_exceeds_clip_limit(filename, &parts);
+                }
+                total_cost += cost * parts;
+                file_count += parts;
+                // </SS:Nexii>
             }
         }
 
