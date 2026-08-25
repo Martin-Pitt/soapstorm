@@ -105,7 +105,8 @@
 #include "llviewerdisplay.h"
 #include "sspreciprenderer.h"
 #include "ssvolcloud.h"
-#include "sslightningrender.h" // <SS:Nexii> Atmo Magic weather
+#include "sslightningrender.h"
+#include "sslightning.h" // <SS:Nexii> Atmo Magic weather
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
@@ -9991,6 +9992,43 @@ void LLPipeline::renderDeferredLighting()
                 LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("renderDeferredLighting - fullscreen lights");
                 LLGLDepthTest depth(GL_FALSE);
                 LL_PROFILE_GPU_ZONE("fullscreen lights");
+
+                // <SS:Nexii> Atmo Magic lightning as scene lights.
+                //
+                // Appended here rather than given a pass of their own,
+                // because a strike IS a local light and this is the list of
+                // local lights - it gets the same falloff, the same
+                // batching and the same shader every other light in the
+                // world gets, which is the whole reason it lights avatars
+                // and wet ground correctly without a line of shading code
+                // being written for it.
+                //
+                // At the back of the queue on purpose. The batcher takes
+                // what it can and lightning is the thing least missed if a
+                // scene is already at its light budget - a strike lasts
+                // fifty milliseconds, and nobody can tell which frame of one
+                // went unlit.
+                {
+                    std::vector<LLVector4> strike_lights;
+                    std::vector<LLColor3> strike_colors;
+                    const S32 n = SSLightning::getInstance()->sceneLights(
+                        strike_lights, strike_colors, 4);
+
+                    for (S32 i = 0; i < n; ++i)
+                    {
+                        // View space, like everything else in this list.
+                        glm::vec3 lp(strike_lights[i].mV[0], strike_lights[i].mV[1],
+                                     strike_lights[i].mV[2]);
+                        lp = mul_mat4_vec3(mat, lp);
+
+                        fullscreen_lights.push_back(
+                            LLVector4(lp.x, lp.y, lp.z, strike_lights[i].mV[3]));
+                        light_colors.push_back(
+                            LLVector4(strike_colors[i].mV[0], strike_colors[i].mV[1],
+                                      strike_colors[i].mV[2], DEFERRED_LIGHT_FALLOFF));
+                    }
+                }
+                // </SS:Nexii>
 
                 U32 count = 0;
 

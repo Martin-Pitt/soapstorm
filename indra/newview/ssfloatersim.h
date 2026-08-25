@@ -55,10 +55,8 @@ private:
     // Which derived thing a watched setting invalidates when it changes
     enum class EInvalidate { SHADOW, FLOW };
 
-    // A tuning change only matters once something rebuilds, so watching the
-    // settings themselves rather than the widgets catches the slider, the
-    // spinner, the reset button and anyone typing into the debug console,
-    // all through one path.
+    // A tuning change only matters once something rebuilds, so watching the settings themselves rather than the widgets catches the slider, the spinner, the reset button and anyone typing into the
+    // debug console, all through one path.
     void watch(const std::string& control, EInvalidate what);
 
     std::vector<boost::signals2::scoped_connection> mConnections;

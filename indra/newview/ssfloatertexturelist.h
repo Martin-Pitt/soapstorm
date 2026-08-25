@@ -26,13 +26,9 @@
 #define SS_FLOATERTEXTURELIST_H
 
 // <SS:Nexii> Atmo Magic texture lists
-//
-// The same shape as the sound list, and for the same reasons - see
-// ssassetlist.h, which holds everything the two have in common. What differs
-// is entirely in how a row shows itself: a sound can only be described (a
-// name, a length) and has to be played to be known, while a texture can just
-// be LOOKED at. So there is no transport here at all. The swatch is the
-// preview, and the rows are tall enough to carry one.
+// The same shape as the sound list, and for the same reasons - see ssassetlist.h, which holds everything the two have in common. What differs is entirely in how a row shows itself: a sound can only
+// be described (a name, a length) and has to be played to be known, while a texture can just be LOOKED at. So there is no transport here at all. The swatch is the preview, and the rows are tall
+// enough to carry one.
 
 #include "ssassetlist.h"
 
@@ -44,16 +40,14 @@
 #include <string>
 
 //-----------------------------------------------------------------------------
-// The compact control: a chip showing the first texture and how many there
-// are, standing in for the slot on a crowded panel.
+// The compact control: a chip showing the first texture and how many there are, standing in for the slot on a crowded panel.
 //-----------------------------------------------------------------------------
 class SSTextureListCtrl : public LLUICtrl
 {
 public:
     struct Params : public LLInitParam::Block<Params, LLUICtrl::Params>
     {
-        // Both are properties of the slot, declared where the slot is - see
-        // SSSoundListCtrl::Params, which says the same about the same two.
+        // Both are properties of the slot, declared where the slot is - see SSSoundListCtrl::Params, which says the same about the same two.
         Optional<std::string> mode;      // "random" (default) or "sequence"
         Optional<S32> max_textures;      // 0 means no limit
 
@@ -98,10 +92,7 @@ private:
 };
 
 //-----------------------------------------------------------------------------
-// The rows inside the editor.
-//
-// Taller than the sound list's, because each carries a swatch and two lines
-// of text rather than one line - the name, and the resolution under it.
+// The rows inside the editor. Taller than the sound list's, because each carries a swatch and two lines of text rather than one line - the name, and the resolution under it.
 //-----------------------------------------------------------------------------
 class SSTextureListRows : public LLUICtrl
 {

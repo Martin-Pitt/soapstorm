@@ -44,10 +44,8 @@ public:
 private:
     void onClickEditPreset();
 
-    // Presets can change while this is open (the preset editor is its own
-    // floater, reachable from here) - refreshed on a poll rather than a
-    // change signal, same idiom the rest of this floater used to use for
-    // its own now-removed per-track polling.
+    // Presets can change while this is open (the preset editor is its own floater, reachable from here) - refreshed on a poll rather than a change signal, same idiom the rest of this floater used to
+    // use for its own now-removed per-track polling.
     void refreshPresets();
 
     F64 mLastPoll = 0.0;

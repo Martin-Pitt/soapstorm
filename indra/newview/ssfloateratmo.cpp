@@ -102,10 +102,8 @@ void SSFloaterAtmoMagic::refreshPresets()
 
 void SSFloaterAtmoMagic::onClickEditPreset()
 {
-    // Open the editor on whatever this floater's own combo has picked -
-    // passed through onOpen rather than the floater key: the editor is
-    // single-instance, and keying it on the name would make every preset
-    // its own floater.
+    // Open the editor on whatever this floater's own combo has picked - passed through onOpen rather than the floater key: the editor is single-instance, and keying it on the name would make every
+    // preset its own floater.
     LLFloater* editor = LLFloaterReg::showInstance("ss_atmo_preset");
     const std::string name = getChild<LLComboBox>("preset_combo")->getValue().asString();
     if (editor && !name.empty())

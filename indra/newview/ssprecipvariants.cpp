@@ -74,13 +74,9 @@ static inline F32 teardropWidth(F32 t)
     return powf(llmax(0.f, 1.f - u), 1.4f);
 }
 
-// Falling raindrop: round head leading the fall, tapering to a thin tail.
-//
-// The head goes at the low v end. The renderer builds a streak with its
-// texture-up axis against the motion, so the +v end of the quad is the
-// trailing end and v = 0 is the end that leads the fall. Baking the head at
-// high v instead flies the drop tail first, which reads as upside down on any
-// preset whose silhouette is legible at all.
+// Falling raindrop: round head leading the fall, tapering to a thin tail. The head goes at the low v end. The renderer builds a streak with its texture-up axis against the motion, so the +v end of
+// the quad is the trailing end and v = 0 is the end that leads the fall. Baking the head at high v instead flies the drop tail first, which reads as upside down on any preset whose silhouette is
+// legible at all.
 static void drawTeardrop(U8* data, S32 res, F32 cx, F32 cy, F32 hw, F32 hh,
                          F32 brightness)
 {
@@ -126,8 +122,7 @@ static void drawSliver(U8* data, S32 res, F32 cx, F32 cy, F32 hw, F32 hh, F32 br
     }
 }
 
-// Stable numeric key for a preset name, so bakes are cached per preset and
-// renaming or editing one cannot collide with another
+// Stable numeric key for a preset name, so bakes are cached per preset and renaming or editing one cannot collide with another
 static U32 presetKey(const SSPrecipPreset& preset)
 {
     U32 h = 0x811c9dc5u;
@@ -135,8 +130,7 @@ static U32 presetKey(const SSPrecipPreset& preset)
     {
         h = (h ^ (U8)c) * 16777619u;
     }
-    // Shape-affecting fields, so an edited preset rebakes rather than
-    // serving the previous silhouette
+    // Shape-affecting fields, so an edited preset rebakes rather than serving the previous silhouette
     h ^= (U32)(preset.mTiers[TIER_DROPS].mSizeX * 1000.f);
     h ^= (U32)(preset.mTiers[TIER_DROPS].mSizeY * 1000.f) << 8;
     h ^= (U32)(preset.mDropScale * 1000.f) << 16;
@@ -145,11 +139,8 @@ static U32 presetKey(const SSPrecipPreset& preset)
     return h & 0x000fffffu;
 }
 
-// Splat layout for a tier texture. Rendering the represented drops at true
-// world scale puts them far below a texel on the big cluster and sheet quads,
-// which is why those tiers baked out as near-empty textures. Guarantee enough
-// splats to read as a group and a minimum visible size, then scale the splat
-// size so the total covered area still matches the true coverage.
+// Splat layout for a tier texture. Rendering the represented drops at true world scale puts them far below a texel on the big cluster and sheet quads, which is why those tiers baked out as
+// near-empty textures. Guarantee enough splats to read as a group and a minimum visible size, then scale the splat size so the total covered area still matches the true coverage.
 static void splatLayout(F32 quad_x, F32 quad_y, F32 drop_x, F32 drop_y, S32 res,
                         S32 drops_represented, S32 min_group,
                         F32& hw, F32& hh, S32& count)
@@ -164,9 +155,8 @@ static void splatLayout(F32 quad_x, F32 quad_y, F32 drop_x, F32 drop_y, S32 res,
     // Splitting the same coverage over more splats shrinks each one
     const F32 scale = sqrtf((F32)drops_represented / (F32)count);
 
-    // The minimum visible splat is a fraction of the quad, not a fixed texel
-    // count: pinning it to texels would make the same sheet render fainter
-    // at higher resolution, since the floored splats would cover less of it
+    // The minimum visible splat is a fraction of the quad, not a fixed texel count: pinning it to texels would make the same sheet render fainter at higher resolution, since the floored splats would
+    // cover less of it
     const F32 min_splat = 0.9f * (F32)res / 128.f;
     hw = llclamp(hw_true * scale, min_splat, res * 0.45f);
     hh = llclamp(hh_true * scale, min_splat, res * 0.45f);
@@ -182,8 +172,7 @@ void SSPrecipVariants::splatInflation(const SSPrecipPreset& preset, SSPrecipTier
     S32 splats;
     if (!SSPrecipSim::tierSprite(preset, tier, quad_x, quad_y, drop_x, drop_y, splats)) return;
 
-    // Same arithmetic the bake runs, at the same resolution, so the answer is
-    // the ratio the bake actually applied rather than an estimate of it
+    // Same arithmetic the bake runs, at the same resolution, so the answer is the ratio the bake actually applied rather than an estimate of it
     const S32 res = 256;
     F32 hw, hh;
     S32 count;
@@ -205,13 +194,11 @@ LLViewerTexture* SSPrecipVariants::get(const SSPrecipPreset& preset, SSPrecipTie
                                        LLViewerTexture* custom_drop)
 {
     variant %= VARIANT_COUNT;
-    // Keyed on the preset name: editing sizes or shapes has to rebake, and
-    // two presets must never share a bake
+    // Keyed on the preset name: editing sizes or shapes has to rebake, and two presets must never share a bake
     U64 key = ((U64)presetKey(preset) << 20) | ((U64)tier << 4) | variant;
     if (custom_drop)
     {
-        // Key on the source texture so swapping the configured texture
-        // bakes a fresh set of variants
+        // Key on the source texture so swapping the configured texture bakes a fresh set of variants
         const LLUUID& id = custom_drop->getID();
         key ^= ((U64)id.mData[0] << 56) ^ ((U64)id.mData[5] << 44) ^
                ((U64)id.mData[10] << 32) ^ ((U64)id.mData[15] << 20) ^ 0x10000000ull;
@@ -224,8 +211,7 @@ LLViewerTexture* SSPrecipVariants::get(const SSPrecipPreset& preset, SSPrecipTie
         {
             if (!custom_drop->hasGLTexture())
             {
-                // Source art still streaming in; use it directly for now and
-                // bake once it exists (no cache entry yet)
+                // Source art still streaming in; use it directly for now and bake once it exists (no cache entry yet)
                 return custom_drop;
             }
             LLPointer<LLViewerTexture> baked = bakeFromCustom(preset, tier, variant, custom_drop);
@@ -271,8 +257,7 @@ LLPointer<LLViewerTexture> SSPrecipVariants::bakeFromCustom(const SSPrecipPreset
         return nullptr;
     }
 
-    // Splat the configured drop art over a transparent ground, sized by the
-    // drop-to-quad world ratio, same layout logic as the procedural path
+    // Splat the configured drop art over a transparent ground, sized by the drop-to-quad world ratio, same layout logic as the procedural path
     F32 hw_px, hh_px;
     S32 count;
     splatLayout(quad_x, quad_y, drop_x, drop_y, res, splats,
@@ -372,8 +357,7 @@ LLPointer<LLViewerTexture> SSPrecipVariants::build(const SSPrecipPreset& preset,
                 hw, hh, count);
 
 
-    // Fixed seed, not the user's weather seed: same textures on every
-    // client and no cache churn when the seed slider moves
+    // Fixed seed, not the user's weather seed: same textures on every client and no cache churn when the seed slider moves
     SSRandStream rng(SSAtmoNoise::combine(0x5EEDF00Du,
         (presetKey(preset) << 12) ^ ((U32)tier << 6) ^ variant));
     rng.next();
@@ -407,9 +391,7 @@ LLPointer<LLViewerTexture> SSPrecipVariants::build(const SSPrecipPreset& preset,
 
 LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
 {
-    // The ring is baked at twice the rest: it carries a normal now, and the
-    // wave's band is only a tenth of the texture wide, so at 64 the whole of
-    // the relief was six texels of it
+    // The ring is baked at twice the rest: it carries a normal now, and the wave's band is only a tenth of the texture wide, so at 64 the whole of the relief was six texels of it
     const S32 res = (kind == UTIL_RING) ? 128 : 64;
     LLPointer<LLImageRaw> raw = new LLImageRaw((U16)res, (U16)res, 4);
     U8* data = raw->getData();
@@ -424,8 +406,7 @@ LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
     const F32 c = res * 0.5f;
     if (kind == UTIL_PUFF)
     {
-        // Vague soft cloud: several overlapping blobs so the silhouette is
-        // irregular rather than a clean disc, with a very soft falloff
+        // Vague soft cloud: several overlapping blobs so the silhouette is irregular rather than a clean disc, with a very soft falloff
         SSRandStream rng(0x9F00DBEEu);
         for (S32 i = 0; i < 6; ++i)
         {
@@ -457,30 +438,17 @@ LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
     }
     else if (kind == UTIL_RING)
     {
-        // Soft annulus for the expanding surface ripple, with the shape of the
-        // wave itself baked into the colour channels as a tangent-space normal.
-        //
-        // A ripple is a raised crest of water travelling outward, and until now
-        // the only thing said about it was where it was opaque: the lit pass
-        // shaded the whole ring with the flat normal of the ground under it, so
-        // it took the sun as evenly as the concrete did and read as a painted
-        // circle rather than as water standing up off it. The crest has real
-        // relief and it is the same relief everywhere around the ring, only
-        // rotated - purely a function of how far across the band a texel sits -
-        // so it bakes exactly rather than being approximated at runtime the way
-        // the drops' normals are.
-        //
-        // The RGB the other utility shapes leave white is a tint the lit shader
-        // multiplies through, so this one is read as a normal only where the
-        // renderer says the generated ring is what is actually bound; a
-        // developer-set ripple texture keeps the old meaning.
+        // Soft annulus for the expanding surface ripple, with the shape of the wave itself baked into the colour channels as a tangent-space normal. A ripple is a raised crest of water travelling
+        // outward, and until now the only thing said about it was where it was opaque: the lit pass shaded the whole ring with the flat normal of the ground under it, so it took the sun as evenly as
+        // the concrete did and read as a painted circle rather than as water standing up off it. The crest has real relief and it is the same relief everywhere around the ring, only rotated - purely
+        // a function of how far across the band a texel sits - so it bakes exactly rather than being approximated at runtime the way the drops' normals are. The RGB the other utility shapes leave
+        // white is a tint the lit shader multiplies through, so this one is read as a normal only where the renderer says the generated ring is what is actually bound; a developer-set ripple texture
+        // keeps the old meaning.
         const F32 radius = res * 0.36f;
         const F32 width = res * 0.1f;
 
-        // How tall the crest stands, in units of the band's own half width.
-        // Slope, not height, is what survives into the normal, so this is the
-        // dial that decides whether the ring catches a light along its flanks
-        // or lies down flat like the ground it is on.
+        // How tall the crest stands, in units of the band's own half width. Slope, not height, is what survives into the normal, so this is the dial that decides whether the ring catches a light
+        // along its flanks or lies down flat like the ground it is on.
         const F32 relief = 0.8f;
 
         for (S32 y = 0; y < res; ++y)
@@ -493,16 +461,13 @@ LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
                 const F32 ry = (F32)y - c;
                 const F32 d = sqrtf(rx * rx + ry * ry);
 
-                // Signed position across the band: -1 at the inner edge, 0 on
-                // the crest, +1 at the outer
+                // Signed position across the band: -1 at the inner edge, 0 on the crest, +1 at the outer
                 const F32 sp = (d - radius) / width;
                 const F32 band = 1.f - fabsf(sp);
                 if (band <= 0.f)
                 {
-                    // Flat, so the filtering either side of the band has
-                    // something meaning "level ground" to blend toward rather
-                    // than the white that would decode as a normal pointing
-                    // off in all three axes at once
+                    // Flat, so the filtering either side of the band has something meaning "level ground" to blend toward rather than the white that would decode as a normal pointing off in all
+                    // three axes at once
                     px[0] = 128;
                     px[1] = 128;
                     px[2] = 255;
@@ -511,11 +476,8 @@ LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
 
                 splatAlpha(data, res, x, y, band * band * 0.9f);
 
-                // Height across the band is the same profile as the coverage,
-                // so the relief and the visible ring are the one wave. Its
-                // slope runs radially: uphill toward the crest from both
-                // sides, which tilts the surface inward on the outer flank and
-                // outward on the inner.
+                // Height across the band is the same profile as the coverage, so the relief and the visible ring are the one wave. Its slope runs radially: uphill toward the crest from both sides,
+                // which tilts the surface inward on the outer flank and outward on the inner.
                 const F32 dh_ds = -2.f * band * ((sp < 0.f) ? -1.f : 1.f);
                 const F32 slope = dh_ds * relief;
 

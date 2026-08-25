@@ -57,8 +57,7 @@ static LLTrace::BlockTimerStatHandle FTM_SS_SHADOW_GRID("Atmo Magic Surface Grid
 
 U32 SSRainShadowMap::resolution() const
 {
-    // The resolution a tile was actually captured at, which lags the setting
-    // until the next capture
+    // The resolution a tile was actually captured at, which lags the setting until the next capture
     for (const auto& entry : mTiles)
     {
         if (entry.second.mValid) return entry.second.mRes;
@@ -72,10 +71,8 @@ void SSRainShadowMap::clearCache()
     mDebugMesh.clear();
 }
 
-// Driven from SSAtmoMagic's settle queue rather than straight off an object
-// update. See the note on SSAtmoMagic::onObjectUpdate: an object has to have
-// held still for a few seconds before a recapture is spent on it, so a
-// projectile or a combat rez never triggers one.
+// Driven from SSAtmoMagic's settle queue rather than straight off an object update. See the note on SSAtmoMagic::onObjectUpdate: an object has to have held still for a few seconds before a recapture
+// is spent on it, so a projectile or a combat rez never triggers one.
 void SSRainShadowMap::markDirty(const LLVector3& pos_agent, F32 radius)
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
@@ -93,11 +90,8 @@ void SSRainShadowMap::markDirty(const LLVector3& pos_agent, F32 radius)
 
     tile.mDirty = true;
 
-    // This is the only place the region's shape is known to have changed. The
-    // other reasons a tile gets recaptured - the camera climbing out of the
-    // band, the wind swinging the fall direction - produce a new capture of the
-    // same build, and anything derived from the map should not be thrown away
-    // for those.
+    // This is the only place the region's shape is known to have changed. The other reasons a tile gets recaptured - the camera climbing out of the band, the wind swinging the fall direction -
+    // produce a new capture of the same build, and anything derived from the map should not be thrown away for those.
     ++tile.mGeomSerial;
 }
 
@@ -161,8 +155,7 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     const F32 width = regionp->getWidth();
     const LLVector3 dir = SSAtmoMagic::getInstance()->rainDirection();
 
-    // Basis perpendicular to the fall direction; dir is always down-ish so
-    // the +Y reference never degenerates
+    // Basis perpendicular to the fall direction; dir is always down-ish so the +Y reference never degenerates
     LLVector3 right = dir % LLVector3(0.f, 1.f, 0.f);
     right.normVec();
     LLVector3 up = right % dir;
@@ -172,36 +165,26 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     const F32 band_top = cam_z + BAND_ABOVE;
     const F32 band_bottom = cam_z - BAND_BELOW;
 
-    // Widen the footprint so tilted columns through the region still start
-    // inside the map, and stretch the range to cross the whole band
+    // Widen the footprint so tilted columns through the region still start inside the map, and stretch the range to cross the whole band
     const F32 inv_z = 1.f / llmax(0.2f, fabsf(dir.mV[VZ]));
     const F32 tilt = sqrtf(llmax(0.f, 1.f - dir.mV[VZ] * dir.mV[VZ]));
     const F32 half = width * 0.5f + (band_top - band_bottom) * tilt * inv_z * 0.5f + 8.f;
 
-    // How far upwind the near plane has to start. The plane is perpendicular
-    // to the fall direction, so once the wind tilts it, it is no longer level:
-    // sitting it on the eye clips away everything upwind of a diagonal cutting
-    // through the region, and rain enters those buildings through an angled
-    // slice with nothing recorded to shelter it. The furthest a point in the
-    // footprint can lie upwind of the centre is the box half-diagonal, and
-    // only its horizontal part is foreshortened by the tilt.
+    // How far upwind the near plane has to start. The plane is perpendicular to the fall direction, so once the wind tilts it, it is no longer level: sitting it on the eye clips away everything
+    // upwind of a diagonal cutting through the region, and rain enters those buildings through an angled slice with nothing recorded to shelter it. The furthest a point in the footprint can lie
+    // upwind of the centre is the box half-diagonal, and only its horizontal part is foreshortened by the tilt.
     const F32 lead = half * F_SQRT2 * tilt + 16.f;
 
-    // Deep enough to cross the band and to come back out the far side, on top
-    // of the lead-in
+    // Deep enough to cross the band and to come back out the far side, on top of the lead-in
     const F32 range = lead + (band_top - band_bottom) * inv_z + half * F_SQRT2 * tilt + 40.f;
 
-    // Backed off along the fall direction by the lead, so the whole region and
-    // its band sit in front of the near plane whatever the wind is doing.
-    // Everything downstream measures depth from this point, so moving it is
-    // self-consistent: resolveColumn's u/v run along right/up, which are
-    // perpendicular to dir and so unchanged by it.
+    // Backed off along the fall direction by the lead, so the whole region and its band sit in front of the near plane whatever the wind is doing. Everything downstream measures depth from this
+    // point, so moving it is self-consistent: resolveColumn's u/v run along right/up, which are perpendicular to dir and so unchanged by it.
     const LLVector3 eye = LLVector3(region_origin.mV[VX] + width * 0.5f,
                                     region_origin.mV[VY] + width * 0.5f,
                                     band_top) - dir * lead;
 
-    // Ortho depth render along the fall direction, reusing the sun shadow
-    // machinery; save/restore the render matrices around it
+    // Ortho depth render along the fall direction, reusing the sun shadow machinery; save/restore the render matrices around it
     const glm::mat4 saved_view = get_current_modelview();
     const glm::mat4 saved_proj = get_current_projection();
     const LLViewerCamera::eCameraID saved_camera = LLViewerCamera::sCurCameraID;
@@ -238,19 +221,11 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     {
         static LLCullResult cull_result;
 
-        // Rain falls on the world's own shape, not on whoever happens to be
-        // standing in the capture band this frame. renderShadow() always
-        // includes avatars - correctly, for the real sun shadow it exists
-        // for - so without this an avatar walking through the capture area
-        // presses a person-shaped dent into the drainage trace, one that
-        // moves as they do and drives spurious sheltering and puddle shape
-        // for as long as the tile stays cached. This also covers what they
-        // are wearing: an attachment's drawable gets an LLAvatarBridge as
-        // its spatial bridge (the root of its attachment linkset's, to be
-        // precise), and that bridge is itself typed RENDER_TYPE_AVATAR, not
-        // RENDER_TYPE_VOLUME - so clearing the one type mask drops the
-        // avatar and everything worn on it together, with no separate
-        // handling needed.
+        // Rain falls on the world's own shape, not on whoever happens to be standing in the capture band this frame. renderShadow() always includes avatars - correctly, for the real sun shadow it
+        // exists for - so without this an avatar walking through the capture area presses a person-shaped dent into the drainage trace, one that moves as they do and drives spurious sheltering and
+        // puddle shape for as long as the tile stays cached. This also covers what they are wearing: an attachment's drawable gets an LLAvatarBridge as its spatial bridge (the root of its attachment
+        // linkset's, to be precise), and that bridge is itself typed RENDER_TYPE_AVATAR, not RENDER_TYPE_VOLUME - so clearing the one type mask drops the avatar and everything worn on it together,
+        // with no separate handling needed.
         gPipeline.pushRenderTypeMask();
         gPipeline.clearRenderTypeMask(LLPipeline::RENDER_TYPE_AVATAR,
                                       LLPipeline::RENDER_TYPE_CONTROL_AV,
@@ -283,8 +258,7 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     tile.mDirty = false;
     tile.mValid = true;
 
-    // Whatever the reason for this capture, the depth in hand now reflects the
-    // region as of this revision
+    // Whatever the reason for this capture, the depth in hand now reflects the region as of this revision
     tile.mCapturedSerial = tile.mGeomSerial;
 
     return true;
@@ -292,8 +266,7 @@ bool SSRainShadowMap::captureTile(Tile& tile)
 
 void SSRainShadowMap::evict()
 {
-    // Drop tiles for regions that left the world, then the least recently
-    // touched ones beyond the cache cap
+    // Drop tiles for regions that left the world, then the least recently touched ones beyond the cache cap
     for (auto it = mTiles.begin(); it != mTiles.end();)
     {
         if (!LLWorld::getInstance()->getRegionFromHandle(it->first))
@@ -331,8 +304,7 @@ void SSRainShadowMap::capture()
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
-    // The camera's region always deserves a tile; neighbors get one once the
-    // camera is close enough to their border for drops to matter
+    // The camera's region always deserves a tile; neighbors get one once the camera is close enough to their border for drops to matter
     LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
     Tile* best = nullptr;
     if (cam_region)
@@ -367,9 +339,7 @@ void SSRainShadowMap::capture()
     {
         mLastCapture = now;
 
-        // Recorded before the capture clears it: a recapture forced by
-        // geometry changing is the interesting one, and it is the only kind
-        // that means anything derived from the map has to be retraced.
+        // Recorded before the capture clears it: a recapture forced by geometry changing is the interesting one, and it is the only kind that means anything derived from the map has to be retraced.
         const bool was_dirty = best->mDirty;
 
         LLTimer timer;
@@ -419,16 +389,9 @@ void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
 
     const F32 width = regionp->getWidth();
 
-    // The grid is capped at 1025 a side, and the spacing has to follow that
-    // cap rather than ignore it.
-    //
-    // Taking the requested step and clamping only the COUNT meant the mesh
-    // simply stopped once it ran out of samples: at 2m over a 1024m region
-    // that is 2048 wanted against 1025 allowed, so it covered half the width
-    // and half the depth - a quarter of the region, with the rest of the map
-    // silently missing. Deriving the spacing back from the clamped count
-    // keeps the whole region covered and spends the cap on resolution
-    // instead of on area.
+    // The grid is capped at 1025 a side, and the spacing has to follow that cap rather than ignore it. Taking the requested step and clamping only the COUNT meant the mesh simply stopped once it ran
+    // out of samples: at 2m over a 1024m region that is 2048 wanted against 1025 allowed, so it covered half the width and half the depth - a quarter of the region, with the rest of the map silently
+    // missing. Deriving the spacing back from the clamped count keeps the whole region covered and spends the cap on resolution instead of on area.
     const S32 n = llclamp((S32)(width / step) + 1, 2, 1025);
     const F32 grid_step = width / (F32)(n - 1);
 
@@ -448,28 +411,20 @@ void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
             const F32 lx = llmin((F32)i * grid_step, width);
             const F32 ly = llmin((F32)j * grid_step, width);
 
-            // Drop a column from the top of the captured band. Seeding at the
-            // heightmap instead put the sample on a different column wherever
-            // the real ground is mesh, which is nearly everywhere, and then
-            // drew the answer down at the dirt where a mesh floor hid it.
+            // Drop a column from the top of the captured band. Seeding at the heightmap instead put the sample on a different column wherever the real ground is mesh, which is nearly everywhere, and
+            // then drew the answer down at the dirt where a mesh floor hid it.
             const LLVector3 start(region_origin.mV[VX] + lx,
                                   region_origin.mV[VY] + ly,
                                   tile.mBandTop);
 
-            // Ask the real function rather than re-deriving it here. Whatever
-            // precipitation sees is what gets drawn, including its mistakes,
-            // which is the entire point of a debug view.
+            // Ask the real function rather than re-deriving it here. Whatever precipitation sees is what gets drawn, including its mistakes, which is the entire point of a debug view.
             LLVector3 hit;
             bool on_water = false;
             resolveColumn(start, hit, on_water);
 
-            // That column started over this patch, so under a tilted fall it
-            // landed a long way downwind of it - the whole sheet slid off the
-            // region, and the upwind edge was left with no samples at all, by
-            // further the stronger the wind and the higher the camera. Step
-            // the seed back upwind by the offset it just measured and ask
-            // again, so what gets drawn is the column that lands here rather
-            // than the one that leaves here.
+            // That column started over this patch, so under a tilted fall it landed a long way downwind of it - the whole sheet slid off the region, and the upwind edge was left with no samples at
+            // all, by further the stronger the wind and the higher the camera. Step the seed back upwind by the offset it just measured and ask again, so what gets drawn is the column that lands
+            // here rather than the one that leaves here.
             const LLVector3 corrected(2.f * start.mV[VX] - hit.mV[VX],
                                       2.f * start.mV[VY] - hit.mV[VY],
                                       tile.mBandTop);
@@ -477,19 +432,13 @@ void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
 
             const size_t idx = (size_t)j * n + i;
 
-            // Sits on the surface the column actually found - a roof, a mesh
-            // floor, terrain, the water - at that surface's own position, and
-            // lifted a hair so it does not fight the geometry it describes.
-            // Where a roof catches the column the sample climbs onto the roof
-            // and sits upwind of the patch it was sheltering, which is the
-            // offset the fall angle is asking for.
+            // Sits on the surface the column actually found - a roof, a mesh floor, terrain, the water - at that surface's own position, and lifted a hair so it does not fight the geometry it
+            // describes. Where a roof catches the column the sample climbs onto the roof and sits upwind of the patch it was sheltering, which is the offset the fall angle is asking for.
             mesh.mPos[idx].set(hit.mV[VX] - region_origin.mV[VX],
                                hit.mV[VY] - region_origin.mV[VY],
                                hit.mV[VZ] + 0.12f);
 
-            // Not shelter any more: whether this came out of the depth
-            // capture or out of the heightmap it falls back to. Real geometry
-            // is what the drop lands on; a fallback is a guess, and seeing
+            // Not shelter any more: whether this came out of the depth capture or out of the heightmap it falls back to. Real geometry is what the drop lands on; a fallback is a guess, and seeing
             // where the guesses are is the whole point of looking.
             mesh.mShade[idx] = mapped ? 1.f : 0.f;
         }
@@ -510,13 +459,9 @@ void SSRainShadowMap::renderDebug()
         return;
     }
 
-    // Cast the map back onto the world rather than drawing the texture in mid
-    // air. Each sample drops a column through the region and draws the surface
-    // it lands on, so the sheet follows the geometry precipitation is actually
-    // using - over roofs, over mesh floors, down onto terrain and water - and
-    // offsets downwind exactly as far as the fall angle says it should. Cool
-    // and faint is a surface the capture saw; warm and solid is a column with
-    // no depth behind it, guessing from the heightmap.
+    // Cast the map back onto the world rather than drawing the texture in mid air. Each sample drops a column through the region and draws the surface it lands on, so the sheet follows the geometry
+    // precipitation is actually using - over roofs, over mesh floors, down onto terrain and water - and offsets downwind exactly as far as the fall angle says it should. Cool and faint is a surface
+    // the capture saw; warm and solid is a column with no depth behind it, guessing from the heightmap.
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const LLVector3 dir = atmo->rainDirection();
     const bool sky = atmo->isSkyTrack();
@@ -525,8 +470,7 @@ void SSRainShadowMap::renderDebug()
     static LLCachedControl<F32> step_setting(gSavedSettings, "SSAtmoShadowDebugStep", 2.f);
     const F32 step = llclamp((F32)step_setting, 0.5f, 16.f);
 
-    // Snapshot the handles: rebuilding a mesh calls resolveColumn, which walks
-    // the tile map, and iterating it at the same time is asking for trouble
+    // Snapshot the handles: rebuilding a mesh calls resolveColumn, which walks the tile map, and iterating it at the same time is asking for trouble
     std::vector<U64> handles;
     handles.reserve(mTiles.size());
     for (const auto& entry : mTiles)
@@ -548,9 +492,7 @@ void SSRainShadowMap::renderDebug()
         const Tile& tile = mTiles[handle];
         ShadowMesh& mesh = mDebugMesh[handle];
 
-        // Rebuild only when what it was baked against has actually changed.
-        // Rebaking every frame would mean a quarter of a million column
-        // resolves a second for no new information.
+        // Rebuild only when what it was baked against has actually changed. Rebaking every frame would mean a quarter of a million column resolves a second for no new information.
         const bool stale = mesh.mN == 0
                         || mesh.mBuiltFrom != tile.mCaptureTime
                         || fabsf(mesh.mBuiltStep - step) > 0.01f
@@ -585,9 +527,7 @@ void SSRainShadowMap::renderDebug()
             const size_t idx = (size_t)j * n + i;
             const F32 s = mesh.mShade[idx];
 
-            // Cool near-black where the column found real geometry, warm and
-            // heavier where it fell back to the heightmap. Interpolating
-            // across the grid gives the boundary a soft falloff for free.
+            // Cool near-black where the column found real geometry, warm and heavier where it fell back to the heightmap. Interpolating across the grid gives the boundary a soft falloff for free.
             gGL.color4f(lerp(0.85f, 0.04f, s),
                         lerp(0.40f, 0.07f, s),
                         lerp(0.10f, 0.16f, s),
@@ -602,10 +542,8 @@ void SSRainShadowMap::renderDebug()
         {
             for (S32 i = 0; i + 1 < n; ++i)
             {
-                // A roof edge puts two corners of this cell metres apart in
-                // height. Bridging them would hang a curtain down the side of
-                // every building; leaving the gap draws the roof and the
-                // ground as the separate surfaces they are.
+                // A roof edge puts two corners of this cell metres apart in height. Bridging them would hang a curtain down the side of every building; leaving the gap draws the roof and the ground
+                // as the separate surfaces they are.
                 const F32 z00 = mesh.mPos[(size_t)j * n + i].mV[VZ];
                 const F32 z10 = mesh.mPos[(size_t)j * n + i + 1].mV[VZ];
                 const F32 z01 = mesh.mPos[(size_t)(j + 1) * n + i].mV[VZ];
@@ -621,8 +559,7 @@ void SSRainShadowMap::renderDebug()
         gGL.end();
     }
 
-    // Fall direction at the camera, so the offset between a building and its
-    // shadow reads as an angle rather than as a mystery
+    // Fall direction at the camera, so the offset between a building and its shadow reads as an angle rather than as a mystery
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const F32 land = sky ? sky_floor : LLWorld::getInstance()->resolveLandHeightAgent(cam);
     const LLVector3 marker(cam.mV[VX], cam.mV[VY], land + 0.2f);
@@ -680,14 +617,9 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
     const bool sky = atmo->isSkyTrack();
     const F32 sky_floor = atmo->groundZero();
 
-    // Scatter, not gather. Every texel is projected to where it actually landed
-    // in the world and dropped into the region cell it fell in, keeping the
-    // highest hit per cell - the first thing a falling drop would meet.
-    //
-    // Gathering instead (one output cell reads a block of texels) would be
-    // marginally cheaper but wrong: the tile is an oblique projection taken
-    // around the camera, so a block of texels is not a column of world space,
-    // and the mapping between the two shifts every time the tile is recaptured.
+    // Scatter, not gather. Every texel is projected to where it actually landed in the world and dropped into the region cell it fell in, keeping the highest hit per cell - the first thing a falling
+    // drop would meet. Gathering instead (one output cell reads a block of texels) would be marginally cheaper but wrong: the tile is an oblique projection taken around the camera, so a block of
+    // texels is not a column of world space, and the mapping between the two shifts every time the tile is recaptured.
     const U32 res = tile.mRes;
     const F32 su = 2.f * tile.mHalfW / (F32)res;
     const F32 sv = 2.f * tile.mHalfH / (F32)res;
@@ -729,9 +661,7 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
         }
     }
 
-    // Resolve what each cell ended up being. Water is the one surface the depth
-    // pass does not draw, so a hit under the waterline is the seabed and the
-    // cell belongs to the water above it.
+    // Resolve what each cell ended up being. Water is the one surface the depth pass does not draw, so a hit under the waterline is the seabed and the cell belongs to the water above it.
     LLWorld* worldp = LLWorld::getInstance();
     for (S32 gy = 0; gy < n; ++gy)
     {
@@ -754,10 +684,8 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
                 continue;
             }
 
-            // Nothing captured in this cell. In a sky band that is open air and
-            // stays empty; at ground level the heightmap and the water plane
-            // are the only answer there is, and it is only reached where the
-            // capture missed, which is rare enough to afford the lookup.
+            // Nothing captured in this cell. In a sky band that is open air and stays empty; at ground level the heightmap and the water plane are the only answer there is, and it is only reached
+            // where the capture missed, which is rare enough to afford the lookup.
             if (sky)
             {
                 out.mZ[idx] = sky_floor;
@@ -792,8 +720,7 @@ bool SSRainShadowMap::refineEdge(U64 region_handle, const LLVector3& from_agent,
     const F32 range = tile.mFar - tile.mNear;
     const F32 texel = 2.f * tile.mHalfW / (F32)tile.mRes;
 
-    // Sample the map for the column through a point, exactly as resolveColumn
-    // does, and hand back where that column meets the surface
+    // Sample the map for the column through a point, exactly as resolveColumn does, and hand back where that column meets the surface
     auto sample = [&](const LLVector3& probe, LLVector3& hit) -> bool
     {
         const LLVector3 rel = probe - eye;
@@ -812,8 +739,7 @@ bool SSRainShadowMap::refineEdge(U64 region_handle, const LLVector3& from_agent,
 
     refined_agent = from_agent;
 
-    // Step outward a texel at a time and stop where the surface does. The last
-    // step that stayed level with the start is the lip.
+    // Step outward a texel at a time and stop where the surface does. The last step that stayed level with the start is the lip.
     const S32 steps = llclamp((S32)(max_dist / llmax(0.01f, texel)), 1, 64);
     for (S32 i = 1; i <= steps; ++i)
     {
@@ -857,17 +783,12 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
                 const F32 texel_u = 2.f * tile->mHalfW / (F32)tile->mRes;
                 const F32 texel_v = 2.f * tile->mHalfH / (F32)tile->mRes;
 
-                // How far a neighbouring texel may differ before it is treated
-                // as a different surface rather than a slope of this one:
-                // one texel across, four along, which is the same ~76 degree
+                // How far a neighbouring texel may differ before it is treated as a different surface rather than a slope of this one: one texel across, four along, which is the same ~76 degree
                 // ceiling the normal below is clamped to.
                 const F32 max_step = (texel_u * 4.f) / llmax(range, 0.01f);
 
-                // Depth at a texel, in the surface this sample landed on:
-                // misses and anything across a discontinuity - the lip of a
-                // roof, the side of a prim - are pulled back to the texel that
-                // was actually hit, so an edge stays an edge instead of
-                // smearing a ramp out into the air beside it.
+                // Depth at a texel, in the surface this sample landed on: misses and anything across a discontinuity - the lip of a roof, the side of a prim - are pulled back to the texel that was
+                // actually hit, so an edge stays an edge instead of smearing a ramp out into the air beside it.
                 auto tap = [&](S32 ix, S32 iy) -> F32
                 {
                     ix = llclamp(ix, 0, (S32)tile->mRes - 1);
@@ -877,14 +798,9 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
                     return llclamp(d, depth - max_step, depth + max_step);
                 };
 
-                // Interpolate the depth across the four texels around the
-                // sample rather than taking the one it fell in. A nearest
-                // lookup reports the height of the texel centre, so on a slope
-                // the impact is placed up to a texel's worth of rise off the
-                // real surface - half the time below it - and at a quarter of
-                // a metre per texel that is enough to bury a ripple in the
-                // ground it is supposed to be lying on. This is the same
-                // reconstruction the gradients below assume.
+                // Interpolate the depth across the four texels around the sample rather than taking the one it fell in. A nearest lookup reports the height of the texel centre, so on a slope the
+                // impact is placed up to a texel's worth of rise off the real surface - half the time below it - and at a quarter of a metre per texel that is enough to bury a ripple in the ground
+                // it is supposed to be lying on. This is the same reconstruction the gradients below assume.
                 const F32 fx = u * (F32)tile->mRes - 0.5f;
                 const F32 fy = v * (F32)tile->mRes - 0.5f;
                 const S32 x0 = (S32)floorf(fx);
@@ -905,11 +821,8 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
 
                 if (hit_normal)
                 {
-                    // Surface normal from the depth gradients. Centred
-                    // differences rather than forward ones: a forward
-                    // difference is the slope half a texel downhill of the
-                    // sample, which tilts every normal the same way and leans
-                    // the ripple into the surface on one side.
+                    // Surface normal from the depth gradients. Centred differences rather than forward ones: a forward difference is the slope half a texel downhill of the sample, which tilts every
+                    // normal the same way and leans the ripple into the surface on one side.
                     const F32 max_dd = texel_u * 4.f; // ~76 degrees max slope
                     const F32 dd_u = llclamp((tap((S32)tx + 1, (S32)ty) - tap((S32)tx - 1, (S32)ty)) * range * 0.5f,
                                              -max_dd, max_dd);
@@ -930,10 +843,8 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
         }
     }
 
-    // Floor of the active track. At ground level that is terrain and water as
-    // before; in a sky band it is the track's own ground zero, because the
-    // terrain thousands of metres below is not what precipitation up there
-    // should be landing on.
+    // Floor of the active track. At ground level that is terrain and water as before; in a sky band it is the track's own ground zero, because the terrain thousands of metres below is not what
+    // precipitation up there should be landing on.
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const bool sky = atmo->isSkyTrack();
 
@@ -945,24 +856,16 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
     }
     else if (from_map)
     {
-        // The capture already contains whatever the ground is actually built
-        // from - mesh, prims and the terrain alike - so a hit is the answer.
-        // The heightmap underneath it is a relic that says nothing about where
-        // a build's floor is, and clamping a real hit up to it can only ever
-        // move a drop onto a surface that is not there. The one surface the
-        // depth pass does not draw is water, so a hit under the waterline is
-        // the seabed and the drop belongs on the water above it.
+        // The capture already contains whatever the ground is actually built from - mesh, prims and the terrain alike - so a hit is the answer. The heightmap underneath it is a relic that says
+        // nothing about where a build's floor is, and clamping a real hit up to it can only ever move a drop onto a surface that is not there. The one surface the depth pass does not draw is water,
+        // so a hit under the waterline is the seabed and the drop belongs on the water above it.
         floor_z = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
         floor_is_water = true;
     }
     else
     {
-        // No depth for this column at all: outside the captured footprint, or
-        // a region with no tile yet. The heightmap is a poor stand-in for
-        // ground that is usually built rather than sculpted, but without the
-        // map it is the only answer there is. Columns over the void beyond
-        // region borders land on the void water surface, so rain carries on
-        // past the sim edge instead of stopping there.
+        // No depth for this column at all: outside the captured footprint, or a region with no tile yet. The heightmap is a poor stand-in for ground that is usually built rather than sculpted, but
+        // without the map it is the only answer there is. Columns over the void beyond region borders land on the void water surface, so rain carries on past the sim edge instead of stopping there.
         const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(pos_agent);
         const F32 water = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
         floor_is_water = water > land;
@@ -971,10 +874,8 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
 
     on_water = false;
 
-    // Either there was no hit to use, or the hit is below the surface the
-    // drop should have landed on: the water at ground level, and nothing at
-    // all in a sky band, where a real hit below the imaginary floor is a
-    // platform hanging under the band base and stays authoritative.
+    // Either there was no hit to use, or the hit is below the surface the drop should have landed on: the water at ground level, and nothing at all in a sky band, where a real hit below the
+    // imaginary floor is a platform hanging under the band base and stays authoritative.
     if (!from_map || (!sky && hit.mV[VZ] < floor_z))
     {
         const F32 dz = dir.mV[VZ];
@@ -1004,8 +905,7 @@ bool SSRainShadowMap::resolveColumn(const LLVector3& pos_agent, LLVector3& hit_p
 
     hit_pos_agent = hit;
 
-    // false here means the column found no real surface. Callers in a sky
-    // track use that to fade the drop out instead of landing it on nothing.
+    // false here means the column found no real surface. Callers in a sky track use that to fade the drop out instead of landing it on nothing.
     return from_map;
 }
 

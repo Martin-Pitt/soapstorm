@@ -25,17 +25,9 @@
 // <SS:Nexii> Atmo Magic wind flowmap
 
 // ---------------------------------------------------------------------------
-// Shared domain description.
-//
-// The domain is a camera-centred box, snapped to a texel grid so it translates
-// in whole cells rather than jittering every frame. Horizontally it is a
-// uniform grid: uRes texels across uExtent metres. Vertically it is uSlices
-// adaptive slabs whose boundaries live in uSliceZ, placed where the captured
-// height field actually has detail. That makes the z spacing non-uniform, so
-// every vertical difference is weighted by the real slab thickness rather than
-// assuming a constant step.
-//
-// Declared in full in each pass: separately compiled GLSL units do not share
+// Shared domain description. The domain is a camera-centred box, snapped to a texel grid so it translates in whole cells rather than jittering every frame. Horizontally it is a uniform grid: uRes
+// texels across uExtent metres. Vertically it is uSlices adaptive slabs whose boundaries live in uSliceZ, placed where the captured height field actually has detail. That makes the z spacing
+// non-uniform, so every vertical difference is weighted by the real slab thickness rather than assuming a constant step. Declared in full in each pass: separately compiled GLSL units do not share
 // uniform declarations, so there is nothing to gain from a common file.
 // ---------------------------------------------------------------------------
 
@@ -72,9 +64,8 @@ bool inBounds(ivec3 c)
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// The height of the topmost surface over each column. Everything below it
-// starts out solid - right for a building, wrong under a skyway - and the
-// oblique probes below carve back whatever they can prove is open.
+// The height of the topmost surface over each column. Everything below it starts out solid - right for a building, wrong under a skyway - and the oblique probes below carve back whatever they can
+// prove is open.
 uniform float uSolidCurve;      // exponent on the fractional occupancy
 
 layout(r32f,   binding = 0) uniform readonly  image2D uHeight;
@@ -82,24 +73,13 @@ layout(r8,     binding = 1) uniform writeonly image3D uSolid;
 layout(rgba16f,binding = 2) uniform writeonly image3D uVel;
 
 // ---------------------------------------------------------------------------
-// Oblique probes.
-//
-// Four ortho depth captures, one per cardinal direction, each tilted down. A
-// point nearer to a probe than that probe's first hit has an unobstructed
-// straight line out of the world, so it is air - there is nothing between it
-// and open sky along that ray. That makes the test one-sided in the direction
-// that matters: it can only ever turn solid into air, on evidence, so a
-// passage the probes fail to see keeps the conservative heightmap answer
-// rather than becoming a hole that is not there.
-//
-// It also means a wall is never wrong. A probe ray stops at the first surface
-// it meets, so a half-metre wall shadows everything behind it just as
-// completely as a thick one, and a building interior stays filled.
+// Oblique probes. Four ortho depth captures, one per cardinal direction, each tilted down. A point nearer to a probe than that probe's first hit has an unobstructed straight line out of the world,
+// so it is air - there is nothing between it and open sky along that ray. That makes the test one-sided in the direction that matters: it can only ever turn solid into air, on evidence, so a passage
+// the probes fail to see keeps the conservative heightmap answer rather than becoming a hole that is not there. It also means a wall is never wrong. A probe ray stops at the first surface it meets,
+// so a half-metre wall shadows everything behind it just as completely as a thick one, and a building interior stays filled.
 // ---------------------------------------------------------------------------
-// Unit 3 rather than a fresh one: GL only guarantees eight image units, so the
-// whole set of passes has to share 0..7. Init never reads the divergence
-// volume that lives at 3 elsewhere, and the divergence pass rebinds the unit
-// before its own dispatch, so the two never overlap in time.
+// Unit 3 rather than a fresh one: GL only guarantees eight image units, so the whole set of passes has to share 0..7. Init never reads the divergence volume that lives at 3 elsewhere, and the
+// divergence pass rebinds the unit before its own dispatch, so the two never overlap in time.
 layout(r32f, binding = 3) uniform readonly image2DArray uProbe;
 
 uniform mat4  uProbeView[4];    // world to probe view space
@@ -127,20 +107,10 @@ bool visibleFrom(int i, vec3 world)
     ivec2 t = clamp(ivec2(uv * float(uProbeRes)), ivec2(0), ivec2(uProbeRes - 1));
     float hit = imageLoad(uProbe, ivec3(t, i)).r;
 
-    // A miss is the absence of evidence, not evidence of absence. The ray left
-    // the captured volume without meeting anything, and that volume is bounded
-    // by a frustum and by whatever happened to be loaded - so a miss says
-    // nothing about this point and must not carve.
-    //
-    // Reading it as air is fatal here, because the probes are OR'd: most of
-    // each probe image is legitimately sky, so nearly every cell in the region
-    // lands on a miss in at least one of the four directions, and one miss
-    // would then be enough to open it. The mask dissolves and the wind sails
-    // through the buildings.
-    //
-    // Nothing is lost by being strict. A passage is found from a ray that
-    // enters one end and hits something beyond the far end, which is a real
-    // hit at a greater distance - exactly the case below.
+    // A miss is the absence of evidence, not evidence of absence. The ray left the captured volume without meeting anything, and that volume is bounded by a frustum and by whatever happened to be
+    // loaded - so a miss says nothing about this point and must not carve. Reading it as air is fatal here, because the probes are OR'd: most of each probe image is legitimately sky, so nearly every
+    // cell in the region lands on a miss in at least one of the four directions, and one miss would then be enough to open it. The mask dissolves and the wind sails through the buildings. Nothing is
+    // lost by being strict. A passage is found from a ray that enters one end and hits something beyond the far end, which is a real hit at a greater distance - exactly the case below.
     if (hit >= PROBE_MISS * 0.5) return false;
 
     return dist < hit - uProbeBias;
@@ -155,11 +125,8 @@ bool anyProbeSees(vec3 world)
     return false;
 }
 
-// Walk the boundary between an open sample and a blocked one down to a fraction
-// of the sample spacing. Counting samples alone quantises the answer to the
-// spacing, which is what made a six metre arch inside a six metre slab read as
-// a quarter solid purely because the slab boundary did not line up with the
-// opening.
+// Walk the boundary between an open sample and a blocked one down to a fraction of the sample spacing. Counting samples alone quantises the answer to the spacing, which is what made a six metre arch
+// inside a six metre slab read as a quarter solid purely because the slab boundary did not line up with the opening.
 float refineEdge(vec2 xy, float z_open, float z_blocked)
 {
     for (int k = 0; k < 4; ++k)
@@ -181,22 +148,14 @@ void main()
     float lo = uSliceZ[c.z];
     float hi = uSliceZ[c.z + 1];
 
-    // Soft occupancy: the fraction of this slab that sits under the surface.
-    // A fraction rather than a hard in/out so a roofline that falls between
-    // two slabs eases the flow instead of popping it, and so raising the
-    // camera out of the geometry fades the obstacles away smoothly.
+    // Soft occupancy: the fraction of this slab that sits under the surface. A fraction rather than a hard in/out so a roofline that falls between two slabs eases the flow instead of popping it, and
+    // so raising the camera out of the geometry fades the obstacles away smoothly.
     float overlap = max(0.0, min(hi, top) - lo);
     float solid = clamp(overlap / max(hi - lo, 0.01), 0.0, 1.0);
 
-    // Carve, by measuring headroom rather than by counting samples.
-    //
-    // What matters to the flow is how much vertical clearance the slab has, and
-    // where a passage's floor and ceiling actually sit inside it. Scan the
-    // covered part of the slab, find the open span, then bisect its two edges so
-    // the clearance is resolved far finer than the scan spacing. A six metre
-    // arch inside a six metre slab comes out open whether or not the boundary
-    // happens to line up with it, instead of losing a quarter of the slab to
-    // whichever sample fell in the stonework.
+    // Carve, by measuring headroom rather than by counting samples. What matters to the flow is how much vertical clearance the slab has, and where a passage's floor and ceiling actually sit inside
+    // it. Scan the covered part of the slab, find the open span, then bisect its two edges so the clearance is resolved far finer than the scan spacing. A six metre arch inside a six metre slab
+    // comes out open whether or not the boundary happens to line up with it, instead of losing a quarter of the slab to whichever sample fell in the stonework.
     if (solid > 0.0 && uProbeCount > 0)
     {
         float cell = cellSize();
@@ -205,8 +164,7 @@ void main()
         float covered_hi = min(hi, top);
         float thickness = max(covered_hi - lo, 0.01);
 
-        // Scan at roughly the horizontal resolution, so the vertical detail the
-        // carve can resolve matches the detail the mask can hold
+        // Scan at roughly the horizontal resolution, so the vertical detail the carve can resolve matches the detail the mask can hold
         int steps = clamp(int(ceil(thickness / max(cell, 0.01))), 4, 12);
         float dz = thickness / float(steps);
 
@@ -227,8 +185,7 @@ void main()
             float z_first = lo + (float(first) + 0.5) * dz;
             float z_last  = lo + (float(last) + 0.5) * dz;
 
-            // An open span running off either end of the slab continues into
-            // the neighbouring one; there is no edge to find inside this slab.
+            // An open span running off either end of the slab continues into the neighbouring one; there is no edge to find inside this slab.
             float open_lo = (first == 0)
                 ? lo : refineEdge(xy, z_first, z_first - dz);
             float open_hi = (last == steps - 1)
@@ -238,10 +195,8 @@ void main()
         }
     }
 
-    // The true fraction treats a building filling a third of a thick slab as a
-    // third of a wall, which is air the flow simply pushes through. Bending the
-    // curve lets partial cover stand up as a wall without waiting for the slab
-    // count to catch up with the roofline.
+    // The true fraction treats a building filling a third of a thick slab as a third of a wall, which is air the flow simply pushes through. Bending the curve lets partial cover stand up as a wall
+    // without waiting for the slab count to catch up with the roofline.
     if (solid > 0.0 && uSolidCurve != 1.0)
     {
         solid = clamp(pow(solid, uSolidCurve), 0.0, 1.0);
@@ -249,8 +204,7 @@ void main()
 
     imageStore(uSolid, c, vec4(solid, 0.0, 0.0, 0.0));
 
-    // Seed with the ambient wind for this slab, killed inside solids. The
-    // projection that follows is what makes it flow around them.
+    // Seed with the ambient wind for this slab, killed inside solids. The projection that follows is what makes it flow around them.
     vec3 v = uAmbient[c.z] * (1.0 - solid);
     imageStore(uVel, c, vec4(v, 0.0));
 }

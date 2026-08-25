@@ -42,9 +42,7 @@
 
 namespace
 {
-    // Rows are tall enough to hold a swatch and two lines beside it. The
-    // swatch is square and the text sits to its right, so the whole row is
-    // sized off the swatch rather than off the font.
+    // Rows are tall enough to hold a swatch and two lines beside it. The swatch is square and the text sits to its right, so the whole row is sized off the swatch rather than off the font.
     const S32 SWATCH = 40;
     const S32 ROW_H = SWATCH + 6;
     const S32 ROW_PAD = 2;
@@ -53,16 +51,11 @@ namespace
 
     const S32 DRAG_OUT_M = 46;
 
-    // How big the chip's own swatch is. Small: it is a reminder of what is in
-    // the slot, not a look at it.
+    // How big the chip's own swatch is. Small: it is a reminder of what is in the slot, not a look at it.
     const S32 CHIP_SWATCH = 16;
 
-    // Fetched at a size worth looking at.
-    //
-    // A texture the viewer has only ever needed as a thumbnail stays at
-    // thumbnail resolution, so a swatch drawn from it is a blur - and it is
-    // the same call that decides whether getFullWidth ever returns anything
-    // but zero. Asking is what makes both work.
+    // Fetched at a size worth looking at. A texture the viewer has only ever needed as a thumbnail stays at thumbnail resolution, so a swatch drawn from it is a blur - and it is the same call that
+    // decides whether getFullWidth ever returns anything but zero. Asking is what makes both work.
     LLViewerFetchedTexture* ss_texture(const LLUUID& id)
     {
         if (id.isNull()) return NULL;
@@ -76,9 +69,7 @@ namespace
         return tex;
     }
 
-    // A texture's dimensions as text, or a placeholder while it is still on
-    // its way. Same rule as a sound's length: unknown yet is normal, and the
-    // row simply asks again next frame.
+    // A texture's dimensions as text, or a placeholder while it is still on its way. Same rule as a sound's length: unknown yet is normal, and the row simply asks again next frame.
     std::string ss_texture_size(LLViewerFetchedTexture* tex)
     {
         if (!tex) return std::string("--");
@@ -121,9 +112,7 @@ void SSTextureListCtrl::draw()
 
     const S32 sw_y = r.mBottom + (r.getHeight() - CHIP_SWATCH) / 2;
 
-    // The first texture stands for the slot. Which one is arbitrary for a
-    // random list and meaningful for a sequenced one, and either way it says
-    // more at this size than a count alone.
+    // The first texture stands for the slot. Which one is arbitrary for a random list and meaningful for a sequenced one, and either way it says more at this size than a count alone.
     if (!mList.empty())
     {
         if (LLViewerFetchedTexture* tex = ss_texture(mList.front()))
@@ -170,8 +159,7 @@ bool SSTextureListCtrl::handleHover(S32 x, S32 y, MASK mask)
 
 bool SSTextureListCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
 {
-    // No transport to get in the way, so the whole chip opens the editor -
-    // there is nothing else it could usefully do.
+    // No transport to get in the way, so the whole chip opens the editor - there is nothing else it could usefully do.
     openEditor();
     return true;
 }
@@ -307,10 +295,8 @@ void SSTextureListRows::draw()
         gl_rect_2d(row, hovered ? LLColor4(0.23f, 0.24f, 0.30f, alpha)
                                 : LLColor4(0.16f, 0.16f, 0.20f, alpha), true);
 
-        // The swatch, on the left, is the whole reason these rows are tall.
-        // A texture does not need describing the way a sound does - it needs
-        // showing, and at this size it is recognisable where a name may not
-        // be.
+        // The swatch, on the left, is the whole reason these rows are tall. A texture does not need describing the way a sound does - it needs showing, and at this size it is recognisable where a
+        // name may not be.
         const LLRect sw(row.mLeft + 3, row.mTop - 3,
                         row.mLeft + 3 + SWATCH, row.mTop - 3 - SWATCH);
 
@@ -331,9 +317,8 @@ void SSTextureListRows::draw()
         const S32 text_left = sw.mRight + 8;
         const S32 text_right = row.mRight - REMOVE_W - 12;
 
-        // Name on the first line, resolution on the second. Two lines is
-        // what a taller row buys, and the size is worth one of them: it is
-        // the thing that decides whether a texture belongs in a slot at all.
+        // Name on the first line, resolution on the second. Two lines is what a taller row buys, and the size is worth one of them: it is the thing that decides whether a texture belongs in a slot
+        // at all.
         font->renderUTF8(title, 0, (F32)text_left, (F32)(row.mTop - 14),
                          named ? LLColor4(0.88f, 0.88f, 0.92f, alpha)
                                : LLColor4(0.62f, 0.62f, 0.68f, alpha),
@@ -541,9 +526,7 @@ bool SSTextureListRows::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         mList.insert(mList.begin() + at, id);
         mBatchCount++;
 
-        // Sorted once the batch has landed, and only the run just dropped -
-        // the same rule the sound list follows, and for the same reason: a
-        // hand-arranged order should survive an addition to it.
+        // Sorted once the batch has landed, and only the run just dropped - the same rule the sound list follows, and for the same reason: a hand-arranged order should survive an addition to it.
         if (index + 1 >= count && mBatchCount > 1)
         {
             std::sort(mList.begin() + mBatchStart,
@@ -612,10 +595,8 @@ void SSFloaterTextureList::editFor(SSTextureListCtrl* owner, const std::string& 
 
 void SSFloaterTextureList::onClose(bool app_quitting)
 {
-    // Same rule as the sound list: closing keeps what is on screen, Cancel is
-    // the button for changing your mind, and the commit happens here directly
-    // rather than by calling the OK handler - which would close, which would
-    // call this.
+    // Same rule as the sound list: closing keeps what is on screen, Cancel is the button for changing your mind, and the commit happens here directly rather than by calling the OK handler - which
+    // would close, which would call this.
     if (!mCancelled)
     {
         commitToOwner();

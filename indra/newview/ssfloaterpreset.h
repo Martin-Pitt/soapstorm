@@ -59,8 +59,7 @@ private:
     void onClickSave();
     void onClickDiscard();
 
-    // Title carries the preset name and an asterisk while edits are staged
-    // but not written to disk
+    // Title carries the preset name and an asterisk while edits are staged but not written to disk
     void refreshTitle();
 
     SSPrecipPreset mEdited;

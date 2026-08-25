@@ -5343,7 +5343,15 @@ void LLVOAvatar::updateFootstepSounds()
     const LLUUID AGENT_FOOTSTEP_ANIMS[] = {ANIM_AGENT_WALK, ANIM_AGENT_RUN, ANIM_AGENT_LAND};
     const S32 NUM_AGENT_FOOTSTEP_ANIMS = LL_ARRAY_SIZE(AGENT_FOOTSTEP_ANIMS);
 
-    if ( gAudiop && isAnyAnimationSignaled(AGENT_FOOTSTEP_ANIMS, NUM_AGENT_FOOTSTEP_ANIMS) )
+    // <SS:Nexii> Or actually moving along the ground. Gating on the STANDARD anims alone silenced everyone wearing an AO - overriders replace ANIM_AGENT_WALK/RUN with their own animations, so the
+    // signal test fails for exactly the avatars most players are. The foot-down edge detection below works off ankle heights, which an AO animates like any other animation, so it needs no anims at
+    // all - only permission to run.
+    const LLVector3 vel_xy(getVelocity().mV[VX], getVelocity().mV[VY], 0.f);
+    const F32 ground_speed = vel_xy.magVec();
+    const bool moving_on_ground = !mInAir && !isSitting() && ground_speed > 0.5f;
+    // </SS:Nexii>
+
+    if ( gAudiop && (isAnyAnimationSignaled(AGENT_FOOTSTEP_ANIMS, NUM_AGENT_FOOTSTEP_ANIMS) || moving_on_ground) )
     {
         bool playSound = false;
         LLVector3 foot_pos_agent;
@@ -5368,6 +5376,28 @@ void LLVOAvatar::updateFootstepSounds()
         mWasOnGroundLeft = onGroundLeft;
         mWasOnGroundRight = onGroundRight;
 
+        // <SS:Nexii> Support-foot swap detector, for gaits the absolute test above cannot see. That test needs the planted ankle to dip within 5cm of the RESOLVED ground - and an AO's foot heights,
+        // or any hover-height offset, shift the whole skeleton so both ankles sit permanently on one side of the threshold: no transitions ever, footsteps dead while visibly running. Which ankle is
+        // the LOWER one, though, alternates left-right in any walking or running gait whatever the anim and wherever the ground - the feet are compared against each other, so nothing external can
+        // break it. Fires only when the anims are NOT signaled (the AO case), so stock gaits keep the original detector and nobody gets two sounds a step. One sound per frame regardless - both
+        // detectors only set the same flag.
+        if (!playSound && moving_on_ground
+            && !isAnyAnimationSignaled(AGENT_FOOTSTEP_ANIMS, NUM_AGENT_FOOTSTEP_ANIMS))
+        {
+            const F32 diff = leftElev - rightElev;
+            if (fabsf(diff) > 0.015f)
+            {
+                const bool lower_left = diff < 0.f;
+                if (lower_left != mSSLowerLeft)
+                {
+                    foot_pos_agent = lower_left ? ankle_left_pos_agent : ankle_right_pos_agent;
+                    playSound = true;
+                }
+                mSSLowerLeft = lower_left;
+            }
+        }
+        // </SS:Nexii>
+
         // <FS:PP> FIRE-3169: Option to change the default footsteps sound
         // if ( playSound )
         static LLCachedControl<bool> PlayModeUISndFootsteps(gSavedSettings, "PlayModeUISndFootsteps");
@@ -5381,7 +5411,8 @@ void LLVOAvatar::updateFootstepSounds()
             const LLUUID AGENT_LAND_ANIM[] = {ANIM_AGENT_LAND};
             const LLUUID AGENT_RUN_ANIM[] = {ANIM_AGENT_RUN};
             if (isAnyAnimationSignaled(AGENT_LAND_ANIM, 1)) action = STEP_LAND;
-            else if (isAnyAnimationSignaled(AGENT_RUN_ANIM, 1)) action = STEP_RUN;
+            // Speed as well as the anim, for the same AO reason as the gate above: an overridden run signals nothing, but it still covers ground at running pace.
+            else if (isAnyAnimationSignaled(AGENT_RUN_ANIM, 1) || ground_speed > 3.2f) action = STEP_RUN;
             playFootstepSound(foot_pos_agent, action);
             // </SS:Nexii>
         }
@@ -5399,7 +5430,7 @@ void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
     const F32 STEP_VOLUME = 0.1f;
 
     LLUUID step_sound_id = SSSoundscape::getInstance()->footstepSound(
-        foot_pos_agent, mStepOnLand, action, isSelf());
+        getID(), foot_pos_agent, mStepOnLand, action, isSelf());
     if (step_sound_id.isNull())
     {
         step_sound_id = getStepSound();

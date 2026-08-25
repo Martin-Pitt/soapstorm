@@ -30,13 +30,11 @@ out vec4 frag_color;
 uniform sampler2D diffuseMap;   // splatted drops, alpha = coverage
 uniform sampler2D sceneMap;     // last frame's lit scene (SSR buffer)
 uniform vec2 screen_res;
-// eye-space dominant light direction; must match the vec3 declaration in
-// windlight/atmosphericsFuncs.glsl exactly or the link fails
+// eye-space dominant light direction; must match the vec3 declaration in windlight/atmosphericsFuncs.glsl exactly or the link fails
 uniform vec3 lightnorm;
 uniform float ss_refract_strength;
 
-// Shape of the water on the sprite and how the light it throws back is
-// distributed over it; see the notes in main()
+// Shape of the water on the sprite and how the light it throws back is distributed over it; see the notes in main()
 uniform float ss_drop_bulge;
 uniform float ss_drop_core;
 uniform float ss_drop_sparkle;
@@ -70,32 +68,19 @@ void main()
     vec3 pos = vary_position;
     vec3 view = normalize(pos);
 
-    // The drop's own frame: the way it is falling, the way it faces the eye,
-    // and the direction across it.
+    // The drop's own frame: the way it is falling, the way it faces the eye, and the direction across it.
     vec3 axis = normalize(vary_axis);
     vec3 face = normalize(vary_normal);              // billboard faces the eye
     vec3 across = cross(axis, face);
     float across_len = length(across);
     across = (across_len > 0.001) ? across / across_len : normalize(cross(axis, vec3(0.0, 0.0, 1.0)));
 
-    // Water normal read off the shape in the texture's alpha rather than
-    // assumed across the quad.
-    //
-    // This was a half cylinder wrapped around the quad's long axis, built from
-    // the texture coordinates: near enough for the drops tier, where a quad is
-    // one splat, and wrong everywhere else. A cluster sprite carries a dozen
-    // separate drops and a sheet ninety, and one cylinder spanning the quad
-    // gave all of them a single fat drop's worth of shading smeared across the
-    // whole card. Even on a lone drop it knew nothing about the taper down the
-    // tail, so the head and the tip shaded alike.
-    //
-    // The alpha the bake writes is coverage, which stands in for how much
-    // water is in the way, so it peaks along each splat's spine and falls to
-    // nothing at its silhouette - exactly where the rounded side of the drop
-    // turns away from us. Its gradient is therefore the slope of that side,
-    // per splat, for free. Taken in texture space and scaled back up by the
-    // texture's own size it is a derivative per unit of uv, so the same bulge
-    // dial means the same roundness at any bake resolution.
+    // Water normal read off the shape in the texture's alpha rather than assumed across the quad. This was a half cylinder wrapped around the quad's long axis, built from the texture coordinates:
+    // near enough for the drops tier, where a quad is one splat, and wrong everywhere else. A cluster sprite carries a dozen separate drops and a sheet ninety, and one cylinder spanning the quad
+    // gave all of them a single fat drop's worth of shading smeared across the whole card. Even on a lone drop it knew nothing about the taper down the tail, so the head and the tip shaded alike.
+    // The alpha the bake writes is coverage, which stands in for how much water is in the way, so it peaks along each splat's spine and falls to nothing at its silhouette - exactly where the rounded
+    // side of the drop turns away from us. Its gradient is therefore the slope of that side, per splat, for free. Taken in texture space and scaled back up by the texture's own size it is a
+    // derivative per unit of uv, so the same bulge dial means the same roundness at any bake resolution.
     vec2 tsize = vec2(textureSize(diffuseMap, 0));
     vec2 texel = 1.0 / tsize;
     float ax = texture(diffuseMap, tc + vec2(texel.x, 0.0)).a
@@ -103,23 +88,17 @@ void main()
     float ay = texture(diffuseMap, tc + vec2(0.0, texel.y)).a
              - texture(diffuseMap, tc - vec2(0.0, texel.y)).a;
 
-    // Uphill in coverage is toward the spine, so the surface leans the other
-    // way. Capped short of grazing: past that the reflection vector swings
-    // wildly across a texel and the edge of every drop crawls with noise.
+    // Uphill in coverage is toward the spine, so the surface leans the other way. Capped short of grazing: past that the reflection vector swings wildly across a texel and the edge of every drop
+    // crawls with noise.
     vec2 lat = -vec2(ax, ay) * tsize * 0.5 * ss_drop_bulge;
     float lat_len = length(lat);
     if (lat_len > 3.0) lat *= 3.0 / lat_len;
 
     vec3 norm = normalize(face + across * lat.x + axis * lat.y);
 
-    // The drops are drawn fatter than life - the bake floors every splat at a
-    // minimum share of its quad, or the far tiers come out as empty cards -
-    // and a highlight spread evenly over that fat footprint is what makes a
-    // lit drop read as a white blob instead of as water. Real water carries
-    // the light in a thin bright line down the spine with dark water either
-    // side of it, so the specular terms below are weighted toward where the
-    // coverage is densest. The drop keeps its size and its refraction; only
-    // the light it throws back collapses onto the middle of it.
+    // The drops are drawn fatter than life - the bake floors every splat at a minimum share of its quad, or the far tiers come out as empty cards - and a highlight spread evenly over that fat
+    // footprint is what makes a lit drop read as a white blob instead of as water. Real water carries the light in a thin bright line down the spine with dark water either side of it, so the
+    // specular terms below are weighted toward where the coverage is densest. The drop keeps its size and its refraction; only the light it throws back collapses onto the middle of it.
     float core = pow(splat, ss_drop_core);
 
     vec3 sunlit;
@@ -129,8 +108,7 @@ void main()
     calcAtmosphericVars(pos.xyz, vec3(0), 1.0, sunlit, amblit, additive, atten);
     vec3 amblit_linear = srgb_to_linear(amblit);
 
-    // Environment reflection through the probe system; the class2 fallback
-    // approximates from sky ambient when probes are disabled
+    // Environment reflection through the probe system; the class2 fallback approximates from sky ambient when probes are disabled
     vec3 irradiance = amblit_linear;
     vec3 glossenv = vec3(0);
     vec3 legacyenv = vec3(0);
@@ -151,13 +129,9 @@ void main()
     float ndv = clamp(dot(norm, -view), 0.0, 1.0);
     float fres = 0.06 + 0.94 * pow(1.0 - ndv, 2.5);
 
-    // Sun/moon glint plus forward scatter when looking lightward.
-    //
-    // Two lobes, not one. The broad one is the drop's wet sheen; the tight one
-    // is the glint proper, and because it only survives where the normal is
-    // within a hair of mirroring the sun it lands on a few drops at a time and
-    // moves off them as they fall. That flicker is the sparkle - a wide lobe
-    // at the same energy is a uniform sheet of grey shine instead.
+    // Sun/moon glint plus forward scatter when looking lightward. Two lobes, not one. The broad one is the drop's wet sheen; the tight one is the glint proper, and because it only survives where the
+    // normal is within a hair of mirroring the sun it lands on a few drops at a time and moves off them as they fall. That flicker is the sparkle - a wide lobe at the same energy is a uniform sheet
+    // of grey shine instead.
     vec3 light_dir = lightnorm.xyz;
     float rl = clamp(dot(reflect(view, norm), light_dir), 0.0, 1.0);
     float spec = pow(rl, 96.0) + pow(rl, 1024.0) * ss_drop_sparkle;

@@ -35,12 +35,9 @@ bool inBounds(ivec3 c)
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// Averaged rather than max-pooled. Max-pooling would close an alley narrower
-// than two coarse cells, and the coarse levels exist precisely to work out how
-// much air the long lanes carry - an alley that seals shut on the grid that
-// decides that is worse than one that reads as half-open. A fractional mask is
-// already what the fine level uses for a roofline caught between slabs, so the
-// solver needs nothing new to understand it.
+// Averaged rather than max-pooled. Max-pooling would close an alley narrower than two coarse cells, and the coarse levels exist precisely to work out how much air the long lanes carry - an alley
+// that seals shut on the grid that decides that is worse than one that reads as half-open. A fractional mask is already what the fine level uses for a roofline caught between slabs, so the solver
+// needs nothing new to understand it.
 layout(r8, binding = 6) uniform readonly  image3D uFine;
 layout(r8, binding = 7) uniform writeonly image3D uCoarse;
 

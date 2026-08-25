@@ -47,82 +47,50 @@
 
 // <SS:Nexii> Atmo Magic volumetric cloud field
 
-// Set while a reflection probe is being captured. Declared the same way
-// sssurfacefield.cpp declares it, rather than pulling in the header that
-// owns it for one bool.
+// Set while a reflection probe is being captured. Declared the same way sssurfacefield.cpp declares it, rather than pulling in the header that owns it for one bool.
 extern bool gCubeSnapshot;
 
 namespace
 {
-    // The puff lattice. Cells are laid out on the WIND-RELATIVE grid rather
-    // than on the world, so a puff belongs to the air rather than to the
-    // ground under it: the whole field slides downwind and new cells arrive
-    // from upwind instead of the pattern shimmering in place.
+    // The puff lattice. Cells are laid out on the WIND-RELATIVE grid rather than on the world, so a puff belongs to the air rather than to the ground under it: the whole field slides downwind and
+    // new cells arrive from upwind instead of the pattern shimmering in place.
     const F32 CELL_M = 260.f;
 
-    // How far out puffs are drawn. Past this they are a few pixels each and
-    // the dome behind them is doing the work anyway.
+    // How far out puffs are drawn. Past this they are a few pixels each and the dome behind them is doing the work anyway.
     const F32 FIELD_RADIUS_M = 3200.f;
 
-    // Ceiling on how many quads a frame may draw, whatever the coverage. A
-    // full-coverage field over the whole radius is thousands of cells, and
-    // beyond a few hundred overlapping alpha quads the fill cost is real
-    // while the look stops changing.
+    // Ceiling on how many quads a frame may draw, whatever the coverage. A full-coverage field over the whole radius is thousands of cells, and beyond a few hundred overlapping alpha quads the fill
+    // cost is real while the look stops changing.
     const S32 MAX_PUFFS = 1260;
 
-    // A puff's radius relative to the cell it sits in. Over 0.5 they
-    // overlap, which is what makes a field read as connected cloud rather
-    // than as a polka dot pattern - and overlapping is cheap here because
-    // the art is mostly transparent.
+    // A puff's radius relative to the cell it sits in. Over 0.5 they overlap, which is what makes a field read as connected cloud rather than as a polka dot pattern - and overlapping is cheap here
+    // because the art is mostly transparent.
     const F32 PUFF_CELL_FRACTION = 0.85f;
 
-    // How much wider than tall a puff is drawn.
-    //
-    // Cloud elements are not spheres. A lump of cumulus is several times
-    // broader than it is deep, and a stratiform deck is broader still -
-    // which is most of why a field of round puffs reads as a bag of balls
-    // however well each one is shaded. Stretching the quad costs nothing
-    // and the world-space noise does not care, since it is sampled by
-    // position rather than across the quad.
-    //
-    // Roughly area-preserving, so widening them does not also make the
-    // field heavier.
+    // How much wider than tall a puff is drawn. Cloud elements are not spheres. A lump of cumulus is several times broader than it is deep, and a stratiform deck is broader still - which is most of
+    // why a field of round puffs reads as a bag of balls however well each one is shaded. Stretching the quad costs nothing and the world-space noise does not care, since it is sampled by position
+    // rather than across the quad. Roughly area-preserving, so widening them does not also make the field heavier.
     const F32 PUFF_WIDE = 1.7f;
     const F32 PUFF_TALL = 0.62f;
 
-    // Where in the layer the stretch has fully eased off, as a fraction of
-    // its depth, and where it starts to.
-    //
-    // Flat is a property of the BASE, not of cloud. Everything sitting at
-    // the condensation level got there the same way and spreads out along
-    // it, which is why an overcast underside is a plane - but the same
-    // stretch carried all the way up makes the top of a tower into a stack
-    // of plates, when a top is the one part that should billow. So the
-    // widening is held through the lowest slice and let go above it.
+    // Where in the layer the stretch has fully eased off, as a fraction of its depth, and where it starts to. Flat is a property of the BASE, not of cloud. Everything sitting at the condensation
+    // level got there the same way and spreads out along it, which is why an overcast underside is a plane - but the same stretch carried all the way up makes the top of a tower into a stack of
+    // plates, when a top is the one part that should billow. So the widening is held through the lowest slice and let go above it.
     const F32 PUFF_ROUND_LO = 0.15f;
     const F32 PUFF_ROUND_HI = 0.70f;
 
-    // How many puffs each cell that holds cloud actually emits.
-    //
-    // Raised rather than shrinking the cells, deliberately. Halving CELL_M
-    // would also triple the count, but it would take the puff size down with
-    // it (base_radius is a fraction of the cell) and move the whole lattice,
-    // so coverage, jitter and the size of a cloud body would all shift at
-    // once. Stacking several into the same cell changes only the density,
-    // which is the thing being asked for - the field gets thicker, not
-    // finer.
+    // How many puffs each cell that holds cloud actually emits. Raised rather than shrinking the cells, deliberately. Halving CELL_M would also triple the count, but it would take the puff size down
+    // with it (base_radius is a fraction of the cell) and move the whole lattice, so coverage, jitter and the size of a cloud body would all shift at once. Stacking several into the same cell
+    // changes only the density, which is the thing being asked for - the field gets thicker, not finer.
     const S32 PUFFS_PER_CELL = 3;
 
-    // How much of the field's thickness a puff's own size follows. A deep
-    // convective layer is drawn as bigger lumps, not merely more of them.
+    // How much of the field's thickness a puff's own size follows. A deep convective layer is drawn as bigger lumps, not merely more of them.
     const F32 PUFF_THICKNESS_GAIN = 0.35f;
 
-    // Coverage below this draws nothing at all: a nearly clear sky should be
-    // clear, not a scatter of ghosts.
+    // Coverage below this draws nothing at all: a nearly clear sky should be clear, not a scatter of ghosts.
     const F32 COVERAGE_FLOOR = 0.04f;
 
-    // Integer hash, so the field is identical on every client looking at the
-    // same weather - the same reason the precipitation sim hashes its cells.
+    // Integer hash, so the field is identical on every client looking at the same weather - the same reason the precipitation sim hashes its cells.
     U32 hashCell(S32 x, S32 y, U32 salt)
     {
         U32 h = (U32)(x * 374761393) ^ (U32)(y * 668265263) ^ (salt * 2246822519u);
@@ -142,42 +110,24 @@ namespace
         return (F32)(hashCell(x, y, salt) & 0x00ffffffu) / (F32)0x01000000;
     }
 
-    // The two scales cloud groups itself at, in cells.
-    //
-    // One scale was not enough, and the size was wrong as well. At six cells
-    // - about 1.5km - a lattice spans barely four steps across the whole
-    // visible field, and value noise interpolated over four steps is not a
-    // field of clouds, it is a ramp. Thresholding a ramp gives one enormous
-    // region with a soft edge, which is exactly the "not really clustering"
-    // look.
-    //
-    // Two octaves fix both. The coarse one groups weather into systems a
-    // couple of kilometres across, the fine one breaks each system into
-    // individual clouds - which is how a real sky is organised, and neither
-    // scale alone can express it.
+    // The two scales cloud groups itself at, in cells. One scale was not enough, and the size was wrong as well. At six cells - about 1.5km - a lattice spans barely four steps across the whole
+    // visible field, and value noise interpolated over four steps is not a field of clouds, it is a ramp. Thresholding a ramp gives one enormous region with a soft edge, which is exactly the "not
+    // really clustering" look. Two octaves fix both. The coarse one groups weather into systems a couple of kilometres across, the fine one breaks each system into individual clouds - which is how a
+    // real sky is organised, and neither scale alone can express it.
     const S32 CLUSTER_CELLS_BIG = 9;
     const S32 CLUSTER_CELLS_SMALL = 3;
     const F32 CLUSTER_OCTAVE_MIX = 0.4f;
 
-    // How much of the coverage decision is the cluster field rather than
-    // per-cell noise. Nearly all of it: the per-cell part only has to fray
-    // the edges of a cloud, and any more of it scatters singletons across
-    // the gaps, which is what a clustered sky is supposed to be free of.
+    // How much of the coverage decision is the cluster field rather than per-cell noise. Nearly all of it: the per-cell part only has to fray the edges of a cloud, and any more of it scatters
+    // singletons across the gaps, which is what a clustered sky is supposed to be free of.
     const F32 CLUSTER_WEIGHT = 0.85f;
 
-    // How tall the EDGE of a cluster stands, as a fraction of the layer.
-    //
-    // A storm is not a slab of even depth. It is a tower over a core with
-    // shallower cloud fraying out around it, and the tower is the part that
-    // reaches the inversion and spreads. Without this the cluster field only
-    // decided WHERE cloud was, never how much - so every puff in the sky had
-    // the whole layer to sit in and the tapering and the anvil happened
-    // everywhere at once, as one sky-wide shape rather than as storms.
+    // How tall the EDGE of a cluster stands, as a fraction of the layer. A storm is not a slab of even depth. It is a tower over a core with shallower cloud fraying out around it, and the tower is
+    // the part that reaches the inversion and spreads. Without this the cluster field only decided WHERE cloud was, never how much - so every puff in the sky had the whole layer to sit in and the
+    // tapering and the anvil happened everywhere at once, as one sky-wide shape rather than as storms.
     const F32 CLUSTER_EDGE_HEIGHT = 0.3f;
 
-    // One octave of value noise over the cell grid: hash the corners of a
-    // lattice and interpolate, smoothstepped so the lumps have soft
-    // shoulders rather than diamond edges.
+    // One octave of value noise over the cell grid: hash the corners of a lattice and interpolate, smoothstepped so the lumps have soft shoulders rather than diamond edges.
     F32 clusterOctave(S32 cx, S32 cy, S32 cells, U32 salt, F32 shift)
     {
         const F32 fx = (F32)cx / (F32)cells + shift;
@@ -201,17 +151,9 @@ namespace
         return top + (bot - top) * ty;
     }
 
-    // A COHERENT field over the cell grid - neighbouring cells get similar
-    // values instead of independent ones - built from two scales.
-    //
-    // Thresholding white noise against coverage keeps each cell's decision
-    // independent of its neighbours', so at low coverage what survives is
-    // scattered singletons, which is nothing like weather. Value noise fixes
-    // that; two octaves of it give the result an inside as well as an
-    // outline.
-    //
-    // The fine octave is offset off the coarse one's lattice, or the two
-    // share corners and the grid they are both built on starts to show.
+    // A COHERENT field over the cell grid - neighbouring cells get similar values instead of independent ones - built from two scales. Thresholding white noise against coverage keeps each cell's
+    // decision independent of its neighbours', so at low coverage what survives is scattered singletons, which is nothing like weather. Value noise fixes that; two octaves of it give the result an
+    // inside as well as an outline. The fine octave is offset off the coarse one's lattice, or the two share corners and the grid they are both built on starts to show.
     F32 clusterUnit(S32 cx, S32 cy)
     {
         const F32 big = clusterOctave(cx, cy, CLUSTER_CELLS_BIG, 101u, 0.f);
@@ -238,9 +180,7 @@ void SSVolCloud::update(F32 dt)
 
     LLTimer timer;
 
-    // The track the camera is actually in, and its weather at this instant -
-    // the same resolution path the applier uses, so the layer agrees with
-    // the sky drawn around it.
+    // The track the camera is actually in, and its weather at this instant - the same resolution path the applier uses, so the layer agrees with the sky drawn around it.
     const SSAtmoEnvAsset& asset = mgr->asset();
     if (asset.mTracks.empty()) return;
 
@@ -261,12 +201,8 @@ void SSVolCloud::update(F32 dt)
 
     if (field.mCoverage < COVERAGE_FLOOR || field.mThicknessM <= 1.f) return;
 
-    // Which art the layer wears follows what the weather is doing to it: a
-    // towering, churning field is cumulonimbus, a quieter one is
-    // altocumulus. The cirrus-like layered map stays on the dome, where a
-    // flat high deck belongs.
-    // Authored if the track says so, otherwise the old convection rule as a
-    // default - see SSAtmoEnvCloudField::mBaseTexture.
+    // Which art the layer wears follows what the weather is doing to it: a towering, churning field is cumulonimbus, a quieter one is altocumulus. The cirrus-like layered map stays on the dome,
+    // where a flat high deck belongs. Authored if the track says so, otherwise the old convection rule as a default - see SSAtmoEnvCloudField::mBaseTexture.
     mTexture = field.mBaseTexture.notNull()
         ? field.mBaseTexture
         : LLUUID(field.mHasAnvil || convection > 0.6f
@@ -275,16 +211,29 @@ void SSVolCloud::update(F32 dt)
 
     mAuthoredDetail = field.mDetailTexture;
 
-    // Lit from whatever is up. One mix per puff, not per fragment - see the
-    // fragment shader on why.
+    // Lit from whatever is up. One mix per puff, not per fragment - see the fragment shader on why.
+    //
+    // getSunlightColor/getAmbientColor are the AUTHORED settings values - constants of the sky preset, not the light actually falling right now - which is why the field used to burn at full
+    // daylight brightness through the night. The attenuation the dome gets from EEP's shader path is applied here by hand: the same twilight band and smoothstep the celestial discs use
+    // (ss_daylight in lldrawpoolwlsky.cpp), so cloud, moon and stars agree about what time it is. At night the moonlight colour takes over at a fraction, and ambient keeps a floor so an overcast
+    // night deck reads as a dark ceiling rather than vanishing.
     LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
-    const LLColor3 sunlit = sky ? LLColor3(sky->getSunlightColor()) : LLColor3(1.f, 1.f, 1.f);
-    const LLColor3 ambient = sky ? LLColor3(sky->getAmbientColor()) : LLColor3(0.4f, 0.4f, 0.5f);
+    const F32 sun_alt = sky ? sky->getSunDirection().mV[VZ] : 0.f;
+    const F32 twilight = llclamp((sun_alt + 0.1f) / 0.25f, 0.f, 1.f);
+    const F32 daylight = twilight * twilight * (3.f - 2.f * twilight);
+
+    LLColor3 sunlit(1.f, 1.f, 1.f);
+    LLColor3 ambient(0.4f, 0.4f, 0.5f);
+    if (sky)
+    {
+        const LLColor3 sun_col(sky->getSunlightColor());
+        const LLColor3 moon_col = LLColor3(sky->getMoonlightColor()) * 0.35f;
+        sunlit = sun_col * daylight + moon_col * (1.f - daylight);
+        ambient = LLColor3(sky->getAmbientColor()) * (0.12f + 0.88f * daylight);
+    }
     const LLVector3 light_dir = LLEnvironment::instance().getLightDirection();
 
-    // Kept for render(), which shades each fragment rather than each puff.
-    // The haze is the sky's own scattered light - the same colour the
-    // celestial discs wash toward, and for the same reason.
+    // Kept for render(), which shades each fragment rather than each puff. The haze is the sky's own scattered light - the same colour the celestial discs wash toward, and for the same reason.
     mBaseZ = field.mBaseHeightM;
     mThicknessM = llmax(1.f, field.mThicknessM);
     mAnvil = field.mAnvil;
@@ -299,18 +248,15 @@ void SSVolCloud::update(F32 dt)
         mHaze.setVec(haze.mV[0], haze.mV[1], haze.mV[2]);
     }
 
-    // Storm cloud is darker than fair-weather cloud, and the field's own
-    // churn is the closest thing it has to a "how angry is this" figure.
+    // Storm cloud is darker than fair-weather cloud, and the field's own churn is the closest thing it has to a "how angry is this" figure.
     const F32 gloom = field.mGloom;
     mChurn = llclamp(field.mChurn, 0.f, 1.f);
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
 
-    // Cell coordinates are taken in the air's frame - camera position minus
-    // how far the air has travelled - so a cell keeps its identity while the
-    // field slides past. Placing them on the ground grid instead would make
-    // the puffs stand still while the dome behind them moved.
+    // Cell coordinates are taken in the air's frame - camera position minus how far the air has travelled - so a cell keeps its identity while the field slides past. Placing them on the ground grid
+    // instead would make the puffs stand still while the dome behind them moved.
     const F32 air_x = cam.mV[VX] - drift.mV[0];
     const F32 air_y = cam.mV[VY] - drift.mV[1];
 
@@ -328,46 +274,30 @@ void SSVolCloud::update(F32 dt)
             const S32 cx = cx0 + dx;
             const S32 cy = cy0 + dy;
 
-            // Coverage decides which cells hold cloud at all, tested against
-            // a mostly-coherent field so that what survives is CLOUDS rather
-            // than confetti - see clusterUnit.
-            //
-            // Still stable under changing weather: both halves are pure
-            // functions of the cell, so the cells that remain as it dries
-            // out are the ones that were there when it was wet, rather than
-            // a fresh scatter every time it eases.
+            // Coverage decides which cells hold cloud at all, tested against a mostly-coherent field so that what survives is CLOUDS rather than confetti - see clusterUnit. Still stable under
+            // changing weather: both halves are pure functions of the cell, so the cells that remain as it dries out are the ones that were there when it was wet, rather than a fresh scatter every
+            // time it eases.
             const F32 gate = clusterUnit(cx, cy) * CLUSTER_WEIGHT
                            + hashUnit(cx, cy, 1u) * (1.f - CLUSTER_WEIGHT);
             if (gate > field.mCoverage) continue;
 
-            // How deep inside its cluster this cell sits, 0 at the ragged
-            // edge and 1 at the core.
-            //
-            // It falls straight out of the gate above: a cell only survives
-            // when its field value is under the coverage, so how far UNDER
-            // is how far in. The same number that decides whether there is
-            // cloud here now also decides how much - which is what turns a
-            // field of cloud into a field of clouds.
+            // How deep inside its cluster this cell sits, 0 at the ragged edge and 1 at the core. It falls straight out of the gate above: a cell only survives when its field value is under the
+            // coverage, so how far UNDER is how far in. The same number that decides whether there is cloud here now also decides how much - which is what turns a field of cloud into a field of
+            // clouds.
             const F32 coreness = llclamp(
                 (field.mCoverage - gate) / llmax(field.mCoverage, 0.01f), 0.f, 1.f);
 
-            // The tower this cell can build. Cores get the whole layer,
-            // edges a shallow skirt - so the tapering and the anvil, which
-            // are keyed to height, only ever happen over a core.
+            // The tower this cell can build. Cores get the whole layer, edges a shallow skirt - so the tapering and the anvil, which are keyed to height, only ever happen over a core.
             const F32 cell_height = CLUSTER_EDGE_HEIGHT
                 + (1.f - CLUSTER_EDGE_HEIGHT) * coreness;
 
             for (S32 sub = 0; sub < PUFFS_PER_CELL; ++sub)
             {
-                // Each puff in the cell gets its own draw from the hash, by
-                // stepping the salt. Eight apart so the sets cannot collide
-                // with each other or with the coverage salt above.
+                // Each puff in the cell gets its own draw from the hash, by stepping the salt. Eight apart so the sets cannot collide with each other or with the coverage salt above.
                 const U32 salt = (U32)sub * 8u;
 
-                // Jittered off the lattice, or the field reads as a grid the
-                // moment two puffs line up. It is also what separates the
-                // puffs sharing a cell - without it they would be stacked on
-                // one spot and the extra two would be doing nothing.
+                // Jittered off the lattice, or the field reads as a grid the moment two puffs line up. It is also what separates the puffs sharing a cell - without it they would be stacked on one
+                // spot and the extra two would be doing nothing.
                 const F32 jx = (hashUnit(cx, cy, 2u + salt) - 0.5f) * CELL_M * 0.8f;
                 const F32 jy = (hashUnit(cx, cy, 3u + salt) - 0.5f) * CELL_M * 0.8f;
 
@@ -375,43 +305,24 @@ void SSVolCloud::update(F32 dt)
                 pos.mV[VX] = (F32)cx * CELL_M + CELL_M * 0.5f + jx + drift.mV[0];
                 pos.mV[VY] = (F32)cy * CELL_M + CELL_M * 0.5f + jy + drift.mV[1];
 
-                // Height within the layer. The anvil case spreads the top of
-                // the field outward rather than piling it higher - which is
-                // what an anvil is, a tower that has hit the inversion and
-                // gone flat.
-                // Where in this CELL's tower the puff sits, and where that
-                // puts it in the layer as a whole. The two differ over
-                // anything but a core, and the difference is the storm.
+                // Height within the layer. The anvil case spreads the top of the field outward rather than piling it higher - which is what an anvil is, a tower that has hit the inversion and gone
+                // flat. Where in this CELL's tower the puff sits, and where that puts it in the layer as a whole. The two differ over anything but a core, and the difference is the storm.
                 const F32 up_cell = hashUnit(cx, cy, 4u + salt);
                 const F32 up = up_cell * cell_height;
                 pos.mV[VZ] = field.mBaseHeightM + up * field.mThicknessM;
 
-                // The tower's width down its own height: a waist, then a flare.
-            //
-            // A step at 0.7 gave every puff above that line the same extra
-            // width and everything below it none, which is a mushroom rather
-            // than an anvil. What a real one does is narrow through the
-            // middle - the tower is fed by a column, and a column is thinner
-            // than the base it rose from - and then spread hard where it hits
-            // the inversion and can go no higher.
-            //
-            // Scaled by how far into anvil the weather actually is, so a
-            // merely convective sky keeps ordinary lumpy tops - and by how
-            // much of a tower this cell is, so the shape belongs to a storm
-            // rather than to the sky.
-            //
-            // Read against up_cell, not up: the waist is two thirds of the
-            // way up THIS tower, wherever its top happens to be. Against the
-            // layer it would sit at one absolute altitude across the whole
-            // field, which is the sky-wide pinch this is meant to replace.
+                // The tower's width down its own height: a waist, then a flare. A step at 0.7 gave every puff above that line the same extra width and everything below it none, which is a mushroom
+                // rather than an anvil. What a real one does is narrow through the middle - the tower is fed by a column, and a column is thinner than the base it rose from - and then spread hard
+                // where it hits the inversion and can go no higher. Scaled by how far into anvil the weather actually is, so a merely convective sky keeps ordinary lumpy tops - and by how much of a
+                // tower this cell is, so the shape belongs to a storm rather than to the sky. Read against up_cell, not up: the waist is two thirds of the way up THIS tower, wherever its top happens
+                // to be. Against the layer it would sit at one absolute altitude across the whole field, which is the sky-wide pinch this is meant to replace.
             const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
             const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
             const F32 flat = 1.f + field.mAnvil * coreness * (waist + flare - 1.f);
 
                 const LLVector3 to_cam = pos - cam;
                 const F32 dist_sq = to_cam.magVecSquared();
-                // Skips this puff, not the cell: its siblings are jittered
-                // elsewhere and may well be inside the radius.
+                // Skips this puff, not the cell: its siblings are jittered elsewhere and may well be inside the radius.
                 if (dist_sq > FIELD_RADIUS_M * FIELD_RADIUS_M) continue;
 
                 Puff puff;
@@ -421,27 +332,19 @@ void SSVolCloud::update(F32 dt)
                 puff.mCamDistSq = dist_sq;
 
 
-                // Fade the outermost ring rather than letting puffs pop in at
-                // the radius, and thin the whole field with coverage so a light
-                // field is wispy rather than merely sparse.
-                const F32 edge = 1.f - llclamp(
-                    (sqrtf(dist_sq) - FIELD_RADIUS_M * 0.75f) / (FIELD_RADIUS_M * 0.25f), 0.f, 1.f);
+                // Fade the outermost ring rather than letting puffs pop in at the radius, and thin the whole field with coverage so a light field is wispy rather than merely sparse.
+                // Fade begins at HALF the radius, not the last quarter: the field hands off to the dome's own overcast at its edge, and a short ramp read as the volumetric layer being cut off
+                // against it. Squared so most of the fade happens in the outer stretch rather than thinning the mid-field.
+                const F32 edge_t = llclamp(
+                    (sqrtf(dist_sq) - FIELD_RADIUS_M * 0.5f) / (FIELD_RADIUS_M * 0.5f), 0.f, 1.f);
+                const F32 edge = 1.f - edge_t * edge_t;
                 puff.mAlpha = edge * llclamp(0.35f + 0.65f * field.mCoverage, 0.f, 1.f);
 
-                // Lit by how much of this puff faces the light: a cheap stand-in
-                // for the bright top and dark base a real cloud has, using the
-                // puff's own offset from the layer's middle as its "normal".
-                // Narrow, deliberately.
-                //
-                // At full swing this is the single strongest thing separating one
-                // puff from its neighbour, and since `up` is a per-cell hash the
-                // separation is random - so the field came out as a patchwork of
-                // flatly-lit cards at visibly different brightnesses, which is
-                // the one thing that gives a billboard field away. A cloud's top
-                // really is brighter than its base, but the difference belongs
-                // across the layer, not between adjacent lumps. What variation
-                // there is now comes mostly from the noise, which is continuous
-                // across puffs and so cannot outline them.
+                // Lit by how much of this puff faces the light: a cheap stand-in for the bright top and dark base a real cloud has, using the puff's own offset from the layer's middle as its
+                // "normal". Narrow, deliberately. At full swing this is the single strongest thing separating one puff from its neighbour, and since `up` is a per-cell hash the separation is random
+                // - so the field came out as a patchwork of flatly-lit cards at visibly different brightnesses, which is the one thing that gives a billboard field away. A cloud's top really is
+                // brighter than its base, but the difference belongs across the layer, not between adjacent lumps. What variation there is now comes mostly from the noise, which is continuous across
+                // puffs and so cannot outline them.
                 const F32 facing = llclamp(
                     0.5f + 0.2f * (light_dir.mV[VZ] * (up - 0.5f) * 2.f), 0.f, 1.f);
                 puff.mColor = (ambient + sunlit * facing) * gloom;
@@ -451,18 +354,7 @@ void SSVolCloud::update(F32 dt)
         }
     }
 
-    // Strikes light the cloud from inside - see the loop in ssVolCloudF.
-    //
-    // This is what sheet lightning IS: the great majority of discharges
-    // never leave the cloud, and what an observer sees is the deck glowing
-    // from within around a point they cannot see.
-    //
-    // Collected here, applied in the shader. The first attempt added a flat
-    // colour per puff on the CPU, which lit every fragment of a puff by the
-    // same amount - so a puff brightened rather than being lit from
-    // anywhere, and the sphere term it then passed through belonged to the
-    // sun, which dimmed the underside of a night deck exactly where a strike
-    // beneath it should have been brightest.
+    // Strike lights for the puff shader [interaction: SSLightning -> puff shading] - sheet lightning IS the deck glowing from within. Applied per-fragment with a per-strike sphere term; the first attempt (flat CPU add through the SUN's wrap term) dimmed the night deck's underside exactly where a strike below should light it.
     mStrikeLights.clear();
     for (const SSStrike& strike : SSLightning::getInstance()->strikes())
     {
@@ -481,9 +373,7 @@ void SSVolCloud::update(F32 dt)
 
     if ((S32)mPuffs.size() > MAX_PUFFS)
     {
-        // Drop the FAR ones: they are the small ones on screen, and cutting
-        // from the back of a back-to-front list keeps the near cloud that
-        // actually fills the view.
+        // Drop the FAR ones: they are the small ones on screen, and cutting from the back of a back-to-front list keeps the near cloud that actually fills the view.
         mPuffs.erase(mPuffs.begin(), mPuffs.end() - MAX_PUFFS);
     }
 
@@ -495,18 +385,10 @@ void SSVolCloud::render()
     if (mPuffs.empty() || mTexture.isNull()) return;
     if (!gSSVolCloudProgram.isComplete()) return;
 
-    // Every pass that is not the one frame the user is looking at.
-    //
-    // renderGeomPostDeferred - where this is called from - runs for more
-    // than the world: llviewerdisplay calls it again for HUD attachments,
-    // and the pipeline calls it for impostors, shadows and probe captures.
-    // In none of those is mRT->screen the bound target, so the depth copy
-    // below would flush and re-bind a target nobody asked for and leave it
-    // bound. During the HUD pass that means the INTERFACE draws into the
-    // wrong place, every other frame.
-    //
-    // The same guard SSPrecipRenderer uses, for the same reason - rain has
-    // no business in a HUD render either.
+    // Every pass that is not the one frame the user is looking at. renderGeomPostDeferred - where this is called from - runs for more than the world: llviewerdisplay calls it again for HUD
+    // attachments, and the pipeline calls it for impostors, shadows and probe captures. In none of those is mRT->screen the bound target, so the depth copy below would flush and re-bind a target
+    // nobody asked for and leave it bound. During the HUD pass that means the INTERFACE draws into the wrong place, every other frame. The same guard SSPrecipRenderer uses, for the same reason -
+    // rain has no business in a HUD render either.
     if (LLPipeline::sRenderingHUDs || LLPipeline::sImpostorRender
         || LLPipeline::sShadowRender || gCubeSnapshot)
     {
@@ -520,20 +402,15 @@ void SSVolCloud::render()
             mTexture, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
         if (mTextureRef.notNull())
         {
-            // BOOST_HIGH asks for it at full resolution; setNoDelete keeps
-            // it from being reclaimed between the frames that want it. A
-            // noise map that has slipped a mip or two is not a slightly
-            // softer noise map, it is a uniform grey, and the field goes
-            // with it.
+            // BOOST_HIGH asks for it at full resolution; setNoDelete keeps it from being reclaimed between the frames that want it. A noise map that has slipped a mip or two is not a slightly softer
+            // noise map, it is a uniform grey, and the field goes with it.
             mTextureRef->setNoDelete();
         }
     }
     if (mTextureRef.isNull()) return;
     mTextureRef->addTextureStats((F32)MAX_IMAGE_AREA);
 
-    // The dome's map, for the finer octaves - see mDomeTexRef. Read from the
-    // live sky rather than from the track, so it follows whatever is
-    // actually being drawn overhead even mid-transition.
+    // The dome's map, for the finer octaves - see mDomeTexRef. Read from the live sky rather than from the track, so it follows whatever is actually being drawn overhead even mid-transition.
     {
         LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
         const LLUUID dome_id = mAuthoredDetail.notNull()
@@ -561,28 +438,12 @@ void SSVolCloud::render()
 
     const LLViewerCamera* camera = LLViewerCamera::getInstance();
 
-    // The scene's depth, copied somewhere it can legally be read.
-    //
-    // Not read in place: this pass draws into a target that has the scene
-    // depth attached, and a shader sampling the texture its own pass has
-    // bound as depth is undefined - it flickers.
-    //
-    // Copied exactly the way LLPipeline::doAtmospherics copies it, which is
-    // worth following to the letter because two details in it are load
-    // bearing:
-    //
-    //  - the current target is FLUSHED before another is bound, and re-bound
-    //    afterwards. Binding a second target while the first is still bound
-    //    nests them, and the inner flush() then pops to the wrong place -
-    //    leaving the wrong framebuffer bound and every puff drawn after it
-    //    going somewhere invisible. That is what made the whole field vanish
-    //    depending on where the camera pointed.
-    //
-    //  - the copy is a full-screen pass through gCopyDepthProgram, which
-    //    SAMPLES depth and writes gl_FragDepth, rather than a framebuffer
-    //    blit. A blit has to agree with the driver about attachment formats
-    //    and read/draw binding state in the middle of a frame; the shader
-    //    path does not.
+    // The scene's depth, copied somewhere it can legally be read. Not read in place: this pass draws into a target that has the scene depth attached, and a shader sampling the texture its own pass
+    // has bound as depth is undefined - it flickers. Copied exactly the way LLPipeline::doAtmospherics copies it, which is worth following to the letter because two details in it are load bearing: -
+    // the current target is FLUSHED before another is bound, and re-bound afterwards. Binding a second target while the first is still bound nests them, and the inner flush() then pops to the wrong
+    // place - leaving the wrong framebuffer bound and every puff drawn after it going somewhere invisible. That is what made the whole field vanish depending on where the camera pointed. - the copy
+    // is a full-screen pass through gCopyDepthProgram, which SAMPLES depth and writes gl_FragDepth, rather than a framebuffer blit. A blit has to agree with the driver about attachment formats and
+    // read/draw binding state in the middle of a frame; the shader path does not.
     const S32 view_w = (S32)gGLViewport[2];
     const S32 view_h = (S32)gGLViewport[3];
     bool soft = false;
@@ -603,8 +464,7 @@ void SSVolCloud::render()
         {
             LL_PROFILE_GPU_ZONE("atmo cloud depth copy");
 
-            // Write depth unconditionally - the point is to end up with a
-            // copy of it, not to test against what is already there.
+            // Write depth unconditionally - the point is to end up with a copy of it, not to test against what is already there.
             LLGLDepthTest copy_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
 
             gPipeline.mRT->screen.flush();
@@ -617,8 +477,7 @@ void SSVolCloud::render()
             gGL.getTexUnit(diff_map)->bind(&gPipeline.mRT->screen);
             gGL.getTexUnit(depth_map)->bind(&gPipeline.mRT->deferredScreen, true);
 
-            // Only the depth is wanted; the colour attachment is along for
-            // the ride because the copy shader writes one.
+            // Only the depth is wanted; the colour attachment is along for the ride because the copy shader writes one.
             gGL.setColorMask(false, false);
             gPipeline.mScreenTriangleVB->setBuffer();
             gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
@@ -631,46 +490,28 @@ void SSVolCloud::render()
         }
     }
 
-    // Depth TESTED but not written: the layer has to sit behind a mountain
-    // that stands in front of it, and its own quads have to blend through
-    // each other rather than the nearest one punching a hole in the rest.
-    //
-    // Kept even with the soft fade below, which reaches zero at the same
-    // place: the test throws the hidden fragments out before they are shaded
-    // rather than after, and these quads are large.
+    // Depth TESTED but not written: the layer has to sit behind a mountain that stands in front of it, and its own quads have to blend through each other rather than the nearest one punching a hole
+    // in the rest. Kept even with the soft fade below, which reaches zero at the same place: the test throws the hidden fragments out before they are shaded rather than after, and these quads are
+    // large.
     LLGLDepthTest depth(GL_TRUE, GL_FALSE);
     LLGLEnable blend(GL_BLEND);
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
 
-    // Colour but NOT alpha.
-    //
-    // The screen target'''s alpha channel is the glow buffer. generateGlow
-    // sets GLOW_MIN_LUMINANCE to 9999, which kills the luminance terms in
-    // glowExtractF.glsl and leaves this:
-    //
-    //     frag_color.a = max(col.a, ...);
-    //
-    // - so glow is whatever alpha the screen happens to be holding. A pass
-    // that blends alpha into the screen is therefore writing glow, and every
-    // puff was: the halo bleeding around corners is the glow blur, which
-    // nothing but the glow buffer can produce.
-    //
-    // The same guard LLDrawPoolAlpha uses for the same reason.
+    // Colour but NOT alpha. The screen target'''s alpha channel is the glow buffer. generateGlow sets GLOW_MIN_LUMINANCE to 9999, which kills the luminance terms in glowExtractF.glsl and leaves
+    // this: frag_color.a = max(col.a, ...); - so glow is whatever alpha the screen happens to be holding. A pass that blends alpha into the screen is therefore writing glow, and every puff was: the
+    // halo bleeding around corners is the glow blur, which nothing but the glow buffer can produce. The same guard LLDrawPoolAlpha uses for the same reason.
     gGL.setColorMask(true, false);
 
     gSSVolCloudProgram.bind();
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
     gSSVolCloudProgram.bindTexture(LLShaderMgr::DIFFUSE_MAP, tex, LLTexUnit::TT_TEXTURE);
 
-    // Falls back to the puff's own map when the sky has no cloud texture, so
-    // the octaves degrade to more of the same rather than to black.
+    // Falls back to the puff's own map when the sky has no cloud texture, so the octaves degrade to more of the same rather than to black.
     gSSVolCloudProgram.bindTexture(LLShaderMgr::CLOUD_NOISE_MAP,
                                    mDomeTexRef.notNull() ? mDomeTexRef.get() : tex,
                                    LLTexUnit::TT_TEXTURE);
 
-    // The air's frame and its convection - the fragment shader samples the
-    // noise by world position, so it needs both to know where the field is
-    // and how fast it is turning over.
+    // The air's frame and its convection - the fragment shader samples the noise by world position, so it needs both to know where the field is and how fast it is turning over.
     static LLStaticHashedString s_drift("ss_drift");
     static LLStaticHashedString s_time("ss_time");
     static LLStaticHashedString s_churn("ss_churn");
@@ -697,10 +538,8 @@ void SSVolCloud::render()
     gSSVolCloudProgram.uniform1f(s_detail_scale, mDetailScale);
     gSSVolCloudProgram.uniform1f(s_drift_rate, mDriftRate);
 
-    // Which way the air is going, for the streaking at low convection.
-    // Taken from the drift the layer has already accumulated - that IS the
-    // wind, integrated - with a fallback for a dead calm, where the stretch
-    // has to point somewhere and no direction is more right than another.
+    // Which way the air is going, for the streaking at low convection. Taken from the drift the layer has already accumulated - that IS the wind, integrated - with a fallback for a dead calm, where
+    // the stretch has to point somewhere and no direction is more right than another.
     static LLStaticHashedString s_wind("ss_wind");
     LLVector2 wind = drift;
     if (wind.length() < 0.001f)
@@ -713,10 +552,8 @@ void SSVolCloud::render()
     }
     gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
-    // Lighting, for the per-fragment shape - see SS_FORM_DARK.
-    // The strikes lighting the deck this frame. Bound even when there are
-    // none, because a stale count would leave the last flash burnt into the
-    // cloud until the next one.
+    // Lighting, for the per-fragment shape - see SS_FORM_DARK. The strikes lighting the deck this frame. Bound even when there are none, because a stale count would leave the last flash burnt into
+    // the cloud until the next one.
     {
         static LLStaticHashedString s_strike("ss_strike");
         static LLStaticHashedString s_strike_count("ss_strike_count");
@@ -747,31 +584,22 @@ void SSVolCloud::render()
     gSSVolCloudProgram.uniform3fv(s_haze, 1, mHaze.mV);
     gSSVolCloudProgram.uniform3fv(s_cam_pos, 1, camera->getOrigin().mV);
 
-    // How far from a surface a puff starts thinning out, and the depth to
-    // measure it against.
-    //
-    // Generous at 45m: this is not really an intersection fix, it is what
-    // makes vapour behave like vapour near anything solid, so a platform
-    // sitting in the layer wears fog rather than cutting a line across it.
+    // How far from a surface a puff starts thinning out, and the depth to measure it against. Generous at 45m: this is not really an intersection fix, it is what makes vapour behave like vapour near
+    // anything solid, so a platform sitting in the layer wears fog rather than cutting a line across it.
     static const F32 SOFT_M = 112.5f;
     static LLStaticHashedString s_clip("ss_clip");
     static LLStaticHashedString s_soft("ss_soft_m");
 
-    // Bound by RESERVED index, not by name - see the note on depthMap in the
-    // fragment shader.
+    // Bound by RESERVED index, not by name - see the note on depthMap in the fragment shader.
     if (soft)
     {
         soft = gSSVolCloudProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH,
                                               &mDepthCopy, true) >= 0;
     }
 
-    // And the fade only switches on if that bind actually took.
-    //
-    // Worth being explicit about, because of how this fails: an unbound
-    // sampler reads whatever is on unit 0, the comparison comes out
-    // nonsense, and the fade takes every fragment to zero. The failure mode
-    // of a depth read gone wrong is not a wrong-looking fade, it is no
-    // clouds at all - so it defaults off rather than trusting the bind.
+    // And the fade only switches on if that bind actually took. Worth being explicit about, because of how this fails: an unbound sampler reads whatever is on unit 0, the comparison comes out
+    // nonsense, and the fade takes every fragment to zero. The failure mode of a depth read gone wrong is not a wrong-looking fade, it is no clouds at all - so it defaults off rather than trusting
+    // the bind.
     gSSVolCloudProgram.uniform1f(s_soft, soft ? SOFT_M : 0.f);
     if (soft)
     {
@@ -789,30 +617,18 @@ void SSVolCloud::render()
     gGL.begin(LLRender::TRIANGLES);
     for (const Puff& puff : mPuffs)
     {
-        // A frame built from the puff's OWN view ray and the world, never
-        // from the camera's screen axes.
-        //
-        // Screen axes are what made the whole field turn with the camera:
-        // every puff shared one orientation rigidly locked to the view, so
-        // looking up and turning span the sky like a painted backdrop. The
-        // fix is that nothing here may depend on which way the camera is
-        // rolled - only on where it is.
+        // A frame built from the puff's OWN view ray and the world, never from the camera's screen axes. Screen axes are what made the whole field turn with the camera: every puff shared one
+        // orientation rigidly locked to the view, so looking up and turning span the sky like a painted backdrop. The fix is that nothing here may depend on which way the camera is rolled - only on
+        // where it is.
         LLVector3 normal = cam_pos - puff.mPosAgent;
         if (normal.normalize() < 0.001f)
         {
             normal = LLVector3::z_axis;
         }
 
-        // Looking along the layer, a puff should face the eye. Looking up
-        // through it, it should lie flat - a deck seen from below is a
-        // ceiling, not a wall of cards edge-on to each other. So the normal
-        // leans toward vertical as the view ray does.
-        //
-        // This is also what makes straight up work at all: a camera-facing
-        // quad has no defined roll when the view ray is the world axis you
-        // would reference it against, and every fix for that pole either
-        // pops or falls back to the camera. A flat quad has no such
-        // problem, because its axes can simply be the world's.
+        // Looking along the layer, a puff should face the eye. Looking up through it, it should lie flat - a deck seen from below is a ceiling, not a wall of cards edge-on to each other. So the
+        // normal leans toward vertical as the view ray does. This is also what makes straight up work at all: a camera-facing quad has no defined roll when the view ray is the world axis you would
+        // reference it against, and every fix for that pole either pops or falls back to the camera. A flat quad has no such problem, because its axes can simply be the world's.
         const F32 flatten = llclamp((fabsf(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
         if (flatten > 0.f)
         {
@@ -824,9 +640,8 @@ void SSVolCloud::render()
             }
         }
 
-        // The reference the roll is measured from, swinging from world up to
-        // world east over the same range - so by the time the quad is flat
-        // and world up would be useless, it is no longer being asked.
+        // The reference the roll is measured from, swinging from world up to world east over the same range - so by the time the quad is flat and world up would be useless, it is no longer being
+        // asked.
         LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
                       + LLVector3::x_axis * flatten;
         ref.normalize();
@@ -838,13 +653,9 @@ void SSVolCloud::render()
         }
         const LLVector3 base_up = normal % base_right;
 
-        // No per-puff roll. There was one, to stop every quad showing the
-        // same tile at the same orientation - but sampling the noise by
-        // world position removes the repetition at its source, and rolling
-        // a circular window achieves nothing anyway.
-        // Broader than tall near the base, easing round with height - see
-        // PUFF_ROUND_LO. The frame is world-referenced, so "tall" stays
-        // vertical instead of following the camera's roll.
+        // No per-puff roll. There was one, to stop every quad showing the same tile at the same orientation - but sampling the noise by world position removes the repetition at its source, and
+        // rolling a circular window achieves nothing anyway. Broader than tall near the base, easing round with height - see PUFF_ROUND_LO. The frame is world-referenced, so "tall" stays vertical
+        // instead of following the camera's roll.
         const F32 layer_h = llclamp(
             (puff.mPosAgent.mV[VZ] - mBaseZ) / mThicknessM, 0.f, 1.f);
         const F32 round = llclamp(
@@ -863,9 +674,7 @@ void SSVolCloud::render()
         const LLVector3 tr = puff.mPosAgent + right + up;
         const LLVector3 br = puff.mPosAgent + right - up;
 
-        // Two triangles rather than a strip: one begin/end for the whole
-        // field beats a state change per puff, and a strip cannot carry
-        // several quads without degenerate joins between them.
+        // Two triangles rather than a strip: one begin/end for the whole field beats a state change per puff, and a strip cannot carry several quads without degenerate joins between them.
         gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv(tl.mV);
         gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(bl.mV);
         gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv(tr.mV);

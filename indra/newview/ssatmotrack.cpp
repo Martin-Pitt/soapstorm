@@ -62,8 +62,7 @@ static const SSAtmoTrackConfig sEmptyConfig;
 
 LLVector3 SSAtmoTrackConfig::windDirection() const
 {
-    // North rotated by the stored orientation. Normalised on the way out so a
-    // hand-authored quaternion that is slightly off unit still behaves.
+    // North rotated by the stored orientation. Normalised on the way out so a hand-authored quaternion that is slightly off unit still behaves.
     LLVector3 dir = LLVector3(0.f, 1.f, 0.f) * mWindRot;
     if (dir.magVecSquared() < F_APPROXIMATELY_ZERO)
     {
@@ -96,10 +95,8 @@ void SSAtmoTrackConfig::setHeadingElevation(F32 heading_deg, F32 elevation_deg)
     mWindRot.shortestArc(LLVector3(0.f, 1.f, 0.f), dir);
 }
 
-// Serialised as heading and elevation rather than raw quaternion components:
-// the two angles describe a direction completely (roll about the wind axis is
-// meaningless), and they are something a person can actually author in a
-// notecard. An explicit "wind_rot" is still honoured if one is present.
+// Serialised as heading and elevation rather than raw quaternion components: the two angles describe a direction completely (roll about the wind axis is meaningless), and they are something a person
+// can actually author in a notecard. An explicit "wind_rot" is still honoured if one is present.
 LLSD SSAtmoTrackConfig::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -126,8 +123,7 @@ void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
     if (!sd.isMap()) return;
 
     mDefined = true;
-    // A track present in the config but with no "enabled" key still means
-    // "weather here"; the key only exists to switch one off without deleting it
+    // A track present in the config but with no "enabled" key still means "weather here"; the key only exists to switch one off without deleting it
     mEnabled = sd.has("enabled") ? sd["enabled"].asBoolean() : true;
 
     if (sd.has("preset"))        mPreset        = sd["preset"].asString();
@@ -158,9 +154,8 @@ void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
 
 bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
 {
-    // Epsilon compare: values round-trip through LLSD doubles, so exact
-    // equality would report a config as edited the moment it was reloaded.
-    // Not called "near": windef.h still macros that, the same trap as NEAR/FAR
+    // Epsilon compare: values round-trip through LLSD doubles, so exact equality would report a config as edited the moment it was reloaded. Not called "near": windef.h still macros that, the same
+    // trap as NEAR/FAR
     auto alike = [](F32 a, F32 b) { return fabsf(a - b) < FIELD_EPSILON; };
 
     return mDefined == rhs.mDefined
@@ -185,9 +180,7 @@ bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
 
 SSAtmoTrackManager::SSAtmoTrackManager()
 {
-    // Fires when the agent crosses into a different parcel and when the
-    // current parcel's properties are re-sent, which is what an owner editing
-    // the description produces. No polling needed.
+    // Fires when the agent crosses into a different parcel and when the current parcel's properties are re-sent, which is what an owner editing the description produces. No polling needed.
     LLViewerParcelMgr::getInstance()->addObserver(this);
 }
 
@@ -205,9 +198,7 @@ SSAtmoTrackManager::~SSAtmoTrackManager()
 
 S32 SSAtmoTrackManager::currentTrack() const
 {
-    // The camera's altitude decides, not the avatar's: weather is a thing you
-    // look at, and alt-camming up into a skybox band should show that band's
-    // weather rather than the ground's.
+    // The camera's altitude decides, not the avatar's: weather is a thing you look at, and alt-camming up into a skybox band should show that band's weather rather than the ground's.
     const F32 z = LLViewerCamera::getInstance()->getOrigin().mV[VZ];
     return llclamp(LLEnvironment::instance().calculateSkyTrackForAltitude((F64)z),
                    SS_TRACK_MIN, SS_TRACK_MAX);
@@ -215,9 +206,7 @@ S32 SSAtmoTrackManager::currentTrack() const
 
 F32 SSAtmoTrackManager::trackFloor(S32 track) const
 {
-    // calculateSkyTrackForAltitude puts track N in (altitudes[N-1], altitudes[N]],
-    // so the band's base is the previous entry. Track 1's base is the region's
-    // ground reference, normally 0.
+    // calculateSkyTrackForAltitude puts track N in (altitudes[N-1], altitudes[N]], so the band's base is the previous entry. Track 1's base is the region's ground reference, normally 0.
     const LLEnvironment::altitude_list_t& alts = LLEnvironment::instance().getRegionAltitudes();
     return alts[llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX) - 1];
 }
@@ -306,13 +295,8 @@ void SSAtmoTrackManager::adoptBaseline(const ss_track_set_t& set, ESource source
 }
 
 //-----------------------------------------------------------------------------
-// LLSD document
-//
-//   { "name": "Storm front",
-//     "tracks": { "1": { "enabled": true, "preset": "Rain", ... } } }
-//
-// A bare map of track numbers is accepted too, so a minimal hand-written
-// notecard does not need the wrapper.
+// LLSD document { "name": "Storm front", "tracks": { "1": { "enabled": true, "preset": "Rain", ... } } } A bare map of track numbers is accepted too, so a minimal hand-written notecard does not need
+// the wrapper.
 //-----------------------------------------------------------------------------
 
 LLSD SSAtmoTrackManager::asLLSD() const
@@ -373,8 +357,7 @@ void SSAtmoTrackManager::applyNotecardText(const std::string& text)
     LLSD sd;
     std::istringstream stream(text);
 
-    // Accept either serialisation. LLSDSerialize::fromNotation on XML text
-    // fails cleanly, so trying XML first costs nothing.
+    // Accept either serialisation. LLSDSerialize::fromNotation on XML text fails cleanly, so trying XML first costs nothing.
     bool parsed = false;
     if (text.find("<llsd") != std::string::npos)
     {
@@ -413,9 +396,7 @@ void SSAtmoTrackManager::applyNotecardText(const std::string& text)
 // static
 LLUUID SSAtmoTrackManager::parseDescription(const std::string& desc)
 {
-    // Scan for "atmo:" in any case, then take the next 36 characters and try
-    // them as a UUID. Keeps the marker findable inside prose, so a parcel
-    // description can stay human readable.
+    // Scan for "atmo:" in any case, then take the next 36 characters and try them as a UUID. Keeps the marker findable inside prose, so a parcel description can stay human readable.
     const std::string lower = utf8str_tolower(desc);
     const std::string::size_type tag_len = strlen(CONFIG_TAG);
     std::string::size_type pos = 0;
@@ -447,8 +428,7 @@ void SSAtmoTrackManager::changed()
 
     if (asset_id.isNull())
     {
-        // Left a configured parcel. A config loaded by hand from inventory is
-        // the user's own choice and outlives parcel crossings.
+        // Left a configured parcel. A config loaded by hand from inventory is the user's own choice and outlives parcel crossings.
         if (mSource == SOURCE_PARCEL)
         {
             resetToDefaults();
@@ -535,8 +515,7 @@ void SSAtmoTrackManager::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::E
     file.read((U8*)buffer.data(), length);
     buffer[length] = '\0';
 
-    // Notecard assets are wrapped in the Linden text container; unwrap to the
-    // plain body, but tolerate a bare text asset too.
+    // Notecard assets are wrapped in the Linden text container; unwrap to the plain body, but tolerate a bare text asset too.
     std::string text(buffer.data(), length);
     if (length > 19 && strncmp(buffer.data(), "Linden text version", 19) == 0)
     {
@@ -567,8 +546,7 @@ void SSAtmoTrackManager::exportToNotecard(const std::string& name)
     LLSD sd = asLLSD();
     sd["name"] = name;
 
-    // Indented: the notecard is meant to be opened and read, and a single-line
-    // LLSD blob is not something anyone can check by eye
+    // Indented: the notecard is meant to be opened and read, and a single-line LLSD blob is not something anyone can check by eye
     std::ostringstream body;
     LLSDSerialize::toPrettyXML(sd, body);
 
@@ -640,8 +618,7 @@ void SSAtmoTrackManager::loadWorking()
 
     mWorking = set;
 
-    // Whatever was in force last session is the baseline until a notecard
-    // replaces it, so a restart does not present itself as unsaved edits.
+    // Whatever was in force last session is the baseline until a notecard replaces it, so a restart does not present itself as unsaved edits.
     mBaseline = set;
 
     if (sd.isMap() && sd.has("name")) mConfigName = sd["name"].asString();

@@ -45,16 +45,12 @@ void main()
     gl_Position = modelview_projection_matrix * vert;
 
     vary_position = pos.xyz;
-    // Billboards carry the direction to the eye here, ripples the normal of
-    // the surface they are lying on; both want the plain rotation into view
-    // space, so the modelview matrix does it rather than a normal matrix.
+    // Billboards carry the direction to the eye here, ripples the normal of the surface they are lying on; both want the plain rotation into view space, so the modelview matrix does it rather than a
+    // normal matrix.
     vary_normal = (modelview_matrix * vec4(normal, 0.0)).xyz;
 
-    // The quad's own long axis in the world - the way the drop is falling for
-    // a streak, the surface's own axis for a ripple. The rain shader builds
-    // its droplet normal around this rather than around the screen, so the
-    // water reads by how the drop sits in the scene instead of by where the
-    // camera happens to be pointing.
+    // The quad's own long axis in the world - the way the drop is falling for a streak, the surface's own axis for a ripple. The rain shader builds its droplet normal around this rather than around
+    // the screen, so the water reads by how the drop sits in the scene instead of by where the camera happens to be pointing.
     vary_axis = (modelview_matrix * vec4(tangent.xyz, 0.0)).xyz;
     vary_texcoord0 = texcoord0;
 

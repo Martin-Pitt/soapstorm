@@ -45,8 +45,7 @@ bool ss_natural_less(const std::string& a, const std::string& b)
 
         if (a_digit && b_digit)
         {
-            // Take the whole run and compare the values, so the count of
-            // digits stops mattering and the number starts.
+            // Take the whole run and compare the values, so the count of digits stops mattering and the number starts.
             size_t ia = i, jb = j;
             while (ia < a.size() && isdigit((unsigned char)a[ia])) ++ia;
             while (jb < b.size() && isdigit((unsigned char)b[jb])) ++jb;
@@ -59,9 +58,7 @@ bool ss_natural_less(const std::string& a, const std::string& b)
 
             if (va != vb) return va < vb;
 
-            // Equal values, different padding: the shorter form first, so an
-            // order exists at all rather than the two comparing as equal and
-            // sorting arbitrarily.
+            // Equal values, different padding: the shorter form first, so an order exists at all rather than the two comparing as equal and sorting arbitrarily.
             if (na.size() != nb.size()) return na.size() < nb.size();
 
             i = ia;
@@ -130,11 +127,8 @@ std::string ss_asset_name(const LLUUID& id)
 {
     if (id.isNull()) return std::string();
 
-    // Cached, because this is asked once per row per frame and the walk is
-    // over the whole inventory. The answer only changes when something is
-    // added or removed, which is rare next to how often it is read - and a
-    // miss is re-asked rather than remembered, so a name that arrives once
-    // the inventory finishes fetching is picked up.
+    // Cached, because this is asked once per row per frame and the walk is over the whole inventory. The answer only changes when something is added or removed, which is rare next to how often it is
+    // read - and a miss is re-asked rather than remembered, so a name that arrives once the inventory finishes fetching is picked up.
     static std::map<LLUUID, std::string> s_names;
 
     auto found = s_names.find(id);

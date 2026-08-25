@@ -30,43 +30,36 @@
 
 // <SS:Nexii> Atmo Magic lightning
 
+// Consumers: sslightningrender (ribbons/sparks/flash), ssvolcloud (puff point lights + band feedback), sssoundscape (thunder by fire time), pipeline.cpp (scene lights). Timing fields are load-bearing for all four. doc/atmo_magic_interactions.md + doc/atmo_magic_lightning.md
+
 #include "llsingleton.h"
 #include "v3math.h"
+#include "v3color.h"
+#include "v4math.h"
 
 #include <vector>
 
-// The deterministic stream every Atmo Magic system draws from - defined in
-// ssatmomagic.h. Forward declared rather than included: this header is the
-// lightning MODEL's public face, and a renderer that includes it has no
-// business being handed the whole weather manager to get at it.
+// Forward declared (defined in ssatmomagic.h) so including the lightning model does not drag the whole weather manager along.
 class SSRandStream;
+class LLHUDText;
 
-// What kind of discharge this is. Real lightning is mostly the first of
-// these - the great majority of strikes never reach the ground and are seen
-// only as the cloud lighting up from inside - so the weights that pick
-// between them are not uniform and should not be.
+// What kind of discharge this is. Real lightning is mostly the first of these - the great majority of strikes never reach the ground and are seen only as the cloud lighting up from inside - so the
+// weights that pick between them are not uniform and should not be.
 enum SSStrikeKind : U8
 {
-    // In-cloud. No visible channel, because the cloud is in the way: what
-    // you see is the cloud itself lit from within. Cheapest by far, and the
-    // one to lean on for a distant storm.
+    // In-cloud. No visible channel, because the cloud is in the way: what you see is the cloud itself lit from within. Cheapest by far, and the one to lean on for a distant storm.
     STRIKE_SHEET = 0,
 
-    // Cloud to cloud, or cloud to air. A visible forked channel with no
-    // ground termination - it wanders, branches, and stops.
+    // Cloud to cloud, or cloud to air. A visible forked channel with no ground termination - it wanders, branches, and stops.
     STRIKE_FORK,
 
-    // Cloud to ground. The one with a leader that gropes downward and a
-    // return stroke that fires back up when it lands, and the only one that
-    // throws sparks or lights the scene properly.
+    // Cloud to ground. The one with a leader that gropes downward and a return stroke that fires back up when it lands, and the only one that throws sparks or lights the scene properly.
     STRIKE_GROUND,
 
     STRIKE_KIND_COUNT
 };
 
-// One node of a discharge channel. A channel is a tree: mParent indexes back
-// toward the cloud, so a renderer can draw segments without needing to know
-// anything about how the tree was built.
+// One node of a discharge channel. A channel is a tree: mParent indexes back toward the cloud, so a renderer can draw segments without needing to know anything about how the tree was built.
 struct SSStrikeNode
 {
     LLVector3 mPos;         // agent space
@@ -76,21 +69,16 @@ struct SSStrikeNode
     bool mTrunk = false;    // on the path that actually reaches the ground
 };
 
-// A discharge, from the first flicker of the leader to the last of the
-// afterglow. Held for its whole life, including the parts of it that are not
-// visible, because the sound is still coming.
+// A discharge, from the first flicker of the leader to the last of the afterglow. Held for its whole life, including the parts of it that are not visible, because the sound is still coming.
 struct SSStrike
 {
     SSStrikeKind mKind = STRIKE_SHEET;
 
-    // When the return stroke fires - the moment anyone would call "the
-    // lightning". Everything else is timed relative to it, forwards AND
-    // backwards, because a strike is now known before it happens.
+    // When the return stroke fires - everything is timed relative to this, forwards AND backwards, because a strike is known before it happens (doc/atmo_magic_lightning.md#timing).
     F64 mFireAt = 0.0;
     F64 mCreatedAt = 0.0;
 
-    // Seconds relative to mFireAt. Negative while the strike is still
-    // coming: dormant, then charging, then the leader on its way down.
+    // Seconds relative to mFireAt. Negative while the strike is still coming: dormant, then charging, then the leader on its way down.
     F32 mT = 0.f;
 
     F32 mIntensity = 1.f;       // 0..1, how fierce this one is
@@ -102,45 +90,29 @@ struct SSStrike
 
     std::vector<SSStrikeNode> mChannel;
 
-    // Brightness of the channel itself right now, 0 when nothing is drawn.
-    // Follows the phases: dim while the leader propagates, brilliant on each
-    // return stroke, decaying between them. The sum of the strokes below;
-    // what the cloud deck lights itself by.
+    // Brightness of the channel itself right now, 0 when nothing is drawn. Follows the phases: dim while the leader propagates, brilliant on each return stroke, decaying between them. The sum of the
+    // strokes below; what the cloud deck lights itself by.
     F32 mChannelBrightness = 0.f;
 
-    // The individual return strokes still glowing this frame, for ribbon
-    // lightning: the ionised channel is a column of hot air, and hot air
-    // drifts with the wind. Strokes come tens of milliseconds apart, so in
-    // a crosswind each successive one fires down a channel displaced a
-    // little from the last - which observers (and long exposures) see as
-    // strokes lying side by side in a smeared ribbon. A renderer draws the
-    // channel once per stroke, offset by wind x mStrokeAt.
+    // Still-glowing return strokes, individually: the ionised channel drifts with wind between strokes, so a renderer draws it once per stroke offset by wind*mStrokeAt = ribbon lightning [interaction: wind -> bolt shape].
     static const S32 MAX_STROKES = 4;
     S32 mStrokeCount = 0;
     F32 mStrokeAt[MAX_STROKES] = { 0.f };      // seconds after mFireAt
     F32 mStrokeBright[MAX_STROKES] = { 0.f };  // each stroke's glow right now
 
-    // How far down the channel the leader has got, 0 to 1. Nodes with
-    // mReachedAt beyond this have not happened yet and must not be drawn -
-    // this is the "forking in the sky before it connects" the eye actually
-    // sees.
+    // How far down the channel the leader has got, 0 to 1. Nodes with mReachedAt beyond this have not happened yet and must not be drawn - this is the "forking in the sky before it connects" the eye
+    // actually sees.
     F32 mLeaderProgress = 0.f;
 
-    // Sky/cloud lift from this strike right now, 0..1, already including
-    // distance falloff. What the sky flash and the in-cloud illumination
-    // both read.
+    // Sky/cloud lift from this strike right now, 0..1, already including distance falloff. What the sky flash and the in-cloud illumination both read.
     F32 mFlash = 0.f;
 
-    // The anticipation, 0 until the charge begins and rising to 1 as the
-    // strike arrives. Zero for the whole life of a strike when the effect
-    // is switched off, which it is by default - nothing in real weather
-    // announces a strike before it happens.
-    //
-    // What reads it is the crackle and the sparks gathering at the
-    // attachment point, so it is a curve rather than a flag: the point of
-    // the effect is that it builds.
+    // Anticipation ramp 0->1 toward the strike; always 0 when the track's charge flag is off (default). A curve, not a flag - the crackle and sparks that read it are meant to BUILD.
     F32 mCharge = 0.f;
     bool mChargeSent = false;
+
+    // Debug countdown text over the attachment point, only while SSAtmoDebugStrikeMarkers is on and the strike is pending; owned loosely (markDead + null when the strike fires or dies).
+    LLHUDText* mDebugText = nullptr;
 
     bool mDone = false;
     bool mThunderSent = false;  // the clap has been handed to the soundscape
@@ -152,24 +124,23 @@ class SSLightning : public LLSingleton<SSLightning>
     LLSINGLETON_EMPTY_CTOR(SSLightning);
 
 public:
-    // Per-frame driver, called from the manager's idle. Schedules new
-    // strikes from the weather state, ages the live ones, retires the spent.
+    // Per-frame driver, called from the manager's idle. Schedules new strikes from the weather state, ages the live ones, retires the spent.
     void idle(F32 dt);
 
     // Everything currently alive, for a renderer to walk.
     const std::vector<SSStrike>& strikes() const { return mStrikes; }
 
-    // Combined sky flash from every live strike, 0..1. Additive across
-    // strikes and clamped, so a severe storm firing several at once reads
-    // as one bright sky rather than as separate events fighting.
+    // Combined sky flash from every live strike, 0..1. Additive across strikes and clamped, so a severe storm firing several at once reads as one bright sky rather than as separate events fighting.
     F32 flash() const { return mFlash; }
 
-    // Which way the brightest live flash is, for a directional lift. Zero
-    // length when nothing is flashing.
+    // Which way the brightest live flash is, for a directional lift. Zero length when nothing is flashing.
     const LLVector3& flashDirection() const { return mFlashDir; }
 
-    // Fire one now, wherever the weather would have put it. For the debug
-    // menu and for testing without waiting on a severe sky.
+    // Strikes as deferred point lights (pos+radius / colour pairs) [interaction: -> pipeline local lights]: what lets a strike light the GROUND - wet streets, avatars - not just the sky. Offered, not pushed; the pipeline decides its budget.
+    S32 sceneLights(std::vector<LLVector4>& out_pos_radius,
+                    std::vector<LLColor3>& out_color, S32 max_count) const;
+
+    // Fire one now, wherever the weather would have put it. For the debug menu and for testing without waiting on a severe sky.
     void triggerNow();
 
     // Everything gone, silently: teleport, system disabled.
@@ -181,22 +152,19 @@ public:
     static const char* kindName(SSStrikeKind k);
 
 private:
-    void spawn(F32 intensity, F64 fire_at);
+    // force_bearing/force_dist >= 0 override the placement roll - the debug Strike Now button puts one in front of the camera with these.
+    void spawn(F32 intensity, F64 fire_at, F32 force_bearing = -1.f, F32 force_dist = -1.f);
     void buildChannel(SSStrike& strike, F32 intensity);
 
-    // One run of channel from a to b, built by midpoint displacement and
-    // appended as a chain of nodes hanging off parent. Fills out_nodes with
-    // the indices it created, which is what a caller needs to hang further
-    // branches off. Returns nothing else: the channel IS the output.
+    // One run of channel from a to b, built by midpoint displacement and appended as a chain of nodes hanging off parent. Fills out_nodes with the indices it created, which is what a caller needs to
+    // hang further branches off. Returns nothing else: the channel IS the output.
     void growPath(SSStrike& strike, S32 parent,
                   const LLVector3& from, const LLVector3& to,
                   S32 levels, F32 width_start, F32 width_end,
                   F32 t_start, F32 t_end, bool trunk,
                   SSRandStream& rng, std::vector<S32>& out_nodes);
 
-    // Branches off a run, and branches off those, down to depth. Recursion
-    // is the point: a channel that splits once looks like a fork, and a
-    // channel that splits at every scale looks like lightning.
+    // Branches off a run, and branches off those, down to depth. Recursion is the point: a channel that splits once looks like a fork, and a channel that splits at every scale looks like lightning.
     void growBranches(SSStrike& strike, const std::vector<S32>& along,
                       S32 depth, S32 levels, F32 intensity, SSRandStream& rng);
     void advance(SSStrike& strike, F32 dt);

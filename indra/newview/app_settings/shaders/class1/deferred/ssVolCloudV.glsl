@@ -32,16 +32,13 @@ in vec4 diffuse_color;
 out vec2 vary_texcoord0;
 out vec4 vary_color;
 
-// Where this fragment is in the world, for the noise lookup. The map is a
-// field the whole sky is carved out of, not a picture of one puff, so it
-// has to be sampled by position - see ssVolCloudF.glsl.
+// Where this fragment is in the world, for the noise lookup. The map is a field the whole sky is carved out of, not a picture of one puff, so it has to be sampled by position - see ssVolCloudF.glsl.
 out vec3 vary_world;
 
 void main()
 {
-    // The quads arrive already built in world space - the puff field turns
-    // its own positions camera-facing on the CPU, where it is also sorting
-    // them back to front, so there is nothing left to orient here.
+    // The quads arrive already built in world space - the puff field turns its own positions camera-facing on the CPU, where it is also sorting them back to front, so there is nothing left to orient
+    // here.
     gl_Position = modelview_projection_matrix * vec4(position.xyz, 1.0);
 
     vary_texcoord0 = texcoord0;

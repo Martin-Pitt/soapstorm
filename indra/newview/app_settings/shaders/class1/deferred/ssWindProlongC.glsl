@@ -35,10 +35,8 @@ bool inBounds(ivec3 c)
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// uRes is the fine resolution here; the coarse grid is half of it. Bilinear
-// rather than nearest: a blocky starting guess carries steps the fine level
-// then has to spend its whole iteration budget smoothing out, which is the
-// budget the pyramid exists to save.
+// uRes is the fine resolution here; the coarse grid is half of it. Bilinear rather than nearest: a blocky starting guess carries steps the fine level then has to spend its whole iteration budget
+// smoothing out, which is the budget the pyramid exists to save.
 layout(r32f, binding = 6) uniform readonly  image3D uCoarse;
 layout(r32f, binding = 7) uniform writeonly image3D uFine;
 
@@ -53,8 +51,7 @@ void main()
     ivec3 c = ivec3(gl_GlobalInvocationID);
     if (!inBounds(c)) return;
 
-    // Cell centres: fine centre (x + 0.5) sits at coarse coordinate
-    // (x + 0.5) / 2 - 0.5 measured in coarse cell centres.
+    // Cell centres: fine centre (x + 0.5) sits at coarse coordinate (x + 0.5) / 2 - 0.5 measured in coarse cell centres.
     vec2 f = (vec2(c.xy) + 0.5) * 0.5 - 0.5;
     ivec2 base = ivec2(floor(f));
     vec2 t = f - vec2(base);

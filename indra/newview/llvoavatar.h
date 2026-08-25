@@ -1348,6 +1348,9 @@ public:
     LLVector4           mFootPlane;
 private:
     bool                mWasOnGroundLeft;
+    // <SS:Nexii> Which ankle was the lower one last frame, for the support-foot swap step detector - see updateFootstepSounds.
+    bool                mSSLowerLeft = false;
+    // </SS:Nexii>
     bool                mWasOnGroundRight;
 
 /**                    Sounds

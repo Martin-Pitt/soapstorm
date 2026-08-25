@@ -31,14 +31,11 @@ uniform sampler2D diffuseMap;   // splatted particles, alpha = coverage
 uniform sampler2D sceneMap;     // last frame's lit scene (SSR buffer)
 uniform vec2 screen_res;
 
-// 1 for surface-aligned ripples, 0 for everything airborne; and 0 when there
-// is no scene map to read, which is the case with HDR off
+// 1 for surface-aligned ripples, 0 for everything airborne; and 0 when there is no scene map to read, which is the case with HDR off
 uniform float ss_decal;
 uniform float ss_scene_lit;
 
-// 1 when the bound decal art is the generated ripple, whose colour channels
-// carry the wave's tangent-space normal rather than a tint. A developer-set
-// ripple texture is ordinary art and clears this.
+// 1 when the bound decal art is the generated ripple, whose colour channels carry the wave's tangent-space normal rather than a tint. A developer-set ripple texture is ordinary art and clears this.
 uniform float ss_decal_normals;
 
 // Also declared by shadowUtil, which is only attached when shadows are on;
@@ -78,19 +75,13 @@ void main()
     }
 
     vec3 pos = vary_position;
-    // Billboards come in with a viewer-facing normal, which is what the
-    // legacy particle path assumes; ripples come in with the normal of the
-    // surface they are lying on, so they take the sun and sample the shadow
-    // map the way that surface does
+    // Billboards come in with a viewer-facing normal, which is what the legacy particle path assumes; ripples come in with the normal of the surface they are lying on, so they take the sun and
+    // sample the shadow map the way that surface does
     vec3 norm = normalize(vary_normal);
 
-    // A ripple is not flat. The generated ring bakes the crest's own shape into
-    // its colour channels, so where that art is what is bound the ring is bent
-    // out of the plane it is lying in and takes the sun along its flanks: the
-    // side of the wave facing the light comes up bright and the far side falls
-    // away, which is the difference between water standing off the ground and a
-    // circle painted on it. The quad's tangent is the axis the renderer built
-    // it along, so the frame here is the one the bake was drawn in.
+    // A ripple is not flat. The generated ring bakes the crest's own shape into its colour channels, so where that art is what is bound the ring is bent out of the plane it is lying in and takes the
+    // sun along its flanks: the side of the wave facing the light comes up bright and the far side falls away, which is the difference between water standing off the ground and a circle painted on
+    // it. The quad's tangent is the axis the renderer built it along, so the frame here is the one the bake was drawn in.
     bool decal_norm = (ss_decal * ss_decal_normals > 0.5);
     if (decal_norm)
     {
@@ -111,10 +102,8 @@ void main()
 
     float shadow = 1.0;
 #ifdef HAS_SUN_SHADOW
-    // The plane the quad is actually in, not the wave bent out of it: the
-    // normal offset the shadow lookup applies is a fix for the geometry's own
-    // depth bias and a steep flank of a ripple would throw the sample well off
-    // the ground it is lying on.
+    // The plane the quad is actually in, not the wave bent out of it: the normal offset the shadow lookup applies is a fix for the geometry's own depth bias and a steep flank of a ripple would throw
+    // the sample well off the ground it is lying on.
     shadow = sampleDirectionalShadow(pos.xyz, normalize(vary_normal), frag_tc);
 #endif
 
@@ -124,17 +113,10 @@ void main()
     vec3 legacyenv = vec3(0);
     sampleReflectionProbesLegacy(irradiance, glossenv, legacyenv, frag_tc, pos.xyz, norm, 0.0, 0.0, true, amblit_linear);
 
-    // Flakes scatter light near-isotropically and a ripple lies flat on the
-    // ground, so neither wants a hard lambert term: the sun comes in through
-    // a wide wrap, which leaves a billboard about where the old flat 0.6
-    // constant had it while letting a ripple on a surface turned away from
-    // the sun, or standing in shadow, actually go dark.
-    //
-    // A ring with the wave baked into it is the exception: it has a shape now,
-    // and a wrap that wide would flatten it straight back out. It takes a
-    // narrower one, so the flank turned toward the sun reads against the flank
-    // turned away, and a specular on top of that - the crest of a ripple
-    // catching the sun in a bright line is most of what says the ground is wet.
+    // Flakes scatter light near-isotropically and a ripple lies flat on the ground, so neither wants a hard lambert term: the sun comes in through a wide wrap, which leaves a billboard about where
+    // the old flat 0.6 constant had it while letting a ripple on a surface turned away from the sun, or standing in shadow, actually go dark. A ring with the wave baked into it is the exception: it
+    // has a shape now, and a wrap that wide would flatten it straight back out. It takes a narrower one, so the flank turned toward the sun reads against the flank turned away, and a specular on top
+    // of that - the crest of a ripple catching the sun in a bright line is most of what says the ground is wet.
     vec3 light_dir = normalize((sun_up_factor == 1) ? sun_dir : moon_dir);
     float wrap = decal_norm ? 0.25 : 0.7;
     float wrapped = max((dot(norm, light_dir) + wrap) / (1.0 + wrap), 0.0);
@@ -148,23 +130,12 @@ void main()
         sheen = srgb_to_linear(sunlit) * shadow * pow(rl, 64.0) * 0.6;
     }
 
-    // A ripple is a film of water lying on ground that has already been through
-    // the whole deferred light pass - every point light, every projector, the
-    // lot - so rather than trying to reproduce that lighting on a batched
-    // particle with no light list of its own, read it back off the surface.
-    //
-    // The scene map holds lit colour, which is light times albedo, so dividing
-    // by a mid-grey guess turns it back into roughly the light arriving there.
-    // Taking the larger of the two rather than adding them is what keeps the
-    // sun from being counted twice: under open sky the sun term already
-    // explains the ground and nothing changes, and it is only where the ground
-    // is brighter than sky and sun alone can account for - a lamp, a spotlight
-    // - that the ripple picks the difference up.
-    //
-    // It is a frame behind, since the scene map is copied at the end of the
-    // frame. For a coarse "is there more light here than the sky is giving"
-    // signal on a decal that is fine; it would not be if this were being used
-    // as the ripple's colour.
+    // A ripple is a film of water lying on ground that has already been through the whole deferred light pass - every point light, every projector, the lot - so rather than trying to reproduce that
+    // lighting on a batched particle with no light list of its own, read it back off the surface. The scene map holds lit colour, which is light times albedo, so dividing by a mid-grey guess turns
+    // it back into roughly the light arriving there. Taking the larger of the two rather than adding them is what keeps the sun from being counted twice: under open sky the sun term already explains
+    // the ground and nothing changes, and it is only where the ground is brighter than sky and sun alone can account for - a lamp, a spotlight - that the ripple picks the difference up. It is a
+    // frame behind, since the scene map is copied at the end of the frame. For a coarse "is there more light here than the sky is giving" signal on a decal that is fine; it would not be if this were
+    // being used as the ripple's colour.
     if (ss_decal * ss_scene_lit > 0.5)
     {
         const float ASSUMED_ALBEDO = 0.4;
@@ -172,8 +143,7 @@ void main()
         lit = max(lit, beneath);
     }
 
-    // The ring's colour channels are its shape, not its colour, so it is tinted
-    // by the particle alone
+    // The ring's colour channels are its shape, not its colour, so it is tinted by the particle alone
     vec3 albedo = decal_norm ? vertex_color.rgb : (tex.rgb * vertex_color.rgb);
 
     vec4 color;

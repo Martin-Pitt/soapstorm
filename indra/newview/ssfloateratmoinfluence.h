@@ -46,23 +46,15 @@ public:
     void onOpen(const LLSD& key) override;
     void draw() override;
 
-    // Which track's influence is being edited. Called by the main floater
-    // when its own selection moves (and when a track sort renumbers
-    // everything), for the same reason the System Designer is: one track
-    // is one world, and an editor pointed at a track the author is no
-    // longer looking at is two views quietly disagreeing.
+    // Which track's influence is being edited. Called by the main floater when its own selection moves (and when a track sort renumbers everything), for the same reason the System Designer is: one
+    // track is one world, and an editor pointed at a track the author is no longer looking at is two views quietly disagreeing.
     void setTrack(S32 index);
 
 private:
     //-------------------------------------------------------------------
-    // One mapping's row. The accessors reach into the selected track's
-    // SSAtmoEnvWeatherInfluence rather than caching a pointer to it: the
-    // asset can be replaced wholesale by a load or a revert between
-    // frames, and a cached reference would outlive the struct it named.
-    //
-    // mEffect reads the applier's last modulation, so what the readout
-    // shows is what the renderer actually did on the previous frame, not
-    // a second opinion computed here.
+    // One mapping's row. The accessors reach into the selected track's SSAtmoEnvWeatherInfluence rather than caching a pointer to it: the asset can be replaced wholesale by a load or a revert
+    // between frames, and a cached reference would outlive the struct it named. mEffect reads the applier's last modulation, so what the readout shows is what the renderer actually did on the
+    // previous frame, not a second opinion computed here.
     //-------------------------------------------------------------------
     struct Row
     {
@@ -72,15 +64,12 @@ private:
         std::function<F32()> mEffect;               // 0..1, what it is doing now
     };
 
-    // Built once in postBuild; the list IS the wiring, so adding a mapping
-    // to the model means adding one entry here and one row to the XML.
+    // Built once in postBuild; the list IS the wiring, so adding a mapping to the model means adding one entry here and one row to the XML.
     std::vector<Row> mRows;
 
     void buildRows();
 
-    // Nothing loaded, or the track index no longer exists: every control
-    // is disabled and the readouts blank rather than editing whatever now
-    // sits at that index.
+    // Nothing loaded, or the track index no longer exists: every control is disabled and the readouts blank rather than editing whatever now sits at that index.
     bool influence(SSAtmoEnvWeatherInfluence** out) const;
 
     void refreshAll();

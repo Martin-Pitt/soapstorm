@@ -56,14 +56,11 @@ bool SSFloaterSimulation::postBuild()
     getChild<LLButton>("flow_rebuild_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickRebuildFlow(); });
 
-    // Watch the settings, not the widgets. Each value is reachable from a
-    // slider, a spinner, a reset button and the debug console, and every one of
-    // them has to invalidate the map it tunes.
+    // Watch the settings, not the widgets. Each value is reachable from a slider, a spinner, a reset button and the debug console, and every one of them has to invalidate the map it tunes.
     watch("SSAtmoShadowRes", EInvalidate::SHADOW);
     watch("SSAtmoShadowMaxAge", EInvalidate::SHADOW);
 
-    // Nothing to watch for the eaves: amount and radius are read live every
-    // frame, so a change to either shows up in the next one on its own.
+    // Nothing to watch for the eaves: amount and radius are read live every frame, so a change to either shows up in the next one on its own.
 
     const char* flow_controls[] = {
         "SSAtmoWindFlow", "SSAtmoWindFlowCell", "SSAtmoWindFlowRes",
@@ -77,10 +74,8 @@ bool SSFloaterSimulation::postBuild()
         watch(name, EInvalidate::FLOW);
     }
 
-    // The overlays live in the render debug mask rather than in a setting, so
-    // these drive it directly and read it back in refreshStatus. Toggling from
-    // Develop > Render Metadata therefore shows up here too, rather than the
-    // two disagreeing about what is on screen.
+    // The overlays live in the render debug mask rather than in a setting, so these drive it directly and read it back in refreshStatus. Toggling from Develop > Render Metadata therefore shows up
+    // here too, rather than the two disagreeing about what is on screen.
     getChild<LLCheckBoxCtrl>("flow_overlay_check")->setCommitCallback(
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WIND_FLOW); });
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->setCommitCallback(
@@ -108,17 +103,13 @@ void SSFloaterSimulation::watch(const std::string& control, EInvalidate what)
         {
             if (what == EInvalidate::SHADOW)
             {
-                // Resolution is read at capture time and the refresh interval
-                // only governs the next one, so neither takes effect until the
-                // cache is dropped
+                // Resolution is read at capture time and the refresh interval only governs the next one, so neither takes effect until the cache is dropped
                 SSRainShadowMap::getInstance()->clearCache();
             }
             else
             {
-                // The flowmap would notice this on its own through its settings
-                // hash, but only after waiting out the rezzing-region settle
-                // delay. Asking explicitly makes dragging a slider feel like it
-                // did something.
+                // The flowmap would notice this on its own through its settings hash, but only after waiting out the rezzing-region settle delay. Asking explicitly makes dragging a slider feel like
+                // it did something.
                 SSWindFlowMap::getInstance()->rebuildAll();
             }
             refreshStatus();
@@ -132,8 +123,7 @@ void SSFloaterSimulation::onOpen(const LLSD& key)
 
 void SSFloaterSimulation::draw()
 {
-    // Neither map has a change signal, and the status only matters while this
-    // is on screen, so poll rather than plumb one through
+    // Neither map has a change signal, and the status only matters while this is on screen, so poll rather than plumb one through
     const F64 now = LLTimer::getElapsedSeconds();
     if (now - mLastPoll > STATUS_POLL_INTERVAL)
     {
@@ -168,9 +158,8 @@ void SSFloaterSimulation::refreshStatus()
                        shadow->tileCount(), shadow->tileCount() == 1 ? "" : "s",
                        (S32)shadow_res));
 
-    // The per-column readouts for both maps are in the Atmo Magic info
-    // overlay, not here: they describe the spot you are standing on, and
-    // reading them means looking at that spot rather than at a settings window.
+    // The per-column readouts for both maps are in the Atmo Magic info overlay, not here: they describe the spot you are standing on, and reading them means looking at that spot rather than at a
+    // settings window.
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
     LLTextBox* flow_status = getChild<LLTextBox>("flow_status");
@@ -178,8 +167,7 @@ void SSFloaterSimulation::refreshStatus()
 
     if (!SSWindFlowMap::isSupported())
     {
-        // Compute shaders are GL 4.3. Say so rather than showing an idle map
-        // and leaving the tuning looking broken.
+        // Compute shaders are GL 4.3. Say so rather than showing an idle map and leaving the tuning looking broken.
         flow_status->setText(std::string("unavailable: needs OpenGL 4.3"));
     }
     else if (flow->tileCount() == 0)
@@ -202,10 +190,8 @@ void SSFloaterSimulation::refreshStatus()
     getChild<LLCheckBoxCtrl>("settle_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
 
-    // What the weather has worked into the surface. There is no drainage
-    // network to report any more - the runoff simulation was retracted, and
-    // what replaced it is geometry rather than a solve, so there is nothing
-    // in flight to watch.
+    // What the weather has worked into the surface. There is no drainage network to report any more - the runoff simulation was retracted, and what replaced it is geometry rather than a solve, so
+    // there is nothing in flight to watch.
     SSSurfaceField* surface = SSSurfaceField::getInstance();
     getChild<LLTextBox>("runoff_status")->setText(
         surface->fieldCount() == 0
@@ -218,9 +204,8 @@ void SSFloaterSimulation::refreshStatus()
     LLTextBox* capture_status = getChild<LLTextBox>("flow_capture_status");
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);
 
-    // Nothing to say while the field itself is what is drawn: the combo above
-    // already reads "Solved flow field", and repeating it back is a line of
-    // text that only ever states its own control's value.
+    // Nothing to say while the field itself is what is drawn: the combo above already reads "Solved flow field", and repeating it back is a line of text that only ever states its own control's
+    // value.
     capture_status->setVisible(capture_view != 0);
 
     if (capture_view == 0)

@@ -34,10 +34,8 @@ out vec4 vary_color;
 
 void main()
 {
-    // Ribbons arrive already built in world space, camera-faced on the CPU
-    // alongside everything else about them - same arrangement as the puff
-    // field, and for the same reason: the geometry is a handful of quads a
-    // few times a minute, not something worth a geometry stage.
+    // Ribbons arrive already built in world space, camera-faced on the CPU alongside everything else about them - same arrangement as the puff field, and for the same reason: the geometry is a
+    // handful of quads a few times a minute, not something worth a geometry stage.
     gl_Position = modelview_projection_matrix * vec4(position.xyz, 1.0);
 
     vary_texcoord0 = texcoord0;

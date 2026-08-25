@@ -24,25 +24,12 @@
  */
 
 // <SS:Nexii> Atmo Magic celestial discs
-//
-// Its own shader rather than uniforms bolted onto the stock sun and moon
-// ones. Three reasons, in order of how much they matter:
-//
-//  1. A GL uniform nobody sets is ZERO. Adding "how bright" and "how far to
-//     drop the quad" uniforms to a stock shader means every call site that
-//     binds it - now and in future, ours and upstream's - must remember to
-//     set them or draw a black disc at the wrong height. A separate program
-//     cannot be bound by accident.
-//  2. Atmo Magic wants different constants, not tunable ones. There is no
-//     legacy 50m drop here (see below), the terminator softness is a fixed
-//     look, and the emissive gain is a fixed multiple. Hardcoding them says
-//     so, and keeps them next to the code that reads them.
-//  3. It leaves the upstream shaders untouched, so a stock environment
-//     renders byte-identically and merges stay clean.
-//
-// What still arrives by uniform is per-BODY state - where its star is, which
-// way its quad faces, whether it lights itself - because that genuinely
-// differs from one disc to the next.
+// Its own shader rather than uniforms bolted onto the stock sun and moon ones. Three reasons, in order of how much they matter: 1. A GL uniform nobody sets is ZERO. Adding "how bright" and "how far
+// to drop the quad" uniforms to a stock shader means every call site that binds it - now and in future, ours and upstream's - must remember to set them or draw a black disc at the wrong height. A
+// separate program cannot be bound by accident. 2. Atmo Magic wants different constants, not tunable ones. There is no legacy 50m drop here (see below), the terminator softness is a fixed look, and
+// the emissive gain is a fixed multiple. Hardcoding them says so, and keeps them next to the code that reads them. 3. It leaves the upstream shaders untouched, so a stock environment renders
+// byte-identically and merges stay clean. What still arrives by uniform is per-BODY state - where its star is, which way its quad faces, whether it lights itself - because that genuinely differs
+// from one disc to the next.
 
 uniform mat4 modelview_projection_matrix;
 
@@ -53,45 +40,19 @@ out vec2 vary_texcoord0;
 
 void main()
 {
-    // No vertex offset of any kind.
-    //
-    // sunDiscV.glsl subtracts vec3(0, 0, 50) here - a legacy sky fudge, the
-    // same 50 the cloud shader carries as vec3(0, 50, 0). At the sun's
-    // ~1004m that is 2.85 degrees of elevation, which is invisible when
-    // nothing says where the sun ought to be and glaring when an authored
-    // orbit does: the disc drew nearly three degrees below the direction it
-    // was placed at, while the haze glow around it - which comes from the
-    // atmosphere shader and the true direction - stayed put.
+    // No vertex offset of any kind. sunDiscV.glsl subtracts vec3(0, 0, 50) here - a legacy sky fudge, the same 50 the cloud shader carries as vec3(0, 50, 0). At the sun's ~1004m that is 2.85 degrees
+    // of elevation, which is invisible when nothing says where the sun ought to be and glaring when an authored orbit does: the disc drew nearly three degrees below the direction it was placed at,
+    // while the haze glow around it - which comes from the atmosphere shader and the true direction - stayed put.
     vec4 pos = modelview_projection_matrix * vec4(position.xyz, 1.0);
 
-    // The sky's depth layers, and this disc's place in them.
-    //
-    // Every skybox pass runs under LLGLSPipelineSkyBox, whose
-    // LLGLSquashToFarClip replaces the projection's z row with its w row
-    // times 0.99999 (llgl.cpp, setProjectionMatrix) - so the haze dome and,
-    // by default, everything else in the sky land on that single value
-    // whatever their geometry says. The dome's real ~5000m never reaches the
-    // depth buffer at all, which is why arguing about where 5000m falls on
-    // the depth curve only ever produced numbers that happened to work.
-    //
-    // With cloudsV.glsl now taking 0.99998 for itself, the sky reads:
-    //
-    //     0.99998   cloud layer
-    //     0.99999   haze dome, and these discs
-    //     1.0       stars (starsV.glsl)
-    //
-    // A disc has to sit clear of the clouds so they can cover it - it is
-    // ADDED to the sky, so depth is the only thing that can hide it - and
-    // clear of the stars so its depth write still clips them.
-    //
-    // Sharing the haze dome's exact value is the one thing to watch. LEQUAL
-    // passes on equality, and the disc is drawn after the dome, so it draws.
-    // But the dome reaches 0.99999 through the rewritten projection while
-    // this reaches it by multiplying, and if those disagree in the last bits
-    // the disc will speckle against the HAZE - the same failure as before,
-    // moved one layer along. If that shows up, the fix is to move these
-    // discs to 0.999995, midway between the dome and the stars, rather than
-    // to move the clouds again.
+    // The sky's depth layers, and this disc's place in them. Every skybox pass runs under LLGLSPipelineSkyBox, whose LLGLSquashToFarClip replaces the projection's z row with its w row times 0.99999
+    // (llgl.cpp, setProjectionMatrix) - so the haze dome and, by default, everything else in the sky land on that single value whatever their geometry says. The dome's real ~5000m never reaches the
+    // depth buffer at all, which is why arguing about where 5000m falls on the depth curve only ever produced numbers that happened to work. With cloudsV.glsl now taking 0.99998 for itself, the sky
+    // reads: 0.99998   cloud layer 0.99999   haze dome, and these discs 1.0       stars (starsV.glsl) A disc has to sit clear of the clouds so they can cover it - it is ADDED to the sky, so depth is
+    // the only thing that can hide it - and clear of the stars so its depth write still clips them. Sharing the haze dome's exact value is the one thing to watch. LEQUAL passes on equality, and the
+    // disc is drawn after the dome, so it draws. But the dome reaches 0.99999 through the rewritten projection while this reaches it by multiplying, and if those disagree in the last bits the disc
+    // will speckle against the HAZE - the same failure as before, moved one layer along. If that shows up, the fix is to move these discs to 0.999995, midway between the dome and the stars, rather
+    // than to move the clouds again.
     pos.z = pos.w * 0.99999;
     gl_Position = pos;
 

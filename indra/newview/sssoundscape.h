@@ -32,6 +32,8 @@
 
 // <SS:Nexii> Atmo Magic soundscape
 
+// Gate map: beds + in-flight thunder on isEnabled, footsteps on isSwitchedOn (dry ground plays exactly when no weather runs), all on SSAtmoSounds. Reads windflow (indoor/burial/stereo), surface field (footstep surface), temperature (sound speed). doc/atmo_magic_interactions.md
+
 #include "llsingleton.h"
 #include "lluuid.h"
 #include "v3math.h"
@@ -47,39 +49,31 @@ class SSSoundscape : public LLSingleton<SSSoundscape>
     LLSINGLETON_EMPTY_CTOR(SSSoundscape);
 
 public:
-    // Per-frame driver, called from the manager's idle after parameters
-    // refresh; owns probe scheduling and loop gain fades
+    // Per-frame driver, called from the manager's idle after parameters refresh; owns probe scheduling and loop gain fades
     void idle();
 
-    // An impact landed near the camera (already distance-gated by the
-    // impact queue); feeds the local-loudness metric so sheltered spots
-    // sound quieter than open ground even at the same weather parameters
+    // An impact landed near the camera (already distance-gated by the impact queue); feeds the local-loudness metric so sheltered spots sound quieter than open ground even at the same weather
+    // parameters
     void notifyImpact(F32 strength);
 
     // Fade out and release every loop (system disabled, teleport, etc.)
     void stopAll();
 
-    // The footstep voice for a foot at this position, from the surface
-    // underfoot - dry, wet, puddle, indoors - or null when the soundscape
-    // has nothing to say: slot unconfigured, or Atmo Magic off. Null tells
-    // the avatar to fall back to the stock per-avatar step sound, so
-    // turning the system off returns the viewer to its vanilla footsteps
-    // rather than silence. action is an SSStepAction; on_land whether the
-    // foot is on terrain rather than an object.
-    LLUUID footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action,
-                         bool is_self);
+    // The footstep voice for a foot at this position, from the surface underfoot - dry, wet, puddle, indoors - or null when the soundscape has nothing to say: slot unconfigured, or Atmo Magic off.
+    // Null tells the avatar to fall back to the stock per-avatar step sound, so turning the system off returns the viewer to its vanilla footsteps rather than silence. action is an SSStepAction;
+    // on_land whether the foot is on terrain rather than an object.
+    LLUUID footstepSound(const LLUUID& avatar_id, const LLVector3& foot_pos_agent,
+                         bool on_land, S32 action, bool is_self);
 
-    // What the last footstep lookup decided, for the info overlay. Every
-    // stage of the walk is recorded, including the ones that returned
-    // nothing, because "no sound played" has half a dozen causes that are
-    // indistinguishable from a chair: system off, wrong surface picked, slot
-    // empty, list unparseable.
+    // What the last footstep lookup decided, for the info overlay. Every stage of the walk is recorded, including the ones that returned nothing, because "no sound played" has half a dozen causes
+    // that are indistinguishable from a chair: system off, wrong surface picked, slot empty, list unparseable.
     struct StepDebug
     {
         F64 mWhen = -1.0;           // sharedTime of the lookup, -1 for never
         S32 mSurface = -1;          // SSStepSurface, or -1 if not reached
         S32 mAction = -1;
         bool mIndoors = false;
+        char mIndoorsFrom = '-';    // 'f' flowmap column, 'p' camera cover probe fallback, '-' nothing answered (treated as outdoors)
         bool mFieldValid = false;   // the surface field had an answer
         F32 mWet = 0.f;
         F32 mPuddle = 0.f;
@@ -89,39 +83,22 @@ public:
         LLUUID mPicked;
         const char* mWhyNot = "";   // empty when a sound was returned
     };
-    // Kept separately for your own avatar and for everyone else's. Footsteps
-    // fire for every avatar in earshot, so a single "last lookup" was
-    // overwritten by whoever stepped most recently - which in a crowd is
-    // never you, and you are the one being debugged.
+    // Kept separately for your own avatar and for everyone else's. Footsteps fire for every avatar in earshot, so a single "last lookup" was overwritten by whoever stepped most recently - which in a
+    // crowd is never you, and you are the one being debugged.
     const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
 
-    // A strike happened at pos, this far away, this fierce. The clap is held
-    // and played when the sound would actually have arrived - the caller
-    // says WHEN IT STRUCK, not when it should be heard, because only this
-    // side knows how long sound takes to cover the distance or how far into
-    // the chosen recording its own bang sits.
+    // A strike happened at pos, this far away, this fierce. The clap is held and played when the sound would actually have arrived - the caller says WHEN IT STRUCK, not when it should be heard,
+    // because only this side knows how long sound takes to cover the distance or how far into the chosen recording its own bang sits.
     void scheduleThunder(const LLVector3& pos_agent, F32 distance_m, F32 intensity,
                          F64 fire_at);
 
-    // The crackle that gathers before a strike, for the anticipation effect.
-    // Played immediately - it is meant to be heard building, so there is
-    // nothing to delay.
+    // The crackle that gathers before a strike, for the anticipation effect. Played immediately - it is meant to be heard building, so there is nothing to delay.
     void playCharge(const LLVector3& pos_agent, F32 intensity);
 
-    // How much better or worse a sound at this position carries to the
-    // listener, given the wind. Downwind of a source the wind gradient
-    // refracts sound back toward the ground and it carries further; upwind
-    // it bends up and away, which is the classic "saw the flash, heard
-    // nothing" of a windy day. Grows with distance because the refraction
-    // accumulates over it - next to the source the wind changes nothing.
-    //
-    // A general answer offered to everything the soundscape plays; thunder
-    // is the first consumer because kilometres are where the effect lives.
+    // Wind carry [interaction: wind -> audio]: downwind refraction bends sound to the ground (carries further), upwind away (the classic saw-the-flash-heard-nothing). Grows over km. General offer to everything the soundscape plays; thunder is the first consumer.
     F32 windCarryGain(const LLVector3& source_pos_agent) const;
 
-    // How many claps are still on their way. For the info overlay: a sky
-    // that has gone quiet with four pending is a storm you are about to
-    // hear, not a bug.
+    // How many claps are still on their way. For the info overlay: a sky that has gone quiet with four pending is a storm you are about to hear, not a bug.
     S32 pendingThunder() const { return (S32)mThunder.size(); }
 
     enum ESpace
@@ -133,9 +110,7 @@ public:
         SPACE_BIG
     };
 
-    // With nothing overhead, height stops mattering and the width of the
-    // surroundings takes over: an alley between two buildings is a different
-    // outdoor space from an open plain.
+    // With nothing overhead, height stops mattering and the width of the surroundings takes over: an alley between two buildings is a different outdoor space from an open plain.
     enum ESize
     {
         SIZE_SMALL = 0,     // surfaces within 10m
@@ -151,32 +126,25 @@ public:
     static const char* sizeName(ESize size);
     ESize outdoorSize() const { return mOutdoorSize; }
 
-    // Rough occlusion from the bubble: a source further away than the
-    // surface in its direction is on the far side of that surface, so it is
-    // being heard through something. Costs no extra rays - it reuses the
-    // width samples the cover probe already took.
+    // Rough occlusion from the bubble: a source further away than the surface in its direction is on the far side of that surface, so it is being heard through something. Costs no extra rays - it
+    // reuses the width samples the cover probe already took.
     F32 occlusionGain(const LLVector3& source_pos) const;
     F32 wallDistanceToward(const LLVector3& dir_horizontal) const;
 
-    // Schedules a delayed, quieter copy of a one-shot bounced off the nearest
-    // wall. Positioned at the reflecting surface, so the ear that hears it
-    // first falls out of normal 3D panning rather than a channel delay.
+    // Schedules a delayed, quieter copy of a one-shot bounced off the nearest wall. Positioned at the reflecting surface, so the ear that hears it first falls out of normal 3D panning rather than a
+    // channel delay.
     F32 impactRate() const;   // landings per second near the camera
     F32 coverBlend() const { return mCoverSmooth; }
     S32 wallCount() const { return mWallCount; }
     F32 wallDistance() const { return mWallAvg; }
     F32 roofDistance() const { return mRoofDist; }
 
-    // How much build stands between the ceiling overhead and the open sky, in
-    // metres. The up ray finds the ceiling of the room you are in; the wind
-    // flowmap's overhead capture knows the top of the whole column. The gap
-    // between the two is everything stacked above you - the storeys of a
-    // building, or the ground over a basement - and it is what separates
-    // standing in a ground floor room from standing in a cellar under it.
+    // How much build stands between the ceiling overhead and the open sky, in metres. The up ray finds the ceiling of the room you are in; the wind flowmap's overhead capture knows the top of the
+    // whole column. The gap between the two is everything stacked above you - the storeys of a building, or the ground over a basement - and it is what separates standing in a ground floor room from
+    // standing in a cellar under it.
     F32 burialDepth() const { return mBuriedSmooth; }
 
-    // 0 at the ceiling, approaching 1 deep under the build. What the rain bed
-    // is attenuated by.
+    // 0 at the ceiling, approaching 1 deep under the build. What the rain bed is attenuated by.
     F32 burialOcclusion() const;
 
     S32 activeLoops() const;
@@ -201,12 +169,21 @@ private:
 
     void queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
                       F32 distance_m, F32 gain, F64 heard_at);
+
+    // Cached roof-over-head verdicts for OTHER avatars, one cheap up-ray each, refreshed only when the avatar has moved a couple of metres AND its distance-scaled interval has passed. The flowmap
+    // answers first when it can; this covers regions it has no tile for. Keyed by avatar so a crowd costs a handful of rays a second at worst, not per footstep.
+    struct AvatarCover
+    {
+        bool mIndoors = false;
+        LLVector3 mPos;
+        F64 mWhen = -1.0;
+    };
+    std::map<LLUUID, AvatarCover> mAvatarCover;
+    bool roofOver(const LLUUID& avatar_id, const LLVector3& pos_agent, bool is_self);
     void updateThunder(F64 now);
 
-    // Ambient loop slots; each maps to one developer-configured sound UUID
-    // Outdoor beds are a light/medium/heavy set where only medium is
-    // required; the roof beds are one per indoor space size. Wind is not
-    // precipitation specific, so it stays global rather than per preset.
+    // Ambient loop slots; each maps to one developer-configured sound UUID Outdoor beds are a light/medium/heavy set where only medium is required; the roof beds are one per indoor space size. Wind
+    // is not precipitation specific, so it stays global rather than per preset.
     enum ESlot
     {
         LOOP_AMBIENT_LIGHT = 0,
@@ -221,12 +198,8 @@ private:
         LOOP_COUNT
     };
 
-    // One slot holds a comma-separated *sequence* of sounds: a single entry
-    // loops seamlessly at the engine level; multiple entries play unlooped
-    // in order, each next one starting when the previous asset (whatever
-    // its duration) has finished. The audio engine reaps finished
-    // non-looping sources, so sources are tracked by ID and re-created to
-    // advance the sequence, never by cached pointer.
+    // One slot holds a comma-separated *sequence* of sounds: a single entry loops seamlessly at the engine level; multiple entries play unlooped in order, each next one starting when the previous
+    // asset (whatever its duration) has finished. The audio engine reaps finished non-looping sources, so sources are tracked by ID and re-created to advance the sequence, never by cached pointer.
     struct Loop
     {
         std::vector<LLUUID> mSounds;
@@ -236,11 +209,8 @@ private:
         F32 mGain = 0.f;
         F32 mTarget = 0.f;
 
-        // Where the source sits relative to the listener's head. Zero for
-        // the beds, which surround you; the wind loops sit a few metres
-        // UPWIND, so the engine's own 3D panning puts the wind in the
-        // correct ear and it audibly swings as the local flow bends around
-        // buildings. Following the flowmap back, in the literal sense.
+        // Where the source sits relative to the listener's head. Zero for the beds, which surround you; the wind loops sit a few metres UPWIND, so the engine's own 3D panning puts the wind in the
+        // correct ear and it audibly swings as the local flow bends around buildings. Following the flowmap back, in the literal sense.
         LLVector3 mOffset;
     };
 
@@ -254,10 +224,8 @@ private:
 
     Loop mLoops[LOOP_COUNT];
 
-    // Probe state: one cycle is 3 wiggled upward rays (all must hit to
-    // count as covered) plus 4 cardinal rays sizing the space, all cast in
-    // a single idle so the classification never lags the camera; cycles are
-    // triggered by movement or staleness and rate limited between each other
+    // Probe state: one cycle is 3 wiggled upward rays (all must hit to count as covered) plus 4 cardinal rays sizing the space, all cast in a single idle so the classification never lags the camera;
+    // cycles are triggered by movement or staleness and rate limited between each other
     LLVector3 mProbeAnchor;
     F64 mLastCycleDone = -1000.0;
     F32 mSideDist[4] = { 0.f, 0.f, 0.f, 0.f };
@@ -271,9 +239,7 @@ private:
     LLVector3 mProbeOrigin;             // where mSideDist was measured from
     F32 mCoverSmooth = 0.f;
 
-    // Build standing above the ceiling, measured at the last probe cycle and
-    // eased the same way cover is, so walking down a stair ramps the rain out
-    // rather than stepping it
+    // Build standing above the ceiling, measured at the last probe cycle and eased the same way cover is, so walking down a stair ramps the rain out rather than stepping it
     F32 mBuriedDepth = 0.f;
     F32 mBuriedSmooth = 0.f;
 

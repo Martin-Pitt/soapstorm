@@ -988,10 +988,52 @@ U32 LLAudioBufferFMODSTUDIO::getLengthMS()
 // time the peak arrives, and aligning to the peak lands the whole event
 // audibly late. The moment a listener would say it happened is where the
 // level first climbs, so that is what this returns.
+// Lock, memcpy, unlock - main thread only, like every FMOD call here. The copy is what makes the worker-side analysis safe: the workers never see an FMOD object.
+bool LLAudioBufferFMODSTUDIO::getPCMCopy(std::vector<S16>& out, S32& out_channels, F32& out_rate)
+{
+    if (!mSoundp) return false;
+
+    FMOD_SOUND_TYPE type;
+    FMOD_SOUND_FORMAT format;
+    S32 channels = 0;
+    S32 bits = 0;
+    if (Check_FMOD_Error(mSoundp->getFormat(&type, &format, &channels, &bits), "FMOD::Sound::getFormat")) return false;
+    if (format != FMOD_SOUND_FORMAT_PCM16 || channels < 1) return false;
+
+    F32 frequency = 0.f;
+    S32 priority = 0;
+    if (Check_FMOD_Error(mSoundp->getDefaults(&frequency, &priority), "FMOD::Sound::getDefaults") || frequency <= 0.f) return false;
+
+    U32 bytes = 0;
+    if (Check_FMOD_Error(mSoundp->getLength(&bytes, FMOD_TIMEUNIT_PCMBYTES), "FMOD::Sound::getLength")) return false;
+
+    void* ptr1 = NULL; void* ptr2 = NULL;
+    U32 len1 = 0; U32 len2 = 0;
+    if (Check_FMOD_Error(mSoundp->lock(0, bytes, &ptr1, &ptr2, &len1, &len2), "FMOD::Sound::lock")) return false;
+
+    bool ok = false;
+    if (ptr1 && len1 >= sizeof(S16))
+    {
+        out.assign((const S16*)ptr1, (const S16*)ptr1 + len1 / sizeof(S16));
+        out_channels = channels;
+        out_rate = frequency;
+        ok = true;
+    }
+    Check_FMOD_Error(mSoundp->unlock(ptr1, ptr2, len1, len2), "FMOD::Sound::unlock");
+    return ok;
+}
+
+F32 LLAudioBufferFMODSTUDIO::getPeakLevel()
+{
+    if (mPeakLevel < 0.f) getOnsetMS();    // one analysis fills both caches
+    return llmax(mPeakLevel, 0.f);
+}
+
 U32 LLAudioBufferFMODSTUDIO::getOnsetMS()
 {
     if (mOnsetMS >= 0) return (U32)mOnsetMS;
     mOnsetMS = 0;    // the answer for every path that cannot do better
+    mPeakLevel = 0.f;
 
     if (!mSoundp) return 0;
 
@@ -1065,6 +1107,16 @@ U32 LLAudioBufferFMODSTUDIO::getOnsetMS()
             const F32 rms = (F32)sqrt(sum / (F64)(window * channels));
             envelope[w] = rms;
             if (rms > peak) { peak = rms; peak_at = w; }
+        }
+
+        // The loudest second, for getPeakLevel: mean of the envelope over ~1s centred on the peak window. One pass fills both caches.
+        {
+            const S32 half = llmax((S32)(0.5f * frequency / (F32)window), 1);
+            const S32 lo = llmax((S32)peak_at - half, 0);
+            const S32 hi = llmin((S32)peak_at + half, (S32)count - 1);
+            F32 sum_env = 0.f;
+            for (S32 w2 = lo; w2 <= hi; ++w2) sum_env += envelope[(size_t)w2];
+            mPeakLevel = sum_env / (F32)(hi - lo + 1);
         }
 
         // A fifth of the peak, in amplitude - about 14 dB down. Low enough to

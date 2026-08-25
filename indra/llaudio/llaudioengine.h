@@ -536,6 +536,13 @@ public:
     // and an unknown offset inside the file corrupts that delay by however
     // long the file's own preamble happens to be.
     virtual U32 getOnsetMS() { return 0; }
+
+    // RMS of the loudest ~1s of the sound, 0..1 against full scale, or 0 when the backend cannot say. The loudness proxy for levelling a pack of differently-mastered assets against each other:
+    // whole-file RMS would be biased low by long echo tails and over-boost exactly the wrong files, so the loudest window is measured instead. Cached with the onset - one PCM pass fills both.
+    virtual F32 getPeakLevel() { return 0.f; }
+
+    // A plain copy of the decoded samples, for analysis on threads the backend's own objects must never touch. False when the format is not something worth guessing about.
+    virtual bool getPCMCopy(std::vector<S16>& out, S32& out_channels, F32& out_rate) { return false; }
     // </SS:Nexii>
 
     friend class LLAudioEngine;

@@ -39,19 +39,27 @@ class SSLightningRender : public LLSingleton<SSLightningRender>
     LLSINGLETON_EMPTY_CTOR(SSLightningRender);
 
 public:
-    // From renderGeomPostDeferred, BEFORE the volumetric cloud pass. The
-    // order is the whole in-cloud compositing story: every puff in front of
-    // a channel segment alpha-blends over it, so inside the cloud the bolt
-    // is veiled into a glow, through a gap it shows bare, and below cloud
-    // base it is fully visible. The field itself is the diffuser; nothing
-    // here tests occlusion at all.
+    // From renderGeomPostDeferred, BEFORE the volumetric cloud pass. The order is the whole in-cloud compositing story: every puff in front of a channel segment alpha-blends over it, so inside the
+    // cloud the bolt is veiled into a glow, through a gap it shows bare, and below cloud base it is fully visible. The field itself is the diffuser; nothing here tests occlusion at all.
     void render();
 
+    // Last frame's draw accounting, for the info overlay - "the bolt is invisible" has half a dozen silent causes and this names which stage went quiet.
+    struct DrawStats
+    {
+        bool mShaderOk = false;
+        bool mGuarded = false;      // skipped by the HUD/impostor/shadow/snapshot guard this frame
+        S32 mStrikes = 0;           // live strikes seen
+        S32 mBright = 0;            // with channel brightness worth drawing
+        S32 mOffScreen = 0;         // culled by the frustum test
+        S32 mSegments = 0;          // ribbon segments actually emitted
+    };
+    const DrawStats& stats() const { return mStats; }
+
 private:
-    // The electric-line texture, held resident the same way the puff field
-    // holds its noise maps and for the same reason.
+    // The electric-line texture, held resident the same way the puff field holds its noise maps and for the same reason.
     LLUUID mTexture;
     LLPointer<LLViewerFetchedTexture> mTextureRef;
+    DrawStats mStats;
 };
 
 // </SS:Nexii>

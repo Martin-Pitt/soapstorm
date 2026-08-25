@@ -45,9 +45,7 @@ SSFloaterAtmoInfluence::SSFloaterAtmoInfluence(const LLSD& key) :
 
 void SSFloaterAtmoInfluence::buildRows()
 {
-    // The applier's most recent modulation is the readout's only source -
-    // see the header. Fetched per call rather than held, since the applier
-    // recomputes it every frame.
+    // The applier's most recent modulation is the readout's only source - see the header. Fetched per call rather than held, since the applier recomputes it every frame.
     auto effect = [](std::function<F32(const SSAtmoEnvSkyModulation&)> pick)
     {
         return [pick]() -> F32
@@ -60,10 +58,8 @@ void SSFloaterAtmoInfluence::buildRows()
         { "cover",
           [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mCloudCoverEnabled; },
           [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mCloudCoverStrength; },
-          // Coverage is the one mapping whose effect is not a single
-          // drive: it is "how much cover is being asked for" times "how
-          // far toward it we go", which multiplied together is what the
-          // dome actually receives.
+          // Coverage is the one mapping whose effect is not a single drive: it is "how much cover is being asked for" times "how far toward it we go", which multiplied together is what the dome
+          // actually receives.
           effect([](const SSAtmoEnvSkyModulation& m) { return m.mCoverTarget * m.mCoverBlend; }) },
 
         { "wind",
@@ -102,9 +98,7 @@ bool SSFloaterAtmoInfluence::postBuild()
 
     for (const Row& row : mRows)
     {
-        // Captured by value: mRows is built once and never resized, but
-        // copying two std::functions and a string is cheap enough that
-        // the callback need not depend on that staying true.
+        // Captured by value: mRows is built once and never resized, but copying two std::functions and a string is cheap enough that the callback need not depend on that staying true.
         const Row captured = row;
         getChild<LLUICtrl>(row.mPrefix + "_enabled")->setCommitCallback(
             [this, captured](LLUICtrl*, const LLSD&) { onCommitRow(captured); });
@@ -151,9 +145,7 @@ void SSFloaterAtmoInfluence::draw()
     {
         mLastPoll = now;
 
-        // Same capture guard the other Atmo floaters poll behind: writing
-        // a slider's value back while it is being dragged makes the drag
-        // fight itself. The readouts are safe either way - they are
+        // Same capture guard the other Atmo floaters poll behind: writing a slider's value back while it is being dragged makes the drag fight itself. The readouts are safe either way - they are
         // display-only text - so they refresh regardless.
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
@@ -178,9 +170,8 @@ void SSFloaterAtmoInfluence::refreshAll()
     master->setEnabled(have);
     master->set(have && infl->mEnabled);
 
-    // Rows follow the master switch as well as the asset: with weather
-    // influence off wholesale, a per-mapping strength has nothing to say,
-    // and leaving them live would invite tuning dials that do nothing.
+    // Rows follow the master switch as well as the asset: with weather influence off wholesale, a per-mapping strength has nothing to say, and leaving them live would invite tuning dials that do
+    // nothing.
     const bool rows_live = have && infl->mEnabled;
 
     for (const Row& row : mRows)
@@ -218,9 +209,7 @@ void SSFloaterAtmoInfluence::refreshReadouts()
         LLTextBox* readout = getChild<LLTextBox>(row.mPrefix + "_readout");
         if (!have || !infl->mEnabled || !row.mEnabled(*infl))
         {
-            // A disabled mapping reads as off rather than as 0%: zero is a
-            // thing the weather can legitimately be asking for, and the
-            // two states should not look alike.
+            // A disabled mapping reads as off rather than as 0%: zero is a thing the weather can legitimately be asking for, and the two states should not look alike.
             readout->setText(std::string("off"));
             continue;
         }
@@ -248,9 +237,7 @@ void SSFloaterAtmoInfluence::onCommitRow(const Row& row)
     row.mStrength(*infl) = llclamp(
         (F32)getChild<LLSliderCtrl>(row.mPrefix + "_strength")->getValueF32(), 0.f, 1.f);
 
-    // Only this row's own slider can have changed enablement, so the whole
-    // panel does not need rebuilding - and rebuilding here would stamp on
-    // a slider the author is still dragging.
+    // Only this row's own slider can have changed enablement, so the whole panel does not need rebuilding - and rebuilding here would stamp on a slider the author is still dragging.
     getChild<LLSliderCtrl>(row.mPrefix + "_strength")->setEnabled(row.mEnabled(*infl));
     refreshReadouts();
 }
@@ -260,8 +247,7 @@ void SSFloaterAtmoInfluence::onClickReset()
     SSAtmoEnvWeatherInfluence* infl = nullptr;
     if (!influence(&infl)) return;
 
-    // The struct's own constructed defaults, so "defaults" here and "what a
-    // new environment gets" cannot drift apart.
+    // The struct's own constructed defaults, so "defaults" here and "what a new environment gets" cannot drift apart.
     *infl = SSAtmoEnvWeatherInfluence();
     refreshAll();
 }

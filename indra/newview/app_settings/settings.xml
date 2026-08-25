@@ -26869,6 +26869,17 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <real>1.0</real>
   </map>
+  <key>SSAtmoDebugStrikeMarkers</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic debug: mark pending lightning strikes with a magenta bolt-path ribbon, a box at the attachment point and a floating countdown, so placement and shape can be checked before anything fires.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
   <key>SSAtmoLightningBranchDepth</key>
   <map>
     <key>Comment</key>
@@ -26923,6 +26934,17 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>F32</string>
     <key>Value</key>
     <real>7.0</real>
+  </map>
+  <key>SSAtmoLightningSceneLight</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how brightly a strike lights the world around it - avatars, wet ground, buildings - through the ordinary local-light pass. 0 keeps lightning in the sky only.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
   </map>
   <key>SSAtmoLightningTexture</key>
   <map>

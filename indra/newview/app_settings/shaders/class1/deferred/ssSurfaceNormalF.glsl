@@ -43,56 +43,37 @@ uniform float ssWetStrength;
 uniform float ssWetDebugForce;
 uniform float ssWetSkipExposure;
 
-// How far a fully wet surface's normal leans toward world up, 0 leaves the
-// normal alone and 1 goes all the way flat. Deliberately its own dial rather
-// than reusing wet directly - a puddle wants this at 1, a merely damp wall
-// wants barely any of it, and that is a judgement about the look, not
-// something the wetness value itself should decide.
+// How far a fully wet surface's normal leans toward world up, 0 leaves the normal alone and 1 goes all the way flat. Deliberately its own dial rather than reusing wet directly - a puddle wants this
+// at 1, a merely damp wall wants barely any of it, and that is a judgement about the look, not something the wetness value itself should decide.
 uniform float ssWetNormalFlatten;
 
-// Cosines of the two angles from vertical-up that bound the taper: at or
-// below ssWetFlattenCosFull the surface is close enough to flat that water
-// on it pools the way it does on a roof or the ground, and gets the full
-// flatten amount; at or above ssWetFlattenCosZero it is close enough to a
-// wall that water on it runs as a thin sheet following the wall's own plane
-// rather than pooling flat, and gets none. Uploaded as cosines rather than
-// angles so the shader never has to take an inverse cosine to use them - the
-// surface's own normal dotted with up is already a cosine.
+// Cosines of the two angles from vertical-up that bound the taper: at or below ssWetFlattenCosFull the surface is close enough to flat that water on it pools the way it does on a roof or the ground,
+// and gets the full flatten amount; at or above ssWetFlattenCosZero it is close enough to a wall that water on it runs as a thin sheet following the wall's own plane rather than pooling flat, and
+// gets none. Uploaded as cosines rather than angles so the shader never has to take an inverse cosine to use them - the surface's own normal dotted with up is already a cosine.
 uniform float ssWetFlattenCosFull;
 uniform float ssWetFlattenCosZero;
 
-// Standing water flattens on its own terms, the same way it earns its own
-// specular treatment in ssSurfaceWetF.glsl: a puddle's surface is level
-// because it is a pool, not because the wall/roof slope test here happened
-// to allow it, so it bypasses that gate entirely rather than being scaled by
-// it. ssWetPuddleDepthFull is the same figure the wetness pass uses, so a
-// spot the two shaders agree is a full puddle reads as one consistently.
+// Standing water flattens on its own terms, the same way it earns its own specular treatment in ssSurfaceWetF.glsl: a puddle's surface is level because it is a pool, not because the wall/roof slope
+// test here happened to allow it, so it bypasses that gate entirely rather than being scaled by it. ssWetPuddleDepthFull is the same figure the wetness pass uses, so a spot the two shaders agree is
+// a full puddle reads as one consistently.
 uniform float ssWetPuddleDepthFull;
 uniform float ssWetPuddleFlatten;
 
-// Flow motion: water visibly running along the drainage rather than merely
-// sitting on it. Reuses the same tileable wave-normal texture the water
-// plane itself scrolls for its own ripples, rather than authoring a second
-// one - the look this is chasing is exactly that texture's, just carried by
-// the flow direction of a channel instead of the wind blowing the lake.
+// Flow motion: water visibly running along the drainage rather than merely sitting on it. Reuses the same tileable wave-normal texture the water plane itself scrolls for its own ripples, rather than
+// authoring a second one - the look this is chasing is exactly that texture's, just carried by the flow direction of a channel instead of the wind blowing the lake.
 uniform sampler2D ssWaveMap;
 uniform float ssTime;
 uniform float ssWetFlowScale;     // metres per tile of the wave texture
 uniform float ssWetFlowSpeed;     // metres per second the pattern scrolls
 uniform float ssWetFlowStrength;  // how far a fully flowing cell blends toward it
 
-// Surface tension's stand-in: how wet (or how full a pool) a channel cell
-// has to be before it counts as spilling at all, below which it stays a
-// still, undisturbed film. 0 disables the threshold outright.
+// Surface tension's stand-in: how wet (or how full a pool) a channel cell has to be before it counts as spilling at all, below which it stays a still, undisturbed film. 0 disables the threshold
+// outright.
 uniform float ssWetFlowMinWet;
 
-// The wave texture was authored for the water plane's own UV convention, not
-// for a tangent frame built straight off a drainage flow vector - whichever
-// way its streaks actually run, there is no reason to expect it lines up
-// with "downstream" in this frame. Turning the sampled normal's tangent-
-// plane components by this before they are laid onto the flow-aligned
-// frame is exactly the same fix as rotating the texture itself would be,
-// without a second copy of it rotated on disk.
+// The wave texture was authored for the water plane's own UV convention, not for a tangent frame built straight off a drainage flow vector - whichever way its streaks actually run, there is no
+// reason to expect it lines up with "downstream" in this frame. Turning the sampled normal's tangent- plane components by this before they are laid onto the flow-aligned frame is exactly the same
+// fix as rotating the texture itself would be, without a second copy of it rotated on disk.
 uniform float ssWetFlowRotSin;
 uniform float ssWetFlowRotCos;
 
@@ -109,17 +90,13 @@ void main()
 {
     vec2 tc = vary_fragcoord.xy;
 
-    // The env intensity and gbuffer flag live in the same texel as the
-    // encoded normal but are not part of what decodeNormal reconstructs -
-    // exactly the trap ssSurfaceWetF.glsl's own flag read fell into earlier.
-    // Both have to come from the raw fetch and go back out unchanged; only
-    // the normal itself is ever supposed to move.
+    // The env intensity and gbuffer flag live in the same texel as the encoded normal but are not part of what decodeNormal reconstructs - exactly the trap ssSurfaceWetF.glsl's own flag read fell
+    // into earlier. Both have to come from the raw fetch and go back out unchanged; only the normal itself is ever supposed to move.
     vec4 raw = getNormRaw(tc);
     float flag = raw.w;
     float env = raw.z;
 
-    // Sky, stars, the sun disc, HDRI - none of them are surfaces with a
-    // normal to flatten
+    // Sky, stars, the sun disc, HDRI - none of them are surfaces with a normal to flatten
     if (GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_HAS_HDRI) ||
         GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_SKIP_ATMOS))
     {
@@ -169,23 +146,12 @@ void main()
         }
     }
 
-    // How much this surface's own tilt lets water pool flat on it at all.
-    // Roofs and the ground read close to 1; a wall reads close to 0, because
-    // water clinging to a wall runs down as a sheet that still follows the
-    // wall's own plane rather than levelling out the way standing water
-    // does. Without this a vertical surface would flatten exactly as much as
-    // a horizontal one for the same wetness, which is what turned every wet
-    // wall into a puddle standing on its side.
-    //
-    // The gbuffer's normal is the final SHADING normal - whatever a bump or
-    // normal map perturbed it to - not the flat geometric surface underneath.
-    // "Is this a wall or a roof" is a question about the geometry, not the
-    // brickwork on it, and answering it from the pixel normal would have a
-    // heavily bump-mapped vertical wall flattening in some pixels and not
-    // others depending on which way each individual bump happened to tilt.
-    // The gradient of view-space position across the screen is the actual
-    // surface the geometry describes, independent of any normal map, and
-    // costs nothing beyond two derivatives already sitting in hardware.
+    // How much this surface's own tilt lets water pool flat on it at all. Roofs and the ground read close to 1; a wall reads close to 0, because water clinging to a wall runs down as a sheet that
+    // still follows the wall's own plane rather than levelling out the way standing water does. Without this a vertical surface would flatten exactly as much as a horizontal one for the same
+    // wetness, which is what turned every wet wall into a puddle standing on its side. The gbuffer's normal is the final SHADING normal - whatever a bump or normal map perturbed it to - not the flat
+    // geometric surface underneath. "Is this a wall or a roof" is a question about the geometry, not the brickwork on it, and answering it from the pixel normal would have a heavily bump-mapped
+    // vertical wall flattening in some pixels and not others depending on which way each individual bump happened to tilt. The gradient of view-space position across the screen is the actual surface
+    // the geometry describes, independent of any normal map, and costs nothing beyond two derivatives already sitting in hardware.
     vec3 n_geo_view = cross(dFdx(pos_view.xyz), dFdy(pos_view.xyz));
     if (dot(n_geo_view, -pos_view.xyz) < 0.0) n_geo_view = -n_geo_view;
     vec3 n_geo_world = normalize(mat3(ssFieldInvView) * n_geo_view);
@@ -193,53 +159,40 @@ void main()
     float up_align = dot(n_geo_world, vec3(0.0, 0.0, 1.0));
     float slope_factor = smoothstep(ssWetFlattenCosZero, ssWetFlattenCosFull, up_align);
 
-    // Blended toward world up rather than toward some notion of the
-    // surface's own unweathered flat direction, so a sloped wet roof still
-    // tilts its highlight the way a real film of water lying or running on
-    // it would - the water's surface answers to gravity, not to whatever the
-    // material underneath happens to be shaped like.
+    // Blended toward world up rather than toward some notion of the surface's own unweathered flat direction, so a sloped wet roof still tilts its highlight the way a real film of water lying or
+    // running on it would - the water's surface answers to gravity, not to whatever the material underneath happens to be shaped like.
     float flatten_wet = wet * ssWetNormalFlatten * slope_factor;
     float flatten_puddle = puddle * ssWetPuddleFlatten;
     float flatten = clamp(max(flatten_wet, flatten_puddle), 0.0, 1.0);
     vec3 flat_world = normalize(mix(n_world, vec3(0.0, 0.0, 1.0), flatten));
 
-    // Water actually running along a channel, laid over the flattened normal
-    // above rather than instead of it - a stream is still a flat film first,
-    // moving ripples second.
-    //
-    // A first few drops on a dry gutter do not run, they cling - surface
-    // tension holds a thin film in place until enough has gathered to break
-    // free and move as a body, and a channel with any wetness on it at all
-    // showing full flow the instant rain starts is exactly the "damp reads
-    // as a rushing stream" that skipping this would leave in. wet and puddle
-    // are the only per-cell figures that build up over time at all here, so
-    // this is asking the same question of whichever of them is greater
-    // rather than of an actual depth a channel cell does not otherwise keep.
+    // Water actually running along a channel, laid over the flattened normal above rather than instead of it - a stream is still a flat film first, moving ripples second. A first few drops on a dry
+    // gutter do not run, they cling - surface tension holds a thin film in place until enough has gathered to break free and move as a body, and a channel with any wetness on it at all showing full
+    // flow the instant rain starts is exactly the "damp reads as a rushing stream" that skipping this would leave in. wet and puddle are the only per-cell figures that build up over time at all
+    // here, so this is asking the same question of whichever of them is greater rather than of an actual depth a channel cell does not otherwise keep.
     vec3 flow = ssFieldFetchFlow(p.xy);
     float wet_for_flow = smoothstep(ssWetFlowMinWet, 1.0, max(wet, puddle));
-    float flow_vis = flow.z * wet_for_flow * ssWetFlowStrength;
+
+    // Faded out over distance, hard. The ripple is centimetre-scale detail sampled by world position in a screen-space pass: past a few tens of metres, and especially at grazing angles across a
+    // floor, it is deep below one texel per pixel and aliases into sheets of thin parallel lines and moire rings instead of water. There is no honest detail to show out there - a ripple that small
+    // IS invisible at that range - so the fade is not hiding the effect, it is stopping the lie.
+    float wave_reach = 1.0 - smoothstep(12.0, 40.0, length(pos_view.xyz));
+
+    // ...and by the same slope gate the flatten term uses. The flow field is indexed by XY alone, so a wall shares the drainage cell of the ground at its foot and was being animated with the
+    // floor's ripple - dancing walls. Water on a wall runs as a sheet following the wall's own plane; the pooled-surface ripple belongs only to surfaces water can actually stand and slosh on,
+    // which is exactly what slope_factor already measures for the flatten.
+    float flow_vis = flow.z * wet_for_flow * ssWetFlowStrength * wave_reach * slope_factor;
     if (flow_vis > 0.004)
     {
-        // A fixed world-XY tangent frame - the same choice the water plane
-        // itself makes for this texture, and for the same reason: water is
-        // flat, so world X and Y already are its tangent and bitangent, and
-        // nothing about which way it happens to be flowing needs to turn
-        // that frame. Building it from the flow direction instead, tried
-        // first, seemed like the more careful thing to do until it went to
-        // a diagonal run: flow is one of eight discrete directions, one per
-        // drainage cell, and a tangent frame that spins with it reinterprets
-        // the very same sampled ripple texel completely differently in two
-        // neighbouring cells that disagree - which reads as broken seams,
-        // worst exactly on the diagonals where neighbours disagree most
-        // often. The rotate dial still turns this frame, just once, the
-        // same way for every fragment, so it stays free to correct the
-        // texture's own orientation without ever depending on flow.
+        // A fixed world-XY tangent frame - the same choice the water plane itself makes for this texture, and for the same reason: water is flat, so world X and Y already are its tangent and
+        // bitangent, and nothing about which way it happens to be flowing needs to turn that frame. Building it from the flow direction instead, tried first, seemed like the more careful thing to do
+        // until it went to a diagonal run: flow is one of eight discrete directions, one per drainage cell, and a tangent frame that spins with it reinterprets the very same sampled ripple texel
+        // completely differently in two neighbouring cells that disagree - which reads as broken seams, worst exactly on the diagonals where neighbours disagree most often. The rotate dial still
+        // turns this frame, just once, the same way for every fragment, so it stays free to correct the texture's own orientation without ever depending on flow.
         vec3 t = vec3(ssWetFlowRotCos, ssWetFlowRotSin, 0.0);
         vec3 b = vec3(-ssWetFlowRotSin, ssWetFlowRotCos, 0.0);
 
-        // Only the sample position moves with the flow direction - sliding
-        // the same fixed pattern along it is what reads as the water
-        // actually running that way, diagonals included, without the
+        // Only the sample position moves with the flow direction - sliding the same fixed pattern along it is what reads as the water actually running that way, diagonals included, without the
         // pattern itself ever having to turn.
         vec2 uv = (p.xy - flow.xy * (ssTime * ssWetFlowSpeed)) / ssWetFlowScale;
         vec3 ripple = texture(ssWaveMap, uv).xyz * 2.0 - 1.0;
@@ -248,10 +201,8 @@ void main()
         flat_world = normalize(mix(flat_world, flowed, clamp(flow_vis, 0.0, 1.0)));
     }
 
-    // Back to view space the same way the exposure march's normal input got
-    // to world space in the first place, undone: ssFieldInvView's rotational
-    // part is orthonormal, so its transpose is its inverse and there is no
-    // need for a second matrix upload just to run the transform backward.
+    // Back to view space the same way the exposure march's normal input got to world space in the first place, undone: ssFieldInvView's rotational part is orthonormal, so its transpose is its
+    // inverse and there is no need for a second matrix upload just to run the transform backward.
     vec3 flat_view = normalize(transpose(mat3(ssFieldInvView)) * flat_world);
 
     frag_color = encodeNormal(flat_view, env, flag);

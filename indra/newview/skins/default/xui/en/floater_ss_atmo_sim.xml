@@ -107,6 +107,17 @@
      name="settle_overlay_check"
      label="Mark geometry changes waiting to settle"
      tool_tip="A beacon over every prim change still waiting out its settle delay, green as it comes due and red once it has re-armed too often to ever settle. Same overlay as Develop &gt; Render Metadata &gt; Geometry settling" />
+    <check_box
+     control_name="SSAtmoDebugStrikeMarkers"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="strike_marker_check"
+     label="Mark pending lightning strikes"
+     tool_tip="Magenta ribbon along the bolt's future path, a box at the attachment point and a floating countdown while a strike is still being prepared - chosen to read against white storm cloud" />
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="10" height="16" width="106"

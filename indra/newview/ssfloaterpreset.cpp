@@ -48,11 +48,8 @@ SSFloaterPreset::SSFloaterPreset(const LLSD& key) :
 {
 }
 
-// The widget name for a footstep slot.
-//
-// Built from the SAME keys the preset serialises with, so a slot's control,
-// its LLSD entry and its tooltip cannot drift apart - there is only one
-// spelling of "outside_wet" in the system and this is it.
+// The widget name for a footstep slot. Built from the SAME keys the preset serialises with, so a slot's control, its LLSD entry and its tooltip cannot drift apart - there is only one spelling of
+// "outside_wet" in the system and this is it.
 std::string SSFloaterPreset::stepWidgetName(SSStepSurface surface, SSStepAction action)
 {
     return std::string("step_") + SSFootstepSounds::surfaceKey(surface)
@@ -79,8 +76,7 @@ bool SSFloaterPreset::postBuild()
     getChild<LLButton>("discard_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickDiscard(); });
 
-    // Every editable widget funnels through one handler: read the whole form
-    // back into the preset, save it, and let the sim pick it up next frame
+    // Every editable widget funnels through one handler: read the whole form back into the preset, save it, and let the sim pick it up next frame
     static const char* widgets[] = {
         "archetype_combo", "fall_speed", "fall_lo", "fall_hi", "sway",
         "wind_response", "rate", "intensity_size", "tint", "glow", "drop_shape",
@@ -103,9 +99,7 @@ bool SSFloaterPreset::postBuild()
         }
     }
 
-    // The footstep grid, by the same names its slots serialise under - so the
-    // panel and the file agree by construction rather than by two lists being
-    // kept in step by hand.
+    // The footstep grid, by the same names its slots serialise under - so the panel and the file agree by construction rather than by two lists being kept in step by hand.
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {
         for (S32 ac = 0; ac < STEP_ACTION_COUNT; ++ac)
@@ -351,13 +345,10 @@ void SSFloaterPreset::controlsToPreset()
 
 void SSFloaterPreset::applyLive()
 {
-    // Staged, not saved: the weather picks the edit up immediately so it can be
-    // dialled in while watching it fall, but nothing reaches disk until Save.
-    // The asterisk in the title is exactly that gap.
+    // Staged, not saved: the weather picks the edit up immediately so it can be dialled in while watching it fall, but nothing reaches disk until Save. The asterisk in the title is exactly that gap.
     SSPrecipPresetManager::instance().stage(mEdited);
 
-    // Sizes and shapes are baked into the splatter textures, so drop the
-    // bakes; they are keyed on the shape fields and would otherwise linger
+    // Sizes and shapes are baked into the splatter textures, so drop the bakes; they are keyed on the shape fields and would otherwise linger
     SSPrecipVariants::instance().clearCache();
 
     // Editing a preset implies you want to see it
@@ -450,16 +441,13 @@ void SSFloaterPreset::onClickRename()
 
     const std::string old_name = mEdited.mName;
 
-    // Write the preset out under its new name first, so nothing is lost if the
-    // old file cannot be removed. A renamed built-in becomes a user preset and
-    // the shipped one returns to the list untouched.
+    // Write the preset out under its new name first, so nothing is lost if the old file cannot be removed. A renamed built-in becomes a user preset and the shipped one returns to the list untouched.
     mEdited.mName = name;
     mEdited.mBuiltIn = false;
     SSPrecipPresetManager::instance().save(mEdited);
     SSPrecipPresetManager::instance().remove(old_name);
 
-    // Follow the rename everywhere the old name was referenced, otherwise a
-    // track would silently fall back to the editor default
+    // Follow the rename everywhere the old name was referenced, otherwise a track would silently fall back to the editor default
     SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     bool touched = false;
     for (S32 track = SS_TRACK_MIN; track <= SS_TRACK_MAX; ++track)
@@ -488,8 +476,7 @@ void SSFloaterPreset::onClickDelete()
     const std::string name = mEdited.mName;
     if (!SSPrecipPresetManager::instance().remove(name))
     {
-        // Built-ins have no file unless they were overridden, so there is
-        // nothing to remove
+        // Built-ins have no file unless they were overridden, so there is nothing to remove
         LLNotificationsUtil::add("GenericAlert",
             LLSD().with("MESSAGE", "This preset has no saved copy to delete."));
         return;
@@ -505,8 +492,7 @@ void SSFloaterPreset::onClickDelete()
 
 void SSFloaterPreset::onClickDiscard()
 {
-    // Put the version on disk back, dropping whatever was staged. A preset that
-    // has never been written has nothing to go back to.
+    // Put the version on disk back, dropping whatever was staged. A preset that has never been written has nothing to go back to.
     const SSPrecipPreset* saved = SSPrecipPresetManager::instance().findSaved(mEdited.mName);
     if (!saved) return;
 

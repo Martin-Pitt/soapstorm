@@ -44,15 +44,13 @@ class SSPrecipRenderer : public LLSingleton<SSPrecipRenderer>
     LLSINGLETON_EMPTY_CTOR(SSPrecipRenderer);
 
 public:
-    // Called at the end of LLPipeline::renderGeomPostDeferred for the main
-    // world camera; draws nothing when the system is idle
+    // Called at the end of LLPipeline::renderGeomPostDeferred for the main world camera; draws nothing when the system is idle
     void render();
 
     void cleanupGL() { mVB = nullptr; }
 
 private:
-    // Particles surviving the fade math this frame, bucketed by shading
-    // material and texture so each texture is one draw call
+    // Particles surviving the fade math this frame, bucketed by shading material and texture so each texture is one draw call
     struct Item
     {
         const SSPrecipParticle* mPart;
@@ -70,11 +68,8 @@ private:
     bool ensureBuffer(U32 quads);
     void drawMaterial(class SSPrecipSim* sim, S32 material);
 
-    // Expands one KIND_STREAM particle into its ribbon of quads. Templated on
-    // the emitter so the strider capture stays local to render(); returns how
-    // many quads it actually wrote, which is at most SS_STREAM_SEGMENTS.
-    // Needs no camera: a stream hangs in the plane of its own fall rather than
-    // facing the view.
+    // Expands one KIND_STREAM particle into its ribbon of quads. Templated on the emitter so the strider capture stays local to render(); returns how many quads it actually wrote, which is at most
+    // SS_STREAM_SEGMENTS. Needs no camera: a stream hangs in the plane of its own fall rather than facing the view.
     template <typename EmitFn>
     U32 emitStream(const SSPrecipParticle& p, F32 alpha, F32 stretch, EmitFn& emit);
 

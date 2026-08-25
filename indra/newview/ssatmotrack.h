@@ -48,16 +48,14 @@
 
 class LLInventoryItem;
 
-// LLEnvironment::calculateSkyTrackForAltitude returns 1..4: track 1 is ground
-// level, 2..4 are the sky bands delimited by the region's altitude settings.
-// Track 0 is EEP's water track and carries no sky, so weather ignores it.
+// LLEnvironment::calculateSkyTrackForAltitude returns 1..4: track 1 is ground level, 2..4 are the sky bands delimited by the region's altitude settings. Track 0 is EEP's water track and carries no
+// sky, so weather ignores it.
 const S32 SS_TRACK_MIN   = 1;
 const S32 SS_TRACK_MAX   = 4;
 const S32 SS_TRACK_COUNT = 4;
 
-// One track's weather. Nothing is defined by default: a track only produces
-// weather once a config explicitly turns it on, so arriving anywhere without
-// an Atmo notecard leaves the sky exactly as it is today.
+// One track's weather. Nothing is defined by default: a track only produces weather once a config explicitly turns it on, so arriving anywhere without an Atmo notecard leaves the sky exactly as it
+// is today.
 struct SSAtmoTrackConfig
 {
     bool mDefined = false;      // a config exists at all for this track
@@ -67,28 +65,18 @@ struct SSAtmoTrackConfig
     F32 mPrecipitation = 0.5f;
     F32 mTurbulence    = 0.3f;
 
-    // Wind direction as a rotation off north. A quaternion rather than a
-    // compass angle so the direction can carry elevation too - updraughts and
-    // downdraughts are just a tilted wind - and so it composes with the rest
-    // of the viewer's orientation maths. Strength stays in mWindSpeed.
+    // Wind direction as a rotation off north. A quaternion rather than a compass angle so the direction can carry elevation too - updraughts and downdraughts are just a tilted wind - and so it
+    // composes with the rest of the viewer's orientation maths. Strength stays in mWindSpeed.
     LLQuaternion mWindRot;
     F32 mWindSpeed = 4.f;       // m/s
 
-    // How the wind arrives rather than how hard it blows. The flowmap solves a
-    // steady wind and layers these on top of it as waves carried along with the
-    // air, so a surge crosses the region downwind at wind speed instead of the
-    // whole build gusting in unison. Depth is scaled by mTurbulence, so a calm
-    // track stays a steady draught however these are set.
-    // Lightning, as the environment authored it. The intervals are -1 for
-    // "nothing said" - a v2 notecard has no lightning fields at all, and the
-    // strike scheduler derives them from turbulence in that case rather than
-    // treating silence as "never".
-    // Air temperature, degrees C. Sound speed, and eventually freezing,
-    // hang off this; a v2 notecard never says, so 15 stands in.
+    // How the wind arrives rather than how hard it blows. The flowmap solves a steady wind and layers these on top of it as waves carried along with the air, so a surge crosses the region downwind
+    // at wind speed instead of the whole build gusting in unison. Depth is scaled by mTurbulence, so a calm track stays a steady draught however these are set. Lightning, as the environment authored
+    // it. The intervals are -1 for "nothing said" - a v2 notecard has no lightning fields at all, and the strike scheduler derives them from turbulence in that case rather than treating silence as
+    // "never". Air temperature, degrees C. Sound speed, and eventually freezing, hang off this; a v2 notecard never says, so 15 stands in.
     F32 mTemperatureC = 15.f;
 
-    // The discharge colour and how white its core stays - see
-    // SSAtmoEnvWeather::mLightningColor.
+    // The discharge colour and how white its core stays - see SSAtmoEnvWeather::mLightningColor.
     LLColor3 mLightningColor{0.62f, 0.55f, 1.f};
     F32 mLightningCoreWhite = 0.85f;
 
@@ -103,15 +91,12 @@ struct SSAtmoTrackConfig
     F32 mGustLength = 140.f;    // metres between fronts, along the wind
     F32 mGustVeer   = 14.f;     // degrees the wind swings as a front passes
 
-    // Sky tracks need a floor to fall onto. By default that is the track's
-    // own base altitude (its "ground zero"), but a config can pin it to a
-    // platform's actual height when the band's base sits well below the build.
+    // Sky tracks need a floor to fall onto. By default that is the track's own base altitude (its "ground zero"), but a config can pin it to a platform's actual height when the band's base sits well
+    // below the build.
     bool mHasGround = false;
     F32  mGround    = 0.f;
 
-    // Fraction of drops still drawn where nothing catches them. Sky tracks are
-    // mostly empty air, so precipitation that finds no platform thins out
-    // instead of pouring onto an imaginary plane.
+    // Fraction of drops still drawn where nothing catches them. Sky tracks are mostly empty air, so precipitation that finds no platform thins out instead of pouring onto an imaginary plane.
     F32 mFallThrough = 1.f;
 
     bool runs() const { return mDefined && mEnabled; }
@@ -134,12 +119,8 @@ struct SSAtmoTrackConfig
 
 typedef std::array<SSAtmoTrackConfig, SS_TRACK_COUNT> ss_track_set_t;
 
-// Loads and owns the per-track configuration.
-//
-// The parcel description is watched through LLParcelObserver rather than
-// polled: descriptions almost never change, and the observer fires both when
-// the agent crosses into a different parcel and when the current parcel's
-// properties are re-sent after an edit.
+// Loads and owns the per-track configuration. The parcel description is watched through LLParcelObserver rather than polled: descriptions almost never change, and the observer fires both when the
+// agent crosses into a different parcel and when the current parcel's properties are re-sent after an edit.
 class SSAtmoTrackManager : public LLSingleton<SSAtmoTrackManager>, public LLParcelObserver
 {
     LLSINGLETON(SSAtmoTrackManager);
@@ -157,15 +138,13 @@ public:
     // LLParcelObserver: agent parcel changed, or its properties were re-sent
     void changed() override;
 
-    // Per-frame; only does deferred first-time load now that parcel discovery
-    // is event driven.
+    // Per-frame; only does deferred first-time load now that parcel discovery is event driven.
     void idle();
 
     // Track the camera is in right now, clamped into 1..4
     S32 currentTrack() const;
 
-    // The working config: the baseline plus whatever has been edited on top.
-    // This is what the weather actually runs from.
+    // The working config: the baseline plus whatever has been edited on top. This is what the weather actually runs from.
     const SSAtmoTrackConfig& config(S32 track) const;
     const SSAtmoTrackConfig& active() const { return config(currentTrack()); }
 
@@ -181,14 +160,12 @@ public:
     void revertToBaseline();
     void resetToDefaults();
 
-    // Base and top altitude of a track band. The floor doubles as ground zero
-    // for sky tracks: precipitation spawns above it and lands on it, rather
-    // than falling all the way to the terrain thousands of metres below.
+    // Base and top altitude of a track band. The floor doubles as ground zero for sky tracks: precipitation spawns above it and lands on it, rather than falling all the way to the terrain thousands
+    // of metres below.
     F32 trackFloor(S32 track) const;
     F32 trackCeiling(S32 track) const;
 
-    // Ground level precipitation still lands on terrain and water; only the
-    // sky bands get a synthetic floor that drops can fall through.
+    // Ground level precipitation still lands on terrain and water; only the sky bands get a synthetic floor that drops can fall through.
     bool isSkyTrack(S32 track) const { return track > SS_TRACK_MIN; }
 
     ESource source() const { return mSource; }
@@ -218,8 +195,7 @@ private:
     static void onNotecardLoaded(const LLUUID& asset_id, LLAssetType::EType type,
                                  void* user_data, S32 status, LLExtStat ext_status);
 
-    // Parses "atmo:<uuid>" out of a parcel description, in any position and
-    // case. Returns null when the description carries no reference.
+    // Parses "atmo:<uuid>" out of a parcel description, in any position and case. Returns null when the description carries no reference.
     static LLUUID parseDescription(const std::string& desc);
 
     ss_track_set_t mBaseline;   // as loaded

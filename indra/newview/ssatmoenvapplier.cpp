@@ -57,52 +57,35 @@
 
 namespace
 {
-    // The schema stores glow in the same UI-space EEP's own sliders use
-    // (see SSAtmoEnvAtmosphere); the renderer wants the packed glow
-    // colour. These are llpaneleditsky.cpp's SLIDER_SCALE_GLOW_R/B.
-    // Outside EEP's own panels this forward conversion lives only here,
-    // and its exact inverse only in SSAtmoEnvAtmosphere::fromSettingsSky
-    // (seeding a new asset from a fetched sky) - packed glow must never
-    // leak into the schema, and UI-space must never leak past this
-    // boundary.
+    // The schema stores glow in the same UI-space EEP's own sliders use (see SSAtmoEnvAtmosphere); the renderer wants the packed glow colour. These are llpaneleditsky.cpp's SLIDER_SCALE_GLOW_R/B.
+    // Outside EEP's own panels this forward conversion lives only here, and its exact inverse only in SSAtmoEnvAtmosphere::fromSettingsSky (seeding a new asset from a fetched sky) - packed glow must
+    // never leak into the schema, and UI-space must never leak past this boundary.
     const F32 SLIDER_SCALE_GLOW_R(20.0f);
     const F32 SLIDER_SCALE_GLOW_B(-5.0f);
 
-    // A single-frame altitude jump larger than this counts as a teleport
-    // for the resolver's instant-cut rule - same figure SSAtmoMagic uses
-    // for the precipitation bridge, so sky and rain always agree on
-    // whether a given jump was "movement" or "arrival".
+    // A single-frame altitude jump larger than this counts as a teleport for the resolver's instant-cut rule - same figure SSAtmoMagic uses for the precipitation bridge, so sky and rain always agree
+    // on whether a given jump was "movement" or "arrival".
     const F32 TELEPORT_JUMP_M(60.f);
 
-    // Emitter angular size -> EEP disc scale: scale 1.0 is treated as the
-    // real Sun's apparent ~0.53 degrees, so a body authored with
-    // Earth-Sun geometry renders at the familiar size. Clamped because a
-    // body parked on its home's doorstep would otherwise ask for a
-    // screen-filling disc, and a distant speck for an invisible one.
+    // Emitter angular size -> EEP disc scale: scale 1.0 is treated as the real Sun's apparent ~0.53 degrees, so a body authored with Earth-Sun geometry renders at the familiar size. Clamped because
+    // a body parked on its home's doorstep would otherwise ask for a screen-filling disc, and a distant speck for an invisible one.
     const F32 REFERENCE_SUN_DIAMETER_DEG(0.53f);
     const F32 CELESTIAL_SCALE_MIN(0.1f);
     const F32 CELESTIAL_SCALE_MAX(20.f);
 
-    // Billboard bodies apparently smaller than this are dropped outright
-    // rather than published - a subpixel quad just shimmers. Emitters are
-    // exempt: their scale clamp already floors them at a visible size.
+    // Billboard bodies apparently smaller than this are dropped outright rather than published - a subpixel quad just shimmers. Emitters are exempt: their scale clamp already floors them at a
+    // visible size.
     const F32 BILLBOARD_MIN_DIAMETER_DEG(0.05f);
 
-    // Inverse of the engine's own convention: LLSettingsSky derives the
-    // world-space sun/moon direction as x_axis * rotation (see
-    // calculateHeavenlyBodyPositions), so the quaternion for a desired
-    // direction is the shortest arc taking +X onto it - the same
-    // construction its convert_azimuth_and_altitude_to_quat performs
-    // from angles.
+    // Inverse of the engine's own convention: LLSettingsSky derives the world-space sun/moon direction as x_axis * rotation (see calculateHeavenlyBodyPositions), so the quaternion for a desired
+    // direction is the shortest arc taking +X onto it - the same construction its convert_azimuth_and_altitude_to_quat performs from angles.
     LLQuaternion quat_from_direction(const LLVector3& dir)
     {
         LLQuaternion quat; // identity
         LLVector3 axis = LLVector3::x_axis % dir;
         if (axis.normalize() < 0.0001f)
         {
-            // Parallel or antiparallel to +X: the cross product vanishes.
-            // Antiparallel needs a half-turn about any perpendicular
-            // (+Z serves); parallel is the identity already.
+            // Parallel or antiparallel to +X: the cross product vanishes. Antiparallel needs a half-turn about any perpendicular (+Z serves); parallel is the identity already.
             if (dir.mV[VX] < 0.f)
             {
                 quat.setAngleAxis(F_PI, LLVector3::z_axis);
@@ -132,11 +115,8 @@ void SSAtmoEnvApplier::apply()
 
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
 
-    // Re-read the asset through the manager every frame - it can be
-    // replaced wholesale between frames (a notecard load landing), so no
-    // pointers into its mTracks ever survive past one apply() call. An
-    // asset with no tracks at all should be impossible (fromLLSD rejects
-    // it), but treat it as "nothing to show" rather than trusting that.
+    // Re-read the asset through the manager every frame - it can be replaced wholesale between frames (a notecard load landing), so no pointers into its mTracks ever survive past one apply() call.
+    // An asset with no tracks at all should be impossible (fromLLSD rejects it), but treat it as "nothing to show" rather than trusting that.
     const bool want_active = enabled && mgr->hasAsset() && !mgr->asset().mTracks.empty();
 
     if (!want_active)
@@ -154,21 +134,15 @@ void SSAtmoEnvApplier::apply()
     }
     else if (!LLEnvironment::instance().hasEnvironment(LLEnvironment::ENV_LOCAL))
     {
-        // Something else cleared ENV_LOCAL out from under us (Personal
-        // Lighting's reset button does exactly that) - reclaim it. While
-        // the master switch is on and an asset is loaded, Atmo Magic owns
+        // Something else cleared ENV_LOCAL out from under us (Personal Lighting's reset button does exactly that) - reclaim it. While the master switch is on and an asset is loaded, Atmo Magic owns
         // the local slot.
         install();
     }
 
     const SSAtmoEnvAsset& asset = mgr->asset();
 
-    // Same resolve call the precipitation bridge makes, with the same
-    // prev-z/teleport bookkeeping (region change or an implausibly large
-    // single-frame jump both count as "teleported" - there is no
-    // dedicated completion event to hook instead). Tracked in our own
-    // members rather than shared with SSAtmoMagic's copy: that state is
-    // the bridge's private bookkeeping, not a published service.
+    // Same resolve call the precipitation bridge makes, with the same prev-z/teleport bookkeeping (region change or an implausibly large single-frame jump both count as "teleported" - there is no
+    // dedicated completion event to hook instead). Tracked in our own members rather than shared with SSAtmoMagic's copy: that state is the bridge's private bookkeeping, not a published service.
     const F32 world_z = LLViewerCamera::getInstance()->getOrigin().mV[VZ];
     LLViewerRegion* region = gAgent.getRegion();
     const LLUUID region_id = region ? region->getRegionID() : LLUUID::null;
@@ -184,12 +158,8 @@ void SSAtmoEnvApplier::apply()
     mPrevWorldZValid = true;
     mPrevRegionID = region_id;
 
-    // Only the primary track is rendered: cross-track sky/water blending
-    // on a soft crossing is deferred per the design doc (precipitation
-    // already fades; sky cuts), so mNeighborTrack/mNeighborWeight are
-    // deliberately ignored here. When the primary flips, values simply
-    // change this frame - the change-detection caches make that a one-off
-    // burst of setter calls, not a stall.
+    // Only the primary track is rendered: cross-track sky/water blending on a soft crossing is deferred per the design doc (precipitation already fades; sky cuts), so mNeighborTrack/mNeighborWeight
+    // are deliberately ignored here. When the primary flips, values simply change this frame - the change-detection caches make that a one-off burst of setter calls, not a stall.
     S32 track_index = blend.mPrimaryTrack;
     if (track_index < 0 || track_index >= static_cast<S32>(asset.mTracks.size()))
     {
@@ -197,18 +167,15 @@ void SSAtmoEnvApplier::apply()
     }
     const SSAtmoEnvTrack& track = asset.mTracks[static_cast<size_t>(track_index)];
 
-    // The floater's preview scrubber overrides the wall clock while it is
-    // looking - scrubbing the editor scrubs the actual sky.
+    // The floater's preview scrubber overrides the wall clock while it is looking - scrubbing the editor scrubs the actual sky.
     const F64 phase = mgr->hasPreviewPhaseOverride()
         ? mgr->previewPhaseOverride()
         : track.currentDayCyclePhase();
 
     const SSAtmoEnvSkyModulation mod = computeModulation(track, phase);
 
-    // The overlay's labels are HUD objects with a life of their own, so
-    // switching the overlay off has to take them with it - otherwise they
-    // hang in the world at their last position, which is what "the text is
-    // still visible but just not updating" was.
+    // The overlay's labels are HUD objects with a life of their own, so switching the overlay off has to take them with it - otherwise they hang in the world at their last position, which is what
+    // "the text is still visible but just not updating" was.
     {
         static LLCachedControl<bool> overlay(gSavedSettings, "SSAtmoPlanetaryDebugOverlay", false);
         if (!overlay && !mDebugLabels.empty())
@@ -227,18 +194,14 @@ void SSAtmoEnvApplier::apply()
     }
     else
     {
-        // Water disabled on this track: apply sky only and park the
-        // installed water instance on EEP's stock defaults. Uninstalling
-        // the water half instead would mean install/uninstall churn on
-        // every track cross between water and no-water tracks - default
-        // water is the lesser evil.
+        // Water disabled on this track: apply sky only and park the installed water instance on EEP's stock defaults. Uninstalling the water half instead would mean install/uninstall churn on every
+        // track cross between water and no-water tracks - default water is the lesser evil.
         applyWaterDefaults();
         setWaterRendering(false);
     }
 }
 
-// The inverse of celestialDiscScale, so the overlay can report the angular
-// size that produced a slot's scale without the caller having to keep it.
+// The inverse of celestialDiscScale, so the overlay can report the angular size that produced a slot's scale without the caller having to keep it.
 F32 SSAtmoEnvApplier::celestialAngularFromScale(F32 scale)
 {
     return scale * 0.53f;
@@ -261,17 +224,14 @@ void SSAtmoEnvApplier::renderCelestialDebug()
         return;
     }
 
-    // Labels live at a fixed distance rather than out at the real shell:
-    // HUD text scales with distance, and a name a kilometre away is a
-    // pixel. The ray is what says which way the body actually is; the label
-    // only has to sit on that ray.
+    // Labels live at a fixed distance rather than out at the real shell: HUD text scales with distance, and a name a kilometre away is a pixel. The ray is what says which way the body actually is;
+    // the label only has to sit on that ray.
     static const F32 LABEL_DIST_M = 24.f;
     static const F32 RAY_DIST_M = 40.f;
 
     const LLVector3 origin = LLViewerCamera::getInstance()->getOrigin();
 
-    // One label per mark, reused frame to frame - creating and killing HUD
-    // objects every frame would churn the HUD list for no reason.
+    // One label per mark, reused frame to frame - creating and killing HUD objects every frame would churn the HUD list for no reason.
     while ((S32)mDebugLabels.size() < (S32)mDebugMarks.size())
     {
         LLHUDText* text = static_cast<LLHUDText*>(
@@ -299,8 +259,7 @@ void SSAtmoEnvApplier::renderCelestialDebug()
     {
         const DebugMark& mark = mDebugMarks[i];
 
-        // Warm for the sun slot, cool for the moon slot, green for
-        // everything else - the same reading the designer's own list gives.
+        // Warm for the sun slot, cool for the moon slot, green for everything else - the same reading the designer's own list gives.
         LLColor4 colour(0.4f, 1.f, 0.5f, 0.9f);
         if (mark.mIsSunSlot) colour = LLColor4(1.f, 0.85f, 0.3f, 0.9f);
         else if (mark.mIsMoonSlot) colour = LLColor4(0.6f, 0.75f, 1.f, 0.9f);
@@ -309,8 +268,7 @@ void SSAtmoEnvApplier::renderCelestialDebug()
         gGL.vertex3fv(origin.mV);
         gGL.vertex3fv((origin + mark.mDirection * RAY_DIST_M).mV);
 
-        // A short cross at the end, so the ray reads as pointing AT
-        // something rather than merely away from here.
+        // A short cross at the end, so the ray reads as pointing AT something rather than merely away from here.
         const LLVector3 tip = origin + mark.mDirection * RAY_DIST_M;
         LLVector3 side = mark.mDirection % LLVector3::z_axis;
         if (side.normalize() < 0.001f) side = LLVector3::x_axis;
@@ -323,9 +281,7 @@ void SSAtmoEnvApplier::renderCelestialDebug()
 
         if (i < mDebugLabels.size() && mDebugLabels[i].notNull())
         {
-            // Elevation and azimuth as an author reads a sky: up from the
-            // horizon, and round from north. Both come from the direction
-            // the renderer is actually using, so a body drawn in the wrong
+            // Elevation and azimuth as an author reads a sky: up from the horizon, and round from north. Both come from the direction the renderer is actually using, so a body drawn in the wrong
             // place reads wrong here too - which is the point.
             const F32 elev = RAD_TO_DEG * asinf(llclamp(mark.mDirection.mV[VZ], -1.f, 1.f));
             F32 azim = RAD_TO_DEG * atan2f(mark.mDirection.mV[VX], mark.mDirection.mV[VY]);
@@ -344,18 +300,10 @@ void SSAtmoEnvApplier::renderCelestialDebug()
             mDebugLabels[i]->setPositionAgent(origin + mark.mDirection * LABEL_DIST_M);
         }
     }
-    // The sun and moon quads AS LLVOSKY ACTUALLY BUILT THEM, so a
-    // disagreement between where a body is supposed to be and where its disc
-    // is drawn can be read off the screen instead of reasoned about.
-    //
-    // LLHeavenBody::corner() holds the quad's camera-relative corners, which
-    // is what went into the vertex buffer (before the pass's own translate),
-    // so the mean of them is the disc's centre and its direction is where
-    // the disc really points. If this ray sits on the authored one, the
-    // geometry is right and any visible offset is inside the disc TEXTURE -
-    // art whose bright part is not centred in its image will look displaced
-    // however correctly the quad is placed. If the two rays diverge, the
-    // geometry is stale or wrong, and the printed angle says by how much.
+    // The sun and moon quads AS LLVOSKY ACTUALLY BUILT THEM, so a disagreement between where a body is supposed to be and where its disc is drawn can be read off the screen instead of reasoned
+    // about. LLHeavenBody::corner() holds the quad's camera-relative corners, which is what went into the vertex buffer (before the pass's own translate), so the mean of them is the disc's centre
+    // and its direction is where the disc really points. If this ray sits on the authored one, the geometry is right and any visible offset is inside the disc TEXTURE - art whose bright part is not
+    // centred in its image will look displaced however correctly the quad is placed. If the two rays diverge, the geometry is stale or wrong, and the printed angle says by how much.
     if (gSky.mVOSkyp.notNull())
     {
         struct { const LLHeavenBody* mBody; bool mIsSun; } quads[2] = {
@@ -371,8 +319,7 @@ void SSAtmoEnvApplier::renderCelestialDebug()
             centre *= 0.25f;
             if (centre.normalize() < 0.0001f) continue;
 
-            // White, and shorter than the authored rays, so the pair reads as
-            // "authored" and "as drawn" rather than as two more bodies.
+            // White, and shorter than the authored rays, so the pair reads as "authored" and "as drawn" rather than as two more bodies.
             const LLColor4 colour(1.f, 1.f, 1.f, 0.7f);
             gGL.color4fv(colour.mV);
             gGL.vertex3fv(origin.mV);
@@ -407,10 +354,8 @@ void SSAtmoEnvApplier::renderCelestialDebug()
 
 void SSAtmoEnvApplier::setWaterRendering(bool enabled)
 {
-    // Only ever undo our own change, and only ever make one: the control
-    // is a global the user (and the EEP derender path) can also touch, so
-    // "toggle it to what I want" would fight them. mWaterDerendered is the
-    // record of what we did, not of what the pipeline currently says.
+    // Only ever undo our own change, and only ever make one: the control is a global the user (and the EEP derender path) can also touch, so "toggle it to what I want" would fight them.
+    // mWaterDerendered is the record of what we did, not of what the pipeline currently says.
     if (!enabled)
     {
         if (!mWaterDerendered && LLPipeline::hasRenderTypeControl(LLPipeline::RENDER_TYPE_WATER))
@@ -433,18 +378,14 @@ void SSAtmoEnvApplier::setWaterRendering(bool enabled)
 
 void SSAtmoEnvApplier::activate()
 {
-    // One settings pair for the whole active span, mutated in place each
-    // frame - the DayInstance holds these same shared_ptrs, so setters
-    // plus update() propagate without reinstalling.
+    // One settings pair for the whole active span, mutated in place each frame - the DayInstance holds these same shared_ptrs, so setters plus update() propagate without reinstalling.
     mSky = LLSettingsVOSky::buildDefaultSky();
     mWater = LLSettingsVOWater::buildDefaultWater();
 
-    // Pristine copy: the value source for applyWaterDefaults() and the
-    // null-normal-map fallback, instead of hardcoding EEP's numbers here.
+    // Pristine copy: the value source for applyWaterDefaults() and the null-normal-map fallback, instead of hardcoding EEP's numbers here.
     mDefaultWater = LLSettingsVOWater::buildDefaultWater();
 
-    // The schema stores glow size/focus only (packed r/b); the packed
-    // colour's g comes from the default sky and is preserved as-is.
+    // The schema stores glow size/focus only (packed r/b); the packed colour's g comes from the default sky and is preserved as-is.
     mGlowG = mSky->getGlow().mV[1];
 
     install();
@@ -453,18 +394,14 @@ void SSAtmoEnvApplier::activate()
 
 void SSAtmoEnvApplier::install()
 {
-    // Fresh (or re-claimed) instances: nothing about their current field
-    // values is known any more - Personal Lighting may even have live-
-    // edited them while sharing the slot - so every field re-applies once.
+    // Fresh (or re-claimed) instances: nothing about their current field values is known any more - Personal Lighting may even have live- edited them while sharing the slot - so every field
+    // re-applies once.
     mSkyCacheValid = false;
     mCelestialCacheValid = false;
     mWaterCacheValid = false;
 
-    // The same take-over Personal Lighting's captureCurrentEnvironment()
-    // performs: install into ENV_LOCAL and select it instantly. If a
-    // Personal Lighting session currently owns ENV_LOCAL this stomps it -
-    // accepted and documented in the design doc; the local slot has no
-    // arbitration and both features are explicit user opt-ins.
+    // The same take-over Personal Lighting's captureCurrentEnvironment() performs: install into ENV_LOCAL and select it instantly. If a Personal Lighting session currently owns ENV_LOCAL this stomps
+    // it - accepted and documented in the design doc; the local slot has no arbitration and both features are explicit user opt-ins.
     LLEnvironment& env = LLEnvironment::instance();
     env.setEnvironment(LLEnvironment::ENV_LOCAL, mSky, mWater);
     env.setSelectedEnvironment(LLEnvironment::ENV_LOCAL, LLEnvironment::TRANSITION_INSTANT);
@@ -472,23 +409,18 @@ void SSAtmoEnvApplier::install()
 
 void SSAtmoEnvApplier::deactivate()
 {
-    // The exact release pair Personal Lighting's reset path uses
-    // (LLFloaterEnvironmentAdjust::onButtonReset): clearing ENV_LOCAL and
-    // re-selecting it makes the selection fall through to whatever the
+    // The exact release pair Personal Lighting's reset path uses (LLFloaterEnvironmentAdjust::onButtonReset): clearing ENV_LOCAL and re-selecting it makes the selection fall through to whatever the
     // parcel/region would otherwise show, with the default transition.
     LLEnvironment::instance().clearEnvironment(LLEnvironment::ENV_LOCAL);
     LLEnvironment::instance().setSelectedEnvironment(LLEnvironment::ENV_LOCAL);
 
-    // Before dropping the settings: a track with water disabled may have
-    // switched the water render type off, and leaving Atmo Magic must not
-    // leave the world's water switched off behind it.
+    // Before dropping the settings: a track with water disabled may have switched the water render type off, and leaving Atmo Magic must not leave the world's water switched off behind it.
     setWaterRendering(true);
 
     mSky.reset();
     mWater.reset();
     mDefaultWater.reset();
-    // The draw pool gates on this vector's emptiness, so clearing it here
-    // is what actually switches the billboard pass off.
+    // The draw pool gates on this vector's emptiness, so clearing it here is what actually switches the billboard pass off.
     mBillboards.clear();
     mDebugMarks.clear();
     releaseDebugLabels();
@@ -503,26 +435,21 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
 {
     const SSAtmoEnvWeatherInfluence& influence = track.mWeatherInfluence;
 
-    // Off means off: no weather resolution, no trail bookkeeping, and an
-    // identity modulation - so a world with influence disabled renders
-    // precisely its authored sky and pays nothing for the feature.
+    // Off means off: no weather resolution, no trail bookkeeping, and an identity modulation - so a world with influence disabled renders precisely its authored sky and pays nothing for the feature.
     if (!influence.mEnabled)
     {
         mWasPrecipitating = false;
         mSecondsSinceRainStopped = -1.f;
         mLastModulation = SSAtmoEnvSkyModulation();
-        // mCloudDriftM deliberately keeps its value: it is a position, not a
-        // rate, and zeroing it here would snap the whole cloud layer back to
-        // where it started the moment influence was switched off.
+        // mCloudDriftM deliberately keeps its value: it is a position, not a rate, and zeroing it here would snap the whole cloud layer back to where it started the moment influence was switched
+        // off.
         return mLastModulation;
     }
 
     const SSAtmoEnvWeatherState state = SSAtmoEnvWeatherResolver::resolve(track.mWeather, phase);
 
     //---------------------------------------------------------------
-    // Rain-stop trail. Wall clock rather than frame count: the window is
-    // stated in seconds because it is a weather phenomenon, not a
-    // rendering one, and it should decay at the same rate on a machine
+    // Rain-stop trail. Wall clock rather than frame count: the window is stated in seconds because it is a weather phenomenon, not a rendering one, and it should decay at the same rate on a machine
     // running at 20fps as at 200.
     //---------------------------------------------------------------
     const F64 now = LLTimer::getElapsedSeconds();
@@ -533,9 +460,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
         && state.mPrecipitationIntensity > 0.f;
     if (precipitating)
     {
-        // Raining now: no window open, and none pending. A shower that
-        // restarts resets the clock rather than resuming it - the bow
-        // belongs to the END of a shower.
+        // Raining now: no window open, and none pending. A shower that restarts resets the clock rather than resuming it - the bow belongs to the END of a shower.
         mWasPrecipitating = true;
         mSecondsSinceRainStopped = -1.f;
     }
@@ -550,18 +475,15 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
     }
 
     SSAtmoEnvSkyWeatherInput in;
-    // The raw cube alongside the resolved state: the resolver's bands are
-    // right for particles and forecast text, but a sky that steps between
-    // four convection phases reads as a bug (see the input struct).
+    // The raw cube alongside the resolved state: the resolver's bands are right for particles and forecast text, but a sky that steps between four convection phases reads as a bug (see the input
+    // struct).
     in.mMoisture = llclamp(track.mWeather.mMoisture.valueAt(phase), 0.f, 1.f);
     in.mConvection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
     in.mTemperatureC = track.mWeather.mTemperatureC.valueAt(phase);
     in.mWindHeadingDeg = state.mWindHeading;
     in.mWindSpeedMS = state.mWindSpeed;
     in.mOktaCloudCover = state.mOktaCloudCover;
-    // The cloud layer's geometry, so the wind mapping can work out what a
-    // given wind speed should LOOK like on this particular sky - see
-    // SSAtmoEnvSkyModulation::cloudScrollRate.
+    // The cloud layer's geometry, so the wind mapping can work out what a given wind speed should LOOK like on this particular sky - see SSAtmoEnvSkyModulation::cloudScrollRate.
     in.mMaxAltitudeM = track.mAtmosphere.mMaxAltitude.valueAt(phase);
     in.mCloudScale = track.mCloudDome.mScale.valueAt(phase);
     in.mPrecipitationIntensity = state.mPrecipitationIntensity;
@@ -575,10 +497,8 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
 
     mLastModulation = SSAtmoEnvSkyWeatherModulator::compute(in, influence);
 
-    // Integrate the drift. Wall clock rather than the day-cycle phase: this
-    // is the sky physically moving over the world, so it advances at the
-    // rate the world does even while an editor's scrubber holds the phase
-    // still.
+    // Integrate the drift. Wall clock rather than the day-cycle phase: this is the sky physically moving over the world, so it advances at the rate the world does even while an editor's scrubber
+    // holds the phase still.
     const F32 drift_dt = static_cast<F32>(llclamp(elapsed, 0.0, 0.25));
     mCloudDriftM += mLastModulation.mDriftVelocity * drift_dt;
 
@@ -616,10 +536,8 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
 
     const SSAtmoEnvAtmosphere& atm = track.mAtmosphere;
 
-    // Write-if-changed: the settings setters mark the whole object dirty,
-    // which re-uploads shader uniforms downstream, so identical values
-    // are compared away. Exact compares suffice - the same keyframe
-    // evaluation at the same phase is bit-identical frame to frame.
+    // Write-if-changed: the settings setters mark the whole object dirty, which re-uploads shader uniforms downstream, so identical values are compared away. Exact compares suffice - the same
+    // keyframe evaluation at the same phase is bit-identical frame to frame.
     bool dirty = false;
     const bool valid = mSkyCacheValid;
     auto put = [&dirty, valid](auto& cache, const auto& value, auto&& setter)
@@ -632,13 +550,9 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         }
     };
 
-    // Colours are stored in LLSettingsSky's own space (the schema's
-    // defaults are the settings' own), so no slider scaling applies here
-    // - only glow converts, below.
-    // Modulated fields evaluate their keyframes exactly as authored and
-    // are then bent by this frame's weather - see SSAtmoEnvSkyModulation.
-    // The cache still holds the FINAL value, so the write-if-changed test
-    // stays honest: weather changing a value counts as a change.
+    // Colours are stored in LLSettingsSky's own space (the schema's defaults are the settings' own), so no slider scaling applies here - only glow converts, below. Modulated fields evaluate their
+    // keyframes exactly as authored and are then bent by this frame's weather - see SSAtmoEnvSkyModulation. The cache still holds the FINAL value, so the write-if-changed test stays honest: weather
+    // changing a value counts as a change.
     put(mLastAmbient, mod.ambientColor(atm.mAmbientColor.valueAt(phase)),
         [this](const LLColor3& v) { mSky->setAmbientColor(v); });
     put(mLastBlueHorizon, atm.mBlueHorizon.valueAt(phase),
@@ -664,24 +578,17 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         [this](F32 v) { mSky->setDistanceMultiplier(v); });
     put(mLastMaxY, atm.mMaxAltitude.valueAt(phase),
         [this](F32 v) { mSky->setMaxY(v); });
-    // Set unconditionally, exactly like EEP's own commit handler - see
-    // SSAtmoEnvAtmosphere::mReflectionProbeAmbiance on why there is no
-    // PBR-mode gate here.
+    // Set unconditionally, exactly like EEP's own commit handler - see SSAtmoEnvAtmosphere::mReflectionProbeAmbiance on why there is no PBR-mode gate here.
     put(mLastProbeAmbiance, atm.mReflectionProbeAmbiance.valueAt(phase),
         [this](F32 v) { mSky->setReflectionProbeAmbiance(v); });
     put(mLastGamma, mod.sceneGamma(atm.mSceneGamma.valueAt(phase)),
         [this](F32 v) { mSky->setGamma(v); });
     put(mLastStarBrightness, atm.mStarBrightness.valueAt(phase),
         [this](F32 v) { mSky->setStarBrightness(v); });
-    // The moon disc's own luminance. This is the only writer: applyCelestial
-    // drives the moon's rotation/scale/texture but deliberately never its
-    // brightness - that is an appearance dial, not planetary structure.
-    // Scaled by how lit the body in the moon slot actually is - its phase
-    // times whatever the home body's shadow leaves of it - so the
-    // Atmosphere tab's dial stays the master while a new moon lights the
-    // world less than a full one. That factor is resolved in
-    // applyCelestial, which runs after this, so it is last frame's; the
-    // phase moves over minutes, so a frame of lag is not observable.
+    // The moon disc's own luminance. This is the only writer: applyCelestial drives the moon's rotation/scale/texture but deliberately never its brightness - that is an appearance dial, not
+    // planetary structure. Scaled by how lit the body in the moon slot actually is - its phase times whatever the home body's shadow leaves of it - so the Atmosphere tab's dial stays the master
+    // while a new moon lights the world less than a full one. That factor is resolved in applyCelestial, which runs after this, so it is last frame's; the phase moves over minutes, so a frame of lag
+    // is not observable.
     put(mLastMoonBrightness, atm.mMoonBrightness.valueAt(phase) * mMoonSlotBrightness,
         [this](F32 v) { mSky->setMoonBrightness(v); });
 
@@ -695,10 +602,8 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
                         glow_focus * SLIDER_SCALE_GLOW_B);
     put(mLastGlow, glow, [this](const LLColor3& v) { mSky->setGlow(v); });
 
-    // The Sky Dome - the legacy cirrus layer's full parameter set (see
-    // SSAtmoEnvCloudDome). Note "coverage" lands on setCloudShadow: that
-    // is genuinely the field EEP's own Cloud Coverage slider drives (see
-    // llpaneleditsky.cpp's onCloudCoverageChanged).
+    // The Sky Dome - the legacy cirrus layer's full parameter set (see SSAtmoEnvCloudDome). Note "coverage" lands on setCloudShadow: that is genuinely the field EEP's own Cloud Coverage slider
+    // drives (see llpaneleditsky.cpp's onCloudCoverageChanged).
     const SSAtmoEnvCloudDome& dome = track.mCloudDome;
 
     put(mLastCloudColor, dome.mColor.valueAt(phase),
@@ -712,8 +617,7 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastCloudScroll, mod.cloudScrollRate(dome.mScrollRate.valueAt(phase)),
         [this](const LLVector2& v) { mSky->setCloudScrollRate(v); });
 
-    // Three separately keyframable scalars fold into each packed setter,
-    // same as the water wavelet triple.
+    // Three separately keyframable scalars fold into each packed setter, same as the water wavelet triple.
     const LLColor3 cloud_density(dome.mDensityX.valueAt(phase),
                                  dome.mDensityY.valueAt(phase),
                                  dome.mDensityD.valueAt(phase));
@@ -726,11 +630,8 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastCloudDetail, cloud_detail,
         [this](const LLColor3& v) { mSky->setCloudPosDensity2(v); });
 
-    // A null noise texture in the schema means "the default cloud noise" -
-    // same guard idiom as the water normal map: actually setting null
-    // would leave the layer with no noise texture at all, and mapping null
-    // to the default makes a keyframe stepping back to null restore the
-    // stock look rather than keeping the last custom map.
+    // A null noise texture in the schema means "the default cloud noise" - same guard idiom as the water normal map: actually setting null would leave the layer with no noise texture at all, and
+    // mapping null to the default makes a keyframe stepping back to null restore the stock look rather than keeping the last custom map.
     LLUUID cloud_noise = dome.mNoiseTexture.valueAt(phase);
     if (cloud_noise.isNull())
     {
@@ -780,11 +681,8 @@ void SSAtmoEnvApplier::applyWater(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastFresnelOffset, water.mFresnelOffset.valueAt(phase),
         [this](F32 v) { mWater->setFresnelOffset(v); });
 
-    // A null normal map in the schema means "the default map" - actually
-    // setting null would leave the surface with no normal texture at all,
-    // so it maps to EEP's stock water normal instead. That also makes a
-    // keyframe stepping back to null behave: it restores the default
-    // rather than silently keeping the last custom map.
+    // A null normal map in the schema means "the default map" - actually setting null would leave the surface with no normal texture at all, so it maps to EEP's stock water normal instead. That also
+    // makes a keyframe stepping back to null behave: it restores the default rather than silently keeping the last custom map.
     LLUUID normal_map = water.mNormalMap.valueAt(phase);
     if (normal_map.isNull())
     {
@@ -793,8 +691,7 @@ void SSAtmoEnvApplier::applyWater(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastNormalMap, normal_map,
         [this](const LLUUID& v) { mWater->setNormalMapID(v); });
 
-    // Three separately keyframable wavelet scalars fold into the one
-    // vector setter.
+    // Three separately keyframable wavelet scalars fold into the one vector setter.
     const LLVector3 normal_scale(water.mNormalScaleX.valueAt(phase),
                                  water.mNormalScaleY.valueAt(phase),
                                  water.mNormalScaleZ.valueAt(phase));
@@ -813,9 +710,7 @@ void SSAtmoEnvApplier::applyWater(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastBlur, water.mBlurMultiplier.valueAt(phase),
         [this](F32 v) { mWater->setBlurMultiplier(v); });
 
-    // Water HEIGHT (the tide) is deliberately not applied: the plane's
-    // height is region state, not a settings field, and overriding it
-    // client-side fights the sim - see the design doc.
+    // Water HEIGHT (the tide) is deliberately not applied: the plane's height is region state, not a settings field, and overriding it client-side fights the sim - see the design doc.
 
     mWaterCacheValid = true;
 
@@ -832,9 +727,7 @@ void SSAtmoEnvApplier::applyWaterDefaults()
         return;
     }
 
-    // Same write-if-changed walk as applyWater, sourcing every value from
-    // the pristine default instance: after the first frame on a no-water
-    // track this is pure compares, no setter traffic.
+    // Same write-if-changed walk as applyWater, sourcing every value from the pristine default instance: after the first frame on a no-water track this is pure compares, no setter traffic.
     bool dirty = false;
     const bool valid = mWaterCacheValid;
     auto put = [&dirty, valid](auto& cache, const auto& value, auto&& setter)
@@ -889,11 +782,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
 
     const SSAtmoEnvPlanetary& planetary = track.mPlanetary;
 
-    // A track with no bodies, or no home body to observe the sky from,
-    // behaves exactly like zero emitters - per the design doc, "No
-    // emitters = a dim, sun-below-horizon sky rather than a fallback
-    // sun". (resolveSky() has no vantage point without a home, so
-    // emitters without one could not be placed anyway.)
+    // A track with no bodies, or no home body to observe the sky from, behaves exactly like zero emitters - per the design doc, "No emitters = a dim, sun-below-horizon sky rather than a fallback
+    // sun". (resolveSky() has no vantage point without a home, so emitters without one could not be placed anyway.)
     const S32 home_index = planetary.homeBodyIndex();
     std::vector<S32> emitters;
     if (home_index >= 0)
@@ -901,9 +791,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         emitters = planetary.lightEmitterIndices();
     }
 
-    // Obliquity gives the world its seasons; latitude says where on it the
-    // observer is standing. They were one field once - see
-    // SSAtmoEnvCelestialBody::mLatitudeDeg.
+    // Obliquity gives the world its seasons; latitude says where on it the observer is standing. They were one field once - see SSAtmoEnvCelestialBody::mLatitudeDeg.
     const F32 tilt_deg = (home_index >= 0)
         ? planetary.mBodies[static_cast<size_t>(home_index)].mAxialTiltDeg
         : 0.f;
@@ -911,51 +799,38 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         ? planetary.mBodies[static_cast<size_t>(home_index)].mLatitudeDeg
         : 0.f;
 
-    // The celestial pole, in the (east, north, up) frame resolveObserverDirection
-    // hands back. It is (0,0,1) in the equatorial frame, so its components
-    // here are its dots with those three axes - which come out as due north
-    // at an elevation of the latitude, as they should.
+    // The celestial pole, in the (east, north, up) frame resolveObserverDirection hands back. It is (0,0,1) in the equatorial frame, so its components here are its dots with those three axes - which
+    // come out as due north at an elevation of the latitude, as they should.
     {
         const F32 lat = lat_deg * DEG_TO_RAD;
         mObserverPole.setVec(0.f, cosf(lat), sinf(lat));
     }
 
-    // Re-resolved from the asset every frame like everything else - no
-    // cached positions survive an asset replacement. Without a home there
-    // is no vantage point, so the sky resolves empty (and with it the
-    // billboard list below - a homeless track shows no bodies at all).
+    // Re-resolved from the asset every frame like everything else - no cached positions survive an asset replacement. Without a home there is no vantage point, so the sky resolves empty (and with it
+    // the billboard list below - a homeless track shows no bodies at all).
     const std::vector<SSAtmoEnvResolvedBody> sky_bodies = (home_index >= 0)
         ? SSAtmoEnvPlanetaryResolver::resolveSky(planetary)
         : std::vector<SSAtmoEnvResolvedBody>();
 
-    // World positions too: directions alone cannot say which side of a body
-    // the sun is on, and that is the whole of a phase. Same resolve the sky
-    // directions came from, so the two describe one arrangement of bodies.
+    // World positions too: directions alone cannot say which side of a body the sun is on, and that is the whole of a phase. Same resolve the sky directions came from, so the two describe one
+    // arrangement of bodies.
     const std::vector<LLVector3> world_pos = (home_index >= 0)
         ? SSAtmoEnvPlanetaryResolver::resolveWorldPositions(planetary)
         : std::vector<LLVector3>();
 
-    // Emitterless defaults, overwritten below when emitters exist. The
-    // moon points straight DOWN whenever no secondary emitter drives it
-    // (single-emitter and zero-emitter worlds alike): EEP casts moonlight
-    // whenever the moon's z >= 0 (getIsMoonUp), so leaving the default
-    // rotation would smuggle a phantom light source into a world whose
-    // author placed no such body.
-    // Reset each frame: an emitterless track must not keep dimming (or
-    // brightening) the moon slot with whatever body used to hold it.
+    // Emitterless defaults, overwritten below when emitters exist. The moon points straight DOWN whenever no secondary emitter drives it (single-emitter and zero-emitter worlds alike): EEP casts
+    // moonlight whenever the moon's z >= 0 (getIsMoonUp), so leaving the default rotation would smuggle a phantom light source into a world whose author placed no such body. Reset each frame: an
+    // emitterless track must not keep dimming (or brightening) the moon slot with whatever body used to hold it.
     mMoonSlotBrightness = 1.f;
 
-    // Which body ended up in the moon slot, hoisted out of the emitter
-    // block below so the illumination pass after it can ask.
+    // Which body ended up in the moon slot, hoisted out of the emitter block below so the illumination pass after it can ask.
     S32 moon_slot_body = -1;
 
-    // Which bodies took the two light slots, for the debug overlay's benefit
-    // - it labels them, so it has to be told rather than guess.
+    // Which bodies took the two light slots, for the debug overlay's benefit - it labels them, so it has to be told rather than guess.
     S32 debug_slot_sun = -1;
     S32 debug_slot_moon = -1;
 
-    // ...and for the disc shader, which needs to know where each slot's own
-    // star is in order to draw a terminator across it.
+    // ...and for the disc shader, which needs to know where each slot's own star is in order to draw a terminator across it.
     S32 sun_slot_body = -1;
 
 
@@ -973,23 +848,16 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     LLVector3 moon_dir = -LLVector3::z_axis;
     F32 sun_scale = 1.f;
     F32 moon_scale = 1.f;
-    // A null custom texture means "the stock disc" - same guard idiom as
-    // the water normal map: actually setting null on the moon would drop
-    // its texture entirely, and mapping null to the default also makes an
-    // emitter stepping back to null restore the stock look rather than
-    // keeping the last custom map. Which stock disc stands in follows the
-    // BODY's kind, not the slot it landed in - see the fallback below.
+    // A null custom texture means "the stock disc" - same guard idiom as the water normal map: actually setting null on the moon would drop its texture entirely, and mapping null to the default also
+    // makes an emitter stepping back to null restore the stock look rather than keeping the last custom map. Which stock disc stands in follows the BODY's kind, not the slot it landed in - see the
+    // fallback below.
     LLUUID sun_texture = LLSettingsSky::GetDefaultSunTextureId();
     LLUUID moon_texture = LLSettingsSky::GetDefaultMoonTextureId();
 
     if (!emitters.empty())
     {
-        // Which emitter takes which of EEP's two light slots is the
-        // resolver's call, not this file's - see resolveLightRoles(), whose
-        // comment carries the physical-diameter rule and the sky-entry
-        // indexing invariant that go with it. The editor's rise/set markers
-        // ask the same function, so what those markers annotate is by
-        // construction the body this code lights the world with.
+        // Which emitter takes which of EEP's two light slots is the resolver's call, not this file's - see resolveLightRoles(), whose comment carries the physical-diameter rule and the sky-entry
+        // indexing invariant that go with it. The editor's rise/set markers ask the same function, so what those markers annotate is by construction the body this code lights the world with.
         SSAtmoEnvResolvedBody sun_resolved;
         SSAtmoEnvResolvedBody moon_resolved;
         SSAtmoEnvPlanetaryResolver::resolveLightRoles(planetary, sky_bodies,
@@ -998,12 +866,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         const S32 moon_body = moon_resolved.mBodyIndex;
         moon_slot_body = moon_body;
 
-        // The null-texture fallback follows the BODY's kind, not the slot
-        // it landed in: a textureless SUN-kind body shows a sun disc in
-        // either slot, anything else the stock moon disc. Nuance for a
-        // sun-kind body in the MOON slot: the "default sun" id is null
-        // (EEP's built-in sun rendering), and setting null on the moon
-        // would drop its texture entirely - so the blank-sun disc ASSET
+        // The null-texture fallback follows the BODY's kind, not the slot it landed in: a textureless SUN-kind body shows a sun disc in either slot, anything else the stock moon disc. Nuance for a
+        // sun-kind body in the MOON slot: the "default sun" id is null (EEP's built-in sun rendering), and setting null on the moon would drop its texture entirely - so the blank-sun disc ASSET
         // stands in there instead.
         auto fallbackFor = [&planetary](S32 body_index, bool sun_slot) -> LLUUID
         {
@@ -1017,11 +881,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
             return LLSettingsSky::GetDefaultMoonTextureId();
         };
 
-        // Both slots get IDENTICAL treatment: the emitter's authored
-        // home-relative direction swept through the home body's diurnal
-        // rotation - so orbital radius, phase and inclination all visibly
-        // place the rendered sun exactly as the designer canvas shows,
-        // and dragging an emitter's phase moves the light in the sky.
+        // Both slots get IDENTICAL treatment: the emitter's authored home-relative direction swept through the home body's diurnal rotation - so orbital radius, phase and inclination all visibly
+        // place the rendered sun exactly as the designer canvas shows, and dragging an emitter's phase moves the light in the sky.
         if (sun_body >= 0)
         {
             const SSAtmoEnvCelestialBody& body =
@@ -1053,11 +914,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         }
     }
 
-    // Illumination geometry, shared by the billboards and by the moon slot.
-    //
-    // The lit body is whichever SUN-kind body is largest - not the body in
-    // EEP's sun slot, which is a rendering role and could be a moon on a
-    // world with no star at all. What lights a moon is a star.
+    // Illumination geometry, shared by the billboards and by the moon slot. The lit body is whichever SUN-kind body is largest - not the body in EEP's sun slot, which is a rendering role and could
+    // be a moon on a world with no star at all. What lights a moon is a star.
     S32 lamp = -1;
     for (size_t i = 0; i < planetary.mBodies.size(); ++i)
     {
@@ -1068,10 +926,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         }
     }
 
-    // Sun direction from a body, and how much of that sunlight reaches it.
-    // Both fall back to "lit from the observer's side, fully" when there is
-    // no star to be lit by: a world lit by nothing at all should show its
-    // bodies rather than a sky of black discs.
+    // Sun direction from a body, and how much of that sunlight reaches it. Both fall back to "lit from the observer's side, fully" when there is no star to be lit by: a world lit by nothing at all
+    // should show its bodies rather than a sky of black discs.
     auto illuminate = [&](S32 body_index, LLVector3& out_dir, F32& out_light)
     {
         out_dir = LLVector3::z_axis;
@@ -1082,18 +938,10 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         const LLVector3 body = world_pos[(size_t)body_index];
         const LLVector3 to_sun_world = world_pos[(size_t)lamp] - body;
 
-        // The inertial sky frame is shared: both this and resolveSky's
-        // directions are differences of the same world positions, so no
-        // rotation is needed to express one in the other.
-        //
-        // But every body direction is then swept through the home body's
-        // diurnal rotation before it is drawn, and this has to be swept with
-        // them. It is a direction in the sky, and the whole sky turns.
-        // Leaving it in the inertial frame while the quad's own axes are
-        // built from a rotated direction is comparing two different frames:
-        // the terminator ends up at the wrong angle across the disc and the
-        // phase intensity - a dot product between the two - comes out wrong
-        // with it.
+        // The inertial sky frame is shared: both this and resolveSky's directions are differences of the same world positions, so no rotation is needed to express one in the other. But every body
+        // direction is then swept through the home body's diurnal rotation before it is drawn, and this has to be swept with them. It is a direction in the sky, and the whole sky turns. Leaving it
+        // in the inertial frame while the quad's own axes are built from a rotated direction is comparing two different frames: the terminator ends up at the wrong angle across the disc and the
+        // phase intensity - a dot product between the two - comes out wrong with it.
         out_dir = to_sun_world;
         if (out_dir.normalize() < 0.0001f) { out_dir = LLVector3::z_axis; return; }
         out_dir = SSAtmoEnvPlanetaryResolver::resolveObserverDirection(
@@ -1110,15 +958,9 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         const F32 home_r = planetary.mBodies[(size_t)home_index].mDiameterM * 0.5f;
         if (home_r <= 0.f) return;
 
-        // A real shadow is a CONE, not a cylinder, and the cone matters: the
-        // star has an angular size, so the umbra narrows with distance while
-        // the penumbra widens. An earlier version used the planet's radius
-        // for both edges and faded over another radius, which put the total
-        // shadow far too wide and made anything near the anti-sun line
-        // almost black.
-        //
-        // The half-angle is the star's angular radius as seen from the home
-        // body, which is data we already have.
+        // A real shadow is a CONE, not a cylinder, and the cone matters: the star has an angular size, so the umbra narrows with distance while the penumbra widens. An earlier version used the
+        // planet's radius for both edges and faded over another radius, which put the total shadow far too wide and made anything near the anti-sun line almost black. The half-angle is the star's
+        // angular radius as seen from the home body, which is data we already have.
         const F32 star_r = planetary.mBodies[(size_t)lamp].mDiameterM * 0.5f;
         const F32 star_dist = (world_pos[(size_t)lamp] - home).magVec();
         const F32 spread = (star_dist > 1.f) ? (star_r / star_dist) * behind : 0.f;
@@ -1127,9 +969,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         const F32 penumbra = home_r + spread;            // partial, widening
         if (miss >= penumbra) return;                    // clean miss
 
-        // Inside the umbra it is not black: a planet with an atmosphere
-        // refracts light around its limb, which is what makes a real
-        // totally-eclipsed moon a dim red rather than invisible. Modelled as
+        // Inside the umbra it is not black: a planet with an atmosphere refracts light around its limb, which is what makes a real totally-eclipsed moon a dim red rather than invisible. Modelled as
         // a floor for now - the red is not, and would want its own tint.
         static const F32 ECLIPSE_FLOOR = 0.05f;
 
@@ -1153,12 +993,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         F32 moon_light = 1.f;
         illuminate(moon_slot_body, moon_sun_dir, moon_light);
 
-        // Phase as a scalar for EEP's own moonlight: a new moon lights
-        // nothing, a full moon lights the most. The terminator itself is
-        // drawn by the shader, which gets the direction rather than this.
-        //
-        // Both are skipped for a body the author has taken out of phase
-        // shading, or one lighting itself: neither has a phase to have.
+        // Phase as a scalar for EEP's own moonlight: a new moon lights nothing, a full moon lights the most. The terminator itself is drawn by the shader, which gets the direction rather than this.
+        // Both are skipped for a body the author has taken out of phase shading, or one lighting itself: neither has a phase to have.
         const SSAtmoEnvCelestialBody& slot_body =
             planetary.mBodies[static_cast<size_t>(moon_slot_body)];
         if (slot_body.mPhaseShaded && !slot_body.mEmissive)
@@ -1170,14 +1006,9 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         }
     }
 
-    // Every remaining body - not an emitter (those became the sun/moon
-    // above), not home (resolveSky() already excludes it) - is published
-    // for LLDrawPoolWLSky to draw as a camera-facing quad, per the design
-    // doc's "quad/billboard only for v1". Swept through the same diurnal
-    // rotation as the emitters so the whole sky rises and sets as one.
-    // The texture is published raw - a null means "no custom texture" and
-    // the draw pool substitutes a stock disc chosen by mIsSun, so a
-    // textureless body still reads as its kind rather than nothing.
+    // Every remaining body - not an emitter (those became the sun/moon above), not home (resolveSky() already excludes it) - is published for LLDrawPoolWLSky to draw as a camera-facing quad, per the
+    // design doc's "quad/billboard only for v1". Swept through the same diurnal rotation as the emitters so the whole sky rises and sets as one. The texture is published raw - a null means "no
+    // custom texture" and the draw pool substitutes a stock disc chosen by mIsSun, so a textureless body still reads as its kind rather than nothing.
     mBillboards.clear();
     for (const SSAtmoEnvResolvedBody& body : sky_bodies)
     {
@@ -1193,9 +1024,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         billboard.mDirection = SSAtmoEnvPlanetaryResolver::resolveObserverDirection(
             body.mDirection, tilt_deg, lat_deg, phase);
         billboard.mAngularDiameterDeg = body.mAngularDiameterDeg;
-        // Same invariant as resolvedFor() above: mBodies is addressed by
-        // the entry's own mBodyIndex, never by this loop's position -
-        // sky_bodies skips the home body, so positions and body indices
+        // Same invariant as resolvedFor() above: mBodies is addressed by the entry's own mBodyIndex, never by this loop's position - sky_bodies skips the home body, so positions and body indices
         // diverge.
         const SSAtmoEnvCelestialBody& authored =
             planetary.mBodies[static_cast<size_t>(body.mBodyIndex)];
@@ -1208,9 +1037,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         mBillboards.push_back(billboard);
     }
 
-    // The debug overlay's list, gathered from what was just applied rather
-    // than resolved a second time - an overlay that disagrees with the sky
-    // it is meant to be checking is worse than no overlay.
+    // The debug overlay's list, gathered from what was just applied rather than resolved a second time - an overlay that disagrees with the sky it is meant to be checking is worse than no overlay.
     mDebugMarks.clear();
     if (home_index >= 0)
     {
@@ -1242,19 +1069,15 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         }
         for (const SSAtmoEnvBillboard& bb : mBillboards)
         {
-            // Straight off the billboard's own body index. This used to
-            // re-sweep every resolved direction and match by distance, which
-            // failed intermittently on floating-point noise - so a body's
+            // Straight off the billboard's own body index. This used to re-sweep every resolved direction and match by distance, which failed intermittently on floating-point noise - so a body's
             // marker flickered in and out frame to frame.
             add_mark(bb.mBodyIndex, bb.mDirection, bb.mAngularDiameterDeg,
                      bb.mSunlight, false, false);
         }
     }
 
-    // Same write-if-changed walk as applySky, on the celestial cache's
-    // own validity flag (see the header). While time advances the sun and
-    // moon directions change every frame - correct and unavoidable for a
-    // keyframed phase - but scales and textures compare away.
+    // Same write-if-changed walk as applySky, on the celestial cache's own validity flag (see the header). While time advances the sun and moon directions change every frame - correct and
+    // unavoidable for a keyframed phase - but scales and textures compare away.
     bool dirty = false;
     const bool valid = mCelestialCacheValid;
     auto put = [&dirty, valid](auto& cache, const auto& value, auto&& setter)
@@ -1267,18 +1090,10 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         }
     };
 
-    // Changing these has to poke the sky into rebuilding its own geometry.
-    //
-    // LLVOSky bakes the sun and moon quads from hb.getRotation() inside
-    // updateGeometry, which only runs when the sky drawable is marked for
-    // rebuild - and that is throttled (UPDATE_EXPRY, a quarter second) and
-    // gated on the sky deciding it needs one at all. An authored sun that
-    // barely moves frame to frame never trips that test, so the disc sat at
-    // whatever direction was current the last time the sky felt like
-    // rebuilding, while a billboard is placed from the live direction every
-    // frame. Toggling a body between the two paths therefore moved it -
-    // which is the "the sun quad drifts from its original position" this
-    // fixes.
+    // Changing these has to poke the sky into rebuilding its own geometry. LLVOSky bakes the sun and moon quads from hb.getRotation() inside updateGeometry, which only runs when the sky drawable is
+    // marked for rebuild - and that is throttled (UPDATE_EXPRY, a quarter second) and gated on the sky deciding it needs one at all. An authored sun that barely moves frame to frame never trips that
+    // test, so the disc sat at whatever direction was current the last time the sky felt like rebuilding, while a billboard is placed from the live direction every frame. Toggling a body between the
+    // two paths therefore moved it - which is the "the sun quad drifts from its original position" this fixes.
     bool celestial_moved = false;
     put(mLastSunDir, sun_dir,
         [this, &celestial_moved](const LLVector3& v)
@@ -1303,9 +1118,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         mSky->update();
     }
 
-    // The sun and moon discs are geometry, and geometry the sky only
-    // rebuilds when asked. Asked, then - otherwise the disc lags the
-    // direction that was just written by up to a rebuild interval.
+    // The sun and moon discs are geometry, and geometry the sky only rebuilds when asked. Asked, then - otherwise the disc lags the direction that was just written by up to a rebuild interval.
     if (celestial_moved && gSky.mVOSkyp.notNull())
     {
         gSky.mVOSkyp->forceSkyUpdate();

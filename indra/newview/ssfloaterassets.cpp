@@ -76,8 +76,7 @@ bool SSFloaterAssets::postBuild()
     return true;
 }
 
-// The widget name for a footstep slot, built from the same keys the settings
-// and the preset both use.
+// The widget name for a footstep slot, built from the same keys the settings and the preset both use.
 std::string SSFloaterAssets::stepWidgetName(SSStepSurface surface, SSStepAction action)
 {
     return std::string("step_") + SSFootstepSounds::surfaceKey(surface)
@@ -120,10 +119,8 @@ void SSFloaterAssets::onCommitSteps()
 
 void SSFloaterAssets::onOpen(const LLSD& key)
 {
-    // Read on every open rather than once at build. These are global
-    // settings, so something else may have changed them since - and a stale
-    // list here would be written straight back over the new value the moment
-    // anything in this window was touched.
+    // Read on every open rather than once at build. These are global settings, so something else may have changed them since - and a stale list here would be written straight back over the new value
+    // the moment anything in this window was touched.
     getChild<SSSoundListCtrl>("loop_wind_light")->setList(
         ss_asset_list_parse(gSavedSettings.getString(WIND_LIGHT_SETTING)));
     getChild<SSSoundListCtrl>("loop_wind_strong")->setList(

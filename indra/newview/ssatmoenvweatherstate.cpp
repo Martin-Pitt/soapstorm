@@ -30,32 +30,23 @@
 
 namespace
 {
-    // Moisture below this reads as "bone dry, clear skies" per the design
-    // doc, rather than a technically-nonzero drizzle nobody would notice.
+    // Moisture below this reads as "bone dry, clear skies" per the design doc, rather than a technically-nonzero drizzle nobody would notice.
     const F32 CLEAR_MOISTURE_THRESHOLD = 0.02f;
 
-    // Named to avoid colliding with the overload set of LL's own global
-    // lerp() (LLColor4/LLVector3/... variants pulled in transitively via
-    // llviewerprecompiledheaders.h), which a plain "lerp(F32,F32,F32)" here
-    // was ambiguous against.
+    // Named to avoid colliding with the overload set of LL's own global lerp() (LLColor4/LLVector3/... variants pulled in transitively via llviewerprecompiledheaders.h), which a plain
+    // "lerp(F32,F32,F32)" here was ambiguous against.
     F32 ss_flerp(F32 a, F32 b, F32 t) { return a + (b - a) * t; }
 
     bool isDrizzleCapable(const std::string& type)
     {
-        // Drizzle is a droplet-size phenomenon specific to liquid
-        // precipitation - snow's lightest form is just light snow, not
-        // "snow drizzle". Freezing drizzle is real (METAR: FZDZ, distinct
-        // from FZRA/freezing rain) even though it renders identically to
-        // freezing rain here per the agreed simplification - same visual
-        // type, the difference is only in droplet size and where the
-        // banding sits.
+        // Drizzle is a droplet-size phenomenon specific to liquid precipitation - snow's lightest form is just light snow, not "snow drizzle". Freezing drizzle is real (METAR: FZDZ, distinct from
+        // FZRA/freezing rain) even though it renders identically to freezing rain here per the agreed simplification - same visual type, the difference is only in droplet size and where the banding
+        // sits.
         return type == "rain" || type == "freezing_rain";
     }
 
-    // WMO/METAR okta scale: 0 SKC (clear), 1-2 FEW, 3-4 SCT (scattered),
-    // 5-7 BKN (broken), 8 OVC (overcast). Derived from moisture as a
-    // coverage proxy - see the header note on this being provisional until
-    // it is the same number the volumetric cloud field (phase 7) computes.
+    // WMO/METAR okta scale: 0 SKC (clear), 1-2 FEW, 3-4 SCT (scattered), 5-7 BKN (broken), 8 OVC (overcast). Derived from moisture as a coverage proxy - see the header note on this being provisional
+    // until it is the same number the volumetric cloud field (phase 7) computes.
     S32 oktaFromMoisture(F32 moisture)
     {
         if (moisture <= CLEAR_MOISTURE_THRESHOLD) return 0;
@@ -90,11 +81,8 @@ SSAtmoEnvWeatherState::EConvectionPhase SSAtmoEnvWeatherResolver::convectionPhas
 // static
 std::string SSAtmoEnvWeatherResolver::derivePrecipitationType(F32 convection, F32 temperature_c)
 {
-    // Deliberately a pure function of the instantaneous cube, not a state
-    // machine - see the design doc's note on why the "Or:" formula was
-    // chosen over the alternative: a transitionary type (freezing rain
-    // decaying into sleet, say) would need memory of what it used to be,
-    // and every frame re-deriving from scratch avoids that entirely.
+    // Deliberately a pure function of the instantaneous cube, not a state machine - see the design doc's note on why the "Or:" formula was chosen over the alternative: a transitionary type (freezing
+    // rain decaying into sleet, say) would need memory of what it used to be, and every frame re-deriving from scratch avoids that entirely.
     if (temperature_c < -1.f)
     {
         return (convection > 0.7f) ? "blizzard" : "snow";
@@ -107,22 +95,12 @@ std::string SSAtmoEnvWeatherResolver::derivePrecipitationType(F32 convection, F3
     {
         return "slush_mix";
     }
-    // Hail wants a genuinely severe storm, not merely a convective one.
-    //
-    // Raised from 0.8, which turned out to be a fifth of the whole
-    // convection range - far too much of the sky's life spent hailing, when
-    // hail at the surface is rare even under storms that are perfectly
-    // capable of producing it. 0.92 puts it above where the anvil has fully
-    // formed (mAnvil ramps 0.6 to 0.9), so it falls only from towers that
-    // have reached the inversion and spread - which is the shape that
-    // actually makes it.
-    //
-    // It matters more than a naming detail, because hail does not just look
-    // different: it falls at 20 m/s against rain's 9.5 (see ssprecippreset),
-    // and slant is wind over fall speed. The same gale that lays rain flat
-    // barely tilts hail. Switching to it at 0.8 meant the windiest weather
-    // in the system was also the weather least able to show the wind.
-    return (convection > 0.92f) ? "hail" : "rain";
+    // Hail wants a genuinely severe storm, not merely a convective one. Raised from 0.8, which turned out to be a fifth of the whole convection range - far too much of the sky's life spent hailing,
+    // when hail at the surface is rare even under storms that are perfectly capable of producing it. 0.95 puts it above where the anvil has fully formed (mAnvil ramps 0.6 to 0.9), so it falls only
+    // from towers that have reached the inversion and spread - which is the shape that actually makes it. It matters more than a naming detail, because hail does not just look different: it falls at
+    // 20 m/s against rain's 9.5 (see ssprecippreset), and slant is wind over fall speed. The same gale that lays rain flat barely tilts hail. Switching to it at 0.8 meant the windiest weather in the
+    // system was also the weather least able to show the wind.
+    return (convection > 0.95f) ? "hail" : "rain";
 }
 
 // static
@@ -132,9 +110,7 @@ SSAtmoEnvPrecipIntensity SSAtmoEnvWeatherResolver::classifyIntensity(F32 moistur
 
     if (isDrizzleCapable(type))
     {
-        // A finer grade than the original two-band (Light/Heavy) split,
-        // which read as an abrupt jump rather than a gradient - drizzle
-        // itself gets three sub-bands too, per the note that drizzle is
+        // A finer grade than the original two-band (Light/Heavy) split, which read as an abrupt jump rather than a gradient - drizzle itself gets three sub-bands too, per the note that drizzle is
         // graded the same way rain is, not just "the step before rain".
         if (moisture <= 0.06f) return SSAtmoEnvPrecipIntensity::DRIZZLE_LIGHT;
         if (moisture <= 0.10f) return SSAtmoEnvPrecipIntensity::DRIZZLE;
@@ -145,9 +121,8 @@ SSAtmoEnvPrecipIntensity SSAtmoEnvWeatherResolver::classifyIntensity(F32 moistur
         return SSAtmoEnvPrecipIntensity::TORRENTIAL;
     }
 
-    // Snow/hail/sleet/slush_mix/blizzard: no drizzle-equivalent stage -
-    // "drizzle" specifically describes a liquid droplet size, and light
-    // snow already covers the same "barely falling" end of the range.
+    // Snow/hail/sleet/slush_mix/blizzard: no drizzle-equivalent stage - "drizzle" specifically describes a liquid droplet size, and light snow already covers the same "barely falling" end of the
+    // range.
     if (moisture <= 0.35f) return SSAtmoEnvPrecipIntensity::LIGHT;
     if (moisture <= 0.65f) return SSAtmoEnvPrecipIntensity::MODERATE;
     if (moisture <= 0.85f) return SSAtmoEnvPrecipIntensity::HEAVY;
@@ -241,8 +216,7 @@ std::string SSAtmoEnvWeatherResolver::generateForecastText(const SSAtmoEnvWeathe
     }
     else if (state.mConvectionPhase == SSAtmoEnvWeatherState::SEVERE)
     {
-        // Thunder gets first billing at this phase regardless of type -
-        // it's the defining feature of a supercell-grade sky, snow or rain.
+        // Thunder gets first billing at this phase regardless of type - it's the defining feature of a supercell-grade sky, snow or rain.
         const bool snowy = (state.mPrecipitationType == "snow" || state.mPrecipitationType == "blizzard");
         precip = snowy ? "Thundersnow" : "Thundery showers";
     }
@@ -277,10 +251,8 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
 
     state.mOktaCloudCover = oktaFromMoisture(moisture);
 
-    // Type and intensity are deliberately separate axes: moisture decides
-    // whether anything is falling at all, convection/temperature decide
-    // what it is once something is, and moisture again decides how much
-    // (the graded intensity band) once there's a type to grade.
+    // Type and intensity are deliberately separate axes: moisture decides whether anything is falling at all, convection/temperature decide what it is once something is, and moisture again decides
+    // how much (the graded intensity band) once there's a type to grade.
     if (moisture <= CLEAR_MOISTURE_THRESHOLD)
     {
         state.mPrecipitationType = std::string();
@@ -298,9 +270,7 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
         state.mPrecipitationIntensity = moisture;
         state.mIntensityBand = classifyIntensity(moisture, state.mPrecipitationType);
 
-        // Coarse-graded (per band, not continuous with moisture) - see the
-        // header note: a future particle system regenerates its drop
-        // texture only when this category changes, not every frame
+        // Coarse-graded (per band, not continuous with moisture) - see the header note: a future particle system regenerates its drop texture only when this category changes, not every frame
         // moisture drifts a fraction.
         switch (state.mIntensityBand)
         {
@@ -316,10 +286,8 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
         }
     }
 
-    // Gust: auto-derived from convection unless the track overrides it.
-    // Longer, gentler gaps at low convection; tight, wide-swinging bursts
-    // as it climbs toward supercell - the "boiling/churning" feel the
-    // design doc describes.
+    // Gust: auto-derived from convection unless the track overrides it. Longer, gentler gaps at low convection; tight, wide-swinging bursts as it climbs toward supercell - the "boiling/churning"
+    // feel the design doc describes.
     if (weather.mGustAuto)
     {
         state.mGustDepth  = convection;
@@ -340,9 +308,8 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     state.mLightningCharge  = weather.mLightningCharge;
     state.mLightningSparks  = weather.mLightningSparks;
 
-    // Lightning: Stable/Breezy never strike regardless of override, since
-    // there is nothing to override toward - the design doc is explicit that
-    // lightning probability is strictly 0% below the Turbulent phase.
+    // Lightning: Stable/Breezy never strike regardless of override, since there is nothing to override toward - the design doc is explicit that lightning probability is strictly 0% below the
+    // Turbulent phase.
     if (weather.mLightningAuto)
     {
         switch (state.mConvectionPhase)
@@ -367,9 +334,7 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     else
     {
         state.mLightningIntensity = weather.mLightningIntensity.valueAt(phase);
-        // An explicit override still respects the Stable/Breezy "never"
-        // rule - overriding the *intensity* is not the same as overriding
-        // whether lightning is possible at all in a flat overcast.
+        // An explicit override still respects the Stable/Breezy "never" rule - overriding the *intensity* is not the same as overriding whether lightning is possible at all in a flat overcast.
         if (state.mConvectionPhase == SSAtmoEnvWeatherState::TURBULENT)
         {
             state.mLightningIntervalMinSeconds = 30.f;

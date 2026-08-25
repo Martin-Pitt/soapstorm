@@ -37,9 +37,7 @@ LLVector3 SSAtmoEnvPlanetaryResolver::orbitOffset(F32 radius, F32 inclination_de
     const F32 phase_rad = phase_deg * DEG_TO_RAD;
     const F32 incl_rad  = inclination_deg * DEG_TO_RAD;
 
-    // A single fixed point on a circle of the given radius, tilted out of
-    // the reference plane by inclination - not a swept path, since nothing
-    // here is simulated.
+    // A single fixed point on a circle of the given radius, tilted out of the reference plane by inclination - not a swept path, since nothing here is simulated.
     const F32 x = radius * cosf(phase_rad);
     const F32 y = radius * sinf(phase_rad) * cosf(incl_rad);
     const F32 z = radius * sinf(phase_rad) * sinf(incl_rad);
@@ -53,17 +51,10 @@ std::vector<LLVector3> SSAtmoEnvPlanetaryResolver::resolveWorldPositions(const S
     std::vector<LLVector3> positions(n, LLVector3::zero);
     std::vector<bool> resolved(n, false);
 
-    // --- Suns first, in two waves: roots (a lone star, or the inner bound
-    // pair), then suns that orbit them (the canonical 3rd/4th). A bound
-    // pair is placed around its pair centre by mass ratio: the JUNIOR
-    // member's orbital radius is the pair separation (its phase sets the
-    // pair's orientation), and each member sits at
-    // separation * other_mass / total_mass from the centre, on opposite
-    // sides - the physical barycenter relation, so the pair's own
-    // mass-weighted barycenter is its centre by construction. The senior
-    // member's own orbital fields describe the PAIR's orbit around its
-    // anchor instead, which is what lets an outer pair orbit the inner
-    // pair as one unit.
+    // --- Suns first, in two waves: roots (a lone star, or the inner bound pair), then suns that orbit them (the canonical 3rd/4th). A bound pair is placed around its pair centre by mass ratio: the
+    // JUNIOR member's orbital radius is the pair separation (its phase sets the pair's orientation), and each member sits at separation * other_mass / total_mass from the centre, on opposite sides -
+    // the physical barycenter relation, so the pair's own mass-weighted barycenter is its centre by construction. The senior member's own orbital fields describe the PAIR's orbit around its anchor
+    // instead, which is what lets an outer pair orbit the inner pair as one unit.
     auto placePair = [&](S32 senior, S32 junior, const LLVector3& centre)
     {
         const SSAtmoEnvCelestialBody& a_body = planetary.mBodies[senior];
@@ -111,10 +102,8 @@ std::vector<LLVector3> SSAtmoEnvPlanetaryResolver::resolveWorldPositions(const S
         // A junior root pair member resolves with its senior above.
     }
 
-    // Wave 2: suns orbiting a resolved sun (the canonical outer single or
-    // outer pair). Their anchor is the parent's pair barycenter when the
-    // parent is paired - with wave 1's construction that barycenter is
-    // exactly the pair centre.
+    // Wave 2: suns orbiting a resolved sun (the canonical outer single or outer pair). Their anchor is the parent's pair barycenter when the parent is paired - with wave 1's construction that
+    // barycenter is exactly the pair centre.
     for (S32 i = 0; i < (S32)n; ++i)
     {
         if (!isSun(i) || resolved[i]) continue;
@@ -146,11 +135,8 @@ std::vector<LLVector3> SSAtmoEnvPlanetaryResolver::resolveWorldPositions(const S
         }
     }
 
-    // --- Shift the whole sun group so its collective mass-weighted
-    // barycenter lands exactly on the origin. THIS is what planets orbit:
-    // the system's true centre of mass, not any individual star - so a
-    // lopsided trinary leans its stars around the origin rather than
-    // dragging every planet's anchor off to one side.
+    // --- Shift the whole sun group so its collective mass-weighted barycenter lands exactly on the origin. THIS is what planets orbit: the system's true centre of mass, not any individual star - so
+    // a lopsided trinary leans its stars around the origin rather than dragging every planet's anchor off to one side.
     {
         LLVector3 weighted = LLVector3::zero;
         F32 total_mass = 0.f;
@@ -170,9 +156,7 @@ std::vector<LLVector3> SSAtmoEnvPlanetaryResolver::resolveWorldPositions(const S
         }
     }
 
-    // --- Planets: anchored at the origin (the sun group's barycenter, per
-    // the shift above) regardless of any stored parent - see
-    // SSAtmoEnvPlanetary::effectiveParent for why nothing is stored.
+    // --- Planets: anchored at the origin (the sun group's barycenter, per the shift above) regardless of any stored parent - see SSAtmoEnvPlanetary::effectiveParent for why nothing is stored.
     for (S32 i = 0; i < (S32)n; ++i)
     {
         const SSAtmoEnvCelestialBody& body = planetary.mBodies[i];
@@ -183,9 +167,7 @@ std::vector<LLVector3> SSAtmoEnvPlanetaryResolver::resolveWorldPositions(const S
         resolved[i] = true;
     }
 
-    // --- Moons: anchored at their planet. A moon whose parent is missing
-    // or unresolved (hand-edited notecard) anchors at the origin rather
-    // than being skipped - visible beats vanished.
+    // --- Moons: anchored at their planet. A moon whose parent is missing or unresolved (hand-edited notecard) anchors at the origin rather than being skipped - visible beats vanished.
     for (S32 i = 0; i < (S32)n; ++i)
     {
         const SSAtmoEnvCelestialBody& body = planetary.mBodies[i];
@@ -267,25 +249,18 @@ LLVector3 SSAtmoEnvPlanetaryResolver::resolveObserverDirection(const LLVector3& 
                                                                F32 obliquity_deg,
                                                                F32 latitude_deg, F64 phase)
 {
-    // 1. Ecliptic to equatorial: tip by the home body's obliquity about the
-    //    line where the two planes cross (+X here). This is the step that
-    //    gives a world seasons - a body sitting in its orbital plane comes
-    //    out north or south of the celestial equator depending on where in
-    //    the orbit it is.
+    // 1. Ecliptic to equatorial: tip by the home body's obliquity about the line where the two planes cross (+X here). This is the step that gives a world seasons - a body sitting in its orbital
+    // plane comes out north or south of the celestial equator depending on where in the orbit it is.
     LLQuaternion tilt;
     tilt.setAngleAxis(obliquity_deg * DEG_TO_RAD, LLVector3::x_axis);
     LLVector3 eq = ecliptic_dir * tilt;
 
-    // 2. The day: one turn about the celestial pole. NEGATIVE, so the sky
-    //    sweeps east to west and a body rises rather than sets as the phase
-    //    advances.
+    // 2. The day: one turn about the celestial pole. NEGATIVE, so the sky sweeps east to west and a body rises rather than sets as the phase advances.
     LLQuaternion spin;
     spin.setAngleAxis((F32)(-F_TWO_PI * phase), LLVector3::z_axis);
     eq = eq * spin;
 
-    // 3. Equatorial to horizon: project onto where the observer's own east,
-    //    north and up point. This is the step latitude lives in, and the
-    //    reason the sky turns at an angle anywhere but the equator.
+    // 3. Equatorial to horizon: project onto where the observer's own east, north and up point. This is the step latitude lives in, and the reason the sky turns at an angle anywhere but the equator.
     LLVector3 east, north, up;
     observerAxes(latitude_deg, east, north, up);
 
@@ -305,11 +280,8 @@ void SSAtmoEnvPlanetaryResolver::resolveLightRoles(const SSAtmoEnvPlanetary& pla
 
     if (planetary.homeBodyIndex() < 0) return;
 
-    // INVARIANT: sky_bodies skips the home body (and anything coincident
-    // with it), so an entry's position in the vector is NOT its body
-    // index - every correlation goes through mBodyIndex. A positional
-    // lookup here is exactly the "one body's direction with another
-    // body's texture" cross-wiring bug.
+    // INVARIANT: sky_bodies skips the home body (and anything coincident with it), so an entry's position in the vector is NOT its body index - every correlation goes through mBodyIndex. A
+    // positional lookup here is exactly the "one body's direction with another body's texture" cross-wiring bug.
     auto resolvedFor = [&sky_bodies](S32 body_index) -> const SSAtmoEnvResolvedBody*
     {
         for (const SSAtmoEnvResolvedBody& body : sky_bodies)
@@ -319,18 +291,10 @@ void SSAtmoEnvPlanetaryResolver::resolveLightRoles(const SSAtmoEnvPlanetary& pla
         return nullptr;
     };
 
-    // Slot assignment is by PHYSICAL diameter, not authoring order and
-    // deliberately not apparent size: a moon is usually far closer than a
-    // star, so a big-in-the-sky moon (Masser looming over Nirn) would
-    // out-subtend a distant giant sun and steal the sun slot the moment
-    // apparent size decided. Physical diameter is the stable
-    // discriminator - suns are big, moons are merely near. Ties break to
-    // the lower body index: lightEmitterIndices() is ascending, so the
-    // first-kept candidate wins by construction. An emitter with no
-    // resolveSky() entry is coincident with the home body - it has no
-    // direction to place, so it is treated as absent rather than handed a
-    // fabricated one (a home-star world's "sun" is the ground underfoot,
-    // not a sky object).
+    // Slot assignment is by PHYSICAL diameter, not authoring order and deliberately not apparent size: a moon is usually far closer than a star, so a big-in-the-sky moon (Masser looming over Nirn)
+    // would out-subtend a distant giant sun and steal the sun slot the moment apparent size decided. Physical diameter is the stable discriminator - suns are big, moons are merely near. Ties break
+    // to the lower body index: lightEmitterIndices() is ascending, so the first-kept candidate wins by construction. An emitter with no resolveSky() entry is coincident with the home body - it has
+    // no direction to place, so it is treated as absent rather than handed a fabricated one (a home-star world's "sun" is the ground underfoot, not a sky object).
     bool have_sun = false;
     for (const S32 emitter : planetary.lightEmitterIndices())
     {
@@ -365,11 +329,8 @@ void SSAtmoEnvPlanetaryResolver::resolveLightRoles(const SSAtmoEnvPlanetary& pla
 
 namespace
 {
-    // theta (the rotation angle resolveDiurnalDirection() applies) back to
-    // the phase that produces it, wrapped into [0, 1). Phase runs BACKWARDS
-    // against theta - the rotation is negative about the celestial axis so
-    // the sky sweeps east to west - which is the whole content of the sign
-    // here.
+    // theta (the rotation angle resolveDiurnalDirection() applies) back to the phase that produces it, wrapped into [0, 1). Phase runs BACKWARDS against theta - the rotation is negative about the
+    // celestial axis so the sky sweeps east to west - which is the whole content of the sign here.
     F64 ss_phase_from_theta(F32 theta)
     {
         F64 phase = std::fmod(-(F64)theta / F_TWO_PI, 1.0);
@@ -382,20 +343,9 @@ namespace
 SSAtmoEnvDiurnalArc SSAtmoEnvPlanetaryResolver::diurnalArc(const LLVector3& ecliptic_dir,
                                                            F32 obliquity_deg, F32 latitude_deg)
 {
-    // Elevation over a day is still one sinusoid, for the same reason as
-    // before: the only thing moving is a rotation about a fixed axis, and
-    // everything either side of it is a fixed rotation.
-    //
-    // Working in the EQUATORIAL frame, where that axis is +Z: a body sits
-    // at a fixed u, the day spins it about +Z, and the observer's up is a
-    // fixed w. Elevation is the dot of the two, and Rodrigues gives
-    //
-    //   sin(elev)(theta) = (z.u)(z.w)
-    //                    + cos(theta)[u.w - (z.u)(z.w)]
-    //                    + sin(theta)[(z x u).w]
-    //
-    // which is a constant plus one sinusoid, gathered below into
-    // amplitude/angle form exactly as it was.
+    // Elevation over a day is still one sinusoid, for the same reason as before: the only thing moving is a rotation about a fixed axis, and everything either side of it is a fixed rotation. Working
+    // in the EQUATORIAL frame, where that axis is +Z: a body sits at a fixed u, the day spins it about +Z, and the observer's up is a fixed w. Elevation is the dot of the two, and Rodrigues gives
+    // sin(elev)(theta) = (z.u)(z.w) + cos(theta)[u.w - (z.u)(z.w)] + sin(theta)[(z x u).w] which is a constant plus one sinusoid, gathered below into amplitude/angle form exactly as it was.
     LLVector3 v = ecliptic_dir;
     v.normalize();
 
@@ -433,10 +383,8 @@ bool SSAtmoEnvPlanetaryResolver::phaseForElevation(const SSAtmoEnvDiurnalArc& ar
                                                    F32 sin_elevation, bool rising,
                                                    F64& out_phase)
 {
-    // Degenerate: the direction lies along the rotation axis, so it never
-    // moves - a body nailed to the celestial pole. It holds one elevation
-    // forever and no phase "reaches" any other; report the failure and
-    // hand back phase 0 rather than dividing by ~0.
+    // Degenerate: the direction lies along the rotation axis, so it never moves - a body nailed to the celestial pole. It holds one elevation forever and no phase "reaches" any other; report the
+    // failure and hand back phase 0 rather than dividing by ~0.
     if (arc.mAmplitude < 1e-6f)
     {
         out_phase = 0.0;
@@ -455,10 +403,8 @@ bool SSAtmoEnvPlanetaryResolver::phaseForElevation(const SSAtmoEnvDiurnalArc& ar
         return false;
     }
 
-    // Two solutions, thetaZero +/- acos(u). The + branch is the RISING
-    // one: there dz/dtheta = -amplitude*sin(theta - thetaZero) is negative,
-    // and phase runs backwards against theta, so elevation climbs as phase
-    // advances.
+    // Two solutions, thetaZero +/- acos(u). The + branch is the RISING one: there dz/dtheta = -amplitude*sin(theta - thetaZero) is negative, and phase runs backwards against theta, so elevation
+    // climbs as phase advances.
     const F32 delta = acosf(llclamp(u, -1.f, 1.f));
     out_phase = ss_phase_from_theta(rising ? (arc.mThetaZero + delta)
                                            : (arc.mThetaZero - delta));
@@ -474,14 +420,9 @@ F64 SSAtmoEnvPlanetaryResolver::phaseForSunDirection(const LLVector3& ecliptic_d
     LLVector3 t = target_dir;
     if (v.normalize() < 0.0001f || t.normalize() < 0.0001f) return 0.0;
 
-    // Same shape as the elevation arc, with the observer's up swapped for
-    // the target direction: the closest approach is where the dot product
-    // between the swept body and the target is largest, and that dot is a
-    // constant plus one sinusoid in the rotation angle.
-    //
-    // The target arrives in HORIZON coordinates (it is a sky direction, out
-    // of a settings asset), so it has to be carried back into the equatorial
-    // frame the sweep happens in.
+    // Same shape as the elevation arc, with the observer's up swapped for the target direction: the closest approach is where the dot product between the swept body and the target is largest, and
+    // that dot is a constant plus one sinusoid in the rotation angle. The target arrives in HORIZON coordinates (it is a sky direction, out of a settings asset), so it has to be carried back into
+    // the equatorial frame the sweep happens in.
     LLQuaternion tilt;
     tilt.setAngleAxis(obliquity_deg * DEG_TO_RAD, LLVector3::x_axis);
     const LLVector3 u = v * tilt;
@@ -499,8 +440,7 @@ F64 SSAtmoEnvPlanetaryResolver::phaseForSunDirection(const LLVector3& ecliptic_d
 
     if (cos_term * cos_term + sin_term * sin_term < 1e-12f)
     {
-        // The sweep never changes how well it matches: the body sits on the
-        // rotation axis, so every phase is equally (un)close.
+        // The sweep never changes how well it matches: the body sits on the rotation axis, so every phase is equally (un)close.
         return 0.0;
     }
 
@@ -515,10 +455,8 @@ bool SSAtmoEnvPlanetaryResolver::riseSetPhases(const LLVector3& ecliptic_dir,
     const SSAtmoEnvDiurnalArc arc = diurnalArc(ecliptic_dir, obliquity_deg, latitude_deg);
 
     F64 rise = 0.0, set = 0.0;
-    // Elevation 0 is the horizon crossing proper - the geometric horizon,
-    // with no refraction or disc-radius allowance. Both halves have to
-    // succeed or the body never crosses at all (circumpolar or never
-    // rising), and half an answer would be worse than none.
+    // Elevation 0 is the horizon crossing proper - the geometric horizon, with no refraction or disc-radius allowance. Both halves have to succeed or the body never crosses at all (circumpolar or
+    // never rising), and half an answer would be worse than none.
     if (!phaseForElevation(arc, 0.f, true, rise)) return false;
     if (!phaseForElevation(arc, 0.f, false, set)) return false;
 

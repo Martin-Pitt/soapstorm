@@ -56,27 +56,13 @@ struct SSAtmoTrackConfig;
 class SSAtmoEnvBridge
 {
 public:
-    // False (out_cfg untouched) if there is no v3 asset loaded at all - the
-    // caller should fall through to the existing SSAtmoTrackManager path
-    // unchanged in that case. True populates out_cfg as if it were a v2
-    // notecard's track config for whichever v3 track is currently active at
-    // world_z, including the transition-buffer fade toward zero precipitation
-    // approaching a track boundary (the same "ease toward nothing rather
-    // than blend two incompatible types" idiom SSAtmoMagic already uses for
-    // a preset swap - see SSAtmoEnvTrackResolver's neighbour weight).
-    //
-    // The precipitation *type* is carried as a preset name in out_cfg.mPreset
-    // (e.g. "rain" -> "Rain"), resolved the same way a v2 notecard's own
-    // preset name is: SSPrecipPresetManager::find() with the existing "empty or
-    // unrecognised name falls back to whatever's active" behaviour. A fresh
-    // install's preset library not yet having a preset for every v3 type is
-    // an asset/content gap, not a code one - it degrades to that fallback,
-    // it does not fail.
-    //
-    // out_is_ground_track is whether the resolved track is v3's own index
-    // 0 - the caller needs this to decide mSkyTrack, since v2's own track
-    // number (whatever SSAtmoTrackManager::currentTrack() happens to report)
-    // means nothing once v3 is what's actually active.
+    // False (out_cfg untouched) if there is no v3 asset loaded at all - the caller should fall through to the existing SSAtmoTrackManager path unchanged in that case. True populates out_cfg as if it
+    // were a v2 notecard's track config for whichever v3 track is currently active at world_z, including the transition-buffer fade toward zero precipitation approaching a track boundary (the same
+    // "ease toward nothing rather than blend two incompatible types" idiom SSAtmoMagic already uses for a preset swap - see SSAtmoEnvTrackResolver's neighbour weight). The precipitation *type* is
+    // carried as a preset name in out_cfg.mPreset (e.g. "rain" -> "Rain"), resolved the same way a v2 notecard's own preset name is: SSPrecipPresetManager::find() with the existing "empty or
+    // unrecognised name falls back to whatever's active" behaviour. A fresh install's preset library not yet having a preset for every v3 type is an asset/content gap, not a code one - it degrades
+    // to that fallback, it does not fail. out_is_ground_track is whether the resolved track is v3's own index 0 - the caller needs this to decide mSkyTrack, since v2's own track number (whatever
+    // SSAtmoTrackManager::currentTrack() happens to report) means nothing once v3 is what's actually active.
     static bool resolveActiveTrack(F32 world_z, F32 prev_world_z, bool teleported,
                                    SSAtmoTrackConfig& out_cfg, bool& out_is_ground_track);
 

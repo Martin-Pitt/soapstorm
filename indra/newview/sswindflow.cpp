@@ -62,26 +62,20 @@ static const F32 NEIGHBOR_REACH       = 96.f;  // neighbour tiles once the camer
 static const U32 MAX_TILES            = 4;
 static const S32 HISTOGRAM_BINS       = 64;
 
-// A soffit has to cover at least this much ground before it earns a slab
-// boundary of its own, and only so many of them can, or a region full of
-// balconies would spend the entire slab budget on undersides. Expressed as an
-// area rather than a column count so it means the same thing at any cell size.
+// A soffit has to cover at least this much ground before it earns a slab boundary of its own, and only so many of them can, or a region full of balconies would spend the entire slab budget on
+// undersides. Expressed as an area rather than a column count so it means the same thing at any cell size.
 static const F32 UNDERSIDE_MIN_AREA   = 24.f;   // square metres
 static const S32 UNDERSIDE_MAX_BOUNDS = 4;
 
-// How far below the overhead surface a probe hit has to land before it counts
-// as something the overhead pass missed. Below this it is the same surface seen
-// at an angle, and depth precision alone would fill the list with noise.
+// How far below the overhead surface a probe hit has to land before it counts as something the overhead pass missed. Below this it is the same surface seen at an angle, and depth precision alone
+// would fill the list with noise.
 static const F32 HIDDEN_CLEARANCE     = 1.5f;
 
-// Above this share of rays hitting nothing, a probe is treated as broken
-// rather than as looking at open country. A real region viewed at a downward
-// angle always has terrain under most of its rays.
+// Above this share of rays hitting nothing, a probe is treated as broken rather than as looking at open country. A real region viewed at a downward angle always has terrain under most of its rays.
 static const F32 PROBE_MAX_MISS       = 0.98f;
 
-// Width classes for the flow line view. Each costs a draw call, and the spread
-// is deliberately wide: a jet is worth finding across a whole region, and a
-// factor of two is not visible against a thicket of lines.
+// Width classes for the flow line view. Each costs a draw call, and the spread is deliberately wide: a jet is worth finding across a whole region, and a factor of two is not visible against a
+// thicket of lines.
 static const S32 SS_WIND_LINE_WIDTHS = 4;
 
 // Capture debug views, in the order the floater lists them
@@ -96,8 +90,7 @@ enum SSCarveFlag : U8
     CARVE_NO_EVIDENCE       // every probe either missed or could not see this far
 };
 
-// The band is probed over this multiple of its nominal height before being
-// settled, so a genuinely tall build is found rather than clipped off
+// The band is probed over this multiple of its nominal height before being settled, so a genuinely tall build is found rather than clipped off
 static const F32 PROBE_SCALE          = 4.f;
 static const F32 PROBE_PERCENTILE     = 0.995f;
 
@@ -110,8 +103,7 @@ static LLTrace::BlockTimerStatHandle FTM_SS_WINDFLOW("Atmo Magic Wind Flow");
 // static
 bool SSWindFlowMap::isSupported()
 {
-    // Compute plus image load/store, i.e. GL 4.3. Bias down the compare the
-    // way llgl.cpp does for its own capability flags.
+    // Compute plus image load/store, i.e. GL 4.3. Bias down the compare the way llgl.cpp does for its own capability flags.
     return gGLManager.mGLVersion >= 4.29f
         && glDispatchCompute != nullptr
         && glBindImageTexture != nullptr
@@ -122,11 +114,8 @@ bool SSWindFlowMap::isSupported()
 // Domain geometry
 //-----------------------------------------------------------------------------
 
-// A region's domain is the region itself plus a margin of overlap into each
-// neighbour. That overlap is the whole answer to the seam problem: solving each
-// region in isolation would leave wind stopping dead at a sim border, whereas a
-// tile that can see 64m into next door produces very nearly the same flow near
-// the border as its neighbour's tile does, because both are looking at the same
+// A region's domain is the region itself plus a margin of overlap into each neighbour. That overlap is the whole answer to the seam problem: solving each region in isolation would leave wind
+// stopping dead at a sim border, whereas a tile that can see 64m into next door produces very nearly the same flow near the border as its neighbour's tile does, because both are looking at the same
 // buildings.
 static void desiredGeometry(LLViewerRegion* regionp, S32& res, F32& extent, F32& margin)
 {
@@ -138,18 +127,15 @@ static void desiredGeometry(LLViewerRegion* regionp, S32& res, F32& extent, F32&
     margin = llclamp((F32)margin_setting, 0.f, 256.f);
     extent = regionp->getWidth() + margin * 2.f;
 
-    // Cell size is the target, not a guarantee: a varregion wide enough to blow
-    // past the cap gets coarser cells rather than a runaway solve
+    // Cell size is the target, not a guarantee: a varregion wide enough to blow past the cap gets coarser cells rather than a runaway solve
     res = llclamp((S32)llround(extent / cell), 32, (S32)llclamp((U32)res_cap, 32u, 512u));
 
-    // Down to a multiple of sixteen, so the pressure pyramid halves exactly
-    // four times and no level has to deal with a stray odd row. Rounded down
-    // rather than up so this can never push back through the cap.
+    // Down to a multiple of sixteen, so the pressure pyramid halves exactly four times and no level has to deal with a stray odd row. Rounded down rather than up so this can never push back through
+    // the cap.
     res = llmax(32, (res / 16) * 16);
 }
 
-// How many levels the pyramid gets. Stops halving once a level is too small
-// for the pass count to be doing anything a single sweep would not.
+// How many levels the pyramid gets. Stops halving once a level is too small for the pass count to be doing anything a single sweep would not.
 S32 SSWindFlowMap::levelCount(S32 res)
 {
     S32 levels = 1;
@@ -162,9 +148,8 @@ S32 SSWindFlowMap::levelCount(S32 res)
     return levels;
 }
 
-// Everything that changes what the solve produces, rolled into one value. The
-// simulation floater edits these live, and comparing a hash is both cheaper and
-// harder to forget to update than checking nine settings by hand.
+// Everything that changes what the solve produces, rolled into one value. The simulation floater edits these live, and comparing a hash is both cheaper and harder to forget to update than checking
+// nine settings by hand.
 static U32 tuningSignature()
 {
     static LLCachedControl<F32> cell(gSavedSettings, "SSAtmoWindFlowCell", 4.f);
@@ -213,10 +198,8 @@ static U32 tuningSignature()
 // Resources
 //-----------------------------------------------------------------------------
 
-// glGetError reports one error from a queue the whole frame shares, so an
-// error left behind by unrelated code reads back here as ours. Emptying the
-// queue first is what makes the checks below mean anything: during login in
-// particular there is plenty of other GL traffic to inherit a stale error from.
+// glGetError reports one error from a queue the whole frame shares, so an error left behind by unrelated code reads back here as ours. Emptying the queue first is what makes the checks below mean
+// anything: during login in particular there is plenty of other GL traffic to inherit a stale error from.
 static void drainGLErrors()
 {
     for (S32 guard = 0; guard < 32 && glGetError() != GL_NO_ERROR; ++guard) {}
@@ -246,9 +229,7 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
 
     drainGLErrors();
 
-    // Named per allocation rather than once at the end: a failure here is
-    // nearly always one specific texture being too large for the driver, and
-    // the whole point of the warning is to say which one.
+    // Named per allocation rather than once at the end: a failure here is nearly always one specific texture being too large for the driver, and the whole point of the warning is to say which one.
     const char* step = nullptr;
     auto failed = [&step](const char* what)
     {
@@ -273,8 +254,7 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
     failed("the probe array");
 
-    // Each level is a quarter of the one above it, so the whole pyramid costs
-    // about a third again on top of the full-resolution grid.
+    // Each level is a quarter of the one above it, so the whole pyramid costs about a third again on top of the full-resolution grid.
     mTexLevels = levelCount(res);
     for (S32 L = 0; L < mTexLevels; ++L)
     {
@@ -298,8 +278,7 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
 
     mTexRes = res;
     mTexSlices = slices;
-    // Without this the size check at the top can never be satisfied and every
-    // solve throws the whole set away and builds it again.
+    // Without this the size check at the top can never be satisfied and every solve throws the whole set away and builds it again.
     mProbeTexRes = probe_res;
     return true;
 }
@@ -335,9 +314,7 @@ void SSWindFlowMap::clear()
 
     if (mWorkerBusy)
     {
-        // The worker holds a reference into mTiles and reads the scratch.
-        // Erasing either out from under it is the one thing that is not safe,
-        // so this finishes in the completion handler instead.
+        // The worker holds a reference into mTiles and reads the scratch. Erasing either out from under it is the one thing that is not safe, so this finishes in the completion handler instead.
         mClearPending = true;
         return;
     }
@@ -351,9 +328,7 @@ void SSWindFlowMap::clear()
 
 void SSWindFlowMap::rebuildAll()
 {
-    // Zero the build time as well as dirtying: that is what the settle delay
-    // for a rezzing region is measured from, and an explicit rebuild should
-    // not have to wait it out.
+    // Zero the build time as well as dirtying: that is what the settle delay for a rezzing region is measured from, and an explicit rebuild should not have to wait it out.
     for (auto& entry : mTiles)
     {
         entry.second.mDirty = true;
@@ -380,8 +355,7 @@ bool SSWindFlowMap::ensureShaders()
 
     if (!mShadersReady)
     {
-        // The shader manager already logged why; stop trying so we do not
-        // spam a failure every frame
+        // The shader manager already logged why; stop trying so we do not spam a failure every frame
         mShaderFailed = true;
     }
     return mShadersReady;
@@ -438,20 +412,15 @@ bool SSWindFlowMap::drivesWind()
 // Staleness
 //-----------------------------------------------------------------------------
 
-// static
-//
-// Called from SSAtmoMagic::settleEdits, not from the object update itself: an
-// edit has to have held still for a few seconds before it is allowed to cost a
-// solve. See the note on SSAtmoMagic::onObjectUpdate.
+// static Called from SSAtmoMagic::settleEdits, not from the object update itself: an edit has to have held still for a few seconds before it is allowed to cost a solve. See the note on
+// SSAtmoMagic::onObjectUpdate.
 void SSWindFlowMap::markDirty(const LLVector3& pos, F32 radius)
 {
     SSWindFlowMap* self = getInstance();
     if (self->mTiles.empty()) return;
     if (radius < 0.5f) return;
 
-    // Bounding-box overlap against each domain rather than a point-in-region
-    // test, so a sim surround megaprim whose centre is in the next region over
-    // still dirties the tile it actually covers
+    // Bounding-box overlap against each domain rather than a point-in-region test, so a sim surround megaprim whose centre is in the next region over still dirties the tile it actually covers
     for (auto& entry : self->mTiles)
     {
         Tile& tile = entry.second;
@@ -484,16 +453,13 @@ bool SSWindFlowMap::needsSolve(const Tile& tile) const
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp) return false;
 
-    // The camera moved to a different sky track, so the band this was solved
-    // for is not the one being flown in
+    // The camera moved to a different sky track, so the band this was solved for is not the one being flown in
     if (tile.mTrack != SSAtmoTrackManager::getInstance()->currentTrack()) return true;
 
-    // Ambient wind changed enough to matter. The map is static with respect to
-    // a fixed inflow; change the inflow and it has to be solved again.
+    // Ambient wind changed enough to matter. The map is static with respect to a fixed inflow; change the inflow and it has to be solved again.
     if ((SSAtmoMagic::getInstance()->wind() - tile.mBuiltWind).magVec() > WIND_EPSILON) return true;
 
-    // Anything that changes what the solve produces was edited, most likely in
-    // the simulation floater, so the answer on file is for different settings
+    // Anything that changes what the solve produces was edited, most likely in the simulation floater, so the answer on file is for different settings
     if (tile.mTuning != tuningSignature()) return true;
 
     S32 res; F32 extent, margin;
@@ -515,10 +481,8 @@ void SSWindFlowMap::chooseBand(Tile& tile, LLViewerRegion* regionp)
     SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     const S32 track = tracks->currentTrack();
 
-    // Base of the band. At ground level that is the lowest land in the region,
-    // or the water surface where the seabed drops below it, so a deep trench
-    // does not drag the band down away from the build. In a sky track it is the
-    // track's own floor, which is that track's ground zero.
+    // Base of the band. At ground level that is the lowest land in the region, or the water surface where the seabed drops below it, so a deep trench does not drag the band down away from the build.
+    // In a sky track it is the track's own floor, which is that track's ground zero.
     F32 base;
     if (track <= SS_TRACK_MIN)
     {
@@ -533,8 +497,7 @@ void SSWindFlowMap::chooseBand(Tile& tile, LLViewerRegion* regionp)
     tile.mBandBottom = base - 8.f;
     tile.mBandTop = base + nominal;     // provisional; the probe capture settles it
 
-    // A slab must never straddle two tracks, because each carries its own
-    // ambient wind, so the band stops at the track ceiling
+    // A slab must never straddle two tracks, because each carries its own ambient wind, so the band stops at the track ceiling
     const F32 ceiling = tracks->trackCeiling(track);
     if (ceiling > tile.mBandBottom + 32.f)
     {
@@ -553,9 +516,8 @@ bool SSWindFlowMap::captureAlong(LLRenderTarget& target, S32 res, const Tile& ti
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp) return false;
 
-    // A basis perpendicular to the view direction. World up degenerates when
-    // looking straight down, which the overhead pass does, so fall back to +Y
-    // there; the probes are all tilted and never hit that case.
+    // A basis perpendicular to the view direction. World up degenerates when looking straight down, which the overhead pass does, so fall back to +Y there; the probes are all tilted and never hit
+    // that case.
     const bool straight_down = fabsf(dir.mV[VZ]) > 0.999f;
     LLVector3 right = dir % (straight_down ? LLVector3(0.f, 1.f, 0.f) : LLVector3(0.f, 0.f, 1.f));
     right.normVec();
@@ -580,9 +542,8 @@ bool SSWindFlowMap::captureAlong(LLRenderTarget& target, S32 res, const Tile& ti
     cam.setOrigin(eye);
     cam.setFar(range);
 
-    // Corner order matters: calcAgentFrustumPlanes builds each plane from three
-    // of these in sequence, so a basis wound the other way inverts every plane
-    // normal and the cull throws the whole world away.
+    // Corner order matters: calcAgentFrustumPlanes builds each plane from three of these in sequence, so a basis wound the other way inverts every plane normal and the cull throws the whole world
+    // away.
     LLVector3 frust[8];
     frust[0] = eye - right * half - up * half;
     frust[1] = eye + right * half - up * half;
@@ -632,10 +593,8 @@ bool SSWindFlowMap::captureAlong(LLRenderTarget& target, S32 res, const Tile& ti
 
 bool SSWindFlowMap::captureHeights(Tile& tile)
 {
-    // Probe pass. The nominal band height is only a guess at how tall the build
-    // is, and a region with a 400m tower would have it sliced off at the
-    // ceiling, so look down from well above and let the geometry set the real
-    // ceiling.
+    // Probe pass. The nominal band height is only a guess at how tall the build is, and a region with a 400m tower would have it sliced off at the ceiling, so look down from well above and let the
+    // geometry set the real ceiling.
     const F32 nominal = tile.mBandTop - tile.mBandBottom;
     const F32 probe_top = tile.mBandBottom + nominal * PROBE_SCALE;
     const F32 half = tile.mExtent * 0.5f;
@@ -648,10 +607,8 @@ bool SSWindFlowMap::captureHeights(Tile& tile)
                            region_origin.mV[VY] + tile.mOriginRegion.mV[VY] + half,
                            0.f);
 
-    // Overhead pass: everything below the surface it finds is solid. That is
-    // wrong under a skyway and right everywhere else, and being wrong the
-    // conservative way is what lets the probes correct it afterwards without
-    // any risk of opening a hole that is not there.
+    // Overhead pass: everything below the surface it finds is solid. That is wrong under a skyway and right everywhere else, and being wrong the conservative way is what lets the probes correct it
+    // afterwards without any risk of opening a hole that is not there.
     {
         const F32 range = llmax(probe_top - tile.mBandBottom, 1.f);
         const LLVector3 eye(centre.mV[VX], centre.mV[VY], probe_top);
@@ -671,9 +628,8 @@ bool SSWindFlowMap::captureHeights(Tile& tile)
         }
     }
 
-    // High percentile rather than the maximum: one lone platform on a pole
-    // should not stretch the band, but a genuine tower should still fit inside
-    // it. Empty columns carry no surface and are not part of the distribution.
+    // High percentile rather than the maximum: one lone platform on a pole should not stretch the band, but a genuine tower should still fit inside it. Empty columns carry no surface and are not
+    // part of the distribution.
     std::vector<F32> surfaces;
     surfaces.reserve(mTop.size());
     for (F32 h : mTop)
@@ -688,8 +644,7 @@ bool SSWindFlowMap::captureHeights(Tile& tile)
         std::nth_element(surfaces.begin(), surfaces.begin() + nth, surfaces.end());
         const F32 tall = surfaces[nth];
 
-        // Headroom above the tallest thing, so wind has somewhere undisturbed
-        // to flow over the rooftops rather than scraping the ceiling
+        // Headroom above the tallest thing, so wind has somewhere undisturbed to flow over the rooftops rather than scraping the ceiling
         ceiling = tall + llmax(16.f, (tall - tile.mBandBottom) * 0.25f);
     }
 
@@ -710,8 +665,7 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
 {
     if (mTop.empty()) return;
 
-    // The tallest column in the region. Whatever else is true, a cell halfway
-    // up a building is solid, and no probe should be able to see it.
+    // The tallest column in the region. Whatever else is true, a cell halfway up a building is solid, and no probe should be able to see it.
     size_t best = 0;
     for (size_t i = 1; i < mTop.size(); ++i)
     {
@@ -778,15 +732,12 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
     }
 }
 
-// Set up for the probe passes. The captures themselves are one per frame from
-// here on, so what they all share is settled once, up front.
+// Set up for the probe passes. The captures themselves are one per frame from here on, so what they all share is settled once, up front.
 void SSWindFlowMap::beginProbes(Tile& tile)
 {
     static LLCachedControl<U32> probe_mult(gSavedSettings, "SSAtmoWindFlowProbeRes", 2);
 
-    // The box is wider than the region and the ground inside it is
-    // foreshortened, so matching the mask's resolution would leave a probe
-    // texel covering several cells. Overshoot deliberately.
+    // The box is wider than the region and the ground inside it is foreshortened, so matching the mask's resolution would leave a probe texel covering several cells. Overshoot deliberately.
     mProbeRes = llclamp(tile.mRes * (S32)llclamp((U32)probe_mult, 1u, 4u), tile.mRes, 1536);
 
     mHidden.clear();
@@ -796,10 +747,8 @@ void SSWindFlowMap::beginProbes(Tile& tile)
         mProbeMiss[i] = 1.f;
     }
 
-    // What the capture debug view will draw until the next build replaces it,
-    // and what the reconstruction resolves its hits against. Settled here
-    // rather than after the last probe, because the reconstruction runs on a
-    // worker and must not be reaching into LLWorld for the region.
+    // What the capture debug view will draw until the next build replaces it, and what the reconstruction resolves its hits against. Settled here rather than after the last probe, because the
+    // reconstruction runs on a worker and must not be reaching into LLWorld for the region.
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     mCaptureRegion = tile.mRegionHandle;
     mCaptureRes = tile.mRes;
@@ -807,8 +756,7 @@ void SSWindFlowMap::beginProbes(Tile& tile)
     mCaptureOrigin = (regionp ? regionp->getOriginAgent() : LLVector3::zero) + tile.mOriginRegion;
 }
 
-// One oblique probe: a full scene render and a depth readback, which is why
-// only one of them happens per frame.
+// One oblique probe: a full scene render and a depth readback, which is why only one of them happens per frame.
 bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
 {
     static LLCachedControl<F32> elevation(gSavedSettings, "SSAtmoWindFlowProbeAngle", 30.f);
@@ -838,11 +786,8 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
                                region_origin.mV[VY] + tile.mOriginRegion.mV[VY] + half_extent,
                                0.5f * (z_lo + z_hi));
 
-        // Footprint. Across the view the region is never wider than itself; up
-        // the view it is the region foreshortened by the tilt plus the vertical
-        // span standing up in it. The old form inflated by the cotangent, which
-        // is the shear of the *depth* range rather than the height of the
-        // image, and cost most of the probe resolution for nothing.
+        // Footprint. Across the view the region is never wider than itself; up the view it is the region foreshortened by the tilt plus the vertical span standing up in it. The old form inflated by
+        // the cotangent, which is the shear of the *depth* range rather than the height of the image, and cost most of the probe resolution for nothing.
         const F32 diag = half_extent * F_SQRT2;
         const F32 half = llmax(diag, se * diag + ce * span * 0.5f) + 8.f;
 
@@ -870,11 +815,8 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
             mProbeFrame[i].mUp = fu;
         }
 
-        // A probe that hit nothing anywhere is far more likely to have failed
-        // than to be looking at an empty region, and the two are impossible to
-        // tell apart from the carve's point of view: a miss means "no evidence"
-        // per ray, but a probe that is nothing but misses contributes nothing
-        // and may be masking a broken capture. Drop it and say so.
+        // A probe that hit nothing anywhere is far more likely to have failed than to be looking at an empty region, and the two are impossible to tell apart from the carve's point of view: a miss
+        // means "no evidence" per ray, but a probe that is nothing but misses contributes nothing and may be masking a broken capture. Drop it and say so.
         size_t misses = 0;
         for (F32 d : mProbeDepth[i])
         {
@@ -899,14 +841,9 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
     return true;
 }
 
-// CPU, worker: reconstruct where every probe ray landed. A hit well below the
-// overhead surface for that column is by definition something the overhead
-// pass could not see - either the underside of an overhang or the ground
-// beneath it - and both are altitudes the slicer needs.
-//
-// Four probes at up to 1536 texels each is nine million rays to walk, which is
-// the largest single CPU cost in a build and the reason this is off the main
-// thread rather than inline in the capture.
+// CPU, worker: reconstruct where every probe ray landed. A hit well below the overhead surface for that column is by definition something the overhead pass could not see - either the underside of an
+// overhang or the ground beneath it - and both are altitudes the slicer needs. Four probes at up to 1536 texels each is nine million rays to walk, which is the largest single CPU cost in a build and
+// the reason this is off the main thread rather than inline in the capture.
 void SSWindFlowMap::reconstructHidden(Tile& tile)
 {
     mHidden.clear();
@@ -957,11 +894,8 @@ void SSWindFlowMap::reconstructHidden(Tile& tile)
 // Adaptive slicing
 //-----------------------------------------------------------------------------
 
-// The carve happens inside the init pass, where it cannot report itself. This
-// repeats it on the CPU and records why each solid cell ended up as it did, so
-// a passage that fails to open can be told apart from one that was never a
-// candidate. Only run while the view that draws it is selected: it is a pass
-// over the whole volume against every probe.
+// The carve happens inside the init pass, where it cannot report itself. This repeats it on the CPU and records why each solid cell ended up as it did, so a passage that fails to open can be told
+// apart from one that was never a candidate. Only run while the view that draws it is selected: it is a pass over the whole volume against every probe.
 void SSWindFlowMap::buildCarveFlags(const Tile& tile)
 {
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);
@@ -1039,13 +973,9 @@ void SSWindFlowMap::placeSlices(Tile& tile)
     F32 hi = tile.mBandBottom;
     std::vector<S32> histogram(HISTOGRAM_BINS, 0);
 
-    // Undersides count as geometry here just as much as rooftops do. The mask
-    // already knows a bridge deck is solid between its underside and its top,
-    // and that the span below it is open - but a slab boundary has to land in
-    // that opening for the solve to have anywhere to put the air. Placing
-    // slabs from rooftops alone leaves the clearance under a deck sitting
-    // inside one slab, where it averages into a partly solid haze and the wind
-    // neither flows under it nor is properly stopped by it.
+    // Undersides count as geometry here just as much as rooftops do. The mask already knows a bridge deck is solid between its underside and its top, and that the span below it is open - but a slab
+    // boundary has to land in that opening for the solve to have anywhere to put the air. Placing slabs from rooftops alone leaves the clearance under a deck sitting inside one slab, where it
+    // averages into a partly solid haze and the wind neither flows under it nor is properly stopped by it.
     auto eachSurface = [&](const std::function<void(F32)>& fn)
     {
         for (F32 h : mTop)
@@ -1072,16 +1002,14 @@ void SSWindFlowMap::placeSlices(Tile& tile)
         hi = tile.mBandTop;
     }
 
-    // Give the top slab some air above the tallest thing, so wind has somewhere
-    // undisturbed to flow over the rooftops
+    // Give the top slab some air above the tallest thing, so wind has somewhere undisturbed to flow over the rooftops
     hi = llmin(hi + llmax(8.f, (hi - lo) * 0.25f), tile.mBandTop);
 
     const F32 span = llmax(hi - lo, 1.f);
     S32 count = (S32)llround(span / sep);
     count = llclamp(count, SS_WIND_MIN_SLICES, cap);
 
-    // Histogram of surface heights, so boundaries land where the geometry
-    // actually changes rather than spreading evenly through empty air
+    // Histogram of surface heights, so boundaries land where the geometry actually changes rather than spreading evenly through empty air
     eachSurface([&](F32 h)
     {
         const F32 t = (llclamp(h, lo, hi) - lo) / span;
@@ -1096,8 +1024,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
 
     if (total > 0)
     {
-        // Quantile placement: walk the cumulative distribution and drop a
-        // boundary every 1/count of the mass
+        // Quantile placement: walk the cumulative distribution and drop a boundary every 1/count of the mass
         S32 running = 0;
         S32 next = 1;
         for (S32 b = 0; b < HISTOGRAM_BINS && next < count; ++b)
@@ -1119,29 +1046,20 @@ void SSWindFlowMap::placeSlices(Tile& tile)
     std::sort(bounds.begin(), bounds.end());
 
     // -----------------------------------------------------------------------
-    // Forced boundaries.
-    //
-    // Quantile placement is mass-weighted, which is right for deciding where
-    // the region's bulk sits and useless for anything small. One bridge over
-    // one street is a few dozen columns out of a hundred thousand: it can
-    // never win a quantile boundary, so the opening underneath it lands inside
-    // a slab that also contains the deck, comes out half solid, and the wind
-    // neither goes under nor around. These get placed first and the quantiles
-    // fill in around them.
+    // Forced boundaries. Quantile placement is mass-weighted, which is right for deciding where the region's bulk sits and useless for anything small. One bridge over one street is a few dozen
+    // columns out of a hundred thousand: it can never win a quantile boundary, so the opening underneath it lands inside a slab that also contains the deck, comes out half solid, and the wind
+    // neither goes under nor around. These get placed first and the quantiles fill in around them.
     // -----------------------------------------------------------------------
     std::vector<F32> forced;
 
-    // A slab may never straddle two EEP tracks: each carries its own ambient
-    // wind. This one is a correctness constraint, so it goes in first.
+    // A slab may never straddle two EEP tracks: each carries its own ambient wind. This one is a correctness constraint, so it goes in first.
     SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     for (S32 track = SS_TRACK_MIN; track <= SS_TRACK_MAX; ++track)
     {
         forced.push_back(tracks->trackFloor(track));
     }
 
-    // Then the altitudes the probes found under cover. A boundary sitting at a
-    // soffit, and another at the floor below it, is what gives the air in
-    // between a slab of its own to travel along.
+    // Then the altitudes the probes found under cover. A boundary sitting at a soffit, and another at the floor below it, is what gives the air in between a slab of its own to travel along.
     {
         const F32 cell = tile.mExtent / (F32)llmax(1, tile.mRes);
         const S32 min_columns = llmax(4, (S32)(UNDERSIDE_MIN_AREA / llmax(0.01f, cell * cell)));
@@ -1157,8 +1075,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
             under_sum[b] += h;
         }
 
-        // Peaks only, and only ones with enough columns behind them to be a
-        // structure rather than a stray hit on the edge of a prim.
+        // Peaks only, and only ones with enough columns behind them to be a structure rather than a stray hit on the edge of a prim.
         std::vector<std::pair<S32, F32>> peaks;
         for (S32 b = 0; b < HISTOGRAM_BINS; ++b)
         {
@@ -1169,8 +1086,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
             peaks.push_back({ n, under_sum[b] / (F32)n });
         }
 
-        // Strongest first, so if the slab budget runs out it is the biggest
-        // spans that keep their boundary
+        // Strongest first, so if the slab budget runs out it is the biggest spans that keep their boundary
         std::sort(peaks.begin(), peaks.end(),
                   [](const std::pair<S32, F32>& a, const std::pair<S32, F32>& b)
                   { return a.first > b.first; });
@@ -1182,9 +1098,8 @@ void SSWindFlowMap::placeSlices(Tile& tile)
     }
 
     // -----------------------------------------------------------------------
-    // Assemble, forced first. The old walk took boundaries in altitude order
-    // and stopped at the cap, which spent the whole budget near the ground and
-    // left the rooftops unresolved whenever the band was tall.
+    // Assemble, forced first. The old walk took boundaries in altitude order and stopped at the cap, which spent the whole budget near the ground and left the rooftops unresolved whenever the band
+    // was tall.
     // -----------------------------------------------------------------------
     std::vector<F32> final_bounds;
     final_bounds.push_back(lo);
@@ -1206,8 +1121,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
 
     std::sort(final_bounds.begin(), final_bounds.end());
 
-    // A band with almost no geometry in it can come out of that with fewer
-    // slabs than the solve needs; halve the widest one until it has enough.
+    // A band with almost no geometry in it can come out of that with fewer slabs than the solve needs; halve the widest one until it has enough.
     while ((S32)final_bounds.size() - 1 < SS_WIND_MIN_SLICES)
     {
         size_t widest = 0;
@@ -1229,23 +1143,17 @@ void SSWindFlowMap::placeSlices(Tile& tile)
         tile.mSliceZ[i] = final_bounds[llmin((size_t)i, final_bounds.size() - 1)];
     }
 
-    // Low end of the captured surfaces is the ground reference for the wind
-    // gradient. The mean would be dragged upward by rooftops, which is exactly
-    // the height the gradient is supposed to be measuring from.
+    // Low end of the captured surfaces is the ground reference for the wind gradient. The mean would be dragged upward by rooftops, which is exactly the height the gradient is supposed to be
+    // measuring from.
     tile.mGroundRef = lo;
 
     static LLCachedControl<F32> gradient(gSavedSettings, "SSAtmoWindFlowGradient", 0.25f);
     const F32 alpha = llclamp((F32)gradient, 0.f, 0.6f);
 
-    // Ambient wind per slab, from the track that slab sits in. Tried as a v3
-    // altitude-band track first - resolveActiveTrack() returns false when
-    // v3 has no asset loaded, the same "is v3 actually driving anything"
-    // question SSAtmoMagic::refreshParams() asks before picking cfg there -
-    // so this stays in lockstep with whichever source is actually live
-    // rather than always reading v2's SSAtmoTrackManager regardless. Read from
-    // the wrong one and the solve keeps baking in whatever the legacy
-    // config's wind speed was (0, most likely, or whatever it was last
-    // left at) no matter what the v3 floater's Wind Speed slider says.
+    // Ambient wind per slab, from the track that slab sits in. Tried as a v3 altitude-band track first - resolveActiveTrack() returns false when v3 has no asset loaded, the same "is v3 actually
+    // driving anything" question SSAtmoMagic::refreshParams() asks before picking cfg there - so this stays in lockstep with whichever source is actually live rather than always reading v2's
+    // SSAtmoTrackManager regardless. Read from the wrong one and the solve keeps baking in whatever the legacy config's wind speed was (0, most likely, or whatever it was last left at) no matter
+    // what the v3 floater's Wind Speed slider says.
     for (S32 k = 0; k < tile.mSlices; ++k)
     {
         const F32 centre = 0.5f * (tile.mSliceZ[k] + tile.mSliceZ[k + 1]);
@@ -1271,11 +1179,8 @@ void SSWindFlowMap::placeSlices(Tile& tile)
                                           : SSAtmoMagic::getInstance()->wind();
         }
 
-        // Atmospheric boundary layer. Ground drag slows the air near the
-        // surface and releases it with height, which is why a rooftop is
-        // windier than the street below it and why getting above the roofline
-        // should feel exposed. Power law against a 10m reference, the standard
-        // engineering form.
+        // Atmospheric boundary layer. Ground drag slows the air near the surface and releases it with height, which is why a rooftop is windier than the street below it and why getting above the
+        // roofline should feel exposed. Power law against a 10m reference, the standard engineering form.
         if (alpha > 0.f)
         {
             const F32 h = llmax(centre - tile.mGroundRef, 0.5f);
@@ -1288,17 +1193,10 @@ void SSWindFlowMap::placeSlices(Tile& tile)
 // Passage bridging
 //-----------------------------------------------------------------------------
 
-// The probes are an evidence-only test, so they open the mouth of an underpass
-// and leave the middle of it solid: no ray reaches in that far. The middle is
-// nonetheless open, and the evidence for it is sitting on either side.
-//
-// Opening a solid cell that has carved cells on both sides along an axis is
-// that inference and nothing more. Requiring both sides is what makes it safe
-// against the case that kills every looser rule - the ring of overhang carved
-// around a building, which has open air outside it and solid building inside,
-// and so never presents evidence on both sides of anything.
-// GL half, main thread: pull the mask the init pass produced. Split out from
-// the bridge itself so the pass over the volume can run on a worker.
+// The probes are an evidence-only test, so they open the mouth of an underpass and leave the middle of it solid: no ray reaches in that far. The middle is nonetheless open, and the evidence for it
+// is sitting on either side. Opening a solid cell that has carved cells on both sides along an axis is that inference and nothing more. Requiring both sides is what makes it safe against the case
+// that kills every looser rule - the ring of overhang carved around a building, which has open air outside it and solid building inside, and so never presents evidence on both sides of anything. GL
+// half, main thread: pull the mask the init pass produced. Split out from the bridge itself so the pass over the volume can run on a worker.
 void SSWindFlowMap::readMaskForBridge(const Tile& tile)
 {
     mMaskRaw.clear();
@@ -1338,9 +1236,7 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
 
     const std::vector<U8>& solid = mMaskRaw;
 
-    // A cell counts as carved only where the heightmap called it solid and the
-    // carve opened it. Air above the rooftops is open too and is no evidence of
-    // a passage, so it must not seed one.
+    // A cell counts as carved only where the heightmap called it solid and the carve opened it. Air above the rooftops is open too and is no evidence of a passage, so it must not seed one.
     std::vector<U8> carved(active, 0);
     for (S32 k = 0; k < slices; ++k)
     {
@@ -1421,10 +1317,8 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
 // Solve
 //-----------------------------------------------------------------------------
 
-// A uniform the running program does not have takes -1 here, and every
-// glUniform call against -1 is quietly ignored. That is how a whole set of
-// tuning knobs came to do nothing at all while looking wired up, so say so
-// once per name instead of letting it pass.
+// A uniform the running program does not have takes -1 here, and every glUniform call against -1 is quietly ignored. That is how a whole set of tuning knobs came to do nothing at all while looking
+// wired up, so say so once per name instead of letting it pass.
 static S32 uniformLoc(const LLGLSLShader& shader, const char* name)
 {
     const S32 loc = glGetUniformLocation(shader.mProgramObject, name);
@@ -1443,16 +1337,10 @@ static S32 uniformLoc(const LLGLSLShader& shader, const char* name)
     return loc;
 }
 
-// Uniforms are set in groups rather than all at once because the passes do not
-// all declare the same ones, and a driver drops any uniform a shader does not
-// read. Handing a pass a value it has no use for would trip the missing-uniform
-// warning on every solve and drown out the case that warning is there to catch.
-//
-// The cost of that arrangement is that adding a use to a shader means adding
-// the matching call here, and nothing enforces it: an unset uniform is zero,
-// not absent, so the missing-uniform warning stays quiet. That is how the carve
-// came to compute every cell's position from a zero cell size and test the same
-// corner of the domain for the whole region.
+// Uniforms are set in groups rather than all at once because the passes do not all declare the same ones, and a driver drops any uniform a shader does not read. Handing a pass a value it has no use
+// for would trip the missing-uniform warning on every solve and drown out the case that warning is there to catch. The cost of that arrangement is that adding a use to a shader means adding the
+// matching call here, and nothing enforces it: an unset uniform is zero, not absent, so the missing-uniform warning stays quiet. That is how the carve came to compute every cell's position from a
+// zero cell size and test the same corner of the domain for the whole region.
 
 static void setGrid(LLGLSLShader& shader, S32 res, S32 slices)
 {
@@ -1516,20 +1404,15 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     glUniform1f(uniformLoc(gSSWindInitProgram, "uSolidCurve"),
                 llclamp((F32)solid_curve, 0.1f, 4.f));
 
-    // Everything the probes need to be looked up in. The view matrices are
-    // agent space as of the capture that produced them, which is why this is
-    // only ever read inside the build that captured it.
+    // Everything the probes need to be looked up in. The view matrices are agent space as of the capture that produced them, which is why this is only ever read inside the build that captured it.
     {
         LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
         const LLVector3 grid_origin = (regionp ? regionp->getOriginAgent() : LLVector3::zero)
                                     + tile.mOriginRegion;
 
-        // Probes are numbered contiguously in the shader, so pack the usable
-        // ones down to the front rather than leaving holes it would have to
-        // test around. Filled before the upload, obviously - but this went out
-        // the other way round once, and unset matrices are not a failure the
-        // shader can notice: it happily projects through them and carves the
-        // mask open on the strength of whatever was on the stack.
+        // Probes are numbered contiguously in the shader, so pack the usable ones down to the front rather than leaving holes it would have to test around. Filled before the upload, obviously - but
+        // this went out the other way round once, and unset matrices are not a failure the shader can notice: it happily projects through them and carves the mask open on the strength of whatever
+        // was on the stack.
         static LLCachedControl<bool> use_probes(gSavedSettings, "SSAtmoWindFlowProbes", true);
 
         glm::mat4 views[SS_WIND_PROBES];
@@ -1567,14 +1450,9 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     glDispatchCompute(groupsFor(res), groupsFor(res), (GLuint)slices);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-    // --- infer the parts of a passage no probe could reach ---
-    // Read the mask out here and stop. Joining the passages up is a pass over
-    // the whole volume against three axes, which is the single largest CPU
-    // cost in a build, so it runs on a worker and solveRun picks up from what
-    // it produced. It edits the mask behind the init pass, so the velocity
-    // seeded from the old mask is stale wherever a cell was opened - which is
-    // why solveRun re-seeds rather than leaving dead air in a passage that now
-    // exists.
+    // --- infer the parts of a passage no probe could reach --- Read the mask out here and stop. Joining the passages up is a pass over the whole volume against three axes, which is the single
+    // largest CPU cost in a build, so it runs on a worker and solveRun picks up from what it produced. It edits the mask behind the init pass, so the velocity seeded from the old mask is stale
+    // wherever a cell was opened - which is why solveRun re-seeds rather than leaving dead air in a passage that now exists.
     readMaskForBridge(tile);
     return true;
 }
@@ -1583,17 +1461,12 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
 {
     LL_PROFILE_GPU_ZONE("atmo wind flow solve");
 
-    // This pass reports its result through glGetError at the end, so it has to
-    // start from an empty queue or it inherits somebody else's failure.
+    // This pass reports its result through glGetError at the end, so it has to start from an empty queue or it inherits somebody else's failure.
     drainGLErrors();
 
-    // Passes per level. Jacobi settles a feature of wavelength L cells in
-    // something like L^2 passes, so this alone decides how large a structure
-    // the pressure field can see: at a metre per cell a hundred or so passes
-    // resolves the few metres around a corner and nothing wider. The pyramid
-    // is what covers the rest - each level below sees the same lane at half
-    // the wavelength, for a quarter of the cost - so this is a detail budget
-    // now rather than a reach budget.
+    // Passes per level. Jacobi settles a feature of wavelength L cells in something like L^2 passes, so this alone decides how large a structure the pressure field can see: at a metre per cell a
+    // hundred or so passes resolves the few metres around a corner and nothing wider. The pyramid is what covers the rest - each level below sees the same lane at half the wavelength, for a quarter
+    // of the cost - so this is a detail budget now rather than a reach budget.
     static LLCachedControl<U32> iterations(gSavedSettings, "SSAtmoWindFlowIterations", 128);
     const S32 iters = llclamp((S32)iterations, 4, 512);
 
@@ -1635,8 +1508,7 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
         const S32 r = levelRes(res, L);
         const GLuint groups = groupsFor(r);
 
-        // The finest level already has its velocity from the seed above; the
-        // coarser ones only ever had a mask handed down to them.
+        // The finest level already has its velocity from the seed above; the coarser ones only ever had a mask handed down to them.
         if (L > 0)
         {
             gSSWindSeedProgram.bind();
@@ -1658,9 +1530,7 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
         glDispatchCompute(groups, groups, (GLuint)slices);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-        // Starting guess. The coarsest level has nothing to inherit and starts
-        // from still air; every level above starts from the answer below it,
-        // which is the whole point of the pyramid.
+        // Starting guess. The coarsest level has nothing to inherit and starts from still air; every level above starts from the answer below it, which is the whole point of the pyramid.
         if (L == levels - 1)
         {
             std::vector<F32> zeros((size_t)r * r * slices, 0.f);
@@ -1722,12 +1592,8 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
     return glGetError() == GL_NO_ERROR;
 }
 
-// GL half, main thread. The audio mix and precipitation advection both sample
-// on the CPU, so the solved volume has to come back once per build.
-//
-// glGetTexImage returns the entire level, not the part we dispatched over. The
-// volumes are allocated at the maximum slab count and only the first mSlices
-// are solved, so the staging buffers have to cover all of them.
+// GL half, main thread. The audio mix and precipitation advection both sample on the CPU, so the solved volume has to come back once per build. glGetTexImage returns the entire level, not the part
+// we dispatched over. The volumes are allocated at the maximum slab count and only the first mSlices are solved, so the staging buffers have to cover all of them.
 void SSWindFlowMap::readback(Tile& tile)
 {
     const size_t allocated = (size_t)mTexRes * mTexRes * mTexSlices;
@@ -1737,18 +1603,14 @@ void SSWindFlowMap::readback(Tile& tile)
     glGetTexImage(GL_TEXTURE_3D, 0, GL_RGBA, GL_FLOAT, mVolumeRaw.data());
     glBindTexture(GL_TEXTURE_3D, 0);
 
-    // And the mask, so "is this point inside a building" is answerable. A lee
-    // and a wall both have almost no velocity in them, and telling them apart
-    // from the velocity alone is not possible.
+    // And the mask, so "is this point inside a building" is answerable. A lee and a wall both have almost no velocity in them, and telling them apart from the velocity alone is not possible.
     mSolidRaw.assign(allocated, 0);
     glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
     glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_UNSIGNED_BYTE, mSolidRaw.data());
     glBindTexture(GL_TEXTURE_3D, 0);
 }
 
-// CPU half, worker: unpack the staged volume into the tile. A quarter of a
-// million LLVector4 stores at a typical resolution, and nothing about it needs
-// the GL context.
+// CPU half, worker: unpack the staged volume into the tile. A quarter of a million LLVector4 stores at a typical resolution, and nothing about it needs the GL context.
 void SSWindFlowMap::unpackVolume(Tile& tile)
 {
     const size_t active = (size_t)tile.mRes * tile.mRes * tile.mSlices;
@@ -1771,18 +1633,10 @@ void SSWindFlowMap::unpackVolume(Tile& tile)
 //-----------------------------------------------------------------------------
 // Staged build
 //-----------------------------------------------------------------------------
-//
-// A build used to run start to finish inside one update(). That is five full
-// scene renders, three GPU readbacks and several passes over a res*res*slices
-// grid, all charged to the same frame - tens of milliseconds, every time a
-// region resolves. Regions resolve whenever anything near the camera rezzes,
-// so in a busy place it was a hitch every few seconds.
-//
-// The same work now runs one stage per update(), and the stages that touch no
-// GL run on the general work queue. Only ever one build is in flight, so the
-// scratch buffers stay single owner and need no locking: while a worker stage
-// holds them the main thread does not touch them, and abandoning a build waits
-// for the worker to report back before anything is freed.
+// A build used to run start to finish inside one update(). That is five full scene renders, three GPU readbacks and several passes over a res*res*slices grid, all charged to the same frame - tens of
+// milliseconds, every time a region resolves. Regions resolve whenever anything near the camera rezzes, so in a busy place it was a hitch every few seconds. The same work now runs one stage per
+// update(), and the stages that touch no GL run on the general work queue. Only ever one build is in flight, so the scratch buffers stay single owner and need no locking: while a worker stage holds
+// them the main thread does not touch them, and abandoning a build waits for the worker to report back before anything is freed.
 
 SSWindFlowMap::Tile* SSWindFlowMap::buildTile()
 {
@@ -1793,8 +1647,7 @@ SSWindFlowMap::Tile* SSWindFlowMap::buildTile()
 
 void SSWindFlowMap::releaseScratch()
 {
-    // The staging tile is scratch too: it carries a full mFlow and mSolid, and
-    // an abandoned build has no reason to keep either
+    // The staging tile is scratch too: it carries a full mFlow and mSolid, and an abandoned build has no reason to keep either
     mBuild = Tile();
 
     mMaskRaw.clear();
@@ -1810,8 +1663,7 @@ void SSWindFlowMap::releaseScratch()
 
 void SSWindFlowMap::abandonBuild()
 {
-    // The generation is what a worker completion checks itself against, so
-    // bumping it here is what makes a stale one land harmlessly
+    // The generation is what a worker completion checks itself against, so bumping it here is what makes a stale one land harmlessly
     ++mBuildGeneration;
     mStage = EStage::IDLE;
     mBuildRegion = 0;
@@ -1875,9 +1727,7 @@ bool SSWindFlowMap::beginBuild(Tile& tile)
     S32 res; F32 extent, margin;
     desiredGeometry(regionp, res, extent, margin);
 
-    // Fresh staging tile. The live one is left exactly as it is - still valid,
-    // still self-consistent, still being sampled - until COMMIT swaps the
-    // finished result in.
+    // Fresh staging tile. The live one is left exactly as it is - still valid, still self-consistent, still being sampled - until COMMIT swaps the finished result in.
     mBuild = Tile();
     mBuild.mRegionHandle = tile.mRegionHandle;
     mBuild.mRes = res;
@@ -1887,9 +1737,8 @@ bool SSWindFlowMap::beginBuild(Tile& tile)
 
     chooseBand(mBuild, regionp);
 
-    // Anything that dirties the region from here on is a change this build has
-    // not seen, so clear it now and let it re-arm. Clearing it at COMMIT
-    // instead would swallow every edit made while the solve was running.
+    // Anything that dirties the region from here on is a change this build has not seen, so clear it now and let it re-arm. Clearing it at COMMIT instead would swallow every edit made while the
+    // solve was running.
     tile.mDirty = false;
 
     mBuildRegion = tile.mRegionHandle;
@@ -1911,25 +1760,20 @@ bool SSWindFlowMap::stageCaptureProbe(Tile& tile, S32 which)
     return captureProbe(tile, which);
 }
 
-// Worker. Everything between the last capture and the first dispatch that does
-// not need the context: nine million probe rays turned back into altitudes,
-// the slab placement that reads them, and the solid fill measurement.
+// Worker. Everything between the last capture and the first dispatch that does not need the context: nine million probe rays turned back into altitudes, the slab placement that reads them, and the
+// solid fill measurement.
 void SSWindFlowMap::stageReduce(Tile& tile)
 {
     reconstructHidden(tile);
     placeSlices(tile);
 
-    // Hold on to what the capture saw, and to how much of the volume it filled.
-    // A solve with an empty mask looks exactly like a solve with no buildings
-    // in the region, and there is otherwise no way to tell the two apart from
-    // the outside.
+    // Hold on to what the capture saw, and to how much of the volume it filled. A solve with an empty mask looks exactly like a solve with no buildings in the region, and there is otherwise no way
+    // to tell the two apart from the outside.
     tile.mSurfaceTop = mTop;
     tile.mSolidFill = 0.f;
     {
-        // Before carving: everything under the overhead surface. What the
-        // probes then open back up is reported separately as mCarved, so the
-        // two numbers together say both how much geometry the capture found
-        // and how much of it turned out to be roofed rather than solid.
+        // Before carving: everything under the overhead surface. What the probes then open back up is reported separately as mCarved, so the two numbers together say both how much geometry the
+        // capture found and how much of it turned out to be roofed rather than solid.
         const size_t cells = (size_t)tile.mRes * tile.mRes;
         F64 sum = 0.0;
         for (size_t i = 0; i < cells && i < mTop.size(); ++i)
@@ -1956,8 +1800,7 @@ bool SSWindFlowMap::stageSolveInit(Tile& tile)
     return solveInit(tile);
 }
 
-// Worker: joining passages up is a pass over the whole volume against three
-// axes, the largest CPU cost left in a build
+// Worker: joining passages up is a pass over the whole volume against three axes, the largest CPU cost left in a build
 void SSWindFlowMap::stageBridge(Tile& tile)
 {
     bridgePassages(tile);
@@ -1976,8 +1819,7 @@ bool SSWindFlowMap::stageReadback(Tile& tile)
     return true;
 }
 
-// Worker: unpack the staged volume, and repeat the carve for the debug view if
-// that view is the one selected
+// Worker: unpack the staged volume, and repeat the carve for the debug view if that view is the one selected
 void SSWindFlowMap::stageConvert(Tile& tile)
 {
     unpackVolume(tile);
@@ -1991,15 +1833,12 @@ void SSWindFlowMap::stageCommit(Tile& live)
     mBuild.mBuildTime = SSAtmoMagic::getInstance()->sharedTime();
     mBuild.mValid = true;
 
-    // Anything that dirtied the region while the solve was running describes a
-    // build this result never saw, so it carries over and asks for another.
+    // Anything that dirtied the region while the solve was running describes a build this result never saw, so it carries over and asks for another.
     mBuild.mDirty = live.mDirty;
     mBuild.mLastTouched = live.mLastTouched;
 
-    // The one point at which the live tile changes shape. Everything about it
-    // - resolution, slab count, slab altitudes, the field itself - moves in a
-    // single assignment, so a sampler either gets the whole of the old solve or
-    // the whole of the new one and never a mix of the two.
+    // The one point at which the live tile changes shape. Everything about it - resolution, slab count, slab altitudes, the field itself - moves in a single assignment, so a sampler either gets the
+    // whole of the old solve or the whole of the new one and never a mix of the two.
     live = std::move(mBuild);
     mBuild = Tile();
 
@@ -2021,8 +1860,7 @@ void SSWindFlowMap::stageCommit(Tile& live)
                           << ", " << llformat("%.0fms wall", mSolveMS) << LL_ENDL;
 }
 
-// One stage per call. Returns true while a build is in flight, so update()
-// knows not to look for another tile to start.
+// One stage per call. Returns true while a build is in flight, so update() knows not to look for another tile to start.
 bool SSWindFlowMap::advanceBuild()
 {
     if (mStage == EStage::IDLE) return false;
@@ -2030,8 +1868,7 @@ bool SSWindFlowMap::advanceBuild()
     // A worker stage is out; nothing to do here until it reports back
     if (mWorkerBusy) return true;
 
-    // The live tile is only needed to commit into; every stage before that
-    // works on the staging tile
+    // The live tile is only needed to commit into; every stage before that works on the staging tile
     Tile* livep = buildTile();
     if (!livep)
     {
@@ -2044,8 +1881,7 @@ bool SSWindFlowMap::advanceBuild()
 
     auto fail = [&](const char* why)
     {
-        // The live tile keeps whatever it had. A failed build produces no
-        // result rather than invalidating a solve that was working.
+        // The live tile keeps whatever it had. A failed build produces no result rather than invalidating a solve that was working.
         LL_WARNS("AtmoMagic") << "Wind flow build abandoned at " << why << LL_ENDL;
         abandonBuild();
         return false;
@@ -2073,8 +1909,7 @@ bool SSWindFlowMap::advanceBuild()
         case EStage::SOLVE_INIT:
             if (!stageSolveInit(tile))
             {
-                // A failed solve is a broken shader, not a broken region, so
-                // stop trying rather than spinning on it
+                // A failed solve is a broken shader, not a broken region, so stop trying rather than spinning on it
                 mShaderFailed = true;
                 return fail("the mask init pass");
             }
@@ -2104,10 +1939,8 @@ bool SSWindFlowMap::advanceBuild()
             return true;
 
         case EStage::COMMIT:
-            // Everything downstream indexes mFlow by mRes and mSlices, so the
-            // three have to agree before this is allowed to become the tile
-            // people sample. A short readback publishes as "valid but empty",
-            // which reads as dead calm rather than as the failure it is.
+            // Everything downstream indexes mFlow by mRes and mSlices, so the three have to agree before this is allowed to become the tile people sample. A short readback publishes as "valid but
+            // empty", which reads as dead calm rather than as the failure it is.
             if (mBuild.mFlow.size() != (size_t)mBuild.mRes * mBuild.mRes * mBuild.mSlices)
             {
                 return fail("the volume unpack: the field came back the wrong size");
@@ -2125,13 +1958,11 @@ bool SSWindFlowMap::advanceBuild()
 }
 void SSWindFlowMap::evict()
 {
-    // A worker stage holds a reference into the map. Inserting into a std::map
-    // leaves existing references alone, but erasing from it does not, so no
-    // tile goes anywhere until the build in flight has let go.
+    // A worker stage holds a reference into the map. Inserting into a std::map leaves existing references alone, but erasing from it does not, so no tile goes anywhere until the build in flight has
+    // let go.
     if (mWorkerBusy) return;
 
-    // Drop tiles for regions that left the world, then the least recently
-    // touched ones beyond the cache cap
+    // Drop tiles for regions that left the world, then the least recently touched ones beyond the cache cap
     for (auto it = mTiles.begin(); it != mTiles.end();)
     {
         if (!LLWorld::getInstance()->getRegionFromHandle(it->first))
@@ -2166,8 +1997,7 @@ void SSWindFlowMap::update()
 
     if (!ensureShaders()) return;
 
-    // A build in flight gets one stage per frame and nothing else happens.
-    // Evicting mid-build would pull the tile out from under it.
+    // A build in flight gets one stage per frame and nothing else happens. Evicting mid-build would pull the tile out from under it.
     if (advanceBuild()) return;
 
     const F64 now = SSAtmoMagic::getInstance()->sharedTime();
@@ -2175,10 +2005,8 @@ void SSWindFlowMap::update()
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
-    // A dirty tile waits before resolving. A region rezzing in fires object
-    // updates continuously for tens of seconds, and re-solving on every one of
-    // them would be both pointless and expensive; this lets it settle and
-    // catches up once things stop moving.
+    // A dirty tile waits before resolving. A region rezzing in fires object updates continuously for tens of seconds, and re-solving on every one of them would be both pointless and expensive; this
+    // lets it settle and catches up once things stop moving.
     auto ready = [&](const Tile& tile)
     {
         if (!needsSolve(tile)) return false;
@@ -2186,8 +2014,7 @@ void SSWindFlowMap::update()
         return true;
     };
 
-    // The camera's region always deserves a tile; neighbours get one once the
-    // camera is close enough to their border to be hearing their wind
+    // The camera's region always deserves a tile; neighbours get one once the camera is close enough to their border to be hearing their wind
     LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
     Tile* best = nullptr;
 
@@ -2326,9 +2153,7 @@ S32 SSWindFlowMap::forEachColumn(const LLVector3& center_agent, F32 radius_m,
     const F32 cell = tile->mExtent / (F32)tile->mRes;
     if (cell <= 0.f) return 0;
 
-    // The square that bounds the circle, clamped to the tile. Walking the
-    // square and rejecting the corners is cheaper than being clever about
-    // circle rasterisation for a grid this small.
+    // The square that bounds the circle, clamped to the tile. Walking the square and rejecting the corners is cheaper than being clever about circle rasterisation for a grid this small.
     const S32 span = (S32)(radius_m / cell) + 1;
     const S32 cx = (S32)((center_agent.mV[VX] - origin.mV[VX]) / cell);
     const S32 cy = (S32)((center_agent.mV[VY] - origin.mV[VY]) / cell);
@@ -2381,27 +2206,15 @@ F32 SSWindFlowMap::solidFill() const
 // Travelling gusts
 //-----------------------------------------------------------------------------
 
-// The solve is deliberately static: it says how a build bends a steady wind,
-// and it is far too expensive to re-run at anything like a frame rate. On its
-// own though it blows at one unvarying strength forever, everywhere at once,
-// and that is the one thing a storm never does.
-//
-// So the rhythm is layered on at sample time, as frozen turbulence: a noise
-// field fixed in the moving air rather than in the world. Standing still, the
-// pattern is carried past at the wind's own speed and the wind rises and falls
-// as it goes by; watched from above, a surge enters the region on the windward
-// side and walks across it, reaching the far edge as much later as the air
-// takes to get there. Nothing about it is a clock - it is one field, and where
-// you are in it is where the air has carried it to.
-//
-// The field is anisotropic, long across the wind and short along it, because a
-// gust front arrives as a line rather than a blob, and it veers as well as
-// surges: a gust that only changed speed reads as the whole world pulsing.
+// The solve is deliberately static: it says how a build bends a steady wind, and it is far too expensive to re-run at anything like a frame rate. On its own though it blows at one unvarying strength
+// forever, everywhere at once, and that is the one thing a storm never does. So the rhythm is layered on at sample time, as frozen turbulence: a noise field fixed in the moving air rather than in
+// the world. Standing still, the pattern is carried past at the wind's own speed and the wind rises and falls as it goes by; watched from above, a surge enters the region on the windward side and
+// walks across it, reaching the far edge as much later as the air takes to get there. Nothing about it is a clock - it is one field, and where you are in it is where the air has carried it to. The
+// field is anisotropic, long across the wind and short along it, because a gust front arrives as a line rather than a blob, and it veers as well as surges: a gust that only changed speed reads as
+// the whole world pulsing.
 void SSWindFlowMap::gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32& veer) const
 {
-    // Depth, spacing and veer are the track's own weather, alongside its
-    // turbulence and wind speed; only how fast a front travels relative to the
-    // air is a viewer-side tuning knob.
+    // Depth, spacing and veer are the track's own weather, alongside its turbulence and wind speed; only how fast a front travels relative to the air is a viewer-side tuning knob.
     static LLCachedControl<F32> travel_setting(gSavedSettings, "SSAtmoWindGustTravel", 1.f);
 
     scale = 1.f;
@@ -2409,8 +2222,7 @@ void SSWindFlowMap::gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
-    // Already scaled by the track's turbulence: at zero the track is asking for
-    // a steady draught and there is nothing to modulate
+    // Already scaled by the track's turbulence: at zero the track is asking for a steady draught and there is nothing to modulate
     const F32 depth = atmo->gustDepth();
     if (depth <= 0.001f) return;
 
@@ -2420,16 +2232,14 @@ void SSWindFlowMap::gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32
 
     const LLVector3 dir = wind / speed;
 
-    // Grid coordinates, so a front crosses a region border without a seam.
-    // Wrapped far outside anything visible across, on a region multiple so the
-    // wrap lands on a border rather than through the middle of a build.
+    // Grid coordinates, so a front crosses a region border without a seam. Wrapped far outside anything visible across, on a region multiple so the wrap lands on a border rather than through the
+    // middle of a build.
     const LLVector3d global = gAgent.getPosGlobalFromAgent(pos_agent);
     const F32 gx = (F32)fmod(global.mdV[VX], 8192.0);
     const F32 gy = (F32)fmod(global.mdV[VY], 8192.0);
 
-    // Distance along and across the wind, the along axis carried backwards by
-    // however far the air has travelled. That subtraction is the whole trick:
-    // it is what sweeps the pattern downwind at exactly wind speed.
+    // Distance along and across the wind, the along axis carried backwards by however far the air has travelled. That subtraction is the whole trick: it is what sweeps the pattern downwind at
+    // exactly wind speed.
     const F64 drift = atmo->windDrift() * (F64)llclamp((F32)travel_setting, 0.f, 4.f);
     const F64 along = (F64)(gx * dir.mV[VX] + gy * dir.mV[VY]) - drift;
     const F32 across = -gx * dir.mV[VY] + gy * dir.mV[VX];
@@ -2437,14 +2247,11 @@ void SSWindFlowMap::gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32
     const F32 wavelength = atmo->gustLength();
     const U32 seed = atmo->seed();
 
-    // Frozen turbulence is only ever an approximation: a real eddy changes as
-    // it travels, so a pattern that never did would repeat itself out of a
-    // steady wind. A slow crosswind slide on the shared clock decorrelates it
-    // over a couple of minutes without disturbing the downwind travel.
+    // Frozen turbulence is only ever an approximation: a real eddy changes as it travels, so a pattern that never did would repeat itself out of a steady wind. A slow crosswind slide on the shared
+    // clock decorrelates it over a couple of minutes without disturbing the downwind travel.
     const F32 evolve = (F32)fmod(time, 4096.0) * 0.006f;
 
-    // The surge itself, and a shorter channel riding on it so a wave has some
-    // texture rather than passing as one clean swell
+    // The surge itself, and a shorter channel riding on it so a wave has some texture rather than passing as one clean swell
     const F32 su = (F32)(along / (F64)wavelength);
     const F32 sv = across / (wavelength * 2.4f) + evolve;
     const F32 wave = SSAtmoNoise::fbm2(su, sv, seed ^ 0x57055EE1u, 2);
@@ -2453,16 +2260,13 @@ void SSWindFlowMap::gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32
     const F32 rv = across / (wavelength * 0.65f) + evolve * 3.f;
     const F32 ripple = SSAtmoNoise::value2(ru, rv, seed ^ 0x9F17E2B3u);
 
-    // Leaned toward the peaks: a windy day spends longer in the lulls between
-    // gusts than it does inside them, and a symmetric field reads as breathing
+    // Leaned toward the peaks: a windy day spends longer in the lulls between gusts than it does inside them, and a symmetric field reads as breathing
     F32 g = 0.8f * wave + 0.3f * ripple;
     g = (g > 0.f) ? g * 1.35f : g * 0.8f;
 
     scale = llclamp(1.f + depth * g, 0.1f, 3.f);
 
-    // Backing and veering a few degrees either side of the mean as the front
-    // goes through. Slower and broader than the speed channel, so the air
-    // swings once per gust instead of jittering.
+    // Backing and veering a few degrees either side of the mean as the front goes through. Slower and broader than the speed channel, so the air swings once per gust instead of jittering.
     const F32 swing = SSAtmoNoise::value2(su * 0.7f, sv * 0.7f, seed ^ 0x2C0FFE55u);
     veer = swing * depth * atmo->gustVeer();
 }
@@ -2474,8 +2278,7 @@ F32 SSWindFlowMap::gust(const LLVector3& pos_agent) const
     return scale;
 }
 
-// Turn a horizontal wind by an angle, leaving any vertical component alone:
-// air going over a roof still goes over it, gust or no gust
+// Turn a horizontal wind by an angle, leaving any vertical component alone: air going over a roof still goes over it, gust or no gust
 static LLVector3 veerWind(const LLVector3& v, F32 angle)
 {
     if (fabsf(angle) < 0.001f) return v;
@@ -2489,15 +2292,12 @@ LLVector3 SSWindFlowMap::sample(const LLVector3& pos_agent) const
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
-    // The gust rides on whatever the wind at this point turns out to be, so
-    // the ambient fallback surges along with the solved field rather than the
-    // two disagreeing either side of a tile border
+    // The gust rides on whatever the wind at this point turns out to be, so the ambient fallback surges along with the solved field rather than the two disagreeing either side of a tile border
     F32 gust_scale, gust_veer;
     gustAt(pos_agent, atmo->sharedTime(), gust_scale, gust_veer);
     auto gusted = [&](const LLVector3& v, F32 shelter)
     {
-        // A courtyard the wind barely reaches does not get the gust either: it
-        // feels the surges as a distant swell rather than as the front itself
+        // A courtyard the wind barely reaches does not get the gust either: it feels the surges as a distant swell rather than as the front itself
         const F32 felt = 1.f + (gust_scale - 1.f) * shelter;
         return veerWind(v * felt, gust_veer * shelter);
     };
@@ -2530,8 +2330,7 @@ LLVector3 SSWindFlowMap::sample(const LLVector3& pos_agent) const
     sliceAt(tile, pos_agent.mV[VZ], k, tz);
     const S32 k1 = llmin(k + 1, tile.mSlices - 1);
 
-    // Velocity in xyz and exposure in w interpolated together: the gust wants
-    // the exposure at the same point, and it is already sitting in the cell
+    // Velocity in xyz and exposure in w interpolated together: the gust wants the exposure at the same point, and it is already sitting in the cell
     auto bilinear = [&](S32 slab)
     {
         const LLVector4& a = tile.mFlow[index(tile, x0,     y0,     slab)];
@@ -2579,8 +2378,7 @@ F32 SSWindFlowMap::exposure(const LLVector3& pos_agent) const
 // Debug visualisation
 //-----------------------------------------------------------------------------
 
-// Flow direction as hue, so the eye can read a whole slab at a glance:
-// opposing directions come out as opposing colours.
+// Flow direction as hue, so the eye can read a whole slab at a glance: opposing directions come out as opposing colours.
 static LLColor4 flowColor(const LLVector3& v, F32 exposure, F32 alpha)
 {
     const F32 len = v.magVec();
@@ -2607,9 +2405,8 @@ static LLColor4 flowColor(const LLVector3& v, F32 exposure, F32 alpha)
     return LLColor4(r * v_scale, g * v_scale, b * v_scale, alpha);
 }
 
-// Draw what a capture pass actually saw, as the world points it saw them at.
-// A depth map shown flat says whether it has holes; shown in place it says
-// which part of the region fell into them, which is the question that matters.
+// Draw what a capture pass actually saw, as the world points it saw them at. A depth map shown flat says whether it has holes; shown in place it says which part of the region fell into them, which
+// is the question that matters.
 void SSWindFlowMap::renderDebugCapture(S32 which)
 {
     if (mCaptureRes <= 0) return;
@@ -2626,8 +2423,7 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
-    // A cross rather than a point: points do not scale with distance and a
-    // dense capture turns into a solid wall of them.
+    // A cross rather than a point: points do not scale with distance and a dense capture turns into a solid wall of them.
     auto mark = [&](const LLVector3& p, const LLColor4& c, F32 size)
     {
         gGL.color4fv(c.mV);
@@ -2641,9 +2437,7 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
 
     if (which == 0)
     {
-        // Overhead pass. Green where it found a surface; a red mark down at the
-        // band floor where the column came back empty, so holes are visible
-        // rather than merely absent.
+        // Overhead pass. Green where it found a surface; a red mark down at the band floor where the column came back empty, so holes are visible rather than merely absent.
         for (S32 y = 0; y < res; ++y)
         {
             for (S32 x = 0; x < res; ++x)
@@ -2671,10 +2465,8 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
             return;
         }
 
-        // Blocked cells are left dim: they are the majority and they are the
-        // ones behaving. What matters is the difference between a cell a probe
-        // opened and one no probe could speak for, because only the second
-        // kind is a passage the capture is failing to find.
+        // Blocked cells are left dim: they are the majority and they are the ones behaving. What matters is the difference between a cell a probe opened and one no probe could speak for, because
+        // only the second kind is a passage the capture is failing to find.
         const Tile* tile = nullptr;
         auto it = mTiles.find(mCaptureRegion);
         if (it != mTiles.end()) tile = &it->second;
@@ -2699,11 +2491,8 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
                     const U8 flag = mCarveFlags[idx];
                     if (flag == CARVE_AIR) continue;
 
-                    // Drawn where the cell was tested, which is the middle of
-                    // the part of the slab that is actually under the surface -
-                    // not the middle of the slab. A roof caught low in a thick
-                    // top slab is otherwise drawn tens of metres above itself,
-                    // and reads as a phantom layer floating over the rooftops.
+                    // Drawn where the cell was tested, which is the middle of the part of the slab that is actually under the surface - not the middle of the slab. A roof caught low in a thick top
+                    // slab is otherwise drawn tens of metres above itself, and reads as a phantom layer floating over the rooftops.
                     const F32 top = mTop[(size_t)y * res + x];
                     const F32 z = 0.5f * (lo + llmin(hi, top));
 
@@ -2739,9 +2528,7 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
 
         const ProbeFrame& f = mProbeFrame[i];
 
-        // Each probe gets its own hue so several can be told apart when the
-        // view is cycled, and so a direction that is missing whole swathes of
-        // the region stands out against the ones that are not.
+        // Each probe gets its own hue so several can be told apart when the view is cycled, and so a direction that is missing whole swathes of the region stands out against the ones that are not.
         static const LLColor4 hues[SS_WIND_PROBES] = {
             LLColor4(1.f, 0.5f, 0.2f, 0.8f),
             LLColor4(0.3f, 0.8f, 1.f, 0.8f),
@@ -2782,34 +2569,23 @@ F32 SSWindFlowMap::slabAlpha(const Tile& tile, S32 k, F32 cam_z) const
     static LLCachedControl<F32> fade(gSavedSettings, "SSAtmoWindFlowDebugFade", 0.5f);
     const F32 falloff = llclamp((F32)fade, 0.05f, 1.f);
 
-    // Measured in slabs rather than metres, so the slab you are standing in is
-    // always the solid one however unevenly the adaptive slicing placed them.
+    // Measured in slabs rather than metres, so the slab you are standing in is always the solid one however unevenly the adaptive slicing placed them.
     S32 k_cam = 0;
     F32 frac = 0.f;
     sliceAt(tile, cam_z, k_cam, frac);
 
-    // Compounding per slab rather than ramping across the band. A linear ramp
-    // spreads the difference evenly and leaves every slab looking much like its
-    // neighbours, which is unreadable once a dozen of them are drawn at once;
-    // halving each step apart separates them at a glance and buries the distant
-    // ones quickly, which is the whole point of drawing them at all.
+    // Compounding per slab rather than ramping across the band. A linear ramp spreads the difference evenly and leaves every slab looking much like its neighbours, which is unreadable once a dozen
+    // of them are drawn at once; halving each step apart separates them at a glance and buries the distant ones quickly, which is the whole point of drawing them at all.
     const F32 alpha = powf(falloff, (F32)llabs(k - k_cam));
 
-    // Never quite nothing: a slab that has faded out entirely cannot be told
-    // from one the solve never produced
+    // Never quite nothing: a slab that has faded out entirely cannot be told from one the solve never produced
     return llmax(0.02f, alpha);
 }
 
-// One arrow per cell says what the field is at a point. A flow line says where
-// the air actually goes, which is the question being asked of an alley or a
-// gate. Lines do not branch - the field has one value per point - but seeded
-// densely they read as branching, because neighbouring lines diverge around an
-// obstacle and converge again through a gap.
-// Speed as colour temperature, measured against the ambient wind rather than in
-// m/s so it reads the same in a breeze and a gale. Cold is sheltered, neutral
-// is undisturbed, hot is a jet. Direction is left to the line's own path and
-// its downstream brightening, which a single arrow cannot lean on and a
-// continuous line can - that is what frees the hue to carry something else.
+// One arrow per cell says what the field is at a point. A flow line says where the air actually goes, which is the question being asked of an alley or a gate. Lines do not branch - the field has one
+// value per point - but seeded densely they read as branching, because neighbouring lines diverge around an obstacle and converge again through a gap. Speed as colour temperature, measured against
+// the ambient wind rather than in m/s so it reads the same in a breeze and a gale. Cold is sheltered, neutral is undisturbed, hot is a jet. Direction is left to the line's own path and its
+// downstream brightening, which a single arrow cannot lean on and a continuous line can - that is what frees the hue to carry something else.
 static LLColor4 speedColor(F32 ratio, F32 alpha)
 {
     F32 r, g, b;
@@ -2824,8 +2600,7 @@ static LLColor4 speedColor(F32 ratio, F32 alpha)
     }
     else
     {
-        // Accelerated: neutral through amber into red. Two ambients is already
-        // a strong jet, so the ramp is spent by then rather than crawling on.
+        // Accelerated: neutral through amber into red. Two ambients is already a strong jet, so the ramp is spent by then rather than crawling on.
         const F32 t = llclamp((ratio - 1.f), 0.f, 1.f);
         r = 1.f;
         g = lerp(0.92f, 0.25f, t);
@@ -2856,10 +2631,8 @@ void SSWindFlowMap::renderDebugStreamlines()
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
-    // Width carries speed as well as colour, which is what makes a jet findable
-    // when the whole volume is on screen at once. Line width is global state and
-    // changing it mid-stream forces a flush, so segments are collected by width
-    // and drawn in one pass each rather than in the order they were traced.
+    // Width carries speed as well as colour, which is what makes a jet findable when the whole volume is on screen at once. Line width is global state and changing it mid-stream forces a flush, so
+    // segments are collected by width and drawn in one pass each rather than in the order they were traced.
     struct Vert { LLVector3 mPos; LLColor4 mColor; };
     std::vector<Vert> buckets[SS_WIND_LINE_WIDTHS];
 
@@ -2875,10 +2648,8 @@ void SSWindFlowMap::renderDebugStreamlines()
         const F32 cell = tile.mExtent / (F32)tile.mRes;
         const F32 step_len = cell * 0.75f;
 
-        // Whether a point is inside geometry. Stopping on low speed alone walks
-        // lines straight into buildings: the interpolation across a wall face
-        // blends open air with solid and leaves just enough velocity to keep
-        // stepping, and a partly filled slab has a real velocity throughout.
+        // Whether a point is inside geometry. Stopping on low speed alone walks lines straight into buildings: the interpolation across a wall face blends open air with solid and leaves just enough
+        // velocity to keep stepping, and a partly filled slab has a real velocity throughout.
         auto solidAt = [&](const LLVector3& q) -> F32
         {
             if (tile.mSolid.empty()) return 0.f;
@@ -2902,14 +2673,9 @@ void SSWindFlowMap::renderDebugStreamlines()
             const F32 slab_alpha = slabAlpha(tile, k, cam.mV[VZ]);
             if (slab_alpha <= 0.02f) continue;
 
-            // Seed upwind, in a footprint stretched along this slab's wind.
-            //
-            // A line is only interesting once it has been somewhere: seeded
-            // beside the camera it is a short stub that has met nothing, and
-            // most of the budget goes on lines coming in from the sides that
-            // never reach anything you are looking at. Starting them well
-            // upwind means they arrive already shaped by whatever they have
-            // passed through, which is the thing worth seeing.
+            // Seed upwind, in a footprint stretched along this slab's wind. A line is only interesting once it has been somewhere: seeded beside the camera it is a short stub that has met nothing,
+            // and most of the budget goes on lines coming in from the sides that never reach anything you are looking at. Starting them well upwind means they arrive already shaped by whatever they
+            // have passed through, which is the thing worth seeing.
             LLVector3 along_dir(tile.mAmbient[k].mV[VX], tile.mAmbient[k].mV[VY], 0.f);
             if (along_dir.magVecSquared() < 0.0001f)
             {
@@ -2946,9 +2712,7 @@ void SSWindFlowMap::renderDebugStreamlines()
                         const F32 speed = v.magVec();
                         if (speed < 0.05f) break;       // dead air
 
-                        // Midpoint step. Following the field straight from the
-                        // start of a step cuts every corner it is meant to be
-                        // showing, and the lines drift through wall corners.
+                        // Midpoint step. Following the field straight from the start of a step cuts every corner it is meant to be showing, and the lines drift through wall corners.
                         const LLVector3 dir = v * (1.f / speed);
                         const LLVector3 mid = p + dir * (step_len * 0.5f);
                         LLVector3 mv = sample(mid);
@@ -2958,8 +2722,7 @@ void SSWindFlowMap::renderDebugStreamlines()
                         const LLVector3 next = p + mdir * step_len;
                         if (solidAt(next) > 0.5f) break;    // ran into geometry
 
-                        // Brightening downstream, so which way the air is
-                        // travelling is legible without drawing a head on it
+                        // Brightening downstream, so which way the air is travelling is legible without drawing a head on it
                         const F32 t0 = (F32)n / (F32)max_steps;
                         const F32 t1 = (F32)(n + 1) / (F32)max_steps;
 
@@ -2972,9 +2735,7 @@ void SSWindFlowMap::renderDebugStreamlines()
                         const LLColor4 c1 = tint_by_speed ? speedColor(ratio, a1)
                                                           : flowColor(v, ratio, a1);
 
-                        // Thin where the air is slack, thick through a jet.
-                        // Banded around ambient rather than proportional, so the
-                        // interesting half of the range is not spent below 1.
+                        // Thin where the air is slack, thick through a jet. Banded around ambient rather than proportional, so the interesting half of the range is not spent below 1.
                         const S32 w = (ratio < 0.6f) ? 0
                                     : (ratio < 1.05f) ? 1
                                     : (ratio < 1.5f) ? 2 : 3;
@@ -2983,8 +2744,7 @@ void SSWindFlowMap::renderDebugStreamlines()
 
                         p = next;
 
-                        // Leaving the domain: the field outside is the plain
-                        // ambient wind and tracing it says nothing
+                        // Leaving the domain: the field outside is the plain ambient wind and tracing it says nothing
                         if (p.mV[VX] < origin.mV[VX] || p.mV[VY] < origin.mV[VY]
                             || p.mV[VX] > origin.mV[VX] + tile.mExtent
                             || p.mV[VY] > origin.mV[VY] + tile.mExtent
@@ -2999,8 +2759,7 @@ void SSWindFlowMap::renderDebugStreamlines()
         }
     }
 
-    // Clamped to the driver maximum by setLineWidth, which in a core profile
-    // can be as low as 1 - in which case the tint carries speed on its own.
+    // Clamped to the driver maximum by setLineWidth, which in a core profile can be as low as 1 - in which case the tint carries speed on its own.
     static const F32 WIDTHS[SS_WIND_LINE_WIDTHS] = { 1.f, 3.f, 6.f, 10.f };
 
     for (S32 w = 0; w < SS_WIND_LINE_WIDTHS; ++w)
@@ -3023,8 +2782,7 @@ void SSWindFlowMap::renderDebugStreamlines()
 
 void SSWindFlowMap::renderDebug()
 {
-    // Capture views replace the flow field rather than overlaying it: the
-    // arrows are dense enough that anything drawn among them is unreadable.
+    // Capture views replace the flow field rather than overlaying it: the arrows are dense enough that anything drawn among them is unreadable.
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);
     if (capture_view > 0)
     {
@@ -3041,9 +2799,7 @@ void SSWindFlowMap::renderDebug()
         return;
     }
 
-    // One arrow per solved cell. Nothing here is interpolated or scaled up: an
-    // arrow sits at a cell centre and reads exactly one texel, so what is drawn
-    // is the field the solve produced.
+    // One arrow per solved cell. Nothing here is interpolated or scaled up: an arrow sits at a cell centre and reads exactly one texel, so what is drawn is the field the solve produced.
     static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
@@ -3071,11 +2827,8 @@ void SSWindFlowMap::renderDebug()
         {
             const F32 z = 0.5f * (tile.mSliceZ[k] + tile.mSliceZ[k + 1]);
 
-            // Reference speed from *this slab's* ambient wind, not the tile's
-            // strongest. The gradient makes an upper slab several times windier
-            // than the street, so measuring street air against the rooftop wind
-            // puts every reading near the bottom of the scale and no local
-            // acceleration can ever show.
+            // Reference speed from *this slab's* ambient wind, not the tile's strongest. The gradient makes an upper slab several times windier than the street, so measuring street air against the
+            // rooftop wind puts every reading near the bottom of the scale and no local acceleration can ever show.
             const F32 ref = llmax(0.1f, tile.mAmbient[k].magVec());
             const F32 slab_alpha = slabAlpha(tile, k, cam.mV[VZ]);
             if (slab_alpha < 0.02f) continue;
@@ -3088,8 +2841,7 @@ void SSWindFlowMap::renderDebug()
                 {
                     const F32 cx = origin.mV[VX] + ((F32)x + 0.5f) * cell;
 
-                    // Texel density where you are standing, decimating outward
-                    // so a whole neighbourhood of tiles stays affordable
+                    // Texel density where you are standing, decimating outward so a whole neighbourhood of tiles stays affordable
                     const F32 away = llmax(fabsf(cx - cam.mV[VX]), fabsf(cy - cam.mV[VY]));
                     const S32 step = (away < full) ? 1 : (away < full * 2.f) ? 2 : 4;
                     if ((x % step) || (y % step)) continue;
@@ -3101,9 +2853,7 @@ void SSWindFlowMap::renderDebug()
                     if (speed < 0.02f) continue;    // solid cell, or dead air
                     v *= 1.f / speed;
 
-                    // Length carries speed against the ambient reference, so a
-                    // venturi through an alley overruns its cell and a lee
-                    // pocket shrinks to a stub
+                    // Length carries speed against the ambient reference, so a venturi through an alley overruns its cell and a lee pocket shrinks to a stub
                     const F32 len = cell * (F32)step * 0.9f
                                   * llclamp(speed / ref, 0.08f, 1.6f);
 
@@ -3111,9 +2861,7 @@ void SSWindFlowMap::renderDebug()
                     const LLVector3 tail = centre - v * (len * 0.5f);
                     const LLVector3 head = centre + v * (len * 0.5f);
 
-                    // Dark tail to bright head: direction is legible from the
-                    // gradient alone, which is what lets the barbs go away and
-                    // the density go up by a factor of sixteen
+                    // Dark tail to bright head: direction is legible from the gradient alone, which is what lets the barbs go away and the density go up by a factor of sixteen
                     LLColor4 tip = flowColor(v * speed, f.mV[3], 0.9f * slab_alpha);
                     gGL.color4f(tip.mV[0] * 0.1f, tip.mV[1] * 0.1f, tip.mV[2] * 0.1f,
                                 0.35f * slab_alpha);
@@ -3124,8 +2872,7 @@ void SSWindFlowMap::renderDebug()
             }
         }
 
-        // Domain footprint: which region the tile belongs to, and how far its
-        // margin reaches into the neighbours it overlaps
+        // Domain footprint: which region the tile belongs to, and how far its margin reaches into the neighbours it overlaps
         const F32 x0 = origin.mV[VX];
         const F32 y0 = origin.mV[VY];
         const F32 x1 = x0 + tile.mExtent;

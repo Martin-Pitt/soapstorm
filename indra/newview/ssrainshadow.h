@@ -44,14 +44,11 @@ class SSRainShadowMap : public LLSingleton<SSRainShadowMap>
     LLSINGLETON_EMPTY_CTOR(SSRainShadowMap);
 
 public:
-    // Called from the display loop right after generateSunShadow, where the
-    // pipeline is in a known state. Captures at most one tile per call,
-    // throttled, picking the stalest/dirtiest tile near the camera.
+    // Called from the display loop right after generateSunShadow, where the pipeline is in a known state. Captures at most one tile per call, throttled, picking the stalest/dirtiest tile near the
+    // camera.
     void capture();
 
-    // Marks the covering tile for a lazy recapture. Driven from SSAtmoMagic's
-    // settle queue, so what arrives here has already been filtered down to
-    // geometry that is actually part of the build.
+    // Marks the covering tile for a lazy recapture. Driven from SSAtmoMagic's settle queue, so what arrives here has already been filtered down to geometry that is actually part of the build.
     void markDirty(const LLVector3& pos_agent, F32 radius);
     void clearCache();
 
@@ -59,28 +56,20 @@ public:
     S32 tileCount() const { return (S32)mTiles.size(); }
     U32 resolution() const;
 
-    // Capture accounting, for the info overlay. A map that is not shadowing
-    // what it should looks identical to one that is simply out of date, and
-    // these are what tell the two apart: how many captures have run, how many
-    // of those were forced by geometry changing rather than by the age or band
-    // checks, how long since the last one, and how long it took.
+    // Capture accounting, for the info overlay. A map that is not shadowing what it should looks identical to one that is simply out of date, and these are what tell the two apart: how many captures
+    // have run, how many of those were forced by geometry changing rather than by the age or band checks, how long since the last one, and how long it took.
     U32 captureCount() const { return mCaptureCount; }
     U32 dirtyCaptureCount() const { return mDirtyCaptures; }
     U32 dirtyTileCount() const;
     F32 lastCaptureMS() const { return mLastCaptureMS; }
     F64 lastCaptureAge() const;
 
-    // Render Metadata > Rain Shadow: casts the map onto the region as an
-    // actual shadow, draped over the ground where the rain does not reach.
+    // Render Metadata > Rain Shadow: casts the map onto the region as an actual shadow, draped over the ground where the rain does not reach.
     void renderDebug();
 
-    // A captured tile resampled down to a coarse world-space surface: for a
-    // regular grid of columns, the point precipitation lands on. This is the
-    // same answer resolveColumn gives, taken for the whole region in one pass
-    // so a consumer that needs the surface as a connected field - rather than
-    // one column at a time - can have it without a quarter of a million
-    // separate lookups. Region-local so it survives the agent-origin shift on
-    // a region crossing, the way the tiles themselves do.
+    // A captured tile resampled down to a coarse world-space surface: for a regular grid of columns, the point precipitation lands on. This is the same answer resolveColumn gives, taken for the
+    // whole region in one pass so a consumer that needs the surface as a connected field - rather than one column at a time - can have it without a quarter of a million separate lookups.
+    // Region-local so it survives the agent-origin shift on a region crossing, the way the tiles themselves do.
     enum
     {
         SURF_MAPPED   = 0x01,   // the capture saw a real surface here
@@ -88,13 +77,9 @@ public:
         SURF_FALLBACK = 0x04    // nothing captured; terrain heightmap guess
     };
 
-    // The grid is anchored to the region, not to the capture: cell centres are
-    // ((x + 0.5) * mCell, (y + 0.5) * mCell) in region-local XY, and mZ holds
-    // the height of the surface found in each. That matters because the tile
-    // itself is camera-relative - its band and footprint both move with the
-    // camera - so a grid laid out in the tile's own space would put its cells
-    // somewhere new every recapture, and anything derived from it would crawl
-    // around as the camera moved.
+    // The grid is anchored to the region, not to the capture: cell centres are ((x + 0.5) * mCell, (y + 0.5) * mCell) in region-local XY, and mZ holds the height of the surface found in each. That
+    // matters because the tile itself is camera-relative - its band and footprint both move with the camera - so a grid laid out in the tile's own space would put its cells somewhere new every
+    // recapture, and anything derived from it would crawl around as the camera moved.
     struct SurfaceGrid
     {
         U64 mRegionHandle = 0;
@@ -108,31 +93,21 @@ public:
         F32 axis(S32 i) const { return ((F32)i + 0.5f) * mCell; }
     };
 
-    // Resample the cached tile for a region into the grid above. False when
-    // that region has no valid tile yet.
+    // Resample the cached tile for a region into the grid above. False when that region has no valid tile yet.
     bool buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& out);
 
-    // Walk the captured depth outward from a coarse edge at the map's own full
-    // resolution, and return the last point still on the upper surface. A grid
-    // cell is metres across and the map is centimetres; this is what lets an
-    // eave sit on the actual lip of the geometry rather than in the middle of
-    // whichever cell happened to straddle it.
+    // Walk the captured depth outward from a coarse edge at the map's own full resolution, and return the last point still on the upper surface. A grid cell is metres across and the map is
+    // centimetres; this is what lets an eave sit on the actual lip of the geometry rather than in the middle of whichever cell happened to straddle it.
     bool refineEdge(U64 region_handle, const LLVector3& from_agent, const LLVector3& out_dir,
                     F32 max_dist, F32 tolerance, LLVector3& refined_agent) const;
 
-    // Regions holding a valid tile, paired with the geometry revision that tile
-    // was captured from. The revision only moves when something in the region
-    // actually changed shape - not when the tile is recaptured because the
-    // camera climbed or the wind turned - so a consumer can tell the difference
-    // between "there is a new capture" and "there is new geometry".
+    // Regions holding a valid tile, paired with the geometry revision that tile was captured from. The revision only moves when something in the region actually changed shape - not when the tile is
+    // recaptured because the camera climbed or the wind turned - so a consumer can tell the difference between "there is a new capture" and "there is new geometry".
     void validTiles(std::vector<std::pair<U64, U32> >& out) const;
 
-    // Find where the precipitation column through pos_agent first hits
-    // something, walking along the current fall direction. Falls back to
-    // terrain/water height when no map covers the point; the result is
-    // always usable. Returns whether map data was involved. When requested,
-    // hit_normal receives the surface normal at the hit, derived from the
-    // depth map's gradients (terrain/water normal on fallback).
+    // Find where the precipitation column through pos_agent first hits something, walking along the current fall direction. Falls back to terrain/water height when no map covers the point; the
+    // result is always usable. Returns whether map data was involved. When requested, hit_normal receives the surface normal at the hit, derived from the depth map's gradients (terrain/water normal
+    // on fallback).
     bool resolveColumn(const LLVector3& pos_agent, LLVector3& hit_pos_agent, bool& on_water,
                        LLVector3* hit_normal = nullptr);
 
@@ -143,11 +118,8 @@ private:
         U32 mRes = 0;
         std::vector<F32> mDepth;        // window-space depth, linear over [mNear, mFar]
 
-        // Ortho basis in region-local coordinates so tiles survive the
-        // agent-origin shift on region crossings
-        // Centre of the near plane, region-local. Backed off upwind of the
-        // band by enough that a tilted fall direction cannot leave part of the
-        // region in front of it; depth is measured along mDir from here.
+        // Ortho basis in region-local coordinates so tiles survive the agent-origin shift on region crossings Centre of the near plane, region-local. Backed off upwind of the band by enough that a
+        // tilted fall direction cannot leave part of the region in front of it; depth is measured along mDir from here.
         LLVector3 mEyeRegion;
         LLVector3 mDir, mRight, mUp;
         F32 mHalfW = 0.f, mHalfH = 0.f;
@@ -159,18 +131,13 @@ private:
         bool mValid = false;
         F64 mLastTouched = 0.0;         // for LRU eviction
 
-        // Bumped when geometry inside the band changes, and copied across at
-        // capture time. Recaptures that are only chasing the camera or the
-        // wind leave both alone.
+        // Bumped when geometry inside the band changes, and copied across at capture time. Recaptures that are only chasing the camera or the wind leave both alone.
         U32 mGeomSerial = 1;
         U32 mCapturedSerial = 0;
     };
 
-    // Debug shadow, draped over the region. A regular grid in region-local XY
-    // holding the receiving surface and how much rain reaches it; region-local
-    // so it survives the agent-origin shift on a region crossing, and cached
-    // so the per-sample column resolve happens on capture rather than per
-    // frame.
+    // Debug shadow, draped over the region. A regular grid in region-local XY holding the receiving surface and how much rain reaches it; region-local so it survives the agent-origin shift on a
+    // region crossing, and cached so the per-sample column resolve happens on capture rather than per frame.
     struct ShadowMesh
     {
         S32 mN = 0;                     // samples per axis

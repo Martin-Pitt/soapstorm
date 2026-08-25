@@ -28,6 +28,7 @@
 #include "sswindflow.h"
 #include "ssprecippreset.h"
 #include "sssurfacefield.h"
+#include "sssoundmeta.h"
 
 #include "llrand.h"
 
@@ -53,11 +54,8 @@ static const F32 IMPACT_RATE_FULL = 22.f;  // impact strength/sec that reads as 
 static const F32 IMPACT_RATE_TAU  = 1.5f;  // seconds, decay of the impact rate EMA
 static const F32 COVER_BLEND_RATE = 8.f;   // per second, indoor/outdoor crossfade
 
-// Burial. The depth at which build overhead has taken most of the rain bed
-// away, and how much of it it may take at the limit. Not all of it: a cellar
-// under a downpour is not silent, and a drain or a light well carries some of
-// it down. Eased more slowly than cover because it describes moving through a
-// building rather than through a doorway.
+// Burial. The depth at which build overhead has taken most of the rain bed away, and how much of it it may take at the limit. Not all of it: a cellar under a downpour is not silent, and a drain or a
+// light well carries some of it down. Eased more slowly than cover because it describes moving through a building rather than through a doorway.
 static const F32 BURIAL_FULL       = 12.f;  // metres of build above the ceiling
 static const F32 BURIAL_MAX_DUCK   = 0.85f; // most of the rain bed it may remove
 static const F32 BURIAL_BLEND_RATE = 2.5f;  // per second
@@ -123,10 +121,8 @@ void SSSoundscape::notifyImpact(F32 strength)
 
 bool SSSoundscape::castUpProbe(S32 index, F32& hit_dist)
 {
-    // Three rays leaning slightly off vertical, evenly spaced around the
-    // camera. Tilting them rather than firing straight up is what stops a
-    // single narrow gap or a lone beam overhead from deciding the result;
-    // the caller only calls it covered when all three agree.
+    // Three rays leaning slightly off vertical, evenly spaced around the camera. Tilting them rather than firing straight up is what stops a single narrow gap or a lone beam overhead from deciding
+    // the result; the caller only calls it covered when all three agree.
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const F32 azimuth = (F32)index * (F_TWO_PI / (F32)UP_RAY_COUNT) + 0.7f;
     const F32 tilt = UP_RAY_TILT * DEG_TO_RAD;
@@ -137,8 +133,7 @@ bool SSSoundscape::castUpProbe(S32 index, F32& hit_dist)
     const LLVector3 end = cam + dir * UP_RAY_LENGTH;
     end4.load3(end.mV);
 
-    // pick_transparent: glass roofs and windows shelter from rain even though
-    // the camera ray is happy to pass through them
+    // pick_transparent: glass roofs and windows shelter from rain even though the camera ray is happy to pass through them
     if (gPipeline.lineSegmentIntersectWorldGeometry(start4, end4, &intersect, true, true))
     {
         LLVector4a delta = intersect;
@@ -178,8 +173,7 @@ void SSSoundscape::updateProbes(F64 now)
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
-    // Re-probe on movement or staleness, rate limited so standing still
-    // costs nothing and running costs at most one cycle per interval
+    // Re-probe on movement or staleness, rate limited so standing still costs nothing and running costs at most one cycle per interval
     const bool moved = (cam - mProbeAnchor).magVec() > MOVE_TRIGGER;
     const bool stale = now - mLastCycleDone > STALE_TRIGGER;
     if (!moved && !stale) return;
@@ -189,9 +183,7 @@ void SSSoundscape::updateProbes(F64 now)
     mProbeOrigin = cam;
     mLastCycleDone = now;
 
-    // Whole cycle at once: 7 short static-geometry rays resolve cover and
-    // room size in the same frame the camera moved, so the mix never trails
-    // the player walking through a doorway
+    // Whole cycle at once: 7 short static-geometry rays resolve cover and room size in the same frame the camera moved, so the mix never trails the player walking through a doorway
     S32 up_hits = 0;
     F32 roof_dist = UP_RAY_LENGTH;
     for (S32 i = 0; i < UP_RAY_COUNT; ++i)
@@ -204,31 +196,21 @@ void SSSoundscape::updateProbes(F64 now)
         }
     }
 
-    // All three have to agree. Partial hits mean the rays disagree about what
-    // is overhead - a gap, a doorway, a beam - and that is treated as open
-    // sky rather than guessed at.
+    // All three have to agree. Partial hits mean the rays disagree about what is overhead - a gap, a doorway, a beam - and that is treated as open sky rather than guessed at.
     mCoverage = (F32)up_hits / (F32)UP_RAY_COUNT;
     mCovered = (up_hits == UP_RAY_COUNT);
     mRoofDist = mCovered ? roof_dist : 0.f;
 
-    // How much build is stacked above the ceiling. The up ray stops at the
-    // first thing over your head, which in a stairwell or a ground floor room
-    // is one slab; the flowmap's overhead capture knows where the column
-    // actually ends against the sky. The difference is the rest of the
-    // building, or the hillside over a cellar.
-    //
-    // The up ray is also short, so a room whose ceiling is beyond its reach
-    // reads as uncovered and this stays at zero - which is right, because a
-    // space that open is not muffling anything either.
+    // How much build is stacked above the ceiling. The up ray stops at the first thing over your head, which in a stairwell or a ground floor room is one slab; the flowmap's overhead capture knows
+    // where the column actually ends against the sky. The difference is the rest of the building, or the hillside over a cellar. The up ray is also short, so a room whose ceiling is beyond its reach
+    // reads as uncovered and this stays at zero - which is right, because a space that open is not muffling anything either.
     mBuriedDepth = 0.f;
     if (mCovered)
     {
         F32 column_top = 0.f;
         if (SSWindFlowMap::getInstance()->surfaceAt(cam, column_top))
         {
-            // Everything above the ceiling the ray found. The ceiling itself
-            // is not burial: one roof between you and the sky is an ordinary
-            // indoor space, and mCoverSmooth already handles that.
+            // Everything above the ceiling the ray found. The ceiling itself is not burial: one roof between you and the sky is an ordinary indoor space, and mCoverSmooth already handles that.
             const F32 ceiling = cam.mV[VZ] + roof_dist;
             mBuriedDepth = llmax(0.f, column_top - ceiling);
         }
@@ -246,8 +228,7 @@ void SSSoundscape::updateProbes(F64 now)
     mWallCount = walls;
     mWallAvg = avg;
 
-    // Width is banded the same way whether it ends up describing a room or
-    // the open ground around you
+    // Width is banded the same way whether it ends up describing a room or the open ground around you
     mOutdoorSize = (avg < SMALL_SPACE_AVG)  ? SIZE_SMALL
                  : (avg < MEDIUM_SPACE_AVG) ? SIZE_MEDIUM : SIZE_LARGE;
 
@@ -275,10 +256,8 @@ void SSSoundscape::updateProbes(F64 now)
     }
 }
 
-// Smooth ramp rather than a linear one: the first couple of metres of build
-// over a ceiling should barely register, because that is an ordinary floor
-// slab and you can still plainly hear the storm. It is being under several of
-// them that takes the rain away.
+// Smooth ramp rather than a linear one: the first couple of metres of build over a ceiling should barely register, because that is an ordinary floor slab and you can still plainly hear the storm. It
+// is being under several of them that takes the rain away.
 F32 SSSoundscape::burialOcclusion() const
 {
     const F32 t = llclamp(mBuriedSmooth / BURIAL_FULL, 0.f, 1.f);
@@ -316,8 +295,7 @@ F32 SSSoundscape::wallDistanceToward(const LLVector3& dir_horizontal) const
         LLVector3(0.f, 1.f, 0.f), LLVector3(0.f, -1.f, 0.f)
     };
 
-    // Only the two cardinals bracketing the direction get positive weight, so
-    // this interpolates between the samples either side of it
+    // Only the two cardinals bracketing the direction get positive weight, so this interpolates between the samples either side of it
     F32 weighted = 0.f;
     F32 total = 0.f;
     for (S32 i = 0; i < 4; ++i)
@@ -339,15 +317,13 @@ F32 SSSoundscape::occlusionGain(const LLVector3& source_pos) const
     const F32 wall = wallDistanceToward(to_source);
     if (dist <= wall + 0.5f) return 1.f;   // same side of everything: unmuffled
 
-    // Past a surface. Sealed in a room muffles far more than a wall standing
-    // between you and the source out in the open.
+    // Past a surface. Sealed in a room muffles far more than a wall standing between you and the source out in the open.
     return lerp(0.6f, 0.22f, mCoverSmooth);
 }
 
 F32 SSSoundscape::impactRate() const
 {
-    // mImpactRate is an exponentially decayed sum of impact strengths; its
-    // steady state is (rate * tau), so undo the tau for a real per-second figure
+    // mImpactRate is an exponentially decayed sum of impact strengths; its steady state is (rate * tau), so undo the tau for a real per-second figure
     return mImpactRate / IMPACT_RATE_TAU;
 }
 
@@ -386,17 +362,14 @@ void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 mast
     loop.mGain = lerp(loop.mGain, loop.mTarget, llclamp(llmax(0.1f, (F32)fade_rate) * dt, 0.f, 1.f));
     const F32 gain = llclamp(loop.mGain * master, 0.f, 1.f);
 
-    // Look the source up by ID every frame: the engine reaps finished
-    // non-looping sources itself, and a vanished source is exactly the
-    // "previous element ended" signal that advances a sequence
+    // Look the source up by ID every frame: the engine reaps finished non-looping sources itself, and a vanished source is exactly the "previous element ended" signal that advances a sequence
     LLAudioSource* source = loop.mSourceID.notNull() ? gAudiop->findAudioSource(loop.mSourceID) : nullptr;
 
     if (gain < 0.005f)
     {
         if (loop.mTarget < 0.005f && loop.mSourceID.notNull())
         {
-            // Fully faded and not wanted: release the channel (the sequence
-            // position is kept for the next activation)
+            // Fully faded and not wanted: release the channel (the sequence position is kept for the next activation)
             if (source)
             {
                 gAudiop->cleanupAudioSource(source);
@@ -423,8 +396,7 @@ void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 mast
         loop.mSourceID.generate();
         source = new LLAudioSource(loop.mSourceID, gAgent.getID(), gain,
                                    LLAudioEngine::AUDIO_TYPE_AMBIENT);
-        // Single entry: seamless engine-level loop. Sequence: play through
-        // once, the reap-and-respawn above chains the next element.
+        // Single entry: seamless engine-level loop. Sequence: play through once, the reap-and-respawn above chains the next element.
         source->setLoop(!sequence);
         source->setForcedPriority(true);
         gAudiop->addAudioSource(source);
@@ -432,8 +404,7 @@ void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 mast
 
         if (sequence)
         {
-            // Warm the decoder for the upcoming element so the handoff gap
-            // stays at a frame or two regardless of asset length
+            // Warm the decoder for the upcoming element so the handoff gap stays at a frame or two regardless of asset length
             gAudiop->preloadSound(loop.mSounds[(loop.mIndex + 1) % (U32)loop.mSounds.size()]);
         }
     }
@@ -447,23 +418,19 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
-    // Indoor factor eases so walking under a roof crossfades instead of
-    // cutting
+    // Indoor factor eases so walking under a roof crossfades instead of cutting
     mCoverSmooth = lerp(mCoverSmooth, mCovered ? 1.f : 0.f, llclamp(COVER_BLEND_RATE * dt, 0.f, 1.f));
     mBuriedSmooth = lerp(mBuriedSmooth, mBuriedDepth, llclamp(BURIAL_BLEND_RATE * dt, 0.f, 1.f));
 
-    // Local wetness: the parameter-side intensity blended with the actually
-    // observed impact rate around the camera, so shelter reads quieter
+    // Local wetness: the parameter-side intensity blended with the actually observed impact rate around the camera, so shelter reads quieter
     const F32 env = llclamp(atmo->gustEnvelopeAt(now), 0.f, 2.5f);
     const SSPrecipPreset& preset = atmo->preset();
     const F32 param_wet = atmo->hasWeather() ? atmo->precipitation() * (0.4f + 0.3f * env) : 0.f;
     const F32 impact_wet = llclamp(mImpactRate / IMPACT_RATE_FULL, 0.f, 1.f);
     const F32 wet = llclamp(0.55f * param_wet + 0.45f * impact_wet, 0.f, 1.f);
 
-    // Wind rides speed, turbulence and the live gust envelope. The speed is
-    // the locally solved one where a flowmap exists, so a courtyard is quiet
-    // and a gap the wind is squeezing through is loud, rather than everywhere
-    // hearing the same parameter.
+    // Wind rides speed, turbulence and the live gust envelope. The speed is the locally solved one where a flowmap exists, so a courtyard is quiet and a gap the wind is squeezing through is loud,
+    // rather than everywhere hearing the same parameter.
     const LLVector3 cam_pos = LLViewerCamera::getInstance()->getOrigin();
     SSWindFlowMap* flow = SSWindFlowMap::getInstance();
     const F32 local_speed = flow->isValid() ? flow->sample(cam_pos).magVec()
@@ -473,23 +440,17 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
                    * (0.55f + 0.45f * llclamp(env, 0.f, 2.f) * 0.5f)
                    * (0.6f + 0.4f * atmo->turbulence());
 
-    // An open shelter (roof, no walls) barely muffles the surrounding rain
-    // and wind; enclosed rooms duck them hard
+    // An open shelter (roof, no walls) barely muffles the surrounding rain and wind; enclosed rooms duck them hard
     const bool sheltered = (mSpace == SPACE_SHELTERED);
 
-    // And on top of that, everything stacked between the ceiling and the sky.
-    // Cover alone cannot tell a ground floor room from the cellar under it -
-    // both have a ceiling a couple of metres up - but the flowmap's height
-    // capture can, and rain you have four storeys of building between you and
-    // should not sound like rain on the roof directly overhead.
+    // And on top of that, everything stacked between the ceiling and the sky. Cover alone cannot tell a ground floor room from the cellar under it - both have a ceiling a couple of metres up - but
+    // the flowmap's height capture can, and rain you have four storeys of building between you and should not sound like rain on the roof directly overhead.
     const F32 buried = burialOcclusion();
     const F32 outdoor = (1.f - (sheltered ? 0.4f : 0.85f) * mCoverSmooth)
                       * (1.f - BURIAL_MAX_DUCK * buried);
 
-    // Outdoor bed: only the medium variant is required. When light or heavy
-    // are not configured their share of the blend folds back into medium, so
-    // a single-sound pack still fades in and out with intensity instead of
-    // dropping to silence at the ends of the range.
+    // Outdoor bed: only the medium variant is required. When light or heavy are not configured their share of the blend folds back into medium, so a single-sound pack still fades in and out with
+    // intensity instead of dropping to silence at the ends of the range.
     F32 w_light = tri(wet, 0.01f, 0.18f, 0.55f);
     F32 w_med   = tri(wet, 0.15f, 0.5f, 0.9f);
     F32 w_heavy = llclamp((wet - 0.55f) / 0.3f, 0.f, 1.f);
@@ -502,22 +463,17 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     targets[LOOP_AMBIENT_MEDIUM] = w_med * outdoor;
     targets[LOOP_AMBIENT_HEAVY]  = w_heavy * outdoor;
 
-    // Rain-on-roof bed for the current situation; needs both cover and
-    // actual precipitation coming down outside. Burial takes this one too:
-    // what you hear drumming on a roof is the roof over your head, and in a
-    // basement that surface is storeys away with a building damping it.
+    // Rain-on-roof bed for the current situation; needs both cover and actual precipitation coming down outside. Burial takes this one too: what you hear drumming on a roof is the roof over your
+    // head, and in a basement that surface is storeys away with a building damping it.
     const F32 roof = mCoverSmooth * wet * (1.f - BURIAL_MAX_DUCK * buried);
     targets[LOOP_ROOF_OPEN]   = sheltered ? roof : 0.f;
     targets[LOOP_ROOF_SMALL]  = (mSpace == SPACE_SMALL) ? roof : 0.f;
     targets[LOOP_ROOF_MEDIUM] = (mSpace == SPACE_MEDIUM) ? roof : 0.f;
     targets[LOOP_ROOF_BIG]    = (mSpace == SPACE_BIG && mCovered) ? roof : 0.f;
 
-    // A tight outdoor space - an alley, a ravine - carries less wind than
-    // open ground even with nothing overhead. The flowmap answers this
-    // properly where it exists: it is continuous rather than a three-way step,
-    // and it separates an alley lined up with the wind (which is louder than
-    // open ground) from one across it. The probe classification stays as the
-    // fallback for hardware without compute.
+    // A tight outdoor space - an alley, a ravine - carries less wind than open ground even with nothing overhead. The flowmap answers this properly where it exists: it is continuous rather than a
+    // three-way step, and it separates an alley lined up with the wind (which is louder than open ground) from one across it. The probe classification stays as the fallback for hardware without
+    // compute.
     const F32 probe_openness = (mOutdoorSize == SIZE_SMALL)  ? 0.55f
                              : (mOutdoorSize == SIZE_MEDIUM) ? 0.8f : 1.f;
     const F32 outdoor_openness = flow->isValid()
@@ -535,8 +491,7 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     const F32 ambient_vol = llclamp((F32)ambient_setting, 0.f, 1.f);
     const F32 wind_vol = llclamp((F32)wind_setting, 0.f, 1.f);
 
-    // Per-category trim under the master: the precipitation beds and the
-    // wind loops are mixed against each other, not just faded together
+    // Per-category trim under the master: the precipitation beds and the wind loops are mixed against each other, not just faded together
     const F32 category[LOOP_COUNT] = {
         ambient_vol, ambient_vol, ambient_vol,          // outdoor beds
         ambient_vol, ambient_vol, ambient_vol, ambient_vol, // roof beds
@@ -556,9 +511,8 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
         gSavedSettings.getString("SSAtmoLoopWindStrong"),
     };
 
-    // The wind loops sit upwind of the head - see Loop::mOffset. Local
-    // flow, not the global vector: standing in an alley the wind you hear
-    // should come down the alley, which is exactly what the flowmap knows.
+    // The wind loops sit upwind of the head - see Loop::mOffset. Local flow, not the global vector: standing in an alley the wind you hear should come down the alley, which is exactly what the
+    // flowmap knows.
     {
         LLVector3 local = flow->isValid() ? flow->sample(cam_pos)
                                           : atmo->windXY();
@@ -580,18 +534,14 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 //-----------------------------------------------------------------------------
 namespace
 {
-    // Speed of sound in the air the environment authored. Temperature moves
-    // it by about 0.6 m/s per degree - across the -30C blizzard to +40C
-    // desert an authorable sky spans, that is a tenth of the figure, which
-    // over ten kilometres of thunder delay is a couple of counted seconds.
+    // Speed of sound in the air the environment authored. Temperature moves it by about 0.6 m/s per degree - across the -30C blizzard to +40C desert an authorable sky spans, that is a tenth of the
+    // figure, which over ten kilometres of thunder delay is a couple of counted seconds.
     F32 speed_of_sound_ms()
     {
         return 331.3f + 0.606f * SSAtmoMagic::getInstance()->temperatureC();
     }
 
-    // Beyond this a clap is all rumble, below it all crack. Not a hard
-    // switch: the two packs cross-fade across the range, because a strike at
-    // the boundary is genuinely both.
+    // Beyond this a clap is all rumble, below it all crack. Not a hard switch: the two packs cross-fade across the range, because a strike at the boundary is genuinely both.
     const F32 THUNDER_CRACK_M = 1500.f;
     const F32 THUNDER_RUMBLE_M = 6000.f;
 
@@ -614,22 +564,16 @@ namespace
         return ids[rng.rand((S32)ids.size())];
     }
 
-    // Where the bang is inside a recording, in milliseconds.
-    //
-    // A thunder sample almost never starts at its own event: there is
-    // leading air, a fade in, a breath of the field recording before
-    // anything happens. Playing at the moment the physics says the sound
-    // arrives therefore lands the actual clap however long that preamble
-    // happens to be too late - and since it differs per asset, the error is
-    // not even consistent enough to dial out by hand.
-    //
-    // The engine analyses the decoded PCM once and remembers the answer, so
-    // this is a lookup after the first call. It needs the buffer to exist,
-    // which is why the pack is preloaded when a strike is scheduled rather
-    // than when it is heard: for a near strike the delay is close to zero,
-    // and that is exactly when the timing matters most.
+    // Where the bang sits inside the recording (leading air differs per asset, so the error was per-asset too). Engine analyses decoded PCM once (getOnsetMS); needs the buffer, which is why packs preload at schedule time.
     U32 sound_onset_ms(const LLUUID& id)
     {
+        // The pre-analysis table first: for anything the pipeline has already walked, the answer is a lookup with no decode race at all. The buffer path below stays as the fallback for a sound
+        // configured seconds ago.
+        if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(id))
+        {
+            return meta->mOnsetMS;
+        }
+
         if (id.isNull() || !gAudiop) return 0;
 
         LLAudioData* data = gAudiop->getAudioData(id);
@@ -673,11 +617,7 @@ F32 SSSoundscape::windCarryGain(const LLVector3& source_pos_agent) const
     // +1 with the wind blowing from the source toward the listener.
     const F32 along = wind * to_listener;
 
-    // Refraction accumulates over kilometres and saturates; a gale bends
-    // harder than a breeze but not without limit. The floor is well above
-    // zero on purpose - upwind thunder is muffled and shortened, not erased,
-    // and erasing it entirely would read as the strike having no sound at
-    // all rather than as the wind eating it.
+    // Refraction accumulates over km and saturates with wind speed; floored well above zero - upwind thunder is muffled and shortened, never erased.
     const F32 range = llmin(dist / 3000.f, 1.f);
     const F32 strength = llmin(speed / 12.f, 1.f);
     return llclamp(1.f + along * range * strength * 0.8f, 0.25f, 1.6f);
@@ -691,38 +631,18 @@ void SSSoundscape::scheduleThunder(const LLVector3& pos_agent, F32 distance_m,
 
     SSRandStream rng((U32)(fire_at * 6151.0) ^ (U32)distance_m);
 
-    // The delay everyone knows: light is instant, sound is not. Roughly
-    // three seconds per kilometre, which is the rule of thumb people count
-    // out loud, arrived at here from the actual speed rather than from the
-    // rule. fire_at is usually in the future - a strike is prepared before
-    // it happens - which is what lets a near clap start its own run-up
-    // before the flash rather than being clipped into.
+    // The delay everyone knows: light is instant, sound is not. Roughly three seconds per kilometre, which is the rule of thumb people count out loud, arrived at here from the actual speed rather
+    // than from the rule. fire_at is usually in the future - a strike is prepared before it happens - which is what lets a near clap start its own run-up before the flash rather than being clipped
+    // into.
     const F64 travel = (F64)(distance_m / speed_of_sound_ms());
     const F64 heard_at = fire_at + travel;
 
-    // Crack and rumble are LAYERED, not chosen between.
-    //
-    // They are not two versions of one sound, and they are not near and far
-    // variants either - they are two parts of the same event. Thunder is
-    // generated along the whole channel at once, and the channel is
-    // kilometres long, so its near end and its far end reach a listener at
-    // different times. The near end arrives first and sharpest: that is the
-    // crack. Everything behind it keeps arriving for as long as the channel
-    // is deep: that is the rumble. Both are present in every strike.
-    //
-    // What distance changes is the BALANCE, and it changes it in a way no
-    // crossfade between whole sounds could: air absorbs high frequencies at
-    // a rate that rises with the square of the frequency, so by a few
-    // kilometres the crack is simply gone while the low roll behind it
-    // carries on. Near, the crack dominates and the roll is a tail on it.
-    // Far, there is no crack left to hear at all.
+    // Crack and rumble LAYERED per strike, not near/far variants: thunder comes from the whole km-long channel at once - the near end is the crack, everything behind keeps arriving as the roll, and air absorption (~f^2) kills the crack over distance. doc/atmo_magic_lightning.md#thunder-acoustics.
     const F32 crack_gain = 1.f - llclamp(
         (distance_m - THUNDER_CRACK_M) / (THUNDER_RUMBLE_M - THUNDER_CRACK_M), 0.f, 1.f);
 
-    // Distance attenuation on top of the 3D falloff the audio engine already
-    // applies, since the source is placed at the strike and a strike can be
-    // ten kilometres off - well past anything the engine's rolloff was ever
-    // tuned for.
+    // Distance attenuation on top of the 3D falloff the audio engine already applies, since the source is placed at the strike and a strike can be ten kilometres off - well past anything the
+    // engine's rolloff was ever tuned for.
     const F32 fade = 1.f / (1.f + (distance_m / 3000.f));
     const F32 gain = llclamp(intensity * fade * windCarryGain(pos_agent), 0.f, 1.f);
 
@@ -732,11 +652,8 @@ void SSSoundscape::scheduleThunder(const LLVector3& pos_agent, F32 distance_m,
                      pos_agent, distance_m, gain * crack_gain, heard_at);
     }
 
-    // The roll comes in behind the crack, by however long the channel takes
-    // to finish arriving. A rough stand-in for the channel's own depth:
-    // several kilometres of it, so several seconds, and more of it for a
-    // fiercer strike. This one number is what makes near thunder a crack
-    // with a tail and distant thunder a roll on its own.
+    // The roll comes in behind the crack, by however long the channel takes to finish arriving. A rough stand-in for the channel's own depth: several kilometres of it, so several seconds, and more
+    // of it for a fiercer strike. This one number is what makes near thunder a crack with a tail and distant thunder a roll on its own.
     const F64 spread = (F64)(rng.frand(2000.f, 5000.f) * (0.6f + intensity * 0.7f)
                              / speed_of_sound_ms());
 
@@ -750,9 +667,8 @@ void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
 {
     if (sound.isNull() || gain <= 0.f) return;
 
-    // Fetched the moment it is queued rather than when it plays. Measuring
-    // where the bang sits inside it needs a decoded buffer, and the whole
-    // reason a strike is prepared ahead of time is to give that fetch room.
+    // Fetched the moment it is queued rather than when it plays. Measuring where the bang sits inside it needs a decoded buffer, and the whole reason a strike is prepared ahead of time is to give
+    // that fetch room.
     gAudiop->preloadSound(sound);
 
     PendingThunder pending;
@@ -772,17 +688,12 @@ void SSSoundscape::updateThunder(F64 now)
     {
         PendingThunder& p = mThunder[i];
 
-        // The onset is resolved as late as possible, because the asset may
-        // still have been fetching when the strike happened. Once known it
-        // moves the start time EARLIER by that much, so the bang itself
-        // lands where the physics put it rather than the file's first
-        // sample landing there.
+        // The onset is resolved as late as possible, because the asset may still have been fetching when the strike happened. Once known it moves the start time EARLIER by that much, so the bang
+        // itself lands where the physics put it rather than the file's first sample landing there.
         if (!p.mAligned)
         {
-            // Resolved as late as it can be, because the asset may still
-            // have been fetching when the strike was prepared - and as early
-            // as it must be, because the answer moves the start time
-            // earlier and a start time already passed cannot be honoured.
+            // Resolved as late as it can be, because the asset may still have been fetching when the strike was prepared - and as early as it must be, because the answer moves the start time earlier
+            // and a start time already passed cannot be honoured.
             const U32 onset = sound_onset_ms(p.mSound);
             if (onset > 0)
             {
@@ -791,17 +702,36 @@ void SSSoundscape::updateThunder(F64 now)
             }
             else if (now >= p.mHeardAt - 0.05)
             {
-                // Out of time to find out. The asset never decoded, or has
-                // no clear onset; play it as it is rather than hold it.
+                // Out of time to find out. The asset never decoded, or has no clear onset; play it as it is rather than hold it.
                 p.mAligned = true;
             }
         }
 
         if (now < p.mPlayAt) { ++i; continue; }
 
+        // Level the pack: assets uploaded from different sources sit many dB apart, and the crack/rumble balance assumes comparable mastering. Scaled toward a reference by the loudest-second RMS
+        // the onset analysis already measured, clamped so a quiet recording's noise floor is never dragged up. When the buffer never decoded the level reads 0 and the gain passes through untouched.
+        F32 gain = p.mGain;
+        {
+            const F32 REF_LEVEL = 0.22f;
+            F32 level = 0.f;
+            if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(p.mSound))
+            {
+                level = meta->mPeakLevel;
+            }
+            else if (gAudiop)
+            {
+                if (LLAudioData* data = gAudiop->getAudioData(p.mSound))
+                {
+                    if (LLAudioBuffer* buffer = data->getBuffer()) level = buffer->getPeakLevel();
+                }
+            }
+            if (level > 0.001f) gain *= llclamp(REF_LEVEL / level, 0.5f, 2.f);
+        }
+
         if (gAudiop)
         {
-            gAudiop->triggerSound(p.mSound, gAgentID, p.mGain,
+            gAudiop->triggerSound(p.mSound, gAgentID, gain,
                                   LLAudioEngine::AUDIO_TYPE_AMBIENT,
                                   gAgent.getPosGlobalFromAgent(p.mPos));
         }
@@ -813,17 +743,54 @@ void SSSoundscape::updateThunder(F64 now)
 //-----------------------------------------------------------------------------
 // Footsteps
 //-----------------------------------------------------------------------------
-LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land, S32 action,
-                                   bool is_self)
+// One tilted up-ray over an avatar, cached - see AvatarCover. Tilted like the camera probe's rays and for the same reason: a lone beam or a narrow gap directly overhead should not decide it.
+bool SSSoundscape::roofOver(const LLUUID& avatar_id, const LLVector3& pos_agent, bool is_self)
+{
+    const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+    AvatarCover& cover = mAvatarCover[avatar_id];
+
+    // Refresh only when they have actually gone somewhere AND their share of ray budget has come round - near avatars get answers within a second, far ones can wait several.
+    const F32 moved = (pos_agent - cover.mPos).magVec();
+    // Your own avatar always gets the fastest cadence: camming away from yourself makes cam_dist large, and your own footsteps going stale-indoors for five seconds is exactly the case this
+    // exists to fix.
+    const F32 cam_dist = (pos_agent - LLViewerCamera::getInstance()->getOrigin()).magVec();
+    const F64 interval = is_self ? 1.0 : 1.0 + (F64)llclamp(cam_dist / 24.f, 0.f, 4.f);
+
+    if (cover.mWhen < 0.0 || (moved > 1.5f && now - cover.mWhen > interval))
+    {
+        cover.mPos = pos_agent;
+        cover.mWhen = now;
+
+        const LLVector3 start = pos_agent + LLVector3(0.f, 0.f, 2.2f);
+        const LLVector3 dir(0.12f, 0.09f, 0.99f);
+        LLVector4a start4, end4, intersect;
+        start4.load3(start.mV);
+        const LLVector3 end = start + dir * 50.f;
+        end4.load3(end.mV);
+        cover.mIndoors = gPipeline.lineSegmentIntersectWorldGeometry(start4, end4, &intersect, true, true);
+
+        // A crowd that left the region should not be remembered forever.
+        if (mAvatarCover.size() > 64)
+        {
+            for (auto it = mAvatarCover.begin(); it != mAvatarCover.end(); )
+            {
+                it = (now - it->second.mWhen > 60.0) ? mAvatarCover.erase(it) : ++it;
+            }
+        }
+    }
+
+    return cover.mIndoors;
+}
+
+LLUUID SSSoundscape::footstepSound(const LLUUID& avatar_id, const LLVector3& foot_pos_agent,
+                                   bool on_land, S32 action, bool is_self)
 {
     StepDebug& dbg = is_self ? mStepSelf : mStepOther;
     dbg = StepDebug();
     dbg.mWhen = SSAtmoMagic::getInstance()->sharedTime();
     dbg.mAction = action;
-    // Switched on, not running: isEnabled() is false whenever no weather
-    // track is active, and dry ground is exactly the surface you walk on
-    // when none is. Gating these on it silenced every footstep in fair
-    // weather - which is all of them, most of the time.
+    // Switched on, not running: isEnabled() is false whenever no weather track is active, and dry ground is exactly the surface you walk on when none is. Gating these on it silenced every footstep
+    // in fair weather - which is all of them, most of the time.
     static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
     if (!SSAtmoMagic::getInstance()->isSwitchedOn() || !sounds)
     {
@@ -832,16 +799,27 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
         return LLUUID::null;
     }
 
-    // Indoors: the wind flowmap already builds a topdown capture of the
-    // topmost surface in every column (roof, floor slab, or open ground) to
-    // drive the rain sound's burial depth. Reusing it here is one grid
-    // lookup, no raycast, and - unlike the camera-anchored cover probe the
-    // rain sound uses - it is evaluated at each avatar's own feet, so a
-    // crowd standing half in and half out of a doorway reads correctly
-    // instead of everyone sharing the camera's verdict.
+    // Indoors: the wind flowmap already builds a topdown capture of the topmost surface in every column (roof, floor slab, or open ground) to drive the rain sound's burial depth. Reusing it here is
+    // one grid lookup, no raycast, and - unlike the camera-anchored cover probe the rain sound uses - it is evaluated at each avatar's own feet, so a crowd standing half in and half out of a doorway
+    // reads correctly instead of everyone sharing the camera's verdict.
     F32 column_top = 0.f;
-    const bool indoors = SSWindFlowMap::getInstance()->surfaceAt(foot_pos_agent, column_top)
-        && (column_top - foot_pos_agent.mV[VZ] > 0.75f);
+    const bool flow_knows = SSWindFlowMap::getInstance()->surfaceAt(foot_pos_agent, column_top);
+    bool indoors = flow_knows && (column_top - foot_pos_agent.mV[VZ] > 0.75f);
+    dbg.mIndoorsFrom = flow_knows ? 'f' : '-';
+
+    // The flowmap only knows regions it has solved a tile for, and a silent flowmap used to read as "outdoors" - your own avatar standing in a roofed room picked terrain_dry while the audio probe
+    // two lines up in the overlay said ROOFED. For yourself the camera cover probe IS at your position, so borrow its verdict when the flowmap has none. Other avatars keep the outdoor default; the
+    // camera's roof says nothing about theirs.
+    if (!flow_knows)
+    {
+        // The avatar's OWN cached up-ray, self included: the camera cover probe was tried for self first, but camera != avatar - cammed across the street, its roof says nothing about yours. One
+        // mechanism for everyone, at the avatar's actual feet.
+        if (roofOver(avatar_id, foot_pos_agent, is_self))
+        {
+            indoors = true;
+            dbg.mIndoorsFrom = 'r';
+        }
+    }
 
     dbg.mIndoors = indoors;
 
@@ -870,10 +848,8 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
         }
     }
 
-    // Dry ground comes from the global settings, everything else from the
-    // preset - see SSFootstepSounds::surfaceIsGlobal. Asked here rather than
-    // resolved earlier because this is the only place that knows which
-    // surface was decided on.
+    // Dry ground comes from the global settings, everything else from the preset - see SSFootstepSounds::surfaceIsGlobal. Asked here rather than resolved earlier because this is the only place that
+    // knows which surface was decided on.
     dbg.mSurface = surface;
     dbg.mGlobal = SSFootstepSounds::surfaceIsGlobal(surface);
 
@@ -913,9 +889,8 @@ LLUUID SSSoundscape::footstepSound(const LLVector3& foot_pos_agent, bool on_land
         return LLUUID::null;
     }
 
-    // A different drop each step, the way the ambient sequences avoid an
-    // audible repeat - but picked at random rather than walked in order,
-    // since footsteps fire far too quickly for a long sequence to matter.
+    // A different drop each step, the way the ambient sequences avoid an audible repeat - but picked at random rather than walked in order, since footsteps fire far too quickly for a long sequence
+    // to matter.
     dbg.mPicked = ids[ll_rand((S32)ids.size())];
     return dbg.mPicked;
 }
@@ -930,10 +905,11 @@ void SSSoundscape::idle()
     dt = llclamp(dt, 0.f, 0.25f);
     mLastIdle = now;
 
-    // Before the gate below: a clap already on its way must still arrive.
-    // The strike happened - the sky clearing in the eight seconds since does
-    // not un-happen it, and swallowing the sound is a worse artefact than
-    // hearing thunder from a sky that has moved on.
+    // The analysis pipeline: walks every configured sound through decode and the worker pool while nothing needs it, so the moment something does, the answer is already in the table.
+    SSSoundMeta::getInstance()->idle();
+
+    // Before the gate below: a clap already on its way must still arrive. The strike happened - the sky clearing in the eight seconds since does not un-happen it, and swallowing the sound is a worse
+    // artefact than hearing thunder from a sky that has moved on.
     updateThunder(now);
 
     static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);

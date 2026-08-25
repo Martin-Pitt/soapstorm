@@ -25,17 +25,9 @@
 // <SS:Nexii> Atmo Magic wind flowmap
 
 // ---------------------------------------------------------------------------
-// Shared domain description.
-//
-// The domain is a camera-centred box, snapped to a texel grid so it translates
-// in whole cells rather than jittering every frame. Horizontally it is a
-// uniform grid: uRes texels across uExtent metres. Vertically it is uSlices
-// adaptive slabs whose boundaries live in uSliceZ, placed where the captured
-// height field actually has detail. That makes the z spacing non-uniform, so
-// every vertical difference is weighted by the real slab thickness rather than
-// assuming a constant step.
-//
-// Declared in full in each pass: separately compiled GLSL units do not share
+// Shared domain description. The domain is a camera-centred box, snapped to a texel grid so it translates in whole cells rather than jittering every frame. Horizontally it is a uniform grid: uRes
+// texels across uExtent metres. Vertically it is uSlices adaptive slabs whose boundaries live in uSliceZ, placed where the captured height field actually has detail. That makes the z spacing
+// non-uniform, so every vertical difference is weighted by the real slab thickness rather than assuming a constant step. Declared in full in each pass: separately compiled GLSL units do not share
 // uniform declarations, so there is nothing to gain from a common file.
 // ---------------------------------------------------------------------------
 
@@ -80,9 +72,7 @@ uniform float uShelterAmount;   // how much of the wind a full lee takes away
 uniform float uStrength;        // how far the solved field may depart from ambient
 uniform float uMaxGain;         // ceiling on local speed-up, in ambients
 
-// Same wall rule the solve used. Subtracting a gradient taken against a solid
-// cell's stored pressure would push air straight back into the geometry the
-// solve just steered it around.
+// Same wall rule the solve used. Subtracting a gradient taken against a solid cell's stored pressure would push air straight back into the geometry the solve just steered it around.
 float loadP(ivec3 c, float here)
 {
     if (c.x < 0 || c.y < 0 || c.x >= uRes || c.y >= uRes) return 0.0;
@@ -121,10 +111,8 @@ void main()
     v -= grad;
     v *= (1.0 - solid);
 
-    // Lee sheltering. Projection alone slows the air in front of an obstacle
-    // and squeezes it through gaps, but it has no memory, so the calm pocket
-    // behind a building does not appear. Marching upwind and counting cover
-    // puts it back for the cost of a few texel reads.
+    // Lee sheltering. Projection alone slows the air in front of an obstacle and squeezes it through gaps, but it has no memory, so the calm pocket behind a building does not appear. Marching upwind
+    // and counting cover puts it back for the cost of a few texel reads.
     vec3 amb = uAmbient[c.z];
     float amb_len = length(amb);
     float shelter = 0.0;
@@ -145,16 +133,10 @@ void main()
 
     v *= (1.0 - clamp(uShelterAmount, 0.0, 1.0) * shelter);
 
-    // Everything above is the physical answer. Strength exaggerates how far it
-    // departs from the ambient wind, so deflections, lees and jets all grow
-    // together without the wind itself changing speed.
-    //
-    // Turning and slowing are scaled separately rather than extrapolating the
-    // vector. Extrapolating looks equivalent and is not: a sheltered cell that
-    // solves to half the ambient wind maps to exactly zero at strength 2, and
-    // to a reversed vector beyond that. Sheltered cells are the whole point of
-    // the setting, so the naive form nulls out precisely the passages and lees
-    // it was turned up to make visible.
+    // Everything above is the physical answer. Strength exaggerates how far it departs from the ambient wind, so deflections, lees and jets all grow together without the wind itself changing speed.
+    // Turning and slowing are scaled separately rather than extrapolating the vector. Extrapolating looks equivalent and is not: a sheltered cell that solves to half the ambient wind maps to exactly
+    // zero at strength 2, and to a reversed vector beyond that. Sheltered cells are the whole point of the setting, so the naive form nulls out precisely the passages and lees it was turned up to
+    // make visible.
     float v_len = length(v);
 
     if (amb_len > 0.01)
@@ -162,14 +144,11 @@ void main()
         vec3 amb_dir = amb / amb_len;
         vec3 v_dir = (v_len > 1e-4) ? v / v_len : amb_dir;
 
-        // Exaggerate the turn. Renormalising keeps this a rotation however far
-        // it is pushed, so it can swing past the solved heading but never
-        // collapse to nothing.
+        // Exaggerate the turn. Renormalising keeps this a rotation however far it is pushed, so it can swing past the solved heading but never collapse to nothing.
         vec3 turned = amb_dir + (v_dir - amb_dir) * max(uStrength, 0.0);
         vec3 dir = (length(turned) > 1e-4) ? normalize(turned) : v_dir;
 
-        // Exaggerate the speed change, floored at zero: a lee can be brought
-        // to a standstill but never turned inside out.
+        // Exaggerate the speed change, floored at zero: a lee can be brought to a standstill but never turned inside out.
         float len = max(0.0, amb_len + (v_len - amb_len) * max(uStrength, 0.0));
 
         v = dir * len;
@@ -177,9 +156,7 @@ void main()
 
     v *= (1.0 - solid);     // solids stay dead however far it was pushed
 
-    // A gap between two buildings accelerates the air through it, and with a
-    // coarse mask that jet can run away. Cap it in ambients rather than m/s so
-    // it means the same thing at any wind speed.
+    // A gap between two buildings accelerates the air through it, and with a coarse mask that jet can run away. Cap it in ambients rather than m/s so it means the same thing at any wind speed.
     float speed = length(v);
     float ceiling = amb_len * max(uMaxGain, 0.0);
     if (ceiling > 0.0 && speed > ceiling)
@@ -187,9 +164,7 @@ void main()
         v *= ceiling / speed;
     }
 
-    // Exposure: how much of the ambient wind actually reaches here. This is
-    // what the audio mix rides, so a courtyard reads calm and an alley lined
-    // up with the wind reads louder than open ground.
+    // Exposure: how much of the ambient wind actually reaches here. This is what the audio mix rides, so a courtyard reads calm and an alley lined up with the wind reads louder than open ground.
     float exposure = (amb_len > 0.01) ? clamp(length(v) / amb_len, 0.0, 2.0) : 0.0;
     exposure *= (1.0 - solid);
 

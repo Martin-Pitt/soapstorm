@@ -31,15 +31,9 @@
 
 #include "llfloater.h"
 
-// The wind loops, which are global because wind is not a precipitation type -
-// it blows whether or not anything is falling.
-//
-// This floater used to be plain LLFloater with the two fields bound straight
-// to their settings by control_name. A sound list cannot be bound that way:
-// control_name copies an LLSD value in and out of a control, and what this
-// control holds is a vector the settings store as a comma separated string.
-// So the conversion happens here, which is the only thing this class exists
-// to do.
+// The wind loops, which are global because wind is not a precipitation type - it blows whether or not anything is falling. This floater used to be plain LLFloater with the two fields bound straight
+// to their settings by control_name. A sound list cannot be bound that way: control_name copies an LLSD value in and out of a control, and what this control holds is a vector the settings store as a
+// comma separated string. So the conversion happens here, which is the only thing this class exists to do.
 class SSFloaterAssets : public LLFloater
 {
 public:
