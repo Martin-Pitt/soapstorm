@@ -40,14 +40,29 @@ vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
 `ss_cloud_alt_m` is the LAYER'S OWN altitude - it replaced the `max_y` proxy
 this first shipped with (max altitude is an atmosphere ceiling authored for
 haze, not a cloud height, and the old `cloud_realism` smoothstep existed only
-to patch over that mismatch for low art-directed domes). It is Atmo-driven
-from one authority (`ss_dome_cloud_altitude()` in lldrawpoolwlsky.cpp):
-cirrus-high (6 km) while the volumetric field is empty, merging quickly down
-onto the deck's mid-altitude as the field's coverage builds (smoothstep over
-coverage 0.05..0.30) - so exactly when the dome band and the deck merge
-visually at the rim, they also agree about where the cloud IS and parallax at
-the same rate. The disc occlusion in ssCelestialF.glsl mirrors the same gate
-and altitude; keep the three in sync.
+to patch over that mismatch for low art-directed domes).
+
+It is now an authored dome parameter: `SSAtmoEnvCloudDome::mHeightM`, keyframed
+like every other value on the Clouds > Sky Dome tab, defaulting to 6000m. The
+altitude is a parallax RATE, not a position - the band is drawn on a fixed dome
+radius either way (`renderDome(..., 0.3325f)`), and the number only says how far
+away the layer behaves.
+
+Ticking the tab's Auto box hands the number back to the derivation this shipped
+with, kept in `SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()`: cirrus-high
+(6 km) while the volumetric field is empty, merging quickly down onto the deck's
+mid-altitude as the field's coverage builds (smoothstep over coverage
+0.05..0.30) - so exactly when the dome band and the deck merge visually at the
+rim, they also agree about where the cloud IS and parallax at the same rate.
+That is what an authored height gives up, and why the Auto box exists rather
+than the derivation simply being deleted.
+
+Resolved in one place, `SSAtmoEnvApplier::cloudDomeAltitudeMetres()`, per call
+rather than cached with the rest of the sky walk - the auto branch reads the
+volumetric field's live coverage, which moves between applies. No Atmo
+environment driving the sky means nobody authored a height, so the derivation
+stands in. The disc occlusion in ssCelestialF.glsl mirrors the same gate and
+altitude; keep the three in sync.
 
 The `/16.0` compensates for `vary_texcoord2`/`vary_texcoord3`, built as
 `vary_texcoord0 * 16` a few lines down — the fine detail/self-shadow layer

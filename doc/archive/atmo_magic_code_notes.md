@@ -1,5 +1,7 @@
 # Atmo Magic code notes
 
+> **OUT OF DATE** — archived 2026-08-26. Kept for historical reference; the code is the ground truth.
+
 Inline commentary moved out of the `ss*` sources (2026-08-26); each note is keyed by the code line it sat above. Interaction tags and design rationale live on here; the sources keep only their license block and a one-line @brief.
 
 ## ssassetlist.cpp

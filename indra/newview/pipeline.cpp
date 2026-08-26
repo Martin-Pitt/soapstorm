@@ -4457,7 +4457,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
             // <SS:Nexii> Atmo Magic weather, WITH the atmospherics and BEFORE the alpha pools: glass and every other transparent surface then blends over clouds, bolts and rain - the transparency
             // test the old end-of-function placement failed, because alpha writes no depth and weather drawn after it composited over nearer windows. The order inside the block is the lightning
             // compositing: flash discs veiled under the puffs, ribbons occlusion-dimmed over them, rain in front of cloud. Known trade: rain BETWEEN the camera and a window now reads as behind the
-            // glass - the rarer and subtler failure of the two. doc/atmo_magic_interactions.md
+            // glass - the rarer and subtler failure of the two. doc/archive/atmo_magic_interactions.md
             if (!gCubeSnapshot)
             {
                 SSLightningRender::getInstance()->renderFlash();

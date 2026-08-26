@@ -29,6 +29,7 @@
 #include "lldrawpoolwater.h"
 
 #include "ssatmoenvapplier.h" // <SS:Nexii> light size for the glitter path
+#include "sswater.h" // <SS:Nexii> the stock-versus-Atmo water plane family gate
 
 #include "llviewercontrol.h"
 #include "lldir.h"
@@ -421,6 +422,13 @@ void LLDrawPoolWater::pushWaterPlanes(int pass)
     {
         water = static_cast<LLVOWater*>(face->getViewerObject());
 
+        // <SS:Nexii> Stock and Atmo water planes coexist in this one pool; exactly one family draws per frame (doc/atmo_magic_water.md).
+        if (!SSWaterWorld::drawsThisFrame(water))
+        {
+            continue;
+        }
+        // </SS:Nexii>
+
         face->renderIndexed();
 
         // Note non-void water being drawn, updates required
@@ -434,6 +442,20 @@ void LLDrawPoolWater::pushWaterPlanes(int pass)
         }
     }
 }
+
+// <SS:Nexii> The water haze pass (LLPipeline::doWaterHaze) re-pushes this pool's faces through the base loop, which knows nothing of the stock-versus-Atmo family swap - without this gate the
+// hidden family's planes would still paint haze over the live one's.
+void LLDrawPoolWater::pushFaceGeometry()
+{
+    for (LLFace* const& face : mDrawFace)
+    {
+        if (SSWaterWorld::drawsThisFrame(static_cast<LLVOWater*>(face->getViewerObject())))
+        {
+            face->renderIndexed();
+        }
+    }
+}
+// </SS:Nexii>
 
 LLViewerTexture *LLDrawPoolWater::getDebugTexture()
 {

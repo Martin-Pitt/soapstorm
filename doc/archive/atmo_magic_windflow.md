@@ -1,5 +1,7 @@
 # Atmo Magic: wind flowmap
 
+> **OUT OF DATE** — archived 2026-08-26. Kept for historical reference; the code is the ground truth.
+
 The weather parameters carry a single wind vector. That is fine for an open
 field and wrong everywhere else: a courtyard is calm, an alley lined up with the
 wind is *windier* than open ground, the lee of a building is a dead pocket, and

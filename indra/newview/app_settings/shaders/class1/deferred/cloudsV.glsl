@@ -121,8 +121,8 @@ void main()
 
 #ifdef SS_ATMO
     // <SS:Nexii> Region-relative cloud parallax, scaled by the LAYER'S OWN altitude rather than the max-altitude proxy it first shipped with - max_y is an atmosphere ceiling, not a cloud height,
-    // and borrowing it coupled the parallax to a dial authored for haze. ss_cloud_alt_m is Atmo-driven: cirrus-high in dry still air, merging quickly down onto the volumetric deck's altitude as
-    // moisture and convection build, so the dome band and the deck agree about where the cloud IS just as they merge visually at the rim.
+    // and borrowing it coupled the parallax to a dial authored for haze. ss_cloud_alt_m is the dome's authored height (Clouds > Sky Dome), or, on that tab's Auto setting, the altitude the
+    // volumetric deck implies - cirrus-high in dry still air, merging down onto the deck as its coverage builds, so dome band and deck agree about where the cloud IS as they merge at the rim.
     float metres_per_uv = 16.0 * ss_cloud_alt_m * cloud_scale;
     vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) / metres_per_uv;
 

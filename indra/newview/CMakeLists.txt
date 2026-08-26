@@ -223,6 +223,7 @@ set(viewer_SOURCE_FILES
     sslightningrender.cpp
     sssoundmeta.cpp
     sssoundscape.cpp
+    sswater.cpp
     sswindflow.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
@@ -1132,6 +1133,7 @@ set(viewer_HEADER_FILES
     sslightningrender.h
     sssoundmeta.h
     sssoundscape.h
+    sswater.h
     sswindflow.h
     fsscriptlibrary.h
     fsscrolllistctrl.h

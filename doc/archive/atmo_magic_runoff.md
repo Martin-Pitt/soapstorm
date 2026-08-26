@@ -1,5 +1,7 @@
 # Atmo Magic: roof runoff
 
+> **OUT OF DATE** — archived 2026-08-26. Kept for historical reference; the code is the ground truth.
+
 Rain that lands on a roof does not stop there. It runs down the pitch, collects
 along the way, and comes off the eaves as a line of fat drips into the street —
 which is most of what makes standing under an overhang in a downpour feel like

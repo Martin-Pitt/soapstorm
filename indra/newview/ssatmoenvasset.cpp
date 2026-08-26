@@ -794,6 +794,7 @@ void SSAtmoEnvCloudDome::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase
 // Fields all keyframes agree on collapse back to plain values.
 void SSAtmoEnvCloudDome::collapseConstantKeyframes()
 {
+    mHeightM.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mColor.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mCoverage.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mScale.collapseIfConstant(SEED_COLLAPSE_EPSILON);
@@ -827,6 +828,8 @@ const char* const SSAtmoEnvCloudDome::BODY_TEXTURE_MOON =
 LLSD SSAtmoEnvCloudDome::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
+    sd["auto"]     = mAuto;
+    sd["height"]   = mHeightM.asLLSD();
     sd["color"]    = mColor.asLLSD();
     sd["coverage"] = mCoverage.asLLSD();
     sd["scale"]    = mScale.asLLSD();
@@ -851,6 +854,11 @@ bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
     if (!sd.isMap()) return false;
 
     const SSAtmoEnvCloudDome def;
+
+    // <SS:Nexii> A document written before the dome had a height of its own gets the authored default, not auto: 6000m is the altitude that derivation returned in clear air anyway, so a sky with
+    // no volumetric field renders identically and only one with a built-up deck notices the difference - and that one can tick Auto back on.
+    mAuto = sd.has("auto") ? sd["auto"].asBoolean() : def.mAuto;
+    if (sd.has("height")) mHeightM.fromLLSD(sd["height"], def.mHeightM.valueAt(0.0));
 
     if (sd.has("color"))    mColor.fromLLSD(sd["color"], def.mColor.valueAt(0.0));
     if (sd.has("coverage")) mCoverage.fromLLSD(sd["coverage"], def.mCoverage.valueAt(0.0));

@@ -1,5 +1,7 @@
 # Atmo Magic: a shared world field (proposal)
 
+> **OUT OF DATE** — archived 2026-08-26. Unbuilt proposal; WorldField is on the current backlog, so treat this as a starting sketch, not a spec.
+
 This is a design, not a build log — nothing here exists yet. It sketches a
 single geometry capture shared by everything that currently captures its own:
 rain shadow, drainage, wind flow, and weather audio, with pathfinding,

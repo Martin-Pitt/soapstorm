@@ -90,6 +90,7 @@
 #include "ssatmomagic.h"
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvdiscovery.h"
+#include "sswater.h"
 #include "ssrainshadow.h"
 #include "sswindflow.h"
 // </SS:Nexii>
@@ -992,6 +993,11 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     // frame's resolved track. Gates itself on the same
                     // SSAtmoEnabled master switch.
                     SSAtmoEnvApplier::getInstance()->apply();
+
+                    // Atmo Magic: the water plane family swap ticks right
+                    // after the applier so it sees the same frame's active
+                    // state (doc/atmo_magic_water.md).
+                    SSWaterWorld::getInstance()->update();
 
                     SSRainShadowMap::getInstance()->capture();
                     SSWindFlowMap::getInstance()->update();

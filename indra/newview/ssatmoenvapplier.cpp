@@ -46,6 +46,7 @@
 #include "ssatmoenvmanager.h"
 #include "ssatmoenvplanetarystate.h"
 #include "ssatmoenvtrackstate.h"
+#include "ssvolcloud.h" // <SS:Nexii> the auto dome altitude reads the volumetric deck
 
 #include <algorithm>
 #include <cmath>
@@ -91,6 +92,27 @@ F32 SSAtmoEnvApplier::celestialDiscScale(F32 angular_diameter_deg)
 {
     return llclamp(angular_diameter_deg / REFERENCE_SUN_DIAMETER_DEG,
                    CELESTIAL_SCALE_MIN, CELESTIAL_SCALE_MAX);
+}
+
+// <SS:Nexii> The dome altitude the volumetric field implies: cirrus-high while the field is empty, merging quickly down onto the deck's mid-altitude as its coverage builds, so the dome band and
+// the deck agree about where the cloud IS just as they merge visually at the rim. What the dome's Auto flag hands the number back to, and what the floater shows in the greyed-out row.
+F32 SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()
+{
+    const F32 CIRRUS_M = 6000.f;
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    if (!vol || vol->empty()) return CIRRUS_M;
+
+    const F32 t = llclamp((vol->lastCoverage() - 0.05f) / 0.25f, 0.f, 1.f);
+    const F32 merge = t * t * (3.f - 2.f * t);
+    const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
+    return lerp(CIRRUS_M, llmax(deck_mid, 300.f), merge);
+}
+
+// The altitude the shaders actually get. No environment driving the sky means nobody authored a height, so the derivation stands in.
+F32 SSAtmoEnvApplier::cloudDomeAltitudeMetres() const
+{
+    if (!mActive || mCloudDomeAuto) return autoCloudDomeAltitudeMetres();
+    return llmax(mCloudDomeHeightM, 1.f);
 }
 
 // Per-frame: resolve the primary track, evaluate its keyframes at the phase, and push sky/water/celestial through EEP's ENV_LOCAL slot.
@@ -532,6 +554,10 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastGlow, glow, [this](const LLColor3& v) { mSky->setGlow(v); });
 
     const SSAtmoEnvCloudDome& dome = track.mCloudDome;
+
+    // <SS:Nexii> Not a put() - the dome altitude has no LLSettingsSky home to write into. It goes to the cloud and disc shaders straight off this applier, so all that is kept here is the sample.
+    mCloudDomeAuto = dome.mAuto;
+    mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
 
     put(mLastCloudColor, dome.mColor.valueAt(phase),
         [this](const LLColor3& v) { mSky->setCloudColor(v); });

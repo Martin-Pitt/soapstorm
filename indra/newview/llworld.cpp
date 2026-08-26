@@ -51,6 +51,7 @@
 #include "llviewerregion.h"
 #include "llviewerstats.h"
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic weather
+#include "sswater.h" // <SS:Nexii> Atmo Magic water planes are torn down with the stock ones
 #include "llvlcomposition.h"
 #include "llvoavatar.h"
 #include "llvocache.h"
@@ -133,6 +134,9 @@ LLWorld::LLWorld() :
 void LLWorld::resetClass()
 {
     mHoleWaterObjects.clear();
+    // <SS:Nexii> Kill the Atmo water plane set before the object list dies so no LLPointer outlives teardown holding a dead drawable.
+    SSWaterWorld::getInstance()->clearWaterObjects();
+    // </SS:Nexii>
     gObjectList.destroy();
     gSky.cleanup(); // references an object
     for(region_list_t::iterator region_it = mRegionList.begin(); region_it != mRegionList.end(); )
@@ -1472,7 +1476,7 @@ void LLWorld::updateWaterObjects()
 
     // <SS:Nexii> Void water skirt past the hole box: as far out as fits, capped so the ring's far corner at sqrt(2) stays inside MAX_FAR_CLIP from a camera anywhere in the box (0.7 ~ 1/sqrt(2)
     // with rounding margin) - triangles the projection slices through rasterise black along the horizon. Floor 256 because under ~128m LLVOWater::updateGeometry rounds a patch to zero quads
-    // (crash). Even metres so tile edges round together. Rationale in doc/atmo_magic_interactions.md.
+    // (crash). Even metres so tile edges round together. Rationale in doc/archive/atmo_magic_interactions.md.
     const F32 corner_room = MAX_FAR_CLIP * 0.7f - (F32)llmax(wx, wy);
     const F32 water_stretch = (F32)(2 * ll_round(llclamp(corner_room, 256.f, 1024.f) * 0.5f));
     // </SS:Nexii>

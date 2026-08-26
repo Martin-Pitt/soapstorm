@@ -28,6 +28,7 @@
 #include "ssatmoenvweatherstate.h"
 #include "ssatmoenvcloudfieldstate.h"
 #include "ssatmoenvplanetarystate.h"
+#include "ssatmoenvapplier.h" // <SS:Nexii> the auto dome altitude the greyed-out row shows
 #include "ssfloateratmoplanetary.h"
 #include "ssfloateratmoinfluence.h"
 
@@ -173,6 +174,8 @@ bool SSFloaterAtmoEnv::postBuild()
         [this](LLUICtrl*, const LLSD&) { onCommitLightningAuto(); });
     getChild<LLUICtrl>("cloud_auto_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitCloudAuto(); });
+    getChild<LLUICtrl>("dome_auto_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitDomeAuto(); });
 
     mFloatRows = {
         { "moisture",     [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mMoisture; },     false },
@@ -224,6 +227,7 @@ bool SSFloaterAtmoEnv::postBuild()
         return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mCloudDome;
     };
     const std::vector<FloatRow> dome_rows = {
+        { "dome_height",    [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mHeightM; },  true },
         { "dome_coverage",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mCoverage; }, false },
         { "dome_scale",     [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mScale; },    false },
         { "dome_variance",  [dome]() -> SSAtmoEnvKeyframed<F32>& { return dome().mVariance; }, false },
@@ -952,6 +956,7 @@ void SSFloaterAtmoEnv::refreshTrackTab()
     getChild<LLUICtrl>("lightning_sparks_check")->setValue(track.mWeather.mLightningSparks);
     getChild<LLUICtrl>("lightning_auto_check")->setValue(track.mWeather.mLightningAuto);
     getChild<LLUICtrl>("cloud_auto_check")->setValue(track.mCloudField.mAuto);
+    getChild<LLUICtrl>("dome_auto_check")->setValue(track.mCloudDome.mAuto);
     refreshAutoRows();
     refreshLightningRows();
     refreshWaterRows();
@@ -1074,6 +1079,21 @@ void SSFloaterAtmoEnv::onCommitLightningAuto()
     refreshStatus();
 }
 
+// Dome altitude auto toggle; the height row enables accordingly.
+void SSFloaterAtmoEnv::onCommitDomeAuto()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mCloudDome.mAuto =
+        getChild<LLUICtrl>("dome_auto_check")->getValue().asBoolean();
+    refreshAutoRows();
+    refreshStatus();
+}
+
 // Cloud field auto toggle; authored rows enable accordingly.
 void SSFloaterAtmoEnv::onCommitCloudAuto()
 {
@@ -1121,6 +1141,7 @@ void SSFloaterAtmoEnv::refreshAutoRows()
         { "cloud_thickness",     track.mCloudField.mAuto, auto_thickness },
         { "cloud_coverage",      track.mCloudField.mAuto, auto_coverage },
         { "cloud_storm_dark",    track.mCloudField.mAuto, auto_dark },
+        { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::autoCloudDomeAltitudeMetres() },
     };
     for (const auto& row : rows)
     {
@@ -1232,6 +1253,10 @@ bool SSFloaterAtmoEnv::rowAutoOwned(const std::string& prefix) const
     if (prefix == "cloud_base_height" || prefix == "cloud_thickness" || prefix == "cloud_coverage")
     {
         return track.mCloudField.mAuto;
+    }
+    if (prefix == "dome_height")
+    {
+        return track.mCloudDome.mAuto;
     }
     if (prefix.compare(0, 6, "water_") == 0)
     {

@@ -2242,6 +2242,24 @@ LLViewerObject *LLViewerObjectList::createObjectViewer(const LLPCode pcode, LLVi
     return objectp;
 }
 
+// <SS:Nexii> The tail of createObjectViewer for an object the caller already constructed - see the header note.
+LLViewerObject *LLViewerObjectList::adoptViewerObject(LLViewerObject *objectp)
+{
+    if (!objectp)
+    {
+        return NULL;
+    }
+
+    mUUIDObjectMap[objectp->getID()] = objectp;
+
+    mObjects.push_back(objectp);
+
+    updateActive(objectp);
+
+    return objectp;
+}
+// </SS:Nexii>
+
 LLViewerObject *LLViewerObjectList::createObjectFromCache(const LLPCode pcode, LLViewerRegion *regionp, const LLUUID &uuid, const U32 local_id)
 {
     llassert_always(uuid.notNull());

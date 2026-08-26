@@ -1,5 +1,7 @@
 # Atmo Magic: per-track weather configuration
 
+> **OUT OF DATE** — archived 2026-08-26. Kept for historical reference; the code is the ground truth.
+
 Weather is configured per EEP sky track and only runs for the track the camera
 is currently in. No track has weather until something defines it, so a region
 with no Atmo configuration looks exactly as it does today.

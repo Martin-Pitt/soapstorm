@@ -1,5 +1,7 @@
 # Atmo Magic — cross-system interaction map
 
+> **OUT OF DATE** — archived 2026-08-26. The `[interaction: ...]` tags at the use sites in code are the ground truth.
+
 Who reads what. When changing a system, check its consumers here — the point of this file is knowing the blast radius before touching anything. Comments tagged `[interaction: ...]` in code refer back to this map. May drift out of date; the tagged comments at the use sites are the ground truth.
 
 ## Shader variant system (SS_ATMO)

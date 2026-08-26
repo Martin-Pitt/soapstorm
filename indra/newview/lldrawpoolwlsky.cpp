@@ -50,7 +50,6 @@
 #include "llviewercontrol.h"
 #include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
 #include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic celestial billboards
-#include "ssvolcloud.h" // <SS:Nexii> Atmo Magic volumetric cloud field
 
 extern bool gCubeSnapshot;
 
@@ -72,21 +71,9 @@ static LLStaticHashedString sPhaseShaded("ss_phase_shaded");
 static LLStaticHashedString sDaylight("ss_daylight");
 static LLStaticHashedString sFaceRot("ss_face_rot");
 
-// <SS:Nexii> The dome cloud layer's virtual ALTITUDE, metres: cirrus-high in dry still air, merging quickly down onto the volumetric deck's altitude as moisture/convection build (read from the
-// field's own coverage), so the dome band and the deck agree about where the cloud IS just as they merge visually at the rim. Both the parallax (cloudsV) and the disc occlusion (ssCelestialF)
-// scale by it - one authority, or the two slide apart.
+// <SS:Nexii> The dome cloud layer's virtual ALTITUDE, metres - an authored dome parameter now (SSAtmoEnvCloudDome::mHeightM), with the old derivation kept behind its Auto flag. Both the parallax
+// (cloudsV) and the disc occlusion (ssCelestialF) scale by it - one authority, or the two slide apart, which is why it is resolved in the applier and only read here.
 static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
-static F32 ss_dome_cloud_altitude()
-{
-    const F32 CIRRUS_M = 6000.f;
-    SSVolCloud* vol = SSVolCloud::getInstance();
-    if (vol->empty()) return CIRRUS_M;
-
-    const F32 t = llclamp((vol->lastCoverage() - 0.05f) / 0.25f, 0.f, 1.f);
-    const F32 merge = t * t * (3.f - 2.f * t);
-    const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
-    return lerp(CIRRUS_M, llmax(deck_mid, 300.f), merge);
-}
 // </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
@@ -494,8 +481,8 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
         cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
 
-        // The layer's own altitude for the parallax scale - see ss_dome_cloud_altitude.
-        cloudshader->uniform1f(sCloudAltM, ss_dome_cloud_altitude());
+        // The layer's own altitude for the parallax scale - see SSAtmoEnvApplier::cloudDomeAltitudeMetres.
+        cloudshader->uniform1f(sCloudAltM, SSAtmoEnvApplier::instance().cloudDomeAltitudeMetres());
         // </SS:Nexii>
 
         /// Render the skydome

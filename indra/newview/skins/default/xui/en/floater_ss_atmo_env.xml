@@ -3,15 +3,15 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- height="740"
+ height="897"
  layout="topleft"
- min_height="600"
- min_width="760"
+ min_height="897"
+ min_width="985"
  name="floater_ss_atmo_env"
  save_rect="true"
  single_instance="true"
  title="Edit Atmo Magic Environment"
- width="800">
+ width="985">
     <!-- <SS:Nexii> Atmo Magic floater. Laid out to echo
          floater_edit_ext_day_cycle.xml where the two overlap - same
          vertical position for the name row, Load/Save/Revert docked at the
@@ -176,7 +176,7 @@
          the right. Ground has no floor of its own to drag (see
          SSAtmoEnvTrack::mFloorZ) so it's a fixed row below the slider
          instead, always present, never removable. See
-         doc/atmo_magic_environment.md. -->
+         doc/archive/atmo_magic_environment.md. -->
     <panel
      follows="left|top|bottom"
      layout="topleft"

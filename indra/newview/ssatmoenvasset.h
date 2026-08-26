@@ -229,6 +229,13 @@ struct SSAtmoEnvCloudField
 
 struct SSAtmoEnvCloudDome
 {
+    // <SS:Nexii> The dome layer's own ALTITUDE, metres - what a metre of camera travel is worth to the parallax, and the one authority the disc occlusion shares (doc/atmo_magic_cloud_parallax.md).
+    // Authored here rather than borrowed from max altitude, which is an atmosphere ceiling dialled for haze and has no business setting where a cloud sits. mAuto hands the number back to the
+    // volumetric field's derivation - cirrus-high while the field is empty, merging down onto the deck's mid-height as coverage builds - for anyone who wants dome and deck to agree at the rim
+    // without dialling it themselves.
+    bool mAuto = false;
+    SSAtmoEnvKeyframed<F32> mHeightM{6000.f};
+
     SSAtmoEnvKeyframed<LLColor3> mColor{LLColor3(0.4099f, 0.4099f, 0.4099f)};
 
     SSAtmoEnvKeyframed<F32> mCoverage{0.2699f};

@@ -1,5 +1,7 @@
 # Atmo Magic: a unified, opt-in environment system
 
+> **OUT OF DATE** — archived 2026-08-26. Kept for historical reference; the code is the ground truth.
+
 This started as a design proposal (internally coded "v3" while it sat next to
 the v1/v2 code it was superseding); it's now the live system, and this
 document tracks it as such. It specifies a fully client-side, opt-in

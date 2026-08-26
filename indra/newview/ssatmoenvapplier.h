@@ -67,6 +67,11 @@ public:
 
     const LLVector2& cloudDriftMetres() const { return mCloudDriftM; }
 
+    // <SS:Nexii> The dome cloud layer's altitude in metres, authored or derived - the single authority the parallax and the disc occlusion both scale by (doc/atmo_magic_cloud_parallax.md).
+    // Resolved per call rather than cached with the rest of the sky walk: the auto derivation reads the volumetric field's LIVE coverage, which moves between applies.
+    F32 cloudDomeAltitudeMetres() const;
+    static F32 autoCloudDomeAltitudeMetres();
+
     const LLVector3& moonSunDirection() const { return mMoonSunDir; }
 
     bool sunSlotEmissive() const { return mSunSlotEmissive; }
@@ -114,6 +119,10 @@ private:
 
     SSAtmoEnvSkyModulation mLastModulation;
     LLVector2 mCloudDriftM;
+
+    // <SS:Nexii> The dome's authored altitude and its auto flag, sampled at the applied phase - see cloudDomeAltitudeMetres.
+    bool mCloudDomeAuto = false;
+    F32 mCloudDomeHeightM = 6000.f;
 
     F32 mMoonSlotBrightness = 1.f;
 

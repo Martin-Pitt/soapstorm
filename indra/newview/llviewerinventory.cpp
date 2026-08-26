@@ -2356,7 +2356,7 @@ void menu_create_inventory_item(LLInventoryPanel* panel, LLUUID dest_id, const L
     // pre-filled with the default v3 environment body rather than left
     // empty - there is no new asset type to hang this off, so the whole
     // unified environment lives in an ordinary notecard from the moment it
-    // is created. See doc/atmo_magic_environment.md.
+    // is created. See doc/archive/atmo_magic_environment.md.
     else if ("atmoenv" == type_name)
     {
         // created_cb only wants the item id (it's the generic

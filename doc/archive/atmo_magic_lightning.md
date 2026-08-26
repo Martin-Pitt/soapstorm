@@ -1,5 +1,7 @@
 # Atmo Magic — lightning design notes
 
+> **OUT OF DATE** — archived 2026-08-26. Kept for historical reference; the code is the ground truth.
+
 Reference for sslightning*, the thunder half of sssoundscape, and the strike lighting in ssvolcloud/ssVolCloudF. Rationale lives here so the code can carry one-line comments; may drift — code wins.
 
 ## Discharge phases (why the timing constants are what they are)

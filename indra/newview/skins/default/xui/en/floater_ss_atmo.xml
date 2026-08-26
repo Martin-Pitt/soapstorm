@@ -22,7 +22,7 @@
          to reach the preset editor), and the sub-floater launchers. The
          per-track weather editing UI, and its own notecard load/save/
          revert/defaults/reload-parcel-config, are gone - see
-         doc/atmo_magic_environment.md's "Relationship to what exists". -->
+         doc/archive/atmo_magic_environment.md's "Relationship to what exists". -->
     <check_box
      control_name="SSAtmoEnabled"
      follows="left|top"

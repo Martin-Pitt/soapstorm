@@ -103,6 +103,7 @@ private:
     void refreshLightningRows();
     void refreshAutoRows();
     void onCommitCloudAuto();
+    void onCommitDomeAuto();
 
     bool rowAutoOwned(const std::string& prefix) const;
 
