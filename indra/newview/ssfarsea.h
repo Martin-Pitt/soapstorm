@@ -30,6 +30,13 @@
 
 class LLGLSLShader;
 
+// <SS:Nexii> The water's far-field squash band as fractions of MAX_FAR_CLIP. The cap is shared with the cloud field + lightning (SSVolCloud), but the KNEE is deliberately the sea's own: 0.95
+// keeps the drawn water TRUE out to 95% of the cap and compresses the whole knee-to-rim sweep into the last ~100 drawn metres - a distant, near-vertical wall at the bubble rim - while clouds
+// and lightning keep their original 0.8 knee so their volume geometry is untouched. The accepted cost: inside the 0.8-0.95 sliver the water is unsquashed while clouds are squashed, so water
+// and cloud depth ordering can disagree there - vertical separation makes real overlap rare. </SS:Nexii>
+constexpr F32 SS_SQUASH_CAP_FRAC = 0.98f;
+constexpr F32 SS_SEA_SQUASH_KNEE_FRAC = 0.95f;
+
 class SSFarSea : public LLSingleton<SSFarSea>
 {
     LLSINGLETON_EMPTY_CTOR(SSFarSea);
@@ -45,12 +52,15 @@ public:
 private:
     void build();
     void band(F32& knee, F32& cap, F32& rim, F32& planet_r) const;
+    LLVector3 anchorEye() const;
 
     LLPointer<LLVertexBuffer> mVB;
     U32 mVertCount = 0;
     U32 mIndexCount = 0;
     F32 mLastRSea = 0.f;
     F32 mLastKnee = 0.f;
+    mutable LLVector3 mFrozenEye;
+    mutable bool mEyeFrozen = false;
 };
 
 #endif

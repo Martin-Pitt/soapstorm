@@ -75,14 +75,10 @@ void main()
             float ss_es = -dot(ss_rd, waterPlane.xyz);
             if (ss_es > 0.0)
             {
-                // The sea distance is fully ANALYTIC - the ray against the drooped sea, d^2/2R below the plane, solved in the cancellation-free quadratic form - because any use of the inverted
-                // depth value carries the depth buffer's ~1m quantization amplified to ~240m+ true-distance steps, which rendered as camera-centred haze rings. Ray direction is per-pixel exact, so
-                // this is noise-free. R derives from the rim the sea actually renders with (rim = 1.35*sqrt(2*R*eye_h), so R = rim^2/(3.645*h)) - self-consistent even where SSFarSea clamped the
-                // rim. Rays missing the droop (disc <= 0) saturate through 2w/es into the rim cap, so the silhouette approach is continuous.
-                float ss_R = ss_squash.z * ss_squash.z / (3.645 * max(waterPlane.w, 2.0));
-                float ss_re = ss_R * ss_es;
-                float ss_disc = max(ss_re * ss_re - 2.0 * ss_R * waterPlane.w, 0.0);
-                float ss_true = min(2.0 * ss_R * waterPlane.w / (ss_re + sqrt(ss_disc)), ss_squash.z);
+                // The sea distance is fully ANALYTIC - never the inverted depth value, whose ~1m quantization amplifies to ~240m+ true-distance steps and rendered as camera-centred haze rings.
+                // Ray direction is per-pixel exact, so this is noise-free. DIAGNOSTIC BASELINE: the sea is currently a dead-flat plane out to the rim (waterV.glsl), so the distance is simply the
+                // ray-plane hit capped at the rim; the drooped-sphere solve that matches a planet-curved sea is in git history and must come back in lockstep with the droop.
+                float ss_true = min(waterPlane.w / ss_es, ss_squash.z);
                 pos.xyz = ss_rd * max(ss_true, ss_dd);
             }
         }

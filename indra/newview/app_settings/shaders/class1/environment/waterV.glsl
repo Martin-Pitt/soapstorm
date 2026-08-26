@@ -85,12 +85,11 @@ void main()
         // identity - a camera-distance ramp let far-side seam vertices pick up a few percent of a 100km pull and tear kilometres off the rect edge. w = 1 exactly at the outer edge, so the square's
         // rim IS the round horizon; the camera stays inside the identity zone whenever stock water is on screen, which keeps the ray directions sweeping the circle monotonically.
         float sea_cheb = max(abs(position.x), abs(position.y)) * 0.5;
-        // The pull profile is a normalized exponential, not smoothstep: sea_w is the GEOMETRY of the horizon approach (it moves vertices from lattice radii to the rim), and the smoothstep's S had
-        // mid-frame rings already halfway to a rim tens of km out - the sea lunged for the horizon early. Exponential keeps rings near their true radii through most of the frame and sweeps the
-        // rim approach into the outer rings - a bowl rising late to the edge. Still exactly 0 through the identity zone and exactly 1 at the outer edge, so the rect seam and the horizon circle
-        // are untouched; raise the 4.0 to hold the near field longer at the cost of chunkier horizon tessellation. MUST stay in exact sync with waterHazeV.glsl. [interaction: waterHazeV.glsl]
-        float sea_t = clamp((sea_cheb - ss_sea.x) / max(1.0 - ss_sea.x, 1e-4), 0.0, 1.0);
-        float sea_w = (exp(4.0 * sea_t) - 1.0) / (exp(4.0) - 1.0);
+        // <SS:Nexii> DIAGNOSTIC BASELINE: flat linear profile. The pull from lattice radii to the rim is plain linear in cheb - no smoothstep, no exponential - so the ring spacing seen edge-on
+        // is exactly the mapping and nothing else. The curvature experiments (droop, bowl lift, shaped pulls - see git history) rebuild on top of this once the foundation reads clean. Still
+        // exactly 0 through the identity zone and 1 at the outer edge, so the rect seam and the rim circle are untouched. MUST stay in exact sync with waterHazeV.glsl. [interaction:
+        // waterHazeV.glsl, hazeF.glsl flat-sea distance] </SS:Nexii>
+        float sea_w = clamp((sea_cheb - ss_sea.x) / max(1.0 - ss_sea.x, 1e-4), 0.0, 1.0);
         vec2 sea_world = sea_lat;
         if (sea_w > 0.0)
         {
@@ -119,9 +118,9 @@ void main()
             float sea_sink_t = clamp((sea_rc - ss_squash.x) / 600.0, 0.0, 1.0);
             sea_sink = 0.05 + 2.95 * sea_sink_t * sea_sink_t;
         }
-        // Planet droop d^2/2R: at the tangent distance the sea has dropped by exactly the eye height, so the visible horizon is a sphere's silhouette. w = 0 means a flat world.
-        float sea_droop = ss_sea.w > 0.0 ? sea_rc * sea_rc / (2.0 * ss_sea.w) : 0.0;
-        ss_true_pos = vec3(sea_world, ss_sea.z - sea_sink - sea_droop);
+        // DIAGNOSTIC BASELINE: dead flat - no planet droop, no bowl lift (see git history for both). The surface is the water plane minus the seam sink, so anything curved seen edge-on from here
+        // on is a bug, not a profile. ss_sea.w (planet radius) is still bound but deliberately unused.
+        ss_true_pos = vec3(sea_world, ss_sea.z - sea_sink);
         pos.xyz = ss_true_pos;
     }
 #endif

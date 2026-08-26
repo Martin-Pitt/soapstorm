@@ -30,6 +30,7 @@
 #include "ssatmoenvmanager.h"
 #include "ssatmoenvtrackstate.h"
 #include "ssatmomagic.h"
+#include "ssfarsea.h"
 #include "sslightning.h"
 
 #include "llenvironment.h"
@@ -235,7 +236,9 @@ void SSVolCloud::update(F32 dt)
     const F32 air_y = cam.mV[VY] - drift.mV[1];
 
     mEffRadius = FIELD_RADIUS_M;
-    mSquashCap = MAX_FAR_CLIP * 0.98f;
+    // Cap shared with the sea (ssfarsea.h); the knee is deliberately NOT - the sea pushed its knee to 0.95 for a farther, steeper drawn wall, while the cloud field and lightning keep 0.8 so
+    // their volume geometry is untouched. Water/cloud depth ordering can disagree in the sliver between the knees; accepted, vertical separation makes real overlap rare. [interaction: SSFarSea]
+    mSquashCap = MAX_FAR_CLIP * SS_SQUASH_CAP_FRAC;
     mSquashKnee = mSquashCap * 0.8f;
 
     const S32 cell_radius = (S32)ceilf(FIELD_DRAW_M / CELL_M);

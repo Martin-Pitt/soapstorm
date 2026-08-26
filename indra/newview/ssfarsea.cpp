@@ -37,19 +37,40 @@
 
 static const F32 SEA_MIN_RADIUS_M = 6800.f;
 static const F32 SEA_MAX_RADIUS_M = 500000.f;
-static const F32 SEA_HORIZON_OVERSHOOT = 1.35f;
+// <SS:Nexii> DIAGNOSTIC BASELINE: 1.0, i.e. no overshoot. The 1.35 existed to push the rim past the tangent distance so the planet-drooped sea closed its own silhouette gap - with the droop
+// removed (flat baseline, waterV.glsl) everything past the tangent renders into the top pixel row or two of the drawn wall: pure vertex and fill waste at the rim. Restore the overshoot in
+// lockstep with the droop. </SS:Nexii>
+static const F32 SEA_HORIZON_OVERSHOOT = 1.0f;
 static const S32 SEA_HOLE_HALF_CELLS = 32;
 static const S32 SEA_FRAME_HALF_CELLS = 64;
+
+// The eye the sea is anchored to - normally the live camera, but freezable in place so the mesh stops following the camera and its drawn shape can be inspected from outside. The frame and
+// squash both degenerate BY DESIGN around any eye outside the identity zone, so from an out-of-bounds camera the live-anchored mesh only ever shows the vacated hole around the camera itself.
+LLVector3 SSFarSea::anchorEye() const
+{
+    static LLCachedControl<bool> freeze(gSavedSettings, "SSAtmoDebugFarSeaFreezeEye", false);
+    if (freeze)
+    {
+        if (!mEyeFrozen)
+        {
+            mFrozenEye = LLViewerCamera::getInstance()->getOrigin();
+            mEyeFrozen = true;
+        }
+        return mFrozenEye;
+    }
+    mEyeFrozen = false;
+    return LLViewerCamera::getInstance()->getOrigin();
+}
 
 // The shared squash band plus this frame's rim and planet radius - one formula so stock planes, frame and clouds always agree.
 void SSFarSea::band(F32& knee, F32& cap, F32& rim, F32& planet_r) const
 {
-    cap = MAX_FAR_CLIP * 0.98f;
-    knee = cap * 0.8f;
+    cap = MAX_FAR_CLIP * SS_SQUASH_CAP_FRAC;
+    knee = cap * SS_SEA_SQUASH_KNEE_FRAC;
 
     static LLCachedControl<F32> planet_km(gSavedSettings, "SSAtmoSeaPlanetRadiusKm", 6371.f);
     planet_r = llmax(0.f, (F32)planet_km) * 1000.f;
-    const F32 eye_h = llmax(LLViewerCamera::getInstance()->getOrigin().mV[2] - LLEnvironment::instance().getWaterHeight(), 2.f);
+    const F32 eye_h = llmax(anchorEye().mV[2] - LLEnvironment::instance().getWaterHeight(), 2.f);
 
     rim = SEA_MIN_RADIUS_M;
     if (planet_r > 0.f)
@@ -69,7 +90,8 @@ void SSFarSea::bindSquash(LLGLSLShader* shader)
     band(knee, cap, rim, planet_r);
     static LLStaticHashedString s_ss_squash("ss_squash");
     shader->uniform3f(s_ss_squash, knee, cap, rim);
-    shader->uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, LLViewerCamera::getInstance()->getOrigin().mV);
+    // anchorEye, not the raw camera: with the freeze-eye debug on, the whole eye-relative construction (placement, pull, squash) stays anchored where it was frozen. [interaction: anchorEye]
+    shader->uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, anchorEye().mV);
 }
 
 // Binds the frame's per-frame uniforms and draws the canonical annulus; zeroes the band on every path out so nothing leaks.
