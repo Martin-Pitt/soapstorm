@@ -132,8 +132,8 @@ S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
         // Big enough to be a sky lighting a street rather than a lamp post. Radius grows with distance so a far strike still reaches whatever is between it and the camera.
         const F32 radius = llclamp(sqrtf(best_d2) * 0.6f, 60.f, 900.f);
 
-        // A light so far out that its radius cannot reach any fragment the gbuffer holds would burn a batcher slot lighting nothing.
-        if (sqrtf(best_d2) - radius > LLViewerCamera::getInstance()->getRenderFarPlane()) continue;
+        // A light so far out that its radius cannot reach any fragment the gbuffer holds would burn a batcher slot lighting nothing. MAX_FAR_CLIP is the constant projection far plane.
+        if (sqrtf(best_d2) - radius > MAX_FAR_CLIP) continue;
 
         out_pos_radius.push_back(LLVector4(best.mV[VX], best.mV[VY], best.mV[VZ], radius));
         out_color.push_back(tint * (b * strength));
@@ -261,7 +261,7 @@ void SSLightning::triggerNow()
     const F32 bearing = atan2f(at.mV[VY], at.mV[VX]);
 
     SSRandStream rng((U32)(SSAtmoMagic::getInstance()->sharedTime() * 31.0));
-    const F32 vis = LLViewerCamera::getInstance()->getRenderFarPlane() * 0.8f;
+    const F32 vis = MAX_FAR_CLIP * 0.8f;
 
     // Down to practically overhead - natural spawns bottom out at 300m, but a debug button exists precisely to summon the case you want to look at, and the near case (sparks, scene light, the
     // channel tearing past at full width) is the one worth inspecting most. Rolled as t*t so roughly half the presses land in the near third.

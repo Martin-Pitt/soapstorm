@@ -292,9 +292,10 @@ void SSVolCloud::update(F32 dt)
     const F32 air_x = cam.mV[VX] - drift.mV[0];
     const F32 air_y = cam.mV[VY] - drift.mV[1];
 
-    // The squash band - see FIELD_RADIUS_M. Everything nearer than the knee draws where it truly is; [knee, FIELD_RADIUS] compresses linearly into [knee, cap].
+    // The squash band - see FIELD_RADIUS_M. Everything nearer than the knee draws where it truly is; [knee, FIELD_RADIUS] compresses linearly into [knee, cap]. MAX_FAR_CLIP is the constant
+    // projection far plane (llcamera.h), so the band no longer moves with draw distance.
     mEffRadius = FIELD_RADIUS_M;
-    mSquashCap = LLViewerCamera::getInstance()->getRenderFarPlane() * 0.98f;
+    mSquashCap = MAX_FAR_CLIP * 0.98f;
     mSquashKnee = mSquashCap * 0.8f;
 
     const S32 cell_radius = (S32)ceilf(FIELD_DRAW_M / CELL_M);

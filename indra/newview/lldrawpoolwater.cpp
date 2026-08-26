@@ -110,11 +110,18 @@ S32 LLDrawPoolWater::getNumPostDeferredPasses()
 {
     // <SS:Nexii> Water is a post-deferred-only pool, so this gate drops the whole water surface render - waves, reflection, refraction and
     // its atmospherics - leaving only the flat plane doWaterHaze() paints, the moment the camera passes a fixed 1024m dating from when that
-    // was the top of the skybox. Gate on the render far plane instead, where the water actually stops being visible; not the draw distance,
-    // which water is deliberately drawn past (its partition sets mInfiniteFarClip). Works out to the original 1024m at default draw distance.
+    // was the top of the skybox. Gate on MAX_FAR_CLIP, the constant projection far plane, where the water actually stops being visible; not
+    // the draw distance, which water is deliberately drawn past (its partition sets mInfiniteFarClip).
+    // When Atmo owns the water the gate goes away entirely: the squash band bound around every water draw is a function of 3D slant
+    // distance, so from any altitude - straight down at the plane's centre included - every vertex past the knee is carried back inside the
+    // cap, and the water stays visible the whole 0-4096m climb. [interaction: SSFarSea::bindSquash]
     //if (LLViewerCamera::getInstance()->getOrigin().mV[2] < 1024.f)
+    if (SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn())
+    {
+        return 1;
+    }
     const F32 height_above_water = LLViewerCamera::getInstance()->getOrigin().mV[2] - LLEnvironment::instance().getWaterHeight();
-    if (height_above_water < LLViewerCamera::getInstance()->getRenderFarPlane())
+    if (height_above_water < MAX_FAR_CLIP)
     // </SS:Nexii>
     {
         return 1;
@@ -401,11 +408,8 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     LLGLDisable cullface(GL_CULL_FACE);
 
-    // <SS:Nexii> Atmo's own far sea: only when an Atmo environment is active AND its track has a water plane does the frame extend the ocean past the stock planes to a planet-curved virtual
-    // horizon - the "own water plane" rule. The stock planes get the SAME squash band bound first: the stock footprint's corners can sit beyond the knee, so the frame seam only stays closed in
-    // drawn space if both sides squash identically.
-    // Without Atmo the uniform defaults to zero and stock renders byte-for-byte vanilla. The sea draws last so depth testing hands every pixel the stock water claimed back to stock. No
-    // underwater form yet: from below the surface the stock plane overhead is all there is to see anyway. [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
+    // <SS:Nexii> Atmo's own far sea (the "own water plane" rule): stock planes get the SAME squash band bound first so the frame seam stays closed in drawn space; the sea draws last so depth
+    // testing hands every stock pixel back to stock. Without Atmo the uniform's zero default keeps stock byte-for-byte vanilla. No underwater form yet. [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
     const bool ss_atmo_sea = !underwater && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
     if (ss_atmo_sea)
     {

@@ -144,6 +144,12 @@ bool LLVOWater::updateGeometry(LLDrawable *drawable)
     size_x *= (S32)llmin(llround(scale.mV[0] / 256.f), 8);
     size_y *= (S32)llmin(llround(scale.mV[1] / 256.f), 8);
 
+    // <SS:Nexii> A patch under ~128m rounds to ZERO quads above, and the zero-size buffer path dangles in the mapped-buffer flush list (access violation under movePartition). One quad is a
+    // valid mesh at any scale.
+    size_x = llmax(size_x, 1);
+    size_y = llmax(size_y, 1);
+    // </SS:Nexii>
+
     const S32 num_quads = size_x * size_y;
     face->setSize(vertices_per_quad * num_quads,
                   indices_per_quad * num_quads);

@@ -110,6 +110,7 @@
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
+#include "ssfarsea.h" // <SS:Nexii> far sea in the water haze pass
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
@@ -10291,9 +10292,22 @@ void LLPipeline::doWaterHaze()
             gGLLastMatrix = NULL;
             gGL.loadMatrix(gGLModelView);
 
+            // <SS:Nexii> The haze pass re-draws the water geometry, so it must be the SAME geometry: stock squashed identically (waterHazeV mirrors waterV, else the depth test cuts the haze
+            // over the squash band) and the far sea frame included. [interaction: SSFarSea, waterHazeV.glsl] </SS:Nexii>
+            const bool ss_atmo_sea = SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
+            if (ss_atmo_sea)
+            {
+                SSFarSea::getInstance()->bindSquash(&haze_shader);
+            }
+
             if (mWaterPool)
             {
                 mWaterPool->pushFaceGeometry();
+            }
+
+            if (ss_atmo_sea)
+            {
+                SSFarSea::getInstance()->render(&haze_shader);
             }
         }
 
