@@ -1,9 +1,6 @@
 /**
  * @file ssatmoenvdiscovery.cpp
- * @brief Atmo Magic parcel discovery and Bridge notecard fetch
- *        implementation. See the header for the Bridge (LSL) contract this
- *        assumes - indra/newview/fs_resources/EBEDD1D2-...-D47BBCA5DFB.lsltxt's
- *        "FetchNotecard" command.
+ * @brief See ssatmoenvdiscovery.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -40,16 +37,12 @@
 
 #include <sstream>
 
-// <SS:Nexii> Atmo Magic: parcel discovery and Bridge notecard fetch
-
 namespace
 {
     const char* CONFIG_TAG = "atmo:";
     const char* FETCH_COMMAND = "FetchNotecard|";
 
-    // Notecards are immutable once created - the same asset uuid is always the same content, forever - so caching a fetched one keyed purely by uuid never goes stale. Written wrapped in the same
-    // Linden text container a real notecard asset already carries, so a cache entry is byte-shape-identical to whatever gAssetStorage would have fetched from the network; reading it back needs no
-    // special-casing for "did this come from the Bridge or the real asset system".
+    // Wraps fetched text in notecard format and caches it under the asset id, so later visits skip the Bridge.
     void cacheNotecardBody(const LLUUID& asset_id, const std::string& plain_body)
     {
         LLNotecard nc(LLNotecard::MAX_SIZE);
@@ -62,7 +55,7 @@ namespace
         file.write((const U8*)wrapped_text.data(), (S32)wrapped_text.size());
     }
 
-    // The inverse of the above - null/empty if there's no cache entry or it doesn't parse as a notecard container.
+    // Reads a cached notecard body back, unwrapping Linden notecard format when present.
     std::string readCachedNotecardBody(const LLUUID& asset_id)
     {
         if (!LLFileSystem::getExists(asset_id, LLAssetType::AT_NOTECARD)) return std::string();
@@ -87,13 +80,13 @@ namespace
     }
 }
 
+// Watches parcel changes from construction on.
 SSAtmoEnvDiscoveryManager::SSAtmoEnvDiscoveryManager()
 {
-    // Fires when the agent crosses into a different parcel and when the current parcel's properties are re-sent, which is what an owner editing the description produces - same event-driven pattern
-    // v2's own SSAtmoTrackManager already uses, no polling needed.
     LLViewerParcelMgr::getInstance()->addObserver(this);
 }
 
+// Stops watching; guarded because the parcel manager may already be gone at shutdown.
 SSAtmoEnvDiscoveryManager::~SSAtmoEnvDiscoveryManager()
 {
     if (LLViewerParcelMgr::instanceExists())
@@ -102,11 +95,9 @@ SSAtmoEnvDiscoveryManager::~SSAtmoEnvDiscoveryManager()
     }
 }
 
-// static
+// Finds the first valid 'atmo:<uuid>' marker in a parcel description.
 LLUUID SSAtmoEnvDiscoveryManager::parseDescription(const std::string& desc)
 {
-    // Same scan-for-marker-then-next-36-characters approach as v2's own SSAtmoTrackManager::parseDescription, same reason: keeps the marker findable inside ordinary prose so a parcel description
-    // stays readable rather than needing to be exactly the tag and nothing else.
     const std::string lower = utf8str_tolower(desc);
     const size_t tag_len = strlen(CONFIG_TAG);
     size_t pos = 0;
@@ -130,6 +121,7 @@ LLUUID SSAtmoEnvDiscoveryManager::parseDescription(const std::string& desc)
     return LLUUID::null;
 }
 
+// Parcel changed: apply, refetch or unload the parcel environment - never while the editor floater is open.
 void SSAtmoEnvDiscoveryManager::changed()
 {
     LLParcel* parcel = LLViewerParcelMgr::getInstance()->getAgentParcel();
@@ -138,13 +130,10 @@ void SSAtmoEnvDiscoveryManager::changed()
 
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
 
-    // Mid-edit is mid-edit, in both directions: the same courtesy that stops a parcel's environment clobbering an open editor also stops a parcel boundary yanking one away while it is being worked
-    // on.
     const bool editing = editorIsOpen();
 
     if (asset_id.isNull())
     {
-        // No marker here. Release what a parcel put on us, and only that - see the header.
         if (!editing && mgr->hasAsset() && mgr->cameFromParcel())
         {
             LL_INFOS("AtmoMagicEnv") << "Left the parcel that supplied the Atmo Magic"
@@ -158,12 +147,10 @@ void SSAtmoEnvDiscoveryManager::changed()
 
     if (asset_id == mAppliedAssetId && mgr->hasAsset())
     {
-        return; // already applied and still loaded - genuinely nothing to do
+        return;
     }
-    if (asset_id == mPendingAssetId) return; // already asked, still waiting on the reply
+    if (asset_id == mPendingAssetId) return;
 
-    // A DIFFERENT parcel environment: the one in hand is not the one this parcel is asking for, so it goes. Dropping it before the fetch rather than after means crossing onto a parcel whose notecard
-    // cannot be reached shows the EEP fallback instead of the previous parcel's sky.
     if (!editing && mgr->hasAsset() && mgr->cameFromParcel() && mAppliedAssetId != asset_id)
     {
         mgr->unload();
@@ -173,10 +160,9 @@ void SSAtmoEnvDiscoveryManager::changed()
     requestFetch(asset_id);
 }
 
+// Cache first, then the LSL Bridge; without a Bridge the environment simply stays unloaded.
 void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id)
 {
-    // Notecards are immutable - the same uuid is always the same content, forever - so a cache hit never needs the Bridge at all. If it can't be applied right now (floater open, content rejected),
-    // that is the same "leave it retryable" rule as everywhere else here, not a reason to also go ask the Bridge for content already in hand.
     const std::string cached = readCachedNotecardBody(asset_id);
     if (!cached.empty())
     {
@@ -193,16 +179,14 @@ void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id)
 
     mPendingAssetId = asset_id;
 
-    // Weak-ish capture by value is fine here: this is a singleton that outlives any request it starts, so there is no dangling-this risk to guard against the way there would be for a floater or
-    // panel.
     FSLSLBridge::instance().viewerToLSL(
         std::string(FETCH_COMMAND) + asset_id.asString(),
         [this, asset_id](const LLSD& data) { onFetchResult(asset_id, data); });
 }
 
+// Bridge reply: cache and apply the fetched notecard text, ignoring stale replies.
 void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data)
 {
-    // A newer request may have superseded this one while it was in flight.
     if (asset_id != mPendingAssetId) return;
     mPendingAssetId.setNull();
 
@@ -214,8 +198,6 @@ void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD
 
     const LLSD& content = data[LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_CONTENT];
 
-    // Reduced to plain text once here, regardless of whether the Bridge passed through a parsed LLSD map (the common case: our own assets already start with "<llsd>") or a bare string (the wrapped
-    // fallback) - one thing to cache, one thing to apply, rather than duplicating both branches in two places.
     std::string text;
     if (content.isMap())
     {
@@ -228,21 +210,19 @@ void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD
         text = content.asString();
     }
 
-    // Cached unconditionally, before the apply attempt: even a floater- open suppression or a rejected parse still means we now have the content in hand, and the next retry (via changed()) should
-    // read it back from here rather than hitting the Bridge a second time for something that never changes anyway.
     cacheNotecardBody(asset_id, text);
 
     applyText(asset_id, text);
 }
 
-// Whether the editor is open on screen. Auto-apply is suppressed while it is - the "New Atmo Magic" creation flow's own "mid-edit, don't clobber" rule, see doc/atmo_magic_environment.md - and so is
-// the release that happens on leaving a configured parcel: an author working on a notecard should not have it taken away because they walked over a line.
+// The editor owns the environment while visible - discovery must not stomp an edit in progress.
 bool SSAtmoEnvDiscoveryManager::editorIsOpen()
 {
     LLFloater* floater = LLFloaterReg::findInstance("ss_atmo_env");
     return floater && floater->getVisible();
 }
 
+// Hands fetched text to the manager and records where it came from; refused while the editor is open.
 bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::string& text)
 {
     if (editorIsOpen())
@@ -254,13 +234,10 @@ bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::str
 
     const bool applied = SSAtmoEnvManager::getInstance()->applyExternalNotecardText(asset_id, text);
 
-    // Only a genuine success marks this uuid as handled. A rejected/ invalid notecard is left retryable too - the alternative (permanently giving up) is worse than occasionally re-attempting a
-    // notecard that turns out to be broken.
     if (applied)
     {
         mAppliedAssetId = asset_id;
 
-        // Marks this environment as the PARCEL's rather than the user's, so leaving the parcel knows it may release it - see changed().
         SSAtmoEnvManager::getInstance()->noteSource(asset_id, true);
     }
     else
@@ -269,5 +246,3 @@ bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::str
     }
     return applied;
 }
-
-// </SS:Nexii>

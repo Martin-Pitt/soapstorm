@@ -1,6 +1,6 @@
 /**
  * @file ssfloaterpreset.cpp
- * @brief Atmo Magic preset editor implementation.
+ * @brief See ssfloaterpreset.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -39,23 +39,22 @@
 #include "llviewercontrol.h"
 #include "llviewertexture.h"
 
-// <SS:Nexii> Atmo Magic preset editor
-
 static const char* TIER_PREFIX[TIER_COUNT] = { "drops", "clusters", "sheets" };
 
+// Floater shell; all content is wired in postBuild.
 SSFloaterPreset::SSFloaterPreset(const LLSD& key) :
     LLFloater(key)
 {
 }
 
-// The widget name for a footstep slot. Built from the SAME keys the preset serialises with, so a slot's control, its LLSD entry and its tooltip cannot drift apart - there is only one spelling of
-// "outside_wet" in the system and this is it.
+// Widget name for a surface/action footstep slot.
 std::string SSFloaterPreset::stepWidgetName(SSStepSurface surface, SSStepAction action)
 {
     return std::string("step_") + SSFootstepSounds::surfaceKey(surface)
          + "_" + SSFootstepSounds::actionKey(action);
 }
 
+// Wires every editor control to the shared commit path plus the toolbar buttons.
 bool SSFloaterPreset::postBuild()
 {
     getChild<LLComboBox>("preset_combo")->setCommitCallback(
@@ -76,7 +75,6 @@ bool SSFloaterPreset::postBuild()
     getChild<LLButton>("discard_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickDiscard(); });
 
-    // Every editable widget funnels through one handler: read the whole form back into the preset, save it, and let the sim pick it up next frame
     static const char* widgets[] = {
         "archetype_combo", "fall_speed", "fall_lo", "fall_hi", "sway",
         "wind_response", "rate", "intensity_size", "tint", "glow", "drop_shape",
@@ -99,7 +97,6 @@ bool SSFloaterPreset::postBuild()
         }
     }
 
-    // The footstep grid, by the same names its slots serialise under - so the panel and the file agree by construction rather than by two lists being kept in step by hand.
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {
         for (S32 ac = 0; ac < STEP_ACTION_COUNT; ++ac)
@@ -131,11 +128,11 @@ bool SSFloaterPreset::postBuild()
     return true;
 }
 
+// Opens on the named preset (or the active one).
 void SSFloaterPreset::onOpen(const LLSD& key)
 {
     refreshPresetList();
 
-    // Open on whatever the weather is currently running, unless told otherwise
     std::string want = key.isString() ? key.asString() : std::string();
     if (want.empty())
     {
@@ -148,6 +145,7 @@ void SSFloaterPreset::onOpen(const LLSD& key)
     loadPreset(want);
 }
 
+// Rebuilds the preset combo around the current selection.
 void SSFloaterPreset::refreshPresetList()
 {
     LLComboBox* combo = getChild<LLComboBox>("preset_combo");
@@ -164,6 +162,7 @@ void SSFloaterPreset::refreshPresetList()
     }
 }
 
+// Loads a preset into the working copy and the controls.
 void SSFloaterPreset::loadPreset(const std::string& name)
 {
     const SSPrecipPreset* found = SSPrecipPresetManager::instance().find(name);
@@ -176,6 +175,7 @@ void SSFloaterPreset::loadPreset(const std::string& name)
     refreshTitle();
 }
 
+// Working copy out to every widget.
 void SSFloaterPreset::presetToControls()
 {
     mUpdating = true;
@@ -247,7 +247,6 @@ void SSFloaterPreset::presetToControls()
             const SSStepSurface surface = (SSStepSurface)sf;
             const SSStepAction action = (SSStepAction)ac;
 
-            // The dry surfaces are not in this window - see surfaceIsGlobal.
             if (SSFootstepSounds::surfaceIsGlobal(surface)) continue;
 
             if (SSSoundListCtrl* ctrl =
@@ -263,6 +262,7 @@ void SSFloaterPreset::presetToControls()
     mUpdating = false;
 }
 
+// Every widget back into the working copy.
 void SSFloaterPreset::controlsToPreset()
 {
     mEdited.mArchetype = (SSPrecipArchetype)llclamp(getChild<LLUICtrl>("archetype_combo")->getValue().asInteger(),
@@ -343,20 +343,19 @@ void SSFloaterPreset::controlsToPreset()
     }
 }
 
+// Stages the edit into the running weather (and clears baked textures) so it can be dialled in while watching it fall.
 void SSFloaterPreset::applyLive()
 {
-    // Staged, not saved: the weather picks the edit up immediately so it can be dialled in while watching it fall, but nothing reaches disk until Save. The asterisk in the title is exactly that gap.
     SSPrecipPresetManager::instance().stage(mEdited);
 
-    // Sizes and shapes are baked into the splatter textures, so drop the bakes; they are keyed on the shape fields and would otherwise linger
     SSPrecipVariants::instance().clearCache();
 
-    // Editing a preset implies you want to see it
     gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
 
     refreshTitle();
 }
 
+// Title shows the preset name and its modified state.
 void SSFloaterPreset::refreshTitle()
 {
     const bool modified = SSPrecipPresetManager::instance().isModified(mEdited.mName);
@@ -364,6 +363,7 @@ void SSFloaterPreset::refreshTitle()
     getChild<LLUICtrl>("save_button")->setEnabled(modified);
 }
 
+// Persists the working copy.
 void SSFloaterPreset::onClickSave()
 {
     SSPrecipPresetManager::instance().save(mEdited);
@@ -371,6 +371,7 @@ void SSFloaterPreset::onClickSave()
     refreshTitle();
 }
 
+// Any control commit: read the widgets, apply live.
 void SSFloaterPreset::onCommitAny()
 {
     if (mUpdating) return;
@@ -378,15 +379,16 @@ void SSFloaterPreset::onCommitAny()
     applyLive();
 }
 
+// Switches the editor (and the running weather) to another preset.
 void SSFloaterPreset::onSelectPreset()
 {
     loadPreset(getChild<LLComboBox>("preset_combo")->getValue().asString());
     gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
 }
 
+// New preset as a copy of the current one.
 void SSFloaterPreset::onClickNew()
 {
-    // Copy the preset on screen under a new name; built-ins stay untouched
     std::string base = mEdited.mName + " copy";
     std::string name = base;
     for (S32 i = 2; SSPrecipPresetManager::instance().find(name) && i < 100; ++i)
@@ -401,7 +403,7 @@ void SSFloaterPreset::onClickNew()
     getChild<LLComboBox>("preset_combo")->selectByValue(name);
 }
 
-// Returns a name based on "base" that no preset is using yet
+// First free 'name N' variant.
 static std::string uniquePresetName(const std::string& base)
 {
     std::string name = base;
@@ -412,9 +414,9 @@ static std::string uniquePresetName(const std::string& base)
     return name;
 }
 
+// New preset from defaults.
 void SSFloaterPreset::onClickBlank()
 {
-    // A fresh preset at its defaults, rather than a copy of what is on screen
     mEdited = SSPrecipPreset();
     mEdited.mName = uniquePresetName("New preset");
     mEdited.mBuiltIn = false;
@@ -425,6 +427,7 @@ void SSFloaterPreset::onClickBlank()
     presetToControls();
 }
 
+// Renames the working preset (delete-and-resave under the new name).
 void SSFloaterPreset::onClickRename()
 {
     std::string name = getChild<LLLineEditor>("preset_name_editor")->getText();
@@ -441,13 +444,11 @@ void SSFloaterPreset::onClickRename()
 
     const std::string old_name = mEdited.mName;
 
-    // Write the preset out under its new name first, so nothing is lost if the old file cannot be removed. A renamed built-in becomes a user preset and the shipped one returns to the list untouched.
     mEdited.mName = name;
     mEdited.mBuiltIn = false;
     SSPrecipPresetManager::instance().save(mEdited);
     SSPrecipPresetManager::instance().remove(old_name);
 
-    // Follow the rename everywhere the old name was referenced, otherwise a track would silently fall back to the editor default
     SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     bool touched = false;
     for (S32 track = SS_TRACK_MIN; track <= SS_TRACK_MAX; ++track)
@@ -471,12 +472,12 @@ void SSFloaterPreset::onClickRename()
     getChild<LLComboBox>("preset_combo")->selectByValue(name);
 }
 
+// Deletes the preset and falls back to whatever is first.
 void SSFloaterPreset::onClickDelete()
 {
     const std::string name = mEdited.mName;
     if (!SSPrecipPresetManager::instance().remove(name))
     {
-        // Built-ins have no file unless they were overridden, so there is nothing to remove
         LLNotificationsUtil::add("GenericAlert",
             LLSD().with("MESSAGE", "This preset has no saved copy to delete."));
         return;
@@ -490,9 +491,9 @@ void SSFloaterPreset::onClickDelete()
     }
 }
 
+// Drops staged edits, back to the saved version.
 void SSFloaterPreset::onClickDiscard()
 {
-    // Put the version on disk back, dropping whatever was staged. A preset that has never been written has nothing to go back to.
     const SSPrecipPreset* saved = SSPrecipPresetManager::instance().findSaved(mEdited.mName);
     if (!saved) return;
 
@@ -501,13 +502,11 @@ void SSFloaterPreset::onClickDiscard()
     loadPreset(mEdited.mName);
 }
 
+// Reverts the controls to the saved preset.
 void SSFloaterPreset::onClickRevert()
 {
-    // Drop the saved override so a built-in returns to its shipped values
     SSPrecipPresetManager::instance().remove(mEdited.mName);
     SSPrecipVariants::instance().clearCache();
     refreshPresetList();
     loadPreset(mEdited.mName);
 }
-
-// </SS:Nexii>

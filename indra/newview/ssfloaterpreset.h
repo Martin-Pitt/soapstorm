@@ -1,9 +1,6 @@
 /**
  * @file ssfloaterpreset.h
- * @brief Atmo Magic preset editor: a tabbed editor for one weather preset -
- *        motion and density, per-tier appearance, impact behaviour, textures
- *        and its sound pack. Edits apply live to the running weather so a
- *        preset can be dialled in while watching it fall.
+ * @brief Atmo Magic: weather preset editor floater.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -27,8 +24,6 @@
 #ifndef SS_FLOATERPRESET_H
 #define SS_FLOATERPRESET_H
 
-// <SS:Nexii> Atmo Magic preset editor
-
 #include "llfloater.h"
 #include "ssprecippreset.h"
 
@@ -45,9 +40,9 @@ public:
 private:
     void loadPreset(const std::string& name);
     void refreshPresetList();
-    void controlsToPreset();   // read every widget back into mEdited
-    void presetToControls();   // push mEdited out to the widgets
-    void applyLive();          // save and make the sim pick it up immediately
+    void controlsToPreset();
+    void presetToControls();
+    void applyLive();
 
     void onSelectPreset();
     void onCommitAny();
@@ -59,13 +54,10 @@ private:
     void onClickSave();
     void onClickDiscard();
 
-    // Title carries the preset name and an asterisk while edits are staged but not written to disk
     void refreshTitle();
 
     SSPrecipPreset mEdited;
-    bool mUpdating = false;    // guards presetToControls against commit echo
+    bool mUpdating = false;
 };
 
-// </SS:Nexii>
-
-#endif // SS_FLOATERPRESET_H
+#endif

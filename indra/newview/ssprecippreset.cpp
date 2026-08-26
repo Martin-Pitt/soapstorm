@@ -1,6 +1,6 @@
 /**
  * @file ssprecippreset.cpp
- * @brief Atmo Magic weather preset defaults, serialization and store.
+ * @brief See ssprecippreset.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -31,9 +31,6 @@
 #include "llsdutil.h"
 #include "llviewercontrol.h"
 
-// <SS:Nexii> Atmo Magic weather presets
-
-// Short keys used both for LLSD serialization ("step_" + surface + "_" + action) and to build widget names in the preset editor, so the two never drift apart.
 static const char* STEP_SURFACE_KEY[STEP_SURFACE_COUNT] =
 {
     "terrain_dry", "terrain_wet", "terrain_puddle",
@@ -42,7 +39,7 @@ static const char* STEP_SURFACE_KEY[STEP_SURFACE_COUNT] =
 };
 static const char* STEP_ACTION_KEY[STEP_ACTION_COUNT] = { "walk", "run", "jump", "land" };
 
-// static
+// Display name for a step surface.
 const char* SSFootstepSounds::surfaceName(SSStepSurface s)
 {
     switch (s)
@@ -58,7 +55,7 @@ const char* SSFootstepSounds::surfaceName(SSStepSurface s)
     }
 }
 
-// static
+// Display name for a step action.
 const char* SSFootstepSounds::actionName(SSStepAction a)
 {
     switch (a)
@@ -71,18 +68,17 @@ const char* SSFootstepSounds::actionName(SSStepAction a)
     }
 }
 
-// static
+// Whether this surface's sounds are global settings rather than per-preset.
 bool SSFootstepSounds::surfaceIsGlobal(SSStepSurface s)
 {
     return s == STEP_TERRAIN_DRY || s == STEP_OUTSIDE_DRY || s == STEP_INSIDE_DRY;
 }
 
-// static
+// Settings name for a global footstep slot, derived from the shared keys so there is one spelling in the system.
 std::string SSFootstepSounds::globalSettingName(SSStepSurface s, SSStepAction a)
 {
     if (!surfaceIsGlobal(s)) return std::string();
 
-    // Built from the same keys everything else uses, capitalised into the house style for settings - so there is still only one spelling of "outside_dry" in the system and this is derived from it.
     std::string name("SSAtmoStep");
 
     bool upper = true;
@@ -103,19 +99,19 @@ std::string SSFootstepSounds::globalSettingName(SSStepSurface s, SSStepAction a)
     return name;
 }
 
-// static
+// Serialisation/widget key for a surface.
 const char* SSFootstepSounds::surfaceKey(SSStepSurface s)
 {
     return (s < STEP_SURFACE_COUNT) ? STEP_SURFACE_KEY[s] : "";
 }
 
-// static
+// Serialisation/widget key for an action.
 const char* SSFootstepSounds::actionKey(SSStepAction a)
 {
     return (a < STEP_ACTION_COUNT) ? STEP_ACTION_KEY[a] : "";
 }
 
-// static
+// Display name for a motion archetype.
 const char* SSPrecipPreset::archetypeName(SSPrecipArchetype a)
 {
     switch (a)
@@ -127,6 +123,7 @@ const char* SSPrecipPreset::archetypeName(SSPrecipArchetype a)
     }
 }
 
+// The whole preset as its saved document.
 LLSD SSPrecipPreset::asLLSD() const
 {
     LLSD sd;
@@ -218,6 +215,7 @@ LLSD SSPrecipPreset::asLLSD() const
     return sd;
 }
 
+// Reads a preset document, migrating fields older presets carried differently (or not at all).
 void SSPrecipPreset::fromLLSD(const LLSD& sd)
 {
     if (sd.has("name")) mName = sd["name"].asString();
@@ -260,7 +258,6 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
 
     if (sd.has("impact_strength")) mImpactStrength = (F32)sd["impact_strength"].asReal();
     if (sd.has("shatter")) mShatter = sd["shatter"].asBoolean();
-    // Presets written before these existed keep the defaults, which are the values the splash used when it was hardcoded
     if (sd.has("ripple_size")) mRippleSize = (F32)sd["ripple_size"].asReal();
     if (sd.has("ripple_alpha")) mRippleAlpha = (F32)sd["ripple_alpha"].asReal();
     if (sd.has("ripple_life")) mRippleLife = (F32)sd["ripple_life"].asReal();
@@ -279,8 +276,6 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     }
     else if (sd.has("stream_reach"))
     {
-        // Presets written before the length was in metres carried a fraction of the way to the ground instead. There is no roof to measure it against here, so it is taken against the tallest fall
-        // the slider offers: a preset that reached all the way down still does.
         mStreamLength = llclamp((F32)sd["stream_reach"].asReal(), 0.05f, 1.f) * SS_STREAM_LENGTH_MAX;
     }
     if (sd.has("stream_stretch")) mStreamStretch = (F32)sd["stream_stretch"].asReal();
@@ -320,8 +315,6 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
 
             if (SSFootstepSounds::surfaceIsGlobal((SSStepSurface)s))
             {
-                // These slots moved out of the preset into the global SSAtmoStep* settings. A preset saved before the move still carries them, so adopt its values - once, into settings still empty -
-                // rather than letting configured footsteps go silent across the change. Not written back out (see the skip in asLLSD), so the preset sheds them on its next save.
                 const std::string setting = SSFootstepSounds::globalSettingName(
                     (SSStepSurface)s, (SSStepAction)a);
                 const std::string val = sd[key].asString();
@@ -338,27 +331,29 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     }
 }
 
+// Defaults plus whatever user presets are on disk.
 SSPrecipPresetManager::SSPrecipPresetManager()
 {
     refresh();
 }
 
-// static
+// Per-user directory the presets persist in.
 std::string SSPrecipPresetManager::presetDir()
 {
     return gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather");
 }
 
+// Rebuilds the list from defaults plus disk; everything staged is dropped.
 void SSPrecipPresetManager::refresh()
 {
     mPresets.clear();
     buildDefaults();
     loadUserPresets();
 
-    // Everything just came from disk, so nothing is staged
     mSaved = mPresets;
 }
 
+// Installs an edited preset into the live list WITHOUT saving - the editor's apply-live path.
 void SSPrecipPresetManager::stage(const SSPrecipPreset& preset)
 {
     if (preset.mName.empty()) return;
@@ -374,6 +369,7 @@ void SSPrecipPresetManager::stage(const SSPrecipPreset& preset)
     mPresets.push_back(preset);
 }
 
+// The on-disk version of a preset, ignoring staged edits.
 const SSPrecipPreset* SSPrecipPresetManager::findSaved(const std::string& name) const
 {
     for (const SSPrecipPreset& p : mSaved)
@@ -383,18 +379,19 @@ const SSPrecipPreset* SSPrecipPresetManager::findSaved(const std::string& name) 
     return nullptr;
 }
 
+// Whether staged differs from saved - compared through the serialisation so new fields cannot silently stop counting.
 bool SSPrecipPresetManager::isModified(const std::string& name) const
 {
     const SSPrecipPreset* live = find(name);
     if (!live) return false;
 
     const SSPrecipPreset* saved = findSaved(name);
-    if (!saved) return true;    // brand new, never written
+    if (!saved) return true;
 
-    // Compared through the serialisation rather than field by field, so a preset gaining a field cannot silently stop counting as modified
     return !llsd_equals(live->asLLSD(), saved->asLLSD());
 }
 
+// The live (possibly staged) preset by name.
 const SSPrecipPreset* SSPrecipPresetManager::find(const std::string& name) const
 {
     for (const SSPrecipPreset& p : mPresets)
@@ -404,6 +401,7 @@ const SSPrecipPreset* SSPrecipPresetManager::find(const std::string& name) const
     return nullptr;
 }
 
+// The preset the SSAtmoPreset setting selects, falling back to the first.
 const SSPrecipPreset& SSPrecipPresetManager::active() const
 {
     static LLCachedControl<std::string> selected(gSavedSettings, "SSAtmoPreset", "Rain");
@@ -414,6 +412,7 @@ const SSPrecipPreset& SSPrecipPresetManager::active() const
     return mPresets.front();
 }
 
+// Stages and writes a preset to disk.
 bool SSPrecipPresetManager::save(const SSPrecipPreset& preset)
 {
     if (preset.mName.empty()) return false;
@@ -435,6 +434,7 @@ bool SSPrecipPresetManager::save(const SSPrecipPreset& preset)
     return true;
 }
 
+// Deletes a user preset from the list and disk.
 bool SSPrecipPresetManager::remove(const std::string& name)
 {
     const std::string path = gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather",
@@ -446,6 +446,7 @@ bool SSPrecipPresetManager::remove(const std::string& name)
     return true;
 }
 
+// Reads every preset file in the user directory.
 void SSPrecipPresetManager::loadUserPresets()
 {
     const std::string dir = presetDir();
@@ -471,7 +472,6 @@ void SSPrecipPresetManager::loadUserPresets()
         }
         preset.mBuiltIn = false;
 
-        // A saved preset sharing a built-in name overrides it, so a shipped default can be retuned in place without losing the name
         bool replaced = false;
         for (SSPrecipPreset& existing : mPresets)
         {
@@ -486,9 +486,9 @@ void SSPrecipPresetManager::loadUserPresets()
     }
 }
 
+// The built-in preset set - every weather type that used to be a hardcoded switch table.
 void SSPrecipPresetManager::buildDefaults()
 {
-    // Rain: one preset spanning drizzle to downpour. mIntensitySize lets the global precipitation slider grow the drops, not just add more of them.
     {
         SSPrecipPreset p;
         p.mName = "Rain";
@@ -509,13 +509,9 @@ void SSPrecipPresetManager::buildDefaults()
         p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.38f,  1.9f,  0.4f, 96.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  9.f,    18.f,  0.3f, 224.f };
 
-        // A street darkens under a shower in about a minute and stays damp for the best part of an hour, so the pair is deliberately lopsided. Puddles fill far more slowly than the surface wets:
-        // standing water is the last thing to arrive in a downpour and the last to leave.
         p.mWetRate = 0.02f;   p.mDryRate = 0.0025f;
         p.mPuddleRate = 0.0016f; p.mPuddleDepth = 0.035f; p.mPuddleDrain = 0.00012f;
 
-        // Sound pack. Each slot is a comma separated sequence played through in order rather than a single looping asset, so the bed does not settle into an audible 30 second repeat. Light is left
-        // empty: its share folds back into the medium bed.
         p.mSounds.mAmbientMedium =
             "599c2146-48cf-d94f-b065-4266c2647f05,"
             "c2feb9c1-2b54-f42b-0f32-4cadcf48c6e4,"
@@ -565,11 +561,9 @@ void SSPrecipPresetManager::buildDefaults()
         p.mTiers[TIER_CLUSTERS] = { true, KIND_ROUND, 0.35f,  0.35f,  0.35f, 64.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET, 4.f,    8.f,    0.10f, 128.f };
 
-        // Roughly a centimetre every four minutes at full intensity, to a hand's depth. Melt is an order slower again: snow that took an hour to lie does not go in ten minutes.
         p.mSnowRate = 0.00004f; p.mSnowMelt = 0.0000045f;
         p.mSnowDepth = 0.09f;   p.mSnowRepose = 46.f;
 
-        // Snow damps what it does not cover - the bare edges of a roof it is sitting on are wet, not dry
         p.mWetRate = 0.004f;    p.mDryRate = 0.0015f;
         mPresets.push_back(p);
     }
@@ -589,7 +583,6 @@ void SSPrecipPresetManager::buildDefaults()
         p.mTiers[TIER_CLUSTERS] = { true, KIND_ROUND, 0.4f,  0.4f,  0.30f, 64.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET, 8.f,   10.f,  0.12f, 128.f };
 
-        // Piles faster and deeper than snow, and packs down harder on a slope before it slides
         p.mSnowRate = 0.00013f; p.mSnowMelt = 0.0000035f;
         p.mSnowDepth = 0.22f;   p.mSnowRepose = 52.f;
         p.mWetRate = 0.003f;    p.mDryRate = 0.0012f;
@@ -636,7 +629,7 @@ void SSPrecipPresetManager::buildDefaults()
         p.mName = "Mana Embers";
         p.mBuiltIn = true;
         p.mArchetype = SSPrecipArchetype::RISER;
-        p.mFallSpeed = 0.9f;    // rise speed
+        p.mFallSpeed = 0.9f;
         p.mFallLo = 2.f;  p.mFallHi = 4.f;
         p.mSway = 0.6f;
         p.mWindResponse = 0.15f;
@@ -674,5 +667,3 @@ void SSPrecipPresetManager::buildDefaults()
         mPresets.push_back(p);
     }
 }
-
-// </SS:Nexii>

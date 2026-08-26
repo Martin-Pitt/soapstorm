@@ -1,7 +1,6 @@
 /**
  * @file ssfloatersoundanalysis.h
- * @brief Atmo Magic sound analysis debug floater: every sound the pipeline has walked, drawn as a waveform with its detected metadata marked on it - onset, tail, peak window, impact onsets -
- *        grouped by which pack or slot configured it. The verification surface for everything selection logic does with these numbers.
+ * @brief Atmo Magic: sound analysis debug floater.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -25,8 +24,6 @@
 #ifndef SS_FLOATERSOUNDANALYSIS_H
 #define SS_FLOATERSOUNDANALYSIS_H
 
-// <SS:Nexii> Atmo Magic sound analysis debug floater
-
 #include "llfloater.h"
 
 class SSSoundAnalysisView;
@@ -42,6 +39,4 @@ private:
     SSSoundAnalysisView* mView = nullptr;
 };
 
-// </SS:Nexii>
-
-#endif // SS_FLOATERSOUNDANALYSIS_H
+#endif

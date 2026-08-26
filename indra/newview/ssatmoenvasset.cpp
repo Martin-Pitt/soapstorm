@@ -1,6 +1,6 @@
 /**
  * @file ssatmoenvasset.cpp
- * @brief Atmo Magic unified environment asset: LLSD round-trip.
+ * @brief See ssatmoenvasset.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -33,12 +33,7 @@
 #include <cmath>
 #include <ctime>
 
-// <SS:Nexii> Atmo Magic: unified environment asset
-
-//-----------------------------------------------------------------------------
-// SSAtmoEnvWeather
-//-----------------------------------------------------------------------------
-
+// The weather cube out to its notecard document.
 LLSD SSAtmoEnvWeather::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -48,8 +43,6 @@ LLSD SSAtmoEnvWeather::asLLSD() const
     sd["wind_heading"]  = mWindHeading.asLLSD();
     sd["wind_speed"]    = mWindSpeed.asLLSD();
 
-    // The override values serialise even while Auto is on - authored keyframes should survive a save made with Auto re-enabled mid-experiment, not silently drop out of the notecard the way they did
-    // when these were plain scalars only written on !auto.
     sd["gust_auto"]   = mGustAuto;
     sd["gust_depth"]  = mGustDepth.asLLSD();
     sd["gust_length"] = mGustLength.asLLSD();
@@ -68,6 +61,7 @@ LLSD SSAtmoEnvWeather::asLLSD() const
     return sd;
 }
 
+// The weather cube back from a document, tolerating missing fields.
 bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
@@ -78,14 +72,11 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     if (sd.has("wind_heading"))  mWindHeading.fromLLSD(sd["wind_heading"], 0.f);
     if (sd.has("wind_speed"))    mWindSpeed.fromLLSD(sd["wind_speed"], 0.f);
 
-    // The keyframe container reads a bare scalar as a plain value, so a notecard written back when these were plain F32s parses through the same call - see SSAtmoEnvKeyframed::fromLLSD's
-    // fallthrough.
     mGustAuto = sd.has("gust_auto") ? sd["gust_auto"].asBoolean() : true;
     if (sd.has("gust_depth"))  mGustDepth.fromLLSD(sd["gust_depth"], 0.f);
     if (sd.has("gust_length")) mGustLength.fromLLSD(sd["gust_length"], 140.f);
     if (sd.has("gust_veer"))   mGustVeer.fromLLSD(sd["gust_veer"], 0.f);
 
-    // Absent in anything written before these existed, and the defaults are what those environments were already doing: lightning on, neither embellishment running.
     mLightningEnabled = sd.has("lightning_enabled") ? sd["lightning_enabled"].asBoolean() : true;
     mLightningCharge  = sd.has("lightning_charge")  ? sd["lightning_charge"].asBoolean()  : false;
     mLightningSparks  = sd.has("lightning_sparks")  ? sd["lightning_sparks"].asBoolean()  : false;
@@ -100,10 +91,7 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvWater
-//-----------------------------------------------------------------------------
-
+// The water block out to its notecard document.
 LLSD SSAtmoEnvWater::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -131,12 +119,11 @@ LLSD SSAtmoEnvWater::asLLSD() const
     return sd;
 }
 
+// The water block back from a document, tolerating missing fields.
 bool SSAtmoEnvWater::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
-    // Every field keeps whatever its constructor default was when the notecard doesn't mention it - a hand-written notecard that only sets height and fog colour is valid, and everything else stays
-    // at the sensible default rather than becoming zero.
     const SSAtmoEnvWater def;
 
     mEnabled = sd.has("enabled") ? sd["enabled"].asBoolean() : false;
@@ -164,10 +151,7 @@ bool SSAtmoEnvWater::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvCelestialBody
-//-----------------------------------------------------------------------------
-
+// One celestial body out to its notecard document.
 LLSD SSAtmoEnvCelestialBody::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -208,13 +192,13 @@ LLSD SSAtmoEnvCelestialBody::asLLSD() const
     return sd;
 }
 
+// One celestial body back from a document, tolerating missing fields.
 bool SSAtmoEnvCelestialBody::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
     mKind = (EKind)llclamp(sd.has("kind") ? sd["kind"].asInteger() : (S32)PLANET, (S32)SUN, (S32)MOON);
     mName = sd.has("name") ? sd["name"].asString() : std::string("Body");
-    // Absent on anything written before auto-naming existed - false (still auto-named) is the right reading for those, no migration needed.
     mNameCustom = sd.has("name_custom") ? sd["name_custom"].asBoolean() : false;
     mParentIndex = sd.has("parent_index") ? sd["parent_index"].asInteger() : -1;
 
@@ -228,11 +212,9 @@ bool SSAtmoEnvCelestialBody::fromLLSD(const LLSD& sd)
     mRotationPeriodSeconds = sd.has("rotation_period_seconds") ? sd["rotation_period_seconds"].asReal() : 0.0;
 
     if (sd.has("axial_tilt_deg")) mAxialTiltDeg = (F32)sd["axial_tilt_deg"].asReal();
-    // Absent in a notecard written while tilt was doing latitude's job, and that is what it meant then - so an old document keeps the sky it had.
     mLatitudeDeg = llclamp(sd.has("latitude_deg") ? (F32)sd["latitude_deg"].asReal()
                                                  : mAxialTiltDeg, -90.f, 90.f);
 
-    // Absent in a notecard written before these were authorable, where the behaviour was derived from kind - so that is what absent means here, and such a document loads looking exactly as it did.
     mEmissive = sd.has("emissive") ? sd["emissive"].asBoolean() : (mKind == SUN);
     mPhaseShaded = sd.has("phase_shaded") ? sd["phase_shaded"].asBoolean() : (mKind != SUN);
     mSpinPeriodSeconds = sd.has("spin_period_seconds") ? sd["spin_period_seconds"].asReal() : 0.0;
@@ -251,10 +233,7 @@ bool SSAtmoEnvCelestialBody::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvPlanetary
-//-----------------------------------------------------------------------------
-
+// The body the observer stands on, or -1.
 S32 SSAtmoEnvPlanetary::homeBodyIndex() const
 {
     for (size_t i = 0; i < mBodies.size(); ++i)
@@ -264,21 +243,21 @@ S32 SSAtmoEnvPlanetary::homeBodyIndex() const
     return -1;
 }
 
+// Moves the observer to another body.
 bool SSAtmoEnvPlanetary::setHomeBody(S32 index)
 {
     if (index < 0 || index >= (S32)mBodies.size()) return false;
 
-    // Exactly one home, ever - clearing everywhere else first rather than trusting the caller to have already done so.
     for (SSAtmoEnvCelestialBody& body : mBodies)
     {
         body.mIsHome = false;
     }
     mBodies[index].mIsHome = true;
-    // A body flagged home cannot also be a light emitter - you don't light yourself.
     mBodies[index].mIsLightEmitter = false;
     return true;
 }
 
+// Which bodies are marked as light emitters, in list order.
 std::vector<S32> SSAtmoEnvPlanetary::lightEmitterIndices() const
 {
     std::vector<S32> out;
@@ -289,15 +268,17 @@ std::vector<S32> SSAtmoEnvPlanetary::lightEmitterIndices() const
     return out;
 }
 
+// Whether another emitter slot is available for this body.
 bool SSAtmoEnvPlanetary::canSetLightEmitter(S32 index) const
 {
     if (index < 0 || index >= (S32)mBodies.size()) return false;
     if (mBodies[index].mIsHome) return false;
-    if (mBodies[index].mIsLightEmitter) return true; // already on - toggling off is always fine
+    if (mBodies[index].mIsLightEmitter) return true;
 
     return lightEmitterIndices().size() < 2;
 }
 
+// Adds a body of a kind with sensible defaults, parented and placed so it appears somewhere reasonable.
 S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferred_parent_index)
 {
     S32 sun_count = 0;
@@ -305,7 +286,6 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
     {
         if (b.mKind == SSAtmoEnvCelestialBody::SUN) ++sun_count;
     }
-    // The canonical topology has no slot for a fifth star - the floater's Add Sun button disables at the cap, this is the backstop behind it.
     if (kind == SSAtmoEnvCelestialBody::SUN && sun_count >= SS_ATMOENV_MAX_SUNS)
     {
         return -1;
@@ -314,12 +294,9 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
     SSAtmoEnvCelestialBody body;
     body.mKind = kind;
 
-    // Shading defaults follow the kind at creation, and are authored from there - a sun lights itself, everything else is lit by one. See SSAtmoEnvCelestialBody::mEmissive.
     body.mEmissive = (kind == SSAtmoEnvCelestialBody::SUN);
     body.mPhaseShaded = !body.mEmissive;
 
-    // "Moon 3": only ever seen on a body auto-naming skips (a moon whose parenting fell through to orphaned) - everything else gets its real name from autoNameBodies() below before this call
-    // returns.
     S32 same_kind = 0;
     for (const SSAtmoEnvCelestialBody& b : mBodies)
     {
@@ -330,10 +307,6 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
                                                                      : "Moon";
     body.mName = llformat("%s %d", kind_name, same_kind + 1);
 
-    // Parenting is automatic - there is no parent dropdown any more. Suns are normalizeSunTopology()'s business below. A planet always parents to the first sun: for one sun that is literally it, for
-    // two the resolver's barycenter rule anchors the planet at the pair's barycenter, and for the 4-sun case "barycenter of ALL suns" would be more honest but the inner pair's barycenter is an
-    // acceptable approximation until someone actually needs better. A moon parents to the caller's preferred planet (the floater passes the selection, or the selection's own planet) when that names
-    // one, else the first planet as a last resort - the floater disables Add Moon when no planet exists at all.
     body.mParentIndex = -1;
     if (kind == SSAtmoEnvCelestialBody::PLANET)
     {
@@ -366,23 +339,17 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
         }
     }
 
-    // Per-kind physical defaults on the same Sol/Earth/Luna scale makeDefault() uses, so a freshly added body reads as the thing its kind says rather than as the struct's one-size PLANET default.
-    // Mass is in per-level units (solar/Earth masses - see the header), so each default reads as 1.0-ish rather than some cross-level ratio. A sun's orbital radius starts 0 - roots sit at the
-    // anchor, and normalizeSunTopology() fills in a pair separation where one applies. A planet or moon arrives one step OUTSIDE its outermost sibling rather than at a fixed radius - a fixed default
-    // would stack every new body onto whichever sibling happens to sit there. The steps are the familiar yardsticks (1 AU, one Luna distance), so the first of each still reads as Earth's orbit and
-    // the Moon's.
     switch (kind)
     {
         case SSAtmoEnvCelestialBody::SUN:
-            body.mDiameterM = 1.392e9f;   // Sol
-            body.mMassRelative = 1.f;     // solar masses
+            body.mDiameterM = 1.392e9f;
+            body.mMassRelative = 1.f;
             body.mOrbitalRadius = 0.f;
             break;
         case SSAtmoEnvCelestialBody::PLANET:
         {
-            body.mDiameterM = 1.2742e7f;  // Earth
-            body.mMassRelative = 1.f;     // Earth masses
-            // All planets orbit the one sun anchor, so every planet is a sibling of every other.
+            body.mDiameterM = 1.2742e7f;
+            body.mMassRelative = 1.f;
             F32 outermost = 0.f;
             for (const SSAtmoEnvCelestialBody& b : mBodies)
             {
@@ -391,14 +358,13 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
                     outermost = llmax(outermost, b.mOrbitalRadius);
                 }
             }
-            body.mOrbitalRadius = outermost + 1.496e11f; // + 1 AU
+            body.mOrbitalRadius = outermost + 1.496e11f;
             break;
         }
         case SSAtmoEnvCelestialBody::MOON:
         {
-            body.mDiameterM = 3.475e6f;   // Luna
-            body.mMassRelative = 0.0123f; // Earth masses - Luna's actual share
-            // Siblings are only the moons of this moon's own planet.
+            body.mDiameterM = 3.475e6f;
+            body.mMassRelative = 0.0123f;
             F32 outermost = 0.f;
             for (const SSAtmoEnvCelestialBody& b : mBodies)
             {
@@ -408,7 +374,7 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
                     outermost = llmax(outermost, b.mOrbitalRadius);
                 }
             }
-            body.mOrbitalRadius = outermost + 3.844e8f; // + one Luna distance
+            body.mOrbitalRadius = outermost + 3.844e8f;
             break;
         }
     }
@@ -421,9 +387,6 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
         normalizeSunTopology();
     }
 
-    // Creation-time lighting defaults - see the header. A fresh binary should light the scene with both stars, and a lone-sun world gaining a moon of the home planet gets that moon as its night
-    // light - matching the renderer's sun+moon light slots. Defaults only: the user can uncheck either afterwards and nothing re-asserts them. canSetLightEmitter() is the never-steal guard (cap of
-    // two, home excluded).
     if (kind == SSAtmoEnvCelestialBody::SUN && sun_count == 1
         && canSetLightEmitter(index))
     {
@@ -440,12 +403,11 @@ S32 SSAtmoEnvPlanetary::addBody(SSAtmoEnvCelestialBody::EKind kind, S32 preferre
     return index;
 }
 
+// Removes a body and repairs every index that pointed at or past it.
 bool SSAtmoEnvPlanetary::removeBody(S32 index)
 {
     if (index < 0 || index >= (S32)mBodies.size()) return false;
 
-    // Removing a planet takes its moons with it - see the header for why cascade replaced orphaning once re-parenting left the UI. The doomed set is gathered up front so one old->new index map can
-    // fix every survivor in a single pass, whatever got removed.
     std::vector<bool> doomed(mBodies.size(), false);
     doomed[index] = true;
     if (mBodies[index].mKind == SSAtmoEnvCelestialBody::PLANET)
@@ -460,9 +422,6 @@ bool SSAtmoEnvPlanetary::removeBody(S32 index)
         }
     }
 
-    // Old index -> new index, -1 for the removed. Survivor pointers into the doomed set become -1 (a bound partner reverting to -1 is just "not paired" - no special case); pointers above removals
-    // shift by however many doomed bodies sat below them. Trace, removing the Planet from [Sun(parent -1), Planet(parent 0), Moon(parent 1)]: Planet and Moon are both doomed, the Sun survives
-    // untouched, and the map is [0, -1, -1].
     std::vector<S32> remap(mBodies.size());
     S32 next = 0;
     for (size_t i = 0; i < mBodies.size(); ++i)
@@ -482,15 +441,13 @@ bool SSAtmoEnvPlanetary::removeBody(S32 index)
     }
     mBodies.swap(kept);
 
-    // The fixup above can leave a surviving pair member an isolated star (its partner just went to -1) - re-normalising restores the one canonical shape for however many suns remain. Planets need
-    // nothing: their lineage is derived (effectiveParent) and their position anchors at the sun group's barycenter, so there is no stored planet parent to go stale. Names follow: the ordinals encode
-    // ordering, and a removal changes it.
     normalizeSunTopology();
     autoNameBodies();
 
     return true;
 }
 
+// The body this one actually orbits, resolving defaults.
 S32 SSAtmoEnvPlanetary::effectiveParent(S32 index) const
 {
     if (index < 0 || index >= (S32)mBodies.size()) return -1;
@@ -502,7 +459,7 @@ S32 SSAtmoEnvPlanetary::effectiveParent(S32 index) const
         {
             if (mBodies[i].mKind == SSAtmoEnvCelestialBody::SUN) return (S32)i;
         }
-        return -1; // sunless system - planets are their own roots
+        return -1;
     }
 
     const S32 parent = body.mParentIndex;
@@ -510,9 +467,9 @@ S32 SSAtmoEnvPlanetary::effectiveParent(S32 index) const
     return parent;
 }
 
+// Repairs sun parent/partner links into a consistent topology after edits.
 void SSAtmoEnvPlanetary::normalizeSunTopology()
 {
-    // Suns in mBodies order - "structure order", the order they were added, which is also the order auto-naming letters them in.
     std::vector<S32> suns;
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
@@ -520,11 +477,6 @@ void SSAtmoEnvPlanetary::normalizeSunTopology()
     }
     if (suns.empty()) return;
 
-    // Dissolve every sun's existing pairing first (symmetrically, so a partner reference from some other body can't dangle), then assign the one canonical shape per star count. "One pair orbiting a
-    // giant sun" needs no case of its own here - it is expressible as pair separations/masses that put the barycenter inside the primary. Trace, adding four suns one at a time (indices = add order):
-    // 1 sun:  0(parent -1, partner -1) 2 suns: 0(-1, 1)  1(-1, 0)            - a bound root pair 3 suns: 0(-1, 1)  1(-1, 0)  2(0, -1)  - 2 orbits the pair's barycenter via the resolver's
-    // partner-substitution rule 4 suns: 0(-1, 1)  1(-1, 0)  2(0, 3)  3(0, 2) - the outer pair orbits the inner pair's barycenter Then removing sun 1: survivors shift to 0,1,2 and re-normalise to
-    // 0(-1, 1)  1(-1, 0)  2(0, -1) - the old third sun is promoted into the root pair rather than leaving the old first sun an isolated star.
     for (const S32 s : suns)
     {
         clearBoundPartner(s);
@@ -535,10 +487,9 @@ void SSAtmoEnvPlanetary::normalizeSunTopology()
     {
         mBodies[suns[1]].mParentIndex = -1;
         setBoundPartner(suns[0], suns[1]);
-        // A sun promoted into an orbiting role with no authored separation yet (radius 0, the root default) gets one; an authored radius is the user's and survives re-normalisation.
         if (mBodies[suns[1]].mOrbitalRadius <= 0.f)
         {
-            mBodies[suns[1]].mOrbitalRadius = 3.74e10f; // ~0.25 AU - a close binary
+            mBodies[suns[1]].mOrbitalRadius = 3.74e10f;
         }
     }
     if (suns.size() >= 3)
@@ -546,7 +497,7 @@ void SSAtmoEnvPlanetary::normalizeSunTopology()
         mBodies[suns[2]].mParentIndex = suns[0];
         if (mBodies[suns[2]].mOrbitalRadius <= 0.f)
         {
-            mBodies[suns[2]].mOrbitalRadius = 1.496e11f; // ~1 AU - the wider outer orbit
+            mBodies[suns[2]].mOrbitalRadius = 1.496e11f;
         }
     }
     if (suns.size() >= 4)
@@ -562,7 +513,7 @@ void SSAtmoEnvPlanetary::normalizeSunTopology()
 
 namespace
 {
-    // Up to XXXIX, far past the body counts a system diagram stays legible at - the subtractive pairs keep it exact rather than "IIII".
+    // Roman numerals for auto body names.
     std::string ss_roman_numeral(S32 n)
     {
         std::string out;
@@ -581,6 +532,7 @@ namespace
     }
 }
 
+// Names unnamed bodies from their kind and position in the system.
 void SSAtmoEnvPlanetary::autoNameBodies()
 {
     const S32 n = (S32)mBodies.size();
@@ -593,15 +545,12 @@ void SSAtmoEnvPlanetary::autoNameBodies()
         else if (mBodies[i].mKind == SSAtmoEnvCelestialBody::PLANET) planets.push_back(i);
     }
 
-    // The first sun's name is the stem everything below derives from - renamed first so a fresh system's planets read "Sol I" rather than deriving from a stale name. A custom-named first sun stems
-    // its whole system ("Alpha B", "Alpha II"); no sun at all falls back to the plain "Sol" stem rather than leaving planets unnamed.
     if (!suns.empty() && !mBodies[suns[0]].mNameCustom)
     {
         mBodies[suns[0]].mName = "Sol";
     }
     const std::string stem = suns.empty() ? std::string("Sol") : mBodies[suns[0]].mName;
 
-    // Further suns letter B/C/D in structure order - the same order normalizeSunTopology() builds pairs in, so the letters read inner-pair-then-outer-pair by construction.
     for (size_t s = 1; s < suns.size(); ++s)
     {
         if (!mBodies[suns[s]].mNameCustom)
@@ -610,7 +559,6 @@ void SSAtmoEnvPlanetary::autoNameBodies()
         }
     }
 
-    // Planets take roman ordinals by orbital radius ascending across ALL planets - they all orbit the sun anchor, so one distance ordering is the ordering. Stable, so equal radii keep add order.
     std::stable_sort(planets.begin(), planets.end(),
         [this](S32 a, S32 b) { return mBodies[a].mOrbitalRadius < mBodies[b].mOrbitalRadius; });
     for (size_t r = 0; r < planets.size(); ++r)
@@ -622,8 +570,6 @@ void SSAtmoEnvPlanetary::autoNameBodies()
         }
     }
 
-    // Moons: "<planet name>.N" by radius around their planet, using the planet's name as it now stands - an auto "Sol I" or a custom "Tatooine" both carry their moons ("Tatooine.1"). A moon whose
-    // parent isn't a planet (orphaned by a removal) keeps its current name; the list already marks it "(orphan)".
     for (const S32 planet : planets)
     {
         std::vector<S32> moons;
@@ -648,16 +594,15 @@ void SSAtmoEnvPlanetary::autoNameBodies()
     }
 }
 
+// Binds two suns into a pair.
 bool SSAtmoEnvPlanetary::setBoundPartner(S32 a, S32 b)
 {
     if (a == b) return false;
     if (a < 0 || a >= (S32)mBodies.size()) return false;
     if (b < 0 || b >= (S32)mBodies.size()) return false;
 
-    // Only ever between same-parent siblings - see mBoundPartnerIndex. Two roots (both -1) count as siblings, which is exactly the binary-star case the design doc names.
     if (mBodies[a].mParentIndex != mBodies[b].mParentIndex) return false;
 
-    // Dissolve whatever either one was in first, so a partner being reassigned can never leave a third body still pointing at it - symmetry is the invariant the resolver relies on.
     clearBoundPartner(a);
     clearBoundPartner(b);
 
@@ -666,6 +611,7 @@ bool SSAtmoEnvPlanetary::setBoundPartner(S32 a, S32 b)
     return true;
 }
 
+// Dissolves a sun pair.
 bool SSAtmoEnvPlanetary::clearBoundPartner(S32 index)
 {
     if (index < 0 || index >= (S32)mBodies.size()) return false;
@@ -673,8 +619,6 @@ bool SSAtmoEnvPlanetary::clearBoundPartner(S32 index)
     const S32 partner = mBodies[index].mBoundPartnerIndex;
     mBodies[index].mBoundPartnerIndex = -1;
 
-    // The partner's back-reference only clears if it actually points here - a hand-edited notecard can break symmetry, and stomping some other pairing it names would compound the damage rather than
-    // contain it.
     if (partner >= 0 && partner < (S32)mBodies.size()
         && mBodies[partner].mBoundPartnerIndex == index)
     {
@@ -683,6 +627,7 @@ bool SSAtmoEnvPlanetary::clearBoundPartner(S32 index)
     return true;
 }
 
+// The planetary system out to its notecard document.
 LLSD SSAtmoEnvPlanetary::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -698,6 +643,7 @@ LLSD SSAtmoEnvPlanetary::asLLSD() const
     return sd;
 }
 
+// The planetary system back from a document, tolerating missing fields.
 bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
 {
     mBodies.clear();
@@ -716,8 +662,6 @@ bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
         }
     }
 
-    // Enforce the invariants on read too, not just through the setters - a hand-edited notecard that names two homes or three emitters should degrade to "first one wins", not carry the contradiction
-    // forward.
     bool have_home = false;
     S32 emitters = 0;
     for (SSAtmoEnvCelestialBody& body : mBodies)
@@ -737,20 +681,14 @@ bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvCloudField
-//-----------------------------------------------------------------------------
-
-// Defined here rather than in the header: the texture ids belong to SSAtmoEnvCloudDome, which is declared after this struct. Cumulonimbus for the body, altocumulus over it. Chosen by looking rather
-// than by reasoning about what each map is called. The pairing works because of what the two layers now DO: the body carries the broad shape of a cloud mass, which the storm map has plenty of, while
-// the detail supplies the moving structure across it, which the broken mid-level map breaks up far better than the layered one did. Layered is a deck seen from below - it belongs on the dome, where
-// it still is by default, and reads as too even here.
+// Defaults to auto derivation.
 SSAtmoEnvCloudField::SSAtmoEnvCloudField()
     : mBaseTexture(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS))
     , mDetailTexture(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS))
 {
 }
 
+// The volumetric cloud field block out to its notecard document.
 LLSD SSAtmoEnvCloudField::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -768,16 +706,14 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
     return sd;
 }
 
+// The volumetric cloud field block back from a document, tolerating missing fields.
 bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
-    // The keyframe container reads a bare scalar as a plain value, so a notecard written back when these were plain F32s parses through the same call - see SSAtmoEnvKeyframed::fromLLSD's
-    // fallthrough. The old >= 0 clamps live in SSAtmoEnvCloudFieldResolver now - see the header.
     mAuto = sd.has("auto") ? sd["auto"].asBoolean() : true;
     if (sd.has("base_height_m")) mBaseHeightM.fromLLSD(sd["base_height_m"], 800.f);
     if (sd.has("base_thickness_m")) mBaseThicknessM.fromLLSD(sd["base_thickness_m"], 300.f);
     if (sd.has("coverage_scale")) mCoverageScale.fromLLSD(sd["coverage_scale"], 1.f);
-    // Falling back to the constructor's choice, not to null - a malformed entry should land on the default rather than on "pick one for me".
     const SSAtmoEnvCloudField def;
     if (sd.has("base_texture")) mBaseTexture.fromLLSD(sd["base_texture"], def.mBaseTexture.valueAt(0.0));
     if (sd.has("detail_texture")) mDetailTexture.fromLLSD(sd["detail_texture"], def.mDetailTexture.valueAt(0.0));
@@ -789,16 +725,10 @@ bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// Sky seeding helpers, shared by SSAtmoEnvCloudDome and SSAtmoEnvAtmosphere
-//-----------------------------------------------------------------------------
-
 namespace
 {
-    // addKeyframesFromSky's per-field stamp. setValueAtHead alone would write the PLAIN value while the field has no keyframes yet (that is the widget editing rule it implements), and a plain value
-    // overwritten per stamp can never accumulate into a cycle - so promote the field first: toggleKeyframeAtHead turns the value in force at `phase` into a real keyframe, which setValueAtHead then
-    // finds and edits.
     template <typename T>
+    // Adds or overwrites a keyframe at a phase.
     void stampKeyframe(SSAtmoEnvKeyframed<T>& field, F64 phase, const T& value)
     {
         if (!field.hasKeyframeAt(phase))
@@ -808,19 +738,12 @@ namespace
         field.setValueAtHead(phase, value);
     }
 
-    // Tolerance collapseConstantKeyframes() hands collapseIfConstant(). Skies that agree on a field hand over byte-identical F32s (settings assets store them verbatim), so this only has to absorb
-    // float noise - and it must NOT be coarse enough to merge genuinely different small values, since density multiplier legitimately lives around 1e-4. Ids and strings compare exactly regardless -
-    // see ss_atmoenv_near_equal.
     const F32 SEED_COLLAPSE_EPSILON = 1.0e-6f;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvCloudDome
-//-----------------------------------------------------------------------------
-
+// Seeds the dome block from a fetched EEP sky.
 void SSAtmoEnvCloudDome::fromSettingsSky(const LLSettingsSky& sky)
 {
-    // Whole-container assignment on purpose, for the same reason the atmosphere's own seeding does it - see SSAtmoEnvAtmosphere::fromSettingsSky below.
     mColor    = SSAtmoEnvKeyframed<LLColor3>(sky.getCloudColor());
     mCoverage = SSAtmoEnvKeyframed<F32>(sky.getCloudShadow());
     mScale    = SSAtmoEnvKeyframed<F32>(sky.getCloudScale());
@@ -828,7 +751,6 @@ void SSAtmoEnvCloudDome::fromSettingsSky(const LLSettingsSky& sky)
 
     mScrollRate = SSAtmoEnvKeyframed<LLVector2>(sky.getCloudScrollRate());
 
-    // The sky's packed density/detail colours unfold into the three scalars EEP's own panel edits - see the header on why the schema stores them unpacked.
     const LLColor3 density = sky.getCloudPosDensity1();
     mDensityX = SSAtmoEnvKeyframed<F32>(density.mV[0]);
     mDensityY = SSAtmoEnvKeyframed<F32>(density.mV[1]);
@@ -839,16 +761,14 @@ void SSAtmoEnvCloudDome::fromSettingsSky(const LLSettingsSky& sky)
     mDetailY = SSAtmoEnvKeyframed<F32>(detail.mV[1]);
     mDetailD = SSAtmoEnvKeyframed<F32>(detail.mV[2]);
 
-    // The stock noise texture reads back as null: the schema's "null = default" convention should hold from the document's first save rather than pinning today's default id into the notecard.
     const LLUUID noise = sky.getCloudNoiseTextureId();
     mNoiseTexture = SSAtmoEnvKeyframed<LLUUID>(
         noise == LLSettingsSky::GetDefaultCloudNoiseTextureId() ? LLUUID::null : noise);
 }
 
+// Stamps a fetched sky's dome values as keyframes at a phase.
 void SSAtmoEnvCloudDome::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase)
 {
-    // Field set and conversions match fromSettingsSky above exactly - the packed density/detail unfold, the null-for-stock noise map - only the write differs: a keyframe stamped at `phase`, leaving
-    // whatever is authored at other phases alone.
     stampKeyframe(mColor,    phase, sky.getCloudColor());
     stampKeyframe(mCoverage, phase, sky.getCloudShadow());
     stampKeyframe(mScale,    phase, sky.getCloudScale());
@@ -871,6 +791,7 @@ void SSAtmoEnvCloudDome::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase
         noise == LLSettingsSky::GetDefaultCloudNoiseTextureId() ? LLUUID::null : noise);
 }
 
+// Fields all keyframes agree on collapse back to plain values.
 void SSAtmoEnvCloudDome::collapseConstantKeyframes()
 {
     mColor.collapseIfConstant(SEED_COLLAPSE_EPSILON);
@@ -902,6 +823,7 @@ const char* const SSAtmoEnvCloudDome::BODY_TEXTURE_SUN =
 const char* const SSAtmoEnvCloudDome::BODY_TEXTURE_MOON =
     "db13b827-7e6a-7ace-bed4-4419ee00984d";
 
+// The legacy cloud dome block out to its notecard document.
 LLSD SSAtmoEnvCloudDome::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -923,12 +845,11 @@ LLSD SSAtmoEnvCloudDome::asLLSD() const
     return sd;
 }
 
+// The legacy cloud dome block back from a document, tolerating missing fields.
 bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
-    // Absent keys keep their constructor defaults, same as the water and atmosphere structs - a hand-written notecard that only sets coverage gets LLSettingsSky's stock cirrus layer for everything
-    // else.
     const SSAtmoEnvCloudDome def;
 
     if (sd.has("color"))    mColor.fromLLSD(sd["color"], def.mColor.valueAt(0.0));
@@ -949,14 +870,9 @@ bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvAtmosphere
-//-----------------------------------------------------------------------------
-
+// Seeds the atmosphere block from a fetched EEP sky.
 void SSAtmoEnvAtmosphere::fromSettingsSky(const LLSettingsSky& sky)
 {
-    // Whole-container assignment on purpose: each field becomes a plain value with no keyframes, which is the only state a freshly created asset can be in anyway - this is a seeding step, not a
-    // merge.
     mAmbientColor  = SSAtmoEnvKeyframed<LLColor3>(sky.getAmbientColor());
     mBlueHorizon   = SSAtmoEnvKeyframed<LLColor3>(sky.getBlueHorizon());
     mBlueDensity   = SSAtmoEnvKeyframed<LLColor3>(sky.getBlueDensity());
@@ -970,38 +886,21 @@ void SSAtmoEnvAtmosphere::fromSettingsSky(const LLSettingsSky& sky)
     mDensityMultiplier  = SSAtmoEnvKeyframed<F32>(sky.getDensityMultiplier());
     mDistanceMultiplier = SSAtmoEnvKeyframed<F32>(sky.getDistanceMultiplier());
     mMaxAltitude        = SSAtmoEnvKeyframed<F32>(sky.getMaxY());
-    // The RAW authored ambiance, not the RenderSkyAutoAdjustLegacy-aware read EEP's own refresh uses - that flag is a per-viewer display convenience, and a transcription should carry what the sky
-    // says.
     mReflectionProbeAmbiance = SSAtmoEnvKeyframed<F32>(sky.getReflectionProbeAmbiance());
     mSceneGamma         = SSAtmoEnvKeyframed<F32>(sky.getGamma());
 
     mStarBrightness = SSAtmoEnvKeyframed<F32>(sky.getStarBrightness());
     mMoonBrightness = SSAtmoEnvKeyframed<F32>(sky.getMoonBrightness());
 
-    // Packed glow -> the UI-space scale this struct stores (see the header:
-    // a notecard should read like the panel that authored it). Exact
-    // inverse of SSAtmoEnvApplier::applySky's forward conversion, which is
-    // itself llpaneleditsky.cpp's SLIDER_SCALE_GLOW_R (20) and
-    // SLIDER_SCALE_GLOW_B (-5): size = 2 - r/20, focus = b/-5. Round trip
-    // on the stock packed glow (r 5.0, b -0.48): size 1.75, focus 0.096;
-    // forward again gives (2 - 1.75) * 20 = 5.0 and 0.096 * -5 = -0.48.
-    // The r channel round-trips bit-exactly (5/20 = 0.25 is a binary
-    // fraction); b round-trips to float precision (0.48 and 0.096 are
-    // not). The packed g channel is a renderer constant the applier
-    // carries on its own (see SSAtmoEnvApplier::mGlowG) - nothing of it
-    // belongs in the schema.
     const LLColor3 glow = sky.getGlow();
     mGlowSize  = SSAtmoEnvKeyframed<F32>(2.f - glow.mV[0] / 20.f);
     mGlowFocus = SSAtmoEnvKeyframed<F32>(glow.mV[2] / -5.f);
 
-    // Nothing else is read on purpose. Sun/moon rotations, disc textures and scales are the Planetary tab's to compute from bodies (see the struct comment), and every cloud-layer field the sky
-    // carries - colour included - is SSAtmoEnvCloudDome::fromSettingsSky's to read, seeded alongside this call.
 }
 
+// Stamps a fetched sky's atmosphere values as keyframes at a phase.
 void SSAtmoEnvAtmosphere::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase)
 {
-    // Field set and conversions match fromSettingsSky above exactly - see there for the raw-ambiance read, the glow packing maths and why nothing positional is read. Only the write differs: a
-    // keyframe stamped at `phase`, leaving whatever is authored elsewhere alone.
     stampKeyframe(mAmbientColor,  phase, sky.getAmbientColor());
     stampKeyframe(mBlueHorizon,   phase, sky.getBlueHorizon());
     stampKeyframe(mBlueDensity,   phase, sky.getBlueDensity());
@@ -1026,6 +925,7 @@ void SSAtmoEnvAtmosphere::addKeyframesFromSky(const LLSettingsSky& sky, F64 phas
     stampKeyframe(mGlowFocus, phase, glow.mV[2] / -5.f);
 }
 
+// Fields all keyframes agree on collapse back to plain values.
 void SSAtmoEnvAtmosphere::collapseConstantKeyframes()
 {
     mAmbientColor.collapseIfConstant(SEED_COLLAPSE_EPSILON);
@@ -1050,6 +950,7 @@ void SSAtmoEnvAtmosphere::collapseConstantKeyframes()
     mMoonBrightness.collapseIfConstant(SEED_COLLAPSE_EPSILON);
 }
 
+// The atmosphere and lighting block out to its notecard document.
 LLSD SSAtmoEnvAtmosphere::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -1060,7 +961,6 @@ LLSD SSAtmoEnvAtmosphere::asLLSD() const
 
     sd["haze_horizon"]        = mHazeHorizon.asLLSD();
     sd["haze_density"]        = mHazeDensity.asLLSD();
-    // Same keys LLSettingsSky itself uses for these four, so a notecard and a settings asset read alike where they overlap.
     sd["moisture_level"]      = mSkyMoistureLevel.asLLSD();
     sd["droplet_radius"]      = mSkyDropletRadius.asLLSD();
     sd["ice_level"]           = mSkyIceLevel.asLLSD();
@@ -1077,13 +977,11 @@ LLSD SSAtmoEnvAtmosphere::asLLSD() const
     return sd;
 }
 
+// The atmosphere and lighting block back from a document, tolerating missing fields.
 bool SSAtmoEnvAtmosphere::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
-    // This key used to round-trip as an opaque LLSD blob "pending its own phase", and nothing ever wrote structured content into it - every saved notecard carries it as an empty map. So there is no
-    // migration to do and no version bump to take: reading the known keys and ignoring anything else covers every asset that exists. Absent keys keep their constructor defaults, same as the water
-    // struct - a hand-written notecard that only sets a haze value gets LLSettingsSky's stock sky for everything else, not black.
     const SSAtmoEnvAtmosphere def;
 
     if (sd.has("ambient"))        mAmbientColor.fromLLSD(sd["ambient"], def.mAmbientColor.valueAt(0.0));
@@ -1109,16 +1007,12 @@ bool SSAtmoEnvAtmosphere::fromLLSD(const LLSD& sd)
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvTrack
-//-----------------------------------------------------------------------------
-
+// The weather influence settings out to its notecard document.
 LLSD SSAtmoEnvWeatherInfluence::asLLSD() const
 {
     LLSD sd;
     sd["enabled"] = mEnabled;
 
-    // Written flat rather than as a map per mapping: six pairs is not enough structure to be worth the nesting, and flat keys keep a hand-edited notecard readable.
     sd["cloud_cover_enabled"]     = mCloudCoverEnabled;
     sd["cloud_cover_strength"]    = (LLSD::Real)mCloudCoverStrength;
     sd["wind_scroll_enabled"]     = mWindScrollEnabled;
@@ -1134,12 +1028,11 @@ LLSD SSAtmoEnvWeatherInfluence::asLLSD() const
     return sd;
 }
 
+// The weather influence settings back from a document, tolerating missing fields.
 bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
-    // Every field keeps its constructed default when absent, so a notecard written before this struct existed loads as "influence on, everything at full strength" - which is what a fresh environment
-    // gets too, so an older document and a new one behave alike rather than diverging on the strength of their own weather.
     auto flag = [&sd](const char* key, bool& out)
     {
         if (sd.has(key)) out = sd[key].asBoolean();
@@ -1165,6 +1058,7 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     return true;
 }
 
+// One track out to its notecard document.
 LLSD SSAtmoEnvTrack::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -1185,14 +1079,13 @@ LLSD SSAtmoEnvTrack::asLLSD() const
     return sd;
 }
 
+// One track back from a document, tolerating missing fields.
 bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
     if (sd.has("name")) mName = sd["name"].asString();
     if (sd.has("floor_z")) mFloorZ = (F32)sd["floor_z"].asReal();
-    // ceiling_z was a stored field in the very first schema revision and is now derived (see SSAtmoEnvAsset::trackCeilingZ) - an older notecard still carrying one is simply ignored rather than
-    // rejected.
     if (sd.has("transition_buffer")) mTransitionBuffer = llmax(0.f, (F32)sd["transition_buffer"].asReal());
 
     mDayLengthSeconds = sd.has("day_length_seconds")
@@ -1210,23 +1103,18 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
     return true;
 }
 
+// Where in the day cycle this track is right now, from shared wall-clock time.
 F64 SSAtmoEnvTrack::currentDayCyclePhase() const
 {
     if (mDayLengthSeconds <= 0.0) return 0.0;
 
-    // Plain Unix epoch seconds: a universal wall clock every viewer already agrees on without needing to ask anything else for the time, which is the whole point - two people who load the same
-    // notecard minutes apart should land on the same phase.
     const F64 utc_now = (F64)time(nullptr);
     F64 t = fmod(utc_now - mDayOffsetSeconds, mDayLengthSeconds);
     if (t < 0.0) t += mDayLengthSeconds;
     return t / mDayLengthSeconds;
 }
 
-//-----------------------------------------------------------------------------
-// SSAtmoEnvAsset
-//-----------------------------------------------------------------------------
-
-// static
+// The fresh-creation default: one ground track, Earth-like planetary system, sensible weather.
 SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
 {
     SSAtmoEnvAsset asset;
@@ -1237,70 +1125,45 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
     ground.mFloorZ = 0.f;
     ground.mDayLengthSeconds = 4.0 * 60.0 * 60.0;
     ground.mDayOffsetSeconds = 0.0;
-    // Calm, clear default: moisture/convection both 0 is "bone dry, clear skies" per the design doc's Weather tab.
     ground.mWeather = SSAtmoEnvWeather();
 
-    // Water on by default at the ground track, at whatever height the current region's water actually sits - same fallback SSAtmoMagic's own voidWaterHeight() uses (20m, SL's default) when there's
-    // no live region to ask. A freshly created ground track should look like the ordinary sea-level world it's standing in until an author changes it, not come up with an invisible/zero-height water
-    // plane no one asked for.
     ground.mWater.mEnabled = true;
     {
         LLViewerRegion* region = gAgent.getRegion();
         ground.mWater.mHeight = SSAtmoEnvKeyframed<F32>(region ? region->getWaterHeight() : 20.f);
     }
 
-    // Default new asset per the design doc: an Earth-sized planet as home, orbiting a 1-solar-mass sun. The sun is flagged as the one light emitter so a freshly created environment already has
-    // *something* lighting it rather than a black sky by default. The planet's radius is exactly 1 AU so the floater's AU display reads a clean 1.00, and masses are the per-level units' own 1.0
-    // (solar/Earth masses - see the header). Both names are autoNameBodies()'s ("Sol", "Sol I"), with mNameCustom left false so they keep tracking any restructuring.
     SSAtmoEnvCelestialBody sun;
     sun.mKind = SSAtmoEnvCelestialBody::SUN;
     sun.mParentIndex = -1;
-    sun.mDiameterM = 1.392e9f;   // Sol, for scale
-    sun.mMassRelative = 1.f;     // 1 solar mass
+    sun.mDiameterM = 1.392e9f;
+    sun.mMassRelative = 1.f;
     sun.mIsLightEmitter = true;
     sun.mEmissive = true;
     sun.mPhaseShaded = false;
-    // Authored disc art rather than EEP's built-in sun, which is a null texture id meaning "let the renderer draw its own" - a real texture is what lets the same body be drawn as a billboard when it
-    // is not the one in the sun slot.
     sun.mCustomTexture = LLUUID(SSAtmoEnvCloudDome::BODY_TEXTURE_SUN);
     ground.mPlanetary.mBodies.push_back(sun);
 
-    // Earth, transcribed rather than approximated - the default world is the one every author starts from, so it may as well be the one they already know the sky of. Real values also make the
-    // derived machinery honest: 23.44 degrees of tilt is what puts the celestial pole where a temperate observer expects it, and the rise/set markers on the editor's scrubber then read as a real day
-    // rather than an equinox at the equator.
     SSAtmoEnvCelestialBody home;
     home.mKind = SSAtmoEnvCelestialBody::PLANET;
-    home.mParentIndex = 0; // the sun above
-    home.mDiameterM = 1.2742e7f; // Earth, for scale
-    home.mMassRelative = 1.f;    // 1 Earth mass
-    home.mOrbitalRadius = 1.496e11f; // 1 AU - reads exactly 1.00 AU in the floater
-    home.mAxialTiltDeg = 23.44f; // Earth's obliquity - the seasons
-    home.mLatitudeDeg = 50.f;    // ...and where the observer stands on it
-    // Earth's orbit IS the ecliptic, so its inclination is zero by definition in the usual frame - the number worth carrying is its 7.155 degrees against the Sun's own equator, which is the plane
-    // bodies here orbit in. (At phase 0 an inclination has no effect at all - the orbit crosses the reference plane there - so this is carried for correctness rather than for anything it does
-    // today.)
+    home.mParentIndex = 0;
+    home.mDiameterM = 1.2742e7f;
+    home.mMassRelative = 1.f;
+    home.mOrbitalRadius = 1.496e11f;
+    home.mAxialTiltDeg = 23.44f;
+    home.mLatitudeDeg = 50.f;
     home.mOrbitalInclinationDeg = 7.155f;
-    // Phase 0, which in THIS model means equinox, not "the start of the year". A home body's orbital phase does not behave like a heliocentric longitude here: the reference plane contains the
-    // rotation axis at zero tilt (see celestialAxis), so phase is really the angle between the sun and the celestial equator - a season dial. Phase 0 puts the sun ON the equator, rising due east and
-    // culminating at 90 - tilt = 66.6 degrees, which is exactly an equinox at a temperate latitude and the most useful place to start authoring from. Real Earth's J2000 mean longitude of 100.46
-    // degrees would put the sun 19 degrees from the celestial pole instead, which in this convention is polar night: a default world where the sun never rises at all.
     home.mOrbitalPhaseDeg = 0.f;
     home.mIsHome = true;
     ground.mPlanetary.mBodies.push_back(home);
 
-    // ...and its moon, likewise real, and likewise a light emitter: EEP's moon slot goes to the smaller of the two emitters (see resolveLightRoles), so Luna lights the night while Sol keeps the sun
-    // slot, and a fresh environment has both lights an author expects to find rather than a sun over an empty night sky.
     SSAtmoEnvCelestialBody moon;
     moon.mKind = SSAtmoEnvCelestialBody::MOON;
-    moon.mParentIndex = 1; // the home planet above
-    moon.mDiameterM = 3.4748e6f;     // Luna
-    moon.mMassRelative = 1.f;        // 1 lunar mass - moons are measured in Lunas here
-    moon.mOrbitalRadius = 3.844e8f;  // reads 1.00 Luna distance in the floater
+    moon.mParentIndex = 1;
+    moon.mDiameterM = 3.4748e6f;
+    moon.mMassRelative = 1.f;
+    moon.mOrbitalRadius = 3.844e8f;
     moon.mOrbitalInclinationDeg = 5.145f;
-    // Thirty degrees off the planet's own orbital phase. Matching it exactly puts the moon on the far side of the planet from the sun - a full moon, which sounds ideal and is in fact a permanent
-    // total lunar eclipse: dead on the anti-sun line, inside the planet's shadow, every hour of every day. Real Luna escapes that because its orbit is inclined and the nodes rarely line up; this
-    // model is static, so it has to be placed off the line deliberately. Thirty degrees is a waxing gibbous - (1 + cos 30) / 2, so about 93% lit, still reading as "a full moon" - while putting it
-    // around 190,000 km off the shadow axis, which is thirty times the planet's own radius and nowhere near the umbra.
     moon.mOrbitalPhaseDeg = 30.f;
     moon.mAxialTiltDeg = 6.68f;
     moon.mIsLightEmitter = true;
@@ -1313,18 +1176,16 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
     return asset;
 }
 
+// Adds an altitude track above the existing ones.
 bool SSAtmoEnvAsset::addTrack()
 {
     if ((S32)mTracks.size() >= SS_ATMOENV_MAX_TRACKS) return false;
 
     SSAtmoEnvTrack track;
-    // A new track starts above whatever is currently highest, far enough up that its marker on the floater's rail can't collide with the one below it (the rail enforces a minimum separation of its
-    // own and would otherwise refuse to place the marker), and clamped so it can never land on or above the region ceiling where it would have no band at all. The author can drag it anywhere
-    // afterwards.
     F32 highest = 0.f;
     for (const SSAtmoEnvTrack& t : mTracks) highest = llmax(highest, t.mFloorZ);
 
-    const F32 SPACING = SS_ATMOENV_MIN_TRACK_FLOOR; // == the rail's enforced minimum
+    const F32 SPACING = SS_ATMOENV_MIN_TRACK_FLOOR;
     track.mFloorZ = llclamp(highest + SPACING,
                             SS_ATMOENV_MIN_TRACK_FLOOR,
                             SS_ATMOENV_REGION_CEILING - SPACING);
@@ -1336,19 +1197,18 @@ bool SSAtmoEnvAsset::addTrack()
     return true;
 }
 
+// Removes a track; the ground track stays.
 bool SSAtmoEnvAsset::removeTrack(S32 index)
 {
-    // Index 0 is the mandatory ground track - never removable.
     if (index <= 0 || index >= (S32)mTracks.size()) return false;
     mTracks.erase(mTracks.begin() + index);
-    // Names are the author's, so nothing is rewritten here - the survivors keep whatever they were called. Only the ordering is maintained.
     sortTracksByAltitude();
     return true;
 }
 
+// First free default track name.
 std::string SSAtmoEnvAsset::nextDefaultTrackName() const
 {
-    // Lowest "Track N" not already taken, so adding a track after deleting one doesn't hand out a name another track is still using.
     for (S32 n = 1; n <= SS_ATMOENV_MAX_TRACKS; ++n)
     {
         const std::string candidate = llformat("Track %d", n);
@@ -1363,11 +1223,11 @@ std::string SSAtmoEnvAsset::nextDefaultTrackName() const
     return "Track";
 }
 
+// Re-sorts tracks by floor altitude, returning where the followed one landed.
 S32 SSAtmoEnvAsset::sortTracksByAltitude(S32 follow_index)
 {
     if (mTracks.size() < 2) return follow_index;
 
-    // Ground stays at index 0 - it is the catch-all band rather than a peer with a floor worth sorting on, and callers (and the notecard format) treat index 0 as ground unconditionally.
     const SSAtmoEnvTrack* follow = (follow_index >= 0 && follow_index < (S32)mTracks.size())
         ? &mTracks[follow_index] : nullptr;
     const std::string follow_name = follow ? follow->mName : std::string();
@@ -1378,8 +1238,6 @@ S32 SSAtmoEnvAsset::sortTracksByAltitude(S32 follow_index)
 
     if (follow_index < 0 || follow_is_ground) return follow_index;
 
-    // Track the caller's selection across the reorder by name. Names are authored and can in principle collide (nothing stops two tracks both being called "Sky"), so this is a best effort - a
-    // collision just leaves the selection on the first match, which is still a real track.
     for (S32 i = 1; i < (S32)mTracks.size(); ++i)
     {
         if (mTracks[i].mName == follow_name) return i;
@@ -1387,6 +1245,7 @@ S32 SSAtmoEnvAsset::sortTracksByAltitude(S32 follow_index)
     return follow_index;
 }
 
+// A track's ceiling: the next floor up, or open ended.
 F32 SSAtmoEnvAsset::trackCeilingZ(S32 index) const
 {
     if (index < 0 || index >= (S32)mTracks.size()) return SS_ATMOENV_REGION_CEILING;
@@ -1398,13 +1257,12 @@ F32 SSAtmoEnvAsset::trackCeilingZ(S32 index) const
     {
         if (i == index) continue;
         const F32 other = mTracks[i].mFloorZ;
-        // Strictly above: two tracks sharing a floor exactly is degenerate either way, and treating one as the other's ceiling would give it a zero-height band rather than just letting the
-        // lower-indexed one win in trackContaining().
         if (other > own_floor && other < ceiling) ceiling = other;
     }
     return ceiling;
 }
 
+// The water height of whichever track owns a visible water plane, if any.
 bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
 {
     bool found = false;
@@ -1413,8 +1271,6 @@ bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
     {
         if (!track.mWater.mEnabled) continue;
 
-        // Water height is a tide now, so "lowest" is a question about a particular instant. Each track's own day cycle decides what that instant is for it - the same evaluation a live
-        // (non-previewing) read of any other field on that track would do.
         const F32 height = track.mWater.mHeight.valueAt(track.currentDayCyclePhase());
 
         if (!found || height < lowest)
@@ -1427,6 +1283,7 @@ bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
     return found;
 }
 
+// The whole document.
 LLSD SSAtmoEnvAsset::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -1443,6 +1300,7 @@ LLSD SSAtmoEnvAsset::asLLSD() const
     return sd;
 }
 
+// Parses and validates a whole document; on failure says why.
 bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
 {
     if (!sd.isMap())
@@ -1493,12 +1351,8 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
         return false;
     }
 
-    // Names come from the notecard as authored - see nextDefaultTrackName() for why nothing is rewritten here. Ordering is normalised though, so a hand-edited notecard listing its tracks out of
-    // altitude order still reads bottom-to-top in the floater.
     parsed.sortTracksByAltitude();
 
     *this = parsed;
     return true;
 }
-
-// </SS:Nexii>

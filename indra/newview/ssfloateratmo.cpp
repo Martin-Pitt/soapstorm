@@ -1,7 +1,6 @@
 /**
  * @file ssfloateratmo.cpp
- * @brief Legacy Atmo Magic weather floater implementation - deprecated,
- *        trimmed. See ssfloateratmo.h.
+ * @brief See ssfloateratmo.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -31,15 +30,15 @@
 #include "llfloaterreg.h"
 #include "ssprecippreset.h"
 
-// <SS:Nexii> Legacy Atmo Magic weather floater
-
 static const F64 PRESET_POLL_INTERVAL = 1.0;
 
+// Deprecated legacy floater; only the preset picker and the sub-floater launchers remain.
 SSFloaterAtmoMagic::SSFloaterAtmoMagic(const LLSD& key) :
     LLFloater(key)
 {
 }
 
+// Wires the sub-floater launcher buttons and the preset editor.
 bool SSFloaterAtmoMagic::postBuild()
 {
     getChild<LLButton>("fx_button")->setClickedCallback(
@@ -59,12 +58,13 @@ bool SSFloaterAtmoMagic::postBuild()
     return true;
 }
 
+// Re-lists presets on open.
 void SSFloaterAtmoMagic::onOpen(const LLSD& key)
 {
-    // A preset added/renamed in the editor while this was closed
     refreshPresets();
 }
 
+// Polls the preset store once a second so external edits show up without a reopen.
 void SSFloaterAtmoMagic::draw()
 {
     const F64 now = LLTimer::getElapsedSeconds();
@@ -77,10 +77,7 @@ void SSFloaterAtmoMagic::draw()
     LLFloater::draw();
 }
 
-//-----------------------------------------------------------------------------
-// Population
-//-----------------------------------------------------------------------------
-
+// Rebuilds the preset combo, keeping the current selection when it survives.
 void SSFloaterAtmoMagic::refreshPresets()
 {
     LLComboBox* combo = getChild<LLComboBox>("preset_combo");
@@ -98,14 +95,9 @@ void SSFloaterAtmoMagic::refreshPresets()
     }
 }
 
-//-----------------------------------------------------------------------------
-// Buttons
-//-----------------------------------------------------------------------------
-
+// Opens the preset editor on the selected preset.
 void SSFloaterAtmoMagic::onClickEditPreset()
 {
-    // Open the editor on whatever this floater's own combo has picked - passed through onOpen rather than the floater key: the editor is single-instance, and keying it on the name would make every
-    // preset its own floater.
     LLFloater* editor = LLFloaterReg::showInstance("ss_atmo_preset");
     const std::string name = getChild<LLComboBox>("preset_combo")->getValue().asString();
     if (editor && !name.empty())
@@ -113,5 +105,3 @@ void SSFloaterAtmoMagic::onClickEditPreset()
         editor->onOpen(LLSD(name));
     }
 }
-
-// </SS:Nexii>

@@ -1,6 +1,6 @@
 /**
  * @file ssatmoenvtrackstate.cpp
- * @brief Atmo Magic track resolution implementation.
+ * @brief See ssatmoenvtrackstate.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -27,12 +27,9 @@
 
 #include <cmath>
 
-// <SS:Nexii> Atmo Magic: track resolution and crossing behaviour
-
-// static
+// Which track's altitude band contains world_z; track 0 is the implicit ground fallback.
 S32 SSAtmoEnvTrackResolver::trackContaining(const SSAtmoEnvAsset& asset, F32 world_z)
 {
-    // Ground (index 0) is deliberately checked last: it is whatever isn't claimed by an optional track's own band, not a band with a floor/ ceiling of its own worth trusting literally.
     for (size_t i = 1; i < asset.mTracks.size(); ++i)
     {
         const SSAtmoEnvTrack& t = asset.mTracks[i];
@@ -41,7 +38,7 @@ S32 SSAtmoEnvTrackResolver::trackContaining(const SSAtmoEnvAsset& asset, F32 wor
     return 0;
 }
 
-// static
+// Closest other track floor, for transition-buffer blending near a boundary.
 bool SSAtmoEnvTrackResolver::nearestBoundary(const SSAtmoEnvAsset& asset, S32 primary, F32 world_z,
                                              S32& out_neighbor, F32& out_distance)
 {
@@ -62,8 +59,6 @@ bool SSAtmoEnvTrackResolver::nearestBoundary(const SSAtmoEnvAsset& asset, S32 pr
             found = true;
         }
 
-        // A track's ceiling is derived - it *is* some other track's floor, or the region ceiling (see SSAtmoEnvAsset::trackCeilingZ). The former is already covered by that other track's own floor
-        // check above, and the latter is not a boundary anyone crosses, so nothing more to test here.
     }
 
     if (found)
@@ -74,15 +69,13 @@ bool SSAtmoEnvTrackResolver::nearestBoundary(const SSAtmoEnvAsset& asset, S32 pr
     return found;
 }
 
-// static
+// Primary track plus neighbour blend for an altitude; teleports and water crossings cut instantly instead of smearing a transition.
 SSAtmoEnvTrackBlend SSAtmoEnvTrackResolver::resolve(const SSAtmoEnvAsset& asset, F32 world_z,
                                                    F32 prev_world_z, bool teleported)
 {
     SSAtmoEnvTrackBlend result;
     result.mPrimaryTrack = trackContaining(asset, world_z);
 
-    // Checked ahead of the teleported flag so a teleport that happens to land across the water plane and a walk that crosses it land on the same instant-cut path, rather than two separate ones that
-    // could disagree.
     F32 water_height = 0.f;
     const bool has_water = asset.visibleWaterHeight(water_height);
     const bool crossed_water = has_water &&
@@ -107,5 +100,3 @@ SSAtmoEnvTrackBlend SSAtmoEnvTrackResolver::resolve(const SSAtmoEnvAsset& asset,
 
     return result;
 }
-
-// </SS:Nexii>

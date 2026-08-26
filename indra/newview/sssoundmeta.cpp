@@ -1,6 +1,6 @@
 /**
  * @file sssoundmeta.cpp
- * @brief Atmo Magic sound metadata - see sssoundmeta.h.
+ * @brief See sssoundmeta.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -31,8 +31,7 @@
 #include "llaudioengine.h"
 #include "llviewercontrol.h"
 
-// FMOD stays on the main thread; workers only ever see plain PCM copies. The lock/memcpy/unlock is a millisecond for a 30s clip - the arithmetic is what goes off-main.
-
+// Stops and joins the worker threads at shutdown.
 void SSSoundMeta::cleanupSingleton()
 {
     {
@@ -47,6 +46,7 @@ void SSSoundMeta::cleanupSingleton()
     mWorkers.clear();
 }
 
+// Lazily spins up the analysis worker pool, sized to leave a core free.
 void SSSoundMeta::startWorkers()
 {
     if (mStarted) return;
@@ -78,7 +78,7 @@ void SSSoundMeta::startWorkers()
     }
 }
 
-// Pure arithmetic on a copy - the whole reason this can run anywhere.
+// The whole offline analysis of one PCM clip: envelope, onset/peak/tail, level, impact cadence (with gap repair), gap floor, crackiness.
 SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels, F32 rate, U32 purpose)
 {
     Meta meta;
@@ -109,8 +109,6 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
 
     meta.mPeakMS = (U32)((F32)(peak_at * window) * 1000.f / rate);
 
-    // Density: mean envelope over peak (inverse crest) - the CONTINUOUS-material density proxy. Onset counting reads a wash as ~0 (nothing discrete to count) and is non-monotonic in rain density
-    // anyway; this is monotonic from drizzle (spikes over silence, low) to downpour (near-constant, high).
     if (purpose & PURPOSE_DENSITY)
     {
         F64 sum_env = 0.0;
@@ -118,7 +116,6 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
         meta.mDensity = (F32)(sum_env / (F64)count) / peak;
     }
 
-    // 240-point max-envelope for the debug floater. Max rather than mean per bucket so a single sharp crack survives the downsample instead of averaging into the noise around it.
     {
         const U32 points = 240;
         meta.mEnvelope.assign(points, 0.f);
@@ -129,17 +126,14 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
         }
     }
 
-    // Onset: walk back from the loudest window to the rise past 20% of peak - the moment a listener says it happened, not the moment of most energy.
     U32 onset = peak_at;
     while (onset > 0 && envelope[onset - 1] >= peak * 0.2f) --onset;
     meta.mOnsetMS = (U32)((F32)(onset * window) * 1000.f / rate);
 
-    // Tail: where content effectively ends. Chains join here, not at the file length - trailing silence in an export must not become a hole in a rolled rumble.
     U32 tail = count - 1;
     while (tail > 0 && envelope[tail] < peak * 0.05f) --tail;
     meta.mTailMS = (U32)((F32)((tail + 1) * window) * 1000.f / rate);
 
-    // Loudest second, for levelling.
     {
         const S32 half = llmax((S32)(0.5f * rate / (F32)window), 1);
         const S32 lo = llmax((S32)peak_at - half, 0);
@@ -149,12 +143,9 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
         meta.mPeakLevel = sum_env / (F32)(hi - lo + 1);
     }
 
-    // Impact rate - steps only; continuous wash honestly reads ~0 here and carries density instead. Discrete envelope onsets per second, 120ms refractory so one splat is one impact.
     if (purpose & PURPOSE_STEPS)
     {
         S32 impacts = 0;
-        // Minimum STEP width, not a generic debounce: no gait lands successive steps faster than ~280ms, so anything closer is splash/debris noise wearing a step's clothes - the puddle
-        // recordings proved it, packing impossible 200ms "steps" between the real ones and drowning the map. This is a steps-only block, so gait physiology is the right floor.
         const U32 refractory = llmax((U32)(0.280f * rate / (F32)window), 1u);
         U32 last = 0;
         bool armed = true;
@@ -178,12 +169,8 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
         const F32 seconds = (F32)frames / rate;
         meta.mImpactRate = (seconds > 0.1f) ? (F32)impacts / seconds : 0.f;
 
-        // Cadence-grid repair - see mRepaired. Loud splashes set the peak, quiet steps fall under the 35% threshold and are MISSED, leaving intervals of ~2x or ~3x the true stride. When the
-        // detected intervals cluster around a plausible stride period, missing steps are re-inserted evenly inside the long intervals: the audio is there, only the marker was lost. Repair runs
-        // before the CV verdict, so an even recording with missed steps earns segmentation instead of being demoted for the detector's failure.
         if (meta.mOnsets.size() >= 4)
         {
-            // Stride estimate: start from the shortest plausible interval, refine as the mean of each interval divided by its own nearest multiple.
             F64 t_est = 0.0;
             for (size_t k = 0; k + 1 < meta.mOnsets.size(); ++k)
             {
@@ -220,14 +207,12 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
                 if (meta.mRepaired > 0)
                 {
                     meta.mOnsets.swap(repaired);
-                    // The rate was counted before repair and would report half a gait for a half-missed map - the segmentability gate's plausible-cadence bounds must judge the HEALED map.
                     const F32 seconds = (F32)frames / rate;
                     if (seconds > 0.1f) meta.mImpactRate = (F32)meta.mOnsets.size() / seconds;
                 }
             }
         }
 
-        // Cadence regularity - see mCadenceCV.
         if (meta.mOnsets.size() >= 4)
         {
             F64 sum = 0.0, sum2 = 0.0;
@@ -246,9 +231,6 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
             }
         }
 
-        // Gap floor: mean envelope over the CUT WINDOWS only - the late stretch of each inter-onset gap (55% of the way through, up to 80ms short of the next onset), because that is where the
-        // 2/3-point cuts actually land. Averaging the whole gap read a clean-but-boomy room recording as wash: the reverb tail belongs to the front of the gap and has decayed by the cut point,
-        // while true wash (rain, wind) is still there late - so measuring late is what separates "reverberant but segmentable" from "bridged and not".
         if (meta.mOnsets.size() >= 3)
         {
             F64 sum_gap = 0.0;
@@ -257,7 +239,7 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
             {
                 const U32 a = meta.mOnsets[k];
                 const U32 b = meta.mOnsets[k + 1];
-                if (b <= a + 250) continue;    // too tight for a late region to exist at all
+                if (b <= a + 250) continue;
                 const U32 lo_ms = a + (U32)((b - a) * 0.55f);
                 const U32 hi_ms = b - 80;
                 if (hi_ms <= lo_ms) continue;
@@ -269,7 +251,6 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
         }
     }
 
-    // Crackiness: zero-crossing rate through the loudest second, normalised so ~4kHz-bright reads 1 - a sharp crack vs a low roll, no FFT needed.
     if (purpose & PURPOSE_BRIGHT)
     {
         const U32 lo_f = peak_at * window;
@@ -290,12 +271,14 @@ SSSoundMeta::Meta SSSoundMeta::analyze(const std::vector<S16>& pcm, S32 channels
     return meta;
 }
 
+// Ready metadata for a sound, or null while it is still pending.
 const SSSoundMeta::Meta* SSSoundMeta::get(const LLUUID& id)
 {
     auto it = mEntries.find(id);
     return (it != mEntries.end() && it->second.mState == READY) ? &it->second.mMeta : nullptr;
 }
 
+// How many sounds have finished analysis, for status UI.
 S32 SSSoundMeta::readyCount()
 {
     S32 n = 0;
@@ -303,6 +286,7 @@ S32 SSSoundMeta::readyCount()
     return n;
 }
 
+// How many sounds are queued or in flight, for status UI.
 S32 SSSoundMeta::pendingCount()
 {
     S32 n = 0;
@@ -310,9 +294,10 @@ S32 SSSoundMeta::pendingCount()
     return n;
 }
 
+// Registers a CSV of sound ids for analysis, unioning purposes and remembering who configured them.
 void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32 purpose)
 {
-    if (purpose == 0) return;    // a role that consumes no metric asks for no analysis
+    if (purpose == 0) return;
 
     std::vector<std::string> tokens;
     LLStringUtil::getTokens(csv, tokens, ",+");
@@ -326,10 +311,9 @@ void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32
     }
 }
 
+// Walks every configured sound source - thunder, global footsteps, the active preset's beds and steps - into the entry table.
 void SSSoundMeta::gather()
 {
-    // Everything the soundscape is configured to play, from every home a sound can live in. Re-gathered every few seconds so edits in the floaters trickle in without any notification plumbing.
-    // Thunder wants timing, levelling, brightness. The charge and wind loops consume no metric today, so they are not gathered at all.
     for (const char* setting : { "SSAtmoThunderCrack", "SSAtmoThunderRumble" })
     {
         addList(gSavedSettings.getString(setting), setting,
@@ -369,13 +353,11 @@ void SSSoundMeta::gather()
     }
 }
 
+// Feeds decoded PCM to the workers a few at a time, preloading undecoded sounds and failing ones that never decode.
 void SSSoundMeta::pump()
 {
     if (!gAudiop) return;
 
-    // A couple of decodes in flight at a time: enough to stream through a library in under a minute, few enough to never contend with the sounds the moment actually needs.
-    // Backlog bound: each job carries a whole decoded clip (~5MB), and an unbounded queue under a slow worker would be this pipeline's way of contributing to an out-of-memory. Waiting jobs cost
-    // nothing to defer a few frames.
     {
         std::lock_guard<std::mutex> lock(mJobMutex);
         if (mJobs.size() >= 4) return;
@@ -393,12 +375,9 @@ void SSSoundMeta::pump()
         const F64 now = SSAtmoMagic::getInstance()->sharedTime();
         if (pair.second.mFirstTried < 0.0) pair.second.mFirstTried = now;
 
-        // A UUID that never decodes - deleted asset, bad paste - must not camp an in-flight slot forever. The first version had exactly that head-of-line block: two dead entries at the front of
-        // the map held both slots and the pending count froze for good.
         if (now - pair.second.mFirstTried > 30.0)
         {
             pair.second.mState = FAILED;
-            // Traced by its home so a bad UUID in OUR OWN preset or settings names itself - a deleted asset, a bad paste, or an upload that never was.
             LL_WARNS("SSSoundMeta") << "sound never decoded: " << pair.first
                 << "  configured in [" << pair.second.mSource << "]" << LL_ENDL;
             continue;
@@ -439,6 +418,7 @@ void SSSoundMeta::pump()
     }
 }
 
+// Per-frame drive: gather occasionally, pump decodes, and publish finished results to the table.
 void SSSoundMeta::idle()
 {
     if (!SSAtmoMagic::getInstance()->isSwitchedOn()) return;
@@ -454,7 +434,6 @@ void SSSoundMeta::idle()
 
     pump();
 
-    // Collect finished analyses.
     std::vector<std::pair<LLUUID, Meta>> done;
     {
         std::lock_guard<std::mutex> lock(mResultMutex);
@@ -466,7 +445,6 @@ void SSSoundMeta::idle()
         entry.mMeta = pair.second;
         entry.mState = READY;
 
-        // The verification surface for everything selection logic does with these numbers - eyeball your own uploads here before trusting an auto-sort with them.
         LL_INFOS("SSSoundMeta") << pair.first << "  len " << pair.second.mLengthMS
             << "ms  onset " << pair.second.mOnsetMS << "ms  tail " << pair.second.mTailMS
             << "ms  level " << pair.second.mPeakLevel << "  impacts/s " << pair.second.mImpactRate
@@ -474,5 +452,3 @@ void SSSoundMeta::idle()
             << "  crackiness " << pair.second.mCrackiness << LL_ENDL;
     }
 }
-
-// </SS:Nexii>

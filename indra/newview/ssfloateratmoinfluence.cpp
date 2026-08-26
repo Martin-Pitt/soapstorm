@@ -1,6 +1,6 @@
 /**
  * @file ssfloateratmoinfluence.cpp
- * @brief Atmo Magic: the Weather Influence sub-floater. See the header.
+ * @brief See ssfloateratmoinfluence.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -34,18 +34,17 @@
 #include "llsliderctrl.h"
 #include "lltextbox.h"
 
-// <SS:Nexii> Atmo Magic weather influence editor
-
 static const F64 STATUS_POLL_INTERVAL = 0.25;
 
+// Floater shell; all content is wired in postBuild.
 SSFloaterAtmoInfluence::SSFloaterAtmoInfluence(const LLSD& key) :
     LLFloater(key)
 {
 }
 
+// One table row per influence mapping: accessors into the asset plus a live-effect probe from the applier.
 void SSFloaterAtmoInfluence::buildRows()
 {
-    // The applier's most recent modulation is the readout's only source - see the header. Fetched per call rather than held, since the applier recomputes it every frame.
     auto effect = [](std::function<F32(const SSAtmoEnvSkyModulation&)> pick)
     {
         return [pick]() -> F32
@@ -58,8 +57,6 @@ void SSFloaterAtmoInfluence::buildRows()
         { "cover",
           [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mCloudCoverEnabled; },
           [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mCloudCoverStrength; },
-          // Coverage is the one mapping whose effect is not a single drive: it is "how much cover is being asked for" times "how far toward it we go", which multiplied together is what the dome
-          // actually receives.
           effect([](const SSAtmoEnvSkyModulation& m) { return m.mCoverTarget * m.mCoverBlend; }) },
 
         { "wind",
@@ -89,6 +86,7 @@ void SSFloaterAtmoInfluence::buildRows()
     };
 }
 
+// Wires master, per-row and reset callbacks from the row table.
 bool SSFloaterAtmoInfluence::postBuild()
 {
     buildRows();
@@ -98,7 +96,6 @@ bool SSFloaterAtmoInfluence::postBuild()
 
     for (const Row& row : mRows)
     {
-        // Captured by value: mRows is built once and never resized, but copying two std::functions and a string is cheap enough that the callback need not depend on that staying true.
         const Row captured = row;
         getChild<LLUICtrl>(row.mPrefix + "_enabled")->setCommitCallback(
             [this, captured](LLUICtrl*, const LLSD&) { onCommitRow(captured); });
@@ -113,17 +110,20 @@ bool SSFloaterAtmoInfluence::postBuild()
     return true;
 }
 
+// Opens targeting the track index passed in the key.
 void SSFloaterAtmoInfluence::onOpen(const LLSD& key)
 {
     setTrack(key.asInteger());
 }
 
+// Retargets the floater at another track.
 void SSFloaterAtmoInfluence::setTrack(S32 index)
 {
     mTrackIndex = index;
     refreshAll();
 }
 
+// The edited track's influence block in the LIVE asset, or false when nothing is loaded.
 bool SSFloaterAtmoInfluence::influence(SSAtmoEnvWeatherInfluence** out) const
 {
     *out = nullptr;
@@ -138,6 +138,7 @@ bool SSFloaterAtmoInfluence::influence(SSAtmoEnvWeatherInfluence** out) const
     return true;
 }
 
+// Polls fast; only the readouts refresh while a slider is captured, so the drag is not fought.
 void SSFloaterAtmoInfluence::draw()
 {
     const F64 now = LLTimer::getElapsedSeconds();
@@ -145,8 +146,6 @@ void SSFloaterAtmoInfluence::draw()
     {
         mLastPoll = now;
 
-        // Same capture guard the other Atmo floaters poll behind: writing a slider's value back while it is being dragged makes the drag fight itself. The readouts are safe either way - they are
-        // display-only text - so they refresh regardless.
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
         {
@@ -161,6 +160,7 @@ void SSFloaterAtmoInfluence::draw()
     LLFloater::draw();
 }
 
+// Rewrites every control's enable/value state from the asset.
 void SSFloaterAtmoInfluence::refreshAll()
 {
     SSAtmoEnvWeatherInfluence* infl = nullptr;
@@ -170,8 +170,6 @@ void SSFloaterAtmoInfluence::refreshAll()
     master->setEnabled(have);
     master->set(have && infl->mEnabled);
 
-    // Rows follow the master switch as well as the asset: with weather influence off wholesale, a per-mapping strength has nothing to say, and leaving them live would invite tuning dials that do
-    // nothing.
     const bool rows_live = have && infl->mEnabled;
 
     for (const Row& row : mRows)
@@ -199,6 +197,7 @@ void SSFloaterAtmoInfluence::refreshAll()
     refreshReadouts();
 }
 
+// Live percentage per row of what each mapping is doing right now.
 void SSFloaterAtmoInfluence::refreshReadouts()
 {
     SSAtmoEnvWeatherInfluence* infl = nullptr;
@@ -209,7 +208,6 @@ void SSFloaterAtmoInfluence::refreshReadouts()
         LLTextBox* readout = getChild<LLTextBox>(row.mPrefix + "_readout");
         if (!have || !infl->mEnabled || !row.mEnabled(*infl))
         {
-            // A disabled mapping reads as off rather than as 0%: zero is a thing the weather can legitimately be asking for, and the two states should not look alike.
             readout->setText(std::string("off"));
             continue;
         }
@@ -219,15 +217,17 @@ void SSFloaterAtmoInfluence::refreshReadouts()
     }
 }
 
+// Master toggle straight into the asset.
 void SSFloaterAtmoInfluence::onCommitMaster()
 {
     SSAtmoEnvWeatherInfluence* infl = nullptr;
     if (!influence(&infl)) return;
 
     infl->mEnabled = getChild<LLCheckBoxCtrl>("master_enabled")->get();
-    refreshAll(); // the rows' enabled state hangs off this
+    refreshAll();
 }
 
+// Row toggle and strength straight into the asset.
 void SSFloaterAtmoInfluence::onCommitRow(const Row& row)
 {
     SSAtmoEnvWeatherInfluence* infl = nullptr;
@@ -237,19 +237,16 @@ void SSFloaterAtmoInfluence::onCommitRow(const Row& row)
     row.mStrength(*infl) = llclamp(
         (F32)getChild<LLSliderCtrl>(row.mPrefix + "_strength")->getValueF32(), 0.f, 1.f);
 
-    // Only this row's own slider can have changed enablement, so the whole panel does not need rebuilding - and rebuilding here would stamp on a slider the author is still dragging.
     getChild<LLSliderCtrl>(row.mPrefix + "_strength")->setEnabled(row.mEnabled(*infl));
     refreshReadouts();
 }
 
+// Back to default influence settings.
 void SSFloaterAtmoInfluence::onClickReset()
 {
     SSAtmoEnvWeatherInfluence* infl = nullptr;
     if (!influence(&infl)) return;
 
-    // The struct's own constructed defaults, so "defaults" here and "what a new environment gets" cannot drift apart.
     *infl = SSAtmoEnvWeatherInfluence();
     refreshAll();
 }
-
-// </SS:Nexii>

@@ -1,6 +1,6 @@
 /**
  * @file ssfarsea.cpp
- * @brief Atmo Magic: far sea - see ssfarsea.h.
+ * @brief See ssfarsea.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -35,37 +35,22 @@
 #include "llvowater.h"
 #include "llworld.h"
 
-// The sea's floor radius: at least the cloud field's virtual reach, so on a flat world (planet radius 0) or at sea level the water still meets the sky at the same horizon the cloud deck does.
 static const F32 SEA_MIN_RADIUS_M = 6800.f;
-// Radius ceiling: from a 2000m skybox on an Earth-sized planet the true horizon is ~160km out and the squash delivers it happily, but a runaway (huge planet, huge altitude) has to stop while
-// single-precision coordinates still have centimetres in them.
 static const F32 SEA_MAX_RADIUS_M = 500000.f;
-// How far past the true tangent horizon the rim reaches. The rim itself drops BELOW the tangent by construction (the droop in waterV), so the visible horizon is the curve's envelope - the
-// silhouette a real sphere shows - rather than the mesh edge, and the mesh edge hides behind it.
 static const F32 SEA_HORIZON_OVERSHOOT = 1.35f;
-// Cells per hole HALF EXTENT: the canonical mesh is a square annulus hung on the stock-water union rect (~1.8km square, static), inner edge one cell INSIDE the rect - a tucked apron the depth
-// sink hides under stock water so seam pinholes show sunken sea, never void. ~28m cells, square, world-anchored by the rect itself: waves cannot swim. Full story in doc/atmo_magic_interactions.md.
 static const S32 SEA_HOLE_HALF_CELLS = 32;
-// Outer half extent: 2x the hole's, corners ~2.5km - inside the 6.8km minimum rim (a 4x first cut overshot the rim and far-clipped; a rim clamp in waterV folds any residual overshoot back).
-// The 64/32 ratio is baked into waterV's chebyshev normalisation as 0.5 - change one, change both. [interaction: waterV.glsl placement block, LLWorld::updateWaterObjects water_stretch]
 static const S32 SEA_FRAME_HALF_CELLS = 64;
 
+// The shared squash band plus this frame's rim and planet radius - one formula so stock planes, frame and clouds always agree.
 void SSFarSea::band(F32& knee, F32& cap, F32& rim, F32& planet_r) const
 {
-    // The same band formula the cloud field uses (ssvolcloud.cpp update: cap just inside MAX_FAR_CLIP, the constant projection far plane, knee at 80% of it), computed HERE rather than read from
-    // SSVolCloud - the cloud field only computes its copy when it builds, so on a clear sky its knee/cap sit at zero and the sea silently refused to draw. The ocean must not inherit the weather's
-    // lifecycle; keeping the formula identical keeps water and cloud agreeing about drawn depth whenever both exist. [interaction: SSVolCloud squash band]
     cap = MAX_FAR_CLIP * 0.98f;
     knee = cap * 0.8f;
 
-    // Planet radius in km drives both how far the horizon is and how much the sea drops away toward it; 0 means a flat world - fixed radius, no droop. Earth by default: sensible curvature for
-    // worlds whose environment never says otherwise. Small values make small worlds with visibly close, visibly curved horizons.
     static LLCachedControl<F32> planet_km(gSavedSettings, "SSAtmoSeaPlanetRadiusKm", 6371.f);
     planet_r = llmax(0.f, (F32)planet_km) * 1000.f;
     const F32 eye_h = llmax(LLViewerCamera::getInstance()->getOrigin().mV[2] - LLEnvironment::instance().getWaterHeight(), 2.f);
 
-    // Tangent horizon distance sqrt(2*R*h), overshot so the rim falls behind the silhouette. Altitude-aware: climbing to a skybox makes the horizon recede and drop the way a planet's does,
-    // instead of leaving a fixed disc floating 16 degrees below eye level.
     rim = SEA_MIN_RADIUS_M;
     if (planet_r > 0.f)
     {
@@ -73,11 +58,9 @@ void SSFarSea::band(F32& knee, F32& cap, F32& rim, F32& planet_r) const
     }
 }
 
+// Puts the live squash band on the shader for the STOCK water planes, so seam neighbours move identically in drawn space.
 void SSFarSea::bindSquash(LLGLSLShader* shader)
 {
-    // The stock planes must move through the SAME squash the frame does, or seam neighbours separate in drawn space wherever the rect passes the knee. Only bound when the far sea will draw
-    // (Atmo owns the water); render() zeroes the band on every path out. Visually free (waves/UVs/atmospherics are pre-squash in waterV); depth-safe while the draw distance stays inside the
-    // knee - see doc/atmo_magic_interactions.md. [interaction: LLDrawPoolWater::pushWaterPlanes, waterV.glsl squash block]
     if (!shader)
     {
         return;
@@ -86,17 +69,15 @@ void SSFarSea::bindSquash(LLGLSLShader* shader)
     band(knee, cap, rim, planet_r);
     static LLStaticHashedString s_ss_squash("ss_squash");
     shader->uniform3f(s_ss_squash, knee, cap, rim);
-    // The camera the squash pulls toward, bound here as well as by the water pool: the haze pass (waterHazeV) mirrors the squash and has no other reason to carry eyeVec, and for the surface
-    // pass this is the same value the pool already bound. [interaction: LLPipeline::doWaterHaze]
     shader->uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, LLViewerCamera::getInstance()->getOrigin().mV);
 }
 
+// Binds the frame's per-frame uniforms and draws the canonical annulus; zeroes the band on every path out so nothing leaks.
 void SSFarSea::render(LLGLSLShader* shader)
 {
     F32 knee = 0.f, cap = 0.f, r_sea = 0.f, planet_r = 0.f;
     band(knee, cap, r_sea, planet_r);
 
-    // Overlay values report THIS frame's draw, not a memory of better times: a stale rim once masked a frame-by-frame refusal to draw as a working sea. Zero until the draw call actually issues.
     mLastKnee = knee;
     mLastRSea = 0.f;
 
@@ -105,8 +86,6 @@ void SSFarSea::render(LLGLSLShader* shader)
         return;
     }
 
-    // Every exit leaves both uniforms zeroed: bindSquash put the live band on the shader for the stock planes already drawn, and uniforms persist per-program - a refusal that leaked the band
-    // would squash every water draw next frame.
     static LLStaticHashedString s_ss_squash("ss_squash");
     static LLStaticHashedString s_ss_sea("ss_sea");
     static LLStaticHashedString s_ss_sea_hole("ss_sea_hole");
@@ -134,9 +113,6 @@ void SSFarSea::render(LLGLSLShader* shader)
 
     const F32 water_h = LLEnvironment::instance().getWaterHeight();
 
-    // Stock water's outer footprint: region water, hole tiles and edge patches are all REAL water, and the frame lattice hangs on the union rectangle of all of them - connecting to the stock
-    // geometry instead of overlapping it, which is what makes their depth relationship a non-issue at any distance (only the one-cell apron ever sits under stock water). Recomputed per frame
-    // from the live objects: it only actually changes on region crossings and draw-distance changes, but chasing those triggers is more code than a dozen bounding-box unions.
     F32 hole_min_x = 0.f, hole_min_y = 0.f, hole_max_x = 0.f, hole_max_y = 0.f;
     {
         bool any = false;
@@ -169,12 +145,9 @@ void SSFarSea::render(LLGLSLShader* shader)
         }
     }
 
-    // Debug: hoist the sea 2m ABOVE the water instead of sinking it, making it overdraw the stock planes and identify itself unmistakably. Splits "the draw never lands fragments" from "the
-    // fragments are all hidden by depth or shading" without touching a fragment shader.
     static LLCachedControl<bool> debug_lift(gSavedSettings, "SSAtmoDebugFarSeaLift", false);
     const F32 sea_h = debug_lift ? water_h + 2.f : water_h;
 
-    // Degenerate rect guard: the region loop guarantees a footprint in practice, but a sub-cell rect would put the whole frame inside its own apron; a live refusal must read as one on the overlay.
     const F32 half_x = 0.5f * (hole_max_x - hole_min_x);
     const F32 half_y = 0.5f * (hole_max_y - hole_min_y);
     if (half_x < 32.f || half_y < 32.f)
@@ -183,18 +156,11 @@ void SSFarSea::render(LLGLSLShader* shader)
         return;
     }
 
-    // Where the blend to the rim starts, as a chebyshev fraction of the frame (the rect edge sits at 1/2 = SEA_HOLE_HALF_CELLS/SEA_FRAME_HALF_CELLS): the knee's fraction of the frame's edge
-    // extent when that fits, so the identity lattice runs to the knee and the blend band lives where the squash already owns the vertices. Clamped: the floor keeps a 0.1-half-extent identity
-    // margin beyond the rect so the blend can never touch the seam, and the ceiling guarantees a real band even when a huge draw distance pushes the knee past the frame - blended cells inside
-    // the knee then skew the wave warp a little, at kilometres out where the waves have faded to nothing.
     const F32 sea_bound = (F32)SEA_FRAME_HALF_CELLS / (F32)SEA_HOLE_HALF_CELLS;
     const F32 blend0 = llclamp(knee / (sea_bound * llmin(half_x, half_y)), 0.55f, 0.85f);
 
     mLastRSea = r_sea;
 
-    // The sea's whole per-frame state is these uniforms; the vertex buffer is canonical and immutable (see build). ss_squash shares knee and cap with the cloud field so water and cloud agree
-    // about drawn depth, but carries the sea's own virtual radius - the horizon is allowed to be much farther than the clouds go. ss_squash was already live for the stock planes (bindSquash);
-    // rebinding here is deliberate redundancy so this draw never depends on the caller's ordering. ss_sea stays zero for every draw but this one - it is what gates the frame placement in waterV.
     shader->uniform3f(s_ss_squash, knee, cap, r_sea);
     shader->uniform4f(s_ss_sea, blend0, r_sea, sea_h, planet_r);
     shader->uniform4f(s_ss_sea_hole, hole_min_x, hole_min_y, hole_max_x, hole_max_y);
@@ -205,15 +171,12 @@ void SSFarSea::render(LLGLSLShader* shader)
     zero_band();
 }
 
+// Builds the immutable canonical frame lattice once - all world placement comes from uniforms, so it never rebuilds.
 void SSFarSea::build()
 {
-    // Canonical mesh, built exactly once for the process: one square FRAME lattice in units of the hole rect's half extent (cell = 1/SEA_HOLE_HALF_CELLS, chebyshev 1 = the rect edge, chebyshev
-    // SEA_FRAME_HALF_CELLS/SEA_HOLE_HALF_CELLS = the outer square edge). No world position, height, knee or rim is baked in anywhere, so nothing that happens at runtime ever needs a rebuild.
     const S32 lattice = SEA_FRAME_HALF_CELLS * 2 + 1;
     mVertCount = (U32)(lattice * lattice);
 
-    // Indices: every cell of the frame. The vertex sheet stays a full square (the hole interior's unused vertices cost ~1MB once and keep the indexing trivial); the index buffer skips cells that
-    // lie entirely inside the apron - everything within one cell of the rect edge stays, so the innermost ring tucks under stock water and depth hides it.
     const F32 cell = 1.f / (F32)SEA_HOLE_HALF_CELLS;
     const S32 apron = SEA_HOLE_HALF_CELLS - 1;
     std::vector<U32> indices;
@@ -236,7 +199,6 @@ void SSFarSea::build()
     mIndexCount = (U32)indices.size();
 
     mVB = new LLVertexBuffer(LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_NORMAL | LLVertexBuffer::MAP_TEXCOORD0);
-    // Doubled index allocation: buffers count in 16-bit units and halve when setIndexData switches them to 32-bit.
     if (!mVB->allocateBuffer(mVertCount, mIndexCount * 2))
     {
         mVB = nullptr;

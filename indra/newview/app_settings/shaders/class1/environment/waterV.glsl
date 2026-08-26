@@ -131,7 +131,16 @@ void main()
     float d = length(oEyeVec.xy);
     float ld = min(d, 2560.0);
 
-    pos.xy = eyeVec.xy + oEyeVec.xy/d*ld;
+#ifdef SS_ATMO
+    // <SS:Nexii> With the squash band live the vanilla 2560m radial clamp IS the stripe artifact: every vertex past 2560m collapses onto the same circle around the eye, so wave UVs freeze along
+    // each camera ray and the whole band from drawn ~1.6km to the rim rasterises as azimuth-striped walls with matching broken fresnel and specular. True positions instead - the virtual-distance
+    // parallax then anchors the waves where they really are, and texture minification mips the normal maps toward flat with distance, which is the correct far-ocean limit that waterF's ss_far
+    // roughness widening compensates. Squash-zeroed draws (Atmo off, sea off, underwater) keep the vanilla clamp byte-for-byte. [interaction: SSFarSea, waterF.glsl] </SS:Nexii>
+    if (ss_squash.z <= 0.0)
+#endif
+    {
+        pos.xy = eyeVec.xy + oEyeVec.xy/d*ld;
+    }
     view.xyz = oEyeVec;
 
     d = clamp(ld/1536.0-0.5, 0.0, 1.0);

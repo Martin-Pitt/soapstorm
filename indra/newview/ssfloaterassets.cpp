@@ -1,6 +1,6 @@
 /**
  * @file ssfloaterassets.cpp
- * @brief Atmo Magic global assets. See the header.
+ * @brief See ssfloaterassets.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -31,8 +31,6 @@
 
 #include "llviewercontrol.h"
 
-// <SS:Nexii> Atmo Magic global assets
-
 namespace
 {
     const char* THUNDER_CRACK_SETTING = "SSAtmoThunderCrack";
@@ -41,11 +39,13 @@ namespace
     const char* WIND_STRONG_SETTING = "SSAtmoLoopWindStrong";
 }
 
+// Floater shell; all content is wired in postBuild.
 SSFloaterAssets::SSFloaterAssets(const LLSD& key)
 :   LLFloater(key)
 {
 }
 
+// Wires commit callbacks for the wind loops, thunder lists and every global footstep slot.
 bool SSFloaterAssets::postBuild()
 {
     getChild<LLUICtrl>("loop_wind_light")->setCommitCallback(
@@ -58,7 +58,6 @@ bool SSFloaterAssets::postBuild()
     getChild<SSSoundListCtrl>("thunder_rumble")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitThunder(); });
 
-    // The dry-ground footstep grid - see SSFootstepSounds::surfaceIsGlobal.
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {
         if (!SSFootstepSounds::surfaceIsGlobal((SSStepSurface)sf)) continue;
@@ -76,13 +75,14 @@ bool SSFloaterAssets::postBuild()
     return true;
 }
 
-// The widget name for a footstep slot, built from the same keys the settings and the preset both use.
+// Widget name for a surface/action footstep slot.
 std::string SSFloaterAssets::stepWidgetName(SSStepSurface surface, SSStepAction action)
 {
     return std::string("step_") + SSFootstepSounds::surfaceKey(surface)
          + "_" + SSFootstepSounds::actionKey(action);
 }
 
+// Persists both thunder lists.
 void SSFloaterAssets::onCommitThunder()
 {
     gSavedSettings.setString(THUNDER_CRACK_SETTING,
@@ -91,6 +91,7 @@ void SSFloaterAssets::onCommitThunder()
         ss_asset_list_str(getChild<SSSoundListCtrl>("thunder_rumble")->getList()));
 }
 
+// Persists every global footstep slot list (and re-reads the thunder lists from settings).
 void SSFloaterAssets::onCommitSteps()
 {
     getChild<SSSoundListCtrl>("thunder_crack")->setList(
@@ -117,10 +118,9 @@ void SSFloaterAssets::onCommitSteps()
     }
 }
 
+// Loads all lists from settings into their controls and labels the footstep slots.
 void SSFloaterAssets::onOpen(const LLSD& key)
 {
-    // Read on every open rather than once at build. These are global settings, so something else may have changed them since - and a stale list here would be written straight back over the new value
-    // the moment anything in this window was touched.
     getChild<SSSoundListCtrl>("loop_wind_light")->setList(
         ss_asset_list_parse(gSavedSettings.getString(WIND_LIGHT_SETTING)));
     getChild<SSSoundListCtrl>("loop_wind_strong")->setList(
@@ -146,6 +146,7 @@ void SSFloaterAssets::onOpen(const LLSD& key)
     }
 }
 
+// Persists both wind loop lists.
 void SSFloaterAssets::onCommitWind()
 {
     gSavedSettings.setString(WIND_LIGHT_SETTING,
@@ -153,5 +154,3 @@ void SSFloaterAssets::onCommitWind()
     gSavedSettings.setString(WIND_STRONG_SETTING,
         ss_asset_list_str(getChild<SSSoundListCtrl>("loop_wind_strong")->getList()));
 }
-
-// </SS:Nexii>

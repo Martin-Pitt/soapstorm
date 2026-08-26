@@ -1,6 +1,6 @@
 /**
  * @file ssassetlist.cpp
- * @brief Atmo Magic ordered asset lists. See the header.
+ * @brief See ssassetlist.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -32,8 +32,7 @@
 #include <algorithm>
 #include <map>
 
-// <SS:Nexii> Atmo Magic ordered asset lists
-
+// Case-insensitive natural sort ('clip 2' before 'clip 10') so asset lists order the way humans name them.
 bool ss_natural_less(const std::string& a, const std::string& b)
 {
     size_t i = 0, j = 0;
@@ -45,7 +44,6 @@ bool ss_natural_less(const std::string& a, const std::string& b)
 
         if (a_digit && b_digit)
         {
-            // Take the whole run and compare the values, so the count of digits stops mattering and the number starts.
             size_t ia = i, jb = j;
             while (ia < a.size() && isdigit((unsigned char)a[ia])) ++ia;
             while (jb < b.size() && isdigit((unsigned char)b[jb])) ++jb;
@@ -58,7 +56,6 @@ bool ss_natural_less(const std::string& a, const std::string& b)
 
             if (va != vb) return va < vb;
 
-            // Equal values, different padding: the shorter form first, so an order exists at all rather than the two comparing as equal and sorting arbitrarily.
             if (na.size() != nb.size()) return na.size() < nb.size();
 
             i = ia;
@@ -77,16 +74,19 @@ bool ss_natural_less(const std::string& a, const std::string& b)
     return (a.size() - i) < (b.size() - j);
 }
 
+// Mode to its persisted key.
 const char* ss_asset_mode_key(SSAssetListMode mode)
 {
     return (mode == SS_ASSET_SEQUENCE) ? "sequence" : "random";
 }
 
+// Persisted key back to mode; anything unknown is random.
 SSAssetListMode ss_asset_mode_from_key(const std::string& key)
 {
     return (key == "sequence") ? SS_ASSET_SEQUENCE : SS_ASSET_RANDOM;
 }
 
+// Comma-separated UUID string to list, silently dropping anything that does not validate.
 SSAssetList ss_asset_list_parse(const std::string& csv)
 {
     SSAssetList out;
@@ -112,6 +112,7 @@ SSAssetList ss_asset_list_parse(const std::string& csv)
     return out;
 }
 
+// List back to the comma-separated form the settings store.
 std::string ss_asset_list_str(const SSAssetList& seq)
 {
     std::string out;
@@ -123,12 +124,11 @@ std::string ss_asset_list_str(const SSAssetList& seq)
     return out;
 }
 
+// Inventory display name for an asset id, cached forever - inventory walks are too slow for per-frame UI.
 std::string ss_asset_name(const LLUUID& id)
 {
     if (id.isNull()) return std::string();
 
-    // Cached, because this is asked once per row per frame and the walk is over the whole inventory. The answer only changes when something is added or removed, which is rare next to how often it is
-    // read - and a miss is re-asked rather than remembered, so a name that arrives once the inventory finishes fetching is picked up.
     static std::map<LLUUID, std::string> s_names;
 
     auto found = s_names.find(id);
@@ -146,6 +146,3 @@ std::string ss_asset_name(const LLUUID& id)
     s_names[id] = name;
     return name;
 }
-
-
-// </SS:Nexii>

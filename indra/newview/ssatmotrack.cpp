@@ -1,7 +1,6 @@
 /**
  * @file ssatmotrack.cpp
- * @brief Atmo Magic per-track weather: parcel-description notecard discovery,
- *        LLSD config parsing, and track/altitude resolution.
+ * @brief See ssatmotrack.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -49,20 +48,14 @@
 #include "llviewermessage.h"
 #include "llviewerregion.h"
 
-// <SS:Nexii> Atmo Magic per-track weather
-
 static const char* CONFIG_TAG = "atmo:";
-static const F32   FIELD_EPSILON = 1e-4f;   // float compare for dirty detection
+static const F32   FIELD_EPSILON = 1e-4f;
 
 static const SSAtmoTrackConfig sEmptyConfig;
 
-//-----------------------------------------------------------------------------
-// SSAtmoTrackConfig
-//-----------------------------------------------------------------------------
-
+// North rotated by the stored orientation, normalised so a hand-authored quaternion still behaves.
 LLVector3 SSAtmoTrackConfig::windDirection() const
 {
-    // North rotated by the stored orientation. Normalised on the way out so a hand-authored quaternion that is slightly off unit still behaves.
     LLVector3 dir = LLVector3(0.f, 1.f, 0.f) * mWindRot;
     if (dir.magVecSquared() < F_APPROXIMATELY_ZERO)
     {
@@ -72,6 +65,7 @@ LLVector3 SSAtmoTrackConfig::windDirection() const
     return dir;
 }
 
+// Wind heading in degrees, back-derived from the quaternion.
 F32 SSAtmoTrackConfig::heading() const
 {
     const LLVector3 dir = windDirection();
@@ -80,11 +74,13 @@ F32 SSAtmoTrackConfig::heading() const
     return deg;
 }
 
+// Wind elevation in degrees, back-derived from the quaternion.
 F32 SSAtmoTrackConfig::elevation() const
 {
     return asinf(llclamp(windDirection().mV[VZ], -1.f, 1.f)) * RAD_TO_DEG;
 }
 
+// Builds the wind quaternion from the two angles a person can author.
 void SSAtmoTrackConfig::setHeadingElevation(F32 heading_deg, F32 elevation_deg)
 {
     const F32 h = heading_deg * DEG_TO_RAD;
@@ -95,8 +91,7 @@ void SSAtmoTrackConfig::setHeadingElevation(F32 heading_deg, F32 elevation_deg)
     mWindRot.shortestArc(LLVector3(0.f, 1.f, 0.f), dir);
 }
 
-// Serialised as heading and elevation rather than raw quaternion components: the two angles describe a direction completely (roll about the wind axis is meaningless), and they are something a person
-// can actually author in a notecard. An explicit "wind_rot" is still honoured if one is present.
+// Serialised as heading/elevation rather than a raw quaternion - what a notecard author can write.
 LLSD SSAtmoTrackConfig::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -118,12 +113,12 @@ LLSD SSAtmoTrackConfig::asLLSD() const
     return sd;
 }
 
+// Reads a track's fields tolerantly; a track present with no 'enabled' key still means weather here.
 void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return;
 
     mDefined = true;
-    // A track present in the config but with no "enabled" key still means "weather here"; the key only exists to switch one off without deleting it
     mEnabled = sd.has("enabled") ? sd["enabled"].asBoolean() : true;
 
     if (sd.has("preset"))        mPreset        = sd["preset"].asString();
@@ -154,8 +149,6 @@ void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
 
 bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
 {
-    // Epsilon compare: values round-trip through LLSD doubles, so exact equality would report a config as edited the moment it was reloaded. Not called "near": windef.h still macros that, the same
-    // trap as NEAR/FAR
     auto alike = [](F32 a, F32 b) { return fabsf(a - b) < FIELD_EPSILON; };
 
     return mDefined == rhs.mDefined
@@ -174,13 +167,9 @@ bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
         && alike(elevation(), rhs.elevation());
 }
 
-//-----------------------------------------------------------------------------
-// Lifetime
-//-----------------------------------------------------------------------------
-
+// Observes parcel changes from construction - crossings and description edits both fire it.
 SSAtmoTrackManager::SSAtmoTrackManager()
 {
-    // Fires when the agent crosses into a different parcel and when the current parcel's properties are re-sent, which is what an owner editing the description produces. No polling needed.
     LLViewerParcelMgr::getInstance()->addObserver(this);
 }
 
@@ -192,53 +181,50 @@ SSAtmoTrackManager::~SSAtmoTrackManager()
     }
 }
 
-//-----------------------------------------------------------------------------
-// Track geometry
-//-----------------------------------------------------------------------------
-
+// Which sky track the CAMERA's altitude is in - weather is a thing you look at.
 S32 SSAtmoTrackManager::currentTrack() const
 {
-    // The camera's altitude decides, not the avatar's: weather is a thing you look at, and alt-camming up into a skybox band should show that band's weather rather than the ground's.
     const F32 z = LLViewerCamera::getInstance()->getOrigin().mV[VZ];
     return llclamp(LLEnvironment::instance().calculateSkyTrackForAltitude((F64)z),
                    SS_TRACK_MIN, SS_TRACK_MAX);
 }
 
+// The band's base altitude.
 F32 SSAtmoTrackManager::trackFloor(S32 track) const
 {
-    // calculateSkyTrackForAltitude puts track N in (altitudes[N-1], altitudes[N]], so the band's base is the previous entry. Track 1's base is the region's ground reference, normally 0.
     const LLEnvironment::altitude_list_t& alts = LLEnvironment::instance().getRegionAltitudes();
     return alts[llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX) - 1];
 }
 
+// The band's top; the highest band is open ended.
 F32 SSAtmoTrackManager::trackCeiling(S32 track) const
 {
     const LLEnvironment::altitude_list_t& alts = LLEnvironment::instance().getRegionAltitudes();
     const S32 t = llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX);
-    if (t >= SS_TRACK_MAX) return F32_MAX;   // top band is open ended
+    if (t >= SS_TRACK_MAX) return F32_MAX;
     return alts[t];
 }
 
-//-----------------------------------------------------------------------------
-// Config access
-//-----------------------------------------------------------------------------
-
+// Read access to a track's config.
 const SSAtmoTrackConfig& SSAtmoTrackManager::config(S32 track) const
 {
     if (track < SS_TRACK_MIN || track > SS_TRACK_MAX) return sEmptyConfig;
     return mWorking[track - SS_TRACK_MIN];
 }
 
+// Write access to a track's working config.
 SSAtmoTrackConfig& SSAtmoTrackManager::editable(S32 track)
 {
     return mWorking[llclamp(track, SS_TRACK_MIN, SS_TRACK_MAX) - SS_TRACK_MIN];
 }
 
+// The working set becomes the baseline.
 void SSAtmoTrackManager::commit()
 {
     saveWorking();
 }
 
+// Whether one track differs from baseline - epsilon compare, since LLSD round-trips wobble floats.
 bool SSAtmoTrackManager::isModified(S32 track) const
 {
     if (track < SS_TRACK_MIN || track > SS_TRACK_MAX) return false;
@@ -246,6 +232,7 @@ bool SSAtmoTrackManager::isModified(S32 track) const
     return mWorking[i] != mBaseline[i];
 }
 
+// Whether any track differs from baseline.
 bool SSAtmoTrackManager::isModified() const
 {
     for (S32 i = 0; i < SS_TRACK_COUNT; ++i)
@@ -255,12 +242,14 @@ bool SSAtmoTrackManager::isModified() const
     return false;
 }
 
+// Working set back to the baseline.
 void SSAtmoTrackManager::revertToBaseline()
 {
     mWorking = mBaseline;
     saveWorking();
 }
 
+// All tracks back to defaults.
 void SSAtmoTrackManager::resetToDefaults()
 {
     mBaseline.fill(SSAtmoTrackConfig());
@@ -273,6 +262,7 @@ void SSAtmoTrackManager::resetToDefaults()
     saveWorking();
 }
 
+// Installs a track set as the new baseline and records where it came from.
 void SSAtmoTrackManager::adoptBaseline(const ss_track_set_t& set, ESource source, const std::string& name)
 {
     mBaseline = set;
@@ -294,11 +284,7 @@ void SSAtmoTrackManager::adoptBaseline(const ss_track_set_t& set, ESource source
     saveWorking();
 }
 
-//-----------------------------------------------------------------------------
-// LLSD document { "name": "Storm front", "tracks": { "1": { "enabled": true, "preset": "Rain", ... } } } A bare map of track numbers is accepted too, so a minimal hand-written notecard does not need
-// the wrapper.
-//-----------------------------------------------------------------------------
-
+// The whole config as the notecard document.
 LLSD SSAtmoTrackManager::asLLSD() const
 {
     LLSD tracks = LLSD::emptyMap();
@@ -316,6 +302,7 @@ LLSD SSAtmoTrackManager::asLLSD() const
     return sd;
 }
 
+// Parses a config document, tolerant of bare track maps and loose 'track N' spellings.
 bool SSAtmoTrackManager::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
 {
     out.fill(SSAtmoTrackConfig());
@@ -336,7 +323,6 @@ bool SSAtmoTrackManager::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
         }
         else
         {
-            // Tolerate "track 2" / "track2" spellings from hand-written cards
             const std::string alt = llformat("track%d", track);
             const std::string alt_spaced = llformat("track %d", track);
             if (tracks.has(alt)) entry = &tracks[alt];
@@ -352,12 +338,12 @@ bool SSAtmoTrackManager::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
     return any;
 }
 
+// Parses notecard text (XML or notation, whichever works) into the working set.
 void SSAtmoTrackManager::applyNotecardText(const std::string& text)
 {
     LLSD sd;
     std::istringstream stream(text);
 
-    // Accept either serialisation. LLSDSerialize::fromNotation on XML text fails cleanly, so trying XML first costs nothing.
     bool parsed = false;
     if (text.find("<llsd") != std::string::npos)
     {
@@ -389,14 +375,9 @@ void SSAtmoTrackManager::applyNotecardText(const std::string& text)
     adoptBaseline(set, mPendingSource, name);
 }
 
-//-----------------------------------------------------------------------------
-// Parcel description discovery
-//-----------------------------------------------------------------------------
-
-// static
+// Finds 'atmo:<uuid>' in a parcel description - case-insensitive, allowed inside prose.
 LLUUID SSAtmoTrackManager::parseDescription(const std::string& desc)
 {
-    // Scan for "atmo:" in any case, then take the next 36 characters and try them as a UUID. Keeps the marker findable inside prose, so a parcel description can stay human readable.
     const std::string lower = utf8str_tolower(desc);
     const std::string::size_type tag_len = strlen(CONFIG_TAG);
     std::string::size_type pos = 0;
@@ -420,6 +401,7 @@ LLUUID SSAtmoTrackManager::parseDescription(const std::string& desc)
     return LLUUID::null;
 }
 
+// Parcel changed: fetch, refetch or drop the parcel config; hand-loaded configs survive crossings.
 void SSAtmoTrackManager::changed()
 {
     LLParcel* parcel = LLViewerParcelMgr::getInstance()->getAgentParcel();
@@ -428,7 +410,6 @@ void SSAtmoTrackManager::changed()
 
     if (asset_id.isNull())
     {
-        // Left a configured parcel. A config loaded by hand from inventory is the user's own choice and outlives parcel crossings.
         if (mSource == SOURCE_PARCEL)
         {
             resetToDefaults();
@@ -436,12 +417,13 @@ void SSAtmoTrackManager::changed()
         return;
     }
 
-    if (asset_id == mAssetID || asset_id == mPendingID) return;   // already applied
+    if (asset_id == mAssetID || asset_id == mPendingID) return;
 
     const std::string name = parcel ? parcel->getName() : std::string("parcel");
     requestNotecard(asset_id, SOURCE_PARCEL, name);
 }
 
+// Refetches the current source's notecard.
 void SSAtmoTrackManager::reload()
 {
     mAssetID.setNull();
@@ -449,10 +431,7 @@ void SSAtmoTrackManager::reload()
     changed();
 }
 
-//-----------------------------------------------------------------------------
-// Notecard fetch
-//-----------------------------------------------------------------------------
-
+// Async notecard fetch.
 void SSAtmoTrackManager::requestNotecard(const LLUUID& asset_id, ESource source, const std::string& name)
 {
     if (!gAssetStorage)
@@ -470,6 +449,7 @@ void SSAtmoTrackManager::requestNotecard(const LLUUID& asset_id, ESource source,
                                 &SSAtmoTrackManager::onNotecardLoaded, nullptr, true);
 }
 
+// Loads a config notecard from inventory by hand.
 bool SSAtmoTrackManager::importFromInventory(const LLInventoryItem* item)
 {
     if (!item || item->getAssetUUID().isNull()) return false;
@@ -485,13 +465,12 @@ bool SSAtmoTrackManager::importFromInventory(const LLInventoryItem* item)
     return true;
 }
 
-// static
+// Fetch arrival: unwrap the notecard, parse, adopt.
 void SSAtmoTrackManager::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::EType type,
                                       void* user_data, S32 status, LLExtStat ext_status)
 {
     SSAtmoTrackManager* self = SSAtmoTrackManager::getInstance();
 
-    // A newer request may have superseded this fetch while it was in flight
     if (asset_id != self->mPendingID) return;
     self->mPendingID.setNull();
 
@@ -515,7 +494,6 @@ void SSAtmoTrackManager::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::E
     file.read((U8*)buffer.data(), length);
     buffer[length] = '\0';
 
-    // Notecard assets are wrapped in the Linden text container; unwrap to the plain body, but tolerate a bare text asset too.
     std::string text(buffer.data(), length);
     if (length > 19 && strncmp(buffer.data(), "Linden text version", 19) == 0)
     {
@@ -537,20 +515,15 @@ void SSAtmoTrackManager::onNotecardLoaded(const LLUUID& asset_id, LLAssetType::E
                           << ": " << self->mStatus << LL_ENDL;
 }
 
-//-----------------------------------------------------------------------------
-// Notecard export
-//-----------------------------------------------------------------------------
-
+// Writes the working set as a notecard into inventory.
 void SSAtmoTrackManager::exportToNotecard(const std::string& name)
 {
     LLSD sd = asLLSD();
     sd["name"] = name;
 
-    // Indented: the notecard is meant to be opened and read, and a single-line LLSD blob is not something anyone can check by eye
     std::ostringstream body;
     LLSDSerialize::toPrettyXML(sd, body);
 
-    // Wrap in the Linden notecard container so it opens as a normal notecard
     LLNotecard nc(LLNotecard::MAX_SIZE);
     nc.setText(body.str());
     std::ostringstream wrapped;
@@ -585,7 +558,6 @@ void SSAtmoTrackManager::exportToNotecard(const std::string& name)
             LLViewerAssetUpload::EnqueueInventoryUpload(url, info);
         });
 
-    // Keep the new notecard from popping an editor window on top of the floater
     suppress_inventory_auto_open_for_folder(folder_id, true);
 
     create_inventory_item(gAgentID, gAgentSessionID, folder_id, LLTransactionID::tnull,
@@ -594,10 +566,7 @@ void SSAtmoTrackManager::exportToNotecard(const std::string& name)
                           NO_INV_SUBTYPE, PERM_ALL, cb);
 }
 
-//-----------------------------------------------------------------------------
-// Working-set persistence
-//-----------------------------------------------------------------------------
-
+// Restores the working set from the per-account file.
 void SSAtmoTrackManager::loadWorking()
 {
     mLoaded = true;
@@ -618,7 +587,6 @@ void SSAtmoTrackManager::loadWorking()
 
     mWorking = set;
 
-    // Whatever was in force last session is the baseline until a notecard replaces it, so a restart does not present itself as unsaved edits.
     mBaseline = set;
 
     if (sd.isMap() && sd.has("name")) mConfigName = sd["name"].asString();
@@ -631,14 +599,13 @@ void SSAtmoTrackManager::loadWorking()
         }
         else if (mSource != SOURCE_DEFAULT)
         {
-            // A parcel config is re-fetched from the description on arrival;
-            // until then treat it as local so the state is honest
             mSource = SOURCE_DEFAULT;
             mStatus = "system defaults";
         }
     }
 }
 
+// Persists the working set to the per-account file.
 void SSAtmoTrackManager::saveWorking()
 {
     LLSD sd = asLLSD();
@@ -649,16 +616,12 @@ void SSAtmoTrackManager::saveWorking()
     gSavedSettings.setString("SSAtmoTrackConfig", stream.str());
 }
 
-//-----------------------------------------------------------------------------
-
+// First-tick lazy load of the working set, then a parcel check.
 void SSAtmoTrackManager::idle()
 {
     if (!mLoaded)
     {
         loadWorking();
-        // The parcel may already be known by the time weather first ticks
         changed();
     }
 }
-
-// </SS:Nexii>

@@ -1,6 +1,6 @@
 /**
  * @file ssfloateratmoplanetary.cpp
- * @brief Atmo Magic planetary system designer implementation.
+ * @brief See ssfloateratmoplanetary.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -45,125 +45,89 @@
 #include <algorithm>
 #include <cmath>
 
-// <SS:Nexii> Atmo Magic planetary system designer
-
 static LLDefaultChildRegistry::Register<SSOrbitViewCtrl> register_ss_orbit_view("ss_orbit_view");
 
 static const F64 STATUS_POLL_INTERVAL = 0.5;
 
-// The "angled top-down" of the whole view: every orbit's minor axis is the major times this. 0.45 reads as a tilted plane without foreshortening the vertical so far that rings collapse into lines.
 static const F32 ORBIT_VIEW_TILT = 0.45f;
 
-// The other half of the view direction. ORBIT_VIEW_TILT is how much of a ring's in-plane depth survives the projection - the sine of the camera's elevation above the orbital plane - so this is its
-// cosine, and it is how much of a body's HEIGHT above that plane shows on screen. Derived rather than picked, so the diagram is one consistent view: at tilt 0.45 the camera sits about 27 degrees
-// above the plane.
 static const F32 ORBIT_VIEW_LIFT =
-    0.893f; // sqrt(1 - ORBIT_VIEW_TILT^2), for ORBIT_VIEW_TILT = 0.45
+    0.893f;
 
-// Below this the projected ring has collapsed to a line and a screen position no longer says which way round the orbit a body is - see inversePhaseDeg.
 static const F32 ORBIT_RING_FLAT_EPS = 0.05f;
 
-// Display-ring geometry. Radii here are NOT the authored orbital radii - those span metres to AU, so each level is normalised instead: the sun's children keep their authored ORDER (with a partial
-// nod to authored scale - see ORBIT_RADIUS_LOG_WEIGHT) and spread out to the canvas edge, and moons get small fixed-pitch rings around their planet. First-ring starts raised after hands-on feedback:
-// 90px keeps the innermost planet clear of a sun pair's discs, 26px keeps the first moon ring outside its planet's disc plus label.
-static const F32 ORBIT_PLANET_FIRST_RING = 90.f; // px, innermost planet ring
-static const F32 ORBIT_MOON_FIRST_RING = 26.f;   // px, innermost moon ring
-static const F32 ORBIT_MOON_RING_SPACING = 16.f; // px between moon rings
+static const F32 ORBIT_PLANET_FIRST_RING = 90.f;
+static const F32 ORBIT_MOON_FIRST_RING = 26.f;
+static const F32 ORBIT_MOON_RING_SPACING = 16.f;
 
-// How much of a planet ring's position comes from log-scaled authored radii rather than pure even rank spacing. Pure rank hides that one planet sits ten times farther out than the rest; pure (or
-// linear) authored scale lets AU-ratios flatten the whole inner system onto the first ring. 0.4 of the log term makes a far-out planet visibly farther without crushing the inner rings together.
 static const F32 ORBIT_RADIUS_LOG_WEIGHT = 0.4f;
-// The scale dials compress display spacing multiplicatively, but never all the way to zero - a floor keeps a fully compressed system readable (and clickable) rather than stacking every body onto its
-// parent's pixel.
 static const F32 ORBIT_PLANET_RING_FLOOR = 30.f;
 static const F32 ORBIT_MOON_RING_FLOOR = 10.f;
-// Total on-screen separation of a bound sun pair around their pair centre.
 static const F32 ORBIT_PAIR_SEPARATION = 56.f;
 
-// Hit-test tolerances: a body wins within this many pixels of its centre (or its own radius if larger); a ring is the thin fallback hitbox.
 static const F32 ORBIT_BODY_HIT_RADIUS = 10.f;
 static const F32 ORBIT_RING_HIT_RADIUS = 5.f;
 
-// The pair-centre handle (the outer pair's grab point for its orbit around the inner barycenter). The drawn circle sits well inside its hitbox so the handle reads as a control, not another body
-// disc.
 static const F32 ORBIT_PAIR_HANDLE_HIT_RADIUS = 8.f;
 static const F32 ORBIT_PAIR_HANDLE_DRAW_RADIUS = 5.f;
 static const F32 ORBIT_PAIR_HANDLE_DOT_RADIUS = 1.5f;
 
-// Segments per ring ellipse - shared by drawing and ring hit-testing so a click lands on exactly the curve that was drawn.
 static const S32 ORBIT_RING_SEGMENTS = 96;
 
-// Zoom: exponential steps (3 notches per doubling), clamped. 1.0 is the fit-everything layout by construction - computeLayout() sizes the outermost ring to the canvas at zoom 1 - so the minimum only
-// ever shrinks an already-fitting system and nothing can be zoomed out of reach.
 static const F32 ORBIT_ZOOM_MIN = 0.5f;
 static const F32 ORBIT_ZOOM_MAX = 4.f;
-static const F32 ORBIT_ZOOM_STEP = 1.2599f; // 2^(1/3)
+static const F32 ORBIT_ZOOM_STEP = 1.2599f;
 
-// Home marker: a small house icon over the body instead of a name suffix.
 static const S32 ORBIT_HOME_ICON_SIZE = 16;
 
-// Label fan-out (see draw()): the exclusion circle a displaced label's near edge kisses is the body's draw radius plus this pad (which also makes the undisplaced below-the-body spot identical to the
-// old fixed 2px gap), and the ray walks the circle in 360/steps-degree notches.
 static const F32 ORBIT_LABEL_PAD = 2.f;
 static const S32 ORBIT_LABEL_ANGLE_STEPS = 24;
 
-// Unit conversions for the properties panel. Storage is always metres (and per-level relative mass); only the spinners speak AU (planets), km (moons, and every diameter but a sun's) and solar
-// diameters (suns).
 static const F32 SS_METRES_PER_AU = 1.496e11f;
 static const F32 SS_METRES_PER_KM = 1000.f;
 static const F32 SS_METRES_PER_SOLAR_DIAMETER = 1.392e9f;
 
-//-----------------------------------------------------------------------------
-// SSOrbitViewCtrl
-//-----------------------------------------------------------------------------
-
-// Wraps any angle into the stored 0..360 phase domain - grab offsets can push the raw cursor angle well outside it in either direction.
+// Wraps to [0, 360).
 static F32 ss_wrap_phase_deg(F32 deg)
 {
     deg = fmodf(deg, 360.f);
     return (deg < 0.f) ? deg + 360.f : deg;
 }
 
+// Widget params.
 SSOrbitViewCtrl::Params::Params()
 {
 }
 
+// The angled top-down orbital map: bodies on display rings, selectable and draggable.
 SSOrbitViewCtrl::SSOrbitViewCtrl(const Params& p) :
     LLUICtrl(p)
 {
 }
 
-// static
+// A ring phase to screen coordinates under the view tilt.
 void SSOrbitViewCtrl::projectOnRing(F32 anchor_x, F32 anchor_y, F32 ring_radius, F32 tilt_rad,
                                     F32 phase_deg, F32& out_x, F32& out_y)
 {
-    // The same orbit the RESOLVER builds, projected. SSAtmoEnvPlanetaryResolver::orbitOffset places a body at ( r cos p,  r sin p cos i,  r sin p sin i ) so an inclined orbit is a circle tipped out
-    // of the reference plane - half of it lifts above, half drops below. This projects exactly that. It used to rotate the finished ellipse in the picture plane by a fraction of the inclination
-    // instead, which is not what inclination does to an orbit: it spun the ring like a dial while leaving it flat, so the diagram disagreed with the sky it was supposed to be describing and no
-    // amount of inclination ever tipped anything.
     const F32 a = phase_deg * DEG_TO_RAD;
     const F32 in_plane = sinf(a) * ring_radius;
 
     const F32 dx = cosf(a) * ring_radius;
-    const F32 dy = in_plane * cosf(tilt_rad);   // along the plane, into the screen
-    const F32 dz = in_plane * sinf(tilt_rad);   // out of the plane, upward
+    const F32 dy = in_plane * cosf(tilt_rad);
+    const F32 dz = in_plane * sinf(tilt_rad);
 
     out_x = anchor_x + dx;
     out_y = anchor_y + dy * ORBIT_VIEW_TILT + dz * ORBIT_VIEW_LIFT;
 }
 
-// static
+// Screen point back to a ring phase - the drag inverse of projectOnRing.
 F32 SSOrbitViewCtrl::inversePhaseDeg(F32 anchor_x, F32 anchor_y, F32 tilt_rad, S32 x, S32 y)
 {
-    // Inverse of projectOnRing. Screen x is r cos p outright, and screen y is r sin p times one combined factor - the ring's flattening and its inclination lift added together - so dividing that out
-    // leaves sin p against cos p and the angle follows. The cursor's radius never enters, so a drag can wander off the curve without the phase fighting back.
     const F32 dx = (F32)x - anchor_x;
     const F32 dy = (F32)y - anchor_y;
 
     const F32 depth = cosf(tilt_rad) * ORBIT_VIEW_TILT + sinf(tilt_rad) * ORBIT_VIEW_LIFT;
 
-    // A ring seen exactly edge-on projects to a line: every phase on one side of it lands on the same pixel, so a drag there has no answer to give. Reading the phase off x alone at least keeps the
-    // near half tracking the cursor instead of thrashing between two branches.
     if (fabsf(depth) < ORBIT_RING_FLAT_EPS)
     {
         F32 edge_deg = (dx >= 0.f) ? 0.f : 180.f;
@@ -175,7 +139,7 @@ F32 SSOrbitViewCtrl::inversePhaseDeg(F32 anchor_x, F32 anchor_y, F32 tilt_rad, S
     return phase_deg;
 }
 
-// static
+// Both members of a bound sun pair, senior first.
 bool SSOrbitViewCtrl::sunPairMembers(const SSAtmoEnvPlanetary& planetary, S32 index,
                                      S32& out_senior, S32& out_junior)
 {
@@ -186,7 +150,6 @@ bool SSOrbitViewCtrl::sunPairMembers(const SSAtmoEnvPlanetary& planetary, S32 in
     const S32 partner = planetary.mBodies[index].mBoundPartnerIndex;
     if (partner < 0 || partner >= n || partner == index) return false;
     if (planetary.mBodies[partner].mKind != SSAtmoEnvCelestialBody::SUN) return false;
-    // Symmetry check, same as the resolver's pairJunior() - a dangling one-way reference from a hand-edited notecard is not a pair.
     if (planetary.mBodies[partner].mBoundPartnerIndex != index) return false;
 
     out_senior = llmin(index, partner);
@@ -194,13 +157,10 @@ bool SSOrbitViewCtrl::sunPairMembers(const SSAtmoEnvPlanetary& planetary, S32 in
     return true;
 }
 
-// static
+// Places a bound pair about its shared centre, masses deciding the split.
 void SSOrbitViewCtrl::placePairMembers(const SSAtmoEnvPlanetary& planetary, std::vector<Placement>& out,
                                        S32 senior, S32 junior, F32 centre_x, F32 centre_y)
 {
-    // Mirrors the resolver's placePair(): the heavier member sits closer to the shared centre, each at separation * other_mass / total, on opposite sides. Orientation is the JUNIOR's phase (and its
-    // display tilt) - the same field the canvas's pair drag edits, so the diagram swings exactly where a drag puts it, and the members' mass-weighted barycenter stays on the centre by construction
-    // (which is what keeps the child-anchor barycenter math downstream correct).
     const F32 mass_s = llmax(planetary.mBodies[senior].mMassRelative, 0.0001f);
     const F32 mass_j = llmax(planetary.mBodies[junior].mMassRelative, 0.0001f);
     const F32 total = mass_s + mass_j;
@@ -218,14 +178,13 @@ void SSOrbitViewCtrl::placePairMembers(const SSAtmoEnvPlanetary& planetary, std:
     out[senior].mPairCentreY = centre_y;
     out[junior].mPairCentreX = centre_x;
     out[junior].mPairCentreY = centre_y;
-    // The junior's anchor is the pair centre; the senior's is the caller's to set (an outer pair's senior anchors its drawn ring at the inner barycenter, which is not the centre the members swing
-    // about).
     out[junior].mAnchorX = centre_x;
     out[junior].mAnchorY = centre_y;
     out[senior].mResolved = true;
     out[junior].mResolved = true;
 }
 
+// Lays out every body: display rings around parents, pairs about their centres, zoom applied.
 void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::vector<Placement>& out) const
 {
     const S32 n = (S32)planetary.mBodies.size();
@@ -233,25 +192,19 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
     for (S32 i = 0; i < n; ++i)
     {
         out[i].mIndex = i;
-        // Body discs are sized by log of diameter: absolute sizes span five orders of magnitude, and a diagram only needs "sun > planet > moon" to read, not the true ratio.
         const F32 diameter = llmax(planetary.mBodies[i].mDiameterM, 2.f);
         out[i].mDrawRadius = llclamp(1.5f * log10f(diameter), 4.f, 14.f);
-        // The authored inclination in full: projectOnRing now tips the orbit the way the resolver does, so there is nothing to scale down. The old fraction existed because the display rotated the
-        // ellipse in the picture plane, where a full inclination tangled every ring through every other one.
         out[i].mTiltRad = llclamp(planetary.mBodies[i].mOrbitalInclinationDeg, -90.f, 90.f)
                           * DEG_TO_RAD;
     }
     if (n == 0) return;
 
-    // Derived lineage - the schema's effectiveParent() is the single authority (planets always hang under the first sun, moons and suns under their stored parent with invalids degraded to root).
     std::vector<S32> eff_parent((size_t)n, -1);
     for (S32 i = 0; i < n; ++i)
     {
         eff_parent[i] = planetary.effectiveParent(i);
     }
 
-    // Sibling rank by authored orbital radius: display rings keep authored ORDER, not authored scale. For non-moon children a 0..1 spread fraction is also computed, blending even rank spacing with
-    // log-scaled authored radii (ORBIT_RADIUS_LOG_WEIGHT) so real distance differences partially show through.
     std::vector<S32> rank((size_t)n, 0);
     std::vector<F32> spread_frac((size_t)n, 0.f);
     for (S32 parent = -1; parent < n; ++parent)
@@ -265,7 +218,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
             [&planetary](S32 a, S32 b)
             { return planetary.mBodies[a].mOrbitalRadius < planetary.mBodies[b].mOrbitalRadius; });
 
-        // Log-space extent of the group's authored radii. Radii clamped away from zero before the log - an unauthored 0 shouldn't put a ring at minus infinity.
         const F32 log_min = (siblings.empty()) ? 0.f
             : log10f(llmax(planetary.mBodies[siblings.front()].mOrbitalRadius, 1.f));
         const F32 log_max = (siblings.empty()) ? 0.f
@@ -278,7 +230,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
 
             const F32 steps = (F32)llmax((S32)siblings.size() - 1, 1);
             const F32 rank_frac = (F32)r / steps;
-            // Degenerate spans (one sibling, or all radii equal) fall back to pure rank spacing rather than dividing by zero.
             const F32 log_frac = (log_span > 0.0001f)
                 ? (log10f(llmax(planetary.mBodies[siblings[r]].mOrbitalRadius, 1.f)) - log_min) / log_span
                 : rank_frac;
@@ -287,7 +238,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
         }
     }
 
-    // Roots, grouped into units: a bound pair of roots is one unit offset around its barycenter; everything else is a unit of one. Multiple units share the canvas side by side.
     std::vector<std::vector<S32>> units;
     {
         std::vector<bool> grouped((size_t)n, false);
@@ -316,14 +266,10 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
     const S32 unit_count = (S32)units.size();
     const F32 unit_span = (unit_count > 1) ? (width - 80.f) / (F32)unit_count : width;
 
-    // How far the outermost planet ring may reach. The height is divided by the tilt so the flattened ellipse fills vertically as generously as horizontally.
     F32 extent = llmin(width, height / ORBIT_VIEW_TILT) * 0.5f - 40.f;
     if (unit_count > 1) extent = llmin(extent, unit_span * 0.5f - 12.f);
-    // The floor stays above the first ring so a cramped canvas still leaves the outer planets somewhere to spread to.
     extent = llmax(extent, ORBIT_PLANET_FIRST_RING + 50.f);
 
-    // Where the sun group's collective barycenter must land after the shift below: the first root sun unit's slot anchor. Planets ring this exact point (their anchors resolve against the PRE-shift
-    // inner centre, which sits here), so shifting the suns onto it is what makes planets ring the group barycenter, mirroring the resolver.
     F32 sun_group_anchor_x = width * 0.5f;
     F32 sun_group_anchor_y = centre_y;
     bool have_sun_group_anchor = false;
@@ -344,8 +290,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
 
         if (units[u].size() == 2)
         {
-            // A bound root pair swings about the unit anchor by the junior's phase - units[] grouped ascending, so [0] is the lower index, the SENIOR. The centre itself is pinned (it is the system
-            // origin), which is why root members keep ring radius 0: no pair-as-a-unit orbit exists to draw or drag.
             const S32 senior = units[u][0];
             const S32 junior = units[u][1];
             out[senior].mAnchorX = anchor_x;
@@ -363,9 +307,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
         }
     }
 
-    // Children, a level per pass - Sun -> Planet -> Moon is three levels by
-    // design, so a fixed handful of passes always converges (same approach
-    // as SSAtmoEnvPlanetaryResolver::resolveWorldPositions).
     const F32 sun_planet_scale = llclamp(planetary.mSunPlanetScale, 0.f, 1.f);
     const F32 planet_moon_scale = llclamp(planetary.mPlanetMoonScale, 0.f, 1.f);
     for (S32 pass = 0; pass < 4; ++pass)
@@ -377,7 +318,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
             const S32 parent = eff_parent[i];
             if (parent < 0 || !out[parent].mResolved) continue;
 
-            // A child of one half of a bound pair orbits the pair's mass-weighted barycenter, matching the resolver's rule.
             F32 anchor_x = out[parent].mX;
             F32 anchor_y = out[parent].mY;
             const S32 partner = planetary.mBodies[parent].mBoundPartnerIndex;
@@ -389,7 +329,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
                 anchor_y = (out[parent].mY * mass_p + out[partner].mY * mass_q) / (mass_p + mass_q);
             }
 
-            // Which level's spacing applies is the child's own kind, same as the resolver's scale-dial rule: moons get the tight fixed pitch, everything else spreads over the canvas.
             F32 base;
             F32 floor_radius;
             F32 scale;
@@ -414,9 +353,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
             out[i].mRingCentreY = anchor_y;
             out[i].mRingRadius = ring;
 
-            // A bound sun pair below root (the canonical outer pair): the senior's ring carries the pair-as-a-unit around the inner barycenter - its own phase places the pair centre on that ring -
-            // and both members then swing about that centre by the junior's phase, the resolver's convention exactly. The ascending scan reaches the senior first (same parent, same pass), so `i` is
-            // the senior whenever this fires; a partner parented elsewhere (hand-edited notecard) falls through to an ordinary individual ring instead.
             S32 pair_senior = -1;
             S32 pair_junior = -1;
             if (sunPairMembers(planetary, i, pair_senior, pair_junior)
@@ -441,9 +377,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
         if (!progressed) break;
     }
 
-    // --- Shift the whole sun group so its mass-weighted display barycenter lands on the system anchor - the same move the resolver makes at the origin, and what makes two equal-mass pairs render
-    // antipodal about the centre (mutually orbiting) instead of one pinned with the other circling it. Planets need no touch: their anchors resolved against the PRE-shift inner centre, which is the
-    // system anchor - exactly the group barycenter they should ring.
     if (have_sun_group_anchor)
     {
         F32 weighted_x = 0.f;
@@ -473,10 +406,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
             }
         }
 
-        // The single ring an orbiting sun unit's senior carried around the inner centre would now be a lie - after the shift, no body travels it. Replace it with the actual paths: the senior's
-        // authored orbit vector R between the unit centres decomposes by opposing masses about the group barycenter, the outer unit's centre at R * m_inner / total and the inner unit's at R *
-        // m_outer / total on the opposite side (equal masses: two equal rings, the perfectly barycentred look). The shift above has already put every centre exactly on these rings. The senior's
-        // ANCHOR deliberately stays on the inner unit's shifted centre: its phase is the direction inner->outer, so that point is what the centre-handle drag inverts about.
         for (S32 i = 0; i < n; ++i)
         {
             if (planetary.mBodies[i].mKind != SSAtmoEnvCelestialBody::SUN) continue;
@@ -503,8 +432,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
             out[i].mRingCentreY = sun_group_anchor_y;
             out[i].mRingRadius = r_full * (mass_inner / total);
             out[i].mCounterRingRadius = r_full * (mass_outer / total);
-            // The inner PAIR's shifted centre doubles as a second grab point for the same phase (+180 - it sits antipodal). Only a paired parent offers it: a lone parent sun IS the inner centre, and
-            // with the handle outranking bodies on mouse-down a handle there would steal every click on that sun's disc.
             if (parent_partner >= 0)
             {
                 out[i].mHasCounterHandle = true;
@@ -514,7 +441,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
         }
     }
 
-    // Anything still unresolved is a parent cycle from a hand-edited notecard - stack them in the corner where they are at least visible and selectable rather than absent.
     S32 stranded = 0;
     for (S32 i = 0; i < n; ++i)
     {
@@ -527,8 +453,6 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
         ++stranded;
     }
 
-    // Zoom last, as a uniform scale of every position and ring radius about the canvas centre - applied inside the layout (rather than a GL transform at draw time) so hit-testing and the phase-drag
-    // inverse see exactly the zoomed geometry for free. Body discs and fonts are diagram glyphs and deliberately keep their size.
     if (mZoom != 1.f)
     {
         const F32 cx = width * 0.5f;
@@ -551,6 +475,7 @@ void SSOrbitViewCtrl::computeLayout(const SSAtmoEnvPlanetary& planetary, std::ve
     }
 }
 
+// One tilted display ring.
 void SSOrbitViewCtrl::drawRing(F32 centre_x, F32 centre_y, F32 radius, F32 tilt_rad, const LLColor4& color) const
 {
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
@@ -566,6 +491,7 @@ void SSOrbitViewCtrl::drawRing(F32 centre_x, F32 centre_y, F32 radius, F32 tilt_
     gGL.end();
 }
 
+// Draws rings, bodies, selection and drag feedback.
 void SSOrbitViewCtrl::draw()
 {
     const LLRect local = getLocalRect();
@@ -579,19 +505,15 @@ void SSOrbitViewCtrl::draw()
         return;
     }
 
-    // Read fresh and laid out per frame - see computeLayout()'s comment.
     std::vector<Placement> placements;
     computeLayout(*planetary, placements);
 
     const std::vector<S32> emitters = planetary->lightEmitterIndices();
 
-    // Rings first so every body draws on top of every curve. An orbiting sun unit's counter-ring (the inner unit's antipodal path) shares its senior's colour and selection state - the two curves are
-    // one mutual orbit, not two features.
     for (const Placement& p : placements)
     {
         if (!p.mResolved) continue;
         const bool selected = (p.mIndex == mSelectedIndex);
-        // A hovered ring brightens toward the selected colour - the "this curve is clickable" cue before the user commits.
         const bool ring_hovered = (p.mIndex == mHoverIndex && !mHoverOnBody);
         const LLColor4 ring_color = selected ? LLColor4(0.75f, 0.78f, 0.85f, 0.9f)
                                              : ring_hovered ? LLColor4(0.62f, 0.65f, 0.72f, 0.6f)
@@ -616,7 +538,6 @@ void SSOrbitViewCtrl::draw()
         const bool is_emitter =
             std::find(emitters.begin(), emitters.end(), p.mIndex) != emitters.end();
 
-        // Light emitters get a soft warm halo behind everything else of theirs - the "this is what lights the scene" marker.
         if (is_emitter)
         {
             gGL.color4f(1.f, 0.85f, 0.45f, 0.35f);
@@ -630,7 +551,6 @@ void SSOrbitViewCtrl::draw()
             case SSAtmoEnvCelestialBody::PLANET: fill = LLColor4(0.55f, 0.72f, 0.95f, 1.f); break;
             case SSAtmoEnvCelestialBody::MOON:   fill = LLColor4(0.72f, 0.72f, 0.78f, 1.f); break;
         }
-        // Hover gets the same brightening as selection but stops short of the white selection ring below - enough to say "clickable" without pretending the body is already selected.
         const bool body_hovered = (p.mIndex == mHoverIndex && mHoverOnBody);
         if (selected || body_hovered)
         {
@@ -641,7 +561,6 @@ void SSOrbitViewCtrl::draw()
         gGL.color4fv(fill.mV);
         gl_circle_2d(p.mX, p.mY, p.mDrawRadius, 24, true);
 
-        // The home body's distinct outline sits inside the selection ring so both stay readable when the home body is also selected.
         if (body.mIsHome)
         {
             gGL.color4f(0.30f, 0.95f, 0.70f, 0.9f);
@@ -653,8 +572,6 @@ void SSOrbitViewCtrl::draw()
             gl_circle_2d(p.mX, p.mY, p.mDrawRadius + (body.mIsHome ? 4.f : 3.f), 24, false);
         }
 
-        // Home reads as a small house icon centred on the body rather than a " (home)" name suffix - the label stays just the name, matching the list. Tinted the same green as the home outline so
-        // the two read as one marker.
         if (body.mIsHome)
         {
             LLPointer<LLUIImage> home_icon = LLUI::getUIImage("Home_Off");
@@ -668,10 +585,6 @@ void SSOrbitViewCtrl::draw()
         }
     }
 
-    // Labels last, on top of every disc, with name-tag style fan-out: a label keeps the plain below-the-body spot unless its rect would overlap an already-placed label's (tight pair, clustered
-    // moons, zoomed out); then its ray walks around the body's exclusion circle - both directions, nearest angle first - until a clear spot is found, the box's near edge always kissing the circle so
-    // it stays visually attached. Greedy, in body-index order with the SELECTED body first so neighbours can never displace it - a fixed order is also what keeps the result deterministic frame to
-    // frame, since the layout recomputes every draw and jittering labels would be worse than any single imperfect arrangement.
     {
         struct SSLabelRect { F32 mLeft; F32 mRight; F32 mTop; F32 mBottom; };
         std::vector<SSLabelRect> placed_rects;
@@ -705,13 +618,11 @@ void SSOrbitViewCtrl::draw()
             bool found = false;
             for (S32 probe = 0; probe < ORBIT_LABEL_ANGLE_STEPS && !found; ++probe)
             {
-                // Probe 0 is straight down (the default spot); then +step, -step, +2*step, -2*step ... fanning colliding neighbours apart to opposite sides.
                 const F32 delta = (F32)((probe + 1) / 2) * angle_step
                                 * ((probe % 2 == 1) ? 1.f : -1.f);
                 const F32 theta = (-90.f + delta) * DEG_TO_RAD;
                 const F32 dir_x = cosf(theta);
                 const F32 dir_y = sinf(theta);
-                // The rect's support extent along the ray places its near edge exactly on the exclusion circle: pushed sideways it sits beside the body, pushed up it sits above.
                 const F32 offset = exclusion + half_w * fabsf(dir_x) + 0.5f * line_h * fabsf(dir_y);
                 const F32 cx = p.mX + dir_x * offset;
                 const F32 cy = p.mY + dir_y * offset;
@@ -732,14 +643,13 @@ void SSOrbitViewCtrl::draw()
                         break;
                     }
                 }
-                if (probe == 0) rect = candidate; // the fallback if every angle collides
+                if (probe == 0) rect = candidate;
                 if (!collides)
                 {
                     rect = candidate;
                     found = true;
                 }
             }
-            // A full circle of collisions (pathological pile-up) falls back to the default spot - overlapped beats vanished.
 
             placed_rects.push_back(rect);
             font->renderUTF8(body.mName, 0,
@@ -749,14 +659,11 @@ void SSOrbitViewCtrl::draw()
         }
     }
 
-    // The pair-centre handles: outline circle plus centre dot at an orbiting pair's projected centre - or, antipodal flavour, at the inner pair's shifted centre - in the selection colour. Hover-only
-    // chrome (or while its own drag runs): drawn permanently it would read as one more body sitting between a pair's members.
     const S32 handle_index = (mDragMode == DRAG_CENTRE) ? mDragIndex : mHoverHandleIndex;
     const bool handle_antipodal = (mDragMode == DRAG_CENTRE) ? mDragAntipodal : mHoverHandleAntipodal;
     if (handle_index >= 0 && handle_index < (S32)placements.size())
     {
         const Placement& p = placements[handle_index];
-        // Same qualifying rules handleHitTest() applies - the hover index can go stale between events if a poll reload re-shapes the system, so re-check against this frame's placements.
         const bool handle_valid = handle_antipodal
             ? p.mHasCounterHandle
             : (p.mPairPartner >= 0 && (p.mRingRadius > 0.5f || p.mCounterRingRadius > 0.5f));
@@ -774,12 +681,12 @@ void SSOrbitViewCtrl::draw()
     LLView::draw();
 }
 
+// Which body (or whose ring) a point is on.
 S32 SSOrbitViewCtrl::hitTest(const std::vector<Placement>& placements, S32 x, S32 y, bool& out_on_body) const
 {
     const F32 fx = (F32)x;
     const F32 fy = (F32)y;
 
-    // Nearest body within tolerance wins outright.
     S32 best = -1;
     F32 best_dist = F32_MAX;
     for (const Placement& p : placements)
@@ -799,7 +706,6 @@ S32 SSOrbitViewCtrl::hitTest(const std::vector<Placement>& placements, S32 x, S3
         return best;
     }
 
-    // Fallback: nearest ring curve, sampled at the same points it is drawn with, so the hitbox is exactly the visible curve.
     out_on_body = false;
     best_dist = F32_MAX;
     for (const Placement& p : placements)
@@ -821,10 +727,9 @@ S32 SSOrbitViewCtrl::hitTest(const std::vector<Placement>& placements, S32 x, S3
     return best;
 }
 
+// Hit test for drag handles, including a pair centre's antipodal handle.
 S32 SSOrbitViewCtrl::handleHitTest(const std::vector<Placement>& placements, S32 x, S32 y, bool& out_antipodal) const
 {
-    // Only a unit whose centre itself travels a ring offers handles: the orbiting senior carries that ring, while a lone root pair's centre is the pinned unit anchor with no phase to edit. Nearest
-    // within tolerance across BOTH handle flavours, matching the body pass's nearest-wins rule.
     const F32 fx = (F32)x;
     const F32 fy = (F32)y;
     S32 best = -1;
@@ -835,7 +740,6 @@ S32 SSOrbitViewCtrl::handleHitTest(const std::vector<Placement>& placements, S32
         if (!p.mResolved) continue;
         const bool orbiting = (p.mRingRadius > 0.5f || p.mCounterRingRadius > 0.5f);
 
-        // The orbiting PAIR's own centre (pair seniors only - a single outer sun's "unit centre" is the sun itself, which body clicks already cover).
         if (p.mPairPartner >= 0 && p.mIndex < p.mPairPartner && orbiting)
         {
             const F32 dist = sqrtf((fx - p.mPairCentreX) * (fx - p.mPairCentreX)
@@ -848,7 +752,6 @@ S32 SSOrbitViewCtrl::handleHitTest(const std::vector<Placement>& placements, S32
             }
         }
 
-        // The inner pair's shifted centre - the antipodal grab point for the same senior phase, present in 3-4 sun systems only.
         if (p.mHasCounterHandle)
         {
             const F32 dist = sqrtf((fx - p.mCounterCentreX) * (fx - p.mCounterCentreX)
@@ -864,6 +767,7 @@ S32 SSOrbitViewCtrl::handleHitTest(const std::vector<Placement>& placements, S32
     return best;
 }
 
+// Select and start a phase drag.
 bool SSOrbitViewCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     SSAtmoEnvPlanetary* planetary = mPlanetary ? mPlanetary() : nullptr;
@@ -872,17 +776,11 @@ bool SSOrbitViewCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
     std::vector<Placement> placements;
     computeLayout(*planetary, placements);
 
-    // Idle hover feedback goes stale the moment a drag owns the mouse - cleared here, re-established by the first idle hover after release.
     mHoverIndex = -1;
     mHoverOnBody = false;
     mHoverHandleIndex = -1;
     mHoverHandleAntipodal = false;
 
-    // Hit priority: the pair-centre handle outranks bodies, which outrank bare rings. The handle must win over a body because a tight pair (or a zoomed-out view) can park a sun's disc on top of the
-    // pair centre, and the visibly hovered handle would then be impossible to grab; the reverse shadowing cannot happen, because the handle only hits inside the same few pixels its hover circle is
-    // showing in - nowhere else on the canvas does a body click have a handle to lose to. Every drag records a scrollbar-thumb style grab offset (see mDragOffsetDeg): phase-at-grab minus
-    // cursor-angle-at-grab, added back on every hover, so a motionless click edits nothing and a real drag never snaps the grabbed thing to the cursor. The offset is exact - the inverse is pure
-    // angle and the drag's reference frame cannot move until the first actual write - so no movement threshold backstop is needed.
     bool handle_antipodal = false;
     const S32 handle = handleHitTest(placements, x, y, handle_antipodal);
     bool on_body = false;
@@ -890,15 +788,12 @@ bool SSOrbitViewCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
 
     if (handle >= 0)
     {
-        // The centre drag edits the orbiting SENIOR's phase (the pair-as-a-unit's orbit), so the senior is what gets selected - whichever of the two handle flavours was grabbed.
         if (mOnSelect) mOnSelect(handle);
         mSelectedIndex = handle;
         mDragMode = DRAG_CENTRE;
         mDragAntipodal = handle_antipodal;
         mDragIndex = handle;
         const Placement& p = placements[handle];
-        // The outer handle inverts about the inner unit's shifted centre (the senior's anchor - its phase IS the inner->outer direction); the antipodal handle about the ring centre its counter-ring
-        // is drawn around, where the cursor angle is stable (angles about the grabbed point itself would not be). Its half-turn opposition folds into the grab offset.
         const F32 raw = handle_antipodal
             ? inversePhaseDeg(p.mRingCentreX, p.mRingCentreY, p.mTiltRad, x, y)
             : inversePhaseDeg(p.mAnchorX, p.mAnchorY, p.mTiltRad, x, y);
@@ -912,9 +807,6 @@ bool SSOrbitViewCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
 
         if (placements[hit].mPairPartner >= 0)
         {
-            // A bound pair member drags as the PAIR's swing about its centre (the junior's phase - see handleHover). This includes the ROOT pair, whose members draw no ring at all: ringlessness
-            // there only means the pair's centre is the pinned origin, not that the pair's orientation isn't editable. The offset is against the JUNIOR's phase; grabbing the senior (which sits
-            // opposite the junior) just bakes a half-turn into it.
             const S32 junior = llmax(hit, placements[hit].mPairPartner);
             mDragMode = DRAG_PAIR;
             mDragIndex = hit;
@@ -926,7 +818,6 @@ bool SSOrbitViewCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
         }
         else if (placements[hit].mRingRadius > 0.5f)
         {
-            // Only a direct hit on a body that actually has a ring starts a phase drag - covers planets, moons and the outer single sun alike; a lone root has no ring to drag along at all.
             mDragMode = DRAG_RING;
             mDragIndex = hit;
             const F32 raw = inversePhaseDeg(placements[hit].mAnchorX,
@@ -938,21 +829,19 @@ bool SSOrbitViewCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
     }
     else if (hit >= 0)
     {
-        // A ring click is selection only - even with the grab offset a ring drag from the bare curve would read as grabbing nothing.
         if (mOnSelect) mOnSelect(hit);
         mSelectedIndex = hit;
     }
-    // Eat the click either way - a miss inside the canvas should not fall through to whatever sits behind it.
     return true;
 }
 
+// Drag: writes the new orbital phase through the drag inverse.
 bool SSOrbitViewCtrl::handleHover(S32 x, S32 y, MASK mask)
 {
     SSAtmoEnvPlanetary* planetary = mPlanetary ? mPlanetary() : nullptr;
 
     if (!hasMouseCapture() || mDragMode == DRAG_NONE || mDragIndex < 0)
     {
-        // Idle hover: the pair-centre handle (drawn only while hovered) plus body/ring highlights, through the same priority chain mouse-down walks - what lights up is what a click would grab.
         mHoverHandleIndex = -1;
         mHoverHandleAntipodal = false;
         mHoverIndex = -1;
@@ -976,7 +865,6 @@ bool SSOrbitViewCtrl::handleHover(S32 x, S32 y, MASK mask)
 
     if (!planetary || mDragIndex >= (S32)planetary->mBodies.size())
     {
-        // The system shrank mid-drag (poll-driven reload) - drop the drag rather than writing through a stale index.
         mDragIndex = -1;
         mDragMode = DRAG_NONE;
         gFocusMgr.setMouseCapture(nullptr);
@@ -993,14 +881,11 @@ bool SSOrbitViewCtrl::handleHover(S32 x, S32 y, MASK mask)
         const S32 partner = p.mPairPartner;
         if (partner < 0 || partner >= (S32)placements.size())
         {
-            // The pairing dissolved mid-drag (poll-driven reload) - same rule as the stale-index drop above.
             mDragIndex = -1;
             mDragMode = DRAG_NONE;
             gFocusMgr.setMouseCapture(nullptr);
             return true;
         }
-        // Cursor angle about the pair centre, in the JUNIOR's display tilt frame (placePairMembers projects the whole pair in it), plus the grab offset - the junior's phase is the pair's
-        // orientation, per the resolver's convention, and the offset already carries the half-turn when the grabbed member was the senior on the opposite side.
         const S32 junior = llmax(mDragIndex, partner);
         const F32 raw = inversePhaseDeg(p.mPairCentreX, p.mPairCentreY,
                                         placements[junior].mTiltRad, x, y);
@@ -1008,8 +893,6 @@ bool SSOrbitViewCtrl::handleHover(S32 x, S32 y, MASK mask)
     }
     else
     {
-        // DRAG_RING and DRAG_CENTRE are the same edit: mDragIndex's own phase, cursor angle plus grab offset. For a centre drag mDragIndex is the orbiting SENIOR: the outer handle inverts about its
-        // anchor (the inner unit's shifted centre - the point its phase is measured from), the antipodal handle about the counter-ring's centre, matching what mouse-down recorded the offset against.
         if (p.mRingRadius <= 0.5f && p.mCounterRingRadius <= 0.5f) return true;
         const F32 raw = (mDragMode == DRAG_CENTRE && mDragAntipodal)
             ? inversePhaseDeg(p.mRingCentreX, p.mRingCentreY, p.mTiltRad, x, y)
@@ -1021,6 +904,7 @@ bool SSOrbitViewCtrl::handleHover(S32 x, S32 y, MASK mask)
     return true;
 }
 
+// Ends a drag.
 bool SSOrbitViewCtrl::handleMouseUp(S32 x, S32 y, MASK mask)
 {
     if (hasMouseCapture())
@@ -1035,9 +919,9 @@ bool SSOrbitViewCtrl::handleMouseUp(S32 x, S32 y, MASK mask)
     return LLUICtrl::handleMouseUp(x, y, mask);
 }
 
+// Clears hover.
 void SSOrbitViewCtrl::onMouseLeave(S32 x, S32 y, MASK mask)
 {
-    // All of it is hover-only chrome; a cursor that left the canvas is not hovering anything.
     mHoverHandleIndex = -1;
     mHoverHandleAntipodal = false;
     mHoverIndex = -1;
@@ -1045,24 +929,22 @@ void SSOrbitViewCtrl::onMouseLeave(S32 x, S32 y, MASK mask)
     LLUICtrl::onMouseLeave(x, y, mask);
 }
 
+// Zoom step.
 void SSOrbitViewCtrl::zoomBy(S32 steps)
 {
     mZoom = llclamp(mZoom * powf(ORBIT_ZOOM_STEP, (F32)steps), ORBIT_ZOOM_MIN, ORBIT_ZOOM_MAX);
 }
 
+// Wheel zoom.
 bool SSOrbitViewCtrl::handleScrollWheel(S32 x, S32 y, S32 clicks)
 {
-    // Positive clicks are wheel-down; maps convention is wheel-up zooms in, hence the negation. Eaten even at the clamp so the scroll can't fall through and drag some list behind the canvas around.
     zoomBy(-clicks);
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// SSFloaterAtmoPlanetary
-//-----------------------------------------------------------------------------
-
 namespace
 {
+    // Display name for a body kind.
     const char* bodyKindName(SSAtmoEnvCelestialBody::EKind kind)
     {
         switch (kind)
@@ -1074,13 +956,11 @@ namespace
         return "Body";
     }
 
-    // The star-type presets: a diameter+mass pair (solar diameters/masses) and nothing else - colour/temperature are a rendering concern for the phase that draws suns as more than warm discs. The
-    // combo's item values are indices into this table; -1 is the "(Custom)" entry the refresh selects when the body matches no preset.
     struct SSStarTypePreset
     {
         const char* mLabel;
-        F32 mDiameterD; // solar diameters
-        F32 mMassM;     // solar masses
+        F32 mDiameterD;
+        F32 mMassM;
     };
     const SSStarTypePreset STAR_TYPE_PRESETS[] = {
         { "M Dwarf",     0.3f,   0.3f },
@@ -1095,16 +975,13 @@ namespace
     };
     const S32 STAR_TYPE_PRESET_COUNT = (S32)(sizeof(STAR_TYPE_PRESETS) / sizeof(STAR_TYPE_PRESETS[0]));
 
-    // Preset matching is on displayed units, so the tolerance can be relative and tight - a float's storage round-trip is far inside it, while any user edit of the last shown decimal is far outside.
+    // Epsilon compare for spinner round-trips.
     bool nearlyEqual(F32 a, F32 b)
     {
         return fabsf(a - b) <= llmax(fabsf(b) * 0.001f, 0.0001f);
     }
 
-    // Which of a SUN's orbit fields the author owns, per the topology's pair conventions (normalizeSunTopology / the resolver's placePair): a pair JUNIOR's orbital radius IS the pair separation and
-    // its phase the pair's orientation - both meaningful, both the same fields the canvas's pair drag edits; a sun WITH a parent (the outer single, or an outer pair's SENIOR) owns its unit's orbit
-    // around the inner barycenter. Only a ROOT senior - a lone root sun, or a root pair's senior - has genuinely unused orbit fields, and only those stay disabled. (Disabling all sun orbit spinners
-    // wholesale locked a pair junior's separation at the normalisation default.)
+    // Whether a sun's orbit fields are editable, and whether it is the junior of a bound pair.
     bool ss_sun_orbit_editable(const SSAtmoEnvPlanetary& p, S32 index, bool& out_pair_junior)
     {
         out_pair_junior = false;
@@ -1112,7 +989,6 @@ namespace
         const SSAtmoEnvCelestialBody& body = p.mBodies[index];
         if (body.mKind != SSAtmoEnvCelestialBody::SUN) return false;
 
-        // Same symmetric-partner validation as sunPairMembers(); junior = the higher index, the resolver's pairJunior() convention.
         const S32 partner = body.mBoundPartnerIndex;
         const bool paired = partner >= 0 && partner < (S32)p.mBodies.size()
             && partner != index
@@ -1124,11 +1000,13 @@ namespace
     }
 }
 
+// Floater shell; all content is wired in postBuild.
 SSFloaterAtmoPlanetary::SSFloaterAtmoPlanetary(const LLSD& key) :
     LLFloater(key)
 {
 }
 
+// Wires the orbit view, body list and every property field.
 bool SSFloaterAtmoPlanetary::postBuild()
 {
     LLScrollListCtrl* body_list = getChild<LLScrollListCtrl>("body_list");
@@ -1157,8 +1035,6 @@ bool SSFloaterAtmoPlanetary::postBuild()
             [this](LLUICtrl*, const LLSD&) { onCommitBodyScalars(); });
     }
 
-    // The star-type dropdown: presets by table index, plus the inert "(Custom)" entry the refresh lands on when nothing matches. Built once here - the item set never changes, only the selection
-    // does.
     LLComboBox* star_type_combo = getChild<LLComboBox>("body_star_type_combo");
     for (S32 i = 0; i < STAR_TYPE_PRESET_COUNT; ++i)
     {
@@ -1192,7 +1068,6 @@ bool SSFloaterAtmoPlanetary::postBuild()
     orbit->setSelectCallback([this](S32 index) { onOrbitSelect(index); });
     orbit->setDragCallback([this]() { onOrbitDrag(); });
 
-    // Maps-style corner zoom cluster - the same exponential step the canvas's own mousewheel takes, with reset-to-fit sitting between the two (the maps-UI idiom).
     getChild<LLButton>("orbit_zoom_in_button")->setClickedCallback(
         [orbit](LLUICtrl*, const LLSD&) { orbit->zoomBy(1); });
     getChild<LLButton>("orbit_zoom_reset_button")->setClickedCallback(
@@ -1204,19 +1079,19 @@ bool SSFloaterAtmoPlanetary::postBuild()
     return true;
 }
 
+// Opens targeting the track index passed in the key.
 void SSFloaterAtmoPlanetary::onOpen(const LLSD& key)
 {
     setTrack(key.asInteger());
 }
 
+// Polls for external asset changes so the designer never shows a stale system.
 void SSFloaterAtmoPlanetary::draw()
 {
     const F64 now = LLTimer::getElapsedSeconds();
     if (now - mLastPoll > STATUS_POLL_INTERVAL)
     {
         mLastPoll = now;
-        // Same capture guard as the main floater's poll: rebuilding the list and the star-type dropdown would fight an in-progress drag on the list's scrollbar, an open dropdown, or the canvas's own
-        // phase drag. The title is safe to keep fresh regardless.
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
         {
@@ -1231,19 +1106,19 @@ void SSFloaterAtmoPlanetary::draw()
     LLFloater::draw();
 }
 
+// Retargets the designer at another track.
 void SSFloaterAtmoPlanetary::setTrack(S32 index)
 {
     if (index != mTrackIndex)
     {
-        // A typed-but-uncommitted property value belongs to the OLD track's body - flush it there before the retarget.
         flushFocusedPropertyField();
-        // Each track is its own planetary system - a body selection carried across tracks would point at some unrelated body.
         mSelectedBodyIndex = 0;
     }
     mTrackIndex = index;
     refreshAll();
 }
 
+// The edited track's planetary block in the LIVE asset, or null.
 SSAtmoEnvPlanetary* SSFloaterAtmoPlanetary::planetary()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1254,6 +1129,7 @@ SSAtmoEnvPlanetary* SSFloaterAtmoPlanetary::planetary()
     return &asset.mTracks[mTrackIndex].mPlanetary;
 }
 
+// The selected body, or null.
 SSAtmoEnvCelestialBody* SSFloaterAtmoPlanetary::selectedBody()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1262,13 +1138,12 @@ SSAtmoEnvCelestialBody* SSFloaterAtmoPlanetary::selectedBody()
     return &p->mBodies[mSelectedBodyIndex];
 }
 
+// Commits whichever property field still holds focus before selection changes, so typed values are not lost.
 void SSFloaterAtmoPlanetary::flushFocusedPropertyField()
 {
     LLView* focused = dynamic_cast<LLView*>(gFocusMgr.getKeyboardFocus());
     if (!focused || !focused->hasAncestor(this)) return;
 
-    // The property controls whose focus must not survive a selection switch. Ancestry, not identity: a spinner's keyboard focus actually sits on its internal line editor, a combo's on its
-    // button/list.
     const char* property_controls[] = {
         "body_name_editor",
         "body_orbital_radius_spinner", "body_inclination_spinner", "body_phase_spinner",
@@ -1284,35 +1159,28 @@ void SSFloaterAtmoPlanetary::flushFocusedPropertyField()
 
         if (LLSpinCtrl* spinner = dynamic_cast<LLSpinCtrl*>(ctrl))
         {
-            // LLSpinCtrl does NOT commit typed text on focus loss - its editor-lost-focus handler reverts the display instead - so dropping focus alone would silently discard the edit. Force the
-            // commit while mSelectedBodyIndex still names the body the value was typed for.
             spinner->forceEditorCommit();
         }
         else if (dynamic_cast<LLLineEditor*>(ctrl))
         {
-            // The name editor: its commit handler reads the live text.
             ctrl->onCommit();
         }
-        // The star-type combo commits on every pick already - nothing pending to flush, it just needs to lose focus below.
 
-        // Focus goes regardless of whether a commit fired: the refresh after the selection switch must repopulate this field for the NEW body, and refreshBodyFields()'s hasFocus guards - right for a
-        // poll landing mid-typing, wrong across a switch - would skip it otherwise.
         gFocusMgr.setKeyboardFocus(nullptr);
         return;
     }
 }
 
+// Rebuilds list, fields and title from the asset.
 void SSFloaterAtmoPlanetary::refreshAll()
 {
     SSAtmoEnvPlanetary* p = planetary();
     const bool valid = (p != nullptr);
 
-    // Stale index / no asset: the "no system to edit" state rather than a crash or a panel editing thin air.
     getChild<LLUICtrl>("no_system_text")->setVisible(!valid);
     getChild<LLUICtrl>("designer_left_panel")->setVisible(valid);
     SSOrbitViewCtrl* orbit = getChild<SSOrbitViewCtrl>("orbit_view");
     orbit->setVisible(valid);
-    // The corner zoom buttons float over the canvas, so they follow its visibility rather than the left panel's.
     getChild<LLUICtrl>("orbit_zoom_in_button")->setVisible(valid);
     getChild<LLUICtrl>("orbit_zoom_reset_button")->setVisible(valid);
     getChild<LLUICtrl>("orbit_zoom_out_button")->setVisible(valid);
@@ -1320,13 +1188,10 @@ void SSFloaterAtmoPlanetary::refreshAll()
     refreshTitle();
     if (!valid) return;
 
-    // Clamped against the vector on every refresh - a removal (or a load) can shrink the list out from under the selection. -1 is the "no bodies at all" state.
     const S32 body_count = (S32)p->mBodies.size();
     if (mSelectedBodyIndex >= body_count) mSelectedBodyIndex = body_count - 1;
     if (mSelectedBodyIndex < 0 && body_count > 0) mSelectedBodyIndex = 0;
 
-    // Add Sun stops at the canonical topology's cap; Add Moon needs a planet to parent to (addBody() would orphan one otherwise, and parenting is automatic now - there is no dropdown to fix it
-    // with).
     S32 sun_count = 0;
     bool any_planet = false;
     for (const SSAtmoEnvCelestialBody& body : p->mBodies)
@@ -1342,6 +1207,7 @@ void SSFloaterAtmoPlanetary::refreshAll()
     orbit->setSelectedIndex(mSelectedBodyIndex);
 }
 
+// Title shows the track being edited.
 void SSFloaterAtmoPlanetary::refreshTitle()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1350,7 +1216,6 @@ void SSFloaterAtmoPlanetary::refreshTitle()
     if (mgr->hasAsset() && mTrackIndex >= 0 && mTrackIndex < (S32)mgr->asset().mTracks.size())
     {
         title += " - " + mgr->asset().mTracks[mTrackIndex].mName;
-        // Same asterisk the main floater's title carries; the modified flag is asset-wide, so both titles always agree.
         if (mgr->isModified()) title += " - Unsaved changes*";
     }
     else
@@ -1360,6 +1225,7 @@ void SSFloaterAtmoPlanetary::refreshTitle()
     setTitle(title);
 }
 
+// Rebuilds the scene-graph list, indented by orbital parentage.
 void SSFloaterAtmoPlanetary::rebuildBodyList()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1367,18 +1233,12 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
 
     const S32 body_count = (S32)p->mBodies.size();
 
-    // Same derived lineage the canvas uses - see effectiveParent(): a planet nests under the first sun by definition, never by a stored index that could go stale.
     std::vector<S32> eff_parent((size_t)body_count, -1);
     for (S32 i = 0; i < body_count; ++i)
     {
         eff_parent[i] = p->effectiveParent(i);
     }
 
-    // Suns first, as a FLAT unindented block in structure order (the order auto-naming letters them: Sol, Sol B, Sol C, Sol D) - their internal topology is automatic and canonical, so nesting pair
-    // juniors and outer suns under each other communicates nothing the user can act on; a flat group of stars reads better. The planet/moon tree follows depth-first, planets one level in under the
-    // sun block, moons one more under their planet; the emitted flags double as the cycle guard, and anything a cycle strands gets appended at root where it is at least visible. Planet/moon siblings
-    // list in orbital-radius order, not mBodies order - the same ordering the canvas's rings and autoNameBodies()'s ordinals use, so "Sol II" always sits under "Sol I" whatever order they were added
-    // in. Stable, so equal radii keep structure order.
     auto sortedSiblings = [p, body_count, &eff_parent](S32 parent)
     {
         std::vector<S32> siblings;
@@ -1392,7 +1252,7 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
         return siblings;
     };
 
-    std::vector<std::pair<S32, S32>> ordered; // body index, depth
+    std::vector<std::pair<S32, S32>> ordered;
     std::vector<bool> emitted((size_t)body_count, false);
     std::function<void(S32, S32)> emit = [&](S32 index, S32 depth)
     {
@@ -1403,8 +1263,6 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
             if (!emitted[child]) emit(child, depth + 1);
         }
     };
-    // The flat sun block. Marked emitted without recursing so no sun ever nests under another; their non-sun children join the tree walk below at depth 1. (A separate index list - emit() appends to
-    // `ordered`, so it cannot be iterated while emitting.)
     std::vector<S32> sun_indices;
     for (S32 i = 0; i < body_count; ++i)
     {
@@ -1422,7 +1280,6 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
             if (!emitted[child]) emit(child, 1);
         }
     }
-    // Remaining roots: a sunless system's planets (and any orphan moon), at the depth the sun block would have had.
     for (S32 root : sortedSiblings(-1))
     {
         if (!emitted[root]) emit(root, 0);
@@ -1436,7 +1293,6 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
         }
     }
 
-    // Rebuild from the asset; selection is re-applied and scroll position carried across so the periodic poll doesn't visibly reset either.
     LLScrollListCtrl* list = getChild<LLScrollListCtrl>("body_list");
     const S32 scroll_pos = list->getScrollPos();
     list->deleteAllItems();
@@ -1445,8 +1301,6 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
         const SSAtmoEnvCelestialBody& body = p->mBodies[entry.first];
 
         std::string name(std::string((size_t)(entry.second * 2), ' ') + body.mName);
-        // Only a moon can genuinely be orphaned (a hand-edited notecard naming a bad parent - removal now cascades moons away with their planet). A parentless planet is just a sunless system's
-        // normal state, not an error.
         if (eff_parent[entry.first] == -1 && body.mKind == SSAtmoEnvCelestialBody::MOON)
         {
             name += " (orphan)";
@@ -1467,6 +1321,7 @@ void SSFloaterAtmoPlanetary::rebuildBodyList()
     }
 }
 
+// Rewrites every property field from the selected body, enabling only what applies to its kind.
 void SSFloaterAtmoPlanetary::refreshBodyFields()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1476,7 +1331,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     const bool has_body = mSelectedBodyIndex >= 0 && mSelectedBodyIndex < body_count;
     getChild<LLUICtrl>("remove_body_button")->setEnabled(has_body);
 
-    // Blanket enable/disable first; the flag-, kind- and ring-specific rules below then only ever tighten it.
     const char* body_controls[] = {
         "body_name_editor",
         "body_orbital_radius_spinner", "body_inclination_spinner", "body_phase_spinner",
@@ -1501,16 +1355,12 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     const bool is_sun  = (body.mKind == SSAtmoEnvCelestialBody::SUN);
     const bool is_moon = (body.mKind == SSAtmoEnvCelestialBody::MOON);
 
-    // Left alone while focused, so a refresh landing mid-typing can't yank the caret or discard a partial edit.
     LLLineEditor* name_editor = getChild<LLLineEditor>("body_name_editor");
     if (!name_editor->hasFocus())
     {
         name_editor->setText(body.mName);
     }
 
-    // A sun's PARENTING is normalizeSunTopology()'s, but its orbit FIELDS are mostly the author's - see ss_sun_orbit_editable(): a pair junior edits its separation/orientation, an orbiting sun (or
-    // outer pair's senior) its unit's own orbit. Only a root senior's spinners grey out - those fields alone are genuinely unused, and greying out more locked a pair's separation at the
-    // normalisation default.
     bool sun_pair_junior = false;
     const bool orbit_editable = !is_sun
         || ss_sun_orbit_editable(*p, mSelectedBodyIndex, sun_pair_junior);
@@ -1518,8 +1368,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     getChild<LLUICtrl>("body_inclination_spinner")->setEnabled(orbit_editable);
     getChild<LLUICtrl>("body_phase_spinner")->setEnabled(orbit_editable);
 
-    // Display units per kind - storage stays metres, only the spinners (range, precision, label) speak AU/km/solar diameters. Range and precision are reconfigured before the value lands so the value
-    // can never be clamped against the previous kind's bounds; all of it is skipped while the spinner is focused, same as the value alone used to be.
     const F32 radius_display = is_moon ? body.mOrbitalRadius / SS_METRES_PER_KM
                                        : body.mOrbitalRadius / SS_METRES_PER_AU;
     LLSpinCtrl* radius_spinner = getChild<LLSpinCtrl>("body_orbital_radius_spinner");
@@ -1534,7 +1382,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
         }
         else
         {
-            // A root sun's automatic radius is 0 - its disabled display must be allowed to actually show that, hence no floor for suns where planets get one.
             radius_spinner->setMinValue(is_sun ? 0.f : 0.05f);
             radius_spinner->setMaxValue(100.f);
             radius_spinner->setIncrement(0.05f);
@@ -1542,8 +1389,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
         }
         radius_spinner->setValue(radius_display);
     }
-    // A pair junior's radius IS the pair separation (its phase the pair's orientation) - say so, rather than letting "orbital radius" imply some orbit around the partner. Label and tooltip both
-    // re-assert per selection since the same widget serves every role.
     getChild<LLTextBox>("body_orbital_radius_label")->setText(
         sun_pair_junior ? std::string("Pair Separation (AU)")
         : is_moon ? std::string("Orbital Radius (km)")
@@ -1562,8 +1407,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     {
         if (is_sun)
         {
-            // Floor at a thousandth of a solar diameter (precision 3 so it can actually be typed and shown): a geocentric build's "home star" wants to be a speck next to its giant partner, and 0.01
-            // D was already hit in anger.
             diameter_spinner->setMinValue(0.001f);
             diameter_spinner->setMaxValue(1000.f);
             diameter_spinner->setIncrement(0.01f);
@@ -1571,8 +1414,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
         }
         else
         {
-            // 20,000,000 km (2e10 m stored): room for a giant-star-sized "planet" - the way a geocentric system authors its apparent sun as a huge body at planetary distance. Must match the XML's
-            // max_val.
             diameter_spinner->setMinValue(1.f);
             diameter_spinner->setMaxValue(20000000.f);
             diameter_spinner->setIncrement(100.f);
@@ -1601,8 +1442,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
         }
     }
 
-    // Star type: suns only. Selection tracks the body - a preset whose diameter+mass both match (in display units, tight tolerance) shows by name, anything else shows "(Custom)". Left alone while
-    // focused so the poll can't move an open dropdown's selection.
     getChild<LLUICtrl>("body_star_type_label")->setVisible(is_sun);
     LLComboBox* star_type_combo = getChild<LLComboBox>("body_star_type_combo");
     star_type_combo->setVisible(is_sun);
@@ -1624,8 +1463,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     getChild<LLTextureCtrl>("body_custom_texture")->setValue(body.mCustomTexture);
     getChild<LLTextureCtrl>("body_ring_texture")->setValue(body.mRingTexture);
 
-    // The mutual exclusion, spelled out as disabled checkboxes rather than commits that bounce: a light emitter can't become home, and canSetLightEmitter() covers both the home flag and the
-    // 2-emitter cap (an already-set emitter can always be unset).
     LLUICtrl* home_check = getChild<LLUICtrl>("body_home_check");
     home_check->setValue(body.mIsHome);
     home_check->setEnabled(!body.mIsLightEmitter);
@@ -1634,8 +1471,6 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     light_check->setValue(body.mIsLightEmitter);
     light_check->setEnabled(p->canSetLightEmitter(mSelectedBodyIndex));
 
-    // Phase shading has nothing to say while the body is emissive - see SSAtmoEnvCelestialBody::mEmissive - so the control says so by going grey rather than by quietly doing nothing. Latitude is the
-    // observer's position ON the home body; on anything else it describes nobody, so the control says so rather than accepting a number that will never be read.
     getChild<LLUICtrl>("body_latitude_spinner")->setEnabled(body.mIsHome);
 
     getChild<LLUICtrl>("body_emissive_check")->setValue(body.mEmissive);
@@ -1643,56 +1478,51 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     phase_check->setValue(body.mPhaseShaded);
     phase_check->setEnabled(!body.mEmissive);
 
-    // Ring sub-controls grey out while there is no ring - the values still show what enabling would start from.
     getChild<LLUICtrl>("body_ring_check")->setValue(body.mHasRing);
     getChild<LLUICtrl>("body_ring_inner_spinner")->setEnabled(body.mHasRing);
     getChild<LLUICtrl>("body_ring_outer_spinner")->setEnabled(body.mHasRing);
     getChild<LLUICtrl>("body_ring_texture")->setEnabled(body.mHasRing);
 }
 
+// List selection into the orbit view and fields.
 void SSFloaterAtmoPlanetary::onSelectBody()
 {
     LLScrollListItem* item = getChild<LLScrollListCtrl>("body_list")->getFirstSelected();
     if (!item) return;
 
     const S32 index = item->getValue().asInteger();
-    // refreshAll()'s own programmatic reselect commits back through here (commit-on-selection-change fires for those too); this early-out is what stops that echo recursing.
     if (index == mSelectedBodyIndex) return;
 
-    // Flush AFTER the early-out (an echo has nothing pending) and BEFORE the switch, so a typed value lands on the body it was typed for.
     flushFocusedPropertyField();
     mSelectedBodyIndex = index;
     refreshAll();
 }
 
+// Orbit-view click into the list and fields.
 void SSFloaterAtmoPlanetary::onOrbitSelect(S32 index)
 {
     if (index == mSelectedBodyIndex) return;
 
-    // Same flush-before-switch as the list path - a canvas click is just another way to change the selected body.
     flushFocusedPropertyField();
     mSelectedBodyIndex = index;
     refreshAll();
 }
 
+// A drag moved a phase - refresh the readouts.
 void SSFloaterAtmoPlanetary::onOrbitDrag()
 {
-    // The canvas has already written the dragged body's phase; keep the field panel's phase spinner and the unsaved-changes asterisk live while the drag runs. No list rebuild - nothing structural
-    // moved.
     refreshBodyFields();
     refreshTitle();
 }
 
+// Adds a body of the clicked kind and selects it.
 void SSFloaterAtmoPlanetary::onClickAddBody(S32 kind)
 {
-    // Adding moves the selection to the new body - same flush-before- switch rule as a direct selection change.
     flushFocusedPropertyField();
 
     SSAtmoEnvPlanetary* p = planetary();
     if (!p) return;
 
-    // A new moon belongs to the planet the user is looking at: the selected body when that is a planet, or the selected moon's own planet (adding a sibling), falling through to addBody()'s
-    // first-planet default otherwise. Suns and planets have no choice to express - their parenting is fully automatic.
     S32 preferred_parent = -1;
     if (kind == (S32)SSAtmoEnvCelestialBody::MOON)
     {
@@ -1713,25 +1543,24 @@ void SSFloaterAtmoPlanetary::onClickAddBody(S32 kind)
     const S32 index = p->addBody((SSAtmoEnvCelestialBody::EKind)kind, preferred_parent);
     if (index < 0) return;
 
-    // Same rule as the main floater's Add Track: you asked for it, you're now editing it.
     mSelectedBodyIndex = index;
     refreshAll();
 }
 
+// Removes the selected body.
 void SSFloaterAtmoPlanetary::onClickRemoveBody()
 {
-    // The flush targets the body about to be removed - a doomed commit, but dropping the focus is still required so the refresh repopulates the fields for whichever body the selection falls to.
     flushFocusedPropertyField();
 
     SSAtmoEnvPlanetary* p = planetary();
     if (!p) return;
     if (!p->removeBody(mSelectedBodyIndex)) return;
 
-    // Back to the top of the list; refreshAll() clamps this to -1 itself if the last body just went.
     mSelectedBodyIndex = 0;
     refreshAll();
 }
 
+// Name field into the body.
 void SSFloaterAtmoPlanetary::onCommitBodyName()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1740,19 +1569,17 @@ void SSFloaterAtmoPlanetary::onCommitBodyName()
 
     std::string name = getChild<LLLineEditor>("body_name_editor")->getText();
     LLStringUtil::trim(name);
-    // A blank name would leave an unreadable list row; keep the old name instead (the refresh below restores it in the editor too).
     if (!name.empty())
     {
         body->mName = name;
-        // Theirs now, permanently - auto-naming skips it from here on. Even retyping the exact auto name counts: the intent expressed was "this name", not "whatever the ordering says".
         body->mNameCustom = true;
-        // A custom-named planet's moons derive from it ("Tatooine.1") - re-run so they follow immediately, not on the next reorder.
         p->autoNameBodies();
     }
 
     refreshAll();
 }
 
+// Shading toggle into the body.
 void SSFloaterAtmoPlanetary::onCommitBodyShading()
 {
     SSAtmoEnvCelestialBody* body = selectedBody();
@@ -1761,10 +1588,10 @@ void SSFloaterAtmoPlanetary::onCommitBodyShading()
     body->mEmissive = getChild<LLUICtrl>("body_emissive_check")->getValue().asBoolean();
     body->mPhaseShaded = getChild<LLUICtrl>("body_phase_check")->getValue().asBoolean();
 
-    // Emissive greys the phase control out, so the panel has to be refreshed rather than just the value written.
     refreshBodyFields();
 }
 
+// The numeric fields (diameter, orbit, phase, mass...) into the body.
 void SSFloaterAtmoPlanetary::onCommitBodyScalars()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1774,14 +1601,9 @@ void SSFloaterAtmoPlanetary::onCommitBodyScalars()
     const bool is_sun  = (body->mKind == SSAtmoEnvCelestialBody::SUN);
     const bool is_moon = (body->mKind == SSAtmoEnvCelestialBody::MOON);
 
-    // All re-read on any one's commit - the untouched ones just read back the values the last refresh put there. Display units (AU/km/solar diameters, matching what refreshBodyFields() configured
-    // for this kind) convert back to the stored metres here and nowhere else.
     body->mDiameterM = (F32)getChild<LLUICtrl>("body_diameter_spinner")->getValue().asReal()
                      * (is_sun ? SS_METRES_PER_SOLAR_DIAMETER : SS_METRES_PER_KM);
     body->mMassRelative = (F32)getChild<LLUICtrl>("body_mass_spinner")->getValue().asReal();
-    // Orbit fields read back exactly when the spinners are enabled - the same ss_sun_orbit_editable() predicate refreshBodyFields() uses, so spinner edits round-trip with the canvas's phase drags
-    // (which write these same fields). Only a ROOT senior sun's fields - the disabled display of genuinely unused values - are never read back, so a normalisation between refreshes can't be undone
-    // by an unrelated commit.
     bool sun_pair_junior = false;
     if (!is_sun || ss_sun_orbit_editable(*p, mSelectedBodyIndex, sun_pair_junior))
     {
@@ -1794,19 +1616,18 @@ void SSFloaterAtmoPlanetary::onCommitBodyScalars()
     body->mLatitudeDeg = llclamp(
         (F32)getChild<LLUICtrl>("body_latitude_spinner")->getValue().asReal(), -90.f, 90.f);
 
-    // A radius edit can reorder siblings, and the auto ordinals encode that ordering.
     p->autoNameBodies();
 
     refreshAll();
 }
 
+// Star type into the body.
 void SSFloaterAtmoPlanetary::onCommitBodyStarType()
 {
     SSAtmoEnvCelestialBody* body = selectedBody();
     if (!body || body->mKind != SSAtmoEnvCelestialBody::SUN) return;
 
     const S32 preset = getChild<LLComboBox>("body_star_type_combo")->getSelectedValue().asInteger();
-    // "(Custom)" (or anything stale) does nothing beyond the refresh, which snaps the selection back to whatever the body actually is.
     if (preset >= 0 && preset < STAR_TYPE_PRESET_COUNT)
     {
         body->mDiameterM = STAR_TYPE_PRESETS[preset].mDiameterD * SS_METRES_PER_SOLAR_DIAMETER;
@@ -1816,6 +1637,7 @@ void SSFloaterAtmoPlanetary::onCommitBodyStarType()
     refreshAll();
 }
 
+// Home toggle: moves the observer to this body.
 void SSFloaterAtmoPlanetary::onCommitBodyHome()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1824,19 +1646,17 @@ void SSFloaterAtmoPlanetary::onCommitBodyHome()
 
     if (getChild<LLUICtrl>("body_home_check")->getValue().asBoolean())
     {
-        // Un-homes every other body (and clears this one's light-emitter flag) in one place - see setHomeBody().
         p->setHomeBody(mSelectedBodyIndex);
     }
     else
     {
-        // No automatic reassignment: no home body at all is a legal state (homeBodyIndex() == -1, the sky simply has no computed arc), and silently electing a different body would be the bigger
-        // surprise.
         body->mIsHome = false;
     }
 
     refreshAll();
 }
 
+// Light-emitter toggle, within the slot limit.
 void SSFloaterAtmoPlanetary::onCommitBodyLight()
 {
     SSAtmoEnvPlanetary* p = planetary();
@@ -1844,10 +1664,9 @@ void SSFloaterAtmoPlanetary::onCommitBodyLight()
     if (!p || !body) return;
 
     const bool want = getChild<LLUICtrl>("body_light_check")->getValue().asBoolean();
-    // Re-checked at commit time rather than trusting the checkbox's enabled state - the cap or the home flag can have moved since the last refresh set it.
     if (want && !p->canSetLightEmitter(mSelectedBodyIndex))
     {
-        refreshAll(); // snap the checkbox back
+        refreshAll();
         return;
     }
     body->mIsLightEmitter = want;
@@ -1855,6 +1674,7 @@ void SSFloaterAtmoPlanetary::onCommitBodyLight()
     refreshAll();
 }
 
+// Ring toggle into the body.
 void SSFloaterAtmoPlanetary::onCommitBodyRing()
 {
     SSAtmoEnvCelestialBody* body = selectedBody();
@@ -1868,6 +1688,7 @@ void SSFloaterAtmoPlanetary::onCommitBodyRing()
     refreshAll();
 }
 
+// Texture pick into the body.
 void SSFloaterAtmoPlanetary::onCommitBodyTexture()
 {
     SSAtmoEnvCelestialBody* body = selectedBody();
@@ -1877,5 +1698,3 @@ void SSFloaterAtmoPlanetary::onCommitBodyTexture()
 
     refreshAll();
 }
-
-// </SS:Nexii>

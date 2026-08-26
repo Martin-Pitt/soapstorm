@@ -1,8 +1,6 @@
 /**
  * @file ssfloatersim.h
- * @brief Atmo Magic simulation settings: the two maps the weather is solved
- *        against - the rain shadow depth capture and the wind flowmap - with
- *        live status and explicit rebuild buttons.
+ * @brief Atmo Magic: simulation settings floater.
  *
  *        Both maps are built once and then left alone, so the tuning here has
  *        no effect until something asks for a rebuild. Every control that
@@ -30,8 +28,6 @@
 #ifndef SS_FLOATERSIM_H
 #define SS_FLOATERSIM_H
 
-// <SS:Nexii> Atmo Magic simulation settings
-
 #include "llfloater.h"
 
 #include <boost/signals2.hpp>
@@ -52,17 +48,12 @@ private:
 
     void refreshStatus();
 
-    // Which derived thing a watched setting invalidates when it changes
     enum class EInvalidate { SHADOW, FLOW };
 
-    // A tuning change only matters once something rebuilds, so watching the settings themselves rather than the widgets catches the slider, the spinner, the reset button and anyone typing into the
-    // debug console, all through one path.
     void watch(const std::string& control, EInvalidate what);
 
     std::vector<boost::signals2::scoped_connection> mConnections;
     F64 mLastPoll = 0.0;
 };
 
-// </SS:Nexii>
-
-#endif // SS_FLOATERSIM_H
+#endif

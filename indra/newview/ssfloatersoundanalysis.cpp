@@ -1,6 +1,6 @@
 /**
  * @file ssfloatersoundanalysis.cpp
- * @brief Atmo Magic sound analysis debug floater - see ssfloatersoundanalysis.h.
+ * @brief See ssfloatersoundanalysis.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -34,19 +34,18 @@
 
 namespace
 {
-    const S32 ROW_H = 66;       // name+info line plus the waveform strip
+    const S32 ROW_H = 66;
     const S32 GROUP_H = 20;
     const S32 WAVE_H = 34;
     const S32 PAD = 8;
 }
 
-// The drawing surface: a plain view that walks the metadata table every frame and paints it. No cached row state at all - the table is small, redrawing from source each frame is cheaper than
-// keeping a copy synchronised, and a sound finishing analysis mid-view simply appears.
 class SSSoundAnalysisView : public LLView
 {
 public:
     SSSoundAnalysisView(const LLView::Params& p) : LLView(p) {}
 
+    // Content height for the scroll container: a group header per source plus a fixed row per analysed sound.
     S32 neededHeight() const
     {
         S32 rows = 0, groups = 0;
@@ -59,6 +58,7 @@ public:
         return groups * GROUP_H + rows * ROW_H + PAD * 2;
     }
 
+    // Renders every READY sound as a stat line plus its envelope waveform with onset/peak/tail markers.
     void draw() override
     {
         const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
@@ -68,7 +68,6 @@ public:
         S32 y = getRect().getHeight() - PAD;
         std::string last_group;
 
-        // std::map orders by UUID; grouping wants source order. Collected and sorted here per draw - the table is tens of entries, this is nothing.
         std::vector<std::pair<std::string, const SSSoundMeta::Meta*>> rows;
         std::vector<std::pair<std::string, LLUUID>> keys;
         for (const auto& pair : SSSoundMeta::getInstance()->entriesForDebug())
@@ -94,7 +93,6 @@ public:
 
             y -= ROW_H;
 
-            // Name + numbers line.
             const std::string name = ss_asset_name(key.second);
             const std::string title = name.empty() ? key.second.asString().substr(0, 12) : name;
             font->renderUTF8(llformat("%s   len %.1fs  onset %.2fs  tail %.1fs  level %.2f  imp/s %.1f  dens %.2f  gap %.2f  cv %.2f  fix %d  crack %.2f",
@@ -103,7 +101,6 @@ public:
                              0, PAD, y + ROW_H - 12, LLColor4(0.9f, 0.9f, 0.9f, 1.f),
                              LLFontGL::LEFT, LLFontGL::BASELINE);
 
-            // The waveform strip: the downsampled max-envelope, then the detections painted over it in the order least-to-most important so the important ones win overlaps.
             const S32 wave_top = y + WAVE_H + 6;
             const S32 wave_bottom = y + 6;
             const S32 wave_w = width - PAD * 2;
@@ -122,14 +119,12 @@ public:
 
                 auto ms_to_x = [&](U32 ms) { return PAD + (S32)((U64)ms * wave_w / meta.mLengthMS); };
 
-                // Impact onsets: every splat/step the detector found, as short ticks along the base.
                 for (U32 ms : meta.mOnsets)
                 {
                     const S32 x = ms_to_x(ms);
                     gl_rect_2d(x, wave_bottom + 8, x + 1, wave_bottom + 1, LLColor4(1.f, 1.f, 1.f, 0.7f));
                 }
 
-                // Peak window (amber), tail (red), onset (green) - the crack marker the thunder timing aligns to.
                 const S32 px = ms_to_x(meta.mPeakMS);
                 gl_rect_2d(px - 1, wave_top, px + 1, wave_bottom, LLColor4(1.f, 0.7f, 0.15f, 0.55f));
                 const S32 tx = ms_to_x(meta.mTailMS);
@@ -143,11 +138,13 @@ public:
     }
 };
 
+// Floater shell; the scrolling analysis view is built in postBuild.
 SSFloaterSoundAnalysis::SSFloaterSoundAnalysis(const LLSD& key)
     : LLFloater(key)
 {
 }
 
+// Creates the analysis view inside the scroll container.
 bool SSFloaterSoundAnalysis::postBuild()
 {
     LLScrollContainer* scroll = getChild<LLScrollContainer>("analysis_scroll");
@@ -156,15 +153,14 @@ bool SSFloaterSoundAnalysis::postBuild()
     p.name = "analysis_view";
     p.rect = LLRect(0, 100, scroll->getRect().getWidth() - 16, 0);
     p.mouse_opaque = false;
-    // addChild on a scroll container adopts the view as its scrolled document - there is no separate setter.
     mView = new SSSoundAnalysisView(p);
     scroll->addChild(mView);
     return true;
 }
 
+// Resizes the inner view to its content height before the normal floater draw.
 void SSFloaterSoundAnalysis::draw()
 {
-    // Content height tracks the table; the scroll container reads it from the view's rect.
     if (mView)
     {
         const S32 needed = llmax(mView->neededHeight(), 100);
@@ -177,5 +173,3 @@ void SSFloaterSoundAnalysis::draw()
     }
     LLFloater::draw();
 }
-
-// </SS:Nexii>

@@ -1,6 +1,6 @@
 /**
  * @file ssfloatertexturelist.cpp
- * @brief Atmo Magic texture lists. See the header.
+ * @brief See ssfloatertexturelist.h.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -38,11 +38,8 @@
 
 #include <algorithm>
 
-// <SS:Nexii> Atmo Magic texture lists
-
 namespace
 {
-    // Rows are tall enough to hold a swatch and two lines beside it. The swatch is square and the text sits to its right, so the whole row is sized off the swatch rather than off the font.
     const S32 SWATCH = 40;
     const S32 ROW_H = SWATCH + 6;
     const S32 ROW_PAD = 2;
@@ -51,11 +48,9 @@ namespace
 
     const S32 DRAG_OUT_M = 46;
 
-    // How big the chip's own swatch is. Small: it is a reminder of what is in the slot, not a look at it.
     const S32 CHIP_SWATCH = 16;
 
-    // Fetched at a size worth looking at. A texture the viewer has only ever needed as a thumbnail stays at thumbnail resolution, so a swatch drawn from it is a blur - and it is the same call that
-    // decides whether getFullWidth ever returns anything but zero. Asking is what makes both work.
+    // Fetched texture for a thumbnail.
     LLViewerFetchedTexture* ss_texture(const LLUUID& id)
     {
         if (id.isNull()) return NULL;
@@ -69,7 +64,7 @@ namespace
         return tex;
     }
 
-    // A texture's dimensions as text, or a placeholder while it is still on its way. Same rule as a sound's length: unknown yet is normal, and the row simply asks again next frame.
+    // Dimension label for a row.
     std::string ss_texture_size(LLViewerFetchedTexture* tex)
     {
         if (!tex) return std::string("--");
@@ -82,18 +77,16 @@ namespace
     }
 }
 
-//-----------------------------------------------------------------------------
-// The chip
-//-----------------------------------------------------------------------------
-
 static LLDefaultChildRegistry::Register<SSTextureListCtrl> r_ss_texture_list("ss_texture_list");
 
+// Widget params.
 SSTextureListCtrl::Params::Params()
 :   mode("mode", "random"),
     max_textures("max_textures", 0)
 {
 }
 
+// Compact strip control showing a texture list; clicking opens the editor.
 SSTextureListCtrl::SSTextureListCtrl(const Params& p)
 :   LLUICtrl(p),
     mMode(ss_asset_mode_from_key(p.mode)),
@@ -101,6 +94,7 @@ SSTextureListCtrl::SSTextureListCtrl(const Params& p)
 {
 }
 
+// Draws the thumbnail strip with hover highlight.
 void SSTextureListCtrl::draw()
 {
     const LLRect& r = getLocalRect();
@@ -112,7 +106,6 @@ void SSTextureListCtrl::draw()
 
     const S32 sw_y = r.mBottom + (r.getHeight() - CHIP_SWATCH) / 2;
 
-    // The first texture stands for the slot. Which one is arbitrary for a random list and meaningful for a sequenced one, and either way it says more at this size than a count alone.
     if (!mList.empty())
     {
         if (LLViewerFetchedTexture* tex = ss_texture(mList.front()))
@@ -145,11 +138,13 @@ void SSTextureListCtrl::draw()
     LLUICtrl::draw();
 }
 
+// Clears hover.
 void SSTextureListCtrl::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHover = false;
 }
 
+// Tracks hover for the highlight.
 bool SSTextureListCtrl::handleHover(S32 x, S32 y, MASK mask)
 {
     mHover = true;
@@ -157,13 +152,14 @@ bool SSTextureListCtrl::handleHover(S32 x, S32 y, MASK mask)
     return true;
 }
 
+// Click opens the editor on this list.
 bool SSTextureListCtrl::handleMouseDown(S32 x, S32 y, MASK mask)
 {
-    // No transport to get in the way, so the whole chip opens the editor - there is nothing else it could usefully do.
     openEditor();
     return true;
 }
 
+// Opens the shared editor floater bound to this control.
 void SSTextureListCtrl::openEditor()
 {
     SSFloaterTextureList* floater =
@@ -175,6 +171,7 @@ void SSTextureListCtrl::openEditor()
     mEditorHandle = floater->getHandle();
 }
 
+// Accepts texture drops straight onto the strip.
 bool SSTextureListCtrl::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                           EDragAndDropType cargo_type, void* cargo_data,
                                           EAcceptance* accept, std::string& tooltip_msg)
@@ -210,36 +207,38 @@ bool SSTextureListCtrl::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// The rows
-//-----------------------------------------------------------------------------
-
 static LLDefaultChildRegistry::Register<SSTextureListRows> r_ss_texture_rows("ss_texture_list_rows");
 
+// Widget params.
 SSTextureListRows::Params::Params()
 {
 }
 
+// The editor's scrolling row view.
 SSTextureListRows::SSTextureListRows(const Params& p)
 :   LLUICtrl(p)
 {
 }
 
+// Total height of all rows.
 S32 SSTextureListRows::contentHeight() const
 {
     return (S32)mList.size() * (ROW_H + ROW_PAD);
 }
 
+// Scroll range.
 S32 SSTextureListRows::maxScroll() const
 {
     return llmax(0, contentHeight() - getLocalRect().getHeight());
 }
 
+// Keeps scroll in range.
 void SSTextureListRows::clampScroll()
 {
     mScroll = llclamp(mScroll, 0, maxScroll());
 }
 
+// Rect of a row.
 LLRect SSTextureListRows::rowRect(S32 index) const
 {
     const LLRect& r = getLocalRect();
@@ -247,6 +246,7 @@ LLRect SSTextureListRows::rowRect(S32 index) const
     return LLRect(r.mLeft, top, r.mRight - SCROLL_W, top - ROW_H);
 }
 
+// Rect of a row's remove button.
 LLRect SSTextureListRows::removeRect(S32 index) const
 {
     const LLRect row = rowRect(index);
@@ -254,6 +254,7 @@ LLRect SSTextureListRows::removeRect(S32 index) const
                   row.mRight - 4, row.mTop - 4 - REMOVE_W);
 }
 
+// Row under a y.
 S32 SSTextureListRows::rowAt(S32 y) const
 {
     const LLRect& r = getLocalRect();
@@ -261,6 +262,7 @@ S32 SSTextureListRows::rowAt(S32 y) const
     return (index >= 0 && index < (S32)mList.size()) ? index : -1;
 }
 
+// Insertion gap under a y, for drag reordering.
 S32 SSTextureListRows::gapAt(S32 y) const
 {
     const LLRect& r = getLocalRect();
@@ -268,11 +270,13 @@ S32 SSTextureListRows::gapAt(S32 y) const
     return llclamp(gap, 0, (S32)mList.size());
 }
 
+// List changed: clamp scroll and notify.
 void SSTextureListRows::changed()
 {
     if (mOnChanged) mOnChanged();
 }
 
+// Draws rows with thumbnails, names, remove buttons and the drag insertion marker.
 void SSTextureListRows::draw()
 {
     const LLRect& r = getLocalRect();
@@ -295,8 +299,6 @@ void SSTextureListRows::draw()
         gl_rect_2d(row, hovered ? LLColor4(0.23f, 0.24f, 0.30f, alpha)
                                 : LLColor4(0.16f, 0.16f, 0.20f, alpha), true);
 
-        // The swatch, on the left, is the whole reason these rows are tall. A texture does not need describing the way a sound does - it needs showing, and at this size it is recognisable where a
-        // name may not be.
         const LLRect sw(row.mLeft + 3, row.mTop - 3,
                         row.mLeft + 3 + SWATCH, row.mTop - 3 - SWATCH);
 
@@ -317,8 +319,6 @@ void SSTextureListRows::draw()
         const S32 text_left = sw.mRight + 8;
         const S32 text_right = row.mRight - REMOVE_W - 12;
 
-        // Name on the first line, resolution on the second. Two lines is what a taller row buys, and the size is worth one of them: it is the thing that decides whether a texture belongs in a slot
-        // at all.
         font->renderUTF8(title, 0, (F32)text_left, (F32)(row.mTop - 14),
                          named ? LLColor4(0.88f, 0.88f, 0.92f, alpha)
                                : LLColor4(0.62f, 0.62f, 0.68f, alpha),
@@ -377,12 +377,14 @@ void SSTextureListRows::draw()
     LLUICtrl::draw();
 }
 
+// Clears hover.
 void SSTextureListRows::onMouseLeave(S32 x, S32 y, MASK mask)
 {
     mHoverRow = -1;
     mHoverRemove = false;
 }
 
+// Scrolls the rows.
 bool SSTextureListRows::handleScrollWheel(S32 x, S32 y, S32 clicks)
 {
     if (maxScroll() <= 0) return false;
@@ -392,6 +394,7 @@ bool SSTextureListRows::handleScrollWheel(S32 x, S32 y, S32 clicks)
     return true;
 }
 
+// Full name tooltip per row.
 bool SSTextureListRows::handleToolTip(S32 x, S32 y, MASK mask)
 {
     const S32 row = rowAt(y);
@@ -403,6 +406,7 @@ bool SSTextureListRows::handleToolTip(S32 x, S32 y, MASK mask)
     return LLUICtrl::handleToolTip(x, y, mask);
 }
 
+// Remove click or drag start.
 bool SSTextureListRows::handleMouseDown(S32 x, S32 y, MASK mask)
 {
     const S32 row = rowAt(y);
@@ -423,6 +427,7 @@ bool SSTextureListRows::handleMouseDown(S32 x, S32 y, MASK mask)
     return true;
 }
 
+// Hover and drag tracking.
 bool SSTextureListRows::handleHover(S32 x, S32 y, MASK mask)
 {
     if (mDragFrom < 0 || !hasMouseCapture())
@@ -445,6 +450,7 @@ bool SSTextureListRows::handleHover(S32 x, S32 y, MASK mask)
     return true;
 }
 
+// Finishes a drag reorder.
 bool SSTextureListRows::handleMouseUp(S32 x, S32 y, MASK mask)
 {
     if (mDragFrom < 0 || !hasMouseCapture()) return LLUICtrl::handleMouseUp(x, y, mask);
@@ -479,6 +485,7 @@ bool SSTextureListRows::handleMouseUp(S32 x, S32 y, MASK mask)
     return true;
 }
 
+// Accepts inventory texture drops at the hovered gap.
 bool SSTextureListRows::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                           EDragAndDropType cargo_type, void* cargo_data,
                                           EAcceptance* accept, std::string& tooltip_msg)
@@ -526,7 +533,6 @@ bool SSTextureListRows::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         mList.insert(mList.begin() + at, id);
         mBatchCount++;
 
-        // Sorted once the batch has landed, and only the run just dropped - the same rule the sound list follows, and for the same reason: a hand-arranged order should survive an addition to it.
         if (index + 1 >= count && mBatchCount > 1)
         {
             std::sort(mList.begin() + mBatchStart,
@@ -547,15 +553,13 @@ bool SSTextureListRows::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     return true;
 }
 
-//-----------------------------------------------------------------------------
-// The editor
-//-----------------------------------------------------------------------------
-
+// Editor floater shell.
 SSFloaterTextureList::SSFloaterTextureList(const LLSD& key)
 :   LLFloater(key)
 {
 }
 
+// Wires the rows view, the CSV line and the buttons.
 bool SSFloaterTextureList::postBuild()
 {
     mRows = getChild<SSTextureListRows>("texture_list");
@@ -571,6 +575,7 @@ bool SSFloaterTextureList::postBuild()
     return true;
 }
 
+// Binds the editor to a control, snapshotting the list for cancel.
 void SSFloaterTextureList::editFor(SSTextureListCtrl* owner, const std::string& label)
 {
     if (!owner) return;
@@ -593,10 +598,9 @@ void SSFloaterTextureList::editFor(SSTextureListCtrl* owner, const std::string& 
     refresh();
 }
 
+// Close behaves as cancel.
 void SSFloaterTextureList::onClose(bool app_quitting)
 {
-    // Same rule as the sound list: closing keeps what is on screen, Cancel is the button for changing your mind, and the commit happens here directly rather than by calling the OK handler - which
-    // would close, which would call this.
     if (!mCancelled)
     {
         commitToOwner();
@@ -604,6 +608,7 @@ void SSFloaterTextureList::onClose(bool app_quitting)
     mCancelled = false;
 }
 
+// Pushes the edited list back to the owning control.
 void SSFloaterTextureList::commitToOwner()
 {
     SSTextureListCtrl* owner = dynamic_cast<SSTextureListCtrl*>(mOwnerHandle.get());
@@ -614,6 +619,7 @@ void SSFloaterTextureList::commitToOwner()
     }
 }
 
+// Restores the snapshot on cancel.
 void SSFloaterTextureList::restoreOwner()
 {
     SSTextureListCtrl* owner = dynamic_cast<SSTextureListCtrl*>(mOwnerHandle.get());
@@ -624,6 +630,7 @@ void SSFloaterTextureList::restoreOwner()
     }
 }
 
+// Parses a pasted CSV into the list.
 void SSFloaterTextureList::onCommitCsv()
 {
     const std::string csv = getChild<LLUICtrl>("csv_editor")->getValue().asString();
@@ -634,6 +641,7 @@ void SSFloaterTextureList::onCommitCsv()
     refresh();
 }
 
+// Rewrites rows and CSV from the list.
 void SSFloaterTextureList::refresh()
 {
     const S32 count = mRows ? (S32)mRows->getList().size() : 0;
@@ -649,17 +657,17 @@ void SSFloaterTextureList::refresh()
     }
 }
 
+// Commit and close.
 void SSFloaterTextureList::onClickOK()
 {
     commitToOwner();
     closeFloater();
 }
 
+// Restore and close.
 void SSFloaterTextureList::onClickCancel()
 {
     restoreOwner();
     mCancelled = true;
     closeFloater();
 }
-
-// </SS:Nexii>

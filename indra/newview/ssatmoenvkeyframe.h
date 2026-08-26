@@ -1,17 +1,6 @@
 /**
  * @file ssatmoenvkeyframe.h
- * @brief Atmo Magic: generic per-parameter keyframe container. See
- *        doc/atmo_magic_environment.md "Keyframes" - there is no
- *        whole-sky-snapshot keyframe like EEP; every parameter keeps its own
- *        independent set, and the editing rule is:
- *          - no keyframes at all: a plain permanent value
- *          - editing while the timeline head sits exactly on a keyframe:
- *            edits that keyframe
- *          - editing anywhere else: inserts a new keyframe at the head
- *        Non-tweenable values (the HOLD curve) step at the keyframe rather
- *        than blend - this is what an enum override (e.g. a forced
- *        precipitation type) uses, since there is no sensible value "between"
- *        Rain and Hail.
+ * @brief Atmo Magic: per-parameter keyframe container.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -35,8 +24,6 @@
 #ifndef SS_ATMOENVKEYFRAME_H
 #define SS_ATMOENVKEYFRAME_H
 
-// <SS:Nexii> Atmo Magic: per-parameter keyframes
-
 #include "llsd.h"
 #include "llsdutil.h"
 #include "lluuid.h"
@@ -48,8 +35,6 @@
 #include <string>
 #include <vector>
 
-// Curve between this keyframe and the next. Hidden behind a simple UI in v1 (no graph editor) - Ease is the sensible default, Linear is offered for when a straight ramp actually reads better, and
-// Hold is what a non-blendable value (a string/enum override) is forced to regardless of what gets stored, since there is no "70% of the way from Rain to Hail".
 enum class SSAtmoEnvCurve : U8
 {
     EASE   = 0,
@@ -77,18 +62,11 @@ inline SSAtmoEnvCurve ss_atmoenv_curve_from_name(const std::string& name)
 template <typename T>
 struct SSAtmoEnvKeyframe
 {
-    // Position in the day cycle as a fraction, 0.0 to 1.0 - never seconds. This is what makes a track's day length a pure playback-speed control: stretching the day cannot move a keyframe relative
-    // to the cycle, because a keyframe does not know how long the cycle is. (It used to be absolute seconds, and every one of the resulting bugs - the preview head sliding to a different time of day
-    // when day length changed, keyframes past the new length silently wrapping via fmod - was the same bug wearing a different hat.) Same reasoning EEP applies to its own day-cycle frames, which are
-    // also normalised.
     F64 mTime = 0.0;
     T mValue{};
     SSAtmoEnvCurve mCurve = SSAtmoEnvCurve::EASE;
 };
 
-// Blend trait: numeric types lerp; anything this isn't specialised for falls back to returning `a` unconditionally, i.e. Hold behaviour even if a curve on the keyframe claims otherwise. This is what
-// makes a SSAtmoEnvKeyframed<std::string> safe to use for an enum override without a separate code path - the container is the same, only the value type decides whether blending can ever mean
-// anything.
 template <typename T>
 inline T ss_atmoenv_lerp(const T& a, const T& b, F32 t)
 {
@@ -101,18 +79,12 @@ inline std::string ss_atmoenv_lerp<std::string>(const std::string& a, const std:
     return a;
 }
 
-// Curve a freshly created keyframe gets, per value type - the companion of the lerp trait above. A type that cannot blend (a string enum, an asset id) gets HOLD, so the stored curve tells the truth
-// about what evaluation will actually do, rather than recording an "ease" the lerp specialisation silently ignores - which also lets the floater's ghost overlay draw these as the
-// value-in-force-across-a-span markers they really are.
 template <typename T>
 inline SSAtmoEnvCurve ss_atmoenv_default_curve() { return SSAtmoEnvCurve::EASE; }
 
 template <>
 inline SSAtmoEnvCurve ss_atmoenv_default_curve<std::string>() { return SSAtmoEnvCurve::HOLD; }
 
-// An asset id has no meaningful midpoint either - blending halfway between two normal maps is not a texture, it is nonsense - so like std::string this holds rather than interpolates regardless of
-// the curve on the keyframe. LLColor3/LLVector2 fall through to the generic template above: both have the operator+/operator-/operator*(F32) it needs, and both genuinely do interpolate
-// componentwise.
 template <>
 inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 /*t*/)
 {
@@ -122,8 +94,6 @@ inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 
 template <>
 inline SSAtmoEnvCurve ss_atmoenv_default_curve<LLUUID>() { return SSAtmoEnvCurve::HOLD; }
 
-// Near-equality trait, the companion collapseIfConstant() compares with. The generic form is for plain scalars; colours and vectors compare componentwise; an asset id or a string enum has no
-// meaningful epsilon, so those compare exactly (their specialisations ignore it), the same way their lerp specialisations hold rather than blend.
 template <typename T>
 inline bool ss_atmoenv_near_equal(const T& a, const T& b, F32 epsilon)
 {
@@ -157,8 +127,6 @@ inline bool ss_atmoenv_near_equal<std::string>(const std::string& a, const std::
     return a == b;
 }
 
-// value_to_sd / value_from_sd traits - specialise per stored type. Kept as free functions rather than a functor passed to every call site, since a keyframed field's type doesn't change after it's
-// declared.
 template <typename T> LLSD ss_atmoenv_value_to_sd(const T& v);
 template <typename T> T ss_atmoenv_value_from_sd(const LLSD& sd, const T& fallback);
 
@@ -186,8 +154,6 @@ template <> inline LLUUID ss_atmoenv_value_from_sd<LLUUID>(const LLSD& sd, const
     return sd.isUUID() ? sd.asUUID() : fallback;
 }
 
-// Colour and 2D vector both serialise as a plain array of reals rather than LLSD's own colour/vector types: an Atmo Magic notecard is meant to stay hand-editable, and [0.1, 0.2, 0.3] reads as
-// obviously-a-colour where a packed binary blob does not.
 template <> inline LLSD ss_atmoenv_value_to_sd<LLColor3>(const LLColor3& v)
 {
     LLSD sd = LLSD::emptyArray();
@@ -215,8 +181,6 @@ template <> inline LLVector2 ss_atmoenv_value_from_sd<LLVector2>(const LLSD& sd,
     return LLVector2((F32)sd[0].asReal(), (F32)sd[1].asReal());
 }
 
-// A single keyframable parameter. Every time here is a phase in [0, 1) - see SSAtmoEnvKeyframe::mTime. The loop length is therefore always exactly 1.0 and never has to be passed in, which is what
-// stops a caller from evaluating a field against a different day length than the one its keyframes were authored under.
 template <typename T>
 class SSAtmoEnvKeyframed
 {
@@ -227,8 +191,6 @@ public:
     size_t keyframeCount() const { return mKeyframes.size(); }
     const std::vector<SSAtmoEnvKeyframe<T>>& keyframes() const { return mKeyframes; }
 
-    // The evaluated value at a point in the cycle. The span from the last keyframe forward to the first keyframe of the next cycle is one more interpolated segment, not a flat hold - a keyframe near
-    // midnight and one near dawn ease between each other through the wrap the same as any other pair.
     T valueAt(F64 phase) const
     {
         if (mKeyframes.empty()) return mPlainValue;
@@ -239,8 +201,6 @@ public:
         const SSAtmoEnvKeyframe<T>& first = mKeyframes.front();
         const SSAtmoEnvKeyframe<T>& last  = mKeyframes.back();
 
-        // Outside [first, last] means we're in the wrap segment - last, forward through the end of the cycle, to first-of-the-next. Shifting by one whole cycle puts both ends on the same continuous
-        // number line, so the interpolation below needs no special case for which side of the boundary we're actually on.
         if (phase < first.mTime || phase > last.mTime)
         {
             if (last.mCurve == SSAtmoEnvCurve::HOLD) return last.mValue;
@@ -251,7 +211,7 @@ public:
             F32 t = span > 0.0 ? (F32)(elapsed / span) : 0.f;
             if (last.mCurve == SSAtmoEnvCurve::EASE)
             {
-                t = t * t * (3.f - 2.f * t); // smoothstep
+                t = t * t * (3.f - 2.f * t);
             }
             return ss_atmoenv_lerp(last.mValue, first.mValue, t);
         }
@@ -268,15 +228,13 @@ public:
             F32 t = span > 0.0 ? (F32)((phase - a.mTime) / span) : 0.f;
             if (a.mCurve == SSAtmoEnvCurve::EASE)
             {
-                t = t * t * (3.f - 2.f * t); // smoothstep
+                t = t * t * (3.f - 2.f * t);
             }
             return ss_atmoenv_lerp(a.mValue, b.mValue, t);
         }
         return mKeyframes.back().mValue;
     }
 
-    // Default tolerance for "is the head on this keyframe". A phase, so 0.001 is a thousandth of the cycle - about 14 seconds of a 4-hour day, and far finer than the 1/32 grid the floater's scrubber
-    // snaps to.
     static constexpr F64 PHASE_EPSILON = 0.001;
 
     bool hasKeyframeAt(F64 phase, F64 epsilon = PHASE_EPSILON) const
@@ -284,7 +242,6 @@ public:
         return findAt(wrapPhase(phase), epsilon) >= 0;
     }
 
-    // The editing rule from the design doc, in one place so every widget that edits a keyframable field goes through the same logic rather than each reimplementing "am I on a keyframe right now".
     void setValueAtHead(F64 head_phase, const T& value, F64 epsilon = PHASE_EPSILON)
     {
         if (mKeyframes.empty())
@@ -305,8 +262,6 @@ public:
         insertKeyframe(head_phase, value, ss_atmoenv_default_curve<T>());
     }
 
-    // The keyframe-diamond toggle. Adding one at a bare value promotes the value at that instant into the first keyframe rather than reaching back for whatever mPlainValue happened to hold; removing
-    // the last one does the reverse, so toggling never causes a visible jump either way.
     void toggleKeyframeAtHead(F64 head_phase, F64 epsilon = PHASE_EPSILON)
     {
         head_phase = wrapPhase(head_phase);
@@ -325,9 +280,6 @@ public:
         insertKeyframe(head_phase, valueAt(head_phase), ss_atmoenv_default_curve<T>());
     }
 
-    // Bulk-seeding companion (see addKeyframesFromSky): if every keyframe holds effectively the same value, the field is a constant wearing animation clothing - collapse it back to a plain value so
-    // it doesn't carry N redundant keyframes into every notecard it's saved to. Comparison is the type's near-equality trait: componentwise for colours/vectors, exact for ids and strings (see
-    // ss_atmoenv_near_equal). A single keyframe collapses too - it evaluates identically everywhere by definition.
     void collapseIfConstant(F32 epsilon)
     {
         if (mKeyframes.empty()) return;
@@ -346,8 +298,6 @@ public:
         if (at >= 0) mKeyframes[at].mCurve = curve;
     }
 
-    // Chevron navigation: the nearest keyframe strictly after/before head. Nothing found ahead wraps to the first keyframe (equivalently, nothing found behind wraps to the last) - the cycle loops,
-    // so "next" past the last keyframe is "the first one again" rather than a dead end. Returns head_phase unchanged if there are no keyframes at all.
     F64 nextKeyframeTime(F64 head_phase) const
     {
         if (mKeyframes.empty()) return head_phase;
@@ -374,7 +324,6 @@ public:
     {
         if (mKeyframes.empty())
         {
-            // A bare value serialises as itself, not a one-element wrapper - a notecard for an environment with nothing keyframed should read like plain settings, not like a degenerate animation.
             return ss_atmoenv_value_to_sd(mPlainValue);
         }
 
@@ -412,14 +361,10 @@ public:
             return;
         }
 
-        // Anything else (a bare scalar, or a shape this version doesn't recognise) is treated as a plain value rather than a hard parse failure - a field this container doesn't understand shouldn't
-        // sink the whole asset.
         mPlainValue = ss_atmoenv_value_from_sd<T>(sd, fallback);
     }
 
 private:
-    // Any phase folded into [0, 1). Every public entry point runs its input through this, so callers can hand over a raw scrubber value or an accumulated wall-clock fraction without pre-normalising
-    // it.
     static F64 wrapPhase(F64 phase)
     {
         phase = std::fmod(phase, 1.0);
@@ -449,9 +394,7 @@ private:
     }
 
     T mPlainValue{};
-    std::vector<SSAtmoEnvKeyframe<T>> mKeyframes; // kept sorted by mTime
+    std::vector<SSAtmoEnvKeyframe<T>> mKeyframes;
 };
 
-// </SS:Nexii>
-
-#endif // SS_ATMOENVKEYFRAME_H
+#endif

@@ -1,7 +1,6 @@
 /**
  * @file ssfloaterassets.h
- * @brief Atmo Magic: the global assets floater - the few things that are not
- *        tied to a precipitation preset.
+ * @brief Atmo Magic: global assets floater.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -25,15 +24,10 @@
 #ifndef SS_FLOATERASSETS_H
 #define SS_FLOATERASSETS_H
 
-// <SS:Nexii> Atmo Magic global assets
-
 #include "ssprecippreset.h"
 
 #include "llfloater.h"
 
-// The wind loops, which are global because wind is not a precipitation type - it blows whether or not anything is falling. This floater used to be plain LLFloater with the two fields bound straight
-// to their settings by control_name. A sound list cannot be bound that way: control_name copies an LLSD value in and out of a control, and what this control holds is a vector the settings store as a
-// comma separated string. So the conversion happens here, which is the only thing this class exists to do.
 class SSFloaterAssets : public LLFloater
 {
 public:
@@ -49,7 +43,5 @@ private:
     void onCommitThunder();
     void onCommitSteps();
 };
-
-// </SS:Nexii>
 
 #endif
