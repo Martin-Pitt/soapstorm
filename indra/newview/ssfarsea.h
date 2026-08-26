@@ -47,8 +47,13 @@ class SSFarSea : public LLSingleton<SSFarSea>
     LLSINGLETON_EMPTY_CTOR(SSFarSea);
 
 public:
-    // Draws the disc with the given water shader already bound and fully set up - called by LLDrawPoolWater at the end of its above-water pass, after the stock planes, so depth testing hides the
-    // disc wherever real water already covered it. Binds the sea's ss_squash band and ss_sea expansion uniforms around the draw and zeroes both after, so no stock geometry is ever touched.
+    // Binds the shared squash band for the STOCK water planes - called by LLDrawPoolWater just before pushWaterPlanes, only when the far sea will draw afterwards. The stock footprint's edge sits
+    // beyond the knee, so the seam only stays closed if stock and frame move through the same squash; it also carries stock's far-plane-crossing edge stretch back inside the cap. render() zeroes
+    // the band again on every path out, so callers pair the two.
+    void bindSquash(LLGLSLShader* shader);
+
+    // Draws the frame with the given water shader already bound and fully set up - called by LLDrawPoolWater at the end of its above-water pass, after the stock planes, so depth testing hides
+    // the tucked apron wherever real water covers it. Binds the sea's ss_squash band and ss_sea expansion uniforms around the draw and zeroes both after (on refusal paths too).
     void render(LLGLSLShader* shader);
 
     // For the debug overlay: the rim radius actually bound this frame (0 when the disc did not draw - a live refusal must read as one, not as the last good value) and the squash knee in use.
@@ -57,6 +62,8 @@ public:
 
 private:
     void build();
+    // The shared band (knee, cap) plus this frame's rim radius and planet radius - one formula, computed identically for bindSquash and render so stock planes and frame agree per frame.
+    void band(F32& knee, F32& cap, F32& rim, F32& planet_r) const;
 
     LLPointer<LLVertexBuffer> mVB;
     U32 mVertCount = 0;

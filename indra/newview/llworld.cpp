@@ -1469,12 +1469,16 @@ void LLWorld::updateWaterObjects()
 
     // <SS:Nexii> How far the void water reaches past the hole water box. Must clear the draw distance to fill the view, but stop short of
     // the projection far plane - triangles it slices through rasterise black along the horizon. The tiles are a square ring, so the corner
-    // at sqrt(2) is what has to fit. mLandFarClip not the camera: setLandFarClip() assigns it before re-running us, the camera is a frame
-    // behind. Even whole metres so the tiles, offset by half of it, round to matching edges in LLVOWater::updateGeometry.
+    // at sqrt(2) is what has to fit. The 1024m floor is half the historic 2048: that floor BROKE the fit rule at low draw distances (its
+    // corners at ~3km against the 2048m minimum far plane were the sliced wall the far sea's connect-around frame exposed), while 1024
+    // corners at ~1.6km fit inside even the minimum. The far distance is not this geometry's job anyway - Atmo's far sea hangs its frame on
+    // this footprint's outer rect and carries the water to the horizon, so shrinking the stretch shrinks the frame with it. mLandFarClip
+    // not the camera: setLandFarClip() assigns it before re-running us, the camera is a frame behind. Even whole metres so the tiles,
+    // offset by half of it, round to matching edges in LLVOWater::updateGeometry. [interaction: SSFarSea rect]
     const F32 far_plane = LLViewerCamera::calcRenderFarPlane(getLandFarClip());
     const F32 corner_room = far_plane * 0.7f - (F32)llmax(wx, wy);
     const F32 stretch_wanted = llmin(getLandFarClip() * 2.f, corner_room);
-    const F32 water_stretch = llmax(2048.f, (F32)(2 * ll_round(stretch_wanted * 0.5f)));
+    const F32 water_stretch = llmax(1024.f, (F32)(2 * ll_round(stretch_wanted * 0.5f)));
     // </SS:Nexii>
 
     S32 dir;

@@ -401,6 +401,17 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     LLGLDisable cullface(GL_CULL_FACE);
 
+    // <SS:Nexii> Atmo's own far sea: only when an Atmo environment is active AND its track has a water plane does the frame extend the ocean past the stock planes to a planet-curved virtual
+    // horizon - the "own water plane" rule. The stock planes get the SAME squash band bound first: the stock footprint's corners can sit beyond the knee, so the frame seam only stays closed in
+    // drawn space if both sides squash identically.
+    // Without Atmo the uniform defaults to zero and stock renders byte-for-byte vanilla. The sea draws last so depth testing hands every pixel the stock water claimed back to stock. No
+    // underwater form yet: from below the surface the stock plane overhead is all there is to see anyway. [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
+    const bool ss_atmo_sea = !underwater && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
+    if (ss_atmo_sea)
+    {
+        SSFarSea::getInstance()->bindSquash(shader);
+    }
+
     // Only push the water planes once.
     // Previously we did this twice: once for void water and one for region water.
     // However, the void water and region water shaders are the same exact shader.
@@ -409,11 +420,7 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // - Geenz 2025-02-11
     pushWaterPlanes(0);
 
-    // <SS:Nexii> Atmo's own far sea: only when an Atmo environment is active AND its track has a water plane does the disc extend the ocean past the stock planes to a planet-curved virtual
-    // horizon - the "own water plane" rule. Drawn last so depth testing hands every pixel the stock water already claimed back to stock; the ss_squash uniform the SS_ATMO vertex variant reads
-    // defaults to zero, so the stock planes above rendered byte-for-byte vanilla. No underwater form yet: from below the surface the stock plane overhead is all there is to see anyway.
-    // [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
-    if (!underwater && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn())
+    if (ss_atmo_sea)
     {
         SSFarSea::getInstance()->render(shader);
     }

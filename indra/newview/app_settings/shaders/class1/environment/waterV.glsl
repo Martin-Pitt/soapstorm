@@ -80,11 +80,11 @@ void main()
         vec2 sea_c = 0.5 * (ss_sea_hole.xy + ss_sea_hole.zw);
         vec2 sea_half = 0.5 * (ss_sea_hole.zw - ss_sea_hole.xy);
         vec2 sea_lat = sea_c + position.xy * sea_half;
-        // Blend to the horizon: chebyshev fraction of the frame (0.25 is the rect edge, 1 the outer square edge), smoothstepped from the knee-derived start in ss_sea.x to 100% at the edge, each
-        // vertex pulled along its own camera ray toward the rim circle. MESH-anchored, not camera-distance-anchored, so the rect and apron are ALWAYS identity - a camera-distance ramp let far-side
-        // seam vertices pick up a few percent of a 100km pull and tear kilometres off the rect edge. w = 1 exactly at the outer edge, so the square's rim IS the round horizon; the camera stays
-        // inside the identity zone whenever stock water is on screen, which keeps the ray directions sweeping the circle monotonically.
-        float sea_cheb = max(abs(position.x), abs(position.y)) * 0.25;
+        // Blend to the horizon: chebyshev fraction of the frame (0.5 is the rect edge - the 64/32 cell ratio in SSFarSea::build - and 1 the outer square edge), smoothstepped from the knee-derived
+        // start in ss_sea.x to 100% at the edge, each vertex pulled along its own camera ray toward the rim circle. MESH-anchored, not camera-distance-anchored, so the rect and apron are ALWAYS
+        // identity - a camera-distance ramp let far-side seam vertices pick up a few percent of a 100km pull and tear kilometres off the rect edge. w = 1 exactly at the outer edge, so the square's
+        // rim IS the round horizon; the camera stays inside the identity zone whenever stock water is on screen, which keeps the ray directions sweeping the circle monotonically.
+        float sea_cheb = max(abs(position.x), abs(position.y)) * 0.5;
         float sea_w = smoothstep(ss_sea.x, 1.0, sea_cheb);
         vec2 sea_world = sea_lat;
         if (sea_w > 0.0)
@@ -93,6 +93,14 @@ void main()
             float sea_rl = length(sea_rd);
             vec2 sea_dir = sea_rl > 1e-3 ? sea_rd / sea_rl : vec2(0.0, 1.0);
             sea_world = mix(sea_lat, eyeVec.xy + sea_dir * ss_sea.y, sea_w);
+            // A fat rect can put mid-blend lattice positions past the rim itself; folded back onto the rim circle they collapse into slivers ON the horizon, instead of mapping past the squash
+            // cap and rasterising as a far-clipped wall around it - which is what the first-cut 4x frame did.
+            vec2 sea_rr = sea_world - eyeVec.xy;
+            float sea_rrl = length(sea_rr);
+            if (sea_rrl > ss_sea.y)
+            {
+                sea_world = eyeVec.xy + sea_rr * (ss_sea.y / sea_rrl);
+            }
         }
 
         float sea_rc = length(sea_world - eyeVec.xy);
