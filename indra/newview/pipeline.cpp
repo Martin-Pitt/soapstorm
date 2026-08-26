@@ -10209,6 +10209,21 @@ void LLPipeline::doAtmospherics()
 
         haze_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
 
+        // <SS:Nexii> The squash band for hazeF's un-squash, so aerial perspective over the far sea rides TRUE distance instead of freezing at the drawn cap - and explicitly zeroed when the sea
+        // is off, because program uniforms persist and a stale band would warp haze on ordinary water. [interaction: SSFarSea, hazeF.glsl] </SS:Nexii>
+        {
+            static LLStaticHashedString s_ss_squash("ss_squash");
+            const bool ss_atmo_sea = !sUnderWaterRender && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
+            if (ss_atmo_sea)
+            {
+                SSFarSea::getInstance()->bindSquash(&haze_shader);
+            }
+            else
+            {
+                haze_shader.uniform3f(s_ss_squash, 0.f, 0.f, 0.f);
+            }
+        }
+
         LLGLDepthTest depth(GL_FALSE);
 
         // full screen blit

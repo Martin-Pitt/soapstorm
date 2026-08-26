@@ -42,6 +42,11 @@ vec3 srgb_to_linear(vec3 c);
 
 uniform vec4 waterPlane;
 
+#ifdef SS_ATMO
+// <SS:Nexii> The Atmo far-field squash band (knee, cap, rim), bound by doAtmospherics only while the far sea is live and zeroed otherwise. [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
+uniform vec3 ss_squash;
+#endif
+
 uniform int cube_snapshot;
 
 uniform float sky_hdr_scale;
@@ -51,6 +56,39 @@ void main()
     vec2  tc           = vary_fragcoord.xy;
     float depth        = getDepth(tc.xy);
     vec4  pos          = getPositionWithDepth(tc, depth);
+
+#ifdef SS_ATMO
+    // <SS:Nexii> Un-squash for aerial perspective: the depth buffer holds DRAWN positions, and the far-field squash compresses everything from the knee to the rim (kilometres to hundreds of km)
+    // into a few hundred drawn metres - so haze all but stopped growing past the knee, the far sea never bathed in the horizon glow, and the growth-rate kink rasterised as a ring on the knee
+    // circle. The pixel-is-squashed-water test rides pure RAY geometry - the view ray dips below the water plane and the drawn distance is past the knee - never the reconstructed position's
+    // height: un-squashing amplifies depth-buffer quantization by the squash ratio (one ~1m LSB near the far plane becomes tens of metres), while the sea only sits ~2 eye-heights below the plane
+    // out there, so any height threshold strobes per pixel - the black spike forest. Nothing but squashed water lives below the plane past the knee (the knee exceeds the max draw distance and
+    // clouds sit above); a longer-than-knee draw distance would merely over-haze sub-eye-level scenery there. The analytic ray-plane distance floors the inverted one because it is depth-noise
+    // FREE and near-exact in the mid-band where the ~240m quantization steps of the inversion terraced the haze; in the far band the droop makes it undershoot and the inversion takes over.
+    // [interaction: SSFarSea] </SS:Nexii>
+    if (ss_squash.y > ss_squash.x && ss_squash.z > ss_squash.x && waterPlane.w > 0.0)
+    {
+        float ss_dd = length(pos.xyz);
+        if (ss_dd > ss_squash.x)
+        {
+            vec3 ss_rd = pos.xyz / ss_dd;
+            float ss_es = -dot(ss_rd, waterPlane.xyz);
+            if (ss_es > 0.0)
+            {
+                // The sea distance is fully ANALYTIC - the ray against the drooped sea, d^2/2R below the plane, solved in the cancellation-free quadratic form - because any use of the inverted
+                // depth value carries the depth buffer's ~1m quantization amplified to ~240m+ true-distance steps, which rendered as camera-centred haze rings. Ray direction is per-pixel exact, so
+                // this is noise-free. R derives from the rim the sea actually renders with (rim = 1.35*sqrt(2*R*eye_h), so R = rim^2/(3.645*h)) - self-consistent even where SSFarSea clamped the
+                // rim. Rays missing the droop (disc <= 0) saturate through 2w/es into the rim cap, so the silhouette approach is continuous.
+                float ss_R = ss_squash.z * ss_squash.z / (3.645 * max(waterPlane.w, 2.0));
+                float ss_re = ss_R * ss_es;
+                float ss_disc = max(ss_re * ss_re - 2.0 * ss_R * waterPlane.w, 0.0);
+                float ss_true = min(2.0 * ss_R * waterPlane.w / (ss_re + sqrt(ss_disc)), ss_squash.z);
+                pos.xyz = ss_rd * max(ss_true, ss_dd);
+            }
+        }
+    }
+#endif
+
     vec4  norm         = getNorm(tc);
     vec3  light_dir   = (sun_up_factor == 1) ? sun_dir : moon_dir;
 

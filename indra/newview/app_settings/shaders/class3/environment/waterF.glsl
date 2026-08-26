@@ -234,6 +234,15 @@ void main()
 
     generateWaveNormals(wave1, wave2, wave3);
 
+#ifdef SS_ATMO
+    // <SS:Nexii> Deterministic far-field flattening: at squash-band distances the pixel footprint in wave UV space is radially thousands of texels, and anisotropic filtering (which picks its mip
+    // from the SHORT axis) returns azimuth-coherent noise instead of the flat average - the radial streak forests. Mixing the sampled normals to flat by ss_far takes the sampler out of the far
+    // field entirely; the slope variance removed here is what the ss_far roughness widening below stands in for. </SS:Nexii>
+    wave1 = mix(wave1, vec3(0.0, 0.0, 1.0), ss_far);
+    wave2 = mix(wave2, vec3(0.0, 0.0, 1.0), ss_far);
+    wave3 = mix(wave3, vec3(0.0, 0.0, 1.0), ss_far);
+#endif
+
     float dmod = sqrt(dist);
     vec2 distort = (refCoord.xy/refCoord.z) * 0.5 + 0.5;
 

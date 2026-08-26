@@ -63,7 +63,8 @@ void main()
             vec2 sea_half = 0.5 * (ss_sea_hole.zw - ss_sea_hole.xy);
             vec2 sea_lat = sea_c + position.xy * sea_half;
             float sea_cheb = max(abs(position.x), abs(position.y)) * 0.5;
-            float sea_w = smoothstep(ss_sea.x, 1.0, sea_cheb);
+            float sea_t = clamp((sea_cheb - ss_sea.x) / max(1.0 - ss_sea.x, 1e-4), 0.0, 1.0);
+            float sea_w = (exp(4.0 * sea_t) - 1.0) / (exp(4.0) - 1.0);
             vec2 sea_world = sea_lat;
             if (sea_w > 0.0)
             {
@@ -79,8 +80,12 @@ void main()
                 }
             }
             float sea_rc = length(sea_world - eyeVec.xy);
-            float sea_sink_t = clamp((sea_rc - ss_squash.x) / 600.0, 0.0, 1.0);
-            float sea_sink = 0.05 + 2.95 * sea_sink_t * sea_sink_t;
+            float sea_sink = 0.05;
+            if (sea_cheb < 0.5)
+            {
+                float sea_sink_t = clamp((sea_rc - ss_squash.x) / 600.0, 0.0, 1.0);
+                sea_sink = 0.05 + 2.95 * sea_sink_t * sea_sink_t;
+            }
             float sea_droop = ss_sea.w > 0.0 ? sea_rc * sea_rc / (2.0 * ss_sea.w) : 0.0;
             pos.xyz = vec3(sea_world, ss_sea.z - sea_sink - sea_droop);
         }

@@ -85,7 +85,12 @@ void main()
         // identity - a camera-distance ramp let far-side seam vertices pick up a few percent of a 100km pull and tear kilometres off the rect edge. w = 1 exactly at the outer edge, so the square's
         // rim IS the round horizon; the camera stays inside the identity zone whenever stock water is on screen, which keeps the ray directions sweeping the circle monotonically.
         float sea_cheb = max(abs(position.x), abs(position.y)) * 0.5;
-        float sea_w = smoothstep(ss_sea.x, 1.0, sea_cheb);
+        // The pull profile is a normalized exponential, not smoothstep: sea_w is the GEOMETRY of the horizon approach (it moves vertices from lattice radii to the rim), and the smoothstep's S had
+        // mid-frame rings already halfway to a rim tens of km out - the sea lunged for the horizon early. Exponential keeps rings near their true radii through most of the frame and sweeps the
+        // rim approach into the outer rings - a bowl rising late to the edge. Still exactly 0 through the identity zone and exactly 1 at the outer edge, so the rect seam and the horizon circle
+        // are untouched; raise the 4.0 to hold the near field longer at the cost of chunkier horizon tessellation. MUST stay in exact sync with waterHazeV.glsl. [interaction: waterHazeV.glsl]
+        float sea_t = clamp((sea_cheb - ss_sea.x) / max(1.0 - ss_sea.x, 1e-4), 0.0, 1.0);
+        float sea_w = (exp(4.0 * sea_t) - 1.0) / (exp(4.0) - 1.0);
         vec2 sea_world = sea_lat;
         if (sea_w > 0.0)
         {
@@ -104,10 +109,16 @@ void main()
         }
 
         float sea_rc = length(sea_world - eyeVec.xy);
-        // Sunk below the authored level: 5cm near, so stock region water wins depth ties outright, ramping to 3m past the knee where the squash compresses drawn-depth separation hundreds-fold
-        // and centimetres would land inside depth-buffer precision.
-        float sea_sink_t = clamp((sea_rc - ss_squash.x) / 600.0, 0.0, 1.0);
-        float sea_sink = 0.05 + 2.95 * sea_sink_t * sea_sink_t;
+        // Sunk below the authored level - but ONLY where sea and stock actually overlap, the one-cell apron under the rect (cheb < 0.5): 5cm near so stock wins depth ties outright, ramping to 3m
+        // past the knee where the squash compresses drawn-depth separation hundreds-fold and centimetres would land inside depth-buffer precision. Outside the rect nothing overlaps the sea, and
+        // the old everywhere-ramp tilted the visible surface by 3m over 600m right at the knee - a reflection ring on the knee circle. The apron-to-edge slope this leaves sits entirely under
+        // stock water, so the open sea starts flush (5cm) at the stock seam.
+        float sea_sink = 0.05;
+        if (sea_cheb < 0.5)
+        {
+            float sea_sink_t = clamp((sea_rc - ss_squash.x) / 600.0, 0.0, 1.0);
+            sea_sink = 0.05 + 2.95 * sea_sink_t * sea_sink_t;
+        }
         // Planet droop d^2/2R: at the tangent distance the sea has dropped by exactly the eye height, so the visible horizon is a sphere's silhouette. w = 0 means a flat world.
         float sea_droop = ss_sea.w > 0.0 ? sea_rc * sea_rc / (2.0 * ss_sea.w) : 0.0;
         ss_true_pos = vec3(sea_world, ss_sea.z - sea_sink - sea_droop);
