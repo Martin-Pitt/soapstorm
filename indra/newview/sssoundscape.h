@@ -73,6 +73,8 @@ public:
         S32 mListSize = 0;
         LLUUID mPicked;
         const char* mWhyNot = "";
+        F32 mStepGap = 0.f;     // seconds between the last two footfalls that actually played - compare against the gait to see whether steps are being missed
+        S32 mStepDropped = 0;   // footfalls refused by the anti-spam gap since this avatar started moving
     };
     const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
 

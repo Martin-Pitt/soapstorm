@@ -5379,21 +5379,48 @@ void LLVOAvatar::updateFootstepSounds()
         SSSoundscape::getInstance()->updateFootstepLoop(
             getID(), foot_pos, mStepOnLand, locomotion, isSelf());
 
-        // Individual footfalls, for recordings whose analysis says the steps can be cut apart: the moment the LOWER ankle swaps sides is the support transfer - the footfall itself - and the
-        // soundscape plays that state's sound as a windowed single step at the landing foot. Ignored entirely for material still in loop mode; the swap costs two subtractions either way.
+        // Individual footfalls, for recordings whose analysis says the steps can be cut apart. Each foot is watched on its OWN elevation and fires its own touchdown, rather than the earlier
+        // "which ankle is lower" sign flip: that compared the two feet, so anything that biased one side - uneven ground under the two ankles, an asymmetric AO walk, a shape whose ankles sit at
+        // different heights - pushed the two sign flips of a cycle close together, and the anti-spam gap in footstepImpact then swallowed one of the pair, leaving one sound per full gait cycle
+        // instead of one per step. It also fired at the crossing, which is when the feet PASS each other, not when either of them lands.
+        //
+        // Thresholds are relative to a decaying low/high envelope per foot because the absolute numbers are not knowable here: elevation is measured ankle-to-ground, so its floor is the
+        // ankle-to-sole distance (scales with avatar height, and hover or a floaty AO shifts it further) and its swing amplitude is whatever the animation does. Arm high, fire on the way back
+        // down through the low band: one event per foot per cycle, at contact, with the arm/fire split acting as the hysteresis.
         if (locomotion == STEP_WALK || locomotion == STEP_RUN)
         {
-            const F32 diff = leftElev - rightElev;
-            if (fabsf(diff) > 0.015f)
+            const F32 elev[2] = { leftElev, rightElev };
+            const LLVector3* ankle[2] = { &ankle_left_pos_agent, &ankle_right_pos_agent };
+
+            // Envelope decay is per-second so the detector behaves the same at 20fps and 200fps. 3s is a handful of gait cycles: slow enough that the band does not sag much between lifts (which
+            // would drag the fire threshold around mid-cycle), fast enough to re-fit when the gait, the ground or the animation changes.
+            const F32 decay = mSSFootTracking ? llclamp(gFrameIntervalSeconds.value() / 3.f, 0.f, 1.f) : 1.f;
+            mSSFootTracking = true;
+
+            for (S32 f = 0; f < 2; ++f)
             {
-                const bool lower_left = diff < 0.f;
-                if (lower_left != mSSLowerLeft)
+                mSSFootLow[f]  = llmin(elev[f], mSSFootLow[f]  + (elev[f] - mSSFootLow[f])  * decay);
+                mSSFootHigh[f] = llmax(elev[f], mSSFootHigh[f] - (mSSFootHigh[f] - elev[f]) * decay);
+
+                const F32 range = mSSFootHigh[f] - mSSFootLow[f];
+                if (range < 0.03f) continue;   // no usable lift yet: still calibrating, or the anim keeps this foot planted
+
+                if (elev[f] > mSSFootLow[f] + range * 0.6f)
                 {
-                    SSSoundscape::getInstance()->footstepImpact(
-                        getID(), lower_left ? ankle_left_pos_agent : ankle_right_pos_agent, isSelf());
+                    mSSFootArmed[f] = true;
                 }
-                mSSLowerLeft = lower_left;
+                else if (mSSFootArmed[f] && elev[f] < mSSFootLow[f] + range * 0.25f)
+                {
+                    mSSFootArmed[f] = false;
+                    SSSoundscape::getInstance()->footstepImpact(getID(), *ankle[f], isSelf());
+                }
             }
+        }
+        else
+        {
+            // Standing, sitting or airborne: drop the envelopes so the next walk refits them instead of inheriting a band measured in some other pose.
+            mSSFootTracking = false;
+            mSSFootArmed[0] = mSSFootArmed[1] = false;
         }
 
         // Touchdown: airborne last frame, grounded now.

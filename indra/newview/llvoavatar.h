@@ -1351,7 +1351,12 @@ private:
     // <SS:Nexii> Airborne last frame, for the touchdown edge that fires the Land one-shot - see updateFootstepSounds.
     bool                mSSWasInAir = false;
     bool                mSSWasRunning = false;   // hysteresis for the walk/run speed classifier - see updateFootstepSounds
-    bool                mSSLowerLeft = false;    // which ankle was lower last frame: the support-foot swap IS the footfall, and it is AO- and hover-immune because feet compare against each other
+    // Per-foot touchdown detection state, [0]=left [1]=right. Envelope trackers rather than fixed thresholds because ankle elevation has an unknown DC offset (ankle-to-sole distance scales with
+    // avatar height, and hover/AO shift it further) and an unknown swing amplitude - see updateFootstepSounds.
+    F32                 mSSFootLow[2]   = { 0.f, 0.f };
+    F32                 mSSFootHigh[2]  = { 0.f, 0.f };
+    bool                mSSFootArmed[2] = { false, false };
+    bool                mSSFootTracking = false;
     // </SS:Nexii>
     bool                mWasOnGroundRight;
 

@@ -980,6 +980,15 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("  mode     %s",
                                  st.mMode == 'S' ? "per-impact segments" :
                                  st.mMode == 'L' ? "attached loop" : "-"));
+        if (st.mMode == 'S')
+        {
+            // The number to eyeball against the gait: SL walks a step roughly every 0.5s and runs one roughly every 0.3s, so a gap near double that means footfalls are being missed rather than
+            // played per step. Any drops at all mean the anti-spam gate is firing, which it should not have to during a steady walk.
+            lines.push_back(llformat("  cadence  %.2fs between steps   %.1f/s   %d dropped",
+                                     st.mStepGap,
+                                     st.mStepGap > 0.01f ? 1.f / st.mStepGap : 0.f,
+                                     st.mStepDropped));
+        }
     }
 
     lines.push_back(llformat("impacts    %.1f/s   %d queued   loops %d",

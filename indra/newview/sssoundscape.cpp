@@ -1080,9 +1080,17 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
         return;
     }
 
+    const bool fresh = mStepLoops.find(avatar_id) == mStepLoops.end();
     StepLoop& loop = mStepLoops[avatar_id];
     loop.mLastSeen = now;
     loop.mStopAt = 0.0;
+    if (fresh)
+    {
+        // Per-walk, so the debug readout counts drops for the walk you are listening to rather than every walk this session.
+        StepDebug& dbg = is_self ? mStepSelf : mStepOther;
+        dbg.mStepDropped = 0;
+        dbg.mStepGap = 0.f;
+    }
 
     LLUUID rolled;
     S32 surface = -1;
@@ -1179,8 +1187,18 @@ void SSSoundscape::footstepImpact(const LLUUID& avatar_id, const LLVector3& foot
     if (!meta || meta->mOnsets.size() < 4 || meta->mLengthMS == 0) return;
 
     const F64 now = SSAtmoMagic::getInstance()->sharedTime();
-    const F64 min_gap = (it->second.mAction == STEP_RUN) ? 0.24 : 0.34;
-    if (now - it->second.mLastImpactAt < min_gap) return;
+    StepDebug& dbg = (avatar_id == gAgentID) ? mStepSelf : mStepOther;
+
+    // Pure anti-spam floor, well under any real cadence (SL's run is about a step every 0.3s). It used to sit at 0.24/0.34, close enough to the gait that a slightly early second footfall was
+    // read as a duplicate and dropped - which is how a per-step detector ends up sounding like one step per cycle. Rejecting the footfall is now the detector's job, not this gate's.
+    const F64 min_gap = 0.10;
+    const F64 gap = now - it->second.mLastImpactAt;
+    if (gap < min_gap)
+    {
+        ++dbg.mStepDropped;
+        return;
+    }
+    if (gap < 5.0) dbg.mStepGap = (F32)gap;   // the first footfall of a walk has no predecessor to measure against - mLastImpactAt is still the epoch
     it->second.mLastImpactAt = now;
 
     const size_t k = (size_t)ll_rand((S32)meta->mOnsets.size() - 1);
