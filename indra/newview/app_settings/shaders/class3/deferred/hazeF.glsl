@@ -69,18 +69,20 @@ void main()
     if (ss_squash.y > ss_squash.x && ss_squash.z > ss_squash.x && waterPlane.w > 0.0)
     {
         float ss_dd = length(pos.xyz);
-        if (ss_dd > ss_squash.x)
+        vec3 ss_rd = pos.xyz / ss_dd;
+        float ss_es = -dot(ss_rd, waterPlane.xyz);
+        // Band entry is a 40m drawn-depth ramp ending at the knee, NOT a hard dd > knee test: near the far plane one depth LSB is ~0.85m, and from altitude the squash packs the entire downward
+        // view within a fraction of one LSB of the knee - a binary gate flips across depth-quantization contours and rasterises as concentric rings around the nadir. The ramp is ~50 LSBs wide,
+        // so quantization wobbles the blend by ~2% instead of flipping it, and nothing real occupies the ramp zone (draw distance ends far short of knee-40 drawn) so it only ever blends water.
+        float ss_band = clamp((ss_dd - (ss_squash.x - 40.0)) / 40.0, 0.0, 1.0);
+        if (ss_es > 0.0 && ss_band > 0.0)
         {
-            vec3 ss_rd = pos.xyz / ss_dd;
-            float ss_es = -dot(ss_rd, waterPlane.xyz);
-            if (ss_es > 0.0)
-            {
-                // The sea distance is fully ANALYTIC - never the inverted depth value, whose ~1m quantization amplifies to ~240m+ true-distance steps and rendered as camera-centred haze rings.
-                // Ray direction is per-pixel exact, so this is noise-free. DIAGNOSTIC BASELINE: the sea is currently a dead-flat plane out to the rim (waterV.glsl), so the distance is simply the
-                // ray-plane hit capped at the rim; the drooped-sphere solve that matches a planet-curved sea is in git history and must come back in lockstep with the droop.
-                float ss_true = min(waterPlane.w / ss_es, ss_squash.z);
-                pos.xyz = ss_rd * max(ss_true, ss_dd);
-            }
+            // The sea distance is fully ANALYTIC - never the inverted depth value, whose ~1m quantization amplifies to ~240m+ true-distance steps and rendered as camera-centred haze rings.
+            // Ray direction is per-pixel exact, so this is noise-free. DIAGNOSTIC BASELINE: the sea is currently a dead-flat plane out to the rim (waterV.glsl), so the distance is simply the
+            // ray-plane hit capped at the rim; the drooped-sphere solve that matches a planet-curved sea is in git history and must come back in lockstep with the droop. Floored at the drawn
+            // distance so anything genuinely in front of the plane hit keeps its own haze.
+            float ss_true = max(min(waterPlane.w / ss_es, ss_squash.z), ss_dd);
+            pos.xyz = ss_rd * mix(ss_dd, ss_true, ss_band);
         }
     }
 #endif

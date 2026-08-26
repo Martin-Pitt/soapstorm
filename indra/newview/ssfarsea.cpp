@@ -37,10 +37,10 @@
 
 static const F32 SEA_MIN_RADIUS_M = 6800.f;
 static const F32 SEA_MAX_RADIUS_M = 500000.f;
-// <SS:Nexii> DIAGNOSTIC BASELINE: 1.0, i.e. no overshoot. The 1.35 existed to push the rim past the tangent distance so the planet-drooped sea closed its own silhouette gap - with the droop
-// removed (flat baseline, waterV.glsl) everything past the tangent renders into the top pixel row or two of the drawn wall: pure vertex and fill waste at the rim. Restore the overshoot in
-// lockstep with the droop. </SS:Nexii>
-static const F32 SEA_HORIZON_OVERSHOOT = 1.0f;
+// <SS:Nexii> DIAGNOSTIC BASELINE: no overshoot. The 1.35 existed to push the rim past the tangent distance so the planet-drooped sea closed its own silhouette gap - with the droop removed
+// (flat baseline, waterV.glsl) everything past the tangent renders into the top pixel row or two of the drawn wall: pure vertex and fill waste at the rim. Currently 0.9, pulling the rim
+// slightly INSIDE the tangent as a concentric-ring experiment (visibly lowers the horizon line a touch). Restore 1.35 in lockstep with the droop. </SS:Nexii>
+static const F32 SEA_HORIZON_OVERSHOOT = 0.9f;
 static const S32 SEA_HOLE_HALF_CELLS = 32;
 static const S32 SEA_FRAME_HALF_CELLS = 64;
 
