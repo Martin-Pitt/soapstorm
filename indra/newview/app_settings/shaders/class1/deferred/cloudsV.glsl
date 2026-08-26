@@ -34,6 +34,9 @@ in vec2 texcoord0;
 
 // Output parameters
 out vec3 vary_CloudColorSun;
+#ifdef SS_ATMO
+out float vary_CloudGlow;   // <SS:Nexii> the sky's forward-scatter glow, handed to the fragment stage separately so thinness can gate it
+#endif
 out vec3 vary_CloudColorAmbient;
 out float vary_CloudDensity;
 
@@ -67,13 +70,12 @@ uniform vec3 cloud_color;
 
 uniform float cloud_scale;
 
-// <SS:Nexii> Metres the cloud layer has travelled on the wind, east and
-// north. See the drift block in main().
-uniform vec2 ss_cloud_drift;
-// </SS:Nexii>
-
-// <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md)
+#ifdef SS_ATMO
+// <SS:Nexii> Region-relative cloud parallax and wind travel (doc/atmo_magic_cloud_parallax.md) - Atmo-only, so a stock environment compiles the pristine texcoord path.
+uniform vec2 ss_cloud_drift;  // metres the layer has travelled on the wind, east and north
 uniform vec2 region_offset;   // camera pos - region centre, metres, world X/Y
+uniform float ss_cloud_alt_m; // the LAYER'S OWN altitude, metres - what a metre of camera travel is worth in uv
+#endif
 // </SS:Nexii>
 
 // NOTE: Keep these in sync!
@@ -117,22 +119,19 @@ void main()
     vary_texcoord0.xy /= cloud_scale;
     vary_texcoord0.xy += 0.5;
 
-    // <SS:Nexii> Region-relative cloud parallax; normalised by max_y, faded out below real cloud-base altitude
-    float cloud_realism = smoothstep(1000.0, 1600.0, max_y);
-    float metres_per_uv = 16.0 * max_y * cloud_scale;
-    vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) * (cloud_realism / metres_per_uv);
+#ifdef SS_ATMO
+    // <SS:Nexii> Region-relative cloud parallax, scaled by the LAYER'S OWN altitude rather than the max-altitude proxy it first shipped with - max_y is an atmosphere ceiling, not a cloud height,
+    // and borrowing it coupled the parallax to a dial authored for haze. ss_cloud_alt_m is Atmo-driven: cirrus-high in dry still air, merging quickly down onto the volumetric deck's altitude as
+    // moisture and convection build, so the dome band and the deck agree about where the cloud IS just as they merge visually at the rim.
+    float metres_per_uv = 16.0 * ss_cloud_alt_m * cloud_scale;
+    vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) / metres_per_uv;
 
-    // ...and the layer's own travel on the wind, in the same terms. This is
-    // the sky actually moving over the world, which the cloud scroll rate is
-    // NOT: that is added to cloud_pos_density1 alone, so it slides the large
-    // cloud texture against the small one and the pattern boils in place.
-    // Applied here, before the other three texcoords are derived from this
-    // one, so every layer travels together and the deck moves as one thing.
-    //
-    // Clouds moving one way looks like the camera moving the other, which is
-    // where the signs come from - they are the parallax term's, negated.
+    // ...and the layer's own travel on the wind, in the same terms - the sky actually moving over the world, which the cloud scroll rate is NOT (that slides the large texture against the small
+    // one and the pattern boils in place). Before the other three texcoords are derived, so the deck moves as one thing. Signs are the parallax term's, negated: clouds moving one way looks like
+    // the camera moving the other.
     vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
     // </SS:Nexii>
+#endif
 
     vary_texcoord1 = vary_texcoord0;
     vary_texcoord1.x += lightnorm.x * 0.0125;
@@ -144,7 +143,20 @@ void main()
     // Get relative position
     vec3 rel_pos = position.xyz - camPosLocal.xyz + vec3(0, 50, 0);
 
+#ifdef SS_ATMO
+    // <SS:Nexii> The horizon fade decoupled from max altitude: dividing by max_y let the ATMOSPHERE ceiling thin every low-sky cloud - at an authored 1000m ceiling a cloud at the horizon sat at
+    // half alpha before anything else touched it, which is exactly the "sun disc through solid clouds" leak, and no amount of disc-side machinery could out-engineer an alpha the author never
+    // chose. A short fixed ramp keeps the horizon soft; the below-horizon droop cut below is untouched.
+    // (Eased back a touch from the first cut of (y+100)/200, which held clouds fully solid to ~1 degree and read as too hard a wall at the waterline.)
+    altitude_blend_factor = clamp((rel_pos.y + 90.0) / 300.0, 0.0, 1.0);
+
+    // ...except INTO the sun: the eased fade reads beautifully against sky but lets the disc burn through the same half-faded clouds, and the two aesthetics only collide inside the disc's
+    // angular neighbourhood - so exactly there, and nowhere else, horizon clouds keep their body. The ramp spans roughly the width of a large authored sun disc.
+    float sun_prox = smoothstep(0.965, 0.992, dot(normalize(rel_pos), lightnorm.xyz));
+    altitude_blend_factor = max(altitude_blend_factor, sun_prox);
+#else
     altitude_blend_factor = clamp((rel_pos.y + 512.0) / max_y, 0.0, 1.0);
+#endif
 
     // Set altitude
     if (rel_pos.y > 0)
@@ -219,11 +231,25 @@ void main()
     sunlight *= exp(-light_atten * off_axis);
 
     // Cloud color out
+#ifdef SS_ATMO
+    // <SS:Nexii> The glow SPLIT OUT of the cloud body colour instead of multiplied into it: haze_glow is the sky's forward-scatter airlight, which lives BEHIND a cloud - baked into
+    // vary_CloudColorSun it recoloured every cloud in a wide cone around the sun toward the glow, when a backlit cloud is a dark silhouette whose thin fringes alone transmit the fire. The
+    // fragment shader gates it by per-fragment thinness; the body keeps glow-free sunlight. </SS:Nexii>
+    vary_CloudColorSun = sunlight * cloud_color;
+    vary_CloudGlow     = haze_glow;
+#else
     vary_CloudColorSun     = (sunlight * haze_glow) * cloud_color;
+#endif
     vary_CloudColorAmbient = tmpAmbient * cloud_color;
 
     // Attenuate cloud color by atmosphere
+#ifdef SS_ATMO
+    // <SS:Nexii> Full-strength optical depth, no sqrt: the stock halving left horizon clouds crisp, which never showed while the max_y alpha fade was thinning them into the sky anyway - with
+    // that fade decoupled, the honest colour convergence has to carry the melt alone. This is the density/distance dials doing on the dome band exactly what they do on the volumetric deck: cloud
+    // extinguishes and takes on the airlight over the same slab path the sky itself is hazed by, so at the horizon the band dissolves into the atmosphere instead of silhouetting against it.
+#else
     combined_haze = sqrt(combined_haze);  // less atmos opacity (more transparency) below clouds
+#endif
     vary_CloudColorSun *= combined_haze;
     vary_CloudColorAmbient *= combined_haze;
     vec3 oHazeColorBelowCloud = additiveColorBelowCloud * (1. - combined_haze);

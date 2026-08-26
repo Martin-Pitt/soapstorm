@@ -31,6 +31,9 @@ out vec4 frag_data[4];
 /////////////////////////////////////////////////////////////////////////
 
 in vec3 vary_CloudColorSun;
+#ifdef SS_ATMO
+in float vary_CloudGlow;   // <SS:Nexii> see cloudsV - the glow arrives separately, gated below by per-fragment thinness
+#endif
 in vec3 vary_CloudColorAmbient;
 in float vary_CloudDensity;
 
@@ -109,7 +112,16 @@ void main()
 
     // Combine
     vec3 color;
+#ifdef SS_ATMO
+    // <SS:Nexii> The glow reaches a fragment only through its THINNESS: the forward-scatter fire belongs to the airlight behind the cloud, so a dense core stays a dark silhouette right up to the
+    // disc's edge (it gets only the anti-solar base the stock far-field carries) while the ragged fringes transmit the full glow and catch fire - which is what every backlit-cloud photograph
+    // shows and the baked-in glow never could. Far from the sun haze_glow sits near its 0.25 floor, below the base cap, so open-sky cloud shading is unchanged.
+    float glow_thin = (1.0 - alpha1) * (1.0 - alpha1);
+    float glow_gate = mix(min(vary_CloudGlow, 0.35), vary_CloudGlow, glow_thin);
+    color = (cloudColorSun*(1.-alpha2)*glow_gate + cloudColorAmbient);
+#else
     color = (cloudColorSun*(1.-alpha2) + cloudColorAmbient);
+#endif
     color.rgb = clamp(color.rgb, vec3(0), vec3(1));
     color.rgb *= 2.0;
 

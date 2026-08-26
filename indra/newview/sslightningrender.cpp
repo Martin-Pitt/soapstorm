@@ -27,6 +27,7 @@
 
 #include "sslightning.h"
 #include "ssatmomagic.h"
+#include "ssvolcloud.h"
 
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
@@ -48,8 +49,8 @@ namespace
 
     // Trunk width at full brightness, in metres. Real channels are a few centimetres; drawn at that width a bolt kilometres away is thinner than a pixel and simply vanishes, so this is a stage
     // width, not a physical one, and distance scales it further below.
-    const F32 CORE_WIDTH_M = 1.6f;
-    const F32 GLOW_WIDTH_MULT = 5.f;
+    const F32 CORE_WIDTH_M = 2.2f;
+    const F32 GLOW_WIDTH_MULT = 7.f;
 
     // One camera-facing ribbon segment. u runs across the width so the shader can shape the falloff; v runs along the length so an electric texture tiles down the channel.
     void ribbon(const LLVector3& a, const LLVector3& b, const LLVector3& cam,
@@ -110,12 +111,50 @@ namespace
     // GEOMETRY is skipped - but only the geometry. The scene light and the in-cloud puff glow keep running, because a strike behind the camera still lights the world in front of it, and that lit
     // world (including whatever reflections catch it) is the glimpse you get of a bolt you did not see. Mirrors/probes never see the bolt itself anyway - the gCubeSnapshot guard, and probe update
     // cadence could not catch a 50ms flash regardless.
+    // A test point pulled to its DRAWN position - the vertex squash keeps far strikes inside the projection, so the frustum (whose far plane would reject true positions out there) must be asked
+    // about where things are drawn.
+    LLVector3 drawnPoint(const LLVector3& p, const LLVector3& cam, F32& scale_out)
+    {
+        const LLVector3 rel = p - cam;
+        scale_out = SSVolCloud::getInstance()->squashScale(rel.magVec());
+        return cam + rel * scale_out;
+    }
+
     bool strikeOnScreen(const SSStrike& strike)
     {
-        const LLVector3 center = (strike.mOrigin + strike.mGround) * 0.5f;
+        LLViewerCamera* camera = LLViewerCamera::getInstance();
+        const LLVector3 cam = camera->getOrigin();
         const F32 flash_r = llmax(350.f, strike.mDistanceM * 0.18f);
-        const F32 radius = (strike.mOrigin - strike.mGround).magVec() * 0.5f + flash_r;
-        return LLViewerCamera::getInstance()->sphereInFrustum(center, radius) != 0;
+
+        F32 s = 1.f;
+        if (strike.mChannel.empty())
+        {
+            const LLVector3 center = drawnPoint((strike.mOrigin + strike.mGround) * 0.5f, cam, s);
+            return camera->sphereInFrustum(center,
+                ((strike.mOrigin - strike.mGround).magVec() * 0.5f + flash_r) * s) != 0;
+        }
+
+        // Three padded spheres at the trunk's start, middle and end, not one sphere around everything: bounding by the origin-ground axis culled crawlers crossing mid-view (their reach is
+        // sideways), and one sphere over the whole 2.4km crawler kept strikes alive when only the empty air between their arms was on screen. Radii overlap along the run, so any on-screen
+        // stretch keeps the strike; partially off-screen is the GPU clipper's job, not this test's.
+        S32 trunk_n = 0;
+        for (const SSStrikeNode& node : strike.mChannel) { if (node.mTrunk) ++trunk_n; else break; }
+        if (trunk_n <= 0) return true;
+
+        const F32 span = (strike.mChannel[0].mPos
+                          - strike.mChannel[(size_t)(trunk_n - 1)].mPos).magVec();
+        const F32 r = llmax(flash_r, span * 0.3f);
+
+        const S32 samples[3] = { 0, trunk_n / 2, trunk_n - 1 };
+        for (S32 i = 0; i < 3; ++i)
+        {
+            const LLVector3 p = drawnPoint(strike.mChannel[(size_t)samples[i]].mPos, cam, s);
+            if (camera->sphereInFrustum(p, r * s) != 0)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     U32 hash3(U32 x)
@@ -128,25 +167,126 @@ namespace
     F32 hashUnit(U32 x) { return (F32)(hash3(x) & 0xffffffu) / (F32)0x1000000; }
 }
 
+void SSLightningRender::renderFlash()
+{
+    // The pre-cloud half: sky-flash discs only - see the header for why they stay under the puffs while the ribbons moved above them. Soft discs AT the discharge, the honest shape (the air/cloud
+    // around the channel is what lights up), and real geometry means depth-testing for free.
+    SSLightning* lightning = SSLightning::getInstance();
+
+    if (LLPipeline::sRenderingHUDs || LLPipeline::sImpostorRender
+        || LLPipeline::sShadowRender || gCubeSnapshot)
+    {
+        return;
+    }
+    if (!gSSLightningProgram.isComplete()) return;
+
+    bool any_flash = false;
+    for (const SSStrike& s : lightning->strikes())
+    {
+        if (s.mFlash > 0.002f) { any_flash = true; break; }
+    }
+    if (!any_flash) return;
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+    static LLCachedControl<F32> glow_setting(gSavedSettings, "SSAtmoLightningGlow", 0.4f);
+    const F32 glow = llclamp((F32)glow_setting, 0.f, 1.f);
+    const LLColor3 GLOW_COLOR = SSAtmoMagic::getInstance()->lightningColor();
+
+    gSSLightningProgram.bind();
+    static LLStaticHashedString s_use_tex("ss_use_tex");
+    static LLStaticHashedString s_radial("ss_radial");
+    gSSLightningProgram.uniform1f(s_use_tex, 0.f);
+    gSSLightningProgram.uniform1f(s_radial, 1.f);
+
+    // The far-field squash happens per VERTEX in ssLightningV, from the same ss_squash band the puff field binds - all geometry here is built at TRUE positions and the shader fits it inside the
+    // projection, which is what keeps a bolt depth-consistent with the compressed cloud it lives in [interaction: SSVolCloud -> shared squash].
+    {
+        static LLStaticHashedString s_squash("ss_squash");
+        static LLStaticHashedString s_cam("ss_cam_pos");
+        SSVolCloud* vol = SSVolCloud::getInstance();
+        gSSLightningProgram.uniform3f(s_squash, vol->squashKnee(), vol->squashCap(), vol->virtualRadius());
+        gSSLightningProgram.uniform3fv(s_cam, 1, cam.mV);
+    }
+    gGL.getTexUnit(0)->bind(LLViewerFetchedTexture::sWhiteImagep);
+
+    LLGLDisable cull(GL_CULL_FACE);
+    LLGLEnable blend(GL_BLEND);
+    gGL.setSceneBlendType(LLRender::BT_ADD);
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    gGL.setColorMask(true, true);
+
+    gGL.begin(LLRender::TRIANGLES);
+    for (const SSStrike& strike : lightning->strikes())
+    {
+        if (strike.mFlash <= 0.002f) continue;
+        if (!strikeOnScreen(strike)) continue;
+
+        const F32 a = llclamp(strike.mFlash, 0.f, 1.f);
+
+        if (!strike.mChannel.empty())
+        {
+            // The flash paints the CHANNEL'S EXTENT, not one hot dot at the origin: several dimmer discs strung along the trunk. One origin disc had two failures at once - it out-shone the bolt
+            // that made it (the fork structure was invisible inside its own flash), and it said nothing about shape, so a crawler wandering kilometres across the deck flashed as a stationary
+            // point. Additive, so where the trunk doubles back the overlaps rebuild local brightness on their own.
+            const F32 radius = llmax(160.f, strike.mDistanceM * 0.08f);
+            const S32 DISCS = 5;
+
+            S32 trunk_n = 0;
+            for (const SSStrikeNode& node : strike.mChannel) { if (node.mTrunk) ++trunk_n; else break; }
+
+            if (trunk_n > 0)
+            {
+                for (S32 di = 0; di < DISCS; ++di)
+                {
+                    const S32 want = (S32)((F32)di / (F32)(DISCS - 1) * (F32)(trunk_n - 1));
+
+                    // Alpha IS the bloom feed, and it gets a small fraction of the discs' visible strength: five stacked additive discs at full glow share out-bloomed the bolt they exist to
+                    // announce - the flash should light the sky, not halo it.
+                    gGL.color4f(GLOW_COLOR.mV[0] * a * 0.35f, GLOW_COLOR.mV[1] * a * 0.35f,
+                                GLOW_COLOR.mV[2] * a * 0.35f, glow * a * 0.08f);
+                    billboard(strike.mChannel[(size_t)want].mPos, radius, cam);
+                }
+            }
+        }
+        else
+        {
+            // Sheet has no channel to trace; one disc at the discharge, dimmed from the old full-strength figure that was reading as a floodlight.
+            const F32 radius = llmax(350.f, strike.mDistanceM * 0.18f);
+            gGL.color4f(GLOW_COLOR.mV[0] * a * 0.6f, GLOW_COLOR.mV[1] * a * 0.6f,
+                        GLOW_COLOR.mV[2] * a * 0.6f, glow * a * 0.12f);
+            billboard(strike.mOrigin, radius, cam);
+        }
+    }
+    gGL.end();
+    gGL.flush();
+
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.setColorMask(true, true);
+    gSSLightningProgram.unbind();
+}
+
 void SSLightningRender::render()
 {
     SSLightning* lightning = SSLightning::getInstance();
 
-    mStats = DrawStats();
-    mStats.mShaderOk = gSSLightningProgram.isComplete();
-    mStats.mStrikes = (S32)lightning->strikes().size();
-
-    if (lightning->strikes().empty()) return;
-    if (!mStats.mShaderOk) return;
-
     // Same guard as the puff field, for the same reason - see SSVolCloud::render(): this is called from renderGeomPostDeferred, which also runs for HUDs, impostors, shadows and probe captures, and a
     // bolt has no business in any of them.
+    // Guarded passes return BEFORE touching mStats: render() runs several times a frame (HUD, impostors, probes after the main view), and the first version of these diagnostics let the HUD
+    // pass overwrite the main pass's numbers with an empty guarded set - the overlay then reported "[guarded pass!] 0 segs" forever while the main pass was drawing fine.
     if (LLPipeline::sRenderingHUDs || LLPipeline::sImpostorRender
         || LLPipeline::sShadowRender || gCubeSnapshot)
     {
-        mStats.mGuarded = true;
+        mStats.mGuarded = true;    // sticky note only; the counts stay the main pass's
         return;
     }
+
+    mStats = DrawStats();
+    mStats.mShaderOk = gSSLightningProgram.isComplete();
+    mStats.mStrikes = (S32)lightning->strikes().size();
+    if (lightning->strikes().empty()) return;
+    if (!mStats.mShaderOk) return;
 
     // Anything at all to draw this frame? Strikes spend most of their life waiting to fire, and the wait must not cost a state change.
     static LLCachedControl<bool> markers(gSavedSettings, "SSAtmoDebugStrikeMarkers", false);
@@ -179,12 +319,17 @@ void SSLightningRender::render()
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const F32 now = (F32)LLFrameTimer::getElapsedSeconds();
 
-    // Strikes beyond the projection's far plane are SCALED toward the camera to fit inside it, the same trick the sky dome itself uses - draw distance governs what the sim sends, not how far a
-    // viewer-side effect may draw. Scaling position and width by the same factor preserves the angular size exactly, parallax at those distances is nothing, and depth keeps working: nearer scene
-    // geometry still occludes the squashed bolt, and the depth-squashed dome stays behind it.
-    const F32 squash_limit = LLViewerCamera::getInstance()->getRenderFarPlane() * 0.75f;
-
     gSSLightningProgram.bind();
+
+    // All geometry here is built at TRUE positions; ssLightningV squashes far vertices into the projection with the same ss_squash band the puff field uses (draw distance governs what the sim
+    // sends, not how far a viewer-side effect may draw) - one mapping, so a bolt inside a compressed far cloud stays inside it in drawn depth [interaction: SSVolCloud -> shared squash].
+    {
+        static LLStaticHashedString s_squash("ss_squash");
+        static LLStaticHashedString s_cam("ss_cam_pos");
+        SSVolCloud* vol_squash = SSVolCloud::getInstance();
+        gSSLightningProgram.uniform3f(s_squash, vol_squash->squashKnee(), vol_squash->squashCap(), vol_squash->virtualRadius());
+        gSSLightningProgram.uniform3fv(s_cam, 1, cam.mV);
+    }
 
     static LLStaticHashedString s_use_tex("ss_use_tex");
     static LLStaticHashedString s_radial("ss_radial");
@@ -201,6 +346,11 @@ void SSLightningRender::render()
     gSSLightningProgram.uniform1f(s_use_tex, textured ? 1.f : 0.f);
     gSSLightningProgram.uniform1f(s_radial, 0.f);
 
+    // No face culling: ribbon quads take their side vector from segment x view, so their winding flips with the segment's direction - a channel walked top-down winds consistently BACKWARDS for a
+    // viewer on the ground, and with culling left on (the pipeline's state here) every quad this pass emitted was silently discarded. 184 segments, nothing on screen, under any shader, at any
+    // width, depth on or off: that investigation ends here. Camera-facing strips from arbitrary directions are double-sided by nature.
+    LLGLDisable cull(GL_CULL_FACE);
+
     // Additive over the finished scene: a discharge only ever adds light. Depth-tested but not depth-writing, so a hill in front of a distant bolt still hides it while the bolt hides nothing.
     LLGLEnable blend(GL_BLEND);
     gGL.setSceneBlendType(LLRender::BT_ADD);
@@ -209,8 +359,12 @@ void SSLightningRender::render()
     // Alpha writes ON - screen alpha IS the glow buffer (glowExtractF reads col.a) [interaction: glow], and lightning is the one Atmo pass meant to bloom. SSAtmoLightningGlow is the peak of ONE quad; overlaps accumulate, so tune down not up.
     gGL.setColorMask(true, true);
 
-    static LLCachedControl<F32> glow_setting(gSavedSettings, "SSAtmoLightningGlow", 0.15f);
+    static LLCachedControl<F32> glow_setting(gSavedSettings, "SSAtmoLightningGlow", 0.4f);
     const F32 glow = llclamp((F32)glow_setting, 0.f, 1.f);
+
+    // How hard the puff field bites into a bolt behind it - see the header comment and SSVolCloud::transmittance. At 0 the cached values are ignored entirely, not merely left stale.
+    static LLCachedControl<F32> occl_setting(gSavedSettings, "SSAtmoLightningOcclusion", 0.85f);
+    const F32 occ_strength = llclamp((F32)occl_setting, 0.f, 1.f);
 
     // Authored per track - see SSAtmoEnvWeather::mLightningColor. The sheath carries the colour; the core is that colour pulled toward white by however much whiteness the track asked for, so the
     // default reads as ordinary white-hot lightning in a violet glow and winding the whiteness down gives a bolt coloured all the way through.
@@ -227,19 +381,32 @@ void SSLightningRender::render()
         if (strike.mChannelBrightness > 0.001f) mStats.mBright++;
         if (!strikeOnScreen(strike)) { mStats.mOffScreen++; continue; }    // off screen entirely: light effects only
 
-        // See squash_limit above. Applied to every vertex and width below through sq()/squash.
-        const F32 squash = (strike.mDistanceM > squash_limit) ? squash_limit / strike.mDistanceM : 1.f;
-        auto sq = [&](const LLVector3& p) { return cam + (p - cam) * squash; };
-
         // ------------------------------------------------- channel ribbons
         // Once per still-glowing stroke, offset by wind * stroke age * drift: coincident in still air, fanned into ribbon lightning in a crosswind [interaction: wind].
         if (strike.mChannelBrightness > 0.001f && !strike.mChannel.empty())
         {
-            static LLCachedControl<F32> ribbon_drift(gSavedSettings, "SSAtmoLightningRibbonDrift", 1.f);
+            static LLCachedControl<F32> ribbon_drift(gSavedSettings, "SSAtmoLightningRibbonDrift", 3.f);
             const LLVector3 wind = SSAtmoMagic::getInstance()->windXY();
 
+            // Refresh this strike's per-node transmittance cache on its throttle (see SSStrike::mOccAt). Real node positions, not squashed ones - the field only exists near the camera and the
+            // rays to a far strike cross it exactly where the drawn puffs are.
+            SSVolCloud* vol = SSVolCloud::getInstance();
+            if (occ_strength > 0.f && !vol->empty()
+                && (now - strike.mOccAt > 0.25f
+                    || (cam - strike.mOccCam).magVecSquared() > 16.f))
+            {
+                for (const SSStrikeNode& node : strike.mChannel)
+                {
+                    node.mOcc = vol->transmittance(cam, node.mPos, occ_strength);
+                }
+                strike.mOccAt = now;
+                strike.mOccCam = cam;
+            }
+            const bool occluding = occ_strength > 0.f && !vol->empty();
+
             // Distance keeps apparent width from collapsing: past a couple of kilometres the ribbon grows with range so the bolt stays a visible filament rather than dropping below a pixel.
-            const F32 dist_scale = llmax(1.f, strike.mDistanceM / 2000.f);
+            // Holds the core at roughly 4px minimum at any range - a 2px additive filament over a bright storm deck is invisible, which was the other half of the original invisibility.
+            const F32 dist_scale = llmax(1.f, strike.mDistanceM / 1000.f);
 
             for (S32 k = 0; k < strike.mStrokeCount; ++k)
             {
@@ -258,11 +425,16 @@ void SSLightningRender::render()
 
                     const SSStrikeNode& parent = strike.mChannel[(size_t)node.mParent];
 
-                    const LLVector3 pa = sq(parent.mPos + off);
-                    const LLVector3 pb = sq(node.mPos + off);
+                    // The veil: this segment's share of what survives the puffs in front of it. Both colour and glow alpha scale by it, so a swallowed stretch neither draws nor blooms - the fork
+                    // structure fades through thin deck and breaks where the cloud is solid, exactly the reference-photo look.
+                    const F32 occ = occluding ? (node.mOcc + parent.mOcc) * 0.5f : 1.f;
+                    if (occ < 0.01f) continue;
 
-                    const F32 wa = parent.mWidth * CORE_WIDTH_M * dist_scale * squash;
-                    const F32 wb = node.mWidth * CORE_WIDTH_M * dist_scale * squash;
+                    const LLVector3 pa = parent.mPos + off;
+                    const LLVector3 pb = node.mPos + off;
+
+                    const F32 wa = parent.mWidth * CORE_WIDTH_M * dist_scale;
+                    const F32 wb = node.mWidth * CORE_WIDTH_M * dist_scale;
 
                     // v tiles by length so an electric texture keeps its scale whatever the segment happens to measure.
                     const F32 seg_len = (pb - pa).magVec();
@@ -270,15 +442,16 @@ void SSLightningRender::render()
 
                     // The glow sheath first, wide and dim, then the core hot on top of it. Additive, so the order is only clarity. The sheath is already the wide soft part; giving it a full share of
                     // the glow as well would bloom the bolt's halo rather than its channel, which is backwards - the channel is what is hot.
-                    gGL.color4f(GLOW_COLOR.mV[0] * b * 0.22f,
-                                GLOW_COLOR.mV[1] * b * 0.22f,
-                                GLOW_COLOR.mV[2] * b * 0.22f, glow * b * 0.3f);
+                    const F32 bo = b * occ;
+                    gGL.color4f(GLOW_COLOR.mV[0] * bo * 0.22f,
+                                GLOW_COLOR.mV[1] * bo * 0.22f,
+                                GLOW_COLOR.mV[2] * bo * 0.22f, glow * bo * 0.3f);
                     ribbon(pa, pb, cam,
                            wa * GLOW_WIDTH_MULT, wb * GLOW_WIDTH_MULT, 0.f, v_span);
 
-                    gGL.color4f(CORE_COLOR.mV[0] * b,
-                                CORE_COLOR.mV[1] * b,
-                                CORE_COLOR.mV[2] * b, glow * b);
+                    gGL.color4f(CORE_COLOR.mV[0] * bo,
+                                CORE_COLOR.mV[1] * bo,
+                                CORE_COLOR.mV[2] * bo, glow * bo);
                     ribbon(pa, pb, cam, wa, wb, 0.f, v_span);
                     mStats.mSegments++;
                 }
@@ -309,13 +482,11 @@ void SSLightningRender::render()
                 pos.mV[VZ] += hashUnit(h ^ 17u) * spread * 1.5f + 0.4f;
 
                 const F32 a = strike.mCharge * flicker;
-                const F32 r = (0.06f + 0.1f * hashUnit(h ^ 19u)) * squash;
+                const F32 r = 0.06f + 0.1f * hashUnit(h ^ 19u);
 
                 // A vertical micro-ribbon reads as a static arc where a dot reads as a firefly.
                 LLVector3 tip = pos;
-                tip.mV[VZ] += r * 6.f / llmax(squash, 0.01f);
-                pos = sq(pos);
-                tip = sq(tip);
+                tip.mV[VZ] += r * 6.f;
 
                 // Sparks glow too, but at a fraction: they are embers, not a discharge, and a crowd of them at the channel's own glow would out-bloom the bolt they are announcing.
                 gGL.color4f(GLOW_COLOR.mV[0] * a, GLOW_COLOR.mV[1] * a,
@@ -362,9 +533,8 @@ void SSLightningRender::render()
                 if (a < 0.02f) continue;
 
                 // Drawn as a short streak along its own motion, which is what a fast ember reads as; a dot at this speed reads as a firefly.
-                const LLVector3 tail = sq(pos - vel * 0.035f);
-                pos = sq(pos);
-                const F32 r = (0.05f + 0.05f * hashUnit(h ^ 21u)) * squash;
+                const LLVector3 tail = pos - vel * 0.035f;
+                const F32 r = 0.05f + 0.05f * hashUnit(h ^ 21u);
 
                 gGL.color4f(CORE_COLOR.mV[0] * a, CORE_COLOR.mV[1] * a * 0.8f,
                             CORE_COLOR.mV[2] * a * 0.55f, glow * a * 0.5f);
@@ -375,42 +545,6 @@ void SSLightningRender::render()
 
     gGL.end();
     gGL.flush();
-
-    // ------------------------------------------------------- the sky flash
-    // Sky flash as a soft disc AT the discharge - the honest shape (the air/cloud around the channel is what lights up), and real geometry means depth-testing for free. Separate begin/end because ss_radial is a uniform.
-    {
-        bool any_flash = false;
-        for (const SSStrike& s : lightning->strikes())
-        {
-            if (s.mFlash > 0.002f) { any_flash = true; break; }
-        }
-
-        if (any_flash)
-        {
-            gSSLightningProgram.uniform1f(s_radial, 1.f);
-            gGL.getTexUnit(0)->bind(LLViewerFetchedTexture::sWhiteImagep);
-            gGL.begin(LLRender::TRIANGLES);
-
-            for (const SSStrike& strike : lightning->strikes())
-            {
-                if (strike.mFlash <= 0.002f) continue;
-                if (!strikeOnScreen(strike)) continue;
-
-                const F32 squash = (strike.mDistanceM > squash_limit) ? squash_limit / strike.mDistanceM : 1.f;
-
-                // Big enough to be a region of lit sky rather than a lamp, and grown with distance so a far strike keeps a sensible angular size instead of shrinking to a spot.
-                const F32 radius = llmax(350.f, strike.mDistanceM * 0.18f) * squash;
-                const F32 a = llclamp(strike.mFlash, 0.f, 1.f);
-
-                gGL.color4f(GLOW_COLOR.mV[0] * a, GLOW_COLOR.mV[1] * a,
-                            GLOW_COLOR.mV[2] * a, glow * a);
-                billboard(cam + (strike.mOrigin - cam) * squash, radius, cam);
-            }
-
-            gGL.end();
-            gGL.flush();
-        }
-    }
 
     // ------------------------------------------------ pending-strike markers
     // Debug: where the next strike will land and the bolt it will take, drawn while it is still counting down (the countdown text half lives in SSLightning::advance). Alpha-blended, NOT additive:
@@ -425,6 +559,9 @@ void SSLightningRender::render()
 
         if (any_pending)
         {
+            // (The invisible-bolt investigation once ran these through gDebugProgram as an A/B against our shader; the culprit was face culling, the shader was acquitted, and the markers are
+            // back on it for the soft-edged ribbon look.)
+            LLGLDepthTest marker_depth(GL_FALSE);
             gGL.setSceneBlendType(LLRender::BT_ALPHA);
             gGL.setColorMask(true, false);
             gGL.getTexUnit(0)->bind(LLViewerFetchedTexture::sWhiteImagep);
@@ -437,10 +574,11 @@ void SSLightningRender::render()
                 if (strike.mT >= 0.f || strike.mDone) continue;
                 if (!strikeOnScreen(strike)) continue;
 
-                const F32 squash = (strike.mDistanceM > squash_limit) ? squash_limit / strike.mDistanceM : 1.f;
-                auto sq = [&](const LLVector3& p) { return cam + (p - cam) * squash; };
-
                 gGL.color4fv(mark.mV);
+
+                // ANGULAR width, not metres: a 0.3m ribbon at 1.5km is a fraction of a pixel and rasterises to nothing - the original invisibility had this as half its cause. Scaled so the
+                // marker holds roughly 4-6px at any range.
+                const F32 mw = llmax(0.4f, strike.mDistanceM * 0.004f);
 
                 // The path the bolt will take: its full channel, faint, ahead of time - or origin to ground for a sheet strike with no channel built.
                 if (!strike.mChannel.empty())
@@ -449,12 +587,12 @@ void SSLightningRender::render()
                     {
                         if (node.mParent < 0) continue;
                         const SSStrikeNode& parent = strike.mChannel[(size_t)node.mParent];
-                        ribbon(sq(parent.mPos), sq(node.mPos), cam, 0.3f * squash, 0.3f * squash, 0.f, 1.f);
+                        ribbon(parent.mPos, node.mPos, cam, mw, mw, 0.f, 1.f);
                     }
                 }
                 else
                 {
-                    ribbon(sq(strike.mOrigin), sq(strike.mGround), cam, 0.4f * squash, 0.4f * squash, 0.f, 1.f);
+                    ribbon(strike.mOrigin, strike.mGround, cam, mw, mw, 0.f, 1.f);
                 }
 
                 // A thin box around the attachment point, sized to the charge-spark spread so the two agree about where "here" is.
@@ -466,7 +604,7 @@ void SSLightningRender::render()
                     const F32 sy = (e < 2) ? -half : half;
                     const F32 ex = (e == 0 || e == 1) ? half : -half;
                     const F32 ey = (e == 0 || e == 3) ? -half : half;
-                    ribbon(sq(g + LLVector3(sx, sy, 0.5f)), sq(g + LLVector3(ex, ey, 0.5f)), cam, 0.2f * squash, 0.2f * squash, 0.f, 1.f);
+                    ribbon(g + LLVector3(sx, sy, 0.5f), g + LLVector3(ex, ey, 0.5f), cam, mw * 0.6f, mw * 0.6f, 0.f, 1.f);
                 }
             }
 

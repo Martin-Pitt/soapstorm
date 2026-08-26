@@ -38,6 +38,25 @@ uniform sampler2D cloud_noise_texture;
 
 uniform sampler2D depthMap;
 uniform vec2 screen_res;
+
+// Agent-to-view, for handing calcAtmosphericVars a view-space position of the TRUE fragment. Reserved name, auto-bound from the fixed-function matrix state.
+uniform mat4 modelview_matrix;
+
+// The windlight atmospheric module, linked via the program's atmospherics features - the same deconstruction the dome and the terrain are fogged with.
+void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, out vec3 sunlit, out vec3 amblit, out vec3 additive,
+                         out vec3 atten);
+
+// The sky's AUTHORED cloud colour, auto-filled from the live settings like the rest of the windlight uniforms - the material the dome's cloud shader paints its band with.
+uniform vec4 cloud_color;
+
+// The beam gate - how much direct celestial light exists, 0..1. Gates every directional shading term; see the CPU note on mBeam.
+uniform float ss_beam;
+
+// The atmosphere's own light vector (sun or moon, view space), declared here as well as in the module - each compilation unit needs its own declaration, same as the rain shader does it.
+uniform vec3 lightnorm;
+
+// The atmosphere slab's ceiling, for the dome-convention fog path at the rim - the module declares it too; same value, same auto-fill.
+uniform float max_y;
 uniform vec2 ss_clip;           // near and far plane, for linearising depth
 uniform float ss_soft_m;        // metres of fade; 0 disables it
 
@@ -51,10 +70,13 @@ uniform int ss_strike_count;
 // What colour the discharge lights the deck. The sheath colour rather than the core's: what reaches a puff has been through cloud, and the core is the part that does not get out.
 uniform vec3 ss_strike_color;
 
+// How strongly cloud BETWEEN a fragment and a strike eats the strike's light (the SSAtmoLightningOcclusion knob, shared with the bolt ribbons). This is what makes the deck read THICK around a
+// flash: puffs with dense field between them and the discharge stay dark while the ones in the clear ignite, so the flash carves the deck's structure instead of washing over it.
+uniform float ss_strike_occ;
+
 // How far a discharge reaches through the deck, in metres. Not an inverse square: cloud scatters, so the light spreads much further and much more softly than it would through clear air.
 #define SS_STRIKE_REACH 700.0
 uniform vec3 ss_sun_color;  // its colour
-uniform vec3 ss_haze;       // the sky's own scattered light
 uniform vec3 ss_cam_pos;
 
 uniform float ss_base_z;        // world height of the layer's underside
@@ -69,6 +91,13 @@ uniform vec2 ss_wind;       // unit, the direction the air is travelling
 uniform vec2 ss_drift;      // metres the air has travelled, east and north
 uniform float ss_time;      // seconds, for the boil
 uniform float ss_churn;     // 0 still air, 1 violently convective
+
+// Where the rim convergence toward the dome runs, in TRUE metres from the eye - x start, y full.
+uniform vec2 ss_rim;
+
+// The far-field squash band (x knee, y cap, z virtual radius) - vary_world arrives at the DRAWN position and main() inverts this mapping per fragment to recover the true one, which every
+// world-space lookup below uses. Exact per pixel where a true-position varying warped mid-quad.
+uniform vec3 ss_squash;
 
 in vec3 vary_world;
 
@@ -121,10 +150,6 @@ const float SS_FORM_DARK = 0.55;
 // How much the thin parts glow. The bright fringe on a cloud is the sun coming THROUGH it where it is thin enough to pass - so the rim lights up while the body stays dull, and that fringe is most of
 // what gives a cloud its silhouette. Keyed to low density, so it lands exactly on the ragged edges the noise cuts.
 const float SS_RIM = 0.8;
-
-// Over how many metres a puff washes out into the sky's own haze. Without this the field ignores the atmosphere entirely: the dome behind it is hazed with distance while the puffs stay crisp at any
-// range, so a puff crossing the dome cuts a hard shape out of it instead of blending into it.
-const float SS_HAZE_M = 2600.0;
 
 // How far the noise is stretched along the wind when the air is perfectly still, easing back to round as convection rises. Stable air does not make lumps, it makes LAYERS. With nothing lifting it,
 // cloud spreads out along the shear instead of piling up, and stratus comes out drawn into long streaks running downwind - which is why a calm overcast reads as a sheet and a convective sky reads as
@@ -225,7 +250,23 @@ void main()
     // identical copy of the same picture, and no amount of jittering their positions hides that. Sampled by position, neighbouring puffs continue each other and the lumps that emerge belong to the
     // field rather than to any quad. In the air's frame rather than the world's, so a cloud keeps its shape as the deck drifts instead of dissolving and reforming while it travels. The puffs are
     // placed on cells in that same frame.
-    vec3 air = vary_world - vec3(ss_drift, 0.0);
+    // Recover the TRUE fragment position first - see ss_squash. The view ray is identical for drawn and true (the squash is radial), so the facing frame below is built once and serves both;
+    // eye_dist is the TRUE distance and feeds everything ranged (haze, rim convergence), while world_true feeds everything positional (noise, the layer band, the strike lights).
+    vec3 to_eye = ss_cam_pos - vary_world;
+    float drawn_dist = length(to_eye);
+    vec3 nrm = (drawn_dist > 1.0e-4) ? to_eye / drawn_dist : vec3(0.0, 0.0, 1.0);
+    float eye_dist = drawn_dist;
+    if (drawn_dist > ss_squash.x && ss_squash.z > ss_squash.x)
+    {
+        eye_dist = ss_squash.x + (drawn_dist - ss_squash.x)
+                 * (ss_squash.z - ss_squash.x) / max(ss_squash.y - ss_squash.x, 1.0);
+    }
+    vec3 world_true = ss_cam_pos - nrm * eye_dist;
+
+    // The dome-handoff band, from TRUE distance - computed here because the base cut below already needs it, ahead of the shading that shares it.
+    float dome_rim = smoothstep(ss_rim.x, ss_rim.y, eye_dist);
+
+    vec3 air = world_true - vec3(ss_drift, 0.0);
 
     // Sampled on all three planes, weighted by the quad's own facing. Two planes was not enough, and failed in a way worth recording: a billboard turned side-on to one of them has almost no
     // variation left in that plane's first coordinate across the whole quad, so the lookup collapses to a single line of the map stretched down the puff. That is where the vertical streaking came
@@ -234,11 +275,7 @@ void main()
     // collapse to nothing; cross() of those is a zero vector and normalize() of THAT is NaN. A NaN colour draws black, and which puffs are small enough to hit it changes as the camera moves, so they
     // blink in and out. That is the scatter of little black tiles - nothing to do with buffers or blending. These quads face the camera (or lie flat, near the zenith), so the direction to the eye is
     // the normal to within a few degrees in every case that matters, and it can never degenerate. The distance falls out of the same operation for the haze below.
-    vec3 to_eye = ss_cam_pos - vary_world;
-    float eye_dist = length(to_eye);
-    vec3 nrm = (eye_dist > 1.0e-4) ? to_eye / eye_dist : vec3(0.0, 0.0, 1.0);
-
-    vec3 tri = abs(nrm);
+    vec3 tri = abs(nrm);    // the facing frame's inputs were computed with the reconstruction above
 
     // The sphere the quad stands in for, reconstructed once and used twice - for the light below, and for which way the detail flows. Axes spanning the quad, taken from the world rather than the
     // screen. Any pair perpendicular to the normal will do: rotating the frame within the quad's own plane turns the fake sphere about the view axis, which a wrapped light term cannot tell apart.
@@ -274,7 +311,7 @@ void main()
     // height drives the boil rate below. Three things decide the mix: what the author asked for, where in the layer the fragment sits, and a slow wander over the field so the change is regional
     // rather than a stripe. The wander alone is horizontal, and that one is safe: it is sampled three times coarser than the base octave, so it barely changes across a single puff. What it must not
     // do is change FAST on a plane with no variation to give - which is why everything below is triplanar.
-    float layer_h = clamp((vary_world.z - ss_base_z) / ss_layer_thick, 0.0, 1.0);
+    float layer_h = clamp((world_true.z - ss_base_z) / ss_layer_thick, 0.0, 1.0);
     float wander = ss_detail(air.xy / (SS_NOISE_M * 3.0));
     float tex_mix = clamp(ss_tex_mix
                         + (layer_h - 0.5) * SS_MIX_HEIGHT
@@ -342,11 +379,11 @@ void main()
 
     // ...and cut flat underneath - see SS_BASE_SOFT_M. Softened over a few tens of metres rather than a hard edge, because a real cloud base is ragged at the scale of the wisps hanging off it, just
     // not at the scale of the deck.
-    density *= smoothstep(ss_base_z, ss_base_z + SS_BASE_SOFT_M, vary_world.z);
+    density *= smoothstep(ss_base_z, ss_base_z + SS_BASE_SOFT_M, world_true.z);
 
     // ...and flat on top too, once there is an anvil to flatten - see SS_TOP_SOFT_M. Faded in by ss_anvil so an ordinary convective sky keeps its rounded tops and only a driven one gets the table.
     float top_z = ss_base_z + ss_layer_thick;
-    float lid = 1.0 - smoothstep(top_z - SS_TOP_SOFT_M, top_z, vary_world.z);
+    float lid = 1.0 - smoothstep(top_z - SS_TOP_SOFT_M, top_z, world_true.z);
     density *= mix(1.0, lid, ss_anvil);
 
     float a = density * vary_color.a * ss_puff_density;
@@ -373,19 +410,24 @@ void main()
     // dimmer one.
     float wrap = 0.5 + 0.5 * dot(sphere_n, ss_light_dir);
 
+    // Rim convergence toward the dome, the per-fragment half (the CPU does the per-puff colour): the dome band is painted FLAT - no wrap shading, no noise self-shade, no sun-through fringe - so
+    // all three ease to their mids across the same range the edge fade runs, and the last rows dissolve into the painting as the same material. The BEAM gate folds into the same flattening: a
+    // deck with no direct celestial light has nothing to wrap around or shine through either, and holding these terms through twilight carved dark cores and lit fringes out of plain dim ambient.
+    float form_flat = max(dome_rim, 1.0 - ss_beam);
+
     vec3 body = vary_color.rgb
-              * mix(SS_FORM_DARK, 1.0, wrap)
-              * mix(1.0 - SS_PUFF_SHADE, 1.0, noise);
+              * mix(mix(SS_FORM_DARK, 1.0, wrap), 0.78, form_flat)
+              * mix(mix(1.0 - SS_PUFF_SHADE, 1.0, noise), 0.83, form_flat);
 
     // The bright fringe where the puff is thin enough for light to come through it - see SS_RIM.
     float thin = 1.0 - density;
-    body += ss_sun_color * (SS_RIM * wrap * thin * thin * thin);
+    body += ss_sun_color * (SS_RIM * wrap * thin * thin * thin) * (1.0 - form_flat);
 
     // Lightning inside the deck. Each strike is a point source, so it gets its own wrapped sphere term against ITS direction - which is the whole difference between a puff that brightens and a puff
     // that is lit from somewhere. Wrapped rather than clamped for the same reason the sun is: light goes through cloud, so the far side dims, it does not go black.
     for (int i = 0; i < ss_strike_count; ++i)
     {
-        vec3 to_strike = ss_strike[i].xyz - vary_world;
+        vec3 to_strike = ss_strike[i].xyz - world_true;
         float dist = length(to_strike);
         if (dist < 0.001) continue;
 
@@ -398,18 +440,63 @@ void main()
         // A thin edge of puff with a discharge behind it glows through, exactly as it does with the sun - and this is what a bolt seen THROUGH cloud actually looks like from below.
         float through = 1.0 + SS_RIM * thin * thin;
 
-        body += ss_strike_color * (ss_strike[i].w * atten * lit * through);
-    }
+        // The veil: two density estimates along the path from this fragment TO the strike, read from the same base map the deck is drawn from, windowed to the layer band. Where the field is
+        // dense between here and the discharge the light dies exponentially, where the path runs through a gap it arrives whole - so the flash maps the deck's own thickness left and right of the
+        // channel instead of falling off by bare distance [interaction: cloud field -> strike light].
+        float veil_sum = 0.0;
+        for (int s = 1; s <= 2; ++s)
+        {
+            vec3 q = mix(world_true, ss_strike[i].xyz, float(s) / 3.0);
+            float inz = smoothstep(ss_base_z, ss_base_z + SS_BASE_SOFT_M, q.z)
+                      * (1.0 - smoothstep(top_z, top_z + SS_TOP_SOFT_M, q.z));
+            float d_est = ss_density((q.xy - ss_drift) / SS_NOISE_M);
+            veil_sum += inz * clamp((d_est - 0.35) * 2.0, 0.0, 1.0);
+        }
+        float veil = exp(-veil_sum * 2.2 * ss_strike_occ);
 
-    // ...and then the atmosphere, over distance, exactly as it treats everything else in the world. This is what lets a far puff sit IN the sky rather than in front of it.
-    float haze = 1.0 - exp(-eye_dist / SS_HAZE_M);
-    vec3 shaded = mix(body, ss_haze, haze);
+        body += ss_strike_color * (ss_strike[i].w * atten * lit * through * veil);
+    }
 
     // Bounded exactly the way the dome layer bounds itself (cloudsF.glsl). Everything feeding this is in EEP's HDR units - sunlight and ambient both run well past 1, and the rim term adds a whole
     // sun colour on top - so the shading came out far brighter than anything else in the frame. Nothing writes to a glow buffer here, but the bloom pass takes its bright-pass off the finished
     // screen, and unclamped cloud sails straight over that threshold. Hence the halo around every puff. Clamping to 1 and doubling is not a taste decision: it is the range the dome layer already
-    // occupies, so the two kinds of cloud end up on the same scale as well as out of the bloom.
-    shaded = clamp(shaded, vec3(0.0), vec3(1.0)) * 2.0;
+    // occupies, so the two kinds of cloud end up on the same scale as well as out of the bloom. NO scene-gamma term here, and its absence is a lesson: pow(c, 1/gamma) with an authored storm-sky
+    // gamma of a few tenths is an exponent of several - it crushed every mid-tone to black and left white ridges with pink rims (red dies last), the whole deck reading as a burnt negative. The
+    // dome's own gamma response goes through the atmospheric soft-clip curve, which is not a power law, so there is no cheap honest replication - better none than that.
+    vec3 shaded = clamp(body, vec3(0.0), vec3(1.0)) * 2.0;
+
+    // Aerial perspective by the WINDLIGHT MATHS themselves, deconstructed rather than approximated (and rather than sampled off a screen copy, which reprints whatever bright disc happens to sit
+    // behind a fragment): calcAtmosphericVars integrates blue horizon and density, haze horizon and density, the density multiplier and the sun glow along the TRUE eye ray, and hands back the
+    // transmittance and the in-scattered airlight - the exact pair the dome and the terrain are fogged with, so the deck converges to the same sky they do. Directional for free: sun glow blooms
+    // where the sun is, horizon rays carry blue-horizon colour, the zenith stays clean, and a moon behind far cloud contributes only its share of airlight glow, never its disc. additive x2 is
+    // atmosFragLighting's own convention, and it matches this shader's clamp-and-double output space.
+    // The REAL light vector, not vec3(0): the module multiplies its haze glow by dot(light_dir, view_dir), so a zero vector guts the additive term - the airlight goes glow-less and near-dark,
+    // and the density/distance multiplier dials appear to do almost nothing to the deck because only the attenuation half of the fog survives. lightnorm is the module's own uniform.
+    //
+    // The fog PATH is the HORIZONTAL range to the fragment, not the slant: camera and cloud both sit inside a horizontally-uniform haze layer, so optical depth accumulates with distance ALONG
+    // the layer - a puff two kilometres overhead is seen through a short vertical column and stays nearly clear, one two kilometres toward the horizon is seen through the whole murk. Slant range
+    // applied the same fog across the entire deck regardless of elevation, which read as the density/distance dials doing nothing in particular. Horizontal range is measured from the TRUE
+    // (squash-inverted) position, never the drawn one. Across the handoff band the path still eases up to the DOME's own convention - every ray extended to the max_y slab top (skyV:
+    // rel_pos *= max_y/|y|), tens of km at the horizon, which is what authored multipliers as low as 0.05 are tuned against - so at the rim the deck is fogged by exactly the maths that fogs the
+    // band it joins [interaction: dome handoff].
+    float horiz = length(world_true.xy - ss_cam_pos.xy);
+    float slab_len = max_y / max(abs(nrm.z), 0.05);
+    float fog_len = mix(horiz, max(slab_len, horiz), dome_rim);
+    vec3 pos_eye = (modelview_matrix * vec4(ss_cam_pos - nrm * fog_len, 1.0)).xyz;
+    vec3 sun_a;
+    vec3 amb_a;
+    vec3 additive;
+    vec3 atten;
+    calcAtmosphericVars(pos_eye, lightnorm.xyz, 1.0, sun_a, amb_a, additive, atten);
+    shaded = shaded * atten + additive * 2.0;
+
+    // ...and at the handoff band, converge to what the DOME'S CLOUD SHADER would paint a full cloud along this very ray - its vertex stage colours cloud as the authored cloud colour times the
+    // atmosphere-processed sun and ambient, which are exactly the sunlit/amblit the module just returned, and the band it joins wears the same air, so the target is fogged identically. This,
+    // not the empty-sky airlight, is the right convergence: at the horizon the dome shows its overcast band, and a deck fading toward sky colour mismatched it whenever band and sky differed -
+    // which under weather is always.
+    vec3 dome_cloud = clamp(cloud_color.rgb * (sun_a * 0.5 + amb_a), vec3(0.0), vec3(1.0)) * 2.0;
+    dome_cloud = dome_cloud * atten + additive * 2.0;
+    shaded = mix(shaded, dome_cloud, dome_rim);
 
     frag_color = vec4(shaded, a);
 }

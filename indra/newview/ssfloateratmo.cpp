@@ -50,6 +50,8 @@ bool SSFloaterAtmoMagic::postBuild()
         [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_atmo_audio"); });
     getChild<LLButton>("sim_button")->setClickedCallback(
         [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_atmo_sim"); });
+    getChild<LLButton>("sound_analysis_button")->setClickedCallback(
+        [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_sound_analysis"); });
     getChild<LLButton>("edit_preset_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickEditPreset(); });
 

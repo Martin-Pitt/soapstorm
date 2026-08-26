@@ -219,6 +219,10 @@ public:
     LLViewerTexture *getDefaultWaterTexture();
     void updateWaterObjects();
 
+    // <SS:Nexii> Read-only views for the Atmo debug overlay, which prints every stock water object's position and scale - "whose water is that grid" answered by enumeration instead of guesswork. </SS:Nexii>
+    const std::list<LLPointer<LLVOWater> >& holeWaterObjects() const { return mHoleWaterObjects; }
+    const LLPointer<LLVOWater>* edgeWaterObjects() const { return mEdgeWaterObjects; }
+
     void waterHeightRegionInfo(std::string const& sim_name, F32 water_height);
     void shiftRegions(const LLVector3& offset);
 

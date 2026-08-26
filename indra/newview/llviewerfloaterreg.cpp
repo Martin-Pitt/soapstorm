@@ -29,6 +29,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llfloaterreg.h"
+#include "ssfloatersoundanalysis.h"
 #include "llviewerfloaterreg.h"
 
 #include "llcommandhandler.h"
@@ -690,6 +691,7 @@ void LLViewerFloaterReg::registerFloaters()
     // <SS:Nexii> Atmo Magic weather
     LLFloaterReg::add("ss_atmo", "floater_ss_atmo.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoMagic>);
     LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    LLFloaterReg::add("ss_sound_analysis", "floater_ss_sound_analysis.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSoundAnalysis>);
     LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAssets>);
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
     LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);

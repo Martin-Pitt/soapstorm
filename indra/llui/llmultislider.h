@@ -99,6 +99,11 @@ public:
     /*virtual*/ void    setValue(const LLSD& value) override;
     /*virtual*/ LLSD    getValue() const override { return mValue; }
 
+    // <SS:Nexii> Thumb rects are cached pixel positions computed against the rect at value-set time; without this they froze at the widget's initial size and a resizable floater stretched the
+    // view around thumbs that stayed put.
+    /*virtual*/ void reshape(S32 width, S32 height, bool called_from_parent = true) override;
+    // </SS:Nexii>
+
     boost::signals2::connection setMouseDownCallback( const commit_signal_t::slot_type& cb );
     boost::signals2::connection setMouseUpCallback( const commit_signal_t::slot_type& cb );
 

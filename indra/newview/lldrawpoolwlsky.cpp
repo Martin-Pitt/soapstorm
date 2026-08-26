@@ -72,13 +72,33 @@ static LLStaticHashedString sPhaseShaded("ss_phase_shaded");
 static LLStaticHashedString sDaylight("ss_daylight");
 static LLStaticHashedString sFaceRot("ss_face_rot");
 
+// <SS:Nexii> The dome cloud layer's virtual ALTITUDE, metres: cirrus-high in dry still air, merging quickly down onto the volumetric deck's altitude as moisture/convection build (read from the
+// field's own coverage), so the dome band and the deck agree about where the cloud IS just as they merge visually at the rim. Both the parallax (cloudsV) and the disc occlusion (ssCelestialF)
+// scale by it - one authority, or the two slide apart.
+static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
+static F32 ss_dome_cloud_altitude()
+{
+    const F32 CIRRUS_M = 6000.f;
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    if (vol->empty()) return CIRRUS_M;
+
+    const F32 t = llclamp((vol->lastCoverage() - 0.05f) / 0.25f, 0.f, 1.f);
+    const F32 merge = t * t * (3.f - 2.f * t);
+    const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
+    return lerp(CIRRUS_M, llmax(deck_mid, 300.f), merge);
+}
+// </SS:Nexii>
+
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
 // the stock sun and moon ones outright while it owns the sky, so a stock
 // environment goes through untouched code.
 static bool ss_atmo_discs_active()
 {
-    return SSAtmoEnvApplier::instance().isActive()
-        && gSSCelestialProgram.isComplete();
+    // Whenever the master switch is on, active Atmo environment or not: the additive compositing is the point. A stock alpha-blended disc REPLACES the sky behind it, and against a hot authored
+    // sunset glow that replacement is DARKER than the surroundings - a dark cutout where the sun should be. Added, a disc can only ever brighten. Slot data falls back to a plain emissive sun and
+    // a phase-shaded moon at the bind sites when no environment is driving the sky.
+    static LLCachedControl<bool> ss_atmo(gSavedSettings, "SSAtmoEnabled", false);
+    return ss_atmo && gSSCelestialProgram.isComplete();
 }
 
 // The quad axes LLVOSky builds for a body at `dir`, rebuilt here because the
@@ -156,6 +176,7 @@ static void ss_bind_disc(const LLColor4& tint, const LLVector3& body_dir,
     // degrees below the horizon, full day by about nine above.
     const F32 daylight = llclamp((sun_alt + 0.1f) / 0.25f, 0.f, 1.f);
     gSSCelestialProgram.uniform1f(sDaylight, daylight * daylight * (3.f - 2.f * daylight));
+
 
     // No airlight uniform any more. Estimating the haze over a disc from a
     // single sky-wide colour was always going to be wrong somewhere - it
@@ -457,11 +478,14 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         cloudshader->uniform1f(LLShaderMgr::CLOUD_VARIANCE, cloud_variance);
         cloudshader->uniform1f(LLShaderMgr::SUN_MOON_GLOW_FACTOR, psky->getSunMoonGlowFactor());
 
-        // <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md)
+        // <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md). Gated on an ACTIVE Atmo environment, not just the compiled-in SS_ATMO define: the master toggle bakes the
+        // shader variant, but an enabled-yet-idle viewer falling back to a plain EEP sky must leave it pixel-stock - zeros make both additive terms vanish. (The drift below already self-gates:
+        // it is zero unless an Atmo environment is driving the sky.)
+        const bool atmo_env_active = SSAtmoEnvApplier::instance().isActive();
         LLViewerRegion* region       = gAgent.getRegion();
         F32             region_width = region ? region->getWidth() : REGION_WIDTH_METERS;
-        F32             region_off_x = camPosLocal.mV[VX] - region_width * 0.5f;
-        F32             region_off_y = camPosLocal.mV[VY] - region_width * 0.5f;
+        F32             region_off_x = atmo_env_active ? (camPosLocal.mV[VX] - region_width * 0.5f) : 0.f;
+        F32             region_off_y = atmo_env_active ? (camPosLocal.mV[VY] - region_width * 0.5f) : 0.f;
         cloudshader->uniform2f(sRegionOffset, region_off_x, region_off_y);
 
         // ...and how far the deck itself has travelled on the wind. Zero
@@ -469,6 +493,9 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         // the only thing that knows what the wind is doing.
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
         cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
+
+        // The layer's own altitude for the parallax scale - see ss_dome_cloud_altitude.
+        cloudshader->uniform1f(sCloudAltM, ss_dome_cloud_altitude());
         // </SS:Nexii>
 
         /// Render the skydome
@@ -597,10 +624,13 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
                 // The disc's own art carries its colour, and how bright it
                 // is comes from the light reaching it. A tint on top would
                 // be a third opinion; white leaves the other two alone.
+                // Plain-sky fallbacks: with no Atmo environment resolving the slots, the sun slot is simply a star.
+                const bool applier_on = atmo.isActive();
                 ss_bind_disc(LLColor4::white,
-                             body_dir, atmo.sunSlotSunDirection(),
-                             atmo.sunSlotSunlight(),
-                             atmo.sunSlotEmissive(), atmo.sunSlotPhaseShaded());
+                             body_dir, applier_on ? atmo.sunSlotSunDirection() : body_dir,
+                             applier_on ? atmo.sunSlotSunlight() : 1.f,
+                             applier_on ? atmo.sunSlotEmissive() : true,
+                             applier_on ? atmo.sunSlotPhaseShaded() : false);
 
                 face->renderIndexed();
 
@@ -667,9 +697,13 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
                     tex_a ? tex_a : tex_b, LLTexUnit::TT_TEXTURE);
 
                 // White - see the note on the sun above.
+                // Plain-sky fallbacks: an ordinary moon - reflective, phase-shaded, lit by the sky's own sun.
+                const bool moon_applier_on = atmo.isActive();
                 ss_bind_disc(LLColor4::white, moon_sky->getMoonDirection(),
-                             atmo.moonSunDirection(), atmo.moonSlotSunlight(),
-                             atmo.moonSlotEmissive(), atmo.moonSlotPhaseShaded());
+                             moon_applier_on ? atmo.moonSunDirection() : moon_sky->getSunDirection(),
+                             moon_applier_on ? atmo.moonSlotSunlight() : 1.f,
+                             moon_applier_on ? atmo.moonSlotEmissive() : false,
+                             moon_applier_on ? atmo.moonSlotPhaseShaded() : true);
 
                 face->renderIndexed();
 

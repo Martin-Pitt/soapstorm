@@ -200,6 +200,7 @@ set(viewer_SOURCE_FILES
     ssatmoenvplanetarystate.cpp
     ssatmoenvskymodulator.cpp
     ssatmoenvtrackstate.cpp
+    ssfarsea.cpp
     ssvolcloud.cpp
     ssatmoenvweatherstate.cpp
     ssfloateratmo.cpp
@@ -207,6 +208,7 @@ set(viewer_SOURCE_FILES
     ssfloateratmoinfluence.cpp
     ssassetlist.cpp
     ssfloaterassets.cpp
+    ssfloatersoundanalysis.cpp
     ssfloatersoundlist.cpp
     ssfloatertexturelist.cpp
     ssfloateratmoplanetary.cpp
@@ -1108,6 +1110,7 @@ set(viewer_HEADER_FILES
     ssatmoenvplanetarystate.h
     ssatmoenvskymodulator.h
     ssatmoenvtrackstate.h
+    ssfarsea.h
     ssvolcloud.h
     ssatmoenvweatherstate.h
     ssfloateratmo.h
@@ -1115,6 +1118,7 @@ set(viewer_HEADER_FILES
     ssfloateratmoinfluence.h
     ssassetlist.h
     ssfloaterassets.h
+    ssfloatersoundanalysis.h
     ssfloatersoundlist.h
     ssfloatertexturelist.h
     ssfloateratmoplanetary.h

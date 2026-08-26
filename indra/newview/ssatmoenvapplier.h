@@ -127,6 +127,13 @@ public:
     // Whether Atmo Magic currently owns the sky. The sky pass asks before applying anything that would change how a stock environment renders.
     bool isActive() const { return mActive; }
 
+    // Whether the frame's resolved track has its water plane enabled - the gate for everything that only exists when Atmo owns the WATER, not just the sky (currently the far sea disc). Only
+    // meaningful while isActive(); callers pair the two. [interaction: SSFarSea via LLDrawPoolWater]
+    bool waterPlaneOn() const { return mWaterPlaneOn; }
+
+    // Whether the void-water standdown is currently latched - overlay ground truth for "whose water is that grid".
+    bool voidWaterDerendered() const { return mVoidDerendered; }
+
     // This frame's resolved billboard bodies - every body that is neither a light emitter nor home - rebuilt by apply() and consumed by LLDrawPoolWLSky::renderHeavenlyBodies(). Empty whenever the
     // applier is inactive (or the track has nothing beyond its emitters), so the draw pool's whole gate is one emptiness check.
     const std::vector<SSAtmoEnvBillboard>& celestialBillboards() const { return mBillboards; }
@@ -214,6 +221,14 @@ private:
     // in llenvironment.cpp.
     void setWaterRendering(bool enabled);
     bool mWaterDerendered = false;
+    bool mWaterPlaneOn = false;
+
+    // Void water alone - the ocean filler tiles, not region water - stands down while the far sea disc is up: the disc's squashed drawn depth compresses metres of true separation into
+    // sub-millimetres, so beyond the squash knee the two can only z-fight, and the disc IS the void water's replacement out there anyway. Same only-undo-our-own-change bookkeeping as
+    // mWaterDerendered, and always restored BEFORE any setWaterRendering(false) so LLPipeline::toggleRenderType's WATER/VOIDWATER lockstep flip never desynchronises the pair.
+    // [interaction: SSFarSea, LLPipeline::toggleRenderType]
+    void setVoidWaterRendering(bool enabled);
+    bool mVoidDerendered = false;
 
     // Planetary lighting: the active track's light emitters drive the rendered sun and moon. Both slots get identical treatment - the emitter's authored home-relative direction from resolveSky(),
     // swept by the home body's diurnal rotation - plus per-emitter disc scale and custom texture, per the design doc's Planetary section. The SUN slot goes to whichever emitter subtends the larger

@@ -27,7 +27,7 @@
 
 // <SS:Nexii> Atmo Magic volumetric cloud field
 
-// Order-coupled: renders AFTER SSLightningRender (that ordering IS the in-cloud bolt compositing) and updates AFTER SSLightning::idle (same-frame flicker). Band exposed to lightning for channel altitude. doc/atmo_magic_interactions.md
+// Order-coupled: renders BETWEEN SSLightningRender's two passes - after renderFlash (the discs stay veiled under the puffs) and before render (the bolts draw over the puffs, dimmed per node by transmittance()) - and updates AFTER SSLightning::idle (same-frame flicker). Band exposed to lightning for channel altitude. doc/atmo_magic_interactions.md
 
 #include "llsingleton.h"
 #include "llpointer.h"
@@ -39,6 +39,7 @@
 #include "v4math.h"
 
 #include <vector>
+#include <unordered_map>
 
 // The volumetric layer, as opposed to the cirrus dome EEP already draws. The dome is a texture on the inside of the sky: it has no altitude, no thickness and no position in the world, so you cannot
 // fly through it, it does not sit below a mountain top, and a storm cannot tower over you in it. This is the layer that can - SSAtmoEnvCloudField authors a base height, a thickness, a coverage and a
@@ -67,6 +68,11 @@ public:
     F32 cloudTopZ() const { return mBaseZ + mThicknessM; }
     bool empty() const { return mPuffs.empty(); }
 
+    // How much of a light at `to` survives the cloud between it and `from`, 0..1, measured against the ACTUAL rendered puffs rather than any field function - each puff the segment crosses multiplies
+    // visibility down by its own soft alpha profile at the crossing offset, so the answer agrees with what is on screen by construction: 1 through a gap, fractional through thin deck, ~0 behind a
+    // dense core. `strength` scales each puff's bite (the SSAtmoLightningOcclusion knob). Cheap per call via an XY cell grid rebuilt with the puff list [interaction: SSLightning -> bolt occlusion].
+    F32 transmittance(const LLVector3& from_agent, const LLVector3& to_agent, F32 strength);
+
     // Simulation floater / info overlay
     S32 puffCount() const { return (S32)mPuffs.size(); }
     F32 lastBuildMS() const { return mLastBuildMS; }
@@ -74,11 +80,11 @@ public:
 private:
     struct Puff
     {
-        LLVector3 mPosAgent;
+        LLVector3 mPosAgent;    // TRUE position always - the far-field squash happens per vertex in the shaders (ss_squash), so the CPU only ever reasons about where things really are
         F32 mRadius = 0.f;
         F32 mAlpha = 0.f;
         LLColor3 mColor;
-        F32 mCamDistSq = 0.f;   // sort key, back to front
+        F32 mCamDistSq = 0.f;   // sort key, back to front (the squash is monotonic, so true order IS drawn order)
     };
 
     std::vector<Puff> mPuffs;
@@ -109,10 +115,29 @@ private:
     F32 mDetailScale = 1.f;
     F32 mDriftRate = 1.f;
 
-    // The lighting the field was built under, kept for the fragment shader: a puff needs shape, and shape needs a light direction per fragment rather than one colour per quad.
+    // The lighting the field was built under, kept for the fragment shader: a puff needs shape, and shape needs a light direction per fragment rather than one colour per quad. Haze is no longer
+    // carried here at all - aerial perspective is the windlight atmospheric module in the fragment shader.
     LLVector3 mLightDir;
     LLColor3 mSunColor;
-    LLColor3 mHaze;
+
+    // How much direct celestial light exists right now, 0..1, from the sunlit magnitude itself - the gate on every directional shading term, CPU and shader both. See the note where it is set.
+    F32 mBeam = 1.f;
+
+    // The virtual field radius of the last build, and the squash band that fits it inside the projection: [knee, radius] compresses linearly into [knee, cap] per VERTEX in ssVolCloudV and
+    // ssLightningV (both bound the same ss_squash uniform), so clouds and bolts share one far-field mapping and stay depth-consistent with each other. squashScale is the CPU-side mirror for the
+    // few places that must reason about drawn positions (the lightning cull).
+    F32 mEffRadius = 5000.f;
+    F32 mSquashKnee = 1600.f;
+    F32 mSquashCap = 2000.f;
+
+public:
+    F32 squashScale(F32 true_dist) const;
+    F32 lastCoverage() const { return mLastCoverage; }    // the field coverage of the last build, 0 while empty - the dome layer's altitude merge reads it
+    F32 squashKnee() const { return mSquashKnee; }
+    F32 squashCap() const { return mSquashCap; }
+    F32 virtualRadius() const { return mEffRadius; }
+
+private:
 
     // A copy of the scene's depth, taken just before the puffs are drawn. A copy and not the buffer itself: this pass draws into a target that has the scene depth attached to it, and a shader that
     // samples the very texture its own pass has bound as depth is undefined - which on a GPU means flicker. Blitting it out first costs one depth blit and makes the read legal.
@@ -121,6 +146,15 @@ private:
     // Strikes lighting the field this frame: xyz agent position, w brightness. Gathered in update(), bound in render().
     std::vector<LLVector4> mStrikeLights;
 
+    // XY cell grid over mPuffs for transmittance(): each puff's index sits in every cell its disc overlaps, so a query only tests puffs near its own ray. Rebuilt with the puff list; the stamp
+    // array dedupes a puff seen from several cells of one query without clearing anything between queries.
+    std::unordered_map<U64, std::vector<S32>> mOccGrid;
+    std::vector<U32> mOccStamp;
+    U32 mOccQuery = 0;
+    F32 mMaxPuffR = 0.f;
+    bool mOccGridDirty = true;    // set by every rebuild, built lazily on the first query - most frames have no bright bolt and pay nothing
+
+    F32 mLastCoverage = 0.f;
     F32 mLastBuildMS = 0.f;
 };
 

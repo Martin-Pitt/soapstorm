@@ -45,6 +45,7 @@
 #include "llviewerregion.h"
 #include "llvowater.h"
 #include "llworld.h"
+#include "ssfarsea.h"
 #include "pipeline.h"
 #include "llviewershadermgr.h"
 #include "llenvironment.h"
@@ -332,8 +333,11 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // reflection, which is what made the water disagree with the sky above
     // it. Handing the shader the angular radius lets it widen the specular
     // lobe to match what is being reflected.
+    // Toggleable as a whole: with SSAtmoWaterPunctualLight off, the water's punctual treatment reverts to stock - point-light angular size and no moon punctual - for A/B comparison and taste.
+    static LLCachedControl<bool> ss_punctual(gSavedSettings, "SSAtmoWaterPunctualLight", true);
+
     F32 light_angular_radius = 0.5f * 0.53f * DEG_TO_RAD;   // stock sun, near enough
-    if (SSAtmoEnvApplier::instance().isActive())
+    if (ss_punctual && SSAtmoEnvApplier::instance().isActive())
     {
         const F32 diameter_deg = sun_up
             ? SSAtmoEnvApplier::instance().sunSlotAngularDeg()
@@ -349,7 +353,7 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // the glitter colour above is built from - lifted enough to read as a
     // path on the water rather than a suggestion of one.
     static const F32 SS_MOON_PUNCTUAL_GAIN = 3.0f;
-    LLColor3 moonlit = psky->getMoonDiffuse() * SS_MOON_PUNCTUAL_GAIN;
+    LLColor3 moonlit = ss_punctual ? psky->getMoonDiffuse() * SS_MOON_PUNCTUAL_GAIN : LLColor3(0.f, 0.f, 0.f);
     shader->uniform3fv(sMoonlit, 1, moonlit.mV);
     shader->uniform1f(sSunUp, sun_up ? 1.f : 0.f);
     // </SS:Nexii>
@@ -404,6 +408,15 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // That flag was not actually used anywhere in the shaders.
     // - Geenz 2025-02-11
     pushWaterPlanes(0);
+
+    // <SS:Nexii> Atmo's own far sea: only when an Atmo environment is active AND its track has a water plane does the disc extend the ocean past the stock planes to a planet-curved virtual
+    // horizon - the "own water plane" rule. Drawn last so depth testing hands every pixel the stock water already claimed back to stock; the ss_squash uniform the SS_ATMO vertex variant reads
+    // defaults to zero, so the stock planes above rendered byte-for-byte vanilla. No underwater form yet: from below the surface the stock plane overhead is all there is to see anyway.
+    // [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
+    if (!underwater && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn())
+    {
+        SSFarSea::getInstance()->render(shader);
+    }
 
     // clean up
     gPipeline.unbindDeferredShader(*shader);

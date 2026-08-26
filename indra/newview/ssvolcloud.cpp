@@ -56,8 +56,16 @@ namespace
     // new cells arrive from upwind instead of the pattern shimmering in place.
     const F32 CELL_M = 260.f;
 
-    // How far out puffs are drawn. Past this they are a few pixels each and the dome behind them is doing the work anyway.
-    const F32 FIELD_RADIUS_M = 3200.f;
+    // How far out the field VIRTUALLY reaches. Puffs beyond the squash knee (0.8 of the far-plane budget) are radially remapped toward the camera - same direction, same angular size, compressed
+    // drawn distance - so the sky reads out to this radius while every vertex stays inside the projection. Safe against real geometry by construction: the knee is always at least 1.6x the sim
+    // draw distance, so nothing the sim sends can sit in the compressed band. The fragment shader INVERTS the remap (ss_squash) to recover true world positions for all its sampling and shaping;
+    // only the geometry itself is compressed.
+    const F32 FIELD_RADIUS_M = 6000.f;
+
+    // Where puffs actually stop being emitted, and the fade band's edges inside that. The squash DOMAIN runs to FIELD_RADIUS_M so the compression curve stays gentle; the last kilometre of the
+    // domain is deliberately empty.
+    const F32 FIELD_DRAW_M = 5000.f;
+    const F32 FIELD_FADE_START_M = 4000.f;
 
     // Ceiling on how many quads a frame may draw, whatever the coverage. A full-coverage field over the whole radius is thousands of cells, and beyond a few hundred overlapping alpha quads the fill
     // cost is real while the look stops changing.
@@ -227,11 +235,39 @@ void SSVolCloud::update(F32 dt)
     if (sky)
     {
         const LLColor3 sun_col(sky->getSunlightColor());
-        const LLColor3 moon_col = LLColor3(sky->getMoonlightColor()) * 0.35f;
+        // 0.16, down from 0.35: the moonlight colour is HDR-sized and the fragment shader doubles its output, so a full-moon deck at the old share glowed several times brighter than the dome's
+        // own night band beneath it - a luminous grey ceiling over a black horizon. The dome is the calibration reference; moonlit cloud should sit level with it.
+        const LLColor3 moon_col = LLColor3(sky->getMoonlightColor()) * 0.16f;
         sunlit = sun_col * daylight + moon_col * (1.f - daylight);
-        ambient = LLColor3(sky->getAmbientColor()) * (0.12f + 0.88f * daylight);
+        // The floor is small on purpose: the fragment shader doubles its output to sit in the dome's HDR range, so every unit of night floor renders at twice its weight against a black sky -
+        // 0.12 read as an emissive deck, not a dark one.
+        ambient = LLColor3(sky->getAmbientColor()) * (0.05f + 0.95f * daylight);
+
+        // Cloud colour, normalised so the stock default (~0.41 grey) is identity: it tints RELATIVE to stock rather than darkening every preset that never authored it. Folded into sunlit and
+        // ambient so every downstream consumer (including the self-shadowing) inherits it. Deliberately NOT the blue horizon/density pair: in windlight those shape the sky gradient itself, and
+        // clouds only inherit them near the horizon through haze - which this field already gets through its own haze wash and the dome showing through gaps. A whole-deck lean off them read as
+        // the entire sky dyeing the clouds.
+        {
+            const LLColor3 cc(sky->getCloudColor());
+            for (S32 c = 0; c < 3; ++c)
+            {
+                const F32 tint = llclamp(cc.mV[c] / 0.41f, 0.f, 2.5f);
+                sunlit.mV[c] *= tint;
+                ambient.mV[c] *= tint;
+            }
+        }
+
     }
     const LLVector3 light_dir = LLEnvironment::instance().getLightDirection();
+
+    // How much of a BEAM there actually is, 0..1: directional shading (facing, tower self-shadow, the shader's wrap and fringe) only makes sense while direct celestial light meaningfully exceeds
+    // nothing at all. Through the sun/moon handoff both discs sit at the horizon and the deck was still being carved into dark cores and lit rims by a light that was not there - stark colourless
+    // grayscale at exactly the hour that should read as flat dim ambient. Judged from the sunlit magnitude itself, so it needs no astronomy: bright beam full shading, dying beam flat.
+    {
+        const F32 sun_lum = (sunlit.mV[0] + sunlit.mV[1] + sunlit.mV[2]) / 3.f;
+        const F32 t = llclamp((sun_lum - 0.08f) / 0.5f, 0.f, 1.f);
+        mBeam = t * t * (3.f - 2.f * t);
+    }
 
     // Kept for render(), which shades each fragment rather than each puff. The haze is the sky's own scattered light - the same colour the celestial discs wash toward, and for the same reason.
     mBaseZ = field.mBaseHeightM;
@@ -243,10 +279,6 @@ void SSVolCloud::update(F32 dt)
     mDriftRate = field.mDriftRate;
     mLightDir = light_dir;
     mSunColor = sunlit;
-    {
-        const LLColor4 haze = sky ? sky->getHazeColor() : LLColor4(0.5f, 0.55f, 0.65f, 1.f);
-        mHaze.setVec(haze.mV[0], haze.mV[1], haze.mV[2]);
-    }
 
     // Storm cloud is darker than fair-weather cloud, and the field's own churn is the closest thing it has to a "how angry is this" figure.
     const F32 gloom = field.mGloom;
@@ -260,7 +292,12 @@ void SSVolCloud::update(F32 dt)
     const F32 air_x = cam.mV[VX] - drift.mV[0];
     const F32 air_y = cam.mV[VY] - drift.mV[1];
 
-    const S32 cell_radius = (S32)ceilf(FIELD_RADIUS_M / CELL_M);
+    // The squash band - see FIELD_RADIUS_M. Everything nearer than the knee draws where it truly is; [knee, FIELD_RADIUS] compresses linearly into [knee, cap].
+    mEffRadius = FIELD_RADIUS_M;
+    mSquashCap = LLViewerCamera::getInstance()->getRenderFarPlane() * 0.98f;
+    mSquashKnee = mSquashCap * 0.8f;
+
+    const S32 cell_radius = (S32)ceilf(FIELD_DRAW_M / CELL_M);
     const S32 cx0 = (S32)floorf(air_x / CELL_M);
     const S32 cy0 = (S32)floorf(air_y / CELL_M);
 
@@ -323,20 +360,27 @@ void SSVolCloud::update(F32 dt)
                 const LLVector3 to_cam = pos - cam;
                 const F32 dist_sq = to_cam.magVecSquared();
                 // Skips this puff, not the cell: its siblings are jittered elsewhere and may well be inside the radius.
-                if (dist_sq > FIELD_RADIUS_M * FIELD_RADIUS_M) continue;
+                if (dist_sq > FIELD_DRAW_M * FIELD_DRAW_M) continue;
+
+                // Beyond the knee one puff per cell carries the cell, drawn wider: the compressed band holds most of the field's area in a sliver of drawn depth, and three angularly-tiny puffs
+                // per cell there is budget spent on separations nobody can resolve.
+                const bool squashed = dist_sq > mSquashKnee * mSquashKnee;
+                if (squashed && sub > 0) continue;
 
                 Puff puff;
                 puff.mPosAgent = pos;
                 puff.mRadius = base_radius * size_gain * flat
-                    * (0.7f + 0.6f * hashUnit(cx, cy, 5u + salt));
+                    * (0.7f + 0.6f * hashUnit(cx, cy, 5u + salt))
+                    * (squashed ? 1.6f : 1.f);
                 puff.mCamDistSq = dist_sq;
 
 
-                // Fade the outermost ring rather than letting puffs pop in at the radius, and thin the whole field with coverage so a light field is wispy rather than merely sparse.
-                // Fade begins at HALF the radius, not the last quarter: the field hands off to the dome's own overcast at its edge, and a short ramp read as the volumetric layer being cut off
-                // against it. Squared so most of the fade happens in the outer stretch rather than thinning the mid-field.
-                const F32 edge_t = llclamp(
-                    (sqrtf(dist_sq) - FIELD_RADIUS_M * 0.5f) / (FIELD_RADIUS_M * 0.5f), 0.f, 1.f);
+                // Fade the outermost ring rather than letting puffs pop in at the radius, and thin the whole field with coverage so a light field is wispy rather than merely sparse. The band is
+                // the last virtual kilometre (4-5km) - the deck reads full to four kilometres and hands off over the fifth; the earlier half-radius fade (tuned when the radius was the visible
+                // edge) was thinning most of the deck for a handoff that now happens far beyond it.
+                const F32 dist = sqrtf(dist_sq);
+                const F32 edge_t = llclamp((dist - FIELD_FADE_START_M)
+                                           / (FIELD_DRAW_M - FIELD_FADE_START_M), 0.f, 1.f);
                 const F32 edge = 1.f - edge_t * edge_t;
                 puff.mAlpha = edge * llclamp(0.35f + 0.65f * field.mCoverage, 0.f, 1.f);
 
@@ -347,7 +391,40 @@ void SSVolCloud::update(F32 dt)
                 // puffs and so cannot outline them.
                 const F32 facing = llclamp(
                     0.5f + 0.2f * (light_dir.mV[VZ] * (up - 0.5f) * 2.f), 0.f, 1.f);
-                puff.mColor = (ambient + sunlit * facing) * gloom;
+
+                // Self-shadowing: the sunlit term dies exponentially along its path THROUGH the deck, scaled by how thick and covered the layer is - which is what makes a heavy deck genuinely
+                // dark underneath while a thin one stays translucent. Three regimes by sun height. HIGH sun: the tower stacked over a puff shadows it (tops bright, bases of thick towers dark).
+                // SIDEWAYS sun: cluster interior-ness stands in for the horizontal traversal, so rims light and cores swallow - the old facing term went flat exactly here and interior puffs
+                // wrongly held full brightness. BELOW horizon: the light comes from beneath, so the BASE is the lit face (sunset underlighting, already reddened by the EEP sun colour) and the
+                // tops go dark. Keyed to altitude and coreness - spatially coherent fields - NOT per-puff hash, so it shades the deck without outlining billboards the way random variation did.
+                // Ambient is left unshaded, so nothing ever goes black.
+                const F32 sun_z = light_dir.mV[VZ];
+                const F32 th = (0.5f + llclamp(field.mThicknessM / 500.f, 0.f, 1.f))
+                             * (0.35f + 0.65f * field.mCoverage);
+                F32 shade;
+                if (sun_z >= 0.f)
+                {
+                    const F32 above = llmax(cell_height - up, 0.f);
+                    shade = expf(-(above / llmax(sun_z, 0.35f) * 0.9f
+                                   + coreness * (1.f - sun_z) * 1.5f) * th);
+                }
+                else
+                {
+                    shade = expf(-(up / llmax(-sun_z, 0.35f) * 0.9f
+                                   + coreness * 1.5f) * th);
+                }
+
+                // Shading convergence at the rim [interaction: dome handoff]: the dome paints its band FLAT - no per-lump facing - and the alpha fade alone was dissolving visibly-shaded objects
+                // over that flat painting, which is why the handoff read as two different materials whatever the fade did. Only the FACING variation flattens; the self-shadow term stays all the
+                // way out, because it carries the storm's darkness - converging to a fixed bright mid stripped it at the rim and a gale-dark deck ended in a band of bright white against the
+                // equally-darkened dome. Gloom stays for the same reason.
+                const F32 rim = edge_t * edge_t * (3.f - 2.f * edge_t);
+
+                // Both directional terms ride the beam - see mBeam: full shading under a real sun or bright moon, easing to flat as the direct light dies, so twilight and moonless nights read as
+                // dim ambient cloud instead of dark cores with lit rims carved by nothing.
+                const F32 form = lerp(0.65f, lerp(facing, 0.65f, rim), mBeam)
+                               * lerp(1.f, shade, mBeam);
+                puff.mColor = (ambient + sunlit * form) * gloom;
 
                 mPuffs.push_back(puff);
             }
@@ -377,7 +454,114 @@ void SSVolCloud::update(F32 dt)
         mPuffs.erase(mPuffs.begin(), mPuffs.end() - MAX_PUFFS);
     }
 
+    mOccGridDirty = true;    // transmittance() rebuilds its grid from the final list when a bolt actually asks
+    mLastCoverage = field.mCoverage;
+
     mLastBuildMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
+}
+
+// The CPU mirror of the vertex shaders' ss_squash mapping - see the header. 1 inside the knee; beyond the virtual radius everything collapses onto a shell just inside the cap, angular sizes
+// preserved throughout because callers scale radially by this.
+F32 SSVolCloud::squashScale(F32 true_dist) const
+{
+    if (true_dist <= mSquashKnee || true_dist <= 0.f) return 1.f;
+    const F32 span = llmax(mEffRadius - mSquashKnee, 1.f);
+    const F32 drawn = llmin(mSquashKnee + (true_dist - mSquashKnee) * (mSquashCap - mSquashKnee) / span,
+                            mSquashCap * 0.999f);
+    return drawn / true_dist;
+}
+
+F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_agent, F32 strength)
+{
+    if (mPuffs.empty() || strength <= 0.f) return 1.f;
+
+    if (mOccGridDirty)
+    {
+        // Indexed from the FINAL (sorted, truncated) list, so a stored index is always valid. Each puff lands in every XY cell its widened footprint overlaps - PUFF_WIDE stretches the drawn quad
+        // past mRadius - which is what lets a query visit only the cells under its own ray with no neighbourhood search.
+        mOccGrid.clear();
+        mMaxPuffR = 0.f;
+        for (S32 i = 0; i < (S32)mPuffs.size(); ++i)
+        {
+            const Puff& p = mPuffs[i];
+            const F32 r = p.mRadius * PUFF_WIDE;
+            mMaxPuffR = llmax(mMaxPuffR, r);
+            const S32 x0 = (S32)floorf((p.mPosAgent.mV[VX] - r) / CELL_M);
+            const S32 x1 = (S32)floorf((p.mPosAgent.mV[VX] + r) / CELL_M);
+            const S32 y0 = (S32)floorf((p.mPosAgent.mV[VY] - r) / CELL_M);
+            const S32 y1 = (S32)floorf((p.mPosAgent.mV[VY] + r) / CELL_M);
+            for (S32 gy = y0; gy <= y1; ++gy)
+            {
+                for (S32 gx = x0; gx <= x1; ++gx)
+                {
+                    mOccGrid[((U64)(U32)gx << 32) | (U64)(U32)gy].push_back(i);
+                }
+            }
+        }
+        mOccStamp.assign(mPuffs.size(), 0u);
+        mOccQuery = 0;
+        mOccGridDirty = false;
+    }
+
+    // Clip the segment to the slab the puffs can occupy, padded by the widest of them - a ray to the ground only ever walks its in-cloud stretch.
+    const LLVector3 d = to_agent - from_agent;
+    const F32 z_lo = mBaseZ - mMaxPuffR;
+    const F32 z_hi = mBaseZ + mThicknessM + mMaxPuffR;
+    F32 t0 = 0.f, t1 = 1.f;
+    if (fabsf(d.mV[VZ]) > 0.001f)
+    {
+        F32 ta = (z_lo - from_agent.mV[VZ]) / d.mV[VZ];
+        F32 tb = (z_hi - from_agent.mV[VZ]) / d.mV[VZ];
+        if (ta > tb) { const F32 tmp = ta; ta = tb; tb = tmp; }
+        t0 = llmax(0.f, ta);
+        t1 = llmin(1.f, tb);
+        if (t0 >= t1) return 1.f;
+    }
+    else if (from_agent.mV[VZ] < z_lo || from_agent.mV[VZ] > z_hi)
+    {
+        return 1.f;
+    }
+
+    const LLVector3 a = from_agent + d * t0;
+    const LLVector3 b = from_agent + d * t1;
+    const F32 d_sq = llmax(d.magVecSquared(), 0.0001f);
+
+    ++mOccQuery;
+    F32 trans = 1.f;
+
+    // Walk the clipped stretch at cell pitch. A puff spans cells (footprints run past CELL_M), so visiting the ray's own cell at each step is enough; the stamp keeps a puff shared by several
+    // visited cells from biting twice in one query.
+    const F32 len_xy = sqrtf((b.mV[VX] - a.mV[VX]) * (b.mV[VX] - a.mV[VX])
+                             + (b.mV[VY] - a.mV[VY]) * (b.mV[VY] - a.mV[VY]));
+    const S32 steps = llmin((S32)(len_xy / CELL_M) + 1, 64);
+    for (S32 s = 0; s <= steps; ++s)
+    {
+        const LLVector3 px = a + (b - a) * ((F32)s / (F32)steps);
+        const S32 gx = (S32)floorf(px.mV[VX] / CELL_M);
+        const S32 gy = (S32)floorf(px.mV[VY] / CELL_M);
+        auto it = mOccGrid.find(((U64)(U32)gx << 32) | (U64)(U32)gy);
+        if (it == mOccGrid.end()) continue;
+
+        for (S32 idx : it->second)
+        {
+            if (mOccStamp[(size_t)idx] == mOccQuery) continue;
+            mOccStamp[(size_t)idx] = mOccQuery;
+
+            const Puff& p = mPuffs[(size_t)idx];
+
+            // Closest approach of the FULL segment to the puff centre; a quadratic profile stands in for the splat's soft alpha falloff, at a radius between the quad's wide and tall stretches.
+            const F32 t = llclamp(((p.mPosAgent - from_agent) * d) / d_sq, 0.f, 1.f);
+            const LLVector3 closest = from_agent + d * t;
+            const F32 r_eff = p.mRadius * 1.15f;
+            const F32 off_sq = (closest - p.mPosAgent).magVecSquared();
+            if (off_sq >= r_eff * r_eff) continue;
+
+            const F32 prof = 1.f - off_sq / (r_eff * r_eff);
+            trans *= 1.f - llclamp(p.mAlpha * prof * strength, 0.f, 1.f);
+            if (trans < 0.004f) return 0.f;    // swallowed; no point finishing the walk
+        }
+    }
+    return trans;
 }
 
 void SSVolCloud::render()
@@ -477,7 +661,8 @@ void SSVolCloud::render()
             gGL.getTexUnit(diff_map)->bind(&gPipeline.mRT->screen);
             gGL.getTexUnit(depth_map)->bind(&gPipeline.mRT->deferredScreen, true);
 
-            // Only the depth is wanted; the colour attachment is along for the ride because the copy shader writes one.
+            // Only the depth is wanted; the colour attachment is along for the ride because the copy shader writes one. (The colour side was briefly copied too as an aerial-perspective target,
+            // before the windlight atmospheric module made the haze analytic - screen sampling reprints whatever bright disc sits behind a fragment, which is why it lost.)
             gGL.setColorMask(false, false);
             gPipeline.mScreenTriangleVB->setBuffer();
             gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
@@ -569,11 +754,16 @@ void SSVolCloud::render()
             gSSVolCloudProgram.uniform4fv(s_strike, count,
                                           (F32*)mStrikeLights.data());
         }
+
+        // The same knob the bolt ribbons use, spent here on the strike LIGHT: the shader marches the deck's own density between each fragment and the discharge, so the flash carves out the
+        // field's thick and thin instead of falling off by bare distance [interaction: SSLightning -> strike light veiling].
+        static LLStaticHashedString s_strike_occ("ss_strike_occ");
+        static LLCachedControl<F32> occl_setting(gSavedSettings, "SSAtmoLightningOcclusion", 0.85f);
+        gSSVolCloudProgram.uniform1f(s_strike_occ, llclamp((F32)occl_setting, 0.f, 1.f));
     }
 
     static LLStaticHashedString s_light_dir("ss_light_dir");
     static LLStaticHashedString s_sun_color("ss_sun_color");
-    static LLStaticHashedString s_haze("ss_haze");
     static LLStaticHashedString s_cam_pos("ss_cam_pos");
 
     LLVector3 light = mLightDir;
@@ -581,8 +771,23 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform3fv(s_light_dir, 1, light.mV);
     gSSVolCloudProgram.uniform3fv(s_sun_color, 1, mSunColor.mV);
-    gSSVolCloudProgram.uniform3fv(s_haze, 1, mHaze.mV);
     gSSVolCloudProgram.uniform3fv(s_cam_pos, 1, camera->getOrigin().mV);
+
+    // The beam gate for the shader's own directional terms (wrap, noise self-shade, the sun-through fringe) - same figure the CPU shading rides.
+    static LLStaticHashedString s_beam("ss_beam");
+    gSSVolCloudProgram.uniform1f(s_beam, mBeam);
+
+    // No haze colour or haze distance uniforms any more: aerial perspective is the windlight atmospheric module inside the fragment shader, fed by the same sky-settings uniforms the dome gets
+    // through mShaderList. (Two retired lessons live here: a flat haze colour dyed the whole deck with the blue-horizon product until it was elevation-weighted, and scene gamma applied as a power
+    // law burnt a storm deck to a negative - the analytic module replaces the first and deliberately omits the second.)
+
+    // Where the rim convergence runs - the same 4-5km band the alpha fade occupies, in TRUE distance.
+    static LLStaticHashedString s_rim("ss_rim");
+    gSSVolCloudProgram.uniform2f(s_rim, 4000.f, 4900.f);
+
+    // The far-field squash band for the vertex shader - see the header. True positions in, compressed drawn positions out, per vertex.
+    static LLStaticHashedString s_squash("ss_squash");
+    gSSVolCloudProgram.uniform3f(s_squash, mSquashKnee, mSquashCap, mEffRadius);
 
     // How far from a surface a puff starts thinning out, and the depth to measure it against. Generous at 45m: this is not really an intersection fix, it is what makes vapour behave like vapour near
     // anything solid, so a platform sitting in the layer wears fog rather than cutting a line across it.
@@ -596,6 +801,7 @@ void SSVolCloud::render()
         soft = gSSVolCloudProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH,
                                               &mDepthCopy, true) >= 0;
     }
+
 
     // And the fade only switches on if that bind actually took. Worth being explicit about, because of how this fails: an unbound sampler reads whatever is on unit 0, the comparison comes out
     // nonsense, and the fade takes every fragment to zero. The failure mode of a depth read gone wrong is not a wrong-looking fade, it is no clouds at all - so it defaults off rather than trusting

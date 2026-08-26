@@ -187,15 +187,21 @@ void SSAtmoEnvApplier::apply()
     applySky(track, phase, mod);
     applyCelestial(track, phase);
 
+    mWaterPlaneOn = track.mWater.mEnabled;
     if (track.mWater.mEnabled)
     {
         applyWater(track, phase, mod);
         setWaterRendering(true);
+        // Stock hole and edge water render as normal - the far sea excludes itself from their footprint instead (the ss_sea_hole rect in waterV), water around the water rather than water under
+        // it. The standdown is only ever an undo now, in case an earlier state left it latched.
+        setVoidWaterRendering(true);
     }
     else
     {
         // Water disabled on this track: apply sky only and park the installed water instance on EEP's stock defaults. Uninstalling the water half instead would mean install/uninstall churn on every
-        // track cross between water and no-water tracks - default water is the lesser evil.
+        // track cross between water and no-water tracks - default water is the lesser evil. Void restored FIRST: setWaterRendering(false)'s toggle flips VOIDWATER in lockstep with WATER, and it must
+        // flip from the stock-true state, not from our standdown.
+        setVoidWaterRendering(true);
         applyWaterDefaults();
         setWaterRendering(false);
     }
@@ -376,6 +382,30 @@ void SSAtmoEnvApplier::setWaterRendering(bool enabled)
     }
 }
 
+void SSAtmoEnvApplier::setVoidWaterRendering(bool enabled)
+{
+    // Same shape as setWaterRendering. toggleRenderType's pair-flip special case only fires for the WATER type, so toggling VOIDWATER through the same public control moves that one flag alone -
+    // which is exactly the divergence this needs (region water on, filler off). Bookkeeping keeps us from undoing a state the user set themselves.
+    if (!enabled)
+    {
+        if (!mVoidDerendered && LLPipeline::hasRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER))
+        {
+            LLPipeline::toggleRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER);
+            mVoidDerendered = true;
+        }
+        return;
+    }
+
+    if (mVoidDerendered)
+    {
+        if (!LLPipeline::hasRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER))
+        {
+            LLPipeline::toggleRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER);
+        }
+        mVoidDerendered = false;
+    }
+}
+
 void SSAtmoEnvApplier::activate()
 {
     // One settings pair for the whole active span, mutated in place each frame - the DayInstance holds these same shared_ptrs, so setters plus update() propagate without reinstalling.
@@ -414,7 +444,9 @@ void SSAtmoEnvApplier::deactivate()
     LLEnvironment::instance().clearEnvironment(LLEnvironment::ENV_LOCAL);
     LLEnvironment::instance().setSelectedEnvironment(LLEnvironment::ENV_LOCAL);
 
-    // Before dropping the settings: a track with water disabled may have switched the water render type off, and leaving Atmo Magic must not leave the world's water switched off behind it.
+    // Before dropping the settings: a track with water disabled may have switched the water render type off, and leaving Atmo Magic must not leave the world's water switched off behind it. Void
+    // first, for the same lockstep reason as in apply().
+    setVoidWaterRendering(true);
     setWaterRendering(true);
 
     mSky.reset();

@@ -5335,7 +5335,9 @@ void LLVOAvatar::updateFootstepSounds()
     const bool jumping = isAnyAnimationSignaled(AGENT_JUMP_ANIMS, LL_ARRAY_SIZE(AGENT_JUMP_ANIMS));
     if (gAudiop && jumping && !mWasJumping && PlayModeUISndFootstepsJump)
     {
-        playFootstepSound(ankle_left_pos_agent, STEP_JUMP);
+        LLVector3 jump_foot = getPositionAgent();
+        jump_foot.mV[VZ] -= mPelvisToFoot;
+        SSSoundscape::getInstance()->footstepEvent(getID(), jump_foot, mStepOnLand, STEP_JUMP, isSelf());
     }
     mWasJumping = jumping;
     // </SS:Nexii>
@@ -5343,46 +5345,43 @@ void LLVOAvatar::updateFootstepSounds()
     const LLUUID AGENT_FOOTSTEP_ANIMS[] = {ANIM_AGENT_WALK, ANIM_AGENT_RUN, ANIM_AGENT_LAND};
     const S32 NUM_AGENT_FOOTSTEP_ANIMS = LL_ARRAY_SIZE(AGENT_FOOTSTEP_ANIMS);
 
-    // <SS:Nexii> Or actually moving along the ground. Gating on the STANDARD anims alone silenced everyone wearing an AO - overriders replace ANIM_AGENT_WALK/RUN with their own animations, so the
-    // signal test fails for exactly the avatars most players are. The foot-down edge detection below works off ankle heights, which an AO animates like any other animation, so it needs no anims at
-    // all - only permission to run.
+    // <SS:Nexii> State-driven footstep loops. Walk and run sounds are LOOP recordings attached to the avatar - per-footfall triggering spammed a fresh copy of a long loop on every step,
+    // overlapping and never stopping. So the model is: report the locomotion STATE every frame (speed-based, so AOs are irrelevant), and the soundscape starts/stops/switches/follows one managed
+    // loop per avatar. Landing is the one per-event sound left: a detached one-shot at the touchdown, fired on the airborne->grounded edge - which needs no anims and no ankle thresholds either.
     const LLVector3 vel_xy(getVelocity().mV[VX], getVelocity().mV[VY], 0.f);
     const F32 ground_speed = vel_xy.magVec();
-    const bool moving_on_ground = !mInAir && !isSitting() && ground_speed > 0.5f;
-    // </SS:Nexii>
 
-    if ( gAudiop && (isAnyAnimationSignaled(AGENT_FOOTSTEP_ANIMS, NUM_AGENT_FOOTSTEP_ANIMS) || moving_on_ground) )
+    static LLCachedControl<bool> PlayModeUISndFootsteps(gSavedSettings, "PlayModeUISndFootsteps");
+    if (gAudiop && PlayModeUISndFootsteps)
     {
-        bool playSound = false;
-        LLVector3 foot_pos_agent;
-
-        bool onGroundLeft = (leftElev <= 0.05f);
-        bool onGroundRight = (rightElev <= 0.05f);
-
-        // did left foot hit the ground?
-        if ( onGroundLeft && !mWasOnGroundLeft )
+        // -1 for stopped, NOT 0: STEP_WALK is 0, and a zero idle sentinel made every standing or airborne avatar read as walking - the loop's stop branch was unreachable and footsteps played
+        // forever at rest and straight through freefall.
+        S32 locomotion = -1;
+        if (!mInAir && !isSitting() && ground_speed > 0.5f)
         {
-            foot_pos_agent = ankle_left_pos_agent;
-            playSound = true;
+            // The speed classifier lives in the GAP between SL's gaits (walk ~3.2 m/s, run ~5.2) with hysteresis so it latches: a threshold sitting on walk speed itself flapped the loop on every
+            // diagonal or shallow ramp. The run anim short-circuits it when an unoverridden gait says so directly.
+            const LLUUID AGENT_RUN_ANIM[] = {ANIM_AGENT_RUN};
+            const bool run_now = isAnyAnimationSignaled(AGENT_RUN_ANIM, 1)
+                || ground_speed > (mSSWasRunning ? 3.9f : 4.5f);
+            mSSWasRunning = run_now;
+            locomotion = run_now ? STEP_RUN : STEP_WALK;
+        }
+        else
+        {
+            mSSWasRunning = false;
         }
 
-        // did right foot hit the ground?
-        if ( onGroundRight && !mWasOnGroundRight )
-    {
-            foot_pos_agent = ankle_right_pos_agent;
-            playSound = true;
-    }
+        // At the FEET, not the pelvis: getPositionAgent is the root, and half a body height matters for a sound meant to come from the ground contact.
+        LLVector3 foot_pos = getPositionAgent();
+        foot_pos.mV[VZ] -= mPelvisToFoot;
 
-        mWasOnGroundLeft = onGroundLeft;
-        mWasOnGroundRight = onGroundRight;
+        SSSoundscape::getInstance()->updateFootstepLoop(
+            getID(), foot_pos, mStepOnLand, locomotion, isSelf());
 
-        // <SS:Nexii> Support-foot swap detector, for gaits the absolute test above cannot see. That test needs the planted ankle to dip within 5cm of the RESOLVED ground - and an AO's foot heights,
-        // or any hover-height offset, shift the whole skeleton so both ankles sit permanently on one side of the threshold: no transitions ever, footsteps dead while visibly running. Which ankle is
-        // the LOWER one, though, alternates left-right in any walking or running gait whatever the anim and wherever the ground - the feet are compared against each other, so nothing external can
-        // break it. Fires only when the anims are NOT signaled (the AO case), so stock gaits keep the original detector and nobody gets two sounds a step. One sound per frame regardless - both
-        // detectors only set the same flag.
-        if (!playSound && moving_on_ground
-            && !isAnyAnimationSignaled(AGENT_FOOTSTEP_ANIMS, NUM_AGENT_FOOTSTEP_ANIMS))
+        // Individual footfalls, for recordings whose analysis says the steps can be cut apart: the moment the LOWER ankle swaps sides is the support transfer - the footfall itself - and the
+        // soundscape plays that state's sound as a windowed single step at the landing foot. Ignored entirely for material still in loop mode; the swap costs two subtractions either way.
+        if (locomotion == STEP_WALK || locomotion == STEP_RUN)
         {
             const F32 diff = leftElev - rightElev;
             if (fabsf(diff) > 0.015f)
@@ -5390,33 +5389,22 @@ void LLVOAvatar::updateFootstepSounds()
                 const bool lower_left = diff < 0.f;
                 if (lower_left != mSSLowerLeft)
                 {
-                    foot_pos_agent = lower_left ? ankle_left_pos_agent : ankle_right_pos_agent;
-                    playSound = true;
+                    SSSoundscape::getInstance()->footstepImpact(
+                        getID(), lower_left ? ankle_left_pos_agent : ankle_right_pos_agent, isSelf());
                 }
                 mSSLowerLeft = lower_left;
             }
         }
-        // </SS:Nexii>
 
-        // <FS:PP> FIRE-3169: Option to change the default footsteps sound
-        // if ( playSound )
-        static LLCachedControl<bool> PlayModeUISndFootsteps(gSavedSettings, "PlayModeUISndFootsteps");
-        if ( playSound && PlayModeUISndFootsteps )
-        // </FS:PP>
+        // Touchdown: airborne last frame, grounded now.
+        if (mSSWasInAir && !mInAir && !isSitting())
         {
-            // <SS:Nexii> Land (touching down) takes priority over run, which
-            // takes priority over walk, matching the priority the original
-            // single-sound lookup implicitly gave every anim in the array.
-            S32 action = STEP_WALK;
-            const LLUUID AGENT_LAND_ANIM[] = {ANIM_AGENT_LAND};
-            const LLUUID AGENT_RUN_ANIM[] = {ANIM_AGENT_RUN};
-            if (isAnyAnimationSignaled(AGENT_LAND_ANIM, 1)) action = STEP_LAND;
-            // Speed as well as the anim, for the same AO reason as the gate above: an overridden run signals nothing, but it still covers ground at running pace.
-            else if (isAnyAnimationSignaled(AGENT_RUN_ANIM, 1) || ground_speed > 3.2f) action = STEP_RUN;
-            playFootstepSound(foot_pos_agent, action);
-            // </SS:Nexii>
+            SSSoundscape::getInstance()->footstepEvent(
+                getID(), foot_pos, mStepOnLand, STEP_LAND, isSelf());
         }
+        mSSWasInAir = mInAir;
     }
+    // </SS:Nexii>
 }
 
 // <SS:Nexii> Atmo Magic surface-aware footstep sounds
@@ -5427,7 +5415,9 @@ void LLVOAvatar::updateFootstepSounds()
 //-----------------------------------------------------------------------------
 void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
 {
-    const F32 STEP_VOLUME = 0.1f;
+    // Was a hardcoded 0.1 (stock's own figure), which is near-inaudible against the Atmo beds; debug-tweakable so the trigger path can be balanced by ear against the loop/segment path's SSAtmoVolumeFootsteps.
+    static LLCachedControl<F32> step_volume(gSavedSettings, "SSAtmoVolumeStepTrigger", 0.3f);
+    const F32 STEP_VOLUME = llclamp((F32)step_volume, 0.f, 1.f);
 
     LLUUID step_sound_id = SSSoundscape::getInstance()->footstepSound(
         getID(), foot_pos_agent, mStepOnLand, action, isSelf());

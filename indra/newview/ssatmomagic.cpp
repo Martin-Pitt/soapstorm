@@ -25,7 +25,11 @@
 
 #include "ssatmomagic.h"
 #include "ssatmotrack.h"
+#include "ssatmoenvapplier.h"
 #include "ssatmoenvbridge.h"
+#include "ssfarsea.h"
+#include "llworld.h"
+#include "llvowater.h"
 #include "ssrainshadow.h"
 #include "ssavatarwet.h"
 #include "ssvolcloud.h"
@@ -226,6 +230,7 @@ void SSAtmoMagic::refreshParams()
 
     // Stay enabled while fading out, otherwise the sim is torn down before the fade can be seen
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
+
     mSwitchedOn = enabled;
 
     mTemperatureC = cfg.mTemperatureC;
@@ -999,18 +1004,17 @@ void SSAtmoMagic::drawInfo()
     {
         SSLightning* lit = SSLightning::getInstance();
         const F64 next = lit->nextStrikeIn();
-        {
-            // Shader compile state is the log's business (llviewershadermgr warns on failure), not the overlay's - this line is for the per-frame numbers no log can show.
-            const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
-            lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs%s",
-                                     ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments,
-                                     ds.mGuarded ? "   [guarded pass!]" : ""));
-        }
         lines.push_back(llformat("lightning  %d live   flash %.2f   %s   %d thunder pending",
                                  lit->liveCount(), lit->flash(),
                                  next < 0.0 ? "not thundery"
                                             : llformat("next in %.0fs", next).c_str(),
                                  audio->pendingThunder()));
+        {
+            // Guarded-pass flag deliberately NOT shown: the HUD pass runs after the main pass every frame and always sets it, so it says nothing; the numbers are the main pass's own.
+            const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
+            lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
+                                     ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));
+        }
         for (const SSStrike& st : lit->strikes())
         {
             lines.push_back(llformat("  %-6s %5.0fm   %+.2fs   leader %.2f   bright %.2f   ch %d   st %d%s",
@@ -1062,11 +1066,40 @@ void SSAtmoMagic::drawInfo()
                                      st.mPicked.asString().substr(0, 8).c_str(),
                                      st.mListSize, st.mSource.c_str()));
         }
+        lines.push_back(llformat("  mode     %s",
+                                 st.mMode == 'S' ? "per-impact segments" :
+                                 st.mMode == 'L' ? "attached loop" : "-"));
     }
 
     lines.push_back(llformat("impacts    %.1f/s   %d queued   loops %d",
                              audio->impactRate(), (S32)atmo->pendingImpacts(), audio->activeLoops()));
     lines.push_back(llformat("probe age  %.2fs", (F32)audio->lastProbeAge()));
+
+    // The far sea's ground truth, because "is that grid stock water or the disc" is unanswerable from a wireframe: whether the disc draws at all, the rim radius it drew with, whether the
+    // void-water standdown actually latched - and an enumeration of every stock filler object with its position and scale, so leftover grids identify themselves.
+    // [interaction: SSFarSea, SSAtmoEnvApplier::setVoidWaterRendering, LLWorld::updateWaterObjects]
+    {
+        const SSAtmoEnvApplier& env = SSAtmoEnvApplier::instance();
+        lines.push_back(llformat("far sea    %s   rim %.1f km (0 = not drawing)   knee %.0f m   void water %s",
+                                 (env.isActive() && env.waterPlaneOn()) ? "on" : "off",
+                                 SSFarSea::getInstance()->lastRimRadius() / 1000.f,
+                                 SSFarSea::getInstance()->lastKnee(),
+                                 env.voidWaterDerendered() ? "stood down" : "stock"));
+
+        LLWorld* world = LLWorld::getInstance();
+        lines.push_back(llformat("  hole water  %d objects", (S32)world->holeWaterObjects().size()));
+        const LLPointer<LLVOWater>* edges = world->edgeWaterObjects();
+        for (S32 i = 0; i < 8; ++i)
+        {
+            const LLVOWater* w = edges[i].get();
+            if (!w || w->isDead()) continue;
+            const LLVector3 p = w->getPositionAgent();
+            const LLVector3 s = w->getScale();
+            lines.push_back(llformat("  edge %d   at %.0f %.0f   %.0f x %.0f m%s",
+                                     i, p.mV[0], p.mV[1], s.mV[0], s.mV[1],
+                                     w->mDrawable.notNull() && w->mDrawable->isVisible() ? "   VISIBLE" : ""));
+        }
+    }
 
     const LLFontGL* font = LLFontGL::getFontMonospace();
     const S32 line_h = font->getLineHeight();

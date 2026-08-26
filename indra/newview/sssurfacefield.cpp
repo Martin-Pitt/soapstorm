@@ -28,6 +28,7 @@
 
 #include "ssatmomagic.h"
 #include "ssavatarwet.h"
+#include "ssvolcloud.h"
 #include "ssprecippreset.h"
 #include "ssprecipitation.h"
 #include "ssrainshadow.h"
@@ -53,6 +54,29 @@
 
 #include <glm/gtc/type_ptr.hpp>
 #include <glm/mat4x4.hpp>
+
+// <SS:Nexii> One octave of value noise over a metre-anchored lattice, THE puddle mask pattern: the cell envelope, the gameplay sample() and (re-implemented verbatim in GLSL) the wet shader's
+// per-fragment shoreline all evaluate this same function on region-local metres, which is the only reason a footstep splash and the drawn pool edge can agree to the centimetre.
+static F32 ssPuddleMaskNoise(F32 mx, F32 my, F32 scale_m)
+{
+    auto latticeHash = [](S32 cx, S32 cy)
+    {
+        U32 h = (U32)cx * 374761393u + (U32)cy * 668265263u;
+        h = (h ^ (h >> 13)) * 1274126177u;
+        return (F32)((h ^ (h >> 16)) & 0xffffffu) / (F32)0x1000000;
+    };
+    const F32 fx = mx / llmax(scale_m, 1.f);
+    const F32 fy = my / llmax(scale_m, 1.f);
+    const S32 ix = (S32)floorf(fx);
+    const S32 iy = (S32)floorf(fy);
+    const F32 tx = fx - (F32)ix;
+    const F32 ty = fy - (F32)iy;
+    const F32 sx = tx * tx * (3.f - 2.f * tx);
+    const F32 sy = ty * ty * (3.f - 2.f * ty);
+    return lerp(lerp(latticeHash(ix, iy),     latticeHash(ix + 1, iy),     sx),
+                lerp(latticeHash(ix, iy + 1), latticeHash(ix + 1, iy + 1), sx), sy);
+}
+// </SS:Nexii>
 
 // <SS:Nexii> Atmo Magic surface field
 
@@ -552,25 +576,13 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
     const F32 mask_amt = llclamp((F32)mask_strength, 0.f, 1.f);
     const F32 mask_wave = llmax((F32)mask_scale, 1.f) / llmax(cell, 0.25f);
 
-    auto latticeHash = [](S32 cx, S32 cy)
-    {
-        U32 h = (U32)cx * 374761393u + (U32)cy * 668265263u;
-        h = (h ^ (h >> 13)) * 1274126177u;
-        return (F32)((h ^ (h >> 16)) & 0xffffffu) / (F32)0x1000000;
-    };
     auto puddleMask = [&](S32 cx, S32 cy)
     {
-        const F32 fx = (F32)cx / mask_wave;
-        const F32 fy = (F32)cy / mask_wave;
-        const S32 ix = (S32)floorf(fx);
-        const S32 iy = (S32)floorf(fy);
-        const F32 tx = fx - (F32)ix;
-        const F32 ty = fy - (F32)iy;
-        const F32 sx = tx * tx * (3.f - 2.f * tx);
-        const F32 sy = ty * ty * (3.f - 2.f * ty);
-        const F32 v = lerp(lerp(latticeHash(ix, iy),     latticeHash(ix + 1, iy),     sx),
-                           lerp(latticeHash(ix, iy + 1), latticeHash(ix + 1, iy + 1), sx), sy);
-        const F32 patch = llclamp((v - 0.42f) / 0.28f, 0.f, 1.f);
+        const F32 v = ssPuddleMaskNoise((F32)cx * cell, (F32)cy * cell, mask_wave * cell);
+        // A generous ENVELOPE, not the shoreline: the wet shader re-evaluates this same lattice per fragment and carves the actual pool edge there (soft threshold at ~0.47-0.56), so the cell
+        // level's job is only to keep depth out of cells no part of a pool can reach and to thin the data the drainage and footstep queries read. Cut to the shader's own threshold this doubled
+        // the falloff and every pool came out half its drawn size.
+        const F32 patch = llclamp((v - 0.36f) / 0.34f, 0.f, 1.f);
         return lerp(1.f, patch * patch * (3.f - 2.f * patch), mask_amt);
     };
 
@@ -786,6 +798,21 @@ SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
     out.mPuddle = fld.mPuddle[i];
     out.mSurfaceZ = fld.mZ[i];
     out.mValid = true;
+
+    // The fine shoreline, at the query point itself - the same lattice and threshold the wet shader carves the drawn pool edge with, so a foot lands in a puddle exactly where the eye sees one.
+    // The stored cell value is only the generous envelope; without this a footstep two metres from a drawn pool still splashed.
+    if (out.mPuddle > 0.f)
+    {
+        static LLCachedControl<F32> mask_strength(gSavedSettings, "SSAtmoWetPuddleMask", 0.75f);
+        static LLCachedControl<F32> mask_scale(gSavedSettings, "SSAtmoWetPuddleMaskScale", 7.f);
+        const F32 amt = llclamp((F32)mask_strength, 0.f, 1.f);
+        if (amt > 0.f)
+        {
+            const F32 v = ssPuddleMaskNoise(local.mV[VX], local.mV[VY], (F32)mask_scale);
+            const F32 t = llclamp((v - 0.47f) / 0.09f, 0.f, 1.f);
+            out.mPuddle *= lerp(1.f, t * t * (3.f - 2.f * t), amt);
+        }
+    }
     return out;
 }
 
@@ -1132,26 +1159,63 @@ void SSSurfaceField::renderWetPass()
     // known on this side.
     static LLCachedControl<F32> spec_matte(gSavedSettings, "SSAtmoWetSpecularMatte", 0.1f);
 
+    // Direct light through the deck, ONE march from the camera toward the sun/moon through the volumetric field, cached briefly: every highlight this pass paints is close to the camera and
+    // in-region, so one answer serves them all [interaction: SSVolCloud -> wet specular]. A deck between you and the light kills the glint a wet street throws - the specular colour targets are
+    // what the sun/moon highlight and the env gloss both multiply by, so dimming them is dimming the shine. The floor keeps the ambient sky's sheen; overcast streets still glisten, they just
+    // stop throwing a sun.
+    static F32 s_light_vis = 1.f;
+    static F64 s_light_vis_at = -1.0;
+    const F64 vis_now = SSAtmoMagic::getInstance()->sharedTime();
+    if (vis_now - s_light_vis_at > 0.5)
+    {
+        s_light_vis_at = vis_now;
+        SSVolCloud* vol = SSVolCloud::getInstance();
+        const LLVector3 cam_pos = LLViewerCamera::getInstance()->getOrigin();
+        const LLVector3 toward_light = LLEnvironment::instance().getLightDirection();
+        s_light_vis = vol->empty() ? 1.f
+            : vol->transmittance(cam_pos, cam_pos + toward_light * 6000.f, 1.f);
+    }
+    const F32 spec_dim = 0.3f + 0.7f * s_light_vis;
+
     gSSSurfaceWetProgram.uniform1f(wet_str, wet_strength);
     gSSSurfaceWetProgram.uniform1f(wet_rough, llclamp((F32)rough_mul, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_rough_min, llclamp((F32)rough_min, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_gloss, llclamp((F32)gloss_target, 0.f, 1.f));
-    gSSSurfaceWetProgram.uniform1f(wet_spec, llclamp((F32)spec_target, 0.f, 1.f));
-    gSSSurfaceWetProgram.uniform1f(wet_spec_matte, llclamp((F32)spec_matte, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_spec, llclamp((F32)spec_target, 0.f, 1.f) * spec_dim);
+    gSSSurfaceWetProgram.uniform1f(wet_spec_matte, llclamp((F32)spec_matte, 0.f, 1.f) * spec_dim);
 
     // Standing water. The depth figure is shared verbatim with the normal flatten pass below so the two agree on what counts as a full puddle; everything else here is this pass's own look, tuned
     // independently of the general wetness dials above it.
     static LLCachedControl<F32> puddle_depth_full(gSavedSettings, "SSAtmoWetPuddleDepthFull", 0.02f);
     static LLCachedControl<F32> puddle_rough(gSavedSettings, "SSAtmoWetPuddleRoughness", 0.02f);
     static LLCachedControl<F32> puddle_rough_min(gSavedSettings, "SSAtmoWetPuddleRoughMin", 0.02f);
-    static LLCachedControl<F32> puddle_spec(gSavedSettings, "SSAtmoWetPuddleSpecular", 0.9f);
+    static LLCachedControl<F32> puddle_spec(gSavedSettings, "SSAtmoWetPuddleSpecular", 0.2f);
     static LLCachedControl<F32> puddle_gloss(gSavedSettings, "SSAtmoWetPuddleGloss", 0.9f);
     const F32 puddle_depth_full_m = llmax((F32)puddle_depth_full, 0.001f);
     gSSSurfaceWetProgram.uniform1f(wet_puddle_depth, puddle_depth_full_m);
     gSSSurfaceWetProgram.uniform1f(wet_puddle_rough, llclamp((F32)puddle_rough, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_puddle_rough_min, llclamp((F32)puddle_rough_min, 0.f, 1.f));
-    gSSSurfaceWetProgram.uniform1f(wet_puddle_spec, llclamp((F32)puddle_spec, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_puddle_spec, llclamp((F32)puddle_spec, 0.f, 1.f) * spec_dim);
     gSSSurfaceWetProgram.uniform1f(wet_puddle_gloss, llclamp((F32)puddle_gloss, 0.f, 1.f));
+
+    // The fine shoreline's dials, and its anchor: the CAMERA's region origin, so the GLSL lattice reproduces the CPU's region-local one exactly - the stitched window's own origin re-snaps as
+    // the camera moves and anchoring there slid the whole pool pattern with you.
+    {
+        static LLStaticHashedString mask_amt_u("ssPuddleMaskAmt");
+        static LLStaticHashedString mask_scale_u("ssPuddleMaskScaleM");
+        static LLStaticHashedString mask_anchor_u("ssPuddleMaskAnchor");
+        static LLCachedControl<F32> m_strength(gSavedSettings, "SSAtmoWetPuddleMask", 0.75f);
+        static LLCachedControl<F32> m_scale(gSavedSettings, "SSAtmoWetPuddleMaskScale", 7.f);
+        LLVector3 anchor(0.f, 0.f, 0.f);
+        if (LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(
+                LLViewerCamera::getInstance()->getOrigin()))
+        {
+            anchor = cam_region->getOriginAgent();
+        }
+        gSSSurfaceWetProgram.uniform1f(mask_amt_u, llclamp((F32)m_strength, 0.f, 1.f));
+        gSSSurfaceWetProgram.uniform1f(mask_scale_u, llmax((F32)m_scale, 1.f));
+        gSSSurfaceWetProgram.uniform2f(mask_anchor_u, anchor.mV[VX], anchor.mV[VY]);
+    }
 
     // How level a surface has to be to hold standing water. The same pair the normal flatten pass reads below, deliberately from the same settings: both passes decide whether this fragment is a
     // puddle, and a fragment shaded as one but not flattened as one (or the reverse) is worse than either choice made consistently.

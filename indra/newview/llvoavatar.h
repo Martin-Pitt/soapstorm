@@ -1348,8 +1348,10 @@ public:
     LLVector4           mFootPlane;
 private:
     bool                mWasOnGroundLeft;
-    // <SS:Nexii> Which ankle was the lower one last frame, for the support-foot swap step detector - see updateFootstepSounds.
-    bool                mSSLowerLeft = false;
+    // <SS:Nexii> Airborne last frame, for the touchdown edge that fires the Land one-shot - see updateFootstepSounds.
+    bool                mSSWasInAir = false;
+    bool                mSSWasRunning = false;   // hysteresis for the walk/run speed classifier - see updateFootstepSounds
+    bool                mSSLowerLeft = false;    // which ankle was lower last frame: the support-foot swap IS the footfall, and it is AO- and hover-immune because feet compare against each other
     // </SS:Nexii>
     bool                mWasOnGroundRight;
 

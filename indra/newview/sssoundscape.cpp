@@ -37,6 +37,10 @@
 #include "llaudioengine.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerobject.h"
+#include "lldrawable.h"
+#include "llhudobject.h"
+#include "llhudtext.h"
 #include "pipeline.h"
 
 // <SS:Nexii> Atmo Magic environmental weather audio
@@ -429,6 +433,11 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     const F32 impact_wet = llclamp(mImpactRate / IMPACT_RATE_FULL, 0.f, 1.f);
     const F32 wet = llclamp(0.55f * param_wet + 0.45f * impact_wet, 0.f, 1.f);
 
+    // Two timescales on purpose. A bed RECORDING represents the mass of rain across its whole background, so WHICH rung of the ladder plays follows a ~10s average - rung swaps track the storm,
+    // not every gust. How LOUD it plays keeps the fast figure, so gusts still swell and shelter still ducks at the speed the ear expects. One number for both made rung choice flappy and loudness
+    // laggy at once.
+    mWetSlow = lerp(mWetSlow, wet, llclamp(dt / 10.f, 0.f, 1.f));
+
     // Wind rides speed, turbulence and the live gust envelope. The speed is the locally solved one where a flowmap exists, so a courtyard is quiet and a gap the wind is squeezing through is loud,
     // rather than everywhere hearing the same parameter.
     const LLVector3 cam_pos = LLViewerCamera::getInstance()->getOrigin();
@@ -463,6 +472,54 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     targets[LOOP_AMBIENT_MEDIUM] = w_med * outdoor;
     targets[LOOP_AMBIENT_HEAVY]  = w_heavy * outdoor;
 
+    // Bucket-free beds: every ambient recording is a rung on one ladder sorted by MEASURED density, and the FAST wetness walks it - immediacy is deliberate, and all the smoothing lives in the
+    // per-rung voice crossfades (equal-power, sub-second, "studio fades"), not in slowing the signal down. Rungs are persistent voices: a boundary crossing keeps the continuing recording's voice
+    // and position untouched, and a rung that fades away resumes from where it stopped next time - see updateBedVoices. Fallback to the authored tri-blend whenever the ladder cannot do better:
+    // auto off, fewer than three analysed rungs, or densities too similar to sort.
+    mLadderTargets.clear();
+    {
+        static LLCachedControl<bool> auto_beds(gSavedSettings, "SSAtmoAmbientAutoSort", true);
+        if (auto_beds)
+        {
+            std::vector<std::pair<F32, LLUUID>> rungs;
+            for (const std::string* csv : { &preset.mSounds.mAmbientLight, &preset.mSounds.mAmbientMedium, &preset.mSounds.mAmbientHeavy })
+            {
+                std::vector<std::string> tokens;
+                LLStringUtil::getTokens(*csv, tokens, ",");
+                for (const std::string& tok : tokens)
+                {
+                    LLUUID id(tok);
+                    if (id.isNull()) continue;
+                    if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(id))
+                    {
+                        rungs.emplace_back(meta->mDensity, id);
+                    }
+                }
+            }
+            if (rungs.size() >= 3)
+            {
+                std::sort(rungs.begin(), rungs.end());
+                if (rungs.back().first - rungs.front().first >= 0.08f)
+                {
+                    const F32 pos = llclamp(wet, 0.f, 1.f) * (F32)(rungs.size() - 1);
+                    const size_t lo = (size_t)llmin((F32)(rungs.size() - 1), pos);
+                    const size_t hi = llmin(lo + 1, rungs.size() - 1);
+                    const F32 frac = llclamp(pos - (F32)lo, 0.f, 1.f);
+
+                    // Equal-power split: constant perceived loudness across the crossfade, which is what a linear split audibly dips in the middle of.
+                    const F32 amb = llclamp(wet / 0.3f, 0.f, 1.f) * outdoor;
+                    mLadderTargets.emplace_back(rungs[lo].second, amb * cosf(frac * F_PI_BY_TWO));
+                    if (hi != lo) mLadderTargets.emplace_back(rungs[hi].second, amb * sinf(frac * F_PI_BY_TWO));
+
+                    // The slot beds stand down while the voices carry the rain.
+                    targets[LOOP_AMBIENT_LIGHT]  = 0.f;
+                    targets[LOOP_AMBIENT_MEDIUM] = 0.f;
+                    targets[LOOP_AMBIENT_HEAVY]  = 0.f;
+                }
+            }
+        }
+    }
+
     // Rain-on-roof bed for the current situation; needs both cover and actual precipitation coming down outside. Burial takes this one too: what you hear drumming on a roof is the roof over your
     // head, and in a basement that surface is storeys away with a building damping it.
     const F32 roof = mCoverSmooth * wet * (1.f - BURIAL_MAX_DUCK * buried);
@@ -484,6 +541,14 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     targets[LOOP_WIND_LIGHT]  = tri(wind, 0.02f, 0.3f, 0.75f) * wind_indoor;
     targets[LOOP_WIND_STRONG] = llclamp((wind - 0.45f) / 0.4f, 0.f, 1.f) * wind_indoor;
 
+    // Login warmup: every input above starts at its naive default - the cover probe says open sky before it has cast a ray, the flowmap has no tile so wind reads the raw parameter - and the beds
+    // opened at full outdoor gain for a second before the probes discovered the roof and faded them back down. Nothing speaks until the first probe cycle has actually answered.
+    if (mLastCycleDone <= 0.0)
+    {
+        for (S32 i = 0; i < LOOP_COUNT; ++i) targets[i] = 0.f;
+        mLadderTargets.clear();
+    }
+
     static LLCachedControl<F32> master_setting(gSavedSettings, "SSAtmoVolumeMaster", 0.8f);
     static LLCachedControl<F32> ambient_setting(gSavedSettings, "SSAtmoVolumeAmbient", 1.f);
     static LLCachedControl<F32> wind_setting(gSavedSettings, "SSAtmoVolumeWind", 1.f);
@@ -498,7 +563,7 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
         wind_vol, wind_vol,
     };
 
-    // Precipitation beds come from the preset pack; wind is global
+    // Precipitation beds come from the preset pack; when the ladder is active their targets are zero and the rung voices carry the rain instead.
     const std::string sources[LOOP_COUNT] = {
         preset.mSounds.mAmbientLight,
         preset.mSounds.mAmbientMedium,
@@ -526,6 +591,72 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     {
         mLoops[i].mTarget = llclamp(targets[i], 0.f, 1.f);
         applyLoop(mLoops[i], sources[i], master * category[i], dt);
+    }
+
+    updateBedVoices(now, dt, master * ambient_vol);
+}
+
+void SSSoundscape::updateBedVoices(F64 now, F32 dt, F32 master_mul)
+{
+    if (!gAudiop) return;
+
+    // Targets for every live voice: the ladder's picks get theirs, everyone else fades to zero. A voice is only ever CREATED by the ladder; it dies by fading out.
+    for (auto& pair : mBedVoices) pair.second.mTarget = 0.f;
+    for (const auto& want : mLadderTargets)
+    {
+        mBedVoices[want.first].mTarget = llclamp(want.second, 0.f, 1.f);
+    }
+
+    // The studio fade: fast enough to feel the weather react, slow enough to be a mix move rather than a cut. ~0.7s full-swing.
+    const F32 fade = llclamp(dt * 1.5f, 0.f, 1.f);
+
+    for (auto it = mBedVoices.begin(); it != mBedVoices.end(); )
+    {
+        BedVoice& voice = it->second;
+        voice.mGain = lerp(voice.mGain, voice.mTarget, fade);
+
+        LLAudioSource* source = voice.mSourceID.notNull() ? gAudiop->findAudioSource(voice.mSourceID) : nullptr;
+
+        if (voice.mTarget <= 0.001f && voice.mGain <= 0.005f)
+        {
+            // Faded away. Remember where the recording stopped so its next appearance RESUMES rather than replaying the authored fade-in from byte zero - the resets that were audible on every
+            // ladder move under the old slot-override design.
+            if (source)
+            {
+                U32 len = 0;
+                if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(it->first)) len = meta->mLengthMS;
+                if (len > 0)
+                {
+                    mBedResume[it->first] = (U32)((voice.mOffsetMS + (U64)((now - voice.mStartedAt) * 1000.0)) % len);
+                }
+                gAudiop->cleanupAudioSource(source);
+            }
+            it = mBedVoices.erase(it);
+            continue;
+        }
+
+        if (!source && voice.mTarget > 0.001f)
+        {
+            voice.mSourceID.generate();
+            voice.mStartedAt = now;
+            auto resume = mBedResume.find(it->first);
+            voice.mOffsetMS = (resume != mBedResume.end()) ? resume->second : 0;
+
+            source = new LLAudioSource(voice.mSourceID, gAgent.getID(), 0.f, LLAudioEngine::AUDIO_TYPE_AMBIENT);
+            source->setStartOffsetMS(voice.mOffsetMS);
+            source->setLoop(true);
+            source->setForcedPriority(true);
+            source->setPositionGlobal(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()));
+            gAudiop->addAudioSource(source);
+            source->play(it->first);
+        }
+
+        if (source)
+        {
+            source->setGain(llclamp(voice.mGain * master_mul, 0.f, 1.f));
+            source->setPositionGlobal(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()));
+        }
+        ++it;
     }
 }
 
@@ -589,6 +720,62 @@ namespace
     }
 }
 
+F32 SSSoundscape::skyOcclusion() const
+{
+    // Cover is the roof over the camera; burial is how much MORE build stands between that ceiling and the open sky. Together: a porch muffles thunder a little, a basement almost entirely.
+    return llclamp(mCoverSmooth * 0.55f + burialOcclusion() * 0.45f, 0.f, 1.f);
+}
+
+// A positioned one-shot with occlusion - what gAudiop->triggerSound cannot express, since it offers no handle to set anything on the source it creates. The engine reaps the source when the
+// sound finishes, same as the sequence loops rely on.
+static LLUUID ss_play_oneshot(const LLUUID& sound, const LLVector3d& pos_global, F32 gain, F32 occlusion)
+{
+    if (!gAudiop || sound.isNull()) return LLUUID::null;
+
+    const LLUUID id = LLUUID::generateNewID();
+    LLAudioSource* source = new LLAudioSource(id, gAgent.getID(),
+                                              llclamp(gain, 0.f, 1.f), LLAudioEngine::AUDIO_TYPE_AMBIENT);
+    source->setPositionGlobal(pos_global);
+    source->setOcclusion(occlusion);
+    gAudiop->addAudioSource(source);
+    source->play(sound);
+    return id;
+}
+
+void SSSoundscape::registerFollower(const LLUUID& source_id, const LLVector3& dir_world, F64 now)
+{
+    if (source_id.isNull()) return;
+    OneShotFollower f;
+    f.mSourceID = source_id;
+    f.mDir = dir_world;
+    f.mLastPos = LLViewerCamera::getInstance()->getOrigin() + dir_world * 12.f;
+    f.mExpires = now + 120.0;
+    mFollowers.push_back(f);
+}
+
+void SSSoundscape::updateFollowers(F64 now, F32 dt)
+{
+    if (!gAudiop) return;
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+    for (size_t i = 0; i < mFollowers.size(); )
+    {
+        OneShotFollower& f = mFollowers[i];
+        LLAudioSource* source = gAudiop->findAudioSource(f.mSourceID);
+        if (!source || now > f.mExpires)
+        {
+            mFollowers.erase(mFollowers.begin() + i);
+            continue;
+        }
+
+        const LLVector3 pos = cam + f.mDir * 12.f;
+        source->setPositionGlobal(gAgent.getPosGlobalFromAgent(pos));
+        source->setVelocity((dt > 0.001f) ? (pos - f.mLastPos) / dt : LLVector3::zero);
+        f.mLastPos = pos;
+        ++i;
+    }
+}
+
 void SSSoundscape::playCharge(const LLVector3& pos_agent, F32 intensity)
 {
     static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
@@ -598,9 +785,15 @@ void SSSoundscape::playCharge(const LLVector3& pos_agent, F32 intensity)
     const LLUUID sound = pick_from_setting("SSAtmoLightningCharge", rng);
     if (sound.isNull()) return;
 
-    gAudiop->triggerSound(sound, gAgentID, llclamp(intensity, 0.f, 1.f),
-                          LLAudioEngine::AUDIO_TYPE_AMBIENT,
-                          gAgent.getPosGlobalFromAgent(pos_agent));
+    // Placed a few metres from the listener ALONG the direction of the strike, not at the strike: the engine's 3D rolloff silences anything hundreds of metres out, and distance is already
+    // carried by our own gain model. Direction is what the placement is for - the ear still learns where it came from.
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    LLVector3 dir = pos_agent - cam;
+    const F32 d = dir.normalize();
+    const LLVector3 near_pos = cam + dir * llmin(d, 12.f);
+    registerFollower(ss_play_oneshot(sound, gAgent.getPosGlobalFromAgent(near_pos),
+                                     llclamp(intensity, 0.f, 1.f), skyOcclusion()),
+                     dir, SSAtmoMagic::getInstance()->sharedTime());
 }
 
 F32 SSSoundscape::windCarryGain(const LLVector3& source_pos_agent) const
@@ -623,11 +816,47 @@ F32 SSSoundscape::windCarryGain(const LLVector3& source_pos_agent) const
     return llclamp(1.f + along * range * strength * 0.8f, 0.25f, 1.6f);
 }
 
+// Crack or rumble by MEASURED brightness rather than by which pack a sound was filed in. Both packs pool; analysed candidates sort by crackiness, near picks draw from the bright half, far from
+// the dark - a mixed dump of recordings sorts itself. Every honest failure falls back to the labelled packs: auto-sort off, fewer than four analysed, or material whose crackiness barely varies
+// (one storm's takes, often - nothing real to sort on). Verify against your own uploads via the SSSoundMeta log lines: cracks should score high, long rolls low.
+static LLUUID pick_thunder(bool want_rumble, SSRandStream& rng)
+{
+    static LLCachedControl<bool> auto_sort(gSavedSettings, "SSAtmoThunderAutoSort", true);
+    const char* home = want_rumble ? "SSAtmoThunderRumble" : "SSAtmoThunderCrack";
+    if (!auto_sort) return pick_from_setting(home, rng);
+
+    std::vector<std::pair<F32, LLUUID>> rated;
+    for (const char* setting : { "SSAtmoThunderCrack", "SSAtmoThunderRumble" })
+    {
+        std::vector<std::string> tokens;
+        LLStringUtil::getTokens(gSavedSettings.getString(setting), tokens, ",");
+        for (const std::string& tok : tokens)
+        {
+            LLUUID id(tok);
+            if (id.isNull()) continue;
+            if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(id))
+            {
+                rated.emplace_back(meta->mCrackiness, id);
+            }
+        }
+    }
+
+    if (rated.size() < 4) return pick_from_setting(home, rng);
+
+    std::sort(rated.begin(), rated.end());
+    if (rated.back().first - rated.front().first < 0.08f) return pick_from_setting(home, rng);
+
+    const size_t half = rated.size() / 2;
+    const size_t lo = want_rumble ? 0 : rated.size() - half;
+    return rated[lo + (size_t)rng.rand((S32)half)].second;
+}
+
 void SSSoundscape::scheduleThunder(const LLVector3& pos_agent, F32 distance_m,
-                                   F32 intensity, F64 fire_at)
+                                   F32 intensity, F64 fire_at, F32 muffle)
 {
     static LLCachedControl<bool> sounds(gSavedSettings, "SSAtmoSounds", true);
     if (!sounds || !gAudiop) return;
+    muffle = llclamp(muffle, 0.f, 1.f);
 
     SSRandStream rng((U32)(fire_at * 6151.0) ^ (U32)distance_m);
 
@@ -638,32 +867,37 @@ void SSSoundscape::scheduleThunder(const LLVector3& pos_agent, F32 distance_m,
     const F64 heard_at = fire_at + travel;
 
     // Crack and rumble LAYERED per strike, not near/far variants: thunder comes from the whole km-long channel at once - the near end is the crack, everything behind keeps arriving as the roll, and air absorption (~f^2) kills the crack over distance. doc/atmo_magic_lightning.md#thunder-acoustics.
-    const F32 crack_gain = 1.f - llclamp(
-        (distance_m - THUNDER_CRACK_M) / (THUNDER_RUMBLE_M - THUNDER_CRACK_M), 0.f, 1.f);
+    // Cloud burial kills the crack the same way distance does - the high frequencies are exactly what a few hundred metres of droplets absorb - which is why intra-cloud lightning is a rumble
+    // however close it is.
+    const F32 crack_gain = (1.f - llclamp(
+        (distance_m - THUNDER_CRACK_M) / (THUNDER_RUMBLE_M - THUNDER_CRACK_M), 0.f, 1.f))
+        * (1.f - muffle);
 
     // Distance attenuation on top of the 3D falloff the audio engine already applies, since the source is placed at the strike and a strike can be ten kilometres off - well past anything the
-    // engine's rolloff was ever tuned for.
+    // engine's rolloff was ever tuned for. A buried strike is quieter overall as well as duller.
     const F32 fade = 1.f / (1.f + (distance_m / 3000.f));
-    const F32 gain = llclamp(intensity * fade * windCarryGain(pos_agent), 0.f, 1.f);
+    const F32 gain = llclamp(intensity * fade * windCarryGain(pos_agent), 0.f, 1.f)
+                   * (1.f - 0.45f * muffle);
 
     if (crack_gain > 0.02f)
     {
-        queueThunder(pick_from_setting("SSAtmoThunderCrack", rng),
-                     pos_agent, distance_m, gain * crack_gain, heard_at);
+        queueThunder(pick_thunder(false, rng),
+                     pos_agent, distance_m, gain * crack_gain, heard_at, muffle);
     }
 
     // The roll comes in behind the crack, by however long the channel takes to finish arriving. A rough stand-in for the channel's own depth: several kilometres of it, so several seconds, and more
-    // of it for a fiercer strike. This one number is what makes near thunder a crack with a tail and distant thunder a roll on its own.
+    // of it for a fiercer strike. This one number is what makes near thunder a crack with a tail and distant thunder a roll on its own. Burial SHORTENS it: the far reaches of a buried channel are
+    // behind even more cloud than its near point, so their share of the roll never arrives - short muffled rumble, not a long peal.
     const F64 spread = (F64)(rng.frand(2000.f, 5000.f) * (0.6f + intensity * 0.7f)
-                             / speed_of_sound_ms());
+                             / speed_of_sound_ms()) * (F64)(1.f - 0.45f * muffle);
 
-    queueThunder(pick_from_setting("SSAtmoThunderRumble", rng),
+    queueThunder(pick_thunder(true, rng),
                  pos_agent, distance_m, gain * (0.5f + 0.5f * (1.f - crack_gain)),
-                 heard_at + spread * (F64)(1.f - crack_gain));
+                 heard_at + spread * (F64)(1.f - crack_gain), muffle);
 }
 
 void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
-                                F32 distance_m, F32 gain, F64 heard_at)
+                                F32 distance_m, F32 gain, F64 heard_at, F32 muffle)
 {
     if (sound.isNull() || gain <= 0.f) return;
 
@@ -674,6 +908,7 @@ void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
     PendingThunder pending;
     pending.mPos = pos_agent;
     pending.mDistanceM = distance_m;
+    pending.mMuffle = muffle;
     pending.mSound = sound;
     pending.mGain = gain;
     pending.mHeardAt = heard_at;
@@ -729,11 +964,23 @@ void SSSoundscape::updateThunder(F64 now)
             if (level > 0.001f) gain *= llclamp(REF_LEVEL / level, 0.5f, 2.f);
         }
 
-        if (gAudiop)
+        // Thunder's own trim, deliberately ABOVE 1 by default: the distance fade and the leveller both only ever pull the gain down, so a typical clap was landing at a fraction of full scale
+        // and thunder read as polite. The boost spends that headroom; ss_play_oneshot still clamps the final figure to 1, so a point-blank strike cannot overdrive.
+        static LLCachedControl<F32> thunder_vol(gSavedSettings, "SSAtmoVolumeThunder", 2.5f);
+        gain *= llclamp((F32)thunder_vol, 0.f, 4.f);
+
+        // Thunder wears the listener's sky occlusion as a lowpass: through a roof the crack dulls to a rumble - the gain barely moves, the timbre does. And like the charge, the source sits a
+        // few metres away ALONG the strike's bearing rather than AT the strike [interaction: engine 3D rolloff]: distance lives in our gain model, the placement only carries direction.
         {
-            gAudiop->triggerSound(p.mSound, gAgentID, gain,
-                                  LLAudioEngine::AUDIO_TYPE_AMBIENT,
-                                  gAgent.getPosGlobalFromAgent(p.mPos));
+            const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+            LLVector3 dir = p.mPos - cam;
+            const F32 d = dir.normalize();
+            const LLVector3 near_pos = cam + dir * llmin(d, 12.f);
+
+            // Cloud burial stacks onto the listener's own roof burial as lowpass - both are stuff between the discharge and the ear, and the occlusion channel is the one lever the engine dulls by.
+            const F32 occ = llclamp(skyOcclusion() + p.mMuffle * 0.55f, 0.f, 1.f);
+            registerFollower(ss_play_oneshot(p.mSound, gAgent.getPosGlobalFromAgent(near_pos), gain, occ),
+                             dir, now);
         }
 
         mThunder.erase(mThunder.begin() + i);
@@ -780,6 +1027,365 @@ bool SSSoundscape::roofOver(const LLUUID& avatar_id, const LLVector3& pos_agent,
     }
 
     return cover.mIndoors;
+}
+
+bool SSSoundscape::onObject(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self)
+{
+    const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+    AvatarCover& cover = mAvatarCover[avatar_id];
+
+    // Kerb-scale cadence, faster than the roof ray's: a street edge is crossed in a stride. Distance still buys other avatars slack.
+    const F32 moved = (foot_pos_agent - cover.mFootPos).magVec();
+    const F32 cam_dist = (foot_pos_agent - LLViewerCamera::getInstance()->getOrigin()).magVec();
+    const F64 interval = is_self ? 0.3 : 0.3 + (F64)llclamp(cam_dist / 24.f, 0.f, 3.f);
+
+    if (cover.mFootWhen < 0.0 || (moved > 0.75f && now - cover.mFootWhen > interval))
+    {
+        cover.mFootPos = foot_pos_agent;
+        cover.mFootWhen = now;
+
+        // Down through the feet: start above the ankles, end far enough below to survive a bouncy walk animation. The intersect helper tests terrain too and RETURNS what it hit, so terrain
+        // underfoot is recognised as terrain rather than read as a miss - the distinction the dead stock resolver was supposed to make. pick_transparent on: invisible prims as walkway surfaces
+        // are a decades-old SL building tradition.
+        const LLVector3 start = foot_pos_agent + LLVector3(0.f, 0.f, 0.5f);
+        const LLVector3 end = foot_pos_agent - LLVector3(0.f, 0.f, 1.2f);
+        LLVector4a start4, end4, intersect;
+        start4.load3(start.mV);
+        end4.load3(end.mV);
+
+        LLDrawable* hit = gPipeline.lineSegmentIntersectWorldGeometry(start4, end4, &intersect, true, true);
+        LLViewerObject* vo = hit ? hit->getVObj().get() : nullptr;
+        cover.mOnObject = vo && vo->getPCode() != LLViewerObject::LL_VO_SURFACE_PATCH;
+    }
+
+    return cover.mOnObject;
+}
+
+void SSSoundscape::fadeKill(const LLUUID& source_id)
+{
+    if (!gAudiop || source_id.isNull()) return;
+    if (LLAudioSource* source = gAudiop->findAudioSource(source_id))
+    {
+        source->setGain(0.f);
+        mDying.emplace_back(source_id, SSAtmoMagic::getInstance()->sharedTime() + 0.06);
+    }
+}
+
+void SSSoundscape::updateDying(F64 now)
+{
+    if (!gAudiop) return;
+    for (size_t i = 0; i < mDying.size(); )
+    {
+        if (now >= mDying[i].second)
+        {
+            if (LLAudioSource* source = gAudiop->findAudioSource(mDying[i].first))
+            {
+                gAudiop->cleanupAudioSource(source);
+            }
+            mDying.erase(mDying.begin() + i);
+        }
+        else ++i;
+    }
+}
+
+void SSSoundscape::releaseStepLoop(StepLoop& loop)
+{
+    if (gAudiop && loop.mSourceID.notNull())
+    {
+        fadeKill(loop.mSourceID);
+    }
+    loop.mSourceID.setNull();
+    loop.mSound.setNull();
+    loop.mSurface = -1;
+    loop.mAction = -1;
+}
+
+void SSSoundscape::reapStepLoops(F64 now)
+{
+    for (auto it = mStepLoops.begin(); it != mStepLoops.end(); )
+    {
+        // An avatar that stopped reporting (left range, logged off, or simply stood still long enough that its updates stopped mattering) takes its loop with it.
+        if (now - it->second.mLastSeen > 0.5)
+        {
+            releaseStepLoop(it->second);
+            it = mStepLoops.erase(it);
+        }
+        else ++it;
+    }
+}
+
+void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& pos_agent,
+                                      bool on_land, S32 locomotion, bool is_self)
+{
+    if (!gAudiop) return;
+
+    const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+
+    if (locomotion != STEP_WALK && STEP_RUN != locomotion)
+    {
+        // Stopped (or airborne, or sitting). Not cut dead mid-splat though: the analysis knows where each step lands inside the recording, so the loop is allowed to finish the step it is in and
+        // dies at the gap after it - the midpoint before the NEXT onset - capped at 400ms so a stop never audibly lags the avatar. No analysis yet, or a sparse recording: immediate stop, exactly
+        // the old behaviour.
+        auto it = mStepLoops.find(avatar_id);
+        if (it == mStepLoops.end()) return;
+        StepLoop& loop = it->second;
+        loop.mLastSeen = now;
+
+        if (loop.mStopAt <= 0.0)
+        {
+            F64 wait = 0.0;
+            const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(loop.mSound);
+            if (meta && meta->mOnsets.size() >= 2 && meta->mLengthMS > 0)
+            {
+                const F64 pos_ms = fmod((F64)loop.mOffsetMS + (now - loop.mStartedAt) * 1000.0, (F64)meta->mLengthMS);
+                F64 cut_ms = -1.0;
+                for (size_t k = 0; k + 1 < meta->mOnsets.size(); ++k)
+                {
+                    // 2/3 of the way to the next onset, NOT the midpoint: the inter-step gap is asymmetric - the front of it is still the previous step's reverb tail decaying, and the true
+                    // quiet sits late, just before the next step. A midpoint cut lands inside the tail.
+                    const F64 gap = (F64)meta->mOnsets[k] + ((F64)meta->mOnsets[k + 1] - (F64)meta->mOnsets[k]) * 0.66;
+                    if (gap > pos_ms) { cut_ms = gap; break; }
+                }
+                if (cut_ms < 0.0) cut_ms = (F64)meta->mTailMS;    // past the last onset: die at content end
+                wait = llclamp((cut_ms - pos_ms) / 1000.0, 0.0, 0.4);
+            }
+            loop.mStopAt = now + wait;
+        }
+
+        if (now >= loop.mStopAt)
+        {
+            releaseStepLoop(loop);
+            mStepLoops.erase(it);
+        }
+        else if (gAudiop)
+        {
+            // Still finishing its step - and still on the avatar's shoulder while it does.
+            if (LLAudioSource* source = gAudiop->findAudioSource(loop.mSourceID))
+            {
+                source->setPositionGlobal(gAgent.getPosGlobalFromAgent(pos_agent));
+            }
+        }
+        return;
+    }
+
+    StepLoop& loop = mStepLoops[avatar_id];
+    loop.mLastSeen = now;
+    loop.mStopAt = 0.0;    // moving again cancels a pending gap-stop - same state resumes the same loop mid-word
+
+    // Surface is re-resolved every frame (doorways, wet ground switch the state mid-stride), but the SOUND pick is only re-rolled when the state actually changes. footstepSound rolls randomly
+    // from the slot each call, and using every frame's roll made a mixed slot flip between segment and loop mode at frame rate - brief loop bursts stomping over impact steps, which is what
+    // "per-impact is messed up" turned out to be.
+    LLUUID rolled;
+    S32 surface = -1;
+    {
+        rolled = footstepSound(avatar_id, pos_agent, on_land, locomotion, is_self);
+        const StepDebug& dbg = is_self ? mStepSelf : mStepOther;
+        surface = dbg.mSurface;
+    }
+
+    const bool state_changed = (surface != loop.mSurface) || (locomotion != loop.mAction);
+    const LLUUID sound = (state_changed || loop.mSound.isNull()) ? rolled : loop.mSound;
+
+    // Segment mode: the analysis says this recording's steps cut apart cleanly (real silence between onsets), so footfalls drive windowed single steps and NO loop plays. The gate is the gap
+    // floor - wash or reverb between steps keeps the whole-loop model, which is the honest one for such material.
+    if (!sound.isNull())
+    {
+        if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(sound))
+        {
+            // Three-part verdict: enough steps to pick from, quiet gaps (the cuts are clean), and REGULAR cadence (the map is actually steps - a splashy recording whose detector confused puddle
+            // noise with footfalls has ragged intervals and stays honestly in loop mode). Rate bounds catch maps counting things no gait produces.
+            const bool segmentable = meta->mOnsets.size() >= 4
+                && meta->mGapFloor < 0.12f
+                && meta->mCadenceCV < 0.4f
+                && meta->mImpactRate > 0.8f && meta->mImpactRate < 4.5f;
+            if (segmentable)
+            {
+                if (LLAudioSource* old_src = loop.mSourceID.notNull() ? gAudiop->findAudioSource(loop.mSourceID) : nullptr)
+                {
+                    fadeKill(loop.mSourceID);
+                    loop.mSourceID.setNull();
+                }
+                loop.mSurface = surface;
+                loop.mAction = locomotion;
+                loop.mSound = sound;
+                loop.mSegmented = true;
+                loop.mStopAt = 0.0;
+                (is_self ? mStepSelf : mStepOther).mMode = 'S';
+                return;
+            }
+        }
+    }
+    loop.mSegmented = false;
+    (is_self ? mStepSelf : mStepOther).mMode = 'L';
+
+    LLAudioSource* source = loop.mSourceID.notNull() ? gAudiop->findAudioSource(loop.mSourceID) : nullptr;
+
+    // Churn guard: a slot whose asset has not decoded yet gets its source reaped by the engine, and recreating per frame is a 60Hz allocation treadmill. Once a second is plenty to catch the decode.
+    if (!state_changed && !source && now - loop.mStartedAt < 1.0) return;
+
+    if (state_changed || !source)
+    {
+        // New state, new loop - the sound picked above is this state's voice until the state changes again. An empty slot means this state is deliberately silent.
+        releaseStepLoop(loop);
+        loop.mSurface = surface;
+        loop.mAction = locomotion;
+        loop.mLastSeen = now;
+
+        if (sound.isNull()) return;
+
+        static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
+        loop.mSourceID.generate();
+        loop.mSound = sound;
+        loop.mStartedAt = now;
+
+        // Start at a RANDOM between-steps gap, not the top of the file: with the step map analysed, every walk begins on a fresh step - the loop format's answer to the variety a one-shot pack
+        // gets by picking. Enter and exit both happen in the silence between steps now, never mid-splat.
+        loop.mOffsetMS = 0;
+        if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(sound))
+        {
+            if (meta->mOnsets.size() >= 2)
+            {
+                // Same 2/3-of-gap point the stops use: entering at the midpoint dropped the listener into the previous step's reverb tail mid-decay, which reads as a blip before the first real step.
+                const size_t k = (size_t)ll_rand((S32)meta->mOnsets.size() - 1);
+                loop.mOffsetMS = meta->mOnsets[k] + (U32)((meta->mOnsets[k + 1] - meta->mOnsets[k]) * 2 / 3);
+            }
+        }
+
+        source = new LLAudioSource(loop.mSourceID, avatar_id,
+                                   llclamp((F32)vol, 0.f, 1.f), LLAudioEngine::AUDIO_TYPE_AMBIENT);
+        source->setStartOffsetMS(loop.mOffsetMS);
+        source->setLoop(true);
+        source->setPositionGlobal(gAgent.getPosGlobalFromAgent(pos_agent));
+        source->setOcclusion(0.f);
+        gAudiop->addAudioSource(source);
+        source->play(sound);
+        gAudiop->preloadSound(sound);
+        markStepSource(loop.mSourceID);
+    }
+
+    // Attached: the loop is wherever the avatar is, every frame. This is the "following" half of the model.
+    if (source)
+    {
+        source->setPositionGlobal(gAgent.getPosGlobalFromAgent(pos_agent));
+    }
+}
+
+void SSSoundscape::footstepImpact(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self)
+{
+    auto it = mStepLoops.find(avatar_id);
+    if (it == mStepLoops.end() || !it->second.mSegmented || it->second.mSound.isNull() || !gAudiop) return;
+
+    const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(it->second.mSound);
+    if (!meta || meta->mOnsets.size() < 4 || meta->mLengthMS == 0) return;
+
+    // Cadence ceiling. The ankle-swap detector is a zero-crossing test and chatters when the two heights run near-equal - turning in place, stair lips, certain anims - firing "footfalls" no gait
+    // could produce. A run peaks around 3.5 steps/s and a walk around 2.5, so anything faster than the refractory is detector noise, not feet.
+    const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+    const F64 min_gap = (it->second.mAction == STEP_RUN) ? 0.24 : 0.34;
+    if (now - it->second.mLastImpactAt < min_gap) return;
+    it->second.mLastImpactAt = now;
+
+    // A random step from the map, windowed: begin 60ms before its onset (the foot's own approach), cut in the gap before the NEXT onset. The analysis put real silence there, so the hard cut is
+    // inaudible by construction.
+    const size_t k = (size_t)ll_rand((S32)meta->mOnsets.size() - 1);
+
+    // Start stays a tight 60ms pre-roll - the segment fires ON the footfall, and every ms before the onset is latency between the visual step and its sound, so the start cannot afford to chase
+    // tail purity the way the CUT can. The cut moves to the 2/3 point: the step keeps its own reverb tail (the two-thirds of the gap that belongs to it) and dies in the true quiet before the
+    // next recorded step.
+    const U32 start = (meta->mOnsets[k] > 60) ? meta->mOnsets[k] - 60 : 0;
+    const U32 cut = meta->mOnsets[k] + (meta->mOnsets[k + 1] - meta->mOnsets[k]) * 2 / 3;
+    const F64 window_s = llclamp((F64)(cut - start) / 1000.0, 0.1, 0.9);
+
+    static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
+
+    // One sounding step per avatar: the new footfall cuts the previous one's window short (its transient masks the cut), so consecutive impacts can never stack whole steps however long the
+    // recording's own inter-step gaps are.
+    fadeKill(it->second.mSegSourceID);
+
+    const LLUUID id = LLUUID::generateNewID();
+    it->second.mSegSourceID = id;
+    LLAudioSource* source = new LLAudioSource(id, gAgent.getID(),
+                                              llclamp((F32)vol, 0.f, 1.f), LLAudioEngine::AUDIO_TYPE_AMBIENT);
+    source->setStartOffsetMS(start);
+    source->setPositionGlobal(gAgent.getPosGlobalFromAgent(foot_pos_agent));
+    gAudiop->addAudioSource(source);
+    source->play(it->second.mSound);
+    markStepSource(id);
+
+    mSegmentStops.emplace_back(id, SSAtmoMagic::getInstance()->sharedTime() + window_s);
+}
+
+void SSSoundscape::updateSegmentStops(F64 now)
+{
+    if (!gAudiop) return;
+    for (size_t i = 0; i < mSegmentStops.size(); )
+    {
+        if (now >= mSegmentStops[i].second)
+        {
+            fadeKill(mSegmentStops[i].first);
+            mSegmentStops.erase(mSegmentStops.begin() + i);
+        }
+        else ++i;
+    }
+}
+
+void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_agent,
+                                 bool on_land, S32 action, bool is_self)
+{
+    const LLUUID sound = footstepSound(avatar_id, pos_agent, on_land, action, is_self);
+    if (sound.isNull() || !gAudiop) return;
+
+    static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
+
+    // Jump travels with the avatar in spirit but is over in a moment; Land is genuinely detached - it belongs to the spot the landing happened and stays there.
+    markStepSource(ss_play_oneshot(sound, gAgent.getPosGlobalFromAgent(pos_agent),
+                                   llclamp((F32)vol, 0.f, 1.f), 0.f));
+}
+
+void SSSoundscape::markStepSource(const LLUUID& source_id)
+{
+    static LLCachedControl<bool> markers(gSavedSettings, "SSAtmoDebugFootstepMarkers", false);
+    if (!markers || source_id.isNull()) return;
+
+    StepMark mark;
+    mark.mSourceID = source_id;
+    mark.mStart = SSAtmoMagic::getInstance()->sharedTime();
+    mark.mText = (LLHUDText*)LLHUDObject::addHUDObject(LLHUDObject::LL_HUD_TEXT);
+    if (mark.mText)
+    {
+        mark.mText->setDoFade(false);
+        mark.mText->setZCompare(false);    // through walls, same as the strike countdown - a marker you cannot find marks nothing
+    }
+    mStepMarks.push_back(mark);
+}
+
+void SSSoundscape::updateStepMarks(F64 now)
+{
+    for (size_t i = 0; i < mStepMarks.size(); )
+    {
+        StepMark& mark = mStepMarks[i];
+        LLAudioSource* source = gAudiop ? gAudiop->findAudioSource(mark.mSourceID) : nullptr;
+        if (!source)
+        {
+            // The source stopped (or was fade-killed): the tag vanishing IS the stop-timing readout.
+            if (mark.mText) mark.mText->markDead();
+            mStepMarks.erase(mStepMarks.begin() + i);
+            continue;
+        }
+        if (mark.mText)
+        {
+            // Rides the source's own position, so an attached loop visibly follows its avatar while a detached land/segment stays planted where it played.
+            const LLVector3 pos = gAgent.getPosAgentFromGlobal(source->getPositionGlobal());
+            mark.mText->setPositionAgent(pos + LLVector3(0.f, 0.f, 0.3f));
+
+            // The two phases the request named: a very short highly visible birth, then a subtle presence for as long as it keeps playing.
+            const bool fresh = now - mark.mStart < 0.25;
+            mark.mText->setString(fresh ? std::string(">> STEP <<") : std::string("."));
+            mark.mText->setColor(fresh ? LLColor4(1.f, 0.95f, 0.1f, 1.f)
+                                       : LLColor4(0.45f, 0.95f, 0.55f, 0.5f));
+        }
+        ++i;
+    }
 }
 
 LLUUID SSSoundscape::footstepSound(const LLUUID& avatar_id, const LLVector3& foot_pos_agent,
@@ -838,7 +1444,9 @@ LLUUID SSSoundscape::footstepSound(const LLUUID& avatar_id, const LLVector3& foo
         dbg.mWet = wet.mWet;
         dbg.mPuddle = wet.mPuddle;
 
-        if (on_land)
+        // NOT on_land: mStepOnLand upstream comes from the stock resolver whose object out-param has never been assigned (see onObject), so it is permanently "land" and every street prim, deck
+        // and skybox floor outdoors read as terrain. Our own cached foot ray answers what is actually underfoot.
+        if (on_land && !onObject(avatar_id, foot_pos_agent, is_self))
         {
             surface = puddle ? STEP_TERRAIN_PUDDLE : (damp ? STEP_TERRAIN_WET : STEP_TERRAIN_DRY);
         }
@@ -907,6 +1515,12 @@ void SSSoundscape::idle()
 
     // The analysis pipeline: walks every configured sound through decode and the worker pool while nothing needs it, so the moment something does, the answer is already in the table.
     SSSoundMeta::getInstance()->idle();
+
+    reapStepLoops(now);
+    updateFollowers(now, dt);
+    updateSegmentStops(now);
+    updateStepMarks(now);
+    updateDying(now);
 
     // Before the gate below: a clap already on its way must still arrive. The strike happened - the sky clearing in the eight seconds since does not un-happen it, and swallowing the sound is a worse
     // artefact than hearing thunder from a sky that has moved on.

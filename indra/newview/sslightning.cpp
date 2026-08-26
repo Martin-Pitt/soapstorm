@@ -371,18 +371,43 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     strike.mGround = ground;
 
     strike.mDistanceM = (strike.mOrigin - cam).magVec();
-    strike.mAudible = strike.mDistanceM < THUNDER_SHADOW_ZONE_M;
 
     if (strike.mKind != STRIKE_SHEET)
     {
         buildChannel(strike, strike.mIntensity);
     }
 
+    // Thunder is aimed and timed by the CHANNEL'S closest approach, not the origin or the attachment point: a crawler's origin can sit kilometres beyond the stretch passing overhead, and the
+    // crack's bearing and delay both belong to the nearest point of the bolt - the roll from the rest of the channel is already the spread's job [interaction: channel -> thunder]. Sheet strikes
+    // have no channel and keep the attachment point, which shares its bearing anyway.
+    LLVector3 thunder_pos = strike.mGround;
+    F32 thunder_d_sq = (thunder_pos - cam).magVecSquared();
+    for (const SSStrikeNode& node : strike.mChannel)
+    {
+        const F32 d_sq = (node.mPos - cam).magVecSquared();
+        if (d_sq < thunder_d_sq) { thunder_d_sq = d_sq; thunder_pos = node.mPos; }
+    }
+    const F32 thunder_d = sqrtf(thunder_d_sq);
+    strike.mAudible = thunder_d < THUNDER_SHADOW_ZONE_M;
+
+    // How buried the discharge is behind cloud, asked of the actual puff field between the listener and the channel's nearest point [interaction: SSVolCloud -> thunder]. A strike living high in
+    // the deck arrives as a quiet short muffled rumble rather than a full-price crack - the sound matching how little of it there was to see. Non-ground kinds keep a floor: an intra-cloud
+    // discharge is wrapped in its own cloud even when the ray to its nearest point threads a gap.
+    F32 muffle = 0.f;
+    {
+        SSVolCloud* vol = SSVolCloud::getInstance();
+        if (!vol->empty())
+        {
+            muffle = 1.f - vol->transmittance(cam, thunder_pos, 1.f);
+        }
+        if (strike.mKind != STRIKE_GROUND) muffle = llmax(muffle, 0.35f);
+    }
+
     // Thunder handed over at build time with the FUTURE fire time [interaction: -> soundscape]; only that side knows travel time and the recording's own onset.
     if (strike.mAudible)
     {
         SSSoundscape::getInstance()->scheduleThunder(
-            strike.mGround, strike.mDistanceM, strike.mIntensity, strike.mFireAt);
+            thunder_pos, thunder_d, strike.mIntensity, strike.mFireAt, muffle);
     }
     strike.mThunderSent = true;
 
@@ -469,13 +494,20 @@ void SSLightning::growPath(SSStrike& strike, S32 parent,
 
 void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
                                S32 depth, S32 levels, F32 intensity,
-                               SSRandStream& rng)
+                               SSRandStream& rng, F32 fecundity)
 {
     if (depth <= 0 || along.size() < 3) return;
     if ((S32)strike.mChannel.size() >= MAX_CHANNEL_NODES) return;
 
-    // Fewer, shorter branches the deeper in this is. A first-generation branch off the trunk is an event; a fourth-generation one is texture.
-    const S32 count = llmax(1, (S32)(rng.frand(1.6f, 3.4f) * (0.55f + intensity * 0.45f)));
+    // Branch count and reach both scale with the RUN being branched from. The old flat 2-3 branches at 40-150m was tuned on a ~1km descending trunk and left a 2.4km crawler almost bare - the
+    // spidering in every crawler photo is many arms, each a real fraction of the trunk. Proportionality also keeps the self-similarity for free: deeper generations branch off shorter runs and
+    // come out shorter and fewer without any depth factor.
+    const LLVector3& run_a = strike.mChannel[(size_t)along.front()].mPos;
+    const LLVector3& run_b = strike.mChannel[(size_t)along.back()].mPos;
+    const F32 run_len = (run_b - run_a).magVec();
+    const F32 len_gain = llclamp(run_len / 700.f, 1.f, 4.f);
+
+    const S32 count = llmax(1, (S32)(rng.frand(1.6f, 3.4f) * (0.55f + intensity * 0.45f) * len_gain * fecundity));
 
     for (S32 b = 0; b < count; ++b)
     {
@@ -491,14 +523,16 @@ void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
         LLVector3 travel = from_node.mPos - strike.mChannel[(size_t)from_node.mParent].mPos;
         if (travel.normalize() <= 0.f) continue;
 
+        // The down-bias belongs to the TRAVEL, not to the world: a descending run keeps descending, but a horizontal crawler's arms spider sideways and stay roughly in the layer - a fixed world
+        // down-bias sent every crawler branch diving out of the deck it lives in.
+        const F32 vertical = fabsf(travel.mV[VZ]);
         LLVector3 dir = travel;
         dir.mV[VX] += rng.frand(-0.55f, 0.55f);
         dir.mV[VY] += rng.frand(-0.55f, 0.55f);
-        dir.mV[VZ] += rng.frand(-0.35f, 0.15f);   // biased to keep descending
+        dir.mV[VZ] += rng.frand(-0.35f, 0.15f) * llmax(vertical, 0.25f);
         if (dir.normalize() <= 0.f) continue;
 
-        // Each generation reaches less far than the one it left.
-        const F32 reach = rng.frand(25.f, 90.f) * (F32)depth * 0.55f;
+        const F32 reach = llclamp(rng.frand(0.10f, 0.30f) * run_len, 30.f, 900.f);
         const LLVector3 end = from_node.mPos + dir * reach;
 
         // It cannot exist before the node it grew from, and it finishes before the parent run does - a branch is a detour, not an extension.
@@ -512,7 +546,7 @@ void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
                  t0, t1, false, rng, sub);
 
         growBranches(strike, sub, depth - 1, llmax(levels - 1, 1),
-                     intensity * 0.75f, rng);
+                     intensity * 0.75f, rng, fecundity);
     }
 }
 
@@ -521,11 +555,6 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
     SSRandStream rng((U32)(strike.mFireAt * 7919.0) ^ 0xfa11u);
 
     const bool to_ground = (strike.mKind == STRIKE_GROUND);
-
-    // A fork channel stops in mid-air rather than landing. Two thirds of the way down is far enough to look like it is going somewhere and short enough that it plainly never got there.
-    const LLVector3 tip = to_ground
-        ? strike.mGround
-        : strike.mOrigin + (strike.mGround - strike.mOrigin) * rng.frand(0.4f, 0.7f);
 
     // How finely to subdivide, by how close this one is. Detail nobody can resolve is detail nobody should pay for - but a strike a few hundred metres off is something a camera can be flown into,
     // now that the channel lives inside a cloud you can enter. Six levels is sixty-five points of trunk; three is nine, which at ten kilometres is more than the handful of pixels it occupies.
@@ -538,6 +567,75 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
     const S32 depth = llclamp((S32)depth_setting, 0, 5);
 
     strike.mChannel.reserve(256);
+
+    // SPIDER morphology, rolled sometimes for either kind: many arms radiating from a hub, bought by trading subdivision levels (fewer zigzag kinks) for doubled branch fecundity - the radial
+    // in-cloud crawl of real 'spider lightning'. For a ground strike the hub sits over the attachment and one full channel still descends; cloud-to-cloud spiders are the hub and arms alone.
+    // All arms share t 0..1, so the leader phase crawls outward from the hub in every direction at once - which is how a bidirectional discharge actually develops.
+    if (rng.frand() < (to_ground ? 0.25f : 0.35f))
+    {
+        // The descending trunk first when there is one: the mTrunk-prefix consumers (flash discs, cull samples) read the channel from the front of the node list.
+        if (to_ground)
+        {
+            std::vector<S32> trunk;
+            growPath(strike, -1, strike.mOrigin, strike.mGround, levels,
+                     1.f, 0.6f, 0.f, 1.f, true, rng, trunk);
+            growBranches(strike, trunk, depth, levels, intensity, rng);
+        }
+
+        const S32 arm_levels = llmax(levels - 2, 3);
+        const S32 arms = 4 + rng.rand(4);
+        const F32 base_bearing = rng.frand(0.f, F_TWO_PI);
+
+        // All arm paths before any arm's branches, or the node cap would let the first arm's branching starve the far side of the spider entirely.
+        std::vector<std::vector<S32>> arm_nodes((size_t)arms);
+        for (S32 a = 0; a < arms; ++a)
+        {
+            const F32 bearing = base_bearing + (F32)a * F_TWO_PI / (F32)arms + rng.frand(-0.5f, 0.5f);
+            const F32 reach = rng.frand(400.f, 1300.f);
+            const LLVector3 tip = strike.mOrigin
+                + LLVector3(cosf(bearing) * reach, sinf(bearing) * reach, rng.frand(-120.f, 120.f));
+            growPath(strike, -1, strike.mOrigin, tip, arm_levels,
+                     0.85f, 0.3f, 0.f, 1.f, !to_ground && a == 0, rng, arm_nodes[(size_t)a]);
+        }
+        for (S32 a = 0; a < arms; ++a)
+        {
+            growBranches(strike, arm_nodes[(size_t)a], depth, arm_levels, intensity * 0.85f, rng, 2.f);
+        }
+        return;
+    }
+
+    // A non-spider fork is one of two real things, rolled evenly. CLOUD-TO-CLOUD: the crawler, and it grows BIDIRECTIONALLY - two runs leaving the origin in roughly opposite bearings, because a
+    // discharge initiates mid-cloud and develops two leaders travelling apart, so a channel that simply STARTS somewhere has an endpoint nature never draws (the out-of-place start point this
+    // replaces). CLOUD-TO-AIR: the descender that stops partway down and plainly never arrives. Ground strikes keep their full run to the attachment point.
+    if (!to_ground && rng.frand() < 0.5f)
+    {
+        const F32 bearing = rng.frand(0.f, F_TWO_PI);
+
+        std::vector<S32> run_a, run_b;
+        {
+            const F32 reach = rng.frand(600.f, 2400.f);
+            const LLVector3 tip = strike.mOrigin
+                + LLVector3(cosf(bearing) * reach, sinf(bearing) * reach, rng.frand(-150.f, 150.f));
+            growPath(strike, -1, strike.mOrigin, tip, levels,
+                     1.f, 0.6f, 0.f, 1.f, true, rng, run_a);
+        }
+        {
+            const F32 back = bearing + F_PI + rng.frand(-0.5f, 0.5f);
+            const F32 reach = rng.frand(400.f, 1600.f);
+            const LLVector3 tip = strike.mOrigin
+                + LLVector3(cosf(back) * reach, sinf(back) * reach, rng.frand(-150.f, 150.f));
+            // Also trunk, grown before any branches: the two runs stay a contiguous mTrunk prefix, so the flash discs and cull samples span the whole crawler rather than one side of it.
+            growPath(strike, -1, strike.mOrigin, tip, levels,
+                     0.9f, 0.5f, 0.f, 1.f, true, rng, run_b);
+        }
+        growBranches(strike, run_a, depth, levels, intensity, rng);
+        growBranches(strike, run_b, depth, levels, intensity * 0.85f, rng);
+        return;
+    }
+
+    const LLVector3 tip = to_ground
+        ? strike.mGround
+        : strike.mOrigin + (strike.mGround - strike.mOrigin) * rng.frand(0.4f, 0.7f);
 
     std::vector<S32> trunk;
     growPath(strike, -1, strike.mOrigin, tip, levels,
@@ -650,6 +748,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
             if (strike.mDebugText)
             {
                 strike.mDebugText->setDoFade(false);
+                strike.mDebugText->setZCompare(false);    // through walls, like the marker geometry - a countdown you cannot find is not a countdown
                 strike.mDebugText->setColor(LLColor4(1.f, 0.25f, 0.9f, 1.f));
             }
         }

@@ -251,7 +251,8 @@ bool LLAudioEngine_FMODSTUDIO::init(void* userdata, const std::string &app_title
 
     // FMOD_INIT_THREAD_UNSAFE Disables thread safety for API calls.
     // Only use this if FMOD is being called from a single thread, and if Studio API is not being used.
-    U32 fmod_flags = FMOD_INIT_NORMAL | FMOD_INIT_3D_RIGHTHANDED | FMOD_INIT_THREAD_UNSAFE;
+    // <SS:Nexii> FMOD_INIT_CHANNEL_LOWPASS puts a per-channel lowpass into every 3D voice's DSP chain, driven by ChannelControl::setLowPassGain - what LLAudioSource::setOcclusion rides on.
+    U32 fmod_flags = FMOD_INIT_NORMAL | FMOD_INIT_3D_RIGHTHANDED | FMOD_INIT_THREAD_UNSAFE | FMOD_INIT_CHANNEL_LOWPASS;
     if (mEnableProfiler)
     {
         fmod_flags |= FMOD_INIT_PROFILE_ENABLE;
@@ -774,6 +775,12 @@ void LLAudioChannelFMODSTUDIO::update3DPosition()
         float_pos.setVec(mCurrentSourcep->getPositionGlobal());
         FMOD_RESULT result = mChannelp->set3DAttributes((FMOD_VECTOR*)float_pos.mV, (FMOD_VECTOR*)mCurrentSourcep->getVelocity().mV);
         Check_FMOD_Error(result, "FMOD::Channel::set3DAttributes");
+
+        // <SS:Nexii> The occlusion lowpass - see LLAudioSource::setOcclusion. Applied every update (channels are reused, a stale filter must not leak between sounds), squared so light cover
+        // barely touches the timbre and full burial leaves mostly bass, which is what a roof between you and a sound actually does.
+        const F32 occ = mCurrentSourcep->getOcclusion();
+        Check_FMOD_Error(mChannelp->setLowPassGain(1.f - occ * occ * 0.92f), "FMOD::Channel::setLowPassGain");
+        // </SS:Nexii>
     }
 }
 
@@ -825,6 +832,13 @@ void LLAudioChannelFMODSTUDIO::play()
         LL_WARNS() << "Playing without a channel handle, aborting" << LL_ENDL;
         return;
     }
+
+    // <SS:Nexii> Seek before unpausing so the first audible sample is already the requested one - see LLAudioSource::setStartOffsetMS.
+    if (getSource() && getSource()->getStartOffsetMS() > 0)
+    {
+        Check_FMOD_Error(mChannelp->setPosition(getSource()->getStartOffsetMS(), FMOD_TIMEUNIT_MS), "FMOD::Channel::setPosition");
+    }
+    // </SS:Nexii>
 
     Check_FMOD_Error(mChannelp->setPaused(false), "FMOD::Channel::setPaused");
 
@@ -1006,6 +1020,9 @@ bool LLAudioBufferFMODSTUDIO::getPCMCopy(std::vector<S16>& out, S32& out_channel
 
     U32 bytes = 0;
     if (Check_FMOD_Error(mSoundp->getLength(&bytes, FMOD_TIMEUNIT_PCMBYTES), "FMOD::Sound::getLength")) return false;
+
+    // A sane clip is a few MB; anything reporting more is a corrupt or streaming length and copying it would be a single giant allocation nobody asked for.
+    if (bytes == 0 || bytes > 64u * 1024u * 1024u) return false;
 
     void* ptr1 = NULL; void* ptr2 = NULL;
     U32 len1 = 0; U32 len2 = 0;

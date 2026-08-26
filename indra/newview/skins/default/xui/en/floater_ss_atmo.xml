@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="236"
+ height="268"
  layout="topleft"
  name="floater_ss_atmo"
  save_rect="true"
@@ -125,4 +125,14 @@
      name="sim_button"
      label="Simulation..."
      tool_tip="Rain shadow and wind flowmap resolution, tuning and rebuilds" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="8"
+     height="23"
+     width="160"
+     name="sound_analysis_button"
+     label="Sound Analysis..."
+     tool_tip="Every analysed sound as a waveform with its detected metadata marked on it - onset, tail, peak, impact ticks, cadence - grouped by which pack configured it" />
 </floater>

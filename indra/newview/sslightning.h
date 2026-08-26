@@ -67,6 +67,10 @@ struct SSStrikeNode
     F32 mWidth = 1.f;       // 1 at the trunk, less on branches
     F32 mReachedAt = 0.f;   // seconds after the leader started, for the crawl
     bool mTrunk = false;    // on the path that actually reaches the ground
+
+    // Render cache, mutable because the renderer iterates strikes by const ref: how much of this node survives the puff field between it and the camera (SSVolCloud::transmittance), refreshed on
+    // the strike's own throttle below. 1 below cloud base and through gaps; toward 0 behind a dense core [interaction: SSVolCloud -> bolt occlusion].
+    mutable F32 mOcc = 1.f;
 };
 
 // A discharge, from the first flicker of the leader to the last of the afterglow. Held for its whole life, including the parts of it that are not visible, because the sound is still coming.
@@ -113,6 +117,11 @@ struct SSStrike
 
     // Debug countdown text over the attachment point, only while SSAtmoDebugStrikeMarkers is on and the strike is pending; owned loosely (markDead + null when the strike fires or dies).
     LLHUDText* mDebugText = nullptr;
+
+    // Throttle for the per-node occlusion cache above: when it was last computed and from where. The renderer refreshes it every quarter second or 4m of camera travel, whichever first - cloud
+    // and camera both move slowly against a strike's one-second life.
+    mutable F32 mOccAt = -1.0e9f;
+    mutable LLVector3 mOccCam;
 
     bool mDone = false;
     bool mThunderSent = false;  // the clap has been handed to the soundscape
@@ -165,8 +174,10 @@ private:
                   SSRandStream& rng, std::vector<S32>& out_nodes);
 
     // Branches off a run, and branches off those, down to depth. Recursion is the point: a channel that splits once looks like a fork, and a channel that splits at every scale looks like lightning.
+    // fecundity multiplies branch count at every generation - the spider morphology's knob, which buys its crap-ton of branching with the subdivision levels it gave up.
     void growBranches(SSStrike& strike, const std::vector<S32>& along,
-                      S32 depth, S32 levels, F32 intensity, SSRandStream& rng);
+                      S32 depth, S32 levels, F32 intensity, SSRandStream& rng,
+                      F32 fecundity = 1.f);
     void advance(SSStrike& strike, F32 dt);
 
     std::vector<SSStrike> mStrikes;

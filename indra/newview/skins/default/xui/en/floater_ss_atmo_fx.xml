@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="920"
+ height="964"
  layout="topleft"
  name="floater_ss_atmo_fx"
  save_rect="true"
@@ -540,6 +540,31 @@
       name="D_SSAtmoLightningGlow" label="D"
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoLightningGlow" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningOcclusion"
+      tool_tip="How strongly the cloud field dims a bolt behind it; 1 lets a dense deck swallow the channel, 0 draws bolts over cloud untouched">
+        Cloud occlusion:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningOcclusion" name="SB_SSAtmoLightningOcclusion"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.01" decimal_digits="2"
+      tool_tip="How strongly the cloud field dims a bolt behind it; 1 lets a dense deck swallow the channel, 0 draws bolts over cloud untouched" />
+    <spinner
+      control_name="SSAtmoLightningOcclusion" name="S_SSAtmoLightningOcclusion"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="1" increment="0.01" decimal_digits="2"
+      tool_tip="How strongly the cloud field dims a bolt behind it; 1 lets a dense deck swallow the channel, 0 draws bolts over cloud untouched" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningOcclusion" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningOcclusion" />
     </button>
     <text
       follows="left|top" layout="topleft"

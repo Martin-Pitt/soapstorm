@@ -43,6 +43,7 @@
 #include <vector>
 
 class LLAudioSource;
+class LLHUDText;
 
 class SSSoundscape : public LLSingleton<SSSoundscape>
 {
@@ -65,6 +66,22 @@ public:
     LLUUID footstepSound(const LLUUID& avatar_id, const LLVector3& foot_pos_agent,
                          bool on_land, S32 action, bool is_self);
 
+    // The footstep model: walk and run are LOOPS attached to the avatar, started/stopped/switched by state (surface x gait), following the avatar every frame. Jump is a one-shot at the avatar;
+    // Land is the one detached one-shot, left at the spot it happened. Per-footfall triggering of loop-format recordings was the previous model, and it spammed a fresh copy of a long loop on
+    // every footfall - overlapping, never stopping, and pinned where each step happened.
+    //
+    // Called every frame per nearby avatar. locomotion: 0 stopped, STEP_WALK or STEP_RUN. Surface changes (walking from terrain into a doorway) switch the loop mid-stride.
+    void updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& pos_agent,
+                            bool on_land, S32 locomotion, bool is_self);
+
+    // Jump (attached, at the avatar) and Land (detached, at the spot) one-shots.
+    void footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_agent,
+                       bool on_land, S32 action, bool is_self);
+
+    // A footfall happened (the support-foot swap). Consumed only when the avatar's current step state is in SEGMENT mode - a recording whose gap floor says its steps cut apart cleanly - in which
+    // case one windowed step plays at the landing foot: seek to just before a random detected onset, stop in the gap after it. Loop-mode states ignore this entirely; the loop is already playing.
+    void footstepImpact(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self);
+
     // What the last footstep lookup decided, for the info overlay. Every stage of the walk is recorded, including the ones that returned nothing, because "no sound played" has half a dozen causes
     // that are indistinguishable from a chair: system off, wrong surface picked, slot empty, list unparseable.
     struct StepDebug
@@ -74,6 +91,7 @@ public:
         S32 mAction = -1;
         bool mIndoors = false;
         char mIndoorsFrom = '-';    // 'f' flowmap column, 'p' camera cover probe fallback, '-' nothing answered (treated as outdoors)
+        char mMode = '-';           // 'S' per-impact segments, 'L' attached loop, '-' no state yet - the overlay's answer to "which playback model is my avatar on right now"
         bool mFieldValid = false;   // the surface field had an answer
         F32 mWet = 0.f;
         F32 mPuddle = 0.f;
@@ -88,15 +106,21 @@ public:
     const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
 
     // A strike happened at pos, this far away, this fierce. The clap is held and played when the sound would actually have arrived - the caller says WHEN IT STRUCK, not when it should be heard,
-    // because only this side knows how long sound takes to cover the distance or how far into the chosen recording its own bang sits.
+    // because only this side knows how long sound takes to cover the distance or how far into the chosen recording its own bang sits. muffle 0..1 is how buried the discharge is behind cloud
+    // (the caller measures it against the actual puff field): a fully-buried intra-cloud strike loses its crack, plays quieter and shorter, and wears extra lowpass - the muffled rumble real
+    // in-cloud lightning is, instead of a full-price bang for a flash you barely saw.
     void scheduleThunder(const LLVector3& pos_agent, F32 distance_m, F32 intensity,
-                         F64 fire_at);
+                         F64 fire_at, F32 muffle = 0.f);
 
     // The crackle that gathers before a strike, for the anticipation effect. Played immediately - it is meant to be heard building, so there is nothing to delay.
     void playCharge(const LLVector3& pos_agent, F32 intensity);
 
     // Wind carry [interaction: wind -> audio]: downwind refraction bends sound to the ground (carries further), upwind away (the classic saw-the-flash-heard-nothing). Grows over km. General offer to everything the soundscape plays; thunder is the first consumer.
     F32 windCarryGain(const LLVector3& source_pos_agent) const;
+
+    // How buried from the OPEN SKY the listener is, 0..1 - the occlusion every sky-borne sound (thunder, wind, distant weather) should wear as a lowpass. Owned here because occlusion is a
+    // property of the listening situation, not of any one sound: one probe answer, every consumer agrees.
+    F32 skyOcclusion() const;
 
     // How many claps are still on their way. For the info overlay: a sky that has gone quiet with four pending is a storm you are about to hear, not a bug.
     S32 pendingThunder() const { return (S32)mThunder.size(); }
@@ -162,13 +186,14 @@ private:
         LLVector3 mPos;
         F32 mGain = 1.f;
         F32 mDistanceM = 0.f;
+        F32 mMuffle = 0.f;      // cloud burial at schedule time - worn as extra lowpass at play
         LLUUID mSound;
         bool mAligned = false;  // the onset has been measured, or given up on
     };
     std::vector<PendingThunder> mThunder;
 
     void queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
-                      F32 distance_m, F32 gain, F64 heard_at);
+                      F32 distance_m, F32 gain, F64 heard_at, F32 muffle);
 
     // Cached roof-over-head verdicts for OTHER avatars, one cheap up-ray each, refreshed only when the avatar has moved a couple of metres AND its distance-scaled interval has passed. The flowmap
     // answers first when it can; this covers regions it has no tile for. Keyed by avatar so a crowd costs a handful of rays a second at worst, not per footstep.
@@ -177,9 +202,93 @@ private:
         bool mIndoors = false;
         LLVector3 mPos;
         F64 mWhen = -1.0;
+
+        // The underfoot verdict, cached on its own faster clock - surfaces change at street-kerb scale where roofs change at building scale.
+        bool mOnObject = false;
+        LLVector3 mFootPos;
+        F64 mFootWhen = -1.0;
     };
     std::map<LLUUID, AvatarCover> mAvatarCover;
     bool roofOver(const LLUUID& avatar_id, const LLVector3& pos_agent, bool is_self);
+
+    // Whether this avatar is standing on an OBJECT rather than on terrain: one short down-ray at the feet, cached per avatar like the roof ray. Exists because the stock resolver footsteps used to
+    // trust (LLWorld::resolveStepHeightGlobal) initialises its object out-param to NULL and never assigns it - mStepOnLand has been permanently true for years, which made every outdoor step
+    // "terrain" no matter what was actually underfoot.
+    bool onObject(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self);
+
+    // One managed looping source per moving avatar - see updateFootstepLoop.
+    struct StepLoop
+    {
+        LLUUID mSourceID;
+        LLUUID mSound;
+        S32 mSurface = -1;
+        S32 mAction = -1;
+        F64 mLastSeen = 0.0;
+        F64 mStartedAt = 0.0;   // when the loop began, for deriving playback position against the analysed onsets - and the churn guard: a source the engine reaped (asset still fetching) is not recreated more than once a second
+        U32 mOffsetMS = 0;      // where inside the recording the loop STARTED - a random between-steps gap, so every walk begins on a fresh step; position math must add it
+        bool mSegmented = false;    // this state plays per-impact windowed steps instead of a loop - see footstepImpact
+        F64 mLastImpactAt = 0.0;    // cadence refractory: the swap detector chatters when ankle heights run near-equal, and humans cannot step faster than a gait allows
+        LLUUID mSegSourceID;        // the avatar's currently sounding step, so the next footfall CUTS it rather than stacking - a recording with long inter-step gaps played at running cadence could otherwise sound three steps at once
+        F64 mStopAt = 0.0;      // > 0: finishing its current step, dies at this time - see the gap-stop in updateFootstepLoop
+    };
+    std::map<LLUUID, StepLoop> mStepLoops;
+    void releaseStepLoop(StepLoop& loop);
+    void reapStepLoops(F64 now);
+
+    // Long one-shots (thunder) ride a fixed WORLD bearing but a listener-relative distance: repositioned every frame at cam + bearing*12m with the listener's own velocity, so there is no relative
+    // motion for the engine's doppler to chew on and no rolloff cliff however far the strike really was.
+    struct OneShotFollower
+    {
+        LLUUID mSourceID;
+        LLVector3 mDir;
+        LLVector3 mLastPos;
+        F64 mExpires = 0.0;
+    };
+    std::vector<OneShotFollower> mFollowers;
+
+    // ~10s-averaged wetness, kept for anything that wants the storm's mass rather than the moment. The ladder deliberately does NOT use it any more - immediacy is wanted there, and the voices'
+    // own crossfades do the smoothing.
+    F32 mWetSlow = 0.f;
+
+    // One persistent looping voice per ladder rung - see updateBedVoices. Voices crossfade by GAIN as the ladder position moves; a rung crossing a pair boundary keeps its voice (and therefore its
+    // playback position) untouched, and a rung that fades out entirely remembers where it stopped and resumes there next time. This is what replaced overriding the bed SLOTS, which restarted both
+    // recordings from their authored fade-ins on every boundary crossing.
+    struct BedVoice
+    {
+        LLUUID mSourceID;
+        F64 mStartedAt = 0.0;
+        U32 mOffsetMS = 0;
+        F32 mGain = 0.f;
+        F32 mTarget = 0.f;
+    };
+    std::map<LLUUID, BedVoice> mBedVoices;
+    std::map<LLUUID, U32> mBedResume;                       // last playback position per recording, ms
+
+    // Debug markers over live footstep audio sources (SSAtmoDebugFootstepMarkers): a big bright tag the instant a source starts, decaying to a small dim one that rides the source until it stops -
+    // so start moments, follow behaviour and stop timing are all visible at a glance.
+    struct StepMark
+    {
+        LLUUID mSourceID;
+        LLHUDText* mText = nullptr;    // owned loosely like the strike countdown: markDead + drop
+        F64 mStart = 0.0;
+    };
+    std::vector<StepMark> mStepMarks;
+    void markStepSource(const LLUUID& source_id);
+    void updateStepMarks(F64 now);
+
+    // Windowed one-shots awaiting their scheduled cut (segment-mode footfalls).
+    std::vector<std::pair<LLUUID, F64>> mSegmentStops;
+    void updateSegmentStops(F64 now);
+
+    // Click-free hard stops: gain to zero NOW (FMOD ramps volume changes internally, ~one mix buffer), destruction a few frames later. Every abrupt stop in the footstep system goes through this;
+    // an unramped cut lands at an arbitrary sample amplitude and pops.
+    std::vector<std::pair<LLUUID, F64>> mDying;
+    void fadeKill(const LLUUID& source_id);
+    void updateDying(F64 now);
+    std::vector<std::pair<LLUUID, F32>> mLadderTargets;     // this tick's rung gains, empty when the ladder is inactive
+    void updateBedVoices(F64 now, F32 dt, F32 master_mul);
+    void registerFollower(const LLUUID& source_id, const LLVector3& dir_world, F64 now);
+    void updateFollowers(F64 now, F32 dt);
     void updateThunder(F64 now);
 
     // Ambient loop slots; each maps to one developer-configured sound UUID Outdoor beds are a light/medium/heavy set where only medium is required; the roof beds are one per indoor space size. Wind

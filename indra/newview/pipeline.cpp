@@ -4453,6 +4453,24 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         if (cur_type >= atmospherics_pass && !done_atmospherics)
         { // do atmospherics against depth buffer before rendering alpha
             doAtmospherics();
+
+            // <SS:Nexii> Atmo Magic weather, WITH the atmospherics and BEFORE the alpha pools: glass and every other transparent surface then blends over clouds, bolts and rain - the transparency
+            // test the old end-of-function placement failed, because alpha writes no depth and weather drawn after it composited over nearer windows. The order inside the block is the lightning
+            // compositing: flash discs veiled under the puffs, ribbons occlusion-dimmed over them, rain in front of cloud. Known trade: rain BETWEEN the camera and a window now reads as behind the
+            // glass - the rarer and subtler failure of the two. doc/atmo_magic_interactions.md
+            if (!gCubeSnapshot)
+            {
+                SSLightningRender::getInstance()->renderFlash();
+                SSVolCloud::getInstance()->render();
+                SSLightningRender::getInstance()->render();
+                SSPrecipRenderer::getInstance()->render();
+
+                // The loop's expected state, which the weather passes just trampled.
+                gGL.setSceneBlendType(LLRender::BT_ALPHA);
+                gGL.setColorMask(true, false);
+            }
+            // </SS:Nexii>
+
             done_atmospherics = true;
         }
 
@@ -4515,29 +4533,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
 
     if (!gCubeSnapshot)
     {
-        // <SS:Nexii> Atmo Magic volumetric cloud: a late translucent pass,
-        // for the same reason precipitation is one, and before it - rain
-        // falls out of the cloud, so the cloud is behind it.
-        //
-        // It cannot live in the sky pass. There it was part of the backdrop:
-        // drawn before the water and before every post-deferred pool, so
-        // anything rendered afterwards painted over it whether it was in
-        // front or not. Here the scene is finished, which is also what lets
-        // a puff soften itself against the geometry it meets rather than
-        // slicing through it.
-        // Lightning first, deliberately: every puff drawn after it blends
-        // over the channel, so the in-cloud reach of a bolt is veiled into
-        // a glow by exactly as much cloud as stands in front of it, shows
-        // bare through gaps, and is naked below cloud base. The field is
-        // the diffuser; no occlusion is computed anywhere.
-        SSLightningRender::getInstance()->render();
-
-        SSVolCloud::getInstance()->render();
-
-        // Atmo Magic precipitation: late translucent pass after all pools,
-        // depth-tested against the finished scene
-        SSPrecipRenderer::getInstance()->render();
-        // </SS:Nexii>
+        // <SS:Nexii> The Atmo Magic weather passes moved INTO the pool loop above, beside doAtmospherics - drawn before the alpha pools so transparent surfaces blend over weather. </SS:Nexii>
 
         // debug displays
         renderHighlights();

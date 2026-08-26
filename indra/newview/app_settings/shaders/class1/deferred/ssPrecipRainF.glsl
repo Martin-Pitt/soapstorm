@@ -105,7 +105,8 @@ void main()
     vec3 amblit;
     vec3 additive;
     vec3 atten;
-    calcAtmosphericVars(pos.xyz, vec3(0), 1.0, sunlit, amblit, additive, atten);
+    // The real light vector, not vec3(0): the module multiplies its haze glow by dot(light_dir, view_dir), and a zero vector guts the additive airlight the fog call below applies.
+    calcAtmosphericVars(pos.xyz, lightnorm.xyz, 1.0, sunlit, amblit, additive, atten);
     vec3 amblit_linear = srgb_to_linear(amblit);
 
     // Environment reflection through the probe system; the class2 fallback approximates from sky ambient when probes are disabled
@@ -120,7 +121,12 @@ void main()
     vec3 transmitted = irradiance;
     if (ss_refract_strength > 0.0)
     {
-        vec2 refract_tc = clamp(frag_tc + norm.xy * ss_refract_strength, vec2(0.001), vec2(0.999));
+        // ...collapsed toward zero as the view closes on the sun/moon: the offset was dragging the saturated disc sideways into every drop within reach of its silhouette, painting a hard-edged
+        // ring of solid white blobs around it - drops drawn fatter than life lens the disc as blobs, not points. Sampling straight through instead makes near-disc drops white-on-white invisible,
+        // which is what rain across the sun actually reads as; the sparkle lobes still glitter around it.
+        float toward_light = pow(clamp(dot(-view, lightnorm.xyz), 0.0, 1.0), 8.0);
+        vec2 refract_tc = clamp(frag_tc + norm.xy * ss_refract_strength * (1.0 - toward_light),
+                                vec2(0.001), vec2(0.999));
         transmitted = texture(sceneMap, refract_tc).rgb;
     }
 
@@ -135,11 +141,20 @@ void main()
     vec3 light_dir = lightnorm.xyz;
     float rl = clamp(dot(reflect(view, norm), light_dir), 0.0, 1.0);
     float spec = pow(rl, 96.0) + pow(rl, 1024.0) * ss_drop_sparkle;
-    float scatter = pow(clamp(dot(-view, -light_dir), 0.0, 1.0), 8.0) * 0.25;
+
+    // Forward scatter: VERY wide and VERY quiet. The old cos^8 x 0.25 cone had a steep shoulder, and the Reinhard compression flattened its bright interior into a plateau - together they drew a
+    // hard circle around the sun with lit drops inside and dark ones out. Real backlit rain (see any sunset-shower photo) is a broad gentle brightening with no boundary anywhere: cos^2.5 spreads
+    // the gradient across half the sky, and the low gain keeps the compression from ever plateauing. The per-drop sparkle lobes above carry the actual glitter.
+    float scatter = pow(clamp(dot(-view, -light_dir), 0.0, 1.0), 2.5) * 0.06;
 
     vec4 color;
     color.rgb = mix(transmitted, glossenv, fres);
-    color.rgb += srgb_to_linear(sunlit) * (spec * core * 1.5 + scatter) * splat;
+
+    // Compressed before it is added: sunlit is HDR and near a low sun runs to several times white, so the forward-scatter cone painted every drop around the disc as a saturated blob - a ring of
+    // popcorn about the sun (the drops IN FRONT of the disc vanishing white-on-white is natural and stays). Reinhard on the glint alone keeps the sparkle's flicker and the scatter's directionality
+    // while capping any single drop short of burnout; away from the light the term is tiny and passes through effectively untouched.
+    vec3 glint = srgb_to_linear(sunlit) * (spec * core * 1.5 + scatter) * splat;
+    color.rgb += glint / (1.0 + glint);
     color.rgb *= vertex_color.rgb;
     color.a = final_alpha;
 

@@ -795,6 +795,62 @@ void SSPrecipRenderer::render()
 
     LLGLSLShader::unbind();
     gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+
+    // Debug: sheet-tier motion markers (SSAtmoDebugSheetMarkers). Per live sheet: a thin cyan line along its WHOLE intended trajectory (spawn to expiry, i.e. what the velocity says the fall is),
+    // a thick magenta dot at the quad's centre, and a magenta heading line of one second's travel. The wind question answers itself on sight - markers leaning while quads hang vertical convicts
+    // the renderer's axis math, markers vertical convicts the spawn wind; per-sheet variation shows whether it is all of them or a pattern.
+    {
+        static LLCachedControl<bool> sheet_markers(gSavedSettings, "SSAtmoDebugSheetMarkers", false);
+        if (sheet_markers)
+        {
+            const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+            gDebugProgram.bind();
+            LLGLDisable cull(GL_CULL_FACE);
+            LLGLEnable blend(GL_BLEND);
+            gGL.setSceneBlendType(LLRender::BT_ALPHA);
+            LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+
+            // Colour only, never alpha: the screen's alpha channel IS the glow buffer, and the first version of these markers wrote its 0.7-0.9 alphas straight into it - every line bloomed into
+            // an unreadable neon smear, which for a diagnostic overlay is self-defeating.
+            gGL.setColorMask(true, false);
+            gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+            gGL.begin(LLRender::TRIANGLES);
+
+            auto mark_ribbon = [&](const LLVector3& a, const LLVector3& b, F32 w)
+            {
+                LLVector3 side = (b - a) % ((a + b) * 0.5f - cam);
+                if (side.normalize() <= 0.f) return;
+                const LLVector3 sa = side * w;
+                gGL.vertex3fv((a - sa).mV); gGL.vertex3fv((a + sa).mV); gGL.vertex3fv((b + sa).mV);
+                gGL.vertex3fv((a - sa).mV); gGL.vertex3fv((b + sa).mV); gGL.vertex3fv((b - sa).mV);
+            };
+
+            for (const SSPrecipParticle& p : sim->particles())
+            {
+                if (p.mTier != TIER_SHEETS) continue;
+
+                const F32 d = (p.mPos - cam).magVec();
+                const F32 w = llmax(0.15f, d * 0.003f);
+
+                // The whole path the velocity implies, spawn to expiry.
+                gGL.color4f(0.1f, 0.9f, 1.f, 0.7f);
+                mark_ribbon(p.mPos - p.mVel * p.mAge,
+                            p.mPos + p.mVel * llmax(p.mMaxAge - p.mAge, 0.f), w * 0.5f);
+
+                // Where it is, and where it is going this second.
+                gGL.color4f(1.f, 0.15f, 0.9f, 0.9f);
+                mark_ribbon(p.mPos, p.mPos + p.mVel, w * 1.6f);
+                mark_ribbon(p.mPos - LLVector3(0.f, 0.f, w * 2.f),
+                            p.mPos + LLVector3(0.f, 0.f, w * 2.f), w * 2.f);
+            }
+
+            gGL.end();
+            gGL.flush();
+            gGL.setColorMask(true, true);
+            gDebugProgram.unbind();
+        }
+    }
     }
 }
 

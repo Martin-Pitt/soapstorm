@@ -119,9 +119,9 @@ void main()
     if (ss_emissive > 0.5)
     {
         // A star is the light: no terminator, no eclipse, and nothing the atmosphere does to it either. Not because that is physically true - a setting sun really is reddened and dimmed - but
-        // because it is not what anyone SEES. The disc stays far past what an eye can hold right down to the horizon, so it reads as flat bright white throughout, and every attempt here to model the
-        // physics (extinction, limb darkening, a softened rim) made it look worse: a muddy orange disc at twenty degrees where the real thing is still blinding. What actually changes at sunset is
-        // the SKY - the haze, the horizon gradient, the light on the clouds - and that is where the work belongs.
+        // because it is not what anyone SEES. The disc stays far past what an eye can hold right down to the horizon, so it reads as flat bright white throughout (sunset photographs agree: the
+        // core clips white with the colour living in the sky around it), and every attempt here to model the physics - including a briefly-shipped horizon-only extinction fade - made it worse.
+        // What changes at sunset is the SKY, and that is where the work belongs.
         c.rgb *= SS_EMISSIVE_GAIN;
     }
     else
@@ -167,6 +167,7 @@ void main()
     {
         c.rgb *= transmittance;
     }
+
 
     // Zero, not the flag: this pass ADDS, so anything written here would be added to what the sky dome already put in the G-buffer. The sky has written SKIP_ATMOS across every pixel a disc can land
     // on - the discs are drawn after the haze dome and only ever over it - so contributing nothing leaves exactly the right flag in place, where contributing the flag itself would double it.

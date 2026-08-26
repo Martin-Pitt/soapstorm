@@ -752,10 +752,27 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
         ? hit_pos
         : hit_pos + LLVector3(0.f, 0.f, fall_len * 0.5f);
 
-    const LLVector3 wind_h = windAt(wind_pos)
+    // The far tiers take the wind EXAGGERATED. The lean angle is atan(wind / fall speed), and against rain's 9.5 m/s fall an SL-scale gale of six or seven only buys ~30 degrees - which on an
+    // 18x36m curtain seen at two hundred metres reads as rain falling dead straight through a storm. A sheet is an abstraction of a thousand drops, not a drop, so it is allowed to lean the way
+    // the weather FEELS rather than the way one drop's vector sum says; the near drops keep the honest physics because they are close enough for it to read.
+    const F32 tier_lean = (tier == TIER_SHEETS) ? 1.9f
+                        : (tier == TIER_CLUSTERS) ? 1.35f : 1.f;
+
+    // Sheets take the flow solve DILUTED toward ambient: the solve shelters building wakes - correctly, for drops falling into a courtyard - but a curtain spanning a hundred metres of air is
+    // mostly ABOVE that shelter, and taking its whole lean from the one sheltered cell it lands in is why sheets near a big building fell dead vertical through a gale (the marker debug showed
+    // exactly this: angled markers everywhere, vertical ones in the cathedral's wake).
+    LLVector3 wind_sample = windAt(wind_pos);
+    if (tier == TIER_SHEETS)
+    {
+        const LLVector3 ambient = SSAtmoMagic::getInstance()->windXY();
+        wind_sample = wind_sample * 0.35f + ambient * 0.65f;
+    }
+
+    const LLVector3 wind_h = wind_sample
         * (0.55f + 0.45f * llclamp(gust, 0.f, 2.5f))
         * (0.8f + 0.4f * gust_jitter)
-        * llmax(0.f, preset.mWindResponse);
+        * llmax(0.f, preset.mWindResponse)
+        * tier_lean;
 
     if (rises)
     {
@@ -773,11 +790,15 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
         if (preset.makesImpacts())
         {
             // Impacting types are back-projected up their slanted path so the drop still lands exactly on the resolved hit. Bound how far upwind that can put them: a long path in strong wind would
-            // push the spawn outside the tier's own radius.
+            // push the spawn outside the tier's own radius. Bounded per TIER, because the clamp works by truncating the whole path: a flat 12m cap fit the drop tier's radius and quietly amputated
+            // every windy sheet - a curtain's six-second, sixty-metre column drifts far more than 12m in any real wind, so the gale that should slant the sheets was instead cutting them down to
+            // second-long stubs spawning barely off the ground.
+            const F32 max_drift = (tier == TIER_SHEETS) ? 120.f
+                                : (tier == TIER_CLUSTERS) ? 36.f : MAX_SPAWN_DRIFT;
             const F32 drift = wind_h.magVec() * fall_time;
-            if (drift > MAX_SPAWN_DRIFT)
+            if (drift > max_drift)
             {
-                fall_time *= MAX_SPAWN_DRIFT / drift;
+                fall_time *= max_drift / drift;
             }
             part.mPos = hit_pos - part.mVel * fall_time;
 

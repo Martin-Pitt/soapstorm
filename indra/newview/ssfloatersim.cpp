@@ -25,6 +25,8 @@
 
 #include "ssfloatersim.h"
 
+#include "llfloaterreg.h"
+
 #include "ssrainshadow.h"
 #include "sssurfacefield.h"
 #include "sswindflow.h"
@@ -51,6 +53,7 @@ SSFloaterSimulation::SSFloaterSimulation(const LLSD& key) :
 
 bool SSFloaterSimulation::postBuild()
 {
+
     getChild<LLButton>("shadow_rebuild_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickRecaptureShadow(); });
     getChild<LLButton>("flow_rebuild_button")->setClickedCallback(

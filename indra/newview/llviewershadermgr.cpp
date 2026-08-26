@@ -292,6 +292,16 @@ static void add_common_permutations(LLGLSLShader* shader)
     {
         shader->addPermutation("HAS_EMISSIVE", "1");
     }
+
+    // <SS:Nexii> The Atmo Magic shader variants, one define for all of them: any Atmo-era change to SHARED shading (the sky, the dome clouds, the atmospheric module) lives behind #ifdef SS_ATMO,
+    // so with the system off every stock shader compiles byte-for-byte pristine. The SSAtmoEnabled listener in llviewercontrol.cpp rebuilds shaders on toggle - compile-time, zero runtime cost
+    // either way. Runtime nuance (weather active vs idle) stays uniform-driven INSIDE the variant blocks; this define is only the master pristine/modified split.
+    static LLCachedControl<bool> atmo(gSavedSettings, "SSAtmoEnabled", false);
+    if (atmo)
+    {
+        shader->addPermutation("SS_ATMO", "1");
+    }
+    // </SS:Nexii>
 }
 
 
@@ -1063,6 +1073,9 @@ bool LLViewerShaderMgr::loadShadersWater()
             gWaterProgram.addPermutation("HAS_SUN_SHADOW", "1");
         }
 
+        // <SS:Nexii> the water pool skipped the common permutations, so the SS_ATMO far-field squash never compiled in and the stretched void water ended at the far plane instead of the virtual horizon
+        add_common_permutations(&gWaterProgram);
+
         gWaterProgram.mShaderGroup = LLGLSLShader::SG_WATER;
         gWaterProgram.mShaderLevel = mShaderLevel[SHADER_WATER];
         success = gWaterProgram.createShader();
@@ -1085,6 +1098,7 @@ bool LLViewerShaderMgr::loadShadersWater()
         {
             gUnderWaterProgram.addPermutation("TRANSPARENT_WATER", "1");
         }
+        add_common_permutations(&gUnderWaterProgram);    // <SS:Nexii> SS_ATMO squash - same omission as gWaterProgram above
         success = gUnderWaterProgram.createShader();
         llassert(success);
     }
@@ -2088,6 +2102,11 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         }
 
         gSSVolCloudProgram.mName = "SS Volumetric Cloud Shader";
+        // The windlight atmospheric module, for the analytic aerial perspective - the same calcAtmosphericVars the rain shader links, so the deck is hazed by the same maths as the dome and the terrain.
+        gSSVolCloudProgram.mFeatures.calculatesAtmospherics = true;
+        gSSVolCloudProgram.mFeatures.hasAtmospherics = true;
+        gSSVolCloudProgram.mFeatures.hasGamma = true;
+        gSSVolCloudProgram.mFeatures.hasSrgb = true;
         gSSVolCloudProgram.mShaderFiles.clear();
         gSSVolCloudProgram.mShaderFiles.push_back(make_pair("deferred/ssVolCloudV.glsl", GL_VERTEX_SHADER));
         gSSVolCloudProgram.mShaderFiles.push_back(make_pair("deferred/ssVolCloudF.glsl", GL_FRAGMENT_SHADER));

@@ -25802,6 +25802,39 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.02</real>
     </map>
+    <key>SSAtmoDebugFarSeaLift</key>
+      <map>
+      <key>Comment</key>
+      <string>Debug: hoist the Atmo far sea disc 2m above the water so it overdraws stock water and identifies itself</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoWaterPunctualLight</key>
+      <map>
+      <key>Comment</key>
+      <string>Water specular treats the sun/moon as a disc of its drawn angular size (with a moon punctual highlight) instead of a point light. Off reverts to stock behaviour</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoSeaPlanetRadiusKm</key>
+      <map>
+      <key>Comment</key>
+      <string>Planet radius in km behind the Atmo far sea's horizon: sets how far the horizon sits and how it recedes and drops with camera altitude. 6371 is Earth; small values make small worlds with close, curved horizons; 0 is a flat world with a fixed-radius sea</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>6371.0</real>
+    </map>
     <key>SSAtmoWetPuddleSpecular</key>
       <map>
       <key>Comment</key>
@@ -25811,7 +25844,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>0.9</real>
+      <real>0.2</real>
     </map>
     <key>SSAtmoWetPuddleGloss</key>
       <map>
@@ -26792,6 +26825,61 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <string />
   </map>
+  <key>SSAtmoVolumeStepTrigger</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: gain of the legacy per-step trigger path (stock animation-driven steps and their fallback sounds), separate from SSAtmoVolumeFootsteps which drives the attached loop/segment path. Stock hardcoded 0.1, which is near-inaudible against the ambient beds.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.3</real>
+  </map>
+  <key>SSAtmoVolumeThunder</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: thunder trim applied after distance fade and pack levelling. Deliberately above 1 by default - the fade and leveller only ever pull down, so claps land well under full scale without it; the final gain still clamps at 1 so nothing overdrives.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>2.5</real>
+  </map>
+  <key>SSAtmoVolumeFootsteps</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: volume of the footstep loops and one-shots (walk/run loops attached to avatars, jump and landing events).</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.5</real>
+  </map>
+  <key>SSAtmoAmbientAutoSort</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: pool the preset's light/medium/heavy rain beds into one ladder sorted by each recording's measured impacts-per-second, and crossfade along it to match the rain actually falling. Falls back to the authored three-bucket blend when fewer than three sounds are analysed or their rates barely differ.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoThunderAutoSort</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: pool both thunder packs and pick crack vs rumble by each sound's measured brightness (crackiness) instead of which pack it was filed in. Falls back to the labelled packs when fewer than four sounds are analysed or the material's brightness barely varies. Verify scores via the SSSoundMeta log lines or the Sound Analysis floater.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
   <key>SSAtmoThunderCrack</key>
   <map>
     <key>Comment</key>
@@ -26869,6 +26957,28 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <real>1.0</real>
   </map>
+  <key>SSAtmoDebugFootstepMarkers</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic debug: tag every footstep audio source in-world - a bright flash the instant it starts playing, then a small dim dot riding the source until it stops - so start moments, follow behaviour and stop timing are visible.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSAtmoDebugSheetMarkers</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic debug: per live rain-sheet particle, a thin cyan line along its whole intended trajectory, a thick magenta dot at its centre and a magenta heading line of one second's travel - for diagnosing whether sheets actually carry wind slant.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
   <key>SSAtmoDebugStrikeMarkers</key>
   <map>
     <key>Comment</key>
@@ -26900,7 +27010,18 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>0.15</real>
+    <real>0.4</real>
+  </map>
+  <key>SSAtmoLightningOcclusion</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how strongly the volumetric cloud field dims a bolt behind it, per puff the camera ray crosses. 1 lets a dense deck swallow a channel completely, lower keeps more of the fork structure ghosting through, 0 draws bolts over cloud untouched.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.85</real>
   </map>
   <key>SSAtmoLightningRibbonDrift</key>
   <map>
@@ -26911,7 +27032,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>1.0</real>
+    <real>3.0</real>
   </map>
   <key>SSAtmoWetPuddleMask</key>
   <map>

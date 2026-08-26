@@ -28,17 +28,26 @@ look.
 
 ## What shipped instead
 
-A uniform additive nudge on top of the untouched stock UV, so the effect is
-provably a no-op at zero:
+A uniform additive nudge on top of the untouched stock UV, `#ifdef SS_ATMO`
+gated so a stock environment compiles the pristine texcoord path:
 
 ```glsl
-float cloud_realism = smoothstep(1000.0, 1600.0, max_y);
-vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y)
-                    * (cloud_realism / (16.0 * max_y * cloud_scale));
+float metres_per_uv = 16.0 * ss_cloud_alt_m * cloud_scale;
+vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) / metres_per_uv;
+vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
 ```
 
-(`cloud_realism` fades the effect out for low, art-directed domes — see
-below.)
+`ss_cloud_alt_m` is the LAYER'S OWN altitude - it replaced the `max_y` proxy
+this first shipped with (max altitude is an atmosphere ceiling authored for
+haze, not a cloud height, and the old `cloud_realism` smoothstep existed only
+to patch over that mismatch for low art-directed domes). It is Atmo-driven
+from one authority (`ss_dome_cloud_altitude()` in lldrawpoolwlsky.cpp):
+cirrus-high (6 km) while the volumetric field is empty, merging quickly down
+onto the deck's mid-altitude as the field's coverage builds (smoothstep over
+coverage 0.05..0.30) - so exactly when the dome band and the deck merge
+visually at the rim, they also agree about where the cloud IS and parallax at
+the same rate. The disc occlusion in ssCelestialF.glsl mirrors the same gate
+and altitude; keep the three in sync.
 
 The `/16.0` compensates for `vary_texcoord2`/`vary_texcoord3`, built as
 `vary_texcoord0 * 16` a few lines down — the fine detail/self-shadow layer
@@ -54,34 +63,33 @@ dropped once it stopped doing anything.
 - `region_offset` (`lldrawpoolwlsky.cpp`) is the camera's true region
   position minus the region's centre, in metres. Centring avoids a bias from
   always measuring off the SW corner; it does not affect the parallax rate.
-- The rate itself is normalised by `max_y` — the current sky's own cloud/dome
-  height — not by region size. Region width (256 m stock, more on a
+- The rate is normalised by the layer altitude (`ss_cloud_alt_m`) — not by
+  region size. Region width (256 m stock, more on a
   varregion) has nothing to do with how high the clouds sit; typical EEP
   `max_y` defaults to ~1605 m and presets are generally 1000–2000 m+. Dividing
   by region width instead made a short walk shift the pattern as if the
-  clouds were only as high as one region is wide. Dividing by `max_y` means a
-  short walk under a high cloud layer barely shifts it, same as real clouds.
-- The UV shift reaches `1/16` once you've walked a distance equal to `max_y`
+  clouds were only as high as one region is wide. Dividing by the altitude
+  means a short walk under a high cirrus layer barely shifts it while a low
+  storm deck slides properly, same as real clouds.
+- The UV shift reaches `1/16` once you've walked a distance equal to the
+  layer altitude
   from the region centre (the `/16` is the `vary_texcoord2`/`vary_texcoord3`
   compensation above, not a separate dial).
-- No altitude term: there is no volumetric cloud layer to anchor a fixed
-  world height to yet, so this parallax is horizontal only — gaining or
-  losing altitude does not add to it. `max_y` itself is "N metres above the
-  camera", re-centred every frame, rather than a fixed world height.
+- The parallax is horizontal only — gaining or losing camera altitude does
+  not add to it; the layer altitude is "N metres above the camera",
+  re-centred every frame, rather than a fixed world height.
 - It is a uniform shift, not distance-projected, so it does not fall off
   between zenith and horizon the way true motion parallax would (see the
   rejected design above). The whole cloud pattern slides together at one
   rate as you walk.
 
-## Fading out for art-directed domes
+## The altitude parameter
 
-`max_y` doesn't monotonically mean "how realistic is this sky" the way a
-true distance would — it's also how artists pull the whole dome down close
-for a stylized or custom-textured ceiling, deliberately unrealistic. Dividing
-by `max_y` alone gets that backwards: the *closer*, most obviously
-art-directed domes would get the *strongest* parallax, swinging the hardest
-exactly where it's least wanted, while a tall, realistic sky would barely
-move.
+The old `max_y`-driven version needed a `smoothstep(1000, 1600, max_y)`
+"realism" fade because max altitude doubles as the artist's pull-the-dome-
+close dial and the parallax got STRONGER exactly on the most stylised skies.
+With the layer altitude decoupled from max_y that patch is gone: a stylised
+sky simply is not driving `ss_cloud_alt_m` low unless its weather says so.
 
 WMO cloud altitude bands (mid-latitudes) for reference:
 

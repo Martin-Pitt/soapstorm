@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- height="700"
+ height="720"
  min_height="240"
  min_width="424"
  layout="topleft"
@@ -118,6 +118,17 @@
      name="strike_marker_check"
      label="Mark pending lightning strikes"
      tool_tip="Magenta ribbon along the bolt's future path, a box at the attachment point and a floating countdown while a strike is still being prepared - chosen to read against white storm cloud" />
+    <check_box
+     control_name="SSAtmoDebugFootstepMarkers"
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="footstep_marker_check"
+     label="Mark footstep audio sources"
+     tool_tip="A bright flash where a footstep sound starts playing, then a small dim dot riding the source until it stops - shows start moments, whether loops follow their avatar, and stop timing" />
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="10" height="16" width="106"

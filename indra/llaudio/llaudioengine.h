@@ -336,6 +336,15 @@ public:
     S32 getType()                                           { return mType; }
 
     void setPositionGlobal(const LLVector3d &position_global)       { mPositionGlobal = position_global; }
+    // <SS:Nexii> For sources that follow the listener (thunder placed on a bearing): matching the listener's velocity zeroes the relative motion FMOD's doppler works from, so walking does not
+    // pitch-bend a clap.
+    void setVelocity(const LLVector3 &velocity)                     { mVelocity = velocity; }
+
+    // Where playback should BEGIN inside the asset, ms; consumed by the channel when it starts. Lets a footstep loop open on a random step instead of the recording's first one forever, and is
+    // the primitive future chained/windowed playback rides on.
+    void setStartOffsetMS(U32 ms)                                   { mStartOffsetMS = ms; }
+    U32 getStartOffsetMS() const                                    { return mStartOffsetMS; }
+    // </SS:Nexii>
     LLVector3d getPositionGlobal() const                            { return mPositionGlobal; }
     LLVector3 getVelocity() const                                   { return mVelocity; }
     F32 getPriority() const                                         { return mPriority; }
@@ -343,6 +352,12 @@ public:
     // Gain should always be clamped between 0 and 1.
     F32 getGain() const                                             { return mGain; }
     virtual void setGain(const F32 gain)                            { mGain = llclamp(gain, 0.f, 1.f); }
+
+    // <SS:Nexii> How buried this source is behind solid build, 0 clear to 1 fully enclosed. Applied by the backend as a LOW-PASS, not a volume cut: transmission loss through mass rises steeply
+    // with frequency (~6dB/octave), so occluded sound goes muffled and bassy long before it goes quiet - the neighbour's party is a bassline. Callers keep gain for loudness; this is for timbre.
+    void setOcclusion(F32 occ)                                      { mOcclusion = llclamp(occ, 0.f, 1.f); }
+    F32 getOcclusion() const                                        { return mOcclusion; }
+    // </SS:Nexii>
 
     const LLUUID &getID() const     { return mID; }
     // NaCl - Sound Explorer
@@ -383,6 +398,8 @@ protected:
     LLUUID          mOwnerID;   // owner of the object playing the sound
     F32             mPriority;
     F32             mGain;
+    F32             mOcclusion = 0.f;   // <SS:Nexii> see setOcclusion
+    U32             mStartOffsetMS = 0; // <SS:Nexii> see setStartOffsetMS
     bool            mSourceMuted;
     bool            mForcedPriority; // ignore mute, set high priority, researved for sound preview and UI
     bool            mLoop;

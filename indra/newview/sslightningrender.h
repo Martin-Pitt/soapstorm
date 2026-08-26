@@ -39,8 +39,11 @@ class SSLightningRender : public LLSingleton<SSLightningRender>
     LLSINGLETON_EMPTY_CTOR(SSLightningRender);
 
 public:
-    // From renderGeomPostDeferred, BEFORE the volumetric cloud pass. The order is the whole in-cloud compositing story: every puff in front of a channel segment alpha-blends over it, so inside the
-    // cloud the bolt is veiled into a glow, through a gap it shows bare, and below cloud base it is fully visible. The field itself is the diffuser; nothing here tests occlusion at all.
+    // The two halves of the in-cloud compositing, either side of SSVolCloud::render(). renderFlash draws the sky-flash discs BEFORE the puffs - a disc is scattered light, and the deck veiling it
+    // is the correct look. render() draws the channel ribbons and sparks AFTER the puffs, each node dimmed by SSVolCloud::transmittance() along its own camera ray - so a fork crawling the deck
+    // reads THROUGH the cloud the way a real one does: dimmed where the deck is thin, bare through gaps, swallowed outright behind a dense core. Painter's order alone (the first design) buried a
+    // deep channel under stacked alpha completely; the analytic transmittance is what lets structure survive the veil [interaction: SSVolCloud -> bolt occlusion].
+    void renderFlash();
     void render();
 
     // Last frame's draw accounting, for the info overlay - "the bolt is invisible" has half a dozen silent causes and this names which stage went quiet.

@@ -74,6 +74,30 @@ uniform float ssWetPuddleRoughMin;    // PBR roughness floor at full puddle
 uniform float ssWetPuddleSpecular;    // legacy specular colour target at full puddle
 uniform float ssWetPuddleGloss;       // legacy gloss target at full puddle
 
+// The fine shoreline. The field's cell lattice can only say "a pool lives around here" at metre resolution; the actual pool EDGE is carved per fragment from this value-noise lattice - identical
+// maths to the CPU's ssPuddleMaskNoise, anchored at the camera region's origin so both sides (and the footstep query) walk one pattern. The soft threshold in main() is the shore band.
+uniform float ssPuddleMaskAmt;      // 0 disables the carve, 1 full
+uniform float ssPuddleMaskScaleM;   // lattice pitch, metres
+uniform vec2 ssPuddleMaskAnchor;    // agent-space origin of the lattice
+
+// The lattice hash, bit-for-bit the CPU's: uint(int) wraps two's complement exactly like the C cast does.
+float ssPuddleLatHash(ivec2 c)
+{
+    uint h = uint(c.x) * 374761393u + uint(c.y) * 668265263u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return float((h ^ (h >> 16)) & 0xffffffu) / 16777216.0;
+}
+
+float ssPuddleMaskNoise(vec2 m)
+{
+    vec2 f = m / max(ssPuddleMaskScaleM, 1.0);
+    ivec2 i0 = ivec2(floor(f));
+    vec2 t = f - vec2(i0);
+    vec2 s = t * t * (3.0 - 2.0 * t);
+    return mix(mix(ssPuddleLatHash(i0),               ssPuddleLatHash(i0 + ivec2(1, 0)), s.x),
+               mix(ssPuddleLatHash(i0 + ivec2(0, 1)), ssPuddleLatHash(i0 + ivec2(1, 1)), s.x), s.y);
+}
+
 // Diagnostic. Above zero this is used as the wetness for every fragment the pass reaches, ignoring the field, the exposure and the shelter march entirely. It answers one question and only one: does
 // anything this pass writes reach the screen. Everything else here is downstream of that.
 uniform float ssWetDebugForce;
@@ -132,12 +156,14 @@ float ssAvatarWetAt(float t, float soak)
     return smoothstep(threshold, threshold + 0.30, soak);
 }
 
-// Wetness from whichever avatar capsule contains this fragment, 0 if none. Returns the wetness in x and how far up the body it was found in y, so the caller can tell a shin from a shoulder without
-// repeating the search.
-vec2 ssAvatarWet(vec3 p_agent, vec3 n)
+// Wetness from whichever avatar capsule contains this fragment, 0 if none. Returns the wetness in x, how far up the body it was found in y, and CONTAINMENT in z - how firmly any capsule holds
+// this fragment regardless of how soaked that body is. Containment is deliberately independent of wetness: a dry body standing in a puddle still needs the puddle kept off it, and gating the body
+// test on soak was exactly what let the standing-water treatment frost a freshly-arrived avatar head to toe.
+vec3 ssAvatarWet(vec3 p_agent, vec3 n)
 {
     float best = 0.0;
     float best_t = 1.0;
+    float inside = 0.0;
 
     for (int i = 0; i < SS_AVATAR_MAX; ++i)
     {
@@ -161,6 +187,11 @@ vec2 ssAvatarWet(vec3 p_agent, vec3 n)
 
         // Softened at the capsule's rim so the edge of the test is not a visible cylinder cut across a shoulder.
         float edge = 1.0 - smoothstep(radius * 0.75, radius, length(off));
+        if (edge > inside)
+        {
+            inside = edge;
+            best_t = t;
+        }
 
         // Facing into the rain wets sooner - see SS_AVATAR_LEE. Applied to the soak rather than to the result, so the windward side crosses each band's threshold earlier instead of merely being
         // drawn stronger once it has.
@@ -168,14 +199,10 @@ vec2 ssAvatarWet(vec3 p_agent, vec3 n)
         float aim = mix(SS_AVATAR_LEE, 1.0, into);
 
         float w = ssAvatarWetAt(t, soak * aim) * edge;
-        if (w > best)
-        {
-            best = w;
-            best_t = t;
-        }
+        best = max(best, w);
     }
 
-    return vec2(best, best_t);
+    return vec3(best, best_t, inside);
 }
 
 void main()
@@ -215,8 +242,9 @@ void main()
     bool field_knows = field_here.x > -1.0e5;
     bool on_surface = field_knows && (p.z <= field_here.x + SS_AVATAR_LIFT);
 
-    vec2 av = ssAvatarWet(p, n);
+    vec3 av = ssAvatarWet(p, n);
     float avatar_wet = av.x;
+    bool in_body = av.z > 0.05;    // inside SOMEONE's capsule, however dry they are - see ssAvatarWet
 
     // How much of this fragment is still "the ground someone is standing on" rather than "someone": 1 at the soles, easing to 0 by the knee. A ramp, not a threshold. The two things it feeds -
     // whether the floor is allowed to answer, and whether standing water is drawn - both look wrong switched. Cut at the knee, a person on a wet floor wears the floor's puddle up their shins and it
@@ -224,8 +252,9 @@ void main()
     float ground_share = 1.0 - smoothstep(0.04, SS_AVATAR_KNEE, av.y);
 
     // Above the knee, a fragment the field still claims as its own surface is a floor the capsule happens to pass through - a mezzanine, a table - and the floor's answer is the right one. Below the
-    // knee the test is not asked, because down there the two answers agree anyway.
-    bool avatar_here = avatar_wet > 0.004 && (ground_share > 0.5 || !on_surface);
+    // knee the test is not asked, because down there the two answers agree anyway. Containment, NOT avatar_wet: a body counts as a body while it is still dry, or the field's answer for the ground
+    // cell lands on the whole silhouette until the first moment soak registers - and the wet fold below already returns the right answer for a dry body (nothing) through body_wet being zero.
+    bool avatar_here = in_body && (ground_share > 0.5 || !on_surface);
 
     if (ssWetDebugForce > 0.0)
     {
@@ -278,8 +307,13 @@ void main()
         float body_wet = avatar_wet * ssWetStrength;
         wet = mix(body_wet, max(wet, body_wet), ground_share);
 
-        // Water stands on a floor, not on a person - so the standing-water term is faded out over the same range rather than switched off at a height. At the soles it is whatever the floor has,
-        // because down there the fragment may well BE the floor; by the knee it is gone.
+    }
+
+    // Water stands on a floor, not on a person - so the standing-water term fades out up the body: at the soles it is whatever the floor has, because down there the fragment may well BE the
+    // floor; by the knee it is gone. Keyed to CONTAINMENT, not to avatar_here: avatar_here needs the body to be measurably wet, and a dry body standing in a puddle was failing it - which handed
+    // the raw field's standing depth to their whole silhouette and frosted them head to toe.
+    if (in_body)
+    {
         puddle *= ground_share;
     }
 
@@ -298,13 +332,24 @@ void main()
     // ...and it lies ON the surface, not somewhere in the column above it. The height tolerance in ssFieldAt has to be generous - a kerb or the crown of a road genuinely sits above the cell average
     // that stored it - but generous and hard-edged is what draws the line. Fading the last part of the range costs nothing and leaves no edge to see: a level surface at the stored height is
     // unaffected, and one drifting up out of its column loses its puddle gradually instead of at a line.
+    // In METRES, clamped, not in cells: a kerb or a road crown sits a few tens of centimetres above its cell's average and deserves its puddle, but standing water half a metre up is not standing
+    // any more. Scaled purely by the cell size this fade reached metres above the ground, which is how the puddle climbed people's bodies and any raised levelish facet near one.
     float cell = ssFieldOrigin.z;
-    level *= 1.0 - smoothstep(cell * 0.5, cell * 1.5, p.z - field_here.x);
+    level *= 1.0 - smoothstep(min(cell * 0.5, 0.20), min(cell * 1.5, 0.45), p.z - field_here.x);
 
     // Not applied under the debug override, whose whole job is to soak every fragment the pass reaches regardless of what anything thinks.
     if (ssWetDebugForce <= 0.0)
     {
         puddle *= field_knows ? level : 0.0;
+
+        // The shoreline itself, carved at fragment resolution: the smoothstep is the shore band - full water inside, a shallow thinning rim across it, dry ground beyond - which is the actual
+        // pool edge the metre-grid cells can only gesture at. Same lattice the CPU envelope and the footstep query evaluate, so all three agree where the water stops.
+        if (ssPuddleMaskAmt > 0.0 && puddle > 0.004)
+        {
+            float mask_v = ssPuddleMaskNoise(p.xy - ssPuddleMaskAnchor);
+            float shore = smoothstep(0.47, 0.56, mask_v);
+            puddle *= mix(1.0, shore, ssPuddleMaskAmt);
+        }
     }
 
     // What actually drives the blend toward the wet/puddle look below - a spot can be a full puddle while the general wetness pass call for this frame is low (just after the rain stopped, say), and
