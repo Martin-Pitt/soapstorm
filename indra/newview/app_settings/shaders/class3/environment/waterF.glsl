@@ -36,11 +36,6 @@ float sampleDirectionalShadow(vec3 pos, vec3 norm, vec2 pos_screen);
 vec3 scaleSoftClipFragLinear(vec3 l);
 void calcAtmosphericVarsLinear(vec3 inPositionEye, vec3 norm, vec3 light_dir, out vec3 sunlit, out vec3 amblit, out vec3 atten, out vec3 additive);
 vec4 applyWaterFogViewLinear(vec3 pos, vec4 color);
-#ifdef SS_ATMO
-vec4 applyWaterFogViewLinearNoClip(vec3 pos, vec4 color);
-// <SS:Nexii> waterFogF.glsl's view-space water plane, redeclared here for the deep-column sample below - same name and type, so the linker merges them. </SS:Nexii>
-uniform vec4 waterPlane;
-#endif
 
 void mirrorClip(vec3 pos);
 
@@ -110,11 +105,6 @@ uniform float ss_light_angular_radius;
 // disc in the sky. This is the light that replaces it at night.
 uniform vec3 ss_moonlit;
 uniform float ss_sun_up;
-#ifdef SS_ATMO
-// <SS:Nexii> The same squash band waterV consumes (knee, cap, rim) - bound program-wide by SSFarSea and zeroed after the sea's draw, so it reads all-zero on vanilla water. Here it keys ss_far,
-// the far-ocean blend in main. [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
-uniform vec3 ss_squash;
-#endif
 
 uniform float blurMultiplier;
 uniform float refScale;
@@ -219,13 +209,6 @@ void main()
     //normalize view vector
     vec3 viewVec = normalize(pos.xyz);
 
-#ifdef SS_ATMO
-    // <SS:Nexii> Far-ocean blend factor: 0 in the near field, 1 by the squash knee, riding TRUE view distance (vary_position is pre-squash), so the stock planes and the far sea frame share one
-    // smooth per-pixel ramp and the rect seam sits mid-blend where both sides already agree - the soft integration across stock water. Zero whenever the band is unbound, keeping stock vanilla.
-    // [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
-    float ss_far = ss_squash.z > ss_squash.x ? smoothstep(ss_squash.x * 0.5, ss_squash.x, dist) : 0.0;
-#endif
-
     // Setup our waves.
 
     vec3 wave1 = vec3(0, 0, 1);
@@ -233,15 +216,6 @@ void main()
     vec3 wave3 = vec3(0, 0, 1);
 
     generateWaveNormals(wave1, wave2, wave3);
-
-#ifdef SS_ATMO
-    // <SS:Nexii> Deterministic far-field flattening: at squash-band distances the pixel footprint in wave UV space is radially thousands of texels, and anisotropic filtering (which picks its mip
-    // from the SHORT axis) returns azimuth-coherent noise instead of the flat average - the radial streak forests. Mixing the sampled normals to flat by ss_far takes the sampler out of the far
-    // field entirely; the slope variance removed here is what the ss_far roughness widening below stands in for. </SS:Nexii>
-    wave1 = mix(wave1, vec3(0.0, 0.0, 1.0), ss_far);
-    wave2 = mix(wave2, vec3(0.0, 0.0, 1.0), ss_far);
-    wave3 = mix(wave3, vec3(0.0, 0.0, 1.0), ss_far);
-#endif
 
     float dmod = sqrt(dist);
     vec2 distort = (refCoord.xy/refCoord.z) * 0.5 + 0.5;
@@ -320,13 +294,6 @@ void main()
 
     vec4 fb = texture(screenTex, distort2);
 
-#ifdef SS_ATMO
-    // <SS:Nexii> What the refraction texture holds behind the squash band is mostly sky, so the far sea refracted red sunsets instead of showing ocean body colour. Blend to the fogged deep-water
-    // column: sample 20m below the water plane THROUGH this fragment, NoClip and black input so only the accumulated fog colour returns. The clipped form on a mid-ray point was the white far sea -
-    // a grazing ray stays above the plane for kilometres, and applyWaterFogViewLinear hands back the input colour untouched for any point above it. </SS:Nexii>
-    fb.rgb = mix(fb.rgb, applyWaterFogViewLinearNoClip(pos.xyz - waterPlane.xyz * 20.0, vec4(0.0)).rgb, ss_far);
-#endif
-
 #else
     vec4 fb = applyWaterFogViewLinear(viewVec*2048.0, vec4(1.0));
 
@@ -347,12 +314,6 @@ void main()
     // streak, matching the disc actually drawn up there.
     perceptualRoughness = clamp(perceptualRoughness + ss_light_angular_radius, 0.0, 1.0);
     // </SS:Nexii>
-
-#ifdef SS_ATMO
-    // <SS:Nexii> Distance-widened lobe: minification averages the wave normals toward flat, and the slope variance the mips discard comes back as roughness (the LEAN/Toksvig idea, fixed-budget
-    // form), so the glitter path stays broad and alive out to the horizon instead of collapsing to a mirror stripe where the waves go sub-pixel. </SS:Nexii>
-    perceptualRoughness = clamp(perceptualRoughness + ss_far * 0.2, 0.0, 1.0);
-#endif
 
     float gloss      = 1 - perceptualRoughness;
 

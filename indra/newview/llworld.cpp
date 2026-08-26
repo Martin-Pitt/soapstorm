@@ -1382,8 +1382,8 @@ void LLWorld::updateWaterObjects()
 // </FS:CR> Aurora Sim
 
     // We only want to fill in water for stuff that's near us, say, within 256 or 512m
-    // <SS:Nexii> Fixed 256 (was 512, flipping on draw distance): keeps the footprint static and its far corner inside MAX_FAR_CLIP; the ring the tiles no longer cover is where the edge
-    // patches lie anyway. Rationale in doc/atmo_magic_interactions.md.
+    // <SS:Nexii> Fixed 256 (was 512, flipping on draw distance): keeps the footprint static and its far corner inside MAX_FAR_CLIP, the constant projection far plane, leaving the skirt below as
+    // much room as possible; the ring the tiles no longer cover is where the edge patches lie anyway.
     S32 range = 256;
     // </SS:Nexii>
 
@@ -1470,11 +1470,11 @@ void LLWorld::updateWaterObjects()
         (S32)(512 - (region_y - min_y)) };
 // </FS:CR> Fix water height on regions larger than 2048x2048
 
-    // <SS:Nexii> Void water skirt past the hole box: constant 256-512m, capped so the ring's far corner at sqrt(2) fits MAX_FAR_CLIP from a camera anywhere in the box (0.7 ~ 1/sqrt(2) with
-    // rounding margin); the far distance is the Atmo far sea's job. Floor 256 because under ~128m LLVOWater::updateGeometry rounds a patch to zero quads (crash). Even metres so tile edges
-    // round together. Rationale in doc/atmo_magic_interactions.md. [interaction: SSFarSea rect]
+    // <SS:Nexii> Void water skirt past the hole box: as far out as fits, capped so the ring's far corner at sqrt(2) stays inside MAX_FAR_CLIP from a camera anywhere in the box (0.7 ~ 1/sqrt(2)
+    // with rounding margin) - triangles the projection slices through rasterise black along the horizon. Floor 256 because under ~128m LLVOWater::updateGeometry rounds a patch to zero quads
+    // (crash). Even metres so tile edges round together. Rationale in doc/atmo_magic_interactions.md.
     const F32 corner_room = MAX_FAR_CLIP * 0.7f - (F32)llmax(wx, wy);
-    const F32 water_stretch = (F32)(2 * ll_round(llclamp(corner_room, 256.f, 512.f) * 0.5f));
+    const F32 water_stretch = (F32)(2 * ll_round(llclamp(corner_room, 256.f, 1024.f) * 0.5f));
     // </SS:Nexii>
 
     S32 dir;

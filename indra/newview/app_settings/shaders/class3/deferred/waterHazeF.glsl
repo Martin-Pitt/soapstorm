@@ -68,9 +68,6 @@ void main()
 
     vec4  pos          = getPositionWithDepth(tc, depth);
 
-    // <SS:Nexii> Deliberately NOT un-squashed to true distance (unlike hazeF): this pass fogs the view ray's submerged span, and for surface pixels that span is a coordinate artifact - the sea's
-    // sink and droop below the flat plane, not real water. At drawn positions the artifact stays centimetres (matching stock planes, where this pass is a near no-op); at true distance it would
-    // saturate and flood the far sea's reflection with flat fog colour. [interaction: SSFarSea, hazeF.glsl] </SS:Nexii>
     vec4 fogged = getWaterFogView(pos.xyz);
     fogged.a = max(pow(fogged.a, 1.7), 0);
 

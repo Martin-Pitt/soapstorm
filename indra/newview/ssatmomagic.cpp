@@ -27,9 +27,6 @@
 #include "ssatmotrack.h"
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvbridge.h"
-#include "ssfarsea.h"
-#include "llworld.h"
-#include "llvowater.h"
 #include "ssrainshadow.h"
 #include "ssavatarwet.h"
 #include "ssvolcloud.h"
@@ -988,29 +985,6 @@ void SSAtmoMagic::drawInfo()
     lines.push_back(llformat("impacts    %.1f/s   %d queued   loops %d",
                              audio->impactRate(), (S32)atmo->pendingImpacts(), audio->activeLoops()));
     lines.push_back(llformat("probe age  %.2fs", (F32)audio->lastProbeAge()));
-
-    {
-        const SSAtmoEnvApplier& env = SSAtmoEnvApplier::instance();
-        lines.push_back(llformat("far sea    %s   rim %.1f km (0 = not drawing)   knee %.0f m   void water %s",
-                                 (env.isActive() && env.waterPlaneOn()) ? "on" : "off",
-                                 SSFarSea::getInstance()->lastRimRadius() / 1000.f,
-                                 SSFarSea::getInstance()->lastKnee(),
-                                 env.voidWaterDerendered() ? "stood down" : "stock"));
-
-        LLWorld* world = LLWorld::getInstance();
-        lines.push_back(llformat("  hole water  %d objects", (S32)world->holeWaterObjects().size()));
-        const LLPointer<LLVOWater>* edges = world->edgeWaterObjects();
-        for (S32 i = 0; i < 8; ++i)
-        {
-            const LLVOWater* w = edges[i].get();
-            if (!w || w->isDead()) continue;
-            const LLVector3 p = w->getPositionAgent();
-            const LLVector3 s = w->getScale();
-            lines.push_back(llformat("  edge %d   at %.0f %.0f   %.0f x %.0f m%s",
-                                     i, p.mV[0], p.mV[1], s.mV[0], s.mV[1],
-                                     w->mDrawable.notNull() && w->mDrawable->isVisible() ? "   VISIBLE" : ""));
-        }
-    }
 
     const LLFontGL* font = LLFontGL::getFontMonospace();
     const S32 line_h = font->getLineHeight();

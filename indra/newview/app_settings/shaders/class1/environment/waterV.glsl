@@ -39,16 +39,6 @@ uniform vec3 eyeVec;
 uniform float waterHeight;
 uniform vec3 lightDir;
 
-#ifdef SS_ATMO
-// <SS:Nexii> The Atmo far-field squash band (knee, cap, virtual radius), shared verbatim with the cloud field and lightning so water, cloud and bolt agree about drawn depth. </SS:Nexii>
-uniform vec3 ss_squash;
-// <SS:Nexii> The far sea's frame: ss_sea = (blend start as a chebyshev fraction of the frame, rim radius, sea height, planet radius); ss_sea_hole = the stock-water union rect (min xy, max xy)
-// the frame lattice hangs from, which also world-anchors the waves - no snapped origin needed. ss_sea is all zeros for every draw except the sea's own - see the placement block in main.
-// [interaction: SSFarSea] </SS:Nexii>
-uniform vec4 ss_sea;
-uniform vec4 ss_sea_hole;
-#endif
-
 out vec4 refCoord;
 out vec4 littleWave;
 out vec4 view;
@@ -67,64 +57,6 @@ void main()
 {
     //transform vertex
     vec4 pos = vec4(position.xyz, 1.0);
-
-#ifdef SS_ATMO
-    // <SS:Nexii> The far sea arrives as an immutable canonical FRAME lattice in units of the stock-water rect's half extent: |xy| = 1 is the rect edge, the frame reaches out to chebyshev 4 (the
-    // 128/32 cell ratio in SSFarSea::build), and the interior is absent except a one-cell apron tucked inside the rect that the depth sink hides under stock water - seam pinholes and the <=0.5m
-    // origin-rounding mismatch land on sunken sea instead of void. Built once, never rebuilt - everything varying is a uniform. [interaction: SSFarSea] </SS:Nexii>
-    vec3 ss_true_pos = position.xyz;
-    if (ss_sea.y > 0.0)
-    {
-        // Affine placement from the rect: the frame's inner edge lands exactly on the stock footprint (per-axis half extents, so a neighbour-stretched rect stays connected at the cost of a few
-        // percent of cell squareness), and cells continue outward in the same world steps - undistorted UVs, waves world-anchored by the rect itself.
-        vec2 sea_c = 0.5 * (ss_sea_hole.xy + ss_sea_hole.zw);
-        vec2 sea_half = 0.5 * (ss_sea_hole.zw - ss_sea_hole.xy);
-        vec2 sea_lat = sea_c + position.xy * sea_half;
-        // Blend to the horizon: chebyshev fraction of the frame (0.5 is the rect edge - the 64/32 cell ratio in SSFarSea::build - and 1 the outer square edge), smoothstepped from the knee-derived
-        // start in ss_sea.x to 100% at the edge, each vertex pulled along its own camera ray toward the rim circle. MESH-anchored, not camera-distance-anchored, so the rect and apron are ALWAYS
-        // identity - a camera-distance ramp let far-side seam vertices pick up a few percent of a 100km pull and tear kilometres off the rect edge. w = 1 exactly at the outer edge, so the square's
-        // rim IS the round horizon; the camera stays inside the identity zone whenever stock water is on screen, which keeps the ray directions sweeping the circle monotonically.
-        float sea_cheb = max(abs(position.x), abs(position.y)) * 0.5;
-        // <SS:Nexii> DIAGNOSTIC BASELINE: flat linear profile. The pull from lattice radii to the rim is plain linear in cheb - no smoothstep, no exponential - so the ring spacing seen edge-on
-        // is exactly the mapping and nothing else. The curvature experiments (droop, bowl lift, shaped pulls - see git history) rebuild on top of this once the foundation reads clean. Still
-        // exactly 0 through the identity zone and 1 at the outer edge, so the rect seam and the rim circle are untouched. MUST stay in exact sync with waterHazeV.glsl. [interaction:
-        // waterHazeV.glsl, hazeF.glsl flat-sea distance] </SS:Nexii>
-        float sea_w = clamp((sea_cheb - ss_sea.x) / max(1.0 - ss_sea.x, 1e-4), 0.0, 1.0);
-        vec2 sea_world = sea_lat;
-        if (sea_w > 0.0)
-        {
-            vec2 sea_rd = sea_lat - eyeVec.xy;
-            float sea_rl = length(sea_rd);
-            vec2 sea_dir = sea_rl > 1e-3 ? sea_rd / sea_rl : vec2(0.0, 1.0);
-            sea_world = mix(sea_lat, eyeVec.xy + sea_dir * ss_sea.y, sea_w);
-            // A fat rect can put mid-blend lattice positions past the rim itself; folded back onto the rim circle they collapse into slivers ON the horizon, instead of mapping past the squash
-            // cap and rasterising as a far-clipped wall around it - which is what the first-cut 4x frame did.
-            vec2 sea_rr = sea_world - eyeVec.xy;
-            float sea_rrl = length(sea_rr);
-            if (sea_rrl > ss_sea.y)
-            {
-                sea_world = eyeVec.xy + sea_rr * (ss_sea.y / sea_rrl);
-            }
-        }
-
-        float sea_rc = length(sea_world - eyeVec.xy);
-        // Sunk below the authored level - but ONLY where sea and stock actually overlap, the one-cell apron under the rect (cheb < 0.5): 5cm near so stock wins depth ties outright, ramping to 3m
-        // past the knee where the squash compresses drawn-depth separation hundreds-fold and centimetres would land inside depth-buffer precision. Outside the rect nothing overlaps the sea, and
-        // the old everywhere-ramp tilted the visible surface by 3m over 600m right at the knee - a reflection ring on the knee circle. The apron-to-edge slope this leaves sits entirely under
-        // stock water, so the open sea starts flush (5cm) at the stock seam.
-        float sea_sink = 0.05;
-        if (sea_cheb < 0.5)
-        {
-            float sea_sink_t = clamp((sea_rc - ss_squash.x) / 600.0, 0.0, 1.0);
-            sea_sink = 0.05 + 2.95 * sea_sink_t * sea_sink_t;
-        }
-        // DIAGNOSTIC BASELINE: dead flat - no planet droop, no bowl lift (see git history for both). The surface is the water plane minus the seam sink, so anything curved seen edge-on from here
-        // on is a bug, not a profile. ss_sea.w (planet radius) is still bound but deliberately unused.
-        ss_true_pos = vec3(sea_world, ss_sea.z - sea_sink);
-        pos.xyz = ss_true_pos;
-    }
-#endif
-
     mat4 modelViewProj = modelview_projection_matrix;
 
     vary_position = (modelview_matrix * pos).xyz;
@@ -141,41 +73,14 @@ void main()
     float d = length(oEyeVec.xy);
     float ld = min(d, 2560.0);
 
-#ifdef SS_ATMO
-    // <SS:Nexii> With the squash band live the vanilla 2560m radial clamp IS the stripe artifact: every vertex past 2560m collapses onto the same circle around the eye, so wave UVs freeze along
-    // each camera ray and the whole band from drawn ~1.6km to the rim rasterises as azimuth-striped walls with matching broken fresnel and specular. True positions instead - the virtual-distance
-    // parallax then anchors the waves where they really are, and texture minification mips the normal maps toward flat with distance, which is the correct far-ocean limit that waterF's ss_far
-    // roughness widening compensates. Squash-zeroed draws (Atmo off, sea off, underwater) keep the vanilla clamp byte-for-byte. [interaction: SSFarSea, waterF.glsl] </SS:Nexii>
-    if (ss_squash.z <= 0.0)
-#endif
-    {
-        pos.xy = eyeVec.xy + oEyeVec.xy/d*ld;
-    }
+    pos.xy = eyeVec.xy + oEyeVec.xy/d*ld;
     view.xyz = oEyeVec;
 
     d = clamp(ld/1536.0-0.5, 0.0, 1.0);
     d *= d;
 
-#ifdef SS_ATMO
-    // <SS:Nexii> ss_true_pos equals position for everything except the far sea disc, whose true placement was computed above. </SS:Nexii>
-    oPosition = vec4(ss_true_pos, 1.0);
-#else
     oPosition = vec4(position, 1.0);
-#endif
 //  oPosition.z = mix(oPosition.z, max(eyeVec.z*0.75, 0.0), d); // SL-11589 remove "U" shaped horizon
-
-#ifdef SS_ATMO
-    // <SS:Nexii> Far-field squash, per vertex: beyond the knee the vertex pulls radially toward the camera along its own ray, so the plane reaches kilometres past the far plane with the image
-    // unchanged and no far-plane slicing - the black-horizon artifact the old void-water stretch cap existed to dodge. eyeVec is the camera in this same space. </SS:Nexii>
-    vec3 sq_rel = oPosition.xyz - eyeVec;
-    float sq_d = length(sq_rel);
-    if (sq_d > ss_squash.x && ss_squash.z > ss_squash.x)
-    {
-        float sq_drawn = ss_squash.x + (sq_d - ss_squash.x) * (ss_squash.y - ss_squash.x) / (ss_squash.z - ss_squash.x);
-        sq_drawn = min(sq_drawn, ss_squash.y * 0.999);
-        oPosition.xyz = eyeVec + sq_rel * (sq_drawn / sq_d);
-    }
-#endif
 
     oPosition = modelViewProj * oPosition;
 

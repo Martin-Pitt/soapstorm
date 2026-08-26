@@ -45,7 +45,6 @@
 #include "llviewerregion.h"
 #include "llvowater.h"
 #include "llworld.h"
-#include "ssfarsea.h"
 #include "pipeline.h"
 #include "llviewershadermgr.h"
 #include "llenvironment.h"
@@ -112,14 +111,7 @@ S32 LLDrawPoolWater::getNumPostDeferredPasses()
     // its atmospherics - leaving only the flat plane doWaterHaze() paints, the moment the camera passes a fixed 1024m dating from when that
     // was the top of the skybox. Gate on MAX_FAR_CLIP, the constant projection far plane, where the water actually stops being visible; not
     // the draw distance, which water is deliberately drawn past (its partition sets mInfiniteFarClip).
-    // When Atmo owns the water the gate goes away entirely: the squash band bound around every water draw is a function of 3D slant
-    // distance, so from any altitude - straight down at the plane's centre included - every vertex past the knee is carried back inside the
-    // cap, and the water stays visible the whole 0-4096m climb. [interaction: SSFarSea::bindSquash]
     //if (LLViewerCamera::getInstance()->getOrigin().mV[2] < 1024.f)
-    if (SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn())
-    {
-        return 1;
-    }
     const F32 height_above_water = LLViewerCamera::getInstance()->getOrigin().mV[2] - LLEnvironment::instance().getWaterHeight();
     if (height_above_water < MAX_FAR_CLIP)
     // </SS:Nexii>
@@ -408,14 +400,6 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     LLGLDisable cullface(GL_CULL_FACE);
 
-    // <SS:Nexii> Atmo's own far sea (the "own water plane" rule): stock planes get the SAME squash band bound first so the frame seam stays closed in drawn space; the sea draws last so depth
-    // testing hands every stock pixel back to stock. Without Atmo the uniform's zero default keeps stock byte-for-byte vanilla. No underwater form yet. [interaction: SSFarSea, waterV.glsl] </SS:Nexii>
-    const bool ss_atmo_sea = !underwater && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
-    if (ss_atmo_sea)
-    {
-        SSFarSea::getInstance()->bindSquash(shader);
-    }
-
     // Only push the water planes once.
     // Previously we did this twice: once for void water and one for region water.
     // However, the void water and region water shaders are the same exact shader.
@@ -423,11 +407,6 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // That flag was not actually used anywhere in the shaders.
     // - Geenz 2025-02-11
     pushWaterPlanes(0);
-
-    if (ss_atmo_sea)
-    {
-        SSFarSea::getInstance()->render(shader);
-    }
 
     // clean up
     gPipeline.unbindDeferredShader(*shader);

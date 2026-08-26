@@ -166,11 +166,9 @@ void SSAtmoEnvApplier::apply()
     {
         applyWater(track, phase, mod);
         setWaterRendering(true);
-        setVoidWaterRendering(true);
     }
     else
     {
-        setVoidWaterRendering(true);
         applyWaterDefaults();
         setWaterRendering(false);
     }
@@ -339,29 +337,6 @@ void SSAtmoEnvApplier::setWaterRendering(bool enabled)
     }
 }
 
-// Toggles the void water render types; survives as undo-only bookkeeping.
-void SSAtmoEnvApplier::setVoidWaterRendering(bool enabled)
-{
-    if (!enabled)
-    {
-        if (!mVoidDerendered && LLPipeline::hasRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER))
-        {
-            LLPipeline::toggleRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER);
-            mVoidDerendered = true;
-        }
-        return;
-    }
-
-    if (mVoidDerendered)
-    {
-        if (!LLPipeline::hasRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER))
-        {
-            LLPipeline::toggleRenderTypeControl(LLPipeline::RENDER_TYPE_VOIDWATER);
-        }
-        mVoidDerendered = false;
-    }
-}
-
 // Starts owning the environment when an asset is present.
 void SSAtmoEnvApplier::activate()
 {
@@ -394,7 +369,6 @@ void SSAtmoEnvApplier::deactivate()
     LLEnvironment::instance().clearEnvironment(LLEnvironment::ENV_LOCAL);
     LLEnvironment::instance().setSelectedEnvironment(LLEnvironment::ENV_LOCAL);
 
-    setVoidWaterRendering(true);
     setWaterRendering(true);
 
     mSky.reset();

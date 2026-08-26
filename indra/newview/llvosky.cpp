@@ -1073,9 +1073,9 @@ bool LLVOSky::updateGeometry(LLDrawable *drawable)
     // <FS:Ansariel> Factor out instance() calls
     LLEnvironment& environment = LLEnvironment::instance();
 
-    // <SS:Nexii> Stock kills the whole disc the instant the body's CENTRE crosses the horizon (getIsSunUp flips on direction z), which reads as the sun popping out of existence half-set - the
-    // stock horizon haze used to swallow that, the Atmo far sea's crisp waterline does not. With Atmo on, grant a grace band past centre-set: the sea and terrain occlude the sunken part by depth,
-    // so drawing "too long" costs nothing and the disc slides below the waterline the way a sunset does. ~5.7 degrees covers even a large authored disc. [interaction: SSFarSea horizon]
+    // <SS:Nexii> Stock kills the whole disc the instant the body's CENTRE crosses the horizon (getIsSunUp flips on direction z), which reads as the sun popping out of existence half-set. With
+    // Atmo on, grant a grace band past centre-set: water and terrain occlude the sunken part by depth, so drawing "too long" costs nothing and the disc slides below the horizon the way a sunset
+    // does. ~5.7 degrees covers even a large authored disc.
     static LLCachedControl<bool> ss_atmo(gSavedSettings, "SSAtmoEnabled", false);
     draw_sun  &= environment.getIsSunUp()
                  || (ss_atmo && environment.getSunDirection().mV[2] > -0.10f);

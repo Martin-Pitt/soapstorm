@@ -25802,28 +25802,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.02</real>
     </map>
-    <key>SSAtmoDebugFarSeaLift</key>
-      <map>
-      <key>Comment</key>
-      <string>Debug: hoist the Atmo far sea disc 2m above the water so it overdraws stock water and identifies itself</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>0</integer>
-    </map>
-    <key>SSAtmoDebugFarSeaFreezeEye</key>
-      <map>
-      <key>Comment</key>
-      <string>Debug: freeze the eye anchor the Atmo far sea (and its squash) is built around at its current camera position, so the mesh stops following the camera and can be inspected from outside</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>0</integer>
-    </map>
     <key>SSAtmoWaterPunctualLight</key>
       <map>
       <key>Comment</key>
@@ -25834,17 +25812,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
-    </map>
-    <key>SSAtmoSeaPlanetRadiusKm</key>
-      <map>
-      <key>Comment</key>
-      <string>Planet radius in km behind the Atmo far sea's horizon: sets how far the horizon sits and how it recedes and drops with camera altitude. 6371 is Earth; small values make small worlds with close, curved horizons; 0 is a flat world with a fixed-radius sea</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>6371.0</real>
     </map>
     <key>SSAtmoWetPuddleSpecular</key>
       <map>

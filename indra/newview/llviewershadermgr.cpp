@@ -1073,7 +1073,7 @@ bool LLViewerShaderMgr::loadShadersWater()
             gWaterProgram.addPermutation("HAS_SUN_SHADOW", "1");
         }
 
-        // <SS:Nexii> the water pool skipped the common permutations, so the SS_ATMO far-field squash never compiled in and the stretched void water ended at the far plane instead of the virtual horizon
+        // <SS:Nexii> the water pool skipped the common permutations, so the SS_ATMO variant never compiled in for water
         add_common_permutations(&gWaterProgram);
 
         gWaterProgram.mShaderGroup = LLGLSLShader::SG_WATER;
@@ -1098,7 +1098,7 @@ bool LLViewerShaderMgr::loadShadersWater()
         {
             gUnderWaterProgram.addPermutation("TRANSPARENT_WATER", "1");
         }
-        add_common_permutations(&gUnderWaterProgram);    // <SS:Nexii> SS_ATMO squash - same omission as gWaterProgram above
+        add_common_permutations(&gUnderWaterProgram);    // <SS:Nexii> SS_ATMO - same omission as gWaterProgram above
         success = gUnderWaterProgram.createShader();
         llassert(success);
     }

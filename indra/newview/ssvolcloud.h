@@ -38,6 +38,11 @@
 
 static const S32 SS_MAX_STRIKE_LIGHTS = 4;
 
+// <SS:Nexii> The far-field squash cap as a fraction of MAX_FAR_CLIP: where the cloud field's drawn depth tops out, just short of the projection far plane so nothing rasterises against it. The
+// knee (0.8 of the cap, set in update()) is where the compression starts; between them the whole remaining field is folded into the last fifth of drawn depth. Shared with lightning so bolt and
+// cloud agree about drawn depth. [interaction: SSLightning] </SS:Nexii>
+constexpr F32 SS_SQUASH_CAP_FRAC = 0.98f;
+
 class SSVolCloud : public LLSingleton<SSVolCloud>
 {
     LLSINGLETON_EMPTY_CTOR(SSVolCloud);

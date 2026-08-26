@@ -110,7 +110,6 @@
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
-#include "ssfarsea.h" // <SS:Nexii> far sea in the water haze pass
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
@@ -10209,21 +10208,6 @@ void LLPipeline::doAtmospherics()
 
         haze_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
 
-        // <SS:Nexii> The squash band for hazeF's un-squash, so aerial perspective over the far sea rides TRUE distance instead of freezing at the drawn cap - and explicitly zeroed when the sea
-        // is off, because program uniforms persist and a stale band would warp haze on ordinary water. [interaction: SSFarSea, hazeF.glsl] </SS:Nexii>
-        {
-            static LLStaticHashedString s_ss_squash("ss_squash");
-            const bool ss_atmo_sea = !sUnderWaterRender && SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
-            if (ss_atmo_sea)
-            {
-                SSFarSea::getInstance()->bindSquash(&haze_shader);
-            }
-            else
-            {
-                haze_shader.uniform3f(s_ss_squash, 0.f, 0.f, 0.f);
-            }
-        }
-
         LLGLDepthTest depth(GL_FALSE);
 
         // full screen blit
@@ -10307,22 +10291,9 @@ void LLPipeline::doWaterHaze()
             gGLLastMatrix = NULL;
             gGL.loadMatrix(gGLModelView);
 
-            // <SS:Nexii> The haze pass re-draws the water geometry, so it must be the SAME geometry: stock squashed identically (waterHazeV mirrors waterV, else the depth test cuts the haze
-            // over the squash band) and the far sea frame included. [interaction: SSFarSea, waterHazeV.glsl] </SS:Nexii>
-            const bool ss_atmo_sea = SSAtmoEnvApplier::instance().isActive() && SSAtmoEnvApplier::instance().waterPlaneOn();
-            if (ss_atmo_sea)
-            {
-                SSFarSea::getInstance()->bindSquash(&haze_shader);
-            }
-
             if (mWaterPool)
             {
                 mWaterPool->pushFaceGeometry();
-            }
-
-            if (ss_atmo_sea)
-            {
-                SSFarSea::getInstance()->render(&haze_shader);
             }
         }
 

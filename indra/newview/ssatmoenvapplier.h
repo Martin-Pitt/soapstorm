@@ -90,8 +90,6 @@ public:
 
     bool waterPlaneOn() const { return mWaterPlaneOn; }
 
-    bool voidWaterDerendered() const { return mVoidDerendered; }
-
     const std::vector<SSAtmoEnvBillboard>& celestialBillboards() const { return mBillboards; }
 
     static F32 celestialDiscScale(F32 angular_diameter_deg);
@@ -150,9 +148,6 @@ private:
     void setWaterRendering(bool enabled);
     bool mWaterDerendered = false;
     bool mWaterPlaneOn = false;
-
-    void setVoidWaterRendering(bool enabled);
-    bool mVoidDerendered = false;
 
     void applyCelestial(const SSAtmoEnvTrack& track, F64 phase);
 
