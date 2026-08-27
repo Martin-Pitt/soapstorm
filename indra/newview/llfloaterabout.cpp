@@ -45,6 +45,7 @@
 #include "llviewerregion.h"
 #include "llversioninfo.h"
 #include "llweb.h"
+#include "ssbc7encoder.h"   // <SS:Nexii> for the Squeeze BC7 backend attribution below
 
 // Linden library includes
 #include "llaudioengine.h"
@@ -206,6 +207,14 @@ bool LLFloaterAbout::postBuild()
     licenses_widget->appendText("\nFMOD Studio by Firelight Technologies Pty Ltd.\n", false,
                                 LLStyle::Params().color(about_color));
 #endif
+
+    // <SS:Nexii> Squeeze's BC7 backend is chosen when the build is configured, so packages-info.txt above - which is generated from the autobuild packages - cannot list it. The backend that got linked reports its own attribution, and returns null when it is our own code and there is nobody to credit.
+    if (const char* squeeze_attribution = ssBC7BlockBackendAttribution())
+    {
+        licenses_widget->appendText(std::string("\n") + squeeze_attribution, false,
+                                    LLStyle::Params().color(about_color));
+    }
+    // </SS:Nexii>
 
     licenses_widget->setEnabled(false);
     licenses_widget->startOfDoc();

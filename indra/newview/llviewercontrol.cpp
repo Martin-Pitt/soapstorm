@@ -119,6 +119,9 @@
 #include "llviewerregion.h"
 #include "NACLantispam.h"
 #include "nd/ndlogthrottle.h"
+// <SS:Nexii>
+#include "sssqueezedebug.h"
+// </SS:Nexii>
 // <FS:Zi> Run Prio 0 default bento pose in the background to fix splayed hands, open mouths, etc.
 #include "llanimationstates.h"
 
@@ -1316,6 +1319,22 @@ void setting_setup_signal_listener(LLControlGroup& group, const std::string& set
     });
 }
 
+// <SS:Nexii> Squeeze P0 verification - the signal fires on any change, so ticking the debug setting on and off again re-runs the test as often as you like
+static bool handleSSSqueezeSelfTest(const LLSD& newvalue)
+{
+    (void)newvalue;
+    ss_squeeze_self_test();
+    return true;
+}
+
+static bool handleSSSqueezeEnabledChanged(const LLSD& newvalue)
+{
+    (void)newvalue;
+    ss_squeeze_refresh_enabled();
+    return true;
+}
+// </SS:Nexii>
+
 void settings_setup_listeners()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -1614,6 +1633,17 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "SDL2IMEEnabled", handleSDL2IMEEnabledChanged);
 #endif
     // </FS:Zi>
+
+    // <SS:Nexii>
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeEnabled", handleSSSqueezeEnabledChanged);
+    // The encode side keeps its own snapshot of these two, because it is read from the texture fetch thread. Without a listener they would only ever take effect at the next login, which for a feature that ships off is indistinguishable from not working.
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeBackgroundEncode", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeMinTextureSize", handleSSSqueezeEnabledChanged);
+    // The read side keeps its own snapshot too, and for the same reason the encode side does: both gates are refreshed from ss_squeeze_refresh_enabled so they can never disagree about whether the feature is on.
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeReadEnabled", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeServeAlpha", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeSelfTest", handleSSSqueezeSelfTest);
+    // </SS:Nexii>
 }
 
 #if TEST_CACHED_CONTROL

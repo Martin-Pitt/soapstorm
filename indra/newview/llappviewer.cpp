@@ -105,6 +105,13 @@
 #endif
 #include "llprogressview.h"
 #include "llvocache.h"
+#include "ssroccache.h" // <SS:Nexii>
+#include "ssrocaux.h" // <SS:Nexii>
+#include "ssbc7encodequeue.h" // <SS:Nexii>
+#include "ssbc7serve.h" // <SS:Nexii>
+#include "ssbc7encoder.h" // <SS:Nexii>
+#include "ssbc7store.h" // <SS:Nexii>
+#include "sssqueezedebug.h" // <SS:Nexii>
 #include "lldiskcache.h"
 #include "llvopartgroup.h"
 #include "llautoupdatechecker.h"
@@ -139,6 +146,7 @@
 #include "llexperiencecache.h"
 #include "llimagej2c.h"
 #include "llmemory.h"
+#include "llprocessor.h" // <SS:Nexii> LLCPUFeatures::buildTargetISA for the SIMD line in the about box
 #include "llprimitive.h"
 #include "llurlaction.h"
 #include "llurlentry.h"
@@ -623,6 +631,9 @@ static void settings_to_globals()
     LLRender::sNsightDebugSupport = gSavedSettings.getBOOL("RenderNsightDebugSupport");
     LLImageGL::sGlobalUseAnisotropic    = gSavedSettings.getBOOL("RenderAnisotropic");
     LLImageGL::sCompressTextures        = gSavedSettings.getBOOL("RenderCompressTextures");
+    // <SS:Nexii>
+    LLImageGL::sSqueezeEnabled          = gSavedSettings.getBOOL("SSSqueezeEnabled");
+    // </SS:Nexii>
     LLVOVolume::sLODFactor              = llclamp(gSavedSettings.getF32("RenderVolumeLODFactor"), 0.01f, MAX_LOD_FACTOR);
     LLVOVolume::sDistanceFactor         = 1.f-LLVOVolume::sLODFactor * 0.1f;
     LLVolumeImplFlexible::sUpdateFactor = gSavedSettings.getF32("RenderFlexTimeFactor");
@@ -1202,6 +1213,9 @@ bool LLAppViewer::init()
     gGLActive = true;
     initWindow();
     LL_INFOS("InitInfo") << "Window is initialized." << LL_ENDL ;
+    // <SS:Nexii> Squeeze - the encode gate depends on whether this GPU has BPTC at all, which is only knowable once the GL context exists. initCache ran before this and could not have found out, so the policy is re-read here; a card without BPTC declines every encode from this point on and says so once in the log.
+    ss_squeeze_refresh_enabled();
+    // </SS:Nexii>
     // <FS:Beq> allow detected hardware to be overridden.
     gGLManager.mVRAMDetected = gGLManager.mVRAM;
     LL_INFOS("AppInit") << "VRAM detected: " << gGLManager.mVRAMDetected << LL_ENDL;
@@ -3969,13 +3983,7 @@ LLSD LLAppViewer::getViewerInfo() const
     //{
     //  info["BUILD_CONFIG"] = build_config;
     //}
-#ifdef USE_AVX2_OPTIMIZATION
-    info["SIMD"] = "AVX2";
-#elif USE_AVX_OPTIMIZATION
-    info["SIMD"] = "AVX";
-#else
-    info["SIMD"] = "SSE2";
-#endif
+    info["SIMD"] = LLCPUFeatures::buildTargetISA(); // <SS:Nexii> was three #ifdef branches duplicated here and in llappviewerwin32.cpp; one definition now, next to the runtime check that has to agree with it
 
 // <FS:PP> LTO indicator
 #ifdef USE_LTO
@@ -5436,14 +5444,47 @@ bool LLAppViewer::initCache()
     // Allocate the remaining percent which is not allocated to the disk cache
     // <FS:Ansariel> Better cache size control
     //const S64 texture_cache_size = S64(cache_total_size * texture_cache_percent / 100);
-    const S64 texture_cache_size = (S64)cache_total_size;
+    //const S64 texture_cache_size = (S64)cache_total_size;
     // </FS:Ansariel>
+
+    // <SS:Nexii> CacheSize is a TOTAL again, which is what the pref has always claimed to be and what the commented-out Linden code above was doing before Firestorm handed the whole thing to the J2C cache. Compressed textures are not a bolt-on that spends beyond the number the user set: they are a cache tier, so they come out of it.
+    //
+    // The J2C cache gets whatever the other tiers do not. It stays the source of truth - a texture whose BC7 blob is evicted is re-encoded from J2C without touching the network - so it must never be squeezed to nothing, hence the floor.
+    S64 texture_cache_size = (S64)cache_total_size;
+    {
+        const U32 bc7_pct = llclamp(gSavedSettings.getU32("SSSqueezeCachePercent"), (U32)0, (U32)90);
+        const S64 bc7_share = SSBC7Store::enabled() ? (S64)((cache_total_size / 100) * bc7_pct) : 0;
+
+        // A quarter of the total, floored, is what the J2C tier keeps whatever the other shares add up to. Below that the re-encode source starts missing often enough that the compressed tier is refilling itself from the network rather than from disk, which is the opposite of the point.
+        const S64 j2c_floor = (S64)(cache_total_size / 4);
+        texture_cache_size = llmax(j2c_floor, (S64)cache_total_size - bc7_share);
+
+        LL_INFOS("InitInfo") << "Cache split: total " << (cache_total_size / MB) << " MB, BC7 " << (bc7_share / MB)
+                             << " MB (" << bc7_pct << "%), J2C " << (texture_cache_size / MB) << " MB" << LL_ENDL;
+    }
+    // </SS:Nexii>
 
     LL_INFOS("InitInfo") << "Initializing texture cache with size: " << (texture_cache_size / (1024 * 1024)) << " MB" << LL_ENDL;
     LLAppViewer::getTextureCache()->initCache(LL_PATH_CACHE, texture_cache_size, texture_cache_mismatch);
 
+    // <SS:Nexii> Squeeze - the BC7 sidecar sits inside the texture cache directory, so it can only come up once that directory is settled and any startup purge above has already run. Unlike the region cache this needs no grid scoping: asset uuids are global, which is the whole reason the tier is keyed by uuid rather than by region. Both calls do nothing at all while SSSqueezeEnabled is off.
+    // Quality goes down FIRST, before anything reads a version. ssBC7EncoderVersion() folds in the block backend's version, which folds in the quality, so setting it after initStore would leave the store expecting one version while every encode stamped another. The backend also latches this at its first encode, which is another reason it cannot wait.
+    //
+    // Pushed rather than pulled because llimage sits below newview and must not reach up into the settings store.
+    {
+        const U32 q = gSavedSettings.getU32("SSSqueezeEncodeQuality");
+        ssBC7SetBlockQuality(q == 0 ? SSBC7_QUALITY_FAST : (q >= 2 ? SSBC7_QUALITY_HIGH : SSBC7_QUALITY_BALANCED));
+    }
+
+    SSBC7Store::instance().initStore(LLAppViewer::getTextureCache()->getTexturesDirName(), ssBC7EncoderVersion());
+    ssBC7EncodeInit();
+    ssBC7ServeInit();
+    // </SS:Nexii>
+
     const U32 CACHE_NUMBER_OF_REGIONS_FOR_OBJECTS = 128;
     LLVOCache::getInstance()->initCache(LL_PATH_CACHE, CACHE_NUMBER_OF_REGIONS_FOR_OBJECTS, getObjectCacheVersion());
+
+    // <SS:Nexii> The region object cache deliberately does NOT initialise here. This runs before the login panel, so the grid is still whatever was used last session and the store would be created under the wrong grid directory - regions from a different grid share coordinate handles and would collide. SSROCStore::ensureInitialized() brings it up on the first region instead, which is always post-login.
 
     // Remove old, stale CEF cache folders
     // <FS:TJ> Purge CEF cache in another thread to prevent very slow startup times
@@ -5576,6 +5617,7 @@ void LLAppViewer::purgeCache()
     LL_INFOS("AppCache") << "Purging Cache and Texture Cache..." << LL_ENDL;
     LLAppViewer::getTextureCache()->purgeCache(LL_PATH_CACHE);
     LLVOCache::getInstance()->removeCache(LL_PATH_CACHE);
+    SSROCStore::instance().purgeAll(); // <SS:Nexii> a region cache records where the user has been, so it must die with every other cache
     LLViewerShaderMgr::instance()->clearShaderCache();
     purgeCefStaleCaches();
     gDirUtilp->deleteFilesInDir(gDirUtilp->getExpandedFilename(LL_PATH_CACHE, ""), "*");
@@ -5586,6 +5628,7 @@ void LLAppViewer::purgeCacheImmediate()
 {
     LL_INFOS("AppCache") << "Purging Object Cache and Texture Cache immediately..." << LL_ENDL;
     LLAppViewer::getTextureCache()->purgeCache(LL_PATH_CACHE, false);
+    SSROCStore::instance().purgeAll(); // <SS:Nexii> mid-session cache clear must cascade here too, not only at the next login
     if (LLVOCache::instanceExists())
     {
         LLVOCache::getInstance()->removeCache(LL_PATH_CACHE, true);
@@ -6100,6 +6143,10 @@ void LLAppViewer::idle()
         gInventory.idleNotifyObservers();
         LLAvatarTracker::instance().idleNotifyObservers();
     }
+
+    // <SS:Nexii> Squeeze - the store's only main-thread cost. Deliberately outside the gDisconnected guard above, because a store sitting over the user's SSBC7CacheSize has to keep draining while they are stood at the login screen or waiting out a disconnect, and it is exactly then that the disk is free to do it. The call itself is a clock comparison until its own minute elapses.
+    ssBC7EncodeMaintenanceTick();
+    // </SS:Nexii>
 
     // Metrics logging (LLViewerAssetStats, etc.)
     {
@@ -6849,12 +6896,39 @@ void LLAppViewer::disconnectViewer()
     // Also writes cached agent settings to gSavedSettings
     gAgent.cleanup();
 
+    // <SS:Nexii> resetClass below removes every region, and each removal captures that region's terrain. Switch the store to inline writes FIRST: the worker pool is already winding down by this point, so posted saves would never run and the final visit to every region would be lost.
+    if (SSROCStore::instanceExists())
+    {
+        SSROCStore::instance().beginShutdown();
+    }
+    // </SS:Nexii>
+
     // This is where we used to call gObjectList.destroy() and then delete gWorldp.
     // Now we just ask the LLWorld singleton to cleanly shut down.
     if(LLWorld::instanceExists())
     {
         LLWorld::getInstance()->resetClass();
     }
+    // <SS:Nexii> LLWorld::resetClass above removed every region, which is what captures and queues each one's terrain snapshot, so this must stay below it and above the thread pool and LLVOCache teardown.
+    if (SSROCAuxMgr::instanceExists())
+    {
+        SSROCAuxMgr::instance().shutdown();
+    }
+    if (SSROCStore::instanceExists())
+    {
+        SSROCStore::instance().shutdownStore();
+    }
+    // </SS:Nexii>
+    // <SS:Nexii> Squeeze - the encode pool must stop before the store it writes into, because every in-flight append belongs to a worker and this is what waits for them. beginShutdown raises the abandon flag FIRST: a WorkQueue drains itself before it closes, so without it a queue full of megapixel encodes would all be executed while the user watches the window refuse to disappear. Both calls are idempotent - the pool's own LLApp listener has usually already done this by the time we arrive.
+    ssBC7ServeBeginShutdown();
+    ssBC7ServeShutdown();
+    ssBC7EncodeBeginShutdown();
+    ssBC7EncodeShutdown();
+    if (SSBC7Store::instanceExists())
+    {
+        SSBC7Store::instance().shutdownStore();
+    }
+    // </SS:Nexii>
     LLVOCache::deleteSingleton();
 
     // call all self-registered classes

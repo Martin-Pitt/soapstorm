@@ -42,6 +42,12 @@
 #   undef _interlockedbittestandreset
 #endif
 
+// <SS:Nexii> For the LLCPUFeatures baseline check at the bottom of this file.
+#if !LL_WINDOWS && LL_X86
+#   include <cpuid.h>
+#endif
+// </SS:Nexii>
+
 #include "llsd.h"
 
 class LLProcessorInfoImpl; // foward declaration for the mImpl;
@@ -979,4 +985,122 @@ bool LLProcessorInfo::hasAltivec() const { return mImpl->hasAltivec(); }
 std::string LLProcessorInfo::getCPUFamilyName() const { return mImpl->getCPUFamilyName(); }
 std::string LLProcessorInfo::getCPUBrandName() const { return mImpl->getCPUBrandName(); }
 std::string LLProcessorInfo::getCPUFeatureDescription() const { return mImpl->getCPUFeatureDescription(); }
+
+// <SS:Nexii> Baseline instruction set check - see llprocessor.h for why this does not go through LLProcessorInfo.
+namespace
+{
+// LL_X86 is set for both the 32 and 64 bit variants by llpreprocessor.h, which linden_common.h has already pulled in.
+#if LL_X86
+#define SS_CPU_IS_X86 1
+#else
+#define SS_CPU_IS_X86 0
+#endif
+
+#if SS_CPU_IS_X86
+    void ss_cpuid(int leaf, int subleaf, int out[4])
+    {
+#if LL_WINDOWS
+        __cpuidex(out, leaf, subleaf);
+#else
+        // Via <cpuid.h> rather than inline asm because on 32 bit PIC builds EBX is the GOT register and a naked "cpuid" constraint fails to compile; the header already contains that workaround.
+        unsigned int a = 0, b = 0, c = 0, d = 0;
+        __cpuid_count((unsigned int)leaf, (unsigned int)subleaf, a, b, c, d);
+        out[0] = (int)a; out[1] = (int)b; out[2] = (int)c; out[3] = (int)d;
+#endif
+    }
+
+    U64 ss_xgetbv0()
+    {
+#if LL_WINDOWS
+        return (U64)_xgetbv(0);
+#else
+        U32 eax, edx;
+        __asm__ __volatile__(".byte 0x0f, 0x01, 0xd0" : "=a"(eax), "=d"(edx) : "c"(0));
+        return ((U64)edx << 32) | eax;
+#endif
+    }
+
+    // Computed once. Nothing here allocates or logs, so it is safe to call from the first line of the process.
+    struct SSCPUFeatures
+    {
+        SSCPUFeatures()
+        {
+            int regs[4] = { 0, 0, 0, 0 };
+            ss_cpuid(0, 0, regs);
+            const int max_leaf = regs[0];
+            if (max_leaf < 1) return;
+
+            ss_cpuid(1, 0, regs);
+            const bool osxsave = (regs[2] & (1 << 27)) != 0;
+            const bool avx_bit = (regs[2] & (1 << 28)) != 0;
+            const bool fma_bit = (regs[2] & (1 << 12)) != 0;
+
+            // Bits 1 and 2 of XCR0 are XMM and YMM state. Without both, the OS is not preserving YMM across a context switch and any VEX-256 instruction is a fault waiting to happen, whatever CPUID claims.
+            const bool ymm_enabled = osxsave && ((ss_xgetbv0() & 0x6) == 0x6);
+
+            mAVX  = avx_bit && ymm_enabled;
+            mFMA3 = fma_bit && mAVX;
+
+            if (max_leaf >= 7)
+            {
+                ss_cpuid(7, 0, regs);
+                mAVX2 = ((regs[1] & (1 << 5)) != 0) && mAVX;
+            }
+        }
+
+        bool mAVX  = false;
+        bool mAVX2 = false;
+        bool mFMA3 = false;
+    };
+
+    const SSCPUFeatures& ssFeatures()
+    {
+        static const SSCPUFeatures s_features;
+        return s_features;
+    }
+#endif // SS_CPU_IS_X86
+}
+
+namespace LLCPUFeatures
+{
+#if SS_CPU_IS_X86
+    bool hasAVX()  { return ssFeatures().mAVX; }
+    bool hasAVX2() { return ssFeatures().mAVX2; }
+    bool hasFMA3() { return ssFeatures().mFMA3; }
+#else
+    bool hasAVX()  { return false; }
+    bool hasAVX2() { return false; }
+    bool hasFMA3() { return false; }
+#endif
+
+    // Both of the following deliberately test SS_CPU_IS_X86 before the USE_AVX* defines. indra/CMakeLists.txt sets those defines on every platform, but only the WINDOWS and LINUX blocks of 00-Common.cmake turn them into an actual /arch or -mavx flag - so on an arm64 macOS build the define can be present while the binary contains no AVX at all. Reading the define alone there would report an instruction set the binary does not use and then refuse to launch on a CPU that would have run it fine.
+    const char* buildTargetISA()
+    {
+#if !SS_CPU_IS_X86
+        return "baseline";
+#elif defined(USE_AVX2_OPTIMIZATION)
+        return "AVX2";
+#elif defined(USE_AVX_OPTIMIZATION)
+        return "AVX";
+#else
+        return "SSE2";
+#endif
+    }
+
+    bool runningCPUSupportsBuildTarget()
+    {
+#if !SS_CPU_IS_X86
+        return true;
+#elif defined(USE_AVX2_OPTIMIZATION)
+        // FMA3 is checked alongside AVX2 because /arch:AVX2 licenses MSVC to emit FMA instructions, so AVX2 without FMA3 - which no shipping part actually is, but a hypervisor can present - would still fault.
+        return hasAVX2() && hasFMA3();
+#elif defined(USE_AVX_OPTIMIZATION)
+        return hasAVX();
+#else
+        // Every x86-64 CPU has SSE2, and the 32-bit build forces /arch:SSE2, a floor the viewer has required for over a decade. There is nothing left to check.
+        return true;
+#endif
+    }
+}
+// </SS:Nexii>
 

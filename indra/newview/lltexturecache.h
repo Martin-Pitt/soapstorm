@@ -149,6 +149,10 @@ public:
     bool isInCache(const LLUUID& id) ;
     bool isInLocal(const LLUUID& id) ; //not thread safe at the moment
     LLMutex* getFastCacheMutex() { return &mFastCacheMutex; }
+
+    // <SS:Nexii> Squeeze - the BC7 sidecar store lives inside this directory, so it reads the name from here rather than recomputing it; two places deriving the same path independently is how a cache wipe ends up missing half of what it was meant to clear.
+    const std::string& getTexturesDirName() const { return mTexturesDirName; }
+    // </SS:Nexii>
 protected:
     // Accessed by LLTextureCacheWorker
     std::string getLocalFileName(const LLUUID& id);

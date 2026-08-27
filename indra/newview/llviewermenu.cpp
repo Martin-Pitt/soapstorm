@@ -113,6 +113,7 @@
 #include "llstatusbar.h"
 #include "llterrainpaintmap.h"
 #include "lltextureview.h"
+#include "ssstatsview.h" // <SS:Nexii>
 #include "lltoolbarview.h"
 #include "lltoolcomp.h"
 #include "lltoolmgr.h"
@@ -828,6 +829,12 @@ class LLAdvancedToggleConsole : public view_listener_t
         {
             toggle_visibility(gSceneMonitorView);
         }
+        // <SS:Nexii>
+        else if ("soapstorm" == console_type)
+        {
+            toggle_visibility(gSSStatsView);
+        }
+        // </SS:Nexii>
 
         return true;
     }
@@ -858,6 +865,12 @@ class LLAdvancedCheckConsole : public view_listener_t
         {
             new_value = get_visibility(gSceneMonitorView);
         }
+        // <SS:Nexii>
+        else if ("soapstorm" == console_type)
+        {
+            new_value = get_visibility(gSSStatsView);
+        }
+        // </SS:Nexii>
 
         return new_value;
     }

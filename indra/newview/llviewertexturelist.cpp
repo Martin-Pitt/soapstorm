@@ -62,6 +62,8 @@
 #include "llviewerdisplay.h"
 #include "llviewerwindow.h"
 #include "llprogressview.h"
+#include "ssbc7serve.h"    // <SS:Nexii> Squeeze - the BC7 probe and the upload pump
+
 
 ////////////////////////////////////////////////////////////////////////////
 
@@ -496,6 +498,9 @@ LLViewerFetchedTexture* LLViewerTextureList::getImageFromUrl(const std::string& 
         if (internal_format && primary_format)
         {
             imagep->setExplicitFormat(internal_format, primary_format);
+            // <SS:Nexii> Squeeze - the second of the two places a caller can demand a GL format, latched for the same reason as the one in createImage: these textures are reachable by the safety-net probe in updateFetch even though they never pass through createImage
+            imagep->ssBC7LatchExplicitFormat();
+            // </SS:Nexii>
         }
 
         addImage(imagep, get_element_type(boost_priority));
@@ -642,6 +647,9 @@ LLViewerFetchedTexture* LLViewerTextureList::createImage(const LLUUID &image_id,
     if (internal_format && primary_format)
     {
         imagep->setExplicitFormat(internal_format, primary_format);
+        // <SS:Nexii> Squeeze - latched HERE and never re-tested, because the read path sets an explicit format of its own and after that getHasExplicitFormat() cannot tell "the caller demanded a format" from "we chose BPTC"
+        imagep->ssBC7LatchExplicitFormat();
+        // </SS:Nexii>
     }
 
     // <FS:minerjr> [FIRE-35428] - Mega prim issue - fix compressed sculpted textures
@@ -682,11 +690,17 @@ LLViewerFetchedTexture* LLViewerTextureList::createImage(const LLUUID &image_id,
         imagep->forceActive() ;
     }
 
+    // <SS:Nexii> Squeeze - STAGE 1 of the read path, and it has to happen HERE, after the boost level is set and before fast-cache enrolment. After, because half the exclusions are keyed on boost; before, because a fast cache hit is a 16x16 raw that goes straight to addToCreateTexture and would clobber a BC7 upload with a thumbnail. One map find under the store's map mutex, no file IO, microseconds - safe on the frame thread. See doc/super_compressed_textures.md.
+    const bool bc7_known = (ssBC7ServeProbe(imagep) == SSBC7_SERVE_HIT);
+    // </SS:Nexii>
+
     // <FS:Ansariel> Keep Fast Cache option
     // <FS:minerjr> [FIRE-35428] - Mega prim issue - fix compressed sculpted textures
     //if(fast_cache_fetching_enabled)
     // If the texture is Sculpted, don't allow it to be added to fast cache as it can affect the texture.
-    if(fast_cache_fetching_enabled && boost_priority != LLViewerFetchedTexture::BOOST_SCULPTED)
+    // <SS:Nexii> Squeeze - a texture the store already holds at full resolution has nothing to gain from a 16x16 thumbnail and everything to lose from the race between the two
+    if(fast_cache_fetching_enabled && boost_priority != LLViewerFetchedTexture::BOOST_SCULPTED && !bc7_known)
+    // </SS:Nexii>
     // </FS:minerjr> [FIRE-35428]
     {
         mFastCacheList.insert(imagep);
@@ -1130,6 +1144,11 @@ F32 LLViewerTextureList::updateImagesCreateTextures(F32 max_time)
     //
 
     LLTimer create_timer;
+
+    // <SS:Nexii> Squeeze - STAGE 3 of the read path. Uploads finished BC7 prefix reads inside this frame's existing texture-creation budget rather than inventing a second one, and takes its slice first because a BC7 upload is half a dozen glCompressedTexImage2D calls with no decode behind it - the cheapest work in this function - and because landing it before the J2C create for the same texture is what stops the two from racing.
+    // Nothing is subtracted from max_time: create_timer is already running and the loop below tests against it, so the time spent here is charged to this frame's budget exactly once. Subtracting as well would charge it twice.
+    ssBC7ServePumpUploads(max_time * 0.5f);
+    // </SS:Nexii>
 
     while (!mCreateTextureList.empty())
     {

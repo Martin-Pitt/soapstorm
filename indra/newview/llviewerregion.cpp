@@ -68,6 +68,9 @@
 #include "llvlcomposition.h"
 #include "llvoavatarself.h"
 #include "llvocache.h"
+#include "ssrocaux.h" // <SS:Nexii>
+#include "ssrocghost.h" // <SS:Nexii>
+#include "ssrocledger.h" // <SS:Nexii>
 #include "llworld.h"
 #include "llspatialpartition.h"
 #include "stringize.h"
@@ -857,6 +860,10 @@ void LLViewerRegion::loadObjectCache()
 
 void LLViewerRegion::saveObjectCache()
 {
+    // <SS:Nexii> Cache entries the region object cache INVENTED and the simulator never confirmed are the viewer's own guess, not the simulator's word, so they must not be written into the protocol cache where the next visit would read them back as though they had come off the wire. Entries that came out of the .slc in the first place are left exactly as they were found. Above both early returns so the pending list is always consumed, and above writeToCache, which otherwise writes the whole map (the stale-entry filter below only runs after a settled stay). See doc/region_object_cache.md.
+    ssROCPurgeInjectedEntries(this, mImpl->mCacheMap);
+    // </SS:Nexii>
+
     if (!mCacheLoaded)
     {
         return;
@@ -911,6 +918,12 @@ void LLViewerRegion::setWaterHeight(F32 water_level)
 void LLViewerRegion::rebuildWater()
 {
     mImpl->mLandp->rebuildWater();
+    // <SS:Nexii> A rebuilt water object is parked at the default height, so whichever value we hold as authoritative has to be pushed again or the sea sits at the wrong level. Guarded on instanceExists because water objects are also rebuilt while regions are being torn down.
+    if (SSROCAuxMgr::instanceExists())
+    {
+        SSROCAuxMgr::instance().onWaterRebuilt(this);
+    }
+    // </SS:Nexii>
 }
 // <FS:CR> Aurora Sim
 
@@ -2976,6 +2989,10 @@ LLViewerRegion::eCacheUpdateResult LLViewerRegion::cacheFullUpdate(LLDataPackerB
     }
     entry->setUpdateFlags(flags);
 
+    // <SS:Nexii> The common tail of all three branches - added, dupe and CRC-changed - so first sighting, confirmation and mutation are all recorded here without double counting. `dp` is used rather than entry->getDP() because the dupe branch never refreshes the entry's stored blob, and because decodeBoundingInfo above may have left that packer's cursor mid-buffer. See doc/region_object_cache.md.
+    ssROCNoteCacheUpdate(this, local_id, crc, flags, dp);
+    // </SS:Nexii>
+
     return result;
     }
 
@@ -3027,6 +3044,13 @@ LLVOCacheEntry* LLViewerRegion::getCacheEntry(U32 local_id, bool valid)
 
 void LLViewerRegion::addCacheMiss(U32 id, LLViewerRegion::eCacheMissType cache_miss_type)
 {
+    // <SS:Nexii> This queue is SENT: requestCacheMisses turns it into a RequestMultipleObjects once a second, and the region object cache's one absolute rule is that it never causes a send. Several live paths reach here with an id the ROC may own - the strict-object checks in llvovolume.cpp and the parenting-cycle recovery in llviewerobject.cpp both call addCacheMissFull with an object's own local id - so the invariant is enforced with one comparison here rather than audited across every call site. Nothing allocates in the reserved range today; see doc/region_object_cache.md.
+    if (ssROCRefuseCacheMiss(id))
+    {
+        return;
+    }
+    // </SS:Nexii>
+
     mRegionCacheMissCount++;
     mCacheMissList.push_back(CacheMissItem(id, cache_miss_type));
 }
@@ -3079,6 +3103,10 @@ bool LLViewerRegion::probeCache(U32 local_id, U32 crc, U32 flags, U8 &cache_miss
             entry->recordHit();
             cache_miss_type = CACHE_MISS_TYPE_NONE;
             entry->setUpdateFlags(flags);
+
+            // <SS:Nexii> This is the ONLY thing that mentions an unchanged object on a warm-cache revisit: ObjectUpdateCached probes carry local id, CRC and flags and no blob at all, and cacheFullUpdate is never entered for them. Sits above all three of this branch's returns, and deliberately above the "already probed" early-out below - the ledger's own per-visit guard is what keeps entries counted once. See doc/region_object_cache.md.
+            ssROCNoteCacheProbe(this, local_id, crc, flags, entry);
+            // </SS:Nexii>
 
             if(entry->isState(LLVOCacheEntry::ACTIVE))
             {
@@ -3135,6 +3163,39 @@ bool LLViewerRegion::probeCache(U32 local_id, U32 crc, U32 flags, U8 &cache_miss
 
     return false;
 }
+
+// <SS:Nexii> The two paths above, probeCache's hit branch and cacheFullUpdate's added branch, with everything that speaks to the simulator or to the viewer's statistics left out. Driving either of them directly would have been shorter and was rejected for three reasons: probeCache's miss branches queue a cache miss the viewer later SENDS as a RequestMultipleObjects, which the region object cache must never cause; both of them move the object-cache hit-rate statistic and the entry's own persisted hit counter, which would count the viewer's own guess as the protocol cache doing its job; and both carry the ledger's recording hooks, which would read the guess back as a fresh sighting from the simulator. Returns false rather than guessing whenever the entry is stale, already probed or already rendering - the live stream always wins. See doc/region_object_cache.md.
+bool LLViewerRegion::ssROCActivateCacheEntry(U32 local_id, U32 crc, U32 flags, LLDataPackerBinaryBuffer* dp)
+{
+    LLVOCacheEntry* entry = getCacheEntry(local_id, false);
+
+    if (entry)
+    {
+        if (entry->getCRC() != crc)
+        {
+            return false;
+        }
+        if (entry->isValid() || entry->isState(LLVOCacheEntry::ACTIVE))
+        {
+            return false;
+        }
+    }
+    else
+    {
+        if (!dp || dp->getBufferSize() <= 0)
+        {
+            return false;
+        }
+        entry = new LLVOCacheEntry(local_id, crc, *dp);
+        mImpl->mCacheMap[local_id] = entry;
+    }
+
+    entry->setUpdateFlags(flags);
+    entry->setValid();
+    decodeBoundingInfo(entry);
+    return true;
+}
+// </SS:Nexii>
 
 void LLViewerRegion::addCacheMissFull(const U32 local_id)
 {
@@ -3421,6 +3482,10 @@ void LLViewerRegion::unpackRegionHandshake()
         }
     }
 
+
+    // <SS:Nexii> Latch the sim's authoritative water height and cache id here, while both are still in scope and after the composition block has run. This is above the RegionHandshakeReply composition below, so the sim-facing contract is untouched. See doc/region_object_cache.md.
+    SSROCAuxMgr::instance().onRegionHandshake(this, water_height, cache_id);
+    // </SS:Nexii>
 
     // Now that we have the name, we can load the cache file
     // off disk.

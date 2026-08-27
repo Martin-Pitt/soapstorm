@@ -1,0 +1,279 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<panel
+ border="true"
+ follows="all"
+ height="480"
+ layout="topleft"
+ left="1"
+ top="1"
+ width="540"
+ label="Region Object Cache"
+ name="ss_roc">
+
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top="10"
+     width="520">
+        Region Object Cache
+    </text>
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="28"
+     layout="topleft"
+     left="10"
+     top_pad="4"
+     width="510"
+     wrap="true">
+        Remembers the long-lived scenery of regions you visit and paints it back the instant you return, instead of waiting for the simulator to stream it. Terrain, water level and ground textures come back first, then the buildings.
+    </text>
+
+    <check_box
+     control_name="SSROCEnabled"
+     follows="left|top"
+     height="16"
+     label="Enable the region object cache"
+     layout="topleft"
+     left="10"
+     name="ss_roc_enabled"
+     tool_tip="Off by default while this feature is still being proven. Takes effect on the next region you enter."
+     top_pad="10"
+     width="500" />
+
+    <!-- ===== How quickly scenery gets cached ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="14"
+     width="520">
+        How quickly scenery gets cached
+    </text>
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="28"
+     layout="topleft"
+     left="10"
+     top_pad="4"
+     width="510"
+     wrap="true">
+        An object is cached once it looks like permanent scenery. Time you actually spend in a region counts as evidence, so a long stay is worth more than passing through.
+    </text>
+
+    <slider
+     control_name="SSROCVisitHours"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="1"
+     increment="0.5"
+     layout="topleft"
+     label="Hours in a region that count as a return visit:"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="0.5"
+     max_val="12.0"
+     name="SSROCVisitHours"
+     tool_tip="Every this many hours spent in a region counts as visiting it again. Lower means scenery is trusted sooner."
+     top_pad="10"
+     width="480" />
+
+    <slider
+     control_name="SSROCPromoteVisits"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1"
+     layout="topleft"
+     label="Visits before scenery is cached:"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="1"
+     max_val="10"
+     name="SSROCPromoteVisits"
+     tool_tip="How many visits an object must be present for before it is cached, when it is known to be safe from parcel auto-return."
+     top_pad="8"
+     width="480" />
+
+    <slider
+     control_name="SSROCPromoteScore"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="2"
+     increment="0.05"
+     layout="topleft"
+     label="How permanent an object must look (0-1):"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="0.10"
+     max_val="0.90"
+     name="SSROCPromoteScore"
+     tool_tip="Lower values cache more of a region, including things that move or change more often. Higher values cache only the most obviously permanent scenery."
+     top_pad="8"
+     width="480" />
+
+    <slider
+     control_name="SSROCSettledStaySecs"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="30"
+     layout="topleft"
+     label="Seconds in a region before it is worth caching:"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="30"
+     max_val="1800"
+     name="SSROCSettledStaySecs"
+     tool_tip="Shorter visits still record what they saw, they just do not decide what to cache."
+     top_pad="8"
+     width="480" />
+
+    <!-- ===== Objects that could be returned ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="16"
+     width="520">
+        Objects that could be auto-returned
+    </text>
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="28"
+     layout="topleft"
+     left="10"
+     top_pad="4"
+     width="510"
+     wrap="true">
+        Objects owned by the parcel owner, or set to the parcel group, cannot be auto-returned - which already tells us they are there to stay. Anything else may vanish on a timer, so it has to earn its place over real days.
+    </text>
+
+    <check_box
+     control_name="SSROCRequireAutoReturnProof"
+     follows="left|top"
+     height="16"
+     label="Only cache objects that cannot be auto-returned"
+     layout="topleft"
+     left="20"
+     name="ss_roc_require_proof"
+     tool_tip="Strictest option. When off, objects that could be auto-returned are still cached once they have been seen on enough separate days."
+     top_pad="8"
+     width="490" />
+
+    <slider
+     control_name="SSROCPromoteDaysUnproven"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1"
+     layout="topleft"
+     label="Days before caching one of those anyway:"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="1"
+     max_val="14"
+     name="SSROCPromoteDaysUnproven"
+     tool_tip="Separate days an object must be seen when it could not be shown to be safe from auto-return. Only real days count here, not time spent in one sitting."
+     top_pad="8"
+     width="480" />
+
+    <!-- ===== Limits ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="16"
+     width="520">
+        Limits
+    </text>
+
+    <slider
+     control_name="SSROCMaxGhostsPerRegion"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="100"
+     layout="topleft"
+     label="Most cached objects per region:"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="100"
+     max_val="5000"
+     name="SSROCMaxGhostsPerRegion"
+     top_pad="10"
+     width="480" />
+
+    <slider
+     control_name="SSROCDiskBudgetMB"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="256"
+     layout="topleft"
+     label="Disk space for the cache (MB):"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="256"
+     max_val="8192"
+     name="SSROCDiskBudgetMB"
+     tool_tip="Regions you have not visited for the longest are dropped first, and only when this limit is approached."
+     top_pad="8"
+     width="480" />
+
+    <slider
+     control_name="SSROCGhostTTL"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="10"
+     layout="topleft"
+     label="Seconds to keep unconfirmed scenery on screen:"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="30"
+     max_val="300"
+     name="SSROCGhostTTL"
+     tool_tip="Cached scenery the simulator has not confirmed yet stops being drawn after this long. What was learned about it is kept either way."
+     top_pad="8"
+     width="480" />
+
+</panel>

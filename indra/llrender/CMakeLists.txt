@@ -90,6 +90,7 @@ if (BUILD_HEADLESS)
 endif (BUILD_HEADLESS)
 
 add_library (llrender ${llrender_SOURCE_FILES})
+ss_hot_loop_codegen(llrender) # <SS:Nexii> see indra/cmake/00-Common.cmake
 target_include_directories( llrender  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
 
 set_property(TARGET llrender PROPERTY POSITION_INDEPENDENT_CODE ON)

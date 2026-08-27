@@ -27,6 +27,8 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llworld.h"
+#include "ssrocaux.h" // <SS:Nexii>
+#include "ssrocghost.h" // <SS:Nexii>
 #include "llrender.h"
 
 #include "indra_constants.h"
@@ -603,6 +605,9 @@ LLViewerRegion* LLWorld::addRegion(const U64 &region_handle, const LLHost &host,
     mActiveRegionList.push_back(regionp);
     mCulledRegionList.push_back(regionp);
 
+    // <SS:Nexii> Kick the region cache load the moment the region is findable by handle - the apply is always deferred to a main-thread completion, never done inline here. See doc/region_object_cache.md.
+    SSROCAuxMgr::instance().onRegionAdded(regionp);
+    // </SS:Nexii>
 
     // Find all the adjacent regions, and attach them.
     // Generate handles for all of the adjacent regions, and attach them in the correct way.
@@ -690,6 +695,13 @@ void LLWorld::removeRegion(LLViewerRegion* regionp)
         LL_WARNS() << "Trying to remove null region!" << LL_ENDL;
         return;
     }
+
+    // <SS:Nexii> Snapshot terrain, water and composition before anything is torn down. This sits above the agent-region branch deliberately: that branch returns without ever deleting the region, so a hook below it would miss the disconnect path entirely, and it is also above the kill-objects and water-rebuild calls further down, where the surface is still intact. Guarded on instanceExists because this path also runs at quit, where constructing a singleton would be an error rather than a save.
+    if (SSROCAuxMgr::instanceExists())
+    {
+        SSROCAuxMgr::instance().onRegionRemoved(regionp);
+    }
+    // </SS:Nexii>
 
     if (regionp == gAgent.getRegion())
     {
@@ -1143,6 +1155,10 @@ void LLWorld::updateRegions(F32 max_update_time)
     {
         max_update_time = llmax(max_update_time, 1.0f); //seconds, loosen the time throttle.
     }
+
+    // <SS:Nexii> Paint a known region back from its own cache before the per-region idle updates below, so anything injected this frame reaches createVisibleObjects in the same frame rather than the next one. It carries its own object and millisecond budget rather than sharing max_update_time, because the region-exit stall this feature already produced once came from a pass that assumed one frame could absorb a whole region. See doc/region_object_cache.md.
+    ssROCGhostTick();
+    // </SS:Nexii>
 
     F32 max_time = llmin((F32)(max_update_time - update_timer.getElapsedTimeF32()), max_update_time * 0.25f);
     //update the self avatar region

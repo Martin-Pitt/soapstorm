@@ -38,6 +38,22 @@
      help_topic="preferences_soapstorm_tab"
      name="soapstorm_login" />
 
+    <panel
+     class="panel_preference"
+     filename="panel_preferences_ss_roc.xml"
+     label="Region Object Cache"
+     layout="topleft"
+     help_topic="preferences_soapstorm_tab"
+     name="ss_roc" />
+
+    <panel
+     class="panel_preference"
+     filename="panel_preferences_ss_squeeze.xml"
+     label="Squeeze"
+     layout="topleft"
+     help_topic="preferences_soapstorm_tab"
+     name="ss_squeeze" />
+
 </tab_container>
 
 </panel>

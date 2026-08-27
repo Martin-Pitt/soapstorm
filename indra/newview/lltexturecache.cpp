@@ -38,6 +38,7 @@
 // Included to allow LLTextureCache::purgeTextures() to pause watchdog timeout
 #include "llappviewer.h"
 #include "llmemory.h"
+#include "ssbc7store.h" // <SS:Nexii> Squeeze
 
 // Cache organization:
 // cache/texture.entries
@@ -1610,6 +1611,13 @@ void LLTextureCache::clearCorruptedCache()
 
 void LLTextureCache::purgeAllTextures(bool purge_directories)
 {
+    // <SS:Nexii> Squeeze - every cache-clear path in the viewer funnels through here, including the mid-session one, so this is the single place the BC7 sidecar has to die too. It is a complete second copy of every texture the user has looked at; leaving it behind would make "clear cache" a lie. It goes first because the Windows branch below renames this whole directory away, and the store has to have dropped its own state before that happens.
+    if (SSBC7Store::instanceExists())
+    {
+        SSBC7Store::instance().purgeAll();
+    }
+    // </SS:Nexii>
+
     if (!mReadOnly)
     {
 // <FS:ND> Windows can be really slow deleting a huge texture cache.

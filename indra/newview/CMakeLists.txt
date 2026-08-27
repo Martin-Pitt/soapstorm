@@ -174,7 +174,18 @@ set(viewer_SOURCE_FILES
     fspanellogin.cpp
     fspanelpreferenceuisounds.cpp
     fspanelprefs.cpp
+    ssbc7encodequeue.cpp
+    ssbc7serve.cpp
+    ssbc7store.cpp
+    ssbc7storeevict.cpp
+    ssbc7storeio.cpp
+    ssrocaux.cpp
+    ssroccache.cpp
+    ssrocghost.cpp
+    ssrocledger.cpp
+    ssstatsview.cpp
     sspanelprefs.cpp
+    sssqueezedebug.cpp
     fspanelradar.cpp
     fsparticipantlist.cpp
     fspose.cpp
@@ -1045,7 +1056,16 @@ set(viewer_HEADER_FILES
     fspanellogin.h
     fspanelpreferenceuisounds.h
     fspanelprefs.h
+    ssbc7encodequeue.h
+    ssbc7serve.h
+    ssbc7store.h
+    ssrocaux.h
+    ssroccache.h
+    ssrocghost.h
+    ssrocledger.h
+    ssstatsview.h
     sspanelprefs.h
+    sssqueezedebug.h
     fspanelradar.h
     fsparticipantlist.h
     fspose.h

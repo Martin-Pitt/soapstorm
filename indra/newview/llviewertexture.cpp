@@ -63,6 +63,7 @@
 #include "lltexturecache.h"
 #include "llviewerwindow.h"
 #include "llwindow.h"
+#include "ssbc7serve.h"     // <SS:Nexii> Squeeze - the BC7 residency ladder is driven from here
 ///////////////////////////////////////////////////////////////////////////////
 
 // statics
@@ -1241,6 +1242,15 @@ void LLViewerFetchedTexture::init(bool firstinit)
     mLastCallBackActiveTime = 0.f;
     mForceCallbackFetch = false;
 
+    // <SS:Nexii> Squeeze - reset on re-init as well as first init, because a texture that is re-initialised has thrown away its GL texture and any residency claim along with it. The live gauge is not adjusted here: init() runs before anything could have been counted, and every route that loses an established residency goes through ssBC7LeaveResidency.
+    mSSBC7Residency      = (U8)SSBC7_RES_NONE;
+    mSSBC7DeclineReason  = 0;
+    mSSBC7ServedDiscard  = -1;
+    if (firstinit) mSSBC7ExplicitFormat = false;
+    mSSBC7ServedBytes    = 0;
+    mSSBC7SavedBytes     = 0;
+    // </SS:Nexii>
+
     mFTType = FTT_UNKNOWN;
 }
 
@@ -1254,6 +1264,12 @@ LLViewerFetchedTexture::~LLViewerFetchedTexture()
     {
         LLAppViewer::getTextureFetch()->deleteRequest(getID(), true);
     }
+
+    // <SS:Nexii> Squeeze - a resident texture that is simply deleted rather than destroyed still has to give its share of the live video-memory gauge back, or the gauge drifts upward for the whole session. dropCompressedFormat is not called here: the LLImageGL is about to be released with it.
+    ssBC7ReleaseGauge();
+    mSSBC7Residency = (U8)SSBC7_RES_NONE;
+    // </SS:Nexii>
+
     cleanup();
 }
 
@@ -1299,6 +1315,13 @@ void LLViewerFetchedTexture::loadFromFastCache()
         return; //no need to access the fast cache.
     }
     mInFastCacheList = false;
+
+    // <SS:Nexii> Squeeze - a fast cache hit is a 16x16 raw that goes straight to addToCreateTexture, which would clobber a BC7 upload that already landed with a thumbnail. Enrolment is suppressed at creation time when the store has a record, so reaching here while on the ladder means the two raced; the thumbnail is worth nothing next to what is already resident.
+    if (mSSBC7Residency == (U8)SSBC7_RES_RESIDENT || mSSBC7Residency == (U8)SSBC7_RES_READING)
+    {
+        return;
+    }
+    // </SS:Nexii>
 
     add(LLTextureFetch::sCacheAttempt, 1.0);
 
@@ -1434,6 +1457,15 @@ void LLViewerFetchedTexture::destroyTexture()
         return;
     }
 
+    // <SS:Nexii> Squeeze - the GL texture is going away, so the residency claim and its share of the live video-memory gauge go with it; otherwise the gauge is a high-water mark and every texture the memory governor reclaims is still counted as saving something.
+    if (mSSBC7Residency == (U8)SSBC7_RES_RESIDENT)
+    {
+        ssBC7LeaveResidency((U8)SSBC7_SERVE_UPGRADED, "the GL texture is being destroyed");
+        // The record is still on disk and still good, so the next time this texture is wanted the ladder should be free to serve it again rather than sitting at DECLINED forever.
+        ssBC7SetResidency((U8)SSBC7_RES_HIT_KNOWN);
+    }
+    // </SS:Nexii>
+
     //LL_DEBUGS("Avatar") << mID << LL_ENDL;
     destroyGLTexture();
     mFullyLoaded = false;
@@ -1442,6 +1474,22 @@ void LLViewerFetchedTexture::destroyTexture()
 void LLViewerFetchedTexture::addToCreateTexture()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
+
+    // <SS:Nexii> Squeeze - the funnel every uncompressed upload passes through, and therefore the right place to declare the BC7 to uncompressed transition. Declared here rather than left to the last-resort guard in llimagegl.cpp because the isForSculptOnly branch below bypasses preCreateTexture entirely, and because a transition this ordinary must not produce a warning.
+    //
+    // Keyed on the GL TEXTURE being compressed, not on the ladder: an exclusion that latched late takes the texture off the ladder while its BC7 texture is still on the card, and a ladder-keyed test would miss exactly those and hand them to the last-resort warn instead.
+    //
+    // Nothing is given up when the raw is no better than what is already there: the branch below drops that raw on the floor, and dropping the format first would trade a full-resolution BC7 texture for nothing at all.
+    if (mRawImage.notNull() && mGLTexturep.notNull()
+        && mGLTexturep->getPrimaryFormat() != 0 && mGLTexturep->isCompressed()
+        && (isForSculptOnly() || getDiscardLevel() < 0 || getDiscardLevel() > mRawDiscardLevel
+            || getComponents() != mRawImage->getComponents()))
+    {
+        ssBC7LeaveResidency((U8)SSBC7_SERVE_UPGRADED, "an uncompressed image is replacing the BC7 resident");
+        mGLTexturep->dropCompressedFormat("an uncompressed image is replacing the BC7 resident");
+    }
+    // </SS:Nexii>
+
     bool force_update = false;
     if (getComponents() != mRawImage->getComponents())
     {
@@ -1509,6 +1557,14 @@ bool LLViewerFetchedTexture::preCreateTexture(S32 usename/*= 0*/)
         destroyRawImage();
         return false;
     }
+
+    // <SS:Nexii> Squeeze - the same edge addToCreateTexture declares, and the point past which nothing else gets a say. createTexture() itself can run on the LLImageGL worker thread, so the format transition has to be settled here, on the main thread, before anything is posted. Keyed on the GL texture for the same reason as above.
+    if (mGLTexturep.notNull() && mGLTexturep->getPrimaryFormat() != 0 && mGLTexturep->isCompressed())
+    {
+        ssBC7LeaveResidency((U8)SSBC7_SERVE_UPGRADED, "preCreateTexture is about to upload an uncompressed image");
+        mGLTexturep->dropCompressedFormat("preCreateTexture is about to upload an uncompressed image");
+    }
+    // </SS:Nexii>
     //  LL_INFOS() << llformat("IMAGE Creating (%d) [%d x %d] Bytes: %d ",
     //                      mRawDiscardLevel,
     //                      mRawImage->getWidth(), mRawImage->getHeight(),mRawImage->getDataSize())
@@ -1647,6 +1703,138 @@ bool LLViewerFetchedTexture::createTexture(S32 usename/*= 0*/)
 
     return res;
 }
+
+// <SS:Nexii> Squeeze - the BC7 read path's half of the create cycle, see doc/super_compressed_textures.md
+bool LLViewerFetchedTexture::ssBC7NeedsRawCallback() const
+{
+    for (const LLLoadedCallbackEntry* entryp : mLoadedCallbackList)
+    {
+        if (entryp && entryp->mNeedsImageRaw) return true;
+    }
+    return false;
+}
+
+// The sibling of createTexture() above. Everything here is main thread and every step is load bearing; the order in particular is the upload contract, proven in sssqueezedebug.cpp's self test before this path existed.
+bool LLViewerFetchedTexture::ssBC7UploadFromStore(const U8* data_in, S32 serve_discard, S32 full_width, S32 full_height, S32 src_components, S32 mip_count, bool alpha_is_mask)
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
+
+    if (mGLTexturep.isNull() || data_in == nullptr) return false;
+    if (mip_count <= 0 || mip_count > MAX_DISCARD_LEVEL + 1) return false;
+    if (serve_discard < 0 || serve_discard >= mip_count) return false;
+    if (src_components < 1 || src_components > 4) return false;
+    if (!LLImageGL::checkSize(full_width, full_height)) return false;
+
+    LLImageGL* glimage = mGLTexturep.get();
+
+    // A texture name carrying different dimensions, or an uncompressed format, has GL_TEXTURE_MAX_LEVEL set for the chain it was made for. Re-specifying levels into it would leave the mip chain incomplete rather than raising a GL error, so the name is thrown away and createGLTexture below builds a fresh one with the right base and max level.
+    if (glimage->getHasGLTexture()
+        && (glimage->getCurrentWidth() != full_width
+            || glimage->getCurrentHeight() != full_height
+            || glimage->getPrimaryFormat() != GL_COMPRESSED_RGBA_BPTC_UNORM))
+    {
+        glimage->destroyGLTexture();
+    }
+
+    // setSize only recalculates anything when the geometry actually changes, and a previous uncompressed upload may have left mMaxDiscardLevel inflated by passing a positive discard on a small texture. Zeroing first forces an honest recount for these dimensions, so the invariant below is testing the stored chain rather than testing whatever the last caller happened to leave behind.
+    glimage->setSize(0, 0, 0);
+
+    // FULL resolution dimensions and a NON-POSITIVE discard. Passing the serving discard here would run mMaxDiscardLevel = llmax(mMaxDiscardLevel, discard_level) and inflate the level count past the stored chain on a small texture, after which setImage's backward walk reads past the end of the prefix - a silent buffer overrun, not a GL error. The serving discard is set through the createGLTexture argument instead, where it is clamped.
+    //
+    // src_components is the ORIGINAL component count carried through from the encoder, never BC7's intrinsic four: LLPipeline::getPoolTypeFromTE sorts on LLImageGL::mComponents, so an opaque texture that arrived here as four would land in the alpha pool.
+    if (!glimage->setSize(full_width, full_height, src_components, -1))
+    {
+        LL_WARNS("Squeeze") << "BC7 upload of " << mID << " refused: setSize rejected " << full_width << "x" << full_height << LL_ENDL;
+        return false;
+    }
+
+    // THE upload contract. ssBC7EncMipCount halves while both axes are >= 2 capped at six; LLImageGL::setSize counts while both are > 1 capped at MAX_DISCARD_LEVEL. They agree for every power of two this store will ever hold, and a disagreement is a silent read past the payload rather than anything GL would complain about - so it is checked here rather than assumed.
+    if (glimage->getMaxDiscardLevel() + 1 != mip_count)
+    {
+        LL_WARNS("Squeeze") << "BC7 upload of " << mID << " refused: stored chain has " << mip_count
+                            << " levels but " << full_width << "x" << full_height << " sizes to "
+                            << (glimage->getMaxDiscardLevel() + 1) << LL_ENDL;
+        return false;
+    }
+
+    // Internal and primary must be the SAME enum: alloc_tex_image sizes from mFormatPrimary while setManualImage sizes from mFormatInternal, and the compressed branch's VRAM accounting is only correct while the two agree.
+    glimage->setExplicitFormat(GL_COMPRESSED_RGBA_BPTC_UNORM, GL_COMPRESSED_RGBA_BPTC_UNORM);
+
+    if (!glimage->createGLTexture(serve_discard, data_in, true))
+    {
+        LL_WARNS("Squeeze") << "BC7 upload of " << mID << " failed inside createGLTexture at discard " << serve_discard << LL_ENDL;
+        return false;
+    }
+
+    // BC7 blocks cannot be scanned for alpha shape, so calcAlphaChannelOffsetAndStride forces mIsMask false and analyzeAlpha never runs. The store classified the source pixels at encode time; without this, cutout content served from BC7 falls into alpha blending instead of the alpha-MASK path.
+    glimage->setIsAlphaMask(alpha_is_mask);
+
+    // There is no LLGLTexture wrapper for the data_hasmips overload, so the four things the imageraw wrapper refreshes are mirrored by hand. Miss setTexelsPerImage and processTextureStats divides by zero.
+    mFullWidth  = glimage->getCurrentWidth();
+    mFullHeight = glimage->getCurrentHeight();
+    mComponents = glimage->getComponents();
+    setTexelsPerImage();
+
+    setActive();
+    mGLTexturep->setGLTextureCreated(true);
+    mIsFetched = true;
+
+    return true;
+}
+
+// The only place this texture's contribution to the live video-memory gauge is given back. Keyed on the recorded byte count rather than on the ladder state, because a resident whose re-serve read fails passes through READING on the way to DECLINED and a ladder-keyed release would miss exactly that case.
+void LLViewerFetchedTexture::ssBC7ReleaseGauge()
+{
+    if (mSSBC7ServedBytes == 0) return;
+
+    ssBC7ServeNoteResidencyLost(mSSBC7ServedBytes, mSSBC7SavedBytes);
+    mSSBC7ServedBytes = 0;
+    mSSBC7SavedBytes  = 0;
+}
+
+void LLViewerFetchedTexture::ssBC7SetDeclined(U8 reason)
+{
+    ssBC7ReleaseGauge();
+
+    mSSBC7Residency     = (U8)SSBC7_RES_DECLINED;
+    mSSBC7DeclineReason = reason;
+    mSSBC7ServedDiscard = -1;
+}
+
+void LLViewerFetchedTexture::ssBC7NoteResident(S32 served_discard, U32 bc7_bytes, U32 saved_bytes)
+{
+    // A re-serve at a different discard replaces the old figures rather than adding to them, so the gauge stays a gauge across an up-rez or a down-rez.
+    ssBC7ReleaseGauge();
+
+    mSSBC7Residency     = (U8)SSBC7_RES_RESIDENT;
+    mSSBC7DeclineReason = 0;
+    mSSBC7ServedDiscard = (S8)served_discard;
+    mSSBC7ServedBytes   = bc7_bytes;
+    mSSBC7SavedBytes    = saved_bytes;
+}
+
+// The RESIDENT to uncompressed edge, and the only place a residency claim is deliberately given up. Declared rather than discovered: the guard inside LLImageGL::createGLTexture would otherwise recover from this silently on some routes and fatally on others, and would warn on every single one of them in a session where the transition is entirely normal.
+void LLViewerFetchedTexture::ssBC7LeaveResidency(U8 verdict, const char* reason, bool drop_format)
+{
+    if (mSSBC7Residency != (U8)SSBC7_RES_RESIDENT && mSSBC7Residency != (U8)SSBC7_RES_READING)
+    {
+        return;
+    }
+
+    if (mSSBC7Residency == (U8)SSBC7_RES_RESIDENT)
+    {
+        ssBC7ServeRecord((ESSBC7ServeVerdict)verdict);
+    }
+
+    ssBC7SetDeclined(verdict);
+
+    // Only when an uncompressed upload or a destroy is actually imminent. The raw-consumer edges pass false: they merely arrange for a J2C fetch that will arrive some frames later, and dropping the format now would leave the format fields claiming RGBA8 while the GL object still holds BPTC levels - a window in which scaleDown in particular would believe it can copy into a texture it cannot.
+    if (drop_format && mGLTexturep.notNull())
+    {
+        mGLTexturep->dropCompressedFormat(reason);
+    }
+}
+// </SS:Nexii>
 
 void LLViewerFetchedTexture::postCreateTexture()
 {
@@ -2135,6 +2323,22 @@ bool LLViewerFetchedTexture::updateFetch()
     S32 desired_discard = getDesiredDiscardLevel();
     F32 decode_priority = mMaxVirtualSize;
 
+    // <SS:Nexii> Squeeze - the ladder's HIT_KNOWN to READING edge, and the RESIDENT to READING one that serves a longer or shorter prefix when the wanted discard moves. This is the right place for it because updateFetch is where the J2C request is decided, and the whole point of serving is that the request is never made: once a BC7 upload sets mCurrentDiscardLevel, the "current <= desired" test further down suppresses the fetch by itself. Nothing is requested while a read is already in flight - ssBC7ServeRequest refuses on READING - and nothing here can block, because the post is a tryPost and a refusal simply leaves the ordinary path to run this frame.
+    if (mSSBC7Residency == (U8)SSBC7_RES_NONE && ssBC7ServeEnabled())
+    {
+        // The safety net for everything createImage's probe cannot reach: textures built before the store came up, textures created through getImageFromUrl, and every texture that already existed when the user ticked the box mid-session. It runs at most once per texture because the probe always leaves the ladder at HIT_KNOWN or DECLINED.
+        ssBC7ServeProbe(this);
+    }
+
+    // decode_priority is the same gate the J2C request below uses, and it has to be respected here too: a texture the memory governor has just destroyed for being unwanted returns to HIT_KNOWN, and without this it would be re-served on the very next frame and thrash against the thing that reclaimed it.
+    if (decode_priority > 0.f
+        && (mSSBC7Residency == (U8)SSBC7_RES_HIT_KNOWN
+            || (mSSBC7Residency == (U8)SSBC7_RES_RESIDENT && current_discard >= 0 && current_discard > desired_discard)))
+    {
+        ssBC7ServeRequest(this, desired_discard);
+    }
+    // </SS:Nexii>
+
     if (mIsFetching)
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_TEXTURE("vftuf - is fetching");
@@ -2203,6 +2407,13 @@ bool LLViewerFetchedTexture::updateFetch()
         LL_PROFILE_ZONE_NAMED_CATEGORY_TEXTURE("vftuf - current < min");
         make_request = false;
     }
+    // <SS:Nexii> Squeeze - a BC7 prefix read is in flight for this texture. Letting the J2C request go out alongside it is how the feature saves nothing: whichever lands second wins, and a warm J2C cache frequently wins the race, so the video memory the record exists to save is spent anyway. The suppression is bounded by construction - the reader pushes a completion on every path including abandon, so READING always resolves into a verdict within a frame or two - and if the post was ever refused the ladder never entered READING in the first place, so this frame's request goes out as normal.
+    else if (mSSBC7Residency == (U8)SSBC7_RES_READING)
+    {
+        LL_PROFILE_ZONE_NAMED_CATEGORY_TEXTURE("vftuf - bc7 read in flight");
+        make_request = false;
+    }
+    // </SS:Nexii>
 
     if (make_request)
     {
@@ -2326,6 +2537,14 @@ void LLViewerFetchedTexture::clearFetchedResults()
         return;
     }
 
+    // <SS:Nexii> Squeeze - this route destroys the GL texture without going through destroyTexture(), so the live gauge has to be released here as well or a texture refresh leaks its share of it for the rest of the session
+    if (mSSBC7Residency == (U8)SSBC7_RES_RESIDENT || mSSBC7Residency == (U8)SSBC7_RES_READING)
+    {
+        ssBC7LeaveResidency((U8)SSBC7_SERVE_UPGRADED, "fetched results are being cleared");
+        ssBC7SetResidency((U8)SSBC7_RES_HIT_KNOWN);
+    }
+    // </SS:Nexii>
+
     cleanup();
     destroyGLTexture();
 
@@ -2425,6 +2644,13 @@ void LLViewerFetchedTexture::setLoadedCallback( loaded_callback_func loaded_call
     {
         mSaveRawImage = true;
     }
+
+    // <SS:Nexii> Squeeze - the other half of the RESIDENT to raw-needed edge. Both of these flags latch here, long after residency, and both mean a consumer wants the decoded pixels rather than a picture on the card; a BC7 resident would satisfy neither and the callback would simply never fire. The format is left alone until the replacement upload actually arrives, so nothing in between reasons about a texture that is not there.
+    if (needs_aux || keep_imageraw)
+    {
+        ssBC7LeaveResidency((U8)SSBC7_SERVE_DECLINE_RAW, "a loaded callback needs the raw image or the aux channels", false);
+    }
+    // </SS:Nexii>
     if (mNeedsAux && mAuxRawImage.isNull() && getDiscardLevel() >= 0)
     {
         if(mHasAux)
@@ -2972,6 +3198,10 @@ void LLViewerFetchedTexture::forceToRefetchTexture(S32 desired_discard, F32 kept
         kept_time = llmax(kept_time, mKeptSavedRawImageTime);
     }
 
+    // <SS:Nexii> Squeeze - same edge as forceToSaveRawImage, reached directly rather than through it. The format is left alone for the same reason: this only arranges a fetch, and the picture on the card stays correct until the replacement actually arrives at addToCreateTexture.
+    ssBC7LeaveResidency((U8)SSBC7_SERVE_DECLINE_RAW, "a refetch was forced for a raw consumer", false);
+    // </SS:Nexii>
+
     //trigger a new fetch.
     mForceToSaveRawImage = true ;
     mDesiredSavedRawDiscardLevel = desired_discard ;
@@ -2990,6 +3220,10 @@ void LLViewerFetchedTexture::forceToSaveRawImage(S32 desired_discard, F32 kept_t
     {
         return; //raw imge is ready.
     }
+
+    // <SS:Nexii> Squeeze - the RESIDENT to raw-needed edge, and deliberately BELOW the early return above: a texture whose saved raw already satisfies the request is not asking for anything, and giving up a full resolution BC7 texture for it would be pure loss. getCurrentDiscardLevelForFetching folds mForceToSaveRawImage into the current discard precisely so a raw consumer forces a refetch, so residency has to step back rather than let a BC7 discard claim the requirement is already met - otherwise the consumer waits for a raw that nothing is ever going to produce. setForSculpt arrives through here too, since it calls straight into this.
+    ssBC7LeaveResidency((U8)SSBC7_SERVE_DECLINE_RAW, "a consumer asked for the raw image to be kept", false);
+    // </SS:Nexii>
 
     if(!mForceToSaveRawImage || mDesiredSavedRawDiscardLevel < 0 || mDesiredSavedRawDiscardLevel > desired_discard)
     {
@@ -3243,6 +3477,19 @@ bool LLViewerLODTexture::scaleDown()
     {
         return false;
     }
+
+    // <SS:Nexii> Squeeze - LLImageGL::scaleDown refuses a block compressed texture outright, and processTextureStats calls this every pass while current discard is below desired, so a compressed texture left on mDownScaleQueue is re-queued forever, mCurrentDiscardLevel never moves and the memory governor never gets those bytes back - the exact opposite of what this feature is for, at precisely the moment it matters.
+    //
+    // Keyed on the GL texture actually being compressed rather than on the ladder, because the two can legitimately disagree: a resident that stepped back for a raw consumer is off the ladder while its GL texture is still BC7 until the replacement upload lands, and queueing THAT would spin just as hard. Down-rez for a texture still on the ladder is a re-upload of a SHORTER prefix, which the smallest-mip-first layout makes a short read rather than a full one.
+    if (mGLTexturep->getPrimaryFormat() != 0 && mGLTexturep->isCompressed())
+    {
+        if (ssBC7IsResident())
+        {
+            ssBC7ServeRequest(this, mDesiredDiscardLevel);
+        }
+        return false;
+    }
+    // </SS:Nexii>
 
     if (!mDownScalePending)
     {

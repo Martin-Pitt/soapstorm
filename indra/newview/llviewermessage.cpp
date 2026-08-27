@@ -113,6 +113,7 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "llworldmap.h"
+#include "ssrocghost.h" // <SS:Nexii>
 #include "pipeline.h"
 #include "llfloaterworldmap.h"
 #include "llviewerdisplay.h"
@@ -4845,6 +4846,10 @@ void process_kill_object(LLMessageSystem *mesgsys, void **user_data)
             // never kill our avatar
             continue;
         }
+
+        // <SS:Nexii> A kill that resolves to an object the region object cache painted from memory is the simulator contradicting that memory - and since this phase issues no probes of any kind, every one of these is a kill the simulator volunteered rather than one we provoked. Recorded, never acted on: the derez below is the stock code's, and the cache RECORD survives, because a resolved kill cannot tell deletion apart from an interest-list cull. See doc/region_object_cache.md.
+        ssROCGhostNoteKill(regionp, local_id, id);
+        // </SS:Nexii>
 
         LLViewerObject *objectp = gObjectList.findObject(id);
         if (objectp)

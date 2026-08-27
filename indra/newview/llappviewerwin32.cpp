@@ -36,6 +36,8 @@
 
 #include "llappviewerwin32.h"
 
+#include "llprocessor.h" // <SS:Nexii> LLCPUFeatures, for the baseline instruction set check in WINMAIN
+
 #include "llgl.h"
 #include "res/resource.h" // *FIX: for setting gIconResource.
 
@@ -509,6 +511,22 @@ int APIENTRY WINMAIN(HINSTANCE hInstance,
                      PWSTR     pCmdLine,
                      int       nCmdShow)
 {
+    // <SS:Nexii> Baseline instruction set check.
+    //
+    // This runs ahead of Velopack, which the comment below says must be first, because the only case where it changes anything is a CPU that physically cannot execute this binary - and letting Velopack install a viewer that will fault on launch is worse than saying so up front.
+    //
+    // The check cannot be perfect: C++ static initialisers run before any entry point, so a vectorised static constructor would still fault before we get here. In practice the compiler's AVX2 output lives in the runtime loops, not in static init, and this turns the common failure from a silent illegal instruction into a sentence the user can act on.
+    if (!LLCPUFeatures::runningCPUSupportsBuildTarget())
+    {
+        std::string msg = llformat(
+            "This viewer was built for %s instructions, which this CPU does not support.\n\n"
+            "Install a build without the AVX optimisations, or run on a newer CPU.",
+            LLCPUFeatures::buildTargetISA());
+        MessageBoxA(nullptr, msg.c_str(), "Unsupported CPU", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    // </SS:Nexii>
+
 #if LL_VELOPACK
     // Velopack MUST be initialized first - it may handle install/uninstall
     // commands and exit the process before we do anything else.
@@ -723,13 +741,7 @@ void LLAppViewerWin32::bugsplatAddStaticAttributes(const LLSD& info)
         bugSplatMap.setAttribute("CPU", info["CPU"].asString());
         bugSplatMap.setAttribute("Graphics Driver", info["GRAPHICS_DRIVER_VERSION"].asString());
         bugSplatMap.setAttribute("CPU MHz", (S32)gSysCPU.getMHz()); // 
-#ifdef USE_AVX2_OPTIMIZATION
-        bugSplatMap.setAttribute("SIMD", "AVX2");
-#elif USE_AVX_OPTIMIZATION
-        bugSplatMap.setAttribute("SIMD", "AVX");
-#else
-        bugSplatMap.setAttribute("SIMD", "SSE2");
-#endif
+        bugSplatMap.setAttribute("SIMD", LLCPUFeatures::buildTargetISA()); // <SS:Nexii>
     // set physical ram integer as a string attribute
         bugSplatMap.setAttribute("Physical RAM (KB)", LLMemory::getMaxMemKB().value());
         bugSplatMap.setAttribute("OpenGL Version", info["OPENGL_VERSION"].asString());
