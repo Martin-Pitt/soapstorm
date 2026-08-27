@@ -40,6 +40,13 @@
 #include "llaudiodecodemgr.h"
 #include "llassetstorage.h"
 
+// <SS:Nexii> downloaded-sound loudness normalization
+#include "sslufs.h"
+#include "llapr.h"
+#include "llendianswizzle.h"
+#include "workqueue.h"
+// </SS:Nexii>
+
 
 // necessary for grabbing sounds from sim (implemented in viewer)
 extern void request_sound(const LLUUID &sound_guid);
@@ -107,6 +114,10 @@ void LLAudioEngine::setDefaults()
 
     for (U32 i = 0; i < LLAudioEngine::AUDIO_TYPE_COUNT; i++)
         mSecondaryGain[i] = 1.0f;
+
+    // <SS:Nexii> loudness normalization off until the viewer pushes settings in
+    mNormalizeSounds = false;
+    mNormalizeTargetLUFS = -23.f;
 }
 
 
@@ -2000,6 +2011,7 @@ bool LLAudioData::load()
         return false;
     }
     mBufferp->mAudioDatap = this;
+    gAudiop->scheduleLoudnessCheck(mID); // <SS:Nexii> background loudness check for cache hits, no-op once checked
     return true;
 }
 
@@ -2025,6 +2037,121 @@ bool LLAudioEngine::isCorruptSound( LLUUID const &aId ) const
     return itr->second == ND_MAX_SOUNDRETRIES;
 }
 // </FS:ND>
+
+// <SS:Nexii> downloaded-sound loudness normalization
+
+// worker-side: measure the decoded cache wav (canonical 44-byte header, mono 16-bit) and rewrite it at target loudness; true when the file changed
+static bool ss_normalize_dsf_file(const std::string& path, F32 target_lufs)
+{
+    const S32 DSF_HEADER = 44;
+
+    LLAPRFile infile;
+    infile.open(path, LL_APR_RB);
+    if (!infile.getFileHandle()) return false;
+    S32 size = infile.seek(APR_END, 0);
+    if (size <= DSF_HEADER + 2)
+    {
+        infile.close();
+        return false;
+    }
+    std::vector<U8> data(size);
+    infile.seek(APR_SET, 0);
+    S32 bytes = infile.read(data.data(), size);
+    infile.close();
+    if (bytes != size) return false;
+
+    S16* samples = (S16*)(data.data() + DSF_HEADER);
+    size_t count = (size - DSF_HEADER) / 2;
+    llendianswizzle(samples, 2, (S32)count);
+    F32 lufs = ss_lufs_measure_mono16(samples, count, 44100);
+    if (lufs <= SS_LUFS_SILENCE || fabsf(lufs - target_lufs) <= SS_LUFS_TOLERANCE)
+    {
+        return false;
+    }
+    ss_lufs_apply_gain16(samples, count, ss_lufs_gain_for_target(lufs, target_lufs));
+    llendianswizzle(samples, 2, (S32)count);
+
+    LLAPRFile outfile;
+    outfile.open(path, LL_APR_WPB);
+    if (!outfile.getFileHandle()) return false;
+    outfile.write(data.data(), size);
+    LL_INFOS("AudioEngine") << "Normalized cached sound " << path << " from " << lufs << " LUFS toward " << target_lufs << LL_ENDL;
+    return true;
+}
+
+void LLAudioEngine::scheduleLoudnessCheck(const LLUUID &audio_id)
+{
+    if (!mNormalizeSounds || audio_id.isNull()) return;
+    if (mNormalizeExempt.find(audio_id) != mNormalizeExempt.end()) return;
+    if (!mLoudnessChecked.insert(audio_id).second) return; // once per session
+
+    std::string wav_path = gDirUtilp->getExpandedFilename(LL_PATH_FS_SOUND_CACHE, audio_id.asString()) + ".dsf";
+    F32 target = mNormalizeTargetLUFS;
+
+    LL::WorkQueue::ptr_t main_queue = LL::WorkQueue::getInstance("mainloop");
+    LL::WorkQueue::ptr_t general_queue = LL::WorkQueue::getInstance("General");
+    if (!main_queue || !general_queue) return;
+
+    // measure and rewrite on the thread pool; patch the live sound back on the main loop
+    main_queue->postTo(
+        general_queue,
+        [wav_path, target]()
+        {
+            return ss_normalize_dsf_file(wav_path, target);
+        },
+        [audio_id](bool changed)
+        {
+            if (changed && gAudiop)
+            {
+                gAudiop->reloadSoundBuffer(audio_id);
+            }
+        });
+}
+
+void LLAudioEngine::reloadSoundBuffer(const LLUUID &audio_id)
+{
+    data_map::iterator it = mAllData.find(audio_id);
+    if (it == mAllData.end()) return;
+    LLAudioData* adp = it->second;
+    LLAudioBuffer* old_buffer = adp->mBufferp;
+    if (!old_buffer) return; // nothing loaded; the next load picks up the patched file
+
+    // capture live playback state on every channel bound to the old buffer, then detach them
+    struct Resume { LLAudioChannel* chan; U32 pos; bool playing; };
+    std::vector<Resume> resumes;
+    for (S32 i = 0; i < LL_MAX_AUDIO_CHANNELS; i++)
+    {
+        LLAudioChannel* chan = mChannels[i];
+        if (chan && chan->mCurrentBufferp == old_buffer)
+        {
+            resumes.push_back({ chan, chan->getPositionBytes(), chan->isPlaying() });
+            chan->cleanup();
+            chan->mCurrentBufferp = NULL;
+        }
+    }
+
+    cleanupBuffer(old_buffer);
+    adp->mBufferp = NULL;
+    adp->load(); // reload from the rewritten cache file
+
+    if (!adp->getBuffer()) return; // load failed; sources will re-request through the normal path
+
+    // rebind and resume where each sound left off; source keeps its loop, type, gain and position untouched
+    for (Resume& r : resumes)
+    {
+        LLAudioChannel* chan = r.chan;
+        LLAudioSource* src = chan->getSource();
+        if (!src || src->getCurrentData() != adp) continue;
+        chan->updateBuffer();
+        chan->update3DPosition(); // set 3D mode and position on the fresh channel before unpausing, same order as setSource, else moving sounds blip at origin for a frame
+        if (r.playing)
+        {
+            chan->setPositionBytes(r.pos);
+            chan->play();
+        }
+    }
+}
+// </SS:Nexii>
 
 // <FS:Ansariel> Asset blacklisting
 void LLAudioEngine::removeAudioData(const LLUUID& audio_uuid)

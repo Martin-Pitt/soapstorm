@@ -108,6 +108,11 @@ public:
                             LLPointer<LLImageRaw>& raw, LLPointer<LLImageRaw>& aux,
                             LLCore::HttpStatus& last_http_get_status);
 
+    // Checks if the formatted image's data mutex is actively held by a decoding thread.
+    // This is used to avoid lock inversion deadlocks during garbage collection.
+    // Threads: Main
+    bool isRequestLocked(const LLUUID& id);
+
     // Threads:  T*
     bool updateRequestPriority(const LLUUID& id, F32 priority);
 

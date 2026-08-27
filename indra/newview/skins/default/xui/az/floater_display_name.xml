@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <floater name="Display Name" title="Göstərilən ad">
 	<text name="info_text">
-		Avatar verdiyiniz ad göstərilən ad adlanır. Həftədə bir dəfə dəyişə bilərsiniz.
+		Avatar verdiyiniz ad göstərilən ad adlanır. 24 saatda bir dəfə dəyişə bilərsiniz.
 	</text>
 	<text name="lockout_text">
 		Adınızı tarixinə qədər dəyişə bilməzsiniz.

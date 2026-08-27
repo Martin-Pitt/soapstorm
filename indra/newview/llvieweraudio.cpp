@@ -378,6 +378,29 @@ void LLViewerAudio::onTeleportFinished(const LLVector3d& pos, const bool& local)
     mWasPlaying = false;
 }
 
+// <SS:Nexii> push loudness normalization settings into the audio engine; the viewer's own UI sounds are exempt from processing
+void audio_update_sound_normalization()
+{
+    if (!gAudiop) return;
+
+    struct UISoundCollector : public LLControlGroup::ApplyFunctor
+    {
+        uuid_vec_t ids;
+        void apply(const std::string& name, LLControlVariable* control) override
+        {
+            if (name.compare(0, 5, "UISnd") == 0)
+            {
+                std::string val = control->getValue().asString();
+                if (LLUUID::validate(val)) ids.push_back(LLUUID(val));
+            }
+        }
+    } collector;
+    gSavedSettings.applyToAll(&collector);
+    gAudiop->setSoundNormalizationExempt(collector.ids);
+    gAudiop->setSoundNormalization(gSavedSettings.getBOOL("FSNormalizeDownloadedSounds"), gSavedSettings.getF32("FSSoundTargetLUFS"));
+}
+// </SS:Nexii>
+
 void init_audio()
 {
     if (!gAudiop)
@@ -385,6 +408,8 @@ void init_audio()
         LL_WARNS() << "Failed to create an appropriate Audio Engine" << LL_ENDL;
         return;
     }
+
+    audio_update_sound_normalization(); // <SS:Nexii> before any preloads so UI sound exemptions are in place
     LLVector3d lpos_global = gAgentCamera.getCameraPositionGlobal();
     LLVector3 lpos_global_f;
 

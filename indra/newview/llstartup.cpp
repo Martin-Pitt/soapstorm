@@ -28,6 +28,7 @@
 
 #include "llappviewer.h"
 #include "llstartup.h"
+#include "llautoupdatechecker.h"
 
 #if LL_VELOPACK && LL_WINDOWS
 #include "llvelopack.h"
@@ -215,6 +216,7 @@
 #include "llstartuplistener.h"
 #include "lltoolbarview.h"
 #include "llexperiencelog.h"
+#include "llgroupcolormap.h"        // group-based nameplate tinting
 #include "llcleanup.h"
 
 #include "llenvironment.h"
@@ -1292,6 +1294,14 @@ bool idle_startup()
         LL_DEBUGS("AppInit") << "Initializing Window, show_connect_box = "
                              << show_connect_box << LL_ENDL;
 
+        // Auto-update check - check once on startup
+        static bool sHasCheckedForUpdates = false;
+        if (!sHasCheckedForUpdates)
+        {
+            sHasCheckedForUpdates = true;
+            LLAutoUpdateChecker::instance().checkForUpdate();
+        }
+
         // if we've gone backwards in the login state machine, to this state where we show the UI
         // AND the debug setting to exit in this case is true, then go ahead and bail quickly
         if ( mLoginStatePastUI && gSavedSettings.getBOOL("QuitOnLoginActivated") )
@@ -1344,6 +1354,8 @@ bool idle_startup()
             //LLPanelLogin::giveFocus();
             FSPanelLogin::giveFocus();
             // </FS:Ansariel> [FS Login Panel]
+
+
 
             // MAINT-3231 Show first run dialog only for Desura viewer
             if (gSavedSettings.getString("sourceid") == "1208_desura")
@@ -4343,6 +4355,9 @@ void LLStartUp::initExperiences()
         boost::bind(&LLAgent::getRegionCapability, &gAgent, _1));
 
     LLExperienceLog::instance().initialize();
+
+    // Load per-group nameplate colors for this account
+    LLGroupColorMap::getInstance()->loadFromDisk();
 }
 
 void LLStartUp::cleanupNameCache()

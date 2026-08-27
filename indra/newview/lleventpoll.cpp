@@ -214,11 +214,11 @@ namespace Details
 //          LL_DEBUGS("LLEventPollImpl::eventPollCoro") << "<" << counter << "> result = "
 //              << LLSDXMLStreamer(result) << LL_ENDL;
 
-            if (gDisconnected)
+            if (mDone || gDisconnected)
             {
-                // Lost connection or disconnected during quit, don't process sim/region update
+                // Lost connection or stopped during yield, don't process sim/region update
                 // messages, they might populate some cleaned up classes (LLWorld, region and object list)
-                LL_INFOS("LLEventPollImpl") << "Dropping event messages" << LL_ENDL;
+                LL_INFOS("LLEventPollImpl") << "Dropping event messages (done=" << mDone << ", disconnected=" << gDisconnected << ")" << LL_ENDL;
                 break;
             }
 
@@ -395,9 +395,13 @@ namespace Details
                             // convert data to string and pass that string.
                             const LLSD body = (*i)["body"];
                             (*i)["body"].clear();
-                            work = [this, msg_name, body]()
+                            std::weak_ptr<LLEventPollImpl> self = shared_from_this();
+                            work = [self, msg_name, body]()
                             {
-                                handleMessage(msg_name, body);
+                                if (auto shared_self = self.lock())
+                                {
+                                    shared_self->handleMessage(msg_name, body);
+                                }
                             };
                         }
                         main_queue->post(work);

@@ -3083,6 +3083,28 @@ LLTextureFetchWorker* LLTextureFetch::getWorker(const LLUUID& id)
 }                                                                       // -Mfq
 
 
+// Threads: Main
+bool LLTextureFetch::isRequestLocked(const LLUUID& id)
+{
+    LL_PROFILE_ZONE_SCOPED;
+    bool locked = false;
+    lockQueue();
+    LLTextureFetchWorker* worker = getWorkerAfterLock(id);
+    if (worker && worker->mFormattedImage.notNull())
+    {
+        if (worker->mFormattedImage->tryLockData())
+        {
+            worker->mFormattedImage->unlockData();
+        }
+        else
+        {
+            locked = true;
+        }
+    }
+    unlockQueue();
+    return locked;
+}
+
 // Threads:  T*
 bool LLTextureFetch::getRequestFinished(const LLUUID& id, S32& discard_level, S32& worker_state,
                                         LLPointer<LLImageRaw>& raw, LLPointer<LLImageRaw>& aux,

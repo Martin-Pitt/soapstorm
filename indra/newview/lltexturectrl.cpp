@@ -745,7 +745,7 @@ void LLFloaterTexturePicker::draw()
     bool valid_dims = updateImageStats();
 
     // if we're inactive, gray out "apply immediate" checkbox
-    mSelectBtn->setEnabled(mActive && mCanApply && valid_dims && !getTentative());
+    mSelectBtn->setEnabled(mActive && mCanApply && valid_dims);
     mPipetteBtn->setEnabled(mActive);
     mPipetteBtn->setValue(LLToolMgr::getInstance()->getCurrentTool() == LLToolPipette::getInstance());
 
@@ -1480,7 +1480,7 @@ void LLFloaterTexturePicker::onBakeTextureSelect(LLUICtrl* ctrl, void *user_data
 
 void LLFloaterTexturePicker::setCanApply(bool can_preview, bool can_apply, bool inworld_image)
 {
-    mSelectBtn->setEnabled(can_apply && !getTentative()); // will be updated on draw
+    mSelectBtn->setEnabled(can_apply); // will be updated on draw
     getChildRef<LLUICtrl>("preview_disabled").setVisible(!can_preview && inworld_image);
     getChildRef<LLUICtrl>("apply_immediate_check").setVisible(can_preview);
 

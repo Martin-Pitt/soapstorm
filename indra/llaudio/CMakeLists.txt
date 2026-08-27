@@ -14,6 +14,7 @@ set(llaudio_SOURCE_FILES
     lllistener.cpp
     llaudiodecodemgr.cpp
     llvorbisencode.cpp
+    sslufs.cpp
     )
 
 set(llaudio_HEADER_FILES
@@ -24,6 +25,7 @@ set(llaudio_HEADER_FILES
     llaudiodecodemgr.h
     llvorbisencode.h
     llwindgen.h
+    sslufs.h
     )
 
 if (TARGET ll::fmodstudio)

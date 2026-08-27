@@ -4,7 +4,7 @@
 		[day,datetime,slt] [month,datetime,slt] [year,datetime,slt], [hour24,datetime,slt]:[min,datetime,slt]:[second,datetime,slt] [timezone,datetime,slt]
 	</floater.string>
 	<text name="info_text">
-		Twoje Wyświetlane Imię to takie, które inni widzą nad Twoją głową. Możesz je zmienić raz w tygodniu.
+		Twoje Wyświetlane Imię to takie, które inni widzą nad Twoją głową. Możesz je zmienić raz na 24 godziny.
 	</text>
 	<text name="lockout_text">
 		Nie możesz zmienić swojego Imienia do:

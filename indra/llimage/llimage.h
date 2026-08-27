@@ -179,6 +179,10 @@ private:
     mutable LLSharedMutex mDataMutex;
 
 public:
+    bool tryLockData() const { return mDataMutex.trylock<false>(); }
+    void unlockData() const { mDataMutex.unlock<false>(); }
+
+public:
     template<bool SHARED>
     class DataLock : public LLSharedMutexLockTemplate<SHARED>
     {

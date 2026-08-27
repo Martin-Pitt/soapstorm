@@ -1813,6 +1813,11 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
 
+    if (!imageraw)
+    {
+        return false;
+    }
+
     if (discard_level < 0)
     {
         discard_level = mCurrentDiscardLevel;
@@ -1820,6 +1825,14 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
 
     if (mTexName == 0 || discard_level < mCurrentDiscardLevel || discard_level > mMaxDiscardLevel )
     {
+        return false;
+    }
+
+    if (mTarget != GL_TEXTURE_2D)
+    {
+        // glGetTexImage below reads a single 2D mip; cube map and other targets
+        // cannot go through this path (querying them here raises GL_INVALID_ENUM)
+        LL_WARNS_ONCE() << "readBackRaw called on unsupported texture target: 0x" << std::hex << mTarget << std::dec << LL_ENDL;
         return false;
     }
 
@@ -1832,9 +1845,21 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
     //debug code, leave it there commented.
     //checkTexSize() ;
 
+    //-----------------------------------------------------------------------------------------------
+    // drain pending errors first so the dimension queries below can be trusted;
+    // an early return must not leave a stale error for the next caller either
+    GLenum error ;
+    while((error = glGetError()) != GL_NO_ERROR)
+    {
+        LL_WARNS() << "GL Error happens before reading back texture. Error code: " << error << LL_ENDL ;
+    }
+    //-----------------------------------------------------------------------------------------------
+
     LLGLint glwidth = 0;
+    LLGLint glheight = 0;
     glGetTexLevelParameteriv(mTarget, gl_discard, GL_TEXTURE_WIDTH, (GLint*)&glwidth);
-    if (glwidth == 0)
+    glGetTexLevelParameteriv(mTarget, gl_discard, GL_TEXTURE_HEIGHT, (GLint*)&glheight);
+    if (glGetError() != GL_NO_ERROR || glwidth == 0 || glheight == 0)
     {
         // No mip data smaller than current discard level
         return false;
@@ -1847,11 +1872,15 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
     {
         return false;
     }
-    if(width < glwidth)
+    if (width != glwidth || height != glheight)
     {
-        LL_WARNS() << "texture size is smaller than it should be." << LL_ENDL ;
-        LL_WARNS() << "width: " << width << " glwidth: " << glwidth << " mWidth: " << mWidth <<
-            " mCurrentDiscardLevel: " << (S32)mCurrentDiscardLevel << " discard_level: " << (S32)discard_level << LL_ENDL ;
+        // the GL texture no longer matches this object's bookkeeping (e.g. it was
+        // rescaled since); reading it back would overrun the destination buffer
+        LL_WARNS() << "texture size mismatch on readback." << LL_ENDL ;
+        LL_WARNS() << "width: " << width << " height: " << height
+            << " glwidth: " << glwidth << " glheight: " << glheight
+            << " mWidth: " << mWidth << " mHeight: " << mHeight
+            << " mCurrentDiscardLevel: " << (S32)mCurrentDiscardLevel << " discard_level: " << (S32)discard_level << LL_ENDL ;
         return false ;
     }
 
@@ -1866,20 +1895,17 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
         glGetTexLevelParameteriv(mTarget, gl_discard, GL_TEXTURE_COMPRESSED, (GLint*)&is_compressed);
     }
 
-    //-----------------------------------------------------------------------------------------------
-    GLenum error ;
-    while((error = glGetError()) != GL_NO_ERROR)
-    {
-        LL_WARNS() << "GL Error happens before reading back texture. Error code: " << error << LL_ENDL ;
-    }
-    //-----------------------------------------------------------------------------------------------
-
     LLImageDataLock lock(imageraw);
 
     if (is_compressed)
     {
-        LLGLint glbytes;
+        LLGLint glbytes = 0;
         glGetTexLevelParameteriv(mTarget, gl_discard, GL_TEXTURE_COMPRESSED_IMAGE_SIZE, (GLint*)&glbytes);
+        if (glGetError() != GL_NO_ERROR || glbytes <= 0)
+        {
+            return false;
+        }
+
         if(!imageraw->allocateDataSize(width, height, ncomponents, glbytes))
         {
             constexpr S64 MAX_GL_BYTES = 2048 * 2048;
@@ -1918,8 +1944,47 @@ bool LLImageGL::readBackRaw(S32 discard_level, LLImageRaw* imageraw, bool compre
             return false ;
         }
 
-        glGetTexImage(GL_TEXTURE_2D, gl_discard, mFormatPrimary, mFormatType, (GLvoid*)(imageraw->getData()));
-        //stop_glerror();
+        // the destination buffer holds exactly width * height * ncomponents bytes;
+        // read back in that layout regardless of what mFormatPrimary/mFormatType
+        // claim, or a wider format (e.g. GL_BGRA into a 3-component buffer) or a
+        // wider type would overrun the allocation
+        S32 format_components = 0;
+        switch (mFormatPrimary)
+        {
+            case GL_LUMINANCE: case GL_ALPHA: case GL_RED: format_components = 1; break;
+            case GL_LUMINANCE_ALPHA: case GL_RG:           format_components = 2; break;
+            case GL_RGB:                                   format_components = 3; break;
+            case GL_RGBA: case GL_BGRA:                    format_components = 4; break;
+            default:                                       format_components = 0; break;
+        }
+
+        GLenum read_format = mFormatPrimary;
+        if (format_components != ncomponents)
+        {
+            switch (ncomponents)
+            {
+                case 1: read_format = LLRender::sGLCoreProfile ? GL_RED : GL_LUMINANCE; break;
+                case 2: read_format = LLRender::sGLCoreProfile ? GL_RG : GL_LUMINANCE_ALPHA; break;
+                case 3: read_format = GL_RGB; break;
+                default: read_format = GL_RGBA; break;
+            }
+        }
+
+        GLenum read_type = GL_UNSIGNED_BYTE;
+        if (mFormatType == GL_UNSIGNED_INT_8_8_8_8_REV && ncomponents == 4)
+        {
+            read_type = mFormatType;
+        }
+
+        // rows in LLImageRaw are tightly packed; the default GL_PACK_ALIGNMENT of 4
+        // would pad rows of small or 1/3-component mips past the end of the buffer
+        GLint old_pack_alignment = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &old_pack_alignment);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+        glGetTexImage(mTarget, gl_discard, read_format, read_type, (GLvoid*)(imageraw->getData()));
+
+        glPixelStorei(GL_PACK_ALIGNMENT, old_pack_alignment);
     }
 
     //-----------------------------------------------------------------------------------------------

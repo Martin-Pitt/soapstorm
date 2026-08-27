@@ -874,6 +874,24 @@ static void handleMovelockAfterMoveOptionChanged(const LLSD& newvalue)
 }
 // </FS:PP>
 
+// Kill Feed: bridge combat log listener follows the enable setting
+static void handleKillFeedEnabledChanged(const LLSD& newvalue)
+{
+    FSLSLBridge::instance().viewerToLSL(newvalue.asBoolean() ? "KillFeedListen|1" : "KillFeedListen|0");
+}
+
+// Hitmarker: bridge combat hits listener follows the enable setting
+static void handleHitMarkerEnabledChanged(const LLSD& newvalue)
+{
+    FSLSLBridge::instance().viewerToLSL(newvalue.asBoolean() ? "CombatHitsListen|1" : "CombatHitsListen|0");
+}
+
+// Offline login splash: re-apply immediately when changed at the login screen
+static void handleLoginSplashChanged(const LLSD& newvalue)
+{
+    FSPanelLogin::loadLoginPage();
+}
+
 // <FS:PP> External integrations (OC, LM etc.) for Bridge
 static void handleExternalIntegrationsOptionChanged()
 {
@@ -1302,6 +1320,10 @@ void settings_setup_listeners()
 {
     LL_PROFILE_ZONE_SCOPED;
     setting_setup_signal_listener(gSavedSettings, "FirstPersonAvatarVisible", handleRenderAvatarMouselookChanged);
+    // <SS:Nexii> downloaded-sound loudness normalization
+    setting_setup_signal_listener(gSavedSettings, "FSNormalizeDownloadedSounds", audio_update_sound_normalization);
+    setting_setup_signal_listener(gSavedSettings, "FSSoundTargetLUFS", audio_update_sound_normalization);
+    // </SS:Nexii>
     setting_setup_signal_listener(gSavedSettings, "RenderFarClip", handleRenderFarClipChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderTerrainScale", handleTerrainScaleChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderTerrainPBRScale", handlePBRTerrainScaleChanged);
@@ -1518,6 +1540,12 @@ void settings_setup_listeners()
 
     setting_setup_signal_listener(gSavedPerAccountSettings, "UseLSLFlightAssist", handleFlightAssistOptionChanged);
     setting_setup_signal_listener(gSavedPerAccountSettings, "UseMoveLock", handleMovelockOptionChanged);
+    setting_setup_signal_listener(gSavedSettings, "FSKillFeedEnabled", handleKillFeedEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "FSHitMarkerEnabled", handleHitMarkerEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "FSLocalLoginSplash", handleLoginSplashChanged);
+    setting_setup_signal_listener(gSavedSettings, "FSLocalLoginSplashImage", handleLoginSplashChanged);
+    setting_setup_signal_listener(gSavedSettings, "FSShowLoginLogo", handleLoginSplashChanged);
+    setting_setup_signal_listener(gSavedSettings, "FSLoginLogoImage", handleLoginSplashChanged);
     setting_setup_signal_listener(gSavedPerAccountSettings, "RelockMoveLockAfterMovement", handleMovelockAfterMoveOptionChanged);
     setting_setup_signal_listener(gSavedSettings, "FSBuildToolDecimalPrecision", handleDecimalPrecisionChanged);
 

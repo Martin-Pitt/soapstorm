@@ -26,7 +26,7 @@
      use_ellipses="true"
      right="-10"
      wrap="true">
-      Your display name is what other people see above your head. It is different from your login name. You can change it once a week.
+       Your display name is what other people see above your head. It is different from your login name. You can change it once every 24 hours.
     </text>
 	<text
      type="string"

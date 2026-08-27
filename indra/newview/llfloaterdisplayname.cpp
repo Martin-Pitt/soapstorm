@@ -73,7 +73,9 @@ void LLFloaterDisplayName::onOpen(const LLSD& key)
     LLAvatarNameCache::get(gAgent.getID(), &av_name);
 
     F64 now_secs = LLDate::now().secondsSinceEpoch();
-    mIsLockedOut = now_secs < av_name.mNextUpdate;
+    // Subtract 6 days from the server's 7-day cooldown (6 * 24 * 3600 = 518400 seconds)
+    // to reduce the client-side cooldown check to 24 hours.
+    mIsLockedOut = now_secs < (av_name.mNextUpdate - 518400.0);
     if (mIsLockedOut)
     {
         // ...can't update until some time in the future
@@ -85,7 +87,7 @@ void LLFloaterDisplayName::onOpen(const LLSD& key)
         //std::string next_update_string =
         //next_update_local.toHTTPDateString("%B %d %I:%M %p");
         std::string next_update_string = getString("LockOutDateFormat");
-        LLStringUtil::format(next_update_string, LLSD().with("datetime", (S32)av_name.mNextUpdate));
+        LLStringUtil::format(next_update_string, LLSD().with("datetime", (S32)(av_name.mNextUpdate - 518400.0)));
         // </FS:Ansariel>
         getChild<LLUICtrl>("lockout_text")->setTextArg("[TIME]", next_update_string);
         getChild<LLUICtrl>("lockout_text")->setVisible(true);

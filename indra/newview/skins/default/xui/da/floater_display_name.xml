@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <floater name="Display Name" title="ÆNDRE VISNINGSNAVN">
 	<text name="info_text">
-		Det navn du giver din avatar kaldes dit visningsnavn. Du kan ændre dette en gang om ugen.
+		Det navn du giver din avatar kaldes dit visningsnavn. Du kan ændre dette en gang hver 24. time.
 	</text>
 	<text name="lockout_text">
 		Du kan ikke ændre dit visningsnavn før:

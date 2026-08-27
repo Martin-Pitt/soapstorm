@@ -43,6 +43,17 @@
 #include "message.h"
 #include "llappviewer.h"
 
+LLAvatarPropertiesObserver::~LLAvatarPropertiesObserver()
+{
+    // A destroyed observer must never remain registered: notifyObservers would
+    // dispatch a virtual call into freed memory. Subclass bookkeeping can't be
+    // trusted to do this (and historically hasn't), so unregister here.
+    if (LLAvatarPropertiesProcessor::instanceExists())
+    {
+        LLAvatarPropertiesProcessor::getInstance()->removeObserver(this);
+    }
+}
+
 LLAvatarPropertiesProcessor::LLAvatarPropertiesProcessor()
 {
 }
@@ -91,6 +102,40 @@ void LLAvatarPropertiesProcessor::removeObserver(const LLUUID& avatar_id, LLAvat
     if (it != end)
     {
         mObservers.erase(it);
+    }
+}
+
+void LLAvatarPropertiesProcessor::removeObserver(LLAvatarPropertiesObserver* observer)
+{
+    if (!observer)
+    {
+        return;
+    }
+
+    std::ostringstream swept_ids;
+    S32 swept = 0;
+    observer_multimap_t::iterator it = mObservers.begin();
+    while (it != mObservers.end())
+    {
+        if (it->second == observer)
+        {
+            swept_ids << (swept ? " " : "") << it->first;
+            ++swept;
+            it = mObservers.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
+    }
+
+    if (swept > 0)
+    {
+        // Each of these was a registration that would have become a dangling
+        // pointer dispatch in notifyObservers once a reply arrived for the id.
+        LL_WARNS("AvatarProperties") << "Swept " << swept
+            << " registration(s) still live at observer destruction, avatar ids: "
+            << swept_ids.str() << LL_ENDL;
     }
 }
 
@@ -660,7 +705,20 @@ void LLAvatarPropertiesProcessor::notifyObservers(const LLUUID& id, void* data, 
         // didn't know the agent ID and passed a NULL id.
         if (agent_id == id || agent_id.isNull())
         {
-            observer->processProperties(data, type);
+            // An observer called earlier in this loop may have removed (and
+            // possibly deleted) this one, but the snapshot taken above would
+            // still hold the stale pointer. Only dispatch if the registration
+            // is still present in the live map.
+            const auto range = mObservers.equal_range(agent_id);
+            const bool still_registered = std::any_of(range.first, range.second,
+                [&](const observer_multimap_t::value_type& entry)
+                {
+                    return entry.second == observer;
+                });
+            if (still_registered)
+            {
+                observer->processProperties(data, type);
+            }
         }
     }
 }

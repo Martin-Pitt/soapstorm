@@ -4,7 +4,7 @@
 		[day,datetime,slt]. [month,datetime,slt] [year,datetime,slt], [hour24,datetime,slt]:[min,datetime,slt]:[second,datetime,slt] [timezone,datetime,slt]
 	</floater.string>
 	<text name="info_text">
-		O nome de exibicao e o nome que voce da ao seu avatar. Voce pode altera-lo uma vez por semana.
+		O nome de exibicao e o nome que voce da ao seu avatar. Voce pode altera-lo a cada 24 horas.
 	</text>
 	<text name="lockout_text">
 		Proxima alteracao disponivel em:

@@ -66,6 +66,7 @@
 
 // linden library includes
 #include "llaudioengine.h"      // mute on minimize
+#include "llchat.h"
 #include "llchatentry.h"
 #include "indra_constants.h"
 #include "llassetstorage.h"
@@ -234,6 +235,10 @@
 #include "utilitybar.h"     // <FS:Zi> Support for the classic V1 style buttons in some skins
 #include "llnetmap.h"
 #include "lggcontactsets.h"
+#include "llgroupcolormap.h"
+#include "fsfloaterkillfeed.h"
+#include "fscombathitmarker.h"
+#include "fsrezqueue.h" // <SS:Nexii> Rez queue watch
 #include "fspanellogin.h"
 
 #include "lltracerecording.h"
@@ -250,6 +255,7 @@ extern bool gDepthDirty;
 extern bool gResizeScreenTexture;
 extern bool gCubeSnapshot;
 extern bool gSnapshotNoPost;
+extern void send_chat_from_viewer(std::string utf8_out_text, EChatType type, S32 channel);
 
 LLViewerWindow  *gViewerWindow = NULL;
 
@@ -787,6 +793,20 @@ public:
             // </FS:Beq>
             gPipeline.mNumVisibleNodes = LLPipeline::sVisibleLightCount = 0;
         }
+
+        // <SS:Nexii> Projectile ghost probing
+        static LLCachedControl<bool> debug_show_soapstorm_projectiles_info(gSavedSettings, "DebugShowSoapstormProjectilesInfo", false);
+        if (debug_show_soapstorm_projectiles_info())
+        {
+            addText(xpos, ypos, llformat("Projectiles: %u", gObjectList.getNumLikelyProjectileObjects()));
+            ypos += y_inc;
+            addText(xpos, ypos, llformat("Ghost projectiles dropped: %u", gObjectList.getNumGhostProjectileObjectsDropped()));
+            ypos += y_inc;
+            addText(xpos, ypos, llformat("Ghost projectiles watched: %d", gObjectList.getNumGhostProjectileObjectsWatched()));
+            ypos += y_inc;
+        }
+        // </SS:Nexii>
+
         static LLCachedControl<bool> debug_show_avatar_render_info(gSavedSettings, "DebugShowAvatarRenderInfo", false);
         if (debug_show_avatar_render_info())
         {
@@ -1305,12 +1325,29 @@ bool LLViewerWindow::handleMouseUp(LLWindow *window,  LLCoordGL pos, MASK mask)
 }
 bool LLViewerWindow::handleRightMouseDown(LLWindow *window,  LLCoordGL pos, MASK mask)
 {
+    static LLCachedControl<bool> rmbEnabled(gSavedSettings, "FSRMBScriptEnabled", false);
+    if (rmbEnabled && gAgentCamera.cameraMouselook() && gAgent.getRegion())
+    {
+        // Track hold state so the main loop can re-apply LBUTTON_DOWN each
+        // frame (resetControlFlags() would otherwise clear it every tick).
+        mRMBHeldInMouselook = true;
+        gAgent.setControlFlags(AGENT_CONTROL_LBUTTON_DOWN);
+        send_agent_update(true);
+    }
     bool down = true;
     return gViewerInput.handleMouse(window, pos, mask, CLICK_RIGHT, down);
 }
 
 bool LLViewerWindow::handleRightMouseUp(LLWindow *window,  LLCoordGL pos, MASK mask)
 {
+    static LLCachedControl<bool> rmbEnabled(gSavedSettings, "FSRMBScriptEnabled", false);
+    if (rmbEnabled && gAgentCamera.cameraMouselook() && gAgent.getRegion())
+    {
+        mRMBHeldInMouselook = false;
+        gAgent.clearControlFlags(AGENT_CONTROL_LBUTTON_DOWN);
+        gAgent.setControlFlags(AGENT_CONTROL_LBUTTON_UP);
+        send_agent_update(true);
+    }
     bool down = false;
     return gViewerInput.handleMouse(window, pos, mask, CLICK_RIGHT, down);
 }
@@ -1976,6 +2013,7 @@ LLViewerWindow::LLViewerWindow(const Params& p)
     mRightMouseDown(false),
     mMouseInWindow( false ),
     mAllowMouseDragging(true),
+    mRMBHeldInMouselook(false),
     mMouseDownTimer(),
     mLastMask( MASK_NONE ),
     mToolStored( NULL ),
@@ -3038,6 +3076,21 @@ void LLViewerWindow::draw()
         // <exodus> Draw HUD stuff.
         bool inMouselook = gAgentCamera.cameraMouselook();
         static LLCachedControl<bool> fsMouselookCombatFeatures(gSavedSettings, "FSMouselookCombatFeatures", true);
+
+        // Kill feed: text-only overlay, positioned and scaled via the Kill
+        // Feed settings floater. Renders in and out of mouselook.
+        FSFloaterKillFeed::drawOverlay();
+
+        // Hitmarker flash and fading hit report for outgoing combat damage.
+        // Reset the crosshair tint each frame; the combat features pass
+        // below re-tints it when a target is identified under the crosshair.
+        FSCombatHitMarker::setCrosshairTint(LLColor4::white);
+        FSCombatHitMarker::draw();
+
+        // <SS:Nexii> Rez queue warning above the crosshair
+        FSRezQueue::draw();
+        // </SS:Nexii>
+
         if (inMouselook && fsMouselookCombatFeatures)
         {
             S32 windowWidth = gViewerWindow->getWorldViewRectScaled().getWidth();
@@ -3105,20 +3158,82 @@ void LLViewerWindow::draw()
 
                         if (magicVector.mdV[VX] > -0.75 && magicVector.mdV[VX] < 0.75 && magicVector.mdV[VZ] > 0.0 && magicVector.mdV[VY] > -1.5 && magicVector.mdV[VY] < 1.5) // Do not fuck with these, cheater. :(
                         {
-                            LLAvatarName avatarName;
-                            std::string targetName = unknown_agent;
-                            if (LLAvatarNameCache::get(targetKey, &avatarName))
+                            // Line of sight: don't identify targets through walls, floors or
+                            // terrain. Two rays (avatar center, then head height) so a target
+                            // peeking over low cover still identifies. World geometry only;
+                            // avatars and attachments never block the check.
+                            static LLCachedControl<bool> renderIFFLineOfSight(gSavedSettings, "ExodusMouselookIFFLineOfSight", true);
+                            bool targetVisible = true;
+                            if (renderIFFLineOfSight)
                             {
-                                targetName = avatarName.getCompleteName();
+                                LLVector3 rayTarget = gAgent.getPosAgentFromGlobal(targetPosition);
+                                LLVector4a rayStart, rayEnd, rayHit;
+                                rayStart.load3(camera.getOrigin().mV);
+                                rayEnd.load3(rayTarget.mV);
+                                if (gPipeline.lineSegmentIntersectWorldGeometry(rayStart, rayEnd, &rayHit))
+                                {
+                                    rayTarget.mV[VZ] += 0.6f;
+                                    rayEnd.load3(rayTarget.mV);
+                                    targetVisible = !gPipeline.lineSegmentIntersectWorldGeometry(rayStart, rayEnd, &rayHit);
+                                }
                             }
 
-                            LLFontGL::getFontSansSerifBold()->renderUTF8(
-                                llformat("%s, %.2fm", targetName.c_str(), (targetPosition - myPosition).magVec()),
-                                0, (windowWidth / 2.f) + userPresetX, (windowHeight / 2.f) + userPresetY, targetColor,
-                                (LLFontGL::HAlign)((S32)userPresetHAlign), LLFontGL::TOP, LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT
-                            );
+                            if (targetVisible)
+                            {
+                                LLAvatarName avatarName;
+                                std::string targetName = unknown_agent;
+                                bool haveName = LLAvatarNameCache::get(targetKey, &avatarName);
+                                if (haveName)
+                                {
+                                    targetName = avatarName.getCompleteName();
+                                }
 
-                            crosshairRendered = true;
+                                // Name color: mark color first (an explicit per-avatar
+                                // override), then contact set color, then group-based
+                                // nameplate tint, then the default nameplate color.
+                                LLColor4 nameColor;
+                                if (!LLNetMap::getAvatarMarkColor(targetKey, nameColor) &&
+                                    !contact_sets.hasFriendColorThatShouldShow(targetKey, ContactSetType::MINIMAP, nameColor))
+                                {
+                                    // Default nameplate color, same logic as LLVOAvatar::getNameTagColor()
+                                    nameColor = LLUIColorTable::instance().getColor("NameTagLegacy", LLColor4::white);
+                                    if (LLAvatarName::useDisplayNames())
+                                    {
+                                        nameColor = LLUIColorTable::instance().getColor(
+                                            (haveName && avatarName.isDisplayNameDefault()) ? "NameTagMatch" : "NameTagMismatch", LLColor4::white);
+                                    }
+
+                                    // Group-based nameplate tint
+                                    LLViewerObject* targetObject = gObjectList.findObject(targetKey);
+                                    LLVOAvatar* targetAvatar = targetObject ? targetObject->asAvatar() : nullptr;
+                                    if (targetAvatar && targetAvatar->getActiveGroupID().notNull())
+                                    {
+                                        LLColor4 groupColor = LLGroupColorMap::getInstance()->getGroupColor(targetAvatar->getActiveGroupID());
+                                        if (groupColor.mV[VW] >= 0.01f)
+                                        {
+                                            nameColor = groupColor;
+                                        }
+                                    }
+                                }
+
+                                // Feed the identified target's color to the custom
+                                // crosshair tint (LoS already verified above).
+                                FSCombatHitMarker::setCrosshairTint(nameColor);
+
+                                // The name text itself is optional; identification
+                                // still runs for the crosshair tint when disabled.
+                                static LLCachedControl<bool> renderIFFName(gSavedSettings, "ExodusMouselookIFFShowName", true);
+                                if (renderIFFName)
+                                {
+                                    LLFontGL::getFontSansSerifBold()->renderUTF8(
+                                        llformat("%s, %.2fm", targetName.c_str(), (targetPosition - myPosition).magVec()),
+                                        0, (windowWidth / 2.f) + userPresetX, (windowHeight / 2.f) + userPresetY, nameColor,
+                                        (LLFontGL::HAlign)((S32)userPresetHAlign), LLFontGL::TOP, LLFontGL::BOLD, LLFontGL::DROP_SHADOW_SOFT
+                                    );
+                                }
+
+                                crosshairRendered = true;
+                            }
                         }
                     }
 
@@ -3482,6 +3597,18 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
             return true;
         } else {
             LL_DEBUGS() << "LLviewerWindow::handleKey - in 'traverse up' - no loops seen... just called keyboard_focus->handleKey an it returned false" << LL_ENDL;
+            
+            // <FS> Prevent gestures from triggering when typing in text input controls
+            // Even if the control didn't explicitly consume the key (returned false),
+            // we should prevent gesture triggers to avoid keys like +/- activating gestures
+            // while typing in script editors, chat, etc.
+            LLUICtrl* cur_focus = dynamic_cast<LLUICtrl*>(keyboard_focus);
+            if (cur_focus && cur_focus->acceptsTextInput())
+            {
+                LL_DEBUGS() << "LLviewerWindow::handleKey - blocking gesture trigger, text input has focus" << LL_ENDL;
+                return true;
+            }
+            // </FS>
         }
     }
 
@@ -6893,7 +7020,13 @@ void LLViewerWindow::setup2DViewport(S32 x_offset, S32 y_offset)
 void LLViewerWindow::setup3DRender()
 {
     // setup perspective camera
-    LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), MAX_FAR_CLIP*2.f);
+    // <SS:Nexii> Draw distance beyond 1024m: the far plane was pinned to MAX_FAR_CLIP*2 (1024m) whatever the draw distance, so raising
+    // RenderFarClip past that moved culling but left everything beyond 1024m clipped by the projection. getRenderFarPlane() tracks the
+    // camera's far clip with the same 2x headroom (objects straddling the cull distance are not sliced) and the old 1024m floor.
+    //LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), MAX_FAR_CLIP*2.f);
+    const F32 far_clip = LLViewerCamera::getInstance()->getRenderFarPlane();
+    LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), far_clip);
+    // </SS:Nexii>
     setup3DViewport();
 }
 

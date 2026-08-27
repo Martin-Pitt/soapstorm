@@ -29,6 +29,8 @@
 #include "vorbis/vorbisenc.h"
 
 #include "llvorbisencode.h"
+#include "lldir.h" // <SS:Nexii> temp files for long sound splitting
+#include "sslufs.h" // <SS:Nexii> loudness normalization
 #include "llerror.h"
 #include "llrand.h"
 #include "llmath.h"
@@ -36,7 +38,8 @@
 
 // <FS:Ansariel> FIRE-17812: Increase sounds length to 60s on OpenSim
 //S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& error_msg)
-S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& error_msg, bool is_in_secondlife)
+// <OTS> added out_clip_length out-param
+S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& error_msg, bool is_in_secondlife, F32* out_clip_length)
 // </FS:Ansariel>
 {
     U16 num_channels = 0;
@@ -160,6 +163,13 @@ S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& erro
 
     F32 clip_length = (F32)raw_data_length/(F32)bytes_per_sec;
 
+    // <OTS> hand the measured clip length back to the caller (bulk sound->notecard upload)
+    if (out_clip_length)
+    {
+        *out_clip_length = clip_length;
+    }
+    // </OTS>
+
     // <FS:Ansariel> FIRE-17812: Increase sounds length to 60s on OpenSim
     //if (clip_length > LLVORBIS_CLIP_MAX_TIME)
     if (clip_length > (is_in_secondlife ? LLVORBIS_CLIP_MAX_TIME : LLVORBIS_CLIP_MAX_TIME_OPENSIM))
@@ -174,7 +184,8 @@ S32 check_for_invalid_wav_formats(const std::string& in_fname, std::string& erro
 
 // <FS:Ansariel> FIRE-17812: Increase sounds length to 60s on OpenSim
 //S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname)
-S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname, bool is_in_secondlife)
+// <SS:Nexii> added gain for loudness normalization
+S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname, bool is_in_secondlife, F32 gain)
 // </FS:Ansariel>
 {
 #define READ_BUFFER 1024
@@ -267,6 +278,12 @@ S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname
          chunk_length = 0;
      }
 
+
+     // <SS:Nexii> micro fade-in/out over the clip edges so every upload (and every split cut) is click-free
+     S64 total_samples = (num_channels && bits_per_sample) ? (S64)data_left / (num_channels * (bits_per_sample / 8)) : 0;
+     S64 fade_samples = llmin((S64)(LLVORBIS_CLIP_FADE_TIME * sample_rate), total_samples / 2);
+     S64 samples_encoded = 0;
+     // </SS:Nexii>
 
      /********** Encode setup ************/
 
@@ -421,6 +438,25 @@ S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname
                  }
              }
 
+             // <SS:Nexii> apply loudness gain plus edge fades by absolute sample position, clamped against normalization clipping
+             if (fade_samples > 0 || gain != 1.f)
+             {
+                 for (long s = 0; s < samples; s++)
+                 {
+                     S64 pos = samples_encoded + s;
+                     F32 g = gain;
+                     if (fade_samples > 0)
+                     {
+                         if (pos < fade_samples) g *= (F32)pos / (F32)fade_samples;
+                         S64 tail = total_samples - 1 - pos;
+                         if (tail < fade_samples) g *= llmax((F32)tail, 0.f) / (F32)fade_samples;
+                     }
+                     buffer[0][s] = llclamp(buffer[0][s] * g, -1.f, 1.f);
+                 }
+             }
+             samples_encoded += samples;
+             // </SS:Nexii>
+
              /* tell the library how much we actually submitted */
              vorbis_analysis_wrote(&vd,i);
          }
@@ -484,3 +520,254 @@ S32 encode_vorbis_file(const std::string& in_fname, const std::string& out_fname
      return(LLVORBISENC_NOERR);
 
 }
+
+// <SS:Nexii> long sound upload: split an over-long PCM wav into temp wav segments, each under max_clip_time; max-length parts by default, near-equal parts when equal_splits
+S32 split_wav_file(const std::string& in_fname, F32 max_clip_time, bool equal_splits, std::vector<std::string>& out_fnames)
+{
+    U16 num_channels = 0;
+    U32 sample_rate = 0;
+    U32 bits_per_sample = 0;
+    U32 raw_data_length = 0;
+    U32 data_pos = 0;
+
+    unsigned char wav_header[44];       /*Flawfinder: ignore*/
+
+    out_fnames.clear();
+
+    LLAPRFile infile;
+    infile.open(in_fname, LL_APR_RB);
+    if (!infile.getFileHandle())
+    {
+        return(LLVORBISENC_SOURCE_OPEN_ERR);
+    }
+
+    U32 physical_file_size = (U32)infile.seek(APR_END, 0);
+    U32 file_pos = 12; // start at the first chunk (usually fmt but not always)
+    U32 chunk_length = 0;
+
+    // caller already ran check_for_invalid_wav_formats, so just locate fmt and data
+    while ((file_pos + 8) < physical_file_size)
+    {
+        infile.seek(APR_SET, file_pos);
+        infile.read(wav_header, 44);
+
+        chunk_length = ((U32) wav_header[7] << 24)
+            + ((U32) wav_header[6] << 16)
+            + ((U32) wav_header[5] << 8)
+            + wav_header[4];
+
+        if (chunk_length > physical_file_size - file_pos - 4)
+        {
+            infile.close();
+            return(LLVORBISENC_CHUNK_SIZE_ERR);
+        }
+
+        if (!(strncmp((char *)&(wav_header[0]),"fmt ",4)))
+        {
+            num_channels = ((U16) wav_header[11] << 8) + wav_header[10];
+            sample_rate = ((U32) wav_header[15] << 24)
+                + ((U32) wav_header[14] << 16)
+                + ((U32) wav_header[13] << 8)
+                + wav_header[12];
+            bits_per_sample = ((U16) wav_header[23] << 8) + wav_header[22];
+        }
+        else if (!(strncmp((char *)&(wav_header[0]),"data",4)))
+        {
+            data_pos = file_pos + 8;
+            raw_data_length = chunk_length;
+        }
+        file_pos += (chunk_length + 8);
+        chunk_length = 0;
+    }
+
+    U32 bytes_per_frame = num_channels * (bits_per_sample / 8);
+    U32 max_frames = (U32)(max_clip_time * sample_rate);
+    if (!bytes_per_frame || !raw_data_length || !max_frames)
+    {
+        infile.close();
+        return(LLVORBISENC_WAV_FORMAT_ERR);
+    }
+
+    U32 total_frames = raw_data_length / bytes_per_frame;
+    U32 num_segments = (total_frames + max_frames - 1) / max_frames;
+    U32 frames_per_segment = equal_splits ? (total_frames + num_segments - 1) / num_segments : max_frames;
+
+    const S32 COPY_BUFFER = 65536;
+    std::vector<unsigned char> copybuffer(COPY_BUFFER);
+
+    for (U32 seg = 0; seg < num_segments; seg++)
+    {
+        U32 start_frame = seg * frames_per_segment;
+        U32 seg_frames = llmin(frames_per_segment, total_frames - start_frame);
+        U32 seg_bytes = seg_frames * bytes_per_frame;
+
+        std::string out_fname = gDirUtilp->getTempFilename() + ".wav"; // .wav suffix so upload type detection works
+        LLAPRFile outfile;
+        outfile.open(out_fname, LL_APR_WPB);
+        if (!outfile.getFileHandle())
+        {
+            infile.close();
+            return(LLVORBISENC_DEST_OPEN_ERR);
+        }
+
+        // canonical 44-byte PCM wav header
+        U32 byte_rate = sample_rate * bytes_per_frame;
+        U32 riff_size = 36 + seg_bytes;
+        unsigned char hdr[44];
+        memcpy(hdr, "RIFF", 4);
+        hdr[4] = riff_size & 0xFF; hdr[5] = (riff_size >> 8) & 0xFF; hdr[6] = (riff_size >> 16) & 0xFF; hdr[7] = (riff_size >> 24) & 0xFF;
+        memcpy(hdr + 8, "WAVEfmt ", 8);
+        hdr[16] = 16; hdr[17] = 0; hdr[18] = 0; hdr[19] = 0;
+        hdr[20] = 1; hdr[21] = 0; // PCM
+        hdr[22] = num_channels & 0xFF; hdr[23] = (num_channels >> 8) & 0xFF;
+        hdr[24] = sample_rate & 0xFF; hdr[25] = (sample_rate >> 8) & 0xFF; hdr[26] = (sample_rate >> 16) & 0xFF; hdr[27] = (sample_rate >> 24) & 0xFF;
+        hdr[28] = byte_rate & 0xFF; hdr[29] = (byte_rate >> 8) & 0xFF; hdr[30] = (byte_rate >> 16) & 0xFF; hdr[31] = (byte_rate >> 24) & 0xFF;
+        hdr[32] = bytes_per_frame & 0xFF; hdr[33] = (bytes_per_frame >> 8) & 0xFF;
+        hdr[34] = bits_per_sample & 0xFF; hdr[35] = (bits_per_sample >> 8) & 0xFF;
+        memcpy(hdr + 36, "data", 4);
+        hdr[40] = seg_bytes & 0xFF; hdr[41] = (seg_bytes >> 8) & 0xFF; hdr[42] = (seg_bytes >> 16) & 0xFF; hdr[43] = (seg_bytes >> 24) & 0xFF;
+        outfile.write(hdr, 44);
+
+        infile.seek(APR_SET, data_pos + start_frame * bytes_per_frame);
+        S32 bytes_left = (S32)seg_bytes;
+        while (bytes_left > 0)
+        {
+            S32 bytes = infile.read(copybuffer.data(), llmin(COPY_BUFFER, bytes_left));
+            if (bytes <= 0)
+            {
+                infile.close();
+                return(LLVORBISENC_SOURCE_OPEN_ERR);
+            }
+            outfile.write(copybuffer.data(), bytes);
+            bytes_left -= bytes;
+        }
+
+        out_fnames.push_back(out_fname);
+    }
+
+    infile.close();
+    LL_INFOS() << "Split long sound into " << num_segments << " segments of ~" << frames_per_segment << " frames" << LL_ENDL;
+    return(LLVORBISENC_NOERR);
+}
+
+// <SS:Nexii> measures integrated LUFS of the mono downmix exactly as the encoder produces it, so upload normalization targets the asset actually heard in-world
+S32 measure_wav_lufs(const std::string& in_fname, F32& out_lufs)
+{
+    out_lufs = SS_LUFS_SILENCE;
+
+    U16 num_channels = 0;
+    U32 sample_rate = 0;
+    U32 bits_per_sample = 0;
+    U32 raw_data_length = 0;
+    U32 data_pos = 0;
+
+    unsigned char wav_header[44];       /*Flawfinder: ignore*/
+
+    LLAPRFile infile;
+    infile.open(in_fname, LL_APR_RB);
+    if (!infile.getFileHandle())
+    {
+        return(LLVORBISENC_SOURCE_OPEN_ERR);
+    }
+
+    U32 physical_file_size = (U32)infile.seek(APR_END, 0);
+    U32 file_pos = 12;
+    U32 chunk_length = 0;
+
+    while ((file_pos + 8) < physical_file_size)
+    {
+        infile.seek(APR_SET, file_pos);
+        infile.read(wav_header, 44);
+
+        chunk_length = ((U32) wav_header[7] << 24)
+            + ((U32) wav_header[6] << 16)
+            + ((U32) wav_header[5] << 8)
+            + wav_header[4];
+
+        if (chunk_length > physical_file_size - file_pos - 4)
+        {
+            infile.close();
+            return(LLVORBISENC_CHUNK_SIZE_ERR);
+        }
+
+        if (!(strncmp((char *)&(wav_header[0]),"fmt ",4)))
+        {
+            num_channels = ((U16) wav_header[11] << 8) + wav_header[10];
+            sample_rate = ((U32) wav_header[15] << 24)
+                + ((U32) wav_header[14] << 16)
+                + ((U32) wav_header[13] << 8)
+                + wav_header[12];
+            bits_per_sample = ((U16) wav_header[23] << 8) + wav_header[22];
+        }
+        else if (!(strncmp((char *)&(wav_header[0]),"data",4)))
+        {
+            data_pos = file_pos + 8;
+            raw_data_length = chunk_length;
+        }
+        file_pos += (chunk_length + 8);
+        chunk_length = 0;
+    }
+
+    U32 bytes_per_frame = num_channels * (bits_per_sample / 8);
+    if (!bytes_per_frame || !raw_data_length || !sample_rate)
+    {
+        infile.close();
+        return(LLVORBISENC_WAV_FORMAT_ERR);
+    }
+
+    U32 total_frames = raw_data_length / bytes_per_frame;
+    std::vector<S16> mono;
+    mono.reserve(total_frames);
+
+    const S32 COPY_BUFFER = 65536;
+    std::vector<unsigned char> readbuf(COPY_BUFFER);
+    infile.seek(APR_SET, data_pos);
+    S32 bytes_left = (S32)raw_data_length;
+    while (bytes_left > 0)
+    {
+        S32 want = llmin(COPY_BUFFER, bytes_left);
+        want -= want % (S32)bytes_per_frame; // whole frames only
+        if (want <= 0) break;
+        S32 bytes = infile.read(readbuf.data(), want);
+        if (bytes <= 0) break;
+        bytes -= bytes % (S32)bytes_per_frame;
+        S32 frames = bytes / (S32)bytes_per_frame;
+        // downmix mirrors encode_vorbis_file so measurement matches the uploaded asset
+        for (S32 f = 0; f < frames; f++)
+        {
+            const unsigned char* p = readbuf.data() + f * bytes_per_frame;
+            S32 v;
+            if (num_channels == 2)
+            {
+                if (bits_per_sample == 16)
+                {
+                    S32 l = (S32)(S16)(p[0] | (p[1] << 8));
+                    S32 r = (S32)(S16)(p[2] | (p[3] << 8));
+                    v = (l + r) / 2;
+                }
+                else
+                {
+                    v = ((S32)p[0] + (S32)p[1] - 256) * 128;
+                }
+            }
+            else
+            {
+                if (bits_per_sample == 16)
+                {
+                    v = (S32)(S16)(p[0] | (p[1] << 8));
+                }
+                else
+                {
+                    v = ((S32)p[0] - 128) * 256;
+                }
+            }
+            mono.push_back((S16)llclamp(v, -32768, 32767));
+        }
+        bytes_left -= bytes;
+    }
+    infile.close();
+
+    out_lufs = ss_lufs_measure_mono16(mono.data(), mono.size(), sample_rate);
+    return(LLVORBISENC_NOERR);
+}
+// </SS:Nexii>

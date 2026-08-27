@@ -676,12 +676,18 @@ LLViewerRegion* LLWorld::addRegion(const U64 &region_handle, const LLHost &host,
 
 void LLWorld::removeRegion(const LLHost &host)
 {
-    F32 x, y;
-
     LLViewerRegion *regionp = getRegion(host);
+    if (regionp)
+    {
+        removeRegion(regionp);
+    }
+}
+
+void LLWorld::removeRegion(LLViewerRegion* regionp)
+{
     if (!regionp)
     {
-        LL_WARNS() << "Trying to remove region that doesn't exist!" << LL_ENDL;
+        LL_WARNS() << "Trying to remove null region!" << LL_ENDL;
         return;
     }
 
@@ -712,6 +718,7 @@ void LLWorld::removeRegion(const LLHost &host)
         return;
     }
 
+    F32 x, y;
     from_region_handle(regionp->getHandle(), &x, &y);
     LL_INFOS() << "Removing region " << x << ":" << y << LL_ENDL;
 
@@ -723,6 +730,9 @@ void LLWorld::removeRegion(const LLHost &host)
     mRegionRemovedSignal(regionp);
 
     updateWaterObjects();
+
+    // Kill all objects in this region before double checking.
+    gObjectList.killObjects(regionp);
 
     //double check all objects of this region are removed.
     gObjectList.clearAllMapObjectsInRegion(regionp) ;
@@ -1456,6 +1466,16 @@ void LLWorld::updateWaterObjects()
         (S32)(512 - (region_y - min_y)) };
 // </FS:CR> Fix water height on regions larger than 2048x2048
 
+    // <SS:Nexii> How far the void water reaches past the hole water box. Must clear the draw distance to fill the view, but stop short of
+    // the projection far plane - triangles it slices through rasterise black along the horizon. The tiles are a square ring, so the corner
+    // at sqrt(2) is what has to fit. mLandFarClip not the camera: setLandFarClip() assigns it before re-running us, the camera is a frame
+    // behind. Even whole metres so the tiles, offset by half of it, round to matching edges in LLVOWater::updateGeometry.
+    const F32 far_plane = LLViewerCamera::calcRenderFarPlane(getLandFarClip());
+    const F32 corner_room = far_plane * 0.7f - (F32)llmax(wx, wy);
+    const F32 stretch_wanted = llmin(getLandFarClip() * 2.f, corner_room);
+    const F32 water_stretch = llmax(2048.f, (F32)(2 * ll_round(stretch_wanted * 0.5f)));
+    // </SS:Nexii>
+
     S32 dir;
     for (dir = 0; dir < EDGE_WATER_OBJECTS_COUNT; dir++)
     {
@@ -1494,11 +1514,13 @@ void LLWorld::updateWaterObjects()
         LLVector3 water_scale((F32) dim[0], (F32) dim[1], 512.f);
 
         //stretch out to horizon
-        water_scale.mV[0] += fabsf(2048.f * gDirAxes[dir][0]);
-        water_scale.mV[1] += fabsf(2048.f * gDirAxes[dir][1]);
+        // <SS:Nexii> water_stretch is computed once above the loop.
+        water_scale.mV[0] += fabsf(water_stretch * gDirAxes[dir][0]);
+        water_scale.mV[1] += fabsf(water_stretch * gDirAxes[dir][1]);
 
-        water_pos.mdV[0] += 1024.f * gDirAxes[dir][0];
-        water_pos.mdV[1] += 1024.f * gDirAxes[dir][1];
+        water_pos.mdV[0] += (water_stretch * 0.5f) * gDirAxes[dir][0];
+        water_pos.mdV[1] += (water_stretch * 0.5f) * gDirAxes[dir][1];
+        // </SS:Nexii>
 
         waterp->setPositionGlobal(water_pos);
         waterp->setScale(water_scale);
@@ -1581,6 +1603,69 @@ void LLWorld::disconnectRegions()
     }
 }
 
+void LLWorld::connectToSimulator(U64 handle, const LLHost& sim, U32 size_x, U32 size_y)
+{
+    gMessageSystem->enableCircuit(sim, true);
+    LLViewerRegion* regionp = addRegion(handle, sim, size_x, size_y);
+
+    auto iter = mBlockedSeedCaps.find(handle);
+    if (iter != mBlockedSeedCaps.end() && regionp)
+    {
+        regionp->setSeedCapability(iter->second);
+        mBlockedSeedCaps.erase(iter);
+    }
+
+    LL_INFOS() << "connectToSimulator() Enabling " << sim << " with code " << gMessageSystem->getOurCircuitCode() << LL_ENDL;
+    gMessageSystem->newMessageFast(_PREHASH_UseCircuitCode);
+    gMessageSystem->nextBlockFast(_PREHASH_CircuitCode);
+    gMessageSystem->addU32Fast(_PREHASH_Code, gMessageSystem->getOurCircuitCode());
+    gMessageSystem->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+    gMessageSystem->addUUIDFast(_PREHASH_ID, gAgent.getID());
+    gMessageSystem->sendReliable(sim);
+}
+
+void LLWorld::disconnectSimulator(LLViewerRegion* regionp)
+{
+    if (!regionp) return;
+
+    LLHost host = regionp->getHost();
+    U64 handle = regionp->getHandle();
+
+    // Cache capability if present
+    std::string seed_cap = regionp->getCapability("Seed");
+    if (!seed_cap.empty())
+    {
+        mBlockedSeedCaps[handle] = seed_cap;
+    }
+
+    // Clean up local region representation and objects
+    removeRegion(regionp);
+}
+
+void LLWorld::deactivateRegion(LLViewerRegion* regionp)
+{
+    if (!regionp) return;
+
+    mActiveRegionList.remove(regionp);
+    mCulledRegionList.remove(regionp);
+    mVisibleRegionList.remove(regionp);
+}
+
+void LLWorld::activateRegion(LLViewerRegion* regionp)
+{
+    if (!regionp) return;
+
+    if (std::find(mActiveRegionList.begin(), mActiveRegionList.end(), regionp) == mActiveRegionList.end())
+    {
+        mActiveRegionList.push_back(regionp);
+    }
+    if (std::find(mCulledRegionList.begin(), mCulledRegionList.end(), regionp) == mCulledRegionList.end()
+        && std::find(mVisibleRegionList.begin(), mVisibleRegionList.end(), regionp) == mVisibleRegionList.end())
+    {
+        mCulledRegionList.push_back(regionp);
+    }
+}
+
 void process_enable_simulator(LLMessageSystem *msg, void **user_data)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_NETWORK;
@@ -1635,21 +1720,15 @@ void process_enable_simulator(LLMessageSystem *msg, void **user_data)
     }
 #endif
 // </FS:CR> Aurora Sim
-    // Viewer trusts the simulator.
-    msg->enableCircuit(sim, true);
-// <FS:CR> Aurora Sim
-    //LLWorld::getInstance()->addRegion(handle, sim);
-    LLWorld::getInstance()->addRegion(handle, sim, region_size_x, region_size_y);
-// </FS:CR> Aurora Sim
 
-    // give the simulator a message it can use to get ip and port
-    LL_INFOS() << "simulator_enable() Enabling " << sim << " with code " << msg->getOurCircuitCode() << LL_ENDL;
-    msg->newMessageFast(_PREHASH_UseCircuitCode);
-    msg->nextBlockFast(_PREHASH_CircuitCode);
-    msg->addU32Fast(_PREHASH_Code, msg->getOurCircuitCode());
-    msg->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
-    msg->addUUIDFast(_PREHASH_ID, gAgent.getID());
-    msg->sendReliable(sim);
+    // If neighbor is manually blocked, cache it and abort connection
+    if (LLWorld::getInstance()->mBlockedNeighbors.count(handle) > 0)
+    {
+        LLWorld::getInstance()->mBlockedHosts[handle] = sim;
+        return;
+    }
+
+    LLWorld::getInstance()->connectToSimulator(handle, sim, region_size_x, region_size_y);
 }
 
 class LLEstablishAgentCommunication : public LLHTTPNode
@@ -1700,6 +1779,21 @@ public:
         LLViewerRegion* regionp = LLWorld::getInstance()->getRegion(sim);
         if (!regionp)
         {
+            bool found_blocked = false;
+            for (const auto& pair : LLWorld::getInstance()->mBlockedHosts)
+            {
+                if (pair.second == sim)
+                {
+                    LLWorld::getInstance()->mBlockedSeedCaps[pair.first] = input["body"]["seed-capability"].asString();
+                    found_blocked = true;
+                    break;
+                }
+            }
+            if (found_blocked)
+            {
+                return;
+            }
+
             LL_WARNS() << "Got EstablishAgentCommunication for unknown region "
                     << sim << LL_ENDL;
             return;

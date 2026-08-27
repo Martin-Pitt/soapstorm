@@ -4,7 +4,7 @@
 		[year,datetime,slt] [month,datetime,slt] [day,datetime,slt] [ampm,datetime,slt] [hour12,datetime,slt]:[min,datetime,slt]:[second,datetime,slt] [timezone,datetime,slt]
 	</floater.string>
 	<text name="info_text">
-		你為你的化身取的名字叫做「顯示名」。 一星期可以修改一次。
+		你為你的化身取的名字叫做「顯示名」。 每 24 小時可以修改一次。
 	</text>
 	<text name="lockout_text">
 		你下次能再更改顯示名的時間為 [TIME]。

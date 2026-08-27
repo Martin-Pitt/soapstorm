@@ -52,6 +52,9 @@
 #include "llagentcamera.h"
 #include "llfloatertools.h"
 #include "llviewercontrol.h"
+#include "llsmoothstep.h"
+#include "llframetimer.h"     // LLFrameTimer::getFrameCount (ADS vignette ease)
+#include "llcriticaldamp.h"   // LLSmoothInterpolation (frame-rate-independent ease)
 
 // NaCl - Rightclick-mousewheel zoom
 #include "llviewercamera.h"
@@ -702,7 +705,23 @@ void LLToolCompRotate::render()
 // LLToolCompGun
 
 LLToolCompGun::LLToolCompGun()
-    : LLToolComposite(std::string("Mouselook"))
+    : LLToolComposite(std::string("Mouselook")),
+      mTargetFOV(0.f),
+      mCurrentFOV(0.f),
+      mTransitionStartFOV(0.f),
+      mIsZoomTransitioning(false),
+      mIsZoomed(false),
+      mBaseFOV(0.f),
+      mZoomedFOV(0.f),
+      mZoomProportion(1.f),
+      mIsADS(false),
+      mTransitionIsADS(false),
+      mTransitionUseADSSmoothing(false),
+      mADSFOV(0.f),
+      mADSFromOTS(false),
+      mLastTapWasQuick(false),
+      mADSVignette(0.f),
+      mADSVignetteFrame(0)
 {
     mGun = new LLToolGun(this);
     mGrab = new LLToolGrabBase(this);
@@ -728,6 +747,51 @@ LLToolCompGun::~LLToolCompGun()
 
 bool LLToolCompGun::handleHover(S32 x, S32 y, MASK mask)
 {
+    // Smooth FOV transition for mouselook zoom
+    if (mIsZoomTransitioning)
+    {
+        // ADS transitions use their own smoothing setting; the normal hold-zoom
+        // uses the existing one. Both are milliseconds (0 = instant).
+        static LLCachedControl<F32> mlTransition(gSavedSettings, "MouselookZoomTransitionSpeed");
+        static LLCachedControl<F32> adsTransition(gSavedSettings, "FSADSZoomTransitionSpeed");
+        F32 duration = llclamp((F32)(mTransitionUseADSSmoothing ? adsTransition : mlTransition), 0.f, 5000.f) / 1000.f;
+
+        if (duration <= 0.f)
+        {
+            // Instant transition
+            mCurrentFOV = mTargetFOV;
+            mIsZoomTransitioning = false;
+            mZoomProportion = 1.f;
+            gSavedSettings.setF32("CameraAngle", mCurrentFOV);
+        }
+        else
+        {
+            // Scale duration by how far we actually zoomed so that a
+            // partial zoom-out finishes proportionally faster.
+            F32 effectiveDuration = duration * llclamp(mZoomProportion, 0.f, 1.f);
+            if (effectiveDuration <= 0.f)
+            {
+                effectiveDuration = duration;
+            }
+
+            F32 elapsed = (F32)mTransitionTimer.getElapsedTimeF32();
+            F32 t = llclamp(elapsed / effectiveDuration, 0.f, 1.f);
+
+            // Smooth-step for a more natural feel
+            F32 smooth_t = llsmoothstep(0.f, 1.f, t);
+            mCurrentFOV = mTransitionStartFOV + (mTargetFOV - mTransitionStartFOV) * smooth_t;
+
+            if (t >= 1.f)
+            {
+                mCurrentFOV = mTargetFOV;
+                mIsZoomTransitioning = false;
+                mZoomProportion = 1.f;
+            }
+
+            gSavedSettings.setF32("CameraAngle", mCurrentFOV);
+        }
+    }
+    
     // *NOTE: This hack is here to make mouselook kick in again after
     // item selected from context menu.
     if ( mCur == mNull && !gPopupMenuView->getVisible() )
@@ -798,27 +862,82 @@ bool LLToolCompGun::handleDoubleClick(S32 x, S32 y, MASK mask)
 
 bool LLToolCompGun::handleRightMouseDown(S32 x, S32 y, MASK mask)
 {
-    /* JC - suppress context menu 8/29/2002
-
-    // On right mouse, go through some convoluted steps to
-    // make the build menu appear.
-    setCurrentTool( (LLTool*) mNull );
-
-    // This should return false, meaning the context menu will
-    // be shown.
-    return false;
-    */
+    mRMBDownTimer.reset(); // measure this press's duration (to tell a tap from a hold)
 
     // Returning true will suppress the context menu
     // NaCl - Rightclick-mousewheel zoom
     if (!(gKeyboard->currentMask(true) & MASK_ALT))
     {
+        // Double-tap-hold ADS: a right press that lands within the double-tap
+        // window of the previous release is the held second tap. Zoom to the
+        // separate ADS FOV (with ADS smoothing) instead of the normal zoom.
+        static LLCachedControl<bool> ads_enable(gSavedSettings, "FSDoubleTapADS", true);
+        static LLCachedControl<F32> ads_window(gSavedSettings, "FSADSDoubleTapTime", 0.25f);
+        // Only the second of two genuine quick taps within the window counts: the
+        // first press must have been a tap (not a hold-zoom). Stops a normal
+        // hold-then-click, or two spaced-out clicks, from firing ADS by accident.
+        if (ads_enable && mLastTapWasQuick && mLastRMBUpTimer.getElapsedTimeF32() < (F32)ads_window)
+        {
+            mLastTapWasQuick = false; // consume the gesture
+
+            // Core: from OTS, ADS dives into first-person mouselook (and pops back
+            // out on release); when already first person, it just applies the zoom.
+            mADSFromOTS = gAgentCamera.cameraOTS();
+            if (mADSFromOTS)
+            {
+                // Fast but smooth, user-configurable transition into first person.
+                static LLCachedControl<F32> swap_ms(gSavedSettings, "FSADSSwapTransitionSpeed", 150.f);
+                gAgentCamera.setNextCameraAnimationDuration(llclamp((F32)swap_ms, 0.f, 2000.f) / 1000.f);
+                gAgentCamera.changeCameraToMouselook(true);
+            }
+
+            // mBaseFOV already holds the un-zoomed FOV from the first tap; only
+            // capture it if we somehow started from a clean state.
+            if (!mIsZoomed && !mIsZoomTransitioning && !mIsADS)
+            {
+                mBaseFOV = gSavedSettings.getF32("CameraAngle");
+            }
+            static LLCachedControl<F32> ads_fov(gSavedSettings, "FSADSZoomFOV", 0.5f);
+            mADSFOV = (F32)ads_fov;
+            mTargetFOV = mADSFOV;
+            mCurrentFOV = gSavedSettings.getF32("CameraAngle");
+            mTransitionStartFOV = mCurrentFOV;
+            mTransitionTimer.reset();
+            mIsZoomTransitioning = true;
+            mTransitionIsADS = true;
+            mTransitionUseADSSmoothing = true;
+            mIsADS = true;
+            mIsZoomed = false; // ADS supersedes the normal hold-zoom
+            mZoomProportion = 1.f;
+            return true;
+        }
+
+        // Are we interrupting an in-progress ADS-release zoom-out? If so, this
+        // normal zoom should flow out of the ADS motion smoothly rather than
+        // snapping with the (often snappier) normal-zoom timing.
+        const bool interrupting_ads_release = mIsZoomTransitioning && mTransitionIsADS;
+
+        // The normal-zoom target FOV is a setting, so read it fresh every time
+        // (valid even mid-transition). Only the un-zoomed base is captured from the
+        // live FOV, and only while idle, so clicking during a zoom-out can't bake a
+        // partial FOV in as the base.
         LLVector3 _NACL_MLFovValues = gSavedSettings.getVector3("_NACL_MLFovValues");
-        F32 CameraAngle = gSavedSettings.getF32("CameraAngle");
-        _NACL_MLFovValues.mV[VX] = CameraAngle;
-        _NACL_MLFovValues.mV[VZ] = 1.0f;
-        gSavedSettings.setVector3("_NACL_MLFovValues", _NACL_MLFovValues);
-        gSavedSettings.setF32("CameraAngle", _NACL_MLFovValues.mV[VY]);
+        mZoomedFOV = _NACL_MLFovValues.mV[VY];
+        if (!mIsZoomed && !mIsZoomTransitioning)
+        {
+            mBaseFOV = gSavedSettings.getF32("CameraAngle");
+        }
+
+        // Start zoom-in transition from wherever the FOV is right now.
+        mTargetFOV = mZoomedFOV;
+        mCurrentFOV = gSavedSettings.getF32("CameraAngle");
+        mTransitionStartFOV = mCurrentFOV;
+        mTransitionTimer.reset();
+        mIsZoomTransitioning = true;
+        mTransitionIsADS = false;                              // a normal zoom: no vignette
+        mTransitionUseADSSmoothing = interrupting_ads_release; // but keep the smooth ADS ease if we cut in on one
+        mIsZoomed = true;
+        mZoomProportion = 1.f; // Full zoom expected
 
         return true;
     }
@@ -832,15 +951,68 @@ bool LLToolCompGun::handleRightMouseDown(S32 x, S32 y, MASK mask)
 // NaCl - Rightclick-mousewheel zoom
 bool LLToolCompGun::handleRightMouseUp(S32 x, S32 y, MASK mask)
 {
-    LLVector3 _NACL_MLFovValues = gSavedSettings.getVector3("_NACL_MLFovValues");
-    F32 CameraAngle = gSavedSettings.getF32("CameraAngle");
-    // Only reset if zoomed
-    if (_NACL_MLFovValues.mV[VZ] == 1.0f)
+    // A press counts as a quick tap only if it was short (not a hold-zoom); the
+    // next press needs this to register a double-tap.
+    static LLCachedControl<F32> ads_window(gSavedSettings, "FSADSDoubleTapTime", 0.25f);
+    mLastTapWasQuick = (mRMBDownTimer.getElapsedTimeF32() < (F32)ads_window);
+    mLastRMBUpTimer.reset(); // open the double-tap window for the next press
+
+    // Releasing the held second tap exits ADS, easing back to the base FOV.
+    if (mIsADS)
     {
-        _NACL_MLFovValues.mV[VY] = CameraAngle;
-        _NACL_MLFovValues.mV[VZ] = 0.0f;
-        gSavedSettings.setVector3("_NACL_MLFovValues", _NACL_MLFovValues);
-        gSavedSettings.setF32("CameraAngle", _NACL_MLFovValues.mV[VX]);
+        // Return to OTS if ADS was entered from there (fast, configurable transition).
+        if (mADSFromOTS)
+        {
+            static LLCachedControl<F32> swap_ms(gSavedSettings, "FSADSSwapTransitionSpeed", 150.f);
+            gAgentCamera.setNextCameraAnimationDuration(llclamp((F32)swap_ms, 0.f, 2000.f) / 1000.f);
+            gAgentCamera.changeCameraToOTS();
+            mADSFromOTS = false;
+        }
+        F32 currentActualFOV = gSavedSettings.getF32("CameraAngle");
+        F32 totalZoomDistance = fabsf(mBaseFOV - mADSFOV);
+        mZoomProportion = (totalZoomDistance > 0.001f)
+            ? llclamp(fabsf(mBaseFOV - currentActualFOV) / totalZoomDistance, 0.f, 1.f)
+            : 1.f;
+        mTargetFOV = mBaseFOV;
+        mCurrentFOV = currentActualFOV;
+        mTransitionStartFOV = mCurrentFOV;
+        mTransitionTimer.reset();
+        mIsZoomTransitioning = true;
+        mTransitionIsADS = true;
+        mTransitionUseADSSmoothing = true;
+        mIsADS = false;
+        return true;
+    }
+
+    // Only zoom out if we're currently zoomed in
+    if (mIsZoomed)
+    {
+        // Get current actual FOV
+        F32 currentActualFOV = gSavedSettings.getF32("CameraAngle");
+
+        // Calculate zoom proportion (how far did we actually zoom)
+        // If base=60, zoomed=30, current=45: proportion = (60-45)/(60-30) = 0.5
+        F32 totalZoomDistance = fabsf(mBaseFOV - mZoomedFOV);
+        if (totalZoomDistance > 0.001f)
+        {
+            F32 currentZoomDistance = fabsf(mBaseFOV - currentActualFOV);
+            mZoomProportion = currentZoomDistance / totalZoomDistance;
+            mZoomProportion = llclamp(mZoomProportion, 0.f, 1.f);
+        }
+        else
+        {
+            mZoomProportion = 1.f; // No zoom distance, treat as full
+        }
+
+        // Start zoom-out transition from current position
+        mTargetFOV = mBaseFOV;
+        mCurrentFOV = currentActualFOV;
+        mTransitionStartFOV = mCurrentFOV;
+        mTransitionTimer.reset();
+        mIsZoomTransitioning = true;
+        mTransitionIsADS = false;
+        mTransitionUseADSSmoothing = false;
+        mIsZoomed = false;  // No longer in zoomed state
     }
     return true;
 }
@@ -858,6 +1030,8 @@ bool LLToolCompGun::handleMouseUp(S32 x, S32 y, MASK mask)
 
 void LLToolCompGun::onMouseCaptureLost()
 {
+    resetZoom(); // Clear zoom when mouse capture is lost
+    
     if (mComposite)
     {
         mComposite->onMouseCaptureLost();
@@ -874,22 +1048,165 @@ void    LLToolCompGun::handleSelect()
 
 void    LLToolCompGun::handleDeselect()
 {
+    // Only end ADS on a GENUINE exit out of mouselook input. An ADS-driven
+    // OTS<->mouselook switch ALSO deselects this tool (deferred), but stays in a
+    // mouselook input mode (MOUSELOOK or OTS); clearing ADS there would wipe the
+    // zoom + return state mid-hold and strand the player in first person.
+    const ECameraMode cam_mode = gAgentCamera.getCameraMode();
+    const bool still_mouselook_input = (cam_mode == CAMERA_MODE_MOUSELOOK || cam_mode == CAMERA_MODE_OTS);
+    if (mIsADS && !still_mouselook_input)
+    {
+        mIsADS = false;
+        mADSFromOTS = false;
+    }
+    resetZoom(); // Clear zoom when exiting mouselook
     LLToolComposite::handleDeselect();
     setMouseCapture(false);
 }
 
+void LLToolCompGun::resetZoom()
+{
+    // While we are STILL in an aim mode (mouselook or OTS), ADS owns its FOV and
+    // lifecycle and incidental tool/capture/animation churn must not tear it down:
+    //  - Entering ADS switches camera modes (changeCameraToMouselook); honoring a
+    //    reset mid-hold would cancel the ADS zoom and strand the player in first
+    //    person. ADS ends on button release (handleRightMouseUp) instead.
+    //  - Releasing ADS-from-OTS swaps the camera back to OTS, deselecting this tool a
+    //    beat later; snapping a live zoom there yanks the FOV back to base mid-zoom.
+    // But once the camera has LEFT the aim modes (e.g. to third person), fall through
+    // and force the full cleanup -- otherwise leaving mouselook while ADS-zoomed leaves
+    // the FOV zoom and vignette stuck on (mIsADS never clears, so the vignette never
+    // fades).
+    const ECameraMode cam_mode = gAgentCamera.getCameraMode();
+    const bool in_aim_mode = (cam_mode == CAMERA_MODE_MOUSELOOK || cam_mode == CAMERA_MODE_OTS);
+    if (in_aim_mode && (mIsADS || mIsZoomed || mIsZoomTransitioning))
+    {
+        return;
+    }
+
+    // Reset NaCl zoom state - immediately restore base FOV if zoomed. Include mIsADS:
+    // a settled ADS zoom sets mIsADS (not mIsZoomed/transitioning), so without this the
+    // FOV stays stuck at the ADS level when leaving mouselook while aimed.
+    if (mIsZoomed || mIsZoomTransitioning || mIsADS)
+    {
+        gSavedSettings.setF32("CameraAngle", mBaseFOV);
+    }
+
+    // Reset transition state
+    mIsZoomTransitioning = false;
+    mIsZoomed = false;
+    mIsADS = false;
+    mADSFromOTS = false;
+    mLastTapWasQuick = false;
+    mTransitionIsADS = false;
+    mTransitionUseADSSmoothing = false;
+    mTargetFOV = 0.f;
+    mCurrentFOV = 0.f;
+    mBaseFOV = 0.f;
+    mZoomedFOV = 0.f;
+    mADSFOV = 0.f;
+    mZoomProportion = 1.f;
+}
+
+// Strength (0-1) of the ADS screen-edge vignette this frame. Applies while ADS is
+// held OR easing out, honors the per-mode (first-person / OTS) toggles, and scales
+// by how far the FOV has zoomed toward the ADS level so it creeps in and fades out
+// in lockstep with the zoom rather than popping. Rendered as a smooth radial
+// post-process in LLPipeline::renderVignette; returns 0 when no ADS vignette applies.
+F32 LLToolCompGun::getADSVignetteAmount()
+{
+    // Per-frame safety net: this runs every frame from the render path, even when the
+    // gun tool is deselected. If the camera has left the aim modes (e.g. dropped to
+    // third person) but ADS/zoom state is still set, the normal cleanup path was missed
+    // — force it now so the FOV zoom and vignette can't stay stuck on.
+    if ((mIsADS || mIsZoomed || mIsZoomTransitioning) && !gAgentCamera.cameraMouselook())
+    {
+        resetZoom(); // cleans up because we are no longer in an aim mode
+    }
+
+    // Live target: the FOV-driven ADS darkness while aiming (or during the
+    // ADS-release fade), else 0. Same gating and progress mapping as before.
+    F32 live = 0.f;
+    if (mIsADS || (mIsZoomTransitioning && mTransitionIsADS))
+    {
+        static LLCachedControl<bool> vig_fp(gSavedSettings, "FSADSVignetteFirstPerson", true);
+        static LLCachedControl<bool> vig_ots(gSavedSettings, "FSADSVignetteOTS", true);
+        const bool ots = gAgentCamera.cameraOTS();
+        if ((ots && vig_ots) || (!ots && vig_fp))
+        {
+            // 0 at the base FOV, 1 at the full ADS FOV (which is the smaller value).
+            F32 progress = 1.f;
+            const F32 span = mBaseFOV - mADSFOV;
+            if (fabsf(span) > 0.0001f)
+            {
+                const F32 currentFOV = gSavedSettings.getF32("CameraAngle");
+                progress = llclamp((mBaseFOV - currentFOV) / span, 0.f, 1.f);
+            }
+            static LLCachedControl<F32> vig_strength(gSavedSettings, "FSADSVignetteStrength", 0.5f);
+            live = llclamp((F32)vig_strength * progress, 0.f, 1.f);
+        }
+    }
+
+    // Ease the displayed darkness toward the live target on its own clock, once
+    // per frame. This keeps the vignette smooth regardless of the FOV-zoom
+    // smoothing (FSADSZoomTransitionSpeed), and lets the release fade finish
+    // gracefully even when a normal mouselook zoom interrupts it and drops the
+    // live target straight to 0 (previously this snapped the vignette off).
+    const F32 VIGNETTE_FADE_HALF_LIFE = 0.09f; // seconds
+    const U32 frame = LLFrameTimer::getFrameCount();
+    if (frame != mADSVignetteFrame)
+    {
+        mADSVignetteFrame = frame;
+        const F32 amt = LLSmoothInterpolation::getInterpolant(VIGNETTE_FADE_HALF_LIFE);
+        mADSVignette = lerp(mADSVignette, live, amt);
+        if (fabsf(mADSVignette - live) < 0.001f)
+        {
+            mADSVignette = live; // settle exactly so it reaches a clean 0 / full
+        }
+    }
+
+    return mADSVignette;
+}
 
 bool LLToolCompGun::handleScrollWheel(S32 x, S32 y, S32 clicks)
 {
     // NaCl - Rightclick-mousewheel zoom
-    LLVector3 _NACL_MLFovValues = gSavedSettings.getVector3("_NACL_MLFovValues");
-    F32 CameraAngle = gSavedSettings.getF32("CameraAngle");
-    _NACL_MLFovValues.mV[VY] = CameraAngle;
-    if (_NACL_MLFovValues.mV[VZ] > 0.0f)
+    if (mIsADS)
     {
-        _NACL_MLFovValues.mV[VY] = llclamp(_NACL_MLFovValues.mV[VY] + (F32)(clicks * 0.1f), LLViewerCamera::getInstance()->getMinView(), LLViewerCamera::getInstance()->getMaxView());
+        // Scroll adjusts the ADS zoom level while held, with its own sensitivity.
+        static LLCachedControl<F32> ads_sens(gSavedSettings, "FSADSZoomSensitivity", 0.1f);
+        F32 currentFOV = gSavedSettings.getF32("CameraAngle");
+        F32 newFOV = llclamp(currentFOV + (F32)clicks * (F32)ads_sens,
+                             LLViewerCamera::getInstance()->getMinView(),
+                             LLViewerCamera::getInstance()->getMaxView());
+        gSavedSettings.setF32("CameraAngle", newFOV);
+        mADSFOV = newFOV;
+        mTargetFOV = newFOV;
+        mCurrentFOV = newFOV;
+        gSavedSettings.setF32("FSADSZoomFOV", newFOV); // remember the ADS level
+    }
+    else if (mIsZoomed)
+    {
+        // Get current FOV
+        F32 currentFOV = gSavedSettings.getF32("CameraAngle");
+        
+        // Adjust FOV by scroll amount
+        F32 newFOV = llclamp(currentFOV + (F32)(clicks * 0.1f), 
+                             LLViewerCamera::getInstance()->getMinView(), 
+                             LLViewerCamera::getInstance()->getMaxView());
+        
+        // Apply immediately for responsive feel
+        gSavedSettings.setF32("CameraAngle", newFOV);
+        
+        // Update our zoom target and current position
+        mZoomedFOV = newFOV;
+        mTargetFOV = newFOV;
+        mCurrentFOV = newFOV;
+        
+        // Save the zoomed FOV to settings for next time
+        LLVector3 _NACL_MLFovValues = gSavedSettings.getVector3("_NACL_MLFovValues");
+        _NACL_MLFovValues.mV[VY] = newFOV;
         gSavedSettings.setVector3("_NACL_MLFovValues", _NACL_MLFovValues);
-        gSavedSettings.setF32("CameraAngle", _NACL_MLFovValues.mV[VY]);
     }
     else if (clicks > 0 && gSavedSettings.getBOOL("FSScrollWheelExitsMouselook"))
     // NaCl End

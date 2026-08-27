@@ -142,12 +142,15 @@
 #include "animationexplorer.h"      // <FS:Zi> Animation Explorer
 #include "fsareasearch.h"
 #include "fsassetblacklist.h"
+#include "fscombathitmarker.h"
 #include "fscommon.h"
 #include "fsfloaterplacedetails.h"
 #include "fsradar.h"
 #include "fskeywords.h" // <FS:PP> FIRE-10178: Keyword Alerts in group IM do not work unless the group is in the foreground
+#include "fsfloaterkillfeed.h"
 #include "fslslbridge.h"
 #include "fsmoneytracker.h"
+#include "fsrezqueue.h" // <SS:Nexii> Rez queue watch
 #include "llattachmentsmgr.h"
 #include "lleconomy.h"
 #include "llfloaterbump.h"
@@ -1130,6 +1133,28 @@ void set_dad_inbox_object(const LLUUID& object_id)
     gInventory.addObserver(move_observer);
 }
 
+// <OTS> Folders whose freshly-created items should not auto-open a preview.
+// Used by the bulk sound->notecard upload so its generated notecard does not
+// pop a notecard editor window when it lands in inventory.
+static std::set<LLUUID> sSuppressAutoOpenFolders;
+void suppress_inventory_auto_open_for_folder(const LLUUID& folder_id, bool suppress)
+{
+    if (suppress)
+    {
+        sSuppressAutoOpenFolders.insert(folder_id);
+    }
+    else
+    {
+        sSuppressAutoOpenFolders.erase(folder_id);
+    }
+}
+static bool is_auto_open_suppressed_for_item(const LLInventoryItem* item)
+{
+    return item && !sSuppressAutoOpenFolders.empty()
+        && sSuppressAutoOpenFolders.count(item->getParentUUID()) > 0;
+}
+// </OTS>
+
 //unlike the FetchObserver for AgentOffer, we only make one
 //instance of the AddedObserver for TaskOffers
 //and it never dies.  We do this because we don't know the UUID of
@@ -1173,6 +1198,14 @@ protected:
                         }
                     }
                     // </FS:Ansariel>
+
+                    // <OTS> Items created in a suppressed folder (bulk sound->notecard
+                    // upload) must not auto-open a preview.
+                    if (!was_moved && is_auto_open_suppressed_for_item(added_item))
+                    {
+                        was_moved = true;
+                    }
+                    // </OTS>
                 }
             }
 
@@ -3137,6 +3170,13 @@ void process_chat_from_simulator(LLMessageSystem *msg, void **user_data)
                 }
                 // </FS:KC>
 
+                // Kill Feed: combat log DEATH events relayed by a worn
+                // listener script (see doc/killfeed_relay.lsl)
+                if (FSFloaterKillFeed::handleChatMessage(mesg, from_id, owner_id))
+                {
+                    return;
+                }
+
 // [RLVa:KB] - Checked: 2010-02-XX (RLVa-1.2.0a) | Modified: RLVa-1.1.0f
                 // TODO-RLVa: [RLVa-1.2.0] consider rewriting this before a RLVa-1.2.0 release
                 if ( (rlv_handler_t::isEnabled()) && (mesg.length() > 3) && (RLV_CMD_PREFIX == mesg[0]) && (CHAT_TYPE_OWNER == chat.mChatType) &&
@@ -3488,7 +3528,23 @@ void process_teleport_start(LLMessageSystem *msg, void**)
 
     if( gAgent.getTeleportState() == LLAgent::TELEPORT_NONE )
     {
+        // <FS:DS> FIRE-TP-DEDUP: The SL server is known to send two TeleportStart packets for some
+        // teleports (e.g. landmark TPs, and some llTeleportAgent calls). If a TeleportStart arrives
+        // shortly after a TP just completed (within a 3-second grace window), treat it as a stale
+        // duplicate and discard it — otherwise it would re-activate the progress screen with no
+        // corresponding TeleportFinish, leaving the viewer stuck in TELEPORT_REQUESTED until timeout.
+        constexpr F32 TP_DUPLICATE_START_GRACE_SECONDS = 3.0f;
+        if (gTeleportCompletionTimer.getElapsedTimeF32() < TP_DUPLICATE_START_GRACE_SECONDS)
+        {
+            LL_WARNS("Teleport","Messaging") << "Discarding TeleportStart within " << TP_DUPLICATE_START_GRACE_SECONDS
+                << "s of last teleport completion (elapsed: " << gTeleportCompletionTimer.getElapsedTimeF32()
+                << "s). Likely a duplicate packet." << LL_ENDL;
+            return;
+        }
+        // </FS:DS>
+
         gTeleportDisplay = true;
+        gTeleportDisplayTimer.reset();
         gAgent.setTeleportState( LLAgent::TELEPORT_START );
         make_ui_sound("UISndTeleportOut");
 
@@ -4237,6 +4293,86 @@ void send_agent_update(bool force_send, bool send_reliable)
                             AGENT_CONTROL_ML_LBUTTON_UP ;
     }
 
+    // Blocked boundary constraints
+    LLViewerRegion* region = gAgent.getRegion();
+    if (region && !LLWorld::getInstance()->mBlockedNeighbors.empty())
+    {
+        LLVector3 pos = gAgent.getPositionAgent();
+        F32 width = region->getWidth();
+        U64 handle = region->getHandle();
+        U32 reg_x = (U32)(handle >> 32);
+        U32 reg_y = (U32)(handle & 0xFFFFFFFF);
+
+        U64 east_handle = to_region_handle(reg_x + (U32)width, reg_y);
+        U64 west_handle = to_region_handle(reg_x - (U32)width, reg_y);
+        U64 north_handle = to_region_handle(reg_x, reg_y + (U32)width);
+        U64 south_handle = to_region_handle(reg_x, reg_y - (U32)width);
+
+        bool east_blocked = (LLWorld::getInstance()->mBlockedNeighbors.count(east_handle) > 0);
+        bool west_blocked = (LLWorld::getInstance()->mBlockedNeighbors.count(west_handle) > 0);
+        bool north_blocked = (LLWorld::getInstance()->mBlockedNeighbors.count(north_handle) > 0);
+        bool south_blocked = (LLWorld::getInstance()->mBlockedNeighbors.count(south_handle) > 0);
+
+        F32 margin = 2.0f; // boundary margin in meters
+        LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
+        LLVector3 body_at = LLVector3::x_axis * body_rotation;
+        LLVector3 body_left = LLVector3::y_axis * body_rotation;
+
+        bool position_changed = false;
+        LLVector3 nudged_pos = pos;
+
+        if (east_blocked && pos.mV[VX] > width - margin)
+        {
+            if ((control_flags & AGENT_CONTROL_AT_POS) && body_at.mV[VX] > 0.1f) { control_flags &= ~AGENT_CONTROL_AT_POS; gAgent.clearControlFlags(AGENT_CONTROL_AT_POS); }
+            if ((control_flags & AGENT_CONTROL_AT_NEG) && body_at.mV[VX] < -0.1f) { control_flags &= ~AGENT_CONTROL_AT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_AT_NEG); }
+            if ((control_flags & AGENT_CONTROL_LEFT_POS) && body_left.mV[VX] > 0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_POS; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_POS); }
+            if ((control_flags & AGENT_CONTROL_LEFT_NEG) && body_left.mV[VX] < -0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_NEG); }
+
+            nudged_pos.mV[VX] = width - margin - 2.0f;
+            position_changed = true;
+        }
+        if (west_blocked && pos.mV[VX] < margin)
+        {
+            if ((control_flags & AGENT_CONTROL_AT_POS) && body_at.mV[VX] < -0.1f) { control_flags &= ~AGENT_CONTROL_AT_POS; gAgent.clearControlFlags(AGENT_CONTROL_AT_POS); }
+            if ((control_flags & AGENT_CONTROL_AT_NEG) && body_at.mV[VX] > 0.1f) { control_flags &= ~AGENT_CONTROL_AT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_AT_NEG); }
+            if ((control_flags & AGENT_CONTROL_LEFT_POS) && body_left.mV[VX] < -0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_POS; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_POS); }
+            if ((control_flags & AGENT_CONTROL_LEFT_NEG) && body_left.mV[VX] > 0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_NEG); }
+
+            nudged_pos.mV[VX] = margin + 2.0f;
+            position_changed = true;
+        }
+        if (north_blocked && pos.mV[VY] > width - margin)
+        {
+            if ((control_flags & AGENT_CONTROL_AT_POS) && body_at.mV[VY] > 0.1f) { control_flags &= ~AGENT_CONTROL_AT_POS; gAgent.clearControlFlags(AGENT_CONTROL_AT_POS); }
+            if ((control_flags & AGENT_CONTROL_AT_NEG) && body_at.mV[VY] < -0.1f) { control_flags &= ~AGENT_CONTROL_AT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_AT_NEG); }
+            if ((control_flags & AGENT_CONTROL_LEFT_POS) && body_left.mV[VY] > 0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_POS; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_POS); }
+            if ((control_flags & AGENT_CONTROL_LEFT_NEG) && body_left.mV[VY] < -0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_NEG); }
+
+            nudged_pos.mV[VY] = width - margin - 2.0f;
+            position_changed = true;
+        }
+        if (south_blocked && pos.mV[VY] < margin)
+        {
+            if ((control_flags & AGENT_CONTROL_AT_POS) && body_at.mV[VY] < -0.1f) { control_flags &= ~AGENT_CONTROL_AT_POS; gAgent.clearControlFlags(AGENT_CONTROL_AT_POS); }
+            if ((control_flags & AGENT_CONTROL_AT_NEG) && body_at.mV[VY] > 0.1f) { control_flags &= ~AGENT_CONTROL_AT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_AT_NEG); }
+            if ((control_flags & AGENT_CONTROL_LEFT_POS) && body_left.mV[VY] < -0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_POS; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_POS); }
+            if ((control_flags & AGENT_CONTROL_LEFT_NEG) && body_left.mV[VY] > 0.1f) { control_flags &= ~AGENT_CONTROL_LEFT_NEG; gAgent.clearControlFlags(AGENT_CONTROL_LEFT_NEG); }
+
+            nudged_pos.mV[VY] = margin + 2.0f;
+            position_changed = true;
+        }
+
+        if (position_changed)
+        {
+            gAgent.setPositionAgent(nudged_pos);
+            if (isAgentAvatarValid())
+            {
+                gAgentAvatarp->setPositionAgent(nudged_pos);
+                gAgentAvatarp->slamPosition();
+            }
+        }
+    }
+
     // any change in control_flags should be sent ASAP, so we fold that into force_send
     force_send = force_send || (control_flags != last_control_flags);
 
@@ -4250,6 +4386,41 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     LLVector3 camera_pos_agent = gAgentCamera.getCameraPositionAgent(); // local to avatar's region
     LLVector3 camera_at = LLViewerCamera::getInstance()->getAtAxis();
+    LLVector3 camera_left = LLViewerCamera::getInstance()->getLeftAxis();
+    LLVector3 camera_up = LLViewerCamera::getInstance()->getUpAxis();
+
+    // OTS convergence camera: report the mouselook-equivalent camera to the
+    // sim. Campos weapons fire from llGetCameraPos along the camera's
+    // at-axis; with the real OTS shoulder camera that means bullets
+    // originate behind/offset from the avatar and can clear cover the
+    // avatar is hiding behind. Substitute the avatar's eye, aimed at the
+    // crosshair's world target, so scripts see exactly what mouselook
+    // would have told them. The render camera is untouched.
+    static LLCachedControl<bool> fs_ots_eye_camera(gSavedSettings, "FSOTSReportEyeCamera", true);
+    if (fs_ots_eye_camera && gAgentCamera.cameraOTS() && isAgentAvatarValid() && gAgentAvatarp->mHeadp
+        && tp_state == LLAgent::TELEPORT_NONE) // never raycast a world that is mid-teleport teardown
+    {
+        const LLVector3 eye = gAgentAvatarp->mHeadp->getWorldPosition();
+
+        // Converge on the crosshair: aim from the eye at whatever is under
+        // the camera crosshair (avatars included, self excluded), falling
+        // back to a far point for open sky so the direction degrades to
+        // camera-parallel. Shared with the line-of-sight (LOS) dot so the dot the
+        // shooter sees and the camera scripts receive cannot diverge.
+        const LLVector3 target = FSCombatHitMarker::getOTSConvergenceTarget(camera_pos_agent, camera_at);
+
+        LLVector3 at = target - eye;
+        if (at.normalize() > 0.f)
+        {
+            LLCoordFrame frame;
+            frame.lookDir(at);
+            camera_pos_agent = eye;
+            camera_at = frame.getAtAxis();
+            camera_left = frame.getLeftAxis();
+            camera_up = frame.getUpAxis();
+        }
+    }
+
     LLQuaternion body_rotation = gAgent.getFrameAgent().getQuaternion();
     LLQuaternion head_rotation = gAgent.getHeadRotation();
     U8 render_state = gAgent.getRenderState();
@@ -4374,8 +4545,8 @@ void send_agent_update(bool force_send, bool send_reliable)
 
     msg->addVector3Fast(_PREHASH_CameraCenter, camera_pos_agent);
     msg->addVector3Fast(_PREHASH_CameraAtAxis, camera_at);
-    msg->addVector3Fast(_PREHASH_CameraLeftAxis, LLViewerCamera::getInstance()->getLeftAxis());
-    msg->addVector3Fast(_PREHASH_CameraUpAxis, LLViewerCamera::getInstance()->getUpAxis());
+    msg->addVector3Fast(_PREHASH_CameraLeftAxis, camera_left);
+    msg->addVector3Fast(_PREHASH_CameraUpAxis, camera_up);
 
     static F32 last_draw_disatance_step = 1024;
     F32 memory_limited_draw_distance = gAgentCamera.mDrawDistance;
@@ -5142,6 +5313,11 @@ void process_sim_stats(LLMessageSystem *msg, void **user_data)
         F32 stat_value;
         msg->getU32("Stat", "StatID", stat_id, i);
         msg->getF32("Stat", "StatValue", stat_value, i);
+
+        // <SS:Nexii> Rez queue watch: track the region's pending asset queue
+        FSRezQueue::onSimStat(stat_id, stat_value);
+        // </SS:Nexii>
+
         auto measurementp = LLStatViewer::SimMeasurementSampler::getInstance((ESimStatID)stat_id);
 
         if (measurementp )
@@ -7886,6 +8062,14 @@ void process_teleport_local(LLMessageSystem *msg,void**)
             gAgent.setTeleportState( LLAgent::TELEPORT_NONE );
         }
     }
+    // <FS:DS> FIRE-TP-DEDUP: Record that a same-region TP just completed so that
+    // process_teleport_start() can discard the late TeleportStart packet the server
+    // sends alongside every TeleportLocal. When TeleportLocal arrives before
+    // TeleportStart (a 50/50 UDP race), the TP is already done and any subsequent
+    // TeleportStart within the grace window must be suppressed to avoid a stuck
+    // progress screen.
+    gTeleportCompletionTimer.reset();
+    // </FS:DS>
 
     // Sim tells us whether the new position is off the ground
     // <FS:Ansariel> Always fly after TP option

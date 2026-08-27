@@ -287,7 +287,11 @@ void LLDrawable::removeFromOctree()
     mEntry->removeData(this);
     if(mEntry->hasVOCacheEntry())
     {
-        getRegion()->removeActiveCacheEntry((LLVOCacheEntry*)mEntry->getVOCacheEntry(), this);
+        LLViewerRegion* region = getRegion();
+        if (region)
+        {
+            region->removeActiveCacheEntry((LLVOCacheEntry*)mEntry->getVOCacheEntry(), this);
+        }
     }
     mEntry = NULL;
 }

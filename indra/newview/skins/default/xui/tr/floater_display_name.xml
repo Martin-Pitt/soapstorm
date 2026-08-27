@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <floater name="Display Name" title="EKRAN ADINI DEĞİŞTİR">
 	<text name="info_text">
-		Avatarınıza verdiğiniz ad, Ekran Adınız olarak değerlendirilir. Bunu haftada bir kere değiştirebilirsiniz.
+		Avatarınıza verdiğiniz ad, Ekran Adınız olarak değerlendirilir. Bunu 24 saatte bir kere değiştirebilirsiniz.
 	</text>
 	<text name="lockout_text">
 		Ekran Adınızı şu saate kadar değiştiremezsiniz:

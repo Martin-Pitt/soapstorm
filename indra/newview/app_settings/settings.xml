@@ -3027,6 +3027,74 @@
       <key>Value</key>
       <real>1.047197551</real>
     </map>
+    <!-- OTS over-the-shoulder aim settings -->
+    <key>OTSEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>When true, M key enters OTS shoulder cam instead of first-person mouselook</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>OTSCameraDistance</key>
+    <map>
+      <key>Comment</key>
+      <string>OTS camera distance behind avatar (meters)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.0</real>
+    </map>
+    <key>OTSCameraSide</key>
+    <map>
+      <key>Comment</key>
+      <string>OTS camera side offset (negative = right of avatar)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>-0.5</real>
+    </map>
+    <key>OTSCameraHeight</key>
+    <map>
+      <key>Comment</key>
+      <string>OTS camera height above avatar root (meters)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.5</real>
+    </map>
+    <key>OTSFocusDistance</key>
+    <map>
+      <key>Comment</key>
+      <string>OTS focus point distance in front of avatar (meters)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>10.0</real>
+    </map>
+    <key>OTSCameraCollision</key>
+    <map>
+      <key>Comment</key>
+      <string>Pull the OTS camera in front of walls/floors instead of clipping through them</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <!-- End OTS settings -->
     <key>CameraOffset</key>
     <map>
       <key>Comment</key>
@@ -4054,6 +4122,19 @@
     <map>
       <key>Comment</key>
       <string>Show stats about current scene</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+      <key>Backup</key>
+      <integer>0</integer>
+    </map>
+    <key>DebugShowSoapstormProjectilesInfo</key>
+    <map>
+      <key>Comment</key>
+      <string>Show Soapstorm ghost projectile diagnostics in debug overlay.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -8813,7 +8894,139 @@
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>3.0</real>
+      <real>20.0</real>
+    </map>
+    <key>MouseSensitivityZoomed</key>
+    <map>
+      <key>Comment</key>
+      <string>Controls responsiveness of mouse when zoomed in mouselook mode (fraction or multiple of default mouse sensitivity)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>10.0</real>
+    </map>
+    <key>FSADSMouseSensitivity</key>
+    <map>
+      <key>Comment</key>
+      <string>Controls responsiveness of mouse while aiming down sights (fraction or multiple of default mouse sensitivity)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>7.0</real>
+    </map>
+    <key>MouselookZoomTransitionSpeed</key>
+    <map>
+      <key>Comment</key>
+      <string>Duration of FOV transitions when zooming in mouselook, in milliseconds (0 = instant, slider max 1000ms, text entry up to 5000ms)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0</real>
+    </map>
+    <key>FSDoubleTapADS</key>
+    <map>
+      <key>Comment</key>
+      <string>Tap then tap-and-hold the right mouse button to aim down sights (ADS) at a separate zoom; release to exit. Works in first person and OTS</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSADSZoomFOV</key>
+    <map>
+      <key>Comment</key>
+      <string>Aim-down-sights field of view (radians); lower = more zoom. Scroll while in ADS to adjust</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.5</real>
+    </map>
+    <key>FSADSZoomTransitionSpeed</key>
+    <map>
+      <key>Comment</key>
+      <string>Duration of the ADS zoom transition, in milliseconds (0 = instant)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>100</real>
+    </map>
+    <key>FSADSDoubleTapTime</key>
+    <map>
+      <key>Comment</key>
+      <string>Maximum time (seconds) for each tap and the gap between them to register a double-tap for ADS; lower = tighter</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>FSADSSwapTransitionSpeed</key>
+    <map>
+      <key>Comment</key>
+      <string>Duration (ms) of the ADS camera swap between OTS and first person; lower is snappier, 0 is instant</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>150</real>
+    </map>
+    <key>FSADSZoomSensitivity</key>
+    <map>
+      <key>Comment</key>
+      <string>Scroll-wheel step (radians per click) for adjusting the ADS zoom level while held</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.1</real>
+    </map>
+    <key>FSADSVignetteFirstPerson</key>
+    <map>
+      <key>Comment</key>
+      <string>Darken the screen edges (vignette) while in ADS in first person</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSADSVignetteOTS</key>
+    <map>
+      <key>Comment</key>
+      <string>Darken the screen edges (vignette) while in ADS in over-the-shoulder</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSADSVignetteStrength</key>
+    <map>
+      <key>Comment</key>
+      <string>How dark the ADS screen-edge vignette is (0-1)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.5</real>
     </map>
     <key>MouseSmooth</key>
     <map>
@@ -12330,6 +12543,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>256.0</real>
+    </map>
+    <key>FSRenderNearClip</key>
+    <map>
+      <key>Comment</key>
+      <string>Distance of near clip plane from camera (meters). Depth precision scales inversely with this, so raising it reduces z-fighting at long draw distances; raising it too far clips geometry close to the camera (mouselook attachments, walls the OTS camera is pulled in against). Ramps down toward 0.01 when the third person camera is focused closer than 3m so alt-cam can zoom right up to a surface. Clamped to 0.01-1.0</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
     </map>
     <key>RenderAutoMaskAlphaNonDeferred</key>
     <map>
@@ -17895,6 +18119,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>FSSoapstormGhostProjectileProbeDelay</key>
+    <map>
+      <key>Comment</key>
+      <string>DEBUG: Extra seconds beyond InterpolationMaxTime that a projectile must go without a simulator update before it is probed as a suspected ghost. Raise this if healthy projectiles are being probed.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
     </map>
     <key>VivoxAutoPostCrashDumps</key>
     <map>
@@ -24844,6 +25079,63 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <!-- <FS:Soapstorm> Experimental performance optimization toggles -->
+    <key>FSSoapstormAvatarPixelAreaThrottle</key>
+    <map>
+      <key>Comment</key>
+      <string>Skip per-avatar pixel area recalculation when camera-to-avatar distance is unchanged (Soapstorm experimental optimization)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSSoapstormLODDeltaThrottle</key>
+    <map>
+      <key>Comment</key>
+      <string>Only recalculate object LOD when camera distance changes by more than 5% (Soapstorm experimental optimization)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSSoapstormSpatialGroupLODGate</key>
+    <map>
+      <key>Comment</key>
+      <string>Use spatial group distance change as outer gate before per-drawable LOD recalculation (Soapstorm experimental optimization)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSSoapstormTreeLODThrottle</key>
+    <map>
+      <key>Comment</key>
+      <string>Only recalculate tree LOD geometry when camera distance changes significantly (Soapstorm experimental optimization)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSSoapstormTreeStatsFrameGuard</key>
+    <map>
+      <key>Comment</key>
+      <string>Update tree texture stats at most once per frame instead of once per shadow pass (Soapstorm experimental optimization)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <!-- </FS:Soapstorm> -->
     <key>FSdataQAtest</key>
       <map>
       <key>Comment</key>
@@ -24960,6 +25252,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>FSRMBScriptEnabled</key>
+      <map>
+      <key>Comment</key>
+      <string>When enabled, right mouse button presses in mouselook are sent to the avatar's attachments as LSL listen events on FSRMBScriptChannel.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSRMBScriptChannel</key>
+      <map>
+      <key>Comment</key>
+      <string>Negative channel on which right mouse button down/up events are sent to the avatar's attachments while in mouselook, when FSRMBScriptEnabled is true.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>-9999</integer>
+    </map>
     <key>ExodusMouselookIFF</key>
       <map>
       <key>Comment</key>
@@ -24970,6 +25284,599 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>FSCustomCrosshair</key>
+      <map>
+      <key>Comment</key>
+      <string>Draw the custom dot and arrows crosshair instead of the stock crosshair in mouselook and OTS</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSLocalLoginSplash</key>
+      <map>
+      <key>Comment</key>
+      <string>Show a bundled offline image on the login screen instead of loading the web login page</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSHitMarkerEnabled</key>
+      <map>
+      <key>Comment</key>
+      <string>Show a hitmarker flash and hit report for your outgoing combat damage (Combat 2.0, via LSL bridge)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSHitMarkerScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Hitmarker and custom crosshair scale</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.75</real>
+    </map>
+    <key>FSHitMarkerTextScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Hit report text scale (independent of the marker/crosshair scale)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>FSHitMarkerTextBold</key>
+      <map>
+      <key>Comment</key>
+      <string>Render the hit report text in bold</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSCrosshairTargetColor</key>
+      <map>
+      <key>Comment</key>
+      <string>Tint the custom crosshair with the identified target's contact set / group color (combat features)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSOTSTrueAimDot</key>
+      <map>
+      <key>Comment</key>
+      <string>Line-of-sight (LOS) dot: in OTS, slide the crosshair center dot to where a bullet fired from the avatar actually lands (eye-origin raycast); the chevrons stay on the camera ray</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSOTSReportEyeCamera</key>
+      <map>
+      <key>Comment</key>
+      <string>In OTS, report the mouselook-equivalent camera (avatar eye, aimed at the crosshair target) to the sim so campos weapons fire from the avatar instead of the shoulder camera</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSOTSAvatarConverge</key>
+      <map>
+      <key>Comment</key>
+      <string>In OTS, converge aim on nearby avatars using cheap capsule proxies so shots land on the target rather than the geometry behind it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSOTSAvatarConvergeRadius</key>
+      <map>
+      <key>Comment</key>
+      <string>Optional forgiveness (meters) added to each side of an avatar's hitbox when converging OTS aim; 0 = converge on the exact hitbox</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.0</real>
+    </map>
+    <key>FSOTSConvergeMinDistance</key>
+      <map>
+      <key>Comment</key>
+      <string>Minimum OTS world convergence distance (meters); guards against the close-range shoulder-lean swing. Avatar capsule hits are exempt</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>FSOTSConvergeSmoothingHalfLife</key>
+      <map>
+      <key>Comment</key>
+      <string>Half-life (seconds) for smoothing the OTS convergence depth so aim eases across depth changes instead of snapping. 0 disables</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.06</real>
+    </map>
+    <key>FSOTSConvergeDebugDraw</key>
+      <map>
+      <key>Comment</key>
+      <string>Draw 3D debug lines for OTS aim convergence (camera ray, bullet ray, converged point, avatar capsules). Toggle via Develop &gt; Rendering menu</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>OTSRememberLastView</key>
+      <map>
+      <key>Comment</key>
+      <string>Re-enter aim mode in whichever view (OTS or first person) was last toggled into, instead of always OTS</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>OTSLastViewFirstPerson</key>
+      <map>
+      <key>Comment</key>
+      <string>Internal: last aim view toggled into was first person (vs OTS); used by OTSRememberLastView</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSHitMarkerText</key>
+      <map>
+      <key>Comment</key>
+      <string>Show the fading hit report text under the crosshair</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerShowName</key>
+      <map>
+      <key>Comment</key>
+      <string>Include the target's name in the hit report</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerShortNames</key>
+      <map>
+      <key>Comment</key>
+      <string>Shorten names in the hit report (Orion Starchild becomes Orion S.)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerShowEmoji</key>
+      <map>
+      <key>Comment</key>
+      <string>Show the damage type emoji in the hit report</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerEmojiMap</key>
+      <map>
+      <key>Comment</key>
+      <string>JSON object overriding damage type emojis, keyed by type number, e.g. {"5":"X", "102":"BOOM"}; empty = built-in defaults</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string></string>
+    </map>
+    <key>FSLocalLoginSplashImage</key>
+      <map>
+      <key>Comment</key>
+      <string>Full path to a local image (PNG/JPG) to show as the offline login screen background; empty = bundled logo</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string></string>
+    </map>
+    <key>FSHitMarkerSounds</key>
+      <map>
+      <key>Comment</key>
+      <string>Play hit and kill sounds</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSShowLoginLogo</key>
+      <map>
+      <key>Comment</key>
+      <string>Show the viewer logo on the login screen</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerSoundGain</key>
+      <map>
+      <key>Comment</key>
+      <string>Volume (0-1) for the combat hitmarker hit and kill sounds</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>FSHitMarkerIgnoreCollision</key>
+      <map>
+      <key>Comment</key>
+      <string>Skip generic Second Life physics/collision damage (type -1: bumps, falls) so only scripted combat damage triggers a hitmarker</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerAgentTargetsOnly</key>
+      <map>
+      <key>Comment</key>
+      <string>Only fire the hitmarker and sounds when your damage lands on an avatar, not an object (uses the bridge agent tag; requires bridge 2.33+)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSHitMarkerHitSound</key>
+      <map>
+      <key>Comment</key>
+      <string>Sound UUID played when your damage lands</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string>f1d28a45-da0e-8dc7-0de3-b94afd350c9c</string>
+    </map>
+    <key>FSHitMarkerKillSound</key>
+      <map>
+      <key>Comment</key>
+      <string>Sound UUID played when your damage kills</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string>4cbf0d33-03ea-49b1-b671-fdfc37d98002</string>
+    </map>
+    <key>FSNormalizeSoundUploads</key>
+      <map>
+      <key>Comment</key>
+      <string>Loudness-normalize sound uploads to the FSSoundTargetLUFS perceived loudness (ITU-R BS.1770) before encoding</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSNormalizeDownloadedSounds</key>
+      <map>
+      <key>Comment</key>
+      <string>Background-normalize downloaded sound assets to FSSoundTargetLUFS on the thread pool; playing sounds are hot-patched in place and the sound cache updated. Viewer UI sounds are never processed</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSSoundTargetLUFS</key>
+      <map>
+      <key>Comment</key>
+      <string>Target integrated loudness in LUFS for sound normalization (-23 matches the EBU R128 / games loudness standard)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>-23.0</real>
+    </map>
+    <key>FSLongSoundUploadEqualSplits</key>
+      <map>
+      <key>Comment</key>
+      <string>Split long sound uploads into equal-length parts instead of max-length parts with a shorter tail</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSRezQueueIndicator</key>
+      <map>
+      <key>Comment</key>
+      <string>Watch the region's pending asset downloads and show a rez queue warning next to the crosshair (mouselook and OTS) while the sim is refusing to rez objects</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSRezQueueThreshold</key>
+      <map>
+      <key>Comment</key>
+      <string>Pending downloads at or above which the region is treated as blocking rezzing</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.9</real>
+    </map>
+    <key>FSKillFeedEnabled</key>
+      <map>
+      <key>Comment</key>
+      <string>Listen to the Combat 2.0 combat log via the LSL bridge and show kills as a screen overlay</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSLoginLogoImage</key>
+      <map>
+      <key>Comment</key>
+      <string>Full path to a local image (PNG/JPG) to replace the login screen logo; empty = stock logo</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string></string>
+    </map>
+    <key>FSNoUpdateReminders</key>
+      <map>
+      <key>Comment</key>
+      <string>Suppress optional update prompts (required updates still prompt)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSKillFeedTextScale</key>
+      <map>
+      <key>Comment</key>
+      <string>Kill feed overlay text scale</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>FSKillFeedScreenX</key>
+      <map>
+      <key>Comment</key>
+      <string>Kill feed overlay horizontal anchor (fraction of screen width)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>FSKillFeedScreenY</key>
+      <map>
+      <key>Comment</key>
+      <string>Kill feed overlay vertical anchor (fraction of screen height)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.9</real>
+    </map>
+    <key>FSKillFeedMaxLines</key>
+      <map>
+      <key>Comment</key>
+      <string>Maximum kill feed overlay lines shown at once</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>5</integer>
+    </map>
+    <key>FSKillFeedShortNames</key>
+      <map>
+      <key>Comment</key>
+      <string>Shorten avatar names in the kill feed (Orion Starchild becomes Orion S.)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSKillFeedShowEmoji</key>
+      <map>
+      <key>Comment</key>
+      <string>Show the killing blow's damage type symbol in kill feed lines (symbols from the hit marker symbols editor; needs bridge 2.32)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSKillFeedBoldText</key>
+      <map>
+      <key>Comment</key>
+      <string>Render kill feed overlay text in bold</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSKillFeedFontName</key>
+      <map>
+      <key>Comment</key>
+      <string>Kill feed overlay font (SansSerifSmall, SansSerif, SansSerifBig, Monospace)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string>SansSerif</string>
+    </map>
+    <key>FSKillFeedTextColor</key>
+      <map>
+      <key>Comment</key>
+      <string>Kill feed overlay text color</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Color4</string>
+      <key>Value</key>
+      <array>
+        <real>1.0</real>
+        <real>1.0</real>
+        <real>1.0</real>
+        <real>1.0</real>
+      </array>
+    </map>
+    <key>FSKillFeedColorOwnName</key>
+      <map>
+      <key>Comment</key>
+      <string>Use your chosen color for your own name in the kill feed, overriding the map-mark/contact-set/group/default priority for yourself</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>FSKillFeedColorOtherNames</key>
+      <map>
+      <key>Comment</key>
+      <string>Tint other players' names in the kill feed by map mark, then contact set, then group color; falls back to the kill feed text color</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSKillFeedOwnNameColor</key>
+      <map>
+      <key>Comment</key>
+      <string>Color for your own name in the kill feed when FSKillFeedColorOwnName is on</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Color4</string>
+      <key>Value</key>
+      <array>
+        <real>1.0</real>
+        <real>0.9</real>
+        <real>0.4</real>
+        <real>1.0</real>
+      </array>
+    </map>
+    <key>FSKillFeedHoldTime</key>
+      <map>
+      <key>Comment</key>
+      <string>Seconds a kill stays visible in the kill feed overlay</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>20.0</real>
+    </map>
+    <key>ExodusMouselookIFFShowName</key>
+      <map>
+      <key>Comment</key>
+      <string>Show the identified target's name under the mouselook crosshair (identification still runs for crosshair coloring when disabled)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>ExodusMouselookIFFLineOfSight</key>
+      <map>
+      <key>Comment</key>
+      <string>Require line of sight to show the name of the avatar under the mouselook crosshair (no identification through walls or terrain)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
     </map>
     <key>ExodusMouselookIFFRange</key>
       <map>
@@ -27705,6 +28612,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>FSAutoUpdateCheck</key>
+    <map>
+      <key>Comment</key>
+      <string>Automatically check for viewer updates on startup</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>FSSkippedUpdateVersion</key>
+    <map>
+      <key>Comment</key>
+      <string>Version of update that user chose to skip</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>String</string>
+      <key>Value</key>
+      <string></string>
     </map>
   </map>
 </llsd>

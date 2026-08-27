@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <floater name="Display Name" title="Cambia Nome Visualizzato">
 	<text name="info_text">
-		Il nome che assegni al tuo avatar è il Nome Visualizzato. Puoi cambiarlo una volta alla settimana.
+		Il nome che assegni al tuo avatar è il Nome Visualizzato. Puoi cambiarlo una volta ogni 24 ore.
 	</text>
 	<text name="lockout_text">
 		Non puoi cambiare il Nome Visualizzato fino a: [TIME]

@@ -4,7 +4,7 @@
 		[day,datetime,slt]. [month,datetime,slt] [year,datetime,slt], [hour24,datetime,slt]:[min,datetime,slt]:[second,datetime,slt] [timezone,datetime,slt]
 	</floater.string>
 	<text name="info_text">
-		Der Anzeigename ist der Name, den Sie Ihrem Avatar geben. Sie können ihn einmal pro Woche ändern.
+		Der Anzeigename ist der Name, den Sie Ihrem Avatar geben. Sie können ihn alle 24 Stunden ändern.
 	</text>
 	<text name="lockout_text">
 		Früheste Änderung möglich ab:

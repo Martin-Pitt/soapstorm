@@ -126,6 +126,10 @@ F32         gLastDrawDistanceStep = 0.0f;
 // <FS:Ansariel> FIRE-12004: Attachments getting lost on TP
 LLFrameTimer gPostTeleportFinishKillObjectDelayTimer;
 
+// <FS:DS> FIRE-TP-DEDUP: Tracks when the last teleport completed. Used in
+// process_teleport_start() to reject late duplicate TeleportStart packets.
+LLFrameTimer gTeleportCompletionTimer;
+
 bool gForceRenderLandFence = false;
 bool gDisplaySwapBuffers = false;
 bool gDepthDirty = false;
@@ -446,6 +450,10 @@ static void update_tp_display(bool minimized)
                 //LLFirstUse::useTeleport();
                 LL_INFOS("Teleport") << "arrival_fraction is " << arrival_fraction << " changing state to TELEPORT_NONE" << LL_ENDL;
                 gAgent.setTeleportState(LLAgent::TELEPORT_NONE);
+                // <FS:DS> FIRE-TP-DEDUP: Record TP completion time so process_teleport_start()
+                // can reject late duplicate TeleportStart packets within a grace window.
+                gTeleportCompletionTimer.reset();
+                // </FS:DS>
             }
             if (!minimized)
             {
@@ -470,6 +478,9 @@ static void update_tp_display(bool minimized)
                                      << "; setting state to TELEPORT_NONE"
                                      << LL_ENDL;
                 gAgent.setTeleportState(LLAgent::TELEPORT_NONE);
+                // <FS:DS> FIRE-TP-DEDUP: Record local TP completion for duplicate TeleportStart guard.
+                gTeleportCompletionTimer.reset();
+                // </FS:DS>
             }
             break;
         }
@@ -780,7 +791,32 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     if (LLViewerCamera::instanceExists())
     {
         LLViewerCamera::getInstance()->setZoomParameters(zoom_factor, subfield);
-        LLViewerCamera::getInstance()->setNear(MIN_NEAR_PLANE);
+        // <SS:Nexii> Near clip drives depth precision: smallest resolvable depth difference is ~d^2 / (near * 2^24) on the 24 bit buffer, so
+        // it scales inversely with this and barely at all with the far plane. Pinning it to MIN_NEAR_PLANE (0.1m) cost a factor of three
+        // against 0.3m, which tells once the draw distance runs to thousands of metres. Bounded above by the OTS collision margin in
+        // LLAgentCamera::updateCamera, which tracks this so walls cannot go see-through when the camera is pulled in against them.
+        //LLViewerCamera::getInstance()->setNear(MIN_NEAR_PLANE);
+        static LLCachedControl<F32> near_clip(gSavedSettings, "FSRenderNearClip", 0.25f);
+        F32 near_plane = llclamp((F32)near_clip, MIN_NEAR_PLANE, 1.f);
+
+        // Alt-cam zoomed in tight on something: ramp the near plane down with the focus distance, full setting at NEAR_CLIP_FOCUS_FAR and
+        // the floor by NEAR_CLIP_FOCUS_NEAR, so the camera can sit right against a face or a small object without the plane slicing into it.
+        // Ramping rather than switching, and continuous at both ends, so nothing pops on the way in or out. Third person only, which is where
+        // alt-cam focus and scroll zoom live - a focus point close to the camera means something else entirely in the modes that do not zoom.
+        // Costs depth precision while zoomed in, a fair trade when the subject is 20cm away.
+        if (gAgentCamera.cameraThirdPerson())
+        {
+            const F32 NEAR_CLIP_FOCUS_FAR = 3.f;    // at and beyond this the setting is used as-is
+            const F32 NEAR_CLIP_FOCUS_NEAR = 0.5f;  // at and inside this the near plane is on the floor
+            F32 focus_dist = (F32)dist_vec(gAgentCamera.getCameraPositionGlobal(), gAgentCamera.getFocusGlobal());
+            if (focus_dist < NEAR_CLIP_FOCUS_FAR)
+            {
+                near_plane = clamp_rescale(focus_dist, NEAR_CLIP_FOCUS_NEAR, NEAR_CLIP_FOCUS_FAR, MIN_NEAR_PLANE, near_plane);
+            }
+        }
+
+        LLViewerCamera::getInstance()->setNear(near_plane);
+        // </SS:Nexii>
     }
 
     //////////////////////////

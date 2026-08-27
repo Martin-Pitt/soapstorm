@@ -1075,6 +1075,14 @@ void LLViewerTextureList::updateImageDecodePriority(LLViewerFetchedTexture* imag
     {
         if (imagep->getLastReferencedTimer()->getElapsedTimeF32() > lazy_flush_timeout)
         {
+            // If the worker thread is actively holding the lock to decode, defer deletion
+            if (imagep->hasFetcher() && LLAppViewer::getTextureFetch() && LLAppViewer::getTextureFetch()->isRequestLocked(imagep->getID()))
+            {
+                // We reset the timer so it will be checked again next flush cycle without blocking here
+                imagep->getLastReferencedTimer()->reset();
+                return;
+            }
+
             // Remove the unused image from the image list
             deleteImage(imagep);
             return;
