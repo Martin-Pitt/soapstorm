@@ -25264,6 +25264,116 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>2</integer>
     </map>
+    <key>SSROCProbeGroups</key>
+    <map>
+      <key>Comment</key>
+      <string>Ask the simulator which group each remembered object is set to, so objects on group land can be recognised as safe from auto-return. Nothing is asked twice and the answers are kept with the region.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCProbeGroupPacketsPerSec</key>
+    <map>
+      <key>Comment</key>
+      <string>Batches of up to 255 objects asked about per second. Selecting a thousand objects at once is ordinary, so this is about not crowding a region while it is still loading rather than about keeping the count low.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSROCProbeGroupOutstanding</key>
+    <map>
+      <key>Comment</key>
+      <string>Most answers allowed to be in flight at once. The replies are the heavy direction - each one carries a name, description and permissions - so this is the number that actually paces the sweep.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2000</integer>
+    </map>
+    <key>SSROCProbeGroupBudget</key>
+    <map>
+      <key>Comment</key>
+      <string>Most objects to ask about in any one region in a session.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>5000</integer>
+    </map>
+    <key>SSROCProbeGroupDelaySecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds to leave a region alone before asking about its objects, so the questions never land while it is still streaming.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>25</integer>
+    </map>
+    <key>SSROCProbeParcels</key>
+    <map>
+      <key>Comment</key>
+      <string>Ask the simulator who owns each parcel a remembered object stands on, so objects belonging to a landowner can be recognised as safe from auto-return. One metered request per parcel, never per object, and nothing is asked twice.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCProbeParcelsPerSec</key>
+    <map>
+      <key>Comment</key>
+      <string>Parcel questions asked per second, across all regions together. The limit exists because these ride the same connection as the object updates they help along.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSROCProbeParcelBudget</key>
+    <map>
+      <key>Comment</key>
+      <string>Most parcel questions to ask about any one region in a session. A region carved into more parcels than this leaves the rest unanswered, which costs patience rather than correctness.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>64</integer>
+    </map>
+    <key>SSROCProbeParcelDelaySecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds to leave a region alone before asking it anything, so the questions never land while it is still streaming objects.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>20</integer>
+    </map>
+    <key>SSROCProbeMeasure</key>
+    <map>
+      <key>Comment</key>
+      <string>ROC Phase 1.5 gate: measure how fast and how completely the simulator probes the object cache on region entry, and log a report when leaving the region. Independent of SSROCEnabled because it measures the simulator rather than the cache.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>SSROCPromoteDaysUnproven</key>
     <map>
       <key>Comment</key>

@@ -12,6 +12,9 @@
 #include "ssrocledger.h"
 
 #include "ssrocghost.h"
+#include "ssrocgroup.h"    // <SS:Nexii/> ROC Stage C: the set-to-group answer, which no object update carries
+#include "ssrocparcel.h"   // <SS:Nexii/> ROC Stage B: auto-return immunity from the parcel under the object
+#include "ssrocprobe.h"   // <SS:Nexii/> ROC Phase 1.5: only the full-update counter lives here now; the probe counter moved into probeCache so it can see all three outcomes
 
 #include "llagent.h"
 #include "llavatarname.h"
@@ -243,6 +246,9 @@ void ssROCMineAssets(const std::vector<U8>& blob, std::vector<LLUUID>& out)
 
 void ssROCNoteCacheUpdate(LLViewerRegion* regionp, U32 local_id, U32 crc, U32 flags, LLDataPackerBinaryBuffer& dp)
 {
+    // <SS:Nexii/> ROC Phase 1.5, above the enabled gate for the same reason as the probe hook. A full update is the simulator declining to use the cache at all, which is the comparison the probe count is only meaningful against.
+    ssROCProbeNoteFullUpdate(regionp);
+
     if (!regionp || !SSROCStore::enabled()) return;
 
     // The blob must be copied here, not pointed at: dp's buffer is a stack array in the caller and is gone the moment the message loop advances.
@@ -391,6 +397,9 @@ void SSROCLedger::onRegionFileLoaded(U64 handle, SSROCFilePtr file)
         applyIDEpoch(*rs);
         return;
     }
+
+    // <SS:Nexii/> Stage C's answers, seeded before a single sighting is recorded so the probe queue never asks about an object this region already answered for on a previous visit. FullID-keyed and epoch-independent, so unlike the local ids below they need no staleness pass.
+    ssROCGroupSeed(handle, file->mGroups);
 
     // The id epoch the records on disk were written under, latched only once the file has been accepted as this region's. Kept beside the live one rather than compared here, because the handshake may not have arrived yet.
     rs->mFileCacheID = file->mLastCacheID;
@@ -737,6 +746,13 @@ void SSROCLedger::noteSighting(LLViewerRegion* regionp, U32 local_id, U32 crc, U
         return;
     }
 
+    // <SS:Nexii/> Stage B: the parcel under this object is a candidate for the throttled immunity probe. Roots only - a child's Pos is parent-relative (llvocache.cpp:701-706) and would file most of a linkset at the region origin. O(1), and it returns on one indexed byte for every sighting after the first in a given parcel, which is nearly all of them.
+    if (facts.mParentLocalID == 0)
+    {
+        ssROCParcelWant(regionp, facts.mPos);
+        ssROCGroupWant(regionp, facts.mLocalID, facts.mFullID, facts.mOwnerID, facts.mPos);
+    }
+
     auto known = rs.mByFullID.find(facts.mFullID);
     U32 index;
 
@@ -883,20 +899,41 @@ bool SSROCLedger::hasImmunity(LLViewerRegion* regionp, const RegionState& rs, co
     // Moles build the permanent landscape of the mainland by arrangement with the estate owner, so the owner-match test - which compares against the PARCEL owner, usually Governor Linden rather than the Mole - would miss them entirely. They get the credit outright.
     if (rec.mRecordFlags & SSROC_REC_OWNER_PUBLIC_WORKS) return true;
 
-    // Your own object on your own land. Auto-return only ever takes objects owned by OTHERS, so both halves are required and neither alone is enough. FLAGS_OBJECT_YOU_OWNER is checked alongside the blob owner because the simulator's population of the blob's Owner field for third-party objects is the design's one unverified Tier 0 dependency, and this leg must not depend on it.
-    const bool mine = (rec.mUpdateFlags & FLAGS_OBJECT_YOU_OWNER)
-                   || (rec.mOwnerID.notNull() && rec.mOwnerID == gAgent.getID());
-    if (!mine) return false;
-
-    // Only a root has a region-local position: a child's Pos is relative to its parent (llvocache.cpp:701-706), so testing a child against the overlay would file most of a linkset at the region origin. Children ride their root's verdict instead.
+    // Only a root has a region-local position: a child's Pos is relative to its parent (llvocache.cpp:701-706), so testing a child against a parcel would file most of a linkset at the region origin. Children ride their root's verdict instead.
     if (!rec.isRoot()) return false;
-
-    const LLViewerParcelOverlay* overlay = regionp->getParcelOverlay();
-    if (!overlay) return false;
     if (!ssPosInRegion(regionp, rec.mPos)) return false;
 
-    // PARCEL_SELF is the simulator's own answer to "is this cell on a parcel you own", one byte per 4m, unsolicited, no request of any kind. A region whose overlay never arrived reads as entirely public, which denies the credit - the safe direction.
-    return overlay->isOwnedSelf(rec.mPos);
+    // Tier 0, and free. Your own object on your own land: auto-return only ever takes objects owned by OTHERS, so both halves are required and neither alone is enough. FLAGS_OBJECT_YOU_OWNER is checked alongside the blob owner because the simulator's population of the blob's Owner field for third-party objects is the design's one unverified Tier 0 dependency, and this leg must not depend on it. PARCEL_SELF is the simulator's own answer to "is this cell on a parcel you own", one byte per 4m, unsolicited, no request of any kind - and a region whose overlay never arrived reads as entirely public, which denies the credit, the safe direction.
+    const bool mine = (rec.mUpdateFlags & FLAGS_OBJECT_YOU_OWNER)
+                   || (rec.mOwnerID.notNull() && rec.mOwnerID == gAgent.getID());
+
+    const LLViewerParcelOverlay* overlay = regionp->getParcelOverlay();
+    if (mine && overlay && overlay->isOwnedSelf(rec.mPos)) return true;
+
+    // Tier 1, one metered request per DISTINCT PARCEL per visit (ssrocparcel.cpp). This is the leg that covers other people's builds, which is the entire population this cache exists for - the overlay above can only ever answer for the agent's own land. A landowner's own content cannot be auto-returned from their own parcel, and that becomes decidable the moment the parcel's owner is known.
+    SSROCParcelFacts parcel_facts;
+    if (ssROCParcelLookup(regionp, rec.mPos, parcel_facts))
+    {
+        // Both sides must be real. A simulator that withholds the parcel owner from an agent with no rights there sends a null, and a blob whose Owner field was never populated stores a null - two nulls comparing equal would manufacture immunity for every object on every unanswered parcel, which is the one failure direction this gate must not have.
+        if (rec.mOwnerID.notNull() && parcel_facts.mOwnerID.notNull() && rec.mOwnerID == parcel_facts.mOwnerID) return true;
+
+        // Deeded objects come free with the same reply. FLAGS_OBJECT_GROUP_OWNED (object_flags.h:51) means the blob's Owner field IS a group UUID, so a deeded object standing on a parcel set to that same group is spared by auto-return - the About Land Objects tab's three buckets are "owned by the parcel owner", "set to group" and "owned by others", and only the last is swept. This leg needs no object probe at all; only the set-to-group case, where the object keeps a resident owner and carries a separate GroupID that appears in no object update, still waits on Stage C.
+        if ((rec.mUpdateFlags & FLAGS_OBJECT_GROUP_OWNED) && rec.mOwnerID.notNull()
+            && parcel_facts.mGroupID.notNull() && rec.mOwnerID == parcel_facts.mGroupID) return true;
+
+        // Tier 2, Stage C: the set-to-group bucket. An object's GroupID is in no cache blob and no object update - only an ObjectProperties reply carries it, which is what ssrocgroup.cpp goes and gets. Both sides must be real for the same reason as above: a parcel with no group and an object with no group must not compare equal into a credit.
+        LLUUID object_group;
+        if (ssROCGroupLookup(rs.mHandle, rec.mFullID, object_group)
+            && object_group.notNull() && parcel_facts.mGroupID.notNull()
+            && object_group == parcel_facts.mGroupID)
+        {
+            return true;
+        }
+
+        // Deliberately absent: mCleanOtherTime == 0. Zero means auto-return is disarmed and it equally means the field was withheld, and nothing in the reply distinguishes the two - so trusting it would immunise a whole parcel of other people's furniture standing on land that returns it every fifteen minutes. Disarmed auto-return is corroborating evidence at best, and the distinct-days path already collects the corroboration. Set-to-group immunity is likewise absent for a different reason: an object's group is in no cache blob and no object update, and only Stage C's ObjectProperties probe can supply it.
+    }
+
+    return false;
 }
 
 void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
@@ -1264,6 +1301,9 @@ bool SSROCLedger::onRegionRemoved(LLViewerRegion* regionp, SSROCRegionFile& file
         mined.erase(std::unique(mined.begin(), mined.end()), mined.end());
         file.mManifest.swap(mined);
     }
+
+    // <SS:Nexii/> Stage C. Written unconditionally rather than only on a promoting visit, because unlike [MANIFEST] this is not derived from the records - it is the only copy of an answer that cost a message to obtain, and dropping it would mean asking the whole region again next visit.
+    ssROCGroupHarvest(handle, file.mGroups, 60000);
 
     // One line per region, and it is the whole field diagnostic for Phase 2a: without the reason histogram a three-hurdle gate cannot be debugged from a user's log.
     U32 blocked[SSROC_BLOCKED_COUNT] = { 0 };

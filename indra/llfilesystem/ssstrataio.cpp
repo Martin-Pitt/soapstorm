@@ -584,8 +584,9 @@ bool SSStrataStore::readPayload(const SSStrataRecord& rec, S32 offset, U8* dst, 
         return false;
     }
 
+    // The header read above left the stream positioned exactly at the payload when offset is 0, which is every whole-object read - a texture body, an asset. Seeking there again is not just a wasted syscall: it discards the stdio buffer the header read just filled, so a small object that was already resident in that buffer is fetched a second time. Only a positional read (offset > 0, which is a mesh LOD) genuinely needs the seek.
     const U64 payload_at = rec.mOffset + (U64)SSSTRATA_BLOB_HEADER_SIZE + (U64)offset;
-    ok = fseek(f, (long)payload_at, SEEK_SET) == 0 && fread(dst, 1, want, f) == want;
+    ok = (offset == 0 || fseek(f, (long)payload_at, SEEK_SET) == 0) && fread(dst, 1, want, f) == want;
     LLFile::close(f);
     if (!ok)
     {

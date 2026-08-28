@@ -131,6 +131,23 @@ void LLDiskCache::purge()
     boost::system::error_code ec;
     auto start_time = std::chrono::high_resolution_clock::now();
 
+    // <SS:Nexii> Publishes the walk's cost on EVERY exit, including the under-the-watermark early return below, which is the path this pass usually takes and the one the pre-existing timing never reached.
+    //
+    // Only the ASSET tier's walk is timed here. The whole-iteration figure is taken in LLPurgeDiskCacheThread::run instead, because the texture tier's pack and reclaim runs after this function returns on the same thread, and it is the larger of the two tenants - timing only this half would have reported the smaller share of the sweep as though it were all of it.
+    struct SSStrataScanTimer
+    {
+        U32 mScanMs{0};
+        U32 mScanFiles{0};
+
+        ~SSStrataScanTimer()
+        {
+            SSStrataStore* pub = SSStrataStore::live();
+            if (!pub) return;
+            pub->metrics().mLastScanFiles = mScanFiles;
+            pub->metrics().mLastScanMs    = mScanMs;
+        }
+    } lap;
+
     // One entry per loose asset file, carrying everything both the packer and the drain need. This replaces the old file_info pair-of-pairs: the packer needs the uuid and the static-asset pin as well as the time, size and path, and threading four more parallel containers through the same loop is how those eventually disagree.
     std::vector<SSStrataLooseFile> loose;
 
@@ -189,6 +206,10 @@ void LLDiskCache::purge()
             iter.increment(ec);
         }
     }
+
+    lap.mScanFiles = (U32)loose.size();
+    lap.mScanMs    = (U32)std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::high_resolution_clock::now() - start_time).count();
 
     // The pack pass. It marks every entry it consumed, so nothing below counts or deletes a file that is now inside a volume.
     SSStrataStore* strata = SSStrataStore::live();
@@ -619,6 +640,9 @@ void LLPurgeDiskCacheThread::run()
 
     while (LLApp::instance()->sleep(CHECK_INTERVAL))
     {
+        // <SS:Nexii/> Times the whole sweep, both tenants, because the texture tier below is the larger one and timing only the asset purge would report a fraction of the cost as the whole of it. The sleep above is a fixed gap taken before every pass, so this duration is what the sweep occupies of each (60s + duration) cycle - it is NOT a budget the work has to fit inside.
+        const auto ss_lap_start = std::chrono::high_resolution_clock::now();
+
         LLDiskCache::instance().purge();
 
         // <SS:Nexii> Strata - AFTER the asset purge rather than before it, and in the same tick rather than on a timer of its own. Two tiers doing their heavy directory work at the same instant on the same disk is the one arrangement that makes background maintenance something the user can feel; serialising them costs nothing, because neither has a deadline. Any exception is swallowed here on purpose: a maintenance pass that threw must not take the thread down and silently stop the asset purge with it.
@@ -633,6 +657,53 @@ void LLPurgeDiskCacheThread::run()
                 LL_WARNS("Strata") << "The texture tier's maintenance tick threw: " << e.what() << "; the purge thread continues" << LL_ENDL;
             }
         }
+
+        const auto ss_now = std::chrono::high_resolution_clock::now();
+
+        if (SSStrataStore* pub = SSStrataStore::live())
+        {
+            const U32 lap_ms = (U32)std::chrono::duration_cast<std::chrono::milliseconds>(ss_now - ss_lap_start).count();
+            pub->metrics().mLastLapMs = lap_ms;
+            ++pub->metrics().mLaps;
+            if (lap_ms >= 60000) ++pub->metrics().mSlowLaps;
+        }
+
+        // <SS:Nexii> The read RATE, per tenant, differenced across the whole cycle rather than across the sweep - the reads happen while the sweep is asleep, so dividing by the sweep duration would report a number many times too large. Everything below is on this one thread, so the snapshots can be plain statics.
+        {
+            static bool  ss_rate_primed = false;
+            static std::chrono::high_resolution_clock::time_point ss_prev_at;
+            static U32   ss_prev_reads[SSSTRATA_TENANT_COUNT] = { 0 };
+            static U64   ss_prev_bytes[SSSTRATA_TENANT_COUNT] = { 0 };
+
+            const F64 elapsed = ss_rate_primed
+                ? std::chrono::duration<F64>(ss_now - ss_prev_at).count()
+                : 0.0;
+
+            for (U32 t = 0; t < SSSTRATA_TENANT_COUNT; ++t)
+            {
+                SSStrataStore* tier = SSStrataStore::live((ESSStrataTenant)t);
+                if (!tier) continue;
+
+                const U32 reads = tier->metrics().mReadsServed.load();
+                const U64 bytes = tier->metrics().mReadBytes.load();
+
+                if (ss_rate_primed && elapsed > 0.0)
+                {
+                    // Counters only ever climb, but a purgeAll resets the store, so a negative delta is clamped rather than wrapped into an enormous rate.
+                    const U32 dr = (reads > ss_prev_reads[t]) ? (reads - ss_prev_reads[t]) : 0;
+                    const U64 db = (bytes > ss_prev_bytes[t]) ? (bytes - ss_prev_bytes[t]) : 0;
+                    tier->metrics().mReadsPerSec  = (U32)((F64)dr / elapsed);
+                    tier->metrics().mReadKBPerSec = (U32)(((F64)db / 1024.0) / elapsed);
+                }
+
+                ss_prev_reads[t] = reads;
+                ss_prev_bytes[t] = bytes;
+            }
+
+            ss_prev_at    = ss_now;
+            ss_rate_primed = true;
+        }
+        // </SS:Nexii>
         // </SS:Nexii>
     }
 }

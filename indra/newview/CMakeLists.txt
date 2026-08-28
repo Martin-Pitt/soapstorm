@@ -189,7 +189,10 @@ set(viewer_SOURCE_FILES
     ssrocaux.cpp
     ssroccache.cpp
     ssrocghost.cpp
+    ssrocgroup.cpp
     ssrocledger.cpp
+    ssrocparcel.cpp
+    ssrocprobe.cpp
     ssrocvocache.cpp
     ssstatsview.cpp
     ssstratabudget.cpp
@@ -1076,7 +1079,10 @@ set(viewer_HEADER_FILES
     ssrocaux.h
     ssroccache.h
     ssrocghost.h
+    ssrocgroup.h
     ssrocledger.h
+    ssrocparcel.h
+    ssrocprobe.h
     ssrocvocache.h
     ssstatsview.h
     ssstratabudget.h

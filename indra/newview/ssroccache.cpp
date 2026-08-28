@@ -704,6 +704,7 @@ size_t SSROCRegionFile::approxBytes() const
     for (const SSROCRecord& r : mRecords) n += 128 + r.mDP.size();
     n += mAux.mHeightmap.size() * sizeof(U16);
     n += mManifest.size() * UUID_BYTES;
+    n += mGroups.size() * (UUID_BYTES * 2);   // <SS:Nexii/> a fully swept region can carry tens of thousands of these, which is megabytes the region budget has to see
     return n;
 }
 
@@ -869,11 +870,23 @@ bool SSROCStore::serialize(const SSROCRegionFile& file, std::vector<U8>& out)
         for (const LLUUID& id : file.mManifest) w.uuid(id);
     }
 
+    std::vector<U8> groups;
+    {
+        Writer w(groups);
+        w.pod<U32>((U32)file.mGroups.size());
+        for (const auto& pair : file.mGroups)
+        {
+            w.uuid(pair.first);
+            w.uuid(pair.second);
+        }
+    }
+
     struct SectionOut { U32 mType; const std::vector<U8>* mData; };
     const SectionOut sections[] = {
         { SSROC_SECTION_OBJECTS,  &objects  },
         { SSROC_SECTION_AUX,      &aux      },
         { SSROC_SECTION_MANIFEST, &manifest },
+        { SSROC_SECTION_GROUPS,   &groups   },
     };
     const U32 section_count = (U32)(sizeof(sections) / sizeof(sections[0]));
 
@@ -1103,6 +1116,23 @@ bool SSROCStore::deserializeVersioned(const U8* data, size_t size, SSROCRegionFi
             {
                 out.mManifest.push_back(sr.uuid());
                 if (!sr.ok()) return false;
+            }
+            break;
+        }
+        case SSROC_SECTION_GROUPS:
+        {
+            const U32 count = sr.pod<U32>();
+            if (!sr.ok() || count > 1000000) return false;
+            out.mGroups.clear();
+            // The declared count is checked against the bytes actually present before reserving, exactly as [MANIFEST] does: a crafted four byte section must not cost a million iterations and a large allocation.
+            if ((U64)count * (UUID_BYTES * 2) + sizeof(U32) > s.mSize) return false;
+            out.mGroups.reserve(count);
+            for (U32 i = 0; i < count; ++i)
+            {
+                const LLUUID object_id = sr.uuid();
+                const LLUUID group_id  = sr.uuid();
+                if (!sr.ok()) return false;
+                out.mGroups.push_back(std::make_pair(object_id, group_id));
             }
             break;
         }

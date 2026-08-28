@@ -29,6 +29,7 @@
 // file include
 #define LLSELECTMGR_CPP
 #include "llselectmgr.h"
+#include "ssrocgroup.h"   // <SS:Nexii/> ROC Stage C: the set-to-group harvest, below
 #include "llmaterialmgr.h"
 
 // library includes
@@ -6230,6 +6231,10 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
         // (see LLVOAvatar::probeAttachmentGroups). Probed objects are not in
         // any selection, so also skip the missing-node warning below for them.
         bool group_probe_reply = LLVOAvatar::handleAttachmentGroupReply(id, group_id);
+
+        // <SS:Nexii/> ROC Stage C. The same shape as the attachment-group probe directly above, and for the same two reasons: this is the only message that carries an object's GroupID, and a probed object is in no selection - so the reply must also suppress the missing-node warning below, or a thousand-object sweep writes a thousand warnings. See doc/region_object_cache.md, Tier 2.
+        const bool ss_roc_group_reply = ssROCGroupNoteProperties(id, owner_id, group_id);
+        // </SS:Nexii>
         msg->getU64Fast(_PREHASH_ObjectData, _PREHASH_CreationDate, creation_date, i);
         msg->getU32Fast(_PREHASH_ObjectData, _PREHASH_BaseMask, base_mask, i);
         msg->getU32Fast(_PREHASH_ObjectData, _PREHASH_OwnerMask, owner_mask, i);
@@ -6298,7 +6303,7 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
         {
             // <FS:Techwolf Lupindo> area search
             FSAreaSearch* area_search_floater = LLFloaterReg::findTypedInstance<FSAreaSearch>("area_search");
-            if (!group_probe_reply && (!area_search_floater || !area_search_floater->isActive())) // Don't spam the log when areasearch is active or for group probe replies.
+            if (!group_probe_reply && !ss_roc_group_reply && (!area_search_floater || !area_search_floater->isActive())) // Don't spam the log when areasearch is active or for group probe replies. <SS:Nexii/> ROC Stage C probes are equally not selections.
             {
             // </FS:Techwolf Lupindo>
             LL_WARNS() << "Couldn't find object " << id << " selected." << LL_ENDL;

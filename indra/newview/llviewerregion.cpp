@@ -71,6 +71,7 @@
 #include "ssrocaux.h" // <SS:Nexii>
 #include "ssrocghost.h" // <SS:Nexii>
 #include "ssrocledger.h" // <SS:Nexii>
+#include "ssrocprobe.h" // <SS:Nexii> ROC Phase 1.5 probe-flood measurement
 #include "ssrocvocache.h" // <SS:Nexii>
 #include "llworld.h"
 #include "llspatialpartition.h"
@@ -857,6 +858,7 @@ void LLViewerRegion::loadObjectCache()
         {
             LLVOCache::instance().readGenericExtrasFromCache(mHandle, mImpl->mCacheID, mImpl->mGLTFOverridesLLSD, mImpl->mCacheMap);
         }
+        ssROCProbeNoteRegionLoad(this, (U32)mImpl->mCacheMap.size(), SSROCP_SRC_ROC);
         return;
     }
     // </SS:Nexii>
@@ -873,6 +875,9 @@ void LLViewerRegion::loadObjectCache()
             mCacheDirty = true;
         }
     }
+
+    // <SS:Nexii/> ROC Phase 1.5: the arrival clock and the coverage denominator, on the stock path as well as the ROC one, because the flood being measured is the simulator's and has to be measurable with the cache switched off. The source is recorded because the two paths fill the map from different populations, and a coverage percentage whose denominator silently changes between the control and treatment arms is not an A/B at all.
+    ssROCProbeNoteRegionLoad(this, (U32)mImpl->mCacheMap.size(), SSROCP_SRC_SLC);
 }
 
 
@@ -3135,6 +3140,8 @@ bool LLViewerRegion::probeCache(U32 local_id, U32 crc, U32 flags, U8 &cache_miss
 
             // <SS:Nexii> This is the ONLY thing that mentions an unchanged object on a warm-cache revisit: ObjectUpdateCached probes carry local id, CRC and flags and no blob at all, and cacheFullUpdate is never entered for them. Sits above all three of this branch's returns, and deliberately above the "already probed" early-out below - the ledger's own per-visit guard is what keeps entries counted once. See doc/region_object_cache.md.
             ssROCNoteCacheProbe(this, local_id, crc, flags, entry);
+            // Phase 1.5 counts the probe itself, separately and in all three branches below, because a measurement hung off THIS branch alone counts cache hits and calls them probes - which reports a complete, prompt flood over a stale cache as zero coverage, the exact reading that would falsely confirm the hypothesis the gate exists to test.
+            ssROCProbeNoteProbe(this, local_id, SSROCP_HIT);
             // </SS:Nexii>
 
             if(entry->isState(LLVOCacheEntry::ACTIVE))
@@ -3181,6 +3188,7 @@ bool LLViewerRegion::probeCache(U32 local_id, U32 crc, U32 flags, U8 &cache_miss
 
             addCacheMiss(local_id, CACHE_MISS_TYPE_CRC);
             cache_miss_type = CACHE_MISS_TYPE_CRC;
+            ssROCProbeNoteProbe(this, local_id, SSROCP_CRC_MISS);   // <SS:Nexii/> the simulator DID probe promptly; our copy was stale. Counting this as a missing probe is the bias Phase 1.5 has to avoid.
         }
     }
     else
@@ -3188,6 +3196,7 @@ bool LLViewerRegion::probeCache(U32 local_id, U32 crc, U32 flags, U8 &cache_miss
         // LL_INFOS() << "Cache miss for " << local_id << LL_ENDL;
         addCacheMiss(local_id, CACHE_MISS_TYPE_TOTAL);
         cache_miss_type = CACHE_MISS_TYPE_TOTAL;
+        ssROCProbeNoteProbe(this, local_id, SSROCP_TOTAL_MISS);   // <SS:Nexii/> as above: a probe the viewer had no entry for is still a probe the simulator sent.
     }
 
     return false;

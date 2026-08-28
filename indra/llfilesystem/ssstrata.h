@@ -359,6 +359,19 @@ public:
         std::atomic<U32> mLooseFiles{0};
         std::atomic<U64> mLooseBytes{0};
 
+        // <SS:Nexii> The maintenance pass had no stopwatch, which hid how expensive it is on a large cache: the pass returns early whenever the cache is under its high watermark - the common case - so the timing that already existed was never reached.
+        //
+        // An earlier version of this comment claimed a long lap makes maintenance run "back to back". That was wrong and is corrected here rather than deleted, because the wrong model is the intuitive one: LLPurgeDiskCacheThread::run sleeps its full 60 seconds at the TOP of every iteration, unconditionally, BEFORE calling purge. So a 90 second lap still leaves a full 60 second idle gap - the sleep is a fixed gap between passes, not a period the work has to fit inside. A slow lap means the disk is busy for a larger fraction of each 150 seconds, which is worth knowing and is what mSlowLaps counts; it does not mean the disk never idles.
+        std::atomic<U32> mLastScanFiles{0};     // files the asset tier's directory walk visited, which is the cost that scales with a fragmented cache
+        std::atomic<U32> mLastScanMs{0};        // that walk alone: stat-heavy, and the part that grows as the cache accumulates small files
+        std::atomic<U32> mLastLapMs{0};         // the WHOLE iteration, both tenants - the asset purge and the texture tier's pack and reclaim, which runs after it on the same thread and was previously not timed at all even though it is the larger tier
+        std::atomic<U32> mLaps{0};
+        std::atomic<U32> mSlowLaps{0};
+
+        // <SS:Nexii> mReadsServed and mReadBytes are cumulative, and a cumulative byte total cannot be compared against a disk-usage reading, which is a rate. These are the same two counters differenced across one sweep cycle by LLPurgeDiskCacheThread. The divisor is the whole cycle - the sweep plus the sleep before it - not the sweep alone, because the reads being counted happen mostly while the sweep is NOT running.
+        std::atomic<U32> mReadsPerSec{0};
+        std::atomic<U32> mReadKBPerSec{0};          // laps that ran longer than the 60s gap that follows them, so the sweep occupies more of the cycle than it rests
+
         std::atomic<U32> mVolumesKilled{0};
         std::atomic<U64> mBytesReclaimed{0};
         std::atomic<U32> mObjectsDropped{0};

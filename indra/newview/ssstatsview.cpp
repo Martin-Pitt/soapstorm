@@ -18,10 +18,14 @@
 #include "llrender.h"
 #include "llui.h"
 #include "llviewercontrol.h"
+#include "llviewertexturelist.h"
 
 #include "ssrocaux.h"
 #include "ssroccache.h"
 #include "ssrocledger.h"
+#include "ssrocgroup.h"
+#include "ssrocparcel.h"
+#include "ssrocprobe.h"
 #include "llassettype.h"
 #include "ssstrata.h"
 #include "ssbc7adaptive.h"
@@ -204,6 +208,64 @@ void SSStatsView::draw()
         }
     }
 
+    // <SS:Nexii> ROC Phase 1.5 gate, OUTSIDE the roc_on branch above. The whole point of this measurement is that it describes what the simulator does, so it has to be visible with the cache turned off - that is the control case the numbers are only meaningful against. See doc/region_object_cache.md.
+    {
+        U32 entries = 0, distinct = 0, events = 0, full = 0;
+        F32 secs = 0.f;
+        bool roc_denominator = false;
+        if (ssROCProbeCurrent(entries, distinct, events, full, secs, roc_denominator))
+        {
+            // Coverage counts DISTINCT objects. Counting probe events here let the fraction run past 100% whenever the simulator re-announced objects leaving and re-entering the interest list, and the clamp that hid it was the tell.
+            const U32 pct = entries ? (U32)(100.f * (F32)distinct / (F32)entries) : 0;
+            line(llformat("  measuring the simulator: %u of %u %s probed (%u%%) in %us, %u sent whole instead",
+                          distinct, entries,
+                          roc_denominator ? "cache records" : "remembered objects",
+                          pct, (U32)secs, full), true);
+            if (events > distinct)
+            {
+                line(llformat("            %u re-probes of objects already seen, not counted as coverage", events - distinct), true);
+            }
+        }
+    }
+
+    // Stage B's land questions. Surfaced because the whole justification for asking them is that the count stays small and stops growing - a number that kept climbing across a long session would mean the per-parcel dedupe is not working and the traffic is per-object after all, which is exactly the shape this was designed not to have.
+    {
+        U32 regions = 0, known = 0, asked = 0, answered = 0, waiting = 0;
+        ssROCParcelCounts(regions, known, asked, answered, waiting);
+        if (asked || known)
+        {
+            std::string tail;
+            if (waiting) tail = llformat(", %u still to ask", waiting);
+            line(llformat("  land      %u parcels known across %u regions from %u questions%s",
+                          known, regions, asked, tail.c_str()), true);
+            if (asked > answered)
+            {
+                line(llformat("            %u unanswered - the simulator declined or has not replied yet", asked - answered), true);
+            }
+        }
+    }
+
+    // Stage C's object questions. The "not worth asking" count is the one to watch: it is the work the two free tests above took off the wire, and if it ever reads zero on a busy region the drain-time filter has stopped doing its job and the sweep is asking about objects whose answer could not change anything.
+    {
+        U32 known = 0, asked = 0, answered = 0, waiting = 0, skipped = 0;
+        ssROCGroupCounts(known, asked, answered, waiting, skipped);
+        if (asked || known)
+        {
+            std::string tail;
+            if (waiting) tail = llformat(", %u still to ask", waiting);
+            line(llformat("  groups    %u objects answered for from %u questions%s", known, asked, tail.c_str()), true);
+            if (skipped)
+            {
+                line(llformat("            %u never had to be asked - already safe, or the land has no group", skipped), true);
+            }
+            if (asked > answered)
+            {
+                line(llformat("            %u still in flight or unanswered", asked - answered), true);
+            }
+        }
+    }
+    // </SS:Nexii>
+
     blank();
 
     // ---- Squeeze -------------------------------------------------------------
@@ -329,6 +391,59 @@ void SSStatsView::draw()
         if (waiting > 0)
         {
             line(llformat("  waiting   %u textures need full resolution first", (U32)waiting), true);
+
+            // <SS:Nexii> The want list holds uuids, and admission gates on an ESTIMATE of the full size - the decoded size shifted back up by the discard it was decoded at. This line checks that estimate against ground truth: gTextureList knows the real full dimensions for anything the viewer has actually seen. If the two disagree, entries that can never pass the geometry gate are sitting on a capped list evicting entries that could, and the readout above is counting work that will never happen.
+            //
+            // Recomputed on its own timer rather than per frame: it is one hash lookup per waiting texture, which is nothing at five second intervals and needless at sixty per second.
+            static LLFrameTimer s_want_timer;
+            static bool  s_want_primed = false;
+            static U32   s_want_small = 0, s_want_unknown = 0, s_want_total = 0;
+            if (!s_want_primed || s_want_timer.getElapsedTimeF32() >= 5.f)
+            {
+                s_want_primed = true;
+                s_want_timer.reset();
+
+                std::vector<LLUUID> ids;
+                ssBC7EncodeWantList(ids);
+
+                s_want_small = s_want_unknown = 0;
+                s_want_total = (U32)ids.size();
+                for (const LLUUID& id : ids)
+                {
+                    LLViewerFetchedTexture* tex = gTextureList.findImage(id, TEX_LIST_STANDARD);
+                    const S32 w = tex ? tex->getFullWidth()  : 0;
+                    const S32 h = tex ? tex->getFullHeight() : 0;
+                    if (!tex || w <= 0 || h <= 0)
+                    {
+                        // Either no longer resident, or resident but its true size has not been learned yet. Both are unCHECKED rather than passed: an earlier version silently counted these as fine and then printed an unqualified reassurance about a population it had never looked at.
+                        ++s_want_unknown;
+                        continue;
+                    }
+                    // The canonical predicate, not a local re-statement of it. Re-implementing only the area half meant non-power-of-two sources and out-of-range component counts were reported as "big enough to compress" when the real gate will refuse them on arrival for a different reason entirely.
+                    if (!ssBC7EncodeGeometryOK((U32)w, (U32)h, (U32)llmax(1, (S32)tex->getComponents()))) ++s_want_small;
+                }
+            }
+
+            if (s_want_total)
+            {
+                // Three distinct populations, and the line never claims anything about the one it could not look at.
+                if (s_want_small)
+                {
+                    // Deliberately NOT dimmed: this is the line that says the number above is overstated.
+                    line(llformat("            %u of them can never be compressed - wrong size or shape",
+                                  s_want_small));
+                }
+                const U32 checked = (s_want_total > s_want_unknown) ? (s_want_total - s_want_unknown) : 0;
+                if (!s_want_small && checked)
+                {
+                    line(llformat("            the %u that could be checked are all compressible", checked), true);
+                }
+                if (s_want_unknown)
+                {
+                    line(llformat("            %u could not be checked - not loaded, or size not known yet", s_want_unknown), true);
+                }
+            }
+            // </SS:Nexii>
         }
     }
 
@@ -460,6 +575,43 @@ void SSStatsView::draw()
                 bad_records     += sm.mRecordsRejected.load() + sm.mTombstoneFailed.load();
             }
 
+            // <SS:Nexii> The one line that can be held up against Windows' own disk reading. Everything else in this panel is cumulative, and a cumulative total cannot be compared with a rate - which is why an unexplained 60 MB/s could not be attributed to any tier for two sessions. Both Strata tenants and the BC7 reader pool are shown together and separately, because the whole diagnostic value is in the subtraction: if these sum to well under what the disk reports, the cause is somewhere else entirely.
+            {
+                U32 strata_kbs = 0, strata_reads = 0;
+                for (U32 t = 0; t < SSSTRATA_TENANT_COUNT; ++t)
+                {
+                    if (!tiers[t]) continue;
+                    strata_kbs   += tiers[t]->metrics().mReadKBPerSec.load();
+                    strata_reads += tiers[t]->metrics().mReadsPerSec.load();
+                }
+
+                // The BC7 reader pool keeps a cumulative byte total and no clock - deliberately, so no timer lives on its worker threads. The rate is differenced here, over this panel's own refresh.
+                static LLFrameTimer s_bc7_timer;
+                static S64  s_bc7_prev = 0;
+                static bool s_bc7_primed = false;
+                static U32  s_bc7_kbs = 0;
+                const F32 since = s_bc7_timer.getElapsedTimeF32();
+                if (!s_bc7_primed || since >= 5.f)
+                {
+                    const S64 now_bytes = ssBC7ServeReadBytesTotal();
+                    if (s_bc7_primed && since > 0.f)
+                    {
+                        const S64 delta = (now_bytes > s_bc7_prev) ? (now_bytes - s_bc7_prev) : 0;
+                        s_bc7_kbs = (U32)(((F32)delta / 1024.f) / since);
+                    }
+                    s_bc7_prev   = now_bytes;
+                    s_bc7_primed = true;
+                    s_bc7_timer.reset();
+                }
+
+                if (strata_kbs || s_bc7_kbs || strata_reads)
+                {
+                    line(llformat("  disk      reading %u MB/s from the big files (%u/s), %u MB/s of compressed textures",
+                                  strata_kbs / 1024, strata_reads, s_bc7_kbs / 1024));
+                }
+            }
+            // </SS:Nexii>
+
             line(llformat("  session   %u folded in (%s), %u read back out",
                           folded, ssMB(folded_bytes).c_str(), read_back), folded == 0 && read_back == 0);
 
@@ -473,6 +625,37 @@ void SSStatsView::draw()
             if (all_loose && (too_young || too_big || in_use))
             {
                 line(llformat("  passed by %u too new, %u too big, %u in use", too_young, too_big, in_use), true);
+            }
+
+            // The upkeep sweep, reported from the ASSET tier's metrics because that is where LLPurgeDiskCacheThread publishes for both tenants. The lap covers the whole sweep; the file and walk figures cover the asset half of it, which is why they are named as the walk rather than as the sweep.
+            //
+            // The condition is the LAST lap's own duration, not a session total. Branching on a cumulative counter made one slow sweep at login pin the panel forever to a sentence describing a sweep that had long since stopped happening - and printing mLastLapMs inside that branch made the sentence contradict its own number.
+            if (tiers[SSSTRATA_TENANT_ASSETS])
+            {
+                const SSStrataStore::Metrics& am = tiers[SSSTRATA_TENANT_ASSETS]->metrics();
+                const U32 lap_ms  = am.mLastLapMs.load();
+                const U32 scan_ms = am.mLastScanMs.load();
+                const U32 files   = am.mLastScanFiles.load();
+                const U32 slow    = am.mSlowLaps.load();
+
+                if (am.mLaps.load())
+                {
+                    if (lap_ms >= 60000)
+                    {
+                        line(llformat("  upkeep    last tidy-up took %us, longer than the minute it rests between them",
+                                      lap_ms / 1000));
+                    }
+                    else
+                    {
+                        line(llformat("  upkeep    last tidy-up %ums, once a minute  (walked %u loose files in %ums)",
+                                      lap_ms, files, scan_ms), true);
+                    }
+
+                    if (slow)
+                    {
+                        line(llformat("            %u of %u tidy-ups this session ran over a minute", slow, am.mLaps.load()), true);
+                    }
+                }
             }
 
             if (bad_reads || bad_records)

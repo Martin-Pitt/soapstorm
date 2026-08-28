@@ -12,6 +12,7 @@
 #include "ssrocvocache.h"
 
 #include "ssrocaux.h"
+#include "ssrocprobe.h"   // <SS:Nexii/> ROC Phase 1.5 probe-flood measurement
 #include "ssrocledger.h"
 
 #include "lltimer.h"
@@ -185,6 +186,9 @@ bool ssROCLoadObjectCache(LLViewerRegion* regionp, LLVOCacheEntry::vocache_entry
 void ssROCNoteObjectCacheSaved(LLViewerRegion* regionp)
 {
     if (!regionp) return;
+
+    // <SS:Nexii/> ROC Phase 1.5: saveObjectCache runs in the region destructor, so this is the last moment the measurement can be reported before the region it describes is gone. Above the gBacked lookup below, which returns early on every region the cache never backed - including all of them when ROC is off, which is exactly when this needs to report.
+    ssROCProbeReport(regionp);
 
     const U64 handle = regionp->getHandle();
 

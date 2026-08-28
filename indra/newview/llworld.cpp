@@ -28,7 +28,9 @@
 
 #include "llworld.h"
 #include "ssrocaux.h" // <SS:Nexii>
-#include "ssrocghost.h" // <SS:Nexii>
+#include "ssrocghost.h"
+#include "ssrocgroup.h"    // <SS:Nexii/> ROC Stage C
+#include "ssrocparcel.h"   // <SS:Nexii/> ROC Stage B // <SS:Nexii>
 #include "llrender.h"
 
 #include "indra_constants.h"
@@ -1158,6 +1160,10 @@ void LLWorld::updateRegions(F32 max_update_time)
 
     // <SS:Nexii> Paint a known region back from its own cache before the per-region idle updates below, so anything injected this frame reaches createVisibleObjects in the same frame rather than the next one. It carries its own object and millisecond budget rather than sharing max_update_time, because the region-exit stall this feature already produced once came from a pass that assumed one frame could absorb a whole region. See doc/region_object_cache.md.
     ssROCGhostTick();
+
+    // Stage B's parcel probe drains here for the same reason: it is main-thread work with a per-second budget, and this is the one place per frame that already knows the region set is settled. It sends nothing at all until a region has been quiet for its delay, so a login burst costs no messages.
+    ssROCParcelTick();
+    ssROCGroupTick();
     // </SS:Nexii>
 
     F32 max_time = llmin((F32)(max_update_time - update_timer.getElapsedTimeF32()), max_update_time * 0.25f);

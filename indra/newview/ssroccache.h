@@ -12,6 +12,8 @@
 
 #include "llsingleton.h"
 #include "lluuid.h"
+
+#include <utility>
 #include "v3math.h"
 
 #include <atomic>
@@ -53,6 +55,7 @@ enum ESSROCSection : U32
     SSROC_SECTION_AUX      = 2,
     SSROC_SECTION_MANIFEST = 3,
     SSROC_SECTION_GLTF     = 4,
+    SSROC_SECTION_GROUPS   = 5,   // <SS:Nexii/> Stage C's set-to-group answers. A new SECTION rather than a new record field on purpose: a record layout change would have to raise SSROC_MIN_SALVAGE_VERSION, which resets every record on the grid to day one and pushes the conservative promotion path three more days out. Unknown sections are skipped within a version, so an older build reads this file and simply ignores this.
 };
 
 // Per-record state bits. Everything here is ROC's own bookkeeping - none of it is protocol state and none of it is ever written back into the .slc.
@@ -262,6 +265,7 @@ struct SSROCRegionFile
     std::vector<SSROCRecord>    mRecords;
     SSROCAux                    mAux;
     std::vector<LLUUID>         mManifest;        // deduped asset UUIDs mined from the records, exported to the BC7 tier's region manifest
+    std::vector<std::pair<LLUUID, LLUUID> > mGroups;   // <SS:Nexii/> FullID -> GroupID from Stage C. A null group is a real answer meaning "set to no group", and keeping it is what stops the object being asked about again on every future visit.
 
     size_t promotedCount() const;
     size_t approxBytes() const;

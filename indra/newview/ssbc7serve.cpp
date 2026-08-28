@@ -87,6 +87,8 @@ namespace
         std::atomic<U32>             mVerdicts[SSBC7_SERVE_VERDICT_COUNT];
 
         // The live gauge, which is the number the whole feature exists to move. Cumulative counters answer "did it ever work"; these answer "is it working right now".
+        // <SS:Nexii/> Bytes actually moved off the disk by the reader pool. The verdict counters say how many reads were issued and none of them say how large those reads were, which left this path - the one read-heavy, write-free path in the tier that scales with camera movement - impossible to confirm or clear against a disk-usage reading. Written only by pool workers on a successful read, read by the overlay.
+        std::atomic<S64>             mReadBytesTotal{0};
         std::atomic<S64>             mResidentCount{0};
         std::atomic<S64>             mResidentBC7Bytes{0};
         std::atomic<S64>             mResidentSavedBytes{0};
@@ -483,6 +485,7 @@ ESSBC7ServeVerdict ssBC7ServeRequest(LLViewerFetchedTexture* tex, S32 desired_di
                 SSBC7Record rec2;
                 if (store->readBlobPrefix(id, levels, done.mBlob, rec2))
                 {
+                    st->mReadBytesTotal += (S64)done.mBlob.size();   // <SS:Nexii/> see mReadBytesTotal
                     done.mWidth         = rec2.mWidth;
                     done.mHeight        = rec2.mHeight;
                     done.mFlags         = rec2.mFlags;
@@ -512,6 +515,13 @@ ESSBC7ServeVerdict ssBC7ServeRequest(LLViewerFetchedTexture* tex, S32 desired_di
     }
 
     return record(st, SSBC7_SERVE_QUEUED);
+}
+
+// <SS:Nexii/> Cumulative bytes the reader pool has pulled off the disk this session. The overlay differences it against wall time to get a rate; keeping the raw total here rather than a rate means no clock lives on the pool threads.
+S64 ssBC7ServeReadBytesTotal()
+{
+    ServeState* st = state();
+    return st ? st->mReadBytesTotal.load() : 0;
 }
 
 // <SS:Nexii> Squeeze region manifests - additive accessor over the counter the reader pool already maintains, so a background pre-warm can refuse to post while the demand path has work outstanding. Nothing in the read path reads this; it exists only so the manifest pass can lose the race on purpose.
