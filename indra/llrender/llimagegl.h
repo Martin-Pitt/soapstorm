@@ -148,6 +148,13 @@ public:
     void setExplicitFormat(LLGLint internal_format, LLGLenum primary_format, LLGLenum type_format = 0, bool swap_bytes = false);
     void setComponents(S8 ncomponents) { mComponents = ncomponents; }
 
+    // <SS:Nexii> Squeeze - the BC7 to uncompressed transition as a first-class, named, reasoned operation rather than an accident recovered from. It clears the explicit format AND re-derives an uncompressed one in the same breath, because between those two steps isCompressed() still answers true and any exit that leaves that window open is the next crash. Expected and common in a healthy session - every raw consumer, every readback, every J2C upgrade - so it logs at debug level with the caller's reason, and the last-resort catches inside setImage and createGLTexture warn instead.
+    void dropCompressedFormat(const char* reason);
+
+    // Squeeze - the store classifies alpha shape from the source pixels at encode time, because BC7 blocks cannot be scanned byte-wise and calcAlphaChannelOffsetAndStride therefore forces mIsMask false for BPTC. This is how that answer reaches the alpha-MASK render path in llface.cpp; there is no other way in, mIsMask having no setter.
+    void setIsAlphaMask(bool is_mask) { mIsMask = is_mask; }
+    // </SS:Nexii>
+
     S32  getDiscardLevel() const        { return mCurrentDiscardLevel; }
     S32  getMaxDiscardLevel() const     { return mMaxDiscardLevel; }
 
@@ -224,6 +231,10 @@ public:
     // only works for GL_TEXTURE_2D target
     bool scaleDown(S32 desired_discard);
 
+    // <SS:Nexii> Squeeze - moved out of private and made const so viewer code can ask whether a texture is currently block compressed without spelling out a getPrimaryFormat() comparison at every call site, which would be a second source of truth for the same answer.
+    bool isCompressed() const;
+    // </SS:Nexii>
+
 public:
     // Various GL/Rendering options
     S64Bytes mTextureMemory;
@@ -232,7 +243,10 @@ public:
 private:
     U32 createPickMask(S32 pWidth, S32 pHeight);
     void freePickMask();
-    bool isCompressed();
+
+    // <SS:Nexii> Squeeze - the component switch that createGLTexture used to inline, factored out so dropCompressedFormat can re-derive an uncompressed format immediately instead of leaving one function's worth of window where the flag is clear but the format is still BPTC.
+    void deriveFormatFromComponents();
+    // </SS:Nexii>
 
     LLPointer<LLImageRaw> mSaveData; // used for destroyGL/restoreGL
     LL::WorkQueue::weak_t mMainQueue;
@@ -292,6 +306,10 @@ public:
     static LLImageGL* sDefaultGLTexture ;
     static bool sAutomatedTest;
     static bool sCompressTextures;          //use GL texture compression
+    // <SS:Nexii> Squeeze - sSqueezeEnabled mirrors the SSSqueezeEnabled setting; canUseSqueeze() also requires gGLManager.mHasBPTC so callers fall back to the ordinary uncompressed path in silence, see doc/super_compressed_textures.md
+    static bool sSqueezeEnabled;
+    static bool canUseSqueeze();
+    // </SS:Nexii>
 #if DEBUG_MISS
     bool mMissed; // Missed on last bind?
     bool getMissed() const { return mMissed; };

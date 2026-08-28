@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<panel
+ border="true"
+ follows="all"
+ height="480"
+ layout="topleft"
+ left="1"
+ top="1"
+ width="540"
+ label="Squeeze"
+ name="ss_squeeze">
+
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top="10"
+     width="520">
+        Squeeze - GPU-compressed textures
+    </text>
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="42"
+     layout="topleft"
+     left="10"
+     top_pad="4"
+     width="510"
+     wrap="true">
+        Keeps textures on the graphics card in a compressed form instead of raw pixels, which uses around a quarter of the video memory for the same picture. Compressed copies are built in the background on spare processor cores and kept on disk, so the work is done once and reused every session.
+    </text>
+
+    <check_box
+     control_name="SSSqueezeEnabled"
+     follows="left|top"
+     height="16"
+     label="Use GPU-compressed textures"
+     layout="topleft"
+     left="10"
+     name="ss_squeeze_enabled"
+     tool_tip="Needs a graphics card supporting BC7 (any card from roughly 2012 onward). Cards without it fall back to the normal texture path automatically."
+     top_pad="10"
+     width="500" />
+
+    <check_box
+     control_name="SSSqueezeBackgroundEncode"
+     follows="left|top"
+     height="16"
+     label="Build compressed textures in the background"
+     layout="topleft"
+     left="20"
+     name="ss_squeeze_background"
+     tool_tip="Uses spare processor cores while you are logged in. Turning this off means only textures already on disk are used."
+     top_pad="8"
+     width="490" />
+
+    <check_box
+     control_name="SSSqueezeNetworkPromote"
+     follows="left|top"
+     height="16"
+     label="Fetch full-resolution textures to compress them"
+     layout="topleft"
+     left="20"
+     name="ss_squeeze_network"
+     tool_tip="Compressed copies are only made from full-resolution textures, so partly-downloaded ones are quietly completed in the background. Uses some extra bandwidth while idle."
+     top_pad="8"
+     width="490" />
+
+    <!-- ===== Limits ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="16"
+     width="520">
+        Limits
+    </text>
+
+    <slider
+     control_name="SSBC7CacheSize"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="256"
+     layout="topleft"
+     label="Disk space for compressed textures (MB):"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="512"
+     max_val="16384"
+     name="SSBC7CacheSize"
+     tool_tip="Compressed copies sit alongside the normal texture cache rather than replacing it, so this is extra disk use. Least recently used textures are dropped only when the limit is approached."
+     top_pad="10"
+     width="480" />
+
+    <slider
+     control_name="SSSqueezeEncodeThreads"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1"
+     layout="topleft"
+     label="Processor cores to use (0 = automatic):"
+     label_width="290"
+     show_text="true"
+     left="20"
+     min_val="0"
+     max_val="16"
+     name="SSSqueezeEncodeThreads"
+     tool_tip="Compression runs at low priority, so it should stay out of the way of the viewer itself. Lower this if you notice other programs slowing down."
+     top_pad="8"
+     width="480" />
+
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="28"
+     layout="topleft"
+     left="10"
+     top_pad="16"
+     width="510"
+     wrap="true">
+        Clearing the cache removes compressed textures along with everything else. They are rebuilt as you go, so nothing is lost apart from the time to make them again.
+    </text>
+
+</panel>

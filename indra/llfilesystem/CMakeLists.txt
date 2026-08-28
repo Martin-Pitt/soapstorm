@@ -11,6 +11,11 @@ set(llfilesystem_SOURCE_FILES
     lllfsthread.cpp
     lldiskcache.cpp
     llfilesystem.cpp
+    # <SS:Nexii> Strata asset volumes
+    ssstrata.cpp
+    ssstrataio.cpp
+    ssstratapack.cpp
+    # </SS:Nexii>
     )
 
 set(llfilesystem_HEADER_FILES
@@ -21,6 +26,7 @@ set(llfilesystem_HEADER_FILES
     lllfsthread.h
     lldiskcache.h
     llfilesystem.h
+    ssstrata.h   # <SS:Nexii/> Strata asset volumes
     )
 
 if (DARWIN)

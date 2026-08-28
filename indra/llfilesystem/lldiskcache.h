@@ -64,6 +64,7 @@
 
 #include "llsingleton.h"
 #include <chrono>
+#include <functional>   // <SS:Nexii/> Strata - LLPurgeDiskCacheThread carries the texture tier's maintenance tick, which cannot be named from this library
 using namespace std::chrono;
 
 
@@ -154,6 +155,10 @@ class LLDiskCache :
 
         // <FS:Ansariel> Better asset cache size control
         void setMaxSizeBytes(uintmax_t size) { mMaxSizeBytes = size; }
+        // <SS:Nexii> The budget arbiter reports what every tier costs and what it is enforcing, and it must do that without a second recursive walk of a fifty thousand file directory. mStoredCacheSize is the number the once-a-minute purge already published from the walk it had to do anyway, so both of these are free. It is written on the purge thread and read on the main one; it is a reported number and never a decision, so a stale read costs an out-of-date log line and nothing else. See doc/strata.md.
+        uintmax_t getStoredCacheSize() const { return mStoredCacheSize; }
+        uintmax_t getMaxSizeBytes() const { return mMaxSizeBytes; }
+        // </SS:Nexii>
         // <FS:Beq> High/Low water control
         void setHighWaterPercentage(F32 HiPct) { mHighPercent = llclamp(HiPct, mLowPercent, 100.0);  };
         void setLowWaterPercentage(F32 LowPct) { mLowPercent = llclamp(LowPct, 0.0, mHighPercent);  };
@@ -209,7 +214,14 @@ class LLPurgeDiskCacheThread : public LLThread
 public:
     LLPurgeDiskCacheThread();
 
+    // <SS:Nexii> Strata - the J2C texture body tier is a second Strata tenant, and its packer has to run somewhere that is neither the main thread nor a fetch thread. This is the maintenance thread that already exists and already ticks once a minute for exactly this kind of work, and doc/strata.md rules out standing up a second pool for it. The callback rather than a direct call is forced by the library layering: LLTextureCache lives in indra/newview, which sits ABOVE indra/llfilesystem and cannot be named from here. Registered once at startup, never cleared, and invoked only between purges so it never overlaps one.
+    static void setExtraMaintenance(const std::function<void()>& fn) { sExtraMaintenance = fn; }
+
 protected:
     void run() override;
+
+private:
+    static std::function<void()> sExtraMaintenance;
+    // </SS:Nexii>
 };
 #endif // _LLDISKCACHE

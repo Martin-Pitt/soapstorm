@@ -52,6 +52,9 @@ extern LL_COMMON_API bool on_main_thread();
 //----------------------------------------------------------------------------
 const F32 MIN_TEXTURE_LIFETIME = 10.f;
 const F32 CONVERSION_SCRATCH_BUFFER_GL_VERSION = 3.29f;
+// <SS:Nexii> hoisted up from its old home just above setNeedsAlphaAndPickMask so the explicit format reset guard in createGLTexture can test it
+const S8 INVALID_OFFSET = -99 ;
+// </SS:Nexii>
 
 //which power of 2 is i?
 //assumes i is a power of 2 > 0
@@ -132,6 +135,14 @@ U64 LLImageGL::getTextureBytesAllocated()
     return sTextureBytes;
 }
 
+// <SS:Nexii> single gate for every BC7 upload decision - hardware capability AND the user setting, mirroring how mHasAnisotropic is paired with sGlobalUseAnisotropic
+// static
+bool LLImageGL::canUseSqueeze()
+{
+    return sSqueezeEnabled && gGLManager.mHasBPTC && !gGLManager.mIsDisabled;
+}
+// </SS:Nexii>
+
 //statics
 
 U32 LLImageGL::sUniqueCount             = 0;
@@ -142,6 +153,9 @@ bool LLImageGL::sGlobalUseAnisotropic   = false;
 F32 LLImageGL::sLastFrameTime           = 0.f;
 LLImageGL* LLImageGL::sDefaultGLTexture = NULL ;
 bool LLImageGL::sCompressTextures = false;
+// <SS:Nexii>
+bool LLImageGL::sSqueezeEnabled = false;
+// </SS:Nexii>
 std::unordered_set<LLImageGL*> LLImageGL::sImageList;
 
 
@@ -316,6 +330,10 @@ S32 LLImageGL::dataFormatBits(S32 dataformat)
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:    return 8;
     case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:          return 8;
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:    return 8;
+    // <SS:Nexii> BC7 is 16 bytes per 4x4 block, so 8 bits per texel; omitting this hits the fatal LL_ERRS default below on the very first alloc_tex_image
+    case GL_COMPRESSED_RGBA_BPTC_UNORM:             return 8;
+    case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:       return 8;
+    // </SS:Nexii>
     case GL_LUMINANCE:                              return 8;
     case GL_LUMINANCE8:                             return 8;
     case GL_ALPHA:                                  return 8;
@@ -364,6 +382,10 @@ S64 LLImageGL::dataFormatBytes(S32 dataformat, S32 width, S32 height)
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
     case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+    // <SS:Nexii> BC7 is a 4x4 block format like S3TC, so a 2x2 or 1x1 mip still occupies one whole 16 byte block and must be sized as 4x4
+    case GL_COMPRESSED_RGBA_BPTC_UNORM:
+    case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+    // </SS:Nexii>
         if (width < 4) width = 4;
         if (height < 4) height = 4;
         break;
@@ -386,6 +408,10 @@ S32 LLImageGL::dataFormatComponents(S32 dataformat)
       case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT: return 4;
       case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:    return 4;
       case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT: return 4;
+      // <SS:Nexii> BC7 is intrinsically four channel; this is unreachable for BPTC today but the default below is a fatal LL_ERRS, and it is public API
+      case GL_COMPRESSED_RGBA_BPTC_UNORM:       return 4;
+      case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM: return 4;
+      // </SS:Nexii>
       case GL_LUMINANCE:                        return 1;
       case GL_ALPHA:                            return 1;
       case GL_RED:                              return 1;
@@ -733,6 +759,72 @@ void LLImageGL::setExplicitFormat( LLGLint internal_format, LLGLenum primary_for
     calcAlphaChannelOffsetAndStride() ;
 }
 
+// <SS:Nexii> Squeeze - the one place a component count is turned into a GL format, so that dropCompressedFormat and createGLTexture cannot ever disagree about what "uncompressed equivalent" means.
+void LLImageGL::deriveFormatFromComponents()
+{
+    switch (mComponents)
+    {
+    case 1:
+        // Use luminance alpha (for fonts)
+        mFormatInternal = GL_LUMINANCE8;
+        mFormatPrimary = GL_LUMINANCE;
+        mFormatType = GL_UNSIGNED_BYTE;
+        break;
+    case 2:
+        // Use luminance alpha (for fonts)
+        mFormatInternal = GL_LUMINANCE8_ALPHA8;
+        mFormatPrimary = GL_LUMINANCE_ALPHA;
+        mFormatType = GL_UNSIGNED_BYTE;
+        break;
+    case 3:
+        mFormatInternal = GL_RGB8;
+        mFormatPrimary = GL_RGB;
+        mFormatType = GL_UNSIGNED_BYTE;
+        break;
+    case 4:
+        mFormatInternal = GL_RGBA8;
+        mFormatPrimary = GL_RGBA;
+        mFormatType = GL_UNSIGNED_BYTE;
+        break;
+    default:
+        LL_ERRS() << "Bad number of components for texture: " << (U32)getComponents() << LL_ENDL;
+    }
+
+    calcAlphaChannelOffsetAndStride() ;
+}
+
+// Squeeze - a BC7 resident that has to become an uncompressed one again. Clearing mHasExplicitFormat on its own is not enough and is in fact the dangerous half of the job: mFormatPrimary stays at BPTC until something re-derives it, isCompressed() keeps answering true for that whole window, and setImage's mUseMipMaps branch turns that into the fatal LL_ERRS about compressed mipmaps. Both halves therefore happen here, together, or not at all.
+void LLImageGL::dropCompressedFormat(const char* reason)
+{
+    if (!mHasExplicitFormat || mFormatPrimary == 0 || !isCompressed())
+    {
+        return;
+    }
+
+    LL_DEBUGS("Squeeze") << "dropping compressed format " << std::hex << mFormatPrimary << std::dec
+                         << " for " << (U32)mComponents << " component uncompressed upload: "
+                         << (reason ? reason : "no reason given") << LL_ENDL;
+
+    mHasExplicitFormat = false;
+
+    if (mComponents < 1 || mComponents > 4)
+    {
+        // Only reachable if a compressed format was attached to an image whose component count was never established. Guessing four is wrong in a way that costs memory; letting deriveFormatFromComponents hit its LL_ERRS default is wrong in a way that costs the session.
+        LL_WARNS("Squeeze") << "compressed format dropped on an image with " << (U32)mComponents
+                            << " components, assuming four so the format can be re-derived" << LL_ENDL;
+        mComponents = 4;
+    }
+
+    deriveFormatFromComponents();
+
+    // A compressed format latched mNeedsAlphaAndPickMask off in calcAlphaChannelOffsetAndStride and nothing turns it back on, so the uncompressed upload that follows would build no alpha analysis and no pick mask at all.
+    if (mAlphaOffset != INVALID_OFFSET)
+    {
+        mNeedsAlphaAndPickMask = true;
+    }
+}
+// </SS:Nexii>
+
 //----------------------------------------------------------------------------
 
 void LLImageGL::setImage(const LLImageRaw* imageraw)
@@ -741,6 +833,9 @@ void LLImageGL::setImage(const LLImageRaw* imageraw)
     llassert((imageraw->getWidth() == getWidth(mCurrentDiscardLevel)) &&
              (imageraw->getHeight() == getHeight(mCurrentDiscardLevel)) &&
              (imageraw->getComponents() == getComponents()));
+    // <SS:Nexii> Squeeze - this overload reaches setImage with data_hasmips false and no guard of its own, so a stale BPTC format here is the fatal LL_ERRS below rather than a wrong picture
+    dropCompressedFormat("setImage(LLImageRaw) cannot describe a compressed upload");
+    // </SS:Nexii>
     const U8* rawdata = imageraw->getData();
     setImage(rawdata, false);
 }
@@ -749,7 +844,17 @@ bool LLImageGL::setImage(const U8* data_in, bool data_hasmips /* = false */, S32
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
 
-    const bool is_compressed = isCompressed();
+    bool is_compressed = isCompressed();
+
+    // <SS:Nexii> Squeeze - LAST RESORT, and the only thing standing between an undeclared BC7 exit and a fatal. Every deliberate transition calls dropCompressedFormat with a reason; the routes that do not - setSubImage's full-texture fast path at the media and dynamic-texture end, and anything else that reaches here with mip maps on and no mip chain - used to fall straight into the LL_ERRS further down, which takes the whole viewer with it instead of one texture. Warns rather than debugs precisely because arriving here means a caller failed to declare itself.
+    if (is_compressed && mUseMipMaps && !data_hasmips && data_in != nullptr && mHasExplicitFormat)
+    {
+        LL_WARNS("Squeeze") << "compressed format " << std::hex << mFormatPrimary << std::dec
+                            << " reached setImage with mip maps enabled and no mip chain; dropping it rather than failing fatally, but the caller should have declared this transition" << LL_ENDL;
+        dropCompressedFormat("undeclared uncompressed upload into a compressed texture");
+        is_compressed = isCompressed();
+    }
+    // </SS:Nexii>
 
     if (mUseMipMaps)
     {
@@ -769,6 +874,13 @@ bool LLImageGL::setImage(const U8* data_in, bool data_hasmips /* = false */, S32
 
     if (data_in == nullptr)
     {
+        // <SS:Nexii> Squeeze - this branch allocates storage through glTexImage2D, which takes an uncompressed PIXEL format; handing it a compressed enum is GL_INVALID_ENUM and a texture that never gets storage at all. Not fatal, which is exactly why it would otherwise be found late.
+        if (is_compressed)
+        {
+            dropCompressedFormat("allocate-only upload cannot describe a compressed format");
+            is_compressed = isCompressed();
+        }
+        // </SS:Nexii>
         S32 w = getWidth();
         S32 h = getHeight();
         LLImageGL::setManualImage(mTarget, 0, mFormatInternal, w, h,
@@ -778,6 +890,12 @@ bool LLImageGL::setImage(const U8* data_in, bool data_hasmips /* = false */, S32
     {
         if (data_hasmips)
         {
+            // <SS:Nexii> the compressed branch below never reaches setManualImage, so it must do its own VRAM accounting; free once here and alloc once after the loop, never per mip, or the one-entry-per-texName precondition in alloc_tex_image trips on the second level
+            if (is_compressed)
+            {
+                free_cur_tex_image();
+            }
+            // </SS:Nexii>
             // NOTE: data_in points to largest image; smaller images
             // are stored BEFORE the largest image
             for (S32 d=mCurrentDiscardLevel; d<=mMaxDiscardLevel; d++)
@@ -824,6 +942,12 @@ bool LLImageGL::setImage(const U8* data_in, bool data_hasmips /* = false */, S32
                 }
                 stop_glerror();
             }
+            // <SS:Nexii> account the base level only, matching the "Does not include mipmaps" contract on getTextureBytesAllocated and the x2 calibration the discard bias controller in llviewertexture.cpp relies on
+            if (is_compressed)
+            {
+                alloc_tex_image(getWidth(mCurrentDiscardLevel), getHeight(mCurrentDiscardLevel), mFormatPrimary, 1);
+            }
+            // </SS:Nexii>
         }
         else if (!is_compressed)
         {
@@ -999,7 +1123,11 @@ bool LLImageGL::setImage(const U8* data_in, bool data_hasmips /* = false */, S32
         if (is_compressed)
         {
             GLsizei tex_size = (GLsizei)dataFormatBytes(mFormatPrimary, w, h);
+            // <SS:Nexii> same accounting gap as the mipped branch above - free the previous entry for this texName before recording the new one
+            free_cur_tex_image();
             glCompressedTexImage2D(mTarget, 0, mFormatPrimary, w, h, 0, tex_size, (GLvoid *)data_in);
+            alloc_tex_image(w, h, mFormatPrimary, 1);
+            // </SS:Nexii>
             stop_glerror();
         }
         else
@@ -1572,6 +1700,15 @@ bool LLImageGL::createGLTexture(S32 discard_level, const LLImageRaw* imageraw, S
         return false;
     }
 
+    // <SS:Nexii> Squeeze - a compressed explicit format cannot describe an uncompressed LLImageRaw upload. The deliberate BC7 exits call dropCompressedFormat themselves with a reason, so reaching here still holding one means a caller did not declare itself and this is the last resort that keeps it from becoming the fatal LL_ERRS in setImage; it stays LL_WARNS for exactly that reason.
+    if (mHasExplicitFormat && isCompressed())
+    {
+        LL_WARNS("Squeeze") << "undeclared compressed to uncompressed transition on format " << std::hex << mFormatPrimary << std::dec
+                            << " with " << (U32)mComponents << " components; recovering, but the caller should have called dropCompressedFormat" << LL_ENDL;
+        dropCompressedFormat("undeclared LLImageRaw upload into a compressed texture");
+    }
+    // </SS:Nexii>
+
     if (mHasExplicitFormat &&
         ((mFormatPrimary == GL_RGBA && mComponents < 4) ||
          (mFormatPrimary == GL_RGB  && mComponents < 3)))
@@ -1579,39 +1716,19 @@ bool LLImageGL::createGLTexture(S32 discard_level, const LLImageRaw* imageraw, S
     {
         LL_WARNS()  << "Incorrect format: " << std::hex << mFormatPrimary << " components: " << (U32)mComponents <<  LL_ENDL;
         mHasExplicitFormat = false;
+        // <SS:Nexii> a compressed format latched mNeedsAlphaAndPickMask off and calcAlphaChannelOffsetAndStride never turns it back on, so restore it unless the caller explicitly asked for no mask via setNeedsAlphaAndPickMask(false)
+        if (mAlphaOffset != INVALID_OFFSET)
+        {
+            mNeedsAlphaAndPickMask = true;
+        }
+        // </SS:Nexii>
     }
 
     if( !mHasExplicitFormat )
     {
-        switch (mComponents)
-        {
-        case 1:
-            // Use luminance alpha (for fonts)
-            mFormatInternal = GL_LUMINANCE8;
-            mFormatPrimary = GL_LUMINANCE;
-            mFormatType = GL_UNSIGNED_BYTE;
-            break;
-        case 2:
-            // Use luminance alpha (for fonts)
-            mFormatInternal = GL_LUMINANCE8_ALPHA8;
-            mFormatPrimary = GL_LUMINANCE_ALPHA;
-            mFormatType = GL_UNSIGNED_BYTE;
-            break;
-        case 3:
-            mFormatInternal = GL_RGB8;
-            mFormatPrimary = GL_RGB;
-            mFormatType = GL_UNSIGNED_BYTE;
-            break;
-        case 4:
-            mFormatInternal = GL_RGBA8;
-            mFormatPrimary = GL_RGBA;
-            mFormatType = GL_UNSIGNED_BYTE;
-            break;
-        default:
-            LL_ERRS() << "Bad number of components for texture: " << (U32)getComponents() << LL_ENDL;
-        }
-
-        calcAlphaChannelOffsetAndStride() ;
+        // <SS:Nexii> Squeeze - the switch that used to be inlined here now lives in deriveFormatFromComponents, so there is one definition of what a component count maps to and dropCompressedFormat cannot drift away from it
+        deriveFormatFromComponents();
+        // </SS:Nexii>
     }
 
     if(!to_create) //not create a gl texture
@@ -2165,7 +2282,7 @@ void LLImageGL::setTarget(const LLGLenum target, const LLTexUnit::eTextureType b
     mBindTarget = bind_target;
 }
 
-const S8 INVALID_OFFSET = -99 ;
+// <SS:Nexii> INVALID_OFFSET moved to the top of this file
 void LLImageGL::setNeedsAlphaAndPickMask(bool need_mask)
 {
     if(mNeedsAlphaAndPickMask != need_mask)
@@ -2207,6 +2324,13 @@ void LLImageGL::calcAlphaChannelOffsetAndStride()
         mNeedsAlphaAndPickMask = false;
         mIsMask = false;
         return; //no alpha channel.
+    // <SS:Nexii> BC7 blocks cannot be scanned byte-wise for alpha, so suppress the analysis quietly here instead of falling through to the default and emitting one LL_WARNS per BC7 texture
+    case GL_COMPRESSED_RGBA_BPTC_UNORM:
+    case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+        mNeedsAlphaAndPickMask = false;
+        mIsMask = false;
+        return;
+    // </SS:Nexii>
     case GL_RGBA:
     case GL_SRGB_ALPHA:
         mAlphaStride = 4;
@@ -2389,7 +2513,7 @@ void LLImageGL::freePickMask()
     mPickMaskWidth = mPickMaskHeight = 0;
 }
 
-bool LLImageGL::isCompressed()
+bool LLImageGL::isCompressed() const
 {
     llassert(mFormatPrimary != 0);
     // *NOTE: Not all compressed formats are included here.
@@ -2402,6 +2526,10 @@ bool LLImageGL::isCompressed()
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT:
     case GL_COMPRESSED_RGBA_S3TC_DXT5_EXT:
     case GL_COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT:
+    // <SS:Nexii> without this setImage takes the uncompressed branch and hands a compressed enum to glTexImage2D as the pixel format
+    case GL_COMPRESSED_RGBA_BPTC_UNORM:
+    case GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM:
+    // </SS:Nexii>
         is_compressed = true;
         break;
     default:
@@ -2536,6 +2664,9 @@ bool LLImageGL::scaleDown(S32 desired_discard)
 
     if (mTarget != GL_TEXTURE_2D
         || mFormatInternal == -1 // not initialized
+        // <SS:Nexii> both downscale paths are illegal on a block compressed texture - the FBO path glCopyTexSubImage2Ds into it and the PBO path passes the compressed enum to glGetTexImage as a pixel format - so refuse here rather than trying to keep BC7 residents out of every mDownScaleQueue producer
+        || (mFormatPrimary != 0 && isCompressed())
+        // </SS:Nexii>
         )
     {
         return false;

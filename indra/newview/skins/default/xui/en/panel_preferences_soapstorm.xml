@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <panel
  border="true"
  follows="all"
@@ -45,6 +45,22 @@
      layout="topleft"
      help_topic="preferences_soapstorm_tab"
      name="soapstorm_sounds" />
+
+    <panel
+     class="panel_preference"
+     filename="panel_preferences_ss_roc.xml"
+     label="Region Object Cache"
+     layout="topleft"
+     help_topic="preferences_soapstorm_tab"
+     name="ss_roc" />
+
+    <panel
+     class="panel_preference"
+     filename="panel_preferences_ss_squeeze.xml"
+     label="Squeeze"
+     layout="topleft"
+     help_topic="preferences_soapstorm_tab"
+     name="ss_squeeze" />
 
 </tab_container>
 

@@ -32,6 +32,7 @@
 #include "llfasttimerview.h"
 #include "llconsole.h"
 #include "lltextureview.h"
+#include "ssstatsview.h" // <SS:Nexii>
 #include "llresmgr.h"
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
@@ -112,6 +113,21 @@ void LLDebugView::init()
     tvp.visible(false);
     gTextureView = LLUICtrlFactory::create<LLTextureView>(tvp);
     addChild(gTextureView);
+
+    // <SS:Nexii> Soapstorm stats overlay, sized to its own content each frame so it starts small and grows only as far as its longest line.
+    // Parked just past the right edge of the texture console instead of sharing its top left corner, because the two are siblings of this one debug view and the child added last is drawn last, so an overlay opened over the console silently painted the console's own header out.
+    const S32 ss_stats_left = r.mRight + 10;
+    const S32 ss_stats_top = r.mTop;
+    r.set(ss_stats_left, ss_stats_top, ss_stats_left + 700, ss_stats_top - 100);
+    SSStatsView::Params ssp;
+    ssp.name("gSSStatsView");
+    ssp.rect(r);
+    ssp.follows.flags(FOLLOWS_TOP|FOLLOWS_LEFT);
+    ssp.visible(false);
+    ssp.mouse_opaque(false);
+    gSSStatsView = LLUICtrlFactory::create<SSStatsView>(ssp);
+    addChild(gSSStatsView);
+    // </SS:Nexii>
 }
 
 void LLDebugView::draw()

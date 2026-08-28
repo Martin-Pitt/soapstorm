@@ -15654,4 +15654,80 @@ Please run the installer manually from your temp folder.
      name="okbutton"
      yestext="OK"/>
   </notification>
+  <!-- <SS:Nexii> Explanatory text for the Soapstorm preference panels. Kept here rather than on the panels so the panels stay short enough to fit without scrolling. -->
+  <notification
+   icon="alertmodal.tga"
+   name="SSROCHelp"
+   type="alertmodal">
+Region Object Cache
+
+Second Life sends you a region's contents piece by piece each time you arrive, and only the parts it thinks you are looking at. That is why a familiar place still takes time to appear, and why turning around leaves you waiting for scenery that was already there a moment ago.
+
+This remembers the long-lived scenery of regions you visit and paints it back the moment you return. Terrain, water level and ground textures come back first, then buildings.
+
+Only permanent scenery is cached. Objects that can be returned by the parcel on a timer, things that move, and anything in a sandbox are left alone, because rezzing them back from memory would show you something that is no longer there.
+
+Cached scenery is checked against what the simulator actually sends. Anything that no longer exists stops being drawn, and if enough of a region turns out to be wrong, that region's cache is thrown away and rebuilt.
+    <usetemplate
+     name="okbutton"
+     yestext="OK"/>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="SSROCPromotionHelp"
+   type="alertmodal">
+How scenery gets cached
+
+An object has to look permanent before it is worth remembering, and the evidence for that is time.
+
+Time you actually spend somewhere counts. Every few hours in a region counts as visiting it again, so an evening at home is worth more than passing through a stranger's build, and a place you use regularly is cached quickly.
+
+Objects that cannot be auto-returned by the parcel - those owned by the parcel owner, or set to the parcel's group - are already known to be staying, so they need only a couple of visits.
+
+Everything else has to be seen on separate days. Time in one sitting does not help there, because an object on a return timer can vanish between one hour and the next, and only real days passing show that it did not.
+
+Lower thresholds cache more of a region sooner, at the cost of occasionally remembering something that later turns out to have gone.
+    <usetemplate
+     name="okbutton"
+     yestext="OK"/>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="SSROCLimitsHelp"
+   type="alertmodal">
+Limits
+
+Objects per region sets how much of one region may be remembered. Thirty thousand covers a full region at its maximum object count. Lower it if you would rather spend less memory and disk on very dense regions.
+
+Disk space is a ceiling for the whole cache, not per region. Nothing is deleted until the limit is approached, and then regions you have not visited for the longest go first.
+
+Unconfirmed scenery is scenery drawn from memory that the simulator has not mentioned yet. After the time set here it stops being drawn, but what was learned about it is kept - being unmentioned usually means the simulator simply is not sending it, not that it is gone.
+    <usetemplate
+     name="okbutton"
+     yestext="OK"/>
+  </notification>
+
+  <notification
+   icon="alertmodal.tga"
+   name="SSSqueezeHelp"
+   type="alertmodal">
+Squeeze
+
+Textures normally sit on the graphics card as raw pixels. Squeeze keeps them in a compressed form the card reads directly, which uses roughly a quarter of the video memory for the same picture. That leaves room for more of the world to stay loaded at once instead of being thrown away and fetched again.
+
+Compressed copies are built in the background on spare processor cores and kept on disk, so the work is done once and reused every session afterwards.
+
+Compression only happens at full resolution, because a compressed copy of a blurry texture would have to be thrown away as soon as you walked closer. Partly downloaded textures are quietly completed while you are idle so they can be compressed properly.
+
+The compressed copies live alongside the ordinary texture cache rather than replacing it, but they are not extra disk use: both come out of the one cache size you set in Network and Cache, and the share here decides how it is divided. The ordinary cache keeps whatever is left and remains the source a compressed copy is rebuilt from, which is why it is never allowed to shrink below a quarter of the total. Clearing the texture cache removes the compressed copies too, and they are rebuilt as you go.
+
+Cards without BC7 support, and anything Squeeze cannot handle, fall back to the ordinary texture path automatically.
+    <usetemplate
+     name="okbutton"
+     yestext="OK"/>
+  </notification>
+  <!-- </SS:Nexii> -->
+
 </notifications>

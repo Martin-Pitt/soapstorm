@@ -423,6 +423,48 @@ public:
 
     virtual bool scaleDown() { return false; };
 
+    // <SS:Nexii> Squeeze - the BC7 residency ladder, see doc/super_compressed_textures.md. It lives on this class and not on LLImageGL for three reasons drawn from the code: this is the only object that survives the whole fetch/create cycle, updateFetch has to be able to see the state to decide whether to spend network on the J2C copy, and both of the edges verification found bugs on - RESIDENT to raw-needed and RESIDENT to uncompressed-upgrade - are member functions here.
+    //
+    // DECLINED is a fifth, terminal value beyond the four the design named, and it carries the reason. Without it a texture excluded for sculpt or raw-consumer reasons would be re-probed every frame, and the log could not tell "never considered" from "considered and refused" - the exact failure the encode side already paid for and fixed with ESSBC7EncodeVerdict.
+    enum ESSBC7Residency
+    {
+        SSBC7_RES_NONE = 0,
+        SSBC7_RES_HIT_KNOWN,
+        SSBC7_RES_READING,
+        SSBC7_RES_RESIDENT,
+        SSBC7_RES_DECLINED
+    };
+
+    U8   ssBC7Residency() const           { return mSSBC7Residency; }
+    void ssBC7SetResidency(U8 state)      { mSSBC7Residency = state; }
+    U8   ssBC7DeclineReason() const       { return mSSBC7DeclineReason; }
+
+    // Out of line because it has to hand this texture's share of the live video-memory gauge back first. The ladder alone is not a safe key for that: a resident whose re-serve read fails passes through READING on its way to DECLINED, and keying the release on the ladder would miss it and drift the gauge upward for the rest of the session.
+    void ssBC7SetDeclined(U8 reason);
+    S32  ssBC7ServedDiscard() const       { return mSSBC7ServedDiscard; }
+    bool ssBC7IsResident() const          { return mSSBC7Residency == (U8)SSBC7_RES_RESIDENT && mGLTexturep.notNull() && mGLTexturep->getHasGLTexture(); }
+
+    // Latched at construction time, not re-tested later: the read path sets an explicit format itself, after which getHasExplicitFormat() can no longer distinguish "the caller demanded a format" from "we chose BPTC".
+    void ssBC7LatchExplicitFormat()       { mSSBC7ExplicitFormat = true; }
+    bool ssBC7HadExplicitFormat() const   { return mSSBC7ExplicitFormat; }
+
+    // True when any loaded callback wants the LLImageRaw itself. mNeedsImageRaw is private to the entry, so this is the only way to ask.
+    bool ssBC7NeedsRawCallback() const;
+
+    // An uncompressed create is queued or already running for this texture. Both flags are needed: mCreatePending is the main-thread queue and mNeedsCreateTexture covers the LLImageGLThread route, which does the GL work on a worker and would otherwise be touching the same LLImageGL as a BC7 upload. Not const because LLAtomicBase's conversion operator is not.
+    bool ssBC7CreateInFlight()            { return mNeedsCreateTexture || mCreatePending; }
+
+    // Uploads a stored BC7 mip prefix. Mirrors by hand what LLGLTexture::createGLTexture(discard, imageraw, ...) does around the raw overload, because there is no LLGLTexture wrapper for the data_hasmips form and processTextureStats divides by mTexelsPerImage.
+    bool ssBC7UploadFromStore(const U8* data_in, S32 serve_discard, S32 full_width, S32 full_height, S32 src_components, S32 mip_count, bool alpha_is_mask);
+
+    void ssBC7NoteResident(S32 served_discard, U32 bc7_bytes, U32 saved_bytes);
+
+    // The RESIDENT to uncompressed-upgrade edge, made a declared transition rather than something the format guard in llimagegl.cpp discovers. `verdict` is an ESSBC7ServeVerdict, kept as a U8 so this header does not have to drag in ssbc7serve.h.
+    //
+    // drop_format is false for the raw-consumer edges, which merely ARRANGE for an uncompressed image to be fetched later. Dropping the format there would leave the format fields describing RGBA8 while the GL object still holds BPTC levels, and everything that reasons from the format - scaleDown above all - would then be reasoning about a texture that does not exist. The drop happens at addToCreateTexture, which every uncompressed upload actually passes through.
+    void ssBC7LeaveResidency(U8 verdict, const char* reason, bool drop_format = true);
+    // </SS:Nexii>
+
     bool mCreatePending = false;    // if true, this is in gTextureList.mCreateTextureList
     mutable bool mDownScalePending = false; // if true, this is in gTextureList.mDownScaleQueue
 
@@ -442,6 +484,10 @@ private:
     bool processFetchResults(S32& desired_discard, S32 current_discard, S32 fetch_discard, F32 decode_priority);
 
     void saveRawImage() ;
+
+    // <SS:Nexii> Squeeze - the ONE place this texture's contribution to the live gauge is given back, keyed on the recorded byte counts rather than on the ladder state so that every route out of residency releases exactly once
+    void ssBC7ReleaseGauge();
+    // </SS:Nexii>
 
 private:
     bool  mFullyLoaded;
@@ -520,6 +566,15 @@ protected:
 
     bool   mForSculpt ; //a flag if the texture is used as sculpt data.
     bool   mIsFetched ; //is loaded from remote or from cache, not generated locally.
+
+    // <SS:Nexii> Squeeze - packed deliberately: there is one LLViewerFetchedTexture per texture the session has ever touched, so the ladder is four bytes of state plus the two byte counts the live video-memory gauge needs to be a gauge rather than a high-water mark.
+    U8   mSSBC7Residency;
+    U8   mSSBC7DeclineReason;
+    S8   mSSBC7ServedDiscard;       // -1 whenever the ladder is not at RESIDENT
+    bool mSSBC7ExplicitFormat;
+    U32  mSSBC7ServedBytes;
+    U32  mSSBC7SavedBytes;
+    // </SS:Nexii>
 
 public:
     static F32 sMaxVirtualSize; //maximum possible value of mMaxVirtualSize

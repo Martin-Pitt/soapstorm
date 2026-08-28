@@ -27,6 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llviewerparcelmgr.h"
+#include "ssparcelfacts.h"   // <SS:Nexii/> the shared parcel cache's private reply branch, below
 
 // Library includes
 #include "llaudioengine.h"
@@ -1674,6 +1675,29 @@ void LLViewerParcelMgr::processParcelProperties(LLMessageSystem *msg, void **use
         LL_INFOS("ParcelMgr") << "no valid parcel data" << LL_ENDL;
         return;
     }
+
+    // <SS:Nexii> The shared parcel cache. Harvested here and returned from here, NOT dispatched through the chain below, because the tail of this function drives parcel media, the music stream and the land floater off whichever parcel it decided to fill - the trailing else does exactly that for any sequence id it does not recognise. A background reply that reached it would start a stranger's audio stream on every region entry.
+    //
+    // Every field that is a property OF THE LAND is taken, not the handful the first consumer wanted: the object cache reads owner, group and auto-return, the weather work reads the DESCRIPTION for its own tags, and a reply costs the same message whichever fields are read out of it. The prim counts and access lists are still read past - those describe the viewer's own selection, not the land.
+    if (sequence_id == SS_PARCELFACTS_SEQ_ID)
+    {
+        SSParcelFacts shared;
+        msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_LocalID, shared.mLocalID);
+        msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_OwnerID, shared.mOwnerID);
+        msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_GroupID, shared.mGroupID);
+        msg->getBOOLFast(_PREHASH_ParcelData, _PREHASH_IsGroupOwned, shared.mGroupOwned);
+        msg->getS32("ParcelData", "OtherCleanTime", shared.mCleanOtherTime);
+        msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_Area, shared.mArea);
+        msg->getU32Fast(_PREHASH_ParcelData, _PREHASH_ParcelFlags, shared.mParcelFlags);
+        msg->getU8Fast(_PREHASH_ParcelData, _PREHASH_Category, shared.mCategory);
+        msg->getStringFast(_PREHASH_ParcelData, _PREHASH_Name, shared.mName);
+        msg->getStringFast(_PREHASH_ParcelData, _PREHASH_Desc, shared.mDescription);
+        msg->getVector3Fast(_PREHASH_ParcelData, _PREHASH_AABBMin, shared.mAABBMin);
+        msg->getVector3Fast(_PREHASH_ParcelData, _PREHASH_AABBMax, shared.mAABBMax);
+        ssParcelFactsNoteReply(LLWorld::getInstance()->getRegion(msg->getSender()), shared);
+        return;
+    }
+    // </SS:Nexii>
 
     // Decide where the data will go.
     LLParcel* parcel = NULL;
