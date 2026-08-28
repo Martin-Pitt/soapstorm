@@ -8270,33 +8270,9 @@ void LLPipeline::applyCAS(LLRenderTarget* src, LLRenderTarget* dst)
 }
 
 // <SS:Nexii> HUD supersampling
-static LLStaticHashedString sHUDCoverage("hud_coverage");
-
-// Only the HUD passes that draw with GL_BLEND off need this. Their alpha reaches the target verbatim rather than being
-// accumulated by the coverage blend, and neither shader puts coverage there: pbropaque writes a hard 0 to suppress glow,
-// and the fullbright alpha-mask variant passes the diffuse texture's own alpha through. Both are harmless in the
-// direct-to-screen path, where alpha writes are masked off, so the correction rides a uniform only this path raises.
-// The blend-enabled HUD passes need no equivalent: their real alpha is both the correct colour blend factor and the
-// correct coverage contribution, and LLRender's coverage mode already accumulates it properly.
-static void set_hud_coverage_uniform(F32 coverage)
-{
-    LLGLSLShader* shaders[] = { &gHUDFullbrightAlphaMaskProgram, &gHUDPBROpaqueProgram };
-
-    for (LLGLSLShader* shader : shaders)
-    {
-        if (shader->isComplete())
-        {
-            shader->bind();
-            shader->uniform1f(sHUDCoverage, coverage);
-        }
-    }
-
-    LLGLSLShader::unbind();
-}
-
 bool LLPipeline::beginHUDSupersample()
 {
-    static LLCachedControl<U32> hud_supersample(gSavedSettings, "RenderHUDSupersample", 2U);
+    static LLCachedControl<U32> hud_supersample(gSavedSettings, "SSHUDSupersample", 2U);
 
     mHUDSupersampleFactor = 1;
 
@@ -8345,13 +8321,26 @@ bool LLPipeline::beginHUDSupersample()
 
     mHUDSupersampleFactor = factor;
 
-    mHUDScreen.bindTarget(); // also sets the viewport to the full target
-    glClearColor(0.f, 0.f, 0.f, 0.f);
-    mHUDScreen.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    // Point-upscale the presented frame into the target before the HUD draws over it. This is what keeps the whole
+    // feature simple: the HUD then blends against a real background exactly as it does when drawn straight to the
+    // screen, so nothing has to be done about blend modes, colour masks or what the alpha channel means. Because every
+    // one of a destination pixel's factor x factor source texels is the same point-sampled texel, the box resolve puts
+    // the background back unchanged; only the HUD geometry, which is genuinely rasterised at the higher resolution,
+    // gains anything from the round trip.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mHUDScreen.getFBO());
+    glBlitFramebuffer(gGLViewport[0], gGLViewport[1], gGLViewport[0] + gGLViewport[2], gGLViewport[1] + gGLViewport[3],
+                      0, 0, (GLint)width, (GLint)height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // from here until endHUDSupersample the alpha channel accumulates coverage rather than glow
-    gGL.setCoverageAlphaMode(true);
-    set_hud_coverage_uniform(1.f);
+    mHUDScreen.bindTarget(); // also sets the viewport to the full target
+
+    {
+        // colour already holds the upscaled frame, so only depth needs resetting; glClear honours the depth mask, hence forcing it writable here
+        LLGLDepthTest clear_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+        glClear(GL_DEPTH_BUFFER_BIT);
+    }
 
     return true;
 }
@@ -8362,9 +8351,6 @@ void LLPipeline::endHUDSupersample()
 
     llassert(mHUDSupersampleFactor > 1);
 
-    set_hud_coverage_uniform(0.f);
-    gGL.setCoverageAlphaMode(false);
-
     mHUDScreen.flush();
 
     // restore the world view viewport that renderFinalize left in place, since bindTarget stomped it with the supersampled size
@@ -8372,11 +8358,11 @@ void LLPipeline::endHUDSupersample()
 
     LLGLDepthTest depth(GL_FALSE, GL_FALSE);
     LLGLDisable cull(GL_CULL_FACE);
-    LLGLEnable blend(GL_BLEND);
 
-    // mHUDScreen holds premultiplied colour, so the composite is a straight "over" with no source alpha multiply
+    // The target already holds the finished composite of background plus HUD, so this replaces the frame rather than
+    // blending into it. No blending means no alpha channel to get right, which is the point of doing it this way.
+    LLGLDisable blend(GL_BLEND);
     gGL.setColorMask(true, false);
-    gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
 
     gHUDDownsampleProgram.bind();
 

@@ -34,7 +34,7 @@ uniform vec2 hud_texel_size; // 1 / source target dimensions
 
 in vec2 vary_fragcoord;
 
-// <SS:Nexii> Box resolve of the supersampled HUD target. The source holds premultiplied colour in rgb and coverage in alpha (see LLRender::setCoverageAlphaMode), and both are linear in coverage, so a plain unweighted average of the block is the correct resolve for each. Sampling is point filtered, so every tap lands on exactly one source texel and the block is counted once. Rationale in doc/hud_supersampling.md.
+// <SS:Nexii> Box resolve of the supersampled HUD target. The source already holds the finished composite of background plus HUD, so this is a plain unweighted average with no alpha handling to get right. Sampling is point filtered, so every tap lands on exactly one source texel and the block is counted once. Rationale in doc/hud_supersampling.md.
 void main()
 {
     // vary_fragcoord is the destination pixel centre in [0,1]. Walk back to the leading edge of the factor x factor source block it covers, then in by half a texel to land on the first texel's centre.

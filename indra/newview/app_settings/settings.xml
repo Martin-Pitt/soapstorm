@@ -12854,7 +12854,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <integer>0</integer>
     </map>
     <!-- <SS:Nexii> HUD supersampling -->
-    <key>RenderHUDSupersample</key>
+    <key>SSHUDSupersample</key>
     <map>
       <key>Comment</key>
       <string>Supersample factor for HUD attachments: 1 = off, 2 or 4 = render HUDs at NxN resolution and downsample (antialiases HUD edges, costs NxN HUD fill and an extra render target)</string>

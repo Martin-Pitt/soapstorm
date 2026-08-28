@@ -464,11 +464,6 @@ public:
     void blendFunc(eBlendFactor color_sfactor, eBlendFactor color_dfactor,
                eBlendFactor alpha_sfactor, eBlendFactor alpha_dfactor);
 
-    // <SS:Nexii> Coverage alpha mode. The main render path treats the destination alpha channel as glow and masks alpha writes off during post-deferred geometry, so a render target filled by that path carries no usable coverage. HUD supersampling needs coverage to composite its downsampled result, and the draw pools reset blend state and colour masks repeatedly mid-pass, so the override is applied here at the single choke point every pool funnels through rather than patched into each pool. While set, alpha writes are forced on and every alpha blend accumulates the "over" operator, which leaves the target holding premultiplied colour plus true coverage. Rationale in doc/hud_supersampling.md.
-    void setCoverageAlphaMode(bool enable);
-    bool getCoverageAlphaMode() const { return mCoverageAlphaMode; }
-    // </SS:Nexii>
-
     LLLightState* getLight(U32 index);
     void setAmbientLightColor(const LLColor4& color);
 
@@ -538,13 +533,6 @@ private:
     eBlendFactor mCurrBlendColorDFactor;
     eBlendFactor mCurrBlendAlphaSFactor;
     eBlendFactor mCurrBlendAlphaDFactor;
-    // <SS:Nexii> see setCoverageAlphaMode. The "requested" values record what the render path last asked for before the override rewrote it, so toggling the mode can re-issue that request rather than guess at the caller's intent.
-    bool mCoverageAlphaMode;
-    bool mColorMaskDirty;
-    bool mRequestedAlphaMask;
-    eBlendFactor mRequestedAlphaSFactor;
-    eBlendFactor mRequestedAlphaDFactor;
-    // </SS:Nexii>
 
     std::vector<LLVector4a, boost::alignment::aligned_allocator<LLVector4a, 16> > mUIOffset;
     std::vector<LLVector4a, boost::alignment::aligned_allocator<LLVector4a, 16> > mUIScale;

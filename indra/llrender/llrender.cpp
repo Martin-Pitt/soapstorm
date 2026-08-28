@@ -828,14 +828,6 @@ LLRender::LLRender()
     mCurrBlendColorDFactor = BF_UNDEF;
     mCurrBlendAlphaDFactor = BF_UNDEF;
 
-    // <SS:Nexii>
-    mCoverageAlphaMode = false;
-    mColorMaskDirty = false;
-    mRequestedAlphaMask = true;
-    mRequestedAlphaSFactor = BF_UNDEF;
-    mRequestedAlphaDFactor = BF_UNDEF;
-    // </SS:Nexii>
-
     mMatrixMode = LLRender::MM_MODELVIEW;
 
     for (U32 i = 0; i < NUM_MATRIX_MODES; ++i)
@@ -1395,22 +1387,11 @@ void LLRender::setColorMask(bool writeColorR, bool writeColorG, bool writeColorB
 {
     flush();
 
-    // <SS:Nexii> the post-deferred geometry path masks alpha writes off because destination alpha is glow; coverage mode needs those writes to land. Alpha follows colour rather than being forced on unconditionally: a pass that writes no colour (depth-only prepasses, invisiprims) contributes no coverage either, and forcing alpha on for those would stamp opaque holes into the target.
-    mRequestedAlphaMask = writeAlpha;
-
-    if (mCoverageAlphaMode && writeColorR && writeColorG && writeColorB)
-    {
-        writeAlpha = true;
-    }
-    // </SS:Nexii>
-
-    if (mColorMaskDirty || // <SS:Nexii/> a mode toggle invalidates the shadowed state, so the next request has to reach the driver even if it matches
-        mCurrColorMask[0] != writeColorR ||
+    if (mCurrColorMask[0] != writeColorR ||
         mCurrColorMask[1] != writeColorG ||
         mCurrColorMask[2] != writeColorB ||
         mCurrColorMask[3] != writeAlpha)
     {
-        mColorMaskDirty = false; // <SS:Nexii/>
         mCurrColorMask[0] = writeColorR;
         mCurrColorMask[1] = writeColorG;
         mCurrColorMask[2] = writeColorB;
@@ -1422,35 +1403,6 @@ void LLRender::setColorMask(bool writeColorR, bool writeColorG, bool writeColorB
                     writeAlpha ? GL_TRUE : GL_FALSE);
     }
 }
-
-// <SS:Nexii>
-void LLRender::setCoverageAlphaMode(bool enable)
-{
-    if (mCoverageAlphaMode == enable)
-    {
-        return;
-    }
-
-    flush();
-    mCoverageAlphaMode = enable;
-
-    // GL state no longer matches the shadowed state now that the override has flipped, so re-issue the last request the render path actually made and let the new override decide what it becomes. Both setters early-out on an unchanged request, hence the dirty flag and the BF_UNDEF sentinel.
-    mColorMaskDirty = true;
-    setColorMask(mCurrColorMask[0], mCurrColorMask[1], mCurrColorMask[2], mRequestedAlphaMask);
-
-    if (mCurrBlendColorSFactor < BF_UNDEF && mCurrBlendColorDFactor < BF_UNDEF &&
-        mRequestedAlphaSFactor < BF_UNDEF && mRequestedAlphaDFactor < BF_UNDEF)
-    {
-        eBlendFactor color_sfactor = mCurrBlendColorSFactor;
-        eBlendFactor color_dfactor = mCurrBlendColorDFactor;
-        eBlendFactor alpha_sfactor = mRequestedAlphaSFactor;
-        eBlendFactor alpha_dfactor = mRequestedAlphaDFactor;
-
-        mCurrBlendAlphaSFactor = BF_UNDEF;
-        blendFunc(color_sfactor, color_dfactor, alpha_sfactor, alpha_dfactor);
-    }
-}
-// </SS:Nexii>
 
 void LLRender::setSceneBlendType(eBlendType type)
 {
@@ -1487,18 +1439,6 @@ void LLRender::blendFunc(eBlendFactor sfactor, eBlendFactor dfactor)
 {
     llassert(sfactor < BF_UNDEF);
     llassert(dfactor < BF_UNDEF);
-
-    // <SS:Nexii> coverage mode always needs separate alpha factors, so route through the separate-factor path and let it apply the override
-    if (mCoverageAlphaMode)
-    {
-        blendFunc(sfactor, dfactor, sfactor, dfactor);
-        return;
-    }
-    // </SS:Nexii>
-
-    mRequestedAlphaSFactor = sfactor; // <SS:Nexii/>
-    mRequestedAlphaDFactor = dfactor; // <SS:Nexii/>
-
     if (mCurrBlendColorSFactor != sfactor || mCurrBlendColorDFactor != dfactor ||
         mCurrBlendAlphaSFactor != sfactor || mCurrBlendAlphaDFactor != dfactor)
     {
@@ -1518,17 +1458,6 @@ void LLRender::blendFunc(eBlendFactor color_sfactor, eBlendFactor color_dfactor,
     llassert(color_dfactor < BF_UNDEF);
     llassert(alpha_sfactor < BF_UNDEF);
     llassert(alpha_dfactor < BF_UNDEF);
-
-    // <SS:Nexii> force the "over" operator on the alpha channel so the target accumulates coverage instead of whatever the pool wanted alpha to mean (glow suppression, glow accumulation, or a material's custom blend)
-    mRequestedAlphaSFactor = alpha_sfactor;
-    mRequestedAlphaDFactor = alpha_dfactor;
-
-    if (mCoverageAlphaMode)
-    {
-        alpha_sfactor = BF_ONE;
-        alpha_dfactor = BF_ONE_MINUS_SOURCE_ALPHA;
-    }
-    // </SS:Nexii>
 
     if (mCurrBlendColorSFactor != color_sfactor || mCurrBlendColorDFactor != color_dfactor ||
         mCurrBlendAlphaSFactor != alpha_sfactor || mCurrBlendAlphaDFactor != alpha_dfactor)

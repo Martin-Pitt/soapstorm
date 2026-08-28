@@ -140,8 +140,6 @@ in vec2 emissive_texcoord;
 
 uniform float minimum_alpha; // PBR alphaMode: MASK, See: mAlphaCutoff, setAlphaCutoff()
 
-uniform float hud_coverage; // <SS:Nexii/> see below
-
 vec3 linear_to_srgb(vec3 c);
 vec3 srgb_to_linear(vec3 c);
 
@@ -165,8 +163,7 @@ void main()
 
     // HUDs are rendered after gamma correction, output in sRGB space
     frag_color.rgb = linear_to_srgb(col);
-    // <SS:Nexii> the 0 here is glow suppression, which is dead in the direct-to-screen path (glow is generated before HUDs render, and alpha writes are masked off anyway). The supersample resolve reads alpha as coverage, so it raises hud_coverage to 1; this pass runs with GL_BLEND off, so the value never affects colour. See doc/hud_supersampling.md.
-    frag_color.a = hud_coverage;
+    frag_color.a = 0.0;
 }
 
 #endif
