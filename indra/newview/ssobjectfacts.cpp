@@ -16,6 +16,7 @@
 #include "llpathfindingmanager.h"
 #include "llpathfindingobjectlist.h"
 #include "llviewercontrol.h"
+#include "llviewerobject.h"
 #include "llviewerregion.h"
 #include "llworld.h"
 #include "message.h"
@@ -28,6 +29,7 @@
 
 SSObjectFacts::SSObjectFacts()
 :   mCreationDate(0),
+    mUpdateFlags(0),
     mBaseMask(0),
     mOwnerMask(0),
     mGroupMask(0),
@@ -235,6 +237,32 @@ bool ssObjectFactsGet(U64 region_handle, const LLUUID& object_id, SSObjectFacts&
 
     out = found->second;
     return true;
+}
+
+bool ssObjectFactsResolve(LLViewerObject* objectp, SSObjectFacts& out)
+{
+    out = SSObjectFacts();
+    if (!objectp) return false;
+
+    LLViewerRegion* regionp = objectp->getRegion();
+    const U64 handle = regionp ? regionp->getHandle() : 0;
+
+    // The cached half first, so the live half overwrites it rather than the other way round. Position in particular: the pathfinding sweep's copy was true when the sweep ran and the object's own is true now.
+    if (handle) ssObjectFactsGet(handle, objectp->getID(), out);
+
+    out.mObjectID    = objectp->getID();
+    out.mUpdateFlags = objectp->getFlags();
+    out.mLocation    = objectp->getPositionRegion();
+    out.mScale       = objectp->getScale();
+    out.mHave       |= SS_OBJFACTS_LIVE;
+
+    return true;
+}
+
+void ssObjectFactsRequestFor(LLViewerObject* objectp, bool urgent, ss_objfacts_filter_t still_wanted)
+{
+    if (!objectp) return;
+    ssObjectFactsRequest(objectp->getRegion(), objectp->getLocalID(), objectp->getID(), urgent, still_wanted);
 }
 
 void ssObjectFactsSeedGroup(U64 region_handle, const LLUUID& object_id, const LLUUID& group_id)

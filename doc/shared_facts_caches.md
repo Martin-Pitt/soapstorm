@@ -51,13 +51,51 @@ ssParcelFactsAddListener([](LLViewerRegion* r, const SSParcelFacts& p) { /* scan
 ssObjectFactsAddListener([](U64 handle, const SSObjectFacts& o) { /* ... */ });
 ```
 
-## The pathfinding table
+## Pathfinding: what is free, what is filtered, and what is not reachable at all
 
-One HTTP GET against the region's `ObjectLinksets` capability returns **every linkset in the region** — no selection, no per-object cost, and it fires automatically for the agent's region on a long refresh. It carries name, description, location, land impact, scripted, modifiable and, above all, the linkset use.
+**Free, and the one most callers want.** `FLAGS_AFFECTS_NAVMESH` (`object_flags.h:44`) is an ordinary object update flag on every object in every region. It answers "does this object shape the region's navigation mesh", which is a declaration by whoever built it, enforced by the simulator, that the object is permanent and unmovable — nothing that can move is permitted to make it. `LLViewerObject::flagObjectPermanent()` reads it, and it is what the build floater shows as "Pathfinding attributes: Permanent". No capability, no request, no cache. **Do not come to this file for that** — test the flag.
 
-`SS_LINKSET_WALKABLE` and `SS_LINKSET_STATIC_OBSTACLE` — together `isNavmeshPermanent()` — mean the object is shaping the region's navigation mesh. That is not an inference from watching something sit still; it is a declaration by whoever built it, enforced by the simulator, and **nothing that can move is permitted to make it**. For the object cache it is the strongest permanence signal available anywhere, and it is worth `SSROCNavmeshPermanentBonus` (0.25) in scoring.
+**Permission filtered.** The `ObjectLinksets` capability returns only objects the agent **owns or can modify**, and only for the agent's own region (it resolves through `LLPathfindingManager::getCurrentRegion`). Verified in the field 2026-08-28: refreshing it in an unowned region does not return that region's objects. So it is not a region sweep and nothing may be built on it that has to be true of other people's builds.
 
-Two limits, both structural. The capability resolves only for the region the agent is standing in, so neighbours get nothing until the agent walks there — asking on a neighbour's behalf would silently return the agent region's table under the wrong handle, which is worse than no answer. And `LLPathfindingObject` keeps the owner UUID private behind a name lookup, exposing only *is it group owned*, so the owner still has to come from the object blob or from a select.
+What it does uniquely carry, for your own objects, is the **category**: `SS_LINKSET_WALKABLE`, `SS_LINKSET_STATIC_OBSTACLE`, `SS_LINKSET_MATERIAL_VOLUME`, `SS_LINKSET_EXCLUSION_VOLUME` — plus land impact, modifiable and scripted. No update flag distinguishes those. It also keeps the owner UUID private behind a name lookup, exposing only *is it group owned*.
+
+**Not reachable: the navigation mesh itself.** It was worth checking whether the baked navmesh could be downloaded, cached and handed to other features — a wind flow map wants exactly that kind of static obstacle field. It cannot, for two independent reasons:
+
+1. **No decoder ships in this tree.** `indra/llphysicsextensionsos/llpathinglib.cpp` is the open-source stub: `isFunctional()` returns false and `getInstance()` returns NULL, which is why every caller in the viewer is written as `if (LLPathingLib::getInstance() != NULL)`. The proprietary library is not in `autobuild.xml` and is not linked. The navmesh arrives as an opaque zlib-compressed `LLSD::Binary` and nothing here can open it.
+2. **Even the closed library would not help.** Its entire interface is `extractNavMeshSrcFromLLSD`, `processNavMeshData`, `generatePath` and a set of `renderNavMesh*` calls (`llpathinglib.h:147-182`). It consumes the blob and draws it or paths through it. It never hands geometry back, so there is nothing for a third feature to read.
+
+Caching the raw blob would therefore cache bytes nobody can interpret.
+
+**The alternative, if a static obstacle field is what you actually need.** Every object already carries `FLAGS_AFFECTS_NAVMESH`, a position and a scale, and the object cache already stores all three per record for whole regions across sessions. That is a coarse obstacle volume set, region-wide, neighbours included, needing no capability and no decoder. It is blockier than a navmesh and it is available today.
+
+## Layering with live objects
+
+A reasonable question, asked by the owner while wiring the wind flow map, which already walks live volume objects: should these facts hang off `LLViewerObject` instead of a side cache?
+
+**No, and the split is not arbitrary — it falls exactly along "does this change".**
+
+*The object owns what changes.* Update flags, region position, scale. Caching any of it makes it a lie the moment the object moves, and all of it is already free on the object. `FLAGS_AFFECTS_NAVMESH`, physics, phantom, temporary, character, scripted are all bits of `mFlags`.
+
+*The cache owns what was answered.* Name, description, group, creator, permission masks, creation date, linkset category, and everything about a parcel. None of it is on `LLViewerObject` and none of it can be, for three reasons:
+
+1. **There is nowhere to put it, and the tree has already answered this twice.** An object's name and description live on `LLSelectNode` (`llselectmgr.h:235-236`), which dies with the selection. That is why FSAreaSearch maintains its own `std::map<LLUUID, FSObjectProperties> mObjectDetails` (`fsareasearch.h:129`) rather than writing to the objects. Two existing side maps, for want of a field.
+2. **Lifetime, and it is fatal rather than inconvenient.** `LLWorld::resetClass` calls `gObjectList.destroy()` (`llworld.cpp:139`) *before* its `removeRegion` loop. At shutdown every `LLViewerObject` is already gone when the object cache's region-exit hook runs — facts stored on objects would vanish at precisely the moment something wants to persist them. More generally, remembering objects that are *not* live is the entire point of that consumer.
+3. **Memory, and it is the opposite of the intuition.** A field on `LLViewerObject` is paid by every live object whether anyone asked about it or not. Two `std::string`s cost ~64 bytes each even when empty, so name and description alone run to megabytes across a 2048 m draw distance before a single one is filled. The side cache holds an entry only for objects something actually asked about — and keeps it after the object dies, which is when it is most valuable.
+
+**So use `ssObjectFactsResolve()` and stop thinking about the seam:**
+
+```cpp
+SSObjectFacts facts;
+if (ssObjectFactsResolve(objectp, facts))
+{
+    if (facts.affectsNavmesh()) { /* live flag, free, always true */ }
+    if (facts.mHave & SS_OBJFACTS_PROPERTIES) { /* facts.mDescription, from a reply */ }
+}
+```
+
+It reads the flags, position and scale off the live object and fills the rest from the cache, returning true for any live object because the object is itself an answer. `mHave` says how complete the rest is. `ssObjectFactsRequestFor(objectp)` queues a probe for the missing half.
+
+One thing it deliberately does not do is read `LLViewerObject::getPhysicsShapeType()`. That getter sends an `ObjectPhysicsProperties` request when the value is unknown (`llviewerobject.cpp:7568-7573`), so calling it across a region's worth of objects fires thousands of messages from what reads like a field access. Ask the object directly if you want it, and mean it.
 
 ## Metering, and why it is where it is
 

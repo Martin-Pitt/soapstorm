@@ -899,8 +899,12 @@ F32 SSROCLedger::scoreRecord(const SSROCRecord& rec) const
         score += (F32)pw_bonus;
     }
 
-    // The region's own navigation mesh calls this walkable floor or a static obstacle. That is not an inference drawn from watching something sit still - it is a declaration by whoever built it, enforced by the simulator, and it names exactly the population this cache exists for: terrain furniture, buildings, roads, the walls a pathfinding character has to walk around. Objects that move are not permitted to shape a navmesh, so the claim polices itself, and it costs one HTTP request per region rather than a message per object.
-    if (rec.mRecordFlags & SSROC_REC_NAVMESH_STATIC)
+    // The object shapes the region's navigation mesh. That is not an inference drawn from watching something sit still - it is a declaration by whoever built it, enforced by the simulator, and it names exactly the population this cache exists for: terrain furniture, buildings, roads, the walls a pathfinding character has to walk around.
+    //
+    // FLAGS_AFFECTS_NAVMESH is an ordinary object update flag (object_flags.h:44) and has been in mUpdateFlags since Stage A. It is what the build floater shows as "Pathfinding attributes: Permanent" (llpanelpermissions.cpp:436, via LLViewerObject::flagObjectPermanent). It therefore costs NOTHING - no probe, no capability, no select, every object, every region, already persisted with the record.
+    //
+    // An earlier version of this took the same signal from the ObjectLinksets capability instead, which was wrong twice over: that capability answers only for objects the agent owns or can modify - so on other people's builds, which are the entire population this cache exists for, it reported nothing - and it is only addressable for the agent's own region. What that capability does add is the CATEGORY (walkable floor versus static obstacle versus material or exclusion volume), which no update flag carries; that remains available through the shared object cache, for your own objects, and nothing here depends on it.
+    if (rec.mUpdateFlags & FLAGS_AFFECTS_NAVMESH)
     {
         static LLCachedControl<F32> navmesh_bonus(gSavedSettings, "SSROCNavmeshPermanentBonus", 0.25f);
         score += (F32)navmesh_bonus;
@@ -1075,14 +1079,6 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
             {
                 rec.mRecordFlags |= SSROC_REC_OWNER_PUBLIC_WORKS;
             }
-        }
-
-        // The region's pathfinding table, where it has been swept. Latched onto the record rather than consulted at score time because the sweep only ever covers the agent's OWN region: a neighbour scored in the same pass has no table of its own, and must keep what an earlier visit as the agent region established rather than lose it. Where the sweep HAS spoken its answer is authoritative in both directions, so an object that stopped shaping the navmesh loses the mark.
-        SSObjectFacts nav_facts;
-        if (ssObjectFactsGet(rs.mHandle, rec.mFullID, nav_facts) && (nav_facts.mHave & SS_OBJFACTS_PATHFINDING))
-        {
-            if (nav_facts.isNavmeshPermanent()) rec.mRecordFlags |=  SSROC_REC_NAVMESH_STATIC;
-            else                                rec.mRecordFlags &= ~SSROC_REC_NAVMESH_STATIC;
         }
 
         rec.mScore = scoreRecord(rec);
