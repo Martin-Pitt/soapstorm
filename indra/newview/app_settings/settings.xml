@@ -12853,6 +12853,21 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Backup</key>
       <integer>0</integer>
     </map>
+    <!-- <SS:Nexii> HUD supersampling -->
+    <key>RenderHUDSupersample</key>
+    <map>
+      <key>Comment</key>
+      <string>Supersample factor for HUD attachments: 1 = off, 2 or 4 = render HUDs at NxN resolution and downsample (antialiases HUD edges, costs NxN HUD fill and an extra render target)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+      <key>Backup</key>
+      <integer>1</integer>
+    </map>
+    <!-- </SS:Nexii> -->
     <key>RenderHighlightSelections</key>
     <map>
       <key>Comment</key>

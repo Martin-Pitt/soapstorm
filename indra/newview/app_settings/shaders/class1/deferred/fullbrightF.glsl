@@ -42,6 +42,10 @@ vec3 linear_to_srgb(vec3 cl);
 uniform float minimum_alpha;
 #endif
 
+#if defined(IS_HUD) && defined(HAS_ALPHA_MASK) && !defined(IS_ALPHA)
+uniform float hud_coverage; // <SS:Nexii/> see below
+#endif
+
 #ifdef IS_ALPHA
 uniform vec4 waterPlane;
 void waterClip(vec3 pos);
@@ -93,6 +97,11 @@ void main()
 
 #endif
 
+#endif
+
+#if defined(IS_HUD) && defined(HAS_ALPHA_MASK) && !defined(IS_ALPHA)
+    // <SS:Nexii> This variant is drawn with GL_BLEND off, so alpha reaches the target untouched and the mask test has already discarded everything not fully covered. The supersample resolve reads alpha as coverage and needs a 1 here; the direct-to-screen path masks alpha writes off entirely, so hud_coverage stays 0 there and nothing changes. Blending is off either way, so this never affects the colour result. See doc/hud_supersampling.md.
+    color.a = mix(color.a, 1.0, hud_coverage);
 #endif
 
     frag_color = max(color, vec4(0));

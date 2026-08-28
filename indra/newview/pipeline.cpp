@@ -1362,6 +1362,8 @@ void LLPipeline::releaseGLBuffers()
 
     mUIScreen.release();
 
+    mHUDScreen.release(); // <SS:Nexii/> reallocated lazily by beginHUDSupersample
+
     mDownResMap.release();
 
     mBakeMap.release();
@@ -8266,6 +8268,142 @@ void LLPipeline::applyCAS(LLRenderTarget* src, LLRenderTarget* dst)
 
     dst->flush();
 }
+
+// <SS:Nexii> HUD supersampling
+static LLStaticHashedString sHUDCoverage("hud_coverage");
+
+// Only the HUD passes that draw with GL_BLEND off need this. Their alpha reaches the target verbatim rather than being
+// accumulated by the coverage blend, and neither shader puts coverage there: pbropaque writes a hard 0 to suppress glow,
+// and the fullbright alpha-mask variant passes the diffuse texture's own alpha through. Both are harmless in the
+// direct-to-screen path, where alpha writes are masked off, so the correction rides a uniform only this path raises.
+// The blend-enabled HUD passes need no equivalent: their real alpha is both the correct colour blend factor and the
+// correct coverage contribution, and LLRender's coverage mode already accumulates it properly.
+static void set_hud_coverage_uniform(F32 coverage)
+{
+    LLGLSLShader* shaders[] = { &gHUDFullbrightAlphaMaskProgram, &gHUDPBROpaqueProgram };
+
+    for (LLGLSLShader* shader : shaders)
+    {
+        if (shader->isComplete())
+        {
+            shader->bind();
+            shader->uniform1f(sHUDCoverage, coverage);
+        }
+    }
+
+    LLGLSLShader::unbind();
+}
+
+bool LLPipeline::beginHUDSupersample()
+{
+    static LLCachedControl<U32> hud_supersample(gSavedSettings, "RenderHUDSupersample", 2U);
+
+    mHUDSupersampleFactor = 1;
+
+    if (gCubeSnapshot || !gHUDDownsampleProgram.isComplete())
+    {
+        return false;
+    }
+
+    U32 factor = llclamp(hud_supersample(), 1U, 4U);
+    if (factor < 2)
+    {
+        return false;
+    }
+
+    LLRect world_rect = gViewerWindow->getWorldViewRectRaw();
+    U32 base_width = (U32)llmax(world_rect.getWidth(), 1);
+    U32 base_height = (U32)llmax(world_rect.getHeight(), 1);
+
+    // 4x on a large display asks for a target past what the driver will hand out; step the factor down rather than fail outright and drop the HUD entirely
+    U32 max_dim = (U32)llmax(gGLManager.mGLMaxTextureSize, 1024);
+    while (factor > 1 && (base_width * factor > max_dim || base_height * factor > max_dim))
+    {
+        factor /= 2;
+    }
+
+    if (factor < 2)
+    {
+        return false;
+    }
+
+    U32 width = base_width * factor;
+    U32 height = base_height * factor;
+
+    if (mHUDScreen.getWidth() != width || mHUDScreen.getHeight() != height)
+    {
+        mHUDScreen.release();
+
+        // depth is required: HUD attachments depth sort against each other, and the direct path relies on a depth buffer being present for the same reason
+        if (!mHUDScreen.allocate(width, height, GL_RGBA, true))
+        {
+            mHUDScreen.release();
+            LL_WARNS() << "Failed to allocate " << width << "x" << height << " HUD supersample target; falling back to direct HUD rendering" << LL_ENDL;
+            return false;
+        }
+    }
+
+    mHUDSupersampleFactor = factor;
+
+    mHUDScreen.bindTarget(); // also sets the viewport to the full target
+    glClearColor(0.f, 0.f, 0.f, 0.f);
+    mHUDScreen.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // from here until endHUDSupersample the alpha channel accumulates coverage rather than glow
+    gGL.setCoverageAlphaMode(true);
+    set_hud_coverage_uniform(1.f);
+
+    return true;
+}
+
+void LLPipeline::endHUDSupersample()
+{
+    LL_PROFILE_GPU_ZONE("HUD downsample");
+
+    llassert(mHUDSupersampleFactor > 1);
+
+    set_hud_coverage_uniform(0.f);
+    gGL.setCoverageAlphaMode(false);
+
+    mHUDScreen.flush();
+
+    // restore the world view viewport that renderFinalize left in place, since bindTarget stomped it with the supersampled size
+    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+    LLGLDisable cull(GL_CULL_FACE);
+    LLGLEnable blend(GL_BLEND);
+
+    // mHUDScreen holds premultiplied colour, so the composite is a straight "over" with no source alpha multiply
+    gGL.setColorMask(true, false);
+    gGL.blendFunc(LLRender::BF_ONE, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+
+    gHUDDownsampleProgram.bind();
+
+    S32 channel = gHUDDownsampleProgram.enableTexture(LLShaderMgr::DEFERRED_DIFFUSE, mHUDScreen.getUsage());
+    if (channel > -1)
+    {
+        // point sampling: the shader gathers the exact factor x factor texel block per output pixel, so bilinear taps would only smear neighbouring blocks in
+        mHUDScreen.bindTexture(0, channel, LLTexUnit::TFO_POINT);
+    }
+
+    static LLStaticHashedString sHUDSupersample("hud_supersample");
+    static LLStaticHashedString sHUDTexelSize("hud_texel_size");
+
+    gHUDDownsampleProgram.uniform1i(sHUDSupersample, (S32)mHUDSupersampleFactor);
+    gHUDDownsampleProgram.uniform2f(sHUDTexelSize, 1.f / (GLfloat)mHUDScreen.getWidth(), 1.f / (GLfloat)mHUDScreen.getHeight());
+
+    mScreenTriangleVB->setBuffer();
+    mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+
+    gHUDDownsampleProgram.disableTexture(LLShaderMgr::DEFERRED_DIFFUSE, mHUDScreen.getUsage());
+    gHUDDownsampleProgram.unbind();
+
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+    mHUDSupersampleFactor = 1;
+}
+// </SS:Nexii>
 
 void LLPipeline::applyFXAA(LLRenderTarget* src, LLRenderTarget* dst)
 {

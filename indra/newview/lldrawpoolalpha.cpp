@@ -858,7 +858,8 @@ void LLDrawPoolAlpha::renderAlpha(U32 mask, bool depth_only, bool rigged)
             }
 
             // render emissive faces into alpha channel for bloom effects
-            if (!depth_only)
+            // <SS:Nexii> ...except for HUDs, where it has never done anything: glow is generated inside renderFinalize, which has already run and presented by the time HUD attachments draw, so these writes land in a buffer nothing samples. Skipping it is free here and necessary under HUD supersampling, where the target's alpha channel is coverage and glow accumulation would punch through it.
+            if (!depth_only && !LLPipeline::sRenderingHUDs)
             {
                 gPipeline.enableLightsDynamic();
 
