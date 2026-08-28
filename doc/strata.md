@@ -100,6 +100,31 @@ drops around 300 textures. Bigger volumes mean proportionally more thrown away p
 At `CacheSize` 16384 with a 50% share the store lands on ~24 volumes of 341 MiB on its own, with no further
 work. Anyone re-raising "why not one enormous file" should read this paragraph and the allocator entry above.
 
+## Measured state, 2026-08-28: the projections against the disk
+
+Counted on the owner's live cache at `V:\Firestorm` after Strata had been running for several sessions.
+
+| | files | bytes |
+|---|---|---|
+| `.dat` volumes, both tenants | **73** | **12,278 MB** |
+| loose `.texture` bodies awaiting the settle | 1,525 | 200 MB |
+| `roc/` containers | 49 | 130 MB |
+| stock `.slc` / `.slec` | 96 | 105 MB |
+| the two caches Strata governs, total | **1,636** | |
+| the same caches before Strata | ~57,900 | |
+
+A 35x reduction in file count, with 99% of the bytes inside 73 files. That is the feature working.
+
+**Two claims in this document were wrong and are corrected here rather than left standing.** The asset-tier
+section says the loose staging tier settles at "low hundreds" and the texture-tier section says "low tens";
+the measured steady state is **1,525 loose texture bodies**. That is not a leak - `SSStrataPackAgeSeconds` is
+300, so every body written in the last five minutes is deliberately still loose, and a browsing session
+writes far more than "low tens" in five minutes. The projection was wrong about arrival rate, not about
+mechanism. Anyone reading the per-tier tables below should read this number instead of theirs.
+
+The second claim, "a few dozen files after", is also wrong for the same reason: 73 volumes plus a rolling
+population of roughly fifteen hundred settling bodies is the real steady state.
+
 ## Measured state, 2026-08-27
 
 | tier | files | size |

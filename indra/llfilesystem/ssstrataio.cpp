@@ -16,6 +16,7 @@
 #include "lldiriterator.h"
 #include "llfile.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -676,6 +677,37 @@ bool SSStrataStore::readObject(const LLUUID& id, S32 offset, U8* dst, S32 bytes,
 // ---------------------------------------------------------------------------
 // Write gates
 // ---------------------------------------------------------------------------
+
+void SSStrataStore::typeBreakdown(std::vector<SSStrataTypeStat>& out) const
+{
+    out.clear();
+
+    // 256 slots rather than AT_COUNT, because the type byte comes off disk and a corrupted or future record must land in a bucket instead of past the end of one.
+    U32 counts[256] = { 0 };
+    U64 bytes[256]  = { 0 };
+
+    {
+        std::lock_guard<std::mutex> lock(mMapMutex);
+        for (const auto& pair : mIndex)
+        {
+            const U8 t = pair.second.mAssetType;
+            ++counts[t];
+            bytes[t] += (U64)pair.second.mSize;
+        }
+    }
+
+    for (U32 t = 0; t < 256; ++t)
+    {
+        if (!counts[t]) continue;
+        SSStrataTypeStat st;
+        st.mType  = (U8)t;
+        st.mCount = counts[t];
+        st.mBytes = bytes[t];
+        out.push_back(st);
+    }
+
+    std::sort(out.begin(), out.end(), [](const SSStrataTypeStat& a, const SSStrataTypeStat& b) { return a.mBytes > b.mBytes; });
+}
 
 ESSStrataUnpack SSStrataStore::noteUnpack(ESSStrataUnpack v)
 {

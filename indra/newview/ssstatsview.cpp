@@ -12,6 +12,7 @@
 #include "ssstatsview.h"
 
 #include "llfontgl.h"
+#include "llframetimer.h"
 #include "llgl.h"
 #include "llimagegl.h"
 #include "llrender.h"
@@ -21,6 +22,7 @@
 #include "ssrocaux.h"
 #include "ssroccache.h"
 #include "ssrocledger.h"
+#include "llassettype.h"
 #include "ssstrata.h"
 #include "ssbc7adaptive.h"
 #include "ssbc7encodequeue.h"
@@ -334,44 +336,149 @@ void SSStatsView::draw()
 
     blank();
 
-    // ---- Strata (asset cache container) --------------------------------------
-    // <SS:Nexii> The number worth watching here is LOOSE, not packed. Packed is the achievement, but loose is the thing a user actually sees in Explorer, and during a cold-cache burst it can run to tens of thousands before the packer catches up - which looked like the feature not working when the only place that number appeared was the log.
-    SSStrataStore* strata = SSStrataStore::live();
-    line("STRATA  (asset cache)", strata == NULL);
-    if (!strata)
+    // ---- Strata (both cache tiers) -------------------------------------------
+    // <SS:Nexii> Two tenants, both shown. The texture tier is roughly ten times the size of the asset tier on a real cache, so a panel that reported only the asset store was describing under a tenth of what Strata actually holds. The number worth watching in each is LOOSE, not packed: packed is the achievement, but loose is what a user sees in Explorer, and during a cold-cache burst it runs to thousands before the packer catches up - which looked like the feature not working when the only place that number appeared was a log line.
     {
-        line("  off", true);
-    }
-    else
-    {
-        const U64 allocated = strata->allocatedBytes();
-        const U64 budget    = strata->budgetBytes();
-        const U32 pct       = budget ? (U32)llmin((U64)999, allocated * 100ull / budget) : 0;
-
-        line(llformat("  packed   %u assets in %u volume%s   %s of %s (%u%%)",
-                      strata->objectCount(), strata->volumeCount(),
-                      strata->volumeCount() == 1 ? "" : "s",
-                      ssMB(allocated).c_str(), ssMB(budget).c_str(), pct));
-
-        const SSStrataStore::Metrics& sm = strata->metrics();
-        line(llformat("  folded   %u this session (%s)   %u read back from volumes",
-                      sm.mPacked.load(), ssMB(sm.mPackedBytes.load()).c_str(), sm.mReadsServed.load()));
-
-        // The count that answers "why are there still thousands of files in my cache folder". Loose is where every write lands before it is folded, so it rises during a burst and drains afterwards; showing it next to the packed count is what makes that legible instead of alarming.
-        line(llformat("  loose    %u files awaiting folding (%s)",
-                      sm.mLooseFiles.load(), ssMB(sm.mLooseBytes.load()).c_str()),
-             sm.mLooseFiles.load() == 0);
-
-        // Only shown when something actually went wrong, so a clean run does not train the eye past the line that matters.
-        const U32 bad = sm.mReadsFailedOpen.load() + sm.mReadsFailedShort.load()
-                      + sm.mReadsFailedIdentity.load() + sm.mReadsFailedCRC.load()
-                      + sm.mTombstoneFailed.load() + sm.mRecordsRejected.load();
-        if (bad)
+        SSStrataStore* tiers[SSSTRATA_TENANT_COUNT];
+        for (U32 t = 0; t < SSSTRATA_TENANT_COUNT; ++t)
         {
-            line(llformat("  problems %u failed reads, %u rejected records, %u lost tombstones",
-                          sm.mReadsFailedOpen.load() + sm.mReadsFailedShort.load()
-                            + sm.mReadsFailedIdentity.load() + sm.mReadsFailedCRC.load(),
-                          sm.mRecordsRejected.load(), sm.mTombstoneFailed.load()));
+            tiers[t] = SSStrataStore::live((ESSStrataTenant)t);
+        }
+
+        U64 all_packed = 0;
+        U32 all_volumes = 0, all_loose = 0;
+        bool any = false;
+        for (U32 t = 0; t < SSSTRATA_TENANT_COUNT; ++t)
+        {
+            if (!tiers[t]) continue;
+            any = true;
+            all_packed  += tiers[t]->allocatedBytes();
+            all_volumes += tiers[t]->volumeCount();
+            all_loose   += tiers[t]->metrics().mLooseFiles.load();
+        }
+
+        line("STRATA  (cache in big files)", !any);
+        if (!any)
+        {
+            line("  off", true);
+        }
+        else
+        {
+            line(llformat("  holding   %s in %u big file%s instead of thousands of small ones",
+                          ssMB(all_packed).c_str(), all_volumes, all_volumes == 1 ? "" : "s"));
+
+            static const char* TENANT_LABEL[SSSTRATA_TENANT_COUNT] = { "assets  ", "textures" };
+            for (U32 t = 0; t < SSSTRATA_TENANT_COUNT; ++t)
+            {
+                SSStrataStore* tier = tiers[t];
+                if (!tier)
+                {
+                    line(llformat("  %s  off", TENANT_LABEL[t]), true);
+                    continue;
+                }
+
+                const U64 allocated = tier->allocatedBytes();
+                const U64 budget    = tier->budgetBytes();
+                const U32 pct       = budget ? (U32)llmin((U64)999, allocated * 100ull / budget) : 0;
+                const SSStrataStore::Metrics& sm = tier->metrics();
+
+                line(llformat("  %s  %s in %u file%s   %u%% of its %s share   %u objects",
+                              TENANT_LABEL[t], ssMB(allocated).c_str(), tier->volumeCount(),
+                              tier->volumeCount() == 1 ? "" : "s", pct, ssMB(budget).c_str(),
+                              tier->objectCount()));
+
+                const U32 loose = sm.mLooseFiles.load();
+                if (loose)
+                {
+                    // Not a backlog and not a leak: SSStrataPackAgeSeconds deliberately leaves a file alone until it has stopped being written to. Saying so on the line stops the number reading as failure.
+                    line(llformat("            %u still loose (%s), waiting out the settle time",
+                                  loose, ssMB(sm.mLooseBytes.load()).c_str()), true);
+                }
+            }
+
+            // The asset tier is the only mixed one - the texture tier is entirely J2C bodies, which is why it carries a default type instead of recording one per object. Refreshed on its own timer because it walks the whole index under the lock the fetch threads resolve reads through.
+            SSStrataStore* assets = tiers[SSSTRATA_TENANT_ASSETS];
+            if (assets)
+            {
+                static std::vector<SSStrataTypeStat> s_breakdown;
+                static LLFrameTimer s_breakdown_timer;
+                static bool s_breakdown_primed = false;
+                if (!s_breakdown_primed || s_breakdown_timer.getElapsedTimeF32() >= 5.f)
+                {
+                    s_breakdown_primed = true;
+                    s_breakdown_timer.reset();
+                    assets->typeBreakdown(s_breakdown);
+                }
+
+                if (!s_breakdown.empty())
+                {
+                    line("  what is in the asset file(s)", true);
+                    const size_t shown = llmin((size_t)5, s_breakdown.size());
+                    for (size_t i = 0; i < shown; ++i)
+                    {
+                        const SSStrataTypeStat& st = s_breakdown[i];
+                        // 0xFF is not corruption: Firestorm's cache filenames do not carry the asset type, so anything packed out of a file this session never wrote has no class to report. It decays as the cache turns over.
+                        const char* name = (st.mType == 0xFF)
+                            ? "not recorded"
+                            : LLAssetType::lookupHumanReadable((LLAssetType::EType)st.mType);
+                        line(llformat("     %-14s %9s  %u objects", name ? name : "other",
+                                      ssMB(st.mBytes).c_str(), st.mCount), true);
+                    }
+                    if (s_breakdown.size() > shown)
+                    {
+                        U64 rest_bytes = 0; U32 rest_count = 0;
+                        for (size_t i = shown; i < s_breakdown.size(); ++i)
+                        {
+                            rest_bytes += s_breakdown[i].mBytes;
+                            rest_count += s_breakdown[i].mCount;
+                        }
+                        line(llformat("     %-14s %9s  %u objects", "everything else",
+                                      ssMB(rest_bytes).c_str(), rest_count), true);
+                    }
+                }
+            }
+
+            // Session activity, summed across both tiers so the line reads as one feature rather than two accountants.
+            U32 folded = 0, read_back = 0, killed = 0, dropped = 0, too_young = 0, too_big = 0, in_use = 0;
+            U32 bad_reads = 0, bad_records = 0;
+            U64 folded_bytes = 0, reclaimed_bytes = 0;
+            for (U32 t = 0; t < SSSTRATA_TENANT_COUNT; ++t)
+            {
+                if (!tiers[t]) continue;
+                const SSStrataStore::Metrics& sm = tiers[t]->metrics();
+                folded          += sm.mPacked.load();
+                folded_bytes    += sm.mPackedBytes.load();
+                read_back       += sm.mReadsServed.load();
+                killed          += sm.mVolumesKilled.load();
+                dropped         += sm.mObjectsDropped.load();
+                reclaimed_bytes += sm.mBytesReclaimed.load();
+                too_young       += sm.mSkipTooYoung.load();
+                too_big         += sm.mSkipTooBig.load();
+                in_use          += sm.mSkipUnstable.load() + sm.mSkipChanged.load() + sm.mSkipPinned.load();
+                bad_reads       += sm.mReadsFailedOpen.load() + sm.mReadsFailedShort.load()
+                                 + sm.mReadsFailedIdentity.load() + sm.mReadsFailedCRC.load();
+                bad_records     += sm.mRecordsRejected.load() + sm.mTombstoneFailed.load();
+            }
+
+            line(llformat("  session   %u folded in (%s), %u read back out",
+                          folded, ssMB(folded_bytes).c_str(), read_back), folded == 0 && read_back == 0);
+
+            if (killed || dropped)
+            {
+                line(llformat("  freed     %u big file%s deleted (%s), %u objects went with them",
+                              killed, killed == 1 ? "" : "s", ssMB(reclaimed_bytes).c_str(), dropped));
+            }
+
+            // Only when something is actually waiting, so a settled cache does not carry a line of zeroes.
+            if (all_loose && (too_young || too_big || in_use))
+            {
+                line(llformat("  passed by %u too new, %u too big, %u in use", too_young, too_big, in_use), true);
+            }
+
+            if (bad_reads || bad_records)
+            {
+                line(llformat("  problems  %u failed reads, %u rejected or lost records", bad_reads, bad_records));
+            }
         }
     }
 

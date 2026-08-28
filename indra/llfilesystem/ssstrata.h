@@ -225,6 +225,15 @@ struct SSStrataLooseFile
     bool        mPinned;    // one of Firestorm's static assets, which prepopulateCacheWithStatic re-copies on every startup and the purge refuses to delete. Packing one would have the copy recreate the loose file every session and the packer unlink it again every session, so it is simply left alone
 };
 
+// One asset class's share of a tier, for the overlay. Emitted rather than accumulated live because a reclaim drops a whole volume's worth of records at once, and running totals that have to be unwound by an eviction are how a counter ends up disagreeing with the thing it counts.
+struct SSStrataTypeStat
+{
+    SSStrataTypeStat() : mType(0xFF), mCount(0), mBytes(0) {}
+    U8  mType;      // LLAssetType::EType, or 0xFF for records whose type this tier never saw - see SSStrataRecord::mAssetType
+    U32 mCount;
+    U64 mBytes;
+};
+
 // TWO LOCKS, NEVER NESTED THE OTHER WAY, copied deliberately from SSBC7Store because the reasoning is identical: mMapMutex guards the in-memory index only and is held for microseconds, mStoreMutex guards every byte of file IO. A multi-megabyte pack batch must never share a mutex with the lookup path or the fetch threads stall behind a disk write. Reads take mMapMutex to resolve a record and then do their IO holding NOTHING - correctness against a volume reclaimed underneath them comes from the uuid in the blob header, not from a lock.
 class SSStrataStore
 {
@@ -315,6 +324,8 @@ public:
     U64 volumeCap() const { return mVolumeCap; }
     U32 generation() const { return mGeneration.load(); }
     U32 objectCount() const { return mLiveRecords.load(); }
+    // Walks the index once and returns the live records grouped by asset class, largest share first. Deliberately NOT maintained as a running total: see SSStrataTypeStat. The caller is expected to cache the result rather than ask per frame, because this is O(records) under mMapMutex and the fetch threads resolve every read through that lock.
+    void typeBreakdown(std::vector<SSStrataTypeStat>& out) const;
     U32 volumeCount() const;
     std::string storeDir() const { return mStoreDir; }
     std::string indexPath() const;
