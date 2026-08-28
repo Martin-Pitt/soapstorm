@@ -28,6 +28,7 @@
 out vec4 frag_color;
 
 uniform sampler2D diffuseRect;
+uniform sampler2D depthMap;
 
 uniform int hud_supersample; // supersample factor, 2 or 4
 uniform vec2 hud_texel_size; // 1 / source target dimensions
@@ -41,14 +42,24 @@ void main()
     vec2 base = vary_fragcoord - (0.5 * float(hud_supersample) - 0.5) * hud_texel_size;
 
     vec4 sum = vec4(0.0);
+    float nearest = 1.0;
 
     for (int y = 0; y < hud_supersample; ++y)
     {
         for (int x = 0; x < hud_supersample; ++x)
         {
-            sum += texture(diffuseRect, base + vec2(float(x), float(y)) * hud_texel_size);
+            vec2 tc = base + vec2(float(x), float(y)) * hud_texel_size;
+
+            sum += texture(diffuseRect, tc);
+            nearest = min(nearest, texture(depthMap, tc).r);
         }
     }
 
     frag_color = sum / float(hud_supersample * hud_supersample);
+
+    // Hand the HUD's depth back to the default framebuffer so anything drawn afterwards that depth tests -- avatar
+    // nametags, non-HUD hover text -- is still occluded by HUD attachments. Depth cannot be averaged the way colour can,
+    // so take the nearest sample in the block: a partially covered edge pixel occludes, which errs on the side of the
+    // HUD hiding what is behind it.
+    gl_FragDepth = nearest;
 }

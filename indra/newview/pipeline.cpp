@@ -8356,7 +8356,11 @@ void LLPipeline::endHUDSupersample()
     // restore the world view viewport that renderFinalize left in place, since bindTarget stomped it with the supersampled size
     glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
 
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+    // Depth writes stay on and the resolve shader emits gl_FragDepth. Without this the HUD's depth would be stranded in
+    // mHUDScreen and everything drawn afterwards that depth tests -- avatar nametags, non-HUD hover text -- would stop
+    // being occluded by HUD attachments. Nothing is lost by overwriting: renderFinalize's present pass has already reset
+    // the default framebuffer's depth to a constant with GL_ALWAYS, so there is no world depth here left to preserve.
+    LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
     LLGLDisable cull(GL_CULL_FACE);
 
     // The target already holds the finished composite of background plus HUD, so this replaces the frame rather than
@@ -8373,6 +8377,9 @@ void LLPipeline::endHUDSupersample()
         mHUDScreen.bindTexture(0, channel, LLTexUnit::TFO_POINT);
     }
 
+    // depth of the same block, so the resolve can hand the HUD's occlusion back to the default framebuffer
+    gHUDDownsampleProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH, &mHUDScreen, true, LLTexUnit::TFO_POINT);
+
     static LLStaticHashedString sHUDSupersample("hud_supersample");
     static LLStaticHashedString sHUDTexelSize("hud_texel_size");
 
@@ -8383,6 +8390,7 @@ void LLPipeline::endHUDSupersample()
     mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
 
     gHUDDownsampleProgram.disableTexture(LLShaderMgr::DEFERRED_DIFFUSE, mHUDScreen.getUsage());
+    gHUDDownsampleProgram.disableTexture(LLShaderMgr::DEFERRED_DEPTH, mHUDScreen.getUsage());
     gHUDDownsampleProgram.unbind();
 
     gGL.setSceneBlendType(LLRender::BT_ALPHA);

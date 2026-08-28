@@ -16,7 +16,9 @@ Most visible HUD jaggedness is not on polygon edges at all. It is on the alpha e
 
 1. **Point-upscale the presented frame** into a target sized world-view × factor, with a `GL_NEAREST` `glBlitFramebuffer` from the default framebuffer.
 2. **Clear depth only** and render the HUD geometry pass into that target, completely unmodified.
-3. **Box-resolve** each factor × factor block back over the screen with blending off, replacing the frame.
+3. **Box-resolve** each factor × factor block back over the screen with blending off, replacing the frame, and emit `gl_FragDepth` from the same block.
+
+The depth half of step 3 is not optional. HUD attachments write depth, and things drawn after them — avatar nametags, non-HUD hover text — depth test against it to stay hidden behind the HUD. Rendering into an offscreen target strands that depth in `mHUDScreen`, so the resolve has to hand it back or those elements stop being occluded. Overwriting costs nothing: `renderFinalize`'s present pass has already reset the default framebuffer's depth to a constant with `GL_ALWAYS`, so there is no world depth left there to preserve. Depth cannot be averaged like colour, so the resolve takes the nearest sample in each block — a partially covered edge pixel occludes, erring towards the HUD hiding what is behind it.
 
 The upscale step is what keeps this simple. The HUD blends against a real background exactly as it does when drawn straight to the screen, so nothing has to be done about blend modes, colour masks, or what the alpha channel means — no draw pool, shader or `LLRender` behaviour changes at all.
 
