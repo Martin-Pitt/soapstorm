@@ -20,11 +20,14 @@
 #include "llwin32headers.h"
 #include "llviewercontrol.h"
 #include "llviewertexturelist.h"   // <SS:Nexii> Squeeze eviction - the maintenance tick walks the resident set to mark what is still referenced
+#include "ssbc7adaptive.h"         // <SS:Nexii/> Squeeze adaptive quality - the profile every encode is done at, and where the throughput it achieved is reported
 #include "ssbc7encoder.h"
+#include "ssbc7promote.h"          // <SS:Nexii/> Squeeze promotion - the bounded want list lives with the engine that drains it, so there is one implementation of "what gets dropped when it is full" rather than two
 #include "ssbc7store.h"
 #include "threadpool.h"
 
 #include <atomic>
+#include <chrono>                   // <SS:Nexii/> Squeeze adaptive quality - a monotonic clock for the per-encode timing, which must never be able to go backwards and report an infinite rate
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -96,7 +99,10 @@ namespace
 
         std::mutex                      mSetMutex;
         std::unordered_set<LLUUID>      mInFlight;
-        std::unordered_set<LLUUID>      mWantList;
+        // <SS:Nexii> Squeeze promotion - a bounded list that names what it evicted, replacing the plain set that simply refused new entries once full. Refusing new ones pins the list to whatever the first eight thousand textures of the session happened to be and then reads, from a log line, exactly as though the engine had everything in hand.
+        SSBC7WantList                   mWantList{SSBC7_PROMOTE_WANT_CAP};
+        std::vector<LLUUID>             mFreshlyStored;   // uuids that reached the store, drained by the main thread so the read path can re-probe a texture it had already declined for having no record
+        // </SS:Nexii>
 
         EncodeState()
         {
@@ -109,14 +115,27 @@ namespace
 
     EncodeState* state() { return s_state.load(std::memory_order_acquire); }
 
-    // The whole want list is capped: one walk through a busy mall must not be able to queue an unbounded set of uuids that nothing will ever get around to.
-    const size_t SSBC7_WANT_LIST_CAP = 8192;
-
+    // <SS:Nexii> Squeeze promotion - one walk through a busy mall must not be able to queue an unbounded set of uuids that nothing will ever get around to, and when the cap does bite it has to SAY what it gave up. The list drops oldest-first and hands work out newest-first, so what survives a mall is the room the user is actually stood in; the drop is counted for the whole session and logged the first time and then once per further thousand, because a cap that bites on every single insert would otherwise write a line per texture.
     void noteWanted(EncodeState* st, const LLUUID& id)
     {
-        std::lock_guard<std::mutex> lock(st->mSetMutex);
-        if (st->mWantList.size() < SSBC7_WANT_LIST_CAP) st->mWantList.insert(id);
+        LLUUID dropped;
+        bool   did_drop = false;
+        U32    total_dropped = 0;
+
+        {
+            std::lock_guard<std::mutex> lock(st->mSetMutex);
+            st->mWantList.add(id, dropped, did_drop);
+            total_dropped = st->mWantList.droppedTotal();
+        }
+
+        if (did_drop && (total_dropped == 1 || (total_dropped % 1000) == 0))
+        {
+            LL_WARNS("Squeeze") << "BC7 want list is at its cap of " << SSBC7_PROMOTE_WANT_CAP
+                                << " textures, so " << dropped << " was dropped to make room for " << id
+                                << " - " << total_dropped << " dropped this session, oldest first, and those textures will not be promoted unless they are seen again" << LL_ENDL;
+        }
     }
+    // </SS:Nexii>
 
     ESSBC7EncodeVerdict record(EncodeState* st, ESSBC7EncodeVerdict verdict)
     {
@@ -215,9 +234,17 @@ void ssBC7EncodeRefreshPolicy()
         size_t threads = (size_t)gSavedSettings.getU32("SSSqueezeEncodeThreads");
         if (threads == 0)
         {
-            // Deliberately narrow until throughput is measured on real hardware, which is the P0 exit criterion this width depends on. Background QoS is what keeps the pool out of the way, not a small width - but a wide pool of idle workers also burns wakeups under the sleepy_robin scheduler.
+            // <SS:Nexii> HALF the logical processors, which on any hyperthreaded machine is about the physical core count. Not a quarter, which was the old rule, and not all of them - and the reason it is neither is worth stating because "use everything" is the obvious answer and it is wrong for a specific, measurable reason.
+            //
+            // Width is NOT what keeps this out of the way. The pool runs at background QoS, which deprioritises CPU, disk and memory pressure together, so a wide pool yields to foreground work exactly as readily as a narrow one and merely finishes sooner when nothing is competing. Being polite is the scheduler's job here, not the width's.
+            //
+            // What actually stops paying is the hardware. This encoder is bc7e through AVX2, so it lives in the vector units - and the two logical processors on one physical core SHARE those units. The second thread per core therefore buys something like a fifth of a thread's work, not a whole one, while costing a whole thread's worth of wakeups, cache pressure and pinned decoded image. Past the physical core count the curve is nearly flat.
+            //
+            // And upstream of all of it the pool is SUPPLY limited, not compute limited: at bc7e veryfast a worker turns over roughly six 1024 square textures a second, so even half of a large machine can consume far more than the fetch path can deliver. Widening past this point would buy idle workers.
+            //
+            // Anyone who wants every thread can still say so - SSSqueezeEncodeThreads is an explicit override and this branch only runs when it is left at zero.
             const unsigned hw = std::thread::hardware_concurrency();
-            threads = (size_t)llclamp((S32)(hw / 4), 1, 4);
+            threads = (size_t)llclamp((S32)(hw / 2), 2, 32);
         }
 
         SSBC7EncodePool* pool = new SSBC7EncodePool(threads);
@@ -317,7 +344,24 @@ ESSBC7EncodeVerdict ssBC7EncodeConsider(const LLUUID& id,
     if (decoded_discard != 0 || !have_all_data || raw.isNull())
     {
         // A texture that failed to decode at all, or was blocked before it ever decoded, arrives here with no raw and a negative discard. It is not a partial asset waiting to be completed, so it stays off the want list - the promotion engine would only spend network on something that has already refused to exist.
-        if (decoded_discard >= 0 && raw.notNull() && !id.isNull()) noteWanted(st, id);
+        //
+        // <SS:Nexii> And neither does anything whose FULL resolution could never pass the geometry gate below. The gate only runs on the full resolution path, and a texture that fails it returns before the in-flight claim that is the only thing which erases a want-list entry - so without this test a 256 square texture is added here, waits forever, is fetched to completion by the promotion engine, is refused for being too small, and STAYS on the list. Permanently, and once per sighting.
+        //
+        // That is not a harmless leak. The list is capped and drops oldest first, so entries which can never be encoded evict entries which can, and the readout says thousands are waiting when most of them are waiting for something that will never happen.
+        //
+        // The full size is derived rather than passed: a decode at discard d produces the level d dimensions, and the chain halves at every level, so the original is the decoded size shifted back up by d. Exact for every standard mip chain, and the only cost of being wrong would be admitting a texture the gate then refuses once - which is the behaviour we already have.
+        bool worth_wanting = (decoded_discard >= 0 && raw.notNull() && !id.isNull());
+        if (worth_wanting)
+        {
+            const U32 shift     = (U32)llclamp(decoded_discard, 0, 16);
+            const U64 full_w    = (U64)raw->getWidth()  << shift;
+            const U64 full_h    = (U64)raw->getHeight() << shift;
+            const U64 min_edge  = (U64)st->mPolicy.mMinSize;
+            if (full_w * full_h < min_edge * min_edge) worth_wanting = false;
+        }
+        if (worth_wanting) noteWanted(st, id);
+        // </SS:Nexii>
+
         return record(st, SSBC7_DECLINE_PARTIAL);
     }
 
@@ -338,6 +382,11 @@ ESSBC7EncodeVerdict ssBC7EncodeConsider(const LLUUID& id,
         || width < 4 || height < 4
         || components < 1 || components > 4)
     {
+        // <SS:Nexii> Reached full resolution and failed the gate, so it can never be encoded - take it off the want list rather than leave the promotion engine fetching it again on the next sighting. Also the repair path for entries added by a build that predates the check above.
+        {
+            std::lock_guard<std::mutex> lock(st->mSetMutex);
+            st->mWantList.erase(id);
+        }
         return record(st, SSBC7_DECLINE_GEOMETRY);
     }
 
@@ -383,59 +432,10 @@ ESSBC7EncodeVerdict ssBC7EncodeConsider(const LLUUID& id,
 
             if (st->mAbandon.load()) { ++st->mAbandoned; return; }
 
-            // One scratch per worker thread, reused for every texture that thread ever encodes, so a busy pool does no allocation per image and none whatsoever per block.
-            static thread_local SSBC7EncodeScratch scratch;
-
-            std::vector<U8> payload;
-            SSBC7EncodeResult result;
-            U16 flags = 0;
-            U32 width = 0;
-            U32 height = 0;
-            U32 components = 0;
-
-            {
-                // The raw is treated as strictly immutable here. The shared lock is what makes that a promise rather than a hope, since the decode pool and the cache writer both reach for the same object.
-                LLImageDataSharedLock lock(pinned.get());
-
-                const U8* src = pinned->getData();
-                width      = pinned->getWidth();
-                height     = pinned->getHeight();
-                components = (U32)pinned->getComponents();
-
-                if (!src || pinned->isBufferInvalid())
-                {
-                    ++st->mEncodeFailed;
-                    LL_WARNS("Squeeze") << "BC7 encode of " << id << " skipped: the decoded image was released before the worker reached it" << LL_ENDL;
-                    return;
-                }
-
-                classifyAlpha(src, width, height, components, flags);
-
-                if (!ssBC7EncodeMipChain(src, width, height, components, scratch, payload, result))
-                {
-                    ++st->mEncodeFailed;
-                    LL_WARNS("Squeeze") << "BC7 encode of " << id << " failed at " << width << "x" << height
-                                        << " with " << components << " components, the texture keeps using the ordinary J2C path" << LL_ENDL;
-                    return;
-                }
-            }
-
-            if (st->mAbandon.load()) { ++st->mAbandoned; return; }
-
-            SSBC7Encoded enc;
-            enc.mUUID          = id;
-            enc.mWidth         = (U16)result.mWidth;
-            enc.mHeight        = (U16)result.mHeight;
-            enc.mMipCount      = result.mMipCount;
-            enc.mSrcComponents = result.mSrcComponents;   // the ORIGINAL component count, which is what later keeps an opaque texture out of the alpha pool
-            enc.mFlags         = flags;
-            enc.mPayload       = std::move(payload);
-
-            // The append is done here rather than posted back to the main thread for the same reason the accounting is: a completion callback does not run once the main loop stops, and a store write is disk work that has no business on the frame thread anyway.
-            if (!st->mStore->append(enc, ssBC7EncoderVersion()))
-            {
-                LL_DEBUGS("Squeeze") << "BC7 store declined " << id << ", see the store metrics for whether that was a duplicate or a write failure" << LL_ENDL;
-            }
+            // <SS:Nexii/> Squeeze promotion - the body moved into ssBC7EncodeAndStore so the promotion engine runs exactly this code rather than a second copy of it that would drift.
+            //
+            // <SS:Nexii/> Squeeze adaptive quality - the profile is read HERE, on the worker, at the moment the encode actually starts, rather than captured when the item was queued. A queue that has been sitting for a minute would otherwise encode at a profile the controller has since abandoned, which is the one case where the queue's own depth is evidence that the older answer was wrong.
+            ssBC7EncodeAndStore(id, pinned, ssBC7AdaptiveQualityNow(), false);
         });
 
     if (!posted)
@@ -514,8 +514,7 @@ void ssBC7EncodeWantList(std::vector<LLUUID>& out)
     if (!st) return;
 
     std::lock_guard<std::mutex> lock(st->mSetMutex);
-    out.reserve(st->mWantList.size());
-    for (const LLUUID& id : st->mWantList) out.push_back(id);
+    st->mWantList.snapshot(out);
 }
 
 size_t ssBC7EncodeWantListSize()
@@ -526,6 +525,240 @@ size_t ssBC7EncodeWantListSize()
     std::lock_guard<std::mutex> lock(st->mSetMutex);
     return st->mWantList.size();
 }
+
+// <SS:Nexii> Squeeze promotion - everything below is the seam ssbc7promote.cpp runs on. None of it is new policy; it is the state this module already owned, made reachable so that promotion shares the one pool, the one queue, the one pinned-bytes budget and the one dedupe set rather than standing up a second of each.
+
+bool ssBC7EncodeGateReady(std::string& out_reason)
+{
+    EncodeState* st = state();
+    if (!st) { out_reason = "the encode module never initialised"; return false; }
+
+    if (!st->mPolicy.mEnabled)          { out_reason = "SSSqueezeEnabled is off"; return false; }
+    if (!st->mPolicy.mBackgroundEncode) { out_reason = "SSSqueezeBackgroundEncode is off"; return false; }
+    if (!st->mPolicy.mGpuSupported)     { out_reason = "this GPU has no BPTC, so a record would have nothing to serve to"; return false; }
+    if (st->mShuttingDown)              { out_reason = "shutdown has begun"; return false; }
+    if (!st->mPool.load())              { out_reason = "the encode pool is not running"; return false; }
+    if (!st->mStore)                    { out_reason = "the store singleton was never resolved"; return false; }
+    if (!st->mStore->isInitialized())   { out_reason = "the store never came up"; return false; }
+    if (st->mStore->isReadOnly())       { out_reason = "this is a read-only second instance"; return false; }
+
+    out_reason.clear();
+    return true;
+}
+
+bool ssBC7EncodeGeometryOK(U32 width, U32 height, U32 components)
+{
+    EncodeState* st = state();
+    if (!st) return false;
+
+    const U32 min_size   = st->mPolicy.mMinSize;
+    const U64 texels     = (U64)width * (U64)height;
+    const U64 min_texels = (U64)min_size * (U64)min_size;
+
+    // Byte for byte the rule ssBC7EncodeConsider applies, so a texture the demand path would have refused is never given a decode by the promotion path either.
+    if (!isPowerOfTwo(width) || !isPowerOfTwo(height)) return false;
+    if (texels < min_texels)                           return false;
+    if (width < 4 || height < 4)                       return false;
+    if (components < 1 || components > 4)              return false;
+    return true;
+}
+
+S32 ssBC7EncodePendingCount()
+{
+    EncodeState* st = state();
+    return st ? st->mPending.load() : 0;
+}
+
+// <SS:Nexii/> Squeeze adaptive quality - the pool's real width, taken from the pool rather than from SSSqueezeEncodeThreads because that setting is zero on every machine that leaves it automatic. Zero here means the pool has not started, and the controller treats that as one worker so its capacity estimate is conservative rather than infinite.
+S32 ssBC7EncodePoolWidth()
+{
+    EncodeState* st = state();
+    if (!st) return 0;
+
+    SSBC7EncodePool* pool = st->mPool.load();
+    return pool ? (S32)pool->getWidth() : 0;
+}
+
+bool ssBC7EncodeAbandonRequested()
+{
+    EncodeState* st = state();
+    return !st || st->mAbandon.load();
+}
+
+bool ssBC7EncodeClaim(const LLUUID& id)
+{
+    EncodeState* st = state();
+    if (!st || id.isNull()) return false;
+
+    std::lock_guard<std::mutex> lock(st->mSetMutex);
+    const bool claimed = st->mInFlight.insert(id).second;
+    if (claimed) st->mWantList.erase(id);
+    return claimed;
+}
+
+void ssBC7EncodeUnclaim(const LLUUID& id)
+{
+    EncodeState* st = state();
+    if (!st) return;
+
+    std::lock_guard<std::mutex> lock(st->mSetMutex);
+    st->mInFlight.erase(id);
+}
+
+bool ssBC7EncodeReserveBytes(S64 bytes)
+{
+    EncodeState* st = state();
+    if (!st || bytes <= 0) return false;
+
+    // Not a compare-exchange loop on purpose. The only two writers are this call and the demand path, both of which over-reserve rather than under-reserve on a race, and a ceiling that is briefly a few megabytes conservative costs one deferred encode - while a loop here would be a lock-free retry in code whose whole job is to be uninteresting.
+    if (st->mPinnedBytes.load() + bytes > SSBC7_MAX_PINNED_BYTES) return false;
+
+    // mPending is deliberately NOT touched. It counts DEMAND path encodes and is what the promotion engine reads to decide the pool is idle, so counting promotion work in it would make the engine permanently believe it had arrived at a busy moment.
+    st->mPinnedBytes += bytes;
+    return true;
+}
+
+void ssBC7EncodeReleaseBytes(S64 bytes)
+{
+    EncodeState* st = state();
+    if (!st || bytes <= 0) return;
+
+    st->mPinnedBytes -= bytes;
+}
+
+bool ssBC7EncodeTryPost(const std::function<void()>& work)
+{
+    EncodeState* st = state();
+    if (!st || st->mShuttingDown) return false;
+
+    SSBC7EncodePool* pool = st->mPool.load();
+    if (!pool) return false;
+
+    // tryPost, always. WorkQueue::post BLOCKS when the queue is full, and the caller here is the frame thread - a blocked frame thread is a frozen viewer, for work whose entire justification is that nobody is waiting on it.
+    return pool->getQueue().tryPost(work);
+}
+
+bool ssBC7EncodeAndStore(const LLUUID& id, const LLPointer<LLImageRaw>& raw, SSBC7Quality quality, bool allow_supersede)
+{
+    EncodeState* st = state();
+    if (!st || raw.isNull()) return false;
+    if (!st->mStore || !st->mStore->isInitialized() || st->mStore->isReadOnly()) return false;
+
+    // <SS:Nexii> Squeeze adaptive quality - the occupancy signal, bracketed around the WHOLE of this call rather than around the block loop alone, because from the overlay's point of view a worker holding a decoded image and waiting on the store lock is just as busy as one inside the vector units. Scoped so every early return below retires it, which is the same lesson EncodeGuard exists for.
+    struct BusyMark
+    {
+        BusyMark()  { ssBC7AdaptiveNoteBusy(true); }
+        ~BusyMark() { ssBC7AdaptiveNoteBusy(false); }
+    } busy_mark;
+    // </SS:Nexii>
+
+    // One scratch per worker thread, reused for every texture that thread ever encodes, so a busy pool does no allocation per image and none whatsoever per block.
+    static thread_local SSBC7EncodeScratch scratch;
+
+    std::vector<U8> payload;
+    SSBC7EncodeResult result;
+    U16 flags = 0;
+    U32 width = 0;
+    U32 height = 0;
+    U32 components = 0;
+
+    {
+        // The raw is treated as strictly immutable here. The shared lock is what makes that a promise rather than a hope, since the decode pool and the cache writer both reach for the same object.
+        LLImageDataSharedLock lock(raw.get());
+
+        const U8* src = raw->getData();
+        width      = raw->getWidth();
+        height     = raw->getHeight();
+        components = (U32)raw->getComponents();
+
+        if (!src || raw->isBufferInvalid())
+        {
+            ++st->mEncodeFailed;
+            LL_WARNS("Squeeze") << "BC7 encode of " << id << " skipped: the decoded image was released before the worker reached it" << LL_ENDL;
+            return false;
+        }
+
+        classifyAlpha(src, width, height, components, flags);
+
+        // <SS:Nexii/> Squeeze adaptive quality - the encode is timed and NOTHING ELSE IS. The decode, the J2C read, the alpha classification and the store append are all excluded deliberately: the number the controller acts on has to be the cost of the profile it is choosing between, and folding in work that is identical at every profile would flatten the ladder and make a step down look as though it bought almost nothing.
+        const std::chrono::steady_clock::time_point encode_began = std::chrono::steady_clock::now();
+
+        if (!ssBC7EncodeMipChain(src, width, height, components, quality, scratch, payload, result))
+        {
+            ++st->mEncodeFailed;
+            LL_WARNS("Squeeze") << "BC7 encode of " << id << " failed at " << width << "x" << height
+                                << " with " << components << " components, the texture keeps using the ordinary J2C path" << LL_ENDL;
+            return false;
+        }
+
+        // <SS:Nexii/> Squeeze adaptive quality - reported only for an encode that SUCCEEDED, because a failure's duration measures how long it took to give up rather than how fast the machine is, and a run of failures would otherwise read as a suddenly very fast profile.
+        const F64 encode_seconds = std::chrono::duration<F64>(std::chrono::steady_clock::now() - encode_began).count();
+        ssBC7AdaptiveNoteEncode((SSBC7Quality)result.mQuality, result.mEncodedTexels, encode_seconds);
+    }
+
+    if (st->mAbandon.load()) { ++st->mAbandoned; return false; }
+
+    SSBC7Encoded enc;
+    enc.mUUID          = id;
+    enc.mWidth         = (U16)result.mWidth;
+    enc.mHeight        = (U16)result.mHeight;
+    enc.mMipCount      = result.mMipCount;
+    enc.mSrcComponents = result.mSrcComponents;   // the ORIGINAL component count, which is what later keeps an opaque texture out of the alpha pool
+    enc.mQuality       = result.mQuality;         // <SS:Nexii/> Squeeze adaptive quality - taken from the RESULT rather than from the argument, so the record says what the encoder actually did even if a future backend clamps a profile it cannot honour
+    enc.mFlags         = flags;
+    enc.mPayload       = std::move(payload);
+
+    // The append is done here rather than posted back to the main thread for the same reason the accounting is: a completion callback does not run once the main loop stops, and a store write is disk work that has no business on the frame thread anyway.
+    if (!st->mStore->append(enc, ssBC7EncoderVersion(), allow_supersede))
+    {
+        LL_DEBUGS("Squeeze") << "BC7 store declined " << id << ", see the store metrics for whether that was a duplicate or a write failure" << LL_ENDL;
+        return false;
+    }
+
+    // A texture the read path already probed and declined for having no record will never look again on its own, so the uuid is handed to the main thread to re-arm. The list is capped for the same reason everything else here is: if nothing is draining it, it must not grow without limit.
+    {
+        std::lock_guard<std::mutex> lock(st->mSetMutex);
+        if (st->mFreshlyStored.size() < 4096) st->mFreshlyStored.push_back(id);
+    }
+    return true;
+}
+
+size_t ssBC7EncodeTakeWanted(size_t max_count, std::vector<LLUUID>& out)
+{
+    out.clear();
+    EncodeState* st = state();
+    if (!st) return 0;
+
+    std::lock_guard<std::mutex> lock(st->mSetMutex);
+    return st->mWantList.take(max_count, out);
+}
+
+void ssBC7EncodeWant(const LLUUID& id)
+{
+    EncodeState* st = state();
+    if (!st || id.isNull()) return;
+    noteWanted(st, id);
+}
+
+U32 ssBC7EncodeWantDroppedTotal()
+{
+    EncodeState* st = state();
+    if (!st) return 0;
+
+    std::lock_guard<std::mutex> lock(st->mSetMutex);
+    return st->mWantList.droppedTotal();
+}
+
+void ssBC7EncodeTakeFreshlyStored(std::vector<LLUUID>& out)
+{
+    out.clear();
+    EncodeState* st = state();
+    if (!st) return;
+
+    std::lock_guard<std::mutex> lock(st->mSetMutex);
+    out.swap(st->mFreshlyStored);
+}
+// </SS:Nexii>
 
 std::string ssBC7EncodeMetricsString()
 {

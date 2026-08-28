@@ -105,14 +105,20 @@
 #endif
 #include "llprogressview.h"
 #include "llvocache.h"
+#include "ssalphadebug.h" // <SS:Nexii> TEMPORARY diagnostic, remove with the file
 #include "ssroccache.h" // <SS:Nexii>
 #include "ssrocaux.h" // <SS:Nexii>
+#include "ssbc7adaptive.h" // <SS:Nexii>
 #include "ssbc7encodequeue.h" // <SS:Nexii>
+#include "ssbc7manifest.h" // <SS:Nexii>
+#include "ssbc7promote.h" // <SS:Nexii>
 #include "ssbc7serve.h" // <SS:Nexii>
 #include "ssbc7encoder.h" // <SS:Nexii>
 #include "ssbc7store.h" // <SS:Nexii>
 #include "sssqueezedebug.h" // <SS:Nexii>
 #include "lldiskcache.h"
+#include "ssstrata.h"   // <SS:Nexii/> Strata asset volumes
+#include "ssstratabudget.h"   // <SS:Nexii/> the budget arbiter - CacheSize divided N ways instead of three tiers each deciding for themselves
 #include "llvopartgroup.h"
 #include "llautoupdatechecker.h"
 // [SL:KB] - Patch: Appearance-Misc | Checked: 2013-02-12 (Catznip-3.4)
@@ -2664,6 +2670,16 @@ bool LLAppViewer::initThreads()
     LLAppViewer::instance()->initGeneralThread();
 
     LLAppViewer::sPurgeDiskCacheThread = new LLPurgeDiskCacheThread();
+
+    // <SS:Nexii> Strata - the J2C body tier's once-a-minute packer. Registered HERE, next to the thread's construction and long before its start() further down initCache, so the std::function is fully written before any thread can read it; registering it after start() would be a data race on the callback itself. The tick is a no-op until LLTextureCache::initCache brings the tenant up, which is exactly what SSStrataStore::live() returning null means.
+    LLPurgeDiskCacheThread::setExtraMaintenance([]()
+    {
+        if (LLTextureCache* cache = LLAppViewer::getTextureCache())
+        {
+            cache->strataMaintenance();
+        }
+    });
+    // </SS:Nexii>
 
     if (LLTrace::BlockTimer::sLog || LLTrace::BlockTimer::sMetricLog)
     {
@@ -5292,8 +5308,9 @@ bool LLAppViewer::initCache()
     // total cache size - the 'CacheSize' pref - for all caches.
     // <FS:Ansariel> Better cache size control
     //const uintmax_t disk_cache_size = uintmax_t(cache_total_size * disk_cache_percent / 100);
-    const unsigned int disk_cache_mb = gSavedSettings.getU32("FSDiskCacheSize");
-    const uintmax_t disk_cache_size = disk_cache_mb * 1024ULL * 1024ULL;
+    // <SS:Nexii> The asset tier's size now comes from the budget arbiter rather than straight from FSDiskCacheSize, which was 16384 MB sitting entirely OUTSIDE the 16384 MB the user set as their total. With SSStrataBudgetEnforce off - which is how it ships - this returns exactly FSDiskCacheSize * 1 MB and this line is byte for byte what it was. See doc/strata.md.
+    const uintmax_t disk_cache_size = (uintmax_t)ssBudgetTierBytes(SSBUDGET_TIER_ASSETS);
+    // </SS:Nexii>
     // </FS:Ansariel>
     const bool enable_cache_debug_info = gSavedSettings.getBOOL("EnableDiskCacheDebugInfo");
 
@@ -5375,6 +5392,21 @@ bool LLAppViewer::initCache()
     // </FS:Ansariel>
 
     const std::string cache_dir = gDirUtilp->getExpandedFilename(LL_PATH_CACHE, cache_dir_name);
+
+    // <SS:Nexii> Strata - every setting the volume store needs is pushed down here, before LLDiskCache's constructor brings it up. indra/llfilesystem sits below this library and has no gSavedSettings, and reaching up for one is what would have forced the store into indra/newview where LLDiskCache cannot see it.
+    {
+        SSStrataStore::Config cfg;
+        cfg.mEnabled          = gSavedSettings.getBOOL("SSStrataEnabled");
+        cfg.mReadOnly         = read_only;   // a second instance shares the cache directory and is a read-only snapshot, exactly as LLTextureCache, LLVOCache and the BC7 sidecar are
+        cfg.mVerbose          = enable_cache_debug_info;
+        cfg.mPackAgeSecs      = gSavedSettings.getU32("SSStrataPackAgeSeconds");
+        cfg.mMaxObjectBytes   = (U64)gSavedSettings.getU32("SSStrataMaxObjectKB") * 1024ull;
+        // The viewer's own cache version, stamped into the volume index. A bump orphans the volumes and the startup sweep unlinks them, which is the established precedent here for derived data the network is authoritative for.
+        cfg.mDiskCacheVersion = (U32)LLAppViewer::getDiskCacheVersion();
+        SSStrataStore::instance().configure(cfg);
+    }
+    // </SS:Nexii>
+
     // <FS:Beq> Improve cache purge triggering
     // LLDiskCache::initParamSingleton(cache_dir, disk_cache_size, enable_cache_debug_info);
     LLDiskCache::initParamSingleton(cache_dir, disk_cache_size, enable_cache_debug_info, gSavedSettings.getF32("FSDiskCacheHighWaterPercent"), gSavedSettings.getF32("FSDiskCacheLowWaterPercent"));
@@ -5450,35 +5482,30 @@ bool LLAppViewer::initCache()
     // <SS:Nexii> CacheSize is a TOTAL again, which is what the pref has always claimed to be and what the commented-out Linden code above was doing before Firestorm handed the whole thing to the J2C cache. Compressed textures are not a bolt-on that spends beyond the number the user set: they are a cache tier, so they come out of it.
     //
     // The J2C cache gets whatever the other tiers do not. It stays the source of truth - a texture whose BC7 blob is evicted is re-encoded from J2C without touching the network - so it must never be squeezed to nothing, hence the floor.
-    S64 texture_cache_size = (S64)cache_total_size;
-    {
-        const U32 bc7_pct = llclamp(gSavedSettings.getU32("SSSqueezeCachePercent"), (U32)0, (U32)90);
-        const S64 bc7_share = SSBC7Store::enabled() ? (S64)((cache_total_size / 100) * bc7_pct) : 0;
-
-        // A quarter of the total, floored, is what the J2C tier keeps whatever the other shares add up to. Below that the re-encode source starts missing often enough that the compressed tier is refilling itself from the network rather than from disk, which is the opposite of the point.
-        const S64 j2c_floor = (S64)(cache_total_size / 4);
-        texture_cache_size = llmax(j2c_floor, (S64)cache_total_size - bc7_share);
-
-        LL_INFOS("InitInfo") << "Cache split: total " << (cache_total_size / MB) << " MB, BC7 " << (bc7_share / MB)
-                             << " MB (" << bc7_pct << "%), J2C " << (texture_cache_size / MB) << " MB" << LL_ENDL;
-    }
+    //
+    // STAGE 2, doc/strata.md: the two-way split that used to be computed inline here is now an N-way normalisation in ssstratabudget.cpp, so that FSDiskCacheSize and the BC7 share are divided by the same arithmetic against the same total instead of three tiers each deciding independently what they may spend. The quarter-of-total floor moved with it and still means the same thing.
+    //
+    // NOTHING CHANGES UNTIL SSStrataBudgetEnforce IS TURNED ON, and it ships off. With it off the arbiter reproduces the old formula - including the fact that this line divided the total before multiplying while SSBC7Store::budgetBytes multiplied before dividing, which makes the two disagree by 42 bytes at CacheSize 16384 - so this build cannot move a single byte of anybody's cache. It only reports what the total WOULD do, because turning it on will evict data that currently survives indefinitely and the ceiling is the owner's to name first.
+    const S64 texture_cache_size = (S64)ssBudgetTierBytes(SSBUDGET_TIER_J2C);
+    ssBudgetLogPlan("startup");
     // </SS:Nexii>
 
     LL_INFOS("InitInfo") << "Initializing texture cache with size: " << (texture_cache_size / (1024 * 1024)) << " MB" << LL_ENDL;
     LLAppViewer::getTextureCache()->initCache(LL_PATH_CACHE, texture_cache_size, texture_cache_mismatch);
 
-    // <SS:Nexii> Squeeze - the BC7 sidecar sits inside the texture cache directory, so it can only come up once that directory is settled and any startup purge above has already run. Unlike the region cache this needs no grid scoping: asset uuids are global, which is the whole reason the tier is keyed by uuid rather than by region. Both calls do nothing at all while SSSqueezeEnabled is off.
-    // Quality goes down FIRST, before anything reads a version. ssBC7EncoderVersion() folds in the block backend's version, which folds in the quality, so setting it after initStore would leave the store expecting one version while every encode stamped another. The backend also latches this at its first encode, which is another reason it cannot wait.
+    // <SS:Nexii> Squeeze - the BC7 sidecar sits inside the texture cache directory, so it can only come up once that directory is settled and any startup purge above has already run. Unlike the region cache this needs no grid scoping: asset uuids are global, which is the whole reason the tier is keyed by uuid rather than by region. Every call here does nothing at all while SSSqueezeEnabled is off.
     //
-    // Pushed rather than pulled because llimage sits below newview and must not reach up into the settings store.
-    {
-        const U32 q = gSavedSettings.getU32("SSSqueezeEncodeQuality");
-        ssBC7SetBlockQuality(q == 0 ? SSBC7_QUALITY_FAST : (q >= 2 ? SSBC7_QUALITY_HIGH : SSBC7_QUALITY_BALANCED));
-    }
+    // The adaptive quality controller comes up BEFORE the store, because it owns the profile every encode will be done at and a worker must never find it missing. It no longer has to precede the version, though, and that is the point of the change: quality used to be folded into ssBC7EncoderVersion, so a different setting wiped the whole store, and now it travels in each record instead. Nothing about a profile can invalidate a cached blob any more.
+    ssBC7AdaptiveInit();
 
     SSBC7Store::instance().initStore(LLAppViewer::getTextureCache()->getTexturesDirName(), ssBC7EncoderVersion());
     ssBC7EncodeInit();
     ssBC7ServeInit();
+    // The promotion engine comes up last of the four because it borrows the encode pool, the store and the controller from the other three, and it starts no threads of its own.
+    ssBC7PromoteInit();
+    // <SS:Nexii> Squeeze region manifests - after the store, because it resolves its directory from the store's own, which is what keeps it inside bc7cache and therefore inside the recursive purge that "clear cache" performs.
+    ssBC7ManifestInit();
+    // </SS:Nexii>
     // </SS:Nexii>
 
     const U32 CACHE_NUMBER_OF_REGIONS_FOR_OBJECTS = 128;
@@ -6146,6 +6173,14 @@ void LLAppViewer::idle()
 
     // <SS:Nexii> Squeeze - the store's only main-thread cost. Deliberately outside the gDisconnected guard above, because a store sitting over the user's SSBC7CacheSize has to keep draining while they are stood at the login screen or waiting out a disconnect, and it is exactly then that the disk is free to do it. The call itself is a clock comparison until its own minute elapses.
     ssBC7EncodeMaintenanceTick();
+    // And the promotion engine, on its own faster tick because it is the tier's primary fill mechanism rather than a housekeeping pass. Outside the gDisconnected guard for the same reason: the disk is at its most free exactly when the viewer is doing nothing else, and tier (a) needs no connection at all.
+    ssBC7PromoteTick();
+    // The adaptive quality controller runs LAST of the three, so its decision is made against the backlog the two calls above have just left behind rather than against the one from the previous frame. Its whole cost is a clock comparison until its own two seconds elapse.
+    ssBC7AdaptiveTick();
+    // The budget arbiter reports and does not evict, so it sits at the end of this sequence rather than the start: it wants the numbers the three calls above have just left behind. Its whole cost is a clock comparison until its own five minutes elapse, and while SSStrataBudgetEnforce is off the only thing it produces is the log block the owner needs in order to name a ceiling.
+    ssBudgetTick();
+    // TEMPORARY: the alpha-pool diagnostic. Costs a settings read per frame until it is removed along with ssalphadebug.cpp.
+    ssAlphaDebugTick();
     // </SS:Nexii>
 
     // Metrics logging (LLViewerAssetStats, etc.)
@@ -6920,14 +6955,25 @@ void LLAppViewer::disconnectViewer()
     }
     // </SS:Nexii>
     // <SS:Nexii> Squeeze - the encode pool must stop before the store it writes into, because every in-flight append belongs to a worker and this is what waits for them. beginShutdown raises the abandon flag FIRST: a WorkQueue drains itself before it closes, so without it a queue full of megapixel encodes would all be executed while the user watches the window refuse to disappear. Both calls are idempotent - the pool's own LLApp listener has usually already done this by the time we arrive.
+    // Promotion stops FIRST of the three: it is the only one that can still be asking the network for something, and cancelling those requests before the pool is joined is what stops a quit from waiting on a download nobody asked for.
+    // <SS:Nexii> Squeeze region manifests - the last region of the session is written HERE, before the encode pool that does the writing is closed below.
+    ssBC7ManifestBeginShutdown();
+    // </SS:Nexii>
+    ssBC7PromoteBeginShutdown();
+    ssBC7PromoteShutdown();
     ssBC7ServeBeginShutdown();
     ssBC7ServeShutdown();
     ssBC7EncodeBeginShutdown();
     ssBC7EncodeShutdown();
+    ssBC7ManifestShutdown();    // <SS:Nexii/> Squeeze region manifests - after the pool is joined, so nothing can still be inside a write
     if (SSBC7Store::instanceExists())
     {
         SSBC7Store::instance().shutdownStore();
     }
+    // </SS:Nexii>
+    // <SS:Nexii> Strata - after the purge thread has stopped, because that thread is the only thing that packs or reclaims, and a pass still running here would be writing into a store this call is closing. It prints the session's metrics line, which is where every named decline is counted.
+    SSStrataStore::tier(SSSTRATA_TENANT_ASSETS).shutdownStore();
+    SSStrataStore::tier(SSSTRATA_TENANT_TEXTURES).shutdownStore();
     // </SS:Nexii>
     LLVOCache::deleteSingleton();
 

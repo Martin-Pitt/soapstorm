@@ -79,6 +79,10 @@ void ssBC7ServeNoteResidencyLost(U32 bc7_bytes, U32 saved_bytes);
 // Recorded for its own sake by callers that decline outside this module, so the tally stays the single answer to "what happened to the read path".
 void ssBC7ServeRecord(ESSBC7ServeVerdict verdict);
 
+// <SS:Nexii> Squeeze region manifests - how many prefix reads the shared pool is working on right now. Added so a background pre-warm can state "foreground fetch always wins" as an actual gate rather than as a hope: the manifest pass only ever adds to this pool when it has drained, which in a steady frame it has, because a prefix read is a fraction of a millisecond. Purely additive - nothing in the read path itself changed.
+S32 ssBC7ServeReadsInFlight();
+// </SS:Nexii>
+
 std::string ssBC7ServeMetricsString();
 
 // <SS:Nexii> The two numbers worth putting in front of a person, as numbers rather than inside the log line. Video memory saved RIGHT NOW is the only figure that answers "is this feature doing anything for me", and a string is no use to an overlay that wants to format and colour it.

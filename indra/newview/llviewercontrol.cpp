@@ -108,6 +108,7 @@
 #include "fsradar.h"
 #include "llavataractions.h"
 #include "lldiskcache.h"
+#include "ssstratabudget.h"   // <SS:Nexii/> the cache shares are decided in one place now, see doc/strata.md
 #include "llfloaterreg.h"
 #include "llfloatersidepanelcontainer.h"
 #include "llhudtext.h"
@@ -1141,11 +1142,18 @@ void handlePlayBentoIdleAnimationChanged(const LLSD& newValue)
 // <FS:Ansariel> Better asset cache size control
 void handleDiskCacheSizeChanged(const LLSD& newValue)
 {
-    const unsigned int disk_cache_mb = gSavedSettings.getU32("FSDiskCacheSize");
-    const U64 disk_cache_bytes = disk_cache_mb * 1024ULL * 1024ULL;
-    LLDiskCache::getInstance()->setMaxSizeBytes(disk_cache_bytes);
+    // <SS:Nexii> Routed through the budget arbiter rather than straight at LLDiskCache, because FSDiskCacheSize is one share of CacheSize now instead of a number of its own. With SSStrataBudgetEnforce off - which is how it ships - the arbiter hands back exactly FSDiskCacheSize * 1 MB, so this does what it always did and additionally logs what the total WOULD have handed out. See doc/strata.md.
+    ssBudgetApply("FSDiskCacheSize changed");
+    // </SS:Nexii>
 }
 // </FS:Ansariel>
+
+// <SS:Nexii> Every setting the arbiter divides lands here, because moving any one of them moves every other tier's share: that is what "one total" means and it is the whole reason the shares are computed in one place. The two tiers that hold their number in a variable are pushed; the BC7 store re-reads the arbiter on its own tick and is deliberately not pushed at, because a second copy of a number is a second thing to disagree with the first.
+void handleCacheBudgetChanged(const LLSD& newValue)
+{
+    ssBudgetApply("a cache share was changed");
+}
+// </SS:Nexii>
 
 // <FS:Beq> Better asset cache purge control
 void handleDiskCacheHighWaterPctChanged(const LLSD& newValue)
@@ -1623,6 +1631,13 @@ void settings_setup_listeners()
 
     // <FS:Ansariel> Better asset cache size control
     setting_setup_signal_listener(gSavedSettings, "FSDiskCacheSize", handleDiskCacheSizeChanged);
+    // <SS:Nexii> The rest of the shares the budget arbiter divides. CacheSize is in the list because it is the pot itself, and SSStrataBudgetEnforce is in it because flipping the switch has to take effect - and be logged - while the owner is watching, not at the next restart.
+    setting_setup_signal_listener(gSavedSettings, "CacheSize", handleCacheBudgetChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSStrataBudgetEnforce", handleCacheBudgetChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSStrataAssetCachePercent", handleCacheBudgetChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeCachePercent", handleCacheBudgetChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSBC7CacheSize", handleCacheBudgetChanged);
+    // </SS:Nexii>
     // <FS:Beq> Better asset cache purge control
     setting_setup_signal_listener(gSavedSettings, "FSDiskCacheHighWaterPercent", handleDiskCacheHighWaterPctChanged);
     setting_setup_signal_listener(gSavedSettings, "FSDiskCacheLowWaterPercent", handleDiskCacheLowWaterPctChanged);
@@ -1643,6 +1658,18 @@ void settings_setup_listeners()
     setting_setup_signal_listener(gSavedSettings, "SSSqueezeReadEnabled", handleSSSqueezeEnabledChanged);
     setting_setup_signal_listener(gSavedSettings, "SSSqueezeServeAlpha", handleSSSqueezeEnabledChanged);
     setting_setup_signal_listener(gSavedSettings, "SSSqueezeSelfTest", handleSSSqueezeSelfTest);
+    // <SS:Nexii> Squeeze promotion - the four settings the fill engine reads, listened for so the preferences checkboxes take effect the moment they are ticked. SSSqueezeNetworkPromote in particular had a checkbox and no reader at all, which is worse than having no control: it told the user their bandwidth was being spent, or not spent, on the strength of a setting nothing consulted.
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezePromote", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeNetworkPromote", handleSSSqueezeEnabledChanged);
+    // <SS:Nexii/> Squeeze adaptive quality - both of these used to need a restart, because quality was baked into the encoder version and changing it wiped the store. It is a per-record field now, so pinning a profile or unpinning it takes effect on the very next texture and costs nothing already written.
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeEncodeQuality", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeUpgradeIdle", handleSSSqueezeEnabledChanged);
+    // <SS:Nexii> Squeeze region manifests - the three settings the arrival warm-up reads, listened for so the feature can be switched off mid-session without a restart, exactly as every other Squeeze gate can.
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeManifests", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeManifestWarmMB", handleSSSqueezeEnabledChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSSqueezeManifestWarmDiscard", handleSSSqueezeEnabledChanged);
+    // </SS:Nexii>
+    // </SS:Nexii>
     // </SS:Nexii>
 }
 

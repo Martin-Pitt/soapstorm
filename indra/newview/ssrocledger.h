@@ -15,6 +15,7 @@
 #include "v3math.h"
 #include "ssroccache.h"
 
+#include <functional>
 #include <map>
 #include <string>
 #include <unordered_map>
@@ -28,19 +29,7 @@ class LLVOCacheEntry;
 //
 // Two recording hooks feed this, and BOTH are needed. LLViewerRegion::cacheFullUpdate carries the DP blob and covers first sightings and mutations, but on a warm .slc revisit the simulator sends ObjectUpdateCached probes carrying only local id, CRC and update flags (llviewerobjectlist.cpp:849-851) and cacheFullUpdate is never entered for an unchanged object - so LLViewerRegion::probeCache's CRC-match branch is the only thing that ever mentions most of a familiar region.
 
-// Why a record could not be promoted. Stored as one byte on every non-promoted record so the region-exit histogram is inspectable in the field - a three-hurdle gate with no reason code is undebuggable.
-enum ESSROCBlockedBy : U8
-{
-    SSROC_BLOCKED_NONE         = 0,  // promoted
-    SSROC_BLOCKED_STAY         = 1,  // the visit was too short for scoring to decide anything (SSROCSettledStaySecs)
-    SSROC_BLOCKED_DISQUALIFIED = 2,  // hard disqualifier: physics, character, avatar PCode, attachment state, oversized blob
-    SSROC_BLOCKED_IMMUNITY     = 3,  // auto-return immunity was required and could not be established
-    SSROC_BLOCKED_PERSISTENCE  = 4,  // not enough visits (immune) or distinct days (unproven) yet
-    SSROC_BLOCKED_SCORE        = 5,  // cleared both gates but scored below SSROCPromoteScore
-    SSROC_BLOCKED_CHILD        = 6,  // linkset child whose root was not promoted, or whose root was never seen
-    SSROC_BLOCKED_NOBLOB       = 7,  // never carried a usable DP blob, so it can never be rezzed
-    SSROC_BLOCKED_CAPACITY     = 8,  // score-ranked out at the per-region cap - a capacity decision, never an existence claim
-};
+// ESSROCBlockedBy and the promotion verdict itself now live in ssroccache.h, beside the record they are written onto: the decision is a pure function of one record and one set of thresholds, and keeping it here made it reachable only by a build of the whole viewer. The ledger owns WHEN it runs, what the region contributes to it and what is done with the answer.
 
 // Everything the ledger needs out of a cached object update, read offline from the byte-identical blob at fixed offsets. The fixed prefix runs 0..83 and every field below lives inside it, so no variable-length walk is needed to record an object.
 struct SSROCBlobFacts
@@ -98,6 +87,11 @@ public:
 
     void shutdown();
 
+    // Fill a region's protocol object cache from this visit's record set, in place of reading the .slc. `sink` is called once per seedable record, freshest first, and returns true when it actually created an entry: a local id the live stream has already claimed is refused there, which is the live-stream-always-wins rule rather than an error.
+    //
+    // The ledger is the right source rather than the raw file because it is the only copy that has had the epoch pass applied to it - the file on disk carries the marks from the visit that wrote it, and the marks that matter for THIS visit were decided when the handshake and the disk read had both landed.
+    U32 seedObjectCache(U64 handle, U32 max_seed, const std::function<bool(const SSROCRecord&)>& sink, SSROCSeedStats& stats, U8& outcome);
+
     // Stage A. Called from the two llviewerregion.cpp hooks after the free functions above have cleared the enabled gate.
     void noteSighting(LLViewerRegion* regionp, U32 local_id, U32 crc, U32 flags, const U8* blob, S32 blob_len);
 
@@ -131,6 +125,11 @@ private:
         LLUUID  mFileCacheID;         // the CacheID stored beside the records the file was loaded with
         U32     mStaleMarked;         // records whose stored local id was written off as belonging to a dead epoch
         U32     mVisitSecs;           // seconds the AGENT was present, not seconds the circuit was up
+
+        // <SS:Nexii> Seconds this region was in the world, which is a DIFFERENT question from how long the agent stood in it and is the one the settled-stay gate is actually asking. The design specifies that gate as "the same condition the stock save already uses", and that condition is LLViewerRegion::mRegionTimer at llviewerregion.cpp:902 - region lifetime, not agent presence. Measuring it as dwell meant every region the agent never entered had a stay of zero forever, so on a 2048m-draw-distance fork the sixty-one neighbour regions of a sixty-two region session could never have a single record evaluated no matter how many days they accumulated. Dwell is still what buys VISITS in the tenure currency, where agent presence is exactly the right measure; the two are kept apart rather than conflated.
+        F64     mTrackedStart;        // LLTimer::getElapsedSeconds() when the region entered the world
+        U32     mTrackedSecs;         // resolved at exit, kept for the log line
+
         U32     mConfirmed;           // records confirmed at least once this visit
         U32     mCreated;
         U32     mNoBlob;

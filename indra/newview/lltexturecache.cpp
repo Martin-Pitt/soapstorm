@@ -38,7 +38,10 @@
 // Included to allow LLTextureCache::purgeTextures() to pause watchdog timeout
 #include "llappviewer.h"
 #include "llmemory.h"
+#include "ssbc7promote.h" // <SS:Nexii> Squeeze promotion - ssBC7J2CExtent, so the partial-sentinel rule has exactly one implementation and it is the one the offline harness runs
 #include "ssbc7store.h" // <SS:Nexii> Squeeze
+#include "ssstrata.h"   // <SS:Nexii> Strata - the J2C body tier
+#include "ssserial.h"   // <SS:Nexii> Strata - the version stamp digest, shared with every other Soapstorm store
 
 // Cache organization:
 // cache/texture.entries
@@ -447,7 +450,9 @@ bool LLTextureCacheRemoteWorker::doRead()
     if (!done && (mState == BODY))
     {
         std::string filename = mCache->getTextureFileName(mID);
-        S32 filesize = LLAPRFile::size(filename, mCache->getLocalAPRFilePool());
+        // <SS:Nexii> Strata - the body may live inside a volume rather than in a file of its own, and the size has to come from the same place the bytes will. Asking the filesystem first would report zero for a packed body and this branch would then quietly decide the texture has no body at all, serving 600 bytes and calling it a whole image.
+        S32 filesize = mCache->bodySize(mID, filename, mCache->getLocalAPRFilePool());
+        // </SS:Nexii>
 
         if (filesize && (filesize + TEXTURE_CACHE_ENTRY_SIZE) > mOffset)
         {
@@ -488,10 +493,9 @@ bool LLTextureCacheRemoteWorker::doRead()
                 mReadData = data;
 
                 // Read the data at last
-                S32 bytes_read = LLAPRFile::readEx(filename,
-                                                 mReadData + data_offset,
-                                                 file_offset, file_size,
-                                                 mCache->getLocalAPRFilePool());
+                // <SS:Nexii> Strata - one call for both tiers. readBody serves a packed body straight out of its volume with the same one open, one seek, one read the loose path costs, and falls through to exactly the LLAPRFile::readEx below when the object was never packed.
+                S32 bytes_read = mCache->readBody(mID, filename, file_offset, mReadData + data_offset, file_size, mCache->getLocalAPRFilePool());
+                // </SS:Nexii>
                 if (bytes_read != file_size)
                 {
                     LL_WARNS() << "LLTextureCacheWorker: "  << mID
@@ -684,10 +688,9 @@ bool LLTextureCacheRemoteWorker::doWrite()
                 // build the cache file name from the UUID
                 std::string filename = mCache->getTextureFileName(mID);
                 //          LL_INFOS() << "Writing Body: " << filename << " Bytes: " << file_offset+file_size << LL_ENDL;
-                S32 bytes_written = LLAPRFile::writeEx(filename,
-                                                       mWriteData + TEXTURE_CACHE_ENTRY_SIZE,
-                                                       0, file_size,
-                                                       mCache->getLocalAPRFilePool());
+                // <SS:Nexii> Strata - writeBody revokes any packed record for this uuid BEFORE the loose file is written, which is what stops a stale volume copy shadowing the newer body a better discard level just produced. The write itself is the same syscall on the same thread as before; nothing here waits on container IO.
+                S32 bytes_written = mCache->writeBody(mID, filename, mWriteData + TEXTURE_CACHE_ENTRY_SIZE, file_size) ? file_size : 0;
+                // </SS:Nexii>
                 if (bytes_written <= 0)
                 {
                     LL_WARNS() << "LLTextureCacheWorker: " << mID
@@ -926,7 +929,7 @@ bool LLTextureCache::isInLocal(const LLUUID& id)
 //static
 F32 LLTextureCache::sHeaderCacheVersion = 1.71f;
 U32 LLTextureCache::sCacheMaxEntries = 1024 * 1024; //~1 million textures.
-S64 LLTextureCache::sCacheMaxTexturesSize = 0; // no limit
+std::atomic<S64> LLTextureCache::sCacheMaxTexturesSize{0}; // <SS:Nexii/> no limit; atomic because the budget arbiter moves it mid-session, see LLTextureCache::ssSetTexturesBudget
 std::string LLTextureCache::sHeaderCacheEncoderVersion = LLImageJ2C::getEngineInfo();
 
 #if defined(ADDRESS_SIZE)
@@ -1002,14 +1005,16 @@ S64 LLTextureCache::initCache(ELLPath location, S64 max_size, bool texture_cache
     sCacheMaxEntries = (S32)(llmin((S64)sCacheMaxEntries, max_entries));
     entries_size = sCacheMaxEntries * (TEXTURE_CACHE_ENTRY_SIZE + TEXTURE_FAST_CACHE_ENTRY_SIZE);
     max_size -= entries_size;
-    if (sCacheMaxTexturesSize > 0)
-        sCacheMaxTexturesSize = llmin(sCacheMaxTexturesSize, max_size);
+    // <SS:Nexii> Unchanged in behaviour - only spelled through the atomic's load and store, because the arbiter can move this number from the main thread while a purge pass is reading it. See ssSetTexturesBudget below and doc/strata.md.
+    if (sCacheMaxTexturesSize.load() > 0)
+        sCacheMaxTexturesSize.store(llmin(sCacheMaxTexturesSize.load(), max_size));
     else
-        sCacheMaxTexturesSize = max_size;
-    max_size -= sCacheMaxTexturesSize;
+        sCacheMaxTexturesSize.store(max_size);
+    max_size -= sCacheMaxTexturesSize.load();
+    // </SS:Nexii>
 
     LL_INFOS("TextureCache") << "Headers: " << sCacheMaxEntries
-            << " Textures size: " << sCacheMaxTexturesSize / (1024 * 1024) << " MB" << LL_ENDL;
+            << " Textures size: " << sCacheMaxTexturesSize.load() / (1024 * 1024) << " MB" << LL_ENDL;
 
     setDirNames(location);
 
@@ -1040,6 +1045,31 @@ S64 LLTextureCache::initCache(ELLPath location, S64 max_size, bool texture_cache
             LLFile::mkdir(dirname);
         }
     }
+    // <SS:Nexii> Strata - the J2C body tier, brought up BEFORE readHeaderCache because readHeaderCache can decide the header is stale and call purgeAllTextures, which wipes the volumes; a store that was not yet able to name its own directory could not be wiped by it. It is also before purgeTextures, whose validation pass asks bodySize() whether a body still exists.
+    //
+    // The version stamp is a digest of every number that already invalidates this cache - the header cache version, the pointer size and the J2C encoder string - rather than DiskCacheVersion, which governs a different tier entirely. Any change that makes readHeaderCache purge also changes this digest, so the volumes are orphaned by the same event that orphans the entries, belt and braces.
+    {
+        std::vector<U8> stamp;
+        ssserial::Writer w(stamp);
+        w.pod<F32>(sHeaderCacheVersion);
+        w.pod<U32>(sHeaderCacheAddressSize);
+        w.bytes(sHeaderCacheEncoderVersion.c_str(), sHeaderCacheEncoderVersion.size());
+
+        SSStrataStore::Config cfg;
+        cfg.mEnabled        = gSavedSettings.getBOOL("SSStrataTextures");
+        cfg.mReadOnly       = mReadOnly;   // a second instance shares this directory and never writes into it, exactly as it never evicts from it
+        cfg.mVerbose        = gSavedSettings.getBOOL("EnableDiskCacheDebugInfo");
+        cfg.mPackAgeSecs    = gSavedSettings.getU32("SSStrataPackAgeSeconds");
+        cfg.mMaxObjectBytes = SSSTRATA_TEX_MAX_OBJECT_BYTES;
+        cfg.mDefaultAssetType = (U8)LLAssetType::AT_TEXTURE;   // every object in this tenant is a J2C body, so the type is a constant rather than something to remember per uuid
+        cfg.mDiskCacheVersion = ssserial::crc32Of(stamp.data(), stamp.size());
+
+        SSStrataStore& tex = SSStrataStore::tier(SSSTRATA_TENANT_TEXTURES);
+        tex.configure(cfg);
+        tex.initStore(mTexturesDirName, (U64)llmax((S64)0, sCacheMaxTexturesSize.load()));
+    }
+    // </SS:Nexii>
+
     readHeaderCache();
     purgeTextures(true); // calc mTexturesSize and make some room in the texture cache if we need it
 
@@ -1328,7 +1358,7 @@ bool LLTextureCache::updateEntry(S32& idx, Entry& entry, S32 new_image_size, S32
 
         writeEntryToHeaderImmediately(idx, entry, update_header) ;
 
-        if (mTexturesSizeTotal > sCacheMaxTexturesSize)
+        if (mTexturesSizeTotal > sCacheMaxTexturesSize.load())   // <SS:Nexii/> atomic load only; the comparison and its consequence are unchanged
         {
             purge = true;
         }
@@ -1618,6 +1648,22 @@ void LLTextureCache::purgeAllTextures(bool purge_directories)
     }
     // </SS:Nexii>
 
+    // <SS:Nexii> Strata - and the body volumes with it, for the same reason and with the same urgency. The non-directory branch below only calls deleteFilesInDir on this directory, which does not descend into the `strata` child at all, so without this line a "clear cache" driven by a header version mismatch would leave every volume standing and the next session would open an index describing bodies whose entries no longer exist.
+    //
+    // The uninitialised branch is not defensive padding: LLAppViewer::initCache calls purgeCache() on this object BEFORE initCache() has told the store where it lives, so at that point the store cannot name its own directory and purgeAll would decline. Naming the path here is the only way that wipe reaches the volumes, and on a platform without the Windows rename shortcut below the alternative is stranding gigabytes the next session's index cannot even see.
+    {
+        SSStrataStore& tex_strata = SSStrataStore::tier(SSSTRATA_TENANT_TEXTURES);
+        if (tex_strata.isInitialized())
+        {
+            tex_strata.purgeAll();
+        }
+        else if (!mReadOnly)
+        {
+            gDirUtilp->deleteDirAndContents(mTexturesDirName + gDirUtilp->getDirDelimiter() + SSSTRATA_DIR_NAME);
+        }
+    }
+    // </SS:Nexii>
+
     if (!mReadOnly)
     {
 // <FS:ND> Windows can be really slow deleting a huge texture cache.
@@ -1740,7 +1786,7 @@ void LLTextureCache::purgeTexturesLazy(F32 time_limit_sec)
         }
 
         S64 cache_size = mTexturesSizeTotal;
-        S64 purged_cache_size = (llmax(cache_size, sCacheMaxTexturesSize) * (S64)((1.f - TEXTURE_CACHE_PURGE_AMOUNT) * 100)) / 100;
+        S64 purged_cache_size = (llmax(cache_size, sCacheMaxTexturesSize.load()) * (S64)((1.f - TEXTURE_CACHE_PURGE_AMOUNT) * 100)) / 100;   // <SS:Nexii/> atomic load only - this path re-reads the budget every pass, which is exactly what lets the arbiter move it mid-session
         for (time_idx_set_t::iterator iter = time_idx_set.begin();
             iter != time_idx_set.end(); ++iter)
         {
@@ -1842,7 +1888,7 @@ void LLTextureCache::purgeTextures(bool validate)
     }
 
     S64 cache_size = mTexturesSizeTotal;
-    S64 purged_cache_size = (llmax(cache_size, sCacheMaxTexturesSize) * (S64)((1.f - TEXTURE_CACHE_PURGE_AMOUNT) * 100)) / 100;
+    S64 purged_cache_size = (llmax(cache_size, sCacheMaxTexturesSize.load()) * (S64)((1.f - TEXTURE_CACHE_PURGE_AMOUNT) * 100)) / 100;   // <SS:Nexii/> atomic load only - the second of the two purge paths that re-read the budget live
     S32 purge_count = 0;
     for (time_idx_set_t::iterator iter = time_idx_set.begin();
          iter != time_idx_set.end(); ++iter)
@@ -1863,7 +1909,9 @@ void LLTextureCache::purgeTextures(bool validate)
                 std::string filename = getTextureFileName(entries[idx].mID);
                 LL_DEBUGS("TextureCache") << "Validating: " << filename << "Size: " << entries[idx].mBodySize << LL_ENDL;
                 // mHeaderAPRFilePoolp because this is under header mutex in main thread
-                S32 bodysize = LLAPRFile::size(filename, mHeaderAPRFilePoolp);
+                // <SS:Nexii> Strata - a packed body has no file, so asking the filesystem would report zero and this check would purge every packed entry it sampled. bodySize answers from whichever tier actually holds the bytes.
+                S32 bodysize = bodySize(entries[idx].mID, filename, mHeaderAPRFilePoolp);
+                // </SS:Nexii>
                 if (bodysize != entries[idx].mBodySize)
                 {
                     LL_WARNS("TextureCache") << "TEXTURE CACHE BODY HAS BAD SIZE: " << bodysize << " != " << entries[idx].mBodySize << filename << LL_ENDL;
@@ -2339,6 +2387,7 @@ void LLTextureCache::removeCachedTexture(const LLUUID& id)
     }
     // We are inside header's mutex so mHeaderAPRFilePoolp is safe to use,
     // but getLocalAPRFilePool() is not safe, it might be in use by worker
+    forgetBody(id);   // <SS:Nexii/> Strata - a packed body is not a file, so the unlink below cannot free it; the record has to be revoked or the bytes stay allocated until the whole volume is reclaimed
     LLAPRFile::remove(getTextureFileName(id), mHeaderAPRFilePoolp);
 }
 
@@ -2377,6 +2426,7 @@ void LLTextureCache::removeEntry(S32 idx, Entry& entry, std::string& filename)
 
     if (file_maybe_exists)
     {
+        forgetBody(entry.mID);   // <SS:Nexii/> Strata - same reason as removeCachedTexture: every eviction path has to revoke the packed record as well as unlink the loose file, or the volumes grow against a live-byte total that is falling
         LLAPRFile::remove(filename, mHeaderAPRFilePoolp);
     }
 }
@@ -2403,6 +2453,294 @@ bool LLTextureCache::removeFromCache(const LLUUID& id)
     }
     return ret ;
 }
+
+//////////////////////////////////////////////////////////////////////////////
+// <SS:Nexii> Strata - the J2C body tier
+//
+// WHY THIS IS A STAGING TIER AND NOT A DIRECT CONTAINER. Body writes are left exactly where they were: one loose file per uuid, written by the cache worker with the same syscall and the same failure modes as before. A background packer folds them into volumes once they have stopped changing. That ordering is what satisfies "no main-thread stall, and fetch threads must not block on cache IO" without having to argue about it - no thread the user can feel ever waits on volume IO, because the only thread that writes a volume is the once-a-minute maintenance thread that already existed. It is also what makes the existing 15,090 body files absorbable rather than disposable: they ARE the staging tier by construction, so they are folded away over the first few minutes of runtime instead of being deleted and re-fetched.
+//
+// Unlike the asset tenant, nothing here ever mutates a packed object. A better discard level rewrites the body whole, which is a revoke followed by a fresh loose write, so the unstable-set machinery the asset tier needs for llmeshrepository's LOD patching never fires on this side.
+
+S32 LLTextureCache::bodySize(const LLUUID& id, const std::string& filename, LLVolatileAPRPool* pool)
+{
+    if (SSStrataStore* strata = SSStrataStore::live(SSSTRATA_TENANT_TEXTURES))
+    {
+        S32 packed = 0;
+        if (strata->objectSize(id, packed)) return packed;
+    }
+    return LLAPRFile::size(filename, pool);
+}
+
+S32 LLTextureCache::readBody(const LLUUID& id, const std::string& filename, S32 offset, U8* dst, S32 bytes, LLVolatileAPRPool* pool)
+{
+    if (SSStrataStore* strata = SSStrataStore::live(SSSTRATA_TENANT_TEXTURES))
+    {
+        S32 got = 0;
+        if (strata->readObject(id, offset, dst, bytes, got)) return got;
+
+        // FALL THROUGH RATHER THAN PROBE. readObject returns false both for the overwhelmingly common "this uuid was never packed" - which costs one hash lookup and says nothing - and for a genuine read failure, which has already revoked the record and logged why: open, short, identity or CRC, each counted separately. The two resolve the same way, so the loose read below is simply attempted. Probing for the loose file first to tell them apart would spend a stat on EVERY body read to make one log line nicer, and when there is no loose file the readEx returns short and doRead reports it exactly as it always has.
+        //
+        // An object mid-pack can be in the index and on disk at the same time, and the crash rule guarantees the loose copy is the authoritative one whenever both exist - which is the other reason this direction of fallback is the correct one.
+    }
+    return LLAPRFile::readEx(filename, dst, offset, bytes, pool);
+}
+
+bool LLTextureCache::writeBody(const LLUUID& id, const std::string& filename, const U8* src, S32 bytes)
+{
+    if (SSStrataStore* strata = SSStrataStore::live(SSSTRATA_TENANT_TEXTURES))
+    {
+        // restore_bytes is FALSE, and that is the whole difference between this tenant and the asset one: the caller is about to write the complete body, so handing the old payload back to the loose file would only be overwritten a syscall later. The record is revoked either way, which is what matters.
+        strata->prepareForWrite(id, LLAssetType::AT_TEXTURE, filename, false);
+    }
+    return LLAPRFile::writeEx(filename, const_cast<U8*>(src), 0, bytes, getLocalAPRFilePool()) > 0;
+}
+
+void LLTextureCache::forgetBody(const LLUUID& id)
+{
+    if (SSStrataStore* strata = SSStrataStore::live(SSSTRATA_TENANT_TEXTURES))
+    {
+        strata->forget(id);
+    }
+}
+
+// <SS:Nexii> Squeeze promotion - see the header for the thread contract. Everything here mirrors LLTextureCacheRemoteWorker::doRead's HEADER and BODY stages byte for byte, because the promotion engine has to see exactly what the fetch pipeline would see; the differences are that nothing is mutated, the whole asset is always asked for, and the entry is re-read afterwards so a reclaimed index cannot silently hand back another texture's bytes.
+const char* LLTextureCache::ssJ2CProbeName(ESSJ2CProbe probe)
+{
+    switch (probe)
+    {
+        case SS_J2C_PROBE_COMPLETE:    return "complete";
+        case SS_J2C_PROBE_NO_ENTRY:    return "no cache entry";
+        case SS_J2C_PROBE_UNKNOWN:     return "total size unknown";
+        case SS_J2C_PROBE_PARTIAL:     return "partial";
+        case SS_J2C_PROBE_READ_FAILED: return "read failed";
+        case SS_J2C_PROBE_RACED:       return "entry changed under the read";
+        default:                       return "unknown";
+    }
+}
+
+LLTextureCache::ESSJ2CProbe LLTextureCache::ssProbeJ2C(const LLUUID& id, bool want_bytes, std::vector<U8>& out_data, S32& out_have, S32& out_total, LLVolatileAPRPool* pool)
+{
+    out_data.clear();
+    out_have  = 0;
+    out_total = 0;
+
+    if (id.isNull()) return SS_J2C_PROBE_NO_ENTRY;
+
+    S32   idx = -1;
+    Entry entry;
+    {
+        // create is FALSE, which is what makes this a pure read: openAndReadEntry's whole allocate-an-index branch is skipped and a miss simply returns -1.
+        LLMutexLock lock(&mHeaderMutex);
+        idx = openAndReadEntry(id, entry, false);
+    }
+    if (idx < 0) return SS_J2C_PROBE_NO_ENTRY;
+
+    const ESSBC7J2CExtent extent = ssBC7J2CExtent(entry.mImageSize, entry.mBodySize, TEXTURE_CACHE_ENTRY_SIZE, out_have, out_total);
+    if (extent == SSBC7_J2C_UNKNOWN)  return SS_J2C_PROBE_UNKNOWN;
+    if (extent == SSBC7_J2C_PARTIAL)  return SS_J2C_PROBE_PARTIAL;
+    if (!want_bytes)                  return SS_J2C_PROBE_COMPLETE;
+
+    const S32 total = out_total;
+    if (total <= 0 || total > MAX_IMAGE_DATA_SIZE) return SS_J2C_PROBE_UNKNOWN;
+
+    out_data.resize((size_t)total);
+
+    // The first record's worth lives in texture.cache at a fixed stride, exactly as the HEADER stage reads it. A texture smaller than one record occupies a whole padded record, so the read is clamped to what the asset actually is rather than to the record size.
+    const S32 header_bytes = llmin(total, (S32)TEXTURE_CACHE_ENTRY_SIZE);
+    const S32 header_read  = LLAPRFile::readEx(mHeaderDataFileName, &out_data[0], idx * TEXTURE_CACHE_ENTRY_SIZE, header_bytes, pool);
+    if (header_read != header_bytes)
+    {
+        LL_WARNS("Squeeze") << "promotion read of " << id << " got " << header_read << " of " << header_bytes
+                            << " header bytes from the texture cache, so the texture is left to the ordinary path" << LL_ENDL;
+        out_data.clear();
+        return SS_J2C_PROBE_READ_FAILED;
+    }
+
+    const S32 body_bytes = total - header_bytes;
+    if (body_bytes > 0)
+    {
+        const std::string filename = getTextureFileName(id);
+        const S32 body_read = readBody(id, filename, 0, &out_data[header_bytes], body_bytes, pool);
+        if (body_read != body_bytes)
+        {
+            LL_WARNS("Squeeze") << "promotion read of " << id << " got " << body_read << " of " << body_bytes
+                                << " body bytes, so the entry claims more than the disk holds and the texture is left to the ordinary path" << LL_ENDL;
+            out_data.clear();
+            return SS_J2C_PROBE_READ_FAILED;
+        }
+    }
+
+    // Index slots are recycled, so between the two reads above this slot could have been handed to a different texture by removeCachedTexture - at which point the bytes in hand are a perfectly well formed J2C for somebody else and would be stored under this uuid forever. Re-reading the entry is the cheap version of the uuid check the BC7 store makes on every blob.
+    {
+        LLMutexLock lock(&mHeaderMutex);
+        Entry after;
+        const S32 idx_after = openAndReadEntry(id, after, false);
+        if (idx_after != idx || after.mImageSize != entry.mImageSize || after.mBodySize != entry.mBodySize)
+        {
+            LL_WARNS("Squeeze") << "promotion read of " << id << " was abandoned: its cache entry moved from index " << idx
+                                << " to " << idx_after << " while the bytes were being read" << LL_ENDL;
+            out_data.clear();
+            return SS_J2C_PROBE_RACED;
+        }
+    }
+
+    return SS_J2C_PROBE_COMPLETE;
+}
+// </SS:Nexii>
+
+// Copies a BOUNDED slice of mTexturesSizeMap and nothing else. The bound is the point: on a cold cache this map holds fifteen thousand entries, and building that many paths under mHeaderMutex would park the main thread's own lazy purge behind this tick once a minute. A cursor makes the next tick continue where this one stopped, so a full sweep still happens, just spread over several minutes - which is the pace the packer's own byte budget wants anyway.
+bool LLTextureCache::strataCollectCandidates(std::vector<SSStrataLooseFile>& out)
+{
+    out.clear();
+
+    bool wrapped = false;
+    std::vector<std::pair<LLUUID, S32> > slice;
+    slice.reserve(SSSTRATA_TEX_SCAN_TICK);
+    {
+        LLMutexLock lock(&mHeaderMutex);
+        size_map_t::const_iterator iter = mTexturesSizeMap.lower_bound(mStrataScanCursor);
+        while (iter != mTexturesSizeMap.end() && slice.size() < (size_t)SSSTRATA_TEX_SCAN_TICK)
+        {
+            if (iter->second > 0) slice.push_back(std::make_pair(iter->first, iter->second));
+            ++iter;
+        }
+        // Wrapping to the start rather than stopping is what makes this a rotation instead of a one-shot scan: entries written after the cursor passed them are picked up on the next lap.
+        wrapped = (iter == mTexturesSizeMap.end());
+        mStrataScanCursor = wrapped ? LLUUID::null : iter->first;
+    }
+
+    // The stats happen OUTSIDE the lock. They are the expensive part of this function and none of them needs the header.
+    out.reserve(slice.size());
+    for (size_t i = 0; i < slice.size(); ++i)
+    {
+        const std::string path = getTextureFileName(slice[i].first);
+        llstat st;
+        if (LLFile::stat(path, &st, ENOENT) != 0) continue;   // already packed, or purged underneath us; either way there is no loose file to fold
+        out.push_back(SSStrataLooseFile((std::time_t)st.st_mtime, (U64)st.st_size, path, slice[i].first, false));
+    }
+    return wrapped;
+}
+
+// Retires the entries whose bodies died with a reclaimed volume. Without this the entry table would keep claiming a body size for a uuid whose bytes are gone, and every read of one would serve the 600 byte header record and report it as a complete image - which is a corrupt texture rather than a cache miss.
+void LLTextureCache::strataDropEntries(const std::vector<LLUUID>& ids)
+{
+    if (ids.empty() || mReadOnly) return;
+
+    U32 dropped = 0;
+    {
+        LLMutexLock lock(&mHeaderMutex);
+        for (size_t i = 0; i < ids.size(); ++i)
+        {
+            Entry entry;
+            S32 idx = openAndReadEntry(ids[i], entry, false);
+            if (idx < 0) continue;
+
+            std::string filename = getTextureFileName(ids[i]);
+            removeEntry(idx, entry, filename);
+            // QUEUED rather than written one at a time. writeEntryToHeaderImmediately opens and closes the entries file per record and one reclaim can drop thousands of them; mUpdatedEntryMap is the mechanism this class already has for exactly that, and it costs one open for the whole batch.
+            mUpdatedEntryMap[idx] = entry;
+            ++dropped;
+        }
+    }
+    writeUpdatedEntries();
+
+    LL_INFOS("TextureCache") << "Strata reclaim retired " << dropped << " of " << ids.size() << " texture entries whose bodies went with the volume" << LL_ENDL;
+}
+
+// <SS:Nexii> The budget arbiter's lever on this tier. Writing this one variable is the whole of doc/strata.md stage 2's J2C mechanism: the LRU purge, the startup purge and strataMaintenance below all re-read it on every pass, so the tier follows the new number at the next pass with no thread being notified of anything and nothing added to the documented mutex ordering.
+//
+// Entry table cost comes off here rather than at the call site, exactly as initCache takes it off max_size, so that the arbiter deals in whole tier shares and never has to know what a header entry costs.
+void LLTextureCache::ssSetTexturesBudget(S64 total_bytes)
+{
+    // A second instance is a read-only snapshot that evicts nothing, so lowering its ceiling would only produce a log line claiming an enforcement that cannot happen.
+    if (mReadOnly)
+    {
+        LL_INFOS("TextureCache") << "J2C budget not moved: this instance opened the texture cache read-only and purges nothing" << LL_ENDL;
+        return;
+    }
+
+    const S64 entries_size = (S64)sCacheMaxEntries * (S64)(TEXTURE_CACHE_ENTRY_SIZE + TEXTURE_FAST_CACHE_ENTRY_SIZE);
+    const S64 bodies       = llmax((S64)0, total_bytes - entries_size);
+
+    // A budget of zero is a setting nobody can honour rather than an instruction to delete the cache, which is the same rule SSBC7Store::budgetBytes already applies to a zero SSBC7CacheSize. Declining loudly beats purging everything.
+    if (bodies <= 0)
+    {
+        LL_WARNS("TextureCache") << "J2C budget not moved: a share of " << (total_bytes / (1024 * 1024))
+                                 << " MB leaves nothing for bodies after " << (entries_size / (1024 * 1024))
+                                 << " MB of entry table, and a zero budget is a setting we cannot honour rather than an instruction to empty the cache" << LL_ENDL;
+        return;
+    }
+
+    const S64 was = sCacheMaxTexturesSize.exchange(bodies);
+    if (was != bodies)
+    {
+        LL_INFOS("TextureCache") << "J2C budget moved from " << (was / (1024 * 1024)) << " MB to " << (bodies / (1024 * 1024))
+                                 << " MB of bodies; the next purge pass enforces it" << LL_ENDL;
+    }
+}
+// </SS:Nexii>
+
+void LLTextureCache::strataMaintenance()
+{
+    SSStrataStore* strata = SSStrataStore::live(SSSTRATA_TENANT_TEXTURES);
+    if (!strata) return;
+
+    // The budget is re-read every tick rather than latched at startup, because sCacheMaxTexturesSize is deliberately movable mid-session - doc/strata.md stage 2 turns it into the arbiter's lever - and a tier enforcing a number the user changed an hour ago is worse than one enforcing none.
+    const U64 budget = (U64)llmax((S64)0, sCacheMaxTexturesSize.load());
+    strata->setBudgetBytes(budget);
+
+    std::vector<SSStrataLooseFile> loose;
+    const bool lap_closed = strataCollectCandidates(loose);
+
+    const ESSStrataPackVerdict pack_verdict = strata->packPass(loose);
+
+    U32 packed_files = 0;
+    U64 loose_bytes = 0;
+    for (size_t i = 0; i < loose.size(); ++i)
+    {
+        if (loose[i].mPacked) ++packed_files;
+        else                  loose_bytes += loose[i].mSize;
+    }
+    // Accumulated over the lap and published only when the lap closes, because a tick sees a slice of the entry table rather than all of it. This is the number a user sees in Explorer and the one that made the asset tier look broken during a cold-cache burst, so it is worth being slow and right about rather than fast and wrong.
+    mStrataLapFiles += (U32)(loose.size() - packed_files);
+    mStrataLapBytes += loose_bytes;
+    if (lap_closed)
+    {
+        strata->metrics().mLooseFiles = mStrataLapFiles;
+        strata->metrics().mLooseBytes = mStrataLapBytes;
+        mStrataLapFiles = 0;
+        mStrataLapBytes = 0;
+    }
+
+    // Reclaim is driven by ALLOCATED bytes, not by live ones, and that distinction is the whole reason this tier needs a reclaim at all. LLTextureCache's own LRU purge already keeps the sum of live body sizes under the slider, but a packed body that is evicted frees nothing on disk until the volume holding it is unlinked. Dead bytes are therefore the only thing that can push the volumes past the budget while the live total sits comfortably under it, and killing the coldest volume is what collects them.
+    //
+    // 0xFFFF is passed as max_day because, unlike LLDiskCache, there is no loose-versus-packed drain race to arbitrate here: the loose tier is transient staging that the packer empties within one settle time, and the entries it belongs to are governed by the LRU purge that already exists.
+    ESSStrataReclaimVerdict reclaim_verdict = SSSTRATA_RECLAIM_NOT_NEEDED;
+    U32 volumes_killed = 0;
+    U64 total_freed = 0;
+    if (budget && strata->allocatedBytes() > budget)
+    {
+        std::vector<LLUUID> dropped;
+        U64 freed = 0;
+        reclaim_verdict = strata->reclaimColdest((U16)0xFFFF, true, freed, &dropped);
+        if (reclaim_verdict == SSSTRATA_RECLAIM_RAN || reclaim_verdict == SSSTRATA_RECLAIM_UNLINK_FAILED)
+        {
+            // UNLINK_FAILED counts too: the records are already dead on disk, so the entries must go whether or not the file did.
+            ++volumes_killed;
+            total_freed += freed;
+            strataDropEntries(dropped);
+        }
+    }
+
+    LL_INFOS("TextureCache") << "Strata textures: pack " << ssStrataPackVerdictName(pack_verdict)
+                             << ", folded " << packed_files << " of " << loose.size() << " candidates this tick"
+                             << (lap_closed ? " [lap closed]" : "") << "; loose " << strata->metrics().mLooseFiles.load()
+                             << " files / " << (strata->metrics().mLooseBytes.load() / (1024 * 1024))
+                             << " MB at the last full lap, volumes " << (strata->allocatedBytes() / (1024 * 1024)) << " MB of "
+                             << (budget / (1024 * 1024)) << " MB; reclaim " << ssStrataReclaimVerdictName(reclaim_verdict)
+                             << " killed " << volumes_killed << " (" << (total_freed / (1024 * 1024)) << " MB)" << LL_ENDL;
+}
+// </SS:Nexii>
 
 //////////////////////////////////////////////////////////////////////////////
 

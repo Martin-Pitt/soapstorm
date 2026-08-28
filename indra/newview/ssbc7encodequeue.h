@@ -13,7 +13,9 @@
 #include "llpointer.h"
 #include "lluuid.h"
 #include "llviewertexture.h"    // FTType
+#include "ssbc7encoder.h"       // <SS:Nexii/> Squeeze adaptive quality - SSBC7Quality is now a parameter of an encode, so the seam the promotion engine calls through has to name it
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -67,9 +69,53 @@ ESSBC7EncodeVerdict ssBC7EncodeConsider(const LLUUID& id,
 void ssBC7EncodeMaintenanceTick();
 // </SS:Nexii>
 
-// Snapshot of the want list, which is where every uuid that was declined for a reason a later pass could fix ends up. Phase 4's promotion engine drains this; for now it exists so the population is measurable rather than guessed at.
+// Snapshot of the want list, which is where every uuid that was declined for a reason a later pass could fix ends up. The promotion engine in ssbc7promote.cpp drains it; the snapshot form remains so the population can be inspected without disturbing it.
 void ssBC7EncodeWantList(std::vector<LLUUID>& out);
 size_t ssBC7EncodeWantListSize();
+
+// <SS:Nexii> Squeeze promotion - the seam ssbc7promote.cpp runs on. It is a set of small accessors rather than a second queue on purpose: promotion work has to share the DEMAND path's pool, its bounded queue, its pinned-bytes budget and its in-flight dedupe set, because two pools would mean a backfill encode could sit ahead of a texture the user is looking at, and two budgets would mean the 256 MB ceiling on pinned raws is really 512 MB.
+
+// True when everything the encode side needs is up: the feature is on, the GPU can actually use a record, and the store is initialised and writable. `out_reason` is filled in on refusal and is what the promotion engine's own decline verdict is built from.
+bool ssBC7EncodeGateReady(std::string& out_reason);
+
+// The same geometry rule ssBC7EncodeConsider applies, exposed so the promotion engine rejects a texture BEFORE spending a decode on it rather than after.
+bool ssBC7EncodeGeometryOK(U32 width, U32 height, U32 components);
+
+// Demand-path encodes still in flight. The promotion engine only runs when this is zero, which is the whole of "foreground always wins" on the CPU side.
+S32 ssBC7EncodePendingCount();
+
+// <SS:Nexii/> Squeeze adaptive quality - how many workers the pool actually has, or zero before it starts. The controller multiplies the measured per-worker rate by this to get the pool's capacity, which is the only sense in which "would this profile keep up" has an answer; reading the setting instead would be wrong on every machine where the setting is left at its automatic zero.
+S32 ssBC7EncodePoolWidth();
+
+// Set once shutdown starts. A long-running promotion item polls it between textures so quit does not wait on a backfill nobody asked for.
+bool ssBC7EncodeAbandonRequested();
+
+// Plain-uuid dedupe across the demand path and the promotion engine, which is what stops the two from encoding the same texture at the same time and throwing one of the results away. A successful claim also takes the uuid off the want list.
+bool ssBC7EncodeClaim(const LLUUID& id);
+void ssBC7EncodeUnclaim(const LLUUID& id);
+
+// The pinned-raw budget. Reserve BEFORE decoding, because the decode is what allocates the bytes being accounted for, and release on every exit including failure - a promotion item that leaked its reservation would leave the demand path refusing everything for the rest of the session.
+bool ssBC7EncodeReserveBytes(S64 bytes);
+void ssBC7EncodeReleaseBytes(S64 bytes);
+
+// tryPost onto the shared pool. NEVER blocks; false means the queue is full or closed and the caller retries at its next tick.
+bool ssBC7EncodeTryPost(const std::function<void()>& work);
+
+// Worker threads only. Encodes an already decoded full-resolution raw and appends it to the store, and is the single implementation the demand path and the promotion engine both use. Returns false and logs the reason on any failure.
+//
+// <SS:Nexii> Squeeze adaptive quality - `quality` is the profile to encode at, chosen by the caller rather than read here, because the two callers want different answers: the demand path wants whatever the controller has settled on this second, while the idle upgrade pass always wants the best rung. `allow_supersede` is what lets that pass replace an existing record; it is false everywhere else, so the plain-uuid dedupe the demand path relies on is unchanged.
+bool ssBC7EncodeAndStore(const LLUUID& id, const LLPointer<LLImageRaw>& raw, SSBC7Quality quality, bool allow_supersede);
+
+// Want-list access for the engine. take() hands back the NEWEST entries and removes them, so two passes never chase the same texture; want() puts one back or adds a new one and is the same call the decline paths use.
+size_t ssBC7EncodeTakeWanted(size_t max_count, std::vector<LLUUID>& out);
+void   ssBC7EncodeWant(const LLUUID& id);
+
+// How many uuids the want list's cap has thrown away this session. Non-zero means the number still waiting is a FLOOR and not a total, which is the difference between an honest readout and one that claims the engine has everything in hand.
+U32 ssBC7EncodeWantDroppedTotal();
+
+// Uuids that reached the store this session, drained by the main thread. Without this a texture probed before its record existed stays DECLINED for NO_RECORD until the viewer restarts, which would quietly throw away the video memory the promotion engine just spent CPU to make available.
+void ssBC7EncodeTakeFreshlyStored(std::vector<LLUUID>& out);
+// </SS:Nexii>
 
 std::string ssBC7EncodeMetricsString();
 

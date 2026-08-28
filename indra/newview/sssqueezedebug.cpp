@@ -18,7 +18,10 @@
 #include "llrender.h"
 #include "llstring.h"
 #include "llviewercontrol.h"
+#include "ssbc7adaptive.h"
 #include "ssbc7encodequeue.h"
+#include "ssbc7manifest.h"
+#include "ssbc7promote.h"
 #include "ssbc7serve.h"
 
 #include <cstring>
@@ -87,6 +90,16 @@ void ss_squeeze_refresh_enabled()
 
     // <SS:Nexii> Squeeze - and the read side, for the same reason: the read gate and the encode gate must come from ONE function or a session can end up encoding what it will not serve, or serving from a store nothing is filling.
     ssBC7ServeRefreshPolicy();
+
+    // <SS:Nexii> Squeeze promotion - and the fill side, for exactly the same reason. SSSqueezeNetworkPromote is read here and nowhere else, so this is the call that makes the preferences checkbox mean something rather than decorate the panel.
+    ssBC7PromoteRefreshPolicy();
+
+    // <SS:Nexii/> Squeeze adaptive quality - and the controller, so SSSqueezeEncodeQuality can be pinned or handed back to the adaptive ladder mid-session. It used to need a restart because a different profile meant a different encoder version and therefore a wiped store; with the profile in the record, changing it now costs nothing already written.
+    ssBC7AdaptiveRefreshPolicy();
+
+    // <SS:Nexii/> Squeeze region manifests - and the pre-warm, for the same reason again: the recorder and the read gate must agree about whether the feature is on, or a session can spend a walk recording uuids into a manifest nothing will ever be allowed to serve.
+    ssBC7ManifestRefreshPolicy();
+    // </SS:Nexii>
     // </SS:Nexii>
 }
 

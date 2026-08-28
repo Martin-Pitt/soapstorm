@@ -288,6 +288,8 @@ SSROCLedger::RegionState::RegionState()
     mEpochApplied(false),
     mStaleMarked(0),
     mVisitSecs(0),
+    mTrackedStart(0.0),
+    mTrackedSecs(0),
     mConfirmed(0),
     mCreated(0),
     mNoBlob(0),
@@ -353,6 +355,9 @@ void SSROCLedger::onRegionAdded(LLViewerRegion* regionp)
     rs.mHandle   = handle;
     rs.mRegionID = regionp->getRegionID();
     rs.mSandbox  = regionp->getRegionFlag(REGION_FLAGS_SANDBOX);
+
+    // <SS:Nexii> The region's own lifetime clock, started where the region becomes findable by handle. This is what the settled-stay gate is measured against, and it is deliberately NOT the dwell clock above: a region streams its objects to the viewer for as long as it is in the world, whether or not the agent ever stands in it, and a gate asking "did this visit observe enough to decide anything" has to be answered by observation rather than by the agent's feet. LLViewerRegion::mRegionTimer would be the exact stock equivalent but is private and resets on every re-received handshake, so the clock is kept here instead.
+    rs.mTrackedStart = (F64)LLTimer::getElapsedSeconds();
 
     ++mMetrics.mRegionsTracked;
 }
@@ -647,6 +652,47 @@ void SSROCLedger::confirmRecord(RegionState& rs, U32 index, U32 local_id, U32 cr
     }
 }
 
+U32 SSROCLedger::seedObjectCache(U64 handle, U32 max_seed, const std::function<bool(const SSROCRecord&)>& sink, SSROCSeedStats& stats, U8& outcome)
+{
+    outcome = SSROC_BACK_DISABLED;
+    if (!SSROCStore::enabled() || !sink) return 0;
+
+    RegionState* rsp = stateFor(handle);
+    if (!rsp)                { outcome = SSROC_BACK_NOT_TRACKED;     return 0; }
+
+    RegionState& rs = *rsp;
+
+    // A sandbox region records nothing, so there is nothing to fill from and the stock path has to serve it. Withholding a cache from a sandbox would not make the viewer safer, it would make it ask the simulator for every object on every visit.
+    if (rs.mSandbox)         { outcome = SSROC_BACK_SANDBOX;         return 0; }
+    if (!rs.mHaveHandshake)  { outcome = SSROC_BACK_NO_HANDSHAKE;    return 0; }
+    if (!rs.mLoadResolved)   { outcome = SSROC_BACK_LOAD_UNRESOLVED; return 0; }
+    if (!rs.mEpochApplied)   { outcome = SSROC_BACK_EPOCH_UNDECIDED; return 0; }
+    if (rs.mRecords.empty()) { outcome = SSROC_BACK_NO_RECORDS;      return 0; }
+
+    // Both ids are reported by the caller rather than folded into one boolean, because "the simulator restarted" and "the visit that wrote this file never saw a handshake" are materially different situations that used to print identically on the ghost path and cost this project several sessions of misdiagnosis.
+    const bool same_epoch = rs.mFileCacheID.notNull() && rs.mCacheID.notNull() && rs.mFileCacheID == rs.mCacheID;
+    if (!same_epoch)
+    {
+        outcome = rs.mFileCacheID.isNull() ? SSROC_BACK_EPOCH_UNKNOWN : SSROC_BACK_CACHEID_CHANGED;
+        return 0;
+    }
+
+    std::vector<U32> plan;
+    ssROCBuildSeedPlan(rs.mRecords, same_epoch, max_seed, plan, stats);
+
+    if (plan.empty())        { outcome = SSROC_BACK_PLAN_EMPTY;      return 0; }
+
+    U32 seeded = 0;
+    for (U32 index : plan)
+    {
+        if (index >= rs.mRecords.size()) continue;
+        if (sink(rs.mRecords[index])) ++seeded;
+    }
+
+    outcome = SSROC_BACK_SEEDED;
+    return seeded;
+}
+
 void SSROCLedger::noteSighting(LLViewerRegion* regionp, U32 local_id, U32 crc, U32 flags, const U8* blob, S32 blob_len)
 {
     RegionState* rsp = stateFor(regionp->getHandle());
@@ -704,7 +750,8 @@ void SSROCLedger::noteSighting(LLViewerRegion* regionp, U32 local_id, U32 crc, U
         index = known->second;
         SSROCRecord& rec = rs.mRecords[index];
 
-        if (rec.mCRC != crc || rec.mDP.empty())
+        // The stored local id is refreshed on every sighting while the blob is only replaced here, so an object whose id moved but whose CRC did not - the ordinary case for the first sighting of a record after a simulator restart - would otherwise keep a blob naming the id it had in the previous epoch. That disagreement is harmless while the blob is only ever rezzed, and is not harmless once the same record answers the simulator's cache probes, so the two are kept in lockstep at the one place that can do it.
+        if (rec.mCRC != crc || rec.mDP.empty() || rec.mLastLocalID != facts.mLocalID)
         {
             if (rec.mCRC != crc && rec.mCRC != 0)
             {
@@ -714,6 +761,11 @@ void SSROCLedger::noteSighting(LLViewerRegion* regionp, U32 local_id, U32 crc, U
             if (blob && blob_len > 0 && blob_len <= (S32)SSROC_MAX_DP_SIZE)
             {
                 rec.mDP.assign(blob, blob + blob_len);
+            }
+            else
+            {
+                // The stored blob is dropped rather than kept, because confirmRecord below is about to write the NEW crc onto this record and a record whose crc and blob disagree is worse than one with no blob at all: it would answer a probe with a match and then rez the previous description of the object. A blobless record still keeps its whole ledger and re-acquires a blob the next time the object is described in full.
+                rec.mDP.clear();
             }
 
             // Drift is measured against the record's own last known position, not against a per-session origin, so it survives sim restarts exactly as the FullID key does.
@@ -866,7 +918,17 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
     const bool   proof_required = (bool)require_proof;
     const size_t ghost_cap      = (size_t)(U32)max_ghosts;
 
-    const bool settled = (rs.mVisitSecs >= settled_need);
+    // <SS:Nexii> Two settled tests, because they answer two different questions and conflating them is what has kept this pipeline at zero promotions.
+    //
+    // PROMOTION asks "did this visit observe the region for long enough to decide anything", and the design specifies that gate as "the same condition the stock save already uses" - which is LLViewerRegion::mRegionTimer, the region's lifetime in the world (llviewerregion.cpp:902), not the agent's dwell in it. Measuring it as dwell meant a region the agent never entered had a stay of zero forever: on a fork with a 2048m draw distance, sixty-one of the owner's sixty-two tracked regions were neighbours, each streaming thousands of objects for the whole session, and not one of their records was ever offered to a gate. That is the "blocked stay 7004 ... immunity 0 persistence 0 score 0" line: every root fell out at the first hurdle and the other three never ran.
+    //
+    // SILENCE asks "was the viewer in a position to expect a confirmation", and that IS the agent's dwell: a neighbour region's interest list is distance-gated, so an object going unmentioned there is not evidence of anything and must not cost a record its paint order. The miss streak therefore keeps the dwell clock it always had.
+    rs.mTrackedSecs = (rs.mTrackedStart > 0.0)
+                    ? (U32)llclamp((F64)LLTimer::getElapsedSeconds() - rs.mTrackedStart, 0.0, 86400.0 * 30.0)
+                    : 0;
+
+    const bool settled       = (llmax(rs.mVisitSecs, rs.mTrackedSecs) >= settled_need);
+    const bool agent_settled = (rs.mVisitSecs >= settled_need);
     const U32  visit_secs = (U32)llmax(1.f, (F32)visit_hours * (F32)SSROC_SECS_PER_HOUR);
 
     const size_t n = rs.mRecords.size();
@@ -906,7 +968,7 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
         {
             rs.mRecords[i].mMissStreak = 0;
         }
-        else if (settled)
+        else if (agent_settled)
         {
             rs.mRecords[i].mMissStreak = ssBumpU16(rs.mRecords[i].mMissStreak);
         }
@@ -921,8 +983,18 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
         }
     }
 
-    // The three hurdles, in order. Immunity is a hard gate evaluated before any score: a penalty would be fungible and could be bought back by unrelated terms, which is exactly wrong for a safety gate.
+    // The three hurdles, in order. Immunity is a hard gate evaluated before any score: a penalty would be fungible and could be bought back by unrelated terms, which is exactly wrong for a safety gate. The chain itself is ssROCPromoteVerdict, a pure function over the record and these thresholds, so it can be tested offline; everything that needs the live region is resolved here first.
     std::vector<U32> promoted_roots;
+
+    SSROCPromoteGates gates;
+    gates.mSettled       = settled;
+    gates.mProofRequired = proof_required;
+    gates.mVisitSecs     = visit_secs;
+    gates.mVisitsNeed    = visits_need;
+    gates.mDaysNeed      = days_need;
+    gates.mScoreNeed     = score_need;
+
+    SSROCPromoteTally tally;
 
     for (size_t i = 0; i < n; ++i)
     {
@@ -940,69 +1012,45 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
 
         rec.mScore = scoreRecord(rec);
 
-        if (rec.mRecordFlags & SSROC_REC_DISQUALIFIED)
+        // Immunity is the one hurdle that needs the live region, so it is resolved here and handed to the verdict. It is evaluated only where the verdict will actually consult it - a settled visit, a linkset root, a blob, no hard disqualifier - so the flags below are never written from a record the gate was never asked about.
+        const bool root_candidate = !(rec.mRecordFlags & SSROC_REC_DISQUALIFIED) && !rec.mDP.empty() && rec.isRoot();
+        gates.mImmune = false;
+
+        if (root_candidate && settled)
         {
-            rec.mRecordFlags &= ~SSROC_REC_PROMOTED;
-            rec.mBlockedBy = SSROC_BLOCKED_DISQUALIFIED;
-            continue;
+            gates.mImmune = hasImmunity(regionp, rs, rec);
+            if (gates.mImmune)
+            {
+                rec.mRecordFlags |=  SSROC_REC_AUTORETURN_PROOF;
+                rec.mRecordFlags &= ~SSROC_REC_AUTORETURN_UNKNOWN;
+            }
+            else
+            {
+                rec.mRecordFlags &= ~SSROC_REC_AUTORETURN_PROOF;
+                rec.mRecordFlags |=  SSROC_REC_AUTORETURN_UNKNOWN;
+            }
         }
 
-        if (rec.mDP.empty())
-        {
-            rec.mRecordFlags &= ~SSROC_REC_PROMOTED;
-            rec.mBlockedBy = SSROC_BLOCKED_NOBLOB;
-            continue;
-        }
+        const U8 verdict = ssROCPromoteVerdict(rec, gates, &tally);
 
-        if (!rec.isRoot())
+        if (verdict == SSROC_BLOCKED_CHILD)
         {
             // Decided in the second pass, once every root's verdict is known.
             rec.mBlockedBy = SSROC_BLOCKED_CHILD;
             continue;
         }
 
-        if (!settled)
+        if (verdict == SSROC_BLOCKED_STAY)
         {
-            // Nothing was decided this visit, so an existing verdict is left exactly as it was.
+            // Nothing was decided this visit, so an existing verdict is left exactly as it was - a promotion earned on an earlier visit is not overturned by a flyover.
             if (!rec.isPromoted()) rec.mBlockedBy = SSROC_BLOCKED_STAY;
             continue;
         }
 
-        const bool immune = hasImmunity(regionp, rs, rec);
-        if (immune)
-        {
-            rec.mRecordFlags |=  SSROC_REC_AUTORETURN_PROOF;
-            rec.mRecordFlags &= ~SSROC_REC_AUTORETURN_UNKNOWN;
-        }
-        else
-        {
-            rec.mRecordFlags &= ~SSROC_REC_AUTORETURN_PROOF;
-            rec.mRecordFlags |=  SSROC_REC_AUTORETURN_UNKNOWN;
-        }
-
-        if (!immune && proof_required)
+        if (verdict != SSROC_BLOCKED_NONE)
         {
             rec.mRecordFlags &= ~SSROC_REC_PROMOTED;
-            rec.mBlockedBy = SSROC_BLOCKED_IMMUNITY;
-            continue;
-        }
-
-        // Two currencies. Where immunity is established the object cannot be swept away on a timer, so waiting several calendar days to confirm what is structurally guaranteed is wasted patience and visits are the honest measure. Where it is not, dwell buys nothing: only the passage of real days is evidence that an object on a return timer survived.
-        const bool persists = immune
-            ? (rec.visitCount(visit_secs) >= visits_need)
-            : (rec.distinctDaysSeen() >= days_need);
-
-        if (!persists)
-        {
-            rec.mRecordFlags &= ~SSROC_REC_PROMOTED;
-            rec.mBlockedBy = SSROC_BLOCKED_PERSISTENCE;
-            continue;
-        }
-
-        if (rec.mScore < score_need)
-        {
-            rec.mRecordFlags &= ~SSROC_REC_PROMOTED;
-            rec.mBlockedBy = SSROC_BLOCKED_SCORE;
+            rec.mBlockedBy = verdict;
             continue;
         }
 
@@ -1035,7 +1083,11 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
         promoted_roots.resize(ghost_cap);
     }
 
-    // Children ride their root, in both directions.
+    // Children ride their root, in both directions. The child bucket is by far the largest in the exit histogram and it is a CONSEQUENCE rather than a gate - promotion is a property of the linkset root by design, because a child's cached position is parent-relative and it is a fragment with nowhere to stand on its own. Counted apart from that, though, is the one child failure that IS a defect: a child whose root is not in the record set at all, which no amount of root promotion can ever rescue.
+    U32 children = 0;
+    U32 children_orphaned = 0;
+    U32 children_promoted = 0;
+
     for (size_t i = 0; i < n; ++i)
     {
         SSROCRecord& rec = rs.mRecords[i];
@@ -1043,18 +1095,28 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
         if (rec.mRecordFlags & (SSROC_REC_DISQUALIFIED)) continue;
         if (rec.mDP.empty()) continue;
 
+        ++children;
+
         bool root_promoted = false;
+        bool root_known    = false;
         if (rec.mParentFullID.notNull())
         {
             auto found = rs.mByFullID.find(rec.mParentFullID);
-            if (found != rs.mByFullID.end()) root_promoted = rs.mRecords[found->second].isPromoted();
+            if (found != rs.mByFullID.end())
+            {
+                root_known    = true;
+                root_promoted = rs.mRecords[found->second].isPromoted();
+            }
         }
+
+        if (!root_known) ++children_orphaned;
 
         if (root_promoted)
         {
             if (!rec.isPromoted()) ++rs.mPromotedThisVisit;
             rec.mRecordFlags |= SSROC_REC_PROMOTED;
             rec.mBlockedBy = SSROC_BLOCKED_NONE;
+            ++children_promoted;
         }
         else if (settled)
         {
@@ -1062,6 +1124,22 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
             rec.mBlockedBy = SSROC_BLOCKED_CHILD;
         }
     }
+
+    // <SS:Nexii> What the gates DID, not merely what they rejected. Without this a blocked-reason histogram reading "immunity 0 persistence 0 score 0" is unreadable: it looks exactly the same whether those gates passed everything or were never reached at all, and it was read the wrong way for several sessions. Emitted after the child pass so the largest bucket in the histogram is reported as a consequence with a cause beside it rather than as an unexplained majority.
+    LL_INFOS("SSROC") << "Promotion gates for region " << rs.mHandle
+                      << ": stay " << (settled ? "passed" : "blocked")
+                      << " (agent " << rs.mVisitSecs << "s, region " << rs.mTrackedSecs << "s, need " << settled_need << "s)"
+                      << " | roots " << tally.mRoots
+                      << ", reached immunity " << tally.mRootsSettled
+                      << " (immune " << tally.mImmune << ")"
+                      << ", reached persistence " << tally.mReachedPersistence
+                      << ", reached score " << tally.mReachedScore
+                      << ", promoted " << tally.mPromoted
+                      << " | children " << children << ", inherited " << children_promoted
+                      << ", rootless " << children_orphaned
+                      << " | best days " << tally.mBestDays << "/" << days_need
+                      << ", best visits " << tally.mBestVisits << "/" << visits_need
+                      << ", best score " << tally.mBestScore << "/" << score_need << LL_ENDL;
 }
 
 bool SSROCLedger::onRegionRemoved(LLViewerRegion* regionp, SSROCRegionFile& file)
@@ -1188,7 +1266,7 @@ bool SSROCLedger::onRegionRemoved(LLViewerRegion* regionp, SSROCRegionFile& file
     }
 
     // One line per region, and it is the whole field diagnostic for Phase 2a: without the reason histogram a three-hurdle gate cannot be debugged from a user's log.
-    U32 blocked[9] = { 0 };
+    U32 blocked[SSROC_BLOCKED_COUNT] = { 0 };
     U32 promoted = 0;
     U32 null_owner = 0;
     U32 immune = 0;
@@ -1215,18 +1293,21 @@ bool SSROCLedger::onRegionRemoved(LLViewerRegion* regionp, SSROCRegionFile& file
         if (rec.mRecordFlags & SSROC_REC_AUTORETURN_PROOF) ++immune;
         if (rec.mRecordFlags & SSROC_REC_ID_STALE) ++stale;
         if (recent_cutoff && rec.mLastConfirmed >= recent_cutoff && rec.mBlockedBy != SSROC_BLOCKED_DISQUALIFIED) ++recent;
-        if (rec.mBlockedBy < 9) ++blocked[rec.mBlockedBy];
+        if (rec.mBlockedBy < SSROC_BLOCKED_COUNT) ++blocked[rec.mBlockedBy];
 
         const U32 days = rec.distinctDaysSeen();
         if (days > best_days) best_days = days;
-        if (rec.mBlockedBy == SSROC_BLOCKED_PERSISTENCE && days + 1 >= days_need_log) ++nearly;
+        // Only records on the CONSERVATIVE path are counted down in days: one blocked on persistence while immunity is established is short of VISITS, not days, and reporting it here would say it was a day away when another visit is what it needs.
+        if (rec.mBlockedBy == SSROC_BLOCKED_PERSISTENCE
+            && !(rec.mRecordFlags & SSROC_REC_AUTORETURN_PROOF)
+            && days + 1 >= days_need_log) ++nearly;
     }
     mMetrics.mPromoted += promoted;
 
     LL_INFOS("SSROC") << "Ledger for region " << handle
                       << ": " << file.mRecords.size() << " records, " << rs.mConfirmed << " confirmed this visit"
                       << ", " << rs.mCreated << " new, " << rs.mNoBlob << " blobless"
-                      << " | visit " << rs.mVisitSecs << "s"
+                      << " | visit " << rs.mVisitSecs << "s agent, " << rs.mTrackedSecs << "s in world"
                       << " | promoted " << promoted << ", recent " << recent << ", immune " << immune
                       << ", null-owner " << null_owner
                       << " | blocked stay " << blocked[SSROC_BLOCKED_STAY]

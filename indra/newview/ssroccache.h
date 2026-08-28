@@ -30,7 +30,16 @@ constexpr U32 SSROC_MAGIC             = 0x434f5253; // 'SROC' as stored little-e
 // Version 6 files predate the epoch flags. A record in one carries neither ID_CURRENT nor ID_STALE, and absent-both reads as "not stale", so every such record is injectable. That is wrong for a specific and reachable file: one saved by a build with no epoch logic, on a visit that saw a restart, which therefore stamped the NEW CacheID into the header while its records still held ids from before it. On the next visit the CacheID compares equal, mode A passes, nothing is marked stale, and remembered ids from a dead epoch get painted - the exact case the epoch flags exist to refuse.
 //
 // Discarding is right rather than merely easy here. There is no in-file evidence that separates a safe version 6 file from that one, so a migration would have to guess, and ROC data is derived: the cost is that ghosts stay quiet for one visit per region while the ledger records them again.
-constexpr U32 SSROC_FORMAT_VERSION    = 7;         // bump on ANY layout change - files from an older version are rejected outright and reclaimed by the budget sweep, never migrated
+// <SS:Nexii> 7 -> 8 for the same reason the last bump happened, applied to a surface where the consequence is larger. Version 7 records may carry NEITHER epoch bit, which reads as "not stale" and therefore as injectable. That was survivable while the only consumer was ghost painting, where a wrong guess shows the user a stale object for ninety seconds. It is not survivable now that the same record set answers the simulator's ObjectUpdateCached probes: a record whose stored local id belongs to a dead epoch would claim a CRC match for an object that is no longer there, and the viewer would then never request the object that actually is. Discarding is right rather than merely easy, exactly as before - nothing in a version 7 file separates a safe record from that one, and ROC data is derived, so the cost is one cold visit per region while the ledger records it again.
+constexpr U32 SSROC_FORMAT_VERSION    = 8;         // bump on ANY layout change - files from an older version are rejected outright as DATA, never migrated, but see SSROC_MIN_SALVAGE_VERSION below for the one thing that is carried across
+// <SS:Nexii> The oldest version whose [OBJECTS] record layout is byte-identical to this one, and therefore the oldest file whose TENURE can be read back after a bump. Both bumps so far were semantic rather than structural - verified field by field against the version 7 serialiser in commit cc6a9040d6 - so a version 6 or 7 file parses exactly, and everything either bump was actually about is thrown away by ssROCStripToTenure rather than trusted.
+//
+// This exists because discarding the whole file was costing the feature the one thing it cannot rebuild. The promotion pipeline's conservative path needs a record confirmed on SSROCPromoteDaysUnproven DISTINCT CALENDAR DAYS, and calendar days can only be earned by waiting - so a format bump does not cost "one cold visit per region", it resets every record on the grid to day one and pushes promotion three more days into the future. The format moved twice in one week and the owner's ledger has therefore never held a record older than a day, which is exactly why nothing has ever promoted.
+//
+// Salvage is safe precisely because it keeps the complement of what the bumps were about. Both bumps concerned the meaning of a stored LOCAL ID against a simulator cache epoch; tenure is FullID-keyed presence history that no epoch can invalidate. The blob, the local id, the CRC, the update flags, the score, the promotion flag and both epoch bits are dropped, so a salvaged record can be neither painted (ssROCBuildInjectPlan refuses an empty blob) nor offered to the protocol cache (ssROCBuildSeedPlan refuses it as SSROC_SEED_NO_BLOB), and the file's own CacheID is nulled so the visit reads as SSROC_BACK_EPOCH_UNKNOWN. It carries history and nothing that could stand an object anywhere.
+//
+// RAISE THIS to SSROC_FORMAT_VERSION on any bump that genuinely moves the record layout - salvage reads the old bytes with the current reader and has no other way to know.
+constexpr U32 SSROC_MIN_SALVAGE_VERSION = 6;
 constexpr U32 SSROC_DAY_BITMAP_BYTES  = 16;         // 128 days of presence bits, one bit per calendar day, bit 0 = the day of mLastConfirmed
 constexpr U32 SSROC_MAX_DP_SIZE       = 10000;      // matches MAX_ENTRY_BODY_SIZE in llvocache.cpp - blobs larger than this cannot be cached by the stock path either
 // Sized for a fully upgraded region: 30000 objects at a few hundred bytes of blob each lands around 20 MB, and a region full of unusually large blobs has to fit too or saveRegionAsync silently refuses the whole file and the region never caches at all. The global budget in SSROCDiskBudgetMB is what actually bounds disk use; these two only bound one region.
@@ -68,6 +77,25 @@ enum ESSROCRecordFlags : U32
 // The reserved private local-id range. Nothing in the protocol reserves it; it is chosen from measurement - 556,931 real local ids across 43 SL regions, sampled from both the .slc and .roc stores on this machine, peak 0x399791FA, and not one value at or above 0x40000000. The floor therefore sits over three billion ids above the highest counter any region here has ever reached. Today nothing allocates in it; the constant exists so "the ROC never causes a send" is a one-instruction test that a stock guard can enforce rather than an invariant that has to be audited by reading call sites. See doc/region_object_cache.md.
 constexpr U32 SSROC_SYNTH_ID_FLOOR = 0xFF000001u;
 
+// <SS:Nexii> Moved here from ssrocledger.h so the promotion decision can be a pure function over a record and its thresholds, testable offline against the same store the viewer uses - exactly as ssROCBuildSeedPlan and ssROCBuildInjectPlan already are. The ledger owns WHEN the decision runs and what the region contributes to it; this header owns the decision itself.
+//
+// Why a record could not be promoted. Stored as one byte on every non-promoted record so the region-exit histogram is inspectable in the field - a three-hurdle gate with no reason code is undebuggable, and a gate that never RAN prints identically to one that always passes unless the tally below is reported beside it.
+enum ESSROCBlockedBy : U8
+{
+    SSROC_BLOCKED_NONE         = 0,  // promoted
+    SSROC_BLOCKED_STAY         = 1,  // the visit was too short for scoring to decide anything (SSROCSettledStaySecs)
+    SSROC_BLOCKED_DISQUALIFIED = 2,  // hard disqualifier: physics, character, avatar PCode, attachment state, oversized blob
+    SSROC_BLOCKED_IMMUNITY     = 3,  // auto-return immunity was required and could not be established
+    SSROC_BLOCKED_PERSISTENCE  = 4,  // not enough visits (immune) or distinct days (unproven) yet
+    SSROC_BLOCKED_SCORE        = 5,  // cleared both gates but scored below SSROCPromoteScore
+    SSROC_BLOCKED_CHILD        = 6,  // linkset child whose root was not promoted, or whose root was never seen
+    SSROC_BLOCKED_NOBLOB       = 7,  // never carried a usable DP blob, so it can never be rezzed
+    SSROC_BLOCKED_CAPACITY     = 8,  // score-ranked out at the per-region cap - a capacity decision, never an existence claim
+    SSROC_BLOCKED_COUNT        = 9,
+};
+
+const char* ssROCBlockedByName(U8 blocked);
+
 // One cached object. The DP blob is byte-identical to the ObjectUpdateCompressed payload the .slc stores, so every existing static unpacker and the whole OUT_FULL_CACHED rez path can consume it unmodified.
 struct SSROCRecord
 {
@@ -92,7 +120,7 @@ struct SSROCRecord
     U16         mConfirmCount;      // confirmations across all sessions - the ROC-side equivalent of the .slc hit and dupe counters, which die with the .slc and are unreachable from here anyway
     U16         mMoveCount;         // times the object was re-sighted outside its own neighbourhood
     U16         mMissStreak;        // consecutive settled visits with no confirmation - what silence does, and its complete effect
-    U8          mBlockedBy;         // ESSROCBlockedBy, see ssrocledger.h - zero when promoted
+    U8          mBlockedBy;         // ESSROCBlockedBy - zero when promoted
     U8          mDayBitmap[SSROC_DAY_BITMAP_BYTES];
     LLVector3   mPos;
     LLVector3   mScale;
@@ -112,6 +140,42 @@ struct SSROCRecord
     void noteEntry();
     U32  visitCount(U32 visit_secs) const;
 };
+
+// <SS:Nexii> The three-hurdle promotion decision, lifted out of SSROCLedger::runPromotion so it is a pure function of one record and one set of thresholds. The ledger still owns everything that needs a live region - the settled-stay measurement, the auto-return immunity ladder, the score - and hands the answers in here.
+//
+// Everything the gates need, resolved by the caller before the record is offered. Both booleans are decisions the ledger has already made against the live region, so this function never has to reach for one.
+struct SSROCPromoteGates
+{
+    SSROCPromoteGates();
+
+    bool mSettled;          // this visit observed the region for long enough to decide anything at all
+    bool mImmune;           // auto-return immunity was established for THIS record, evaluated by the ledger against the parcel overlay
+    bool mProofRequired;    // SSROCRequireAutoReturnProof: refuse the conservative distinct-days path entirely
+    U32  mVisitSecs;        // seconds of confirmed presence that count as one additional visit (SSROCVisitHours)
+    U32  mVisitsNeed;       // SSROCPromoteVisits, the currency where immunity is established
+    U32  mDaysNeed;         // SSROCPromoteDaysUnproven, the currency where it is not
+    F32  mScoreNeed;        // SSROCPromoteScore
+};
+
+// What the gates actually did, not merely what they rejected. A gate that never ran and a gate that always passes produce an identical zero in a blocked-reason histogram, which is precisely how "immunity 0 persistence 0 score 0" was read for several sessions as "those gates are fine" when in truth no record had ever reached them.
+struct SSROCPromoteTally
+{
+    SSROCPromoteTally();
+
+    U32 mConsidered;        // records offered to the verdict
+    U32 mRoots;             // of those, linkset roots carrying a blob and no hard disqualifier - the only records the gates apply to
+    U32 mRootsSettled;      // roots that cleared the stay gate, so the immunity test genuinely RAN for them
+    U32 mImmune;            // of those, how many established immunity
+    U32 mReachedPersistence;// roots the persistence gate was actually evaluated for
+    U32 mReachedScore;      // roots the score comparison was actually evaluated for
+    U32 mPromoted;
+    U32 mBestDays;          // the highest distinct-day count any root reached, so "promoted 0" reads as a countdown
+    U32 mBestVisits;        // and the same for the immune path's currency
+    F32 mBestScore;         // the best score among roots that got as far as the score gate, 0 when none did
+};
+
+// Returns an ESSROCBlockedBy; SSROC_BLOCKED_NONE means promote. Order matters and mirrors the design: hard disqualifier, then blob, then rootness, then the stay gate, then immunity, persistence and score. `tally` may be null.
+U8 ssROCPromoteVerdict(const SSROCRecord& rec, const SSROCPromoteGates& gates, SSROCPromoteTally* tally);
 
 // Sandbox policy. Auto-return is a PER-PARCEL setting, so immunity is always decided per parcel - but two cases are decided up front.
 //
@@ -203,12 +267,72 @@ struct SSROCRegionFile
     size_t approxBytes() const;
 };
 
+// <SS:Nexii> Reduce a whole region file to the part of it a format bump cannot invalidate: FullID-keyed presence history and terrain. Everything a bump has ever been about - the stored local id, the CRC it was last named with, the blob, the live update flags, the score, the promotion flag and both epoch bits - is cleared, along with the file's own CacheID, so what survives cannot paint an object, cannot answer a simulator probe and cannot claim an epoch. Exposed rather than kept private to deserializeSalvage so the stripping rule itself is testable, which matters more than the parse.
+void ssROCStripToTenure(SSROCRegionFile& file);
+
 // Build the arrival paint order for a loaded region file. Returns indices into `file.mRecords`, most permanent and largest first, because painting a whole region takes many frames and what lands in the first of them decides whether the place reads as itself immediately or as a scatter of props with the buildings missing.
 //
 // Records with no blob, no last-known local id, a hard disqualifier or a STALE local-id epoch are never planned - none of the first three can be rezzed back, and the fourth would be rezzed at an id the simulator has since reissued to somebody else.
 //
 // Linkset children whose root did not survive the plan are dropped rather than injected as orphans: a child's cached position is parent-relative, so on its own it is a fragment with nowhere to stand.
 void ssROCBuildInjectPlan(const SSROCRegionFile& file, const SSROCInjectPolicy& policy, std::vector<U32>& out);
+
+// ---------------------------------------------------------------------------
+// Backing the stock protocol object cache
+// ---------------------------------------------------------------------------
+//
+// The ROC already stores everything an .slc entry holds and more - the byte-identical data-packer blob, the CRC the simulator last named, the local id, the update flags the .slc disk format does not even have - so keeping a second copy of the same objects on disk buys nothing. When SSROCBackObjectCache is on, LLViewerRegion::loadObjectCache fills its entry map from these records instead of from the .slc, and the protocol code above it is untouched: probeCache and cacheFullUpdate read a map and neither knows nor cares where it came from.
+//
+// SEEDING IS NOT PAINTING, and the distinction is the whole safety argument. A seeded entry is created INVALID, exactly as one read from the .slc is, so it is inert until the simulator's own probe validates it. It therefore carries no promotion gate, no recency window and no disqualifier test - a physical object belongs in the protocol cache precisely as much as it belongs in the .slc, and withholding it would only turn a probe hit into a request the simulator did not have to answer.
+
+// Why a record may not be handed to the protocol object cache. A CLOSED set, counted per region and reported by name, because a bare refusal on this path is indistinguishable from a cache that was never warm - and the difference is visible to the simulator as request traffic.
+enum ESSROCSeedRefusal : U8
+{
+    SSROC_SEED_OK           = 0,
+    SSROC_SEED_NO_BLOB      = 1,  // no stored blob, or one larger than the stock entry body limit - it could not be an .slc entry either
+    SSROC_SEED_NO_LOCAL_ID  = 2,  // never carried a local id, so there is no key to file it under
+    SSROC_SEED_STALE_EPOCH  = 3,  // the CacheID moved on while this record went unmentioned: its stored id names whatever the simulator has since reissued it to
+    SSROC_SEED_RESERVED_ID  = 4,  // an id at or above SSROC_SYNTH_ID_FLOOR must never enter the protocol cache, because the stock cache-miss guard drops that range and the object would then never be requested
+    SSROC_SEED_DUPLICATE_ID = 5,  // a fresher record already claimed this local id this visit
+    SSROC_SEED_COUNT        = 6,
+};
+
+// Why a region visit did or did not have its protocol object cache filled from the ROC. A CLOSED set, latched at every exit and reported once per region, following the rule this project already learned the hard way on the ghost path: no reason may ever be inferred from a default value, and a decline must never be indistinguishable from never having run.
+//
+// Every outcome other than SEEDED means the STOCK .slc path runs for that region, untouched. That is deliberate: a decline costs the ROC its win for one visit and costs the simulator nothing at all.
+enum ESSROCBackOutcome : U8
+{
+    SSROC_BACK_DISABLED        = 0,  // the setting is off, or the store is not running
+    SSROC_BACK_NOT_TRACKED     = 1,  // the ledger never saw this region added - what enabling the cache mid-session looks like
+    SSROC_BACK_NO_HANDSHAKE    = 2,  // no CacheID yet, so the local-id epoch is unknowable and no stored id may be trusted
+    SSROC_BACK_LOAD_UNRESOLVED = 3,  // the .roc read had not landed and the blocking fallback did not produce one either
+    SSROC_BACK_EPOCH_UNDECIDED = 4,  // both facts arrived but the epoch pass has not run - structurally unreachable, named so it can never be silent
+    SSROC_BACK_EPOCH_UNKNOWN   = 5,  // the file carries no CacheID at all, because the visit that wrote it never saw a handshake - not a restart, and materially different from one
+    SSROC_BACK_CACHEID_CHANGED = 6,  // the simulator restarted: every stored local id belongs to somebody else now, exactly as the stock code decides when it discards the whole .slc
+    SSROC_BACK_SANDBOX         = 7,  // sandbox regions are never recorded, so there is nothing to fill from
+    SSROC_BACK_NO_RECORDS      = 8,  // first visit, or a region whose ledger is empty
+    SSROC_BACK_PLAN_EMPTY      = 9,  // records exist but none of them could be handed over - the per-record refusal histogram says which
+    SSROC_BACK_SEEDED          = 10, // the map was filled from the ROC and the .slc was not read
+    SSROC_BACK_COUNT           = 11,
+};
+
+const char* ssROCBackOutcomeName(U8 outcome);
+
+const char* ssROCSeedRefusalName(U8 refusal);
+
+struct SSROCSeedStats
+{
+    SSROCSeedStats() { for (U32 i = 0; i < SSROC_SEED_COUNT; ++i) mCounts[i] = 0; }
+    U32 mCounts[SSROC_SEED_COUNT];
+    std::string describe() const;
+};
+
+// Which records may seed the protocol object cache, in the order they should be offered. Pure over the record set so it can be tested offline against the same store the viewer uses.
+//
+// `same_epoch` is the file-level CacheID comparison, kept as a separate argument rather than inferred from the per-record bits: on a mismatch the stock code discards the WHOLE .slc, so refusing every record here is what makes the simulator-facing answer identical rather than merely similar.
+//
+// Ordered by last-confirmed descending so that when two records claim one local id - which the epoch bits are meant to prevent and which must still be decided rather than left to map iteration order - the more recently confirmed one wins.
+void ssROCBuildSeedPlan(const std::vector<SSROCRecord>& records, bool same_epoch, U32 max_seed, std::vector<U32>& out, SSROCSeedStats& stats);
 
 using SSROCFilePtr      = std::shared_ptr<SSROCRegionFile>;
 using SSROCLoadCallback = std::function<void(U64 handle, SSROCFilePtr file)>;
@@ -236,6 +360,9 @@ public:
     // Async load. The callback always fires on the main thread, exactly once, with a null file when the region has no cache or the file was unreadable.
     void loadRegionAsync(U64 handle, SSROCLoadCallback cb);
 
+    // Blocking load on the calling thread, for the one caller that cannot be deferred: LLViewerRegion::loadObjectCache runs inside unpackRegionHandshake and the map it fills decides bit 1 of the RegionHandshakeReply - the bit that tells the simulator whether to send cache probes at all. Answering that bit from a half-arrived cache would change what the simulator sends, which is the one thing this integration may not do. This is NOT a new stall: it stands where the stock synchronous .slc read stands, replaces it, and only runs at all when the async read has not already landed.
+    SSROCFilePtr loadRegionBlocking(U64 handle);
+
     // Async save of a completed snapshot. The caller must not touch the file afterwards.
     void saveRegionAsync(SSROCFilePtr file);
 
@@ -254,6 +381,10 @@ public:
         std::atomic<U32> mLoadsOk{0};
         std::atomic<U32> mLoadsMissing{0};
         std::atomic<U32> mLoadsCorrupt{0};
+        // <SS:Nexii> A file written by an older format version is NOT corruption and must never be counted as it. Every format bump orphans every existing file at once, so folding the two together means a routine upgrade reports the user's whole cache as damaged - which is exactly what happened after 7 to 8, and it is alarming, wrong, and completely uninformative about the thing it names.
+        std::atomic<U32> mLoadsOldVersion{0};
+        // <SS:Nexii> Counted apart from both of the above, because it is the good outcome: an older file whose presence history was carried forward while everything the bump was about was discarded. A bump that reports 48 salvaged files has cost the owner one cold visit per region; one that reports 48 orphaned files has cost every record on the grid three more days before it can promote.
+        std::atomic<U32> mLoadsSalvaged{0};
         std::atomic<U32> mSavesOk{0};
         std::atomic<U32> mSavesFailed{0};
         std::atomic<U32> mFilesEvicted{0};
@@ -267,10 +398,20 @@ public:
     static bool serialize(const SSROCRegionFile& file, std::vector<U8>& out);
     static bool deserialize(const U8* data, size_t size, SSROCRegionFile& out);
 
+    // <SS:Nexii> True when the buffer is a well formed ROC file from a DIFFERENT format version - readable enough to identify, deliberately not readable as data. Separate from deserialize so the loader can tell "this is last week's format" from "these bytes are damaged" without either of them guessing.
+    static bool isOtherVersion(const U8* data, size_t size);
+
+    // <SS:Nexii> Read a file from an older but layout-compatible version for its TENURE ONLY. Succeeds for versions SSROC_MIN_SALVAGE_VERSION..SSROC_FORMAT_VERSION and strips every field either bump was about, so what comes back can be neither painted nor offered to the protocol cache - it is presence history and terrain, nothing that could stand an object anywhere. A file from a NEWER version is refused outright: this reader has no way to know what its records mean.
+    static bool deserializeSalvage(const U8* data, size_t size, SSROCRegionFile& out);
+
     // Internal, public only so the worker-side scope guard can reach it: retires one in-flight IO op and wakes a shutdown that is waiting to drain.
     void endOp();
 
 private:
+    // <SS:Nexii> The single parser behind both deserialize and deserializeSalvage, so one layout is never read by two subtly different readers.
+    static bool deserializeVersioned(const U8* data, size_t size, SSROCRegionFile& out, U32 accept_version);
+
+    SSROCFilePtr loadRegionBody(U64 handle, const std::string& path);
     std::string gridKey() const;
     bool        writeFileBlocking(const std::string& path, const std::vector<U8>& bytes);
     static bool readFileBlocking(const std::string& path, std::vector<U8>& bytes);

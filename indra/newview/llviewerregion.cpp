@@ -71,6 +71,7 @@
 #include "ssrocaux.h" // <SS:Nexii>
 #include "ssrocghost.h" // <SS:Nexii>
 #include "ssrocledger.h" // <SS:Nexii>
+#include "ssrocvocache.h" // <SS:Nexii>
 #include "llworld.h"
 #include "llspatialpartition.h"
 #include "stringize.h"
@@ -843,6 +844,23 @@ void LLViewerRegion::loadObjectCache()
     // Presume success.  If it fails, we don't want to try again.
     mCacheLoaded = true;
 
+    // <SS:Nexii> Fill the entry map from the region object cache instead of from a second copy of the same objects in the .slc. The ROC already stores everything an entry here needs and more - the byte-identical blob, the CRC, the local id, the update flags the .slc format has no field for - so the two caches were holding the same region twice, and only one of them survives a simulator restart with its history intact.
+    //
+    // Nothing below this changes what the simulator sees. probeCache and cacheFullUpdate are untouched and are not called from here; their whole input besides the message is this map, and the entries put into it are built from the same three values the .slc constructor reads and are marked invalid exactly as .slc entries are, so they are inert until the simulator's own probe validates them. Every way this can decline falls through to the stock path below, by name and logged. See doc/region_object_cache.md.
+    if (ssROCLoadObjectCache(this, mImpl->mCacheMap))
+    {
+        // Deliberately not dirty: these entries were not read from the .slc and are not written back to it. Their source records are saved by the region object cache at region exit, on a worker thread.
+        mCacheDirty = false;
+
+        // GLTF material overrides still live in the stock sidecar, keyed by local id, and are read against the map that was just built. They are not part of this change and are named here rather than quietly dropped - moving them into the .roc by FullID is Phase 4.
+        if (LLVOCache::instanceExists())
+        {
+            LLVOCache::instance().readGenericExtrasFromCache(mHandle, mImpl->mCacheID, mImpl->mGLTFOverridesLLSD, mImpl->mCacheMap);
+        }
+        return;
+    }
+    // </SS:Nexii>
+
     if(LLVOCache::instanceExists())
     {
         LLVOCache & vocache = LLVOCache::instance();
@@ -862,6 +880,10 @@ void LLViewerRegion::saveObjectCache()
 {
     // <SS:Nexii> Cache entries the region object cache INVENTED and the simulator never confirmed are the viewer's own guess, not the simulator's word, so they must not be written into the protocol cache where the next visit would read them back as though they had come off the wire. Entries that came out of the .slc in the first place are left exactly as they were found. Above both early returns so the pending list is always consumed, and above writeToCache, which otherwise writes the whole map (the stale-entry filter below only runs after a settled stay). See doc/region_object_cache.md.
     ssROCPurgeInjectedEntries(this, mImpl->mCacheMap);
+
+    // Sampled and reported here rather than further down because every early return below is also a path this region will never come back from - saveObjectCache runs in the destructor - and a per-region record that is only released on the common path is a leak that grows with how far you travel. Also reports this visit's probe hit rate against how the map was filled, which is the number that says whether backing the object cache made the simulator answer more requests or fewer.
+    const bool ss_roc_backed = ssROCObjectCacheIsBacked(mHandle);
+    ssROCNoteObjectCacheSaved(this);
     // </SS:Nexii>
 
     if (!mCacheLoaded)
@@ -881,7 +903,14 @@ void LLViewerRegion::saveObjectCache()
 
         LLVOCache & instance = LLVOCache::instance();
 
-        instance.writeToCache(mHandle, mImpl->mCacheID, mImpl->mCacheMap, mCacheDirty, removal_enabled);
+        // <SS:Nexii> A region whose map came from the region object cache is saved by the region object cache, at LLWorld::removeRegion, from the ledger's own record set - which already holds every entry in this map and more. Writing the .slc as well would put the same objects on disk twice, which is the duplication this integration exists to end.
+        //
+        // The existing .slc file is left exactly as it is found rather than emptied. It is the fallback's data: turning SSROCBackObjectCache off restores the stock path on the next region entry with nothing lost, and that promise is only worth anything if the file it falls back to is still there. It stops growing, and an ordinary cache clear reclaims it.
+        if (!ss_roc_backed)
+        {
+            instance.writeToCache(mHandle, mImpl->mCacheID, mImpl->mCacheMap, mCacheDirty, removal_enabled);
+        }
+        // </SS:Nexii>
         instance.writeGenericExtrasToCache(mHandle, mImpl->mCacheID, mImpl->mGLTFOverridesLLSD, mCacheDirty, removal_enabled);
         mCacheDirty = false;
     }

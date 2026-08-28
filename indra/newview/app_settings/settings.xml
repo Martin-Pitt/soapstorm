@@ -25154,6 +25154,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>SSROCBackObjectCache</key>
+    <map>
+      <key>Comment</key>
+      <string>Fill the object cache from the region object cache instead of from the .slc files. The region cache already stores everything an .slc entry holds and more, survives a simulator restart, and has no 128-region limit. Off until soaked: turning it off restores the stock object cache on the next region entry, and the .slc files are left untouched so nothing is lost by doing so.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCBackMaxSeed</key>
+    <map>
+      <key>Comment</key>
+      <string>Most cache entries to build from the region object cache on entering one region, freshest first. Zero means no limit. A ceiling here only costs cache misses the simulator answers, so it is a safety valve rather than a tuning knob.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>SSROCDiskBudgetMB</key>
     <map>
       <key>Comment</key>
@@ -25441,6 +25463,74 @@ Change of this parameter will affect the layout of buttons in notification toast
       <integer>1</integer>
     </map>
     <!-- </SS:Nexii> -->
+    <!-- <SS:Nexii> Strata - asset volumes, see doc/strata.md -->
+    <key>SSStrataEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>Store cached assets inside a few large volume files instead of tens of thousands of individual ones. Turning this off leaves any existing volumes in place, still readable, and simply stops new assets being folded into them.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSStrataPackAgeSeconds</key>
+    <map>
+      <key>Comment</key>
+      <string>How long a cached asset must sit unchanged before it is folded into a volume. Mesh data is filled in level by level after it first arrives, so a short value here costs extra work rather than correctness.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>300</integer>
+    </map>
+    <key>SSStrataMaxObjectKB</key>
+    <map>
+      <key>Comment</key>
+      <string>Cached assets larger than this stay as individual files. The measured cache has no assets anywhere near the default, so this is a safety valve rather than a tuning knob.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>8192</integer>
+    </map>
+    <key>SSStrataTextures</key>
+    <map>
+      <key>Comment</key>
+      <string>Store cached J2C texture bodies inside a few large volume files instead of the tens of thousands of individual ones in texturecache. Turning this off leaves any existing volumes in place, still readable, and simply stops new texture bodies being folded into them.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSStrataBudgetEnforce</key>
+    <map>
+      <key>Comment</key>
+      <string>Treat the cache size setting as a genuine total that every cache tier is held inside. While this is off the tiers keep the separate budgets they have always had, which together authorise more than twice the number the cache size slider shows, and the viewer only reports in the log what the total would have done. Turning this on will delete cached data that currently survives; nothing is lost that cannot be fetched again.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSStrataAssetCachePercent</key>
+    <map>
+      <key>Comment</key>
+      <string>Share of the total cache size given to cached assets - meshes, sounds, animations and everything else that is not a texture. Set to 0 to ignore the percentage and use the fixed FSDiskCacheSize instead. Only has any effect while the total is being enforced.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>25</integer>
+    </map>
+    <!-- </SS:Nexii> -->
     <!-- <SS:Nexii> Squeeze - GPU-compressed textures, see doc/super_compressed_textures.md -->
     <key>SSSqueezeEnabled</key>
     <map>
@@ -25464,10 +25554,10 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>SSSqueezeNetworkPromote</key>
+    <key>SSSqueezePromote</key>
     <map>
       <key>Comment</key>
-      <string>Quietly complete partly-downloaded textures in the background so they can be compressed. Compressed copies are only ever made from full resolution, so without this the cache fills much more slowly.</string>
+      <string>Compress textures already sitting in the texture cache while nothing else needs the processor. This costs no download at all - it only uses what is already on your disk - and it is how most compressed copies get made.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25475,7 +25565,18 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>SSSqueezeEncodeThreads</key>
+    <key>SSSqueezeNetworkPromote</key>
+    <map>
+      <key>Comment</key>
+      <string>Quietly finish downloading partly-downloaded textures in the background so they can be compressed. Compressed copies are only ever made from full resolution, so without this the cache fills much more slowly. Only runs while nothing else is downloading, never during teleports or login, and is limited by the two settings below.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+<key>SSSqueezeEncodeThreads</key>
     <map>
       <key>Comment</key>
       <string>Processor cores used for texture compression. 0 picks a sensible number automatically. Compression runs at low priority.</string>
@@ -25511,11 +25612,22 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSSqueezeEncodeQuality</key>
     <map>
       <key>Comment</key>
-      <string>Texture compression quality. 0 is fastest, 1 is the default and is the setting that handles blocks containing several unrelated colours properly, 2 is slowest for a small further gain. Changing this re-compresses cached textures, and takes effect after a restart.</string>
+      <string>Texture compression quality. 0 is fastest but handles blocks containing several unrelated colours badly, 1 brings in the modes that fix that, 2 is the best quality. 3 is the default and picks between them automatically: best quality while the machine keeps up, stepping down only while there is a real backlog, and re-encoding the rushed ones at best quality again once it is idle. Takes effect immediately and never re-compresses what is already cached.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>U32</string>
+      <key>Value</key>
+      <integer>3</integer>
+    </map>
+    <key>SSSqueezeUpgradeIdle</key>
+    <map>
+      <key>Comment</key>
+      <string>When the machine is idle and nothing is waiting to be compressed, go back over textures that were compressed at a lower quality and redo them at the best one.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
     </map>
@@ -25534,6 +25646,17 @@ Change of this parameter will affect the layout of buttons in notification toast
     <map>
       <key>Comment</key>
       <string>Use the compressed textures already on disk instead of decoding the originals again. This is the setting that actually saves video memory; turning it off leaves the viewer building compressed copies it never reads.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSMaterialAlphaFailOpaque</key>
+    <map>
+      <key>Comment</key>
+      <string>When a surface says it has see-through parts but the setting that says how to treat them has not arrived from the region yet, draw it solid rather than see-through. Without this a surface in a neighbouring region can go completely invisible instead of merely looking wrong for a moment.</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25562,6 +25685,39 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>U32</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>SSSqueezeManifests</key>
+    <map>
+      <key>Comment</key>
+      <string>Remember which textures a region used and load their compressed copies from disk as you arrive, instead of waiting to be told about them. Only ever reads the local disk - it never downloads anything - so it does nothing on a region you have not been to before.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSSqueezeManifestWarmMB</key>
+    <map>
+      <key>Comment</key>
+      <string>Most video memory the arrival warm-up may put in place before anything has asked for it. Textures nothing turns out to look at are handed back automatically after half a minute, so this is a ceiling on a temporary cost rather than on a permanent one.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>128</integer>
+    </map>
+    <key>SSSqueezeManifestWarmDiscard</key>
+    <map>
+      <key>Comment</key>
+      <string>How sharp the arrival warm-up loads textures at, where 0 is full size and each step up is half the width. 2 costs a sixteenth of the memory of full size, is already sharper than anything that could have arrived over the network in the same moment, and is sharpened the rest of the way as soon as something actually comes into view.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
     </map>
     <key>SSSqueezeSelfTest</key>
     <map>

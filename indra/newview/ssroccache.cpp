@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstring>
 #include <ctime>
+#include <sstream>
 
 namespace
 {
@@ -294,6 +295,105 @@ F32 ssROCInjectPriority(const SSROCRecord& rec, U64 recent_cutoff)
     return 0.6f * permanence + 0.4f * size01;
 }
 
+// <SS:Nexii> The three-hurdle promotion decision and its tally. See doc/region_object_cache.md.
+
+const char* ssROCBlockedByName(U8 blocked)
+{
+    switch (blocked)
+    {
+        case SSROC_BLOCKED_NONE:         return "promoted";
+        case SSROC_BLOCKED_STAY:         return "stay";
+        case SSROC_BLOCKED_DISQUALIFIED: return "disqualified";
+        case SSROC_BLOCKED_IMMUNITY:     return "immunity";
+        case SSROC_BLOCKED_PERSISTENCE:  return "persistence";
+        case SSROC_BLOCKED_SCORE:        return "score";
+        case SSROC_BLOCKED_CHILD:        return "child";
+        case SSROC_BLOCKED_NOBLOB:       return "no blob";
+        case SSROC_BLOCKED_CAPACITY:     return "capacity";
+        default:                         return "unknown";
+    }
+}
+
+SSROCPromoteGates::SSROCPromoteGates()
+:   mSettled(false),
+    mImmune(false),
+    mProofRequired(false),
+    mVisitSecs(7200),
+    mVisitsNeed(2),
+    mDaysNeed(3),
+    mScoreNeed(0.40f)
+{
+}
+
+SSROCPromoteTally::SSROCPromoteTally()
+:   mConsidered(0),
+    mRoots(0),
+    mRootsSettled(0),
+    mImmune(0),
+    mReachedPersistence(0),
+    mReachedScore(0),
+    mPromoted(0),
+    mBestDays(0),
+    mBestVisits(0),
+    mBestScore(0.f)
+{
+}
+
+U8 ssROCPromoteVerdict(const SSROCRecord& rec, const SSROCPromoteGates& gates, SSROCPromoteTally* tally)
+{
+    if (tally) ++tally->mConsidered;
+
+    // Hard disqualifiers are evaluated before anything else so no bonus and no amount of tenure can resurrect a moving object.
+    if (rec.mRecordFlags & SSROC_REC_DISQUALIFIED) return SSROC_BLOCKED_DISQUALIFIED;
+
+    // A record with no blob cannot be rezzed back by any path, so it is not a candidate at any score. This is also what a salvaged record looks like immediately after a format bump: it carries its whole presence history and re-acquires a blob the first time the simulator describes the object in full.
+    if (rec.mDP.empty()) return SSROC_BLOCKED_NOBLOB;
+
+    // Children ride their root's verdict, decided by the caller once every root is known. A child's cached position is parent-relative, so it can be neither classified nor positioned on its own.
+    if (!rec.isRoot()) return SSROC_BLOCKED_CHILD;
+
+    if (tally)
+    {
+        ++tally->mRoots;
+        const U32 days = rec.distinctDaysSeen();
+        if (days > tally->mBestDays) tally->mBestDays = days;
+        const U32 visits = rec.visitCount(gates.mVisitSecs);
+        if (visits > tally->mBestVisits) tally->mBestVisits = visits;
+    }
+
+    // Nothing is DECIDED on a visit too short to have observed anything, so an existing verdict is left exactly as it was rather than being overturned by a flyover.
+    if (!gates.mSettled) return SSROC_BLOCKED_STAY;
+
+    if (tally)
+    {
+        ++tally->mRootsSettled;
+        if (gates.mImmune) ++tally->mImmune;
+    }
+
+    // Immunity is a hard gate evaluated before any score: a penalty would be fungible and could be bought back by unrelated terms, which is exactly wrong for a safety gate. It only BLOCKS when the strict posture is asked for; otherwise it chooses which persistence currency applies.
+    if (!gates.mImmune && gates.mProofRequired) return SSROC_BLOCKED_IMMUNITY;
+
+    if (tally) ++tally->mReachedPersistence;
+
+    // Two currencies. Where immunity is established the object cannot be swept away on a timer, so waiting several calendar days to confirm what is structurally guaranteed is wasted patience and visits are the honest measure. Where it is not, dwell buys nothing: only the passage of real days is evidence that an object on a return timer survived.
+    const bool persists = gates.mImmune
+        ? (rec.visitCount(gates.mVisitSecs) >= gates.mVisitsNeed)
+        : (rec.distinctDaysSeen() >= gates.mDaysNeed);
+
+    if (!persists) return SSROC_BLOCKED_PERSISTENCE;
+
+    if (tally)
+    {
+        ++tally->mReachedScore;
+        if (rec.mScore > tally->mBestScore) tally->mBestScore = rec.mScore;
+    }
+
+    if (rec.mScore < gates.mScoreNeed) return SSROC_BLOCKED_SCORE;
+
+    if (tally) ++tally->mPromoted;
+    return SSROC_BLOCKED_NONE;
+}
+
 SSROCInjectPolicy::SSROCInjectPolicy()
 :   mPromotedTier(true),
     mRecentTier(true),
@@ -374,6 +474,131 @@ void ssROCBuildInjectPlan(const SSROCRegionFile& file, const SSROCInjectPolicy& 
             if (!std::binary_search(kept_ids.begin(), kept_ids.end(), rec.mParentFullID)) continue;
         }
         out.push_back(index);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Backing the stock protocol object cache
+// ---------------------------------------------------------------------------
+
+const char* ssROCBackOutcomeName(U8 outcome)
+{
+    switch (outcome)
+    {
+        case SSROC_BACK_DISABLED:        return "disabled";
+        case SSROC_BACK_NOT_TRACKED:     return "region not tracked";
+        case SSROC_BACK_NO_HANDSHAKE:    return "no handshake";
+        case SSROC_BACK_LOAD_UNRESOLVED: return "cache read unresolved";
+        case SSROC_BACK_EPOCH_UNDECIDED: return "epoch undecided";
+        case SSROC_BACK_EPOCH_UNKNOWN:   return "stored epoch unknown";
+        case SSROC_BACK_CACHEID_CHANGED: return "cache id changed";
+        case SSROC_BACK_SANDBOX:         return "sandbox region";
+        case SSROC_BACK_NO_RECORDS:      return "no records";
+        case SSROC_BACK_PLAN_EMPTY:      return "plan empty";
+        case SSROC_BACK_SEEDED:          return "seeded";
+        default:                         return "unknown";
+    }
+}
+
+const char* ssROCSeedRefusalName(U8 refusal)
+{
+    switch (refusal)
+    {
+        case SSROC_SEED_OK:           return "ok";
+        case SSROC_SEED_NO_BLOB:      return "no blob";
+        case SSROC_SEED_NO_LOCAL_ID:  return "no local id";
+        case SSROC_SEED_STALE_EPOCH:  return "stale epoch";
+        case SSROC_SEED_RESERVED_ID:  return "reserved id";
+        case SSROC_SEED_DUPLICATE_ID: return "duplicate id";
+        default:                      return "unknown";
+    }
+}
+
+std::string SSROCSeedStats::describe() const
+{
+    std::ostringstream os;
+    bool first = true;
+    for (U32 i = 0; i < SSROC_SEED_COUNT; ++i)
+    {
+        if (!mCounts[i]) continue;
+        if (!first) os << ", ";
+        first = false;
+        os << ssROCSeedRefusalName((U8)i) << " " << mCounts[i];
+    }
+    if (first) os << "nothing considered";
+    return os.str();
+}
+
+void ssROCBuildSeedPlan(const std::vector<SSROCRecord>& records, bool same_epoch, U32 max_seed, std::vector<U32>& out, SSROCSeedStats& stats)
+{
+    out.clear();
+
+    const size_t n = records.size();
+    if (!n) return;
+
+    // A CacheID mismatch makes the stock code throw the entire .slc away, and it is right to: every local id in the region was reassigned when the simulator restarted, so no stored id is evidence about anything. Refusing the whole set by name here is what makes this path's answer to the simulator identical to the stock one rather than merely close to it - and it is also why the records themselves are KEPT, which is the difference the whole integration is for.
+    if (!same_epoch)
+    {
+        stats.mCounts[SSROC_SEED_STALE_EPOCH] += (U32)n;
+        return;
+    }
+
+    struct Candidate
+    {
+        U32 mIndex;
+        U32 mLocalID;
+        U64 mLastConfirmed;
+    };
+
+    std::vector<Candidate> candidates;
+    candidates.reserve(n);
+
+    for (size_t i = 0; i < n; ++i)
+    {
+        const SSROCRecord& rec = records[i];
+
+        // Deliberately NOT filtered by promotion, recency or the hard disqualifiers. Seeding creates an entry the simulator's own probe must still validate before anything is drawn, so a physical object belongs here exactly as much as it belongs in the .slc - withholding it would turn a probe the simulator expected to be answered into a request it now has to serve.
+        if (rec.mLastLocalID == 0)                                  { ++stats.mCounts[SSROC_SEED_NO_LOCAL_ID]; continue; }
+        if (rec.mDP.empty() || rec.mDP.size() > SSROC_MAX_DP_SIZE)   { ++stats.mCounts[SSROC_SEED_NO_BLOB];     continue; }
+
+        // An id in the reserved range must never reach the protocol cache: the stock cache-miss guard drops that range outright, so an object filed under one could never be requested if the entry turned out to be wrong. Nothing allocates there today - this fires only on a grid whose id policy has moved.
+        if (rec.mLastLocalID >= SSROC_SYNTH_ID_FLOOR)               { ++stats.mCounts[SSROC_SEED_RESERVED_ID];  continue; }
+
+        // Per-record epoch, on top of the file-level gate above. This is the finer of the two and catches the case the .slc cannot even represent: a file stamped with a NEW CacheID beside records that were never re-mentioned under it.
+        if (rec.mRecordFlags & SSROC_REC_ID_STALE)                  { ++stats.mCounts[SSROC_SEED_STALE_EPOCH];  continue; }
+
+        Candidate c;
+        c.mIndex         = (U32)i;
+        c.mLocalID       = rec.mLastLocalID;
+        c.mLastConfirmed = rec.mLastConfirmed;
+        candidates.push_back(c);
+    }
+
+    if (candidates.empty()) return;
+
+    // Freshest first, so a local-id collision is decided by evidence rather than by whichever record the merge happened to put first. Stable on the record index so a given file always seeds in the same order and a field report is reproducible.
+    std::stable_sort(candidates.begin(), candidates.end(),
+                     [](const Candidate& a, const Candidate& b) { return a.mLastConfirmed > b.mLastConfirmed; });
+
+    std::vector<U32> claimed;
+    claimed.reserve(candidates.size());
+
+    out.reserve(candidates.size());
+    for (const Candidate& c : candidates)
+    {
+        if (max_seed > 0 && out.size() >= (size_t)max_seed) break;
+
+        // Searching a sorted vector rather than scanning: a linear membership test would be quadratic on a full region, on the arrival frame. Two records naming one id should be impossible once the epoch bits have done their work; it is still decided rather than left to chance, because the loser is an object the simulator would otherwise never be asked for.
+        auto at = std::lower_bound(claimed.begin(), claimed.end(), c.mLocalID);
+        if (at != claimed.end() && *at == c.mLocalID)
+        {
+            ++stats.mCounts[SSROC_SEED_DUPLICATE_ID];
+            continue;
+        }
+        claimed.insert(at, c.mLocalID);
+
+        ++stats.mCounts[SSROC_SEED_OK];
+        out.push_back(c.mIndex);
     }
 }
 
@@ -701,12 +926,74 @@ bool SSROCStore::serialize(const SSROCRegionFile& file, std::vector<U8>& out)
     return true;
 }
 
+// <SS:Nexii> Magic and version only, read straight off the front of the buffer. It reads the two fields deserialize reads first and stops, so it cannot disagree with it about what a file is.
+bool SSROCStore::isOtherVersion(const U8* data, size_t size)
+{
+    if (!data || size < 8) return false;
+
+    U32 magic = 0, version = 0;
+    memcpy(&magic,   data,     sizeof(U32));
+    memcpy(&version, data + 4, sizeof(U32));
+
+    return magic == SSROC_MAGIC && version != SSROC_FORMAT_VERSION;
+}
+
+// <SS:Nexii> Reduce a file to the part a format bump cannot invalidate. Everything cleared here is something a bump has been about or something derived from it; everything kept is FullID-keyed presence history, which no simulator cache epoch can make wrong. See doc/region_object_cache.md.
+void ssROCStripToTenure(SSROCRegionFile& file)
+{
+    // The file's own epoch claim goes first. A salvaged record set has no local ids to place, and saying so explicitly is what makes the next visit latch SSROC_BACK_EPOCH_UNKNOWN - which is the true statement - rather than comparing a stale id against a live one.
+    file.mLastCacheID.setNull();
+
+    // Derived entirely from the blobs of promoted records, every one of which is about to be dropped.
+    file.mManifest.clear();
+
+    for (SSROCRecord& rec : file.mRecords)
+    {
+        // The four fields that name an object to the SIMULATOR rather than describing it to us. Without all four a record can be neither painted nor offered to the protocol cache, which is the whole safety argument for carrying anything across a bump at all.
+        rec.mDP.clear();
+        rec.mLastLocalID = 0;
+        rec.mCRC         = 0;
+        rec.mUpdateFlags = 0;
+
+        // A promotion is a claim about a specific blob at a specific id, so it does not survive losing both. The evidence behind it does, and every day of it is re-read by the very next exit pass, so a record that had earned promotion earns it again on the first visit that describes the object.
+        rec.mRecordFlags &= (SSROC_REC_DISQUALIFIED | SSROC_REC_IS_CHILD | SSROC_REC_OWNER_PUBLIC_WORKS);
+        rec.mScore        = 0.f;
+        rec.mRezTimeEpoch = 0;
+        rec.mBlockedBy    = SSROC_BLOCKED_NOBLOB;
+    }
+}
+
+bool SSROCStore::deserializeSalvage(const U8* data, size_t size, SSROCRegionFile& out)
+{
+    if (!data || size < 8) return false;
+
+    U32 magic = 0, version = 0;
+    memcpy(&magic,   data,     sizeof(U32));
+    memcpy(&version, data + 4, sizeof(U32));
+
+    if (magic != SSROC_MAGIC) return false;
+
+    // A NEWER file is refused rather than salvaged. This reader can only guess what its records mean, and the whole point of salvage is that it guesses at nothing.
+    if (version > SSROC_FORMAT_VERSION || version < SSROC_MIN_SALVAGE_VERSION) return false;
+
+    if (!deserializeVersioned(data, size, out, version)) return false;
+
+    if (version != SSROC_FORMAT_VERSION) ssROCStripToTenure(out);
+    return true;
+}
+
 bool SSROCStore::deserialize(const U8* data, size_t size, SSROCRegionFile& out)
+{
+    return deserializeVersioned(data, size, out, SSROC_FORMAT_VERSION);
+}
+
+// The one parser. `accept_version` is passed in rather than compared against the constant here so that deserialize and deserializeSalvage read the same bytes with the same code and can never drift into two subtly different readers of one layout - which is the failure mode that would make a salvage quietly wrong rather than loudly broken.
+bool SSROCStore::deserializeVersioned(const U8* data, size_t size, SSROCRegionFile& out, U32 accept_version)
 {
     Reader r(data, size);
 
     if (r.pod<U32>() != SSROC_MAGIC) return false;
-    if (r.pod<U32>() != SSROC_FORMAT_VERSION) return false;   // wipe-never-migrate: a format bump simply orphans old files, which the budget sweep then reclaims
+    if (r.pod<U32>() != accept_version) return false;   // never migrated as DATA: a format bump orphans the file, and only ssROCStripToTenure carries anything out of one
 
     out.mRegionHandle = r.pod<U64>();
     out.mRegionID     = r.uuid();
@@ -874,6 +1161,70 @@ bool SSROCStore::writeFileBlocking(const std::string& path, const std::vector<U8
 // Async entry points
 // ---------------------------------------------------------------------------
 
+// The whole of a load, hoisted out of the worker lambda so the blocking entry point below runs byte-for-byte the same code rather than a second, subtly different copy of it. Callable from either thread: it touches only the metrics, which are atomic, and the filesystem.
+SSROCFilePtr SSROCStore::loadRegionBody(U64 handle, const std::string& path)
+{
+    std::vector<U8> bytes;
+    if (!readFileBlocking(path, bytes))
+    {
+        ++mMetrics.mLoadsMissing;
+        return SSROCFilePtr();
+    }
+
+    SSROCFilePtr file = std::make_shared<SSROCRegionFile>();
+    if (!deserialize(bytes.data(), bytes.size(), *file))
+    {
+        // <SS:Nexii> An older format is counted apart from damage. Both used to end the same way - the file goes and the region is rebuilt - but only one of them is worth telling the user about, and a format bump makes every file in the cache take this branch at once.
+        if (isOtherVersion(bytes.data(), bytes.size()))
+        {
+            // Before writing the file off, try to carry its TENURE across. A bump costs one cold visit per region for the blobs, which is cheap; it costs every record its accumulated calendar days, which is not, because days can only be earned by waiting and the conservative promotion path counts nothing else. Two bumps in one week is why the owner's ledger has never held a record older than one day and why nothing has ever promoted.
+            SSROCFilePtr salvaged = std::make_shared<SSROCRegionFile>();
+            if (deserializeSalvage(bytes.data(), bytes.size(), *salvaged) && salvaged->mRegionHandle == handle)
+            {
+                ++mMetrics.mLoadsSalvaged;
+                mMetrics.mBytesRead += bytes.size();
+
+                // The file is deliberately NOT deleted here: this visit's exit save rewrites it in the current format, and if the session ends before that happens the same bytes are salvaged again next time, which is idempotent.
+                LL_INFOS("SSROC") << "Region cache file " << path << " is from an older format; carried "
+                                  << salvaged->mRecords.size()
+                                  << " records forward for their presence history only - no blob, no local id, no epoch claim" << LL_ENDL;
+                return salvaged;
+            }
+
+            ++mMetrics.mLoadsOldVersion;
+            LL_WARNS("SSROC") << "Region cache file " << path
+                              << " is from a format version this build cannot salvage; it has been discarded and the region will be recorded again" << LL_ENDL;
+        }
+        else
+        {
+            // Corruption costs nothing but a rebuild: the file is deleted outright rather than salvaged, and only this region is affected.
+            ++mMetrics.mLoadsCorrupt;
+            LL_WARNS("SSROC") << "Region cache file " << path << " is damaged and has been discarded; the region will be recorded again" << LL_ENDL;
+        }
+        LLFile::remove(path, ENOENT);
+        return SSROCFilePtr();
+    }
+
+    if (file->mRegionHandle != handle)
+    {
+        ++mMetrics.mLoadsCorrupt;
+        LLFile::remove(path, ENOENT);
+        return SSROCFilePtr();
+    }
+
+    mMetrics.mBytesRead += bytes.size();
+    ++mMetrics.mLoadsOk;
+    return file;
+}
+
+SSROCFilePtr SSROCStore::loadRegionBlocking(U64 handle)
+{
+    if (!mInitialized || mShuttingDown || !enabled()) return SSROCFilePtr();
+
+    // Not counted against mPendingOps: this runs on the caller's own thread and has completed by the time it returns, so there is nothing for a shutdown drain to wait for.
+    return loadRegionBody(handle, regionFilePath(handle));
+}
+
 void SSROCStore::loadRegionAsync(U64 handle, SSROCLoadCallback cb)
 {
     if (!mInitialized || mShuttingDown || !enabled() || !cb)
@@ -898,33 +1249,7 @@ void SSROCStore::loadRegionAsync(U64 handle, SSROCLoadCallback cb)
         [this, handle, path]() -> SSROCFilePtr
         {
             OpGuard guard(this);
-
-            std::vector<U8> bytes;
-            if (!readFileBlocking(path, bytes))
-            {
-                ++mMetrics.mLoadsMissing;
-                return SSROCFilePtr();
-            }
-
-            SSROCFilePtr file = std::make_shared<SSROCRegionFile>();
-            if (!deserialize(bytes.data(), bytes.size(), *file))
-            {
-                // Corruption costs nothing but a rebuild: the file is deleted outright rather than salvaged, and only this region is affected.
-                ++mMetrics.mLoadsCorrupt;
-                LLFile::remove(path, ENOENT);
-                return SSROCFilePtr();
-            }
-
-            if (file->mRegionHandle != handle)
-            {
-                ++mMetrics.mLoadsCorrupt;
-                LLFile::remove(path, ENOENT);
-                return SSROCFilePtr();
-            }
-
-            mMetrics.mBytesRead += bytes.size();
-            ++mMetrics.mLoadsOk;
-            return file;
+            return loadRegionBody(handle, path);
         },
         [handle, cb](SSROCFilePtr file)
         {
@@ -1118,11 +1443,14 @@ void SSROCStore::endOp()
 
 std::string SSROCStore::metricsString() const
 {
-    return llformat("ROC loads %u/%u miss %u corrupt %u | saves %u fail %u | evicted %u | disk %llu MB",
+    // <SS:Nexii> Salvaged and orphaned are reported separately from corruption, because after a format bump they are the whole story: salvaged means the presence history survived and promotion keeps counting, orphaned means every record on the grid went back to day one.
+    return llformat("ROC loads %u/%u miss %u corrupt %u salvaged %u orphaned %u | saves %u fail %u | evicted %u | disk %llu MB",
                     mMetrics.mLoadsOk.load(),
                     mMetrics.mLoadsOk.load() + mMetrics.mLoadsMissing.load(),
                     mMetrics.mLoadsMissing.load(),
                     mMetrics.mLoadsCorrupt.load(),
+                    mMetrics.mLoadsSalvaged.load(),
+                    mMetrics.mLoadsOldVersion.load(),
                     mMetrics.mSavesOk.load(),
                     mMetrics.mSavesFailed.load(),
                     mMetrics.mFilesEvicted.load(),

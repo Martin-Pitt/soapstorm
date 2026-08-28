@@ -258,6 +258,7 @@ set(llcommon_HEADER_FILES
     u64.h
     workqueue.h
     StackWalker.h
+    ssserial.h   # <SS:Nexii/> shared record framing for the Soapstorm on-disk stores
     )
     
 if (DARWIN)

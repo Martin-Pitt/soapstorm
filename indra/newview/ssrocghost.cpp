@@ -496,15 +496,27 @@ void SSROCGhostMgr::retireGhost(LLViewerRegion* regionp, RegionGhosts& rg, Ghost
     ghost.mState = SSROC_GHOST_RETIRED;
     mLiveGhosts.erase(ghost.mFullID);
 
-    // The VISUAL is derezzed; the .roc record is untouched. An unconfirmed ghost disappearing is overwhelmingly the interest list neglecting it rather than the object being gone, and silence is never evidence - only an answered existence sweep or a resolved kill may remove a record, and neither of those is what brought us here.
-    LLViewerObject* obj = gObjectList.findObject(ghost.mFullID);
-    if (obj && !obj->isDead() && obj->getRegion() == regionp)
+    // <SS:Nexii> ROC ONLY DESTROYS WHAT ROC INVENTED. A ghost that merely VALIDATED an entry the simulator itself wrote into the .slc is the simulator's object, made visible early - the bytes are its own and its existence was never ROC's claim to make. Killing one of those on a timer removes a real object from a real region, which is precisely what was happening: a terrain surround made visible while the agent stood in its region, then derezzed once the agent crossed the border, alt-cammable to point blank and simply not there, returning the moment the region was re-entered.
+    //
+    // The timer was measuring nothing by then. Confirmation arrives through cacheFullUpdate and probeCache, and the simulator probes the region the agent is IN - so the instant the agent leaves, non-confirmation stops being evidence of anything and becomes a certainty. The comment this replaces had the premise exactly right, that silence is the interest list neglecting an object rather than the object being gone, and then killed it anyway.
+    //
+    // On the owner's own data every single ghost is validated and none are created, so this makes the destructive half of retirement unreachable in practice rather than merely rarer.
+    if (ghost.mCreatedEntry)
     {
-        gObjectList.killObject(obj);
-    }
+        LLViewerObject* obj = gObjectList.findObject(ghost.mFullID);
+        if (obj && !obj->isDead() && obj->getRegion() == regionp)
+        {
+            gObjectList.killObject(obj);
+        }
 
-    // The cache entry has to go too, or createVisibleObjects rebuilds the object from it on the very next frame. This returns the entry to exactly the untrusted state it was in before injection, so a later probe re-validates it normally.
-    if (regionp) regionp->killCacheEntry(ghost.mLocalID);
+        // The invented cache entry has to go too, or createVisibleObjects rebuilds the object from it on the very next frame. This returns the region to exactly the state it was in before injection.
+        if (regionp) regionp->killCacheEntry(ghost.mLocalID);
+    }
+    else
+    {
+        // Nothing to undo: the entry was the simulator's, it is still the simulator's, and it goes back to being an ordinary untrusted entry that a later probe validates normally. All that retires here is ROC's interest in watching it.
+        ++mMetrics.mReleasedValidated;
+    }
 
     LL_DEBUGS("SSROC") << "Retired ghost " << ghost.mFullID << " in region " << rg.mHandle << ": " << why << LL_ENDL;
 }

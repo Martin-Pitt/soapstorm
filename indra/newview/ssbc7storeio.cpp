@@ -20,6 +20,7 @@
 #include "lldiriterator.h"
 #include "llfile.h"
 #include "llviewercontrol.h"
+#include "ssstratabudget.h"   // <SS:Nexii/> budgetBytes is a share of CacheSize decided by the arbiter, not a number of this store's own
 
 #include <cstdio>
 #include <cstring>
@@ -96,21 +97,11 @@ std::string SSBC7Store::segmentPath(U32 segment) const
 // This restores what Linden originally intended and Firestorm departed from: the commented-out DiskCachePercentOfTotal / texture_cache_percent pair in llappviewer.cpp, and its surviving comment "the maximum size of this cache is defined as a percentage of the total cache size - the 'CacheSize' pref - for all caches".
 //
 // SSBC7CacheSize survives as an absolute override for anyone who wants to pin the tier regardless of the total; a percent of zero selects it. Read live rather than latched, so moving either slider mid-session starts draining at the next tick rather than at the next restart.
+//
+// STAGE 2, doc/strata.md: the four lines of arithmetic that used to live here moved to the arbiter in ssstratabudget.cpp, which is now the ONLY place that decides how CacheSize is divided - the same percent, the same clamp to 90 and the same "a zero share selects SSBC7CacheSize" escape hatch, reproduced there byte for byte. This function's contract is unchanged: read live, zero means the setting is unusable and the eviction pass declines with BUDGET_INVALID rather than guessing a budget the user did not ask for. Until SSStrataBudgetEnforce is turned on the arbiter hands back exactly what this function used to compute.
 U64 SSBC7Store::budgetBytes() const
 {
-    static LLCachedControl<U32> percent(gSavedSettings, "SSSqueezeCachePercent", 50);
-    static LLCachedControl<U32> absolute_mb(gSavedSettings, "SSBC7CacheSize", 2048);
-    static LLCachedControl<U32> total_mb(gSavedSettings, "CacheSize", 16384);
-
-    const U32 pct = llclamp((U32)percent, (U32)0, (U32)90);   // the other tiers still need somewhere to live, so the share can never be the whole cache
-    if (pct == 0)
-    {
-        const U32 mb = absolute_mb;
-        if (mb == 0) return 0;   // a zero budget is a setting we cannot honour, not an instruction to delete everything - the pass declines with BUDGET_INVALID and says so
-        return (U64)mb * 1024ull * 1024ull;
-    }
-
-    return ((U64)(U32)total_mb * 1024ull * 1024ull * (U64)pct) / 100ull;
+    return ssBudgetTierBytes(SSBUDGET_TIER_BC7);
 }
 
 U64 SSBC7Store::allocatedBytes() const
@@ -275,19 +266,50 @@ bool SSBC7Store::readBlobPrefix(const LLUUID& id, U32 levels, std::vector<U8>& o
 {
     out_blob.clear();
 
-    if (!mInitialized || mShuttingDown) return false;
-    if (!lookup(id, out_record)) return false;
-    if (out_record.mBlobSize < SSBC7_BLOB_HEADER_SIZE) return false;
-    if (out_record.mMipCount == 0 || out_record.mMipCount > SSBC7_MAX_MIPS) return false;
+    // <SS:Nexii> Every exit below says which one it was. These used to be six bare returns, and because the pump maps any false onto the single verdict DECLINE_READ, "this texture has no record", "its record was evicted while we were reading" and "the index disagrees with itself about its geometry" arrived at the log as the same number - which is precisely the failure this tier's own verdict enum exists to prevent, and which this project has already paid for twice elsewhere.
+    //
+    // Debug level rather than info: a miss is the ordinary state of a warming cache and would drown the log, but a reason that is only in the binary is not a reason at all.
+    if (!mInitialized || mShuttingDown)
+    {
+        LL_DEBUGS("Squeeze") << "BC7 read for " << id << " declined: the store is not up" << LL_ENDL;
+        return false;
+    }
+    if (!lookup(id, out_record))
+    {
+        LL_DEBUGS("Squeeze") << "BC7 read for " << id << " declined: no record, either never encoded or evicted since the probe" << LL_ENDL;
+        return false;
+    }
+    if (out_record.mBlobSize < SSBC7_BLOB_HEADER_SIZE)
+    {
+        LL_WARNS("Squeeze") << "BC7 read for " << id << " declined: the index claims a blob of " << out_record.mBlobSize
+                            << " bytes, smaller than a header - the index is inconsistent" << LL_ENDL;
+        return false;
+    }
+    if (out_record.mMipCount == 0 || out_record.mMipCount > SSBC7_MAX_MIPS)
+    {
+        LL_WARNS("Squeeze") << "BC7 read for " << id << " declined: the index claims " << (U32)out_record.mMipCount
+                            << " mips, which is impossible - the index is inconsistent" << LL_ENDL;
+        return false;
+    }
 
     if (levels == 0 || levels > out_record.mMipCount) levels = out_record.mMipCount;
 
     // Sized from the INDEX record rather than from the blob header, because the read length has to be known before the file is opened - that is what makes this one seek and one read rather than a header read followed by a second one.
     const U32 prefix = ssBC7PrefixBytes(out_record.mWidth, out_record.mHeight, out_record.mMipCount, levels);
-    if (prefix == 0) return false;
+    if (prefix == 0)
+    {
+        LL_WARNS("Squeeze") << "BC7 read for " << id << " declined: " << out_record.mWidth << "x" << out_record.mHeight
+                            << " over " << (U32)out_record.mMipCount << " mips gives a zero length prefix" << LL_ENDL;
+        return false;
+    }
 
     const U64 want = (U64)SSBC7_BLOB_HEADER_SIZE + (U64)prefix;
-    if (want > (U64)out_record.mBlobSize) return false;
+    if (want > (U64)out_record.mBlobSize)
+    {
+        LL_WARNS("Squeeze") << "BC7 read for " << id << " declined: the prefix wants " << want
+                            << " bytes but the index says the blob is only " << out_record.mBlobSize << LL_ENDL;
+        return false;
+    }
 
     LLFILE* f = LLFile::fopen(segmentPath(out_record.mSegment), "rb");
     if (!f)
@@ -336,6 +358,7 @@ bool SSBC7Store::loadIndex()
     // </SS:Nexii>
     {
         std::lock_guard<std::mutex> lock(mMapMutex);
+        for (U32 q = 0; q < SSBC7_QUALITY_LEVELS; ++q) mQualityCounts[q] = 0;   // <SS:Nexii/> Squeeze adaptive quality
         mIndex.clear();
         mSegMembers.clear();
         mDroppedUUIDs.clear();
@@ -422,6 +445,14 @@ bool SSBC7Store::loadIndex()
     mLiveRecords = (U32)index.size();
     mDataBytes = data_bytes;
     mMetrics.mRecordsLoaded = (U32)index.size();
+
+    // <SS:Nexii/> Squeeze adaptive quality - the histogram is derived from the survivors in the same pass that derives the frontiers, so a session that starts with a store full of hurried records knows on the first tick how much the upgrade pass owes rather than after a scan nobody scheduled.
+    for (U32 q = 0; q < SSBC7_QUALITY_LEVELS; ++q) mQualityCounts[q] = 0;
+    for (const auto& entry : index)
+    {
+        const U8 q = entry.second.mQuality;
+        if (q < SSBC7_QUALITY_LEVELS) ++mQualityCounts[q];
+    }
 
     {
         std::lock_guard<std::mutex> lock(mMapMutex);
@@ -739,10 +770,13 @@ void SSBC7Store::compactIndex()
         std::unordered_map<LLUUID, SSBC7Record> rebuilt;
         rebuilt.reserve(keep.size());
         mSegMembers.clear();
+        // <SS:Nexii/> Squeeze adaptive quality - recounted rather than adjusted by `dropped`, because compaction is the one path that rebuilds the map wholesale and a delta applied to a map that was just replaced is a guess. It runs once at startup, so the extra walk costs nothing anyone can measure.
+        for (U32 q = 0; q < SSBC7_QUALITY_LEVELS; ++q) mQualityCounts[q] = 0;
         for (const SSBC7Record& rec : keep)
         {
             rebuilt[rec.mUUID] = rec;
             mSegMembers[rec.mSegment].push_back(rec.mUUID);
+            if (rec.mQuality < SSBC7_QUALITY_LEVELS) ++mQualityCounts[rec.mQuality];
         }
         mIndex.swap(rebuilt);
     }
@@ -752,7 +786,7 @@ void SSBC7Store::compactIndex()
 }
 // </SS:Nexii>
 
-bool SSBC7Store::append(const SSBC7Encoded& src, U32 encoder_version)
+bool SSBC7Store::append(const SSBC7Encoded& src, U32 encoder_version, bool allow_supersede)
 {
     if (!mInitialized || mShuttingDown || mReadOnly || !enabled())
     {
@@ -773,12 +807,26 @@ bool SSBC7Store::append(const SSBC7Encoded& src, U32 encoder_version)
     }
     // </SS:Nexii>
 
-    if (hasRecord(src.mUUID))
+    // <SS:Nexii> Squeeze adaptive quality - records used to be immutable per (uuid, encoder_version), which was true while every record in a store shared one profile. Now that they do not, a second encode of the same texture is worth keeping when and only when it is at a STRICTLY BETTER profile, and the demand path never asks for that - only the idle upgrade pass does.
+    //
+    // The comparison is on the profile ordinal, which is ordered by cost and therefore by quality, so "better" is a plain greater-than and there is no table to keep in step. Refusing an equal or worse re-encode is not a nicety: without it a mistimed upgrade pass would rewrite the whole store to change nothing, and every rewrite leaves the old blob behind as garbage until its segment is killed.
+    bool superseding = false;
     {
-        // Records are immutable per (uuid, encoder_version) under full-res-only, so a second encode of the same texture has nothing to add and is dropped rather than superseded.
-        ++mMetrics.mAppendsDuplicate;
-        return false;
+        SSBC7Record existing;
+        std::lock_guard<std::mutex> lock(mMapMutex);
+        auto it = mIndex.find(src.mUUID);
+        const bool have = (it != mIndex.end() && !it->second.isTombstone());
+        if (have)
+        {
+            if (!allow_supersede || src.mQuality <= it->second.mQuality)
+            {
+                ++mMetrics.mAppendsDuplicate;
+                return false;
+            }
+            superseding = true;
+        }
     }
+    // </SS:Nexii>
 
     std::vector<U8> blob;
     SSBC7Record rec;
@@ -825,17 +873,94 @@ bool SSBC7Store::append(const SSBC7Encoded& src, U32 encoder_version)
 
     {
         std::lock_guard<std::mutex> lock(mMapMutex);
+        // <SS:Nexii> Squeeze adaptive quality - the record being replaced is read back HERE rather than trusted from the check above, because the map lock was dropped in between for the multi-megabyte write and a kill may have taken the old record in the meantime. If it is gone this is simply a fresh record, which is the correct outcome and not an error.
+        auto prev = mIndex.find(rec.mUUID);
+        const bool replacing = (prev != mIndex.end() && !prev->second.isTombstone());
+        if (replacing)
+        {
+            const U8 old_q = prev->second.mQuality;
+            if (old_q < SSBC7_QUALITY_LEVELS && mQualityCounts[old_q]) --mQualityCounts[old_q];
+            // The old blob is not erased and its file is not shortened: it becomes garbage its segment reclaims when that segment is eventually killed, exactly as a torn tail does. mDataBytes tracks LIVE bytes, so it loses the old size and gains the new one, while mAllocBytes - the number the budget is enforced against - correctly keeps counting both until the unlink.
+            mDataBytes = (mDataBytes.load() > prev->second.mBlobSize) ? (mDataBytes.load() - prev->second.mBlobSize) : 0;
+            ++mUpgradesApplied;
+        }
+        else
+        {
+            ++mLiveRecords;
+        }
+        if (rec.mQuality < SSBC7_QUALITY_LEVELS) ++mQualityCounts[rec.mQuality];
+        // </SS:Nexii>
+
         mIndex[rec.mUUID] = rec;
         // <SS:Nexii> Squeeze eviction - the per-segment side index is what lets the scorer weigh a segment without walking the whole map, and mDroppedUUIDs is how re-encode-after-eviction gets measured: a texture that comes back is the copy phase working, and if it comes back too often the strategy is wrong.
         mSegMembers[rec.mSegment].push_back(rec.mUUID);
-        ++mLiveRecords;
         if (mDroppedUUIDs.erase(rec.mUUID)) ++mMetrics.mReEncodedAfterEvict;
         // </SS:Nexii>
+    }
+
+    // <SS:Nexii/> Squeeze adaptive quality - logged at DEBUG rather than INFO because a busy idle hour is thousands of these; the pass itself reports its totals at INFO, which is the level at which a person wants to read this.
+    if (superseding)
+    {
+        LL_DEBUGS("Squeeze") << "BC7 upgraded " << src.mUUID << " to quality " << (U32)src.mQuality
+                             << ", the old blob in segment " << rec.mSegment << " is now garbage its segment will reclaim" << LL_ENDL;
     }
 
     ++mMetrics.mAppendsOk;
     return true;
 }
+
+// <SS:Nexii> Squeeze adaptive quality - everything the idle upgrade pass and the overlay need from the store, and nothing more. Both are cheap by construction: the histogram is a counter copy, and the candidate walk is the one place that touches every record, which is why it only ever runs when the machine has nothing else to do.
+
+size_t SSBC7Store::takeUpgradeCandidates(U8 target_quality, size_t max_count, const std::unordered_set<LLUUID>& skip, std::vector<LLUUID>& out, U32& out_remaining)
+{
+    out.clear();
+    out_remaining = 0;
+
+    if (!mInitialized || mShuttingDown || mReadOnly || max_count == 0) return 0;
+
+    // WORST FIRST, and it matters: FAST is the profile with the 11 dB blind spot on multi-hue blocks, so a record at FAST is visibly wrong in a way a BALANCED one is not. Repairing those before the merely imperfect ones is what makes a short idle window worth having.
+    std::vector<LLUUID> by_quality[SSBC7_QUALITY_LEVELS];
+
+    {
+        std::lock_guard<std::mutex> lock(mMapMutex);
+        for (const auto& entry : mIndex)
+        {
+            const SSBC7Record& rec = entry.second;
+            if (rec.isTombstone()) continue;
+            if (rec.mQuality >= target_quality || rec.mQuality >= SSBC7_QUALITY_LEVELS) continue;
+
+            ++out_remaining;
+
+            // Already tried and failed this session - usually because the J2C is no longer on this disk. Counted in the remaining total anyway, because it IS still below the target and a readout that hid it would claim the pass had finished when it had merely given up.
+            if (skip.find(entry.first) != skip.end()) continue;
+
+            if (by_quality[rec.mQuality].size() < max_count) by_quality[rec.mQuality].push_back(entry.first);
+        }
+    }
+
+    for (U32 q = 0; q < SSBC7_QUALITY_LEVELS && out.size() < max_count; ++q)
+    {
+        for (const LLUUID& id : by_quality[q])
+        {
+            if (out.size() >= max_count) break;
+            out.push_back(id);
+        }
+    }
+    return out.size();
+}
+
+void SSBC7Store::qualityHistogram(U32 out_counts[SSBC7_QUALITY_LEVELS]) const
+{
+    std::lock_guard<std::mutex> lock(mMapMutex);
+    for (U32 q = 0; q < SSBC7_QUALITY_LEVELS; ++q) out_counts[q] = mQualityCounts[q];
+}
+
+U32 SSBC7Store::upgradesApplied() const
+{
+    std::lock_guard<std::mutex> lock(mMapMutex);
+    return mUpgradesApplied;
+}
+// </SS:Nexii>
 
 void SSBC7Store::purgeAll()
 {
@@ -866,6 +991,7 @@ void SSBC7Store::purgeAll()
 
     {
         std::lock_guard<std::mutex> lock(mMapMutex);
+        for (U32 q = 0; q < SSBC7_QUALITY_LEVELS; ++q) mQualityCounts[q] = 0;   // <SS:Nexii/> Squeeze adaptive quality
         mIndex.clear();
         // <SS:Nexii> Squeeze eviction
         mSegMembers.clear();

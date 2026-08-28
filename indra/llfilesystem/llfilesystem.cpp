@@ -33,6 +33,7 @@
 #include "llfilesystem.h"
 #include "llfasttimer.h"
 #include "lldiskcache.h"
+#include "ssstrata.h"   // <SS:Nexii/> Strata asset volumes
 
 #include "boost/filesystem.hpp"
 
@@ -63,6 +64,14 @@ LLFileSystem::LLFileSystem(const LLUUID& file_id, const LLAssetType::EType file_
         // even though we are reading and not writing because this is the
         // way the cache works - it relies on a valid "last accessed time" for
         // each file so it knows how to remove the oldest, unused files
+        // <SS:Nexii> Strata - a packed object's recency lives in its index record and is stamped by hasObject under a lock this call already takes, so the whole stat-plus-conditional-utime below is skipped. This is the one place the container makes the read path cheaper rather than merely no worse.
+        SSStrataStore* strata = SSStrataStore::live();
+        if (strata && strata->hasObject(mFileID))
+        {
+            return;
+        }
+        // </SS:Nexii>
+
         bool exists = gDirUtilp->fileExists(filename);
         if (exists)
         {
@@ -75,6 +84,14 @@ LLFileSystem::LLFileSystem(const LLUUID& file_id, const LLAssetType::EType file_
 bool LLFileSystem::getExists(const LLUUID& file_id, const LLAssetType::EType file_type)
 {
     LL_PROFILE_ZONE_SCOPED;
+    // <SS:Nexii> Strata - the index answers this from memory, where the loose path needs two stats. An object is EITHER packed OR loose and never both, so a hit here is conclusive and a miss falls through unchanged.
+    SSStrataStore* strata = SSStrataStore::live();
+    if (strata && strata->hasObject(file_id))
+    {
+        return true;
+    }
+    // </SS:Nexii>
+
     const std::string filename = LLDiskCache::metaDataToFilepath(file_id, file_type);
 
     boost::system::error_code ec;
@@ -89,6 +106,12 @@ bool LLFileSystem::getExists(const LLUUID& file_id, const LLAssetType::EType fil
 bool LLFileSystem::removeFile(const LLUUID& file_id, const LLAssetType::EType file_type, int suppress_error /*= 0*/)
 {
     LL_PROFILE_ZONE_COLOR(tracy::Color::Gold); // <FS:Beq> measure cache performance
+    // <SS:Nexii> Strata - the record is revoked first and the loose unlink still runs, because a crash between the two has to leave the cache with less rather than with two answers for one uuid.
+    if (SSStrataStore* strata = SSStrataStore::live())
+    {
+        strata->forget(file_id);
+    }
+    // </SS:Nexii>
     const std::string filename = LLDiskCache::metaDataToFilepath(file_id, file_type);
 
     LLFile::remove(filename.c_str(), suppress_error);
@@ -103,6 +126,14 @@ bool LLFileSystem::renameFile(const LLUUID& old_file_id, const LLAssetType::ETyp
     LL_PROFILE_ZONE_COLOR(tracy::Color::Gold); // <FS:Beq> measure cache performance
     const std::string old_filename = LLDiskCache::metaDataToFilepath(old_file_id, old_file_type);
     const std::string new_filename = LLDiskCache::metaDataToFilepath(new_file_id, new_file_type);
+
+    // <SS:Nexii> Strata - rename is a whole-object move and the loose tier is the only place a rename can happen, so the source is pulled back out first and the LLFile::rename below then behaves exactly as it always did. Renames are an upload-time path, a handful per session, so paying a copy for them is free next to the complexity of a key change inside an append-only index. The destination is forgotten too: LLFile::rename overwrites the target file, and a packed record for that uuid would otherwise survive as a stale answer.
+    if (SSStrataStore* strata = SSStrataStore::live())
+    {
+        strata->prepareForWrite(old_file_id, old_file_type, old_filename, true);
+        strata->forget(new_file_id);
+    }
+    // </SS:Nexii>
 
     if (LLFile::rename(old_filename, new_filename) != 0)
     {
@@ -120,6 +151,15 @@ bool LLFileSystem::renameFile(const LLUUID& old_file_id, const LLAssetType::ETyp
 S32 LLFileSystem::getFileSize(const LLUUID& file_id, const LLAssetType::EType file_type)
 {
     LL_PROFILE_ZONE_COLOR(tracy::Color::Gold); // <FS:Beq> measure cache performance
+    // <SS:Nexii> Strata - the size is a field of the index record, so this costs a hash lookup where the loose path costs two stats. getSize is called on every seek, so it is one of the hottest things in this file.
+    SSStrataStore* strata = SSStrataStore::live();
+    S32 packed_size = 0;
+    if (strata && strata->objectSize(file_id, packed_size))
+    {
+        return packed_size;
+    }
+    // </SS:Nexii>
+
     const std::string filename = LLDiskCache::metaDataToFilepath(file_id, file_type);
 
     boost::system::error_code ec;
@@ -134,6 +174,19 @@ bool LLFileSystem::read(U8* buffer, S32 bytes)
 {
     LL_PROFILE_ZONE_COLOR(tracy::Color::Gold); // <FS:Beq> measure cache performance
     bool success = false;
+
+    // <SS:Nexii> Strata - a positional read straight out of the volume, and it is deliberately the FIRST thing tried rather than a fallback: an object is either packed or loose and never both, so a hit here is conclusive. A true return means the store handled the read, including the zero-byte end-of-object case, which is why it does not fall through - the loose file it would fall through to has already been unlinked.
+    if (SSStrataStore* strata = SSStrataStore::live())
+    {
+        S32 got = 0;
+        if (strata->readObject(mFileID, mPosition, buffer, bytes, got))
+        {
+            mBytesRead = got;
+            mPosition += got;
+            return got != 0;
+        }
+    }
+    // </SS:Nexii>
 
     const std::string filename = LLDiskCache::metaDataToFilepath(mFileID, mFileType);
 
@@ -202,6 +255,13 @@ bool LLFileSystem::write(const U8* buffer, S32 bytes)
     const std::string filename = LLDiskCache::metaDataToFilepath(mFileID, mFileType);
 
     bool success = false;
+
+    // <SS:Nexii> Strata - hand the object back to the loose tier before writing a byte of it. This is the gate that makes an append-only volume safe for a cache llmeshrepository.cpp patches in place: APPEND and READ_WRITE need the old bytes back because they address into them, while a plain WRITE is about to truncate and so takes the cheaper path that simply drops them. When the object is not packed - which is every newly fetched asset, and so the overwhelming majority of calls - this is one hash lookup.
+    if (SSStrataStore* strata = SSStrataStore::live())
+    {
+        strata->prepareForWrite(mFileID, mFileType, filename, mMode != LLFileSystem::WRITE);
+    }
+    // </SS:Nexii>
 
     // <FS:Ansariel> IO-streams replacement
     //if (mMode == APPEND)

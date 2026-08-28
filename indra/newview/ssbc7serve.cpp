@@ -20,6 +20,7 @@
 #include "lltimer.h"
 #include "llviewercontrol.h"
 #include "llviewertexture.h"
+#include "llviewertexturelist.h"
 #include "ssbc7encoder.h"
 #include "ssbc7store.h"
 #include "threadpool.h"
@@ -234,9 +235,31 @@ void ssBC7ServeRefreshPolicy()
     ServeState* st = state();
     if (!st) return;
 
+    const bool was_enabled = st->mEnabled.load();
+
     st->mEnabled      = gSavedSettings.getBOOL("SSSqueezeEnabled") && gSavedSettings.getBOOL("SSSqueezeReadEnabled");
     st->mServeAlpha   = gSavedSettings.getBOOL("SSSqueezeServeAlpha");
     st->mGpuSupported = LLImageGL::canUseSqueeze();
+
+    // <SS:Nexii> Turning serving OFF now actually takes effect on what is already on screen, which it did not before: flipping mEnabled stopped NEW serves while every texture already uploaded as BC7 stayed exactly where it was. That made the setting useless as the one thing it most needs to be - a live A/B for "is Squeeze causing what I am looking at" - because the artefact under investigation would still be there after switching it off.
+    //
+    // Handing each resident back through the ordinary decline path rather than inventing a teardown: dropCompressedFormat re-derives an uncompressed format and destroyTexture releases the name, after which the stock fetch path owns the texture again and re-requests it at whatever discard it wants. Cost is one walk of the texture list and a re-fetch of what was resident, paid only on a transition to off.
+    if (was_enabled && !st->mEnabled.load())
+    {
+        U32 released = 0;
+        for (const LLPointer<LLViewerFetchedTexture>& imagep : gTextureList)
+        {
+            LLViewerFetchedTexture* tex = imagep.get();
+            if (tex && tex->ssBC7IsResident())
+            {
+                tex->ssBC7SetDeclined((U8)SSBC7_SERVE_DECLINE_OFF);
+                ++released;
+            }
+        }
+
+        LL_INFOS("Squeeze") << "BC7 serving switched off: " << released
+                            << " resident textures handed back to the ordinary path, so the change is visible immediately" << LL_ENDL;
+    }
 
     LL_INFOS("Squeeze") << "BC7 read policy: serving " << (st->mEnabled.load() ? "on" : "off")
                         << ", gpu " << (st->mGpuSupported.load() ? "supports BC7" : "has no BC7, nothing will ever be served")
@@ -491,6 +514,14 @@ ESSBC7ServeVerdict ssBC7ServeRequest(LLViewerFetchedTexture* tex, S32 desired_di
     return record(st, SSBC7_SERVE_QUEUED);
 }
 
+// <SS:Nexii> Squeeze region manifests - additive accessor over the counter the reader pool already maintains, so a background pre-warm can refuse to post while the demand path has work outstanding. Nothing in the read path reads this; it exists only so the manifest pass can lose the race on purpose.
+S32 ssBC7ServeReadsInFlight()
+{
+    ServeState* st = state();
+    return st ? st->mReadsInFlight.load() : 0;
+}
+// </SS:Nexii>
+
 F32 ssBC7ServePumpUploads(F32 max_time)
 {
     ServeState* st = state();
@@ -570,7 +601,16 @@ F32 ssBC7ServePumpUploads(F32 max_time)
                 // The pointer handed to createGLTexture is the START of the LARGEST level present, because setImage walks data_in BACKWARD one level at a time from mCurrentDiscardLevel down to mMaxDiscardLevel.
                 const U8* data_in = done.mBlob.data() + SSBC7_BLOB_HEADER_SIZE + base_off;
 
-                const bool alpha_is_mask = (done.mFlags & SSBC7_FLAG_ALPHA_IS_MASK) != 0;
+                // <SS:Nexii> A FULLY OPAQUE texture IS an alpha mask as far as the renderer is concerned, and reading only the ALPHA_IS_MASK flag here quietly said otherwise for every texture this feature serves by default.
+                //
+                // The store's two flags are mutually exclusive - classifyAlpha sets FULLY_OPAQUE when nothing is transparent and ALPHA_IS_MASK only otherwise - but LLImageGL::analyzeAlpha does not partition them that way. Work its arithmetic on an all-255 alpha channel: every sample lands in the top bucket so there is no midrange, and its disqualifier alphatotal != 255*length is false because a four component image counts two samples per texel. Stock therefore sets mIsMask TRUE on a fully opaque RGBA texture, and mIsMask is what LLFace::canRenderAsMask reads to choose between the deferred alpha-mask pass and forward blending.
+                //
+                // Getting this wrong is invisible and expensive: the texture still looks broadly right, but it renders blended instead of masked, loses its depth write, and leaves the deferred path. And because SSSqueezeServeAlpha ships off, FULLY_OPAQUE is not an edge case here - it is the entire population being served.
+                //
+                // Components one and three carry no alpha at all and must stay false, which is the same line calcAlphaChannelOffsetAndStride draws when it returns early for GL_LUMINANCE and GL_RGB.
+                const bool has_alpha_channel = (done.mSrcComponents == 2 || done.mSrcComponents == 4);
+                const bool alpha_is_mask = has_alpha_channel
+                                           && ((done.mFlags & (SSBC7_FLAG_ALPHA_IS_MASK | SSBC7_FLAG_FULLY_OPAQUE)) != 0);
 
                 if (tex->ssBC7UploadFromStore(data_in, done.mServeDiscard, (S32)done.mWidth, (S32)done.mHeight,
                                               (S32)done.mSrcComponents, (S32)done.mMipCount, alpha_is_mask))

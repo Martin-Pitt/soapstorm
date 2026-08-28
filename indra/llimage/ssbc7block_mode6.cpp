@@ -253,17 +253,13 @@ static void ssBC7EncodeOneBlock(const U8* rgba_4x4, U8* out_block)
     }
 }
 
-void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks)
+// <SS:Nexii> Squeeze adaptive quality - the profile is accepted and ignored, because this backend implements one mode with one search and there is no dial to turn. Ignoring it is not a failure, and the version below deliberately does not move with it: a request that changed nothing must never invalidate a cache. ssBC7BackendHasQualityProfiles() is what stops newview from spending a controller on a backend with one setting.
+void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks, SSBC7Quality)
 {
     for (U32 i = 0; i < num_blocks; ++i)
     {
         ssBC7EncodeOneBlock(rgba_blocks + (size_t)i * 64, out_blocks + (size_t)i * 16);
     }
-}
-
-// Accepted and ignored: this backend implements one mode with one search, so there is no dial to turn. It is not an error for a caller to ask, only a no-op, and the version below deliberately does not move with it - a quality request that changed nothing must not invalidate a cache.
-void ssBC7SetBlockQuality(SSBC7Quality)
-{
 }
 
 U32 ssBC7BlockBackendVersion()
@@ -275,6 +271,18 @@ const char* ssBC7BlockBackendName()
 {
     return "ss-mode6-lsq";
 }
+
+// <SS:Nexii> Squeeze adaptive quality - one encoder, so every level names the same thing. Saying "mode6" three times is more honest than inventing three names for one code path.
+const char* ssBC7QualityName(SSBC7Quality)
+{
+    return "mode6";
+}
+
+bool ssBC7BackendHasQualityProfiles()
+{
+    return false;
+}
+// </SS:Nexii>
 
 // Nothing third party is linked when this backend is the one compiled, so there is nobody to credit.
 const char* ssBC7BlockBackendAttribution()

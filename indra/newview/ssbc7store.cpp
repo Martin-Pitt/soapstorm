@@ -13,61 +13,17 @@
 
 // Split from ssbc7storeio.cpp deliberately: this half reaches for no viewer global and no filesystem, so the exact bytes the store writes can be built, parsed and corrupted in an offline test that links this file alone. The half that owns directories, handles and settings lives next door.
 
-#include "llcrc.h"
+// <SS:Nexii> STAGE 1 of doc/strata.md, the shared serialisation lift. The Writer, the Reader and the CRC32 wrapper that used to be declared in an anonymous namespace here were a verbatim copy of the ones in ssroccache.cpp - the comment above them said so - and they now live once, in indra/llcommon/ssserial.h. llcommon sits below both newview and llfilesystem, so nothing gained a link edge and the offline test still links this file alone.
+//
+// PURELY MECHANICAL: the lifted classes are byte for byte the same code with the same explicit little-endian field writes, so every record and every blob this file produces is identical to the one it produced before. The volume manager was deliberately NOT lifted, for the reasons ssserial.h states at length.
+#include "ssserial.h"
 
 #include <cstring>
 
-namespace
-{
-    // Same shape as the writer and reader in ssroccache.cpp: every field is written explicitly rather than by struct punning, so packing and endianness are never left to the compiler and the offline test harness sees exactly what the viewer wrote.
-    class Writer
-    {
-    public:
-        explicit Writer(std::vector<U8>& out) : mOut(out) {}
-
-        void bytes(const void* src, size_t n) { const U8* p = (const U8*)src; mOut.insert(mOut.end(), p, p + n); }
-        template <typename T> void pod(const T& v) { bytes(&v, sizeof(T)); }
-        void uuid(const LLUUID& id) { bytes(id.mData, UUID_BYTES); }
-        void zeros(size_t n) { mOut.insert(mOut.end(), n, (U8)0); }
-        size_t size() const { return mOut.size(); }
-
-    private:
-        std::vector<U8>& mOut;
-    };
-
-    class Reader
-    {
-    public:
-        Reader(const U8* data, size_t size) : mData(data), mSize(size), mPos(0), mOk(true) {}
-
-        bool ok() const { return mOk; }
-        size_t tell() const { return mPos; }
-
-        bool bytes(void* dst, size_t n)
-        {
-            if (!mOk || mPos + n > mSize) { mOk = false; return false; }
-            memcpy(dst, mData + mPos, n);
-            mPos += n;
-            return true;
-        }
-        template <typename T> T pod() { T v = T(); bytes(&v, sizeof(T)); return v; }
-        LLUUID uuid() { LLUUID id; bytes(id.mData, UUID_BYTES); return id; }
-        void skip(size_t n) { if (!mOk || mPos + n > mSize) { mOk = false; return; } mPos += n; }
-
-    private:
-        const U8*   mData;
-        size_t      mSize;
-        size_t      mPos;
-        bool        mOk;
-    };
-
-    U32 crc32Of(const U8* data, size_t size)
-    {
-        LLCRC crc;
-        if (size) crc.update(data, size);
-        return crc.getCRC();
-    }
-}
+using ssserial::Writer;
+using ssserial::Reader;
+using ssserial::crc32Of;
+// </SS:Nexii>
 
 SSBC7Record::SSBC7Record()
 :   mBlobOffset(0),
@@ -83,6 +39,8 @@ SSBC7Record::SSBC7Record()
     mMipCount(0),
     mFormat(SSBC7_FMT_BC7_UNORM),
     mSrcComponents(4),
+    // <SS:Nexii/> Squeeze adaptive quality - BALANCED rather than zero, so a record that predates a field being filled in never claims to have been made at the one profile with a known blind spot and so never invites a pointless re-encode
+    mQuality((U8)1),
     mRecordCRC(0),
     // <SS:Nexii> Squeeze eviction - in memory only, so deserializeRecord's fresh SSBC7Record leaves a reloaded record looking untouched rather than inheriting whatever was on the stack.
     mTouchTick(0),
@@ -99,6 +57,7 @@ SSBC7BlobHeader::SSBC7BlobHeader()
     mFormat(SSBC7_FMT_BC7_UNORM),
     mSrcComponents(4),
     mFlags(0),
+    mQuality((U8)1),               // <SS:Nexii/> Squeeze adaptive quality
     mPickMaskBytes(0),
     mPayloadBytes(0),
     mPickMaskCRC(0),
@@ -113,6 +72,7 @@ SSBC7Encoded::SSBC7Encoded()
     mHeight(0),
     mMipCount(0),
     mSrcComponents(4),
+    mQuality((U8)1),               // <SS:Nexii/> Squeeze adaptive quality
     mFlags(0)
 {
 }
@@ -205,7 +165,9 @@ bool ssBC7BuildBlob(const SSBC7Encoded& src, U32 encoder_version, std::vector<U8
         w.pod<U8>(SSBC7_FMT_BC7_UNORM);
         w.pod<U8>(src.mSrcComponents);
         w.pod<U16>(src.mFlags);
-        w.pod<U16>(0);                     // reserved0
+        // <SS:Nexii/> Squeeze adaptive quality - the first of the two reserved0 bytes becomes the profile. It fits without moving one other field, which is the reason the reserved bytes were there.
+        w.pod<U8>(src.mQuality);
+        w.pod<U8>(0);                      // reserved0, one byte left
         w.pod<U32>(pickmask_bytes);
         w.pod<U32>(payload_bytes);
         w.pod<U32>(pickmask_bytes ? crc32Of(src.mPickMask.data(), pickmask_bytes) : 0);
@@ -237,6 +199,7 @@ bool ssBC7BuildBlob(const SSBC7Encoded& src, U32 encoder_version, std::vector<U8
     out_record.mMipCount      = src.mMipCount;
     out_record.mFormat        = SSBC7_FMT_BC7_UNORM;
     out_record.mSrcComponents = src.mSrcComponents;
+    out_record.mQuality       = src.mQuality;    // <SS:Nexii/> Squeeze adaptive quality - the index record and the blob header carry the same byte, so a rebuilt index knows what the upgrade pass still owes without reading a single payload
     return true;
 }
 
@@ -258,7 +221,8 @@ bool ssBC7ParseBlobHeaderOnly(const U8* data, size_t size, SSBC7BlobHeader& out)
     out.mFormat        = r.pod<U8>();
     out.mSrcComponents = r.pod<U8>();
     out.mFlags         = r.pod<U16>();
-    r.skip(2);                                  // reserved0
+    out.mQuality       = r.pod<U8>();           // <SS:Nexii/> Squeeze adaptive quality
+    r.skip(1);                                  // reserved0, one byte left
     out.mPickMaskBytes = r.pod<U32>();
     out.mPayloadBytes  = r.pod<U32>();
     out.mPickMaskCRC   = r.pod<U32>();
@@ -385,6 +349,8 @@ void SSBC7Store::serializeRecord(const SSBC7Record& rec, U8* out)
         w.pod<U8>(rec.mMipCount);
         w.pod<U8>(rec.mFormat);
         w.pod<U8>(rec.mSrcComponents);
+        // <SS:Nexii/> Squeeze adaptive quality - the fields above total fifty bytes and the checksum takes four, so ten of the sixty-four were spare and this spends one of them. Appended at the end of the written fields rather than beside mSrcComponents so that nothing already on disk moves, which is the entire reason the reserved run exists.
+        w.pod<U8>(rec.mQuality);
         w.zeros(SSBC7_RECORD_SIZE - 4 - buf.size());   // reserved, so a later field can be added without moving anything already written
         w.pod<U32>(crc32Of(buf.data(), buf.size()));
     }
@@ -412,6 +378,10 @@ bool SSBC7Store::deserializeRecord(const U8* in, SSBC7Record& out)
     out.mMipCount      = r.pod<U8>();
     out.mFormat        = r.pod<U8>();
     out.mSrcComponents = r.pod<U8>();
+    // <SS:Nexii> Squeeze adaptive quality - CLAMPED, never rejected. loadIndex stops at the first record that fails, so returning false here over a byte that only steers a background upgrade pass would throw away every record written after the bad one - for a field that has no bearing on whether the pixels are readable. An out of range value degrades to the best profile, which merely means the upgrade pass leaves that record alone.
+    out.mQuality       = r.pod<U8>();
+    if (out.mQuality >= (U8)SSBC7_QUALITY_LEVELS) out.mQuality = (U8)(SSBC7_QUALITY_LEVELS - 1);
+    // </SS:Nexii>
     r.skip(SSBC7_RECORD_SIZE - 4 - r.tell());
     const U32 stored = r.pod<U32>();
 

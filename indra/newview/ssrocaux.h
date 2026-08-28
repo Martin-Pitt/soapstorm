@@ -40,6 +40,11 @@ public:
     // LLViewerRegion::rebuildWater. A freshly rebuilt water object is parked at the default height, so a cached or handshake value has to be pushed again or the sea sits at the wrong level.
     void onWaterRebuilt(LLViewerRegion* regionp);
 
+    // Make the region's .roc resident NOW, reading it on this thread if the async load has not landed. Exists for exactly one caller: LLViewerRegion::loadObjectCache runs inside unpackRegionHandshake and the map it fills decides bit 1 of the RegionHandshakeReply, the bit that tells the simulator whether to send cache probes at all - so an answer given from a half-arrived cache would change what the simulator sends. Returns true when a record set is available, whichever way it arrived.
+    //
+    // It is not a new stall. It stands where the stock synchronous .slc read stands and replaces it, and on the common path where the async read already landed it does no IO at all.
+    bool ensureRegionLoaded(U64 handle);
+
     void shutdown();
 
     struct Metrics
@@ -73,6 +78,8 @@ private:
         std::vector<PaintWitness> mPaintWitnesses;
     };
 
+    // The one completion path, shared by the async load and the blocking fallback so the two can never diverge. Idempotent: the second arrival for a handle is dropped, which is what makes the fallback safe to run while the worker read is still outstanding.
+    void completeLoad(U64 handle, SSROCFilePtr file);
     void applyPending(U64 handle);
     bool applyTerrain(LLViewerRegion* regionp, const SSROCAux& aux, RegionState& state);
     bool applyWater(LLViewerRegion* regionp, const SSROCAux& aux, RegionState& state);

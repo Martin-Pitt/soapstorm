@@ -54,7 +54,7 @@ namespace
     // Blocks are emitted in raster order, which is the order GL reads a compressed level in.
     //
     // One row of blocks is gathered and handed to the backend per call. A row is a natural batch: it is contiguous in the output, it keeps the gathered working set small enough to stay in cache, and for every level above 4 texels tall it is comfortably past the few dozen blocks a SIMD backend wants. The smallest levels fall below that, but they are a rounding error of the total work.
-    void encodeLevel(const U8* level, U32 width, U32 height, U32 components, SSBC7EncodeScratch& scratch, U8* dst)
+    void encodeLevel(const U8* level, U32 width, U32 height, U32 components, SSBC7Quality quality, SSBC7EncodeScratch& scratch, U8* dst)
     {
         const U32 bw = blocksAcross(width);
         const U32 bh = blocksAcross(height);
@@ -74,7 +74,7 @@ namespace
                                 scratch.mBlockBatch.data() + (size_t)bx * SSBC7ENC_BLOCK_TEXELS * 4);
             }
 
-            ssBC7EncodeBlocksRGBA(bw, scratch.mBlockBatch.data(), scratch.mOutBatch.data());
+            ssBC7EncodeBlocksRGBA(bw, scratch.mBlockBatch.data(), scratch.mOutBatch.data(), quality);
             memcpy(dst + (size_t)by * bw * SSBC7ENC_BLOCK_BYTES, scratch.mOutBatch.data(), out_bytes);
         }
     }
@@ -85,7 +85,11 @@ SSBC7EncodeResult::SSBC7EncodeResult()
     mHeight(0),
     mPayloadBytes(0),
     mMipCount(0),
-    mSrcComponents(0)
+    mSrcComponents(0),
+    // <SS:Nexii> Squeeze adaptive quality - BALANCED rather than zero, so a result nobody filled in never claims to be the one profile with a known blind spot.
+    mQuality((U8)SSBC7_QUALITY_BALANCED),
+    mEncodedTexels(0)
+    // </SS:Nexii>
 {
 }
 
@@ -157,12 +161,13 @@ U32 ssBC7EncoderVersion()
 // ---------------------------------------------------------------------------
 
 bool ssBC7EncodeMipChain(const U8* src, U32 width, U32 height, U32 components,
+                         SSBC7Quality quality,
                          SSBC7EncodeScratch& scratch,
                          std::vector<U8>& out_payload,
                          SSBC7EncodeResult& out_result)
 {
     out_payload.clear();
-    out_result = SSBC7EncodeResult();
+    out_result = SSBC7EncodeResult();          // <SS:Nexii/> Squeeze adaptive quality - the texel tally accumulates through the loop below, so it has to start from a fresh result rather than from whatever the caller reused
 
     if (!src || width == 0 || height == 0) return false;
     if (components < 1 || components > 4) return false;
@@ -196,7 +201,11 @@ bool ssBC7EncodeMipChain(const U8* src, U32 width, U32 height, U32 components,
         // Store order is smallest first, so the base level lands last and each level goes straight to its final offset - no second pass and no reversal buffer.
         const U32 store_index = mip_count - 1 - i;
         const U32 offset = ssBC7EncLevelOffset(width, height, mip_count, store_index);
-        encodeLevel(level, lw, lh, components, scratch, out_payload.data() + offset);
+        encodeLevel(level, lw, lh, components, quality, scratch, out_payload.data() + offset);
+
+        // <SS:Nexii> Squeeze adaptive quality - counted here rather than derived from the base size afterwards, because what the backend was actually handed is the padded block grid and a 1x1 mip costs a whole 4x4 of it. Deriving it would flatter the machine on small textures and understate the cost of the chain's tail.
+        out_result.mEncodedTexels += blocksAcross(lw) * 4 * blocksAcross(lh) * 4;
+        // </SS:Nexii>
     }
 
     out_result.mWidth         = width;
@@ -204,5 +213,6 @@ bool ssBC7EncodeMipChain(const U8* src, U32 width, U32 height, U32 components,
     out_result.mPayloadBytes  = total;
     out_result.mMipCount      = (U8)mip_count;
     out_result.mSrcComponents = (U8)components;   // the ORIGINAL count, not BC7's intrinsic four, because this byte is what later keeps opaque textures out of the alpha pool
+    out_result.mQuality       = (U8)quality;      // <SS:Nexii/> Squeeze adaptive quality - echoed back so the store records the profile the bytes were made at, rather than whatever the controller has moved on to by the time the append happens
     return true;
 }

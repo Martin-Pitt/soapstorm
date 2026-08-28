@@ -21,6 +21,9 @@
 #include "ssrocaux.h"
 #include "ssroccache.h"
 #include "ssrocledger.h"
+#include "ssstrata.h"
+#include "ssbc7adaptive.h"
+#include "ssbc7encodequeue.h"
 #include "ssbc7serve.h"
 #include "ssbc7store.h"
 #include "ssrocghost.h"
@@ -127,38 +130,75 @@ void SSStatsView::draw()
             }
         }
 
-        if (SSROCStore::instanceExists())
-        {
-            const SSROCStore::Metrics& m = SSROCStore::instance().metrics();
-            line(llformat("  store    loaded %u  missing %u  corrupt %u",
-                          m.mLoadsOk.load(), m.mLoadsMissing.load(), m.mLoadsCorrupt.load()));
-            line(llformat("           saved %u  failed %u  evicted %u  disk %s",
-                          m.mSavesOk.load(), m.mSavesFailed.load(), m.mFilesEvicted.load(),
-                          ssMB(SSROCStore::instance().diskBytesUsed()).c_str()));
-            line(llformat("           read %s  written %s",
-                          ssMB(m.mBytesRead.load()).c_str(), ssMB(m.mBytesWritten.load()).c_str()));
-        }
-        else
-        {
-            line("  store    not initialised yet", true);
-        }
-
+        // <SS:Nexii> Three lines, each answering a question somebody actually has: did it help, does it know this place, and is it still learning. What was here before was four subsystems reporting their own internals - loads and saves and terrain patches and sighting counts - which is what you want when debugging the thing and never what you want when using it.
+        //
+        // The raw counters are all still in the log at region exit, which is the right home for them.
         if (SSROCAuxMgr::instanceExists())
         {
             const SSROCAuxMgr::Metrics& a = SSROCAuxMgr::instance().metrics();
-            line(llformat("  terrain  applied %u  skipped %u   water %u   ground %u",
-                          a.mTerrainApplied, a.mTerrainSkipped, a.mWaterApplied, a.mCompApplied));
-            line(llformat("           regions loaded %u  new %u  captured %u",
-                          a.mRegionsLoaded, a.mRegionsMissing, a.mCaptured));
+            const U32 known = a.mRegionsLoaded;
+            const U32 fresh = a.mRegionsMissing;
+            const U64 disk  = SSROCStore::instanceExists() ? SSROCStore::instance().diskBytesUsed() : 0;
+
+            if (known || fresh)
+            {
+                line(llformat("  knows     %u of the %u regions visited (%s on disk)",
+                              known, known + fresh, ssMB(disk).c_str()), known == 0);
+            }
         }
 
         if (SSROCLedger::instanceExists())
         {
             const SSROCLedger::Metrics& l = SSROCLedger::instance().metrics();
-            line(llformat("  ledger   regions %u  sightings %u  records %u  blobless %u",
-                          l.mRegionsTracked, l.mSightings, l.mRecordsCreated, l.mNoBlob));
-            line(llformat("           promoted %u  sandbox regions %u  owner lookups %u",
-                          l.mPromoted, l.mRegionsSandbox, l.mOwnerLookups));
+
+            // Promotion is what frees ghosts from the recent-visit window, so a zero here is the single most useful thing on this panel: it says the long-term tier is not carrying anything yet and every paint you saw came from having been here in the last few hours.
+            if (l.mPromoted == 0 && l.mRecordsCreated > 0)
+            {
+                line(llformat("  learning  %u objects remembered, none settled into long term yet",
+                              l.mRecordsCreated), true);
+            }
+            else if (l.mRecordsCreated > 0)
+            {
+                line(llformat("  learning  %u objects remembered, %u settled into long term",
+                              l.mRecordsCreated, l.mPromoted));
+            }
+        }
+
+        // <SS:Nexii> Says WHAT the number counts, WHETHER it matters, and WHAT happens next - which the previous line did none of. "problems 4 unreadable" names no unit, gives no consequence and offers no action, and it was reporting a routine format upgrade as damage besides.
+        //
+        // A region rebuilding itself is not a problem in any sense the user needs a line for, so an upgrade says so in ordinary words and is not filed under problems at all.
+        if (SSROCStore::instanceExists())
+        {
+            const SSROCStore::Metrics& m = SSROCStore::instance().metrics();
+
+            // <SS:Nexii> Salvaged and orphaned are shown apart because they are different news. A salvaged region kept its whole presence history - every distinct day it has ever been seen on - and only lost the object descriptions, which come back the first time the simulator describes them. An orphaned one starts from nothing. Since distinct days are the one currency that can only be earned by waiting, that difference is the difference between a format change costing an afternoon and costing three days.
+            const U32 salvaged = m.mLoadsSalvaged.load();
+            const U32 orphaned = m.mLoadsOldVersion.load();
+
+            if (salvaged)
+            {
+                line(llformat("  upgraded  %u region%s carried their history across a format change",
+                              salvaged, salvaged == 1 ? "" : "s"), true);
+            }
+            if (orphaned)
+            {
+                line(llformat("  reset     %u region%s were too old to carry over and start again",
+                              orphaned, orphaned == 1 ? "" : "s"), true);
+            }
+
+            const U32 damaged = m.mLoadsCorrupt.load();
+            const U32 unsaved = m.mSavesFailed.load();
+            if (damaged)
+            {
+                line(llformat("  problems  %u region file%s damaged and discarded - %s will be remembered again on the next visit",
+                              damaged, damaged == 1 ? "" : "s", damaged == 1 ? "it" : "they"));
+            }
+            if (unsaved)
+            {
+                // This one IS worth alarm: a region that cannot be written is a region that learns nothing, so the same visit repeats forever with no way for the user to tell.
+                line(llformat("  problems  %u region%s could not be saved, so nothing was remembered from %s",
+                              unsaved, unsaved == 1 ? "" : "s", unsaved == 1 ? "it" : "them"));
+            }
         }
     }
 
@@ -181,20 +221,47 @@ void SSStatsView::draw()
     else
     {
         // <SS:Nexii> The saving IS the feature, so it is the first line and it is phrased as a saving rather than as two sizes to subtract. Everything else about Squeeze - what is stored, what is permitted, how much texture memory is in use - is context for this number, and an overlay that made the reader compute it themselves was the reason this console kept being called unhelpful.
+        // <SS:Nexii> The three figures are made to RECONCILE, because the previous pair could not be. It read "using 855 MB instead of 2644 MB" beside a separate total of all texture memory, and no arithmetic relates those three: 2644 is a COUNTERFACTUAL that never occupied a byte of the card, sat next to an ACTUAL with nothing marking which was which.
+        //
+        // Stated as now-versus-without instead. The total is what the card really holds; the same total plus the saving is what it would hold if none of this existed; and the compressed share is called out as a part OF the real total rather than as a number floating beside it. Every figure on these lines can be checked against the others by adding up.
+        //
+        // They are commensurable to begin with only because both sides count the base level and no mips: getTextureBytesAllocated documents "Does not include mipmaps", and the compressed accounting in llimagegl.cpp deliberately matches that contract. If either side ever starts counting the chain, these lines stop meaning anything and must be revisited.
         const SSBC7ServeResidency r = ssBC7ServeResidencyNow();
+        const U64 total_now = LLImageGL::getTextureBytesAllocated();
+
         if (r.mTextures > 0 && r.mSavedBytes > 0)
         {
-            const S64 without = r.mBC7Bytes + r.mSavedBytes;
-            const F32 ratio   = (r.mBC7Bytes > 0) ? ((F32)without / (F32)r.mBC7Bytes) : 0.f;
-            line(llformat("  SAVING   %s of video memory right now  (%.1fx smaller)",
-                          ssMB((U64)r.mSavedBytes).c_str(), ratio));
-            line(llformat("           %u textures using %s instead of %s",
-                          r.mTextures, ssMB((U64)r.mBC7Bytes).c_str(), ssMB((U64)without).c_str()));
+            const S64 without_bc7 = r.mBC7Bytes + r.mSavedBytes;
+            const F32 ratio       = (r.mBC7Bytes > 0) ? ((F32)without_bc7 / (F32)r.mBC7Bytes) : 0.f;
+
+            // <SS:Nexii> "using X instead of Y" is kept exactly as it was, because it is the clearest line here: two numbers, one comparison, no arithmetic asked of the reader. What was wrong was never the phrasing, it was that Y is a COUNTERFACTUAL - bytes that never existed - and it used to sit beside a separate total of real memory with nothing relating them, so anyone trying to add up got nonsense.
+            //
+            // The fix is one line underneath giving the same before-and-after for ALL textures. Now the compressed pair is visibly a part of the whole pair, and every figure can be checked against the others.
+            line(llformat("  SAVING    %s of video memory right now", ssMB((U64)r.mSavedBytes).c_str()));
+            line(llformat("            %u textures using %s instead of %s  (%.1fx smaller)",
+                          r.mTextures, ssMB((U64)r.mBC7Bytes).c_str(), ssMB((U64)without_bc7).c_str(), ratio));
+
+            // The exact pair matches "GL Tex" in the texture console byte for byte - both count base levels and no mips - and the card figure beside it is the viewer's own estimate of what that misses. llviewertexture.cpp divides by RenderTextureVRAMDivisor to drive the discard bias, with the stock comment that the metrics "miss about half the vram we use" but land "within 5% of the real number", so reading the setting rather than hardcoding two keeps this line honest if anyone retunes it. It is the figure to hold against a task manager, and it says the exact numbers understate the saving rather than flatter it.
+            static LLCachedControl<U32> vram_divisor(gSavedSettings, "RenderTextureVRAMDivisor", 2);
+            const U32 div = llmax((U32)1, (U32)vram_divisor);
+
+            if (div > 1)
+            {
+                line(llformat("            all textures %s, would be %s  (on the card, about %s and %s)",
+                              ssMB(total_now).c_str(), ssMB(total_now + (U64)r.mSavedBytes).c_str(),
+                              ssMB(total_now * div).c_str(), ssMB((total_now + (U64)r.mSavedBytes) * div).c_str()), true);
+            }
+            else
+            {
+                line(llformat("            all textures %s, would be %s without it",
+                              ssMB(total_now).c_str(), ssMB(total_now + (U64)r.mSavedBytes).c_str()), true);
+            }
         }
         else
         {
-            // Serving nothing is the expected state on a cold store rather than a fault, and saying so stops it reading as breakage while the store fills.
-            line("  active   nothing served yet - textures are compressed as they are seen, and reused from the next sighting on", true);
+            // Serving nothing is the expected state on a cold store rather than a fault, and giving the real total alongside it stops the panel reading as breakage while the store fills.
+            line(llformat("  textures  %s of video memory, none of it compressed yet", ssMB(total_now).c_str()), true);
+            line("            they are compressed as they are seen, and reused from the next sighting on", true);
         }
     }
 
@@ -208,11 +275,106 @@ void SSStatsView::draw()
         const U64 budget = store.budgetBytes();
         const U32 pct    = budget ? (U32)llmin((U64)999, (U64)(used * 100ull / budget)) : 0;
 
-        line(llformat("  stored   %u textures   %s of %s (%u%%)",
+        line(llformat("  stored    %u textures compressed   %s of %s (%u%%)",
                       store.recordCount(), ssMB(used).c_str(), ssMB(budget).c_str(), pct));
+
+        // <SS:Nexii> Quality, effort and repair, in the words a person would use. The profile alone is not the answer - "best" and "dropped to fast" mean nothing without WHY, and a user seeing lower quality needs to know whether the viewer chose it or they pinned it themselves.
+        //
+        // Busy workers come from the moving average rather than the instant count, because on a supply limited pool an instant sample reads zero most of the time and would make a healthy machine look idle.
+        const SSBC7AdaptiveStats a = ssBC7AdaptiveStatsNow();
+        if (a.mWorkers > 0)
+        {
+            std::string why;
+            switch ((ESSBC7AdaptReason)a.mReason)
+            {
+                case SSBC7_ADAPT_PINNED:       why = "you chose this";                       break;
+                case SSBC7_ADAPT_HEADROOM:     why = "keeping up easily";                    break;
+                case SSBC7_ADAPT_HOLDING:      why = "keeping up";                           break;
+                case SSBC7_ADAPT_STEPPED_DOWN: why = "lowered to catch up on a backlog";     break;
+                case SSBC7_ADAPT_STEPPED_UP:   why = "raised again now the backlog cleared"; break;
+                case SSBC7_ADAPT_NO_BACKEND:   why = "only one encoder in this build";       break;
+                default:                       why = "nothing measured yet";                 break;
+            }
+
+            // The rate is only shown once it means something. A figure resting on no samples is worse than no figure, because it looks like a measurement.
+            if (a.mAggregateMpixPerSec > 0.f)
+            {
+                line(llformat("  quality   %s  -  %s, at %.0f Mpix/s",
+                              ssBC7QualityName((SSBC7Quality)a.mQuality), why.c_str(), a.mAggregateMpixPerSec));
+            }
+            else
+            {
+                line(llformat("  quality   %s  -  %s",
+                              ssBC7QualityName((SSBC7Quality)a.mQuality), why.c_str()));
+            }
+
+            line(llformat("            %.0f of %u cores busy compressing", a.mWorkersBusy, a.mWorkers), true);
+        }
+
+        // The repair pass, and the reason both numbers appear together: "1240 improved" says nothing without "3891 to go". Together they say the viewer is quietly making the cache better while it has nothing else to do.
+        if (a.mUpgraded || a.mBelowBest)
+        {
+            line(llformat("  improving %u old textures redone at better quality%s",
+                          a.mUpgraded, a.mUpgradeRunning ? "  (running now)" : ""));
+            if (a.mBelowBest)
+            {
+                line(llformat("            %u still stored at a lower quality", a.mBelowBest), true);
+            }
+        }
+
+        // <SS:Nexii> The want list is why the saving climbs slowly rather than arriving at once, and without it the panel looks like the feature has finished when it has barely started. Compression only happens at full resolution, so a texture seen at a distance waits here until something brings it close enough to be fetched whole.
+        const size_t waiting = ssBC7EncodeWantListSize();
+        if (waiting > 0)
+        {
+            line(llformat("  waiting   %u textures need full resolution first", (U32)waiting), true);
+        }
     }
 
-    line(llformat("  texture memory in use  %s", ssMB(LLImageGL::getTextureBytesAllocated()).c_str()));
+
+
+    blank();
+
+    // ---- Strata (asset cache container) --------------------------------------
+    // <SS:Nexii> The number worth watching here is LOOSE, not packed. Packed is the achievement, but loose is the thing a user actually sees in Explorer, and during a cold-cache burst it can run to tens of thousands before the packer catches up - which looked like the feature not working when the only place that number appeared was the log.
+    SSStrataStore* strata = SSStrataStore::live();
+    line("STRATA  (asset cache)", strata == NULL);
+    if (!strata)
+    {
+        line("  off", true);
+    }
+    else
+    {
+        const U64 allocated = strata->allocatedBytes();
+        const U64 budget    = strata->budgetBytes();
+        const U32 pct       = budget ? (U32)llmin((U64)999, allocated * 100ull / budget) : 0;
+
+        line(llformat("  packed   %u assets in %u volume%s   %s of %s (%u%%)",
+                      strata->objectCount(), strata->volumeCount(),
+                      strata->volumeCount() == 1 ? "" : "s",
+                      ssMB(allocated).c_str(), ssMB(budget).c_str(), pct));
+
+        const SSStrataStore::Metrics& sm = strata->metrics();
+        line(llformat("  folded   %u this session (%s)   %u read back from volumes",
+                      sm.mPacked.load(), ssMB(sm.mPackedBytes.load()).c_str(), sm.mReadsServed.load()));
+
+        // The count that answers "why are there still thousands of files in my cache folder". Loose is where every write lands before it is folded, so it rises during a burst and drains afterwards; showing it next to the packed count is what makes that legible instead of alarming.
+        line(llformat("  loose    %u files awaiting folding (%s)",
+                      sm.mLooseFiles.load(), ssMB(sm.mLooseBytes.load()).c_str()),
+             sm.mLooseFiles.load() == 0);
+
+        // Only shown when something actually went wrong, so a clean run does not train the eye past the line that matters.
+        const U32 bad = sm.mReadsFailedOpen.load() + sm.mReadsFailedShort.load()
+                      + sm.mReadsFailedIdentity.load() + sm.mReadsFailedCRC.load()
+                      + sm.mTombstoneFailed.load() + sm.mRecordsRejected.load();
+        if (bad)
+        {
+            line(llformat("  problems %u failed reads, %u rejected records, %u lost tombstones",
+                          sm.mReadsFailedOpen.load() + sm.mReadsFailedShort.load()
+                            + sm.mReadsFailedIdentity.load() + sm.mReadsFailedCRC.load(),
+                          sm.mRecordsRejected.load(), sm.mTombstoneFailed.load()));
+        }
+    }
+
 
     // ---- Layout and paint ----------------------------------------------------
     LLFontGL* font = LLFontGL::getFontMonospace();

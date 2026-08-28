@@ -334,6 +334,12 @@ ESSBC7EvictVerdict SSBC7Store::evictPassLocked(bool respect_cooldown)
             dropped_bytes += it->second.mBlobSize;
             if (ssBC7IsHot(it->second.mTouchSecond, now)) ++hot_dropped;
 
+            // <SS:Nexii/> Squeeze adaptive quality - a kill is the other direction the histogram moves in, and it has to be adjusted here rather than recomputed, because this is already the walk that knows exactly which records are leaving.
+            {
+                const U8 q = it->second.mQuality;
+                if (q < SSBC7_QUALITY_LEVELS && mQualityCounts[q]) --mQualityCounts[q];
+            }
+
             // Capped, and it exists purely so re-encode-after-eviction can be MEASURED. Re-encode is this design's copy phase; if it ever costs more than a small fraction of bytes written then copy-forward or an explicit tenured generation was the better answer after all, and this counter is how that gets noticed instead of assumed.
             if (mDroppedUUIDs.size() < SSBC7_EVICT_DROPPED_CAP) mDroppedUUIDs.insert(it->first);
 

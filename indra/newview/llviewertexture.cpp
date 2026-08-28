@@ -1772,7 +1772,33 @@ bool LLViewerFetchedTexture::ssBC7UploadFromStore(const U8* data_in, S32 serve_d
     // There is no LLGLTexture wrapper for the data_hasmips overload, so the four things the imageraw wrapper refreshes are mirrored by hand. Miss setTexelsPerImage and processTextureStats divides by zero.
     mFullWidth  = glimage->getCurrentWidth();
     mFullHeight = glimage->getCurrentHeight();
-    mComponents = glimage->getComponents();
+
+    // <SS:Nexii> A change in component count is not a field update, it is a change of render pool, and assigning mComponents alone leaves every face that already drew this texture in the wrong one. getPoolTypeFromTE reads this exact field, so a face built while the texture held nothing - components zero, therefore POOL_SIMPLE - stays in POOL_SIMPLE after a four component upload until something unrelated happens to rebuild its drawable.
+    //
+    // It also decides whether the alpha-mask classification above ever reaches anything: canRenderAsMask is read at genDrawInfo time and baked into the pass assignment, so setting mIsMask without dirtying the faces changes a value nobody will look at again.
+    //
+    // This mirrors the component-change block in preCreateTexture rather than inventing a lighter version of it, because the stock path is the definition of what the renderer needs told.
+    const S8 new_components = glimage->getComponents();
+    if (mComponents != new_components)
+    {
+        mComponents = new_components;
+        mGLTexturep->setComponents(mComponents);
+
+        for (U32 j = 0; j < LLRender::NUM_TEXTURE_CHANNELS; ++j)
+        {
+            llassert(mNumFaces[j] <= mFaceList[j].size());
+            for (U32 i = 0; i < mNumFaces[j]; i++)
+            {
+                mFaceList[j][i]->dirtyTexture();
+            }
+        }
+
+        // The saved raw belonged to the old component count and would be handed back to a consumer expecting the new one.
+        mSavedRawDiscardLevel = -1;
+        mSavedRawImage = NULL;
+    }
+    // </SS:Nexii>
+
     setTexelsPerImage();
 
     setActive();
@@ -1795,6 +1821,15 @@ void LLViewerFetchedTexture::ssBC7ReleaseGauge()
 void LLViewerFetchedTexture::ssBC7SetDeclined(U8 reason)
 {
     ssBC7ReleaseGauge();
+
+    // <SS:Nexii> Declining a texture that is ALREADY holding compressed levels strands it, and stranding it costs more than never having served it: scaleDown refuses because the texture is compressed but no longer RESIDENT, updateFetch will not re-request because the ladder has left the two states that ask, and the ordinary J2C fetch stays suppressed because a BC7 texture's discard is FINER than the one being asked for. The result is a full resolution texture the memory governor can never shrink and nothing will ever replace - reachable simply by an eviction pass dropping a record between the probe and the read.
+    //
+    // Handing the format back is what returns it to the stock path. From there the uncompressed pipeline owns it again and every mechanism that was refusing to act now applies normally.
+    if (mGLTexturep.notNull() && mGLTexturep->isCompressed())
+    {
+        mGLTexturep->dropCompressedFormat("a BC7 re-serve failed, so the texture is handed back to the ordinary path rather than left stranded at full resolution");
+        destroyTexture();
+    }
 
     mSSBC7Residency     = (U8)SSBC7_RES_DECLINED;
     mSSBC7DeclineReason = reason;

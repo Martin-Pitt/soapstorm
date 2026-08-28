@@ -32,11 +32,10 @@ namespace
     // bc7e builds global lookup tables on first use and returns blocks of zeroes if that is skipped, so the call is forced through std::call_once rather than left to whoever encodes first. Encoding runs on worker threads, so "once" has to mean once across all of them.
     std::once_flag sInitFlag;
 
-    // Filled during the same call_once, because the params structs are pure output of the profile initialisers and are then only read.
-    ispc::bc7e_compress_block_params sParams;
-
-    // Read once inside the call_once below, so every encode in a session uses the profile the blobs were stamped with.
-    SSBC7Quality sQuality = SSBC7_QUALITY_BALANCED;
+    // <SS:Nexii> Squeeze adaptive quality - EVERY profile's parameter block is built during that same call_once, and this array is READ ONLY from then on. That is the whole synchronisation story for profile selection: bc7e_compress_blocks takes a const params pointer, so an encode picks its profile with an array index and needs no mutex, no atomic and no re-init even while the controller is changing its mind between one texture and the next.
+    //
+    // The alternative - re-initialising one shared struct whenever the profile changes - would put a writer on the hot path of sixteen workers for a struct they are all reading, which is a data race for the sake of saving three hundred bytes.
+    ispc::bc7e_compress_block_params sParams[SSBC7_QUALITY_COUNT];
 
     // Perceptual weighting is deliberately off. It optimises a luma weighted error that suits albedo, but the same code path also encodes normal and specular maps where the channels are not colour at all and weighting them by human luminance response is simply wrong. Uniform error is correct for every channel type, which is what a backend with no knowledge of its input needs to be.
     const bool SSBC7E_PERCEPTUAL = false;
@@ -45,19 +44,19 @@ namespace
     //
     //   ultrafast  73 Mpix/s   matches or beats the portable mode 6 backend everywhere, but shares its one blind spot: a 4x4 of several unrelated hues still scores about 11 dB
     //   veryfast    9 Mpix/s   the partitioned modes arrive and that same block jumps to 54 dB, a 43 dB step, while smooth content gains about 1.5 dB
-    //   basic     2.5 Mpix/s   a further 1.8 dB on low saturation content for nearly four times the time
+    //   basic     2.5 Mpix/s   a further 1.8 dB on low saturation content
+    //   slow      3.4 Mpix/s   0.6 dB BEHIND basic on skin, 45 dB AHEAD of it on multi-hue blocks, which it encodes losslessly, and faster than it
     //
-    // BALANCED is the default because that first step is a different kind of improvement from the second: it removes a failure mode rather than sharpening an already good result. Everything past it is ordinary diminishing returns, which is what a user with time to spare can opt into.
+    // HIGH maps to slow rather than basic because slow measurably DOMINATES it: repeatably faster and bit exact on the case both of the cheaper profiles merely make acceptable, for six tenths of a decibel on smooth content. The ordering is not monotonic and the names invite the wrong guess, which is exactly why the choice is made from the benchmark rather than from them.
+    //
+    // HIGH is the default because the economics changed once the pool widened and the promotion engine landed. A texture is encoded ONCE and then read from disk for the life of the cache, so encode time is a one-off and quality is permanent - and the pool is supply limited rather than compute limited, so its workers spend most of their time waiting on fetches regardless. Sixteen workers at slow is roughly fifty Mpix/s of aggregate throughput, comfortably more than four workers at veryfast managed, so this is better quality AND more of it than the previous build produced.
     void ssInitBC7E()
     {
         ispc::bc7e_compress_block_init();
 
-        switch (sQuality)
-        {
-            case SSBC7_QUALITY_FAST:  ispc::bc7e_compress_block_params_init_ultrafast(&sParams, SSBC7E_PERCEPTUAL); break;
-            case SSBC7_QUALITY_HIGH:  ispc::bc7e_compress_block_params_init_basic(&sParams, SSBC7E_PERCEPTUAL);     break;
-            default:                  ispc::bc7e_compress_block_params_init_veryfast(&sParams, SSBC7E_PERCEPTUAL);  break;
-        }
+        ispc::bc7e_compress_block_params_init_ultrafast(&sParams[SSBC7_QUALITY_FAST],     SSBC7E_PERCEPTUAL);
+        ispc::bc7e_compress_block_params_init_veryfast(&sParams[SSBC7_QUALITY_BALANCED],  SSBC7E_PERCEPTUAL);
+        ispc::bc7e_compress_block_params_init_slow(&sParams[SSBC7_QUALITY_HIGH],          SSBC7E_PERCEPTUAL);
     }
 
     // bc7e reads pixels as uint32 and writes blocks as uint64. Callers hand us byte pointers, and a byte pointer that happens to be odd would make those casts undefined, so misaligned input is staged through an aligned buffer instead. In practice the encoder wrapper passes vector storage and this never triggers; it exists so that a future caller with a stack buffer fails slowly rather than mysteriously.
@@ -67,7 +66,7 @@ namespace
     }
 }
 
-void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks)
+void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks, SSBC7Quality quality)
 {
     if (num_blocks == 0)
     {
@@ -75,6 +74,10 @@ void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks
     }
 
     std::call_once(sInitFlag, ssInitBC7E);
+
+    // <SS:Nexii> Squeeze adaptive quality - a profile outside the table would index past the end of a static array, so it is clamped rather than trusted. BALANCED is the fallback because it is the cheapest profile that still has the partitioned modes, so a corrupted value degrades to something usable rather than to the one profile with a known blind spot.
+    U32 profile = (U32)quality;
+    if (profile >= (U32)SSBC7_QUALITY_COUNT) profile = (U32)SSBC7_QUALITY_BALANCED;
 
     const U8* in = rgba_blocks;
     U8* out = out_blocks;
@@ -104,7 +107,7 @@ void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks
     ispc::bc7e_compress_blocks(num_blocks,
                                reinterpret_cast<uint64_t*>(out),
                                reinterpret_cast<const uint32_t*>(in),
-                               &sParams);
+                               &sParams[profile]);
 
     if (stage_out)
     {
@@ -112,25 +115,33 @@ void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks
     }
 }
 
-void ssBC7SetBlockQuality(SSBC7Quality quality)
-{
-    sQuality = quality;
-}
-
-// The hundreds are bc7e's range and the low numbers are the portable backend's, so a blob encoded by one is never mistaken for the other's output; the quality is folded in for the same reason, since a blob encoded at FAST is a different artefact from one encoded at HIGH. Both remain valid BC7 whatever the stamp says - what the stamp buys is that the cache re-encodes at the current setting rather than serving the old one forever.
+// The hundreds are bc7e's range and the low numbers are the portable backend's, so a blob encoded by one is never mistaken for the other's output. Both remain valid BC7 whatever the stamp says - what the stamp buys is that the cache is wiped rather than read by a decoder that means something else by the same bytes.
+//
+// <SS:Nexii> Squeeze adaptive quality - a PLAIN BACKEND ID with no quality term, and it must stay that way. Folding the profile in here is what made a mid-session quality change wipe the entire store, which is precisely what adaptive selection would do several times an hour. The profile lives in SSBC7Record::mQuality now, and a record encoded at a low profile is upgraded in place by the idle pass rather than being invalidated wholesale. This value changing again should mean the BLOCK FORMAT changed, never that a setting did.
 U32 ssBC7BlockBackendVersion()
 {
-    return 100 + (U32)sQuality;
+    return 100;
 }
 
 const char* ssBC7BlockBackendName()
 {
-    switch (sQuality)
+    return "bc7e";
+}
+
+// <SS:Nexii> Squeeze adaptive quality - the bc7e profile each level actually maps to, so the log line that reports a change names the thing that changed rather than an enum ordinal. HIGH is `slow` and not `basic` because slow measurably DOMINATES it: repeatably faster and bit exact on multi-hue blocks, for six tenths of a decibel on smooth content.
+const char* ssBC7QualityName(SSBC7Quality quality)
+{
+    switch (quality)
     {
-        case SSBC7_QUALITY_FAST: return "bc7e-ultrafast";
-        case SSBC7_QUALITY_HIGH: return "bc7e-basic";
-        default:                 return "bc7e-veryfast";
+        case SSBC7_QUALITY_FAST: return "ultrafast";
+        case SSBC7_QUALITY_HIGH: return "slow";
+        default:                 return "veryfast";
     }
+}
+
+bool ssBC7BackendHasQualityProfiles()
+{
+    return true;
 }
 
 // Apache 2.0 asks that the notices travel with the work. The full licence text ships in licenses.txt, which is the copy that satisfies the licence; this shorter line exists so the credit is also somewhere a user will actually look.

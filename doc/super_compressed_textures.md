@@ -114,8 +114,10 @@ Reading it:
   veryfast fixes it by 43 dB. That step is a different kind of improvement from the ones after it:
   it removes a failure mode rather than sharpening an already-good result.
 - Everything past veryfast is ordinary diminishing returns — basic buys 1.8 dB on low-saturation
-  content for 3.6x the time. Hence `SSBC7_QUALITY_BALANCED` (veryfast) as the default, with FAST
-  (ultrafast) and HIGH (basic) exposed via `ssBC7SetBlockQuality`.
+  content for 3.6x the time. The three exposed rungs are FAST (ultrafast), BALANCED (veryfast) and
+  HIGH (slow); `basic` is deliberately not on the ladder, because `slow` DOMINATES it — repeatably
+  faster, and bit-exact on the multi-hue case `basic` merely makes acceptable, for six tenths of a
+  decibel on smooth content. The ladder is built from this table and not from the profile names.
 - "two-tone edges" is identical across every backend, which is the useful negative result: a 4x4
   containing only two colours fits mode 6 *exactly*, endpoints landing on the colours themselves.
   A hard edge is not what breaks a single-mode encoder; several unrelated colours is.
@@ -127,9 +129,9 @@ Reading it:
 The portable backend's numbers are identical whether measured with our own mode-6 decoder or with
 bc7decomp, which is independent confirmation that it writes correct BC7.
 
-Quality is folded into `ssBC7BlockBackendVersion` (bc7e uses 100 + quality, the portable backend
-stays in the low numbers) so changing the setting re-encodes cached blobs instead of serving old
-ones forever, and so a blob from one backend can never be mistaken for the other's.
+`ssBC7BlockBackendVersion` is a plain backend id (bc7e 100, the portable backend stays in the low
+numbers) so a blob from one backend can never be mistaken for the other's. **Quality is NOT folded
+in** — see "Adaptive encode quality" below for why that changed and what replaced it.
 
 **Determinism is per machine, not universal.** bc7e dispatches on the host instruction set and is
 built with fast maths, so another CPU may produce different bytes. This costs nothing: a blob is
@@ -205,6 +207,241 @@ Three stages on three threads, and the split is forced by what each API locks ra
 
 **Down-rez** re-uploads a shorter prefix instead of queueing. `LLImageGL::scaleDown` refuses a block compressed texture and `processTextureStats` calls `scaleDown()` every pass while current is below desired, so a BC7 resident left on `mDownScaleQueue` is re-queued forever, `mCurrentDiscardLevel` never moves and the memory governor never gets those bytes back — the opposite of the point, at the moment it matters most.
 
+## Promotion engine (P4, as built)
+
+IMPLEMENTED 2026-08-27, in `indra/newview/ssbc7promote.cpp` with the decisions split into `ssbc7promotepolicy.cpp`. This closes the gap the read path exposed: `ssBC7EncodeWantList()` had zero callers anywhere in `indra/`, `SSSqueezeNetworkPromote` had a preferences checkbox and no reader at all, and the encode pool logged "in flight 0" in twenty of twenty-seven samples while the want list only grew. Under full-res-only that is not a missing optimisation, it is the fill mechanism being absent.
+
+TWO TIERS IN STRICT ORDER, and the order is the whole safety argument. Tier (b) is not considered at all until the want list is empty.
+
+**TIER (a), free, no network.** When `ssBC7EncodePendingCount()` is zero - the demand path has nothing in flight - a bounded SCAN is posted onto the existing BC7Encode pool. It takes the newest 48 want-list uuids, drops those the store already has, and asks `LLTextureCache::ssProbeJ2C` whether each J2C is complete on this disk. COMPLETE ones are claimed and posted as fused items: `[read -> decode -> mips -> encode -> store]`, one work item, wholly on the pool, never touching the ImageDecode pool. PARTIAL ones move to the network candidate list. NO_ENTRY, UNKNOWN and READ_FAILED are dropped with their own counted reason, because keeping them would make the want list a list of textures the engine can never act on.
+
+COMPLETENESS is decided by the J2C tier's own partial sentinel and nowhere else: `LLTextureCacheWorker` stores the asset's total size in the entry, but a fetch that only had part of it stores total+1 (`lltexturefetch.cpp:2079-2088`), so "header record + body >= total" makes a partial fall exactly one byte short. That arithmetic is `ssBC7J2CExtent` and is unit tested offline against both the real record size and a different one, because the rule must not depend on `FIRST_PACKET_SIZE`.
+
+**TIER (b), network, and deliberately hard to notice.** Governed by `SSSqueezeNetworkPromote`, which now actually reads. Refused unless: the want list is empty, the store is under its budget, the encode pool is idle, the session is at `STATE_STARTED` and connected, no teleport is in progress, the texture fetcher has at most four requests outstanding for the USER (llviewertexturelist.cpp:924 uses zero for the same question; the allowance stops one lingering DONE worker from disabling the engine for a session), at most two continuation fetches are already in flight, a token bucket at `SSSqueezeNetworkPromoteKBPerSec` holds enough credit for the missing bytes, and the whole-session ceiling `SSSqueezeNetworkPromoteMaxMB` has not been reached.
+
+The rate limit and the ceiling are both present because they answer different questions: the bucket says "never faster than this", the ceiling says "never more than this, at all". A rate limit alone still spends a gigabyte given a long enough session, which is exactly what somebody on a metered connection is afraid of.
+
+TARGETING, with manifests still unbuilt: a candidate must still have a live `LLViewerFetchedTexture` in `gTextureList`, be `FTT_DEFAULT`, want no aux channel, have no record already, pass the encode geometry rule when its dimensions are known, and NOT currently be fetching for the user. A texture the viewer has already forgotten never gets bandwidth. This is the "manifest-referenced or recent last_use" rule expressed with what exists today; when P5 lands, the manifest becomes the better signal and slots in at the same point.
+
+THE REQUEST IS THE PIPELINE'S NATIVE MODE. `createRequest` at discard 0 asks for the whole asset and the worker resumes from what is already cached using the same offset arithmetic every progressive fetch uses. The completed J2C is written back by the ordinary `WRITE_TO_CACHE` state and the encode is triggered by the ordinary `DONE` hook, so this engine adds no transfer code, no cache code and no encode code - only the decision to ask. Priority is `1.f`, not zero, because `lltexturefetch.cpp:1158` aborts a worker below `F_ALMOST_ZERO`; one is the lowest value that still means "eventually" and sits below every priority the texture list assigns. Completion is detected with `getRequestFinished`, the same call `updateFetch` makes; a request is only deleted when the user's own texture has not taken the worker over, and both run on the main thread so that check is exact rather than merely likely. A teleport wipes every fetch, so the slots are released rather than waiting out their 120 second timeout.
+
+**BOUNDED, AND IT SAYS WHAT IT DROPPED.** The want list was a plain set that simply refused new entries past 8192 - which pins it to whatever the first eight thousand textures of the session happened to be and then reads from a log line exactly as though the engine had everything in hand. It is now `SSBC7WantList`: FIFO at the bottom, LIFO at the top. Work is taken NEWEST first because the most recently seen texture is the one the user is probably still stood in front of; entries are dropped OLDEST first so a walk through a mall cannot push out the room they are actually in. Every drop is counted, the first and every thousandth is logged with the uuid, and the drop total is exposed so a readout can say that "still waiting" is a FLOOR rather than a total. The 256-entry network candidate list behaves the same way.
+
+**THE RE-ARM, which the read path needed and did not have.** `ssBC7ServeProbe` latches `DECLINED` with `SSBC7_SERVE_DECLINE_NO_RECORD` and never looks again, so a record created mid-session was not served until the next login - throwing away the video memory the engine had just spent CPU and bandwidth to make available. Every uuid that reaches the store is now queued to the main thread, which resets the ladder to `NONE` for exactly those textures still sat at DECLINED-for-no-record; the safety-net probe in `updateFetch` re-examines them, so no exclusion logic is duplicated.
+
+**SEAM, NOT A SECOND ENGINE.** Promotion borrows the demand path's pool, bounded queue, 256 MB pinned-raw budget and plain-uuid in-flight set through a small set of accessors in `ssbc7encodequeue.h`. Two pools would let a backfill encode sit ahead of a texture the user is looking at; two budgets would make the one 256 MB ceiling really 512 MB. Every post is `tryPost` and a refusal is a counted verdict that re-wants the texture, never a block - the frame thread posts these, and a blocked frame thread is a frozen viewer for work whose entire justification is that nobody is waiting on it.
+
+LOCK ORDERING IS UNDISTURBED. `mHeaderMutex` before the BC7 store's locks already exists in the tree (`clearCorruptedCache` holds the header mutex through `purgeAllTextures` into `SSBC7Store::purgeAll`). This engine never nests the two in either direction: `ssProbeJ2C` takes the header mutex for one fixed-size entry read, releases it, and only then decodes and appends. The multi-megabyte body read holds nothing, which matters because the caller is a background-QoS worker whose disk IO Windows deprioritises - holding the header mutex across that would let a deprioritised thread stall the texture cache's own thread. `LLTextureCache::readBody` gained a `pool` parameter for the same reason `bodySize` always had one: its loose fallback used the cache THREAD's `LLVolatileAPRPool`, which a foreign thread must not share.
+
+EVERY EXIT IS NAMED (`ESSBC7PromoteVerdict`): RAN_LOCAL, RAN_SCAN, RAN_NETWORK, IDLE_EMPTY, OFF, NOT_READY, POOL_BUSY, SCAN_RUNNING, POST_FAILED, BACKPRESSURE, STORE_FULL, NET_OFF, NET_TELEPORT, NET_LOGIN, NET_BUSY, NET_BANDWIDTH, NET_SESSION, NET_IN_FLIGHT, NET_NO_TARGET. There is deliberately no verdict for "the tick interval has not elapsed": that exit happens on almost every frame and changes nothing, so counting it would bury eighteen meaningful numbers under one eight-figure one. `ssBC7PromoteStatsNow()` exposes promoted-from-local, completed-over-network, still-waiting, want-drops, candidates, in-flight, bytes spent against the ceiling and the last verdict, as numbers, for the overlay.
+
+DEFAULTS: `SSSqueezePromote` on (tier (a) costs no download at all), `SSSqueezeNetworkPromote` on per OWNER CALL #4, `SSSqueezeNetworkPromoteKBPerSec` 128, `SSSqueezeNetworkPromoteMaxMB` 512. The last two have no preferences UI yet; the existing checkbox is the one that stopped lying.
+
+## Adaptive encode quality (as built)
+
+IMPLEMENTED 2026-08-28, in `indra/newview/ssbc7adaptive.cpp` with the decisions split into
+`ssbc7adaptivepolicy.cpp` so the offline harness runs the shipping control law rather than a copy.
+Measure what the pool is really achieving, pick the profile that matches the backlog, and — the half
+that matters more — go back over what was rushed once the machine is idle.
+
+### The record format change, which had to come first
+
+Quality used to be folded into `ssBC7BlockBackendVersion()` (100 + quality), which is stamped into
+every blob and compared at startup: a mismatch WIPES the tier. That is fine when the profile is
+chosen once per session. It is catastrophic when a controller changes it every few minutes, so the
+scheme had to go before anything adaptive could exist.
+
+**The profile now lives in the record.** `SSBC7Record` gains a `mQuality` byte; the fields it
+already serialised totalled 50 bytes plus a 4 byte checksum against `SSBC7_RECORD_SIZE` of 64, so
+ten were spare and this spends one. The blob header carries the same byte in one of its reserved
+two, because the header's stated purpose is that the segments alone can rebuild a lost index — and a
+rebuild that forgot the profile would send the upgrade pass over everything. `SSBC7_FORMAT_VERSION`
+moves 1 → 2 for this, once, and the intention is that it never moves for quality again.
+`ssBC7EncoderVersion()` also changes (0x00010066 → 0x00010064 on bc7e) because the quality term left
+it, so existing caches are wiped exactly once on the build that lands this.
+
+A quality byte outside the known range is **clamped on read, never rejected**. `loadIndex` stops at
+the first record that fails, so refusing one over a byte that only steers a background pass would
+silently discard every record written after it.
+
+This is not damage control, it is what makes the feature good: with quality per record the store may
+hold a mixture, and a record encoded in a hurry becomes something to IMPROVE rather than something
+that is wrong until the next wipe.
+
+### Lock-free profile selection
+
+`ssBC7EncodeBlocksRGBA` takes the profile as an argument. bc7e's parameter block for **every** rung
+is built once inside the existing `std::call_once` and is read-only thereafter, so selecting between
+them is an array index — no mutex, no atomic, nothing to synchronise on a path that runs once per row
+of blocks. `ispc::bc7e_compress_blocks` takes a `const` params pointer, which is what makes that
+sound. Re-initialising one shared struct on change would instead have put a writer on the hot path of
+sixteen readers to save three hundred bytes.
+
+The encode path reads the current profile once per texture, on the worker, at the moment the encode
+starts — not when the item was queued. A queue that has been sitting for a minute would otherwise
+write at a profile the controller has since abandoned, and its own depth is the evidence that the
+older answer was wrong.
+
+### What is measured, and over what window
+
+Per profile, on the worker side, bracketing `ssBC7EncodeMipChain` and **nothing else** — not the J2C
+read, not the decode, not the alpha classification, not the store append. Folding in work that is
+identical at every profile would flatten the ladder and make a step down look as though it bought
+almost nothing.
+
+- Numerator: `SSBC7EncodeResult::mEncodedTexels`, the padded block grid across the whole chain, which
+  is the work the backend really did. Deriving it from the base size would flatter small textures.
+- Denominator: that one worker's wall time. So the figure is **per worker**, and pool capacity is it
+  multiplied by the pool's real width (`ssBC7EncodePoolWidth()`, not the setting, which is zero on
+  every machine that leaves it automatic).
+- Window: a 64-sample ring per profile over the last 60 seconds. If fewer than four samples fall
+  inside the window the whole ring is used regardless of age — the pool is supply limited, so a
+  healthy machine genuinely goes a minute without encoding, and a stale measurement of THIS machine
+  beats a benchmark figure from a different one. Benchmark seeds are used only for a rung nothing has
+  been encoded at yet.
+- Samples with zero duration or zero pixels are dropped, not clamped: an infinite rate would justify
+  the best profile forever.
+
+### The control law
+
+Backlog is the want list plus demand encodes in flight, in textures; the window's mean megapixels
+per texture converts it to work. The single quantity the law turns on is **estimated seconds to
+drain**, `backlog x mpix_per_texture / capacity`, and an unusable capacity returns −1 for "unknown",
+which every caller treats as hold rather than as instant.
+
+- **Step down** when the CURRENT profile's drain estimate exceeds 300 s.
+- **Step up** when the profile ONE RUNG BETTER is predicted under 90 s.
+
+Testing the step up against the TARGET rather than against the current rate is what makes it stable
+rather than merely slow. Asking "is here comfortable" would climb whenever a cheap profile had caught
+up, onto a profile eight times slower that then immediately falls behind — an oscillation with a
+period of a couple of minutes, scattering mixed-quality records for no benefit. Asking "would there
+be comfortable" applies both tests to the same quantity with a dead band between them, so a step up
+cannot undo itself. This is pinned by a test.
+
+Hysteresis, all four of which are required and none of which is sufficient alone: the 90/300 s dead
+band; a 20 s dwell down against a 90 s dwell up (falling behind costs the user time, catching up too
+early costs records the upgrade pass must redo); a 60 s cooldown between any two changes, armed from
+startup; and both dwell timers cleared on every change, so one observation can never produce two
+moves. Either dwell timer is reset the instant its condition stops holding, so a noisy signal never
+accumulates — the offline test flaps the backlog every tick for thirteen minutes and the ladder does
+not move once.
+
+**The user's setting always wins.** `SSSqueezeEncodeQuality` gains value **3, adaptive, as the new
+default**; 0–2 still pin a profile exactly as before. It is an added enum value rather than a second
+checkbox so "which profile am I getting" stays one question with one answer, and so a user who pinned
+HIGH in an earlier build keeps HIGH. The pin is checked before anything else is computed, so there is
+no path by which a measurement overrides it. The offline test drives every pinned value past a
+hopeless backlog and a completely idle machine for over an hour each and asserts it never moves.
+
+Every transition is logged at `LL_INFOS("Squeeze")` with the profile either side, the reason, the
+backlog, the measured capacity, the worker count, the drain estimate and both bars. Reaching the
+bottom rung additionally logs a warning, because ultrafast shares the portable backend's 11 dB
+blind spot on multi-hue blocks and the only reason it is on the ladder at all is that the upgrade
+pass will come back for it.
+
+### The idle upgrade pass — tier (c) of the promotion engine
+
+This is the real answer to "if it is a slow day use the best profile": not only encode new work
+better, but redo what was rushed. It is a third tier of the EXISTING promotion engine rather than a
+second scheduler — same pool, same claim, same pinned-bytes budget, same fused
+`[read → decode → mips → encode → store]` item, same idle detection.
+
+It runs only when tiers (a) and (b) have nothing left, and never when the network gate said the user
+is busy (NET_BUSY, NET_TELEPORT, NET_LOGIN): a free encode pool is not the same as a calm machine,
+and a teleport arrival has one for the second before the textures land. It is also refused whenever
+the controller has stepped down — a machine behind on new work has no business redoing old work —
+which is the second half of the control law rather than a separate policy.
+
+`SSBC7Store::takeUpgradeCandidates` walks the index on a pool worker (never the frame thread) and
+returns records below the target profile **worst first**, since a FAST record is visibly wrong in a
+way a BALANCED one is not. `append` gained an `allow_supersede` argument, off for every ordinary
+append: superseding writes a newer record for the same uuid, which `loadIndex` already resolves in
+favour of the later one, and the old blob becomes garbage its segment reclaims when killed. A
+supersede that is not STRICTLY an improvement is refused and counted — otherwise a mistimed pass
+rewrites the store to change nothing.
+
+A candidate the pass cannot finish (almost always a J2C that has since left the texture cache) is
+written off into a capped skip set and counted, rather than being re-read, re-decoded and re-refused
+every pass for the rest of the session. It still counts toward "how many are left", so the readout
+cannot claim the pass finished when it merely gave up.
+
+Gated by `SSSqueezeUpgradeIdle`, default on. New verdict `SSBC7_PROMOTE_RAN_UPGRADE`, appended to the
+enum rather than inserted, because the ordinals index the verdict-name table.
+
+### The readout
+
+`ssBC7AdaptiveStatsNow()` returns `SSBC7AdaptiveStats` as plain numbers, in the style of
+`SSBC7PromoteStats`, for the owner to wire into the overlay separately — nothing here edits
+`ssstatsview.cpp`. It answers four questions:
+
+1. **Which profile, and why.** The profile plus an `ESSBC7AdaptReason`: pinned by the user, no data
+   yet, best quality keeping up easily, holding, stepped down under backlog, stepped back up as it
+   cleared, or this backend has one encoder. A transition reason is STICKY until the next transition
+   or until the ladder is back at its best rung with headroom, because an overlay reads this between
+   ticks and a reason overwritten on the next tick could never be seen. Plus the session change count.
+2. **How the cores are used.** Pool width, a ~10 s moving average of workers inside an encode (an
+   instant sample on a supply-limited pool reads zero most of the time and would look broken), and
+   cumulative worker busy seconds for an overlay that would rather difference it itself.
+3. **The rate.** One aggregate figure — megapixels in the window over the window's own wall span,
+   which idle workers correctly pull down — for display, plus the per-worker per-profile table and
+   its sample counts for detail, plus the capacity the last decision was actually made against, the
+   backlog and the drain estimate.
+4. **The upgrade pass.** Records improved this session, records still below the best profile, whether
+   a pass is running right now (a nesting COUNT, not a flag, so it stays true while the re-encodes it
+   posted are running rather than only while the scan is), how many were written off, and the full
+   per-quality histogram. The histogram is maintained incrementally by the store on every append,
+   supersede, kill, compaction and index load, so reading it costs a counter copy and never a scan.
+
+`ssBC7AdaptiveMetricsString()` remains for the log and is written on the promotion engine's existing
+120 s tick, so a quiet session still leaves one honest statement next to the backlog it was choosing
+against.
+
+### Verified
+
+Offline: `test_bc7adaptive.cpp` drives the real `ssbc7adaptivepolicy.cpp` — window arithmetic and its
+refusals, step down, step down twice, step up, the step-up-is-not-self-defeating case, two shapes of
+noise, every pinned value, and the no-measurement case. `test_bc7store.cpp` gained the quality byte
+round trip, the out-of-range clamp, the blob header, supersede accept/refuse, the histogram, candidate
+selection worst-first with a skip set, and survival across a reopen; its existing 400-odd assertions
+including the whole eviction and crash-recovery suite still pass on the new 55-byte record.
+`test_bc7enc.cpp` gained a check that the profile REACHES the backend — the same noisy image encoded
+at two profiles must differ on bc7e and must match on mode 6 — and that per-call selection leaks no
+state between calls; it passes against both backends. `/Zs` semantic parse against the real viewer
+headers is clean for every touched file, including all three `indra/llimage` sources.
+
+## Region manifests (P5, as built)
+
+IMPLEMENTED 2026-08-28, in `indra/newview/ssbc7manifest.cpp` with the file format and the cap policy split into `ssbc7manifestfile.cpp`. This closes the gap the read path leaves open: the store only ever helps once something ASKS for a uuid, so on arriving somewhere you have been before, every texture still waits for the interest list to reach it, the fetcher to request it and the pipeline to decide it is wanted - while the bytes sit on the local disk in the exact form the GPU wants them.
+
+SCOPE: region manifests only. Agent manifests are the same mechanism keyed by avatar uuid and hooked at `processAvatarAppearance` instead of region change; the file format, the cap policy and the pre-warm are all key-agnostic, so adding them later is a second filename prefix and a second recorder rather than a second design.
+
+**WHERE IT LIVES, and why not in the .roc file.** `<cache>/texturecache/bc7cache/manifests/r_<grid>_<x>_<y>.uml`. `ssroccache.h` does define a `SSROC_SECTION_MANIFEST` and folding this in there is a sensible consolidation ONCE ROC HAS SETTLED - but a texture manifest is a Squeeze concern that merely happens to be keyed by region, and putting it in ROC's file makes every ROC format change a Squeeze format change while two workstreams are live in `ssroccache.cpp`. Living under `bc7cache` also buys the privacy requirement for free: `SSBC7Store::purgeAll` is a recursive `deleteDirAndContents` of the store directory, so "clear cache" takes the record of where you went with it, and that falls out of critical fix 4 rather than needing a second hook to forget. Grid-scoped names because SL and OpenSim coordinates collide outright.
+
+FORMAT: a 64 byte header (magic, version, region handle, last_seen, count, lifetime drop total, visit count, payload CRC, header CRC over the first 60 bytes) plus a flat 20 byte stride of uuid + weight. Rewritten whole through a temporary and a rename, so the torn file the reader refuses is one the writer cannot produce. **Manifests are DERIVED DATA and a version bump orphans them**, which is the established precedent - the store itself wipes on encoder-version mismatch, and the whole cost is one region visit spent re-learning. Stated rather than smuggled into a silent reformat.
+
+EVERY REFUSAL IS NAMED (`ESSBC7ManifestVerdict`): OK, NO_FILE, UNREADABLE, SHORT, MAGIC, VERSION, HEADER_CRC, COUNT, TRUNCATED, PAYLOAD_CRC, HANDLE, WRITE. Nothing below the checksum is believed before it passes, and **the count is why**: a flipped bit in the count field is the one corruption that turns a bad file into a bad allocation, so the checksum is tested before the count is read. The size check is an equality rather than an "at least", because a file LONGER than its header claims - what overwriting a big manifest in place with a smaller one leaves - is exactly as untrustworthy as a short one. The header carries the region handle and it is checked against the filename, for the same reason `ssBC7VerifyBlob` requires a uuid: a filename is precisely the part of a cache that survives being copied, renamed or restored from somebody else's backup.
+
+**HOW THE REGION CHANGE IS DETECTED: no new stock hook at all.** `ssBC7ManifestTick()` is called from the head of `ssBC7PromoteTick()`, above every gate there so manifests are not switched off by `SSSqueezePromote`. That tick already runs on the main thread every frame and `gAgent` already knows which region the agent is in, so the whole detector is one pointer dereference and one 64 bit comparison. Nothing was added to `llviewerregion.cpp`. A null region is ignored rather than treated as a departure, because a teleport passes through one.
+
+**RECORDING** is one walk of `gTextureList` every 15 seconds on the main thread - the same shape as the eviction heat sweep, at a quarter of its rate - and never on a fetch thread. The signal is `mMaxVirtualSize`, which the texture list has already computed: a non-zero one means something on screen wanted this texture, which is the definition of "mattered here". The set is not restricted to objects owned by the current region on purpose: a neighbour's build is on this screen, so the manifest describes a VIEWPOINT rather than a parcel.
+
+**WHAT THE CAP DROPS.** 4096 uuids per region, 128 regions. The want list is a work queue so its oldest entry is its least urgent and FIFO is right there; a manifest is a description of a place, read back once in full, so age says nothing and area says everything. The cap therefore sacrifices the LIGHTEST entries - those only ever glimpsed a few pixels across, simultaneously the cheapest to forget and the least missed - and the pruning is hysteretic (overshoot by an eighth, cut back to the cap) so a texture-heavy region does not pay a sort per insertion. Every drop is counted, the last one is kept so a log line can name it, and the lifetime total is written into the manifest header so a readout says "at least this many" instead of implying it remembered everything. A merged-in manifest has its weights HALVED, so a set built over many visits keeps re-earning its place rather than ossifying around the first visit.
+
+**WHAT BOUNDS THE PRE-WARM.** Five independent limits, and they stop different things: at most 32 reads posted per 0.25 s pass (the shared reader queue is 256 deep, so this path can never fill it and leave a foreground read with nowhere to go); at most 128 entries EXAMINED per pass, which is what bounds the main thread on a cold store where every entry costs a lookup and returns no-record; at most 2048 attempts per arrival; a video memory budget, `SSSqueezeManifestWarmMB`, default 128 MB; and the pass refuses outright while `ssBC7ServeReadsInFlight()` is non-zero, which is how "foreground fetch always wins" becomes a gate rather than a hope. When the budget runs out the pass STOPS rather than skipping to something smaller, because the queue is in descending weight order and everything past that point matters less than what is already placed.
+
+**THE WARM IS AT DISCARD 2, NOT FULL RES**, and this is the number the whole video memory argument rests on. A full-res warm of a dense region would be a gigabyte spent on textures nobody has looked at; discard 2 costs about a sixteenth of that, is already sharper than anything the network could have delivered in the same instant, and the ordinary `RESIDENT -> READING` edge in `updateFetch` sharpens each texture to its real wanted level the moment an object references it. Warming cheap and upgrading on demand beats warming expensively and evicting.
+
+**CREATING THE TEXTURE OBJECT IS SAFE, and the reason is load bearing.** The pre-warm calls `LLViewerTextureManager::getFetchedTexture(id, FTT_DEFAULT, ..., LOD_TEXTURE)` for uuids nothing has asked for yet. `decode_priority` in `updateFetch` is `mMaxVirtualSize`, which is zero until something on screen wants the texture, and `make_request` is false at zero - so a pre-warmed texture can never turn into network traffic. If nothing ever references it, the ordinary lazy flush in `updateImageDecodePriority` deletes it after thirty seconds of no references and hands the video memory straight back. The whole episode is self-cleaning, which is why the budget is a ceiling on a temporary cost rather than a permanent one.
+
+**ONLY UUIDS THAT ACTUALLY HAVE A RECORD.** A manifest entry the store has no record for is counted (`mWarmNoRecord`) and dropped. It is never turned into a network fetch from this path - that is the difference between a warm-up and a speculative download, and it is what lets this path promise it reads the local disk and nothing else. Feeding those uuids to the promotion want-list is the obvious next step and is deliberately not taken here.
+
+**METRICS**, exposed as numbers through `ssBC7ManifestStatsNow()` for the overlay the owner wires separately: manifests loaded, refused and saved; uuids named; pre-warms issued and, separately, LANDED - confirmed resident by a bounded sweep, because a posted read is not a resident texture; already resident; no record; declined; reader busy; the BC7 bytes and the saving actually in place; and the recorder's depth and lifetime drop count. `ssBC7ManifestMetricsString()` writes the same on a two minute tick.
+
+WHERE IT RUNS: the tick, the recorder and the pre-warm are main thread, because `gAgent`, `gTextureList` and the read path's request stage all are. The load and the save are the only file IO and both go on the existing BC7Encode pool via `ssBC7EncodeTryPost` - not a new pool, and not the reader pool, because an 80 KB manifest write has no business queueing ahead of a visible texture. The save deliberately does NOT honour the encode pool's abandon flag: shutdown posts it before the pool is told to abandon, and honouring the flag would lose the last region of every session to a race with whichever worker picked the item up.
+
+STILL OPEN: the ROC miner. `doc/region_object_cache.md` describes ROC walking promoted objects' DP blobs at region-exit save to regenerate the manifest, which would populate a manifest for a region the user only walked through rather than stood in, and would pick up textures never rendered. That is a one-way ROC-to-manifest feed at a single call site and it slots in at `SSBC7ManifestSet::note` unchanged. Agent manifests, the location-TP-request warm-up (which can start during the teleport round trip rather than after arrival) and semantic eviction reading manifest `last_seen` as an evictability pin are all still outstanding.
+
 ## Work queue
 
 Pool: LL::ThreadPool("BC7Encode") — the name auto-gains the ThreadPoolSizes override. Workers self-set THREAD_MODE_BACKGROUND_BEGIN inside an overridden run() — note the in-tree "precedent" at llappviewerwin32.cpp:1404 is itself broken (wrong-thread handle; the mode is valid only for the current thread), so this is the first working instance. Background QoS deprioritizes CPU, I/O, and memory pressure — priority via QoS, not width rationing. Conservative default width until throughput is measured (sleepy_robin idle workers Sleep(1)-poll; a wide idle pool burns wakeups).
@@ -239,8 +476,8 @@ VERDICT: no rewrite now — 30-60+ dev-days of pure risk with zero VRAM benefit.
 - P1 (8-10d): write-only sidecar store — index+segments with CRC/truncate recovery; corrected record layout; two-lock discipline; plain-UUID dedupe; DONE-state enqueue (free full-res case) + want-list capture + exclusions; purge cascade at ALL purge sites with close-before-wipe; second-instance read-only; kill-process/disk-full/two-instance tests.
 - P2 (12-15d): read path, the VRAM win — index probe beside loadFromFastCache; async-only blob reads; explicit-format lifecycle fix; source-components injection; encode-time pickmask/alpha at parity resolution; raw-callback→J2C forcing; NPOT guard; tombstone+fallthrough on read failure; downscale exemption; telemetry. FIRST USER-VISIBLE BUILD (~5-7 weeks in).
 - P3 (4-6d): bounded steady state — SSBC7CacheSize; lax watermark eviction (~64 MB least-recently-referenced drop batches) + compaction; VRAM-pressure down-rez via RAM tail mips; multi-day soak. (Re-encode debounce deleted — records immutable under full-res-only.)
-- P4 (5-7d, CORE — primary fill mechanism): promotion engine — drain the want-list in preference order: fused encodes over complete J2C first, then throttled low-priority network-completion fetches for manifest-referenced / recently-used partials; paused during teleport/login; bandwidth-capped.
-- P5 (7-10d): manifests + warm-up + semantic eviction pins (grid-scoped names, VOCache DP + cacheFullUpdate + processAvatarAppearance + TP-request hooks, GLTF extras coverage, deleted on cache clear).
+- P4 (5-7d, CORE — primary fill mechanism) IMPLEMENTED 2026-08-27, see "Promotion engine (P4, as built)" above: promotion engine — drain the want-list in preference order: fused encodes over complete J2C first, then throttled low-priority network-completion fetches for manifest-referenced / recently-used partials; paused during teleport/login; bandwidth-capped.
+- P5 (7-10d): manifests + warm-up + semantic eviction pins (grid-scoped names, VOCache DP + cacheFullUpdate + processAvatarAppearance + TP-request hooks, GLTF extras coverage, deleted on cache clear). REGION HALF IMPLEMENTED 2026-08-28, see "Region manifests (P5, as built)" above: the manifest format, the recorder, the bounded arrival pre-warm and the directory LRU. Still outstanding: the ROC DP-blob miner, agent manifests at processAvatarAppearance, the location-TP-request warm-up, and semantic eviction reading manifest last_seen as an evictability pin.
 
 CORE (P0-P4, promotion engine included since it is the fill mechanism): 33-43 dev-days ≈ 7-9 calendar weeks solo. With P5 manifests: ~40-53 days. DEFERRED behind triggers: unified all-asset store (keep the Strata container/journal spec as reference: per-tier volumes ≤1 GiB, journal+checkpoint, extent allocator, segment_mask for mesh) and the orchestration rewrite (keep the staged-rewrite-behind-facade plan as template).
 

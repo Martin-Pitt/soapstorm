@@ -101,6 +101,8 @@ public:
         U32 mSkipped         = 0;
         U32 mConfirmed       = 0;
         U32 mExpired         = 0;
+        // <SS:Nexii> Ghosts whose watch ended without ROC touching the world, because the entry was the simulator's own. Counted apart from mExpired so "we stopped looking" is never mistaken for "we removed something".
+        U32 mReleasedValidated = 0;
         U32 mIdReuse         = 0;
         U32 mKilled          = 0;
         U32 mTrashed         = 0;

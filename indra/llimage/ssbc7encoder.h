@@ -33,6 +33,20 @@ struct SSBC7EncodeScratch
     std::vector<U8> mOutBatch;
 };
 
+// <SS:Nexii> Squeeze adaptive quality - the profile is a PARAMETER of an encode rather than a property of the process, because the adaptive controller in newview changes it while the session runs and a record now carries the profile it was made at. Declared here, above everything that takes one, rather than beside the backend seam where it used to live.
+//
+// The portable mode 6 backend has only one setting and ignores this. bc7e maps them onto its own profiles, where the step from FAST to BALANCED is the one that matters: it is what brings in the partitioned modes, and with them a block holding several unrelated colours goes from unusable to good.
+//
+// The ordering is by MEASURED cost, not by name, and these values are the on-disk meaning of SSBC7Record::mQuality - so they may be extended but must never be renumbered.
+enum SSBC7Quality
+{
+    SSBC7_QUALITY_FAST     = 0,
+    SSBC7_QUALITY_BALANCED = 1,
+    SSBC7_QUALITY_HIGH     = 2,
+    SSBC7_QUALITY_COUNT    = 3
+};
+// </SS:Nexii>
+
 struct SSBC7EncodeResult
 {
     SSBC7EncodeResult();
@@ -42,10 +56,17 @@ struct SSBC7EncodeResult
     U32 mPayloadBytes;      // always equals ssBC7PayloadBytes(mWidth, mHeight, mMipCount)
     U8  mMipCount;
     U8  mSrcComponents;     // components of the ORIGINAL image, 1/2/3/4, NOT BC7's intrinsic four - this byte is what later keeps opaque textures out of the alpha pool
+    // <SS:Nexii> Squeeze adaptive quality - the profile this chain was ACTUALLY encoded at, echoed back so the caller stores it beside the bytes rather than re-reading a setting that may have moved since it asked, and the texel count the encoder really put through the backend, which is the numerator of every throughput figure the controller measures. Padded texels are counted because padding is work the machine genuinely did, and the whole chain is counted rather than the base level because the mips are about a third of it and pretending otherwise would understate the machine by that much.
+    U8  mQuality;           // SSBC7Quality
+    U32 mEncodedTexels;
+    // </SS:Nexii>
 };
 
 // Encodes src, which must be width * height * components tightly packed bytes, into a complete BC7 chain. Returns false and leaves out_payload empty on any geometry the store cannot represent. Touches no globals and no GL, so it is safe on any thread.
+//
+// <SS:Nexii> Squeeze adaptive quality - `quality` is passed per call and reaches the backend unchanged. Nothing is latched and nothing is synchronised, so two workers may be encoding at two different profiles in the same instant, which is exactly what lets the controller change its mind without first draining the pool.
 bool ssBC7EncodeMipChain(const U8* src, U32 width, U32 height, U32 components,
+                         SSBC7Quality quality,
                          SSBC7EncodeScratch& scratch,
                          std::vector<U8>& out_payload,
                          SSBC7EncodeResult& out_result);
@@ -72,26 +93,22 @@ U32 ssBC7EncMipCount(U32 width, U32 height);
 // Batched rather than one block at a time because a SIMD backend fills its vector lanes with independent blocks - the reason bc7e asks for dozens per call. A scalar backend simply loops.
 //
 // Determinism required of a backend is per machine, not universal: the same bytes encoded twice on one machine must give the same block, because that is what makes a stored blob comparable against the version stamped beside it. A SIMD backend dispatching on the host's instruction set, or compiled with fast maths, may legitimately differ from another machine's - which costs nothing here, because a blob is only ever read back by the installation that wrote it.
-void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks);
-
-// Speed against quality, for a backend that offers the choice. Measured on the offline benchmark, the spread between these is roughly thirty to one in throughput, so it is worth exposing rather than picking once.
 //
-// The portable mode 6 backend has only one setting and ignores this. bc7e maps them onto its own profiles, where the step from FAST to BALANCED is the one that matters: it is what brings in the partitioned modes, and with them a block holding several unrelated colours goes from unusable to good. Beyond BALANCED the returns are small.
-enum SSBC7Quality
-{
-    SSBC7_QUALITY_FAST     = 0,
-    SSBC7_QUALITY_BALANCED = 1,
-    SSBC7_QUALITY_HIGH     = 2
-};
-
-// Selects the quality a backend will use. Must be called before the first encode: a backend is entitled to read this once while building whatever tables it needs, and later changes are then ignored. Layering is why this is a call rather than a settings lookup - llimage sits below newview and cannot reach up to the settings store, so newview pushes the value down at startup.
-//
-// Changing quality changes ssBC7BlockBackendVersion, and so ssBC7EncoderVersion, which is what makes already cached blobs re-encode at the new setting instead of lingering at the old one.
-void ssBC7SetBlockQuality(SSBC7Quality quality);
+// <SS:Nexii> Squeeze adaptive quality - `quality` is a per-call argument and this function MUST stay free of locks. A backend that offers profiles builds every one of its parameter blocks once and thereafter only reads them, so selecting between them costs an array index on a path that runs once per row of blocks.
+void ssBC7EncodeBlocksRGBA(U32 num_blocks, const U8* rgba_blocks, U8* out_blocks, SSBC7Quality quality);
 
 // Identifies the backend so ssBC7EncoderVersion changes automatically when the backend file is replaced.
+//
+// <SS:Nexii> Squeeze adaptive quality - THE QUALITY IS NO LONGER FOLDED IN HERE, and that removal is what the rest of this feature rests on. It used to be, so that flipping the setting re-encoded the cache; but once the profile can vary WITHIN a session that scheme wipes the whole store every time the controller changes its mind. The profile travels in the record instead, which is strictly better than what it replaced: the store may hold a mixture, and a texture encoded in a hurry becomes something the idle upgrade pass can improve later rather than something that is simply wrong until the next wipe.
 U32         ssBC7BlockBackendVersion();
 const char* ssBC7BlockBackendName();
+
+// <SS:Nexii> Squeeze adaptive quality - what the backend actually does with each profile, for the log line that reports a change. The portable backend answers the same string for all three, which is the honest answer when it only has one encoder.
+const char* ssBC7QualityName(SSBC7Quality quality);
+
+// False when the linked backend ignores the profile entirely, which is how newview knows adaptive selection would be theatre and says so once at startup rather than logging changes that change nothing.
+bool ssBC7BackendHasQualityProfiles();
+// </SS:Nexii>
 
 // The attribution this backend requires in the About box, or null if it is entirely our own code and needs none. The About box reads packages-info.txt, which is generated from the autobuild packages and therefore cannot know about a backend chosen at configure time, so the notice has to come from the backend itself.
 //

@@ -27,7 +27,12 @@
 constexpr U32 SSBC7_IDX_MAGIC        = 0x37434253; // 'SBC7' little-endian
 constexpr U32 SSBC7_SEG_MAGIC        = 0x47534253; // 'SBSG'
 constexpr U32 SSBC7_BLOB_MAGIC       = 0x42374253; // 'SB7B'
-constexpr U32 SSBC7_FORMAT_VERSION   = 1;          // wipe-never-migrate, exactly as the region cache does
+// <SS:Nexii> Squeeze adaptive quality - version 2 adds SSBC7Record::mQuality and the matching byte in the blob header. It is bumped ONCE for that, and the intention is that it never moves for quality again: the whole point of putting the profile in the record is that a store may hold a mixture, so a session that changes profile costs an upgrade pass rather than a wipe.
+constexpr U32 SSBC7_FORMAT_VERSION   = 2;          // wipe-never-migrate, exactly as the region cache does
+
+// How many distinct encode profiles a record's quality byte may name. Mirrors SSBC7_QUALITY_COUNT in indra/llimage/ssbc7encoder.h, duplicated rather than included for the same reason SSBC7_MAX_MIPS is: this half of the store reaches for nothing above it, which is what lets the offline harness compile it alone. A value outside the range is CLAMPED on read and never rejected - a record whose pixels are perfectly good must not be thrown away, and taking the whole tail of the index with it, over a byte that only steers a background upgrade pass.
+constexpr U32 SSBC7_QUALITY_LEVELS   = 3;
+// </SS:Nexii>
 constexpr U32 SSBC7_HEADER_SIZE      = 64;
 constexpr U32 SSBC7_RECORD_SIZE      = 64;
 constexpr U32 SSBC7_BLOB_HEADER_SIZE = 96;
@@ -81,6 +86,9 @@ struct SSBC7Record
     U8      mMipCount;
     U8      mFormat;            // ESSBC7Format
     U8      mSrcComponents;     // components of the ORIGINAL image - BC7 is always four channel, and without this every opaque texture lands in the alpha pool
+    // <SS:Nexii> Squeeze adaptive quality - SSBC7Quality, SERIALISED, and the field this whole feature is built around. With the profile here rather than in the encoder version, the store may hold records made at three different profiles at once, so the controller can drop to a cheaper one under load without invalidating everything already written - and a record made in a hurry becomes something the idle upgrade pass can re-encode better later rather than something that is simply wrong.
+    U8      mQuality;
+    // </SS:Nexii>
     U32     mRecordCRC;
 
     // <SS:Nexii> Squeeze eviction - IN MEMORY ONLY, never serialised. mLastUseDay is a U16 of days, so on a cache filled in one session every record shares a single value and a day-only sort is arbitrary order; the tick breaks ties inside today and the second is a hard recency floor. Losing both to a crash costs ordering quality and nothing else, which is exactly what a drop-priority signal is allowed to lose.
@@ -104,6 +112,7 @@ struct SSBC7BlobHeader
     U8      mFormat;
     U8      mSrcComponents;
     U16     mFlags;
+    U8      mQuality;                  // <SS:Nexii/> Squeeze adaptive quality - the same byte as the record's, in the blob too, because the header's stated purpose is that the segments alone are enough to rebuild a lost index and a rebuild that forgot the profile would send the upgrade pass over everything
     U32     mPickMaskBytes;
     U32     mPayloadBytes;
     U32     mPickMaskCRC;
@@ -122,6 +131,7 @@ struct SSBC7Encoded
     U16              mHeight;
     U8               mMipCount;
     U8               mSrcComponents;
+    U8               mQuality;    // <SS:Nexii/> Squeeze adaptive quality - carried in rather than looked up, so ssBC7BuildBlob stays a pure function of its argument and the offline harness can build a record at any profile without a backend
     U16              mFlags;
     std::vector<U8>  mPayload;    // concatenated mips, smallest first
     std::vector<U8>  mPickMask;   // optional, may be empty
@@ -221,7 +231,19 @@ public:
     // </SS:Nexii>
 
     // Serialises, appends the blob to the current segment, then appends the index record. Blob first, always: an index record pointing at a blob that was never written is a dangling reference, while a blob nothing points at is merely wasted space the next compaction reclaims.
-    bool append(const SSBC7Encoded& src, U32 encoder_version);
+    //
+    // <SS:Nexii> Squeeze adaptive quality - `allow_supersede` is how the idle upgrade pass replaces a record with a better encode of the same texture, and it is OFF for every ordinary append so the plain-uuid dedupe is unchanged for the demand path. Superseding is an append of a newer record for the same uuid, exactly as a tombstone is, so loadIndex already resolves it on the way back in - the old blob simply becomes garbage its segment reclaims when it is eventually killed. A supersede that is not strictly an improvement is refused and counted, because re-encoding a texture at the profile it already has spends CPU and disk to change nothing.
+    bool append(const SSBC7Encoded& src, U32 encoder_version, bool allow_supersede = false);
+
+    // Up to `max_count` uuids of live records encoded BELOW `target_quality`, worst first so the ugliest records are repaired before the merely imperfect ones. One walk of the index under the map lock, taken only when the machine is otherwise idle. `out_remaining` is the total that still qualify, which is what makes the readout say "1,240 improved, 3,891 still to go" rather than a number with no denominator.
+    size_t takeUpgradeCandidates(U8 target_quality, size_t max_count, const std::unordered_set<LLUUID>& skip, std::vector<LLUUID>& out, U32& out_remaining);
+
+    // Live records per quality level, maintained incrementally on every append, supersede, kill and index load, so a readout costs a copy of three counters rather than the index walk the overlay must never provoke.
+    void qualityHistogram(U32 out_counts[SSBC7_QUALITY_LEVELS]) const;
+
+    // Records replaced by a better encode of the same texture this session, which is the number that makes the idle upgrade pass visible to a person instead of being a thing the viewer does silently.
+    U32 upgradesApplied() const;
+    // </SS:Nexii>
 
     // Hooked into every cache-clear path. A BC7 store is a complete second copy of every texture the user has looked at, so it has to die with the rest of the cache or "clear cache" is a lie.
     void purgeAll();
@@ -355,6 +377,10 @@ private:
 
     mutable std::mutex              mMapMutex;
     std::unordered_map<LLUUID, SSBC7Record> mIndex;
+    // <SS:Nexii> Squeeze adaptive quality - guarded by mMapMutex alongside mIndex, and derived from it rather than persisted: every path that adds, replaces or drops a record adjusts these in the same critical section, so they cannot drift from the map they describe without the map itself being wrong.
+    U32                             mQualityCounts[SSBC7_QUALITY_LEVELS] = {0, 0, 0};
+    U32                             mUpgradesApplied = 0;
+    // </SS:Nexii>
 
     mutable std::mutex              mStoreMutex;
     Metrics                         mMetrics;

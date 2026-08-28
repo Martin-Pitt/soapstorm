@@ -13,6 +13,7 @@
 
 #include "ssrocghost.h"
 #include "ssrocledger.h"
+#include "ssrocvocache.h"
 
 #include "llsurface.h"
 #include "llsurfacepatch.h"
@@ -45,6 +46,9 @@ void SSROCAuxMgr::shutdown()
     if (mMetrics.mRegionsLoaded || mMetrics.mCaptured || mMetrics.mRegionsMissing)
     {
         LL_INFOS("SSROC") << metricsString() << LL_ENDL;
+
+        // Reported from here rather than from a manager of its own: backing the object cache has no per-frame state and no lifecycle beyond one region visit, so a whole singleton for two counters would be machinery for its own sake.
+        LL_INFOS("SSROC") << ssROCVOCacheMetricsString() << LL_ENDL;
     }
 
     // The ledger and the ghost manager share this manager's lifecycle rather than owning hooks of their own in llappviewer, so they are retired here - after the last region removal has already run its promotion pass.
@@ -82,40 +86,67 @@ void SSROCAuxMgr::onRegionAdded(LLViewerRegion* regionp)
     SSROCStore::instance().loadRegionAsync(handle,
         [this](U64 loaded_handle, SSROCFilePtr file)
         {
-            // Main thread. The region this was kicked for may already be gone, so nothing here dereferences a cached pointer - applyPending re-resolves by handle.
-            auto it = mRegions.find(loaded_handle);
-            if (it == mRegions.end()) return;
-
-            it->second.mFile = file;
-            it->second.mLoadDone = true;
-
-            // Hand the record set to the ledger. Sightings can and do arrive before the disk read completes, so the ledger merges rather than adopts.
-            if (SSROCLedger::instanceExists())
-            {
-                SSROCLedger::instance().onRegionFileLoaded(loaded_handle, file);
-            }
-
-            // And to the ghost manager, which holds it until the handshake says whether the stored local ids still name the same objects. Nothing is painted from here: injection is frame-budgeted and belongs to the tick.
-            if (SSROCGhostMgr::enabled())
-            {
-                SSROCGhostMgr::instance().onRegionFileLoaded(loaded_handle, file);
-            }
-
-            if (file)
-            {
-                ++mMetrics.mRegionsLoaded;
-                LL_INFOS("SSROC") << "Loaded region cache for " << loaded_handle
-                                  << " (" << file->mRecords.size() << " objects, heightmap "
-                                  << (file->mAux.mHeightmap.empty() ? "absent" : "present") << ")" << LL_ENDL;
-            }
-            else
-            {
-                ++mMetrics.mRegionsMissing;
-                LL_DEBUGS("SSROC") << "No region cache on disk for " << loaded_handle << LL_ENDL;
-            }
-
-            applyPending(loaded_handle);
+            // Main thread. The region this was kicked for may already be gone, so nothing here dereferences a cached pointer - completeLoad re-resolves by handle.
+            completeLoad(loaded_handle, file);
         });
+}
+
+void SSROCAuxMgr::completeLoad(U64 handle, SSROCFilePtr file)
+{
+    auto it = mRegions.find(handle);
+    if (it == mRegions.end()) return;
+
+    // Dropped rather than merged. The blocking fallback and the worker read can both deliver a copy of the same file, and handing the ledger two copies of one record set would replay every confirmation the merge path performs for records already sighted this visit.
+    if (it->second.mLoadDone) return;
+
+    it->second.mFile = file;
+    it->second.mLoadDone = true;
+
+    // Hand the record set to the ledger. Sightings can and do arrive before the disk read completes, so the ledger merges rather than adopts.
+    if (SSROCLedger::instanceExists())
+    {
+        SSROCLedger::instance().onRegionFileLoaded(handle, file);
+    }
+
+    // And to the ghost manager, which holds it until the handshake says whether the stored local ids still name the same objects. Nothing is painted from here: injection is frame-budgeted and belongs to the tick.
+    if (SSROCGhostMgr::enabled())
+    {
+        SSROCGhostMgr::instance().onRegionFileLoaded(handle, file);
+    }
+
+    if (file)
+    {
+        ++mMetrics.mRegionsLoaded;
+        LL_INFOS("SSROC") << "Loaded region cache for " << handle
+                          << " (" << file->mRecords.size() << " objects, heightmap "
+                          << (file->mAux.mHeightmap.empty() ? "absent" : "present") << ")" << LL_ENDL;
+    }
+    else
+    {
+        ++mMetrics.mRegionsMissing;
+        LL_DEBUGS("SSROC") << "No region cache on disk for " << handle << LL_ENDL;
+    }
+
+    applyPending(handle);
+}
+
+bool SSROCAuxMgr::ensureRegionLoaded(U64 handle)
+{
+    auto it = mRegions.find(handle);
+    if (it == mRegions.end()) return false;
+    if (it->second.mLoadDone) return it->second.mFile != NULL;
+
+    // The worker read is still outstanding and cannot be waited on without blocking the main thread on a queue, so the file is read again here instead. Reading the same file twice is safe by construction: saves go through a temp file and a rename, so a reader never sees a partial write, and whichever copy arrives second is dropped by completeLoad.
+    LLTimer timer;
+    SSROCFilePtr file = SSROCStore::instance().loadRegionBlocking(handle);
+    const F32 ms = timer.getElapsedTimeF32() * 1000.f;
+
+    // Logged every time rather than only when slow, because this is the one piece of main-thread IO the region object cache performs and the cost of it is a number the owner has to be able to see rather than infer.
+    LL_INFOS("SSROC") << "Region " << handle << ": the cache read had not landed by the handshake, so it was read inline in "
+                      << ms << " ms (" << (file ? file->mRecords.size() : 0) << " records)" << LL_ENDL;
+
+    completeLoad(handle, file);
+    return file != NULL;
 }
 
 void SSROCAuxMgr::onRegionHandshake(LLViewerRegion* regionp, F32 water_height, const LLUUID& cache_id)

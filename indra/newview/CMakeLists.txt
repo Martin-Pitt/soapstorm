@@ -174,7 +174,14 @@ set(viewer_SOURCE_FILES
     fspanellogin.cpp
     fspanelpreferenceuisounds.cpp
     fspanelprefs.cpp
+    ssalphadebug.cpp
+    ssbc7adaptive.cpp
+    ssbc7adaptivepolicy.cpp
     ssbc7encodequeue.cpp
+    ssbc7manifest.cpp
+    ssbc7manifestfile.cpp
+    ssbc7promote.cpp
+    ssbc7promotepolicy.cpp
     ssbc7serve.cpp
     ssbc7store.cpp
     ssbc7storeevict.cpp
@@ -183,7 +190,10 @@ set(viewer_SOURCE_FILES
     ssroccache.cpp
     ssrocghost.cpp
     ssrocledger.cpp
+    ssrocvocache.cpp
     ssstatsview.cpp
+    ssstratabudget.cpp
+    ssstratabudgetwire.cpp
     sspanelprefs.cpp
     sssqueezedebug.cpp
     fspanelradar.cpp
@@ -1056,14 +1066,20 @@ set(viewer_HEADER_FILES
     fspanellogin.h
     fspanelpreferenceuisounds.h
     fspanelprefs.h
+    ssalphadebug.h
+    ssbc7adaptive.h
     ssbc7encodequeue.h
+    ssbc7manifest.h
+    ssbc7promote.h
     ssbc7serve.h
     ssbc7store.h
     ssrocaux.h
     ssroccache.h
     ssrocghost.h
     ssrocledger.h
+    ssrocvocache.h
     ssstatsview.h
+    ssstratabudget.h
     sspanelprefs.h
     sssqueezedebug.h
     fspanelradar.h
