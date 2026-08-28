@@ -23,8 +23,8 @@
 #include "ssrocaux.h"
 #include "ssroccache.h"
 #include "ssrocledger.h"
-#include "ssrocgroup.h"
-#include "ssrocparcel.h"
+#include "ssobjectfacts.h"
+#include "ssparcelfacts.h"
 #include "ssrocprobe.h"
 #include "llassettype.h"
 #include "ssstrata.h"
@@ -231,7 +231,7 @@ void SSStatsView::draw()
     // Stage B's land questions. Surfaced because the whole justification for asking them is that the count stays small and stops growing - a number that kept climbing across a long session would mean the per-parcel dedupe is not working and the traffic is per-object after all, which is exactly the shape this was designed not to have.
     {
         U32 regions = 0, known = 0, asked = 0, answered = 0, waiting = 0;
-        ssROCParcelCounts(regions, known, asked, answered, waiting);
+        ssParcelFactsCounts(regions, known, asked, answered, waiting);
         if (asked || known)
         {
             std::string tail;
@@ -245,18 +245,22 @@ void SSStatsView::draw()
         }
     }
 
-    // Stage C's object questions. The "not worth asking" count is the one to watch: it is the work the two free tests above took off the wire, and if it ever reads zero on a busy region the drain-time filter has stopped doing its job and the sweep is asking about objects whose answer could not change anything.
+    // The shared object cache. The withdrawn count is the one to watch: it is the work the free tests took off the wire before a message was built, and if it ever reads zero on a busy region the drain-time filter has stopped doing its job. The navmesh count is the pathfinding table's own answer, and it costs one request per region rather than a message per object.
     {
-        U32 known = 0, asked = 0, answered = 0, waiting = 0, skipped = 0;
-        ssROCGroupCounts(known, asked, answered, waiting, skipped);
+        U32 known = 0, asked = 0, answered = 0, waiting = 0, withdrawn = 0, navmesh = 0;
+        ssObjectFactsCounts(known, asked, answered, waiting, withdrawn, navmesh);
         if (asked || known)
         {
             std::string tail;
             if (waiting) tail = llformat(", %u still to ask", waiting);
-            line(llformat("  groups    %u objects answered for from %u questions%s", known, asked, tail.c_str()), true);
-            if (skipped)
+            line(llformat("  objects   %u described from %u questions%s", known, asked, tail.c_str()), true);
+            if (navmesh)
             {
-                line(llformat("            %u never had to be asked - already safe, or the land has no group", skipped), true);
+                line(llformat("            %u are permanent landscape by the region's own navigation mesh", navmesh), true);
+            }
+            if (withdrawn)
+            {
+                line(llformat("            %u never had to be asked - already safe, or the land has no group", withdrawn), true);
             }
             if (asked > answered)
             {

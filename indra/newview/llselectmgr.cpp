@@ -29,7 +29,7 @@
 // file include
 #define LLSELECTMGR_CPP
 #include "llselectmgr.h"
-#include "ssrocgroup.h"   // <SS:Nexii/> ROC Stage C: the set-to-group harvest, below
+#include "ssobjectfacts.h"   // <SS:Nexii/> the shared object cache's harvest, below
 #include "llmaterialmgr.h"
 
 // library includes
@@ -6231,10 +6231,6 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
         // (see LLVOAvatar::probeAttachmentGroups). Probed objects are not in
         // any selection, so also skip the missing-node warning below for them.
         bool group_probe_reply = LLVOAvatar::handleAttachmentGroupReply(id, group_id);
-
-        // <SS:Nexii/> ROC Stage C. The same shape as the attachment-group probe directly above, and for the same two reasons: this is the only message that carries an object's GroupID, and a probed object is in no selection - so the reply must also suppress the missing-node warning below, or a thousand-object sweep writes a thousand warnings. See doc/region_object_cache.md, Tier 2.
-        const bool ss_roc_group_reply = ssROCGroupNoteProperties(id, owner_id, group_id);
-        // </SS:Nexii>
         msg->getU64Fast(_PREHASH_ObjectData, _PREHASH_CreationDate, creation_date, i);
         msg->getU32Fast(_PREHASH_ObjectData, _PREHASH_BaseMask, base_mask, i);
         msg->getU32Fast(_PREHASH_ObjectData, _PREHASH_OwnerMask, owner_mask, i);
@@ -6264,6 +6260,14 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
         msg->getStringFast(_PREHASH_ObjectData, _PREHASH_Name, name, i);
         std::string desc;
         msg->getStringFast(_PREHASH_ObjectData, _PREHASH_Description, desc, i);
+
+        // <SS:Nexii> The shared object cache. Harvested here rather than beside the attachment-group probe above only because name and description are not parsed until this point. The WHOLE reply is kept rather than the group one consumer wanted: an ObjectProperties costs the same select whichever fields are read out of it, and a cache that stored six of them would have to be widened and re-flown for every new caller.
+        //
+        // Like the attachment probe it also reports whether the object was one of ours, because a probed object is in no selection and without that a thousand-object sweep writes a thousand missing-node warnings.
+        const bool ss_facts_reply = ssObjectFactsNoteProperties(id, owner_id, group_id, creator_id, creation_date,
+                                                                base_mask, owner_mask, group_mask, everyone_mask, next_owner_mask,
+                                                                name, desc);
+        // </SS:Nexii>
 
         std::string touch_name;
         msg->getStringFast(_PREHASH_ObjectData, _PREHASH_TouchName, touch_name, i);
@@ -6303,7 +6307,7 @@ void LLSelectMgr::processObjectProperties(LLMessageSystem* msg, void** user_data
         {
             // <FS:Techwolf Lupindo> area search
             FSAreaSearch* area_search_floater = LLFloaterReg::findTypedInstance<FSAreaSearch>("area_search");
-            if (!group_probe_reply && !ss_roc_group_reply && (!area_search_floater || !area_search_floater->isActive())) // Don't spam the log when areasearch is active or for group probe replies. <SS:Nexii/> ROC Stage C probes are equally not selections.
+            if (!group_probe_reply && !ss_facts_reply && (!area_search_floater || !area_search_floater->isActive())) // Don't spam the log when areasearch is active or for group probe replies. <SS:Nexii/> shared-cache probes are equally not selections.
             {
             // </FS:Techwolf Lupindo>
             LL_WARNS() << "Couldn't find object " << id << " selected." << LL_ENDL;

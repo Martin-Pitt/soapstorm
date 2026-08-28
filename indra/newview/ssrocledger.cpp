@@ -12,8 +12,8 @@
 #include "ssrocledger.h"
 
 #include "ssrocghost.h"
-#include "ssrocgroup.h"    // <SS:Nexii/> ROC Stage C: the set-to-group answer, which no object update carries
-#include "ssrocparcel.h"   // <SS:Nexii/> ROC Stage B: auto-return immunity from the parcel under the object
+#include "ssobjectfacts.h"   // <SS:Nexii/> the shared object cache: set-to-group, and the region navmesh's verdict on permanence
+#include "ssparcelfacts.h"   // <SS:Nexii/> the shared parcel cache: owner, group and auto-return for the land under an object
 #include "ssrocprobe.h"   // <SS:Nexii/> ROC Phase 1.5: only the full-update counter lives here now; the probe counter moved into probeCache so it can see all three outcomes
 
 #include "llagent.h"
@@ -398,8 +398,8 @@ void SSROCLedger::onRegionFileLoaded(U64 handle, SSROCFilePtr file)
         return;
     }
 
-    // <SS:Nexii/> Stage C's answers, seeded before a single sighting is recorded so the probe queue never asks about an object this region already answered for on a previous visit. FullID-keyed and epoch-independent, so unlike the local ids below they need no staleness pass.
-    ssROCGroupSeed(handle, file->mGroups);
+    // <SS:Nexii/> The shared object cache is primed with what this region answered on previous visits, before a single sighting is recorded, so the select probe never asks again about an object already answered for. FullID-keyed and epoch-independent, so unlike the local ids below these need no staleness pass.
+    for (const auto& pair : file->mGroups) ssObjectFactsSeedGroup(handle, pair.first, pair.second);
 
     // The id epoch the records on disk were written under, latched only once the file has been accepted as this region's. Kept beside the live one rather than compared here, because the handshake may not have arrived yet.
     rs->mFileCacheID = file->mLastCacheID;
@@ -749,8 +749,31 @@ void SSROCLedger::noteSighting(LLViewerRegion* regionp, U32 local_id, U32 crc, U
     // <SS:Nexii/> Stage B: the parcel under this object is a candidate for the throttled immunity probe. Roots only - a child's Pos is parent-relative (llvocache.cpp:701-706) and would file most of a linkset at the region origin. O(1), and it returns on one indexed byte for every sighting after the first in a given parcel, which is nearly all of them.
     if (facts.mParentLocalID == 0)
     {
-        ssROCParcelWant(regionp, facts.mPos);
-        ssROCGroupWant(regionp, facts.mLocalID, facts.mFullID, facts.mOwnerID, facts.mPos);
+        ssParcelFactsRequest(regionp, facts.mPos);
+
+        // The withdrawal filter is built only where a request would actually be queued. It captures three values and therefore costs a heap allocation, and this path runs thousands of times a second - paying for a functor that the very next line would discard is exactly the kind of cost that does not show up in a profile as itself.
+        if (ssObjectFactsWouldQueue(rs.mHandle, facts.mFullID))
+        {
+            const U64       want_handle = rs.mHandle;
+            const LLVector3 want_pos    = facts.mPos;
+            const LLUUID    want_owner  = facts.mOwnerID;
+
+            ssObjectFactsRequest(regionp, facts.mLocalID, facts.mFullID, false,
+                [want_handle, want_pos, want_owner]() -> bool
+                {
+                    LLViewerRegion* live = LLWorld::instanceExists() ? LLWorld::getInstance()->getRegionFromHandle(want_handle) : NULL;
+                    if (!live) return false;
+
+                    // No parcel answer yet, so ask anyway: the answer keeps, and asking now costs one message where asking after the parcel lands costs the same message plus a visit's delay.
+                    SSParcelFacts parcel;
+                    if (!ssParcelFactsGet(live, want_pos, parcel)) return true;
+
+                    // Two refusals, both free, and together they take most of a typical region off the wire. The parcel is set to no group, so the set-to-group bucket is empty by construction and no answer could match it; or the object's owner IS the parcel owner, so it is already immune by a leg that cost nothing.
+                    if (parcel.mGroupID.isNull()) return false;
+                    if (want_owner.notNull() && parcel.mOwnerID.notNull() && want_owner == parcel.mOwnerID) return false;
+                    return true;
+                });
+        }
     }
 
     auto known = rs.mByFullID.find(facts.mFullID);
@@ -876,6 +899,13 @@ F32 SSROCLedger::scoreRecord(const SSROCRecord& rec) const
         score += (F32)pw_bonus;
     }
 
+    // The region's own navigation mesh calls this walkable floor or a static obstacle. That is not an inference drawn from watching something sit still - it is a declaration by whoever built it, enforced by the simulator, and it names exactly the population this cache exists for: terrain furniture, buildings, roads, the walls a pathfinding character has to walk around. Objects that move are not permitted to shape a navmesh, so the claim polices itself, and it costs one HTTP request per region rather than a message per object.
+    if (rec.mRecordFlags & SSROC_REC_NAVMESH_STATIC)
+    {
+        static LLCachedControl<F32> navmesh_bonus(gSavedSettings, "SSROCNavmeshPermanentBonus", 0.25f);
+        score += (F32)navmesh_bonus;
+    }
+
     if (rec.mUpdateFlags & FLAGS_SCRIPTED)      score -= 0.10f;
     if (rec.mUpdateFlags & FLAGS_HANDLE_TOUCH)  score -= 0.05f;
 
@@ -910,9 +940,9 @@ bool SSROCLedger::hasImmunity(LLViewerRegion* regionp, const RegionState& rs, co
     const LLViewerParcelOverlay* overlay = regionp->getParcelOverlay();
     if (mine && overlay && overlay->isOwnedSelf(rec.mPos)) return true;
 
-    // Tier 1, one metered request per DISTINCT PARCEL per visit (ssrocparcel.cpp). This is the leg that covers other people's builds, which is the entire population this cache exists for - the overlay above can only ever answer for the agent's own land. A landowner's own content cannot be auto-returned from their own parcel, and that becomes decidable the moment the parcel's owner is known.
-    SSROCParcelFacts parcel_facts;
-    if (ssROCParcelLookup(regionp, rec.mPos, parcel_facts))
+    // Tier 1, one metered request per DISTINCT PARCEL per visit (ssparcelfacts.cpp, shared). This is the leg that covers other people's builds, which is the entire population this cache exists for - the overlay above can only ever answer for the agent's own land. A landowner's own content cannot be auto-returned from their own parcel, and that becomes decidable the moment the parcel's owner is known.
+    SSParcelFacts parcel_facts;
+    if (ssParcelFactsGet(regionp, rec.mPos, parcel_facts))
     {
         // Both sides must be real. A simulator that withholds the parcel owner from an agent with no rights there sends a null, and a blob whose Owner field was never populated stores a null - two nulls comparing equal would manufacture immunity for every object on every unanswered parcel, which is the one failure direction this gate must not have.
         if (rec.mOwnerID.notNull() && parcel_facts.mOwnerID.notNull() && rec.mOwnerID == parcel_facts.mOwnerID) return true;
@@ -921,11 +951,11 @@ bool SSROCLedger::hasImmunity(LLViewerRegion* regionp, const RegionState& rs, co
         if ((rec.mUpdateFlags & FLAGS_OBJECT_GROUP_OWNED) && rec.mOwnerID.notNull()
             && parcel_facts.mGroupID.notNull() && rec.mOwnerID == parcel_facts.mGroupID) return true;
 
-        // Tier 2, Stage C: the set-to-group bucket. An object's GroupID is in no cache blob and no object update - only an ObjectProperties reply carries it, which is what ssrocgroup.cpp goes and gets. Both sides must be real for the same reason as above: a parcel with no group and an object with no group must not compare equal into a credit.
-        LLUUID object_group;
-        if (ssROCGroupLookup(rs.mHandle, rec.mFullID, object_group)
-            && object_group.notNull() && parcel_facts.mGroupID.notNull()
-            && object_group == parcel_facts.mGroupID)
+        // Tier 2: the set-to-group bucket. An object's GroupID is in no cache blob and no object update - only an ObjectProperties reply carries it, which is what the shared object cache goes and gets. Both sides must be real for the same reason as above: a parcel with no group and an object with no group must not compare equal into a credit.
+        SSObjectFacts object_facts;
+        if (ssObjectFactsGet(rs.mHandle, rec.mFullID, object_facts)
+            && object_facts.mGroupID.notNull() && parcel_facts.mGroupID.notNull()
+            && object_facts.mGroupID == parcel_facts.mGroupID)
         {
             return true;
         }
@@ -1045,6 +1075,14 @@ void SSROCLedger::runPromotion(LLViewerRegion* regionp, RegionState& rs)
             {
                 rec.mRecordFlags |= SSROC_REC_OWNER_PUBLIC_WORKS;
             }
+        }
+
+        // The region's pathfinding table, where it has been swept. Latched onto the record rather than consulted at score time because the sweep only ever covers the agent's OWN region: a neighbour scored in the same pass has no table of its own, and must keep what an earlier visit as the agent region established rather than lose it. Where the sweep HAS spoken its answer is authoritative in both directions, so an object that stopped shaping the navmesh loses the mark.
+        SSObjectFacts nav_facts;
+        if (ssObjectFactsGet(rs.mHandle, rec.mFullID, nav_facts) && (nav_facts.mHave & SS_OBJFACTS_PATHFINDING))
+        {
+            if (nav_facts.isNavmeshPermanent()) rec.mRecordFlags |=  SSROC_REC_NAVMESH_STATIC;
+            else                                rec.mRecordFlags &= ~SSROC_REC_NAVMESH_STATIC;
         }
 
         rec.mScore = scoreRecord(rec);
@@ -1302,8 +1340,16 @@ bool SSROCLedger::onRegionRemoved(LLViewerRegion* regionp, SSROCRegionFile& file
         file.mManifest.swap(mined);
     }
 
-    // <SS:Nexii/> Stage C. Written unconditionally rather than only on a promoting visit, because unlike [MANIFEST] this is not derived from the records - it is the only copy of an answer that cost a message to obtain, and dropping it would mean asking the whole region again next visit.
-    ssROCGroupHarvest(handle, file.mGroups, 60000);
+    // <SS:Nexii/> The set-to-group answers, taken back out of the shared cache and stored with this region. Only for records the file actually holds: the shared cache belongs to the viewer, this file belongs to the object cache, and an answer about an object it is not remembering is not its to keep. Written unconditionally rather than only on a promoting visit because, unlike [MANIFEST], it is not derived from the records - it is the only copy of something that cost a message.
+    file.mGroups.clear();
+    file.mGroups.reserve(file.mRecords.size());
+    for (const SSROCRecord& stored : file.mRecords)
+    {
+        SSObjectFacts obj;
+        if (!ssObjectFactsGet(handle, stored.mFullID, obj)) continue;
+        if (!(obj.mHave & SS_OBJFACTS_PROPERTIES)) continue;
+        file.mGroups.push_back(std::make_pair(stored.mFullID, obj.mGroupID));
+    }
 
     // One line per region, and it is the whole field diagnostic for Phase 2a: without the reason histogram a three-hurdle gate cannot be debugged from a user's log.
     U32 blocked[SSROC_BLOCKED_COUNT] = { 0 };

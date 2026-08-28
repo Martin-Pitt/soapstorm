@@ -27,7 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "llviewerparcelmgr.h"
-#include "ssrocparcel.h"   // <SS:Nexii/> ROC Stage B: the immunity probe's private reply branch, below
+#include "ssparcelfacts.h"   // <SS:Nexii/> the shared parcel cache's private reply branch, below
 
 // Library includes
 #include "llaudioengine.h"
@@ -1668,18 +1668,25 @@ void LLViewerParcelMgr::processParcelProperties(LLMessageSystem *msg, void **use
         return;
     }
 
-    // <SS:Nexii> ROC Stage B. Harvested here and returned from here, NOT dispatched through the chain below, because the tail of this function drives parcel media, the music stream and the land floater off whichever parcel it decided to fill - the trailing else does exactly that for any sequence id it does not recognise. A probe reply that reached it would start a stranger's audio stream on every region entry. Only the seven fields the immunity gate reads are taken; the prim counts, access lists and covenant are read past.
-    if (sequence_id == SSROC_PARCEL_SEQ_ID)
+    // <SS:Nexii> The shared parcel cache. Harvested here and returned from here, NOT dispatched through the chain below, because the tail of this function drives parcel media, the music stream and the land floater off whichever parcel it decided to fill - the trailing else does exactly that for any sequence id it does not recognise. A background reply that reached it would start a stranger's audio stream on every region entry.
+    //
+    // Every field that is a property OF THE LAND is taken, not the handful the first consumer wanted: the object cache reads owner, group and auto-return, the weather work reads the DESCRIPTION for its own tags, and a reply costs the same message whichever fields are read out of it. The prim counts and access lists are still read past - those describe the viewer's own selection, not the land.
+    if (sequence_id == SS_PARCELFACTS_SEQ_ID)
     {
-        SSROCParcelFacts roc_facts;
-        msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_LocalID, roc_facts.mLocalID);
-        msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_OwnerID, roc_facts.mOwnerID);
-        msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_GroupID, roc_facts.mGroupID);
-        msg->getBOOLFast(_PREHASH_ParcelData, _PREHASH_IsGroupOwned, roc_facts.mGroupOwned);
-        msg->getS32("ParcelData", "OtherCleanTime", roc_facts.mCleanOtherTime);
-        msg->getVector3Fast(_PREHASH_ParcelData, _PREHASH_AABBMin, roc_facts.mAABBMin);
-        msg->getVector3Fast(_PREHASH_ParcelData, _PREHASH_AABBMax, roc_facts.mAABBMax);
-        ssROCParcelNoteReply(LLWorld::getInstance()->getRegion(msg->getSender()), roc_facts);
+        SSParcelFacts shared;
+        msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_LocalID, shared.mLocalID);
+        msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_OwnerID, shared.mOwnerID);
+        msg->getUUIDFast(_PREHASH_ParcelData, _PREHASH_GroupID, shared.mGroupID);
+        msg->getBOOLFast(_PREHASH_ParcelData, _PREHASH_IsGroupOwned, shared.mGroupOwned);
+        msg->getS32("ParcelData", "OtherCleanTime", shared.mCleanOtherTime);
+        msg->getS32Fast(_PREHASH_ParcelData, _PREHASH_Area, shared.mArea);
+        msg->getU32Fast(_PREHASH_ParcelData, _PREHASH_ParcelFlags, shared.mParcelFlags);
+        msg->getU8Fast(_PREHASH_ParcelData, _PREHASH_Category, shared.mCategory);
+        msg->getStringFast(_PREHASH_ParcelData, _PREHASH_Name, shared.mName);
+        msg->getStringFast(_PREHASH_ParcelData, _PREHASH_Desc, shared.mDescription);
+        msg->getVector3Fast(_PREHASH_ParcelData, _PREHASH_AABBMin, shared.mAABBMin);
+        msg->getVector3Fast(_PREHASH_ParcelData, _PREHASH_AABBMax, shared.mAABBMax);
+        ssParcelFactsNoteReply(LLWorld::getInstance()->getRegion(msg->getSender()), shared);
         return;
     }
     // </SS:Nexii>

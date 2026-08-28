@@ -29,8 +29,8 @@
 #include "llworld.h"
 #include "ssrocaux.h" // <SS:Nexii>
 #include "ssrocghost.h"
-#include "ssrocgroup.h"    // <SS:Nexii/> ROC Stage C
-#include "ssrocparcel.h"   // <SS:Nexii/> ROC Stage B // <SS:Nexii>
+#include "ssobjectfacts.h"   // <SS:Nexii/> the shared object cache
+#include "ssparcelfacts.h"   // <SS:Nexii/> the shared parcel cache // <SS:Nexii>
 #include "llrender.h"
 
 #include "indra_constants.h"
@@ -1162,8 +1162,9 @@ void LLWorld::updateRegions(F32 max_update_time)
     ssROCGhostTick();
 
     // Stage B's parcel probe drains here for the same reason: it is main-thread work with a per-second budget, and this is the one place per frame that already knows the region set is settled. It sends nothing at all until a region has been quiet for its delay, so a login burst costs no messages.
-    ssROCParcelTick();
-    ssROCGroupTick();
+    // The two shared fact caches drain here for the same reason: main-thread work with a per-second budget, and this is the one place per frame that already knows the region set is settled. Neither sends anything until a region has been quiet for its delay, so a login burst costs no messages. Neither is owned by the object cache - it is simply the only consumer so far.
+    ssParcelFactsTick();
+    ssObjectFactsTick();
     // </SS:Nexii>
 
     F32 max_time = llmin((F32)(max_update_time - update_timer.getElapsedTimeF32()), max_update_time * 0.25f);

@@ -186,12 +186,12 @@ set(viewer_SOURCE_FILES
     ssbc7store.cpp
     ssbc7storeevict.cpp
     ssbc7storeio.cpp
+    ssobjectfacts.cpp
+    ssparcelfacts.cpp
     ssrocaux.cpp
     ssroccache.cpp
     ssrocghost.cpp
-    ssrocgroup.cpp
     ssrocledger.cpp
-    ssrocparcel.cpp
     ssrocprobe.cpp
     ssrocvocache.cpp
     ssstatsview.cpp
@@ -1076,12 +1076,12 @@ set(viewer_HEADER_FILES
     ssbc7promote.h
     ssbc7serve.h
     ssbc7store.h
+    ssobjectfacts.h
+    ssparcelfacts.h
     ssrocaux.h
     ssroccache.h
     ssrocghost.h
-    ssrocgroup.h
     ssrocledger.h
-    ssrocparcel.h
     ssrocprobe.h
     ssrocvocache.h
     ssstatsview.h

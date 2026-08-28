@@ -74,6 +74,7 @@ enum ESSROCRecordFlags : U32
 
     // Local-id epoch. The simulator's CacheID names one local-id assignment epoch, and it is stored ONCE per file beside every record - so after a visit whose CacheID changed, the file carries the NEW CacheID next to records whose stored ids are still from the OLD one, because only the records the simulator actually mentioned that visit were re-keyed. Without these two bits the visit after that reads as mode A and would file a remembered object under a dead id, which is the one thing the whole design forbids. Neither bit set means a file written before this existed: legacy, treated as usable, so the format version does not move.
     SSROC_REC_ID_CURRENT         = 1 << 10, // the stored mLastLocalID came from the simulator's own stream under the CacheID this file was last saved with
+    SSROC_REC_NAVMESH_STATIC     = 1 << 12, // the region's own navigation mesh treats this object as walkable floor or a static obstacle - a declaration by whoever built it, enforced by the simulator, that it is permanent unmovable geometry. Nothing that moves is permitted to shape a navmesh, so the claim polices itself
     SSROC_REC_ID_STALE           = 1 << 11, // the CacheID changed while this record went unmentioned, so its stored local id names whatever the simulator has since put there - never inject it
 };
 
