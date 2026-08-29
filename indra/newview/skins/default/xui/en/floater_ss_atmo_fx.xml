@@ -416,6 +416,21 @@
       tool_tip="Fire a strike in front of the camera at a random visible distance, with a 3 second lead. Needs Atmo Magic and lightning enabled">
         <button.commit_callback function="SSAtmo.StrikeNow" />
     </button>
+    <check_box
+      control_name="SSAtmoDebugStrikeMarkers"
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="180"
+      name="CB_SSAtmoDebugStrikeMarkers"
+      label="Mark pending strikes"
+      tool_tip="Mark strikes while they are still being prepared: a ring where a sheet flash will bloom, a fork's future channel, a ground strike's channel plus its attachment box, each with a floating countdown. Same switch as the Simulation floater" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="40" top_delta="-2" height="20" width="110"
+      name="strike_ground_button"
+      label="Ground Strike"
+      tool_tip="Fire a cloud-to-ground strike where the camera ray through the lower third of the screen meets land or a build, with a 3 second lead. Needs Atmo Magic and lightning enabled">
+        <button.commit_callback function="SSAtmo.StrikeGround" />
+    </button>
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="8" height="16" width="122"

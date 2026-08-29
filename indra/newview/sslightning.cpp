@@ -33,15 +33,23 @@
 #include "llagent.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerdisplay.h"
 #include "llviewerregion.h"
+#include "llviewerwindow.h"
+#include "llworld.h"
 #include "llsurface.h"
+#include "llvector4a.h"
 #include "llhudobject.h"
 #include "llhudtext.h"
+#include "pipeline.h"
 
 namespace
 {
 
     const F32 ANTICIPATION_MAX_S = 8.f;
+
+    // Matches the settings.xml default: the anticipation effect ships switched on.
+    const F32 ANTICIPATION_DEFAULT_S = 3.f;
 
     const F32 LEADER_MIN_S = 0.05f;
     const F32 LEADER_MAX_S = 0.18f;
@@ -63,7 +71,17 @@ namespace
 
     const F32 ATTACH_SEARCH_M = 120.f;
 
-    const S32 MAX_CHANNEL_NODES = 700;
+    const S32 MAX_CHANNEL_NODES = 1000;
+
+    // Ground-strike branch exclusion: a cone about the main line's foot - apex held over
+    // the attachment, half-angle rolled per strike - and a floor above the ground.
+    const F32 BRANCH_CONE_APEX_M = 80.f;
+    const F32 BRANCH_CONE_HALF_ANGLE_MIN_DEG = 20.f;
+    const F32 BRANCH_CONE_HALF_ANGLE_MAX_DEG = 40.f;
+    const F32 BRANCH_FLOOR_MIN_M = 20.f;
+    const F32 BRANCH_FLOOR_MAX_M = 40.f;
+
+    const S32 BRANCH_TRIES = 4;
 
     const F32 PREPARE_LEAD_S = 10.f;
 
@@ -83,6 +101,20 @@ const char* SSLightning::kindName(SSStrikeKind k)
         case STRIKE_FORK:   return "fork";
         case STRIKE_GROUND: return "ground";
         default:            return "?";
+    }
+}
+
+// Debug overlay colour per strike kind - the markers and the countdown labels share it, so a glance tells the kinds apart.
+const LLColor4& SSLightning::kindDebugColor(SSStrikeKind k)
+{
+    static const LLColor4 sheet(0.2f, 0.9f, 1.f, 0.75f);
+    static const LLColor4 fork(1.f, 0.75f, 0.15f, 0.75f);
+    static const LLColor4 ground(1.f, 0.15f, 0.85f, 0.75f);
+    switch (k)
+    {
+        case STRIKE_SHEET:  return sheet;
+        case STRIKE_FORK:   return fork;
+        default:            return ground;
     }
 }
 
@@ -136,6 +168,25 @@ static void ss_kill_strike_text(SSStrike& strike)
         strike.mDebugText->markDead();
         strike.mDebugText = nullptr;
     }
+}
+
+// True when a point falls inside a ground strike's branch exclusion: below the floor held
+// over the attachment, or down in the cone about the main line's descent - apex 80m over
+// the ground with a half-angle rolled 20-40deg. Branches off the trunk are what this keeps
+// away from the strike point; the trunk itself never asks.
+static bool ss_branch_forbidden(const SSStrike& strike, const LLVector3& pos)
+{
+    if (!strike.mBranchLimits) return false;
+
+    if (pos.mV[VZ] < strike.mBranchFloorZ) return true;
+
+    const LLVector3 from_apex = pos - strike.mBranchConeApex;
+    const F32 along = from_apex * strike.mBranchConeAxis;
+    if (along <= 0.f) return false; // above the apex - the cone only reaches down
+
+    const F32 len = from_apex.magVec();
+    if (len < 0.01f) return true;
+    return (along / len) >= strike.mBranchConeDot;
 }
 
 // Drops all strikes and scheduling - the off switch.
@@ -249,8 +300,53 @@ void SSLightning::triggerNow()
     mPrepared = false;
 }
 
-// Builds a full strike for a future fire time: kind, placement, attachment, channel, and thunder handed to the soundscape with its lead.
-void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force_dist)
+// Debug button: a ground strike where the camera ray through the lower third of the view meets land or a build, so the mark lands where you are looking rather than wherever the roll put it.
+void SSLightning::triggerGroundNow()
+{
+    if (!gViewerWindow) return;
+
+    const LLRect& view = gViewerWindow->getWorldViewRectScaled();
+    const S32 x = (S32)view.getCenterX();
+    const S32 y = (S32)(view.mBottom + (F32)view.getHeight() / 3.f);
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const LLVector3 dir = gViewerWindow->mouseDirectionGlobal(x, y);
+
+    LLVector4a start, end, pos;
+    start.load3(cam.mV);
+    end.load3((cam + dir * MAX_FAR_CLIP).mV);
+
+    LLVector3 at;
+    bool found = false;
+    if (gPipeline.lineSegmentIntersectWorldGeometry(start, end, &pos))
+    {
+        at.set(pos.getF32ptr());
+        found = true;
+    }
+    else if (dir.mV[VZ] < -0.01f)
+    {
+        // Open sky along the whole ray (the surface is past the far clip): walk it down to where it dips under the terrain.
+        for (F32 d = 50.f; d < MAX_FAR_CLIP; d += 32.f)
+        {
+            const LLVector3 p = cam + dir * d;
+            if (p.mV[VZ] <= LLWorld::getInstance()->resolveLandHeightAgent(p))
+            {
+                at = p;
+                found = true;
+                break;
+            }
+        }
+    }
+    if (!found) return;
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    spawn(llmax(atmo->turbulence(), 0.6f), atmo->sharedTime() + 3.0, -1.f, -1.f, STRIKE_GROUND, &at);
+    mPrepared = false;
+}
+
+// Builds a full strike for a future fire time: kind, placement, attachment, channel, and thunder handed to the soundscape with its lead. A forced kind or ground point (debug buttons) skips the rolls for that part.
+void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force_dist,
+                        SSStrikeKind force_kind, const LLVector3* force_ground)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const F64 now = atmo->sharedTime();
@@ -262,27 +358,28 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     strike.mFireAt = fire_at;
     strike.mIntensity = llclamp(intensity, 0.f, 1.f);
 
-    F32 w[STRIKE_KIND_COUNT];
-    w[STRIKE_SHEET]  = llmax(settingF("SSAtmoLightningWeightSheet",  6.f), 0.f);
-    w[STRIKE_FORK]   = llmax(settingF("SSAtmoLightningWeightFork",   3.f), 0.f);
-    w[STRIKE_GROUND] = llmax(settingF("SSAtmoLightningWeightGround", 1.f), 0.f);
-
-    const F32 total = w[0] + w[1] + w[2];
-    if (total <= 0.f) return;
-
-    F32 roll = rng.frand(0.f, total);
-    strike.mKind = STRIKE_SHEET;
-    for (S32 k = 0; k < STRIKE_KIND_COUNT; ++k)
+    if (force_kind < STRIKE_KIND_COUNT)
     {
-        if (roll < w[k]) { strike.mKind = (SSStrikeKind)k; break; }
-        roll -= w[k];
+        strike.mKind = force_kind;
     }
+    else
+    {
+        F32 w[STRIKE_KIND_COUNT];
+        w[STRIKE_SHEET]  = llmax(settingF("SSAtmoLightningWeightSheet",  6.f), 0.f);
+        w[STRIKE_FORK]   = llmax(settingF("SSAtmoLightningWeightFork",   3.f), 0.f);
+        w[STRIKE_GROUND] = llmax(settingF("SSAtmoLightningWeightGround", 1.f), 0.f);
 
-    const F32 t = rng.frand();
-    const F32 dist = (force_dist >= 0.f) ? force_dist
-        : STRIKE_NEAR_M + (STRIKE_FAR_M - STRIKE_NEAR_M) * t * t;
-    const F32 bearing = (force_bearing > -10.f && force_dist >= 0.f) ? force_bearing
-        : rng.frand(0.f, F_TWO_PI);
+        const F32 total = w[0] + w[1] + w[2];
+        if (total <= 0.f) return;
+
+        F32 roll = rng.frand(0.f, total);
+        strike.mKind = STRIKE_SHEET;
+        for (S32 k = 0; k < STRIKE_KIND_COUNT; ++k)
+        {
+            if (roll < w[k]) { strike.mKind = (SSStrikeKind)k; break; }
+            roll -= w[k];
+        }
+    }
 
     const LLVector3 cam = gAgent.getPositionAgent();
 
@@ -295,49 +392,66 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         band_hi = llmax(field->cloudTopZ(), band_lo + 50.f);
     }
 
-    strike.mOrigin.set(cam.mV[VX] + cosf(bearing) * dist,
-                       cam.mV[VY] + sinf(bearing) * dist,
-                       band_lo + rng.frand(0.2f, 0.9f) * (band_hi - band_lo));
-
-    LLVector3 ground = strike.mOrigin;
-    ground.mV[VZ] = cam.mV[VZ];
-    if (LLViewerRegion* regionp = gAgent.getRegion())
+    if (force_ground)
     {
-        const LLVector3 local = ground - regionp->getOriginAgent();
-        if (local.mV[VX] >= 0.f && local.mV[VY] >= 0.f &&
-            local.mV[VX] < 256.f && local.mV[VY] < 256.f)
+        // Debug placement: the bolt anchors at the given point exactly - no terrain resolve, no attach-bias
+        // search - with the cloud origin straight above it.
+        strike.mGround = *force_ground;
+        strike.mOrigin.set(strike.mGround.mV[VX], strike.mGround.mV[VY],
+                           band_lo + rng.frand(0.2f, 0.9f) * (band_hi - band_lo));
+    }
+    else
+    {
+        const F32 t = rng.frand();
+        const F32 dist = (force_dist >= 0.f) ? force_dist
+            : STRIKE_NEAR_M + (STRIKE_FAR_M - STRIKE_NEAR_M) * t * t;
+        const F32 bearing = (force_bearing > -10.f && force_dist >= 0.f) ? force_bearing
+            : rng.frand(0.f, F_TWO_PI);
+
+        strike.mOrigin.set(cam.mV[VX] + cosf(bearing) * dist,
+                           cam.mV[VY] + sinf(bearing) * dist,
+                           band_lo + rng.frand(0.2f, 0.9f) * (band_hi - band_lo));
+
+        LLVector3 ground = strike.mOrigin;
+        ground.mV[VZ] = cam.mV[VZ];
+        if (LLViewerRegion* regionp = gAgent.getRegion())
         {
-            ground.mV[VZ] = regionp->getLand().resolveHeightRegion(local);
-        }
-    }
-    if (strike.mKind == STRIKE_GROUND)
-    {
-        const F32 penalty = llclamp(settingF("SSAtmoLightningAttachBias", 1.f), 0.f, 4.f);
-
-        F32 best_score = -1.0e9f;
-        LLVector3 best;
-        bool found = false;
-
-        SSWindFlowMap::getInstance()->forEachColumn(ground, ATTACH_SEARCH_M,
-            [&](const LLVector3& pos, F32 top)
+            const LLVector3 local = ground - regionp->getOriginAgent();
+            if (local.mV[VX] >= 0.f && local.mV[VY] >= 0.f &&
+                local.mV[VX] < 256.f && local.mV[VY] < 256.f)
             {
-                const F32 dx = pos.mV[VX] - ground.mV[VX];
-                const F32 dy = pos.mV[VY] - ground.mV[VY];
-                const F32 lateral = sqrtf(dx * dx + dy * dy);
+                ground.mV[VZ] = regionp->getLand().resolveHeightRegion(local);
+            }
+        }
+        if (strike.mKind == STRIKE_GROUND)
+        {
+            const F32 penalty = llclamp(settingF("SSAtmoLightningAttachBias", 1.f), 0.f, 4.f);
 
-                const F32 score = top - lateral * penalty;
-                if (score > best_score)
+            F32 best_score = -1.0e9f;
+            LLVector3 best;
+            bool found = false;
+
+            SSWindFlowMap::getInstance()->forEachColumn(ground, ATTACH_SEARCH_M,
+                [&](const LLVector3& pos, F32 top)
                 {
-                    best_score = score;
-                    best = pos;
-                    found = true;
-                }
-            });
+                    const F32 dx = pos.mV[VX] - ground.mV[VX];
+                    const F32 dy = pos.mV[VY] - ground.mV[VY];
+                    const F32 lateral = sqrtf(dx * dx + dy * dy);
 
-        if (found) ground = best;
+                    const F32 score = top - lateral * penalty;
+                    if (score > best_score)
+                    {
+                        best_score = score;
+                        best = pos;
+                        found = true;
+                    }
+                });
+
+            if (found) ground = best;
+        }
+
+        strike.mGround = ground;
     }
-
-    strike.mGround = ground;
 
     strike.mDistanceM = (strike.mOrigin - cam).magVec();
 
@@ -469,44 +583,84 @@ void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
     {
         if ((S32)strike.mChannel.size() >= MAX_CHANNEL_NODES) return;
 
-        const S32 pick = 1 + rng.rand((S32)along.size() - 2);
-        const S32 from_idx = along[(size_t)pick];
-        const SSStrikeNode& from_node = strike.mChannel[(size_t)from_idx];
-        if (from_node.mParent < 0) continue;
+        // A candidate that would come down inside the trunk cone or under the ground floor
+        // is aborted and re-rolled from another node - a few tries, then the branch is dropped.
+        for (S32 attempt = 0; attempt < BRANCH_TRIES; ++attempt)
+        {
+            const S32 pick = 1 + rng.rand((S32)along.size() - 2);
+            const S32 from_idx = along[(size_t)pick];
+            const SSStrikeNode& from_node = strike.mChannel[(size_t)from_idx];
+            if (from_node.mParent < 0) continue;
 
-        LLVector3 travel = from_node.mPos - strike.mChannel[(size_t)from_node.mParent].mPos;
-        if (travel.normalize() <= 0.f) continue;
+            LLVector3 travel = from_node.mPos - strike.mChannel[(size_t)from_node.mParent].mPos;
+            if (travel.normalize() <= 0.f) continue;
 
-        const F32 vertical = fabsf(travel.mV[VZ]);
-        LLVector3 dir = travel;
-        dir.mV[VX] += rng.frand(-0.55f, 0.55f);
-        dir.mV[VY] += rng.frand(-0.55f, 0.55f);
-        dir.mV[VZ] += rng.frand(-0.35f, 0.15f) * llmax(vertical, 0.25f);
-        if (dir.normalize() <= 0.f) continue;
+            const F32 vertical = fabsf(travel.mV[VZ]);
+            LLVector3 dir = travel;
+            dir.mV[VX] += rng.frand(-0.55f, 0.55f);
+            dir.mV[VY] += rng.frand(-0.55f, 0.55f);
+            dir.mV[VZ] += rng.frand(-0.35f, 0.15f) * llmax(vertical, 0.25f);
+            if (dir.normalize() <= 0.f) continue;
 
-        const F32 reach = llclamp(rng.frand(0.10f, 0.30f) * run_len, 30.f, 900.f);
-        const LLVector3 end = from_node.mPos + dir * reach;
+            const F32 reach = llclamp(rng.frand(0.10f, 0.30f) * run_len, 30.f, 900.f);
+            const LLVector3 end = from_node.mPos + dir * reach;
 
-        const F32 t0 = from_node.mReachedAt;
-        const F32 t1 = llmin(1.f, t0 + 0.12f * (F32)depth);
+            if (ss_branch_forbidden(strike, end)) continue;
 
-        std::vector<S32> sub;
-        growPath(strike, from_idx, from_node.mPos, end,
-                 llmax(levels - 1, 1),
-                 from_node.mWidth * 0.55f, from_node.mWidth * 0.2f,
-                 t0, t1, false, rng, sub);
+            const F32 t0 = from_node.mReachedAt;
+            const F32 t1 = llmin(1.f, t0 + 0.12f * (F32)depth);
 
-        growBranches(strike, sub, depth - 1, llmax(levels - 1, 1),
-                     intensity * 0.75f, rng, fecundity);
+            const size_t grown = strike.mChannel.size();
+
+            std::vector<S32> sub;
+            growPath(strike, from_idx, from_node.mPos, end,
+                     llmax(levels - 1, 1),
+                     from_node.mWidth * 0.55f, from_node.mWidth * 0.2f,
+                     t0, t1, false, rng, sub);
+
+            // The midpoint wander can still carry the run into the cone or under the floor:
+            // roll the grown nodes back and try somewhere else.
+            bool rejected = false;
+            for (const S32 idx : sub)
+            {
+                if (ss_branch_forbidden(strike, strike.mChannel[(size_t)idx].mPos))
+                {
+                    rejected = true;
+                    break;
+                }
+            }
+            if (rejected)
+            {
+                strike.mChannel.resize(grown);
+                continue;
+            }
+
+            growBranches(strike, sub, depth - 1, llmax(levels - 1, 1),
+                         intensity * 0.75f, rng, fecundity);
+            break;
+        }
     }
 }
 
-// Chooses the morphology (spider, bidirectional crawler, cloud-to-air, or ground trunk) and grows the whole channel.
+// Chooses the morphology (spider, bidirectional crawler, cloud-to-air, or ground trunk with a fork-style cloud spread) and grows the whole channel.
 void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 {
     SSRandStream rng((U32)(strike.mFireAt * 7919.0) ^ 0xfa11u);
 
     const bool to_ground = (strike.mKind == STRIKE_GROUND);
+
+    if (to_ground)
+    {
+        // Hold forked channels off the strike point: a cone about the main line's descent,
+        // apex 80m over the attachment with a 20-40deg half-angle, and a floor 20-40m over it.
+        LLVector3 axis = strike.mGround - strike.mOrigin;
+        if (axis.normalize() <= 0.f) axis.set(0.f, 0.f, -1.f);
+        strike.mBranchLimits = true;
+        strike.mBranchConeAxis = axis;
+        strike.mBranchConeApex = strike.mGround + LLVector3(0.f, 0.f, BRANCH_CONE_APEX_M);
+        strike.mBranchConeDot = cosf(rng.frand(BRANCH_CONE_HALF_ANGLE_MIN_DEG, BRANCH_CONE_HALF_ANGLE_MAX_DEG) * DEG_TO_RAD);
+        strike.mBranchFloorZ = strike.mGround.mV[VZ] + rng.frand(BRANCH_FLOOR_MIN_M, BRANCH_FLOOR_MAX_M);
+    }
 
     S32 levels = 3;
     if (strike.mDistanceM < 800.f)       levels = 6;
@@ -520,12 +674,13 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     if (rng.frand() < (to_ground ? 0.25f : 0.35f))
     {
+        // All primary geometry grows before any branches - the horizontal spread must not
+        // be left to fight the trunk's forks for the last channel nodes.
+        std::vector<S32> trunk;
         if (to_ground)
         {
-            std::vector<S32> trunk;
             growPath(strike, -1, strike.mOrigin, strike.mGround, levels,
                      1.f, 0.6f, 0.f, 1.f, true, rng, trunk);
-            growBranches(strike, trunk, depth, levels, intensity, rng);
         }
 
         const S32 arm_levels = llmax(levels - 2, 3);
@@ -541,6 +696,10 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
                 + LLVector3(cosf(bearing) * reach, sinf(bearing) * reach, rng.frand(-120.f, 120.f));
             growPath(strike, -1, strike.mOrigin, tip, arm_levels,
                      0.85f, 0.3f, 0.f, 1.f, !to_ground && a == 0, rng, arm_nodes[(size_t)a]);
+        }
+        if (to_ground)
+        {
+            growBranches(strike, trunk, depth, levels, intensity, rng);
         }
         for (S32 a = 0; a < arms; ++a)
         {
@@ -582,6 +741,30 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
     growPath(strike, -1, strike.mOrigin, tip, levels,
              1.f, 0.6f, 0.f, 1.f, true, rng, trunk);
 
+    if (to_ground)
+    {
+        // Horizontal spread off the top, fork-style: a run out of the origin in each
+        // direction, so a ground bolt carries the cloud-level channel a fork does instead
+        // of standing as a bare vertical line.
+        const S32 arm_levels = llmax(levels - 2, 3);
+        const F32 base_bearing = rng.frand(0.f, F_TWO_PI);
+
+        std::vector<std::vector<S32>> runs(2);
+        for (S32 r = 0; r < 2; ++r)
+        {
+            const F32 run_bearing = base_bearing + (F32)r * F_PI + rng.frand(-0.5f, 0.5f);
+            const F32 reach = rng.frand(400.f, 1300.f);
+            const LLVector3 run_tip = strike.mOrigin
+                + LLVector3(cosf(run_bearing) * reach, sinf(run_bearing) * reach, rng.frand(-120.f, 120.f));
+            growPath(strike, -1, strike.mOrigin, run_tip, arm_levels,
+                     0.85f, 0.3f, 0.f, 1.f, false, rng, runs[(size_t)r]);
+        }
+        for (S32 r = 0; r < 2; ++r)
+        {
+            growBranches(strike, runs[(size_t)r], depth, arm_levels, intensity * 0.85f, rng, 2.f);
+        }
+    }
+
     growBranches(strike, trunk, depth, levels, intensity, rng);
 }
 
@@ -596,7 +779,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
     const S32 strokes = RETURN_STROKES_MIN + rng.rand(RETURN_STROKES_MAX - RETURN_STROKES_MIN + 1);
 
     const F32 charge_s = SSAtmoMagic::getInstance()->lightningCharge()
-        ? llclamp(settingF("SSAtmoLightningAnticipation", 0.f), 0.f, ANTICIPATION_MAX_S)
+        ? llclamp(settingF("SSAtmoLightningAnticipation", ANTICIPATION_DEFAULT_S), 0.f, ANTICIPATION_MAX_S)
         : 0.f;
     if (charge_s > 0.f && strike.mT < -leader_s)
     {
@@ -682,7 +865,20 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
         }
         if (strike.mDebugText)
         {
-            strike.mDebugText->setPositionAgent(strike.mGround + LLVector3(0.f, 0.f, 4.f));
+            // Ground strikes are labelled at the attachment; sheet and fork live in the sky, so float the countdown at their centre instead - sheet at the flash origin, fork at the channel's centroid.
+            LLVector3 label_pos = strike.mGround + LLVector3(0.f, 0.f, 4.f);
+            if (strike.mKind == STRIKE_SHEET)
+            {
+                label_pos = strike.mOrigin;
+            }
+            else if (strike.mKind == STRIKE_FORK && !strike.mChannel.empty())
+            {
+                LLVector3 centre;
+                for (const SSStrikeNode& node : strike.mChannel) centre += node.mPos;
+                label_pos = centre / (F32)strike.mChannel.size();
+            }
+            strike.mDebugText->setPositionAgent(label_pos);
+            strike.mDebugText->setColor(kindDebugColor(strike.mKind));
             strike.mDebugText->setString(llformat("%s strike in %.1fs%s",
                 kindName(strike.mKind), -strike.mT,
                 strike.mCharge > 0.f ? llformat("  charge %.0f%%", strike.mCharge * 100.f).c_str() : ""));

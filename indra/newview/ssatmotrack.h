@@ -64,8 +64,8 @@ struct SSAtmoTrackConfig
     F32 mLightningCoreWhite = 0.85f;
 
     bool mLightning = true;
-    bool mLightningCharge = false;
-    bool mLightningSparks = false;
+    bool mLightningCharge = true;
+    bool mLightningSparks = true;
     F32 mLightningIntervalMin = -1.f;
     F32 mLightningIntervalMax = -1.f;
     F32 mLightningIntensity = -1.f;

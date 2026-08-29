@@ -12660,8 +12660,9 @@ void initialize_spellcheck_menu()
     LLUICtrl::CommitCallbackRegistry::Registrar& commit = LLUICtrl::CommitCallbackRegistry::currentRegistrar();
     LLUICtrl::EnableCallbackRegistry::Registrar& enable = LLUICtrl::EnableCallbackRegistry::currentRegistrar();
 
-    // <SS:Nexii> Atmo Magic: the Effects & LOD floater's debug strike button; registered here because that floater is a plain LLFloater with no class of its own to hang a callback on.
+    // <SS:Nexii> Atmo Magic: the Effects & LOD floater's debug strike buttons; registered here because that floater is a plain LLFloater with no class of its own to hang a callback on.
     commit.add("SSAtmo.StrikeNow", [](LLUICtrl*, const LLSD&) { SSLightning::getInstance()->triggerNow(); });
+    commit.add("SSAtmo.StrikeGround", [](LLUICtrl*, const LLSD&) { SSLightning::getInstance()->triggerGroundNow(); });
     // </SS:Nexii>
     commit.add("SpellCheck.ReplaceWithSuggestion", boost::bind(&handle_spellcheck_replace_with_suggestion, _1, _2));
     enable.add("SpellCheck.VisibleSuggestion", boost::bind(&visible_spellcheck_suggestion, _1, _2));

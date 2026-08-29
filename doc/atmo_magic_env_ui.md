@@ -115,6 +115,12 @@ The transition interpolates over roughly 200ms on both the scale and the marker 
 reads as diving into the selected track rather than as the widget swapping its contents. Re-fitting
 happens on drag commit, never during a drag, so the axis cannot move under the cursor.
 
+The fit reads decks through the same auto derivation the renderer resolves, so a deck with `Auto`
+ticked tracks its height rather than the stale authored row it greys out. The fit's own bottom and
+top round to the nearest 256m: an auto deck's height wanders with moisture and convection, and an
+exact fit would glide the whole scale under every step of that drift, where a quantised one only
+moves once the content crosses a block boundary.
+
 Space and Dome are fixed anchors excluded from the fit. The dome is a backdrop rather than a placed
 layer, its height is frequently on `mAuto`, and a cirrus dome at 6km would otherwise squash the
 decks being edited into the bottom eighth of the rail.

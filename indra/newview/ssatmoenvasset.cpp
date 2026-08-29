@@ -80,8 +80,8 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     if (sd.has("gust_veer"))   mGustVeer.fromLLSD(sd["gust_veer"], 0.f);
 
     mLightningEnabled = sd.has("lightning_enabled") ? sd["lightning_enabled"].asBoolean() : true;
-    mLightningCharge  = sd.has("lightning_charge")  ? sd["lightning_charge"].asBoolean()  : false;
-    mLightningSparks  = sd.has("lightning_sparks")  ? sd["lightning_sparks"].asBoolean()  : false;
+    mLightningCharge  = sd.has("lightning_charge")  ? sd["lightning_charge"].asBoolean()  : true;
+    mLightningSparks  = sd.has("lightning_sparks")  ? sd["lightning_sparks"].asBoolean()  : true;
 
     mLightningAuto = sd.has("lightning_auto") ? sd["lightning_auto"].asBoolean() : true;
     if (sd.has("lightning_intensity")) mLightningIntensity.fromLLSD(sd["lightning_intensity"], 0.f);

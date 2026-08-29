@@ -27,6 +27,7 @@
 #include "llsingleton.h"
 #include "v3math.h"
 #include "v3color.h"
+#include "v4color.h"
 #include "v4math.h"
 
 #include <vector>
@@ -76,6 +77,14 @@ struct SSStrike
 
     F32 mChannelBrightness = 0.f;
 
+    // Branch exclusion for ground strikes, filled in by buildChannel: a cone about the
+    // main line's foot and a floor over the attachment that forked channels must stay out of.
+    bool mBranchLimits = false;
+    LLVector3 mBranchConeApex;
+    LLVector3 mBranchConeAxis;
+    F32 mBranchConeDot = 0.f;
+    F32 mBranchFloorZ = 0.f;
+
     static const S32 MAX_STROKES = 4;
     S32 mStrokeCount = 0;
     F32 mStrokeAt[MAX_STROKES] = { 0.f };
@@ -116,14 +125,18 @@ public:
 
     void triggerNow();
 
+    void triggerGroundNow();
+
     void clear();
 
     S32 liveCount() const { return (S32)mStrikes.size(); }
     F64 nextStrikeIn() const;
     static const char* kindName(SSStrikeKind k);
+    static const LLColor4& kindDebugColor(SSStrikeKind k);
 
 private:
-    void spawn(F32 intensity, F64 fire_at, F32 force_bearing = -1.f, F32 force_dist = -1.f);
+    void spawn(F32 intensity, F64 fire_at, F32 force_bearing = -1.f, F32 force_dist = -1.f,
+               SSStrikeKind force_kind = STRIKE_KIND_COUNT, const LLVector3* force_ground = nullptr);
     void buildChannel(SSStrike& strike, F32 intensity);
 
     void growPath(SSStrike& strike, S32 parent,

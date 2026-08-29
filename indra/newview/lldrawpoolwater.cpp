@@ -363,8 +363,13 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // moon's own light after transmittance and brightness - the same figure
     // the glitter colour above is built from - lifted enough to read as a
     // path on the water rather than a suggestion of one.
+    //
+    // Gated on an ACTIVE Atmo environment like the angular radius above: a
+    // stock EEP sky's moon lights the water exactly as stock computed it.
     static const F32 SS_MOON_PUNCTUAL_GAIN = 3.0f;
-    LLColor3 moonlit = ss_punctual ? psky->getMoonDiffuse() * SS_MOON_PUNCTUAL_GAIN : LLColor3(0.f, 0.f, 0.f);
+    LLColor3 moonlit = (ss_punctual && SSAtmoEnvApplier::instance().isActive())
+        ? psky->getMoonDiffuse() * SS_MOON_PUNCTUAL_GAIN
+        : LLColor3(0.f, 0.f, 0.f);
     shader->uniform3fv(sMoonlit, 1, moonlit.mV);
     shader->uniform1f(sSunUp, sun_up ? 1.f : 0.f);
     // </SS:Nexii>

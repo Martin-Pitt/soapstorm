@@ -81,8 +81,8 @@ struct SSAtmoEnvWeather
     SSAtmoEnvKeyframed<F32> mGustVeer{0.f};
 
     bool mLightningEnabled = true;
-    bool mLightningCharge = false;
-    bool mLightningSparks = false;
+    bool mLightningCharge = true;
+    bool mLightningSparks = true;
 
     bool mLightningAuto = true;
     SSAtmoEnvKeyframed<F32> mLightningIntensity{0.f};
@@ -451,16 +451,6 @@ struct SSAtmoEnvTemplate
 
 const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates();
 
-// <SS:Nexii> Stages the environment's own precipitation types into the live preset list, so every
-// consumer resolves a type by name without needing to know which tier it came from. Called when an
-// environment is adopted; the manager drops them again on unload.
-void ssAtmoEnvStagePrecipTypes(const SSAtmoEnvAsset& asset);
-
-// Copies the definition of every shipped type the asset's keyframes name into the asset itself.
-// Run before saving: it is what makes an environment self-contained, so a region opened on a build
-// whose shipped set differs still renders the precipitation its author chose.
-void ssAtmoEnvEmbedReferencedPrecipTypes(SSAtmoEnvAsset& asset);
-
 // Returns false only for an unknown key. Everything the template names is overwritten on the track,
 // keyframes included - a seed is destructive by design, which is why the UI confirms first.
 bool ssAtmoEnvApplyTemplate(SSAtmoEnvTrack& track, const std::string& key);
@@ -501,5 +491,15 @@ struct SSAtmoEnvAsset
 
     bool fromLLSD(const LLSD& sd, std::string& out_error);
 };
+
+// <SS:Nexii> Stages the environment's own precipitation types into the live preset list, so every
+// consumer resolves a type by name without needing to know which tier it came from. Called when an
+// environment is adopted; the manager drops them again on unload.
+void ssAtmoEnvStagePrecipTypes(const SSAtmoEnvAsset& asset);
+
+// Copies the definition of every shipped type the asset's keyframes name into the asset itself.
+// Run before saving: it is what makes an environment self-contained, so a region opened on a build
+// whose shipped set differs still renders the precipitation its author chose.
+void ssAtmoEnvEmbedReferencedPrecipTypes(SSAtmoEnvAsset& asset);
 
 #endif

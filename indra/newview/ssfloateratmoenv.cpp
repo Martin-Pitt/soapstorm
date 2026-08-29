@@ -398,8 +398,23 @@ bool SSFloaterAtmoEnv::postBuild()
 
     // <SS:Nexii> The rail's mode follows the selected tab and nothing else, so the tab container is
     // the only thing that drives it - no separate zoom control to keep in step with the selection.
+    // The sync first, though: the rail's markers select tabs, so a tab clicked directly has to
+    // select or clear its marker the same way, or a pressed marker survives a tab click that
+    // moved elsewhere and a direct click never shows what it linked to.
     getChild<LLTabContainer>("atmo_tabs")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&) { refreshRailMode(); });
+        [this](LLUICtrl*, const LLSD&)
+        {
+            syncSelectionToTab();
+            refreshRailMode();
+        });
+    // The Clouds sub-tabs are part of the same bargain: Main/Under press their deck marker,
+    // Dome - like Space, a pinned anchor rather than a layer - clears it.
+    getChild<LLTabContainer>("clouds_sub_tabs")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            syncSelectionToTab();
+            refreshRailMode();
+        });
 
     for (S32 layer = 0; layer < LAYER_COUNT; ++layer)
     {
@@ -836,6 +851,29 @@ S32 SSFloaterAtmoEnv::railCentreForValue(F32 value) const
     return sld_rect.mBottom + bottom_edge + (S32)(t * (F32)(top_edge - bottom_edge));
 }
 
+// What a deck actually resolves to at the preview phase: the auto derivation off the track's
+// weather when the field owns its numbers, else the authored keyframes. The rail reads this
+// rather than the raw keyframes so its markers and fit follow the deck the renderer draws - an
+// auto deck's height wanders with moisture and convection, and the row it greys out does not.
+void SSFloaterAtmoEnv::effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under_deck,
+                                         F32& out_base, F32& out_thickness) const
+{
+    const SSAtmoEnvCloudField& field = under_deck ? track.mUnderField : track.mCloudField;
+
+    if (field.mAuto)
+    {
+        F32 coverage, dark;
+        SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(
+            track.mWeather.mMoisture.valueAt(mPreviewPhase),
+            track.mWeather.mConvection.valueAt(mPreviewPhase),
+            out_base, out_thickness, coverage, dark);
+        return;
+    }
+
+    out_base      = field.mBaseHeightM.valueAt(mPreviewPhase);
+    out_thickness = field.mBaseThicknessM.valueAt(mPreviewPhase);
+}
+
 // The altitude band the rail covers in layer mode: everything placed inside the selected track,
 // padded, with a floor on the span so a flat stack does not collapse to a point. The dome is
 // excluded deliberately - it is a backdrop pinned above the scale, and a cirrus dome at 6km would
@@ -863,15 +901,17 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
 
     const F64 phase = mPreviewPhase;
 
-    const F32 main_base = track.mCloudField.mBaseHeightM.valueAt(phase);
-    include(main_base);
-    include(main_base + track.mCloudField.mBaseThicknessM.valueAt(phase));
+    F32 base, thickness;
+
+    effectiveDeckSpan(track, false, base, thickness);
+    include(base);
+    include(base + thickness);
 
     if (track.mUnderField.mEnabled)
     {
-        const F32 under_base = track.mUnderField.mBaseHeightM.valueAt(phase);
-        include(under_base);
-        include(under_base + track.mUnderField.mBaseThicknessM.valueAt(phase));
+        effectiveDeckSpan(track, true, base, thickness);
+        include(base);
+        include(base + thickness);
     }
 
     if (track.mWater.mEnabled)
@@ -890,6 +930,20 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
     const F32 pad = 0.08f * (hi - lo);
     out_min = lo - pad;
     out_max = hi + pad;
+
+    // Quantise the fit to 256m blocks. The fit re-runs on every poll, and an auto deck's height
+    // wanders with moisture and convection, so an exact fit glides the whole scale under even a
+    // small drift; rounding keeps it still until the content actually crosses a block boundary.
+    // Rounding can land both bounds of a near-minimum span on one block, so spread a collapsed
+    // fit back out symmetrically.
+    static const F32 FIT_BLOCK = 256.f;
+    out_min = FIT_BLOCK * llround(out_min / FIT_BLOCK);
+    out_max = FIT_BLOCK * llround(out_max / FIT_BLOCK);
+    if (out_max - out_min < RAIL_MIN_SPAN)
+    {
+        out_min -= 0.5f * FIT_BLOCK;
+        out_max += 0.5f * FIT_BLOCK;
+    }
 }
 
 F32 SSFloaterAtmoEnv::weatherReferenceSurface() const
@@ -932,8 +986,9 @@ S32 SSFloaterAtmoEnv::weatherDeliveringDeck() const
     }
 
     const F32 surface = weatherReferenceSurface();
-    const F32 main_base  = track.mCloudField.mBaseHeightM.valueAt(mPreviewPhase);
-    const F32 under_base = track.mUnderField.mBaseHeightM.valueAt(mPreviewPhase);
+    F32 main_base, main_thickness, under_base, under_thickness;
+    effectiveDeckSpan(track, false, main_base, main_thickness);
+    effectiveDeckSpan(track, true, under_base, under_thickness);
 
     const bool under_above = track.mUnderField.mEnabled && under_base > surface;
     if (under_above && under_base <= main_base) return LAYER_UNDER;
@@ -954,8 +1009,13 @@ F32 SSFloaterAtmoEnv::layerAltitude(S32 layer) const
     switch (layer)
     {
     case LAYER_WATER: return track.mWater.mHeight.valueAt(mPreviewPhase);
-    case LAYER_MAIN:  return track.mCloudField.mBaseHeightM.valueAt(mPreviewPhase);
-    case LAYER_UNDER: return track.mUnderField.mBaseHeightM.valueAt(mPreviewPhase);
+    case LAYER_MAIN:
+    case LAYER_UNDER:
+    {
+        F32 base, thickness;
+        effectiveDeckSpan(track, layer == LAYER_UNDER, base, thickness);
+        return base;
+    }
     default: return 0.f;
     }
 }
@@ -981,6 +1041,46 @@ bool SSFloaterAtmoEnv::layerPresent(S32 layer) const
 // Which mode the rail should be in, driven entirely by the selected tab, and the widget swap that
 // goes with it. The author never asks for a zoom level: Track shows the region, everything else
 // shows the track you are inside.
+// Tab to rail, the reverse half of selectTrack/selectLayer. A tab clicked directly resolves the
+// marker it is linked to: Water presses the water marker, Clouds presses whichever deck its
+// sub-tabs are showing, and tabs with nothing on the rail - Weather, Sky, Space, Look, and Dome
+// inside Clouds, a pinned anchor rather than a layer - clear the pressed one. Track reselects the
+// selected track's own marker, which refreshTrackRail re-applies from mSelectedTrackIndex. Runs
+// ahead of refreshRailMode, which re-applies the toggle states from the resolved selection.
+void SSFloaterAtmoEnv::syncSelectionToTab()
+{
+    LLTabContainer* tabs = getChild<LLTabContainer>("atmo_tabs");
+    const LLPanel* current = tabs->getCurrentPanel();
+
+    if (ss_tab_is(current, "water_tab", "panel_ss_atmo_env_water"))
+    {
+        mSelectedLayer = layerPresent(LAYER_WATER) ? LAYER_WATER : LAYER_NONE;
+        return;
+    }
+
+    if (ss_tab_is(current, "clouds_tab", "panel_ss_atmo_env_clouds"))
+    {
+        const LLPanel* sub = getChild<LLTabContainer>("clouds_sub_tabs")->getCurrentPanel();
+        if (ss_tab_is(sub, "clouds_under_tab", "panel_ss_atmo_env_clouds_under"))
+        {
+            // The main deck is always present, so a stale Under selection on a track whose
+            // second deck went away still has something legitimate to fall back to.
+            mSelectedLayer = layerPresent(LAYER_UNDER) ? LAYER_UNDER : LAYER_MAIN;
+        }
+        else if (ss_tab_is(sub, "clouds_main_tab", "panel_ss_atmo_env_clouds_main"))
+        {
+            mSelectedLayer = LAYER_MAIN;
+        }
+        else
+        {
+            mSelectedLayer = LAYER_NONE;
+        }
+        return;
+    }
+
+    mSelectedLayer = LAYER_NONE;
+}
+
 void SSFloaterAtmoEnv::refreshRailMode()
 {
     LLTabContainer* tabs = getChild<LLTabContainer>("atmo_tabs");
@@ -1102,7 +1202,7 @@ void SSFloaterAtmoEnv::refreshLayerRail()
             slider->addSlider(llclamp(altitude, mRailMin, mRailMax), llformat("layer%d", i));
         }
 
-        button->setLabel(LAYER_LABELS[i]);
+        button->setLabel(std::string(LAYER_LABELS[i]));
         button->setToggleState(i == mSelectedLayer);
         label->setText(llformat("%.0fm", altitude));
 

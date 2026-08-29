@@ -26905,13 +26905,13 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoLightningAnticipation</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: seconds of gathering charge before a strike - crackle and sparks at the point about to be hit. Zero is what real weather does; higher values are a fantasy-weather effect that telegraphs the strike.</string>
+    <string>Atmo Magic: seconds of gathering charge before a strike - crackle, sparks and corona at the point about to be hit. Zero is what real weather does; the default 3.0 is a fantasy-weather effect that telegraphs the strike. Capped at 8.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>0.0</real>
+    <real>3.0</real>
   </map>
   <key>SSAtmoLightningAttachBias</key>
   <map>

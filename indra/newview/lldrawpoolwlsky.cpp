@@ -85,18 +85,34 @@ static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
 // set. The VALUE lives in the shader const table (gShaderConstsVal in llglslshader.cpp) rather than
 // here, so there is one number to keep honest; this side only ever passes the gate.
 static LLStaticHashedString sHorizonClip("ss_horizon_clip");
+
+// <SS:Nexii> The sky dome's below-horizon ray treatment (skyV.glsl): 1 mirrors
+// below-horizon rays instead of stock's -32000 collapse, 0 is exactly stock.
+// Zero unless an ACTIVE Atmo environment is driving the sky, so an enabled-but-
+// idle viewer's plain EEP sky shades below the horizon the way stock always has.
+static LLStaticHashedString sHorizonMirror("ss_horizon_mirror");
+
+// <SS:Nexii> The dome cloud layer's own depth slot (cloudsV.glsl): 0.99998 when
+// an ACTIVE Atmo environment is driving the sky - the slot exists to order the
+// layer against the Atmo discs - and 0 for stock's untouched projection squash.
+static LLStaticHashedString sCloudDepth("ss_cloud_depth");
 // </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
-// the stock sun and moon ones outright while it owns the sky, so a stock
-// environment goes through untouched code.
+// the stock sun and moon ones only while an Atmo environment owns the sky -
+// enabled but idle, the stock EEP discs go through untouched stock code.
 static bool ss_atmo_discs_active()
 {
-    // Whenever the master switch is on, active Atmo environment or not: the additive compositing is the point. A stock alpha-blended disc REPLACES the sky behind it, and against a hot authored
-    // sunset glow that replacement is DARKER than the surroundings - a dark cutout where the sun should be. Added, a disc can only ever brighten. Slot data falls back to a plain emissive sun and
-    // a phase-shaded moon at the bind sites when no environment is driving the sky.
+    // Gated on an ACTIVE Atmo environment, matching the cloud parallax below: an enabled-but-idle
+    // viewer falling back to a plain EEP sky must keep the stock discs, the stock alpha-blended
+    // compositing and the stock disc shaders, pixel for pixel. (A stock alpha-blended disc REPLACES
+    // the sky behind it, and against a hot authored sunset glow that replacement reads darker than
+    // the surroundings - which is exactly why the Atmo discs composite additively when the applier
+    // IS driving the sky.)
     static LLCachedControl<bool> ss_atmo(gSavedSettings, "SSAtmoEnabled", false);
-    return ss_atmo && gSSCelestialProgram.isComplete();
+    return ss_atmo
+           && SSAtmoEnvApplier::instance().isActive()
+           && gSSCelestialProgram.isComplete();
 }
 
 // The quad axes LLVOSky builds for a body at `dir`, rebuilt here because the
@@ -357,6 +373,11 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         const bool horizon_clip = atmo_applier.isActive() && atmo_applier.horizonClip();
         sky_shader->uniform1f(sHorizonClip, horizon_clip ? 1.f : 0.f);
 
+        // <SS:Nexii> The below-horizon ray mirror rides the same gate: only an
+        // active Atmo environment may depart from stock's -32000 collapse.
+        sky_shader->uniform1f(sHorizonMirror, atmo_applier.isActive() ? 1.f : 0.f);
+        // </SS:Nexii>
+
         /// Render the skydome
         renderDome(origin, camHeightLocal, sky_shader, 0.333f, horizon_clip);
 
@@ -507,6 +528,10 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
 
         // The layer's own altitude for the parallax scale - see SSAtmoEnvApplier::cloudDomeAltitudeMetres.
         cloudshader->uniform1f(sCloudAltM, SSAtmoEnvApplier::instance().cloudDomeAltitudeMetres());
+
+        // The layer's own depth slot, 0.99998 - or 0 for stock's untouched
+        // projection squash when no Atmo environment is driving the sky.
+        cloudshader->uniform1f(sCloudDepth, atmo_env_active ? 0.99998f : 0.f);
         // </SS:Nexii>
 
         /// Render the skydome
@@ -522,7 +547,11 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         // or parallax. Earlier passes here took it to 0.22 and then 0.32,
         // both of which moved the deck visibly to buy margin that was not
         // in short supply.
-        renderDome(camPosLocal, camHeightLocal, cloudshader, 0.3325f);
+        //
+        // Stock scale for a stock sky: with no Atmo discs there is nothing
+        // to order the layer against, so an idle EEP sky renders at the
+        // stock 0.333.
+        renderDome(camPosLocal, camHeightLocal, cloudshader, atmo_env_active ? 0.3325f : 0.333f);
 
         cloudshader->unbind();
 
@@ -635,13 +664,15 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
                 // The disc's own art carries its colour, and how bright it
                 // is comes from the light reaching it. A tint on top would
                 // be a third opinion; white leaves the other two alone.
-                // Plain-sky fallbacks: with no Atmo environment resolving the slots, the sun slot is simply a star.
-                const bool applier_on = atmo.isActive();
+                // The disc's own art carries its colour, and how bright it
+                // is comes from the light reaching it. A tint on top would
+                // be a third opinion; white leaves the other two alone.
                 ss_bind_disc(LLColor4::white,
-                             body_dir, applier_on ? atmo.sunSlotSunDirection() : body_dir,
-                             applier_on ? atmo.sunSlotSunlight() : 1.f,
-                             applier_on ? atmo.sunSlotEmissive() : true,
-                             applier_on ? atmo.sunSlotPhaseShaded() : false);
+                             body_dir,
+                             atmo.sunSlotSunDirection(),
+                             atmo.sunSlotSunlight(),
+                             atmo.sunSlotEmissive(),
+                             atmo.sunSlotPhaseShaded());
 
                 face->renderIndexed();
 
@@ -708,13 +739,11 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
                     tex_a ? tex_a : tex_b, LLTexUnit::TT_TEXTURE);
 
                 // White - see the note on the sun above.
-                // Plain-sky fallbacks: an ordinary moon - reflective, phase-shaded, lit by the sky's own sun.
-                const bool moon_applier_on = atmo.isActive();
                 ss_bind_disc(LLColor4::white, moon_sky->getMoonDirection(),
-                             moon_applier_on ? atmo.moonSunDirection() : moon_sky->getSunDirection(),
-                             moon_applier_on ? atmo.moonSlotSunlight() : 1.f,
-                             moon_applier_on ? atmo.moonSlotEmissive() : false,
-                             moon_applier_on ? atmo.moonSlotPhaseShaded() : true);
+                             atmo.moonSunDirection(),
+                             atmo.moonSlotSunlight(),
+                             atmo.moonSlotEmissive(),
+                             atmo.moonSlotPhaseShaded());
 
                 face->renderIndexed();
 

@@ -45,12 +45,26 @@ namespace
     const F32 SPARK_GRAVITY = 9.8f;
     const S32 SPARK_COUNT = 40;
 
+    // The pre-strike charge field: sparks live a fraction of a second, then respawn
+    // elsewhere (the duty cycle is at least double the life) until the strike fires.
+    const F32 CHARGE_SPARK_LIFE_S = 0.36f;
+    const S32 CHARGE_SPARK_MAX = 90;
+
+    // Corona discharge / St. Elmo's fire: ionized air reads blue-violet whatever colour
+    // the bolt itself is authored as.
+    const LLColor3 CORONA_COLOR(0.5f, 0.36f, 1.f);
+
     const F32 CORE_WIDTH_M = 2.2f;
     const F32 GLOW_WIDTH_MULT = 7.f;
 
     // One camera-faced quad segment - every bolt, spark and marker is built from these.
+    // side_a/side_b, when given, replace the quad's own perpendicular at that end: a joint
+    // hands the same merged side vector to both quads sharing a turn's corner so their
+    // corner edges coincide and the pieces read as one continuous line instead of two
+    // butted quads gapping and doubling around the bend.
     void ribbon(const LLVector3& a, const LLVector3& b, const LLVector3& cam,
-                F32 width_a, F32 width_b, F32 v0, F32 v1)
+                F32 width_a, F32 width_b, F32 v0, F32 v1,
+                const LLVector3* side_a = nullptr, const LLVector3* side_b = nullptr)
     {
         LLVector3 seg = b - a;
         LLVector3 mid = (a + b) * 0.5f;
@@ -58,10 +72,13 @@ namespace
         LLVector3 side = seg % view;
         if (side.normalize() <= 0.f) return;
 
-        const LLVector3 a0 = a - side * width_a;
-        const LLVector3 a1 = a + side * width_a;
-        const LLVector3 b0 = b - side * width_b;
-        const LLVector3 b1 = b + side * width_b;
+        const LLVector3& sa = side_a ? *side_a : side;
+        const LLVector3& sb = side_b ? *side_b : side;
+
+        const LLVector3 a0 = a - sa * width_a;
+        const LLVector3 a1 = a + sa * width_a;
+        const LLVector3 b0 = b - sb * width_b;
+        const LLVector3 b1 = b + sb * width_b;
 
         gGL.texCoord2f(0.f, v0); gGL.vertex3fv(a0.mV);
         gGL.texCoord2f(1.f, v0); gGL.vertex3fv(a1.mV);
@@ -248,7 +265,8 @@ void SSLightningRender::renderFlash()
     gSSLightningProgram.unbind();
 }
 
-// Draws every live strike: layered core and glow ribbons per return stroke, ground-charge shimmer, impact sparks, debug markers.
+// Draws every live strike: layered core and glow ribbons per return stroke, the gathering-charge
+// spark field with its corona haze, impact sparks, debug markers.
 void SSLightningRender::render()
 {
     SSLightning* lightning = SSLightning::getInstance();
@@ -337,6 +355,11 @@ void SSLightningRender::render()
     const LLColor3 CORE_COLOR = SSAtmoMagic::getInstance()->lightningCoreColor();
     const LLColor3 GLOW_COLOR = SSAtmoMagic::getInstance()->lightningColor();
 
+    // The charge field leans into its own physics: air breakdown is violet-blue regardless
+    // of the bolt's authored colour, so the sparks and haze read electric even in a red storm.
+    const LLColor3 SPARK_COLOR = CORONA_COLOR * 0.7f + GLOW_COLOR * 0.3f;
+    const LLColor3 CORONA_TINT = CORONA_COLOR * 0.85f + GLOW_COLOR * 0.15f;
+
     const bool sparks_on = SSAtmoMagic::getInstance()->lightningSparks();
 
     gGL.begin(LLRender::TRIANGLES);
@@ -367,6 +390,53 @@ void SSLightningRender::render()
 
             const F32 dist_scale = llmax(1.f, strike.mDistanceM / 1000.f);
 
+            // Merged corners. Each node with exactly one child is a turn, not a fork, so the
+            // quad ending there and the quad starting there share one side vector - the
+            // average of the two segments' own sides - and both quads' corner edges at the
+            // node land on the same two points. The overlap wedge on the inside of the turn
+            // and the notch on the outside both collapse into a single shared edge, which is
+            // all a vector line's corner join ever was. Forks (two or more children) and
+            // tips keep plain butts: there is no single "other side" to merge with.
+            const S32 node_n = (S32)strike.mChannel.size();
+            std::vector<S32> sole_child((size_t)node_n, -1);
+            for (S32 i = 0; i < node_n; ++i)
+            {
+                const S32 p = strike.mChannel[(size_t)i].mParent;
+                if (p >= 0)
+                {
+                    sole_child[(size_t)p] = (sole_child[(size_t)p] == -1) ? i : -2;
+                }
+            }
+            std::vector<LLVector3> joint_side((size_t)node_n, LLVector3::zero);
+            for (S32 i = 0; i < node_n; ++i)
+            {
+                const S32 c = sole_child[(size_t)i];
+                if (c < 0) continue;
+                if (strike.mChannel[(size_t)i].mParent < 0) continue;
+
+                // Both halves of the joint must be on screen for it to exist - the growing
+                // leader's leading quad stays plain-butt until its continuation arrives.
+                if (strike.mChannel[(size_t)i].mReachedAt > strike.mLeaderProgress
+                    || strike.mChannel[(size_t)c].mReachedAt > strike.mLeaderProgress) continue;
+
+                const LLVector3& p = strike.mChannel[(size_t)i].mPos;
+                const LLVector3 view = p - cam;
+                LLVector3 s_in = (p - strike.mChannel[(size_t)strike.mChannel[(size_t)i].mParent].mPos) % view;
+                LLVector3 s_out = (strike.mChannel[(size_t)c].mPos - p) % view;
+                s_in.normalize();
+                s_out.normalize();
+                LLVector3 merged = s_in + s_out;
+                if (merged.magVecSquared() < 1.e-10f)
+                {
+                    merged = s_in;
+                }
+                else
+                {
+                    merged.normalize();
+                }
+                joint_side[(size_t)i] = merged;
+            }
+
             for (S32 k = 0; k < strike.mStrokeCount; ++k)
             {
                 const F32 b = strike.mStrokeBright[k] * strike.mIntensity;
@@ -375,8 +445,10 @@ void SSLightningRender::render()
                 const LLVector3 off = wind
                     * (strike.mStrokeAt[k] * llclamp((F32)ribbon_drift, 0.f, 5.f));
 
-                for (const SSStrikeNode& node : strike.mChannel)
+                for (S32 i = 0; i < node_n; ++i)
                 {
+                    const SSStrikeNode& node = strike.mChannel[(size_t)i];
+
                     if (node.mParent < 0) continue;
 
                     if (node.mReachedAt > strike.mLeaderProgress) continue;
@@ -395,17 +467,25 @@ void SSLightningRender::render()
                     const F32 seg_len = (pb - pa).magVec();
                     const F32 v_span = seg_len / llmax(wa * 2.f, 0.001f);
 
+                    // The joint side lives on the shared node, so both quads of a turn read
+                    // the same vector from opposite ends of their common corner.
+                    const LLVector3* start_side = joint_side[(size_t)node.mParent].magVecSquared() > 0.f
+                        ? &joint_side[(size_t)node.mParent] : nullptr;
+                    const LLVector3* end_side = joint_side[(size_t)i].magVecSquared() > 0.f
+                        ? &joint_side[(size_t)i] : nullptr;
+
                     const F32 bo = b * occ;
                     gGL.color4f(GLOW_COLOR.mV[0] * bo * 0.22f,
                                 GLOW_COLOR.mV[1] * bo * 0.22f,
                                 GLOW_COLOR.mV[2] * bo * 0.22f, glow * bo * 0.3f);
                     ribbon(pa, pb, cam,
-                           wa * GLOW_WIDTH_MULT, wb * GLOW_WIDTH_MULT, 0.f, v_span);
+                           wa * GLOW_WIDTH_MULT, wb * GLOW_WIDTH_MULT, 0.f, v_span,
+                           start_side, end_side);
 
                     gGL.color4f(CORE_COLOR.mV[0] * bo,
                                 CORE_COLOR.mV[1] * bo,
                                 CORE_COLOR.mV[2] * bo, glow * bo);
-                    ribbon(pa, pb, cam, wa, wb, 0.f, v_span);
+                    ribbon(pa, pb, cam, wa, wb, 0.f, v_span, start_side, end_side);
                     mStats.mSegments++;
                 }
             }
@@ -414,31 +494,92 @@ void SSLightningRender::render()
         if (strike.mCharge > 0.001f)
         {
             const U32 seed = (U32)(strike.mFireAt * 271.0);
-            const S32 count = 6 + (S32)(strike.mCharge * 10.f);
             const F32 spread = 6.f * (1.2f - strike.mCharge);
+
+            // The ionizing field gathering around the attachment: a swarm of tiny sparks
+            // that each live a fraction of a second, sprint through a small erratic spiral
+            // arc and vanish. Entirely stateless - a spark's whole life is hashed out of
+            // (strike, index, respawn count) and the clock, so there is no per-spark state
+            // to tick and the field cannot desync from its strike.
+            const S32 count = (S32)(CHARGE_SPARK_MAX * strike.mCharge
+                                    * (0.4f + 0.6f * strike.mIntensity));
 
             for (S32 i = 0; i < count; ++i)
             {
-                const U32 h = seed + (U32)i * 97u;
+                const U32 h = seed + (U32)i * 71u;
 
-                const F32 phase = fmodf(now * (2.f + 3.f * hashUnit(h)) + hashUnit(h ^ 7u) * 7.f, 1.f);
-                const F32 flicker = powf(llmax(0.f, sinf(phase * F_TWO_PI)), 6.f);
-                if (flicker < 0.05f) continue;
+                // Very short life inside a longer cycle: the spark pops in, is gone for a
+                // while, reappears - the field shimmers by popping, not by glowing steadily.
+                const F32 life = CHARGE_SPARK_LIFE_S * (0.45f + 0.55f * hashUnit(h ^ 3u));
+                const F32 duty = 2.f + 2.5f * hashUnit(h ^ 5u);
+                const F32 offset = hashUnit(h ^ 7u);
 
-                LLVector3 pos = strike.mGround;
-                pos.mV[VX] += (hashUnit(h ^ 11u) - 0.5f) * 2.f * spread;
-                pos.mV[VY] += (hashUnit(h ^ 13u) - 0.5f) * 2.f * spread;
-                pos.mV[VZ] += hashUnit(h ^ 17u) * spread * 1.5f + 0.4f;
+                const F32 cycle = life * duty;
+                const F32 age = fmodf(now / cycle + offset, 1.f) * cycle;
+                if (age > life) continue;
 
-                const F32 a = strike.mCharge * flicker;
-                const F32 r = 0.06f + 0.1f * hashUnit(h ^ 19u);
+                // The respawn count folds into the hash, so every reappearance lands the
+                // arc somewhere new instead of retracing the same loop forever.
+                const U32 g = hash3(h ^ ((U32)(now / cycle + offset) * 31u + 97u));
 
-                LLVector3 tip = pos;
-                tip.mV[VZ] += r * 6.f;
+                // Birthplace: a disc around the attachment that contracts as the moment
+                // approaches, and denser near the ground than up in the air.
+                const F32 ang0 = hashUnit(g) * F_TWO_PI;
+                const F32 rad = spread * sqrtf(hashUnit(g ^ 11u));
+                const F32 field_h = 0.8f + spread * 0.8f;
+                const LLVector3 spawn = strike.mGround
+                    + LLVector3(cosf(ang0) * rad, sinf(ang0) * rad,
+                                0.3f + field_h * hashUnit(g ^ 13u) * hashUnit(g ^ 13u));
 
-                gGL.color4f(GLOW_COLOR.mV[0] * a, GLOW_COLOR.mV[1] * a,
-                            GLOW_COLOR.mV[2] * a, glow * a * 0.5f);
-                ribbon(pos, tip, cam, r, r * 0.4f, 0.f, 1.f);
+                // The arc's plane: a tilted spiral axis, so sparks climb, dive and
+                // corkscrew instead of all circling flat.
+                const F32 az = hashUnit(g ^ 17u) * F_TWO_PI;
+                const F32 tilt = (hashUnit(g ^ 19u) - 0.5f) * 1.9f;
+                const LLVector3 axis(cosf(az) * cosf(tilt), sinf(az) * cosf(tilt), sinf(tilt));
+                LLVector3 arc_a = axis % LLVector3::z_axis;
+                if (arc_a.normalize() <= 0.f) arc_a = LLVector3::x_axis;
+                LLVector3 arc_b = axis % arc_a;
+                arc_b.normalize();
+
+                // Snow sway, exaggerated and erratic: the winding angle wobbles and the
+                // radius breathes, so no arc is a circle and none read alike. The turn
+                // count scales with the life so every spark sweeps at a comparable clip -
+                // a shorter life is a tighter sprint, not a vibration. Both sway and
+                // breathe run on the clock, not on normalized life-time: a per-life term
+                // would oscillate a 160ms spark at 50Hz and alias into jitter.
+                const F32 spin = (1.5f + 2.5f * hashUnit(g ^ 23u)) * (life * 4.f) * F_TWO_PI
+                    * (hashUnit(g ^ 29u) < 0.5f ? -1.f : 1.f);
+                const F32 w1 = hashUnit(g ^ 31u) * F_TWO_PI;
+                const F32 r_arc = 0.1f + 0.35f * hashUnit(g ^ 37u);
+                const F32 sway_hz = 4.f + 5.f * hashUnit(g ^ 41u);
+                const F32 sway_amp = 0.7f + 0.9f * hashUnit(g ^ 43u);
+                const F32 breathe = 0.4f + 0.6f * hashUnit(g ^ 47u);
+                const F32 breathe_hz = 2.f + 2.f * hashUnit(g ^ 51u);
+                const LLVector3 drift = axis * (0.5f + 0.8f * hashUnit(g ^ 53u))
+                    + LLVector3(0.f, 0.f, 0.2f + 0.8f * hashUnit(g ^ 59u));
+
+                auto sparkPos = [&](F32 t) -> LLVector3
+                {
+                    const F32 u = llclamp(t / life, 0.f, 1.f);
+                    const F32 a = w1 + u * spin
+                        + sinf(t * sway_hz * F_TWO_PI + w1 * 3.f) * sway_amp;
+                    const F32 r = r_arc * (1.f - breathe
+                        + breathe * (0.5f + 0.5f * sinf(t * breathe_hz * F_TWO_PI + w1)));
+                    return spawn + drift * t + (arc_a * cosf(a) + arc_b * sinf(a)) * r;
+                };
+
+                // Squared sine envelope: snaps on, snaps off - each spark exists bright
+                // and brief, which is what a discharge in air is.
+                const F32 env = sinf(age / life * F_PI);
+                const F32 a = env * env * strike.mCharge;
+                if (a < 0.03f) continue;
+
+                const F32 r = 0.02f + 0.03f * hashUnit(g ^ 61u);
+
+                gGL.color4f(SPARK_COLOR.mV[0] * a, SPARK_COLOR.mV[1] * a,
+                            SPARK_COLOR.mV[2] * a, glow * a * 0.6f);
+                ribbon(sparkPos(llmax(0.f, age - 0.03f)), sparkPos(age), cam,
+                       r * 0.35f, r, 0.f, 1.f);
             }
         }
 
@@ -487,6 +628,60 @@ void SSLightningRender::render()
     gGL.end();
     gGL.flush();
 
+    // Corona discharge along the spark field: St. Elmo's fire. The same ionized air that
+    // throws the sparks also reads as a soft blue-violet haze hanging over the ground,
+    // blooming late in the buildup (charge squared) and sputtering slowly - patches of
+    // glow breathing on their own clocks rather than one pulsing blob. A second batch
+    // with the shader's disc falloff, because a haze wants a radial edge, not a ribbon's
+    // line core; back to ribbon mode before the debug markers below.
+    bool any_corona = false;
+    for (const SSStrike& s : lightning->strikes())
+    {
+        if (s.mCharge > 0.2f) { any_corona = true; break; }
+    }
+    if (any_corona)
+    {
+        gSSLightningProgram.uniform1f(s_radial, 1.f);
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (const SSStrike& strike : lightning->strikes())
+        {
+            if (strike.mCharge <= 0.2f) continue;
+            if (!strikeOnScreen(strike)) continue;
+
+            const U32 seed = (U32)(strike.mFireAt * 271.0) ^ 0xc0fau;
+            const S32 CORONA_DISCS = 4;
+            const F32 spread = 6.f * (1.2f - strike.mCharge);
+
+            for (S32 i = 0; i < CORONA_DISCS; ++i)
+            {
+                const U32 h = seed + (U32)i * 61u;
+
+                const F32 pulse = powf(llmax(0.f, sinf(now * (1.2f + 1.6f * hashUnit(h ^ 7u))
+                                                        + hashUnit(h ^ 9u) * 7.f)), 3.f);
+                const F32 a = strike.mCharge * strike.mCharge * pulse
+                    * (0.4f + 0.6f * strike.mIntensity);
+                if (a < 0.02f) continue;
+
+                const F32 ang = hashUnit(h) * F_TWO_PI;
+                const F32 rad = spread * (0.25f + 0.55f * hashUnit(h ^ 3u));
+                const LLVector3 pos = strike.mGround
+                    + LLVector3(cosf(ang) * rad, sinf(ang) * rad,
+                                0.25f + 1.2f * hashUnit(h ^ 5u));
+
+                const F32 r = spread * (0.3f + 0.3f * hashUnit(h ^ 11u));
+
+                gGL.color4f(CORONA_TINT.mV[0] * a * 0.5f, CORONA_TINT.mV[1] * a * 0.5f,
+                            CORONA_TINT.mV[2] * a * 0.5f, glow * a * 0.25f);
+                billboard(pos, r, cam);
+            }
+        }
+        gGL.end();
+        gGL.flush();
+
+        gSSLightningProgram.uniform1f(s_radial, 0.f);
+    }
+
     if (markers)
     {
         bool any_pending = false;
@@ -503,16 +698,32 @@ void SSLightningRender::render()
             gGL.getTexUnit(0)->bind(LLViewerFetchedTexture::sWhiteImagep);
             gGL.begin(LLRender::TRIANGLES);
 
-            const LLColor4 mark(1.f, 0.15f, 0.85f, 0.75f);
-
             for (const SSStrike& strike : lightning->strikes())
             {
                 if (strike.mT >= 0.f || strike.mDone) continue;
                 if (!strikeOnScreen(strike)) continue;
 
-                gGL.color4fv(mark.mV);
+                // One colour per kind, and only the geometry that kind actually has - a sheet has no
+                // channel and no attachment, so the old origin-to-ground line read as a down-strike.
+                gGL.color4fv(SSLightning::kindDebugColor(strike.mKind).mV);
 
                 const F32 mw = llmax(0.4f, strike.mDistanceM * 0.004f);
+
+                if (strike.mKind == STRIKE_SHEET)
+                {
+                    // In-cloud flash: ring the cloud the flash will bloom in.
+                    const F32 r = llmax(40.f, strike.mDistanceM * 0.06f);
+                    const S32 SIDES = 8;
+                    for (S32 e = 0; e < SIDES; ++e)
+                    {
+                        const F32 a0 = (F32)e / (F32)SIDES * F_TWO_PI;
+                        const F32 a1 = (F32)(e + 1) / (F32)SIDES * F_TWO_PI;
+                        ribbon(strike.mOrigin + LLVector3(cosf(a0) * r, sinf(a0) * r, 0.f),
+                               strike.mOrigin + LLVector3(cosf(a1) * r, sinf(a1) * r, 0.f),
+                               cam, mw, mw, 0.f, 1.f);
+                    }
+                    continue;
+                }
 
                 if (!strike.mChannel.empty())
                 {
@@ -527,6 +738,9 @@ void SSLightningRender::render()
                 {
                     ribbon(strike.mOrigin, strike.mGround, cam, mw, mw, 0.f, 1.f);
                 }
+
+                // Forks never reach the ground, so the attachment box is ground strikes only.
+                if (strike.mKind != STRIKE_GROUND) continue;
 
                 const F32 half = 7.f;
                 const LLVector3& g = strike.mGround;

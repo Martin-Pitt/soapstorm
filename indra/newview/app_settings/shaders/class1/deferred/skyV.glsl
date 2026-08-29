@@ -57,6 +57,13 @@ uniform vec3  blue_density;
 uniform float haze_horizon;
 uniform float haze_density;
 
+#ifdef SS_ATMO
+// <SS:Nexii> Below-horizon ray treatment: 1 mirrors the ray (Atmo look), 0 leaves
+// the stock -32000 collapse. Zero unless an ACTIVE Atmo environment is driving the
+// sky (lldrawpoolwlsky.cpp), so an enabled-but-idle viewer's EEP sky stays stock.
+uniform float ss_horizon_mirror;
+#endif
+
 uniform float cloud_shadow;
 uniform float density_multiplier;
 uniform float distance_multiplier;
@@ -111,10 +118,26 @@ void main()
     // degree above, so the haze simply carries on down. Continuous at the
     // horizon, and truer than black: what is actually down there is the
     // same air, seen along the same sort of path.
-    rel_pos.y = abs(rel_pos.y);
+    //
+    // Runtime-gated by ss_horizon_mirror (see the uniform note above): with
+    // the mirror off, the stock behaviour below is restored exactly - the
+    // -32000 branch stays compiled because the SS_ATMO variant serves both
+    // the idle (stock collapse) and active (mirror) cases per frame, and
+    // under the mirror it is simply unreachable: the abs keeps y >= 0.
+    // </SS:Nexii>
+#ifdef SS_ATMO
+    if (ss_horizon_mirror > 0.)
+    {
+        rel_pos.y = abs(rel_pos.y);
+    }
+#endif
     if (rel_pos.y > 0.)
     {
         rel_pos *= (max_y / rel_pos.y);
+    }
+    if (rel_pos.y < 0.)
+    {
+        rel_pos *= (-32000. / rel_pos.y);
     }
 
     // Normalized

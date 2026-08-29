@@ -76,8 +76,8 @@ struct SSAtmoEnvWeatherState
     F32 mLightningCoreWhite = 0.85f;
 
     bool mLightningEnabled = true;
-    bool mLightningCharge = false;
-    bool mLightningSparks = false;
+    bool mLightningCharge = true;
+    bool mLightningSparks = true;
 
     std::string mForecastText;
 };

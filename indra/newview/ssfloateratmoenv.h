@@ -111,6 +111,10 @@ private:
     static const S32 LAYER_COUNT = 3;
 
     void refreshRailMode();
+    // <SS:Nexii> Tab to rail: a tab clicked directly has to press the marker it belongs to, or
+    // clear the still-pressed one when nothing on the rail corresponds to it - the reverse half
+    // of the marker-to-tab selection the rail already does.
+    void syncSelectionToTab();
     void refreshLayerRail();
     void railRangeForTrack(F32& out_min, F32& out_max) const;
 
@@ -121,6 +125,12 @@ private:
     S32 weatherDeliveringDeck() const;
     F32 layerAltitude(S32 layer) const;
     bool layerPresent(S32 layer) const;
+    // Base and thickness a deck resolves to at the preview phase: the auto derivation off the
+    // track's weather when the field owns its numbers, else the authored keyframes. The rail
+    // reads this rather than the raw keyframes so markers, fit and weather bracket follow the
+    // deck the renderer draws - an auto deck's height wanders, and its authored row does not.
+    void effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under_deck,
+                           F32& out_base, F32& out_thickness) const;
 
     void selectLayer(S32 layer);
     void onClickLayerMarker(S32 layer);

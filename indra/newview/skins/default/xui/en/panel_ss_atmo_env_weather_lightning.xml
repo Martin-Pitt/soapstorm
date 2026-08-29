@@ -34,7 +34,7 @@
      width="360"
      name="lightning_charge_check"
      label="Gathering charge before a strike"
-     tool_tip="Crackle and sparks gathering in the air where a strike is about to land, seconds before it does. Nothing in real weather announces a strike; this is for skies that are not trying to be real. Off by default." />
+     tool_tip="Crackle, sparks and corona gathering in the air where a strike is about to land, seconds before it does. Nothing in real weather announces a strike; this is for skies that are not trying to be real. On by default." />
 
     <check_box
      follows="left|top"
@@ -45,7 +45,7 @@
      width="360"
      name="lightning_sparks_check"
      label="Sparks at the impact"
-     tool_tip="Sparks thrown outward where a cloud-to-ground strike lands. Off by default." />
+     tool_tip="Sparks thrown outward where a cloud-to-ground strike lands. On by default." />
 
     <text
      follows="left|top"

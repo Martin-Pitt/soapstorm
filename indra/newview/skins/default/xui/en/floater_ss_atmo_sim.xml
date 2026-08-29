@@ -117,7 +117,7 @@
      width="382"
      name="strike_marker_check"
      label="Mark pending lightning strikes"
-     tool_tip="Magenta ribbon along the bolt's future path, a box at the attachment point and a floating countdown while a strike is still being prepared - chosen to read against white storm cloud" />
+     tool_tip="Sheet strikes get a ring where the flash will bloom, forks their future channel, ground strikes the channel plus a box at the attachment point, each with a floating countdown in a colour of its own - chosen to read against white storm cloud. Same switch as the Effects &amp; LOD floater" />
     <check_box
      control_name="SSAtmoDebugFootstepMarkers"
      follows="left|top"

@@ -75,6 +75,10 @@ uniform float cloud_scale;
 uniform vec2 ss_cloud_drift;  // metres the layer has travelled on the wind, east and north
 uniform vec2 region_offset;   // camera pos - region centre, metres, world X/Y
 uniform float ss_cloud_alt_m; // the LAYER'S OWN altitude, metres - what a metre of camera travel is worth in uv
+// The layer's own depth slot, 0.99998 - or 0 for the stock projection squash. Zero unless an
+// ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the
+// layer against the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
+uniform float ss_cloud_depth;
 #endif
 // </SS:Nexii>
 
@@ -106,10 +110,19 @@ void main()
     // projection row there) leaves the two disagreeing in the last bits, so
     // the depth test flips per pixel and the layers speckle through each
     // other. Same expression, same result, no fight.
-    vec4 cloud_pos = modelview_projection_matrix * vec4(position.xyz, 1.0);
-    cloud_pos.z = cloud_pos.w * 0.99998;
-    gl_Position = cloud_pos;
+    //
+    // Runtime-gated by ss_cloud_depth (see the uniform note above): 0 leaves
+    // gl_Position exactly as stock computed it, so an idle EEP sky takes the
+    // untouched squash the projection row bakes.
     // </SS:Nexii>
+    vec4 cloud_pos = modelview_projection_matrix * vec4(position.xyz, 1.0);
+#ifdef SS_ATMO
+    if (ss_cloud_depth > 0.)
+    {
+        cloud_pos.z = cloud_pos.w * ss_cloud_depth;
+    }
+#endif
+    gl_Position = cloud_pos;
 
     // Texture coords
     // SL-13084 EEP added support for custom cloud textures -- flip them horizontally to match the preview of Clouds > Cloud Scroll

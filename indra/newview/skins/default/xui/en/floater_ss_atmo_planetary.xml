@@ -420,12 +420,14 @@
          font="SansSerifSmall">
             Texture
         </text>
+        <!-- Square swatch: the texture maps onto the body's flat square
+              quad, so the preview previews exactly that shape. -->
         <texture_picker
          follows="left|top"
          layout="topleft"
          left_pad="6"
          top_delta="-4"
-         height="22"
+         height="30"
          width="30"
          show_caption="false"
          name="body_custom_texture"
