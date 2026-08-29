@@ -252,11 +252,28 @@ struct SSAtmoEnvCloudField
     SSAtmoEnvKeyframed<LLUUID> mBaseTexture;
     SSAtmoEnvKeyframed<LLUUID> mDetailTexture;
 
+    // <SS:Nexii> The convection noise map. A field-scale greyscale map - the same kind of tileable
+    // noise the dome's cloud image is - that gives the deck's response to convection a geography.
+    // Sampled per cell in the air frame and run through a ramp (see ssvolcloud's tower and hole
+    // windows): where the map runs high the deck rises into cumulonimbus towers that carry the
+    // anvil's spread before the convection dial alone would allow it, where it runs low the deck
+    // thins into the pockets and gaps between them - down to holes in the sky when the air is dry
+    // and stable. Moisture lifts the map's floor back over the holes, so the same map that breaks
+    // a dry stable deck turns a moist one into an unbroken overcast nimbostratus sheet. The Noise
+    // Scale slider scales how many metres one tile of the map spans. None leaves the deck to the
+    // plain cluster noise it has always used.
+    SSAtmoEnvKeyframed<LLUUID> mNoiseTexture;
+
     SSAtmoEnvKeyframed<F32> mTextureMix{0.4f};
 
     SSAtmoEnvKeyframed<F32> mPuffDensity{0.8f};
 
     SSAtmoEnvKeyframed<F32> mDetailScale{3.f};
+
+    // <SS:Nexii> Metres per tile of the convection noise map, as a multiplier on the viewer's
+    // field-scale tile. 1 is the tuned default; smaller packs the map's pockets and towers
+    // tighter together, larger spreads them into continent-scale weather.
+    SSAtmoEnvKeyframed<F32> mNoiseScale{1.f};
 
     SSAtmoEnvKeyframed<F32> mDriftRate{1.f};
 

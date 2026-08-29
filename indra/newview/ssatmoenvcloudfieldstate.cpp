@@ -54,10 +54,12 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
 
     state.mBaseTexture = field.mBaseTexture.valueAt(phase);
     state.mDetailTexture = field.mDetailTexture.valueAt(phase);
+    state.mNoiseTexture = field.mNoiseTexture.valueAt(phase);
 
     state.mTextureMix = llclamp(field.mTextureMix.valueAt(phase), 0.f, 1.f);
     state.mPuffDensity = llclamp(field.mPuffDensity.valueAt(phase), 0.f, 1.f);
     state.mDetailScale = llmax(0.01f, field.mDetailScale.valueAt(phase));
+    state.mNoiseScale = llmax(0.05f, field.mNoiseScale.valueAt(phase));
     state.mDriftRate = llmax(0.f, field.mDriftRate.valueAt(phase));
 
     const F32 darkening = (auto_darkening >= 0.f)

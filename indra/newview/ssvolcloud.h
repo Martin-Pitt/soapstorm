@@ -29,6 +29,7 @@
 #include "lluuid.h"
 #include "llrendertarget.h"
 #include "llviewertexture.h"
+#include "v2math.h"
 #include "v3color.h"
 #include "v3math.h"
 #include "v4math.h"
@@ -68,6 +69,20 @@ public:
     S32 puffCount() const { return (S32)(mPrimary.mPuffs.size() + mUnder.mPuffs.size()); }
     F32 lastBuildMS() const { return mLastBuildMS; }
 
+    // <SS:Nexii> The convection noise map's gate for the weather. Precipitation asks the deck
+    // it falls from two questions about a point of the sky: how much cloud is over it (x, a hole
+    // in the map reads zero and takes the rain with it) and how tower-like the column is (y,
+    // which tweaks the intensity toward the dense parts). The point handed in must already be
+    // the WIND-TILTED one - where a drop falling at the weather's angle entered the deck, not
+    // where it lands - because only the caller knows the fall; this side supplies everything
+    // else, drift included. A deck with no map, or whose map has not read back yet, answers
+    // neutral: everything present, nothing tower-like. [interaction: precipitation]
+    LLVector2 precipNoiseAt(const LLVector3& pos_agent) const;
+
+    // The weather deck's base height, metres, for the same tilt maths - how far above the
+    // ground a drop's column reaches.
+    F32 precipBaseZ() const;
+
 private:
     struct Puff
     {
@@ -94,6 +109,20 @@ private:
         LLUUID mDetail;
         LLPointer<LLViewerFetchedTexture> mDetailRef;
 
+        // <SS:Nexii> The convection noise map and its CPU copy. The GPU never sees this one:
+        // it is a FIELD map, read per cell by the builder and per column by precipitation, so
+        // it is read back once out of VRAM (the way sculpties read their maps) into a small
+        // wrapped greyscale grid. mNoiseW zero means "no map, or not read back yet" - every
+        // consumer then treats the field as unmodulated, and the cache fills a frame or two
+        // later once the fetch lands.
+        LLUUID mNoise;
+        LLPointer<LLViewerFetchedTexture> mNoiseRef;
+        std::vector<F32> mNoiseLuma;
+        S32 mNoiseW = 0;
+        S32 mNoiseH = 0;
+        S32 mNoiseSrcW = 0;     // the raw image's size at cache time, to re-cache on upgrade
+        S32 mNoiseSrcH = 0;
+
         F32 mBaseZ = 0.f;
         F32 mThicknessM = 1.f;
 
@@ -106,14 +135,38 @@ private:
         F32 mChurn = 0.f;
         F32 mCoverage = 0.f;
 
+        // <SS:Nexii> The noise map's resolved shaping, baked at build time so precipitation
+        // reads exactly the field the deck drew with. mNoiseTileM is metres per tile after the
+        // Noise Scale slider (zero when there is no map); mNoiseHole is how hard the map's low
+        // end cuts holes once moisture has lifted the floor and convection has kept the storm
+        // gaps open.
+        F32 mNoiseTileM = 0.f;
+        F32 mNoiseHole = 0.f;
+
         F32 mMeanDistSq = 0.f;
     };
 
-    void buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, U32 salt);
+    void buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt);
     bool fetchDeckTextures(Deck& deck);
+
+    // <SS:Nexii> The noise map's two answers for one point of a deck's field, in the AIR frame
+    // (drift already subtracted): presence after the moisture floor and convection's say, and
+    // the tower weight the gradient ramp hands back. Shared by the deck builder and the
+    // precipitation gate so both always agree about where the holes are.
+    void noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower) const;
+
+    // Wrapped bilinear sample of the cached grid, or -1 when the deck has no map cached yet.
+    F32 noiseSample(const Deck& deck, F32 air_x, F32 air_y) const;
+
+    // Which deck the weather reads: the authored source when it names the under deck and that
+    // deck is on, the main field otherwise - the same default every "how much cloud is overhead"
+    // consumer uses.
+    const Deck* weatherDeck() const;
 
     Deck mPrimary;
     Deck mUnder;
+
+    S32 mWeatherDeck = 0;
 
     F32 mLastCoverage = 0.f;
     F32 mLastBuildMS = 0.f;

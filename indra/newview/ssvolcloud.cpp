@@ -101,6 +101,44 @@ namespace
 
     const F32 CLUSTER_EDGE_HEIGHT = 0.3f;
 
+    // <SS:Nexii> The convection noise map. One authored tileable greyscale map per deck, read
+    // back to the CPU and sampled per cell to give the deck's response to convection a
+    // geography. The map's values run through two ramps:
+    //
+    //   the HOLE window - below its low edge the cell is cut away entirely, so where the map
+    //   runs low the sky opens; this is what breaks a dry stable deck into cloud and holes,
+    //
+    //   the TOWER window - the gradient ramp overlaid on the same values, deciding which
+    //   columns are rising thermals. As the convection dial climbs, tower-weighted cells keep
+    //   the full climb to the lid while the pockets between them are held low, and the tower
+    //   columns take the anvil's flat-and-flare spread before the dial alone would allow it -
+    //   which is how the anvil forms early, on the strong towers first.
+    //
+    // Moisture then lifts the whole map: the same values that broke a dry stable sky leave a
+    // moist one unbroken, the overcast nimbostratus sheet. The tile is the field-scale metre
+    // count at Noise Scale 1, and the grid is the cached readback's fixed resolution - the
+    // structure it carries is kilometres wide, so 64 across carries it with texels to spare.
+    const F32 SS_NOISE_TILE_M = 2048.f;
+    const S32 SS_NOISE_GRID = 64;
+
+    const F32 SS_HOLE_LO = 0.16f;
+    const F32 SS_HOLE_HI = 0.52f;
+    const F32 SS_TOWER_LO = 0.42f;
+    const F32 SS_TOWER_HI = 0.78f;
+
+    // How low the pockets between towers are held at full convection, as a fraction of the
+    // height they would otherwise reach.
+    const F32 SS_POCKET_H = 0.45f;
+
+    // The moisture band that lifts the map's floor over its holes - the dry end keeps them
+    // open, the mid-high end closes every one and the deck reads as unbroken nimbostratus.
+    const F32 SS_NIMBUS_LO = 0.30f;
+    const F32 SS_NIMBUS_HI = 0.72f;
+
+    // And how much of the hole-cutting convection keeps alive in the dry case: a storm sky
+    // still wants its gaps between towers, a stable sky its outright holes.
+    const F32 SS_STORM_GAP = 0.45f;
+
     // The under deck's hash salt: the same cell field, offset so its cloud masses land where the
     // main deck's do not. Zero keeps the primary deck's pattern byte-identical to the single-deck
     // field it was before two decks existed.
@@ -223,9 +261,18 @@ void SSVolCloud::update(F32 dt)
     const SSAtmoEnvCloudFieldState field =
         SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, phase);
 
+    // <SS:Nexii> Which deck the weather's noise gate reads: the authored source when it names
+    // the under deck and that deck is on, the main field otherwise - which is every sky build's
+    // answer, since its under deck hangs below the platform and is nobody's weather. The same
+    // rule the environment editor's derivation follows, kept where the deck lives so
+    // precipitation and deck can never disagree about who is making weather.
+    // [interaction: precipitation]
+    mWeatherDeck = (track.mWeatherSourceDeck == SS_ATMOENV_DECK_UNDER
+                    && track.mUnderField.mEnabled) ? 1 : 0;
+
     if (field.mCoverage >= COVERAGE_FLOOR && field.mThicknessM > 1.f)
     {
-        buildDeck(mPrimary, field, convection, 0u);
+        buildDeck(mPrimary, field, convection, moisture, 0u);
         mLastCoverage = field.mCoverage;
     }
 
@@ -239,7 +286,7 @@ void SSVolCloud::update(F32 dt)
             SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, phase);
         if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
         {
-            buildDeck(mUnder, under, convection, SS_UNDER_DECK_SALT);
+            buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT);
         }
     }
 
@@ -260,8 +307,9 @@ void SSVolCloud::update(F32 dt)
     mLastBuildMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
 }
 
-// Builds one deck's puffs from a resolved field state: same deterministic placement and shading for both decks, hashed with the deck's salt so their patterns differ.
-void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, U32 salt)
+// Builds one deck's puffs from a resolved field state: same deterministic placement and shading for both decks, hashed with the deck's salt so their patterns differ. Moisture rides along because the
+// noise map's hole-cutting is what moisture moderates.
+void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt)
 {
     deck.mTexture = field.mBaseTexture.notNull()
         ? field.mBaseTexture
@@ -270,6 +318,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                  : SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS);
 
     deck.mDetail = field.mDetailTexture;
+    deck.mNoise = field.mNoiseTexture;
 
     deck.mBaseZ = field.mBaseHeightM;
     deck.mThicknessM = llmax(1.f, field.mThicknessM);
@@ -280,6 +329,17 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mDriftRate = field.mDriftRate;
     deck.mChurn = llclamp(field.mChurn, 0.f, 1.f);
     deck.mCoverage = field.mCoverage;
+
+    // <SS:Nexii> The noise map's resolved shaping, baked once per build so every consumer of the
+    // field - this builder, and the precipitation gate reading the deck from outside - runs the
+    // same numbers. The tile scales off the authored Noise Scale slider; the hole weight is what
+    // survives of the map's low end once moisture has lifted the floor over it and convection has
+    // kept the storm gaps open in what is left.
+    deck.mNoiseTileM = field.mNoiseTexture.notNull()
+        ? SS_NOISE_TILE_M * llmax(0.05f, field.mNoiseScale)
+        : 0.f;
+    const F32 nimbus = ss_smoothstep(SS_NIMBUS_LO, SS_NIMBUS_HI, moisture);
+    deck.mNoiseHole = (1.f - nimbus) * (1.f - SS_STORM_GAP * llclamp(convection, 0.f, 1.f));
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();

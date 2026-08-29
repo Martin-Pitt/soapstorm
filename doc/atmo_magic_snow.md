@@ -272,6 +272,9 @@ structure but keeps its squall term.
 
 ## 8. Phasing
 
+The concrete code architecture - files, classes, signatures, data flow and per-phase touch lists -
+is in `doc/atmo_magic_snow_architecture.md`.
+
 1. **Erosion + drift particles** - the field branch, the spawn gate, the RISER parameterisation.
    Purely additive; the visible change is snow moving with the wind from the ground up. Smallest
    change, biggest single effect.

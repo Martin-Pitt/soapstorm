@@ -865,9 +865,11 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
     sd["coverage_scale"] = mCoverageScale.asLLSD();
     sd["base_texture"] = mBaseTexture.asLLSD();
     sd["detail_texture"] = mDetailTexture.asLLSD();
+    sd["noise_texture"] = mNoiseTexture.asLLSD();
     sd["texture_mix"] = mTextureMix.asLLSD();
     sd["puff_density"] = mPuffDensity.asLLSD();
     sd["detail_scale"] = mDetailScale.asLLSD();
+    sd["noise_scale"] = mNoiseScale.asLLSD();
     sd["drift_rate"] = mDriftRate.asLLSD();
     sd["storm_darkening"] = mStormDarkening.asLLSD();
     return sd;
@@ -888,9 +890,11 @@ bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
     const SSAtmoEnvCloudField def;
     if (sd.has("base_texture")) mBaseTexture.fromLLSD(sd["base_texture"], def.mBaseTexture.valueAt(0.0));
     if (sd.has("detail_texture")) mDetailTexture.fromLLSD(sd["detail_texture"], def.mDetailTexture.valueAt(0.0));
+    if (sd.has("noise_texture")) mNoiseTexture.fromLLSD(sd["noise_texture"], def.mNoiseTexture.valueAt(0.0));
     if (sd.has("texture_mix")) mTextureMix.fromLLSD(sd["texture_mix"], 0.4f);
     if (sd.has("puff_density")) mPuffDensity.fromLLSD(sd["puff_density"], 0.8f);
     if (sd.has("detail_scale")) mDetailScale.fromLLSD(sd["detail_scale"], 3.f);
+    if (sd.has("noise_scale")) mNoiseScale.fromLLSD(sd["noise_scale"], 1.f);
     if (sd.has("drift_rate")) mDriftRate.fromLLSD(sd["drift_rate"], 1.f);
     if (sd.has("storm_darkening")) mStormDarkening.fromLLSD(sd["storm_darkening"], 0.85f);
     return true;
