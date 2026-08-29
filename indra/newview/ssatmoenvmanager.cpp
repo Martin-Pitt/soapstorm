@@ -172,30 +172,90 @@ namespace
 
 namespace
 {
-    const S32 SEED_SKY_COUNT = 4;
-    const char* const SEED_SKY_ID[SEED_SKY_COUNT] = {
+    // The shipped skies the stock day cycle seeds from.
+    const S32 STOCK_SEED_SKY_COUNT = 4;
+    const char* const STOCK_SEED_SKY_ID[STOCK_SEED_SKY_COUNT] = {
         "7250bab8-0a2c-0cb7-8161-6717e194da43",
         "db8115a4-9549-9f7d-97ca-a791d0a99a0f",
         "cd8afef7-4276-3f46-6122-6165d97f3e87",
         "7b43eefd-f390-0c79-c30e-a03b3e0ef9c8"
     };
 
-    const char* const SEED_SKY_NAME[SEED_SKY_COUNT] = {
+    const char* const STOCK_SEED_SKY_NAME[STOCK_SEED_SKY_COUNT] = {
         "Daylight", "Night", "Sunrise", "Sunset"
     };
 
-    // Even-spread fallback placement when no sun exists to measure the seed skies against.
-    F64 seedSkyEvenPhase(S32 slot)
-    {
-        return ss_atmoenv_snap_phase((F64)slot / (F64)SEED_SKY_COUNT);
-    }
-
     struct SeedSkyCollector
     {
-        LLSettingsSky::ptr_t mSkies[SEED_SKY_COUNT];
-        bool mDone[SEED_SKY_COUNT] = { false };
-        S32 mPending = SEED_SKY_COUNT;
+        std::vector<LLSettingsSky::ptr_t> mSkies;
+        std::vector<std::string> mNames;
+        std::vector<bool> mDone;
+        S32 mPending = 0;
     };
+
+    // Log label for a requested sky: the caller's name when it has one, otherwise an index.
+    std::string seedSkyLabel(const SeedSkyCollector& skies, size_t slot)
+    {
+        if (slot < skies.mNames.size() && !skies.mNames[slot].empty())
+        {
+            return skies.mNames[slot];
+        }
+        return llformat("sky %d", (S32)slot);
+    }
+
+    // Fetches a list of skies by asset id and calls on_done once every fetch has settled. A failed
+    // fetch logs and leaves a null slot; the seed builder decides what a hole means.
+    void fetchSeedSkies(const std::vector<LLUUID>& asset_ids,
+                        const std::vector<std::string>& names,
+                        std::function<void(const SeedSkyCollector&)> on_done)
+    {
+        auto collector = std::make_shared<SeedSkyCollector>();
+        collector->mSkies.resize(asset_ids.size());
+        collector->mNames.resize(asset_ids.size());
+        for (size_t slot = 0; slot < asset_ids.size() && slot < names.size(); ++slot)
+        {
+            collector->mNames[slot] = names[slot];
+        }
+        collector->mDone.resize(asset_ids.size(), false);
+        collector->mPending = (S32)asset_ids.size();
+
+        for (size_t slot = 0; slot < asset_ids.size(); ++slot)
+        {
+            LLSettingsVOBase::getSettingsAsset(asset_ids[slot],
+                [collector, slot, on_done](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+                {
+                    if (collector->mDone[slot]) return;
+                    collector->mDone[slot] = true;
+
+                    LLSettingsSky::ptr_t sky;
+                    if (!status && settings)
+                    {
+                        sky = std::dynamic_pointer_cast<LLSettingsSky>(settings);
+                    }
+                    if (sky)
+                    {
+                        collector->mSkies[slot] = sky;
+                    }
+                    else
+                    {
+                        LL_WARNS("AtmoMagicEnv") << "Could not fetch seed sky " << seedSkyLabel(*collector, slot)
+                                                 << " sky " << asset_id << " (status " << status
+                                                 << "); seeding the new Atmo v3 environment without it" << LL_ENDL;
+                    }
+
+                    if (--collector->mPending > 0) return;
+
+                    if (on_done) on_done(*collector);
+                });
+        }
+    }
+
+    // Even-spread fallback placement when no sun exists to measure the seed skies against:
+    // one sky per equal slice of the arrived set.
+    F64 seedSkyEvenPhase(size_t slot, size_t count)
+    {
+        return count > 0 ? ss_atmoenv_snap_phase((F64)slot / (F64)count) : 0.0;
+    }
 
     // Where a fetched sky's own sun stands, in the observer frame.
     LLVector3 seedSkySunDirection(const LLSettingsSky& sky)
@@ -206,11 +266,14 @@ namespace
     }
 
     void seedSkyPhases(const SSAtmoEnvTrack& track, const SeedSkyCollector& skies,
-                       F64 (&out_phase)[SEED_SKY_COUNT])
+                       std::vector<F64>& out_phase)
     {
-        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        const size_t count = skies.mSkies.size();
+
+        out_phase.resize(count);
+        for (size_t slot = 0; slot < count; ++slot)
         {
-            out_phase[slot] = seedSkyEvenPhase(slot);
+            out_phase[slot] = seedSkyEvenPhase(slot, count);
         }
 
         SSAtmoEnvResolvedBody sun;
@@ -224,8 +287,8 @@ namespace
         const F32 lat = (home >= 0)
             ? track.mPlanetary.mBodies[static_cast<size_t>(home)].mLatitudeDeg : 0.f;
 
-        F64 measured[SEED_SKY_COUNT];
-        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        std::vector<F64> measured(count);
+        for (size_t slot = 0; slot < count; ++slot)
         {
             measured[slot] = out_phase[slot];
             if (!skies.mSkies[slot]) continue;
@@ -241,13 +304,13 @@ namespace
         {
             const F32 LOW_SUN_SIN = 0.25f;
 
-            for (S32 a = 0; a < SEED_SKY_COUNT; ++a)
+            for (size_t a = 0; a < count; ++a)
             {
                 if (!skies.mSkies[a]) continue;
                 const F32 sin_a = seedSkySunDirection(*skies.mSkies[a]).mV[VZ];
                 if (fabsf(sin_a) > LOW_SUN_SIN) continue;
 
-                for (S32 b = a + 1; b < SEED_SKY_COUNT; ++b)
+                for (size_t b = a + 1; b < count; ++b)
                 {
                     if (!skies.mSkies[b]) continue;
                     const F32 sin_b = seedSkySunDirection(*skies.mSkies[b]).mV[VZ];
@@ -261,10 +324,10 @@ namespace
                     SSAtmoEnvPlanetaryResolver::phaseForElevation(arc, sin_a, true, rising);
                     SSAtmoEnvPlanetaryResolver::phaseForElevation(arc, sin_b, false, setting);
 
-                    LL_INFOS("AtmoMagicEnv") << "Seed skies " << SEED_SKY_NAME[a] << " and "
-                        << SEED_SKY_NAME[b] << " have their suns at the same height; putting "
-                        << SEED_SKY_NAME[a] << " on the rising side (" << rising << ") and "
-                        << SEED_SKY_NAME[b] << " on the setting side (" << setting << ")" << LL_ENDL;
+                    LL_INFOS("AtmoMagicEnv") << "Seed skies " << seedSkyLabel(skies, a) << " and "
+                        << seedSkyLabel(skies, b) << " have their suns at the same height; putting "
+                        << seedSkyLabel(skies, a) << " on the rising side (" << rising << ") and "
+                        << seedSkyLabel(skies, b) << " on the setting side (" << setting << ")" << LL_ENDL;
 
                     measured[a] = ss_atmoenv_snap_phase(rising);
                     measured[b] = ss_atmoenv_snap_phase(setting);
@@ -274,41 +337,37 @@ namespace
 
         const F64 SEED_PHASE_MIN_GAP = 1.0 / (F64)SS_ATMOENV_PREVIEW_STEPS;
 
-        S32 order[SEED_SKY_COUNT];
-        S32 order_count = 0;
-        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        std::vector<size_t> order;
+        for (size_t slot = 0; slot < count; ++slot)
         {
-            if (skies.mSkies[slot]) order[order_count++] = slot;
+            if (skies.mSkies[slot]) order.push_back(slot);
         }
-        std::sort(order, order + order_count,
-                  [&measured](S32 a, S32 b) { return measured[a] < measured[b]; });
+        std::sort(order.begin(), order.end(),
+                  [&measured](size_t a, size_t b) { return measured[a] < measured[b]; });
 
-        for (S32 k = 1; k < order_count; ++k)
+        for (size_t k = 1; k < order.size(); ++k)
         {
-            const S32 prev = order[k - 1];
-            const S32 here = order[k];
+            const size_t prev = order[k - 1];
+            const size_t here = order[k];
             const F64 gap = measured[here] - measured[prev];
             if (gap >= SEED_PHASE_MIN_GAP) continue;
 
             const F64 pushed = ss_atmoenv_snap_phase(measured[prev] + SEED_PHASE_MIN_GAP);
-            LL_INFOS("AtmoMagicEnv") << "Seed skies " << SEED_SKY_NAME[prev] << " and "
-                << SEED_SKY_NAME[here] << " measure to the same point in the cycle ("
+            LL_INFOS("AtmoMagicEnv") << "Seed skies " << seedSkyLabel(skies, prev) << " and "
+                << seedSkyLabel(skies, here) << " measure to the same point in the cycle ("
                 << measured[here] << "); moving the second to " << pushed
                 << " so both survive" << LL_ENDL;
             measured[here] = pushed;
         }
 
-        if (order_count > 0)
+        if (!order.empty())
         {
-            const S32 last = order[order_count - 1];
+            const size_t last = order.back();
             measured[last] = ss_atmoenv_snap_phase(
                 llmin(measured[last], 1.0 - SEED_PHASE_MIN_GAP));
         }
 
-        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
-        {
-            out_phase[slot] = measured[slot];
-        }
+        out_phase = measured;
     }
 
     // The seeded default asset: a day cycle from whichever seed skies arrived, or plain defaults from none.
@@ -317,31 +376,27 @@ namespace
         SSAtmoEnvAsset def = SSAtmoEnvAsset::makeDefault();
         if (def.mTracks.empty()) return def;
 
-        S32 arrived = 0;
-        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        std::vector<size_t> arrived;
+        for (size_t slot = 0; slot < skies.mSkies.size(); ++slot)
         {
-            if (skies.mSkies[slot]) ++arrived;
+            if (skies.mSkies[slot]) arrived.push_back(slot);
         }
-        if (arrived == 0) return def;
+        if (arrived.empty()) return def;
 
         SSAtmoEnvTrack& ground = def.mTracks[0];
-        if (arrived == 1)
+        if (arrived.size() == 1)
         {
-            for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
-            {
-                if (!skies.mSkies[slot]) continue;
-                ground.mAtmosphere.fromSettingsSky(*skies.mSkies[slot]);
-                ground.mCloudDome.fromSettingsSky(*skies.mSkies[slot]);
-            }
+            const LLSettingsSky::ptr_t& sky = skies.mSkies[arrived[0]];
+            ground.mAtmosphere.fromSettingsSky(*sky);
+            ground.mCloudDome.fromSettingsSky(*sky);
             return def;
         }
 
-        F64 phase[SEED_SKY_COUNT];
+        std::vector<F64> phase;
         seedSkyPhases(ground, skies, phase);
 
-        for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+        for (size_t slot : arrived)
         {
-            if (!skies.mSkies[slot]) continue;
             ground.mAtmosphere.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
             ground.mCloudDome.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
         }
@@ -355,10 +410,54 @@ namespace
     }
 }
 
-// Creates a fresh environment: fetches the seed skies, measures each against the track's own sun, and writes the notecard.
+// Creates a plain midday-defaults environment: no fetching, no seeding.
+void SSAtmoEnvManager::createEmptyNotecard(const LLUUID& parent_id,
+                                           std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
+{
+    writeDefaultNotecard(SSAtmoEnvAsset::makeDefault(), parent_id, on_created);
+}
+
+// Seeds a day cycle from a list of the author's own skies, the same measure-and-stamp algorithm
+// the stock seed uses. An empty list makes the empty environment.
+void SSAtmoEnvManager::createFromSkies(const std::vector<LLUUID>& sky_asset_ids,
+                                       const std::vector<std::string>& sky_names,
+                                       const LLUUID& parent_id,
+                                       std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
+{
+    if (sky_asset_ids.empty())
+    {
+        createEmptyNotecard(parent_id, on_created);
+        return;
+    }
+
+    if (!gAssetStorage)
+    {
+        LL_WARNS("AtmoMagicEnv") << "Asset system unavailable; creating Atmo v3 environment with built-in defaults instead of the chosen skies" << LL_ENDL;
+        writeDefaultNotecard(SSAtmoEnvAsset::makeDefault(), parent_id, on_created);
+        return;
+    }
+
+    fetchSeedSkies(sky_asset_ids, sky_names,
+        [parent_id, on_created](const SeedSkyCollector& skies)
+        {
+            writeDefaultNotecard(buildSeededDefault(skies), parent_id, on_created);
+        });
+}
+
+// The stock create path: the four shipped seed skies.
 void SSAtmoEnvManager::createDefaultNotecard(const LLUUID& parent_id,
                                          std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
 {
+    std::vector<LLUUID> ids;
+    std::vector<std::string> names;
+    ids.reserve(STOCK_SEED_SKY_COUNT);
+    names.reserve(STOCK_SEED_SKY_COUNT);
+    for (S32 slot = 0; slot < STOCK_SEED_SKY_COUNT; ++slot)
+    {
+        ids.push_back(LLUUID(STOCK_SEED_SKY_ID[slot]));
+        names.push_back(STOCK_SEED_SKY_NAME[slot]);
+    }
+
     if (!gAssetStorage)
     {
         LL_WARNS("AtmoMagicEnv") << "Asset system unavailable; creating Atmo v3 environment with built-in defaults instead of the stock sky cycle" << LL_ENDL;
@@ -366,42 +465,90 @@ void SSAtmoEnvManager::createDefaultNotecard(const LLUUID& parent_id,
         return;
     }
 
-    LLUUID known_ids[SEED_SKY_COUNT];
-    for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
+    fetchSeedSkies(ids, names,
+        [parent_id, on_created](const SeedSkyCollector& skies)
+        {
+            writeDefaultNotecard(buildSeededDefault(skies), parent_id, on_created);
+        });
+}
+
+// Maps an EEP day cycle over: every sky keyframe on its ground-level track is stamped into the
+// ground track at the day cycle's own keyframe time, so the authored timings carry across. The
+// skies' own noise textures are kept (no layered-noise override) - this is an authored asset, not
+// a seed.
+void SSAtmoEnvManager::createFromDayCycle(const LLUUID& day_cycle_asset_id,
+                                          const LLUUID& parent_id,
+                                          std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
+{
+    if (!gAssetStorage || day_cycle_asset_id.isNull())
     {
-        known_ids[slot] = LLUUID(SEED_SKY_ID[slot]);
+        LL_WARNS("AtmoMagicEnv") << "Asset system unavailable or no day cycle given; creating Atmo v3 environment with built-in defaults" << LL_ENDL;
+        createEmptyNotecard(parent_id, on_created);
+        return;
     }
 
-    auto collector = std::make_shared<SeedSkyCollector>();
-    for (S32 slot = 0; slot < SEED_SKY_COUNT; ++slot)
-    {
-        LLSettingsVOBase::getSettingsAsset(known_ids[slot],
-            [collector, slot, parent_id, on_created](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+    LLSettingsVOBase::getSettingsAsset(day_cycle_asset_id,
+        [parent_id, on_created](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+        {
+            LLSettingsDay::ptr_t day;
+            if (!status && settings)
             {
-                if (collector->mDone[slot]) return;
-                collector->mDone[slot] = true;
+                day = std::dynamic_pointer_cast<LLSettingsDay>(settings);
+            }
+            if (!day)
+            {
+                LL_WARNS("AtmoMagicEnv") << "Could not fetch day cycle " << asset_id
+                                         << " (status " << status
+                                         << "); creating an empty Atmo v3 environment instead" << LL_ENDL;
+                writeDefaultNotecard(SSAtmoEnvAsset::makeDefault(), parent_id, on_created);
+                return;
+            }
 
-                LLSettingsSky::ptr_t sky;
-                if (!status && settings)
-                {
-                    sky = std::dynamic_pointer_cast<LLSettingsSky>(settings);
-                }
+            SSAtmoEnvAsset def = SSAtmoEnvAsset::makeDefault();
+            if (def.mTracks.empty())
+            {
+                writeDefaultNotecard(def, parent_id, on_created);
+                return;
+            }
+
+            const LLSettingsDay::CycleTrack_t& frames =
+                day->getCycleTrackConst(LLSettingsDay::TRACK_GROUND_LEVEL);
+            if (frames.empty())
+            {
+                LL_WARNS("AtmoMagicEnv") << "Day cycle " << asset_id
+                                         << " has no sky keyframes; creating an empty Atmo v3 environment instead" << LL_ENDL;
+                writeDefaultNotecard(def, parent_id, on_created);
+                return;
+            }
+
+            SSAtmoEnvTrack& ground = def.mTracks[0];
+            if (frames.size() == 1)
+            {
+                LLSettingsSky::ptr_t sky = std::dynamic_pointer_cast<LLSettingsSky>(frames.begin()->second);
                 if (sky)
                 {
-                    collector->mSkies[slot] = sky;
+                    ground.mAtmosphere.fromSettingsSky(*sky);
+                    ground.mCloudDome.fromSettingsSky(*sky);
                 }
-                else
+            }
+            else
+            {
+                for (const LLSettingsDay::CycleTrack_t::value_type& frame : frames)
                 {
-                    LL_WARNS("AtmoMagicEnv") << "Could not fetch seed sky " << SEED_SKY_NAME[slot]
-                                             << " sky " << asset_id << " (status " << status
-                                             << "); seeding the new Atmo v3 environment without it" << LL_ENDL;
+                    LLSettingsSky::ptr_t sky = std::dynamic_pointer_cast<LLSettingsSky>(frame.second);
+                    if (!sky) continue;
+
+                    const F64 phase = ss_atmoenv_snap_phase((F64)frame.first);
+                    ground.mAtmosphere.addKeyframesFromSky(*sky, phase);
+                    ground.mCloudDome.addKeyframesFromSky(*sky, phase);
                 }
+            }
 
-                if (--collector->mPending > 0) return;
+            ground.mAtmosphere.collapseConstantKeyframes();
+            ground.mCloudDome.collapseConstantKeyframes();
 
-                writeDefaultNotecard(buildSeededDefault(*collector), parent_id, on_created);
-            });
-    }
+            writeDefaultNotecard(def, parent_id, on_created);
+        });
 }
 
 // Takes ownership of a just-created notecard as the live asset.

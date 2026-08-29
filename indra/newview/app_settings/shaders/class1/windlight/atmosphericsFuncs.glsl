@@ -43,6 +43,15 @@ uniform float sky_sunlight_scale;
 uniform float sky_ambient_scale;
 uniform int classic_mode;
 
+#ifdef SS_ATMO
+// <SS:Nexii> How much of the sun's disc has cleared the horizon (SSAtmoEnvApplier::sunRiseFraction):
+// 0 fully set - or no active Atmo environment, which is exactly stock - up to 1 fully risen,
+// ramping across the disc's own angular span. Stock switches the sunlight and the sun glow the
+// moment the disc's CENTRE crosses zero, which reads as the whole sunrise lighting snapping on
+// at once; the ramps below grow it with the disc instead.
+uniform float ss_sun_rise;
+#endif
+
 float getAmbientClamp() { return 1.0f; }
 
 vec3 srgb_to_linear(vec3 col);
@@ -60,6 +69,16 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
     float rel_pos_len  = length(rel_pos);
 
     vec3  sunlight     = (sun_up_factor == 1) ? sunlight_color: moonlight_color;
+
+#ifdef SS_ATMO
+    // <SS:Nexii> The disc sheds light as it rises, not the instant its centre clears the horizon:
+    // the light walks from the night value to the day value across the disc's own rise. Zero
+    // leaves the stock switch untouched - night, idle environments, and the fully-set case.
+    if (ss_sun_rise > 0.0)
+    {
+        sunlight = mix(moonlight_color, sunlight_color, ss_sun_rise);
+    }
+#endif
 
     // sunlight attenuation effect (hue and brightness) due to atmosphere
     // this is used later for sunlight modulation at various altitudes
@@ -106,6 +125,16 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
     haze_glow += .25;
 
     haze_glow *= sun_moon_glow_factor;
+
+#ifdef SS_ATMO
+    // <SS:Nexii> And the glow walks with the risen share too - the sun sheds its share of the
+    // full glow, never less than whatever the sun-down state already shed - instead of snapping
+    // at centre-rise. Continuous at both ends of the band, and the stock sun value at full rise.
+    if (ss_sun_rise > 0.0)
+    {
+        haze_glow *= max(sun_moon_glow_factor, ss_sun_rise);
+    }
+#endif
 
     vec3 amb_color = ambient_color;
 

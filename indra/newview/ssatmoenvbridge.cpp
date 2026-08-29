@@ -55,7 +55,9 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
                                                SSAtmoTrackConfig& out_cfg, bool& out_is_ground_track)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
-    if (!mgr->hasAsset()) return false;
+    // <SS:Nexii> An asset with no tracks is no environment: the applier's want_active refuses it
+    // and so does this resolver, rather than indexing an empty track vector below.
+    if (!mgr->hasAsset() || mgr->asset().mTracks.empty()) return false;
 
     const SSAtmoEnvAsset& asset = mgr->asset();
 

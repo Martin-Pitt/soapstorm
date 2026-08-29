@@ -90,6 +90,11 @@ public:
     F32 sunSlotAngularDeg() const { return mSunSlotAngularDeg; }
     F32 moonSlotAngularDeg() const { return mMoonSlotAngularDeg; }
 
+    // <SS:Nexii> How much of the sun slot's disc has cleared the horizon: 0 fully set, 1 fully risen, ramping across the disc's OWN angular span with the share of the disc that sheds light on
+    // the observer (the risen area). The sky dome, the dome clouds and the atmospheric module ramp their sun glow and haze on this instead of snapping the whole sunrise/sunset horizon on the
+    // moment the disc's centre crosses zero (skyV.glsl, cloudsV.glsl, atmosphericsFuncs.glsl). Zero unless an ACTIVE environment is driving the sky, so a plain EEP sky keeps stock's step.
+    F32 sunRiseFraction() const { return mActive ? mSunRiseFraction : 0.f; }
+
     const LLVector3& observerPole() const { return mObserverPole; }
 
     void renderCelestialDebug();
@@ -145,6 +150,9 @@ private:
     LLVector3 mObserverPole = LLVector3::z_axis;
     F32 mSunSlotAngularDeg = 0.53f;
     F32 mMoonSlotAngularDeg = 0.53f;
+
+    // <SS:Nexii> The sun slot's risen fraction, sampled at the applied phase - see sunRiseFraction.
+    F32 mSunRiseFraction = 0.f;
 
     std::vector<LLPointer<class LLHUDText> > mDebugLabels;
     void releaseDebugLabels();

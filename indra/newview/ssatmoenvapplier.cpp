@@ -778,6 +778,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     mMoonSlotSunlight = 1.f;
     mSunSlotAngularDeg = 0.53f;
     mMoonSlotAngularDeg = 0.53f;
+    mSunRiseFraction = 0.f;
 
     LLVector3 sun_dir = -LLVector3::z_axis;
     LLVector3 moon_dir = -LLVector3::z_axis;
@@ -1004,6 +1005,31 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         [this](const LLUUID& v) { mSky->setSunTextureId(v); });
     put(mLastMoonTexture, moon_texture,
         [this](const LLUUID& v) { mSky->setMoonTextureId(v); });
+
+    // <SS:Nexii> The sun slot's risen fraction, from the RESOLVED direction and disc - see
+    // sunRiseFraction. The band spans the slot quad's OWN half-angle - the same sizing chain
+    // updateHeavenlyBodyGeometry lays the disc out with (scale * HEAVENLY_BODY_FACTOR * the
+    // sun's disk radius, over the HEAVENLY_BODY_DIST shell) - so the ramp tracks what the disc
+    // actually draws, through its whole rise, however large it is authored. And the fraction is
+    // the share of the disc's area above the horizon - the share of it that sheds light on the
+    // observer. That is what makes the ramp start as the top edge breaks, run through half light
+    // at centre-rise where stock flips its switch, and complete when the full disc stands clear,
+    // gently at both ends.
+    F32 half_tan = sun_scale * HEAVENLY_BODY_FACTOR * 0.5f; // llvosky.cpp's SUN_DISK_RADIUS
+    if (gSky.mVOSkyp.notNull())
+    {
+        half_tan = sun_scale * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
+    }
+    const F32 half_sin = half_tan / sqrtf(1.f + half_tan * half_tan);
+    if (half_sin > 1e-6f)
+    {
+        const F32 u = llclamp(sun_dir.mV[VZ] / half_sin, -1.f, 1.f);
+        mSunRiseFraction = (u * sqrtf(1.f - u * u) + asinf(u)) / F_PI + 0.5f;
+    }
+    else
+    {
+        mSunRiseFraction = (sun_dir.mV[VZ] > 0.f) ? 1.f : 0.f;
+    }
 
     mCelestialCacheValid = true;
 

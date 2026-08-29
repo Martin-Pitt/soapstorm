@@ -54,6 +54,8 @@
 
 #include "llpermissions.h"
 
+#include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic sunrise ramp
+
 #include "llinventorymodel.h"
 #include "llassetstorage.h"
 #include "llfilesystem.h"
@@ -862,6 +864,13 @@ void LLSettingsVOSky::applySpecial(void *ptarget, bool force)
 
     shader->uniform1i(LLShaderMgr::SUN_UP_FACTOR, getIsSunUp() ? 1 : 0);
     shader->uniform1f(LLShaderMgr::SUN_MOON_GLOW_FACTOR, getSunMoonGlowFactor());
+
+    // <SS:Nexii> Atmo Magic: the sun disc's risen fraction, for the sunrise/sunset glow ramp in
+    // the sky dome, the dome clouds and the atmospheric module (skyV.glsl, cloudsV.glsl,
+    // atmosphericsFuncs.glsl). Zero unless an active Atmo environment is driving the sky - see
+    // SSAtmoEnvApplier::sunRiseFraction - so every stock sky keeps stock's centre-rise step.
+    shader->uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
+
     shader->uniform1f(LLShaderMgr::DENSITY_MULTIPLIER, getDensityMultiplier());
     shader->uniform1f(LLShaderMgr::DISTANCE_MULTIPLIER, getDistanceMultiplier());
 

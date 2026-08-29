@@ -52,8 +52,16 @@ public:
                            EDragAndDropType cargo_type, void* cargo_data,
                            EAcceptance* accept, std::string& tooltip_msg) override;
 
+    // <SS:Nexii> The EEP sky import dialog drives the same preview/status refresh the drop path
+    // used to - the stamp happens over there now, and the poll alone would leave the fresh
+    // keyframes and the modified asterisk up to half a second late.
+    friend class SSFloaterAtmoSkyImport;
+
 private:
     void handleSettingsDrop(const LLInventoryItem* item);
+    // <SS:Nexii> A settings drop with nothing loaded: the drop seeds a new environment instead of
+    // stamping into one, mirroring the Create button's chooser.
+    void handleCreateDrop(const LLInventoryItem* item);
     void refreshVisibility();
 
     void refreshStatus();

@@ -62,6 +62,13 @@ uniform float haze_density;
 // the stock -32000 collapse. Zero unless an ACTIVE Atmo environment is driving the
 // sky (lldrawpoolwlsky.cpp), so an enabled-but-idle viewer's EEP sky stays stock.
 uniform float ss_horizon_mirror;
+
+// <SS:Nexii> How much of the sun's disc has cleared the horizon (SSAtmoEnvApplier::sunRiseFraction):
+// 0 fully set - or no active Atmo environment, which is exactly stock - up to 1 fully risen,
+// ramping across the disc's own angular span. The dome's light and its sun glow are ramped on
+// this below, because stock switches BOTH the moment the disc's centre crosses zero, which reads
+// as the whole sunrise horizon snapping on at once instead of growing with the disc.
+uniform float ss_sun_rise;
 #endif
 
 uniform float cloud_shadow;
@@ -151,6 +158,17 @@ void main()
     // Initialize temp variables
     vec3 sunlight = (sun_up_factor == 1) ? sunlight_color : moonlight_color * 0.7; //magic 0.7 to match legacy color
 
+#ifdef SS_ATMO
+    // <SS:Nexii> The disc sheds light as it rises, not the instant its centre clears the horizon:
+    // the dome's sunlight walks from the night value to the day value across the disc's own rise
+    // (ss_sun_rise is the risen share of the disc), so the haze it lights up grows in with it.
+    // Zero leaves the stock switch untouched - night, idle environments, and the fully-set case.
+    if (ss_sun_rise > 0.0)
+    {
+        sunlight = mix(moonlight_color * 0.7, sunlight_color, ss_sun_rise);
+    }
+#endif
+
     // Sunlight attenuation effect (hue and brightness) due to atmosphere
     // this is used later for sunlight modulation at various altitudes
     vec3 light_atten = (blue_density + vec3(haze_density * 0.25)) * (density_multiplier * max_y);
@@ -185,6 +203,16 @@ void main()
     // Add "minimum anti-solar illumination"
     // For sun, add to glow.  For moon, remove glow entirely. SL-13768
     haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (sun_moon_glow_factor * (haze_glow + 0.25));
+
+#ifdef SS_ATMO
+    // <SS:Nexii> And the glow itself is the light the disc sheds: it grows from nothing with the
+    // risen share, instead of snapping on at centre-rise (sun_moon_glow_factor flips on
+    // getIsSunUp, the same centre-crossing step). At full rise this is the stock sun value.
+    if (ss_sun_rise > 0.0)
+    {
+        haze_glow = ss_sun_rise * (haze_glow + 0.25);
+    }
+#endif
 
     // Haze color above cloud
     vec3 color = (blue_horizon * blue_weight * (sunlight + ambient_color)

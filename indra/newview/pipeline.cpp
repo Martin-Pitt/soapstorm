@@ -9785,6 +9785,9 @@ void LLPipeline::renderDeferredLighting()
             LLEnvironment &environment = LLEnvironment::instance();
 
             soften_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
+            // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the atmospheric module ramps
+            // its sunlight and sun glow across the disc's rise instead of snapping at centre-rise.
+            soften_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
             soften_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
 
             soften_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
@@ -10204,6 +10207,9 @@ void LLPipeline::doAtmospherics()
 
         LLEnvironment& environment = LLEnvironment::instance();
         haze_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
+        // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the haze additive ramps its sun
+        // glow across the disc's rise instead of snapping at centre-rise.
+        haze_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
         haze_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
 
         haze_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);

@@ -79,6 +79,12 @@ uniform float ss_cloud_alt_m; // the LAYER'S OWN altitude, metres - what a metre
 // ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the
 // layer against the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
 uniform float ss_cloud_depth;
+
+// <SS:Nexii> How much of the sun's disc has cleared the horizon
+// (SSAtmoEnvApplier::sunRiseFraction): 0 fully set - or no active Atmo environment, which is
+// exactly stock - up to 1 fully risen. The layer's sun glow ramps on it below, because stock
+// switches the glow the moment the disc's centre crosses zero.
+uniform float ss_sun_rise;
 #endif
 // </SS:Nexii>
 
@@ -226,6 +232,16 @@ void main()
     // Add "minimum anti-solar illumination"
     // For sun, add to glow.  For moon, remove glow entirely. SL-13768
     haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (haze_glow + 0.25);
+
+#ifdef SS_ATMO
+    // <SS:Nexii> The glow is the light the disc sheds: it grows from nothing with the risen share
+    // of the disc instead of snapping on at centre-rise (sun_moon_glow_factor flips on
+    // getIsSunUp, the same centre-crossing step). At full rise this is the stock sun value.
+    if (ss_sun_rise > 0.0)
+    {
+        haze_glow = ss_sun_rise * (haze_glow + 0.25);
+    }
+#endif
 
     // Increase ambient when there are more clouds
     vec3 tmpAmbient = ambient_color;

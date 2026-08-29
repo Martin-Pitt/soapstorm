@@ -359,6 +359,11 @@ public:
         SNAPSHOT_BORDER_THICKNESS,          // "border_thickness"
         SNAPSHOT_FRAME_RECT,                // "frame_rect"
         // </FS:Beq>
+
+        // <SS:Nexii> Atmo Magic: how much of the sun's disc has cleared the horizon - the
+        // sunrise/sunset ramp the sky dome, the dome clouds and the atmospheric module shade
+        // their sun glow and haze with (see SSAtmoEnvApplier::sunRiseFraction). 0 is stock.
+        SS_SUN_RISE,                        //  "ss_sun_rise"
         END_RESERVED_UNIFORMS
     } eGLSLReservedUniforms;
     // clang-format on

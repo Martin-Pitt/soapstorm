@@ -31,6 +31,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "ssatmoenvasset.h"
 
@@ -60,8 +61,33 @@ public:
     bool isModified() const;
     void revertToBaseline();
 
+    // <SS:Nexii> The creation seeds behind the floater's Create Environment chooser. All of them
+    // write a fresh notecard into the Atmo Magic folder and hand it back through on_created.
+    //
+    // The stock day cycle: the four shipped seed skies, each measured against the track's own sun
+    // and stamped as keyframes. Also the generic inventory "New Atmo Environment" path.
     static void createDefaultNotecard(const LLUUID& parent_id,
                                        std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
+
+    // Empty: the midday defaults and nothing else - no fetching, no seeding.
+    static void createEmptyNotecard(const LLUUID& parent_id,
+                                    std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
+
+    // A list of skies of the author's choosing, run through the same measure-and-stamp algorithm
+    // as the stock day cycle. Names are for the log only and may be empty. An empty list makes
+    // the empty environment.
+    static void createFromSkies(const std::vector<LLUUID>& sky_asset_ids,
+                                const std::vector<std::string>& sky_names,
+                                const LLUUID& parent_id,
+                                std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
+
+    // An EEP day cycle asset, mapped over: every sky keyframe on its ground-level track is stamped
+    // at the day cycle's own keyframe time, so the authored timings carry across rather than being
+    // re-derived from the suns. The water track is not mapped - the v3 water block is a different
+    // vocabulary from the EEP water preset set.
+    static void createFromDayCycle(const LLUUID& day_cycle_asset_id,
+                                   const LLUUID& parent_id,
+                                   std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
 
     void adoptCreated(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset);
 

@@ -786,9 +786,12 @@ void SSAtmoEnvCloudDome::fromSettingsSky(const LLSettingsSky& sky)
         noise == LLSettingsSky::GetDefaultCloudNoiseTextureId() ? LLUUID::null : noise);
 }
 
-// Stamps a fetched sky's dome values as keyframes at a phase.
-void SSAtmoEnvCloudDome::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase)
+// Stamps a fetched sky's dome values as keyframes at a phase. The dome is one look - colour,
+// density and noise only read against each other - so it imports whole or not at all.
+void SSAtmoEnvCloudDome::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase, U32 groups)
 {
+    if (!(groups & SS_SKY_IMPORT_CLOUDS)) return;
+
     stampKeyframe(mColor,    phase, sky.getCloudColor());
     stampKeyframe(mCoverage, phase, sky.getCloudShadow());
     stampKeyframe(mScale,    phase, sky.getCloudScale());
@@ -926,31 +929,42 @@ void SSAtmoEnvAtmosphere::fromSettingsSky(const LLSettingsSky& sky)
 
 }
 
-// Stamps a fetched sky's atmosphere values as keyframes at a phase.
-void SSAtmoEnvAtmosphere::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase)
+// Stamps a fetched sky's atmosphere values as keyframes at a phase. The group mask picks which
+// clusters take part, so a partial import leaves the fields it does not name untouched.
+void SSAtmoEnvAtmosphere::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase, U32 groups)
 {
-    stampKeyframe(mAmbientColor,  phase, sky.getAmbientColor());
-    stampKeyframe(mBlueHorizon,   phase, sky.getBlueHorizon());
-    stampKeyframe(mBlueDensity,   phase, sky.getBlueDensity());
-    stampKeyframe(mSunlightColor, phase, sky.getSunlightColor());
+    if (groups & SS_SKY_IMPORT_ATMOSPHERE)
+    {
+        stampKeyframe(mBlueHorizon,   phase, sky.getBlueHorizon());
+        stampKeyframe(mBlueDensity,   phase, sky.getBlueDensity());
 
-    stampKeyframe(mHazeHorizon,        phase, sky.getHazeHorizon());
-    stampKeyframe(mHazeDensity,        phase, sky.getHazeDensity());
-    stampKeyframe(mSkyMoistureLevel,   phase, sky.getSkyMoistureLevel());
-    stampKeyframe(mSkyDropletRadius,   phase, sky.getSkyDropletRadius());
-    stampKeyframe(mSkyIceLevel,        phase, sky.getSkyIceLevel());
-    stampKeyframe(mDensityMultiplier,  phase, sky.getDensityMultiplier());
-    stampKeyframe(mDistanceMultiplier, phase, sky.getDistanceMultiplier());
-    stampKeyframe(mMaxAltitude,        phase, sky.getMaxY());
-    stampKeyframe(mReflectionProbeAmbiance, phase, sky.getReflectionProbeAmbiance());
-    stampKeyframe(mSceneGamma,         phase, sky.getGamma());
+        stampKeyframe(mHazeHorizon,        phase, sky.getHazeHorizon());
+        stampKeyframe(mHazeDensity,        phase, sky.getHazeDensity());
+        stampKeyframe(mSkyMoistureLevel,   phase, sky.getSkyMoistureLevel());
+        stampKeyframe(mSkyDropletRadius,   phase, sky.getSkyDropletRadius());
+        stampKeyframe(mSkyIceLevel,        phase, sky.getSkyIceLevel());
+        stampKeyframe(mDensityMultiplier,  phase, sky.getDensityMultiplier());
+        stampKeyframe(mDistanceMultiplier, phase, sky.getDistanceMultiplier());
+        stampKeyframe(mMaxAltitude,        phase, sky.getMaxY());
+    }
 
-    stampKeyframe(mStarBrightness, phase, sky.getStarBrightness());
-    stampKeyframe(mMoonBrightness, phase, sky.getMoonBrightness());
+    if (groups & SS_SKY_IMPORT_LIGHTING)
+    {
+        stampKeyframe(mAmbientColor,  phase, sky.getAmbientColor());
+        stampKeyframe(mSunlightColor, phase, sky.getSunlightColor());
+        stampKeyframe(mReflectionProbeAmbiance, phase, sky.getReflectionProbeAmbiance());
+        stampKeyframe(mSceneGamma,    phase, sky.getGamma());
 
-    const LLColor3 glow = sky.getGlow();
-    stampKeyframe(mGlowSize,  phase, 2.f - glow.mV[0] / 20.f);
-    stampKeyframe(mGlowFocus, phase, glow.mV[2] / -5.f);
+        const LLColor3 glow = sky.getGlow();
+        stampKeyframe(mGlowSize,  phase, 2.f - glow.mV[0] / 20.f);
+        stampKeyframe(mGlowFocus, phase, glow.mV[2] / -5.f);
+    }
+
+    if (groups & SS_SKY_IMPORT_CELESTIAL)
+    {
+        stampKeyframe(mStarBrightness, phase, sky.getStarBrightness());
+        stampKeyframe(mMoonBrightness, phase, sky.getMoonBrightness());
+    }
 }
 
 // Fields all keyframes agree on collapse back to plain values.

@@ -27,6 +27,7 @@
 #include "ssatmotrack.h"
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvbridge.h"
+#include "ssatmoenvmanager.h"
 #include "ssrainshadow.h"
 #include "ssavatarwet.h"
 #include "ssvolcloud.h"
@@ -191,7 +192,13 @@ void SSAtmoMagic::refreshParams()
 
     SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     mTrack = tracks->currentTrack();
-    const SSAtmoTrackConfig& cfg = v3_active ? v3_cfg : tracks->config(mTrack);
+
+    // <SS:Nexii> An environment is the whole system's master gate, not just the sky's: with none
+    // resolved, every Atmo Magic feature - precipitation, wind, lightning, the sound engine,
+    // footsteps - stands down and the viewer runs pristine. The deprecated legacy track layer no
+    // longer drives anything here; ssatmoenvapplier.cpp's want_active is the sky-side twin of this.
+    static const SSAtmoTrackConfig no_env_cfg;
+    const SSAtmoTrackConfig& cfg = v3_active ? v3_cfg : no_env_cfg;
 
     const bool track_runs = enabled && cfg.runs();
 
@@ -218,7 +225,10 @@ void SSAtmoMagic::refreshParams()
 
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
 
-    mSwitchedOn = enabled;
+    // <SS:Nexii> Switched-on means the setting AND a live environment: the footstep picker and the
+    // sound-meta analyser read this directly, and both must fall back to stock viewer behaviour
+    // (stock step sounds, no analysis) the moment no environment answers.
+    mSwitchedOn = enabled && v3_active;
 
     mTemperatureC = cfg.mTemperatureC;
 
@@ -733,9 +743,8 @@ void SSAtmoMagic::drawInfo()
 
     std::vector<std::string> lines;
     lines.push_back(llformat("ATMO MAGIC  %s", atmo->isEnabled() ? "[enabled]" : "[disabled]"));
-    SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     lines.push_back(llformat("track      %d of 4   %s   ground zero %.0fm%s",
-                             atmo->track(), tracks->statusText().c_str(),
+                             atmo->track(), SSAtmoEnvManager::getInstance()->statusText().c_str(),
                              atmo->groundZero(), atmo->isSkyTrack() ? " (sky)" : ""));
     if (atmo->trackBlend() < 0.99f)
     {

@@ -243,6 +243,18 @@ struct SSAtmoEnvCloudField
     bool fromLLSD(const LLSD& sd);
 };
 
+// <SS:Nexii> Which clusters of a dropped EEP sky's values an import stamps. A sky arrives as one
+// asset, but its fields read as separate looks - the haze is not the cloud layer is not the light -
+// and an author dropping a sky onto a track they have already tuned usually wants some of it, not
+// all of it. SSFloaterAtmoSkyImport asks which groups before anything is stamped.
+const U32 SS_SKY_IMPORT_ATMOSPHERE = 0x1; // sky gradient, haze, moisture, multipliers, sky ceiling
+const U32 SS_SKY_IMPORT_LIGHTING   = 0x2; // ambient/sunlight colour, gamma, probe ambiance, sun glow
+const U32 SS_SKY_IMPORT_CELESTIAL  = 0x4; // star and moon brightness
+const U32 SS_SKY_IMPORT_CLOUDS     = 0x8; // the legacy dome layer, whole block
+
+const U32 SS_SKY_IMPORT_ALL = SS_SKY_IMPORT_ATMOSPHERE | SS_SKY_IMPORT_LIGHTING
+                            | SS_SKY_IMPORT_CELESTIAL | SS_SKY_IMPORT_CLOUDS;
+
 struct SSAtmoEnvCloudDome
 {
     // <SS:Nexii> The dome layer's own ALTITUDE, metres - what a metre of camera travel is worth to the parallax, and the one authority the disc occlusion shares (doc/atmo_magic_cloud_parallax.md).
@@ -278,7 +290,7 @@ struct SSAtmoEnvCloudDome
 
     void fromSettingsSky(const LLSettingsSky& sky);
 
-    void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase);
+    void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase, U32 groups = SS_SKY_IMPORT_ALL);
 
     void collapseConstantKeyframes();
 
@@ -325,7 +337,7 @@ struct SSAtmoEnvAtmosphere
 
     void fromSettingsSky(const LLSettingsSky& sky);
 
-    void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase);
+    void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase, U32 groups = SS_SKY_IMPORT_ALL);
 
     void collapseConstantKeyframes();
 
