@@ -116,8 +116,12 @@ void SSWaterWorld::update()
 
     if (dirty)
     {
-        mState = state;
+        // <SS:Nexii> Signature is stamped after the rebuild, not before: rebuild's first act is clearWaterObjects, which resets mState so the teardown path (LLWorld::resetClass) leaves nothing
+        // stale behind. Stamping first meant the reset wiped the new signature, every frame came out dirty, and the set was killed and recreated before any object survived to the next frame's
+        // updateGeom - so no SS plane was ever built and, with stock water suppressed, no water rendered at all.
         rebuild(active);
+        mState = state;
+        // </SS:Nexii>
     }
 }
 
