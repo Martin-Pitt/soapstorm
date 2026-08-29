@@ -70,14 +70,17 @@ in vec3 vary_ray_dir;
 
 // One band's base UVs: intersect the view ray with a horizontal plane at the band's own altitude
 // above the camera, anchor at the region centre, subtract the wind travel, and divide by the
-// band's metres-per-UV. Sign conventions are the old vertex patches': world north runs down the
-// texture's v, and the wind travel negates the same way. The grazing clamp holds the intersection
-// finite below ~1.2 degrees of elevation, where the horizon fade has already taken the band's
-// alpha to nothing.
+// band's metres-per-UV. vary_ray_dir rides the dome mesh's Y-up local space (renderDome's 120
+// degree permute: local y is world UP, local x is world Y, local z is world X), so the horizontal
+// components reach plane_xy as (ray.z, ray.x) - east, north, matching region_offset's (world X,
+// world Y) order - and the grazing clamp is on the UP component. Sign conventions are the old
+// vertex patches': world north runs down the texture's v, and the wind travel negates the same
+// way. The clamp holds the intersection finite below ~1.2 degrees of elevation, where the horizon
+// fade has already taken the band's alpha to nothing.
 vec2 ss_plane_base(float alt)
 {
-    float dz = max(vary_ray_dir.z, 0.02);
-    vec2 plane_xy = region_offset + vary_ray_dir.xy * (alt / dz);
+    float dy = max(vary_ray_dir.y, 0.02);
+    vec2 plane_xy = region_offset + vec2(vary_ray_dir.z, vary_ray_dir.x) * (alt / dy);
     float metres_per_uv = 16.0 * alt * cloud_scale;
     return vec2(plane_xy.x - ss_cloud_drift.x, -plane_xy.y + ss_cloud_drift.y) / metres_per_uv;
 }

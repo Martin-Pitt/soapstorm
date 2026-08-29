@@ -46,12 +46,6 @@ namespace
 {
     // The active preset when nothing was ever chosen; mirrors the old settings.xml value.
     const char* DEFAULT_PRESET = "Rain";
-
-    SSAtmoStore& store()
-    {
-        static SSAtmoStore instance;
-        return instance;
-    }
 } // namespace
 
 // ----------------------------------------------------------------------------
@@ -61,6 +55,12 @@ SSAtmoStore::SSAtmoStore()
 :   mState(LLSD::emptyMap())
 {
     load();
+}
+
+SSAtmoStore& SSAtmoStore::store()
+{
+    static SSAtmoStore instance;
+    return instance;
 }
 
 // The one persisted file, next to the weather presets.

@@ -43,11 +43,12 @@ namespace
 
     // <SS:Nexii> The water height the SS family mirrors: the environment's own, the lowest enabled
     // track water, so the authored tide - or a sky build's ocean dialled kilometres below its
-    // platform - is what actually renders. With no track carrying a water plane the region height
-    // stands in; the applier derenders water outright in that state anyway. update() drives this
-    // same height into the region water height store (the hijack below), so underwater detection,
-    // fog flips, the water clip plane, precipitation landing and every other getWaterHeight()
-    // consumer follow the Atmo plane wholesale. </SS:Nexii>
+    // platform - is what actually renders. Each track's tide is authored relative to that track's
+    // floor and visibleWaterHeight() lifts it back to world metres; with no track carrying a water
+    // plane the region height stands in, the applier derendering water outright in that state
+    // anyway. update() drives this same height into the region water height store (the hijack
+    // below), so underwater detection, fog flips, the water clip plane, precipitation landing and
+    // every other getWaterHeight() consumer follow the Atmo plane wholesale. </SS:Nexii>
     F32 ss_atmo_water_height(bool& out_valid)
     {
         out_valid = false;
@@ -317,7 +318,7 @@ void SSWaterWorld::rebuild(bool active)
         }
         const F64 width = (F64)regionp->getWidth();
         const LLVector3d& origin = regionp->getOriginGlobal();
-        // Region water convention (llsurface.cpp): the plane sits exactly at water height with zero Z scale. Every region shares the environment's one height - the Atmo authored tide, not each sim's own.
+        // Region water convention (llsurface.cpp): the plane sits exactly at water height with zero Z scale. Every region shares the environment's one height - the Atmo resolved tide (floor-relative authored heights lifted to world), not each sim's own.
         waterp->setPositionGlobal(LLVector3d(origin.mdV[0] + width * 0.5, origin.mdV[1] + width * 0.5, (F64)atmo_height));
         waterp->setScale(LLVector3((F32)width, (F32)width, 0.f));
         gPipeline.createObject(waterp);

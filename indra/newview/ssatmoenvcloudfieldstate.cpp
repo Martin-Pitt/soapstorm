@@ -25,9 +25,11 @@
 
 #include "ssatmoenvcloudfieldstate.h"
 
-// Derives the live cloud field (coverage, height, gloom, churn) from the authored tunables and the moisture/convection cube.
+// Derives the live cloud field (coverage, height, gloom, churn) from the authored tunables and the moisture/convection cube. The authored base height is an offset above the track's floor, so the
+// floor rides along here - everything downstream of this resolver is world-frame.
 SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvCloudField& field,
-                                                             F32 moisture, F32 convection, F64 phase)
+                                                              F32 moisture, F32 convection, F64 phase,
+                                                              F32 track_floor_z)
 {
     SSAtmoEnvCloudFieldState state;
 
@@ -49,7 +51,7 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     state.mCoverage = (1.f - dry * dry * dry) * llmax(0.f, coverage_scale);
 
     const F32 height_factor = 1.f + llclamp(convection, 0.f, 1.f) * 4.f;
-    state.mBaseHeightM = base_height;
+    state.mBaseHeightM = track_floor_z + base_height;
     state.mThicknessM = llmax(0.f, thickness) * height_factor;
 
     state.mBaseTexture = field.mBaseTexture.valueAt(phase);
@@ -75,7 +77,8 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     return state;
 }
 
-// Auto mode: plausible base height, thickness and darkening straight from moisture and convection when nothing is authored.
+// Auto mode: plausible base height, thickness and darkening straight from moisture and convection when nothing is authored. The base is an offset above the track's floor, not a world altitude -
+// the ground track sits at zero, where the two coincide.
 void SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(F32 moisture, F32 convection,
                                                      F32& out_base_height, F32& out_thickness,
                                                      F32& out_coverage_scale, F32& out_darkening)

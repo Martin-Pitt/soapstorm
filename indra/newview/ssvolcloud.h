@@ -83,6 +83,10 @@ public:
     // ground a drop's column reaches.
     F32 precipBaseZ() const;
 
+    // Whether the weather deck has a built field and a noise map read back - checked before
+    // precipitation pays for any of the gating.
+    bool precipNoiseReady() const;
+
 private:
     struct Puff
     {
@@ -157,6 +161,9 @@ private:
 
     // Wrapped bilinear sample of the cached grid, or -1 when the deck has no map cached yet.
     F32 noiseSample(const Deck& deck, F32 air_x, F32 air_y) const;
+
+    // Folds the noise map's raw readback into the deck's small wrapped sample grid.
+    void cacheNoiseGrid(Deck& deck, LLImageRaw* raw);
 
     // Which deck the weather reads: the authored source when it names the under deck and that
     // deck is on, the main field otherwise - the same default every "how much cloud is overhead"

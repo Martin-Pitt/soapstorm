@@ -26,6 +26,7 @@
 #include "ssprecipitation.h"
 #include "ssprecipvariants.h"
 #include "ssrainshadow.h"
+#include "ssvolcloud.h"
 #include "sswindflow.h"
 
 #include "llagent.h"
@@ -538,15 +539,51 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
     const F32 headroom = (fill < 0.7f) ? 1.f : llmax(0.f, (1.f - fill) / 0.3f);
 
     const F32 area_factor = atmo->areaFactorAt((cx + 0.5) * spec.mCell, (cy + 0.5) * spec.mCell);
-    const F32 p = powf(atmo->precipitation(), 1.4f);
+
+    const F32 cell_agent_x = (F32)((F64)cx * spec.mCell - agent_origin_global.mdV[VX]);
+    const F32 cell_agent_y = (F32)((F64)cy * spec.mCell - agent_origin_global.mdV[VY]);
+
+    // <SS:Nexii> The deck's convection noise map, asked about the column this cell's weather
+    // falls out of - and asked where the rain COMES FROM, not where it lands. Wind tips the
+    // fall, so a drop that lands here entered the deck's base a wind-drift upwind of here;
+    // sampling the tilted point is what keeps it raining on a spot right under a gap when the
+    // wind carries the weather across it, and what dries the spot the wind has carried AWAY
+    // from. Presence gates the rate - a hole in the map takes its rain with it - and the tower
+    // weight tweaks intensity slightly toward the high, dense parts. Weather that rises from
+    // the ground never passes through the deck and is left alone.
+    // [interaction: SSVolCloud]
+    F32 noise_presence = 1.f;
+    F32 noise_tower = 0.f;
+    if (!preset.risesFromGround())
+    {
+        SSVolCloud* vol = SSVolCloud::getInstance();
+        if (vol && vol->precipNoiseReady())
+        {
+            const LLVector3 cell_mid(cell_agent_x + spec.mCell * 0.5f,
+                                     cell_agent_y + spec.mCell * 0.5f,
+                                     cam_agent.mV[VZ]);
+            LLVector3 hit;
+            bool on_water = false;
+            if (SSRainShadowMap::getInstance()->resolveColumn(cell_mid, hit, on_water))
+            {
+                const LLVector3 wind_h = windAt(hit);
+                const F32 fall_t = llmax(0.f, vol->precipBaseZ() - hit.mV[VZ])
+                                 / llmax(0.1f, preset.mFallSpeed);
+                const LLVector2 gate = vol->precipNoiseAt(
+                    hit - LLVector3(wind_h.mV[VX], wind_h.mV[VY], 0.f) * fall_t);
+                noise_presence = gate.mV[VX];
+                noise_tower = gate.mV[VY];
+            }
+        }
+    }
+
+    const F32 p = powf(atmo->precipitation(), 1.4f)
+                * noise_presence * (0.85f + 0.30f * noise_tower);
 
     const F32 mean_full = preset.mRate * spec.mRateScale * p * area_factor * env
                           * llclamp((F32)density, 0.1f, 3.f)
                           * spec.mCell * spec.mCell / (F32)spec.mHz;
     mTierSpawnAccum[tier] += mean_full;
-
-    const F32 cell_agent_x = (F32)((F64)cx * spec.mCell - agent_origin_global.mdV[VX]);
-    const F32 cell_agent_y = (F32)((F64)cy * spec.mCell - agent_origin_global.mdV[VY]);
 
     const F32 impact_reach = IMPACT_QUEUE_RADIUS + spec.mCell * 1.5f;
     const F32 cell_dx = cell_agent_x + spec.mCell * 0.5f - cam_agent.mV[VX];
@@ -894,7 +931,29 @@ F32 SSPrecipSim::dropRateAt(const LLVector3& pos_agent)
 
     const LLVector3d global = gAgent.getPosGlobalFromAgent(pos_agent);
     const F32 area_factor = atmo->areaFactorAt(global.mdV[VX], global.mdV[VY]);
-    const F32 p = powf(atmo->precipitation(), 1.4f);
+    F32 p = powf(atmo->precipitation(), 1.4f);
+
+    // <SS:Nexii> The same noise gate the spawner runs, wind tilt included: whatever consumes
+    // the arrival rate - impacts, wetness, the sound of it - follows the holes and the dense
+    // parts of the deck rather than averaging over them. [interaction: SSVolCloud]
+    if (!preset.risesFromGround())
+    {
+        SSVolCloud* vol = SSVolCloud::getInstance();
+        if (vol && vol->precipNoiseReady())
+        {
+            LLVector3 hit;
+            bool on_water = false;
+            if (SSRainShadowMap::getInstance()->resolveColumn(pos_agent, hit, on_water))
+            {
+                const LLVector3 wind_h = windAt(hit);
+                const F32 fall_t = llmax(0.f, vol->precipBaseZ() - hit.mV[VZ])
+                                 / llmax(0.1f, preset.mFallSpeed);
+                const LLVector2 gate = vol->precipNoiseAt(
+                    hit - LLVector3(wind_h.mV[VX], wind_h.mV[VY], 0.f) * fall_t);
+                p *= gate.mV[VX] * (0.85f + 0.30f * gate.mV[VY]);
+            }
+        }
+    }
 
     return preset.mRate * TIER_SPEC[TIER_DROPS].mRateScale * p * area_factor
          * atmo->gustEnvelopeAt(atmo->sharedTime())

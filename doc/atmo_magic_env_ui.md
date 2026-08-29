@@ -130,9 +130,13 @@ is viewer-facing output. Both leave the rail in layer mode holding context with 
 
 ### The weather bracket
 
-Precipitation occupies a span, so it draws as a bracket rather than a thumb. The reference surface
-is `max(track.mFloorZ, water height)`, with the track's own `mWater.mEnabled` deciding whether the
-water term counts at all. The top is the delivering deck.
+Precipitation occupies a span, so it draws as a bracket rather than a thumb. The layer rail and
+everything on it live in the track's own frame: the water plane's height and both decks' base
+heights are metres relative to the track floor (`SSAtmoEnvTrack::mFloorZ`), negative below it, and
+the renderer's resolvers add the floor back where they render (`visibleWaterHeight()`, the cloud
+field resolver). The reference surface is therefore `max(0, water height)` in the rail's frame,
+with the track's own `mWater.mEnabled` deciding whether the water term counts at all. The top is
+the delivering deck.
 
 The delivering deck defaults to the lowest enabled deck above the reference surface, which resolves
 correctly for the sky case by construction - the under deck hangs below the platform floor, so it
@@ -208,9 +212,10 @@ Camera shock and impact radius exist as disabled stubs on the preset editor's Im
 reads them yet.
 
 The world template values in `ssAtmoEnvTemplates()` are starting points rather than authored
-presets. They place a coherent stack for each archetype - the sky archipelago puts water at -2000m
-with an under deck at 900m and the main deck at 2600m, the barrage puts a thick dark deck at 700m -
-but the colours and weather numbers want dialling against the real renderer.
+presets. They place a coherent stack for each archetype - the sky archipelago puts water 2000m
+below the track floor with an under deck 900m above it and the main deck 2600m up, the barrage
+puts a thick dark deck 700m up (all heights floor-relative) - but the colours and weather numbers
+want dialling against the real renderer.
 
 ## Deliberately not done
 

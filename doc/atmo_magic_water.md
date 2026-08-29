@@ -58,12 +58,13 @@ and cross-sim track sharing are future work.
 
 ## The height hijack
 
-The SS planes render at the environment's water height - the lowest enabled track water - and
-`SSWaterWorld` drives that same height into the region water height store (`LLSurface`'s stock
-water object) every frame while Atmo owns the scene. Every consumer that reads
-`getWaterHeight()` therefore follows the Atmo plane without being taught one by one: underwater
-detection, the fog flips and the water clip plane, the camera's submerged test, precipitation
-landing and the rain shadow floor, avatar swimming, the parcel overlay's waterline.
+The SS planes render at the environment's water height - the lowest enabled track water, each
+track's authored tide being relative to that track's floor and lifted to world metres by
+`visibleWaterHeight()` - and `SSWaterWorld` drives that same height into the region water height
+store (`LLSurface`'s stock water object) every frame while Atmo owns the scene. Every consumer
+that reads `getWaterHeight()` therefore follows the Atmo plane without being taught one by one:
+underwater detection, the fog flips and the water clip plane, the camera's submerged test,
+precipitation landing and the rain shadow floor, avatar swimming, the parcel overlay's waterline.
 
 - Originals are captured at first hijack and put back on deactivate (or whenever no track
   carries a water plane), with one `LLWorld::updateWaterObjects()` so the stock hole/skirt

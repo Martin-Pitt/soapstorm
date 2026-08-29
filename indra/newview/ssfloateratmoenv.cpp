@@ -260,6 +260,7 @@ bool SSFloaterAtmoEnv::postBuild()
         { "cloud_storm_dark",  [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mStormDarkening; },  false },
         { "cloud_texture_mix", [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mTextureMix; },      false },
         { "cloud_detail_scale",[clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mDetailScale; },     false },
+        { "cloud_noise_scale", [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mNoiseScale; },      false },
         { "cloud_drift_rate",  [clouds]() -> SSAtmoEnvKeyframed<F32>& { return clouds().mDriftRate; },       false },
     };
     mFloatRows.insert(mFloatRows.end(), cloud_rows.begin(), cloud_rows.end());
@@ -275,6 +276,7 @@ bool SSFloaterAtmoEnv::postBuild()
         { "ucloud_storm_dark",  [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mStormDarkening; },  false },
         { "ucloud_texture_mix", [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mTextureMix; },      false },
         { "ucloud_detail_scale",[under]() -> SSAtmoEnvKeyframed<F32>& { return under().mDetailScale; },     false },
+        { "ucloud_noise_scale", [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mNoiseScale; },      false },
         { "ucloud_drift_rate",  [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mDriftRate; },       false },
     };
     mFloatRows.insert(mFloatRows.end(), under_rows.begin(), under_rows.end());
@@ -326,9 +328,10 @@ bool SSFloaterAtmoEnv::postBuild()
         bindKeyframeButtons<F32>(row.mPrefix, row.mField);
     }
 
-    // <SS:Nexii> The slider keeps its honest near-surface dial (SS_ATMOENV_WATER_CEILING); the
-    // spinner takes the whole authored range by hand, so a sky-themed build can put its ocean
-    // kilometres below the platform. Values past the slider's ends read there pinned at the rail.
+    // <SS:Nexii> The height is authored relative to the track's floor. The slider keeps its
+    // honest near-floor dial (SS_ATMOENV_WATER_CEILING); the spinner takes the whole authored
+    // range by hand, so a sky-themed build can put its ocean kilometres below the track it rides.
+    // Values past the slider's ends read there pinned at the rail. </SS:Nexii>
     getChild<LLSliderCtrl>("water_height_slider")->setMaxValue(SS_ATMOENV_WATER_CEILING);
     getChild<LLSpinCtrl>("water_height_value_spinner")->setMinValue(SS_ATMOENV_WATER_MIN);
     getChild<LLSpinCtrl>("water_height_value_spinner")->setMaxValue(SS_ATMOENV_WATER_MAX);
@@ -374,8 +377,10 @@ bool SSFloaterAtmoEnv::postBuild()
         { "dome_image",       [dome]() -> SSAtmoEnvKeyframed<LLUUID>& { return dome().mNoiseTexture; } },
         { "cloud_field_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mBaseTexture; } },
         { "cloud_detail_image",[clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mDetailTexture; } },
+        { "cloud_noise_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mNoiseTexture; } },
         { "ucloud_field_image", [under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mBaseTexture; } },
         { "ucloud_detail_image",[under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mDetailTexture; } },
+        { "ucloud_noise_image", [under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mNoiseTexture; } },
     };
     for (const KeyRow<LLUUID>& row : mTextureRows)
     {
@@ -934,6 +939,7 @@ S32 SSFloaterAtmoEnv::railCentreForValue(F32 value) const
 // weather when the field owns its numbers, else the authored keyframes. The rail reads this
 // rather than the raw keyframes so its markers and fit follow the deck the renderer draws - an
 // auto deck's height wanders with moisture and convection, and the row it greys out does not.
+// Metres are the rail's own floor-relative frame: above the track's floor, negative below it.
 void SSFloaterAtmoEnv::effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under_deck,
                                          F32& out_base, F32& out_thickness) const
 {
@@ -954,9 +960,12 @@ void SSFloaterAtmoEnv::effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under
 }
 
 // The altitude band the rail covers in layer mode: everything placed inside the selected track,
-// padded, with a floor on the span so a flat stack does not collapse to a point. The dome is
-// excluded deliberately - it is a backdrop pinned above the scale, and a cirrus dome at 6km would
-// otherwise squash the decks being edited into the bottom eighth of the rail.
+// padded, with a floor on the span so a flat stack does not collapse to a point. The rail runs in
+// the track's own frame - metres above its floor, negative below, with zero the floor itself -
+// because the water plane and both decks are authored against that floor and ride it wherever the
+// track sits. The dome is excluded deliberately - it is a backdrop pinned above the scale, and a
+// cirrus dome at 6km would otherwise squash the decks being edited into the bottom eighth of the
+// rail.
 void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
 {
     out_min = 0.f;
@@ -969,8 +978,8 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
     if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
     const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
 
-    F32 lo = track.mFloorZ;
-    F32 hi = track.mFloorZ;
+    F32 lo = 0.f;
+    F32 hi = 0.f;
 
     auto include = [&lo, &hi](F32 value)
     {
@@ -1025,6 +1034,8 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
     }
 }
 
+// The surface precipitation is measured against, in the track's floor-relative frame: the floor
+// itself (zero) unless the track's own water plane sits above it.
 F32 SSFloaterAtmoEnv::weatherReferenceSurface() const
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1034,7 +1045,7 @@ F32 SSFloaterAtmoEnv::weatherReferenceSurface() const
     if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return 0.f;
     const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
 
-    F32 surface = track.mFloorZ;
+    F32 surface = 0.f;
     if (track.mWater.mEnabled)
     {
         surface = llmax(surface, track.mWater.mHeight.valueAt(mPreviewPhase));

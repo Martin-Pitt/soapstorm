@@ -29,6 +29,11 @@
 struct SSAtmoEnvCloudFieldState
 {
     F32 mCoverage = 0.f;
+
+    // <SS:Nexii> The deck's base in WORLD metres: the authored offset above the track floor
+    // (negative below it) with the floor already added. Everything downstream - puff placement,
+    // the dome altitude merge, precipitation's tilt maths - is world-frame and reads this.
+    // </SS:Nexii>
     F32 mBaseHeightM = 800.f;
     F32 mThicknessM = 0.f;
 
@@ -57,8 +62,14 @@ struct SSAtmoEnvCloudFieldState
 class SSAtmoEnvCloudFieldResolver
 {
 public:
-    static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field, F32 moisture, F32 convection, F64 phase);
+    // <SS:Nexii> track_floor_z is the owning track's vertical position (SSAtmoEnvTrack::mFloorZ):
+    // the authored base height - and the auto derivation's answer - are offsets above it, so the
+    // whole deck rides the track. The ground track sits at 0, where nothing changes numerically.
+    // </SS:Nexii>
+    static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field, F32 moisture,
+                                            F32 convection, F64 phase, F32 track_floor_z);
 
+    // Floor-relative: out_base_height is metres ABOVE the track floor the deck should sit at.
     static void deriveAutoBaseline(F32 moisture, F32 convection,
                                    F32& out_base_height, F32& out_thickness, F32& out_coverage_scale, F32& out_darkening);
 };

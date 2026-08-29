@@ -56,6 +56,8 @@ public:
 private:
     SSAtmoStore();
 
+    static SSAtmoStore& store();
+
     void load();
     bool save() const;
     static std::string filePath();

@@ -107,6 +107,11 @@ struct SSAtmoEnvWater
 {
     bool mEnabled = false;
 
+    // <SS:Nexii> Metres relative to the owning track's floor (SSAtmoEnvTrack::mFloorZ), so a
+    // whole stack - deck, water, ocean floor - rides with the track's vertical position instead
+    // of being pinned to world zero: dial a sky build's ocean to -2000 and it stays 2 km below
+    // that build wherever the track itself sits. Resolved to world Z wherever it renders.
+    // </SS:Nexii>
     SSAtmoEnvKeyframed<F32> mHeight{0.f};
 
     SSAtmoEnvKeyframed<LLColor3> mFogColor{LLColor3(0.f, 0.24f, 0.34f)};
@@ -244,6 +249,11 @@ struct SSAtmoEnvCloudField
 
     bool mAuto = true;
 
+    // <SS:Nexii> Metres above the owning track's floor (SSAtmoEnvTrack::mFloorZ), negative for a
+    // deck hung below it - the same floor-relative frame the water plane and the altitude rail's
+    // baseline tick live in, so a whole sky build rides its track's vertical position. The
+    // resolver adds the floor back for rendering (SSAtmoEnvCloudFieldResolver::resolve).
+    // </SS:Nexii>
     SSAtmoEnvKeyframed<F32> mBaseHeightM{800.f};
     SSAtmoEnvKeyframed<F32> mBaseThicknessM{300.f};
 
@@ -431,6 +441,11 @@ struct SSAtmoEnvTrack
 {
     std::string mName = "Ground";
 
+    // <SS:Nexii> The track's vertical position in the world - the floor of the altitude band it
+    // owns, and the reference surface everything placed inside it is authored against: the water
+    // plane's height and both decks' base heights are metres relative to this, and the resolver
+    // adds it back wherever they render. The ground track sits at 0, where relative and world
+    // coincide. </SS:Nexii>
     F32 mFloorZ = 0.f;
 
     F32 mTransitionBuffer = 15.f;
@@ -450,8 +465,8 @@ struct SSAtmoEnvTrack
 
     // <SS:Nexii> The optional under deck: a second volumetric field at the bottom of a
     // sky-themed build - cloud layer below the platform, ocean way below that - whose base
-    // height is authored straight to wherever the build's floor sits. Seeded off, manual,
-    // and low: see SSAtmoEnvCloudField::under().
+    // height is authored against the track floor, typically dialled negative to hang it below
+    // the build. Seeded off, manual, and low: see SSAtmoEnvCloudField::under().
     SSAtmoEnvCloudField mUnderField = SSAtmoEnvCloudField::under();
 
     // <SS:Nexii> Which deck precipitation falls from. Derived by default - the lowest enabled deck
@@ -472,7 +487,10 @@ struct SSAtmoEnvTrack
 // deck under the landmass AND another above it. Seeding those together is what makes the first
 // screen useful to someone who came to build a place rather than to tune haze.
 //
-// Seeding is one-shot: the template is copied into the track and forgotten, with no live link back.
+// The height seeds (water, both decks, the dome) carry the same frames the fields do: water and
+// deck heights are offsets from the track's floor, so a template dialed for a sky build keeps its
+// shape - ocean below, decks above and below the platform - wherever that track sits. Seeding is
+// one-shot: the template is copied into the track and forgotten, with no live link back.
 // A link would mean drift and reconciliation for no gain, since the whole point is that the author
 // dials the result afterwards. Numbers here are starting points, not authored presets - tune them
 // in place. See doc/atmo_magic_env_ui.md.

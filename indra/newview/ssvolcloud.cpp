@@ -34,6 +34,7 @@
 
 #include "llenvironment.h"
 #include "llglslshader.h"
+#include "llimage.h"
 #include "llrender.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
@@ -259,7 +260,7 @@ void SSVolCloud::update(F32 dt)
     mSquashKnee = mSquashCap * 0.8f;
 
     const SSAtmoEnvCloudFieldState field =
-        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, phase);
+        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, phase, track.mFloorZ);
 
     // <SS:Nexii> Which deck the weather's noise gate reads: the authored source when it names
     // the under deck and that deck is on, the main field otherwise - which is every sky build's
@@ -283,7 +284,7 @@ void SSVolCloud::update(F32 dt)
     if (track.mUnderField.mEnabled)
     {
         const SSAtmoEnvCloudFieldState under =
-            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, phase);
+            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, phase, track.mFloorZ);
         if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
         {
             buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT);
@@ -367,15 +368,44 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             const S32 cx = cx0 + dx;
             const S32 cy = cy0 + dy;
 
-            const F32 gate = clusterUnit(cx, cy, salt) * CLUSTER_WEIGHT
-                           + hashUnit(cx, cy, 1u + salt) * (1.f - CLUSTER_WEIGHT);
+            const F32 gate_raw = clusterUnit(cx, cy, salt) * CLUSTER_WEIGHT
+                               + hashUnit(cx, cy, 1u + salt) * (1.f - CLUSTER_WEIGHT);
+
+            // <SS:Nexii> The noise map's say over this cell - two ramps over one sample, taken in
+            // the air frame so the pattern drifts with the deck exactly as the cells do. Presence
+            // runs the hole window: where the map runs low, the cell's gate is pushed toward a
+            // certain skip, and the sky opens. Tower runs the gradient ramp window overlaid on
+            // the same values, and decides what this column does with whatever height it keeps.
+            F32 presence = 1.f;
+            F32 tower = 0.f;
+            noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower);
+
+            const F32 gate = gate_raw + (1.f - gate_raw) * (1.f - presence);
             if (gate > field.mCoverage) continue;
 
             const F32 coreness = llclamp(
                 (field.mCoverage - gate) / llmax(field.mCoverage, 0.01f), 0.f, 1.f);
 
-            const F32 cell_height = CLUSTER_EDGE_HEIGHT
-                + (1.f - CLUSTER_EDGE_HEIGHT) * coreness;
+            // <SS:Nexii> The tower shaping. Convection decides how much say the map gets over
+            // heights at all - a stable sky keeps every column at the cluster's own height and
+            // only the holes differ - and past that the map decides which columns RISE:
+            // tower-weighted cells keep the full climb to the lid while the pockets between
+            // them are held low, which is what stands a cumulonimbus tower up in the gaps of
+            // its own field. The stretch to the towers comes free with the same stroke: a
+            // column the map marks high spans the layer's whole convective thickness, base to
+            // lid, because nothing pulls it back down.
+            const F32 conv_gain = ss_smoothstep(0.12f, 0.55f, convection);
+            const F32 height_shape = lerp(1.f, SS_POCKET_H + (1.f - SS_POCKET_H) * tower, conv_gain);
+
+            const F32 cell_height =
+                (CLUSTER_EDGE_HEIGHT + (1.f - CLUSTER_EDGE_HEIGHT) * coreness) * height_shape;
+
+            // ...and the anvil: the ramp's tower columns take the lid's spread EARLY - flattened
+            // and flared while the convection dial alone still calls for rounded tops - so the
+            // anvil forms on the strong towers first and fills in deck-wide as convection rises.
+            // The deck's own anvil figure stays the ceiling; the ramp can only bring it forward.
+            const F32 cell_anvil = llmax(field.mAnvil,
+                                         ss_smoothstep(0.40f, 0.70f, convection) * tower);
 
             for (S32 sub = 0; sub < PUFFS_PER_CELL; ++sub)
             {
@@ -394,7 +424,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
 
                 const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
                 const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
-                const F32 flat = 1.f + field.mAnvil * coreness * (waist + flare - 1.f);
+                const F32 flat = 1.f + cell_anvil * coreness * (waist + flare - 1.f);
 
                 const LLVector3 to_cam = pos - cam;
                 const F32 dist_sq = to_cam.magVecSquared();
@@ -820,6 +850,58 @@ void SSVolCloud::render()
 // Binds a deck's authored textures, falling back to the sky dome's noise for an empty detail slot - per deck, since the two may carry different maps.
 bool SSVolCloud::fetchDeckTextures(Deck& deck)
 {
+    // <SS:Nexii> The convection noise map: fetched like the other maps, then read back out of
+    // VRAM once it has one - the way sculpties read theirs - into the small wrapped grid the
+    // builder and the precipitation gate sample on the CPU. The GPU never sees this map; it is
+    // a field map, not a surface one. readbackRawImage keeps its own raw copy current as better
+    // mips stream in, so re-caching whenever that copy's size changes keeps the grid honest
+    // through the load.
+    if (deck.mNoise.notNull())
+    {
+        if (deck.mNoiseRef.isNull() || deck.mNoiseRef->getID() != deck.mNoise)
+        {
+            deck.mNoiseRef = LLViewerTextureManager::getFetchedTexture(
+                deck.mNoise, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
+            if (deck.mNoiseRef.notNull())
+            {
+                deck.mNoiseRef->setNoDelete();
+            }
+            deck.mNoiseW = 0;
+            deck.mNoiseH = 0;
+            deck.mNoiseSrcW = 0;
+            deck.mNoiseSrcH = 0;
+            deck.mNoiseLuma.clear();
+        }
+
+        if (deck.mNoiseRef.notNull())
+        {
+            deck.mNoiseRef->addTextureStats((F32)MAX_IMAGE_AREA);
+
+            LLImageRaw* raw = deck.mNoiseRef->getRawImage();
+            if (!raw || raw->getWidth() < deck.mNoiseRef->getWidth()
+                     || raw->getHeight() < deck.mNoiseRef->getHeight())
+            {
+                deck.mNoiseRef->readbackRawImage();
+                raw = deck.mNoiseRef->getRawImage();
+            }
+
+            if (raw && (raw->getWidth() != deck.mNoiseSrcW
+                     || raw->getHeight() != deck.mNoiseSrcH))
+            {
+                cacheNoiseGrid(deck, raw);
+            }
+        }
+    }
+    else if (deck.mNoiseRef.notNull() || deck.mNoiseW > 0)
+    {
+        deck.mNoiseRef = nullptr;
+        deck.mNoiseLuma.clear();
+        deck.mNoiseW = 0;
+        deck.mNoiseH = 0;
+        deck.mNoiseSrcW = 0;
+        deck.mNoiseSrcH = 0;
+    }
+
     if (deck.mTextureRef.isNull() || deck.mTextureRef->getID() != deck.mTexture)
     {
         deck.mTextureRef = LLViewerTextureManager::getFetchedTexture(
@@ -851,4 +933,138 @@ bool SSVolCloud::fetchDeckTextures(Deck& deck)
     }
 
     return true;
+}
+
+// Box-averages the noise map's raw image into the deck's fixed wrapped grid, luminance only: each destination texel the mean of the source block it covers. The field's structure is kilometres
+// wide, so a 64-across grid carries it whole; the point of shrinking it is that the builder and the precipitation gate sample it thousands of times a frame.
+void SSVolCloud::cacheNoiseGrid(Deck& deck, LLImageRaw* raw)
+{
+    const S32 sw = raw->getWidth();
+    const S32 sh = raw->getHeight();
+    const S32 comps = raw->getComponents();
+    if (sw <= 0 || sh <= 0 || comps < 1) return;
+
+    const U8* data = raw->getData();
+    deck.mNoiseLuma.assign((size_t)SS_NOISE_GRID * SS_NOISE_GRID, 0.f);
+
+    for (S32 gy = 0; gy < SS_NOISE_GRID; ++gy)
+    {
+        const S32 sy0 = llclamp((S32)((F64)gy * sh / SS_NOISE_GRID), 0, sh - 1);
+        const S32 sy1 = llclamp(llmax(sy0 + 1, (S32)((F64)(gy + 1) * sh / SS_NOISE_GRID)), 1, sh);
+        for (S32 gx = 0; gx < SS_NOISE_GRID; ++gx)
+        {
+            const S32 sx0 = llclamp((S32)((F64)gx * sw / SS_NOISE_GRID), 0, sw - 1);
+            const S32 sx1 = llclamp(llmax(sx0 + 1, (S32)((F64)(gx + 1) * sw / SS_NOISE_GRID)), 1, sw);
+
+            F64 sum = 0.0;
+            for (S32 y = sy0; y < sy1; ++y)
+            {
+                const U8* row = data + (size_t)y * sw * comps;
+                for (S32 x = sx0; x < sx1; ++x)
+                {
+                    const U8* px = row + (size_t)x * comps;
+                    // Luminance the same way the shaders read their maps - the mean of RGB
+                    // when there are three channels to mean, the one channel otherwise.
+                    const F32 lum = (comps >= 3)
+                        ? (F32)(px[0] + px[1] + px[2]) / 765.f
+                        : (F32)px[0] / 255.f;
+                    sum += lum;
+                }
+            }
+            deck.mNoiseLuma[(size_t)gy * SS_NOISE_GRID + gx] = (F32)(sum / (F64)((sy1 - sy0) * (sx1 - sx0)));
+        }
+    }
+
+    deck.mNoiseW = SS_NOISE_GRID;
+    deck.mNoiseH = SS_NOISE_GRID;
+    deck.mNoiseSrcW = sw;
+    deck.mNoiseSrcH = sh;
+}
+
+// One wrapped bilinear read of the cached grid at an air-frame position, in map values. Anything that stops the read - no map, no readback yet - answers a negative, which every
+// consumer treats as "no map": the field stands unmodulated.
+F32 SSVolCloud::noiseSample(const Deck& deck, F32 air_x, F32 air_y) const
+{
+    const S32 w = deck.mNoiseW;
+    const S32 h = deck.mNoiseH;
+    if (w <= 0 || h <= 0 || deck.mNoiseLuma.empty() || deck.mNoiseTileM <= 0.f) return -1.f;
+
+    const F32 fx = air_x / deck.mNoiseTileM * (F32)w - 0.5f;
+    const F32 fy = air_y / deck.mNoiseTileM * (F32)h - 0.5f;
+
+    const S32 ix = llfloor(fx);
+    const S32 iy = llfloor(fy);
+    const F32 tx = fx - (F32)ix;
+    const F32 ty = fy - (F32)iy;
+
+    // The map tiles, exactly as it draws: wrap both axes, so a field kilometres across never
+    // falls off the edge of its own pattern.
+    const S32 x0 = ((ix % w) + w) % w;
+    const S32 y0 = ((iy % h) + h) % h;
+    const S32 x1 = (x0 + 1) % w;
+    const S32 y1 = (y0 + 1) % h;
+
+    const F32 c00 = deck.mNoiseLuma[(size_t)y0 * w + x0];
+    const F32 c10 = deck.mNoiseLuma[(size_t)y0 * w + x1];
+    const F32 c01 = deck.mNoiseLuma[(size_t)y1 * w + x0];
+    const F32 c11 = deck.mNoiseLuma[(size_t)y1 * w + x1];
+
+    const F32 top = c00 + (c10 - c00) * tx;
+    const F32 bot = c01 + (c11 - c01) * tx;
+    return top + (bot - top) * ty;
+}
+
+// The noise map's two ramps at one point of a deck's field: presence (1 = cloud whole, 0 = a hole the map cut) and tower (0 = pocket, 1 = a rising thermal's column). The hole window's
+// strength was baked at build time - moisture's floor lift and convection's storm-gap keep are
+// already inside it, so every reader of the field gets the same sky.
+void SSVolCloud::noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower) const
+{
+    presence = 1.f;
+    tower = 0.f;
+
+    const F32 n = noiseSample(deck, air_x, air_y);
+    if (n < 0.f) return;
+
+    const F32 cut = ss_smoothstep(SS_HOLE_LO, SS_HOLE_HI, n);
+    presence = 1.f - (1.f - cut) * deck.mNoiseHole;
+    tower = ss_smoothstep(SS_TOWER_LO, SS_TOWER_HI, n);
+}
+
+// The deck the weather reads, resolved at build time - see update().
+const SSVolCloud::Deck* SSVolCloud::weatherDeck() const
+{
+    return (mWeatherDeck == 1) ? &mUnder : &mPrimary;
+}
+
+// Whether the precipitation gate has anything to say: a built weather deck with a noise map read back. Checked before any rain-shadow work so a plain sky pays nothing.
+bool SSVolCloud::precipNoiseReady() const
+{
+    const Deck* deck = weatherDeck();
+    return deck && !deck->mPuffs.empty() && deck->mNoiseW > 0 && deck->mNoiseTileM > 0.f;
+}
+
+LLVector2 SSVolCloud::precipNoiseAt(const LLVector3& pos_agent) const
+{
+    const Deck* deck = weatherDeck();
+    if (!deck || deck->mPuffs.empty() || deck->mNoiseW <= 0 || deck->mNoiseTileM <= 0.f)
+    {
+        return LLVector2(1.f, 0.f);
+    }
+
+    // The air frame, the same one the cells are placed in, so the gate moves with the deck.
+    const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+
+    F32 presence = 1.f;
+    F32 tower = 0.f;
+    noiseFieldAt(*deck,
+                 pos_agent.mV[VX] - drift.mV[0],
+                 pos_agent.mV[VY] - drift.mV[1],
+                 presence, tower);
+    return LLVector2(presence, tower);
+}
+
+F32 SSVolCloud::precipBaseZ() const
+{
+    const Deck* deck = weatherDeck();
+    return (deck && !deck->mPuffs.empty()) ? deck->mBaseZ : cloudBaseZ();
 }

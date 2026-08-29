@@ -97,6 +97,33 @@ namespace
             && !body.mHasRing
             && body.mCustomTexture == standard.mCustomTexture;
     }
+    // The default planetary system a freshly created track starts with: the standard sun, an
+    // Earth-sized home planet and a moon, built by the same code that defines "standard" for the
+    // sky import's body groups, so the two can never drift apart.
+    void seedDefaultPlanetary(SSAtmoEnvPlanetary& planetary)
+    {
+        planetary = SSAtmoEnvPlanetary();
+        planetary.mBodies.push_back(standardSunBody());
+
+        SSAtmoEnvCelestialBody home;
+        home.mKind = SSAtmoEnvCelestialBody::PLANET;
+        home.mParentIndex = 0;
+        home.mDiameterM = 1.2742e7f;
+        home.mMassRelative = 1.f;
+        home.mOrbitalRadius = 1.496e11f;
+        home.mAxialTiltDeg = 23.44f;
+        home.mLatitudeDeg = 50.f;
+        home.mOrbitalInclinationDeg = 7.155f;
+        home.mOrbitalPhaseDeg = 0.f;
+        home.mIsHome = true;
+        planetary.mBodies.push_back(home);
+
+        SSAtmoEnvCelestialBody moon = standardMoonBody();
+        moon.mParentIndex = 1;
+        planetary.mBodies.push_back(moon);
+
+        planetary.autoNameBodies();
+    }
 }
 
 // The weather cube out to its notecard document.
@@ -842,7 +869,7 @@ SSAtmoEnvCloudField::SSAtmoEnvCloudField()
 }
 
 // The under deck's seed: off until asked for, manual rather than auto-derived, and a low flat
-// deck whose base the author dials to the sky build's floor.
+// deck whose base the author dials against the track floor - negative to hang it below the build.
 SSAtmoEnvCloudField SSAtmoEnvCloudField::under()
 {
     SSAtmoEnvCloudField field;
@@ -1260,7 +1287,9 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
 }
 
 // <SS:Nexii> The world template table. Ordered roughly by how far each sits from a stock region, so
-// the combo reads as a walk outwards from the familiar rather than an alphabetised list.
+// the combo reads as a walk outwards from the familiar rather than an alphabetised list. Water and
+// deck heights are offsets from the track floor (see SSAtmoEnvTemplate), so the sky archipelago's
+// -2000 m ocean hangs two kilometres below whatever platform the track carries.
 const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates()
 {
     static const std::vector<SSAtmoEnvTemplate> templates = {
@@ -1447,28 +1476,8 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
         ground.mWater.mHeight = SSAtmoEnvKeyframed<F32>(region ? region->getWaterHeight() : 20.f);
     }
 
-    // The standard bodies the sky import's body groups check against - built by the same code
-    // that defines "standard", so the two can never drift apart.
-    ground.mPlanetary.mBodies.push_back(standardSunBody());
-
-    SSAtmoEnvCelestialBody home;
-    home.mKind = SSAtmoEnvCelestialBody::PLANET;
-    home.mParentIndex = 0;
-    home.mDiameterM = 1.2742e7f;
-    home.mMassRelative = 1.f;
-    home.mOrbitalRadius = 1.496e11f;
-    home.mAxialTiltDeg = 23.44f;
-    home.mLatitudeDeg = 50.f;
-    home.mOrbitalInclinationDeg = 7.155f;
-    home.mOrbitalPhaseDeg = 0.f;
-    home.mIsHome = true;
-    ground.mPlanetary.mBodies.push_back(home);
-
-    SSAtmoEnvCelestialBody moon = standardMoonBody();
-    moon.mParentIndex = 1;
-    ground.mPlanetary.mBodies.push_back(moon);
-
-    ground.mPlanetary.autoNameBodies();
+    // The standard bodies - same seeding every new track gets in addTrack().
+    seedDefaultPlanetary(ground.mPlanetary);
 
     asset.mTracks.push_back(ground);
     return asset;
@@ -1489,6 +1498,8 @@ bool SSAtmoEnvAsset::addTrack()
                             SS_ATMOENV_REGION_CEILING - SPACING);
 
     track.mName = nextDefaultTrackName();
+
+    seedDefaultPlanetary(track.mPlanetary);
 
     mTracks.push_back(track);
     sortTracksByAltitude();
@@ -1560,7 +1571,9 @@ F32 SSAtmoEnvAsset::trackCeilingZ(S32 index) const
     return ceiling;
 }
 
-// The water height of whichever track owns a visible water plane, if any.
+// The water height of whichever track owns a visible water plane, if any, in world metres: each
+// candidate is the track's authored tide (relative to its floor) lifted by the floor itself, and
+// the lowest of those wins - only one plane ever renders.
 bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
 {
     bool found = false;
@@ -1569,7 +1582,7 @@ bool SSAtmoEnvAsset::visibleWaterHeight(F32& out_height) const
     {
         if (!track.mWater.mEnabled) continue;
 
-        const F32 height = track.mWater.mHeight.valueAt(track.currentDayCyclePhase());
+        const F32 height = track.mFloorZ + track.mWater.mHeight.valueAt(track.currentDayCyclePhase());
 
         if (!found || height < lowest)
         {
