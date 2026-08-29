@@ -25,6 +25,8 @@
 
 #include "ssatmoenvmanager.h"
 
+#include "ssprecippreset.h"
+
 #include "ssatmoenvplanetarystate.h"
 
 #include <algorithm>
@@ -426,6 +428,9 @@ void SSAtmoEnvManager::saveNotecard(const std::string& name)
 
     mWorking.mName = save_name;
 
+    // Self-containment is a save-time property: whatever the keyframes name travels with the asset.
+    ssAtmoEnvEmbedReferencedPrecipTypes(mWorking);
+
     mBaseline = mWorking;
 
     if (mItemID.notNull())
@@ -650,6 +655,7 @@ void SSAtmoEnvManager::unload()
     mBaseline = SSAtmoEnvAsset();
     mSourceAssetId.setNull();
     mFromParcel = false;
+    SSPrecipPresetManager::instance().clearEnvironmentPresets();
     clearPreviewPhaseOverride();
 }
 
@@ -669,5 +675,7 @@ bool SSAtmoEnvManager::adoptParsedAsset(const LLSD& sd)
     mWorking = parsed_asset;
     mHasAsset = true;
     mStatus = "Ready.";
+    // The environment's own precipitation types have to be live before anything resolves one.
+    ssAtmoEnvStagePrecipTypes(mWorking);
     return true;
 }

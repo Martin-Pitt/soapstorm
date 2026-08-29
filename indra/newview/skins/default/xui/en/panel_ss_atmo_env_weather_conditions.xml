@@ -2,43 +2,440 @@
 <panel
  border="true"
  follows="all"
- label="Volumetric Field"
+ label="Conditions"
  layout="topleft"
  left="0"
- name="panel_ss_atmo_env_clouds_volumetric"
+ name="panel_ss_atmo_env_weather_conditions"
  top="0"
  width="580"
- height="1180">
-    <!-- <SS:Nexii> Atmo Magic: Clouds > Volumetric Field sub-tab - the
-         storm layer's artist baseline. Live coverage/density derive from
-         these plus the weather cube's moisture/convection (see
-         ssatmoenvcloudfieldstate); the legacy Windlight cloud plane
-         (cirrus) is the Sky Dome sub-tab's, untouched by anything here.
+ height="580">
+    <!-- <SS:Nexii> Atmo Magic: Weather > Conditions - the simulation inputs. What
+         the air is doing, before anything falls out of it or discharges through
+         it. Lightning and precipitation are outputs and live on their own
+         sub-tabs. See doc/atmo_magic_env_ui.md. -->
 
-         Units live in the parameter label rather than glued to the number,
-         same as every other tab - one shared right-aligned spinner column. -->
+    <!-- <SS:Nexii> Atmo Magic: the moisture/convection/temperature cube,
+         AE-style keyframe rows - see ssatmoenvkeyframe.h and the FloatRow
+         comment in ssfloateratmoenv.h.
 
-    <check_box
+         Units live in the parameter label rather than glued to the number.
+         That is what lets every tab share one right-aligned spinner column
+         instead of each number drifting by the width of its own suffix. -->
+
+    <text
      follows="left|top"
      layout="topleft"
      left="10"
      top="10"
+     height="14"
+     width="110"
+     name="moisture_label"
+     font="SansSerifSmall">
+        Moisture
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="moisture_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.001"
+     initial_value="0" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="moisture_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.001"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="moisture_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="moisture_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="moisture_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="convection_label"
+     font="SansSerifSmall">
+        Convection
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="convection_slider"
+     show_text="false"
+     min_val="0"
+     max_val="1"
+     increment="0.001"
+     initial_value="0" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="convection_value_spinner"
+     min_val="0"
+     max_val="1"
+     increment="0.001"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="convection_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="convection_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="convection_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="temperature_label"
+     font="SansSerifSmall">
+        Temperature (&#176;C)
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="temperature_slider"
+     show_text="false"
+     min_val="-30"
+     max_val="40"
+     increment="1"
+     initial_value="-30" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="temperature_value_spinner"
+     min_val="-30"
+     max_val="40"
+     increment="1"
+     decimal_digits="0" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="temperature_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="temperature_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="temperature_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="wind_heading_label"
+     font="SansSerifSmall">
+        Wind Heading (&#176;)
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="wind_heading_slider"
+     show_text="false"
+     min_val="0"
+     max_val="360"
+     increment="1"
+     initial_value="0" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="wind_heading_value_spinner"
+     min_val="0"
+     max_val="360"
+     increment="1"
+     decimal_digits="0" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="wind_heading_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_heading_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_heading_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="wind_speed_label"
+     font="SansSerifSmall">
+        Wind Speed (m/s)
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="wind_speed_slider"
+     show_text="false"
+     min_val="0"
+     max_val="30"
+     increment="1"
+     initial_value="0" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="wind_speed_value_spinner"
+     min_val="0"
+     max_val="30"
+     increment="1"
+     decimal_digits="0" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="wind_speed_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_speed_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="wind_speed_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <!-- Gust and lightning default from the cube; unchecking an Auto box
+         hands its rows below over to the author. The Auto boxes themselves
+         are structural toggles like the water enable, not keyframe rows. -->
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
      height="16"
      width="360"
-     name="cloud_auto_check"
-     label="Auto (derive from moisture and convection)"
-     tool_tip="Derives the baseline below from the weather cube. The greyed rows show what Auto computed for the current preview time; authored values are kept and come back when Auto is turned off" />
+     name="gust_auto_check"
+     label="Gust Auto"
+     tool_tip="Derive gust behaviour from the moisture/convection/temperature cube; uncheck to author the rows below directly" />
 
     <text
      follows="left|top"
      layout="topleft"
      left="10"
-     top_pad="12"
+     top_pad="10"
      height="14"
      width="110"
-     name="cloud_base_height_label"
+     name="gust_depth_label"
      font="SansSerifSmall">
-        Base Height (m)
+        Gust Depth
     </text>
     <slider
      follows="left|top"
@@ -47,11 +444,11 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="cloud_base_height_slider"
+     name="gust_depth_slider"
      show_text="false"
      min_val="0"
-     max_val="4096"
-     increment="25"
+     max_val="3"
+     increment="0.05"
      initial_value="0" />
     <spinner
      follows="left|top"
@@ -61,10 +458,88 @@
      height="20"
      width="70"
      label_width="0"
-     name="cloud_base_height_value_spinner"
+     name="gust_depth_value_spinner"
      min_val="0"
-     max_val="4096"
-     increment="25"
+     max_val="3"
+     increment="0.05"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="gust_depth_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="gust_depth_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="gust_depth_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="gust_length_label"
+     font="SansSerifSmall">
+        Gust Spacing (m)
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="gust_length_slider"
+     show_text="false"
+     min_val="20"
+     max_val="600"
+     increment="10"
+     initial_value="20" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="gust_length_value_spinner"
+     min_val="20"
+     max_val="600"
+     increment="10"
      decimal_digits="0" />
     <button
      follows="left|top"
@@ -73,7 +548,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="cloud_base_height_prev_button"
+     name="gust_length_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -88,7 +563,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="cloud_base_height_keyframe_button"
+     name="gust_length_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -97,7 +572,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="cloud_base_height_next_button"
+     name="gust_length_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -114,9 +589,9 @@
      top_pad="10"
      height="14"
      width="110"
-     name="cloud_thickness_label"
+     name="gust_veer_label"
      font="SansSerifSmall">
-        Thickness (m)
+        Gust Veer (&#176;)
     </text>
     <slider
      follows="left|top"
@@ -125,12 +600,12 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="cloud_thickness_slider"
+     name="gust_veer_slider"
      show_text="false"
-     min_val="10"
-     max_val="2000"
-     increment="10"
-     initial_value="10" />
+     min_val="0"
+     max_val="45"
+     increment="1"
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -139,10 +614,10 @@
      height="20"
      width="70"
      label_width="0"
-     name="cloud_thickness_value_spinner"
-     min_val="10"
-     max_val="2000"
-     increment="10"
+     name="gust_veer_value_spinner"
+     min_val="0"
+     max_val="45"
+     increment="1"
      decimal_digits="0" />
     <button
      follows="left|top"
@@ -151,7 +626,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="cloud_thickness_prev_button"
+     name="gust_veer_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -166,7 +641,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="cloud_thickness_keyframe_button"
+     name="gust_veer_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -175,7 +650,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="cloud_thickness_next_button"
+     name="gust_veer_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -185,600 +660,26 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <text
-     follows="left|top"
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
+         sections grouped by the tab each mapping reaches) - the tuning
+         surface for how far this track's weather may bend the values on
+         this tab.
+
+         Positioned by an absolute top against the panel's own height rather
+         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
+         measured downward from the panel's top edge, so that put the button
+         at the very top of the panel, overlapping the rows there and
+         reading as a stray control floating above the tab. Only a negative
+         value would have meant "up from the bottom", and an absolute top is
+         plainer than relying on either reading. -->
+    <button
+     follows="left|bottom"
      layout="topleft"
      left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_coverage_label"
-     font="SansSerifSmall">
-        Coverage Scale
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="cloud_coverage_slider"
-     show_text="false"
-     min_val="0"
-     max_val="2"
-     increment="0.01"
-     initial_value="0" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="cloud_coverage_value_spinner"
-     min_val="0"
-     max_val="2"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="cloud_coverage_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_coverage_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_coverage_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_puff_density_label"
-     font="SansSerifSmall">
-        Puff Density
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="cloud_puff_density_slider"
-     show_text="false"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     initial_value="0" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="cloud_puff_density_value_spinner"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="cloud_puff_density_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_puff_density_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_puff_density_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_storm_dark_label"
-     font="SansSerifSmall">
-        Storm Darkening
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="cloud_storm_dark_slider"
-     show_text="false"
-     min_val="0"
-     max_val="2"
-     increment="0.01"
-     initial_value="0" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="cloud_storm_dark_value_spinner"
-     min_val="0"
-     max_val="2"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="cloud_storm_dark_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_storm_dark_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_storm_dark_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_field_image_label"
-     font="SansSerifSmall">
-        Cloud Image
-    </text>
-    <texture_picker
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-4"
-     height="22"
-     width="30"
-     show_caption="false"
-     name="cloud_field_image"
-     tool_tip="Noise map the puffs are cut from; None picks one from the weather" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="486"
-     top_delta="-2"
-     height="25"
-     width="25"
-     name="cloud_field_image_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="513"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="cloud_field_image_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="540"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="cloud_field_image_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_detail_image_label"
-     font="SansSerifSmall">
-        Detail Image
-    </text>
-    <texture_picker
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-4"
-     height="22"
-     width="30"
-     show_caption="false"
-     name="cloud_detail_image"
-     tool_tip="Finer map layered over it; None reuses the Sky Dome&apos;s own cloud image" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="486"
-     top_delta="-2"
-     height="25"
-     width="25"
-     name="cloud_detail_image_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="513"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="cloud_detail_image_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="540"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="cloud_detail_image_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_texture_mix_label"
-     font="SansSerifSmall">
-        Image Mix
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="cloud_texture_mix_slider"
-     show_text="false"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     initial_value="0" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="cloud_texture_mix_value_spinner"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="cloud_texture_mix_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_texture_mix_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_texture_mix_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_detail_scale_label"
-     font="SansSerifSmall">
-        Detail Scale
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="cloud_detail_scale_slider"
-     show_text="false"
-     min_val="0.1"
-     max_val="8"
-     increment="0.01"
-     initial_value="0.1" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="cloud_detail_scale_value_spinner"
-     min_val="0.1"
-     max_val="8"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="cloud_detail_scale_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_detail_scale_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_detail_scale_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="cloud_drift_rate_label"
-     font="SansSerifSmall">
-        Boil Rate
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="cloud_drift_rate_slider"
-     show_text="false"
-     min_val="0"
-     max_val="4"
-     increment="0.01"
-     initial_value="0" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="cloud_drift_rate_value_spinner"
-     min_val="0"
-     max_val="4"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="cloud_drift_rate_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_drift_rate_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="cloud_drift_rate_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
+     top="549"
+     height="21"
+     width="170"
+     name="influence_button_weather"
+     tool_tip="Choose how much the weather cube modulates the sky you authored"
+     label="Weather Influence..." />
 </panel>

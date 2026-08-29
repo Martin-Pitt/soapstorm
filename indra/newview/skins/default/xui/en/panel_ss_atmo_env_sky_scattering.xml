@@ -2,130 +2,47 @@
 <panel
  border="true"
  follows="all"
- label="Dome"
+ label="Scattering"
  layout="topleft"
  left="0"
- name="panel_ss_atmo_env_clouds_dome"
+ name="panel_ss_atmo_env_sky_scattering"
  top="0"
  width="580"
- height="580">
-    <!-- <SS:Nexii> Atmo Magic: Clouds > Sky Dome sub-tab - the legacy
-         Windlight/EEP cloud layer's full parameter set (see
-         SSAtmoEnvCloudDome), every field keyframable. Names, ranges and
-         increments mirror EEP's own Clouds panel
-         (panel_settings_sky_clouds.xml) one-for-one; "Coverage" really
-         drives cloud_shadow, exactly as EEP's slider does.
+ height="540">
+    <!-- <SS:Nexii> Atmo Magic: Atmosphere > Atmosphere sub-tab. The
+         parameter set, row order and grouping mirror EEP's own Atmosphere
+         panel (panel_settings_sky_atmos.xml) - colours, then the
+         haze/density block read left column first - ranges included, the
+         difference being that every one of them is keyframable. The
+         PBR-era dials (sky moisture, droplet radius, ice, probe
+         ambiance) are here in EEP's own positions. Sun/moon azimuth and
+         elevation are deliberately absent from this tab family: position
+         is the Planetary tab job, computed from the home body, so these
+         panels only ever say what the light looks like, never where it
+         comes from. -->
 
-         Same row grid as the Water and Atmosphere tabs: the colour swatch
-         and texture picker keep their usual proportions with their
-         keyframe cluster at the shared right edge, and the scroll vector
-         takes two rows on the Water tab's wave-row pattern. -->
-
-    <!-- <SS:Nexii> The dome's own altitude - the parallax rate, not a
-         position: the band is drawn on a fixed dome radius either way, and
-         this is how far away the layer BEHAVES, so a metre of camera travel
-         slides the pattern by the right amount (doc/atmo_magic_cloud_parallax.md).
-         First row on the tab because everything below it is pattern, and
-         this is where the pattern lives. -->
-    <check_box
+    <text
      follows="left|top"
      layout="topleft"
      left="10"
      top="10"
-     height="16"
-     width="360"
-     name="dome_auto_check"
-     label="Auto (follow the volumetric deck)"
-     tool_tip="Derives the height below from the volumetric cloud field - cirrus-high while it is empty, merging down onto the deck as its coverage builds, so the dome band and the deck agree where the cloud is at the rim. The greyed row shows what Auto computed; the authored value comes back when Auto is turned off" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="12"
      height="14"
-     width="110"
-     name="dome_height_label"
-     font="SansSerifSmall">
-        Height (m)
+     width="336"
+     name="atmo_colours_label"
+     font="SansSerifSmallBold">
+        Colours
     </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="dome_height_slider"
-     show_text="false"
-     min_val="100"
-     max_val="12000"
-     increment="50"
-     initial_value="6000" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="dome_height_value_spinner"
-     min_val="100"
-     max_val="12000"
-     increment="50"
-     decimal_digits="0" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="dome_height_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_height_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_height_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
 
     <text
      follows="left|top"
      layout="topleft"
      left="10"
-     top_pad="12"
+     top_pad="10"
      height="14"
      width="110"
-     name="dome_color_label"
+     name="atmo_ambient_label"
      font="SansSerifSmall">
-        Cloud Colour
+        Ambient
     </text>
     <color_swatch
      can_apply_immediately="true"
@@ -136,7 +53,7 @@
      height="22"
      width="60"
      label_height="0"
-     name="dome_color" />
+     name="atmo_ambient" />
     <button
      follows="left|top"
      layout="topleft"
@@ -144,7 +61,7 @@
      top_delta="-2"
      height="25"
      width="25"
-     name="dome_color_prev_button"
+     name="atmo_ambient_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -160,7 +77,7 @@
      top_delta="0"
      height="25"
      width="25"
-     name="dome_color_keyframe_button"
+     name="atmo_ambient_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -170,7 +87,7 @@
      top_delta="0"
      height="25"
      width="25"
-     name="dome_color_next_button"
+     name="atmo_ambient_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -187,9 +104,149 @@
      top_pad="10"
      height="14"
      width="110"
-     name="dome_coverage_label"
+     name="atmo_blue_horizon_label"
      font="SansSerifSmall">
-        Coverage
+        Blue Horizon
+    </text>
+    <color_swatch
+     can_apply_immediately="true"
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-4"
+     height="22"
+     width="60"
+     label_height="0"
+     name="atmo_blue_horizon" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="-2"
+     height="25"
+     width="25"
+     name="atmo_blue_horizon_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="atmo_blue_horizon_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="atmo_blue_horizon_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="atmo_blue_density_label"
+     font="SansSerifSmall">
+        Blue Density
+    </text>
+    <color_swatch
+     can_apply_immediately="true"
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-4"
+     height="22"
+     width="60"
+     label_height="0"
+     name="atmo_blue_density" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="-2"
+     height="25"
+     width="25"
+     name="atmo_blue_density_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="atmo_blue_density_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="atmo_blue_density_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="24"
+     height="14"
+     width="336"
+     name="atmo_haze_label"
+     font="SansSerifSmallBold">
+        Haze &amp; Density
+    </text>
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="atmo_haze_horizon_label"
+     font="SansSerifSmall">
+        Haze Horizon
     </text>
     <slider
      follows="left|top"
@@ -198,12 +255,12 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="dome_coverage_slider"
+     name="atmo_haze_horizon_slider"
      show_text="false"
      min_val="0"
-     max_val="1"
+     max_val="5"
      increment="0.01"
-     initial_value="0.27" />
+     initial_value="0.19" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -212,9 +269,9 @@
      height="20"
      width="70"
      label_width="0"
-     name="dome_coverage_value_spinner"
+     name="atmo_haze_horizon_value_spinner"
      min_val="0"
-     max_val="1"
+     max_val="5"
      increment="0.01"
      decimal_digits="2" />
     <button
@@ -224,7 +281,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="dome_coverage_prev_button"
+     name="atmo_haze_horizon_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -239,7 +296,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_coverage_keyframe_button"
+     name="atmo_haze_horizon_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -248,7 +305,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_coverage_next_button"
+     name="atmo_haze_horizon_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -265,9 +322,9 @@
      top_pad="10"
      height="14"
      width="110"
-     name="dome_scale_label"
+     name="atmo_haze_density_label"
      font="SansSerifSmall">
-        Scale
+        Haze Density
     </text>
     <slider
      follows="left|top"
@@ -276,12 +333,12 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="dome_scale_slider"
+     name="atmo_haze_density_slider"
      show_text="false"
-     min_val="0.01"
-     max_val="3"
+     min_val="0"
+     max_val="5"
      increment="0.01"
-     initial_value="0.42" />
+     initial_value="0.7" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -290,9 +347,9 @@
      height="20"
      width="70"
      label_width="0"
-     name="dome_scale_value_spinner"
-     min_val="0.01"
-     max_val="3"
+     name="atmo_haze_density_value_spinner"
+     min_val="0"
+     max_val="5"
      increment="0.01"
      decimal_digits="2" />
     <button
@@ -302,7 +359,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="dome_scale_prev_button"
+     name="atmo_haze_density_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -317,7 +374,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_scale_keyframe_button"
+     name="atmo_haze_density_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -326,7 +383,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_scale_next_button"
+     name="atmo_haze_density_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -343,9 +400,9 @@
      top_pad="10"
      height="14"
      width="110"
-     name="dome_variance_label"
+     name="atmo_density_mult_label"
      font="SansSerifSmall">
-        Variance
+        Density Multiplier
     </text>
     <slider
      follows="left|top"
@@ -354,11 +411,263 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="dome_variance_slider"
+     name="atmo_density_mult_slider"
+     show_text="false"
+     min_val="0.0001"
+     max_val="2"
+     increment="0.0001"
+     initial_value="0.0001" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="atmo_density_mult_value_spinner"
+     min_val="0.0001"
+     max_val="2"
+     increment="0.0001"
+     decimal_digits="4" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="atmo_density_mult_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="atmo_density_mult_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="atmo_density_mult_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="atmo_distance_mult_label"
+     font="SansSerifSmall">
+        Distance Multiplier
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="atmo_distance_mult_slider"
+     show_text="false"
+     min_val="0.05"
+     max_val="1000"
+     increment="0.01"
+     initial_value="0.8" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="atmo_distance_mult_value_spinner"
+     min_val="0.05"
+     max_val="1000"
+     increment="0.01"
+     decimal_digits="2" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="atmo_distance_mult_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="atmo_distance_mult_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="atmo_distance_mult_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="atmo_max_altitude_label"
+     font="SansSerifSmall">
+        Max Altitude (m)
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="atmo_max_altitude_slider"
      show_text="false"
      min_val="0"
+     max_val="10000"
+     increment="1"
+     initial_value="1605" />
+    <spinner
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-1"
+     height="20"
+     width="70"
+     label_width="0"
+     name="atmo_max_altitude_value_spinner"
+     min_val="0"
+     max_val="10000"
+     increment="1"
+     decimal_digits="0" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="atmo_max_altitude_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="atmo_max_altitude_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     height="25"
+     width="25"
+     name="atmo_max_altitude_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <!-- <SS:Nexii> Atmo Magic: the optics group. These three are not scattering dials
+         despite EEP filing them beside them: skyF.glsl multiplies the rainbow map lookup by
+         moisture_level and the 22 degree halo lookup by ice_level, with droplet radius
+         setting the arc geometry between them. Labelled for what they draw. The UI prefix is
+         atmo_rainbow while the asset field stays mSkyMoistureLevel and the LLSD key stays
+         moisture_level - the serialised form is EEP's and must not drift. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="24"
+     height="14"
+     width="200"
+     name="atmo_rainbow_label"
+     font="SansSerifSmallBold">
+        Rainbow &amp; Halo
+    </text>
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="atmo_rainbow_label"
+     tool_tip="Optical moisture driving rainbow and halo effects around the sun - not the Weather tab moisture, which drives precipitation"
+     font="SansSerifSmall">
+        Rainbow
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="280"
+     name="atmo_rainbow_slider"
+     show_text="false"
+     tool_tip="Optical moisture driving rainbow and halo effects around the sun - not the Weather tab moisture, which drives precipitation"
+     min_val="0"
      max_val="1"
-     increment="0.01"
+     increment="0.001"
      initial_value="0" />
     <spinner
      follows="left|top"
@@ -368,11 +677,11 @@
      height="20"
      width="70"
      label_width="0"
-     name="dome_variance_value_spinner"
+     name="atmo_rainbow_value_spinner"
      min_val="0"
      max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
+     increment="0.001"
+     decimal_digits="3" />
     <button
      follows="left|top"
      layout="topleft"
@@ -380,7 +689,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="dome_variance_prev_button"
+     name="atmo_rainbow_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -395,7 +704,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_variance_keyframe_button"
+     name="atmo_rainbow_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -404,7 +713,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_variance_next_button"
+     name="atmo_rainbow_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -421,9 +730,10 @@
      top_pad="10"
      height="14"
      width="110"
-     name="dome_density_x_label"
+     name="atmo_droplet_radius_label"
+     tool_tip="Water droplet radius in micrometres, shaping the rainbow and halo optics"
      font="SansSerifSmall">
-        Density X
+        Rainbow Width (um)
     </text>
     <slider
      follows="left|top"
@@ -432,12 +742,13 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="dome_density_x_slider"
+     name="atmo_droplet_radius_slider"
      show_text="false"
-     min_val="0"
-     max_val="1"
+     tool_tip="Water droplet radius in micrometres, shaping the rainbow and halo optics"
+     min_val="5"
+     max_val="1000"
      increment="0.01"
-     initial_value="1" />
+     initial_value="800" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -446,9 +757,9 @@
      height="20"
      width="70"
      label_width="0"
-     name="dome_density_x_value_spinner"
-     min_val="0"
-     max_val="1"
+     name="atmo_droplet_radius_value_spinner"
+     min_val="5"
+     max_val="1000"
      increment="0.01"
      decimal_digits="2" />
     <button
@@ -458,7 +769,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="dome_density_x_prev_button"
+     name="atmo_droplet_radius_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -473,7 +784,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_density_x_keyframe_button"
+     name="atmo_droplet_radius_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -482,7 +793,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_density_x_next_button"
+     name="atmo_droplet_radius_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -499,9 +810,9 @@
      top_pad="10"
      height="14"
      width="110"
-     name="dome_density_y_label"
+     name="atmo_ice_level_label"
      font="SansSerifSmall">
-        Density Y
+        Ice Halo
     </text>
     <slider
      follows="left|top"
@@ -510,12 +821,12 @@
      top_delta="-2"
      height="18"
      width="280"
-     name="dome_density_y_slider"
+     name="atmo_ice_level_slider"
      show_text="false"
      min_val="0"
      max_val="1"
-     increment="0.01"
-     initial_value="0.53" />
+     increment="0.001"
+     initial_value="0" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -524,11 +835,11 @@
      height="20"
      width="70"
      label_width="0"
-     name="dome_density_y_value_spinner"
+     name="atmo_ice_level_value_spinner"
      min_val="0"
      max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
+     increment="0.001"
+     decimal_digits="3" />
     <button
      follows="left|top"
      layout="topleft"
@@ -536,7 +847,7 @@
      top_delta="-3"
      height="25"
      width="25"
-     name="dome_density_y_prev_button"
+     name="atmo_ice_level_prev_button"
      tool_tip="Jump to the previous keyframe"
      image_overlay="SkipBackward_Off"
      image_disabled="PushButton_Disabled"
@@ -551,7 +862,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_density_y_keyframe_button"
+     name="atmo_ice_level_keyframe_button"
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
@@ -560,7 +871,7 @@
      left_pad="2"
      height="25"
      width="25"
-     name="dome_density_y_next_button"
+     name="atmo_ice_level_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -569,482 +880,6 @@
      image_unselected="PushButton_Off"
      hover_glow_amount="0.15"
      label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="dome_density_d_label"
-     font="SansSerifSmall">
-        Density D
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="dome_density_d_slider"
-     show_text="false"
-     min_val="0"
-     max_val="3"
-     increment="0.01"
-     initial_value="1" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="dome_density_d_value_spinner"
-     min_val="0"
-     max_val="3"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="dome_density_d_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_density_d_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_density_d_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="dome_detail_x_label"
-     font="SansSerifSmall">
-        Detail X
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="dome_detail_x_slider"
-     show_text="false"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     initial_value="1" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="dome_detail_x_value_spinner"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="dome_detail_x_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_detail_x_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_detail_x_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="dome_detail_y_label"
-     font="SansSerifSmall">
-        Detail Y
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="dome_detail_y_slider"
-     show_text="false"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     initial_value="0.53" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="dome_detail_y_value_spinner"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="dome_detail_y_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_detail_y_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_detail_y_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="dome_detail_d_label"
-     font="SansSerifSmall">
-        Detail D
-    </text>
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="18"
-     width="280"
-     name="dome_detail_d_slider"
-     show_text="false"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     initial_value="1" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-1"
-     height="20"
-     width="70"
-     label_width="0"
-     name="dome_detail_d_value_spinner"
-     min_val="0"
-     max_val="1"
-     increment="0.01"
-     decimal_digits="2" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-3"
-     height="25"
-     width="25"
-     name="dome_detail_d_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_detail_d_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left_pad="2"
-     height="25"
-     width="25"
-     name="dome_detail_d_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="12"
-     height="14"
-     width="110"
-     name="dome_scroll_label"
-     font="SansSerifSmall">
-        Scroll Rate
-    </text>
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left="126"
-     top_delta="-3"
-     height="20"
-     width="70"
-     label="X"
-     label_width="14"
-     name="dome_scroll_x_spinner"
-     min_val="-30"
-     max_val="30"
-     increment="0.01"
-     decimal_digits="2" />
-    <spinner
-     follows="left|top"
-     layout="topleft"
-     left="126"
-     top_pad="4"
-     height="20"
-     width="70"
-     label="Y"
-     label_width="14"
-     name="dome_scroll_y_spinner"
-     min_val="-30"
-     max_val="30"
-     increment="0.01"
-     decimal_digits="2" />
-    <xy_vector
-     follows="left|top"
-     layout="topleft"
-     left="206"
-     top_delta="-24"
-     height="48"
-     width="48"
-     edit_bar_height="0"
-     padding="2"
-     name="dome_scroll"
-     min_val_x="-30"
-     max_val_x="30"
-     increment_x="0.01"
-     min_val_y="-30"
-     max_val_y="30"
-     increment_y="0.01"
-     arrow_color="white" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="486"
-     top_delta="12"
-     height="25"
-     width="25"
-     name="dome_scroll_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="513"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="dome_scroll_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="540"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="dome_scroll_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="14"
-     width="110"
-     name="dome_image_label"
-     font="SansSerifSmall">
-        Cloud Image
-    </text>
-    <texture_picker
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-4"
-     height="22"
-     width="30"
-     show_caption="false"
-     name="dome_image"
-     tool_tip="Noise texture the cloud layer is drawn from; None restores the stock cloud noise" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="486"
-     top_delta="-2"
-     height="25"
-     width="25"
-     name="dome_image_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="513"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="dome_image_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="540"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="dome_image_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-
 
     <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
          sections grouped by the tab each mapping reaches) - the tuning
@@ -1062,10 +897,10 @@
      follows="left|bottom"
      layout="topleft"
      left="10"
-     top="549"
+     top="509"
      height="21"
      width="170"
-     name="influence_button_clouds"
+     name="influence_button_atmosphere"
      tool_tip="Choose how much the weather cube modulates the sky you authored"
      label="Weather Influence..." />
 </panel>

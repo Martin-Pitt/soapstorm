@@ -43,6 +43,49 @@
      max_length_chars="32"
      tool_tip="What this track is called. Yours to set - a track keeps its name when you move it, so it can describe what the place actually is rather than where it currently sits" />
 
+    <!-- <SS:Nexii> World templates. An author arrives with a theme, not a
+         parameter category, and a theme is never one setting: a sky world
+         is water kilometres down AND a deck below the landmass AND another
+         above it. Seeding all of that together is the only way the first
+         screen is useful to someone who came here to build Arcadia rather
+         than to tune haze.
+
+         A dropdown on Track rather than a tab of its own: it acts on the
+         selected track, and one combo does not earn top-level rank. Seeding
+         is one-shot and destructive to the selected track, hence the
+         confirmation - there is no live link back to the template, so
+         nothing drifts and nothing needs reconciling later. See
+         doc/atmo_magic_env_ui.md. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="14"
+     height="14"
+     width="110"
+     name="track_template_label"
+     font="SansSerifSmall">
+        Template
+    </text>
+    <combo_box
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-3"
+     height="20"
+     width="240"
+     name="track_template_combo"
+     tool_tip="Seed this track from a world archetype - tracks, deck heights, water, sky and weather together. Replaces everything on the selected track" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     top_delta="-1"
+     height="22"
+     width="70"
+     name="track_template_apply_button"
+     label="Apply" />
+
     <text
      follows="left|top"
      layout="topleft"

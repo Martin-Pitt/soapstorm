@@ -2,7 +2,7 @@
 <panel
  border="true"
  follows="all"
- label="Under Layer"
+ label="Under Deck"
  layout="topleft"
  left="0"
  name="panel_ss_atmo_env_clouds_under"

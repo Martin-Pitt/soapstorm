@@ -25,6 +25,8 @@
 
 #include "ssprecippreset.h"
 
+#include <algorithm>
+
 #include "lldir.h"
 #include "llfile.h"
 #include "llsdserialize.h"
@@ -370,6 +372,45 @@ void SSPrecipPresetManager::stage(const SSPrecipPreset& preset)
 }
 
 // The on-disk version of a preset, ignoring staged edits.
+// Swaps the environment tier out wholesale. Shipped types of the same name are shadowed rather than
+// overwritten: the environment's copy travels with the region, so it is the one that should win
+// while that region's environment is loaded, and refresh() puts the shipped one back afterwards.
+void SSPrecipPresetManager::setEnvironmentPresets(const std::vector<SSPrecipPreset>& presets)
+{
+    clearEnvironmentPresets();
+
+    for (const SSPrecipPreset& preset : presets)
+    {
+        if (preset.mName.empty()) continue;
+
+        SSPrecipPreset staged = preset;
+        staged.mFromEnvironment = true;
+        staged.mBuiltIn = false;
+
+        bool replaced = false;
+        for (SSPrecipPreset& existing : mPresets)
+        {
+            if (existing.mName == staged.mName)
+            {
+                existing = staged;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) mPresets.push_back(staged);
+    }
+}
+
+void SSPrecipPresetManager::clearEnvironmentPresets()
+{
+    const bool had_any = std::any_of(mPresets.begin(), mPresets.end(),
+        [](const SSPrecipPreset& p) { return p.mFromEnvironment; });
+    if (!had_any) return;
+
+    // Shadowed shipped types have to come back, and rebuilding is the only thing that knows how.
+    refresh();
+}
+
 const SSPrecipPreset* SSPrecipPresetManager::findSaved(const std::string& name) const
 {
     for (const SSPrecipPreset& p : mSaved)

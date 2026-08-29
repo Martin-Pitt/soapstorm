@@ -198,6 +198,22 @@
              height="16" width="410" label="Shatter into shards on impact"
              tool_tip="Throws glowing shards off the surface at the speed it hit" />
 
+            <!-- <SS:Nexii> What an impact does to the person standing in it. Stubs: shown so the
+                 intent is documented where it belongs rather than living only in a design note,
+                 disabled because nothing reads them yet. They matter to impact-carrying archetypes
+                 - a barrage built out of the solid archetype is the case that wants them - and are
+                 meaningless to a riser, which never lands. See doc/atmo_magic_env_ui.md. -->
+            <text name="shock_label" follows="left|top" layout="topleft" left="10" top_pad="14"
+             height="14" width="410" font="SansSerifSmallBold">Felt Impact (not yet implemented)</text>
+            <slider name="shock_camera" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Camera shock:" label_width="130" enabled="false"
+             min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
+             tool_tip="How hard a nearby impact kicks the camera. Not yet wired up" />
+            <slider name="shock_radius" follows="left|top" layout="topleft" left="10" top_pad="6"
+             height="15" width="410" label="Felt within:" label_width="130" enabled="false"
+             min_val="0" max_val="120" increment="1" decimal_digits="0" show_text="true"
+             tool_tip="Metres within which an impact is felt and heard as a discrete event. Not yet wired up" />
+
             <text name="ripple_label" follows="left|top" layout="topleft" left="10" top_pad="14"
              height="14" width="410" font="SansSerifSmallBold">Landing Ring</text>
             <slider name="ripple_size" follows="left|top" layout="topleft" left="10" top_pad="6"

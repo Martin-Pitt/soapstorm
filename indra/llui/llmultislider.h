@@ -125,6 +125,10 @@ public:
     S32             getMaxNumSliders() const { return mMaxNumSliders; }
     S32             getCurNumSliders() const { return static_cast<S32>(mValue.size()); }
     F32             getOverlapThreshold() const { return mOverlapThreshold; }
+    // <SS:Nexii> Settable so a rail whose value range changes at runtime can keep the
+    // threshold proportionate: a gap authored for a 0-4096m scale blocks every marker once
+    // the same rail is fitted to a 300m one.
+    void            setOverlapThreshold(F32 threshold) { mOverlapThreshold = threshold; }
     bool            canAddSliders() const { return mValue.size() < mMaxNumSliders; }
 
 

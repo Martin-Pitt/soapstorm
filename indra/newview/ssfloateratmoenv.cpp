@@ -31,6 +31,8 @@
 #include "ssatmoenvapplier.h" // <SS:Nexii> the auto dome altitude the greyed-out row shows
 #include "ssfloateratmoplanetary.h"
 #include "ssfloateratmoinfluence.h"
+#include "ssprecippreset.h"
+#include "ssatmoenvbridge.h"
 
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
@@ -51,8 +53,10 @@
 #include "llsettingsvo.h"
 #include "llsliderctrl.h"
 #include "llspinctrl.h"
+#include "lltabcontainer.h"
 #include "lltexturectrl.h"
 #include "lltextbox.h"
+#include "llui.h"
 #include "llviewercontrol.h"
 #include "llviewerinventory.h"
 
@@ -78,6 +82,23 @@ static const S32 HOVER_PAD_Y = 10;
 SSFloaterAtmoEnv::SSFloaterAtmoEnv(const LLSD& key) :
     LLFloater(key)
 {
+}
+
+// <SS:Nexii> A tab_container matches on the panel's own name, which is either the name given in the
+// tab entry or the one inside the loaded panel file depending on which params win. Both are tried
+// so a rename in one place cannot silently stop the rail selecting tabs.
+static bool ss_select_tab(LLTabContainer* tabs, const char* entry_name, const char* panel_name)
+{
+    if (!tabs) return false;
+    if (tabs->getPanelByName(entry_name)) return tabs->selectTabByName(entry_name);
+    return tabs->selectTabByName(panel_name);
+}
+
+static bool ss_tab_is(const LLPanel* panel, const char* entry_name, const char* panel_name)
+{
+    if (!panel) return false;
+    const std::string& name = panel->getName();
+    return name == entry_name || name == panel_name;
 }
 
 // Wires the whole editor: toolbar, altitude rail, every tab's rows, keyframe buttons, preview scrubber.
@@ -141,6 +162,18 @@ bool SSFloaterAtmoEnv::postBuild()
 
     getChild<LLUICtrl>("track_name_editor")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitTrackName(); });
+
+    // <SS:Nexii> World templates. Built from the table rather than listed in the XUI so the two
+    // cannot drift: adding an archetype is one row in ssAtmoEnvTemplates() and nothing else.
+    LLComboBox* template_combo = getChild<LLComboBox>("track_template_combo");
+    template_combo->clearRows();
+    for (const SSAtmoEnvTemplate& tmpl : ssAtmoEnvTemplates())
+    {
+        template_combo->add(tmpl.mLabel, LLSD(tmpl.mKey));
+    }
+    template_combo->selectFirstItem();
+    getChild<LLButton>("track_template_apply_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickApplyTemplate(); });
     const char* day_cycle_fields[] = { "day_length_slider", "day_offset_slider",
                                       "day_length_value_spinner", "day_offset_value_spinner" };
     for (const char* name : day_cycle_fields)
@@ -267,7 +300,7 @@ bool SSFloaterAtmoEnv::postBuild()
     const std::vector<FloatRow> atmos_rows = {
         { "atmo_haze_horizon",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeHorizon; },        false },
         { "atmo_haze_density",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeDensity; },        false },
-        { "atmo_moisture_level",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyMoistureLevel; },   false },
+        { "atmo_rainbow",        [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyMoistureLevel; },   false },
         { "atmo_droplet_radius",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyDropletRadius; },   false },
         { "atmo_ice_level",       [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyIceLevel; },        false },
         { "atmo_density_mult",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mDensityMultiplier; },  false, 0.001f },
@@ -363,8 +396,60 @@ bool SSFloaterAtmoEnv::postBuild()
         bindKeyframeButtons<std::string>(row.mPrefix, row.mField);
     }
 
+    // <SS:Nexii> The rail's mode follows the selected tab and nothing else, so the tab container is
+    // the only thing that drives it - no separate zoom control to keep in step with the selection.
+    getChild<LLTabContainer>("atmo_tabs")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { refreshRailMode(); });
+
+    for (S32 layer = 0; layer < LAYER_COUNT; ++layer)
+    {
+        getChild<LLUICtrl>(llformat("layer_name_button_%d", layer + 1))->setCommitCallback(
+            [this, layer](LLUICtrl*, const LLSD&) { onClickLayerMarker(layer); });
+    }
+    getChild<LLUICtrl>("space_anchor_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            ss_select_tab(getChild<LLTabContainer>("atmo_tabs"), "space_tab",
+                          "panel_ss_atmo_env_space");
+            mSelectedLayer = LAYER_NONE;
+            refreshRailMode();
+        });
+    getChild<LLUICtrl>("dome_anchor_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            ss_select_tab(getChild<LLTabContainer>("atmo_tabs"), "clouds_tab",
+                          "panel_ss_atmo_env_clouds");
+            ss_select_tab(getChild<LLTabContainer>("clouds_sub_tabs"), "clouds_dome_tab",
+                          "panel_ss_atmo_env_clouds_dome");
+            mSelectedLayer = LAYER_NONE;
+            refreshRailMode();
+        });
+    getChild<LLUICtrl>("weather_marker_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            ss_select_tab(getChild<LLTabContainer>("atmo_tabs"), "weather_tab",
+                          "panel_ss_atmo_env_weather");
+            ss_select_tab(getChild<LLTabContainer>("weather_sub_tabs"),
+                          "weather_precipitation_tab",
+                          "panel_ss_atmo_env_weather_precipitation");
+            mSelectedLayer = LAYER_NONE;
+            refreshRailMode();
+        });
+    getChild<LLUICtrl>("add_deck_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickAddDeck(); });
+    getChild<LLUICtrl>("remove_deck_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickRemoveDeck(); });
+    getChild<LLUICtrl>("weather_source_combo")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitWeatherSource(); });
+    getChild<LLUICtrl>("precip_new_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickNewPrecipType(); });
+    getChild<LLUICtrl>("precip_edit_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickEditPrecipTypes(); });
+
     refreshVisibility();
-    refreshTrackRail();
+    refreshWeatherSource();
+    refreshPrecipitationTypes();
+    refreshRailMode();
     refreshTrackTab();
     refreshPlanetaryScales();
     refreshStatus();
@@ -376,7 +461,9 @@ bool SSFloaterAtmoEnv::postBuild()
 void SSFloaterAtmoEnv::onOpen(const LLSD& key)
 {
     refreshVisibility();
-    refreshTrackRail();
+    refreshWeatherSource();
+    refreshPrecipitationTypes();
+    refreshRailMode();
     refreshTrackTab();
     refreshPlanetaryScales();
     refreshStatus();
@@ -419,6 +506,36 @@ void SSFloaterAtmoEnv::draw()
     advancePreviewPlayback();
 
     const F64 now = LLTimer::getElapsedSeconds();
+
+    // <SS:Nexii> The rail's zoom between the region scale and the selected track's own contents.
+    // Smoothstepped so it reads as diving into the track rather than as the widget cutting to a
+    // different set of numbers; markers glide while it runs and the thumbs land at the end.
+    if (mRailZooming)
+    {
+        static const F64 RAIL_ZOOM_SECONDS = 0.2;
+        F32 t = (F32)llclamp((now - mRailZoomStart) / RAIL_ZOOM_SECONDS, 0.0, 1.0);
+        const F32 eased = t * t * (3.f - 2.f * t);
+
+        mRailMin = lerp(mRailMinFrom, mRailMinTo, eased);
+        mRailMax = lerp(mRailMaxFrom, mRailMaxTo, eased);
+
+        if (t >= 1.f)
+        {
+            mRailZooming = false;
+            mRailMin = mRailMinTo;
+            mRailMax = mRailMaxTo;
+        }
+
+        if (mRailMode == ERailMode::LAYER)
+        {
+            refreshLayerRail();
+        }
+        else
+        {
+            refreshTrackRail();
+        }
+    }
+
     if (now - mLastPoll > STATUS_POLL_INTERVAL)
     {
         mLastPoll = now;
@@ -428,7 +545,7 @@ void SSFloaterAtmoEnv::draw()
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
         {
-            refreshTrackRail();
+            refreshRailMode();
             refreshPlanetaryScales();
             refreshPreview();
         }
@@ -436,6 +553,7 @@ void SSFloaterAtmoEnv::draw()
 
     LLFloater::draw();
 
+    drawWeatherBracket();
     drawRiseSetMarkers();
     drawKeyframeGhosts();
     drawSliderValueGhosts();
@@ -481,6 +599,7 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                         "MESSAGE", "That notecard could not be loaded as an Atmo Magic environment."));
                 }
                 refreshVisibility();
+                refreshPrecipitationTypes();
                 mSelectedTrackIndex = 0;
                 refreshTrackRail();
                 refreshTrackTab();
@@ -592,8 +711,30 @@ void SSFloaterAtmoEnv::refreshTrackRail()
         mSelectedTrackIndex = 0;
     }
 
+    // <SS:Nexii> Called from a dozen places that just want the rail brought up to date. In layer
+    // mode the markers belong to refreshLayerRail(); the asset-level chrome below is shared, so
+    // only the track markers themselves are conditional.
+    if (mRailMode == ERailMode::LAYER)
+    {
+        refreshLayerRail();
+
+        LLLineEditor* layer_name_editor = getChild<LLLineEditor>("name_editor");
+        if (!layer_name_editor->hasFocus())
+        {
+            layer_name_editor->setText(asset.mName);
+        }
+        return;
+    }
+
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
     slider->clear();
+
+    // Layer mode retunes the rail to whatever the selected track spans, so track mode puts the
+    // authored region scale back rather than assuming it survived.
+    slider->setMinValue(0.f);
+    slider->setMaxValue(SS_ATMOENV_REGION_CEILING);
+    slider->setIncrement(64.f);
+    slider->setOverlapThreshold(304.f);
 
     const S32 optional_count = (S32)asset.mTracks.size() - 1;
     for (S32 slot = 1; slot <= SS_ATMOENV_MAX_TRACKS - 1; ++slot)
@@ -650,6 +791,12 @@ void SSFloaterAtmoEnv::repositionRailMarkers()
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
 
+    if (mRailMode == ERailMode::LAYER)
+    {
+        refreshLayerRail();
+        return;
+    }
+
     const S32 centre = railCentreForValue(0.f);
     centreViewOn(getChild<LLUICtrl>("track_ground_button"), centre);
     centreViewOn(getChild<LLUICtrl>("track_ground_alt_label"), centre);
@@ -661,7 +808,8 @@ void SSFloaterAtmoEnv::repositionRailMarkers()
     }
 }
 
-// Altitude to rail pixel.
+// Altitude to rail pixel. Maps through mRailMin/mRailMax rather than the slider's own range: the
+// two agree except mid-zoom, when the markers glide and the slider carries no thumbs at all.
 S32 SSFloaterAtmoEnv::railCentreForValue(F32 value) const
 {
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
@@ -681,10 +829,548 @@ S32 SSFloaterAtmoEnv::railCentreForValue(F32 value) const
     const S32 bottom_edge = thumb / 2;
     const S32 top_edge = sld_rect.getHeight() - (thumb / 2);
 
-    const F32 range = slider->getMaxValue() - slider->getMinValue();
-    const F32 t = (range > 0.f) ? (value - slider->getMinValue()) / range : 0.f;
+    const F32 range = mRailMax - mRailMin;
+    F32 t = (range > 0.f) ? (value - mRailMin) / range : 0.f;
+    t = llclamp(t, 0.f, 1.f);
 
     return sld_rect.mBottom + bottom_edge + (S32)(t * (F32)(top_edge - bottom_edge));
+}
+
+// The altitude band the rail covers in layer mode: everything placed inside the selected track,
+// padded, with a floor on the span so a flat stack does not collapse to a point. The dome is
+// excluded deliberately - it is a backdrop pinned above the scale, and a cirrus dome at 6km would
+// otherwise squash the decks being edited into the bottom eighth of the rail.
+void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
+{
+    out_min = 0.f;
+    out_max = SS_ATMOENV_REGION_CEILING;
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    F32 lo = track.mFloorZ;
+    F32 hi = track.mFloorZ;
+
+    auto include = [&lo, &hi](F32 value)
+    {
+        lo = llmin(lo, value);
+        hi = llmax(hi, value);
+    };
+
+    const F64 phase = mPreviewPhase;
+
+    const F32 main_base = track.mCloudField.mBaseHeightM.valueAt(phase);
+    include(main_base);
+    include(main_base + track.mCloudField.mBaseThicknessM.valueAt(phase));
+
+    if (track.mUnderField.mEnabled)
+    {
+        const F32 under_base = track.mUnderField.mBaseHeightM.valueAt(phase);
+        include(under_base);
+        include(under_base + track.mUnderField.mBaseThicknessM.valueAt(phase));
+    }
+
+    if (track.mWater.mEnabled)
+    {
+        include(track.mWater.mHeight.valueAt(phase));
+    }
+
+    static const F32 RAIL_MIN_SPAN = 200.f;
+    if (hi - lo < RAIL_MIN_SPAN)
+    {
+        const F32 centre = 0.5f * (lo + hi);
+        lo = centre - 0.5f * RAIL_MIN_SPAN;
+        hi = centre + 0.5f * RAIL_MIN_SPAN;
+    }
+
+    const F32 pad = 0.08f * (hi - lo);
+    out_min = lo - pad;
+    out_max = hi + pad;
+}
+
+F32 SSFloaterAtmoEnv::weatherReferenceSurface() const
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return 0.f;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return 0.f;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    F32 surface = track.mFloorZ;
+    if (track.mWater.mEnabled)
+    {
+        surface = llmax(surface, track.mWater.mHeight.valueAt(mPreviewPhase));
+    }
+    return surface;
+}
+
+// The deck precipitation falls from. Derived by default as the lowest enabled deck above the
+// reference surface, which resolves to the main deck for a sky build because the under deck hangs
+// below the platform floor. An authored override that names a deck which has since been disabled
+// falls back to derivation rather than leaving weather with no source.
+S32 SSFloaterAtmoEnv::weatherDeliveringDeck() const
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return LAYER_NONE;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return LAYER_NONE;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    if (track.mWeatherSourceDeck == SS_ATMOENV_DECK_UNDER && track.mUnderField.mEnabled)
+    {
+        return LAYER_UNDER;
+    }
+    if (track.mWeatherSourceDeck == SS_ATMOENV_DECK_MAIN)
+    {
+        return LAYER_MAIN;
+    }
+
+    const F32 surface = weatherReferenceSurface();
+    const F32 main_base  = track.mCloudField.mBaseHeightM.valueAt(mPreviewPhase);
+    const F32 under_base = track.mUnderField.mBaseHeightM.valueAt(mPreviewPhase);
+
+    const bool under_above = track.mUnderField.mEnabled && under_base > surface;
+    if (under_above && under_base <= main_base) return LAYER_UNDER;
+    if (main_base > surface) return LAYER_MAIN;
+    if (under_above) return LAYER_UNDER;
+    return LAYER_NONE;
+}
+
+F32 SSFloaterAtmoEnv::layerAltitude(S32 layer) const
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return 0.f;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return 0.f;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    switch (layer)
+    {
+    case LAYER_WATER: return track.mWater.mHeight.valueAt(mPreviewPhase);
+    case LAYER_MAIN:  return track.mCloudField.mBaseHeightM.valueAt(mPreviewPhase);
+    case LAYER_UNDER: return track.mUnderField.mBaseHeightM.valueAt(mPreviewPhase);
+    default: return 0.f;
+    }
+}
+
+bool SSFloaterAtmoEnv::layerPresent(S32 layer) const
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return false;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return false;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    switch (layer)
+    {
+    case LAYER_WATER: return track.mWater.mEnabled;
+    case LAYER_MAIN:  return true;
+    case LAYER_UNDER: return track.mUnderField.mEnabled;
+    default: return false;
+    }
+}
+
+// Which mode the rail should be in, driven entirely by the selected tab, and the widget swap that
+// goes with it. The author never asks for a zoom level: Track shows the region, everything else
+// shows the track you are inside.
+void SSFloaterAtmoEnv::refreshRailMode()
+{
+    LLTabContainer* tabs = getChild<LLTabContainer>("atmo_tabs");
+    const LLPanel* current = tabs->getCurrentPanel();
+    const bool on_track = ss_tab_is(current, "track_tab", "panel_ss_atmo_env_track");
+
+    const ERailMode wanted = on_track ? ERailMode::TRACK : ERailMode::LAYER;
+    const bool changed = (wanted != mRailMode);
+    mRailMode = wanted;
+
+    const bool layer = (mRailMode == ERailMode::LAYER);
+
+    getChild<LLUICtrl>("tracks_label")->setValue(layer ? "Layers" : "Tracks");
+
+    for (S32 slot = 1; slot <= SS_ATMOENV_MAX_TRACKS - 1; ++slot)
+    {
+        if (layer)
+        {
+            getChild<LLUICtrl>(llformat("track_name_button_%d", slot))->setVisible(false);
+            getChild<LLUICtrl>(llformat("track_alt_label_%d", slot))->setVisible(false);
+        }
+    }
+    getChild<LLUICtrl>("track_ground_button")->setVisible(!layer);
+    getChild<LLUICtrl>("track_ground_alt_label")->setVisible(!layer);
+    getChild<LLUICtrl>("add_track_button")->setVisible(!layer);
+    getChild<LLUICtrl>("remove_track_button")->setVisible(!layer);
+
+    getChild<LLUICtrl>("space_anchor_button")->setVisible(layer);
+    getChild<LLUICtrl>("dome_anchor_button")->setVisible(layer);
+    getChild<LLUICtrl>("dome_anchor_alt_label")->setVisible(layer);
+    getChild<LLUICtrl>("weather_marker_button")->setVisible(layer);
+    getChild<LLUICtrl>("add_deck_button")->setVisible(layer);
+    getChild<LLUICtrl>("remove_deck_button")->setVisible(layer);
+    if (!layer)
+    {
+        for (S32 i = 0; i < LAYER_COUNT; ++i)
+        {
+            getChild<LLUICtrl>(llformat("layer_name_button_%d", i + 1))->setVisible(false);
+            getChild<LLUICtrl>(llformat("layer_alt_label_%d", i + 1))->setVisible(false);
+        }
+    }
+
+    F32 want_min = 0.f;
+    F32 want_max = SS_ATMOENV_REGION_CEILING;
+    if (layer)
+    {
+        railRangeForTrack(want_min, want_max);
+    }
+
+    if (changed || want_min != mRailMinTo || want_max != mRailMaxTo)
+    {
+        mRailMinFrom = mRailMin;
+        mRailMaxFrom = mRailMax;
+        mRailMinTo = want_min;
+        mRailMaxTo = want_max;
+        // Only the mode switch is worth animating. A range that merely re-fits because a deck
+        // moved should follow the drag, not lag behind it.
+        if (changed)
+        {
+            mRailZooming = true;
+            mRailZoomStart = LLTimer::getElapsedSeconds();
+        }
+        else
+        {
+            mRailMin = want_min;
+            mRailMax = want_max;
+        }
+    }
+
+    if (layer)
+    {
+        refreshLayerRail();
+    }
+    else
+    {
+        refreshTrackRail();
+    }
+}
+
+// Populates the rail with the selected track's contents. Thumbs are only added once the zoom has
+// settled: the slider clamps values to its own range, so adding them mid-flight would snap a deck
+// sitting outside the interpolated window onto its edge and then write that back.
+void SSFloaterAtmoEnv::refreshLayerRail()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
+    slider->clear();
+
+    const F32 range = llmax(1.f, mRailMax - mRailMin);
+    slider->setMinValue(mRailMin);
+    slider->setMaxValue(mRailMax);
+    slider->setIncrement(llmax(1.f, range / 256.f));
+    // The authored 304m gap is sized for the 0-4096m scale and would reject every marker on a
+    // fitted one, so it scales with the window too.
+    slider->setOverlapThreshold(range / 24.f);
+
+    static const char* const LAYER_LABELS[LAYER_COUNT] = { "Water", "Main Deck", "Under Deck" };
+
+    for (S32 i = 0; i < LAYER_COUNT; ++i)
+    {
+        LLButton*  button = getChild<LLButton>(llformat("layer_name_button_%d", i + 1));
+        LLTextBox* label  = getChild<LLTextBox>(llformat("layer_alt_label_%d", i + 1));
+
+        const bool present = layerPresent(i);
+        button->setVisible(present);
+        label->setVisible(present);
+        if (!present) continue;
+
+        const F32 altitude = layerAltitude(i);
+
+        if (!mRailZooming)
+        {
+            slider->addSlider(llclamp(altitude, mRailMin, mRailMax), llformat("layer%d", i));
+        }
+
+        button->setLabel(LAYER_LABELS[i]);
+        button->setToggleState(i == mSelectedLayer);
+        label->setText(llformat("%.0fm", altitude));
+
+        const S32 centre = railCentreForValue(altitude);
+        centreViewOn(button, centre);
+        centreViewOn(label, centre);
+    }
+
+    // The dome reads out its height but keeps its pinned position - it is not on the scale.
+    getChild<LLTextBox>("dome_anchor_alt_label")->setText(
+        llformat("%.0fm", track.mCloudDome.mHeightM.valueAt(mPreviewPhase)));
+    getChild<LLButton>("dome_anchor_button")->setToggleState(false);
+    getChild<LLButton>("space_anchor_button")->setToggleState(false);
+
+    const S32 delivering = weatherDeliveringDeck();
+    LLButton* weather_marker = getChild<LLButton>("weather_marker_button");
+    weather_marker->setVisible(delivering != LAYER_NONE);
+    if (delivering != LAYER_NONE)
+    {
+        const F32 surface = weatherReferenceSurface();
+        const F32 top = layerAltitude(delivering);
+        centreViewOn(weather_marker, railCentreForValue(0.5f * (surface + top)));
+    }
+
+    getChild<LLUICtrl>("add_deck_button")->setEnabled(!track.mUnderField.mEnabled);
+    getChild<LLUICtrl>("remove_deck_button")->setEnabled(track.mUnderField.mEnabled);
+}
+
+// Rail marker to tab. The markers are the tab selector in layer mode exactly as the track buttons
+// are in track mode, which is the whole reason the two share one widget.
+void SSFloaterAtmoEnv::selectLayer(S32 layer)
+{
+    mSelectedLayer = layer;
+
+    LLTabContainer* tabs = getChild<LLTabContainer>("atmo_tabs");
+    switch (layer)
+    {
+    case LAYER_WATER:
+        ss_select_tab(tabs, "water_tab", "panel_ss_atmo_env_water");
+        break;
+    case LAYER_MAIN:
+    case LAYER_UNDER:
+        ss_select_tab(tabs, "clouds_tab", "panel_ss_atmo_env_clouds");
+        if (layer == LAYER_MAIN)
+        {
+            ss_select_tab(getChild<LLTabContainer>("clouds_sub_tabs"),
+                          "clouds_main_tab", "panel_ss_atmo_env_clouds_main");
+        }
+        else
+        {
+            ss_select_tab(getChild<LLTabContainer>("clouds_sub_tabs"),
+                          "clouds_under_tab", "panel_ss_atmo_env_clouds_under");
+        }
+        break;
+    default:
+        break;
+    }
+    refreshRailMode();
+}
+
+void SSFloaterAtmoEnv::onClickLayerMarker(S32 layer)
+{
+    if (!layerPresent(layer))
+    {
+        refreshLayerRail();
+        return;
+    }
+    selectLayer(layer);
+}
+
+// Add Deck reads generically but bottoms out on the under deck's enable flag: the model carries two
+// named decks with distinct semantics rather than a vector. If a third is ever wanted the rail does
+// not change - only the asset and the deck panels do. See doc/atmo_magic_env_ui.md.
+void SSFloaterAtmoEnv::onClickAddDeck()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+    if (asset.mTracks[mSelectedTrackIndex].mUnderField.mEnabled) return;
+
+    asset.mTracks[mSelectedTrackIndex].mUnderField.mEnabled = true;
+    selectLayer(LAYER_UNDER);
+    refreshAutoRows();
+    refreshStatus();
+    refreshPreview();
+}
+
+void SSFloaterAtmoEnv::onClickRemoveDeck()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+    if (!track.mUnderField.mEnabled) return;
+
+    track.mUnderField.mEnabled = false;
+    // An override naming the deck that just went away would otherwise leave weather sourceless.
+    if (track.mWeatherSourceDeck == SS_ATMOENV_DECK_UNDER)
+    {
+        track.mWeatherSourceDeck = SS_ATMOENV_DECK_DERIVED;
+    }
+    if (mSelectedLayer == LAYER_UNDER)
+    {
+        selectLayer(LAYER_MAIN);
+    }
+    refreshWeatherSource();
+    refreshAutoRows();
+    refreshRailMode();
+    refreshStatus();
+    refreshPreview();
+}
+
+void SSFloaterAtmoEnv::onCommitWeatherSource()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mWeatherSourceDeck =
+        getChild<LLComboBox>("weather_source_combo")->getSelectedValue().asInteger();
+
+    refreshRailMode();
+    refreshStatus();
+    refreshPreview();
+}
+
+// <SS:Nexii> Rebuilds the type combo from both tiers. The shipped vocabulary is captured from the
+// XUI on the first pass rather than duplicated in code, so the panel stays the one place the
+// derivation names are written down; the environment's own types are appended after a separator.
+void SSFloaterAtmoEnv::refreshPrecipitationTypes()
+{
+    LLComboBox* combo = getChild<LLComboBox>("precipitation_combo");
+
+    if (mBuiltinPrecipItems.empty())
+    {
+        // LLComboBox exposes its rows only through the selection, so walk it once and put the
+        // selection back. Once is all it takes - the shipped vocabulary is fixed at build time.
+        const S32 was = combo->getCurrentIndex();
+        for (S32 i = 0; i < combo->getItemCount(); ++i)
+        {
+            if (!combo->setCurrentByIndex(i)) continue;
+            mBuiltinPrecipItems.emplace_back(combo->getSelectedItemLabel(),
+                                             combo->getSelectedValue().asString());
+        }
+        combo->setCurrentByIndex(llmax(0, was));
+    }
+
+    const std::string selected = combo->getSelectedValue().asString();
+
+    combo->removeall();
+    for (const auto& entry : mBuiltinPrecipItems)
+    {
+        combo->add(entry.first, LLSD(entry.second));
+    }
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (mgr->hasAsset())
+    {
+        for (const auto& entry : mgr->asset().mPrecipitationTypes)
+        {
+            // Marked so an author can tell at a glance which types travel with this environment.
+            combo->add(entry.first + "  (this environment)", LLSD(entry.first));
+        }
+    }
+
+    if (!combo->setSelectedByValue(LLSD(selected), true))
+    {
+        combo->setSelectedByValue(LLSD(std::string()), true);
+    }
+}
+
+// Derives a new environment type from whatever is selected and opens it for editing.
+void SSFloaterAtmoEnv::onClickNewPrecipType()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset())
+    {
+        LLNotificationsUtil::add("GenericAlert", LLSD().with(
+            "MESSAGE", "Load or create an Atmo environment first - custom precipitation types are "
+                       "saved into it."));
+        return;
+    }
+
+    const std::string selected = getChild<LLComboBox>("precipitation_combo")
+        ->getSelectedValue().asString();
+
+    // Auto has no definition to derive from, so a blank selection starts from the shipped rain.
+    const std::string parent_type = selected.empty() ? std::string("rain") : selected;
+    const std::string parent_name = SSAtmoEnvBridge::presetNameForType(parent_type);
+
+    const SSPrecipPreset* parent = SSPrecipPresetManager::instance().find(parent_name);
+    if (!parent)
+    {
+        LLNotificationsUtil::add("GenericAlert", LLSD().with(
+            "MESSAGE", "That precipitation type has no definition to copy."));
+        return;
+    }
+
+    SSPrecipPreset derived = *parent;
+    derived.mBuiltIn = false;
+    derived.mFromEnvironment = true;
+
+    std::map<std::string, LLSD>& types = mgr->editable().mPrecipitationTypes;
+    std::string name = parent->mName + " copy";
+    for (S32 i = 2; types.count(name) && i < 1000; ++i)
+    {
+        name = parent->mName + " copy " + llformat("%d", i);
+    }
+    derived.mName = name;
+
+    types[name] = derived.asLLSD();
+    ssAtmoEnvStagePrecipTypes(mgr->asset());
+
+    refreshPrecipitationTypes();
+    refreshStatus();
+
+    LLFloaterReg::showInstance("ss_atmo_preset",
+        LLSD().with("scope", "environment").with("name", name));
+}
+
+void SSFloaterAtmoEnv::onClickEditPrecipTypes()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset() || mgr->asset().mPrecipitationTypes.empty())
+    {
+        LLNotificationsUtil::add("GenericAlert", LLSD().with(
+            "MESSAGE", "This environment has no precipitation types of its own yet. Use "
+                       "\"New from this...\" to derive one from a shipped type."));
+        return;
+    }
+
+    const std::string selected = getChild<LLComboBox>("precipitation_combo")
+        ->getSelectedValue().asString();
+    const std::string want = mgr->asset().mPrecipitationTypes.count(selected)
+        ? selected : mgr->asset().mPrecipitationTypes.begin()->first;
+
+    LLFloaterReg::showInstance("ss_atmo_preset",
+        LLSD().with("scope", "environment").with("name", want));
+}
+
+void SSFloaterAtmoEnv::refreshWeatherSource()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    LLComboBox* combo = getChild<LLComboBox>("weather_source_combo");
+    combo->clearRows();
+    combo->add("Derived", LLSD(SS_ATMOENV_DECK_DERIVED));
+    combo->add("Main Deck", LLSD(SS_ATMOENV_DECK_MAIN));
+    if (track.mUnderField.mEnabled)
+    {
+        combo->add("Under Deck", LLSD(SS_ATMOENV_DECK_UNDER));
+    }
+    if (!combo->setSelectedByValue(LLSD(track.mWeatherSourceDeck), true))
+    {
+        combo->setSelectedByValue(LLSD(SS_ATMOENV_DECK_DERIVED), true);
+    }
 }
 
 // Centres a rail widget on a pixel.
@@ -730,6 +1416,49 @@ void SSFloaterAtmoEnv::onCommitAltitudeSlider()
 
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
     const std::string cur = slider->getCurSlider();
+
+    // Layer mode drags a placed layer, not a track floor. Writing straight to the field's plain
+    // value is deliberate: a deck's altitude can be keyframed, but dragging it on the rail is a
+    // structural placement, so it sets the value the track holds rather than stamping a keyframe.
+    if (mRailMode == ERailMode::LAYER)
+    {
+        if (cur.rfind("layer", 0) != 0) return;
+
+        const S32 layer = atoi(cur.c_str() + 5);
+        SSAtmoEnvAsset& layer_asset = mgr->editable();
+        if (mSelectedTrackIndex >= (S32)layer_asset.mTracks.size()) return;
+        SSAtmoEnvTrack& track = layer_asset.mTracks[mSelectedTrackIndex];
+
+        const F32 value = slider->getCurSliderValue();
+        switch (layer)
+        {
+        case LAYER_WATER:
+            track.mWater.mHeight.setValueAtHead(mPreviewPhase,
+                llclamp(value, SS_ATMOENV_WATER_MIN, SS_ATMOENV_WATER_MAX));
+            break;
+        case LAYER_MAIN:
+            track.mCloudField.mAuto = false;
+            track.mCloudField.mBaseHeightM.setValueAtHead(mPreviewPhase, value);
+            break;
+        case LAYER_UNDER:
+            track.mUnderField.mAuto = false;
+            track.mUnderField.mBaseHeightM.setValueAtHead(mPreviewPhase, value);
+            break;
+        default:
+            return;
+        }
+
+        if (layer != mSelectedLayer)
+        {
+            selectLayer(layer);
+        }
+        refreshLayerRail();
+        refreshAutoRows();
+        refreshStatus();
+        refreshPreview();
+        return;
+    }
+
     if (cur.size() <= 5) return;
 
     const S32 slot = atoi(cur.c_str() + 5);
@@ -759,6 +1488,19 @@ void SSFloaterAtmoEnv::onMouseUpAltitudeSlider()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
+
+    if (mRailMode == ERailMode::LAYER)
+    {
+        // Re-fit only now the drag is over, so the axis cannot move under the cursor.
+        F32 want_min = 0.f;
+        F32 want_max = SS_ATMOENV_REGION_CEILING;
+        railRangeForTrack(want_min, want_max);
+        mRailMin = mRailMinTo = want_min;
+        mRailMax = mRailMaxTo = want_max;
+        refreshLayerRail();
+        refreshStatus();
+        return;
+    }
 
     mSelectedTrackIndex = mgr->editable().sortTracksByAltitude(mSelectedTrackIndex);
     refreshTrackRail();
@@ -886,6 +1628,7 @@ void SSFloaterAtmoEnv::onClickUnload()
 
     mSelectedTrackIndex = 0;
     refreshVisibility();
+    refreshPrecipitationTypes();
     refreshTrackRail();
     refreshTrackTab();
     refreshStatus();
@@ -896,6 +1639,11 @@ void SSFloaterAtmoEnv::onClickRevert()
 {
     SSAtmoEnvManager::getInstance()->revertToBaseline();
     mSelectedTrackIndex = 0;
+    // Reverting restores the baseline's precipitation types too, so they have to be restaged and
+    // relisted - otherwise a type added since the load would linger in the combo and in the
+    // resolver's live set.
+    ssAtmoEnvStagePrecipTypes(SSAtmoEnvManager::getInstance()->asset());
+    refreshPrecipitationTypes();
     refreshTrackRail();
     refreshTrackTab();
     refreshPlanetaryScales();
@@ -934,6 +1682,49 @@ void SSFloaterAtmoEnv::onClickRemoveTrack()
     refreshPlanetaryScales();
     refreshStatus();
     refreshPreview();
+}
+
+// <SS:Nexii> Seeds the selected track from a world archetype. Confirmed first because it overwrites
+// the track wholesale, keyframes included - there is no partial apply and no undo beyond Revert.
+void SSFloaterAtmoEnv::onClickApplyTemplate()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    LLComboBox* combo = getChild<LLComboBox>("track_template_combo");
+    const std::string key = combo->getSelectedValue().asString();
+    if (key.empty()) return;
+
+    LLSD args;
+    args["MESSAGE"] = "Seed \"" + combo->getSelectedItemLabel() + "\" onto this track? Its water, "
+                      "cloud decks, sky and weather are replaced, keyframes included.";
+    // The floater can be closed while the confirmation is up, so the callback goes through a
+    // handle rather than capturing this - same pattern as the dropped-settings load above.
+    LLHandle<LLFloater> handle = getHandle();
+    LLNotificationsUtil::add("GenericAlertYesCancel", args, LLSD(),
+        [handle, key](const LLSD& notification, const LLSD& response)
+        {
+            if (LLNotificationsUtil::getSelectedOption(notification, response) != 0) return;
+
+            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+            if (!self) return;
+
+            SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+            if (!mgr->hasAsset()) return;
+
+            SSAtmoEnvAsset& asset = mgr->editable();
+            if (self->mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+            if (!ssAtmoEnvApplyTemplate(asset.mTracks[self->mSelectedTrackIndex], key)) return;
+
+            self->refreshTrackRail();
+            self->refreshTrackTab();
+            self->refreshWaterRows();
+            self->refreshAutoRows();
+            self->refreshLightningRows();
+            self->refreshPlanetaryScales();
+            self->refreshStatus();
+            self->refreshPreview();
+        });
 }
 
 // Asset name field into the asset.
@@ -1879,6 +2670,45 @@ bool SSFloaterAtmoEnv::scrubberGeometry(LLRect& out_rect, S32& out_left_edge, S3
     out_left_edge = out_rect.mLeft + (thumb_width / 2);
     out_travel = (out_rect.mRight - (thumb_width / 2)) - out_left_edge;
     return out_travel > 0;
+}
+
+// The weather bracket: precipitation occupies a span rather than a height, so it draws as an extent
+// from the reference surface up to the delivering deck rather than as another thumb. Rail
+// geometry is panel-local, and this runs after LLFloater::draw() in floater space, so the track
+// panel's own origin has to be added back on.
+void SSFloaterAtmoEnv::drawWeatherBracket()
+{
+    if (mRailMode != ERailMode::LAYER) return;
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    const S32 delivering = weatherDeliveringDeck();
+    if (delivering == LAYER_NONE) return;
+
+    LLView* panel = findChild<LLView>("track_panel");
+    LLView* slider = findChild<LLView>("track_altitude_slider");
+    if (!panel || !slider || !panel->getVisible()) return;
+
+    const LLRect panel_rect = panel->getRect();
+    const LLRect sld_rect = slider->getRect();
+
+    const S32 surface_y = panel_rect.mBottom + railCentreForValue(weatherReferenceSurface());
+    const S32 deck_y    = panel_rect.mBottom + railCentreForValue(layerAltitude(delivering));
+    if (deck_y <= surface_y) return;
+
+    const S32 centre_x = panel_rect.mLeft + sld_rect.getCenterX();
+
+    static const LLColor4 BRACKET_COLOUR(0.55f, 0.72f, 0.95f, 0.55f);
+    static const S32 STEM_HALF = 1;
+    static const S32 CAP_HALF = 5;
+
+    gl_rect_2d(centre_x - STEM_HALF, deck_y, centre_x + STEM_HALF, surface_y,
+               BRACKET_COLOUR, true);
+    gl_rect_2d(centre_x - CAP_HALF, deck_y + 1, centre_x + CAP_HALF, deck_y - 1,
+               BRACKET_COLOUR, true);
+    gl_rect_2d(centre_x - CAP_HALF, surface_y + 1, centre_x + CAP_HALF, surface_y - 1,
+               BRACKET_COLOUR, true);
 }
 
 // Sun and moon rise/set/culmination markers on the scrubber, from the resolver's arc math.

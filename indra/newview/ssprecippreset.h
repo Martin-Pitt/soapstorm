@@ -139,6 +139,11 @@ struct SSPrecipPreset
     std::string mName;
     bool mBuiltIn = false;
 
+    // <SS:Nexii> Set when the type came from the loaded Atmo environment rather than from disk.
+    // Not serialised: it describes where this copy arrived from, not what the type is, and the
+    // same definition stored in an environment and saved to disk is the same type either way.
+    bool mFromEnvironment = false;
+
     SSPrecipArchetype mArchetype = SSPrecipArchetype::LIQUID;
 
     F32 mFallSpeed = 9.5f;
@@ -236,6 +241,13 @@ public:
     bool remove(const std::string& name);
 
     void stage(const SSPrecipPreset& preset);
+
+    // <SS:Nexii> The environment tier. Types authored into an Atmo environment are staged into the
+    // live list so everything that resolves a precipitation by name finds them without knowing the
+    // difference, and dropped again when the environment unloads. Replacing the whole set at once
+    // rather than adding one at a time is what makes a rename or a deletion in the editor take.
+    void setEnvironmentPresets(const std::vector<SSPrecipPreset>& presets);
+    void clearEnvironmentPresets();
 
     bool isModified(const std::string& name) const;
 

@@ -50,7 +50,9 @@ public:
     static bool resolveActiveTrack(F32 world_z, F32 prev_world_z, bool teleported,
                                    SSAtmoTrackConfig& out_cfg, bool& out_is_ground_track);
 
-private:
+    // <SS:Nexii> Public because the environment editor derives a new precipitation type from
+    // whatever the combo has selected, and the combo holds derivation vocabulary rather than
+    // preset names - it needs the same mapping the renderer uses, not a second copy of it.
     static std::string presetNameForType(const std::string& v3_type);
 };
 

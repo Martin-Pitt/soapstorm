@@ -111,6 +111,7 @@ public:
     void            setMinValue(F32 min_value) {mMultiSlider->setMinValue(min_value);}
     void            setMaxValue(F32 max_value) {mMultiSlider->setMaxValue(max_value);}
     void            setIncrement(F32 increment) {mMultiSlider->setIncrement(increment);}
+    void            setOverlapThreshold(F32 threshold) {mMultiSlider->setOverlapThreshold(threshold);}
 
     F32             getNearestIncrement(F32 value) const { return mMultiSlider->getNearestIncrement(value); }
     F32             getSliderValueFromPos(S32 x, S32 y) const { return mMultiSlider->getSliderValueFromPos(x, y); }

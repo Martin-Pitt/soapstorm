@@ -24,6 +24,8 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "ssfloaterpreset.h"
+#include "llsdutil.h"
+#include "ssatmoenvmanager.h"
 
 #include "ssfloatersoundlist.h"
 #include "ssatmotrack.h"
@@ -131,18 +133,86 @@ bool SSFloaterPreset::postBuild()
 // Opens on the named preset (or the active one).
 void SSFloaterPreset::onOpen(const LLSD& key)
 {
+    // <SS:Nexii> A map key carries the scope; a bare string is the viewer-scope call this floater
+    // has always taken, so existing callers are unchanged.
+    std::string want;
+    if (key.isMap())
+    {
+        mEnvironmentScope = (key["scope"].asString() == "environment");
+        want = key["name"].asString();
+    }
+    else
+    {
+        mEnvironmentScope = false;
+        want = key.isString() ? key.asString() : std::string();
+    }
+
     refreshPresetList();
 
-    std::string want = key.isString() ? key.asString() : std::string();
-    if (want.empty())
+    if (want.empty() && mEnvironmentScope)
+    {
+        const std::vector<std::string> names = environmentTypeNames();
+        if (!names.empty()) want = names.front();
+    }
+    if (want.empty() && !mEnvironmentScope)
     {
         want = gSavedSettings.getString("SSAtmoPreset");
     }
-    if (want.empty())
+    if (want.empty() && !mEnvironmentScope)
     {
         want = SSAtmoMagic::getInstance()->preset().mName;
     }
-    loadPreset(want);
+    if (!want.empty())
+    {
+        loadPreset(want);
+    }
+    refreshTitle();
+}
+
+// The environment's type names, from the asset rather than from the staged list, so a type staged
+// by something else cannot masquerade as one this environment owns.
+std::vector<std::string> SSFloaterPreset::environmentTypeNames() const
+{
+    std::vector<std::string> names;
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return names;
+
+    for (const auto& entry : mgr->asset().mPrecipitationTypes)
+    {
+        names.push_back(entry.first);
+    }
+    return names;
+}
+
+// Writes the working copy into the loaded environment and restages it.
+bool SSFloaterPreset::saveToEnvironment()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset() || mEdited.mName.empty()) return false;
+
+    mgr->editable().mPrecipitationTypes[mEdited.mName] = mEdited.asLLSD();
+    refreshEnvironmentStaging();
+    return true;
+}
+
+bool SSFloaterPreset::removeFromEnvironment(const std::string& name)
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return false;
+
+    if (!mgr->editable().mPrecipitationTypes.erase(name)) return false;
+    refreshEnvironmentStaging();
+    return true;
+}
+
+void SSFloaterPreset::refreshEnvironmentStaging()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    ssAtmoEnvStagePrecipTypes(mgr->asset());
+    SSPrecipVariants::instance().clearCache();
 }
 
 // Rebuilds the preset combo around the current selection.
@@ -152,9 +222,19 @@ void SSFloaterPreset::refreshPresetList()
     const std::string selected = combo->getSelectedItemLabel();
 
     combo->removeall();
-    for (const SSPrecipPreset& p : SSPrecipPresetManager::instance().presets())
+    if (mEnvironmentScope)
     {
-        combo->add(p.mName, p.mName);
+        for (const std::string& name : environmentTypeNames())
+        {
+            combo->add(name, name);
+        }
+    }
+    else
+    {
+        for (const SSPrecipPreset& p : SSPrecipPresetManager::instance().presets())
+        {
+            combo->add(p.mName, p.mName);
+        }
     }
     if (!selected.empty())
     {
@@ -350,7 +430,12 @@ void SSFloaterPreset::applyLive()
 
     SSPrecipVariants::instance().clearCache();
 
-    gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+    // Only the viewer-scope editor sets what the viewer is running. In environment scope the type
+    // is one the region offers, and picking it is the environment's job, not the editor's.
+    if (!mEnvironmentScope)
+    {
+        gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+    }
 
     refreshTitle();
 }
@@ -358,6 +443,22 @@ void SSFloaterPreset::applyLive()
 // Title shows the preset name and its modified state.
 void SSFloaterPreset::refreshTitle()
 {
+    if (mEnvironmentScope)
+    {
+        SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+        bool modified = true;
+        if (mgr->hasAsset())
+        {
+            const auto& types = mgr->asset().mPrecipitationTypes;
+            const auto it = types.find(mEdited.mName);
+            modified = (it == types.end()) || !llsd_equals(it->second, mEdited.asLLSD());
+        }
+        setTitle("Edit Environment Precipitation - " + mEdited.mName
+                 + (modified ? " - Unsaved changes*" : ""));
+        getChild<LLUICtrl>("save_button")->setEnabled(modified);
+        return;
+    }
+
     const bool modified = SSPrecipPresetManager::instance().isModified(mEdited.mName);
     setTitle("Edit Atmo Magic Preset - " + mEdited.mName + (modified ? " - Unsaved changes*" : ""));
     getChild<LLUICtrl>("save_button")->setEnabled(modified);
@@ -366,7 +467,19 @@ void SSFloaterPreset::refreshTitle()
 // Persists the working copy.
 void SSFloaterPreset::onClickSave()
 {
-    SSPrecipPresetManager::instance().save(mEdited);
+    if (mEnvironmentScope)
+    {
+        if (!saveToEnvironment())
+        {
+            LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                "MESSAGE", "There is no Atmo environment loaded to save this type into."));
+            return;
+        }
+    }
+    else
+    {
+        SSPrecipPresetManager::instance().save(mEdited);
+    }
     refreshPresetList();
     refreshTitle();
 }
@@ -383,7 +496,10 @@ void SSFloaterPreset::onCommitAny()
 void SSFloaterPreset::onSelectPreset()
 {
     loadPreset(getChild<LLComboBox>("preset_combo")->getValue().asString());
-    gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+    if (!mEnvironmentScope)
+    {
+        gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+    }
 }
 
 // New preset as a copy of the current one.
@@ -398,6 +514,10 @@ void SSFloaterPreset::onClickNew()
 
     mEdited.mName = name;
     mEdited.mBuiltIn = false;
+    // Deriving carries a full copy rather than a reference to the parent, so a viewer update that
+    // retunes the shipped type it came from cannot silently change a region that ships this one.
+    mEdited.mFromEnvironment = mEnvironmentScope;
+    if (mEnvironmentScope) saveToEnvironment();
     applyLive();
     refreshPresetList();
     getChild<LLComboBox>("preset_combo")->selectByValue(name);
@@ -420,6 +540,8 @@ void SSFloaterPreset::onClickBlank()
     mEdited = SSPrecipPreset();
     mEdited.mName = uniquePresetName("New preset");
     mEdited.mBuiltIn = false;
+    mEdited.mFromEnvironment = mEnvironmentScope;
+    if (mEnvironmentScope) saveToEnvironment();
 
     applyLive();
     refreshPresetList();
@@ -446,6 +568,30 @@ void SSFloaterPreset::onClickRename()
 
     mEdited.mName = name;
     mEdited.mBuiltIn = false;
+
+    if (mEnvironmentScope)
+    {
+        // Rekey the asset, then follow the reference through every keyframe that named the old
+        // type - otherwise the rename would leave those keyframes pointing at nothing.
+        SSAtmoEnvManager* env = SSAtmoEnvManager::getInstance();
+        if (env->hasAsset())
+        {
+            SSAtmoEnvAsset& asset = env->editable();
+            asset.mPrecipitationTypes.erase(old_name);
+            asset.mPrecipitationTypes[name] = mEdited.asLLSD();
+
+            for (SSAtmoEnvTrack& track : asset.mTracks)
+            {
+                track.mWeather.mPrecipitationOverride.renameValue(old_name, name);
+            }
+        }
+        refreshEnvironmentStaging();
+        refreshPresetList();
+        getChild<LLComboBox>("preset_combo")->selectByValue(name);
+        refreshTitle();
+        return;
+    }
+
     SSPrecipPresetManager::instance().save(mEdited);
     SSPrecipPresetManager::instance().remove(old_name);
 
@@ -476,6 +622,23 @@ void SSFloaterPreset::onClickRename()
 void SSFloaterPreset::onClickDelete()
 {
     const std::string name = mEdited.mName;
+
+    if (mEnvironmentScope)
+    {
+        if (!removeFromEnvironment(name))
+        {
+            LLNotificationsUtil::add("GenericAlert",
+                LLSD().with("MESSAGE", "This environment does not carry a type by that name."));
+            return;
+        }
+
+        refreshPresetList();
+        const std::vector<std::string> remaining = environmentTypeNames();
+        if (!remaining.empty()) loadPreset(remaining.front());
+        refreshTitle();
+        return;
+    }
+
     if (!SSPrecipPresetManager::instance().remove(name))
     {
         LLNotificationsUtil::add("GenericAlert",
@@ -494,6 +657,13 @@ void SSFloaterPreset::onClickDelete()
 // Drops staged edits, back to the saved version.
 void SSFloaterPreset::onClickDiscard()
 {
+    if (mEnvironmentScope)
+    {
+        // The asset is the saved copy in this scope.
+        loadPreset(mEdited.mName);
+        return;
+    }
+
     const SSPrecipPreset* saved = SSPrecipPresetManager::instance().findSaved(mEdited.mName);
     if (!saved) return;
 
@@ -505,6 +675,12 @@ void SSFloaterPreset::onClickDiscard()
 // Reverts the controls to the saved preset.
 void SSFloaterPreset::onClickRevert()
 {
+    if (mEnvironmentScope)
+    {
+        loadPreset(mEdited.mName);
+        return;
+    }
+
     SSPrecipPresetManager::instance().remove(mEdited.mName);
     SSPrecipVariants::instance().clearCache();
     refreshPresetList();

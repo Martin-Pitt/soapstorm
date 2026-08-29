@@ -25,6 +25,8 @@
 
 #include "ssatmoenvasset.h"
 
+#include "ssprecippreset.h"
+
 #include "llagent.h"
 #include "llsettingssky.h"
 #include "llviewerregion.h"
@@ -1088,6 +1090,114 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     return true;
 }
 
+// <SS:Nexii> The world template table. Ordered roughly by how far each sits from a stock region, so
+// the combo reads as a walk outwards from the familiar rather than an alphabetised list.
+const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates()
+{
+    static const std::vector<SSAtmoEnvTemplate> templates = {
+        // key                label                 day   water  height   fog colour                        fogd   deck   thick  cov   dark   under  ubase   uthick  domeA  domeH   domeC  temp   moist  conv   wind   blue horizon                        blue density                       haze   maxalt
+        { "natural",          "Natural Coast",       4.0,  true,    20.f, LLColor3(0.00f, 0.24f, 0.34f),    16.f,  900.f, 300.f, 0.80f, 0.85f, false,  200.f,  200.f,  true, 6000.f, 0.27f, 15.f,  0.35f, 0.20f,  4.f, LLColor3(0.4954f, 0.4954f, 0.6399f), LLColor3(0.2447f, 0.4487f, 0.7599f), 0.70f, 1605.f },
+        { "urban",            "Urban Region",        4.0,  true,    20.f, LLColor3(0.05f, 0.20f, 0.26f),    22.f, 1200.f, 250.f, 0.50f, 0.80f, false,  200.f,  200.f,  true, 6000.f, 0.20f, 18.f,  0.25f, 0.15f,  3.f, LLColor3(0.5200f, 0.5000f, 0.5900f), LLColor3(0.2800f, 0.4300f, 0.6800f), 0.85f, 1605.f },
+        { "sky_archipelago",  "Sky Archipelago",     5.0,  true, -2000.f, LLColor3(0.02f, 0.20f, 0.30f),    12.f, 2600.f, 400.f, 0.70f, 0.85f,  true,  900.f,  500.f, false, 9000.f, 0.35f,  8.f,  0.40f, 0.35f,  9.f, LLColor3(0.4600f, 0.5200f, 0.7000f), LLColor3(0.2200f, 0.4600f, 0.8200f), 0.55f, 3000.f },
+        { "geocentric",       "Geocentric Fantasy",  6.0,  true,    20.f, LLColor3(0.02f, 0.22f, 0.30f),    16.f, 1400.f, 350.f, 0.65f, 0.85f, false,  200.f,  200.f, false, 7000.f, 0.30f, 12.f,  0.30f, 0.25f,  5.f, LLColor3(0.5400f, 0.4800f, 0.6200f), LLColor3(0.2600f, 0.4200f, 0.7200f), 0.75f, 2000.f },
+        { "alien",            "Alien World",         4.0, false,     0.f, LLColor3(0.16f, 0.10f, 0.22f),    20.f, 1800.f, 600.f, 0.90f, 0.90f, false,  200.f,  200.f, false, 8000.f, 0.40f, 30.f,  0.15f, 0.45f,  7.f, LLColor3(0.7000f, 0.4200f, 0.3400f), LLColor3(0.5600f, 0.3000f, 0.5200f), 0.90f, 2400.f },
+        { "shattered_moon",   "Shattered Moon",      6.0,  true,    20.f, LLColor3(0.04f, 0.16f, 0.26f),    18.f, 1000.f, 450.f, 0.75f, 0.92f, false,  200.f,  200.f, false, 8000.f, 0.45f,  5.f,  0.50f, 0.60f,  8.f, LLColor3(0.4400f, 0.4400f, 0.6800f), LLColor3(0.2000f, 0.3600f, 0.7800f), 0.80f, 2400.f },
+        { "barrage",          "Artillery Barrage",   4.0,  true,    20.f, LLColor3(0.10f, 0.12f, 0.12f),    26.f,  700.f, 900.f, 1.00f, 0.55f, false,  200.f,  200.f,  true, 6000.f, 0.60f, 10.f,  0.80f, 0.90f, 12.f, LLColor3(0.5600f, 0.4600f, 0.4000f), LLColor3(0.3400f, 0.3400f, 0.4000f), 1.10f, 1605.f },
+    };
+    return templates;
+}
+
+bool ssAtmoEnvApplyTemplate(SSAtmoEnvTrack& track, const std::string& key)
+{
+    const SSAtmoEnvTemplate* tmpl = nullptr;
+    for (const SSAtmoEnvTemplate& candidate : ssAtmoEnvTemplates())
+    {
+        if (key == candidate.mKey) { tmpl = &candidate; break; }
+    }
+    if (!tmpl) return false;
+
+    // Assigning a fresh SSAtmoEnvKeyframed drops any keyframes the field carried, which is the
+    // intent: a seed replaces what the track said, it does not blend with it.
+    track.mDayLengthSeconds = tmpl->mDayLengthHours * 60.0 * 60.0;
+
+    track.mWater.mEnabled    = tmpl->mWaterEnabled;
+    track.mWater.mHeight     = SSAtmoEnvKeyframed<F32>(tmpl->mWaterHeightM);
+    track.mWater.mFogColor   = SSAtmoEnvKeyframed<LLColor3>(tmpl->mWaterFogColor);
+    track.mWater.mFogDensity = SSAtmoEnvKeyframed<F32>(tmpl->mWaterFogDensity);
+
+    track.mCloudField.mAuto           = false;
+    track.mCloudField.mBaseHeightM    = SSAtmoEnvKeyframed<F32>(tmpl->mDeckBaseM);
+    track.mCloudField.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(tmpl->mDeckThicknessM);
+    track.mCloudField.mCoverageScale  = SSAtmoEnvKeyframed<F32>(tmpl->mDeckCoverage);
+    track.mCloudField.mStormDarkening = SSAtmoEnvKeyframed<F32>(tmpl->mDeckStormDarkening);
+
+    track.mUnderField.mEnabled        = tmpl->mUnderEnabled;
+    track.mUnderField.mBaseHeightM    = SSAtmoEnvKeyframed<F32>(tmpl->mUnderBaseM);
+    track.mUnderField.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(tmpl->mUnderThicknessM);
+
+    track.mCloudDome.mAuto     = tmpl->mDomeAuto;
+    track.mCloudDome.mHeightM  = SSAtmoEnvKeyframed<F32>(tmpl->mDomeHeightM);
+    track.mCloudDome.mCoverage = SSAtmoEnvKeyframed<F32>(tmpl->mDomeCoverage);
+
+    track.mWeather.mTemperatureC = SSAtmoEnvKeyframed<F32>(tmpl->mTemperatureC);
+    track.mWeather.mMoisture     = SSAtmoEnvKeyframed<F32>(tmpl->mMoisture);
+    track.mWeather.mConvection   = SSAtmoEnvKeyframed<F32>(tmpl->mConvection);
+    track.mWeather.mWindSpeed    = SSAtmoEnvKeyframed<F32>(tmpl->mWindSpeed);
+
+    track.mAtmosphere.mBlueHorizon = SSAtmoEnvKeyframed<LLColor3>(tmpl->mBlueHorizon);
+    track.mAtmosphere.mBlueDensity = SSAtmoEnvKeyframed<LLColor3>(tmpl->mBlueDensity);
+    track.mAtmosphere.mHazeDensity = SSAtmoEnvKeyframed<F32>(tmpl->mHazeDensity);
+    track.mAtmosphere.mMaxAltitude = SSAtmoEnvKeyframed<F32>(tmpl->mMaxAltitudeM);
+
+    return true;
+}
+
+void ssAtmoEnvStagePrecipTypes(const SSAtmoEnvAsset& asset)
+{
+    std::vector<SSPrecipPreset> staged;
+    staged.reserve(asset.mPrecipitationTypes.size());
+
+    for (const auto& entry : asset.mPrecipitationTypes)
+    {
+        SSPrecipPreset preset;
+        preset.fromLLSD(entry.second);
+        // The map key is the authority on the name: a rename in the editor rewrites the key, and a
+        // stale name left inside the serialised body must not resurrect the old one.
+        preset.mName = entry.first;
+        staged.push_back(preset);
+    }
+
+    SSPrecipPresetManager::instance().setEnvironmentPresets(staged);
+}
+
+void ssAtmoEnvEmbedReferencedPrecipTypes(SSAtmoEnvAsset& asset)
+{
+    SSPrecipPresetManager& presets = SSPrecipPresetManager::instance();
+
+    for (const SSAtmoEnvTrack& track : asset.mTracks)
+    {
+        std::vector<std::string> referenced;
+        referenced.push_back(track.mWeather.mPrecipitationOverride.valueAt(0.0));
+        for (const SSAtmoEnvKeyframe<std::string>& kf
+                 : track.mWeather.mPrecipitationOverride.keyframes())
+        {
+            referenced.push_back(kf.mValue);
+        }
+
+        for (const std::string& name : referenced)
+        {
+            // Empty means derived from convection and temperature - there is nothing to embed.
+            if (name.empty()) continue;
+            if (asset.mPrecipitationTypes.count(name)) continue;
+
+            if (const SSPrecipPreset* shipped = presets.find(name))
+            {
+                asset.mPrecipitationTypes[name] = shipped->asLLSD();
+            }
+        }
+    }
+}
+
 // One track out to its notecard document.
 LLSD SSAtmoEnvTrack::asLLSD() const
 {
@@ -1107,6 +1217,7 @@ LLSD SSAtmoEnvTrack::asLLSD() const
     sd["cloud_dome"]  = mCloudDome.asLLSD();
     sd["atmosphere"] = mAtmosphere.asLLSD();
     sd["weather_influence"] = mWeatherInfluence.asLLSD();
+    sd["weather_source_deck"] = (LLSD::Integer)mWeatherSourceDeck;
     return sd;
 }
 
@@ -1131,6 +1242,8 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
     if (sd.has("cloud_dome"))  mCloudDome.fromLLSD(sd["cloud_dome"]);
     if (sd.has("atmosphere"))  mAtmosphere.fromLLSD(sd["atmosphere"]);
     if (sd.has("weather_influence")) mWeatherInfluence.fromLLSD(sd["weather_influence"]);
+    mWeatherSourceDeck = sd.has("weather_source_deck")
+        ? (S32)sd["weather_source_deck"].asInteger() : SS_ATMOENV_DECK_DERIVED;
 
     return true;
 }
@@ -1329,6 +1442,16 @@ LLSD SSAtmoEnvAsset::asLLSD() const
     }
     sd["tracks"] = tracks;
 
+    if (!mPrecipitationTypes.empty())
+    {
+        LLSD types = LLSD::emptyMap();
+        for (const auto& entry : mPrecipitationTypes)
+        {
+            types[entry.first] = entry.second;
+        }
+        sd["precipitation_types"] = types;
+    }
+
     return sd;
 }
 
@@ -1384,6 +1507,16 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
     }
 
     parsed.sortTracksByAltitude();
+
+    if (sd.has("precipitation_types") && sd["precipitation_types"].isMap())
+    {
+        const LLSD& types = sd["precipitation_types"];
+        for (LLSD::map_const_iterator it = types.beginMap(); it != types.endMap(); ++it)
+        {
+            if (it->first.empty()) continue;
+            parsed.mPrecipitationTypes[it->first] = it->second;
+        }
+    }
 
     *this = parsed;
     return true;

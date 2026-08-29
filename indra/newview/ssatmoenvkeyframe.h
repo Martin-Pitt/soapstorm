@@ -242,6 +242,18 @@ public:
         return findAt(wrapPhase(phase), epsilon) >= 0;
     }
 
+    // <SS:Nexii> Follows a rename through the whole field - the plain value and every keyframe.
+    // Only meaningful for the string fields that name something by key (a precipitation type), and
+    // only instantiated where it is called, so the numeric fields never see it.
+    void renameValue(const T& from, const T& to)
+    {
+        if (mPlainValue == from) mPlainValue = to;
+        for (SSAtmoEnvKeyframe<T>& kf : mKeyframes)
+        {
+            if (kf.mValue == from) kf.mValue = to;
+        }
+    }
+
     void setValueAtHead(F64 head_phase, const T& value, F64 epsilon = PHASE_EPSILON)
     {
         if (mKeyframes.empty())

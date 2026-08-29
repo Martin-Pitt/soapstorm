@@ -25,9 +25,12 @@
 #define SS_FLOATERATMOENV_H
 
 #include "llfloater.h"
+#include "ssatmoenvasset.h" // <SS:Nexii> SS_ATMOENV_REGION_CEILING, for the rail's track-mode range
 #include "ssatmoenvkeyframe.h"
 
 #include <functional>
+#include <string>
+#include <utility>
 #include <vector>
 
 class LLInventoryItem;
@@ -87,8 +90,75 @@ private:
 
     S32 mSelectedTrackIndex = 0;
 
+    // <SS:Nexii> The altitude rail runs in two modes rather than there being two rails. Track mode
+    // is the region scale with a marker per track, the way it has always been. Selecting any other
+    // tab switches to layer mode: the scale fits the selected track's own contents and the markers
+    // become the things stacked inside it - water plane, main deck, optional under deck - with
+    // Space and the Dome pinned above as fixed anchors excluded from the fit.
+    //
+    // One widget with two modes because the track markers already carry two meanings (altitude and
+    // tab selection) and hanging a third kind of object off them would overload the same control
+    // again. A fixed scale cannot serve both a coastal build inside 100m and a sky archipelago
+    // spanning 10km, and a piecewise one is worse - the same drag would mean 64m at one end and
+    // 800m at the other. See doc/atmo_magic_env_ui.md.
+    enum class ERailMode { TRACK, LAYER };
+
+    // Marker slots in layer mode, in the order the rail lists them.
+    static const S32 LAYER_NONE  = -1;
+    static const S32 LAYER_WATER = 0;
+    static const S32 LAYER_MAIN  = 1;
+    static const S32 LAYER_UNDER = 2;
+    static const S32 LAYER_COUNT = 3;
+
+    void refreshRailMode();
+    void refreshLayerRail();
+    void railRangeForTrack(F32& out_min, F32& out_max) const;
+
+    // The higher of the track's floor and its water plane: what precipitation lands on.
+    F32 weatherReferenceSurface() const;
+    // LAYER_MAIN or LAYER_UNDER, honouring the track's authored override; LAYER_NONE if neither
+    // deck sits above the reference surface.
+    S32 weatherDeliveringDeck() const;
+    F32 layerAltitude(S32 layer) const;
+    bool layerPresent(S32 layer) const;
+
+    void selectLayer(S32 layer);
+    void onClickLayerMarker(S32 layer);
+    void onClickAddDeck();
+    void onClickRemoveDeck();
+    void onCommitWeatherSource();
+    void refreshWeatherSource();
+
+    // <SS:Nexii> The precipitation combo lists two tiers: the shipped derivation vocabulary, read
+    // once from the XUI so the panel stays the single place it is written down, and whatever types
+    // this environment carries of its own. Rebuilt whenever the environment's set changes.
+    void refreshPrecipitationTypes();
+    void onClickNewPrecipType();
+    void onClickEditPrecipTypes();
+
+    std::vector<std::pair<std::string, std::string>> mBuiltinPrecipItems;
+
+    void drawWeatherBracket();
+
+    ERailMode mRailMode = ERailMode::TRACK;
+    S32 mSelectedLayer = LAYER_NONE;
+
+    // The rail's live value range, and where it is heading. Interpolated in draw() so the mode
+    // switch reads as diving into the selected track rather than as the widget swapping contents.
+    F32 mRailMin = 0.f;
+    F32 mRailMax = SS_ATMOENV_REGION_CEILING;
+    F32 mRailMinFrom = 0.f;
+    F32 mRailMaxFrom = SS_ATMOENV_REGION_CEILING;
+    F32 mRailMinTo = 0.f;
+    F32 mRailMaxTo = SS_ATMOENV_REGION_CEILING;
+    bool mRailZooming = false;
+    F64 mRailZoomStart = 0.0;
+
     void refreshTrackTab();
     void onCommitTrackName();
+
+    // <SS:Nexii> Seeds the selected track from a world archetype - see ssAtmoEnvTemplates().
+    void onClickApplyTemplate();
     void onCommitDayCycle();
 
     void onCommitWaterEnabled();

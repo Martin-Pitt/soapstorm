@@ -238,7 +238,7 @@
          follows="left|top|bottom"
          layout="topleft"
          left="100"
-         top="30"
+         top="76"
          bottom="-129"
          width="17"
          name="track_altitude_slider"
@@ -488,6 +488,173 @@
          name="remove_track_button"
          tool_tip="Select a track above first; the ground track cannot be removed"
          label="Remove Track" />
+
+        <!-- <SS:Nexii> Layer mode. Selecting any tab other than Track swaps the
+             rail from showing every track on the region scale to showing what is
+             stacked inside the selected track, fitted to its own contents - see
+             SSFloaterAtmoEnv::refreshRailMode(). One rail with two modes rather
+             than two rails: the track markers already carry both altitude and
+             selection, and hanging a third kind of object off them would overload
+             the same widget again.
+
+             Space and Dome are fixed anchors at the top, excluded from the fit.
+             Space is not an altitude at all, and the dome is a backdrop whose
+             height is often auto-derived - a cirrus dome at 6km would otherwise
+             squash the decks being edited into the bottom eighth of the rail.
+
+             Three marker pairs is what the model can currently place: the water
+             plane, the main deck and the optional under deck. Same widgets and
+             same C++ repositioning as the track markers above.
+             See doc/atmo_magic_env_ui.md. -->
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="30"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="space_anchor_button"
+         font="SansSerifSmall"
+         label="Space"
+         tool_tip="Everything beyond the sky - suns, planets, moons and the starfield"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="4"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="dome_anchor_button"
+         font="SansSerifSmall"
+         label="Dome"
+         tool_tip="The cirrus dome. Drawn out of scale at the top of the rail: it is a backdrop rather than a placed layer"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top_delta="0"
+         height="20"
+         width="48"
+         name="dome_anchor_alt_label"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="layer_name_button_1"
+         font="SansSerifSmall"
+         label="Layer 1"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="layer_alt_label_1"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="layer_name_button_2"
+         font="SansSerifSmall"
+         label="Layer 2"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="layer_alt_label_2"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="layer_name_button_3"
+         font="SansSerifSmall"
+         label="Layer 3"
+         visible="false" />
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="122"
+         top="0"
+         height="20"
+         width="48"
+         name="layer_alt_label_3"
+         font="SansSerifSmall"
+         text_valign="center"
+         visible="false" />
+
+        <!-- Precipitation occupies a span rather than a height, so its marker is
+             a bracket: the button sits at the middle of the band and
+             drawWeatherBracket() draws the extent, from the reference surface
+             (the higher of the track floor and the water plane) up to whichever
+             deck delivers. -->
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="20"
+         width="96"
+         is_toggle="true"
+         name="weather_marker_button"
+         font="SansSerifSmall"
+         label="Weather"
+         tool_tip="Where precipitation falls: from the delivering deck down to the surface below it"
+         visible="false" />
+
+        <button
+         follows="left|bottom"
+         layout="topleft"
+         left="0"
+         bottom="-41"
+         height="23"
+         width="170"
+         name="add_deck_button"
+         tool_tip="Adds the under deck - the second volumetric field a sky-themed build hangs below its platform"
+         label="Add Deck"
+         visible="false" />
+        <button
+         follows="left|bottom"
+         layout="topleft"
+         left="0"
+         bottom="-14"
+         height="23"
+         width="170"
+         name="remove_deck_button"
+         tool_tip="Removes the under deck. The main deck cannot be removed - empty it with its coverage instead"
+         label="Remove Deck"
+         visible="false" />
     </panel>
 
     <tab_container
@@ -499,13 +666,15 @@
      width="586"
      halign="left"
      tab_position="top"
-     tab_width="90"
+     tab_width="80"
      tab_padding_right="2"
      name="atmo_tabs">
         <!-- Tab order is altitude order, bottom to top, matching the rail
              beside it: the track's own foundation, then water at sea level,
-             surface weather above that, the cloud deck, the sky itself, and
-             the celestial bodies at the top. -->
+             surface weather above that, the cloud decks, the sky itself, and
+             space at the top. Look is last and deliberately outside the
+             series - it holds the renderer's own output controls, which have
+             no position on the rail at all. See doc/atmo_magic_env_ui.md. -->
         <panel
          border="true"
          layout="topleft"
@@ -543,17 +712,25 @@
          layout="topleft"
          left_delta="0"
          top_pad="5"
-         name="atmosphere_tab"
-         label="Atmosphere"
-         filename="panel_ss_atmo_env_atmosphere.xml" />
+         name="sky_tab"
+         label="Sky"
+         filename="panel_ss_atmo_env_sky.xml" />
         <panel
          border="true"
          layout="topleft"
          left_delta="0"
          top_pad="5"
-         name="planetary_tab"
-         label="Planetary"
-         filename="panel_ss_atmo_env_planetary.xml" />
+         name="space_tab"
+         label="Space"
+         filename="panel_ss_atmo_env_space.xml" />
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="look_tab"
+         label="Look"
+         filename="panel_ss_atmo_env_look.xml" />
     </tab_container>
 
     <!-- CRUD row, docked at the floater's bottom edge, same as Save/Cancel

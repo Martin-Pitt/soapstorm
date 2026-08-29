@@ -30,6 +30,7 @@
 #include "lluuid.h"
 
 #include <cfloat>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -358,6 +359,11 @@ struct SSAtmoEnvWeatherInfluence
     bool fromLLSD(const LLSD& sd);
 };
 
+// Values for SSAtmoEnvTrack::mWeatherSourceDeck.
+const S32 SS_ATMOENV_DECK_DERIVED = -1;
+const S32 SS_ATMOENV_DECK_MAIN    = 0;
+const S32 SS_ATMOENV_DECK_UNDER   = 1;
+
 struct SSAtmoEnvTrack
 {
     std::string mName = "Ground";
@@ -385,17 +391,98 @@ struct SSAtmoEnvTrack
     // and low: see SSAtmoEnvCloudField::under().
     SSAtmoEnvCloudField mUnderField = SSAtmoEnvCloudField::under();
 
+    // <SS:Nexii> Which deck precipitation falls from. Derived by default - the lowest enabled deck
+    // above the reference surface, which resolves to the main deck for a sky build because the
+    // under deck hangs below the platform floor. Authored only for the case of wanting weather from
+    // the upper deck while a lower one is enabled for looks. Not keyframed: it is a property of the
+    // track, not of a moment. See doc/atmo_magic_env_ui.md.
+    S32 mWeatherSourceDeck = SS_ATMOENV_DECK_DERIVED;
+
     F64 currentDayCyclePhase() const;
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
 };
 
+// <SS:Nexii> World templates. An author arrives with a theme - a coastline, a sky archipelago, a
+// permanent barrage - and a theme is never one setting: a sky world is water kilometres down AND a
+// deck under the landmass AND another above it. Seeding those together is what makes the first
+// screen useful to someone who came to build a place rather than to tune haze.
+//
+// Seeding is one-shot: the template is copied into the track and forgotten, with no live link back.
+// A link would mean drift and reconciliation for no gain, since the whole point is that the author
+// dials the result afterwards. Numbers here are starting points, not authored presets - tune them
+// in place. See doc/atmo_magic_env_ui.md.
+struct SSAtmoEnvTemplate
+{
+    const char* mKey;
+    const char* mLabel;
+
+    F64 mDayLengthHours;
+
+    bool mWaterEnabled;
+    F32  mWaterHeightM;
+    LLColor3 mWaterFogColor;
+    F32  mWaterFogDensity;
+
+    F32  mDeckBaseM;
+    F32  mDeckThicknessM;
+    F32  mDeckCoverage;
+    F32  mDeckStormDarkening;
+
+    bool mUnderEnabled;
+    F32  mUnderBaseM;
+    F32  mUnderThicknessM;
+
+    bool mDomeAuto;
+    F32  mDomeHeightM;
+    F32  mDomeCoverage;
+
+    F32  mTemperatureC;
+    F32  mMoisture;
+    F32  mConvection;
+    F32  mWindSpeed;
+
+    LLColor3 mBlueHorizon;
+    LLColor3 mBlueDensity;
+    F32  mHazeDensity;
+    F32  mMaxAltitudeM;
+};
+
+const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates();
+
+// <SS:Nexii> Stages the environment's own precipitation types into the live preset list, so every
+// consumer resolves a type by name without needing to know which tier it came from. Called when an
+// environment is adopted; the manager drops them again on unload.
+void ssAtmoEnvStagePrecipTypes(const SSAtmoEnvAsset& asset);
+
+// Copies the definition of every shipped type the asset's keyframes name into the asset itself.
+// Run before saving: it is what makes an environment self-contained, so a region opened on a build
+// whose shipped set differs still renders the precipitation its author chose.
+void ssAtmoEnvEmbedReferencedPrecipTypes(SSAtmoEnvAsset& asset);
+
+// Returns false only for an unknown key. Everything the template names is overwritten on the track,
+// keyframes included - a seed is destructive by design, which is why the UI confirms first.
+bool ssAtmoEnvApplyTemplate(SSAtmoEnvTrack& track, const std::string& key);
+
 struct SSAtmoEnvAsset
 {
     std::string mName = "New Atmo Environment";
 
     std::vector<SSAtmoEnvTrack> mTracks;
+
+    // <SS:Nexii> The environment's own precipitation types, name to serialised SSPrecipPreset.
+    // Two tiers exist: the ones shipped with the viewer, which we author, and these, which the
+    // region's author derives from them. Held as LLSD rather than SSPrecipPreset so the asset
+    // schema does not have to depend on the particle system's headers, and so a type authored by
+    // a newer build survives a round trip through an older one instead of being silently dropped.
+    //
+    // Derived types carry a full copy of their parent, never a reference: a viewer update that
+    // retunes stock rain must not silently change a shipped region. Referenced shipped types are
+    // copied in here on save for the same reason, which is what makes an environment
+    // self-contained and an unresolvable type reference impossible.
+    // See doc/atmo_magic_env_ui.md.
+    std::map<std::string, LLSD> mPrecipitationTypes;
 
     static SSAtmoEnvAsset makeDefault();
 

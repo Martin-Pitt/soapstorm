@@ -34,16 +34,16 @@
          layout="topleft"
          left_delta="0"
          top_pad="5"
-         name="clouds_volumetric_tab"
-         label="Volumetric Field"
-         filename="panel_ss_atmo_env_clouds_volumetric.xml" />
+         name="clouds_main_tab"
+         label="Main Deck"
+         filename="panel_ss_atmo_env_clouds_main.xml" />
         <panel
          border="true"
          layout="topleft"
          left_delta="0"
          top_pad="5"
          name="clouds_under_tab"
-         label="Under Layer"
+         label="Under Deck"
          filename="panel_ss_atmo_env_clouds_under.xml" />
         <panel
          border="true"
@@ -51,7 +51,7 @@
          left_delta="0"
          top_pad="5"
          name="clouds_dome_tab"
-         label="Sky Dome"
+         label="Dome"
          filename="panel_ss_atmo_env_clouds_dome.xml" />
     </tab_container>
 </panel>

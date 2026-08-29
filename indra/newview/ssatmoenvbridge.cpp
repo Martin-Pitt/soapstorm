@@ -41,7 +41,13 @@ std::string SSAtmoEnvBridge::presetNameForType(const std::string& v3_type)
     if (v3_type == "sleet")       return "Sleet";
     if (v3_type == "freezing_rain") return "Freezing Rain";
     if (v3_type == "slush_mix")   return "Wintry Mix";
-    return std::string();
+
+    // <SS:Nexii> Anything else is a type the environment carries under its own authored name - the
+    // derivation vocabulary above is only the shipped set. Handing the name straight through lets
+    // SSPrecipPresetManager::find() decide: it resolves an environment type staged by
+    // ssAtmoEnvStagePrecipTypes(), and a name that resolves to nothing falls back to the active
+    // preset exactly as an empty string used to. See doc/atmo_magic_env_ui.md.
+    return v3_type;
 }
 
 // Translates the active v3 track's resolved weather into a v2 SSAtmoTrackConfig so the existing renderer runs unmodified.
