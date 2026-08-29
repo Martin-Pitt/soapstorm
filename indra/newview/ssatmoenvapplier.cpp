@@ -559,6 +559,10 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     mCloudDomeAuto = dome.mAuto;
     mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
 
+    // Same for the horizon clip: no LLSettingsSky home either - the sky pool reads it straight off this applier when it binds the dome shader, and turns it into the lower dome's depth gate (LL_SHADER_CONST_HORIZON_DEPTH in skyF.glsl).
+    mHorizonClip = atm.mHorizonClip;
+    // </SS:Nexii>
+
     put(mLastCloudColor, dome.mColor.valueAt(phase),
         [this](const LLColor3& v) { mSky->setCloudColor(v); });
     put(mLastCloudCoverage, mod.cloudCoverage(dome.mCoverage.valueAt(phase)),

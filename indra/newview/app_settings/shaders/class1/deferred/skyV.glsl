@@ -35,6 +35,10 @@ in vec3 position;
 out vec3 vary_HazeColor;
 out float vary_LightNormPosDot;
 
+#ifdef SS_ATMO
+out float vary_ss_below_horizon;
+#endif
+
 #ifdef HAS_HDRI
 out vec4 vary_position;
 out vec3 vary_rel_pos;
@@ -73,6 +77,12 @@ void main()
     vec4 pos = modelview_projection_matrix * vec4(position.xyz, 1.0);
 
     gl_Position = pos;
+
+#ifdef SS_ATMO
+    // <SS:Nexii> Which half of the dome this vertex belongs to, for the horizon clip
+    // (SSAtmoEnvAtmosphere::mHorizonClip - see skyF.glsl and lldrawpoolwlsky.cpp).
+    vary_ss_below_horizon = position.y - camPosLocal.y;
+#endif
 
     // Get relative position
     vec3 rel_pos = position.xyz - camPosLocal.xyz + vec3(0, 50, 0);

@@ -104,6 +104,7 @@ private:
     void refreshAutoRows();
     void onCommitCloudAuto();
     void onCommitDomeAuto();
+    void onCommitHorizonClip();
 
     bool rowAutoOwned(const std::string& prefix) const;
 

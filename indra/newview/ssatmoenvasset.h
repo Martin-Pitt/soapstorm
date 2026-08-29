@@ -297,6 +297,16 @@ struct SSAtmoEnvAtmosphere
 
     SSAtmoEnvKeyframed<F32> mMoonBrightness{0.5f};
 
+    // <SS:Nexii> Atmo Magic: the horizon clip. When on, the sky dome is split at the horizon plane
+    // and its lower half takes a depth slot one step nearer than the cloud layer (the
+    // LL_SHADER_CONST_HORIZON_DEPTH shader const against the clouds' 0.99998 and the celestial
+    // discs' 0.99999 - see skyF.glsl), so the sun, moon, stars, planetary bodies and the dome's own
+    // cloud layer are hidden by the dome the moment they set instead of glowing through the world
+    // below it. A look, not a dial: there is no meaningful "partially clipped", and nothing here
+    // follows the day, so this is a plain authored flag rather than a keyframed value - the same
+    // call mGustAuto makes.
+    bool mHorizonClip = false;
+
     void fromSettingsSky(const LLSettingsSky& sky);
 
     void addKeyframesFromSky(const LLSettingsSky& sky, F64 phase);

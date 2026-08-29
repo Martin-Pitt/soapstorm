@@ -27,6 +27,11 @@
 in vec3 vary_HazeColor;
 in float vary_LightNormPosDot;
 
+#ifdef SS_ATMO
+in float vary_ss_below_horizon;
+uniform float ss_horizon_clip;
+#endif
+
 #ifdef HAS_HDRI
 in vec4 vary_position;
 in vec3 vary_rel_pos;
@@ -83,6 +88,15 @@ vec3 halo22(float d)
 
 void main()
 {
+#ifdef SS_ATMO
+    // <SS:Nexii> Horizon clip's depth write (SSAtmoEnvAtmosphere::mHorizonClip). The uniform is the
+    // on/off gate; the depth itself is the shader const - one step nearer than the clouds (0.99998)
+    // and the discs (0.99999), so both fail LEQUAL behind it below the horizon. Above it - and when
+    // the gate is off - this writes 1.0, bit-identical to the cleared buffer; and the depth mask is
+    // off unless the pool asks for the clip (drawDome), so the off path stores nothing at all.
+    gl_FragDepth = (ss_horizon_clip > 0.0 && vary_ss_below_horizon < 0.0) ? LL_SHADER_CONST_HORIZON_DEPTH : 1.0;
+#endif
+
     vec3 color;
 #ifdef HAS_HDRI
     vec3 frag_coord = vary_position.xyz/vary_position.w;

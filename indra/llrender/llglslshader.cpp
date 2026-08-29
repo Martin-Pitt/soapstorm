@@ -75,6 +75,7 @@ const std::string gShaderConstsKey[LLGLSLShader::NUM_SHADER_CONSTS] =
 {
       "LL_SHADER_CONST_CLOUD_MOON_DEPTH"
     , "LL_SHADER_CONST_STAR_DEPTH"
+    , "LL_SHADER_CONST_HORIZON_DEPTH"
 };
 
 // NOTE: Keep gShaderConsts* and LLGLSLShader::ShaderConsts_e in sync!
@@ -82,6 +83,7 @@ const std::string gShaderConstsVal[LLGLSLShader::NUM_SHADER_CONSTS] =
 {
       "0.99998" // SHADER_CONST_CLOUD_MOON_DEPTH // SL-14113
     , "0.99999" // SHADER_CONST_STAR_DEPTH       // SL-14113
+    , "0.99997" // SHADER_CONST_HORIZON_DEPTH    // <SS:Nexii> the sky dome's lower half, one step nearer than the clouds - the horizon clip (skyF.glsl)
 };
 
 

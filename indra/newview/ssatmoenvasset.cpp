@@ -982,6 +982,8 @@ LLSD SSAtmoEnvAtmosphere::asLLSD() const
     sd["glow_focus"]      = mGlowFocus.asLLSD();
     sd["glow_size"]       = mGlowSize.asLLSD();
     sd["moon_brightness"] = mMoonBrightness.asLLSD();
+
+    sd["horizon_clip"] = mHorizonClip;
     return sd;
 }
 
@@ -1012,6 +1014,8 @@ bool SSAtmoEnvAtmosphere::fromLLSD(const LLSD& sd)
     if (sd.has("glow_focus"))      mGlowFocus.fromLLSD(sd["glow_focus"], def.mGlowFocus.valueAt(0.0));
     if (sd.has("glow_size"))       mGlowSize.fromLLSD(sd["glow_size"], def.mGlowSize.valueAt(0.0));
     if (sd.has("moon_brightness")) mMoonBrightness.fromLLSD(sd["moon_brightness"], def.mMoonBrightness.valueAt(0.0));
+
+    mHorizonClip = sd.has("horizon_clip") ? sd["horizon_clip"].asBoolean() : def.mHorizonClip;
     return true;
 }
 

@@ -74,6 +74,17 @@ static LLStaticHashedString sFaceRot("ss_face_rot");
 // <SS:Nexii> The dome cloud layer's virtual ALTITUDE, metres - an authored dome parameter now (SSAtmoEnvCloudDome::mHeightM), with the old derivation kept behind its Auto flag. Both the parallax
 // (cloudsV) and the disc occlusion (ssCelestialF) scale by it - one authority, or the two slide apart, which is why it is resolved in the applier and only read here.
 static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
+
+// <SS:Nexii> The horizon clip's uniform (SSAtmoEnvAtmosphere::mHorizonClip) - the on/off gate the
+// dome fragment shader tests before it writes the lower half of the dome into its own depth slot
+// (LL_SHADER_CONST_HORIZON_DEPTH, a shader const on both sky programs; see skyF.glsl). The sky's
+// layer stack reads 1.0 stars, 0.999999 stock sun, 0.999991 stock moon, 0.99999 haze dome and Atmo
+// discs, 0.99998 cloud layer - and the clip slot, one step nearer than the clouds, is what the
+// below-horizon half of the dome takes: the discs, the stars, the stock sun and moon and the clouds
+// are all deeper than it, so they fail LEQUAL behind it and the horizon line hides whatever has
+// set. The VALUE lives in the shader const table (gShaderConstsVal in llglslshader.cpp) rather than
+// here, so there is one number to keep honest; this side only ever passes the gate.
+static LLStaticHashedString sHorizonClip("ss_horizon_clip");
 // </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
@@ -216,7 +227,7 @@ void LLDrawPoolWLSky::endDeferredPass(S32 pass)
 }
 
 void LLDrawPoolWLSky::renderDome(const LLVector3& camPosLocal, F32 camHeightLocal, LLGLSLShader * shader,
-                                 F32 scale) const
+                                 F32 scale, bool depth_write) const
 {
     llassert_always(NULL != shader);
 
@@ -245,7 +256,10 @@ void LLDrawPoolWLSky::renderDome(const LLVector3& camPosLocal, F32 camHeightLoca
     // Draw WL Sky
     shader->uniform3f(sCamPosLocal, 0.f, camHeightLocal, 0.f);
 
-    gSky.mVOWLSkyp->drawDome();
+    // depth_write rides in only from the haze pass when the horizon clip is on - the lower dome
+    // must store its nearer depth slot for the discs, stars and clouds to fail against (see
+    // LL_SHADER_CONST_HORIZON_DEPTH). The cloud pass keeps the stock mask-off behaviour.
+    gSky.mVOWLSkyp->drawDome(depth_write);
 
     gGL.matrixMode(LLRender::MM_MODELVIEW);
     gGL.popMatrix();
@@ -333,8 +347,18 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
 
         sky_shader->uniform1i(LLShaderMgr::SUN_UP_FACTOR, psky->getIsSunUp() ? 1 : 0);
 
+        // <SS:Nexii> The horizon clip: when an active Atmo environment asks for it, the dome
+        // fragment stage writes the lower half of the dome into the clip's depth slot (see
+        // sHorizonClip above and skyF.glsl) and drawDome is asked to let it - the only draw in
+        // this pool that writes depth, because it is the only one that has anything to hide. The
+        // uniform is the gate only: 0 leaves the fragment stage's write on the harmless 1.0 path
+        // and drawDome keeps the depth mask off, exactly as stock.
+        const SSAtmoEnvApplier& atmo_applier = SSAtmoEnvApplier::instance();
+        const bool horizon_clip = atmo_applier.isActive() && atmo_applier.horizonClip();
+        sky_shader->uniform1f(sHorizonClip, horizon_clip ? 1.f : 0.f);
+
         /// Render the skydome
-        renderDome(origin, camHeightLocal, sky_shader);
+        renderDome(origin, camHeightLocal, sky_shader, 0.333f, horizon_clip);
 
         sky_shader->unbind();
     }

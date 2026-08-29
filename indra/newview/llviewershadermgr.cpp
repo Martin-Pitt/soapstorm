@@ -3264,6 +3264,10 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gEnvironmentMapProgram.clearPermutations();
         gEnvironmentMapProgram.addPermutation("HAS_HDRI", "1");
         add_common_permutations(&gEnvironmentMapProgram);
+        // <SS:Nexii> Both programs that compile skyF.glsl must carry the horizon depth const -
+        // skyF references LL_SHADER_CONST_HORIZON_DEPTH inside its SS_ATMO block, and a program
+        // without the define fails to compile rather than silently misbehaving.
+        gEnvironmentMapProgram.addConstant(LLGLSLShader::SHADER_CONST_HORIZON_DEPTH);
         gEnvironmentMapProgram.mShaderFiles.push_back(make_pair("deferred/skyV.glsl", GL_VERTEX_SHADER));
         gEnvironmentMapProgram.mShaderFiles.push_back(make_pair("deferred/skyF.glsl", GL_FRAGMENT_SHADER));
         gEnvironmentMapProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
@@ -3288,6 +3292,8 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gDeferredWLSkyProgram.mShaderGroup = LLGLSLShader::SG_SKY;
 
         add_common_permutations(&gDeferredWLSkyProgram);
+        // <SS:Nexii> The skyF.glsl horizon-clip depth - see the note on gEnvironmentMapProgram above.
+        gDeferredWLSkyProgram.addConstant(LLGLSLShader::SHADER_CONST_HORIZON_DEPTH);
 
         success = gDeferredWLSkyProgram.createShader();
         llassert(success);

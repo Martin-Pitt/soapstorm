@@ -176,6 +176,8 @@ bool SSFloaterAtmoEnv::postBuild()
         [this](LLUICtrl*, const LLSD&) { onCommitCloudAuto(); });
     getChild<LLUICtrl>("dome_auto_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitDomeAuto(); });
+    getChild<LLUICtrl>("atmo_horizon_clip_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitHorizonClip(); });
 
     mFloatRows = {
         { "moisture",     [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mMoisture; },     false },
@@ -957,6 +959,7 @@ void SSFloaterAtmoEnv::refreshTrackTab()
     getChild<LLUICtrl>("lightning_auto_check")->setValue(track.mWeather.mLightningAuto);
     getChild<LLUICtrl>("cloud_auto_check")->setValue(track.mCloudField.mAuto);
     getChild<LLUICtrl>("dome_auto_check")->setValue(track.mCloudDome.mAuto);
+    getChild<LLUICtrl>("atmo_horizon_clip_check")->setValue(track.mAtmosphere.mHorizonClip);
     refreshAutoRows();
     refreshLightningRows();
     refreshWaterRows();
@@ -1091,6 +1094,20 @@ void SSFloaterAtmoEnv::onCommitDomeAuto()
     asset.mTracks[mSelectedTrackIndex].mCloudDome.mAuto =
         getChild<LLUICtrl>("dome_auto_check")->getValue().asBoolean();
     refreshAutoRows();
+    refreshStatus();
+}
+
+// Horizon clip toggle; the render side reads it straight off the applier.
+void SSFloaterAtmoEnv::onCommitHorizonClip()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mAtmosphere.mHorizonClip =
+        getChild<LLUICtrl>("atmo_horizon_clip_check")->getValue().asBoolean();
     refreshStatus();
 }
 

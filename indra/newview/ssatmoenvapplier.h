@@ -72,6 +72,11 @@ public:
     F32 cloudDomeAltitudeMetres() const;
     static F32 autoCloudDomeAltitudeMetres();
 
+    // <SS:Nexii> Whether the sky dome's lower half takes the nearer depth slot that clips what it
+    // draws over at the horizon (SSAtmoEnvAtmosphere::mHorizonClip). Sampled at the applied phase
+    // like the dome altitude; the sky pool reads it when it binds the dome shader.
+    bool horizonClip() const { return mHorizonClip; }
+
     const LLVector3& moonSunDirection() const { return mMoonSunDir; }
 
     bool sunSlotEmissive() const { return mSunSlotEmissive; }
@@ -123,6 +128,9 @@ private:
     // <SS:Nexii> The dome's authored altitude and its auto flag, sampled at the applied phase - see cloudDomeAltitudeMetres.
     bool mCloudDomeAuto = false;
     F32 mCloudDomeHeightM = 6000.f;
+
+    // <SS:Nexii> The horizon clip, sampled at the applied phase - see horizonClip.
+    bool mHorizonClip = false;
 
     F32 mMoonSlotBrightness = 1.f;
 
