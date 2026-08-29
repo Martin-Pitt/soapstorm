@@ -29,19 +29,19 @@
 
 #include "llbutton.h"
 #include "llfloaterreg.h"
-#include "llfolderviewitem.h"
-#include "llfolderviewmodelinventory.h"
-#include "llinventoryfilter.h"
 #include "llinventorymodel.h"
-#include "llinventorypanel.h"
 #include "llnotificationsutil.h"
 #include "llpermissionsflags.h"
 #include "llradiogroup.h"
+#include "llscrolllistctrl.h"
 #include "lltextbox.h"
 #include "llviewerinventory.h"
 
 // Registration name this floater lives under - see LLViewerFloaterReg.
 static const std::string CREATE_FLOATER_NAME = "ss_atmo_env_create";
+
+// The editor floater this chooser opens inside of.
+static const std::string ENV_FLOATER_NAME = "ss_atmo_env";
 
 // Floater shell; all content is wired in postBuild.
 SSFloaterAtmoEnvCreate::SSFloaterAtmoEnvCreate(const LLSD& key) :
@@ -52,75 +52,62 @@ SSFloaterAtmoEnvCreate::SSFloaterAtmoEnvCreate(const LLSD& key) :
 bool SSFloaterAtmoEnvCreate::postBuild()
 {
     LLRadioGroup* mode = getChild<LLRadioGroup>("mode_radio");
-    mode->setValue(MODE_EMPTY);
+    mode->setSelectedIndex(MODE_EMPTY);
     mode->setCommitCallback([this](LLUICtrl*, const LLSD&) { refresh(); });
-
-    // Two pickers over one panel widget: both hold settings, and only the settings type
-    // (sky vs day cycle) differs, which is a filter set here rather than in the XUI.
-    LLInventoryPanel* skies = getChild<LLInventoryPanel>("skies_panel");
-    skies->setFilterTypes(0x1 << LLInventoryType::IT_SETTINGS);
-    skies->setFilterSettingsTypes(0x01 << static_cast<U64>(LLSettingsType::ST_SKY));
-    skies->setShowFolderState(LLInventoryFilter::SHOW_NON_EMPTY_FOLDERS);
-    skies->setSelectCallback([this](const std::deque<LLFolderViewItem*>&, bool) { refresh(); });
-
-    LLInventoryPanel* day_cycles = getChild<LLInventoryPanel>("daycycle_panel");
-    day_cycles->setFilterTypes(0x1 << LLInventoryType::IT_SETTINGS);
-    day_cycles->setFilterSettingsTypes(0x01 << static_cast<U64>(LLSettingsType::ST_DAYCYCLE));
-    day_cycles->setShowFolderState(LLInventoryFilter::SHOW_NON_EMPTY_FOLDERS);
-    day_cycles->setSelectCallback([this](const std::deque<LLFolderViewItem*>&, bool) { refresh(); });
 
     getChild<LLUICtrl>("create_button")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onClickCreate(); });
     getChild<LLUICtrl>("cancel_button")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { closeFloater(); });
+    getChild<LLUICtrl>("remove_sky_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickRemoveSky(); });
+
+    LLScrollListCtrl* skies = getChild<LLScrollListCtrl>("skies_list");
+    skies->setCommitCallback([this](LLUICtrl*, const LLSD&) { refresh(); });
 
     refresh();
     return true;
 }
 
-// Opens the chooser.
+// Opens the chooser inside the editor floater rather than wherever the window manager
+// cascades it - the choice belongs to the editor it acts on.
 void SSFloaterAtmoEnvCreate::show()
 {
     LLFloaterReg::showInstance(CREATE_FLOATER_NAME);
+
+    LLFloater* chooser = LLFloaterReg::findInstance(CREATE_FLOATER_NAME);
+    LLFloater* env = LLFloaterReg::findInstance(ENV_FLOATER_NAME);
+    if (chooser && env && env->getVisible() && !env->isMinimized())
+    {
+        chooser->centerWithin(env->getRect());
+    }
 }
 
 SSFloaterAtmoEnvCreate::EMode SSFloaterAtmoEnvCreate::currentMode() const
 {
-    return (EMode)getChild<LLRadioGroup>("mode_radio")->getValue().asInteger();
+    // <SS:Nexii> The index, not getValue(): a radio item without a payload answers getValue()
+    // with an empty LLSD, which asInteger()s to 0 - every mode would read as EMPTY forever.
+    return (EMode)getChild<LLRadioGroup>("mode_radio")->getSelectedIndex();
 }
 
-// The panel's selection narrowed to finished, full-perm settings of the asked-for kind. Folders
-// and anything the item model cannot resolve drop out silently; the summary line accounts for
-// what was dropped so an unusable pick does not vanish without a trace.
-std::vector<LLViewerInventoryItem*> SSFloaterAtmoEnvCreate::usableSelection(
-    LLInventoryPanel* panel, LLSettingsType::type_e type) const
+// Switches the radio; refresh is called by the caller (setSelectedIndex with an event only
+// happens on a real click, where the commit callback runs refresh anyway).
+void SSFloaterAtmoEnvCreate::setMode(EMode mode)
 {
-    std::vector<LLViewerInventoryItem*> usable;
-    if (!panel) return usable;
-
-    for (LLFolderViewItem* view : panel->getSelectedItems())
-    {
-        const LLFolderViewModelItemInventory* model =
-            dynamic_cast<const LLFolderViewModelItemInventory*>(view->getViewModelItem());
-        if (!model) continue;
-
-        LLViewerInventoryItem* item = gInventory.getItem(model->getUUID());
-        if (!item || item->getAssetUUID().isNull()) continue;
-        if (item->getSettingsType() != type) continue;
-        if (!item->checkPermissionsSet(PERM_ITEM_UNRESTRICTED)) continue;
-
-        usable.push_back(item);
-    }
-    return usable;
+    getChild<LLRadioGroup>("mode_radio")->setSelectedIndex((S32)mode);
 }
 
-// Mode-specific visibility, button state and the summary line.
+// Mode-specific visibility, button state and the summary line. The radio commits into here, so
+// both paths (hand click and programmatic switch after a drop) land in the same refresh. The
+// skies list is NOT rebuilt here - its selection commit lands here too, and rebuilding under a
+// select would eat the row the author just clicked.
 void SSFloaterAtmoEnvCreate::refresh()
 {
     const EMode mode = currentMode();
 
-    getChild<LLView>("skies_panel")->setVisible(mode == MODE_SKIES);
-    getChild<LLView>("daycycle_panel")->setVisible(mode == MODE_DAY_CYCLE);
+    getChild<LLView>("skies_list")->setVisible(mode == MODE_SKIES);
+    getChild<LLView>("remove_sky_button")->setVisible(mode == MODE_SKIES);
+    getChild<LLView>("daycycle_zone")->setVisible(mode == MODE_DAY_CYCLE);
 
     std::string summary;
     bool can_create = false;
@@ -140,54 +127,152 @@ void SSFloaterAtmoEnvCreate::refresh()
 
         case MODE_SKIES:
         {
-            LLInventoryPanel* panel = getChild<LLInventoryPanel>("skies_panel");
-            const std::vector<LLViewerInventoryItem*> usable = usableSelection(panel, LLSettingsType::ST_SKY);
+            const size_t count = mDroppedSkies.size();
+            summary = (count == 0)
+                ? "Drag skies from Inventory onto this window. Each is measured against the track's own sun and stamped as keyframes."
+                : llformat("%d sky%s supplied - each is measured against the track's own sun and stamped as keyframes.",
+                           (S32)count, count == 1 ? "" : "s");
 
-            const S32 picked = (S32)panel->getSelectedItems().size();
-            if (usable.empty())
-            {
-                summary = "Select one or more skies - only full-permission sky settings can be imported.";
-            }
-            else if ((S32)usable.size() < picked)
-            {
-                summary = llformat("%d of %d selected are usable - only full-permission sky settings can be imported.",
-                                   (S32)usable.size(), picked);
-            }
-            else
-            {
-                summary = llformat("%d sky%s selected - each is measured against the track's own sun and stamped as keyframes.",
-                                   (S32)usable.size(), usable.size() == 1 ? "" : "s");
-            }
-            can_create = !usable.empty();
+            can_create = count > 0;
             break;
         }
 
         case MODE_DAY_CYCLE:
         {
-            LLInventoryPanel* panel = getChild<LLInventoryPanel>("daycycle_panel");
-            const std::vector<LLViewerInventoryItem*> usable = usableSelection(panel, LLSettingsType::ST_DAYCYCLE);
+            summary = mDroppedDayCycle.isNull()
+                ? "Drag a day cycle from Inventory onto this window. Its sky keyframes map over at their authored times."
+                : "Every sky keyframe of the supplied day cycle lands at its authored time of day.";
 
-            if (usable.empty())
-            {
-                summary = "Select a day cycle - only full-permission settings can be imported. "
-                          "Its sky keyframes map over at their authored times.";
-            }
-            else
-            {
-                summary = llformat("Maps \"%s\" over: every sky keyframe lands at its authored time of day.",
-                                   usable.front()->getName().c_str());
-            }
-            can_create = !usable.empty();
+            getChild<LLTextBox>("daycycle_text")->setText(
+                mDroppedDayCycle.isNull()
+                    ? "(nothing dropped yet)"
+                    : llformat("Day cycle: %s", mDroppedDayCycleName.c_str()));
+
+            can_create = mDroppedDayCycle.notNull();
             break;
         }
     }
 
     getChild<LLTextBox>("hint_text")->setText(summary);
     getChild<LLUICtrl>("create_button")->setEnabled(can_create);
+    getChild<LLUICtrl>("remove_sky_button")->setEnabled(
+        mode == MODE_SKIES && !getChild<LLScrollListCtrl>("skies_list")->getAllSelected().empty());
 }
 
-// Runs the chosen seed and adopts what it wrote. The same on_created shape the editor's own
-// create button used before the chooser existed - the editor picks the new asset up on its next
+// Resyncs the list widget with the supplied skies. Only called when the set itself changed.
+void SSFloaterAtmoEnvCreate::rebuildSkyList()
+{
+    LLScrollListCtrl* list = getChild<LLScrollListCtrl>("skies_list");
+    list->deleteAllItems();
+    for (const DroppedSky& sky : mDroppedSkies)
+    {
+        list->addSimpleElement(sky.mName, ADD_BOTTOM, sky.mAssetId);
+    }
+}
+
+// The whole floater is the drop target: skies land in the list, day cycles become the seed, and
+// a drop switches the radio to the mode it feeds so the author sees what took. Only full-perm
+// settings are taken, the same rule a sky dropped onto the editor obeys.
+bool SSFloaterAtmoEnvCreate::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
+                                               EDragAndDropType cargo_type, void* cargo_data,
+                                               EAcceptance* accept, std::string& tooltip_msg)
+{
+    if (cargo_type != DAD_SETTINGS)
+    {
+        *accept = ACCEPT_NO;
+        return false;
+    }
+
+    const LLViewerInventoryItem* item =
+        cargo_data ? gInventory.getItem(((const LLInventoryItem*)cargo_data)->getUUID()) : nullptr;
+    if (!item || item->getAssetUUID().isNull())
+    {
+        *accept = ACCEPT_NO;
+        return true;
+    }
+
+    if (!item->checkPermissionsSet(PERM_ITEM_UNRESTRICTED))
+    {
+        *accept = ACCEPT_NO;
+        tooltip_msg = "Only full-permission settings can be used.";
+        return true;
+    }
+
+    const LLSettingsType::type_e type = item->getSettingsType();
+    const bool is_sky = (type == LLSettingsType::ST_SKY);
+    const bool is_day_cycle = (type == LLSettingsType::ST_DAYCYCLE);
+    if (!is_sky && !is_day_cycle)
+    {
+        *accept = ACCEPT_NO;
+        tooltip_msg = "Only skies and day cycles can seed an environment.";
+        return true;
+    }
+
+    *accept = ACCEPT_YES_SINGLE;
+    tooltip_msg = item->getName();
+
+    if (drop)
+    {
+        if (is_sky)
+        {
+            bool have = false;
+            for (const DroppedSky& sky : mDroppedSkies)
+            {
+                if (sky.mAssetId == item->getAssetUUID())
+                {
+                    have = true;
+                    break;
+                }
+            }
+            if (!have)
+            {
+                mDroppedSkies.push_back(DroppedSky{ item->getAssetUUID(), item->getName() });
+                rebuildSkyList();
+            }
+            setMode(MODE_SKIES);
+        }
+        else
+        {
+            mDroppedDayCycle = item->getAssetUUID();
+            mDroppedDayCycleName = item->getName();
+            setMode(MODE_DAY_CYCLE);
+        }
+
+        refresh();
+    }
+
+    return true;
+}
+
+// Takes the selected rows back out of the supplied list.
+void SSFloaterAtmoEnvCreate::onClickRemoveSky()
+{
+    LLScrollListCtrl* list = getChild<LLScrollListCtrl>("skies_list");
+
+    std::vector<LLUUID> remove_ids;
+    for (LLScrollListItem* item : list->getAllSelected())
+    {
+        remove_ids.push_back(item->getUUID());
+    }
+    if (remove_ids.empty()) return;
+
+    for (const LLUUID& id : remove_ids)
+    {
+        for (auto it = mDroppedSkies.begin(); it != mDroppedSkies.end(); ++it)
+        {
+            if (it->mAssetId == id)
+            {
+                mDroppedSkies.erase(it);
+                break;
+            }
+        }
+    }
+
+    rebuildSkyList();
+    refresh();
+}
+
+// Runs the chosen seed and adopts what it wrote. The editor picks the new asset up on its next
 // poll, and showInstance brings it forward and forces the full refresh now.
 void SSFloaterAtmoEnvCreate::onClickCreate()
 {
@@ -212,18 +297,16 @@ void SSFloaterAtmoEnvCreate::onClickCreate()
 
         case MODE_SKIES:
         {
-            std::vector<LLViewerInventoryItem*> usable =
-                usableSelection(getChild<LLInventoryPanel>("skies_panel"), LLSettingsType::ST_SKY);
-            if (usable.empty()) return;
+            if (mDroppedSkies.empty()) return;
 
             std::vector<LLUUID> ids;
             std::vector<std::string> names;
-            ids.reserve(usable.size());
-            names.reserve(usable.size());
-            for (const LLViewerInventoryItem* item : usable)
+            ids.reserve(mDroppedSkies.size());
+            names.reserve(mDroppedSkies.size());
+            for (const DroppedSky& sky : mDroppedSkies)
             {
-                ids.push_back(item->getAssetUUID());
-                names.push_back(item->getName());
+                ids.push_back(sky.mAssetId);
+                names.push_back(sky.mName);
             }
             SSAtmoEnvManager::createFromSkies(ids, names, LLUUID::null, on_created);
             break;
@@ -231,11 +314,9 @@ void SSFloaterAtmoEnvCreate::onClickCreate()
 
         case MODE_DAY_CYCLE:
         {
-            std::vector<LLViewerInventoryItem*> usable =
-                usableSelection(getChild<LLInventoryPanel>("daycycle_panel"), LLSettingsType::ST_DAYCYCLE);
-            if (usable.empty()) return;
+            if (mDroppedDayCycle.isNull()) return;
 
-            SSAtmoEnvManager::createFromDayCycle(usable.front()->getAssetUUID(), LLUUID::null, on_created);
+            SSAtmoEnvManager::createFromDayCycle(mDroppedDayCycle, LLUUID::null, on_created);
             break;
         }
     }

@@ -58,7 +58,6 @@ namespace
 
     const F32 TELEPORT_JUMP_M(60.f);
 
-    const F32 REFERENCE_SUN_DIAMETER_DEG(0.53f);
     const F32 CELESTIAL_SCALE_MIN(0.1f);
     const F32 CELESTIAL_SCALE_MAX(20.f);
 
@@ -90,29 +89,52 @@ SSAtmoEnvApplier::SSAtmoEnvApplier()
 // Angular diameter to EEP's disc scale.
 F32 SSAtmoEnvApplier::celestialDiscScale(F32 angular_diameter_deg)
 {
-    return llclamp(angular_diameter_deg / REFERENCE_SUN_DIAMETER_DEG,
+    return llclamp(angular_diameter_deg / SS_ATMOENV_REFERENCE_DISC_DEG,
                    CELESTIAL_SCALE_MIN, CELESTIAL_SCALE_MAX);
 }
 
-// <SS:Nexii> The dome altitude the volumetric field implies: cirrus-high while the field is empty, merging quickly down onto the deck's mid-altitude as its coverage builds, so the dome band and
-// the deck agree about where the cloud IS just as they merge visually at the rim. What the dome's Auto flag hands the number back to, and what the floater shows in the greyed-out row.
-F32 SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()
-{
-    const F32 CIRRUS_M = 6000.f;
-    SSVolCloud* vol = SSVolCloud::getInstance();
-    if (!vol || vol->empty()) return CIRRUS_M;
+// <SS:Nexii> The dome's two altitudes. The cirrus veil sits cirrus-high while the air is calm and
+// descends onto the deck's lid as convection anvils - the same ramp that flattens the deck's own
+// tops (SSAtmoEnvCloudFieldResolver::mAnvil), so veil and lid choreograph one storm: by full anvil
+// the veil hangs just over the deck's max height and the two read as one integrated structure. The
+// overcast band then merges from wherever the veil currently IS down onto the deck's mid-altitude
+// as the deck's coverage builds, so band, deck and veil agree about where the cloud IS exactly as
+// they merge at the rim. What the dome's Auto flag hands the dry altitude back to, and what the
+// floater shows in the greyed-out row.
+static const F32 SS_CIRRUS_M         = 6000.f;
+static const F32 SS_CIRRUS_LID_GAP_M = 300.f;
+static const F32 SS_ANVIL_ONSET      = 0.6f;
+static const F32 SS_ANVIL_FULL       = 0.9f;
 
-    const F32 t = llclamp((vol->lastCoverage() - 0.05f) / 0.25f, 0.f, 1.f);
-    const F32 merge = t * t * (3.f - 2.f * t);
-    const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
-    return lerp(CIRRUS_M, llmax(deck_mid, 300.f), merge);
+F32 SSAtmoEnvApplier::cirrusAltitudeMetres() const
+{
+    const F32 dry = mCloudDomeAuto ? SS_CIRRUS_M : llmax(mCloudDomeHeightM, 1.f);
+
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    if (!vol || vol->empty()) return dry;
+
+    const F32 anvil = llclamp((mLastConvection - SS_ANVIL_ONSET)
+                              / (SS_ANVIL_FULL - SS_ANVIL_ONSET), 0.f, 1.f);
+    const F32 lid = llmax(vol->cloudTopZ() + SS_CIRRUS_LID_GAP_M, 300.f);
+    return lerp(dry, lid, anvil);
 }
 
-// The altitude the shaders actually get. No environment driving the sky means nobody authored a height, so the derivation stands in.
+F32 SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()
+{
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    const F32 veil = instance().cirrusAltitudeMetres();
+    if (!vol || vol->empty()) return veil;
+
+    const F32 merge = cubic_step((vol->lastCoverage() - 0.05f) / 0.25f);
+    const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
+    return lerp(veil, llmax(deck_mid, 300.f), merge);
+}
+
+// The altitude the shaders actually get. The overcast band always tracks the deck through the merge
+// derivation - the authored height governs the cirrus veil now, not the band.
 F32 SSAtmoEnvApplier::cloudDomeAltitudeMetres() const
 {
-    if (!mActive || mCloudDomeAuto) return autoCloudDomeAltitudeMetres();
-    return llmax(mCloudDomeHeightM, 1.f);
+    return autoCloudDomeAltitudeMetres();
 }
 
 // Per-frame: resolve the primary track, evaluate its keyframes at the phase, and push sky/water/celestial through EEP's ENV_LOCAL slot.
@@ -150,7 +172,7 @@ void SSAtmoEnvApplier::apply()
 
     const bool teleported = !mPrevWorldZValid
         || region_id != mPrevRegionID
-        || fabsf(world_z - mPrevWorldZ) > TELEPORT_JUMP_M;
+        || llabs(world_z - mPrevWorldZ) > TELEPORT_JUMP_M;
 
     const SSAtmoEnvTrackBlend blend = SSAtmoEnvTrackResolver::resolve(
         asset, world_z, mPrevWorldZValid ? mPrevWorldZ : world_z, teleported);
@@ -199,7 +221,7 @@ void SSAtmoEnvApplier::apply()
 // Inverse of celestialDiscScale, for the overlay.
 F32 SSAtmoEnvApplier::celestialAngularFromScale(F32 scale)
 {
-    return scale * 0.53f;
+    return scale * SS_ATMOENV_REFERENCE_DISC_DEG;
 }
 
 // Kills the celestial debug HUD texts.
@@ -409,6 +431,11 @@ void SSAtmoEnvApplier::deactivate()
 // Weather cube plus the author's influence settings into this frame's sky transforms, cached for the readouts.
 SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack& track, F64 phase)
 {
+    // Sampled before the influence gate, not behind it: the volumetric deck ignores that gate
+    // (SSVolCloud::update resolves straight off the weather cube), and the cirrus veil integrates
+    // with the DECK - with the deck, not with the influence switch.
+    mLastConvection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
+
     const SSAtmoEnvWeatherInfluence& influence = track.mWeatherInfluence;
 
     if (!influence.mEnabled)
@@ -448,7 +475,10 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
     in.mTemperatureC = track.mWeather.mTemperatureC.valueAt(phase);
     in.mWindHeadingDeg = state.mWindHeading;
     in.mWindSpeedMS = state.mWindSpeed;
-    in.mOktaCloudCover = state.mOktaCloudCover;
+    // The overcast band's target: the deck's own coverage, so dome and deck move as one. Last
+    // frame's build at worst - the same staleness the dome altitude derivation accepts.
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    in.mDeckCoverage = (vol && !vol->empty()) ? vol->lastCoverage() : 0.f;
     in.mMaxAltitudeM = track.mAtmosphere.mMaxAltitude.valueAt(phase);
     in.mCloudScale = track.mCloudDome.mScale.valueAt(phase);
     in.mPrecipitationIntensity = state.mPrecipitationIntensity;
@@ -555,9 +585,14 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
 
     const SSAtmoEnvCloudDome& dome = track.mCloudDome;
 
-    // <SS:Nexii> Not a put() - the dome altitude has no LLSettingsSky home to write into. It goes to the cloud and disc shaders straight off this applier, so all that is kept here is the sample.
+    // <SS:Nexii> Not put()s - neither the dome altitude pair nor the cirrus coverage has an
+    // LLSettingsSky home to write into. They go to the cloud and disc shaders straight off this
+    // applier, so all that is kept here is the sample. The live sky's cloud shadow below is the
+    // tracked blend (authored floor lifted toward the deck's coverage) and lights the world; the
+    // cirrus veil draws from the raw authored sample instead, because it does not track the deck.
     mCloudDomeAuto = dome.mAuto;
     mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
+    mCirrusCoverage = llclamp(dome.mCoverage.valueAt(phase), 0.f, 1.f);
 
     // Same for the horizon clip: no LLSettingsSky home either - the sky pool reads it straight off this applier when it binds the dome shader, and turns it into the lower dome's depth gate (LL_SHADER_CONST_HORIZON_DEPTH in skyF.glsl).
     mHorizonClip = atm.mHorizonClip;
@@ -569,7 +604,16 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         [this](F32 v) { mSky->setCloudShadow(v); });
     put(mLastCloudScale, dome.mScale.valueAt(phase),
         [this](F32 v) { mSky->setCloudScale(v); });
-    put(mLastCloudVariance, mod.cloudVariance(dome.mVariance.valueAt(phase)),
+    // <SS:Nexii> Deliberately unmodulated - the one weather mapping that was removed rather than
+    // retuned. Storm darkening used to add the dome a little variance for texture, but EEP's
+    // variance erodes (cloudsF.glsl: cloudDensity *= 1 - density_variance^2, saturated wherever
+    // four noise samples agree), and on the cirrus layer that erosion has nothing to eat into but
+    // the overcast sheet max moisture builds: past convection ~0.8 the saturation spreads and the
+    // sheet tears open - gaps, and the disturbed lookup peeling at their edges. The bump predates
+    // the volumetric split, when this layer WAS the storm deck; the deck now carries the storm's
+    // texture (its churn and flow) and its weight (coverage), so convection leaves the dome alone.
+    // </SS:Nexii>
+    put(mLastCloudVariance, dome.mVariance.valueAt(phase),
         [this](F32 v) { mSky->setCloudVariance(v); });
     put(mLastCloudScroll, mod.cloudScrollRate(dome.mScrollRate.valueAt(phase)),
         [this](const LLVector2& v) { mSky->setCloudScrollRate(v); });
@@ -779,6 +823,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     mSunSlotAngularDeg = 0.53f;
     mMoonSlotAngularDeg = 0.53f;
     mSunRiseFraction = 0.f;
+    mSunSlotDir = LLVector3::z_axis;
 
     LLVector3 sun_dir = -LLVector3::z_axis;
     LLVector3 moon_dir = -LLVector3::z_axis;
@@ -1030,6 +1075,10 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     {
         mSunRiseFraction = (sun_dir.mV[VZ] > 0.f) ? 1.f : 0.f;
     }
+
+    // ...and the direction itself, for everything that must keep aiming at the SUN through the
+    // rise band - see sunSlotDirection.
+    mSunSlotDir = sun_dir;
 
     mCelestialCacheValid = true;
 

@@ -84,7 +84,7 @@ namespace
     F32 ss_smoothstep(F32 lo, F32 hi, F32 v)
     {
         const F32 t = llclamp((v - lo) / llmax(hi - lo, 1.0e-5f), 0.f, 1.f);
-        return t * t * (3.f - 2.f * t);
+        return cubic_step(t);
     }
 
     // Cell hash to [0,1).
@@ -112,13 +112,13 @@ namespace
         const F32 fx = (F32)cx / (F32)cells + shift;
         const F32 fy = (F32)cy / (F32)cells + shift;
 
-        const S32 x0 = (S32)floorf(fx);
-        const S32 y0 = (S32)floorf(fy);
+        const S32 x0 = llfloor(fx);
+        const S32 y0 = llfloor(fy);
 
         F32 tx = fx - (F32)x0;
         F32 ty = fy - (F32)y0;
-        tx = tx * tx * (3.f - 2.f * tx);
-        ty = ty * ty * (3.f - 2.f * ty);
+        tx = cubic_step(tx);
+        ty = cubic_step(ty);
 
         const F32 c00 = hashUnit(x0,     y0,     salt);
         const F32 c10 = hashUnit(x0 + 1, y0,     salt);
@@ -181,7 +181,7 @@ void SSVolCloud::update(F32 dt)
     LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
     const F32 sun_alt = sky ? sky->getSunDirection().mV[VZ] : 0.f;
     const F32 twilight = llclamp((sun_alt + 0.1f) / 0.25f, 0.f, 1.f);
-    const F32 daylight = twilight * twilight * (3.f - 2.f * twilight);
+    const F32 daylight = cubic_step(twilight);
 
     LLColor3 sunlit(1.f, 1.f, 1.f);
     LLColor3 ambient(0.4f, 0.4f, 0.5f);
@@ -208,7 +208,7 @@ void SSVolCloud::update(F32 dt)
     {
         const F32 sun_lum = (sunlit.mV[0] + sunlit.mV[1] + sunlit.mV[2]) / 3.f;
         const F32 t = llclamp((sun_lum - 0.08f) / 0.5f, 0.f, 1.f);
-        mBeam = t * t * (3.f - 2.f * t);
+        mBeam = cubic_step(t);
     }
 
     mAmbient = ambient;
@@ -287,9 +287,9 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     const F32 air_x = cam.mV[VX] - drift.mV[0];
     const F32 air_y = cam.mV[VY] - drift.mV[1];
 
-    const S32 cell_radius = (S32)ceilf(FIELD_DRAW_M / CELL_M);
-    const S32 cx0 = (S32)floorf(air_x / CELL_M);
-    const S32 cy0 = (S32)floorf(air_y / CELL_M);
+    const S32 cell_radius = llceil(FIELD_DRAW_M / CELL_M);
+    const S32 cx0 = llfloor(air_x / CELL_M);
+    const S32 cy0 = llfloor(air_y / CELL_M);
 
     const F32 base_radius = CELL_M * PUFF_CELL_FRACTION * 0.5f;
     const F32 size_gain = 1.f + PUFF_THICKNESS_GAIN * (field.mThicknessM / 500.f);
@@ -375,7 +375,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                                    + coreness * 1.5f) * th);
                 }
 
-                const F32 rim = edge_t * edge_t * (3.f - 2.f * edge_t);
+                const F32 rim = cubic_step(edge_t);
 
                 const F32 form = lerp(0.65f, lerp(facing, 0.65f, rim), beam)
                                * lerp(1.f, shade, beam);
@@ -425,10 +425,10 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
             const Puff& p = mPrimary.mPuffs[(size_t)i];
             const F32 r = p.mRadius * PUFF_WIDE;
             mMaxPuffR = llmax(mMaxPuffR, r);
-            const S32 x0 = (S32)floorf((p.mPosAgent.mV[VX] - r) / CELL_M);
-            const S32 x1 = (S32)floorf((p.mPosAgent.mV[VX] + r) / CELL_M);
-            const S32 y0 = (S32)floorf((p.mPosAgent.mV[VY] - r) / CELL_M);
-            const S32 y1 = (S32)floorf((p.mPosAgent.mV[VY] + r) / CELL_M);
+            const S32 x0 = llfloor((p.mPosAgent.mV[VX] - r) / CELL_M);
+            const S32 x1 = llfloor((p.mPosAgent.mV[VX] + r) / CELL_M);
+            const S32 y0 = llfloor((p.mPosAgent.mV[VY] - r) / CELL_M);
+            const S32 y1 = llfloor((p.mPosAgent.mV[VY] + r) / CELL_M);
             for (S32 gy = y0; gy <= y1; ++gy)
             {
                 for (S32 gx = x0; gx <= x1; ++gx)
@@ -446,7 +446,7 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
     const F32 z_lo = mPrimary.mBaseZ - mMaxPuffR;
     const F32 z_hi = mPrimary.mBaseZ + mPrimary.mThicknessM + mMaxPuffR;
     F32 t0 = 0.f, t1 = 1.f;
-    if (fabsf(d.mV[VZ]) > 0.001f)
+    if (llabs(d.mV[VZ]) > 0.001f)
     {
         F32 ta = (z_lo - from_agent.mV[VZ]) / d.mV[VZ];
         F32 tb = (z_hi - from_agent.mV[VZ]) / d.mV[VZ];
@@ -473,8 +473,8 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
     for (S32 s = 0; s <= steps; ++s)
     {
         const LLVector3 px = a + (b - a) * ((F32)s / (F32)steps);
-        const S32 gx = (S32)floorf(px.mV[VX] / CELL_M);
-        const S32 gy = (S32)floorf(px.mV[VY] / CELL_M);
+        const S32 gx = llfloor(px.mV[VX] / CELL_M);
+        const S32 gy = llfloor(px.mV[VY] / CELL_M);
         auto it = mOccGrid.find(((U64)(U32)gx << 32) | (U64)(U32)gy);
         if (it == mOccGrid.end()) continue;
 
@@ -698,7 +698,7 @@ void SSVolCloud::render()
                 normal = LLVector3::z_axis;
             }
 
-            const F32 flatten = llclamp((fabsf(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
+            const F32 flatten = llclamp((llabs(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
             if (flatten > 0.f)
             {
                 const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;

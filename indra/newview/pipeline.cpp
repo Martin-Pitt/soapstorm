@@ -5705,6 +5705,13 @@ void LLPipeline::renderDebug()
         SSSurfaceField::getInstance()->renderDebug();
     }
 
+    // Atmo Magic roof runoff: the eaves, the water they hold, the gates that
+    // quiet them, or what they shed - view chosen in the Simulation floater
+    if (mRenderDebugMask & RENDER_DEBUG_ROOF_RUNOFF)
+    {
+        SSSurfaceField::getInstance()->renderRunoffDebug();
+    }
+
     // Atmo Magic geometry settling: a beacon over every prim change still
     // waiting to be believed, so a queue that never drains can be walked to
     if (mRenderDebugMask & RENDER_DEBUG_GEOM_SETTLE)
@@ -9788,6 +9795,9 @@ void LLPipeline::renderDeferredLighting()
             // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the atmospheric module ramps
             // its sunlight and sun glow across the disc's rise instead of snapping at centre-rise.
             soften_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
+            // ...and the sun's true direction while any part of the disc is in sight - see
+            // SSAtmoEnvApplier::sunSlotDirection.
+            soften_shader.uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
             soften_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
 
             soften_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
@@ -10210,6 +10220,9 @@ void LLPipeline::doAtmospherics()
         // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the haze additive ramps its sun
         // glow across the disc's rise instead of snapping at centre-rise.
         haze_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
+        // ...and the sun's true direction while any part of the disc is in sight - see
+        // SSAtmoEnvApplier::sunSlotDirection.
+        haze_shader.uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
         haze_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
 
         haze_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);

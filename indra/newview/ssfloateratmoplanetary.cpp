@@ -128,7 +128,7 @@ F32 SSOrbitViewCtrl::inversePhaseDeg(F32 anchor_x, F32 anchor_y, F32 tilt_rad, S
 
     const F32 depth = cosf(tilt_rad) * ORBIT_VIEW_TILT + sinf(tilt_rad) * ORBIT_VIEW_LIFT;
 
-    if (fabsf(depth) < ORBIT_RING_FLAT_EPS)
+    if (llabs(depth) < ORBIT_RING_FLAT_EPS)
     {
         F32 edge_deg = (dx >= 0.f) ? 0.f : 180.f;
         return edge_deg;
@@ -623,7 +623,7 @@ void SSOrbitViewCtrl::draw()
                 const F32 theta = (-90.f + delta) * DEG_TO_RAD;
                 const F32 dir_x = cosf(theta);
                 const F32 dir_y = sinf(theta);
-                const F32 offset = exclusion + half_w * fabsf(dir_x) + 0.5f * line_h * fabsf(dir_y);
+                const F32 offset = exclusion + half_w * llabs(dir_x) + 0.5f * line_h * llabs(dir_y);
                 const F32 cx = p.mX + dir_x * offset;
                 const F32 cy = p.mY + dir_y * offset;
 
@@ -978,7 +978,7 @@ namespace
     // Epsilon compare for spinner round-trips.
     bool nearlyEqual(F32 a, F32 b)
     {
-        return fabsf(a - b) <= llmax(fabsf(b) * 0.001f, 0.0001f);
+        return llabs(a - b) <= llmax(llabs(b) * 0.001f, 0.0001f);
     }
 
     // Whether a sun's orbit fields are editable, and whether it is the junior of a bound pair.

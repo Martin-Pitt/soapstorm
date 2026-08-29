@@ -51,7 +51,7 @@ bool SSAtmoEnvTrackResolver::nearestBoundary(const SSAtmoEnvAsset& asset, S32 pr
         if ((S32)i == primary) continue;
         const SSAtmoEnvTrack& t = asset.mTracks[i];
 
-        const F32 floor_dist = std::fabs(world_z - t.mFloorZ);
+        const F32 floor_dist = llabs(world_z - t.mFloorZ);
         if (floor_dist < best)
         {
             best = floor_dist;

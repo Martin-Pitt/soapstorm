@@ -25,6 +25,8 @@
 
 #include "ssatmotrack.h"
 
+#include "ssatmostore.h"
+
 #include <sstream>
 
 #include "llnotecard.h"
@@ -149,7 +151,7 @@ void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
 
 bool SSAtmoTrackConfig::operator==(const SSAtmoTrackConfig& rhs) const
 {
-    auto alike = [](F32 a, F32 b) { return fabsf(a - b) < FIELD_EPSILON; };
+    auto alike = [](F32 a, F32 b) { return llabs(a - b) < FIELD_EPSILON; };
 
     return mDefined == rhs.mDefined
         && mEnabled == rhs.mEnabled
@@ -566,12 +568,12 @@ void SSAtmoTrackManager::exportToNotecard(const std::string& name)
                           NO_INV_SUBTYPE, PERM_ALL, cb);
 }
 
-// Restores the working set from the per-account file.
+// Restores the working set from the atmo state file.
 void SSAtmoTrackManager::loadWorking()
 {
     mLoaded = true;
 
-    const std::string packed = gSavedSettings.getString("SSAtmoTrackConfig");
+    const std::string packed = SSAtmoStore::getString(SSAtmoStoreKey::TRACK_CONFIG);
     if (packed.empty()) return;
 
     LLSD sd;
@@ -605,7 +607,7 @@ void SSAtmoTrackManager::loadWorking()
     }
 }
 
-// Persists the working set to the per-account file.
+// Persists the working set to the atmo state file.
 void SSAtmoTrackManager::saveWorking()
 {
     LLSD sd = asLLSD();
@@ -613,7 +615,7 @@ void SSAtmoTrackManager::saveWorking()
 
     std::ostringstream stream;
     LLSDSerialize::toNotation(sd, stream);
-    gSavedSettings.setString("SSAtmoTrackConfig", stream.str());
+    SSAtmoStore::setString(SSAtmoStoreKey::TRACK_CONFIG, stream.str());
 }
 
 // First-tick lazy load of the working set, then a parcel check.

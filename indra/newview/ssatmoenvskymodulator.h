@@ -41,7 +41,11 @@ struct SSAtmoEnvSkyWeatherInput
     F32 mMaxAltitudeM = 1605.f;
     F32 mCloudScale = 0.42f;
 
-    S32 mOktaCloudCover = 0;
+    // <SS:Nexii> The main deck's live coverage (SSVolCloud::lastCoverage). The dome's overcast band
+    // tracks this instead of deriving its own opinion about how cloudy it is - one coverage, two
+    // layers. One frame stale at worst; the dome altitude derivation already accepts that.
+    F32 mDeckCoverage = 0.f;
+
     F32 mPrecipitationIntensity = 0.f;
 
     F32 mSecondsSinceRainStopped = -1.f;
@@ -53,8 +57,6 @@ struct SSAtmoEnvSkyModulation
     F32 cloudCoverage(F32 base) const;
 
     LLVector2 cloudScrollRate(const LLVector2& base) const;
-
-    F32 cloudVariance(F32 base) const;
 
     F32 hazeDensity(F32 base) const;
     F32 distanceMultiplier(F32 base) const;

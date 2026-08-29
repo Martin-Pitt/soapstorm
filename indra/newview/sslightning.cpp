@@ -514,7 +514,7 @@ void SSLightning::growPath(SSStrike& strike, S32 parent,
 
     const LLVector3 dir = axis / len;
 
-    const LLVector3 ref = (fabsf(dir.mV[VZ]) > 0.9f)
+    const LLVector3 ref = (llabs(dir.mV[VZ]) > 0.9f)
         ? LLVector3(1.f, 0.f, 0.f) : LLVector3(0.f, 0.f, 1.f);
     LLVector3 side_u = dir % ref;
     if (side_u.normalize() <= 0.f) return;
@@ -604,7 +604,7 @@ void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
             LLVector3 travel = from_node.mPos - strike.mChannel[(size_t)from_node.mParent].mPos;
             if (travel.normalize() <= 0.f) continue;
 
-            const F32 vertical = fabsf(travel.mV[VZ]);
+            const F32 vertical = llabs(travel.mV[VZ]);
             LLVector3 dir = travel;
             dir.mV[VX] += rng.frand(-0.55f, 0.55f);
             dir.mV[VY] += rng.frand(-0.55f, 0.55f);

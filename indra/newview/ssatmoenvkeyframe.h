@@ -97,22 +97,22 @@ inline SSAtmoEnvCurve ss_atmoenv_default_curve<LLUUID>() { return SSAtmoEnvCurve
 template <typename T>
 inline bool ss_atmoenv_near_equal(const T& a, const T& b, F32 epsilon)
 {
-    return std::fabs((F64)(a - b)) <= (F64)epsilon;
+    return llabs((F64)(a - b)) <= (F64)epsilon;
 }
 
 template <>
 inline bool ss_atmoenv_near_equal<LLColor3>(const LLColor3& a, const LLColor3& b, F32 epsilon)
 {
-    return std::fabs(a.mV[0] - b.mV[0]) <= epsilon
-        && std::fabs(a.mV[1] - b.mV[1]) <= epsilon
-        && std::fabs(a.mV[2] - b.mV[2]) <= epsilon;
+    return llabs(a.mV[0] - b.mV[0]) <= epsilon
+        && llabs(a.mV[1] - b.mV[1]) <= epsilon
+        && llabs(a.mV[2] - b.mV[2]) <= epsilon;
 }
 
 template <>
 inline bool ss_atmoenv_near_equal<LLVector2>(const LLVector2& a, const LLVector2& b, F32 epsilon)
 {
-    return std::fabs(a.mV[0] - b.mV[0]) <= epsilon
-        && std::fabs(a.mV[1] - b.mV[1]) <= epsilon;
+    return llabs(a.mV[0] - b.mV[0]) <= epsilon
+        && llabs(a.mV[1] - b.mV[1]) <= epsilon;
 }
 
 template <>
@@ -211,7 +211,7 @@ public:
             F32 t = span > 0.0 ? (F32)(elapsed / span) : 0.f;
             if (last.mCurve == SSAtmoEnvCurve::EASE)
             {
-                t = t * t * (3.f - 2.f * t);
+                t = cubic_step(t);
             }
             return ss_atmoenv_lerp(last.mValue, first.mValue, t);
         }
@@ -228,7 +228,7 @@ public:
             F32 t = span > 0.0 ? (F32)((phase - a.mTime) / span) : 0.f;
             if (a.mCurve == SSAtmoEnvCurve::EASE)
             {
-                t = t * t * (3.f - 2.f * t);
+                t = cubic_step(t);
             }
             return ss_atmoenv_lerp(a.mValue, b.mValue, t);
         }
@@ -388,7 +388,7 @@ private:
     {
         for (size_t i = 0; i < mKeyframes.size(); ++i)
         {
-            if (std::fabs(mKeyframes[i].mTime - time) < epsilon) return (S32)i;
+            if (llabs(mKeyframes[i].mTime - time) < epsilon) return (S32)i;
         }
         return -1;
     }

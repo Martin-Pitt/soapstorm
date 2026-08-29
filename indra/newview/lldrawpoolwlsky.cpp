@@ -50,6 +50,7 @@
 #include "llviewercontrol.h"
 #include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
 #include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic celestial billboards
+#include "ssvolcloud.h" // <SS:Nexii> the overcast band tracks the deck's live coverage
 
 extern bool gCubeSnapshot;
 
@@ -71,8 +72,11 @@ static LLStaticHashedString sPhaseShaded("ss_phase_shaded");
 static LLStaticHashedString sDaylight("ss_daylight");
 static LLStaticHashedString sFaceRot("ss_face_rot");
 
-// <SS:Nexii> The dome cloud layer's virtual ALTITUDE, metres - an authored dome parameter now (SSAtmoEnvCloudDome::mHeightM), with the old derivation kept behind its Auto flag. Both the parallax
-// (cloudsV) and the disc occlusion (ssCelestialF) scale by it - one authority, or the two slide apart, which is why it is resolved in the applier and only read here.
+// <SS:Nexii> The dome bands' virtual ALTITUDES, metres - the overcast band's is the deck-tracking
+// merge (SSAtmoEnvApplier::cloudDomeAltitudeMetres), the cirrus veil's its own authored-then-
+// integrated derivation (cirrusAltitudeMetres). Both the plane-mapped UVs (cloudsF) and the disc
+// occlusion (ssCelestialF, band only) scale by them - one authority per band, or the two slide
+// apart, which is why they are resolved in the applier and only read here.
 static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
 
 // <SS:Nexii> The horizon clip's uniform (SSAtmoEnvAtmosphere::mHorizonClip) - the on/off gate the
@@ -92,10 +96,20 @@ static LLStaticHashedString sHorizonClip("ss_horizon_clip");
 // idle viewer's plain EEP sky shades below the horizon the way stock always has.
 static LLStaticHashedString sHorizonMirror("ss_horizon_mirror");
 
-// <SS:Nexii> The dome cloud layer's own depth slot (cloudsV.glsl): 0.99998 when
-// an ACTIVE Atmo environment is driving the sky - the slot exists to order the
-// layer against the Atmo discs - and 0 for stock's untouched projection squash.
+// <SS:Nexii> The dome cloud bands' own depth slots (cloudsV.glsl): the cirrus veil 0.999985 and the
+// overcast band 0.99998 when an ACTIVE Atmo environment is driving the sky - the slots order the
+// two bands against each other and against the Atmo discs - and 0 for stock's untouched projection
+// squash.
 static LLStaticHashedString sCloudDepth("ss_cloud_depth");
+
+// <SS:Nexii> The stock atmosphere ray lift (skyV.glsl, cloudsV.glsl): 1 computes the
+// haze ray 50 m above the geometry - stock's legacy fudge, which once paired with the
+// stock sun disc's own legacy 50 m drop (sunDiscV.glsl), glow hotspot and drawn disc
+// wrong together - and 0 computes it at the true direction the Atmo discs draw at
+// (ssCelestialV.glsl carries no offset). 1 unless the Atmo discs own the sky, so the
+// glow lands on the disc exactly when there is an unfudged disc to land on: with the
+// stock discs drawing, the dome keeps the stock pairing.
+static LLStaticHashedString sRayLift("ss_ray_lift");
 // </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
@@ -376,6 +390,10 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         // <SS:Nexii> The below-horizon ray mirror rides the same gate: only an
         // active Atmo environment may depart from stock's -32000 collapse.
         sky_shader->uniform1f(sHorizonMirror, atmo_applier.isActive() ? 1.f : 0.f);
+
+        // ...and the ray lift drops only when the Atmo discs own the sky, taking the
+        // glow's hotspot with it onto the disc - see sRayLift above.
+        sky_shader->uniform1f(sRayLift, ss_atmo_discs_active() ? 0.f : 1.f);
         // </SS:Nexii>
 
         /// Render the skydome
@@ -526,32 +544,67 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
         cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
 
-        // The layer's own altitude for the parallax scale - see SSAtmoEnvApplier::cloudDomeAltitudeMetres.
-        cloudshader->uniform1f(sCloudAltM, SSAtmoEnvApplier::instance().cloudDomeAltitudeMetres());
+        // <SS:Nexii> The dome layers' own depth slots (cloudsV.glsl): the cirrus veil 0.999985, the
+        // overcast band 0.99998 when an ACTIVE Atmo environment is driving the sky - the slots
+        // order the two bands against each other and against the Atmo discs - and 0 for stock's
+        // untouched projection squash (the file-scope sCloudDepth).
+        static const F32 SS_CIRRUS_DEPTH  = 0.999985f;
+        static const F32 SS_BAND_DEPTH    = 0.99998f;
 
-        // The layer's own depth slot, 0.99998 - or 0 for stock's untouched
-        // projection squash when no Atmo environment is driving the sky.
-        cloudshader->uniform1f(sCloudDepth, atmo_env_active ? 0.99998f : 0.f);
+        // <SS:Nexii> The plane-mapping gate (cloudsF.glsl): 1 computes the dome cloud UVs from the
+        // true view ray's intersection with a plane at the layer's own altitude - exact parallax and
+        // the real horizon compression of a flat deck - and 0 keeps the stock dome-mesh texcoords.
+        static LLStaticHashedString sCloudPlane("ss_cloud_plane");
+
+        // The stock ray lift, riding the same gate as the discs: the deck's glow
+        // hotspot and its disc-neighbourhood restore track the true direction while
+        // the Atmo discs draw, and keep stock's +50 m when it does not - see
+        // sRayLift above.
+        cloudshader->uniform1f(sRayLift, ss_atmo_discs_active() ? 0.f : 1.f);
+
+        // The plane-mapping gate, shared by both bands.
+        cloudshader->uniform1f(sCloudPlane, atmo_env_active ? 1.f : 0.f);
+
+        // <SS:Nexii> The scale the dome mesh draws at: 0.3325 of the dome radius when Atmo owns the
+        // sky, the stock 0.333 when not - twelve metres of headroom over the haze backdrop, see the
+        // note at the old single-pass draw.
+        const F32 dome_scale = atmo_env_active ? 0.3325f : 0.333f;
+
+        if (!atmo_env_active)
+        {
+            // Idle EEP sky: one pass, stock cloud shadow from the live settings, stock texcoords,
+            // stock squash. Pixel-stock by construction.
+            cloudshader->uniform1f(sCloudDepth, 0.f);
+            cloudshader->uniform1f(sCloudAltM, 6000.f);
+            renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
+        }
+        else
+        {
+            // <SS:Nexii> Two bands, one dome mesh drawn twice, far band first. The CIRRUS VEIL sits
+            // at its own altitude (calm: the authored dome height; storm: descended onto the deck's
+            // lid - see SSAtmoEnvApplier::cirrusAltitudeMetres) and carries the AUTHORED coverage -
+            // it is the dome's own cloud, not the weather's. The OVERCAST BAND tracks the deck:
+            // the deck's live coverage for density and the deck-tracking merge for altitude
+            // (cloudDomeAltitudeMetres), so band and deck overcast in lockstep and the veil stays
+            // visible above and through the band until the deck is solid enough to hide it. Both
+            // override the shared cloud-shadow uniform per pass: that uniform also dims the world
+            // through the live settings, and neither band's density is the world's dim.
+            // </SS:Nexii>
+            SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
+            SSVolCloud* vol = SSVolCloud::getInstance();
+
+            cloudshader->uniform1f(LLShaderMgr::CLOUD_SHADOW, applier.cirrusCoverage());
+            cloudshader->uniform1f(sCloudAltM, applier.cirrusAltitudeMetres());
+            cloudshader->uniform1f(sCloudDepth, SS_CIRRUS_DEPTH);
+            renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
+
+            const F32 band_coverage = (vol && !vol->empty()) ? vol->lastCoverage() : 0.f;
+            cloudshader->uniform1f(LLShaderMgr::CLOUD_SHADOW, band_coverage);
+            cloudshader->uniform1f(sCloudAltM, applier.cloudDomeAltitudeMetres());
+            cloudshader->uniform1f(sCloudDepth, SS_BAND_DEPTH);
+            renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
+        }
         // </SS:Nexii>
-
-        /// Render the skydome
-        // <SS:Nexii> The cloud layer is drawn a little nearer than the haze
-        // backdrop behind it: 0.3325 of the dome radius rather than the
-        // stock 0.333, which is about 4988m instead of 4995m - twelve
-        // metres, a fifth of one percent.
-        //
-        // Deliberately tiny. What actually stopped the sun flickering
-        // through cloud was giving the celestial discs the far end of the
-        // depth range (see ssCelestialV.glsl); this is only headroom on top
-        // of that, and headroom does not need to cost apparent cloud size
-        // or parallax. Earlier passes here took it to 0.22 and then 0.32,
-        // both of which moved the deck visibly to buy margin that was not
-        // in short supply.
-        //
-        // Stock scale for a stock sky: with no Atmo discs there is nothing
-        // to order the layer against, so an idle EEP sky renders at the
-        // stock 0.333.
-        renderDome(camPosLocal, camHeightLocal, cloudshader, atmo_env_active ? 0.3325f : 0.333f);
 
         cloudshader->unbind();
 

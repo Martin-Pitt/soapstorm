@@ -25,13 +25,14 @@
 
 #include "ssprecippreset.h"
 
+#include "ssatmostore.h"
+
 #include <algorithm>
 
 #include "lldir.h"
 #include "llfile.h"
 #include "llsdserialize.h"
 #include "llsdutil.h"
-#include "llviewercontrol.h"
 
 static const char* STEP_SURFACE_KEY[STEP_SURFACE_COUNT] =
 {
@@ -76,7 +77,7 @@ bool SSFootstepSounds::surfaceIsGlobal(SSStepSurface s)
     return s == STEP_TERRAIN_DRY || s == STEP_OUTSIDE_DRY || s == STEP_INSIDE_DRY;
 }
 
-// Settings name for a global footstep slot, derived from the shared keys so there is one spelling in the system.
+// Store slot name for a global footstep slot, derived from the shared keys so there is one spelling in the system.
 std::string SSFootstepSounds::globalSettingName(SSStepSurface s, SSStepAction a)
 {
     if (!surfaceIsGlobal(s)) return std::string();
@@ -320,9 +321,9 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
                 const std::string setting = SSFootstepSounds::globalSettingName(
                     (SSStepSurface)s, (SSStepAction)a);
                 const std::string val = sd[key].asString();
-                if (!val.empty() && gSavedSettings.getString(setting).empty())
+                if (!val.empty() && SSAtmoStore::getString(setting).empty())
                 {
-                    gSavedSettings.setString(setting, val);
+                    SSAtmoStore::setString(setting, val);
                 }
             }
             else
@@ -442,10 +443,10 @@ const SSPrecipPreset* SSPrecipPresetManager::find(const std::string& name) const
     return nullptr;
 }
 
-// The preset the SSAtmoPreset setting selects, falling back to the first.
+// The preset the atmo state file selects, falling back to the first.
 const SSPrecipPreset& SSPrecipPresetManager::active() const
 {
-    static LLCachedControl<std::string> selected(gSavedSettings, "SSAtmoPreset", "Rain");
+    const std::string selected = SSAtmoStore::getString(SSAtmoStoreKey::PRESET);
     if (const SSPrecipPreset* p = find(selected))
     {
         return *p;

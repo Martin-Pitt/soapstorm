@@ -871,6 +871,11 @@ void LLSettingsVOSky::applySpecial(void *ptarget, bool force)
     // SSAtmoEnvApplier::sunRiseFraction - so every stock sky keeps stock's centre-rise step.
     shader->uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
 
+    // ...and the sun's true direction for the same shaders: while any part of the disc is in
+    // sight the sun outranks the moon as the light, instead of lightnorm swinging to the moon's
+    // azimuth the moment the centre sets - see SSAtmoEnvApplier::sunSlotDirection.
+    shader->uniform3fv(LLShaderMgr::SS_SUN_DIR, SSAtmoEnvApplier::instance().sunSlotDirection());
+
     shader->uniform1f(LLShaderMgr::DENSITY_MULTIPLIER, getDensityMultiplier());
     shader->uniform1f(LLShaderMgr::DISTANCE_MULTIPLIER, getDistanceMultiplier());
 

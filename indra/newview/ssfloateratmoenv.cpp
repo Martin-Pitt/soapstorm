@@ -531,7 +531,7 @@ void SSFloaterAtmoEnv::draw()
     {
         static const F64 RAIL_ZOOM_SECONDS = 0.2;
         F32 t = (F32)llclamp((now - mRailZoomStart) / RAIL_ZOOM_SECONDS, 0.0, 1.0);
-        const F32 eased = t * t * (3.f - 2.f * t);
+        const F32 eased = cubic_step(t);
 
         mRailMin = lerp(mRailMinFrom, mRailMinTo, eased);
         mRailMax = lerp(mRailMaxFrom, mRailMaxTo, eased);
@@ -1016,8 +1016,8 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
     // Rounding can land both bounds of a near-minimum span on one block, so spread a collapsed
     // fit back out symmetrically.
     static const F32 FIT_BLOCK = 256.f;
-    out_min = FIT_BLOCK * llround(out_min / FIT_BLOCK);
-    out_max = FIT_BLOCK * llround(out_max / FIT_BLOCK);
+    out_min = ll_round(out_min, FIT_BLOCK);
+    out_max = ll_round(out_max, FIT_BLOCK);
     if (out_max - out_min < RAIL_MIN_SPAN)
     {
         out_min -= 0.5f * FIT_BLOCK;
@@ -1252,6 +1252,10 @@ void SSFloaterAtmoEnv::refreshLayerRail()
     const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
 
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
+    // A refresh runs mid-drag (the live commit re-runs it on every move), and addSlider hands
+    // "current" to each thumb it adds - without saving it here the last rebuilt thumb would steal
+    // the drag off the one under the cursor, so a water drag would end up dragging the main deck.
+    const std::string drag_slider = slider->getCurSlider();
     slider->clear();
 
     const F32 range = llmax(1.f, mRailMax - mRailMin);
@@ -1288,6 +1292,13 @@ void SSFloaterAtmoEnv::refreshLayerRail()
         const S32 centre = railCentreForValue(altitude);
         centreViewOn(button, centre);
         centreViewOn(label, centre);
+    }
+
+    // Put the drag (or last-touched thumb) back: setCurSlider no-ops when the name did not
+    // survive the rebuild, so a zoom that drops thumbs mid-flight lands here harmless.
+    if (!drag_slider.empty() && slider->getCurSlider() != drag_slider)
+    {
+        slider->setCurSlider(drag_slider);
     }
 
     // The dome reads out its height but keeps its pinned position - it is not on the scale.
@@ -2186,7 +2197,7 @@ void SSFloaterAtmoEnv::refreshAutoRows()
         { "ucloud_thickness",    track.mUnderField.mAuto, auto_thickness },
         { "ucloud_coverage",     track.mUnderField.mAuto, auto_coverage },
         { "ucloud_storm_dark",   track.mUnderField.mAuto, auto_dark },
-        { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::autoCloudDomeAltitudeMetres() },
+        { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::instance().cirrusAltitudeMetres() },
     };
     for (const auto& row : rows)
     {
@@ -2794,9 +2805,9 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
         const F32 ghost_inv = (row.mScale > 0.f) ? (255.f / row.mScale) : 255.f;
         buildGhosts<LLColor3>(row.mField().keyframes(),
             [ghost_inv](const LLColor3& v) {
-                return llformat("%d %d %d", (S32)llround(v.mV[0] * ghost_inv),
-                                            (S32)llround(v.mV[1] * ghost_inv),
-                                            (S32)llround(v.mV[2] * ghost_inv));
+                return llformat("%d %d %d", ll_round(v.mV[0] * ghost_inv),
+                                            ll_round(v.mV[1] * ghost_inv),
+                                            ll_round(v.mV[2] * ghost_inv));
             }, out);
         found = true;
         if (!overview) return true;
@@ -2969,7 +2980,7 @@ void SSFloaterAtmoEnv::drawKeyframeGhosts()
 
         const bool current = ghost.mHold
             ? (mPreviewPhase >= ghost.mSpanStart && mPreviewPhase < ghost.mSpanEnd)
-            : (std::fabs(phase - mPreviewPhase) < SSAtmoEnvKeyframed<F32>::PHASE_EPSILON);
+            : (llabs(phase - mPreviewPhase) < SSAtmoEnvKeyframed<F32>::PHASE_EPSILON);
 
         const LLColor4 colour = current ? LLColor4::white : LLColor4(0.7f, 0.7f, 0.7f, 0.9f);
 
@@ -3037,7 +3048,7 @@ void SSFloaterAtmoEnv::drawSliderValueGhosts()
             const F32 t = llclamp((kf.mValue - lo) / range, 0.f, 1.f);
             const S32 x = left_edge + (S32)(t * (F32)travel);
 
-            const bool current = std::fabs(kf.mTime - mPreviewPhase)
+            const bool current = llabs(kf.mTime - mPreviewPhase)
                                  < SSAtmoEnvKeyframed<F32>::PHASE_EPSILON;
 
             font->renderUTF8(std::string(current ? FILLED_DIAMOND : HOLLOW_DIAMOND), 0,

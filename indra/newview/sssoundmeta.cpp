@@ -25,11 +25,12 @@
 
 #include "sssoundmeta.h"
 
+#include "ssatmostore.h"
+
 #include "ssatmomagic.h"
 #include "ssprecippreset.h"
 
 #include "llaudioengine.h"
-#include "llviewercontrol.h"
 
 // Stops and joins the worker threads at shutdown.
 void SSSoundMeta::cleanupSingleton()
@@ -314,9 +315,9 @@ void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32
 // Walks every configured sound source - thunder, global footsteps, the active preset's beds and steps - into the entry table.
 void SSSoundMeta::gather()
 {
-    for (const char* setting : { "SSAtmoThunderCrack", "SSAtmoThunderRumble" })
+    for (const std::string& key : { SSAtmoStoreKey::THUNDER_CRACK, SSAtmoStoreKey::THUNDER_RUMBLE })
     {
-        addList(gSavedSettings.getString(setting), setting,
+        addList(SSAtmoStore::getString(key), key,
                 PURPOSE_TIMING | PURPOSE_LEVEL | PURPOSE_BRIGHT);
     }
 
@@ -327,7 +328,7 @@ void SSSoundMeta::gather()
             if (SSFootstepSounds::surfaceIsGlobal((SSStepSurface)sf))
             {
                 const std::string name = SSFootstepSounds::globalSettingName((SSStepSurface)sf, (SSStepAction)ac);
-                addList(gSavedSettings.getString(name), name, PURPOSE_STEPS);
+                addList(SSAtmoStore::getString(name), name, PURPOSE_STEPS);
             }
         }
     }

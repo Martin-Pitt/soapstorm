@@ -69,6 +69,25 @@ uniform float ss_horizon_mirror;
 // this below, because stock switches BOTH the moment the disc's centre crosses zero, which reads
 // as the whole sunrise horizon snapping on at once instead of growing with the disc.
 uniform float ss_sun_rise;
+
+// <SS:Nexii> The sun's TRUE direction while any part of the disc is in sight
+// (SSAtmoEnvApplier::sunSlotDirection). The shared lightnorm direction switches from the sun to
+// the moon the moment the disc's CENTRE sets (LLSettingsSky::getLightDirection) - stock never
+// saw it because stock zeroes the glow and culls the disc below the horizon, but the ramps keep
+// both alive through the rise band, and the takeover rule is sun > moon until the sun is
+// completely out of sight: the glow and the extinction below keep aiming at the SUN while
+// ss_sun_rise is positive, and the moon takes the lightnorm back only once it is not.
+uniform vec3 ss_sun_dir;
+
+// <SS:Nexii> The stock ray lift. The atmosphere ray below is computed 50 m above the geometry it
+// belongs to (the + vec3(0, 50, 0) in rel_pos), a legacy fudge that once rode along with the stock
+// sun disc's own legacy 50 m drop (sunDiscV.glsl) - glow hotspot and drawn disc wrong together,
+// which passed for agreement. The Atmo discs draw at the TRUE direction (ssCelestialV.glsl carries
+// no offset of any kind), so while they own the sky the lift drops to 0 and the glow hotspot lands
+// on the disc: 50 m of lift at the ~5000 m dome is 0.57 degrees, about one sun-diameter of visible
+// droop. 1 is exactly stock - 50 * 1.0 is the same ray bit for bit - which is what an
+// enabled-but-idle viewer keeps.
+uniform float ss_ray_lift;
 #endif
 
 uniform float cloud_shadow;
@@ -99,7 +118,14 @@ void main()
 #endif
 
     // Get relative position
+#ifdef SS_ATMO
+    // <SS:Nexii> The lift rides ss_ray_lift (see the uniform note above): 1 keeps the
+    // stock ray bit for bit, 0 aims the glow - and the rainbow dot below - at the
+    // true direction the Atmo discs draw at.
+    vec3 rel_pos = position.xyz - camPosLocal.xyz + vec3(0, 50.0 * ss_ray_lift, 0);
+#else
     vec3 rel_pos = position.xyz - camPosLocal.xyz + vec3(0, 50, 0);
+#endif
 
 #ifdef HAS_HDRI
     vary_rel_pos = rel_pos;
@@ -173,13 +199,30 @@ void main()
     // this is used later for sunlight modulation at various altitudes
     vec3 light_atten = (blue_density + vec3(haze_density * 0.25)) * (density_multiplier * max_y);
 
+#ifdef SS_ATMO
+    // <SS:Nexii> While any part of the disc is above the horizon, the sun's term in the light
+    // path floors at zero. Stock feeds the raw (clamped) lightnorm elevation in here, so the
+    // moment the disc's CENTRE dips under, every ray near the horizon loses its light path -
+    // the max(1e-6, ...) below collapses them to unlit - and the whole sunset band is cut out
+    // from under a disc that is still half up. Held at the horizon-sitting airmass instead, the
+    // band fades with the risen share through the color and glow ramps above instead of
+    // snapping off. The floor rides the sun's TRUE elevation (ss_sun_dir.z, not the lightnorm's
+    // - that one belongs to the moon below centre-set), so the airmass is the horizon-sitting
+    // one from both sides of the crossing regardless of where the moon is. It releases
+    // continuously once the centre clears zero, is a no-op at full rise, and is stock with the
+    // gate off.
+    float sun_elev = (ss_sun_rise > 0.0) ? max(ss_sun_dir.z, 0.0) : lightnorm.y;
+#else
+    float sun_elev = lightnorm.y;
+#endif
+
     // Calculate relative weights
     vec3 combined_haze = max(abs(blue_density) + vec3(abs(haze_density)), vec3(1e-6));
     vec3 blue_weight   = blue_density / combined_haze;
     vec3 haze_weight   = haze_density / combined_haze;
 
     // Compute sunlight from rel_pos & lightnorm (for long rays like sky)
-    float off_axis = 1.0 / max(1e-6, max(0., rel_pos_norm.y) + lightnorm.y);
+    float off_axis = 1.0 / max(1e-6, max(0., rel_pos_norm.y) + sun_elev);
     sunlight *= exp(-light_atten * off_axis);
 
     // Distance
@@ -191,7 +234,15 @@ void main()
     combined_haze = exp(-combined_haze * density_dist);
 
     // Compute haze glow
-    float haze_glow = 1.0 - rel_pos_lightnorm_dot;
+    // <SS:Nexii> The glow tracks the disc (ss_sun_dir), not the lightnorm: lightnorm hands the
+    // direction to the moon at centre-set, which would swing the whole sunset band across the
+    // sky to the moon's azimuth while the disc is still half up. See the ss_sun_dir note above.
+#ifdef SS_ATMO
+    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+#else
+    vec3 glow_dir = lightnorm.xyz;
+#endif
+    float haze_glow = 1.0 - dot(rel_pos_norm, glow_dir);
     // haze_glow is 0 at the sun and increases away from sun
     haze_glow = max(haze_glow, .001);
     // Set a minimum "angle" (smaller glow.y allows tighter, brighter hotspot)

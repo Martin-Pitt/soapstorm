@@ -57,10 +57,16 @@ const F32 SS_ATMOENV_WATER_MAX = 10000.f;
 
 const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
 
+// <SS:Nexii> EEP's reference disc: the angular diameter a body-or-sky disc of scale 1.0 draws.
+// SSAtmoEnvApplier::celestialDiscScale() divides a body's angular size by this to get EEP's disc
+// scale, and the sky-to-body translation below multiplies a sky's disc scale by it to go the
+// other way - one number, so both directions of the conversion agree by construction.
+const F32 SS_ATMOENV_REFERENCE_DISC_DEG = 0.53f;
+
 inline F64 ss_atmoenv_snap_phase(F64 phase)
 {
     const F64 steps = (F64)SS_ATMOENV_PREVIEW_STEPS;
-    F64 snapped = std::floor(phase * steps + 0.5) / steps;
+    F64 snapped = ll_round(phase * steps) / steps;
     snapped = std::fmod(snapped, 1.0);
     if (snapped < 0.0) snapped += 1.0;
     return snapped;
@@ -199,6 +205,23 @@ struct SSAtmoEnvPlanetary
 
     void autoNameBodies();
 
+    // <SS:Nexii> The stock sun/moon of the standard setup makeDefault() seeds - the EEP-shaped
+    // world an author starts from. A body still counts as one while its LOOK is untouched (size,
+    // mass, glow character, disc texture, no rings, the kind's place in the topology); where the
+    // author has redesigned it, a dropped sky must not quietly overwrite that design. Index into
+    // mBodies, or -1 when there is none: an empty or fully custom system offers no body groups.
+    S32 standardSunIndex() const;
+    S32 standardMoonIndex() const;
+
+    // Translates a fetched EEP sky's disc values onto the standard sun/moon this system still
+    // carries - the sky says what its disc DRAWS like, the body stores what it IS. Disc scale
+    // becomes a physical diameter at the body's resolved home-to-body distance (the same
+    // distance the renderer's resolver turns back into an angular size on screen, so the body
+    // draws what the sky would have drawn), and a disc texture the sky does not name at its own
+    // stock value replaces the body's. Only the groups named in `groups` take part; a group with
+    // no standard body left silently does nothing.
+    void translateSettingsSky(const LLSettingsSky& sky, U32 groups);
+
     bool setBoundPartner(S32 a, S32 b);
     bool clearBoundPartner(S32 index);
 
@@ -247,13 +270,24 @@ struct SSAtmoEnvCloudField
 // asset, but its fields read as separate looks - the haze is not the cloud layer is not the light -
 // and an author dropping a sky onto a track they have already tuned usually wants some of it, not
 // all of it. SSFloaterAtmoSkyImport asks which groups before anything is stamped.
+//
+// The four field groups stamp as keyframes (see SSAtmoEnvAtmosphere::addKeyframesFromSky and
+// SSAtmoEnvCloudDome::addKeyframesFromSky). The two body groups are different in kind: a sky
+// states what its sun and moon DISCS look like (angular scale against SS_ATMOENV_REFERENCE_DISC_DEG,
+// plus disc texture), while an Atmo Magic body states a physical diameter and texture - so those
+// groups are offered only when the target track still carries the STANDARD sun/moon bodies
+// makeDefault() seeds (see SSAtmoEnvPlanetary::standardSunIndex), and the stamp is a translation
+// (see SSAtmoEnvPlanetary::translateSettingsSky) rather than a keyframe write.
 const U32 SS_SKY_IMPORT_ATMOSPHERE = 0x1; // sky gradient, haze, moisture, multipliers, sky ceiling
 const U32 SS_SKY_IMPORT_LIGHTING   = 0x2; // ambient/sunlight colour, gamma, probe ambiance, sun glow
 const U32 SS_SKY_IMPORT_CELESTIAL  = 0x4; // star and moon brightness
 const U32 SS_SKY_IMPORT_CLOUDS     = 0x8; // the legacy dome layer, whole block
+const U32 SS_SKY_IMPORT_SUN        = 0x10; // the standard sun body's size and texture
+const U32 SS_SKY_IMPORT_MOON       = 0x20; // the standard moon body's size and texture
 
 const U32 SS_SKY_IMPORT_ALL = SS_SKY_IMPORT_ATMOSPHERE | SS_SKY_IMPORT_LIGHTING
-                            | SS_SKY_IMPORT_CELESTIAL | SS_SKY_IMPORT_CLOUDS;
+                            | SS_SKY_IMPORT_CELESTIAL | SS_SKY_IMPORT_CLOUDS
+                            | SS_SKY_IMPORT_SUN | SS_SKY_IMPORT_MOON;
 
 struct SSAtmoEnvCloudDome
 {

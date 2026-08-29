@@ -67,10 +67,19 @@ public:
 
     const LLVector2& cloudDriftMetres() const { return mCloudDriftM; }
 
-    // <SS:Nexii> The dome cloud layer's altitude in metres, authored or derived - the single authority the parallax and the disc occlusion both scale by (doc/atmo_magic_cloud_parallax.md).
-    // Resolved per call rather than cached with the rest of the sky walk: the auto derivation reads the volumetric field's LIVE coverage, which moves between applies.
+    // <SS:Nexii> The dome's two altitudes, resolved per call rather than cached with the rest of the sky walk - both read the volumetric field's LIVE geometry, which moves between applies.
+    // cloudDomeAltitudeMetres is the overcast band's: the deck-tracking merge, and the single
+    // altitude authority the disc occlusion shares (doc/atmo_magic_cloud_parallax.md).
+    // cirrusAltitudeMetres is the cirrus veil's: the authored dome height while the air is calm,
+    // descending onto the deck's lid as convection anvils the deck into it.
     F32 cloudDomeAltitudeMetres() const;
+    F32 cirrusAltitudeMetres() const;
     static F32 autoCloudDomeAltitudeMetres();
+
+    // <SS:Nexii> The dome's AUTHORED coverage, sampled at the applied phase - the cirrus pass's
+    // density. The live sky's cloud shadow is the tracked blend (authored floor lifted toward the
+    // deck's coverage); the cirrus veil does not track the deck, so it draws from this raw sample.
+    F32 cirrusCoverage() const { return mCirrusCoverage; }
 
     // <SS:Nexii> Whether the sky dome's lower half takes the nearer depth slot that clips what it
     // draws over at the horizon (SSAtmoEnvAtmosphere::mHorizonClip). Sampled at the applied phase
@@ -94,6 +103,12 @@ public:
     // the observer (the risen area). The sky dome, the dome clouds and the atmospheric module ramp their sun glow and haze on this instead of snapping the whole sunrise/sunset horizon on the
     // moment the disc's centre crosses zero (skyV.glsl, cloudsV.glsl, atmosphericsFuncs.glsl). Zero unless an ACTIVE environment is driving the sky, so a plain EEP sky keeps stock's step.
     F32 sunRiseFraction() const { return mActive ? mSunRiseFraction : 0.f; }
+
+    // <SS:Nexii> The sun slot's TRUE direction, sampled at the applied phase - the disc itself, however far below the horizon it currently sits. The shaders need it because lightnorm - the
+    // shared light direction - SWITCHES to the moon the moment the sun's centre sets (LLSettingsSky::getLightDirection), and stock never noticed: its glow was zeroed and its disc culled
+    // below the horizon, so nothing was left looking at the sun to jump. Atmo's ramps keep the glow, the horizon band and the clouds' disc-neighbourhood body alive through the rise band, and
+    // every one of those has to keep aiming at the SUN or it leaps to the moon's azimuth at centre-set. Only meaningful while sunRiseFraction() is in (0, 1); the shader ramps gate on that.
+    const LLVector3& sunSlotDirection() const { return mSunSlotDir; }
 
     const LLVector3& observerPole() const { return mObserverPole; }
 
@@ -130,9 +145,17 @@ private:
     SSAtmoEnvSkyModulation mLastModulation;
     LLVector2 mCloudDriftM;
 
-    // <SS:Nexii> The dome's authored altitude and its auto flag, sampled at the applied phase - see cloudDomeAltitudeMetres.
+    // <SS:Nexii> The cirrus veil's authored dry altitude and its auto flag, sampled at the applied
+    // phase - see cirrusAltitudeMetres. The overcast band no longer uses either: it always tracks
+    // the deck.
     bool mCloudDomeAuto = false;
     F32 mCloudDomeHeightM = 6000.f;
+
+    // <SS:Nexii> The track's convection, sampled at the applied phase - the cirrus integration ramp
+    // rides it - and the dome's authored coverage, sampled at the applied phase - the cirrus pass's
+    // density. See cirrusCoverage.
+    F32 mLastConvection = 0.f;
+    F32 mCirrusCoverage = 0.f;
 
     // <SS:Nexii> The horizon clip, sampled at the applied phase - see horizonClip.
     bool mHorizonClip = true;
@@ -153,6 +176,9 @@ private:
 
     // <SS:Nexii> The sun slot's risen fraction, sampled at the applied phase - see sunRiseFraction.
     F32 mSunRiseFraction = 0.f;
+
+    // <SS:Nexii> The sun slot's true direction, sampled at the applied phase - see sunSlotDirection.
+    LLVector3 mSunSlotDir = LLVector3::z_axis;
 
     std::vector<LLPointer<class LLHUDText> > mDebugLabels;
     void releaseDebugLabels();

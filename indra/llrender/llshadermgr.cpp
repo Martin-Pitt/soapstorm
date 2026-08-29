@@ -1595,6 +1595,9 @@ void LLShaderMgr::initAttribsAndUniforms()
     // <SS:Nexii> Atmo Magic sunrise ramp - see SSAtmoEnvApplier::sunRiseFraction
     mReservedUniforms.push_back("ss_sun_rise");
 
+    // <SS:Nexii> Atmo Magic sun direction takeover - see SSAtmoEnvApplier::sunSlotDirection
+    mReservedUniforms.push_back("ss_sun_dir");
+
     llassert(mReservedUniforms.size() == END_RESERVED_UNIFORMS);
 
     std::set<std::string> dupe_check;

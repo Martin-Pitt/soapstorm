@@ -364,6 +364,12 @@ public:
         // sunrise/sunset ramp the sky dome, the dome clouds and the atmospheric module shade
         // their sun glow and haze with (see SSAtmoEnvApplier::sunRiseFraction). 0 is stock.
         SS_SUN_RISE,                        //  "ss_sun_rise"
+
+        // <SS:Nexii> Atmo Magic: the sun's TRUE direction while any part of the disc is in
+        // sight (see SSAtmoEnvApplier::sunSlotDirection) - lightnorm itself switches to the
+        // moon the moment the sun's centre sets, which would swing every sun-anchored term
+        // over to the moon's azimuth mid-sunset. Unused (stock) while ss_sun_rise is 0.
+        SS_SUN_DIR,                         //  "ss_sun_dir"
         END_RESERVED_UNIFORMS
     } eGLSLReservedUniforms;
     // clang-format on

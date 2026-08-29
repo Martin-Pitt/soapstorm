@@ -91,8 +91,8 @@ static inline F32 quintic(F32 t) { return t * t * t * (t * (t * 6.f - 15.f) + 10
 // 1D value noise.
 F32 value1(F32 x, U32 seed)
 {
-    F32 fx = floorf(x);
-    S32 ix = (S32)fx;
+    const S32 ix = llfloor(x);
+    const F32 fx = (F32)ix;
     F32 t = quintic(x - fx);
     return lerp(latticeGrad(seed, ix), latticeGrad(seed, ix + 1), t);
 }
@@ -100,10 +100,10 @@ F32 value1(F32 x, U32 seed)
 // 2D value noise.
 F32 value2(F32 x, F32 y, U32 seed)
 {
-    F32 fx = floorf(x);
-    F32 fy = floorf(y);
-    S32 ix = (S32)fx;
-    S32 iy = (S32)fy;
+    const S32 ix = llfloor(x);
+    const S32 iy = llfloor(y);
+    const F32 fx = (F32)ix;
+    const F32 fy = (F32)iy;
     F32 tx = quintic(x - fx);
     F32 ty = quintic(y - fy);
     F32 a = lerp(latticeGrad2(seed, ix, iy),     latticeGrad2(seed, ix + 1, iy),     tx);
@@ -181,7 +181,7 @@ void SSAtmoMagic::refreshParams()
 
     const bool teleported = !mV3PrevWorldZValid
         || region_id != mV3PrevRegionID
-        || fabsf(world_z - mV3PrevWorldZ) > 60.f;
+        || llabs(world_z - mV3PrevWorldZ) > 60.f;
 
     const bool v3_active = SSAtmoEnvBridge::resolveActiveTrack(
         world_z, mV3PrevWorldZValid ? mV3PrevWorldZ : world_z, teleported, v3_cfg, v3_is_ground_track);
@@ -300,7 +300,7 @@ F32 SSAtmoMagic::gustEnvelopeAt(F64 time) const
     const F32 t = (F32)fmod(time, 4096.0);
     F32 wave = SSAtmoNoise::fbm1(t * (0.05f + 0.15f * mTurbulence), SS_ATMO_SEED ^ 0xA17C0FEEu);
     wave = llclamp(wave * 2.2f + 0.5f, 0.f, 1.f);
-    wave = wave * wave * (3.f - 2.f * wave);
+    wave = cubic_step(wave);
 
     F32 burst = llclamp(SSAtmoNoise::fbm1(t * 0.7f, SS_ATMO_SEED ^ 0x00B57A9Du, 2) * 2.5f, 0.f, 1.f);
     burst = burst * burst * burst * 2.f;

@@ -308,15 +308,15 @@ namespace
             {
                 if (!skies.mSkies[a]) continue;
                 const F32 sin_a = seedSkySunDirection(*skies.mSkies[a]).mV[VZ];
-                if (fabsf(sin_a) > LOW_SUN_SIN) continue;
+                if (llabs(sin_a) > LOW_SUN_SIN) continue;
 
                 for (size_t b = a + 1; b < count; ++b)
                 {
                     if (!skies.mSkies[b]) continue;
                     const F32 sin_b = seedSkySunDirection(*skies.mSkies[b]).mV[VZ];
-                    if (fabsf(sin_b) > LOW_SUN_SIN) continue;
+                    if (llabs(sin_b) > LOW_SUN_SIN) continue;
 
-                    F64 gap = std::fabs(measured[a] - measured[b]);
+                    F64 gap = llabs(measured[a] - measured[b]);
                     gap = llmin(gap, 1.0 - gap);
                     if (gap >= 0.08) continue;
 

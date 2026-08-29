@@ -25,6 +25,7 @@
 
 #include "sssoundscape.h"
 #include "ssatmomagic.h"
+#include "ssatmostore.h"
 #include "sswindflow.h"
 #include "ssprecippreset.h"
 #include "sssurfacefield.h"
@@ -533,8 +534,8 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
         preset.mSounds.mRoofSmall,
         preset.mSounds.mRoofMedium,
         preset.mSounds.mRoofBig,
-        gSavedSettings.getString("SSAtmoLoopWindLight"),
-        gSavedSettings.getString("SSAtmoLoopWindStrong"),
+        SSAtmoStore::getString(SSAtmoStoreKey::WIND_LIGHT),
+        SSAtmoStore::getString(SSAtmoStoreKey::WIND_STRONG),
     };
 
     {
@@ -627,10 +628,9 @@ namespace
     const F32 THUNDER_CRACK_M = 1500.f;
     const F32 THUNDER_RUMBLE_M = 6000.f;
 
-    // Rolls a sound from a CSV setting.
-    LLUUID pick_from_setting(const std::string& setting, SSRandStream& rng)
+    // Rolls a sound from a comma-separated UUID list.
+    LLUUID pick_from_csv(const std::string& csv, SSRandStream& rng)
     {
-        const std::string csv = gSavedSettings.getString(setting);
         if (csv.empty()) return LLUUID::null;
 
         std::vector<std::string> tokens;
@@ -733,7 +733,7 @@ void SSSoundscape::playCharge(const LLVector3& pos_agent, F32 intensity)
     if (!sounds || !gAudiop) return;
 
     SSRandStream rng((U32)(SSAtmoMagic::getInstance()->sharedTime() * 8171.0));
-    const LLUUID sound = pick_from_setting("SSAtmoLightningCharge", rng);
+    const LLUUID sound = pick_from_csv(gSavedSettings.getString("SSAtmoLightningCharge"), rng);
     if (sound.isNull()) return;
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
@@ -768,14 +768,15 @@ F32 SSSoundscape::windCarryGain(const LLVector3& source_pos_agent) const
 static LLUUID pick_thunder(bool want_rumble, SSRandStream& rng)
 {
     static LLCachedControl<bool> auto_sort(gSavedSettings, "SSAtmoThunderAutoSort", true);
-    const char* home = want_rumble ? "SSAtmoThunderRumble" : "SSAtmoThunderCrack";
-    if (!auto_sort) return pick_from_setting(home, rng);
+    const std::string& home = want_rumble ? SSAtmoStoreKey::THUNDER_RUMBLE
+                                          : SSAtmoStoreKey::THUNDER_CRACK;
+    if (!auto_sort) return pick_from_csv(SSAtmoStore::getString(home), rng);
 
     std::vector<std::pair<F32, LLUUID>> rated;
-    for (const char* setting : { "SSAtmoThunderCrack", "SSAtmoThunderRumble" })
+    for (const std::string& key : { SSAtmoStoreKey::THUNDER_CRACK, SSAtmoStoreKey::THUNDER_RUMBLE })
     {
         std::vector<std::string> tokens;
-        LLStringUtil::getTokens(gSavedSettings.getString(setting), tokens, ",");
+        LLStringUtil::getTokens(SSAtmoStore::getString(key), tokens, ",");
         for (const std::string& tok : tokens)
         {
             LLUUID id(tok);
@@ -787,10 +788,10 @@ static LLUUID pick_thunder(bool want_rumble, SSRandStream& rng)
         }
     }
 
-    if (rated.size() < 4) return pick_from_setting(home, rng);
+    if (rated.size() < 4) return pick_from_csv(SSAtmoStore::getString(home), rng);
 
     std::sort(rated.begin(), rated.end());
-    if (rated.back().first - rated.front().first < 0.08f) return pick_from_setting(home, rng);
+    if (rated.back().first - rated.front().first < 0.08f) return pick_from_csv(SSAtmoStore::getString(home), rng);
 
     const size_t half = rated.size() / 2;
     const size_t lo = want_rumble ? 0 : rated.size() - half;
@@ -1361,7 +1362,7 @@ LLUUID SSSoundscape::footstepSound(const LLUUID& avatar_id, const LLVector3& foo
     if (dbg.mGlobal)
     {
         dbg.mSource = SSFootstepSounds::globalSettingName(surface, (SSStepAction)action);
-        csv = gSavedSettings.getString(dbg.mSource);
+        csv = SSAtmoStore::getString(dbg.mSource);
     }
     else
     {

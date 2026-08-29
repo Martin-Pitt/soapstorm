@@ -95,7 +95,7 @@ namespace
         LLVector3 to_cam = cam - center;
         if (to_cam.normalize() <= 0.f) return;
 
-        LLVector3 ref = (fabsf(to_cam.mV[VZ]) > 0.9f)
+        LLVector3 ref = (llabs(to_cam.mV[VZ]) > 0.9f)
             ? LLVector3(1.f, 0.f, 0.f) : LLVector3(0.f, 0.f, 1.f);
         LLVector3 right = to_cam % ref;
         if (right.normalize() <= 0.f) return;

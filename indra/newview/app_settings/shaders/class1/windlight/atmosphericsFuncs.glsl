@@ -50,6 +50,12 @@ uniform int classic_mode;
 // moment the disc's CENTRE crosses zero, which reads as the whole sunrise lighting snapping on
 // at once; the ramps below grow it with the disc instead.
 uniform float ss_sun_rise;
+
+// <SS:Nexii> The sun's TRUE direction while any part of the disc is in sight
+// (SSAtmoEnvApplier::sunSlotDirection). lightnorm switches to the moon the moment the disc's
+// centre sets, which would swing the surface glow's hotspot across the sky to the moon's
+// azimuth mid-sunset - see the ss_sun_dir note in skyV.glsl.
+uniform vec3 ss_sun_dir;
 #endif
 
 float getAmbientClamp() { return 1.0f; }
@@ -106,7 +112,14 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
     atten = combined_haze.rgb;
 
     // compute haze glow
-    float haze_glow = dot(rel_pos_norm, lightnorm.xyz);
+    // <SS:Nexii> The glow's direction tracks the disc (ss_sun_dir), not the lightnorm - lightnorm
+    // belongs to the moon below centre-set. See the ss_sun_dir note in skyV.glsl.
+#ifdef SS_ATMO
+    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+#else
+    vec3 glow_dir = lightnorm.xyz;
+#endif
+    float haze_glow = dot(rel_pos_norm, glow_dir);
 
     // dampen sun additive contrib when not facing it...
     // SL-13539: This "if" clause causes an "additive" white artifact at roughly 77 degreees.

@@ -46,6 +46,8 @@ public:
 
     void renderDebug();
 
+    void renderRunoffDebug();
+
     struct Sample
     {
         F32 mWet = 0.f;
@@ -123,6 +125,9 @@ private:
     };
 
     void shedEdges(F32 dt);
+
+    void renderRunoffLips(U32 view, const LLVector3& cam,
+                          F32 radius_sq, F32 budget, bool context_only) const;
 
     void shedRegion(U64 region_handle, const Geometry& geom, Field& fld,
                     F32 dt, F32 rate_m2, const LLVector3& camera_agent);

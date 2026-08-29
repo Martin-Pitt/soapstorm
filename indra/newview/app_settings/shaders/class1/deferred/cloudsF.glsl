@@ -51,6 +51,38 @@ in vec2 vary_texcoord2;
 in vec2 vary_texcoord3;
 in float altitude_blend_factor;
 
+#ifdef SS_ATMO
+// <SS:Nexii> The plane mapping (doc/atmo_magic_cloud_parallax.md). Each dome band's UVs are
+// derived HERE, per fragment, from the true view ray cloudsV hands down - not from the dome mesh's
+// own texcoords plus a patch. Two things that buys: the parallax is exact (a metre of camera travel
+// moves the ray's intersection with the band's plane exactly one metre, instead of being
+// approximated per dome-mesh vertex and linearly interpolated across triangles whose size the
+// mapping never asked for), and the sky curvature is the band's own - a real flat deck compresses
+// into the horizon at tan(elevation), and so does this, rather than at whatever rate the dome mesh
+// happens to distribute its vertices. Per-fragment costs one normalize already paid in the vertex
+// stage and one divide.
+uniform vec2 region_offset;    // camera pos - region centre, metres, world X/Y
+uniform vec2 ss_cloud_drift;   // metres the band has travelled on the wind, east and north
+uniform float ss_cloud_alt_m;  // the BAND'S OWN altitude, metres - what a metre of camera travel is worth in uv
+uniform float ss_cloud_plane;  // 1: derive UVs from the view ray (active Atmo). 0: stock dome texcoords
+uniform vec3 lightnorm;        // the self-shadow offset's direction - stock derived texcoord1 from it per-vertex
+in vec3 vary_ray_dir;
+
+// One band's base UVs: intersect the view ray with a horizontal plane at the band's own altitude
+// above the camera, anchor at the region centre, subtract the wind travel, and divide by the
+// band's metres-per-UV. Sign conventions are the old vertex patches': world north runs down the
+// texture's v, and the wind travel negates the same way. The grazing clamp holds the intersection
+// finite below ~1.2 degrees of elevation, where the horizon fade has already taken the band's
+// alpha to nothing.
+vec2 ss_plane_base(float alt)
+{
+    float dz = max(vary_ray_dir.z, 0.02);
+    vec2 plane_xy = region_offset + vary_ray_dir.xy * (alt / dz);
+    float metres_per_uv = 16.0 * alt * cloud_scale;
+    return vec2(plane_xy.x - ss_cloud_drift.x, -plane_xy.y + ss_cloud_drift.y) / metres_per_uv;
+}
+#endif
+
 vec4 cloudNoise(vec2 uv)
 {
    vec4 a = texture(cloud_noise_texture, uv);
@@ -62,14 +94,37 @@ vec4 cloudNoise(vec2 uv)
 void main()
 {
     // Set variables
-    vec2 uv1 = vary_texcoord0.xy;
-    vec2 uv2 = vary_texcoord1.xy;
-
     vec3 cloudColorSun = vary_CloudColorSun;
     vec3 cloudColorAmbient = vary_CloudColorAmbient;
     float cloudDensity = vary_CloudDensity;
-    vec2 uv3 = vary_texcoord2.xy;
-    vec2 uv4 = vary_texcoord3.xy;
+
+    // The four texcoords: base, base plus the self-shadow offset, and both at 16x for the fine
+    // layers. Stock derives them per-vertex from the dome mesh's own mapping; the Atmo plane path
+    // derives the base per-fragment from the view ray (see ss_plane_base) and rebuilds the other
+    // three from it with stock's own offsets, so the two paths agree about WHAT each coordinate is
+    // and differ only about where it comes from.
+    vec2 uv1;
+    vec2 uv2;
+    vec2 uv3;
+    vec2 uv4;
+#ifdef SS_ATMO
+    if (ss_cloud_plane > 0.0)
+    {
+        uv1 = ss_plane_base(ss_cloud_alt_m);
+        uv2 = uv1 + vec2(lightnorm.x, lightnorm.z) * 0.0125;
+        uv3 = uv1 * 16.0;
+        uv4 = uv2 * 16.0;
+    }
+    else
+    {
+#endif
+    uv1 = vary_texcoord0.xy;
+    uv2 = vary_texcoord1.xy;
+    uv3 = vary_texcoord2.xy;
+    uv4 = vary_texcoord3.xy;
+#ifdef SS_ATMO
+    }
+#endif
 
     if (cloud_scale < 0.001)
     {

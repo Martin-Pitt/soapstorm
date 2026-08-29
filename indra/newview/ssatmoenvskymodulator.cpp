@@ -43,10 +43,6 @@ namespace
     const F32 GAMMA_FULL_CUT    = 0.5f;
     const F32 AMBIENT_FULL_CUT  = 0.6f;
 
-    const F32 STORM_COVER_FULL = 0.9f;
-
-    const F32 VARIANCE_FULL_ADD = 0.15f;
-
     const F32 DARKENING_ONSET = 0.55f;
 
     const F32 ICE_FULL_ADD        = 0.5f;
@@ -84,7 +80,13 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     SSAtmoEnvSkyModulation mod;
     if (!influence.mEnabled) return mod;
 
-    mod.mCoverTarget = llclamp((F32)in.mOktaCloudCover / 8.f, 0.f, 1.f);
+    // <SS:Nexii> The dome's overcast band tracks the main deck's live coverage - the same number
+    // the puffs render with, so band and deck can never disagree about how overcast it is. The
+    // okta count this replaces was the forecast's wording stepped into the render: every eighth of
+    // moisture popped the band 12.5% in one frame. Okta stays where wording belongs, in the
+    // forecast text; authored coverage below stays a floor (the cirrus duty), so the target only
+    // ever lifts.
+    mod.mCoverTarget = llclamp(in.mDeckCoverage, 0.f, 1.f);
     mod.mCoverBlend  = ss_effect(1.f, influence.mCloudCoverEnabled, influence.mCloudCoverStrength);
 
     {
@@ -132,13 +134,14 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     return mod;
 }
 
-// Blends authored coverage toward the okta target, then toward storm cover as darkening rises.
+// Blends authored coverage toward the deck's live coverage, lift only: weather can pile cloud on,
+// but a sky authored overcast stays overcast in fair weather. The old storm-cover push is gone with
+// the okta drive - a band that overcasts past the deck it tracks is exactly the disagreement the
+// tracking exists to prevent; a storm's weight comes from the deck's own gloom, thickness and the
+// gamma/ambient cuts below.
 F32 SSAtmoEnvSkyModulation::cloudCoverage(F32 base) const
 {
-    F32 out = base + (llmax(base, mCoverTarget) - base) * mCoverBlend;
-
-    out += (llmax(out, STORM_COVER_FULL) - out) * mDarkening;
-    return out;
+    return base + (llmax(base, mCoverTarget) - base) * mCoverBlend;
 }
 
 // Authored scroll plus the churn delta.
@@ -151,12 +154,6 @@ LLVector2 SSAtmoEnvSkyModulation::cloudScrollRate(const LLVector2& base) const
 void SSAtmoEnvSkyModulation::setChurn(const LLVector2& along)
 {
     mScrollDelta = along * (mDarkening * CHURN_FULL_ADD);
-}
-
-// Storm darkening adds cloud variance.
-F32 SSAtmoEnvSkyModulation::cloudVariance(F32 base) const
-{
-    return llclamp(base + mDarkening * VARIANCE_FULL_ADD, 0.f, 1.f);
 }
 
 // Moisture adds haze.

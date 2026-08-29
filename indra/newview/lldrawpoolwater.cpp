@@ -403,6 +403,10 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // ramps its sun glow across the disc's rise instead of snapping at centre-rise.
     shader->uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
 
+    // ...and the sun's true direction while any part of the disc is in sight - see
+    // SSAtmoEnvApplier::sunSlotDirection.
+    shader->uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
+
     // SL-15861 This was changed from getRotatedLightNorm() as it was causing
     // lightnorm in shaders\class1\windlight\atmosphericsFuncs.glsl in have inconsistent additive lighting for 180 degrees of the FOV.
     LLVector4 rotated_light_direction = LLEnvironment::instance().getClampedLightNorm();

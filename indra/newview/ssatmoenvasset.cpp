@@ -25,6 +25,7 @@
 
 #include "ssatmoenvasset.h"
 
+#include "ssatmoenvplanetarystate.h"
 #include "ssprecippreset.h"
 
 #include "llagent.h"
@@ -34,6 +35,69 @@
 #include <algorithm>
 #include <cmath>
 #include <ctime>
+
+// <SS:Nexii> The stock bodies the standard setup seeds. makeDefault() plants them, and the sky
+// import's body groups check against them: a dropped sky may only rewrite a body the author has
+// not already redesigned into something of their own.
+namespace
+{
+    // How far a body's diameter may sit from the stock value and still count as standard. The
+    // translation itself (a stock sky's disc scale of 1.0) lands within ~2.5% of the stock
+    // diameter - the resolver's atan measured against the round numbers the stock constants were
+    // tuned from - so the band keeps repeated imports of stock skies idempotent rather than
+    // letting the first import disqualify the body it just resized.
+    const F32 STANDARD_BODY_DIAMETER_TOLERANCE = 0.05f;
+
+    // The stock sun: EEP's own disc, in body form.
+    SSAtmoEnvCelestialBody standardSunBody()
+    {
+        SSAtmoEnvCelestialBody body;
+        body.mKind = SSAtmoEnvCelestialBody::SUN;
+        body.mDiameterM = 1.392e9f;
+        body.mMassRelative = 1.f;
+        body.mIsLightEmitter = true;
+        body.mEmissive = true;
+        body.mPhaseShaded = false;
+        body.mCustomTexture = LLUUID(SSAtmoEnvCloudDome::BODY_TEXTURE_SUN);
+        return body;
+    }
+
+    // The stock moon, minus its parent - which is wherever the home body sits in the system
+    // being checked, not a number the standard itself carries.
+    SSAtmoEnvCelestialBody standardMoonBody()
+    {
+        SSAtmoEnvCelestialBody body;
+        body.mKind = SSAtmoEnvCelestialBody::MOON;
+        body.mDiameterM = 3.4748e6f;
+        body.mMassRelative = 1.f;
+        body.mOrbitalRadius = 3.844e8f;
+        body.mOrbitalInclinationDeg = 5.145f;
+        body.mOrbitalPhaseDeg = 30.f;
+        body.mAxialTiltDeg = 6.68f;
+        body.mIsLightEmitter = true;
+        body.mCustomTexture = LLUUID(SSAtmoEnvCloudDome::BODY_TEXTURE_MOON);
+        return body;
+    }
+
+    // Whether a body still IS the standard one it started as. Compared: the look a sky import
+    // would overwrite (size, glow character, disc texture) plus mass and rings, which a redesign
+    // touches as surely. Position along the orbit is deliberately absent - that is the day
+    // cycle's domain, not the body's look, and rephasing a moon should not cost the import.
+    bool isStandardBody(const SSAtmoEnvCelestialBody& body, const SSAtmoEnvCelestialBody& standard)
+    {
+        auto close = [](F32 a, F32 b, F32 tolerance)
+        {
+            return llabs(a - b) <= tolerance * llmax(llabs(a), llabs(b));
+        };
+        return body.mKind == standard.mKind
+            && close(body.mDiameterM, standard.mDiameterM, STANDARD_BODY_DIAMETER_TOLERANCE)
+            && close(body.mMassRelative, standard.mMassRelative, 1.0e-4f)
+            && body.mEmissive == standard.mEmissive
+            && body.mPhaseShaded == standard.mPhaseShaded
+            && !body.mHasRing
+            && body.mCustomTexture == standard.mCustomTexture;
+    }
+}
 
 // The weather cube out to its notecard document.
 LLSD SSAtmoEnvWeather::asLLSD() const
@@ -627,6 +691,93 @@ bool SSAtmoEnvPlanetary::clearBoundPartner(S32 index)
         mBodies[partner].mBoundPartnerIndex = -1;
     }
     return true;
+}
+
+// The stock sun of the standard setup, if it is still flying. Needs a home: without a world to
+// stand on there is no standard setup to speak of, and no distance to translate a disc against.
+S32 SSAtmoEnvPlanetary::standardSunIndex() const
+{
+    if (homeBodyIndex() < 0) return -1;
+
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        const SSAtmoEnvCelestialBody& body = mBodies[i];
+        if (body.mKind != SSAtmoEnvCelestialBody::SUN) continue;
+        if (body.mParentIndex != -1) continue;
+        if (isStandardBody(body, standardSunBody())) return (S32)i;
+    }
+    return -1;
+}
+
+// The stock moon, still circling the home body.
+S32 SSAtmoEnvPlanetary::standardMoonIndex() const
+{
+    const S32 home = homeBodyIndex();
+    if (home < 0) return -1;
+
+    for (size_t i = 0; i < mBodies.size(); ++i)
+    {
+        const SSAtmoEnvCelestialBody& body = mBodies[i];
+        if (body.mKind != SSAtmoEnvCelestialBody::MOON) continue;
+        if (body.mParentIndex != home) continue;
+        if (isStandardBody(body, standardMoonBody())) return (S32)i;
+    }
+    return -1;
+}
+
+// Translates a fetched EEP sky's disc values onto the standard sun/moon bodies.
+void SSAtmoEnvPlanetary::translateSettingsSky(const LLSettingsSky& sky, U32 groups)
+{
+    const S32 sun_index = (groups & SS_SKY_IMPORT_SUN) ? standardSunIndex() : -1;
+    const S32 moon_index = (groups & SS_SKY_IMPORT_MOON) ? standardMoonIndex() : -1;
+    if (sun_index < 0 && moon_index < 0) return;
+
+    // The distances the renderer itself will use: the same home-to-body span the resolver turns
+    // back into an angular size when the body is drawn, so the translated diameter draws what
+    // the sky's disc would have drawn.
+    const std::vector<SSAtmoEnvResolvedBody> sky_bodies =
+        SSAtmoEnvPlanetaryResolver::resolveSky(*this);
+
+    auto distanceFor = [&sky_bodies](S32 body_index) -> F32
+    {
+        for (const SSAtmoEnvResolvedBody& resolved : sky_bodies)
+        {
+            if (resolved.mBodyIndex == body_index) return resolved.mDistance;
+        }
+        return 0.f;
+    };
+
+    auto translate = [this, &distanceFor](S32 body_index, F32 disc_scale,
+                                          const LLUUID& disc_texture, const LLUUID& stock_texture)
+    {
+        // The sky's disc scale states an angular diameter against EEP's reference disc; the body
+        // stores the physical size that draws the same angle from where the observer stands.
+        const F32 distance = distanceFor(body_index);
+        if (distance > 0.f)
+        {
+            const F32 angular_rad = disc_scale * SS_ATMOENV_REFERENCE_DISC_DEG * DEG_TO_RAD;
+            const F32 radius = distance * tanf(angular_rad * 0.5f);
+            mBodies[(size_t)body_index].mDiameterM = llmax(radius * 2.f, 0.f);
+        }
+
+        // The sky's own stock disc value means it has nothing custom to say about the look - the
+        // standard texture the body already carries stays. Anything else is a look to adopt.
+        if (disc_texture != stock_texture)
+        {
+            mBodies[(size_t)body_index].mCustomTexture = disc_texture;
+        }
+    };
+
+    // EEP's stock sun disc is the null texture; its stock moon disc is the default moon asset.
+    if (sun_index >= 0)
+    {
+        translate(sun_index, sky.getSunScale(), sky.getSunTextureId(), LLUUID::null);
+    }
+    if (moon_index >= 0)
+    {
+        translate(moon_index, sky.getMoonScale(), sky.getMoonTextureId(),
+                  LLSettingsSky::GetDefaultMoonTextureId());
+    }
 }
 
 // The planetary system out to its notecard document.
@@ -1292,16 +1443,9 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
         ground.mWater.mHeight = SSAtmoEnvKeyframed<F32>(region ? region->getWaterHeight() : 20.f);
     }
 
-    SSAtmoEnvCelestialBody sun;
-    sun.mKind = SSAtmoEnvCelestialBody::SUN;
-    sun.mParentIndex = -1;
-    sun.mDiameterM = 1.392e9f;
-    sun.mMassRelative = 1.f;
-    sun.mIsLightEmitter = true;
-    sun.mEmissive = true;
-    sun.mPhaseShaded = false;
-    sun.mCustomTexture = LLUUID(SSAtmoEnvCloudDome::BODY_TEXTURE_SUN);
-    ground.mPlanetary.mBodies.push_back(sun);
+    // The standard bodies the sky import's body groups check against - built by the same code
+    // that defines "standard", so the two can never drift apart.
+    ground.mPlanetary.mBodies.push_back(standardSunBody());
 
     SSAtmoEnvCelestialBody home;
     home.mKind = SSAtmoEnvCelestialBody::PLANET;
@@ -1316,17 +1460,8 @@ SSAtmoEnvAsset SSAtmoEnvAsset::makeDefault()
     home.mIsHome = true;
     ground.mPlanetary.mBodies.push_back(home);
 
-    SSAtmoEnvCelestialBody moon;
-    moon.mKind = SSAtmoEnvCelestialBody::MOON;
+    SSAtmoEnvCelestialBody moon = standardMoonBody();
     moon.mParentIndex = 1;
-    moon.mDiameterM = 3.4748e6f;
-    moon.mMassRelative = 1.f;
-    moon.mOrbitalRadius = 3.844e8f;
-    moon.mOrbitalInclinationDeg = 5.145f;
-    moon.mOrbitalPhaseDeg = 30.f;
-    moon.mAxialTiltDeg = 6.68f;
-    moon.mIsLightEmitter = true;
-    moon.mCustomTexture = LLUUID(SSAtmoEnvCloudDome::BODY_TEXTURE_MOON);
     ground.mPlanetary.mBodies.push_back(moon);
 
     ground.mPlanetary.autoNameBodies();

@@ -282,6 +282,331 @@ structure but keeps its squall term.
 4. **Whiteout pass** - local fog with the corridor term; the squall derivation feeding it.
 5. **Avatar caking, footsteps, compaction** - the tactile follow-ons, each riding a pattern that
    already exists.
+6. **Granular runoff** - creep advection, the shed re-feed, dithered cascades (section 13); needs
+   the surface pass to scroll and the field to feed, and is the doorway to the sand skin.
+
+## 9. Performance, quality and LOD
+
+### The cost inventory
+
+Nothing here adds a GPU solve. The wind flowmap is already solved, staged and read back
+asynchronously per region; every new piece is either CPU work inside existing throttled ticks or
+fullscreen shading passes in the wet-pass family. Per feature:
+
+| Feature | CPU | GPU | Idle cost |
+|---|---|---|---|
+| Erosion/deposit | one throttled `tick()` pass per region (`TICK_INTERVAL`, `MAX_TICK_DT` budget, shed cursor - the wet/puddle model unchanged), plus one wind fetch per snow-holding cell | none | zero - cells with `mSnow == 0` skip the fetch, no lift active means no work |
+| Drift particles | a slice of the existing `SSAtmoParticleBudget` sim; riser lifetimes are 2-3 s, so the standing population is spawn rate x life | the precip renderer's existing buckets, one more material bucket | zero when no cell passes the lift gate |
+| Snow surface pass | none | one fullscreen pre-lighting pass (+ its commit draw) | zero - gated on `peakSnow() > 0` and the field window, exactly like `renderWetPass` gates on wet strength |
+| Whiteout pass | none | one fullscreen post pass, ~8 texture fetches (depth, colour, field window, flow window, 3-4 band taps) | zero - gated on lift activity + squall intensity |
+| Granular runoff | the shed cursor already walks edges within a fixed visit budget; creep adds one neighbour exchange per ticked cell | the precip renderer's existing stream/drip buckets, dithered branch | zero - the shed accumulator only fills while creep or spilling feeds it |
+| Avatar caking / footsteps | per-avatar idle bookkeeping (`MAX_SHADED` = 8) and point field samples | rides the existing passes | zero |
+
+Two fetch-cost notes that are design decisions, not implementation details:
+
+- **The field tick must not call `SSWindFlowMap::sample()` per cell.** `sample()` runs `gustAt()` -
+  fbm calls - per invocation, and a region grid is thousands of cells. Gusts vary over ~100 m
+  wavelengths while the field cell is well under a metre, so gust structure is lost at field
+  resolution anyway: add a `sampleGround()` to `SSWindFlowMap` that bilinears the bottom slab
+  straight out of the CPU-resident `mFlow` tiles with no gust evaluation, and apply the gust
+  envelope once per region per tick (it is a scalar here, not a per-cell veer). Same answer, an
+  order of magnitude fewer trig calls.
+- **The whiteout pass runs at half resolution by default.** Fog density is the lowest-frequency
+  quantity on screen; a half-res density buffer bilinearly upsampled before the colour blend loses
+  nothing visible and halves the fetch bill of the most expensive new pass.
+
+Rough landing zone, assuming the wet family (two fullscreen passes + commits) was accepted: the
+snow surface pass is comparable, the whiteout pass is similar-or-cheaper at half res, and the CPU
+drift work is bounded by the particle budget the sim already enforces (`tierCap`, headroom,
+`RIPPLE_CAP`-style pooling). Net: two additional fullscreen passes when snow is actively falling or
+blowing, no new solve, no new capture.
+
+### Quality dial
+
+One enum drives the whole feature set, in the house style of a single setting with named tiers:
+
+`SSAtmoSnowQuality` - 0 off, 1 low, 2 medium (default), 3 high, 4 ultra.
+
+| | Off | Low | Medium | High | Ultra |
+|---|---|---|---|---|---|
+| Erosion/deposit | off (snow still settles) | on, coarser field | on | on | on |
+| Drift tier | off | 24 m band, 8% budget share | 48 m, 15% | 96 m, 25% | 96 m, 30% + raised tier cap |
+| Snow surface | off | flat shade, no POM, no sparkle | POM 8 steps within 24 m, sparkle | POM 16 steps within 32 m | POM 24 steps within 48 m |
+| Whiteout | off | 2 taps, half-res | 4 taps, half-res | 6 taps, half-res | 6 taps, full res |
+| Compaction / caking | - | off | caking only | both | both |
+| Granular runoff | off | cascades blended, no creep | dither near + creep | + clump spawn | full |
+| Field tick cadence | - | relaxed | default | default | default |
+
+The individual strengths already proposed (`SSAtmoSnowLift`, `SSAtmoSnowSurfaceStrength`,
+`SSAtmoWhiteoutStrength`, `SSAtmoSnowLiftRate` per preset) remain master dials on top - the enum
+sets *how much machinery runs*, the strengths set *how visible it is*, and any strength at 0
+removes its pass entirely, so an author who wants accumulation without drift or a blizzard without
+the surface look can have each piece alone.
+
+The feature-level gates also carry through: the surface and whiteout passes sit behind the same
+deferred-shader availability the wet pass requires, the flowmap dependency keeps its existing
+`SSAtmoWindFlow` + GL 4.3 check with the ambient-wind fallback from section 7, and every tier
+obeys the `SSAtmoParticleBudget` ceiling the rest of precipitation lives under.
+
+### LOD mechanics
+
+- **POM taper**: step count lerps from the tier maximum down to 2 with distance and cuts to
+  normal-only beyond the range above; sparkle cuts out past ~16 m. The expensive part of the snow
+  pass is therefore a near-camera effect by construction.
+- **Drift spawn band**: mirrors the tier-band pattern (`tierBands`/`tierRadii`) the other tiers
+  already use - drift exists inside a radius with cross-fade edges, density scaled by the local
+  lift figure, so distant scoured ground keeps its look through the field without paying for
+  particles over it. A `SSAtmoLodDrift` multiplier sits beside `SSAtmoLodDrops` and friends for
+  the existing per-tier LOD dials.
+- **Whiteout band taps** scale with the quality tier; at 2 taps the march is start/end/mid and
+  relies on the low-frequency nature of the density field.
+- **Erosion tick cadence** reuses the surface field's existing budget: regions tick in
+  camera-distance order under one cursor, and a lifted field region spends its tick only on cells
+  that hold snow. A heavy blizzard and a light dusting cost the same per cell that has snow; bare
+  cells are skipped before the wind fetch.
+- **Idle everything**: `peakSnow() == 0`, no lift activity and no squall intensity gate all three
+  passes out before they bind a single texture - the dry-summer cost of the whole design is the
+  settled-snow tick, which is the sim that already runs.
+
+### Instrumentation
+
+Each phase lands with its `LL_RECORD_BLOCK_TIME` block (`FTM_SS_SNOW_SURFACE`,
+`FTM_SS_WHITEOUT`, plus the drift slice inside the sim block), the Render Metadata debug views
+from section 7 double as the visual verification for LOD cuts, and the ss floater stats line -
+which already prints surface ms and peak wet/snow/puddle - gains drift count and lift activity so
+a user reporting "snow is slow" reports with numbers.
+
+## 10. Alternatives considered
+
+Sections 1-9 describe one design. It was not the only shape this could take, and it is worth
+writing down the other two seriously, attacking each on its own terms, and then taking what
+survives. The three designs differ on exactly two axes: **who owns the snow's ground state** (the
+CPU field, a GPU volume, or nobody) and **where whiteout lives** (surface fog, air-band fog, or a
+real volume).
+
+### Design A - field-coupled CPU everything (sections 1-9 as written)
+
+Erosion/deposit in `SSSurfaceField::tick()`, drift as a RISER flavour, whiteout as a screen-space
+band march over a constant 2-3 m slab above the stored surface, snow surface pass + POM in the wet
+family. Deterministic end to end, gated to zero when idle, entirely inside existing patterns.
+
+**Adversarial review.**
+
+- *Whiteout leaks.* The band march integrates fog along the ray but never asks whether anything
+  occludes a given tap. A wall 5 m from the camera hides a howling corridor behind it - the march
+  still adds the corridor's fog. Paradoxically the *dumber* design (Design C's depth fog) is
+  occlusion-correct by construction: it integrates density only up to the first surface, and
+  whatever the surface hides is not drawn. A has the most expensive whiteout and the leakiest one.
+  This is the design's one genuine hole.
+- *The mass story is a lie at the particle layer.* Erosion spawns drift, but drift particles never
+  deposit; redeposit is a flow-potential term with no knowledge of where particles went. Two views
+  of one gate, not a conserved system. Defensible - per-particle deposit means field writes from
+  the sim, cross-thread, for a difference nobody can see - but it must be said out loud.
+- *Threshold churn.* A cell sitting at the lift threshold can erode and, as its neighbour's lee,
+  deposit every tick. Needs hysteresis (deposit threshold strictly below lift), which the body
+  never stated.
+- Otherwise the review comes back clean: fit, cost, determinism, degradation all hold.
+
+### Design B - GPU density volume
+
+Extend each flowmap tile with a snow-density volume in the existing slab layout, advected
+semi-Lagrangian by the solved field every frame, eroded from the field window and settled where the
+flow stagnates. Whiteout becomes a true raymarch of that volume: occlusion falls out of the solid
+mask, plumes curl over rooflines because the solved vz lifts density into the upper slabs, and a
+gust front sweeps a courtyard as a visible fog wave. Drift particles become garnish.
+
+**Adversarial review.**
+
+- *It breaks the house rule the whole stack is built on.* `SSAtmoMagic` is a synced deterministic
+  weather manager: shared clock, cell-hash spawns, a flowmap that is "solved once, anchored to the
+  region". A running sim is per-viewer state - two avatars side by side see different plumes, and
+  the Render Metadata debug views draw *the field*, not a divergent local sim. Statistical parity
+  is achievable; the philosophy and its debuggability are not recoverable.
+- *Split-brain accumulation.* The ground truth the shaders, footsteps and avatars read is the CPU
+  field. The volume can own airborne density, but deposit must land in the CPU field - either a
+  readback every frame (stall, latency) or a second CPU deposit model, at which point the volume's
+  deposit is fake and the CPU field is Design A again with extra steps.
+- *The cost argument inverts and then fails.* A per-frame advect over 96 x 96 x 8 slabs is tiny -
+  cheaper than one fullscreen pass - so cost is *not* the reason to refuse B. The reasons are
+  determinism, state management (eviction mid-storm pops the airborne snow, tiles need margined
+  volume continuity across borders at frame granularity), and complexity budget for gains that are
+  reachable cheaper (below).
+- *What B genuinely wins:* occlusion-correct fog, over-roofline plume fog, spatial gust waves in
+  the air. All three are real; the first two have cheaper paths.
+
+### Design C - layered visual-first
+
+Ship the look, skip the coupling. No erosion; snowiness is the settled field. Drift particles spawn
+where exposure x ambient speed x a coarse snowiness scalar are high, no per-cell lift rate.
+Whiteout is per-pixel depth fog whose density is a function of the *surface point's* cell (the
+corridor's far wall fogs hard, the plaza wall does not). Everything independently toggleable.
+
+**Adversarial review.**
+
+- *It fails the stated ask.* The brief says effects are "introduced and added on" as intensity
+  scales - scouring ground bare and banking drifts against walls IS the added effect of sustained
+  wind. C has no mechanism for the ground to change state at all: a 20-minute ground blizzard
+  leaves the world as white as it found it, with the air full of snow. That is the difference
+  between a snow *skin* and a snow *system*.
+- *Its whiteout is better than it looks and worse than it needs to be.* Surface-cell density fog is
+  occlusion-correct and structured on visible geometry - but it fogs *surfaces*, not *air*. The
+  depth read of standing in blowing snow - the near air itself thickening, the wall 3 m away going
+  soft - is exactly what surface fog cannot produce. C is a snow skin with good manners.
+- *Its spawn gate lifts a dusting as hard as a drift* - no depth coupling, so fresh centimetres
+  stream at full rate.
+- *What C genuinely wins:* the decoupled **near-camera layer**. A's drift exists only where cells
+  qualify; stand in a sheltered courtyard mid-blizzard and the storm still ought to be in your
+  face - RDR2's close-to-screen streaks are a screen-space garnish, not world particles. C also
+  wins robustness: no feedback loops means no tuning cliffs.
+
+## 11. Synthesis
+
+The shipped design keeps A's skeleton and steals B's two reachable wins through cheaper doors and
+C's one unanswerable point:
+
+1. **From A, unchanged:** erosion/deposit in the field tick via `sampleGround()`, drift as the
+   RISER flavour, the snow surface pass + POM taper, the quality enum, determinism throughout,
+   the whole of sections 1, 4, 5, 6, 7, 8, 9.
+2. **Amendment to section 1 (hysteresis):** the deposit threshold sits at roughly 70% of the lift
+   threshold, so a cell cannot erode and bank in the same tick range, and the deposit term carries
+   a per-tick cap. The gate ramp (`smoothstep`) already softens the edge; the gap makes it stable.
+3. **Amendment to section 3 (occlusion):** the whiteout band march samples the field window's
+   surface Z along the ray - the data is already bound, two to three extra taps per pixel - and
+   drops any tap whose ray point is below the captured surface between it and the camera. Air-band
+   fog with occlusion: B's correctness at A's cost, from data A already owns. The trichotomy this
+   resolves: C fogs surfaces (occlusion-correct, no air), A-as-written fogged air (air, leaky),
+   this fogs occluded air.
+4. **Amendment to section 2 (loft and plumes):** drift loft is a mix of the preset's gentle climb
+   and the flow sample's own vz - rooftops and other high surfaces spawn from their own cells (the
+   riser floor resolve already does this), so the snow lifting off a roof streams *above* the
+   street's band. The per-cell band height in section 3 inherits the same surface-relative
+   definition, which is most of B's "plume over the roofline" without any volume.
+5. **From C, the near-camera layer:** a small, capped ring of world-anchored streaks following the
+   camera - a few hundred, spawn-gated once per frame on the camera cell's own lift figure plus
+   squall intensity, so a sheltered courtyard does not storm at the lens. Purely visual, decoupled
+   from mass by design, first thing a quality tier cuts.
+6. **Deferred with B's name on it:** a *static* per-slab deposit-potential field - the divergence-
+   weighted calm zones per slab, solved once with the flowmap, no per-frame anything - as a later
+   refinement of where snow banks. It is B's volumetric idea tamed into the anchored-field
+   philosophy; the running sim itself stays rejected (determinism, split-brain, state).
+
+## 12. Adversarial review of the synthesis
+
+Attacking the combination, not the parts:
+
+- *The two whiteout inputs can disagree.* Corridor term comes from the flow solve, occlusion from
+  the rain-shadow capture - but both derive from the same captures, so they cannot disagree about
+  where the ground is; worst case is a capture-cadence lag, shared with every other consumer of
+  both maps. Acceptable, already the house pattern.
+- *The near-camera layer lies.* It is gated on the camera cell's lift, but "camera cell" is coarse:
+  stand at a courtyard's edge and the cell may qualify while the exact spot is calm. Residual
+  artifact: a few streaks where the air is still. The gate is one sample per frame - cheap enough
+  to use the precise `sample()` there instead of the coarse figure.
+- *The mass narrative is still approximate, now on purpose.* Particles are visuals; deposit is
+  flow-potential. The visible consequence - a calm courtyard banking snow no particle entered - is
+  where wind would put it anyway. The error direction is *flattering*, not wrong-looking.
+- *Complexity creep is the real risk.* The near-camera layer and the static slab potential are both
+  "easy to keep adding" items; both are hard-capped - the layer at a few hundred particles and a
+  first-cut quality tier, the potential field behind an explicit phase gate. The rejection of the
+  running volume is the load-bearing decision; everything deferred stays behind it.
+- *What was genuinely given up from B:* spatial gust waves in the fog. The gust envelope modulates
+  whiteout density globally, so a blizzard pulses, but the fog never shows a front sweeping one
+  street while the next stays clear. Only a running volume does that, and that price was declined.
+- *What was genuinely given up from C:* its simplicity - kept deliberately, because the ground
+  changing state is the brief.
+- *Perf:* the amendments cost two to three field taps in the whiteout pass and a few hundred
+  particles; section 9's envelope and table gain one row (near-camera layer: first cut, off below
+  Medium) and otherwise stand.
+
+## 13. Granular runoff: creep, eave cascades and the sand skin
+
+Rain already runs off buildings: `buildGeometry` marks every cell with an open side or a drop below
+as an edge (`sssurfacefield.cpp:218`), `shedRegion` runs those edges through a store/drain
+accumulator (`SHED_DRAIN_TAU`, per-frame visit cursor, `DRIP_BUDGET`, `SSAtmoRunoffRadius`
+culling - `sssurfacefield.cpp:321`), and the accumulator drives `refreshStream` cascades and
+`spawnDrip` clumps that land and queue `from_runoff` impacts. None of that machinery is
+water-specific: the store is an inflow/drain pair, the streams carry the preset's material and
+tint, and the eaves are just edge cells. Granular runoff is a re-feed and a re-skin, not a new
+system. The reference behaviour is the sand sheeting across a dark roof and pouring off the lip in
+dithered threads: **horizontal drift blended, vertical cascade dithered.**
+
+### Horizontal drift: creep
+
+**Mass.** `tick()` gains a creep advection term alongside lift: each cell pushes a downwind flux
+`F = creep_k * lift * depth` along the flow direction into its neighbour. The flux is capped per
+tick at a fraction of the source cell's depth - a CFL-style guard, so advection can never move
+more than exists and the step cannot oscillate. Arriving mass piles against the same `lieHere()`
+repose room that snowfall uses; when a cell's room is full the flux passes over it, and when the
+cell it is entering is an edge cell the arriving flux is the shed accumulator's inflow. This one
+term is what turns the drift field from a static skin into a moving surface: sheets migrate
+downwind, thicken where the flow stalls, and thin out over exposed crowns.
+
+**Look.** The surface pass gets a granular scroll: the wet pass's flow-window animation path
+(`ssSurfaceNormalF` advects wave normals along `mWindowFlowData`) re-purposed as an *albedo*
+detail scroll - a stretched ripple noise advected along the flow vector, coverage-lerped into the
+snow albedo. That is the picture's smooth moving sheet, and it stays blend at every distance,
+because it is coverage on a surface in a deferred pass, not geometry in the alpha queue.
+
+### Vertical cascade: the eave
+
+`shedRegion` runs unchanged with a granular feed: inflow = arriving creep flux plus over-repose
+slumping (a steep cell holding past its repose line sheds straight into the store), drain
+produces cascades through the same `refreshStream`/`spawnDrip` calls. The differences are the
+preset's own: slower scroll, clumped texture, width from `mStreamSpan`, colour from the tint.
+Drips land through the same `resolveColumn` the rain uses - and for granular material, landing
+**deposits**: the clump's mass is credited to the landing cell, capped by repose room, and
+overflow re-enters that cell's store. A cascade that lands on a ledge cascades again; the
+multi-stage pour in the picture is emergent, and the eave drift pile at the wall's foot - the most
+recognisable snow shape there is - forms itself.
+
+One ledger rule keeps the books honest: the lip cell is debited when the store ingests, the
+landing cell is credited on impact, and the store itself stays a rate limiter exactly as it is for
+rain - never a second mass pool.
+
+### Dithered transparency on the cascade
+
+The precip particle fragment shader gains a dithered branch for granular materials: when the
+particle's material flag says granular, alpha becomes a screen-hash test - `hash(gl_FragCoord.xy)
+< alpha` discards, otherwise the fragment writes opaque with depth. Static 4x4 Bayer or
+interleaved gradient noise, deliberately **not** frame-rotated.
+
+- *The stipple is the material.* A thin cascade of sand or powder is partial coverage; a static
+  stipple reads as grains, where alpha blending reads as a glass sheet of liquid. The quad moves
+  across a fixed screen pattern, which reads as grains passing - the desired crawl.
+- *Sorting for free.* Depth-writing cascades composite correctly against flakes, drift, other
+  cascades and the whiteout pass (drawn before weather) with zero sort work.
+- *Blend crossfade with distance.* Stipple density is constant in screen space, so past ~20-25 m
+  the dither crossfades back to plain alpha - stipple aliasing grows exactly as coverage detail
+  stops mattering.
+- Temporal-hash dithering (per-frame rotation) was considered and rejected: it shimmers on a
+  slow cascade, and the static pattern's apparent grain motion is already the effect.
+
+### The sand skin
+
+Nothing above is snow-specific. The field channel, creep, shed, cascades, whiteout and footsteps
+are **granular transport wearing a preset**. A "Sand" built-in - FLAKE archetype, sand tint,
+repose 34 degrees, `mSnowMelt` zero (wind ablation is the only loss; the melt slot is the
+granular loss slot), thresholds on the same global 3-8 m/s band, which brackets fine sand's
+onset - turns the entire stack into the screenshot: creep sheeting across surfaces, dithered
+threads over every lip, banking where the flow dies. Whiteout re-tints into a dust veil, the
+ground blizzard's steady state becomes a haboob, and dune slip faces are the repose-shed cascade
+running on terrain edges. The code keeps its `mSnow*` names; the docs call the channel what it
+is.
+
+### Budgets, settings, phasing
+
+Reused as-is: `SSAtmoRunoff`, `SSAtmoRunoffScale`, `SSAtmoRunoffRadius`, `SHED_VISIT_PER_FRAME`,
+the visit cursor and the radius culling. New: `SSAtmoSnowCreep` (advection rate),
+`SSAtmoSnowCascadeDither` (0 = blend, 1 = full stipple, default ~0.8), and a granular share of
+`DRIP_BUDGET` (clumps cost less than rain drips - no ripple pool work on landing). Quality row
+(section 9): runoff off / blend-only cascades / dither near + creep / + clump spawn / full. This
+is phase 6, after the surface pass it scrolls and the field it feeds.
+
+Adversarial residue, stated: the CFL cap is load-bearing (without it a gust front stripping a
+roofline overshoots and machine-guns the store); creep must be slope-gated (walls hold their
+exposure-driven film and do not creep sideways); and the dither's one honest cost is a faint
+static pattern visible on a perfectly still cascade at close range - accepted, because a perfectly
+still cascade of granular material at close range is a few frames from being a pile.
 
 ## Deferred / known limits
 
@@ -289,11 +614,12 @@ structure but keeps its squall term.
   swallowed, AC Shadows' pushed ridges) needs surface geometry to bite into; see the rejection
   above. The field's depth, the repose gate and the POM relief read correctly on slopes, drift
   banks and footprint edges regardless.
-- **The drift band is a slab, not a volume.** The whiteout march integrates a constant-density
-  band above the stored surface height; it does not see a snow plume curling over a roof the way
-  a real volumetric solve would. The flowmap's slab structure could carry a per-slab drift density
-  later if the top-down band ever reads wrong; until then the band is 2-3 m and the lie of the
-  land carries it.
+- **The drift band is a band, not a volume.** Section 11's amendments make the band occlusion-
+  correct and surface-relative, so plumes ride rooflines and fog stops at walls, but the air
+  between band top and cloud deck carries no density of its own: a gust front still does not sweep
+  one street as a visible fog wave while the next stays clear (see section 12). The static
+  per-slab deposit-potential field is the sanctioned next step if the band ever reads wrong; the
+  running density volume stays rejected.
 - **Redeposition is per-region and terrain-anchored**, like everything in `SSSurfaceField`: a
   drift banks against the *field's* stored surface, cell-resolution. A fence finer than the cell
   catches snow coarsely. The field cell size is the accuracy budget, as it is for puddles today.

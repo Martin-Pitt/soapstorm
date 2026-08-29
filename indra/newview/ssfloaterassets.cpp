@@ -27,17 +27,9 @@
 
 #include "ssfloatersoundlist.h"
 
+#include "ssatmostore.h"
+
 #include "ssprecippreset.h"
-
-#include "llviewercontrol.h"
-
-namespace
-{
-    const char* THUNDER_CRACK_SETTING = "SSAtmoThunderCrack";
-    const char* THUNDER_RUMBLE_SETTING = "SSAtmoThunderRumble";
-    const char* WIND_LIGHT_SETTING = "SSAtmoLoopWindLight";
-    const char* WIND_STRONG_SETTING = "SSAtmoLoopWindStrong";
-}
 
 // Floater shell; all content is wired in postBuild.
 SSFloaterAssets::SSFloaterAssets(const LLSD& key)
@@ -85,19 +77,19 @@ std::string SSFloaterAssets::stepWidgetName(SSStepSurface surface, SSStepAction 
 // Persists both thunder lists.
 void SSFloaterAssets::onCommitThunder()
 {
-    gSavedSettings.setString(THUNDER_CRACK_SETTING,
+    SSAtmoStore::setString(SSAtmoStoreKey::THUNDER_CRACK,
         ss_asset_list_str(getChild<SSSoundListCtrl>("thunder_crack")->getList()));
-    gSavedSettings.setString(THUNDER_RUMBLE_SETTING,
+    SSAtmoStore::setString(SSAtmoStoreKey::THUNDER_RUMBLE,
         ss_asset_list_str(getChild<SSSoundListCtrl>("thunder_rumble")->getList()));
 }
 
-// Persists every global footstep slot list (and re-reads the thunder lists from settings).
+// Persists every global footstep slot list (and re-reads the thunder lists from the store).
 void SSFloaterAssets::onCommitSteps()
 {
     getChild<SSSoundListCtrl>("thunder_crack")->setList(
-        ss_asset_list_parse(gSavedSettings.getString(THUNDER_CRACK_SETTING)));
+        ss_asset_list_parse(SSAtmoStore::getString(SSAtmoStoreKey::THUNDER_CRACK)));
     getChild<SSSoundListCtrl>("thunder_rumble")->setList(
-        ss_asset_list_parse(gSavedSettings.getString(THUNDER_RUMBLE_SETTING)));
+        ss_asset_list_parse(SSAtmoStore::getString(SSAtmoStoreKey::THUNDER_RUMBLE)));
 
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {
@@ -110,7 +102,7 @@ void SSFloaterAssets::onCommitSteps()
             if (SSSoundListCtrl* ctrl =
                     findChild<SSSoundListCtrl>(stepWidgetName(surface, action)))
             {
-                gSavedSettings.setString(
+                SSAtmoStore::setString(
                     SSFootstepSounds::globalSettingName(surface, action),
                     ss_asset_list_str(ctrl->getList()));
             }
@@ -118,13 +110,13 @@ void SSFloaterAssets::onCommitSteps()
     }
 }
 
-// Loads all lists from settings into their controls and labels the footstep slots.
+// Loads all lists from the store into their controls and labels the footstep slots.
 void SSFloaterAssets::onOpen(const LLSD& key)
 {
     getChild<SSSoundListCtrl>("loop_wind_light")->setList(
-        ss_asset_list_parse(gSavedSettings.getString(WIND_LIGHT_SETTING)));
+        ss_asset_list_parse(SSAtmoStore::getString(SSAtmoStoreKey::WIND_LIGHT)));
     getChild<SSSoundListCtrl>("loop_wind_strong")->setList(
-        ss_asset_list_parse(gSavedSettings.getString(WIND_STRONG_SETTING)));
+        ss_asset_list_parse(SSAtmoStore::getString(SSAtmoStoreKey::WIND_STRONG)));
 
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {
@@ -137,7 +129,7 @@ void SSFloaterAssets::onOpen(const LLSD& key)
             if (SSSoundListCtrl* ctrl =
                     findChild<SSSoundListCtrl>(stepWidgetName(surface, action)))
             {
-                ctrl->setList(ss_asset_list_parse(gSavedSettings.getString(
+                ctrl->setList(ss_asset_list_parse(SSAtmoStore::getString(
                     SSFootstepSounds::globalSettingName(surface, action))));
                 ctrl->setSlotLabel(std::string(SSFootstepSounds::surfaceName(surface))
                                    + " - " + SSFootstepSounds::actionName(action));
@@ -149,8 +141,8 @@ void SSFloaterAssets::onOpen(const LLSD& key)
 // Persists both wind loop lists.
 void SSFloaterAssets::onCommitWind()
 {
-    gSavedSettings.setString(WIND_LIGHT_SETTING,
+    SSAtmoStore::setString(SSAtmoStoreKey::WIND_LIGHT,
         ss_asset_list_str(getChild<SSSoundListCtrl>("loop_wind_light")->getList()));
-    gSavedSettings.setString(WIND_STRONG_SETTING,
+    SSAtmoStore::setString(SSAtmoStoreKey::WIND_STRONG,
         ss_asset_list_str(getChild<SSSoundListCtrl>("loop_wind_strong")->getList()));
 }

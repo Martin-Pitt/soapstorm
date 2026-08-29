@@ -570,12 +570,13 @@ function, tuned per track from the Weather Influence sub-floater.
 
   | Weather input | EEP parameters | Shape |
   | --- | --- | --- |
-  | Okta cloud cover | cloud coverage (cloud_shadow) | lift only - authored coverage is a floor |
+  | Deck coverage | dome overcast band coverage (cloud_shadow) | the band tracks the deck's live coverage - lift only, authored coverage is a floor; one coverage, two layers |
   | Wind heading/speed | cloud layer drift | the deck actually travels over the world - see below |
   | Convection | dome scroll rate (churn) | scroll is evolution, not travel - see below |
   | Moisture | haze density up, distance multiplier down | full effect +1.5 haze / -50% distance |
   | Precipitation intensity | water fog modifier | multiplier, so rain thickens whatever the author set |
-  | Convection (past 0.55) | coverage up, gamma and ambient down, a little variance | the design's "pitch-black boiling sky": heavier deck AND dimmer light |
+  | Convection (past 0.55) | gamma and ambient down | the design's "pitch-black boiling sky": dimmer light, heavier deck - the deck's own gloom and thickness carry the weight, and the overcast band tracks the deck rather than being pushed past it |
+  | Convection (anvil, 0.6-0.9) | cirrus veil altitude | the veil descends from its authored height onto the deck's lid, ending ~300 m over the deck's max height - the deck integrates with its cirrus |
   | Sub-freezing AND dry | sky ice level up, blue density crisper | both gates required - freezing fog is not a halo sky |
   | Rain just stopped, sun up and low | sky moisture level (EEP's rainbow driver) | decays over 4 minutes; needs sun below ~42 deg |
 
@@ -595,13 +596,21 @@ function, tuned per track from the Weather Influence sub-floater.
   already uses, `1 / (16 * max_y * cloud_scale)`, which means a higher deck
   drifts more slowly for the same wind, exactly as it should.
 
-- **Cloud variance is not a churn dial.** EEP's variance displaces the
-  cloud noise lookup and then applies `cloudDensity *= 1 - variance^2`
-  (cloudsF.glsl), so raising it *erodes* the deck. An early version of the
-  storm mapping drove it hard for "boiling cumulus", which made turning
-  convection to maximum visibly pull the clouds back - the opposite of a
-  storm sky. It now gets a small bump for texture, and the weight of a storm
-  comes from coverage instead.
+- **Cloud variance is not a churn dial — and no longer a storm dial at
+  all.** EEP's variance displaces the cloud noise lookup and then applies
+  `cloudDensity *= 1 - variance^2` (cloudsF.glsl), so raising it *erodes*
+  the layer. An early version of the storm mapping drove it hard for
+  "boiling cumulus", which made turning convection to maximum visibly pull
+  the clouds back - the opposite of a storm sky. It was then retuned to a
+  small bump for texture, with the weight of a storm coming from coverage
+  instead - but the bump survived the volumetric split that demoted this
+  layer to cirrus duty, and on the demoted layer the erosion has nothing to
+  eat into but the overcast sheet max moisture builds: past roughly
+  convection 0.8 the shader's density cut saturates across the sheet and
+  tears it open - gaps, with the disturbed lookup peeling at their edges.
+  The bump is now gone entirely: convection never touches the dome. The
+  storm's texture lives in the deck's churn and flow, its weight in
+  coverage, exactly as the coverage-first retune intended.
 - **The one piece of state:** rainbows happen *after* rain, which no
   evaluation of "right now" can know, so the applier keeps a rain-stop
   trail (`mSecondsSinceRainStopped`, wall-clock so it decays the same at

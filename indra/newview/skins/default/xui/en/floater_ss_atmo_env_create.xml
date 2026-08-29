@@ -9,84 +9,113 @@
  single_instance="true"
  title="Create Atmo Environment"
  width="470">
-    <!-- <SS:Nexii> What "Create New Environment" means is a choice, so the button opens this
-         chooser rather than acting. Four seeds, one per radio item: the midday defaults, the
-         stock four-sky day cycle, a list of skies the author picks (run through the same
-         measure-and-stamp seeding the stock cycle uses), and an EEP day cycle mapped over at
-         its own keyframe times. Two of the four need pickers, which is why this is a floater
-         with embedded inventory panels rather than a popup menu - the whole decision, source
-         and pick together, stays in one place. The panels are the same widget twice; the
-         sky-vs-day-cycle difference is a settings-type filter set in code. Only full-permission
-         settings can be imported, the same rule a sky dropped onto the editor obeys. -->
+    <!-- <SS:Nexii> What "Create New Environment" means is a choice, so the editor's button opens
+         this chooser rather than acting. Four seeds, one per radio item: the midday defaults,
+         the stock four-sky day cycle, a list of skies the author supplies (run through the same
+         measure-and-stamp seeding the stock cycle uses), and an EEP day cycle mapped over at its
+         own keyframe times. The skies and the day cycle arrive as DROPS - the same gesture the
+         editor itself takes for a notecard - so the whole floater is the drop target and a drop
+         switches the radio to the mode it feeds. Create stays parked until the chosen mode has
+         actually been given something; only full-permission settings are taken, the same rule a
+         sky dropped onto the editor obeys. The chooser opens centred within the editor floater
+         (see SSFloaterAtmoEnvCreate::show), not wherever the window manager cascades it. -->
 
+    <!-- <SS:Nexii> Every radio item carries an explicit rect. A radio_item without one gets no
+         height at all when it supplies a "top" (the fallback minimum only applies to items that
+         supply neither top nor height), which reads as a toggle whose top half will not click
+         and a column that spaces itself unevenly. -->
     <radio_group
      follows="left|top"
-     height="100"
+     height="104"
      layout="topleft"
      left="15"
      name="mode_radio"
      top="20"
      width="440">
         <radio_item
+         height="16"
          label="Empty - midday defaults"
          layout="topleft"
          left="0"
          name="mode_empty"
-         top="0" />
+         top="0"
+         width="440" />
         <radio_item
+         height="16"
          label="Stock day cycle (shipped Daylight, Night, Sunrise, Sunset)"
          layout="topleft"
          left="0"
          name="mode_stock"
-         top_delta="24" />
+         top="29"
+         width="440" />
         <radio_item
+         height="16"
          label="From skies I choose:"
          layout="topleft"
          left="0"
          name="mode_skies"
-         top_delta="24" />
+         top="58"
+         width="440" />
         <radio_item
+         height="16"
          label="From an EEP day cycle:"
          layout="topleft"
          left="0"
          name="mode_daycycle"
-         top_delta="24" />
+         top="87"
+         width="440" />
     </radio_group>
 
-    <!-- Shown only while "From skies I choose" is picked. -->
-    <asset_filtered_inv_panel
-     allow_multi_select="true"
-     allow_drag="false"
-     accepts_drag_and_drop="false"
-     bg_alpha_color="DkGray2"
-     bg_visible="true"
-     border="true"
-     filter_asset_types="settings"
+    <!-- The supplied skies, fed by drops; rows are removable. -->
+    <scroll_list
+     commit_on_selection_change="true"
      follows="left|top"
-     height="230"
+     height="190"
      layout="topleft"
      left="15"
-     name="skies_panel"
+     multi_select="true"
+     name="skies_list"
      top="132"
-     width="440" />
+     width="440">
+        <scroll_list.columns
+         label="Supplied skies"
+         name="skies" />
+    </scroll_list>
 
-    <!-- Shown only while "From an EEP day cycle" is picked. Same rect, so the swap is
-         position-neutral. -->
-    <asset_filtered_inv_panel
-     allow_multi_select="false"
-     allow_drag="false"
-     accepts_drag_and_drop="false"
+    <button
+     follows="left|top"
+     height="23"
+     label="Remove Selected"
+     layout="topleft"
+     left="15"
+     name="remove_sky_button"
+     top_pad="6"
+     width="140" />
+
+    <!-- The supplied day cycle, fed by drops; one at a time, a later drop replaces it. -->
+    <panel
      bg_alpha_color="DkGray2"
      bg_visible="true"
      border="true"
-     filter_asset_types="settings"
      follows="left|top"
-     height="230"
+     height="70"
      layout="topleft"
      left="15"
-     name="daycycle_panel"
+     name="daycycle_zone"
      top="132"
-     width="440" />
+     width="440">
+        <text
+         follows="left|top|right"
+         height="18"
+         layout="topleft"
+         left="10"
+         name="daycycle_text"
+         top="10"
+         width="420"
+         wrap="true">
+            (nothing dropped yet)
+        </text>
+    </panel>
 
     <text
      follows="left|top"

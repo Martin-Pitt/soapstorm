@@ -30,6 +30,8 @@
 #include "ssrainshadow.h"
 #include "sssurfacefield.h"
 #include "sswindflow.h"
+#include "ssatmomagic.h"
+#include "ssprecipitation.h"
 
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
@@ -80,6 +82,8 @@ bool SSFloaterSimulation::postBuild()
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW); });
     getChild<LLCheckBoxCtrl>("settle_overlay_check")->setCommitCallback(
         [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_GEOM_SETTLE); });
+    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->setCommitCallback(
+        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF); });
 
     refreshStatus();
     return true;
@@ -184,15 +188,19 @@ void SSFloaterSimulation::refreshStatus()
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_RAIN_SHADOW));
     getChild<LLCheckBoxCtrl>("settle_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
+    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
+        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
 
     SSSurfaceField* surface = SSSurfaceField::getInstance();
+    SSPrecipSim* sim = SSAtmoMagic::getInstance()->sim();
     getChild<LLTextBox>("runoff_status")->setText(
         surface->fieldCount() == 0
             ? std::string("no surface dressed yet")
-            : llformat("%d region%s dressed. Peak wet %.2f, snow %.0f mm, puddle %.0f mm, in %.1f ms",
+            : llformat("%d region%s dressed. Peak wet %.2f, snow %.0f mm, puddle %.0f mm, in %.1f ms. Live drips %d, streams %d",
                        surface->fieldCount(), surface->fieldCount() == 1 ? "" : "s",
                        surface->peakWet(), surface->peakSnow() * 1000.f,
-                       surface->peakPuddle() * 1000.f, surface->lastTickMS()));
+                       surface->peakPuddle() * 1000.f, surface->lastTickMS(),
+                       sim ? sim->dripCount() : 0, sim ? sim->streamCount() : 0));
 
     LLTextBox* capture_status = getChild<LLTextBox>("flow_capture_status");
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);

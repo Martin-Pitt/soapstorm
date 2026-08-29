@@ -215,6 +215,7 @@ set(viewer_SOURCE_FILES
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
     ssfloatersim.cpp
+    ssatmostore.cpp
     ssprecippreset.cpp
     ssprecipitation.cpp
     ssprecipvariants.cpp
@@ -1127,6 +1128,7 @@ set(viewer_HEADER_FILES
     ssfloateratmoplanetary.h
     ssfloaterpreset.h
     ssfloatersim.h
+    ssatmostore.h
     ssprecippreset.h
     ssprecipitation.h
     ssprecipvariants.h

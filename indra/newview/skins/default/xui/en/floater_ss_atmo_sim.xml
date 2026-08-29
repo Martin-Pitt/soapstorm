@@ -33,9 +33,9 @@
      layout="topleft"
      left="0"
      top="0"
-     width="406"
-     height="1174"
-     background_visible="false">
+      width="406"
+      height="1224"
+      background_visible="false">
 
     <!-- <SS:Nexii> Debug views first.
          Everything below this is a dial, and a dial is only worth turning
@@ -108,6 +108,16 @@
      label="Mark geometry changes waiting to settle"
      tool_tip="A beacon over every prim change still waiting out its settle delay, green as it comes due and red once it has re-armed too often to ever settle. Same overlay as Develop &gt; Render Metadata &gt; Geometry settling" />
     <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="runoff_overlay_check"
+     label="Draw the roof runoff"
+     tool_tip="The eaves, the water they hold and what they shed, in the mode picked below. Same overlay as Develop &gt; Render Metadata &gt; Roof runoff" />
+    <check_box
      control_name="SSAtmoDebugStrikeMarkers"
      follows="left|top"
      layout="topleft"
@@ -176,6 +186,23 @@
      tool_tip="The capture buffers are overwritten by every build, so this view can only show the region solved most recently">
         nothing captured yet. Carve candidates: green opened by a probe, amber no probe could see it, dim red correctly blocked.
     </text>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="10" height="16" width="106"
+      name="T_runoff_view"
+      tool_tip="What the roof runoff overlay draws, one stage of the shed per view">
+        Runoff view:
+    </text>
+    <combo_box
+      control_name="SSAtmoRunoffDebugView" name="C_runoff_view"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="250"
+      tool_tip="Eaves shows every edge that could shed; shed flow shows the water each holds; spawn gates colours each eave by why it is quiet; drips and streams draws what the shed actually spawned">
+        <combo_box.item label="Eaves" value="0" name="view_eaves" />
+        <combo_box.item label="Shed flow" value="1" name="view_flow" />
+        <combo_box.item label="Spawn gates" value="2" name="view_gates" />
+        <combo_box.item label="Drips and streams" value="3" name="view_live" />
+    </combo_box>
 
     <text
      follows="left|top"

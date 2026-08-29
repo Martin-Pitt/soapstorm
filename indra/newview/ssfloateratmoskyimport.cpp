@@ -43,12 +43,22 @@ struct SSImportGroupRow
     U32 mFlag;
 };
 
-static const SSImportGroupRow IMPORT_GROUPS[] =
+// The four field groups stamp as keyframes and are always on offer - every EEP sky carries them.
+static const SSImportGroupRow FIELD_GROUPS[] =
 {
     { "import_atmosphere", SS_SKY_IMPORT_ATMOSPHERE },
     { "import_lighting",   SS_SKY_IMPORT_LIGHTING },
     { "import_celestial",  SS_SKY_IMPORT_CELESTIAL },
     { "import_clouds",     SS_SKY_IMPORT_CLOUDS },
+};
+
+// The body groups are offered only when the target track still carries the standard sun/moon -
+// see SSAtmoEnvPlanetary::standardSunIndex. A redesigned body is the author's work, not a slot
+// for a dropped sky to overwrite.
+static const SSImportGroupRow BODY_GROUPS[] =
+{
+    { "import_sun",  SS_SKY_IMPORT_SUN },
+    { "import_moon", SS_SKY_IMPORT_MOON },
 };
 
 // Floater shell; all content is wired in postBuild.
@@ -60,7 +70,12 @@ SSFloaterAtmoSkyImport::SSFloaterAtmoSkyImport(const LLSD& key) :
 // Wires the checkboxes (an empty selection parks the import button) and the two buttons.
 bool SSFloaterAtmoSkyImport::postBuild()
 {
-    for (const SSImportGroupRow& row : IMPORT_GROUPS)
+    for (const SSImportGroupRow& row : FIELD_GROUPS)
+    {
+        getChild<LLUICtrl>(row.mName)->setCommitCallback(
+            [this](LLUICtrl*, const LLSD&) { refresh(); });
+    }
+    for (const SSImportGroupRow& row : BODY_GROUPS)
     {
         getChild<LLUICtrl>(row.mName)->setCommitCallback(
             [this](LLUICtrl*, const LLSD&) { refresh(); });
@@ -93,6 +108,8 @@ void SSFloaterAtmoSkyImport::show(LLSettingsSky::ptr_t sky, S32 track_index, F64
 
 // Arms the dialog with a fresh drop. Groupings default to all on: a drop with nothing picked
 // is refused by the button, not silently half-imported, and unticking is the deliberate act.
+// The body groups appear only when the track's system still has the standard sun/moon to
+// translate onto - a drop offers what exists, nothing more.
 void SSFloaterAtmoSkyImport::setPayload(LLSettingsSky::ptr_t sky, S32 track_index, F64 phase,
                                         const std::string& item_name, LLHandle<LLFloater> parent)
 {
@@ -102,9 +119,28 @@ void SSFloaterAtmoSkyImport::setPayload(LLSettingsSky::ptr_t sky, S32 track_inde
     mItemName = item_name;
     mParent = parent;
 
-    for (const SSImportGroupRow& row : IMPORT_GROUPS)
+    bool have_standard_sun = false;
+    bool have_standard_moon = false;
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (mgr->hasAsset()
+        && track_index >= 0 && track_index < (S32)mgr->asset().mTracks.size())
+    {
+        const SSAtmoEnvPlanetary& planetary = mgr->asset().mTracks[(size_t)track_index].mPlanetary;
+        have_standard_sun = planetary.standardSunIndex() >= 0;
+        have_standard_moon = planetary.standardMoonIndex() >= 0;
+    }
+
+    for (const SSImportGroupRow& row : FIELD_GROUPS)
     {
         getChild<LLCheckBoxCtrl>(row.mName)->set(true);
+    }
+    for (const SSImportGroupRow& row : BODY_GROUPS)
+    {
+        LLCheckBoxCtrl* check = getChild<LLCheckBoxCtrl>(row.mName);
+        const bool offer = (row.mFlag == SS_SKY_IMPORT_SUN) ? have_standard_sun : have_standard_moon;
+        check->setVisible(offer);
+        check->set(offer);
     }
 
     refresh();
@@ -114,9 +150,17 @@ void SSFloaterAtmoSkyImport::setPayload(LLSettingsSky::ptr_t sky, S32 track_inde
 U32 SSFloaterAtmoSkyImport::checkedGroups() const
 {
     U32 groups = 0;
-    for (const SSImportGroupRow& row : IMPORT_GROUPS)
+    for (const SSImportGroupRow& row : FIELD_GROUPS)
     {
         if (getChild<LLCheckBoxCtrl>(row.mName)->get())
+        {
+            groups |= row.mFlag;
+        }
+    }
+    for (const SSImportGroupRow& row : BODY_GROUPS)
+    {
+        LLCheckBoxCtrl* check = getChild<LLCheckBoxCtrl>(row.mName);
+        if (check->isInVisibleChain() && check->get())
         {
             groups |= row.mFlag;
         }
@@ -169,6 +213,9 @@ void SSFloaterAtmoSkyImport::onClickImport()
                 SSAtmoEnvTrack& track = asset.mTracks[(size_t)mTrackIndex];
                 track.mAtmosphere.addKeyframesFromSky(*mSky, mPhase, groups);
                 track.mCloudDome.addKeyframesFromSky(*mSky, mPhase, groups);
+                // The body groups re-check their standard bodies inside - whatever the author
+                // redesigned between the drop and this click is left exactly as they left it.
+                track.mPlanetary.translateSettingsSky(*mSky, groups);
 
                 if (SSFloaterAtmoEnv* parent = (SSFloaterAtmoEnv*)mParent.get())
                 {

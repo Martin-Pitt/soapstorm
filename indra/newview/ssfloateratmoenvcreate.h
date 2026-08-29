@@ -25,27 +25,30 @@
 #define SS_FLOATERATMOENVCREATE_H
 
 #include "llfloater.h"
-#include "llinventorysettings.h"
+#include "lluuid.h"
 
 #include <string>
 #include <vector>
 
-class LLInventoryPanel;
-class LLViewerInventoryItem;
+class LLScrollListItem;
 
-// <SS:Nexii> Atmo Magic: what "Create New Environment" means is a choice, not a behaviour. Four
-// seeds exist - plain midday defaults, the stock four-sky day cycle, a list of skies the author
-// picks (run through the same measure-and-stamp algorithm the stock seed uses), and an EEP day
-// cycle mapped over by its own keyframe times. The chooser is a floater rather than a menu
-// because two of the four need pickers anyway, and a radio group over embedded inventory panels
-// keeps the whole decision in one place. See SSAtmoEnvManager for the seeds themselves.
+// <SS:Nexii> What "Create New Environment" means is a choice, not a behaviour. Four seeds exist -
+// plain midday defaults, the stock four-sky day cycle, a list of skies the author supplies (run
+// through the same measure-and-stamp algorithm the stock seed uses), and an EEP day cycle mapped
+// over by its own keyframe times. The two latter are fed by dropping settings onto this floater,
+// the same gesture the editor itself takes - not by browsing - and Create stays parked until the
+// chosen mode has actually been given something. See SSAtmoEnvManager for the seeds themselves.
 class SSFloaterAtmoEnvCreate : public LLFloater
 {
 public:
     SSFloaterAtmoEnvCreate(const LLSD& key);
 
     bool postBuild() override;
+    bool handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
+                           EDragAndDropType cargo_type, void* cargo_data,
+                           EAcceptance* accept, std::string& tooltip_msg) override;
 
+    // Opens the chooser centred within the environment editor floater.
     static void show();
 
 private:
@@ -57,14 +60,23 @@ private:
         MODE_DAY_CYCLE = 3
     };
 
-    EMode currentMode() const;
+    struct DroppedSky
+    {
+        LLUUID mAssetId;
+        std::string mName;
+    };
 
-    // The panel's selection narrowed to full-perm settings of the kind the mode asks for.
-    std::vector<LLViewerInventoryItem*> usableSelection(LLInventoryPanel* panel,
-                                                        LLSettingsType::type_e type) const;
+    EMode currentMode() const;
+    void setMode(EMode mode);
 
     void refresh();
+    void rebuildSkyList();
     void onClickCreate();
+    void onClickRemoveSky();
+
+    std::vector<DroppedSky> mDroppedSkies;
+    LLUUID mDroppedDayCycle;
+    std::string mDroppedDayCycleName;
 };
 
 #endif

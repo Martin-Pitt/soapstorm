@@ -120,6 +120,8 @@ static const F32 SHED_MAX_RATE = 40.f;
 static const S32 SHED_MAX_BURST = 4;
 static const S32 SHED_VISIT_PER_FRAME = 96;
 
+static const S32 DRIP_BUDGET = 220;
+
 static const F32 STREAM_SPAN_MAX = 24.f;
 
 static const S32 GEOM_RES = 128;
@@ -337,7 +339,6 @@ void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& 
     const F32 radius = llclamp((F32)radius_setting, 8.f, 128.f);
     const F32 radius_sq = radius * radius;
 
-    static const S32 DRIP_BUDGET = 220;
     const S32 live = sim->dripCount();
     const F32 budget = (live >= DRIP_BUDGET) ? 0.f
                      : llmin(1.f, (F32)(DRIP_BUDGET - live) / (F32)(DRIP_BUDGET / 4));
@@ -1452,6 +1453,195 @@ void SSSurfaceField::renderDebug()
             gGL.vertex3f(c.mV[VX] - half, c.mV[VY] + half, c.mV[VZ]);
         }
         gGL.end();
+    }
+
+    gGL.flush();
+}
+
+// Every shelter edge lip as a tile plus an arrow along its outward
+// direction, coloured per the runoff debug view: 0 the eaves themselves,
+// 1 the water each holds and how hard it is draining, 2 the first gate
+// holding each quiet one back. context_only paints them all dim, as ground
+// for the live particle view.
+void SSSurfaceField::renderRunoffLips(U32 view, const LLVector3& cam,
+                                      F32 radius_sq, F32 budget, bool context_only) const
+{
+    for (const auto& entry : mGeometry)
+    {
+        const Geometry& geom = entry.second;
+        if (!geom.valid() || geom.mEdgeCells.empty()) continue;
+
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
+        if (!regionp) continue;
+
+        const LLVector3 origin = regionp->getOriginAgent();
+        const S32 n = geom.mN;
+        const F32 cell = geom.mCell;
+        const F32 half = cell * 0.35f;
+
+        auto field_it = mFields.find(entry.first);
+        const Field* fld = (field_it != mFields.end() && field_it->second.mN == n)
+                               ? &field_it->second : nullptr;
+
+        auto cursor_it = mShedCursor.find(entry.first);
+        const S32 cursor = (cursor_it != mShedCursor.end()) ? cursor_it->second : 0;
+        const S32 lip_count = (S32)geom.mEdgeCells.size();
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 k = 0; k < lip_count; ++k)
+        {
+            const S32 i = geom.mEdgeCells[(size_t)k];
+            const size_t ui = (size_t)i;
+
+            const F32 cx = origin.mV[VX] + ((F32)(i % n) + 0.5f) * cell;
+            const F32 cy = origin.mV[VY] + ((F32)(i / n) + 0.5f) * cell;
+            const F32 cz = geom.mZ[ui] + 0.05f;
+
+            F32 r = 0.4f, g = 0.45f, b = 0.5f, a = 0.12f;
+            if (!context_only)
+            {
+                const F32 store = fld ? fld->mStore[ui] : 0.f;
+                const F32 outflow = store / SHED_DRAIN_TAU;
+                const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
+                const F32 stream_drive = llclamp((raw_rate - SHED_STREAM_MIN)
+                                                     / SHED_STREAM_FULL, 0.f, 1.f);
+
+                if (view == 2)
+                {
+                    // The first gate shedRegion applies that still holds
+                    // this lip back - dry, waiting on the visit window,
+                    // beyond the shed radius, starved by the drip budget,
+                    // or actually producing.
+                    if (outflow <= 0.01f)
+                    {
+                        r = 0.35f; g = 0.35f; b = 0.38f; a = 0.15f;
+                    }
+                    else
+                    {
+                        const S32 offset = (k - cursor + lip_count) % lip_count;
+                        const LLVector3 delta(cx - cam.mV[VX], cy - cam.mV[VY],
+                                              cz - cam.mV[VZ]);
+                        if (offset >= SHED_VISIT_PER_FRAME)
+                        {
+                            r = 1.f; g = 0.75f; b = 0.2f; a = 0.5f;
+                        }
+                        else if (delta.magVecSquared() > radius_sq)
+                        {
+                            r = 1.f; g = 0.25f; b = 0.2f; a = 0.5f;
+                        }
+                        else if (stream_drive > 0.f)
+                        {
+                            r = 1.f; g = 1.f; b = 1.f; a = 0.85f;
+                        }
+                        else if (budget <= 0.f)
+                        {
+                            r = 1.f; g = 0.2f; b = 1.f; a = 0.6f;
+                        }
+                        else
+                        {
+                            r = 0.2f; g = 1.f; b = 0.35f;
+                            a = 0.35f + 0.4f * budget;
+                        }
+                    }
+                }
+                else
+                {
+                    // Eaves (0) and shed flow (1) share one ramp: dry slate
+                    // filling toward the stream threshold, white once the
+                    // lip is driving a stream. Eaves never disappear, so
+                    // the geometry reads even between rains.
+                    const F32 t = llclamp(raw_rate / SHED_STREAM_MIN, 0.f, 1.f);
+                    r = lerp(lerp(0.15f, 0.1f, t), 1.f, stream_drive);
+                    g = lerp(lerp(0.3f, 0.7f, t), 1.f, stream_drive);
+                    b = lerp(lerp(0.6f, 0.95f, t), 1.f, stream_drive);
+                    a = llmax(0.2f + 0.6f * t, (view == 0) ? 0.3f : 0.f);
+                }
+            }
+
+            gGL.color4f(r, g, b, a);
+
+            gGL.vertex3f(cx - half, cy - half, cz);
+            gGL.vertex3f(cx + half, cy - half, cz);
+            gGL.vertex3f(cx + half, cy + half, cz);
+
+            gGL.vertex3f(cx - half, cy - half, cz);
+            gGL.vertex3f(cx + half, cy + half, cz);
+            gGL.vertex3f(cx - half, cy + half, cz);
+
+            // An arrowhead out over the edge: the way the water leaves.
+            const F32 ex = geom.mEdgeX[ui], ey = geom.mEdgeY[ui];
+            const F32 px = -ey * half * 0.55f, py = ex * half * 0.55f;
+            const F32 bx = cx + ex * half, by = cy + ey * half;
+            const F32 tx = cx + ex * half * 2.4f, ty = cy + ey * half * 2.4f;
+
+            gGL.vertex3f(bx + px, by + py, cz);
+            gGL.vertex3f(bx - px, by - py, cz);
+            gGL.vertex3f(tx, ty, cz);
+        }
+        gGL.end();
+    }
+}
+
+// The runoff overlay: one stage of the shed per SSAtmoRunoffDebugView - the
+// eaves, the water they hold, the gates that quiet them, or the drips and
+// gutter streams they have actually spawned.
+void SSSurfaceField::renderRunoffDebug()
+{
+    static LLCachedControl<U32> view_setting(gSavedSettings, "SSAtmoRunoffDebugView", 0);
+    const U32 view = llclamp((U32)view_setting, 0u, 3u);
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    SSPrecipSim* sim = atmo ? atmo->sim() : nullptr;
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+    static LLCachedControl<F32> radius_setting(gSavedSettings, "SSAtmoRunoffRadius", 48.f);
+    const F32 radius = llclamp((F32)radius_setting, 8.f, 128.f);
+    const F32 radius_sq = radius * radius;
+
+    const S32 live = sim ? sim->dripCount() : 0;
+    const F32 budget = (live >= DRIP_BUDGET) ? 0.f
+                     : llmin(1.f, (F32)(DRIP_BUDGET - live) / (F32)(DRIP_BUDGET / 4));
+
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    if (view == 3)
+    {
+        // What the shed produced: each live drip as a short trail against
+        // its fall, each gutter stream as the span it sweeps from its lip.
+        if (sim)
+        {
+            gGL.begin(LLRender::LINES);
+            for (const SSPrecipParticle& p : sim->ripples())
+            {
+                if (!(p.mFlags & PART_DRIP)) continue;
+
+                LLVector3 fall = p.mVel;
+                if (fall.magVecSquared() > 0.0001f) fall.normVec();
+                else fall.setVec(0.f, 0.f, -1.f);
+
+                gGL.color4f(1.f, 0.35f, 0.85f, 0.9f);
+                gGL.vertex3fv(p.mPos.mV);
+                gGL.vertex3fv((p.mPos - fall * 0.25f).mV);
+            }
+
+            for (const SSPrecipParticle& s : sim->streams())
+            {
+                gGL.color4f(0.4f, 1.f, 1.f, 0.8f);
+                gGL.vertex3fv(s.mPos.mV);
+                gGL.vertex3fv((s.mPos + s.mNormal * (s.mSizeX * 2.f)).mV);
+            }
+            gGL.end();
+        }
+
+        renderRunoffLips(view, cam, radius_sq, budget, true);
+    }
+    else
+    {
+        renderRunoffLips(view, cam, radius_sq, budget, false);
     }
 
     gGL.flush();

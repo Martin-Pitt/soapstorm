@@ -173,15 +173,25 @@ void main()
     vec3 flow = ssFieldFetchFlow(p.xy);
     float wet_for_flow = smoothstep(ssWetFlowMinWet, 1.0, max(wet, puddle));
 
-    // Faded out over distance, hard. The ripple is centimetre-scale detail sampled by world position in a screen-space pass: past a few tens of metres, and especially at grazing angles across a
-    // floor, it is deep below one texel per pixel and aliases into sheets of thin parallel lines and moire rings instead of water. There is no honest detail to show out there - a ripple that small
-    // IS invisible at that range - so the fade is not hiding the effect, it is stopping the lie.
-    float wave_reach = 1.0 - smoothstep(12.0, 40.0, length(pos_view.xyz));
+    // The ripple's sample coordinates, built out here rather than inside the branch below because the reach that decides the branch reads their screen-space derivatives, and taking a derivative
+    // inside non-uniform control flow is not defined.
+    vec2 flow_uv = (p.xy - flow.xy * (ssTime * ssWetFlowSpeed)) / ssWetFlowScale;
 
-    // ...and by the same slope gate the flatten term uses. The flow field is indexed by XY alone, so a wall shares the drainage cell of the ground at its foot and was being animated with the
-    // floor's ripple - dancing walls. Water on a wall runs as a sheet following the wall's own plane; the pooled-surface ripple belongs only to surfaces water can actually stand and slosh on,
-    // which is exactly what slope_factor already measures for the flatten.
-    float flow_vis = flow.z * wet_for_flow * ssWetFlowStrength * wave_reach * slope_factor;
+    // Faded by what a pixel actually covers, not by how far away the surface sits. The ripple is centimetre-scale detail sampled by world position in a screen-space pass, and its failure mode in
+    // the distance is moire - sheets of thin parallel lines - once the pattern's finest waves arrive at a couple of pixels per wavelength. fwidth of the sample coordinates measures exactly that,
+    // in every direction at once, so a roof seen square from across the parcel keeps its waves far past where a metres-from-camera fade had been killing them, while a floor seen edge-on loses
+    // them the moment its grazing angle stretches the footprint past what the pixels can resolve. Distance conflated those two cases; the footprint tells them apart. The same derivative spikes
+    // wherever the input underneath it jumps - the one-pixel seams between drainage cells scrolling the pattern differently, the fringe where a depth edge folds the position - and fades the
+    // ripple there too, which quietly takes the worst of the sampling garbage those seams were already producing.
+    float texels_per_pixel = max(fwidth(flow_uv.x), fwidth(flow_uv.y)) * float(textureSize(ssWaveMap, 0).x);
+    float wave_reach = 1.0 - smoothstep(8.0, 48.0, texels_per_pixel);
+
+    // ...and gated by slope, but on a far wider band than the flatten term uses. The flow field is indexed by XY alone, so a wall shares the drainage cell of the ground at its foot and was being
+    // animated with the floor's ripple - dancing walls - and the wall still has to stay still. But handing this the flatten's pooling taper was answering the wrong question: pooling is about
+    // water standing still, and a stream on a pitched roof waves hardest exactly where the roof is too steep to pool at all. This gate only has to tell a wall from a surface water runs along, so
+    // everything flatter than about forty five degrees passes at full strength and the gate closes only as the surface approaches vertical.
+    float flow_slope = smoothstep(0.25, 0.70, up_align);
+    float flow_vis = flow.z * wet_for_flow * ssWetFlowStrength * wave_reach * flow_slope;
     if (flow_vis > 0.004)
     {
         // A fixed world-XY tangent frame - the same choice the water plane itself makes for this texture, and for the same reason: water is flat, so world X and Y already are its tangent and
@@ -193,9 +203,8 @@ void main()
         vec3 b = vec3(-ssWetFlowRotSin, ssWetFlowRotCos, 0.0);
 
         // Only the sample position moves with the flow direction - sliding the same fixed pattern along it is what reads as the water actually running that way, diagonals included, without the
-        // pattern itself ever having to turn.
-        vec2 uv = (p.xy - flow.xy * (ssTime * ssWetFlowSpeed)) / ssWetFlowScale;
-        vec3 ripple = texture(ssWaveMap, uv).xyz * 2.0 - 1.0;
+        // pattern itself ever having to turn. flow_uv was computed above the reach so its derivatives could be read there; this is the same coordinates, consumed.
+        vec3 ripple = texture(ssWaveMap, flow_uv).xyz * 2.0 - 1.0;
         vec3 flowed = normalize(t * ripple.x + b * ripple.y + flat_world * ripple.z);
 
         flat_world = normalize(mix(flat_world, flowed, clamp(flow_vis, 0.0, 1.0)));

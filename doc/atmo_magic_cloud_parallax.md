@@ -37,32 +37,35 @@ vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) / metres_per_uv;
 vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
 ```
 
-`ss_cloud_alt_m` is the LAYER'S OWN altitude - it replaced the `max_y` proxy
-this first shipped with (max altitude is an atmosphere ceiling authored for
-haze, not a cloud height, and the old `cloud_realism` smoothstep existed only
-to patch over that mismatch for low art-directed domes).
+`ss_cloud_alt_m` is the LAYER'S OWN altitude, and there are now two layers
+on the dome mesh, each with its own:
 
-It is now an authored dome parameter: `SSAtmoEnvCloudDome::mHeightM`, keyframed
-like every other value on the Clouds > Sky Dome tab, defaulting to 6000m. The
-altitude is a parallax RATE, not a position - the band is drawn on a fixed dome
-radius either way (`renderDome(..., 0.3325f)`), and the number only says how far
-away the layer behaves.
+- **The overcast band** — the dome's deck-tracking sheet. Its altitude is
+  always the merge derivation (`SSAtmoEnvApplier::cloudDomeAltitudeMetres`):
+  it starts wherever the cirrus veil currently is and merges down onto the
+  deck's mid-altitude as the deck's coverage builds (smoothstep over coverage
+  0.05..0.30), so exactly when the band and the deck merge visually at the
+  rim, they also agree about where the cloud IS and parallax at the same
+  rate. Its density is the deck's live coverage — the band overcasts in
+  lockstep with the puffs, never past them.
+- **The cirrus veil** — the dome's own cloud, high above the band. Calm air
+  leaves it at the authored dome height (`SSAtmoEnvCloudDome::mHeightM`,
+  keyframed like every other value on the Clouds > Sky Dome tab, default
+  6000m; the Auto box stands in for the height with the same default). As
+  convection anvils the deck (0.6..0.9, the same ramp that flattens the
+  deck's own tops) the veil descends onto the deck's lid, ending ~300 m over
+  the deck's max height — by full anvil, veil and deck read as one integrated
+  structure. Its density is the AUTHORED dome coverage, untouched by the
+  weather: the veil is what the author pinned, the band is what the sky is
+  doing. The two draw far-band-first at their own depth slots (veil
+  0.999985, band 0.99998), so the band composites over the veil and the veil
+  stays visible above and through it until the deck is solid enough to hide
+  it. The disc occlusion (ssCelestialF.glsl) mirrors the band's gate and
+  altitude; keep those in sync.
 
-Ticking the tab's Auto box hands the number back to the derivation this shipped
-with, kept in `SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()`: cirrus-high
-(6 km) while the volumetric field is empty, merging quickly down onto the deck's
-mid-altitude as the field's coverage builds (smoothstep over coverage
-0.05..0.30) - so exactly when the dome band and the deck merge visually at the
-rim, they also agree about where the cloud IS and parallax at the same rate.
-That is what an authored height gives up, and why the Auto box exists rather
-than the derivation simply being deleted.
-
-Resolved in one place, `SSAtmoEnvApplier::cloudDomeAltitudeMetres()`, per call
-rather than cached with the rest of the sky walk - the auto branch reads the
-volumetric field's live coverage, which moves between applies. No Atmo
-environment driving the sky means nobody authored a height, so the derivation
-stands in. The disc occlusion in ssCelestialF.glsl mirrors the same gate and
-altitude; keep the three in sync.
+The altitude is a parallax RATE, not a position - each band is drawn on a
+fixed dome radius either way (`renderDome(..., 0.3325f)`), and the number
+only says how far away the layer behaves.
 
 The `/16.0` compensates for `vary_texcoord2`/`vary_texcoord3`, built as
 `vary_texcoord0 * 16` a few lines down — the fine detail/self-shadow layer
@@ -93,10 +96,20 @@ dropped once it stopped doing anything.
 - The parallax is horizontal only — gaining or losing camera altitude does
   not add to it; the layer altitude is "N metres above the camera",
   re-centred every frame, rather than a fixed world height.
-- It is a uniform shift, not distance-projected, so it does not fall off
-  between zenith and horizon the way true motion parallax would (see the
-  rejected design above). The whole cloud pattern slides together at one
-  rate as you walk.
+- It is computed per FRAGMENT now, from the true view ray (cloudsV hands the
+  camera-relative ray down in `vary_ray_dir`; cloudsF intersects it with a
+  horizontal plane at the band's own altitude and maps the intersection
+  point). The first version shifted the dome mesh's own texcoords by a
+  uniform amount per VERTEX, which was correct in rate but wrong in two
+  ways: the shift was interpolated linearly across the dome mesh's triangles
+  while the true mapping is nonlinear in exactly the place that matters
+  (the horizon), and the base mapping was the dome's curvature rather than
+  the flat deck's — a real plane compresses into the horizon at
+  tan(elevation); the dome mesh compresses at whatever rate its vertices
+  are laid out. Intersecting the ray with the plane per fragment makes the
+  parallax exact (a metre of travel moves the intersection a metre) and the
+  curvature the band's own. The UVs clamp below ~1.2° elevation, where the
+  horizon fade has already taken the band's alpha to nothing.
 
 ## The altitude parameter
 

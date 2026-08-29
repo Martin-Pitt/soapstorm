@@ -42,7 +42,7 @@ namespace
     S32 oktaFromMoisture(F32 moisture)
     {
         if (moisture <= CLEAR_MOISTURE_THRESHOLD) return 0;
-        return llclamp((S32)llround(moisture * 8.0), 1, 8);
+        return llclamp(ll_round(moisture * 8.f), 1, 8);
     }
 
     // Human sky wording per okta band.

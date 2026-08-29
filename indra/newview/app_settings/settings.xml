@@ -25637,17 +25637,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>0</integer>
     </map>
-    <key>SSAtmoPreset</key>
-      <map>
-      <key>Comment</key>
-      <string>Name of the active weather preset</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string>Rain</string>
-    </map>
     <key>SSAtmoRespawnOnImpact</key>
       <map>
       <key>Comment</key>
@@ -25724,6 +25713,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>48.0</real>
+    </map>
+    <key>SSAtmoRunoffDebugView</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata roof runoff debug: which stage to draw. 0 every shelter edge that could ever shed, 1 the water each eave holds and how hard it is draining, 2 the first gate holding each quiet eave back, 3 the drips and gutter streams the shed has spawned</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
     </map>
     <key>SSAtmoCommitDebugPaint</key>
       <map>
@@ -25822,7 +25822,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>0.2</real>
+      <real>0.9</real>
     </map>
     <key>SSAtmoWetPuddleGloss</key>
       <map>
@@ -26186,17 +26186,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
-    </map>
-    <key>SSAtmoTrackConfig</key>
-      <map>
-      <key>Comment</key>
-      <string>Local Atmo Magic per-track weather configuration (LLSD notation). Only consulted where the parcel description does not point at an Atmo notecard; edited through the Atmo Magic floater rather than by hand</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string></string>
     </map>
     <key>SSAtmoVolumeMaster</key>
       <map>
@@ -26671,139 +26660,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>6.0</real>
     </map>
-    <key>SSAtmoStepTerrainDryWalk</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Terrain, dry, walk. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepTerrainDryRun</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Terrain, dry, run. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepTerrainDryJump</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Terrain, dry, jump. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepTerrainDryLand</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Terrain, dry, land. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepOutsideDryWalk</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Outside, dry, walk. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepOutsideDryRun</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Outside, dry, run. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepOutsideDryJump</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Outside, dry, jump. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepOutsideDryLand</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Outside, dry, land. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepInsideDryWalk</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Inside, walk. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepInsideDryRun</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Inside, run. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepInsideDryJump</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Inside, jump. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoStepInsideDryLand</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: footstep sounds for Inside, land. Comma separated sound UUIDs, drawn from at random. Global rather than per-preset: dry ground sounds the same whatever is not falling on it.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoVolumeStepTrigger</key>
+    <key>SSAtmoVolumeStepTrigger</key>
   <map>
     <key>Comment</key>
     <string>Atmo Magic: gain of the legacy per-step trigger path (stock animation-driven steps and their fallback sounds), separate from SSAtmoVolumeFootsteps which drives the attached loop/segment path. Stock hardcoded 0.1, which is near-inaudible against the ambient beds.</string>
@@ -26857,28 +26714,6 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>Boolean</string>
     <key>Value</key>
     <integer>1</integer>
-  </map>
-  <key>SSAtmoThunderCrack</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: thunder sounds for a near strike - the sharp crack. Comma separated sound UUIDs, one picked at random. Global rather than per-preset: thunder is thunder whatever is falling.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
-  </map>
-  <key>SSAtmoThunderRumble</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: thunder sounds for a distant strike - the long roll. Comma separated sound UUIDs, one picked at random. Distance cross-fades between this pack and the crack pack.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>String</string>
-    <key>Value</key>
-    <string />
   </map>
   <key>SSAtmoLightning</key>
   <map>
@@ -27089,28 +26924,6 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <real>1.0</real>
   </map>
-  <key>SSAtmoLoopWindLight</key>
-      <map>
-      <key>Comment</key>
-      <string>Comma-separated sound UUID sequence: light wind ambient loop; entries chain end-to-end</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string />
-    </map>
-    <key>SSAtmoLoopWindStrong</key>
-      <map>
-      <key>Comment</key>
-      <string>Comma-separated sound UUID sequence: strong wind ambient loop with gusts; entries chain end-to-end</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>String</string>
-      <key>Value</key>
-      <string />
-    </map>
     <key>FSKillFeedEnabled</key>
       <map>
       <key>Comment</key>

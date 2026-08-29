@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
-<floater
+ <floater
  positioning="cascading"
  can_minimize="false"
  can_resize="false"
- height="260"
+ height="292"
  layout="topleft"
  name="floater_ss_atmo_sky_import"
  save_rect="true"
@@ -18,7 +18,11 @@
 
          Groupings deliberately mirror what a sky actually populates (the Atmosphere & Lighting
          and Sky Dome tabs) rather than the editor's whole tab set - a sky cannot bring water,
-         weather or planets with it. -->
+         weather or planets with it. The Sun and Moon rows are conditional: they appear only
+         when the target track still carries the STANDARD sun/moon bodies, because a sky states
+         what its discs draw like (angular scale, texture) while a body stores what it is, and
+         the import translates one into the other rather than stamping keyframes - something it
+         may only do to a body the author has not redesigned. -->
 
     <text
      follows="left|top"
@@ -76,6 +80,28 @@
      name="import_celestial"
      tool_tip="Star brightness and moon brightness only."
      label="Celestial - star and moon brightness" />
+
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="6"
+     height="16"
+     width="410"
+     name="import_sun"
+     tool_tip="The sky's sun disc becomes this track's standard sun body: its disc scale sets the body's diameter at its current orbit, and a custom sun texture replaces the body's. Offered only while the sun is still the standard one."
+     label="Sun - resize and retexture the standard sun body" />
+
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="6"
+     height="16"
+     width="410"
+     name="import_moon"
+     tool_tip="The sky's moon disc becomes this track's standard moon body: its disc scale sets the body's diameter at its current orbit, and a custom moon texture replaces the body's. Offered only while the moon is still the standard one."
+     label="Moon - resize and retexture the standard moon body" />
 
     <check_box
      follows="left|top"

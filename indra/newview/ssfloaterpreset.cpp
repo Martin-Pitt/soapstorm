@@ -27,6 +27,7 @@
 #include "llsdutil.h"
 #include "ssatmoenvmanager.h"
 
+#include "ssatmostore.h"
 #include "ssfloatersoundlist.h"
 #include "ssatmotrack.h"
 #include "ssprecipvariants.h"
@@ -156,7 +157,7 @@ void SSFloaterPreset::onOpen(const LLSD& key)
     }
     if (want.empty() && !mEnvironmentScope)
     {
-        want = gSavedSettings.getString("SSAtmoPreset");
+        want = SSAtmoStore::getString(SSAtmoStoreKey::PRESET);
     }
     if (want.empty() && !mEnvironmentScope)
     {
@@ -434,7 +435,7 @@ void SSFloaterPreset::applyLive()
     // is one the region offers, and picking it is the environment's job, not the editor's.
     if (!mEnvironmentScope)
     {
-        gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+        SSAtmoStore::setString(SSAtmoStoreKey::PRESET, mEdited.mName);
     }
 
     refreshTitle();
@@ -498,7 +499,7 @@ void SSFloaterPreset::onSelectPreset()
     loadPreset(getChild<LLComboBox>("preset_combo")->getValue().asString());
     if (!mEnvironmentScope)
     {
-        gSavedSettings.setString("SSAtmoPreset", mEdited.mName);
+        SSAtmoStore::setString(SSAtmoStoreKey::PRESET, mEdited.mName);
     }
 }
 
@@ -608,9 +609,9 @@ void SSFloaterPreset::onClickRename()
     }
     if (touched) tracks->commit();
 
-    if (gSavedSettings.getString("SSAtmoPreset") == old_name)
+    if (SSAtmoStore::getString(SSAtmoStoreKey::PRESET) == old_name)
     {
-        gSavedSettings.setString("SSAtmoPreset", name);
+        SSAtmoStore::setString(SSAtmoStoreKey::PRESET, name);
     }
 
     SSPrecipVariants::instance().clearCache();

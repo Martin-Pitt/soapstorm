@@ -45,6 +45,9 @@ out vec2 vary_texcoord1;
 out vec2 vary_texcoord2;
 out vec2 vary_texcoord3;
 out float altitude_blend_factor;
+#ifdef SS_ATMO
+out vec3 vary_ray_dir;   // <SS:Nexii> the TRUE camera-relative view ray, for the fragment stage's plane mapping
+#endif
 
 // Inputs
 uniform vec3 camPosLocal;
@@ -71,13 +74,10 @@ uniform vec3 cloud_color;
 uniform float cloud_scale;
 
 #ifdef SS_ATMO
-// <SS:Nexii> Region-relative cloud parallax and wind travel (doc/atmo_magic_cloud_parallax.md) - Atmo-only, so a stock environment compiles the pristine texcoord path.
-uniform vec2 ss_cloud_drift;  // metres the layer has travelled on the wind, east and north
-uniform vec2 region_offset;   // camera pos - region centre, metres, world X/Y
-uniform float ss_cloud_alt_m; // the LAYER'S OWN altitude, metres - what a metre of camera travel is worth in uv
-// The layer's own depth slot, 0.99998 - or 0 for the stock projection squash. Zero unless an
-// ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the
-// layer against the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
+// <SS:Nexii> Region-relative cloud parallax and wind travel (doc/atmo_magic_cloud_parallax.md) have moved to the FRAGMENT stage, which derives each band's UVs from the true view ray - the vertex
+// stage's only remaining job is to hand that ray down. Atmo-only, so a stock environment compiles the pristine texcoord path.
+// The layer's own depth slot, 0.999985 (cirrus veil) or 0.99998 (overcast band) - or 0 for the stock projection squash. Zero unless an
+// ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the bands against each other and the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
 uniform float ss_cloud_depth;
 
 // <SS:Nexii> How much of the sun's disc has cleared the horizon
@@ -85,6 +85,24 @@ uniform float ss_cloud_depth;
 // exactly stock - up to 1 fully risen. The layer's sun glow ramps on it below, because stock
 // switches the glow the moment the disc's centre crosses zero.
 uniform float ss_sun_rise;
+
+// <SS:Nexii> The sun's TRUE direction while any part of the disc is in sight
+// (SSAtmoEnvApplier::sunSlotDirection). lightnorm hands the direction to the moon the moment
+// the disc's centre sets, and TWO things here must keep looking at the sun through the rise
+// band: the glow hotspot below, and the disc-neighbourhood body restore further down - the one
+// that keeps horizon clouds solid around the disc so it cannot burn through them. Both swing to
+// the moon's azimuth at centre-set without this. See the ss_sun_dir note in skyV.glsl.
+uniform vec3 ss_sun_dir;
+
+// <SS:Nexii> The stock ray lift, as in skyV.glsl: the layer's atmosphere ray below is computed
+// 50 m above the geometry it belongs to (the + vec3(0, 50, 0) in rel_pos), a legacy fudge that
+// once rode along with the stock sun disc's own legacy 50 m drop. The Atmo discs draw at the TRUE
+// direction (ssCelestialV.glsl carries no offset of any kind), so while they own the sky the lift
+// drops to 0 and TWO things on this layer land on the disc with it: the glow hotspot, and the
+// disc-neighbourhood body restore - the one that keeps horizon clouds solid around the disc, and
+// which is ring-shaped about a direction, so a lifted ray swings the whole ring off the disc it
+// is there to frame. 1 is exactly stock, which is what an enabled-but-idle viewer keeps.
+uniform float ss_ray_lift;
 #endif
 // </SS:Nexii>
 
@@ -138,20 +156,6 @@ void main()
     vary_texcoord0.xy /= cloud_scale;
     vary_texcoord0.xy += 0.5;
 
-#ifdef SS_ATMO
-    // <SS:Nexii> Region-relative cloud parallax, scaled by the LAYER'S OWN altitude rather than the max-altitude proxy it first shipped with - max_y is an atmosphere ceiling, not a cloud height,
-    // and borrowing it coupled the parallax to a dial authored for haze. ss_cloud_alt_m is the dome's authored height (Clouds > Sky Dome), or, on that tab's Auto setting, the altitude the
-    // volumetric deck implies - cirrus-high in dry still air, merging down onto the deck as its coverage builds, so dome band and deck agree about where the cloud IS as they merge at the rim.
-    float metres_per_uv = 16.0 * ss_cloud_alt_m * cloud_scale;
-    vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) / metres_per_uv;
-
-    // ...and the layer's own travel on the wind, in the same terms - the sky actually moving over the world, which the cloud scroll rate is NOT (that slides the large texture against the small
-    // one and the pattern boils in place). Before the other three texcoords are derived, so the deck moves as one thing. Signs are the parallax term's, negated: clouds moving one way looks like
-    // the camera moving the other.
-    vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
-    // </SS:Nexii>
-#endif
-
     vary_texcoord1 = vary_texcoord0;
     vary_texcoord1.x += lightnorm.x * 0.0125;
     vary_texcoord1.y += lightnorm.z * 0.0125;
@@ -160,7 +164,22 @@ void main()
     vary_texcoord3 = vary_texcoord1 * 16.;
 
     // Get relative position
+#ifdef SS_ATMO
+    // <SS:Nexii> The lift rides ss_ray_lift (see the uniform note above): 1 keeps the stock
+    // ray bit for bit, 0 aims the glow hotspot and the disc-neighbourhood restore at the
+    // true direction the Atmo discs draw at.
+    vec3 rel_pos = position.xyz - camPosLocal.xyz + vec3(0, 50.0 * ss_ray_lift, 0);
+#else
     vec3 rel_pos = position.xyz - camPosLocal.xyz + vec3(0, 50, 0);
+#endif
+
+#ifdef SS_ATMO
+    // <SS:Nexii> The TRUE camera-relative view ray, handed to the fragment stage for the plane
+    // mapping (cloudsF.glsl). The lift is 0 whenever the plane path runs - an active Atmo
+    // environment - so this is the exact direction the ray actually travels, not the stock-fudged
+    // one.
+    vary_ray_dir = normalize(position.xyz - camPosLocal.xyz);
+#endif
 
 #ifdef SS_ATMO
     // <SS:Nexii> The horizon fade decoupled from max altitude: dividing by max_y let the ATMOSPHERE ceiling thin every low-sky cloud - at an authored 1000m ceiling a cloud at the horizon sat at
@@ -171,7 +190,10 @@ void main()
 
     // ...except INTO the sun: the eased fade reads beautifully against sky but lets the disc burn through the same half-faded clouds, and the two aesthetics only collide inside the disc's
     // angular neighbourhood - so exactly there, and nowhere else, horizon clouds keep their body. The ramp spans roughly the width of a large authored sun disc.
-    float sun_prox = smoothstep(0.965, 0.992, dot(normalize(rel_pos), lightnorm.xyz));
+    // <SS:Nexii> And the neighbourhood follows the DISC (ss_sun_dir), not the lightnorm: lightnorm hands the direction to the moon the moment the disc's centre sets, which silently revoked
+    // the restore for the still-half-risen disc - the clouds around it collapsed onto their eased fade, and the disc burned through them exactly at centre-set. See skyV.glsl's ss_sun_dir note.
+    vec3 disc_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+    float sun_prox = smoothstep(0.965, 0.992, dot(normalize(rel_pos), disc_dir));
     altitude_blend_factor = max(altitude_blend_factor, sun_prox);
 #else
     altitude_blend_factor = clamp((rel_pos.y + 512.0) / max_y, 0.0, 1.0);
@@ -200,13 +222,26 @@ void main()
     // this is used later for sunlight modulation at various altitudes
     light_atten = (blue_density + vec3(haze_density * 0.25)) * (density_multiplier * max_y);
 
+#ifdef SS_ATMO
+    // <SS:Nexii> While any part of the disc is above the horizon, the sun's term in the light
+    // path floors at zero - see the long note in skyV.glsl. Stock collapses every ray near the
+    // horizon to unlit the moment the disc's CENTRE dips under, cutting the sunset band out
+    // from under a disc that is still half up; the floor holds the band at its horizon-sitting
+    // airmass and lets the risen share fade it instead. Rides the sun's TRUE elevation
+    // (ss_sun_dir.z), so the airmass agrees from both sides of the crossing wherever the moon
+    // is. No-op at full rise, stock with the gate off.
+    float sun_elev = (ss_sun_rise > 0.0) ? max(ss_sun_dir.z, 0.0) : lightnorm.y;
+#else
+    float sun_elev = lightnorm.y;
+#endif
+
     // Calculate relative weights
     vec3 combined_haze = abs(blue_density) + vec3(abs(haze_density));
     vec3 blue_weight   = blue_density / combined_haze;
     vec3 haze_weight   = haze_density / combined_haze;
 
     // Compute sunlight from rel_pos & lightnorm (for long rays like sky)
-    float off_axis = 1.0 / max(1e-6, max(0., rel_pos_norm.y) + lightnorm.y);
+    float off_axis = 1.0 / max(1e-6, max(0., rel_pos_norm.y) + sun_elev);
     sunlight *= exp(-light_atten * off_axis);
 
     // Distance
@@ -218,7 +253,15 @@ void main()
     combined_haze = exp(-combined_haze * density_dist);
 
     // Compute haze glow
-    float haze_glow = 1.0 - dot(rel_pos_norm, lightnorm.xyz);
+    // <SS:Nexii> The glow tracks the disc (ss_sun_dir), not the lightnorm - lightnorm belongs to
+    // the moon below centre-set, and the layer's glow must stay on the sun while any part of it
+    // is in sight. See the ss_sun_dir note above and in skyV.glsl.
+#ifdef SS_ATMO
+    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+#else
+    vec3 glow_dir = lightnorm.xyz;
+#endif
+    float haze_glow = 1.0 - dot(rel_pos_norm, glow_dir);
     // haze_glow is 0 at the sun and increases away from sun
     haze_glow = max(haze_glow, .001);
         // Set a minimum "angle" (smaller glow.y allows tighter, brighter hotspot)
