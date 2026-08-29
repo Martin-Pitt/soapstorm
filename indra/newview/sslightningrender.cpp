@@ -687,7 +687,7 @@ void SSLightningRender::render()
         bool any_pending = false;
         for (const SSStrike& s : lightning->strikes())
         {
-            if (s.mT < 0.f && !s.mDone) { any_pending = true; break; }
+            if (s.mT <= -SSLightning::MARKER_HIDE_S && !s.mDone) { any_pending = true; break; }
         }
 
         if (any_pending)
@@ -700,7 +700,7 @@ void SSLightningRender::render()
 
             for (const SSStrike& strike : lightning->strikes())
             {
-                if (strike.mT >= 0.f || strike.mDone) continue;
+                if (strike.mT > -SSLightning::MARKER_HIDE_S || strike.mDone) continue;
                 if (!strikeOnScreen(strike)) continue;
 
                 // One colour per kind, and only the geometry that kind actually has - a sheet has no

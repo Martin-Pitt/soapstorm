@@ -134,6 +134,10 @@ public:
     static const char* kindName(SSStrikeKind k);
     static const LLColor4& kindDebugColor(SSStrikeKind k);
 
+    // The pending-strike debug overlay (markers and countdown label) hides this long before
+    // impact, so the preview does not sit on top of the strike it announced.
+    static constexpr F32 MARKER_HIDE_S = 0.5f;
+
 private:
     void spawn(F32 intensity, F64 fire_at, F32 force_bearing = -1.f, F32 force_dist = -1.f,
                SSStrikeKind force_kind = STRIKE_KIND_COUNT, const LLVector3* force_ground = nullptr);

@@ -90,6 +90,15 @@ namespace
     {
         return gSavedSettings.controlExists(name) ? (F32)gSavedSettings.getF32(name) : fallback;
     }
+
+    // Debug strikes spawn as far ahead as the anticipation effect needs, so the slider's
+    // charge window fits inside a button-triggered strike the way it does a scheduled one.
+    // The floor keeps the buttons feeling deliberate when anticipation is low or zero.
+    F32 debugStrikeLeadS()
+    {
+        const F32 anticipation = llclamp(settingF("SSAtmoLightningAnticipation", ANTICIPATION_DEFAULT_S), 0.f, ANTICIPATION_MAX_S);
+        return llmax(3.f, anticipation + 0.25f);
+    }
 }
 
 // Debug label for a strike kind.
@@ -296,7 +305,7 @@ void SSLightning::triggerNow()
     const F32 dist = 60.f + t * t * (llclamp(vis, 500.f, 2500.f) - 60.f);
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
-    spawn(llmax(atmo->turbulence(), 0.6f), atmo->sharedTime() + 3.0, bearing, dist);
+    spawn(llmax(atmo->turbulence(), 0.6f), atmo->sharedTime() + debugStrikeLeadS(), bearing, dist);
     mPrepared = false;
 }
 
@@ -340,7 +349,7 @@ void SSLightning::triggerGroundNow()
     if (!found) return;
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
-    spawn(llmax(atmo->turbulence(), 0.6f), atmo->sharedTime() + 3.0, -1.f, -1.f, STRIKE_GROUND, &at);
+    spawn(llmax(atmo->turbulence(), 0.6f), atmo->sharedTime() + debugStrikeLeadS(), -1.f, -1.f, STRIKE_GROUND, &at);
     mPrepared = false;
 }
 
@@ -851,7 +860,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
     strike.mChannelBrightness = llclamp(brightness, 0.f, 1.f);
 
     static LLCachedControl<bool> markers(gSavedSettings, "SSAtmoDebugStrikeMarkers", false);
-    if (markers && strike.mT < 0.f && !strike.mDone)
+    if (markers && strike.mT <= -MARKER_HIDE_S && !strike.mDone)
     {
         if (!strike.mDebugText)
         {
