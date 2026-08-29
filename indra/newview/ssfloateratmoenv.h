@@ -93,6 +93,9 @@ private:
 
     void onCommitWaterEnabled();
 
+    void onCommitUnderEnabled();
+    void onCommitUnderAuto();
+
     bool waterRowsInactive() const;
 
     void refreshWaterRows();

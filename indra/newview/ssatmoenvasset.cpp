@@ -688,10 +688,24 @@ SSAtmoEnvCloudField::SSAtmoEnvCloudField()
 {
 }
 
+// The under deck's seed: off until asked for, manual rather than auto-derived, and a low flat
+// deck whose base the author dials to the sky build's floor.
+SSAtmoEnvCloudField SSAtmoEnvCloudField::under()
+{
+    SSAtmoEnvCloudField field;
+    field.mEnabled = false;
+    field.mAuto = false;
+    field.mBaseHeightM = SSAtmoEnvKeyframed<F32>(200.f);
+    field.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(400.f);
+    field.mCoverageScale = SSAtmoEnvKeyframed<F32>(1.f);
+    return field;
+}
+
 // The volumetric cloud field block out to its notecard document.
 LLSD SSAtmoEnvCloudField::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
+    sd["enabled"] = mEnabled;
     sd["auto"] = mAuto;
     sd["base_height_m"] = mBaseHeightM.asLLSD();
     sd["base_thickness_m"] = mBaseThicknessM.asLLSD();
@@ -710,7 +724,11 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
 bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
-    mAuto = sd.has("auto") ? sd["auto"].asBoolean() : true;
+    // <SS:Nexii> Only overwrite what the document carries: the seed an empty block leaves in
+    // place decides enabled and auto (the primary deck always on and auto, the under deck off
+    // and manual), so an old document without the keys keeps whichever field is being parsed.
+    if (sd.has("enabled")) mEnabled = sd["enabled"].asBoolean();
+    if (sd.has("auto")) mAuto = sd["auto"].asBoolean();
     if (sd.has("base_height_m")) mBaseHeightM.fromLLSD(sd["base_height_m"], 800.f);
     if (sd.has("base_thickness_m")) mBaseThicknessM.fromLLSD(sd["base_thickness_m"], 300.f);
     if (sd.has("coverage_scale")) mCoverageScale.fromLLSD(sd["coverage_scale"], 1.f);
@@ -1085,6 +1103,7 @@ LLSD SSAtmoEnvTrack::asLLSD() const
     sd["weather"]    = mWeather.asLLSD();
     sd["planetary"]  = mPlanetary.asLLSD();
     sd["cloud_field"] = mCloudField.asLLSD();
+    sd["under_field"] = mUnderField.asLLSD();
     sd["cloud_dome"]  = mCloudDome.asLLSD();
     sd["atmosphere"] = mAtmosphere.asLLSD();
     sd["weather_influence"] = mWeatherInfluence.asLLSD();
@@ -1108,6 +1127,7 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
     if (sd.has("weather"))     mWeather.fromLLSD(sd["weather"]);
     if (sd.has("planetary"))   mPlanetary.fromLLSD(sd["planetary"]);
     if (sd.has("cloud_field")) mCloudField.fromLLSD(sd["cloud_field"]);
+    if (sd.has("under_field")) mUnderField.fromLLSD(sd["under_field"]);
     if (sd.has("cloud_dome"))  mCloudDome.fromLLSD(sd["cloud_dome"]);
     if (sd.has("atmosphere"))  mAtmosphere.fromLLSD(sd["atmosphere"]);
     if (sd.has("weather_influence")) mWeatherInfluence.fromLLSD(sd["weather_influence"]);

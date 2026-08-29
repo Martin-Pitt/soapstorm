@@ -55,7 +55,8 @@
      min_val="0"
      max_val="100"
      increment="0.01"
-     initial_value="0" />
+     initial_value="0"
+     tool_tip="Near-surface dial; the spinner takes the full -10 km to +10 km range by hand" />
     <spinner
      follows="left|top"
      layout="topleft"
@@ -65,10 +66,11 @@
      width="70"
      label_width="0"
      name="water_height_value_spinner"
-     min_val="0"
-     max_val="100"
+     min_val="-10000"
+     max_val="10000"
      increment="0.01"
-     decimal_digits="2" />
+     decimal_digits="2"
+     tool_tip="Ocean surface height in metres; type anything from -10 km to +10 km, so a sky build can put the ocean far below" />
     <button
      follows="left|top"
      layout="topleft"

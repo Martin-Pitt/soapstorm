@@ -130,7 +130,7 @@ private:
     F32 mCloudDomeHeightM = 6000.f;
 
     // <SS:Nexii> The horizon clip, sampled at the applied phase - see horizonClip.
-    bool mHorizonClip = false;
+    bool mHorizonClip = true;
 
     F32 mMoonSlotBrightness = 1.f;
 

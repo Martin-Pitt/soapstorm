@@ -10,9 +10,9 @@ stock viewer water is untouched and instantly recoverable by switching Atmo off.
 
 | Class | Base | Covers | Status |
 |---|---|---|---|
-| `SSWater` | `LLVOWater` | one plane per connected region, at that region's own water height | live |
-| `SSEdgeWater` | `LLVOVoidWater` | 256x256m void tiles ringing the regions out toward the projection far plane | live |
-| `SSFarWater` | `LLVOVoidWater` | the band from the tile ring to the true horizon | stub |
+| `SSWater` | `LLVOWater` | one plane per connected region, at the environment's water height | live |
+| `SSEdgeWater` | `LLVOVoidWater` | 256x256m void tiles ringing the regions out to the squash cap | live |
+| `SSFarWater` | `LLVOVoidWater` | the band past the projection far plane | stub |
 
 All three reuse the stock water machinery wholesale - `LLVOWater::updateGeometry`, the existing
 `PARTITION_WATER`/`PARTITION_VOIDWATER` spatial partitions, `POOL_WATER`, the water shaders, water
@@ -56,6 +56,51 @@ void water alike - an empty void, water removed from the sim and the surrounding
 When neighbouring sims exist we currently assume they share this water; per-neighbour environments
 and cross-sim track sharing are future work.
 
+## The height hijack
+
+The SS planes render at the environment's water height - the lowest enabled track water - and
+`SSWaterWorld` drives that same height into the region water height store (`LLSurface`'s stock
+water object) every frame while Atmo owns the scene. Every consumer that reads
+`getWaterHeight()` therefore follows the Atmo plane without being taught one by one: underwater
+detection, the fog flips and the water clip plane, the camera's submerged test, precipitation
+landing and the rain shadow floor, avatar swimming, the parcel overlay's waterline.
+
+- Originals are captured at first hijack and put back on deactivate (or whenever no track
+  carries a water plane), with one `LLWorld::updateWaterObjects()` so the stock hole/skirt
+  slabs agree again. The stock set is suppressed while Atmo owns rendering, so the writes go
+  straight to the water object - `LLSurface::setWaterHeight` would rebuild that stock set per
+  region per change for nothing.
+- An external write landing mid-hijack (a sim handshake, a god tool) is recognised - it is the
+  one height on the region that is not the one we wrote - and kept as the new original, so
+  deactivating never clobbers the sim's latest word.
+- The height rides the `SSWaterWorld` rebuild signature, so re-authoring it rebuilds the SS set
+  and re-drives the store without a region or camera move. The hijack runs before the signature
+  is read, so a height change costs one rebuild, not two.
+
+## The far-field squash
+
+The tile ring is built out past the squash cap (`SS_WATER_SQUASH_CAP_FRAC` of `MAX_FAR_CLIP`,
+the constant projection far plane) and the water vertex shader folds every vertex past the knee
+(cap * 0.8) toward the cap edge along its exact ray - the same band `ssVolCloudV.glsl` runs for
+the cloud field, and radial in full 3D: the far plane clips VIEW depth, so a horizontal-only
+fold would leave the slant distance alone and the ocean would still cut out from under a camera
+parked more than 2km up. Folding radially is what pulls the water up toward the eye as the
+camera climbs, and since every vertex keeps its true ray the projected image is the true
+ocean's - only the depth compresses. Direction is preserved, so the drawn image matches the
+true positions and no triangle crosses the far plane (a sliced triangle rasterises black),
+which is what let the ring extend freely where the old `reach` had to stop short.
+
+The uniform is `(knee, cap, ring reach)` and lives on the shared water vertex shader
+(`waterV.glsl`), written per frame by `LLDrawPoolWater::renderPostDeferred` keyed on the family
+swap: stock water never wears Atmo geometry and gets zeros - passthrough - so nothing stale
+survives a swap. The fog follows the drawn ray too: `vary_position` carries the drawn position
+(the fragment shader's `calcAtmosphericVarsLinear` reads its distance from there) and the
+vertex-stage atmospherics sample the drawn distance - for on-plane vertices the stock push is
+exactly a mirror through the eye, so the mirrored drawn offset is written directly. Sampling
+the true ray instead would blanket a sky build's ocean - kilometres of true distance - in full
+fog. The water pass itself is no longer height-gated: the squash keeps the surface in the far
+disc at every camera altitude, so there is no "too high up to draw" any more.
+
 ## SSEdgeWater tiling
 
 Stock void water is nine stretched slabs (hole fillers plus an 8-piece skirt). SSEdgeWater is
@@ -63,38 +108,41 @@ instead a flat grid of 256x256m tiles - region-sized units - so each tile can la
 waterline, per-neighbour height, or shoreline treatment without re-splitting geometry.
 
 - Tiles are laid on the 256m global grid, anchored to the agent region's origin, and trimmed to a
-  circle of radius `reach = max(MAX_FAR_CLIP * 0.7 - region_width / 2, 512)` around the region
-  centre. The 0.7 (~1/sqrt(2)) cap is the same rationale as the stock skirt fix in
-  `LLWorld::updateWaterObjects`: any triangle whose far corner crosses `MAX_FAR_CLIP`, the constant
-  projection far plane, gets sliced by the projection and rasterises as a black band along the
-  horizon. Water is deliberately drawn past the draw distance (the water partitions set
-  `mInfiniteFarClip`), so the projection far plane - not the draw distance - is what "up to the far
-  clip" means here.
+  circle of radius `ring_reach = squash_cap + region_width / 2 + 256` around the region centre -
+  past the squash cap, so every direction's outermost tiles fold onto the cap edge (see "The
+  far-field squash" above). Where the old `reach` had to stop short of `MAX_FAR_CLIP` to keep
+  triangles un-sliced, the fold now pulls every vertex back inside first, so the ocean reads to
+  the horizon. Water is deliberately drawn past the draw distance (the water partitions set
+  `mInfiniteFarClip`), so the projection far plane - not the draw distance - is what "up to the
+  far clip" means here.
 - A cell occupied by any connected region is skipped: the region gets a full-size `SSWater` plane
-  at its own water height instead, and holes between regions get tiles naturally.
-- Tiles use the agent region's water height (the stock assumption) and the stock void slab
+  at the environment's water height instead, and holes between regions get tiles naturally.
+- Tiles use the environment's water height and the stock void slab
   convention: position Z at `256 + water_height` with Z scale 512, which puts the rendered quad at
   water height while the bounding slab reaches up for visibility culling.
 - Rebuilds are keyed on a per-frame signature (applier active, agent region handle and water
-  height, region set hash, water height sum, transparent-water setting) plus a dead-object sweep;
-  a rebuild kills and recreates the whole set, which is cheap at ~100 small objects and only fires
-  on region changes, water height changes or the Atmo toggle.
+  height, region set hash, water height sum, transparent-water setting, Atmo water height and
+  validity) plus a dead-object sweep;
+  a rebuild kills and recreates the whole set, which is cheap at a few hundred small objects and
+  only fires on region changes, water height changes or the Atmo toggle.
 
 ## Deferred / known limits
 
-- **Keyframed water height (tide) is authored but not yet applied to SS geometry**, matching the
-  applier's long-standing deferral (`doc/archive/atmo_magic_environment.md`). With SS-owned planes the old
-  objection - plane height is region state, fighting the sim - falls away for the *rendered* plane,
-  but underwater detection, fog flips and the water clip plane all key off
-  `LLEnvironment::getWaterHeight()` (region height), so moving only the visible plane desyncs them.
-  Applying tide means teaching those consumers about the Atmo height first.
-- **SSFarWater is a stub.** It exists so the class and manager slot are in place; the
-  actual work - water all the way to the horizon, past `MAX_FAR_CLIP`, presumably eye-anchored
+- **The water_height spinner takes the full -10 km to +10 km by hand** (the slider keeps its
+  near-surface dial) so a sky-themed build can put its ocean kilometres below the platform. The
+  authored height is what the SS family renders and what the height hijack drives into the
+  region store, so underwater detection, fog flips, precipitation landing and the rest follow it.
+- **SSFarWater is a stub.** The squash carries the surface to the projection far plane's edge -
+  the horizon the projection has - but true water beyond `MAX_FAR_CLIP` still needs eye-anchored
   geometry with a bespoke projection or shader trick (see the removed far-sea experiment in git
-  history for constraints) - is unstarted.
+  history for constraints).
+- Water shaders off (fixed-function water) renders the extended ring unsquashed - the far tiles
+  then slice exactly as the old `reach` avoided. Atmo Magic is shader-driven everywhere else,
+  so this only bites a deliberately broken graphics path.
 - On very large var regions the camera can sit far from the region centre the tile circle is
-  anchored to, thinning coverage in the camera's direction; the `reach` subtraction of half the
-  region width keeps the slicing guarantee but the ring is not camera-centred. Camera-anchored
-  tiling (with hysteresis to avoid rebuild churn) is the fix if it ever shows.
+  anchored to, thinning coverage in the camera's direction; the `region_width / 2` term in
+  `ring_reach` keeps every direction covered past the cap from anywhere in the region, but the
+  ring is not camera-centred. Camera-anchored tiling (with hysteresis to avoid rebuild churn) is
+  the fix if it ever shows.
 - Neighbour regions with their own Atmo environments, and tracks shared across sims, are future
   work; today every tile and every `SSWater` plane wears the agent's track.

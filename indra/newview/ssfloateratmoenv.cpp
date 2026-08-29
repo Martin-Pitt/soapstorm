@@ -161,6 +161,10 @@ bool SSFloaterAtmoEnv::postBuild()
 
     getChild<LLUICtrl>("water_enabled_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitWaterEnabled(); });
+    getChild<LLUICtrl>("ucloud_enabled_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitUnderEnabled(); });
+    getChild<LLUICtrl>("ucloud_auto_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitUnderAuto(); });
 
     getChild<LLUICtrl>("gust_auto_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitGustAuto(); });
@@ -225,6 +229,21 @@ bool SSFloaterAtmoEnv::postBuild()
     };
     mFloatRows.insert(mFloatRows.end(), cloud_rows.begin(), cloud_rows.end());
 
+    auto under = [this]() -> SSAtmoEnvCloudField& {
+        return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mUnderField;
+    };
+    const std::vector<FloatRow> under_rows = {
+        { "ucloud_base_height", [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mBaseHeightM; },    true },
+        { "ucloud_thickness",   [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mBaseThicknessM; }, true },
+        { "ucloud_coverage",    [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mCoverageScale; },  false },
+        { "ucloud_puff_density",[under]() -> SSAtmoEnvKeyframed<F32>& { return under().mPuffDensity; },     false },
+        { "ucloud_storm_dark",  [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mStormDarkening; },  false },
+        { "ucloud_texture_mix", [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mTextureMix; },      false },
+        { "ucloud_detail_scale",[under]() -> SSAtmoEnvKeyframed<F32>& { return under().mDetailScale; },     false },
+        { "ucloud_drift_rate",  [under]() -> SSAtmoEnvKeyframed<F32>& { return under().mDriftRate; },       false },
+    };
+    mFloatRows.insert(mFloatRows.end(), under_rows.begin(), under_rows.end());
+
     auto dome = [this]() -> SSAtmoEnvCloudDome& {
         return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mCloudDome;
     };
@@ -272,8 +291,12 @@ bool SSFloaterAtmoEnv::postBuild()
         bindKeyframeButtons<F32>(row.mPrefix, row.mField);
     }
 
+    // <SS:Nexii> The slider keeps its honest near-surface dial (SS_ATMOENV_WATER_CEILING); the
+    // spinner takes the whole authored range by hand, so a sky-themed build can put its ocean
+    // kilometres below the platform. Values past the slider's ends read there pinned at the rail.
     getChild<LLSliderCtrl>("water_height_slider")->setMaxValue(SS_ATMOENV_WATER_CEILING);
-    getChild<LLSpinCtrl>("water_height_value_spinner")->setMaxValue(SS_ATMOENV_WATER_CEILING);
+    getChild<LLSpinCtrl>("water_height_value_spinner")->setMinValue(SS_ATMOENV_WATER_MIN);
+    getChild<LLSpinCtrl>("water_height_value_spinner")->setMaxValue(SS_ATMOENV_WATER_MAX);
 
     static const F32 SCALE_SUN_AMBIENT = 3.f;
     static const F32 SCALE_BLUE = 2.f;
@@ -316,6 +339,8 @@ bool SSFloaterAtmoEnv::postBuild()
         { "dome_image",       [dome]() -> SSAtmoEnvKeyframed<LLUUID>& { return dome().mNoiseTexture; } },
         { "cloud_field_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mBaseTexture; } },
         { "cloud_detail_image",[clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mDetailTexture; } },
+        { "ucloud_field_image", [under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mBaseTexture; } },
+        { "ucloud_detail_image",[under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mDetailTexture; } },
     };
     for (const KeyRow<LLUUID>& row : mTextureRows)
     {
@@ -951,6 +976,8 @@ void SSFloaterAtmoEnv::refreshTrackTab()
     }
 
     getChild<LLUICtrl>("water_enabled_check")->setValue(track.mWater.mEnabled);
+    getChild<LLUICtrl>("ucloud_enabled_check")->setValue(track.mUnderField.mEnabled);
+    getChild<LLUICtrl>("ucloud_auto_check")->setValue(track.mUnderField.mAuto);
 
     getChild<LLUICtrl>("gust_auto_check")->setValue(track.mWeather.mGustAuto);
     getChild<LLUICtrl>("lightning_enabled_check")->setValue(track.mWeather.mLightningEnabled);
@@ -1019,6 +1046,37 @@ void SSFloaterAtmoEnv::onCommitWaterEnabled()
 
     asset.mTracks[mSelectedTrackIndex].mWater.mEnabled =
         getChild<LLUICtrl>("water_enabled_check")->getValue().asBoolean();
+    refreshWaterRows();
+    refreshStatus();
+}
+
+// Under layer toggle into the track.
+void SSFloaterAtmoEnv::onCommitUnderEnabled()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mUnderField.mEnabled =
+        getChild<LLUICtrl>("ucloud_enabled_check")->getValue().asBoolean();
+    refreshWaterRows();
+    refreshStatus();
+}
+
+// Under layer auto toggle into the track.
+void SSFloaterAtmoEnv::onCommitUnderAuto()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    asset.mTracks[mSelectedTrackIndex].mUnderField.mAuto =
+        getChild<LLUICtrl>("ucloud_auto_check")->getValue().asBoolean();
+    refreshAutoRows();
     refreshWaterRows();
     refreshStatus();
 }
@@ -1158,6 +1216,10 @@ void SSFloaterAtmoEnv::refreshAutoRows()
         { "cloud_thickness",     track.mCloudField.mAuto, auto_thickness },
         { "cloud_coverage",      track.mCloudField.mAuto, auto_coverage },
         { "cloud_storm_dark",    track.mCloudField.mAuto, auto_dark },
+        { "ucloud_base_height",  track.mUnderField.mAuto, auto_height },
+        { "ucloud_thickness",    track.mUnderField.mAuto, auto_thickness },
+        { "ucloud_coverage",     track.mUnderField.mAuto, auto_coverage },
+        { "ucloud_storm_dark",   track.mUnderField.mAuto, auto_dark },
         { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::autoCloudDomeAltitudeMetres() },
     };
     for (const auto& row : rows)
@@ -1197,14 +1259,21 @@ bool SSFloaterAtmoEnv::waterRowsInactive() const
     return !mgr->asset().mTracks[mSelectedTrackIndex].mWater.mEnabled;
 }
 
-// Rewrites the Water tab rows.
+// Rewrites the Water tab rows, and gates the Under Layer tab's rows on its enable flag (the
+// auto derivation's own grey-out from refreshAutoRows composes with this: a row is live only
+// when its field is on and not auto-owned).
 void SSFloaterAtmoEnv::refreshWaterRows()
 {
     const bool enabled = !waterRowsInactive();
 
-    auto setRow = [this, enabled](const std::string& prefix, LLUICtrl* primary)
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    const bool under_enabled = mgr->hasAsset()
+        && mSelectedTrackIndex < (S32)mgr->asset().mTracks.size()
+        && mgr->asset().mTracks[mSelectedTrackIndex].mUnderField.mEnabled;
+
+    auto setRow = [this](const std::string& prefix, LLUICtrl* primary, bool on)
     {
-        if (primary) primary->setEnabled(enabled);
+        if (primary) primary->setEnabled(on);
 
         static const char* const CLUSTER[] = {
             "_keyframe_button", "_prev_button", "_next_button"
@@ -1212,7 +1281,7 @@ void SSFloaterAtmoEnv::refreshWaterRows()
         for (const char* suffix : CLUSTER)
         {
             LLUICtrl* part = findChild<LLUICtrl>(prefix + suffix);
-            if (part) part->setEnabled(enabled);
+            if (part) part->setEnabled(on);
         }
     };
 
@@ -1221,22 +1290,35 @@ void SSFloaterAtmoEnv::refreshWaterRows()
         return prefix.compare(0, 6, "water_") == 0;
     };
 
+    auto isUnder = [](const std::string& prefix)
+    {
+        return prefix.compare(0, 7, "ucloud_") == 0;
+    };
+
+    auto rowEnabled = [&](const std::string& prefix)
+    {
+        if (isWater(prefix)) return enabled;
+        if (isUnder(prefix)) return under_enabled && !rowAutoOwned(prefix);
+        return true;
+    };
+
     for (const FloatRow& row : mFloatRows)
     {
-        if (!isWater(row.mPrefix)) continue;
-        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix + "_slider"));
+        if (!isWater(row.mPrefix) && !isUnder(row.mPrefix)) continue;
+        const bool on = rowEnabled(row.mPrefix);
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix + "_slider"), on);
         LLUICtrl* spinner = findChild<LLUICtrl>(row.mPrefix + "_value_spinner");
-        if (spinner) spinner->setEnabled(enabled);
+        if (spinner) spinner->setEnabled(on);
     }
     for (const KeyRow<LLColor3>& row : mColorRows)
     {
         if (!isWater(row.mPrefix)) continue;
-        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix));
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix), enabled);
     }
     for (const KeyRow<LLVector2>& row : mVectorRows)
     {
         if (!isWater(row.mPrefix)) continue;
-        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix));
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix), enabled);
         for (const char* suffix : { "_x_spinner", "_y_spinner" })
         {
             LLUICtrl* part = findChild<LLUICtrl>(row.mPrefix + suffix);
@@ -1245,8 +1327,8 @@ void SSFloaterAtmoEnv::refreshWaterRows()
     }
     for (const KeyRow<LLUUID>& row : mTextureRows)
     {
-        if (!isWater(row.mPrefix)) continue;
-        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix));
+        if (!isWater(row.mPrefix) && !isUnder(row.mPrefix)) continue;
+        setRow(row.mPrefix, findChild<LLUICtrl>(row.mPrefix), rowEnabled(row.mPrefix));
     }
 }
 
@@ -1270,6 +1352,11 @@ bool SSFloaterAtmoEnv::rowAutoOwned(const std::string& prefix) const
     if (prefix == "cloud_base_height" || prefix == "cloud_thickness" || prefix == "cloud_coverage")
     {
         return track.mCloudField.mAuto;
+    }
+    if (prefix == "ucloud_base_height" || prefix == "ucloud_thickness"
+        || prefix == "ucloud_coverage" || prefix == "ucloud_storm_dark")
+    {
+        return track.mUnderField.mAuto;
     }
     if (prefix == "dome_height")
     {

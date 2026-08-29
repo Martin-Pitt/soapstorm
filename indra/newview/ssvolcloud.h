@@ -36,6 +36,8 @@
 #include <vector>
 #include <unordered_map>
 
+struct SSAtmoEnvCloudFieldState;
+
 static const S32 SS_MAX_STRIKE_LIGHTS = 4;
 
 // <SS:Nexii> The far-field squash cap as a fraction of MAX_FAR_CLIP: where the cloud field's drawn depth tops out, just short of the projection far plane so nothing rasterises against it. The
@@ -54,13 +56,16 @@ public:
 
     void clear();
 
-    F32 cloudBaseZ() const { return mBaseZ; }
-    F32 cloudTopZ() const { return mBaseZ + mThicknessM; }
-    bool empty() const { return mPuffs.empty(); }
+    // <SS:Nexii> The primary deck's geometry and coverage: the auto dome altitude derivation and
+    // every consumer that asks "how much cloud is overhead" mean the main field, not the under
+    // deck bolted on below a sky build. </SS:Nexii>
+    F32 cloudBaseZ() const { return mPrimary.mBaseZ; }
+    F32 cloudTopZ() const { return mPrimary.mBaseZ + mPrimary.mThicknessM; }
+    bool empty() const { return mPrimary.mPuffs.empty(); }
 
     F32 transmittance(const LLVector3& from_agent, const LLVector3& to_agent, F32 strength);
 
-    S32 puffCount() const { return (S32)mPuffs.size(); }
+    S32 puffCount() const { return (S32)(mPrimary.mPuffs.size() + mUnder.mPuffs.size()); }
     F32 lastBuildMS() const { return mLastBuildMS; }
 
 private:
@@ -73,26 +78,47 @@ private:
         F32 mCamDistSq = 0.f;
     };
 
-    std::vector<Puff> mPuffs;
-    LLUUID mTexture;
+    // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are
+    // the same renderer run twice - each with its own resolved field state, textures, puff set and
+    // uniforms - so a sky-themed build can hang a second layer at the bottom of the build while the
+    // weather-driven deck stays overhead. Drawn far deck first; within a deck the puffs stay
+    // depth-sorted, and decks separated by hundreds of metres hide the cross-deck ordering.
+    // </SS:Nexii>
+    struct Deck
+    {
+        std::vector<Puff> mPuffs;
 
-    LLPointer<LLViewerFetchedTexture> mTextureRef;
+        LLUUID mTexture;
+        LLPointer<LLViewerFetchedTexture> mTextureRef;
 
-    LLUUID mAuthoredDetail;
+        LLUUID mDetail;
+        LLPointer<LLViewerFetchedTexture> mDetailRef;
 
-    LLUUID mDomeTexture;
-    LLPointer<LLViewerFetchedTexture> mDomeTexRef;
+        F32 mBaseZ = 0.f;
+        F32 mThicknessM = 1.f;
 
-    F32 mChurn = 0.f;
+        F32 mAnvil = 0.f;
+        F32 mTextureMix = 0.f;
+        F32 mPuffDensity = 0.8f;
+        F32 mDetailScale = 1.f;
+        F32 mDriftRate = 1.f;
 
-    F32 mBaseZ = 0.f;
-    F32 mThicknessM = 1.f;
+        F32 mChurn = 0.f;
+        F32 mCoverage = 0.f;
 
-    F32 mAnvil = 0.f;
-    F32 mTextureMix = 0.f;
-    F32 mPuffDensity = 0.8f;
-    F32 mDetailScale = 1.f;
-    F32 mDriftRate = 1.f;
+        F32 mMeanDistSq = 0.f;
+    };
+
+    void buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, U32 salt);
+    bool fetchDeckTextures(Deck& deck);
+
+    Deck mPrimary;
+    Deck mUnder;
+
+    F32 mLastCoverage = 0.f;
+    F32 mLastBuildMS = 0.f;
+
+    LLColor3 mAmbient;
 
     LLVector3 mLightDir;
     LLColor3 mSunColor;
@@ -121,9 +147,6 @@ private:
     U32 mOccQuery = 0;
     F32 mMaxPuffR = 0.f;
     bool mOccGridDirty = true;
-
-    F32 mLastCoverage = 0.f;
-    F32 mLastBuildMS = 0.f;
 };
 
 #endif

@@ -108,19 +108,13 @@ void LLDrawPoolWater::prerender()
 
 S32 LLDrawPoolWater::getNumPostDeferredPasses()
 {
-    // <SS:Nexii> Water is a post-deferred-only pool, so this gate drops the whole water surface render - waves, reflection, refraction and
-    // its atmospherics - leaving only the flat plane doWaterHaze() paints, the moment the camera passes a fixed 1024m dating from when that
-    // was the top of the skybox. Gate on MAX_FAR_CLIP, the constant projection far plane, where the water actually stops being visible; not
-    // the draw distance, which water is deliberately drawn past (its partition sets mInfiniteFarClip).
-    //if (LLViewerCamera::getInstance()->getOrigin().mV[2] < 1024.f)
-    const F32 height_above_water = LLViewerCamera::getInstance()->getOrigin().mV[2] - LLEnvironment::instance().getWaterHeight();
-    if (height_above_water < MAX_FAR_CLIP)
-    // </SS:Nexii>
-    {
-        return 1;
-    }
-
-    return 0;
+    // <SS:Nexii> Water renders at every camera height. This used to gate on the camera's height
+    // above the water plane (1024m dating from when that was the skybox top, then MAX_FAR_CLIP
+    // once the SS planes went in) on the theory that the surface stops being visible that far up
+    // - but the far-field squash pulls the surface into the far disc at any altitude, so the
+    // ocean below a sky build is exactly what the pass exists to draw. Faces still frustum-cull
+    // individually; an empty pass costs one fullscreen depth copy.
+    return 1;
 }
 
 void LLDrawPoolWater::beginPostDeferredPass(S32 pass)
@@ -316,6 +310,23 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     shader->uniform1f(LLShaderMgr::WATER_WATERHEIGHT, camera_height - water_height);
     shader->uniform1f(LLShaderMgr::WATER_TIME, phase_time);
     shader->uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, LLViewerCamera::getInstance()->getOrigin().mV);
+
+    // <SS:Nexii> Atmo water far-field squash (ss_squash: knee, cap, ring reach - see waterV.glsl).
+    // Keyed on the family swap: stock water never wears Atmo geometry, so it gets zeros -
+    // passthrough - and never inherits a stale band from a previous Atmo frame. </SS:Nexii>
+    {
+        static LLStaticHashedString ss_squash("ss_squash");
+        if (SSWaterWorld::atmoWaterLive())
+        {
+            SSWaterWorld* water_world = SSWaterWorld::getInstance();
+            shader->uniform3f(ss_squash, water_world->squashKnee(), water_world->squashCap(),
+                              water_world->squashReach());
+        }
+        else
+        {
+            shader->uniform3f(ss_squash, 0.f, 0.f, 0.f);
+        }
+    }
 
     shader->uniform3fv(LLShaderMgr::WATER_SPECULAR, 1, light_diffuse.mV);
 

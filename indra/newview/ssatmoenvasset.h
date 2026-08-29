@@ -48,6 +48,12 @@ const F32 SS_ATMOENV_MIN_TRACK_FLOOR = 256.f;
 
 const F32 SS_ATMOENV_WATER_CEILING = 100.f;
 
+// <SS:Nexii> The water height the spinner will take by hand: sky-themed builds put the ocean
+// way below the platform, so the typed range runs -10 km to +10 km while the slider keeps its
+// honest near-surface dial. Values past the slider's ends show there pinned at the rail.
+const F32 SS_ATMOENV_WATER_MIN = -10000.f;
+const F32 SS_ATMOENV_WATER_MAX = 10000.f;
+
 const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
 
 inline F64 ss_atmoenv_snap_phase(F64 phase)
@@ -203,6 +209,15 @@ struct SSAtmoEnvCloudField
 {
     SSAtmoEnvCloudField();
 
+    // <SS:Nexii> The secondary field a sky-themed build hangs below its platform: disabled by
+    // default (no undercloud unless asked for), authored rather than auto-derived, and seeded to
+    // a low flat deck the author dials down to wherever the build's floor wants its cloud base.
+    static SSAtmoEnvCloudField under();
+
+    // Whether this field renders at all. The primary deck is always on - its empty state is
+    // coverage-driven - so only the under deck's flag is ever false.
+    bool mEnabled = true;
+
     bool mAuto = true;
 
     SSAtmoEnvKeyframed<F32> mBaseHeightM{800.f};
@@ -305,7 +320,7 @@ struct SSAtmoEnvAtmosphere
     // below it. A look, not a dial: there is no meaningful "partially clipped", and nothing here
     // follows the day, so this is a plain authored flag rather than a keyframed value - the same
     // call mGustAuto makes.
-    bool mHorizonClip = false;
+    bool mHorizonClip = true;
 
     void fromSettingsSky(const LLSettingsSky& sky);
 
@@ -363,6 +378,12 @@ struct SSAtmoEnvTrack
     SSAtmoEnvAtmosphere mAtmosphere;
     SSAtmoEnvCloudField mCloudField;
     SSAtmoEnvCloudDome  mCloudDome;
+
+    // <SS:Nexii> The optional under deck: a second volumetric field at the bottom of a
+    // sky-themed build - cloud layer below the platform, ocean way below that - whose base
+    // height is authored straight to wherever the build's floor sits. Seeded off, manual,
+    // and low: see SSAtmoEnvCloudField::under().
+    SSAtmoEnvCloudField mUnderField = SSAtmoEnvCloudField::under();
 
     F64 currentDayCyclePhase() const;
 

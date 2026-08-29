@@ -101,6 +101,11 @@ namespace
 
     const F32 CLUSTER_EDGE_HEIGHT = 0.3f;
 
+    // The under deck's hash salt: the same cell field, offset so its cloud masses land where the
+    // main deck's do not. Zero keeps the primary deck's pattern byte-identical to the single-deck
+    // field it was before two decks existed.
+    constexpr U32 SS_UNDER_DECK_SALT = 61u;
+
     // One value-noise octave over cell space, for cloud clustering.
     F32 clusterOctave(S32 cx, S32 cy, S32 cells, U32 salt, F32 shift)
     {
@@ -126,10 +131,10 @@ namespace
     }
 
     // Two-octave cluster noise: big masses with small-scale raggedness.
-    F32 clusterUnit(S32 cx, S32 cy)
+    F32 clusterUnit(S32 cx, S32 cy, U32 salt)
     {
-        const F32 big = clusterOctave(cx, cy, CLUSTER_CELLS_BIG, 101u, 0.f);
-        const F32 small = clusterOctave(cx, cy, CLUSTER_CELLS_SMALL, 137u, 0.37f);
+        const F32 big = clusterOctave(cx, cy, CLUSTER_CELLS_BIG, 101u + salt, 0.f);
+        const F32 small = clusterOctave(cx, cy, CLUSTER_CELLS_SMALL, 137u + salt, 0.37f);
         return big * (1.f - CLUSTER_OCTAVE_MIX) + small * CLUSTER_OCTAVE_MIX;
     }
 }
@@ -137,14 +142,18 @@ namespace
 // Drops the field - rebuilt from scratch next update.
 void SSVolCloud::clear()
 {
-    mPuffs.clear();
+    mPrimary.mPuffs.clear();
+    mUnder.mPuffs.clear();
     mLastBuildMS = 0.f;
 }
 
 // Rebuilds the puff field for this frame from the resolved cloud state: deterministic placement, lighting, squash band, strike lights, depth sort.
 void SSVolCloud::update(F32 dt)
 {
-    mPuffs.clear();
+    mPrimary.mPuffs.clear();
+    mUnder.mPuffs.clear();
+    mLastCoverage = 0.f;
+    mLastBuildMS = 0.f;
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoVolumetricClouds", true);
     if (!enabled) return;
@@ -168,19 +177,6 @@ void SSVolCloud::update(F32 dt)
 
     const F32 moisture = llclamp(track.mWeather.mMoisture.valueAt(phase), 0.f, 1.f);
     const F32 convection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
-
-    const SSAtmoEnvCloudFieldState field =
-        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, phase);
-
-    if (field.mCoverage < COVERAGE_FLOOR || field.mThicknessM <= 1.f) return;
-
-    mTexture = field.mBaseTexture.notNull()
-        ? field.mBaseTexture
-        : LLUUID(field.mHasAnvil || convection > 0.6f
-                 ? SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS
-                 : SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS);
-
-    mAuthoredDetail = field.mDetailTexture;
 
     LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
     const F32 sun_alt = sky ? sky->getSunDirection().mV[VZ] : 0.f;
@@ -215,29 +211,81 @@ void SSVolCloud::update(F32 dt)
         mBeam = t * t * (3.f - 2.f * t);
     }
 
-    mBaseZ = field.mBaseHeightM;
-    mThicknessM = llmax(1.f, field.mThicknessM);
-    mAnvil = field.mAnvil;
-    mTextureMix = field.mTextureMix;
-    mPuffDensity = field.mPuffDensity;
-    mDetailScale = field.mDetailScale;
-    mDriftRate = field.mDriftRate;
+    mAmbient = ambient;
     mLightDir = light_dir;
     mSunColor = sunlit;
 
-    const F32 gloom = field.mGloom;
-    mChurn = llclamp(field.mChurn, 0.f, 1.f);
+    mEffRadius = FIELD_RADIUS_M;
+    // Cap and knee: see SS_SQUASH_CAP_FRAC in ssvolcloud.h. The knee is a plain 0.8 of the cap, so the field from there outward folds into the last fifth of drawn depth.
+    mSquashCap = MAX_FAR_CLIP * SS_SQUASH_CAP_FRAC;
+    mSquashKnee = mSquashCap * 0.8f;
+
+    const SSAtmoEnvCloudFieldState field =
+        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, phase);
+
+    if (field.mCoverage >= COVERAGE_FLOOR && field.mThicknessM > 1.f)
+    {
+        buildDeck(mPrimary, field, convection, 0u);
+        mLastCoverage = field.mCoverage;
+    }
+
+    // <SS:Nexii> The under deck: the same resolver and the same builder against the track's second
+    // field, hashed with its own salt so the two decks' cloud patterns are independent - a mirror
+    // copy of the main deck at a different altitude would read as exactly the artifact it is.
+    // </SS:Nexii>
+    if (track.mUnderField.mEnabled)
+    {
+        const SSAtmoEnvCloudFieldState under =
+            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, phase);
+        if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
+        {
+            buildDeck(mUnder, under, convection, SS_UNDER_DECK_SALT);
+        }
+    }
+
+    mStrikeLights.clear();
+    for (const SSStrike& strike : SSLightning::getInstance()->strikes())
+    {
+        const F32 b = strike.mChannelBrightness * strike.mIntensity;
+        if (b <= 0.004f) continue;
+
+        mStrikeLights.push_back(LLVector4(strike.mOrigin.mV[VX],
+                                          strike.mOrigin.mV[VY],
+                                          strike.mOrigin.mV[VZ], b));
+        if ((S32)mStrikeLights.size() >= SS_MAX_STRIKE_LIGHTS) break;
+    }
+
+    mOccGridDirty = true;
+
+    mLastBuildMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
+}
+
+// Builds one deck's puffs from a resolved field state: same deterministic placement and shading for both decks, hashed with the deck's salt so their patterns differ.
+void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, U32 salt)
+{
+    deck.mTexture = field.mBaseTexture.notNull()
+        ? field.mBaseTexture
+        : LLUUID(field.mHasAnvil || convection > 0.6f
+                 ? SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS
+                 : SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS);
+
+    deck.mDetail = field.mDetailTexture;
+
+    deck.mBaseZ = field.mBaseHeightM;
+    deck.mThicknessM = llmax(1.f, field.mThicknessM);
+    deck.mAnvil = field.mAnvil;
+    deck.mTextureMix = field.mTextureMix;
+    deck.mPuffDensity = field.mPuffDensity;
+    deck.mDetailScale = field.mDetailScale;
+    deck.mDriftRate = field.mDriftRate;
+    deck.mChurn = llclamp(field.mChurn, 0.f, 1.f);
+    deck.mCoverage = field.mCoverage;
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
 
     const F32 air_x = cam.mV[VX] - drift.mV[0];
     const F32 air_y = cam.mV[VY] - drift.mV[1];
-
-    mEffRadius = FIELD_RADIUS_M;
-    // Cap and knee: see SS_SQUASH_CAP_FRAC in ssvolcloud.h. The knee is a plain 0.8 of the cap, so the field from there outward folds into the last fifth of drawn depth.
-    mSquashCap = MAX_FAR_CLIP * SS_SQUASH_CAP_FRAC;
-    mSquashKnee = mSquashCap * 0.8f;
 
     const S32 cell_radius = (S32)ceilf(FIELD_DRAW_M / CELL_M);
     const S32 cx0 = (S32)floorf(air_x / CELL_M);
@@ -246,6 +294,12 @@ void SSVolCloud::update(F32 dt)
     const F32 base_radius = CELL_M * PUFF_CELL_FRACTION * 0.5f;
     const F32 size_gain = 1.f + PUFF_THICKNESS_GAIN * (field.mThicknessM / 500.f);
 
+    const F32 gloom = field.mGloom;
+    const LLVector3 light_dir = mLightDir;
+    const F32 beam = mBeam;
+
+    F64 dist_sum = 0.0;
+
     for (S32 dy = -cell_radius; dy <= cell_radius; ++dy)
     {
         for (S32 dx = -cell_radius; dx <= cell_radius; ++dx)
@@ -253,8 +307,8 @@ void SSVolCloud::update(F32 dt)
             const S32 cx = cx0 + dx;
             const S32 cy = cy0 + dy;
 
-            const F32 gate = clusterUnit(cx, cy) * CLUSTER_WEIGHT
-                           + hashUnit(cx, cy, 1u) * (1.f - CLUSTER_WEIGHT);
+            const F32 gate = clusterUnit(cx, cy, salt) * CLUSTER_WEIGHT
+                           + hashUnit(cx, cy, 1u + salt) * (1.f - CLUSTER_WEIGHT);
             if (gate > field.mCoverage) continue;
 
             const F32 coreness = llclamp(
@@ -265,22 +319,22 @@ void SSVolCloud::update(F32 dt)
 
             for (S32 sub = 0; sub < PUFFS_PER_CELL; ++sub)
             {
-                const U32 salt = (U32)sub * 8u;
+                const U32 sub_salt = salt + (U32)sub * 8u;
 
-                const F32 jx = (hashUnit(cx, cy, 2u + salt) - 0.5f) * CELL_M * 0.8f;
-                const F32 jy = (hashUnit(cx, cy, 3u + salt) - 0.5f) * CELL_M * 0.8f;
+                const F32 jx = (hashUnit(cx, cy, 2u + sub_salt) - 0.5f) * CELL_M * 0.8f;
+                const F32 jy = (hashUnit(cx, cy, 3u + sub_salt) - 0.5f) * CELL_M * 0.8f;
 
                 LLVector3 pos;
                 pos.mV[VX] = (F32)cx * CELL_M + CELL_M * 0.5f + jx + drift.mV[0];
                 pos.mV[VY] = (F32)cy * CELL_M + CELL_M * 0.5f + jy + drift.mV[1];
 
-                const F32 up_cell = hashUnit(cx, cy, 4u + salt);
+                const F32 up_cell = hashUnit(cx, cy, 4u + sub_salt);
                 const F32 up = up_cell * cell_height;
                 pos.mV[VZ] = field.mBaseHeightM + up * field.mThicknessM;
 
-            const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
-            const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
-            const F32 flat = 1.f + field.mAnvil * coreness * (waist + flare - 1.f);
+                const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
+                const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
+                const F32 flat = 1.f + field.mAnvil * coreness * (waist + flare - 1.f);
 
                 const LLVector3 to_cam = pos - cam;
                 const F32 dist_sq = to_cam.magVecSquared();
@@ -292,7 +346,7 @@ void SSVolCloud::update(F32 dt)
                 Puff puff;
                 puff.mPosAgent = pos;
                 puff.mRadius = base_radius * size_gain * flat
-                    * (0.7f + 0.6f * hashUnit(cx, cy, 5u + salt))
+                    * (0.7f + 0.6f * hashUnit(cx, cy, 5u + sub_salt))
                     * (squashed ? 1.6f : 1.f);
                 puff.mCamDistSq = dist_sq;
 
@@ -323,39 +377,28 @@ void SSVolCloud::update(F32 dt)
 
                 const F32 rim = edge_t * edge_t * (3.f - 2.f * edge_t);
 
-                const F32 form = lerp(0.65f, lerp(facing, 0.65f, rim), mBeam)
-                               * lerp(1.f, shade, mBeam);
-                puff.mColor = (ambient + sunlit * form) * gloom;
+                const F32 form = lerp(0.65f, lerp(facing, 0.65f, rim), beam)
+                               * lerp(1.f, shade, beam);
+                puff.mColor = (mAmbient + mSunColor * form) * gloom;
 
-                mPuffs.push_back(puff);
+                dist_sum += dist_sq;
+                deck.mPuffs.push_back(puff);
             }
         }
     }
 
-    mStrikeLights.clear();
-    for (const SSStrike& strike : SSLightning::getInstance()->strikes())
+    if (!deck.mPuffs.empty())
     {
-        const F32 b = strike.mChannelBrightness * strike.mIntensity;
-        if (b <= 0.004f) continue;
+        deck.mMeanDistSq = (F32)(dist_sum / (F64)deck.mPuffs.size());
 
-        mStrikeLights.push_back(LLVector4(strike.mOrigin.mV[VX],
-                                          strike.mOrigin.mV[VY],
-                                          strike.mOrigin.mV[VZ], b));
-        if ((S32)mStrikeLights.size() >= SS_MAX_STRIKE_LIGHTS) break;
+        std::sort(deck.mPuffs.begin(), deck.mPuffs.end(),
+                  [](const Puff& a, const Puff& b) { return a.mCamDistSq > b.mCamDistSq; });
+
+        if ((S32)deck.mPuffs.size() > MAX_PUFFS)
+        {
+            deck.mPuffs.erase(deck.mPuffs.begin(), deck.mPuffs.end() - MAX_PUFFS);
+        }
     }
-
-    std::sort(mPuffs.begin(), mPuffs.end(),
-              [](const Puff& a, const Puff& b) { return a.mCamDistSq > b.mCamDistSq; });
-
-    if ((S32)mPuffs.size() > MAX_PUFFS)
-    {
-        mPuffs.erase(mPuffs.begin(), mPuffs.end() - MAX_PUFFS);
-    }
-
-    mOccGridDirty = true;
-    mLastCoverage = field.mCoverage;
-
-    mLastBuildMS = (F32)(timer.getElapsedTimeF64() * 1000.0);
 }
 
 // Drawn/true distance ratio of the shared squash band, for anything that must land at the field's drawn depth.
@@ -368,18 +411,18 @@ F32 SSVolCloud::squashScale(F32 true_dist) const
     return drawn / true_dist;
 }
 
-// How much light survives from A to B through the puffs - grid-accelerated, drives lightning occlusion.
+// How much light survives from A to B through the primary deck's puffs - grid-accelerated, drives lightning occlusion. The under deck sits below the weather and is nobody's occluder.
 F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_agent, F32 strength)
 {
-    if (mPuffs.empty() || strength <= 0.f) return 1.f;
+    if (mPrimary.mPuffs.empty() || strength <= 0.f) return 1.f;
 
     if (mOccGridDirty)
     {
         mOccGrid.clear();
         mMaxPuffR = 0.f;
-        for (S32 i = 0; i < (S32)mPuffs.size(); ++i)
+        for (S32 i = 0; i < (S32)mPrimary.mPuffs.size(); ++i)
         {
-            const Puff& p = mPuffs[i];
+            const Puff& p = mPrimary.mPuffs[(size_t)i];
             const F32 r = p.mRadius * PUFF_WIDE;
             mMaxPuffR = llmax(mMaxPuffR, r);
             const S32 x0 = (S32)floorf((p.mPosAgent.mV[VX] - r) / CELL_M);
@@ -394,14 +437,14 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
                 }
             }
         }
-        mOccStamp.assign(mPuffs.size(), 0u);
+        mOccStamp.assign(mPrimary.mPuffs.size(), 0u);
         mOccQuery = 0;
         mOccGridDirty = false;
     }
 
     const LLVector3 d = to_agent - from_agent;
-    const F32 z_lo = mBaseZ - mMaxPuffR;
-    const F32 z_hi = mBaseZ + mThicknessM + mMaxPuffR;
+    const F32 z_lo = mPrimary.mBaseZ - mMaxPuffR;
+    const F32 z_hi = mPrimary.mBaseZ + mPrimary.mThicknessM + mMaxPuffR;
     F32 t0 = 0.f, t1 = 1.f;
     if (fabsf(d.mV[VZ]) > 0.001f)
     {
@@ -440,7 +483,7 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
             if (mOccStamp[(size_t)idx] == mOccQuery) continue;
             mOccStamp[(size_t)idx] = mOccQuery;
 
-            const Puff& p = mPuffs[(size_t)idx];
+            const Puff& p = mPrimary.mPuffs[(size_t)idx];
 
             const F32 t = llclamp(((p.mPosAgent - from_agent) * d) / d_sq, 0.f, 1.f);
             const LLVector3 closest = from_agent + d * t;
@@ -459,7 +502,7 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
 // Draws the sorted puffs as camera-faced billboards with soft depth, storm lighting and strike flashes.
 void SSVolCloud::render()
 {
-    if (mPuffs.empty() || mTexture.isNull()) return;
+    if ((mPrimary.mPuffs.empty() && mUnder.mPuffs.empty())) return;
     if (!gSSVolCloudProgram.isComplete()) return;
 
     if (LLPipeline::sRenderingHUDs || LLPipeline::sImpostorRender
@@ -468,86 +511,55 @@ void SSVolCloud::render()
         return;
     }
 
-    if (mTextureRef.isNull() || mTextureRef->getID() != mTexture)
-    {
-        mTextureRef = LLViewerTextureManager::getFetchedTexture(
-            mTexture, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
-        if (mTextureRef.notNull())
-        {
-            mTextureRef->setNoDelete();
-        }
-    }
-    if (mTextureRef.isNull()) return;
-    mTextureRef->addTextureStats((F32)MAX_IMAGE_AREA);
-
-    {
-        LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
-        const LLUUID dome_id = mAuthoredDetail.notNull()
-            ? mAuthoredDetail
-            : (sky ? sky->getCloudNoiseTextureId() : LLUUID::null);
-        if (dome_id.notNull() && (mDomeTexRef.isNull() || mDomeTexture != dome_id))
-        {
-            mDomeTexture = dome_id;
-            mDomeTexRef = LLViewerTextureManager::getFetchedTexture(
-                dome_id, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
-            if (mDomeTexRef.notNull())
-            {
-                mDomeTexRef->setNoDelete();
-            }
-        }
-        if (mDomeTexRef.notNull())
-        {
-            mDomeTexRef->addTextureStats((F32)MAX_IMAGE_AREA);
-        }
-    }
-
-    LLViewerFetchedTexture* tex = mTextureRef.get();
-
+    // <SS:Nexii> Depth copy: taken once before either deck draws - the primary deck is the occluder
+    // the soft edges belong to, and the under deck at the bottom of a build blends against world
+    // geometry plus the primary deck above it in the one copy. </SS:Nexii>
     LL_PROFILE_GPU_ZONE("atmo volumetric clouds");
 
-    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    bool have_depth_copy = false;
 
-    const S32 view_w = (S32)gGLViewport[2];
-    const S32 view_h = (S32)gGLViewport[3];
-    bool soft = false;
-
-    if (view_w > 0 && view_h > 0 && gCopyDepthProgram.isComplete())
     {
-        if ((S32)mDepthCopy.getWidth() != view_w || (S32)mDepthCopy.getHeight() != view_h)
+        const S32 view_w = (S32)gGLViewport[2];
+        const S32 view_h = (S32)gGLViewport[3];
+
+        if (view_w > 0 && view_h > 0 && gCopyDepthProgram.isComplete())
         {
-            mDepthCopy.release();
-            soft = mDepthCopy.allocate(view_w, view_h, GL_RGBA, true);
-        }
-        else
-        {
-            soft = true;
-        }
+            if ((S32)mDepthCopy.getWidth() != view_w || (S32)mDepthCopy.getHeight() != view_h)
+            {
+                mDepthCopy.release();
+                have_depth_copy = mDepthCopy.allocate(view_w, view_h, GL_RGBA, true);
+            }
+            else
+            {
+                have_depth_copy = true;
+            }
 
-        if (soft)
-        {
-            LL_PROFILE_GPU_ZONE("atmo cloud depth copy");
+            if (have_depth_copy)
+            {
+                LL_PROFILE_GPU_ZONE("atmo cloud depth copy");
 
-            LLGLDepthTest copy_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+                LLGLDepthTest copy_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
 
-            gPipeline.mRT->screen.flush();
-            mDepthCopy.bindTarget();
+                gPipeline.mRT->screen.flush();
+                mDepthCopy.bindTarget();
 
-            gCopyDepthProgram.bind();
+                gCopyDepthProgram.bind();
 
-            S32 diff_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DIFFUSE_MAP);
-            S32 depth_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DEFERRED_DEPTH);
-            gGL.getTexUnit(diff_map)->bind(&gPipeline.mRT->screen);
-            gGL.getTexUnit(depth_map)->bind(&gPipeline.mRT->deferredScreen, true);
+                S32 diff_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DIFFUSE_MAP);
+                S32 depth_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DEFERRED_DEPTH);
+                gGL.getTexUnit(diff_map)->bind(&gPipeline.mRT->screen);
+                gGL.getTexUnit(depth_map)->bind(&gPipeline.mRT->deferredScreen, true);
 
-            gGL.setColorMask(false, false);
-            gPipeline.mScreenTriangleVB->setBuffer();
-            gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-            gGL.setColorMask(true, true);
+                gGL.setColorMask(false, false);
+                gPipeline.mScreenTriangleVB->setBuffer();
+                gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+                gGL.setColorMask(true, true);
 
-            gCopyDepthProgram.unbind();
+                gCopyDepthProgram.unbind();
 
-            mDepthCopy.flush();
-            gPipeline.mRT->screen.bindTarget();
+                mDepthCopy.flush();
+                gPipeline.mRT->screen.bindTarget();
+            }
         }
     }
 
@@ -559,39 +571,34 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.bind();
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
-    gSSVolCloudProgram.bindTexture(LLShaderMgr::DIFFUSE_MAP, tex, LLTexUnit::TT_TEXTURE);
-
-    gSSVolCloudProgram.bindTexture(LLShaderMgr::CLOUD_NOISE_MAP,
-                                   mDomeTexRef.notNull() ? mDomeTexRef.get() : tex,
-                                   LLTexUnit::TT_TEXTURE);
 
     static LLStaticHashedString s_drift("ss_drift");
     static LLStaticHashedString s_time("ss_time");
     static LLStaticHashedString s_churn("ss_churn");
-
-    const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
-    gSSVolCloudProgram.uniform2f(s_drift, drift.mV[0], drift.mV[1]);
-    gSSVolCloudProgram.uniform1f(s_time, (F32)LLFrameTimer::getElapsedSeconds());
-    gSSVolCloudProgram.uniform1f(s_churn, mChurn);
-
     static LLStaticHashedString s_anvil("ss_anvil");
-    gSSVolCloudProgram.uniform1f(s_anvil, mAnvil);
-
     static LLStaticHashedString s_base_z("ss_base_z");
     static LLStaticHashedString s_thick("ss_layer_thick");
     static LLStaticHashedString s_tex_mix("ss_tex_mix");
     static LLStaticHashedString s_puff_density("ss_puff_density");
     static LLStaticHashedString s_detail_scale("ss_detail_scale");
     static LLStaticHashedString s_drift_rate("ss_drift_rate");
-
-    gSSVolCloudProgram.uniform1f(s_base_z, mBaseZ);
-    gSSVolCloudProgram.uniform1f(s_thick, mThicknessM);
-    gSSVolCloudProgram.uniform1f(s_tex_mix, mTextureMix);
-    gSSVolCloudProgram.uniform1f(s_puff_density, mPuffDensity);
-    gSSVolCloudProgram.uniform1f(s_detail_scale, mDetailScale);
-    gSSVolCloudProgram.uniform1f(s_drift_rate, mDriftRate);
-
     static LLStaticHashedString s_wind("ss_wind");
+    static LLStaticHashedString s_strike("ss_strike");
+    static LLStaticHashedString s_strike_count("ss_strike_count");
+    static LLStaticHashedString s_strike_color("ss_strike_color");
+    static LLStaticHashedString s_strike_occ("ss_strike_occ");
+    static LLStaticHashedString s_light_dir("ss_light_dir");
+    static LLStaticHashedString s_sun_color("ss_sun_color");
+    static LLStaticHashedString s_cam_pos("ss_cam_pos");
+    static LLStaticHashedString s_beam("ss_beam");
+    static LLStaticHashedString s_rim("ss_rim");
+    static LLStaticHashedString s_squash("ss_squash");
+    static LLStaticHashedString s_clip("ss_clip");
+    static LLStaticHashedString s_soft("ss_soft_m");
+
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+
     LLVector2 wind = drift;
     if (wind.length() < 0.001f)
     {
@@ -601,13 +608,8 @@ void SSVolCloud::render()
     {
         wind.normalize();
     }
-    gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
     {
-        static LLStaticHashedString s_strike("ss_strike");
-        static LLStaticHashedString s_strike_count("ss_strike_count");
-
-        static LLStaticHashedString s_strike_color("ss_strike_color");
         const LLColor3 lit = SSAtmoMagic::getInstance()->lightningColor();
         gSSVolCloudProgram.uniform3fv(s_strike_color, 1, lit.mV);
 
@@ -619,14 +621,9 @@ void SSVolCloud::render()
                                           (F32*)mStrikeLights.data());
         }
 
-        static LLStaticHashedString s_strike_occ("ss_strike_occ");
         static LLCachedControl<F32> occl_setting(gSavedSettings, "SSAtmoLightningOcclusion", 0.85f);
         gSSVolCloudProgram.uniform1f(s_strike_occ, llclamp((F32)occl_setting, 0.f, 1.f));
     }
-
-    static LLStaticHashedString s_light_dir("ss_light_dir");
-    static LLStaticHashedString s_sun_color("ss_sun_color");
-    static LLStaticHashedString s_cam_pos("ss_cam_pos");
 
     LLVector3 light = mLightDir;
     if (light.normalize() < 0.001f) light = LLVector3::z_axis;
@@ -635,99 +632,163 @@ void SSVolCloud::render()
     gSSVolCloudProgram.uniform3fv(s_sun_color, 1, mSunColor.mV);
     gSSVolCloudProgram.uniform3fv(s_cam_pos, 1, camera->getOrigin().mV);
 
-    static LLStaticHashedString s_beam("ss_beam");
     gSSVolCloudProgram.uniform1f(s_beam, mBeam);
 
-    static LLStaticHashedString s_rim("ss_rim");
     gSSVolCloudProgram.uniform2f(s_rim, 4000.f, 4900.f);
 
-    static LLStaticHashedString s_squash("ss_squash");
     gSSVolCloudProgram.uniform3f(s_squash, mSquashKnee, mSquashCap, mEffRadius);
 
     static const F32 SOFT_M = 112.5f;
-    static LLStaticHashedString s_clip("ss_clip");
-    static LLStaticHashedString s_soft("ss_soft_m");
 
-    if (soft)
-    {
-        soft = gSSVolCloudProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH,
-                                              &mDepthCopy, true) >= 0;
-    }
+    bool soft = have_depth_copy &&
+        gSSVolCloudProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH, &mDepthCopy, true) >= 0;
 
     gSSVolCloudProgram.uniform1f(s_soft, soft ? SOFT_M : 0.f);
     if (soft)
     {
         gSSVolCloudProgram.uniform2f(LLShaderMgr::DEFERRED_SCREEN_RES,
-                                     (F32)view_w, (F32)view_h);
+                                     (F32)gGLViewport[2], (F32)gGLViewport[3]);
         gSSVolCloudProgram.uniform2f(s_clip, camera->getNear(), camera->getFar());
     }
 
-    const LLVector3 cam_pos = camera->getOrigin();
+    gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
+    // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the
+    // build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer
+    // one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and
+    // the shared uniforms above survive across both. </SS:Nexii>
+    const bool under_on_top = mUnder.mMeanDistSq < mPrimary.mMeanDistSq;
+    Deck* order[2] = { under_on_top ? &mPrimary : &mUnder,
+                       under_on_top ? &mUnder    : &mPrimary };
+
+    const LLVector3 cam_pos = camera->getOrigin();
     const LLVector3 cam_right_fallback = camera->getLeftAxis() * -1.f;
 
-    gGL.begin(LLRender::TRIANGLES);
-    for (const Puff& puff : mPuffs)
+    for (Deck* deckp : order)
     {
-        LLVector3 normal = cam_pos - puff.mPosAgent;
-        if (normal.normalize() < 0.001f)
-        {
-            normal = LLVector3::z_axis;
-        }
+        Deck& deck = *deckp;
+        if (deck.mPuffs.empty() || deck.mTexture.isNull()) continue;
 
-        const F32 flatten = llclamp((fabsf(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
-        if (flatten > 0.f)
+        if (!fetchDeckTextures(deck)) continue;
+
+        gSSVolCloudProgram.bindTexture(LLShaderMgr::DIFFUSE_MAP, deck.mTextureRef, LLTexUnit::TT_TEXTURE);
+        gSSVolCloudProgram.bindTexture(LLShaderMgr::CLOUD_NOISE_MAP,
+                                       deck.mDetailRef.notNull() ? deck.mDetailRef.get() : deck.mTextureRef.get(),
+                                       LLTexUnit::TT_TEXTURE);
+
+        gSSVolCloudProgram.uniform2f(s_drift, drift.mV[0], drift.mV[1]);
+        gSSVolCloudProgram.uniform1f(s_time, (F32)LLFrameTimer::getElapsedSeconds());
+        gSSVolCloudProgram.uniform1f(s_churn, deck.mChurn);
+
+        gSSVolCloudProgram.uniform1f(s_anvil, deck.mAnvil);
+
+        gSSVolCloudProgram.uniform1f(s_base_z, deck.mBaseZ);
+        gSSVolCloudProgram.uniform1f(s_thick, deck.mThicknessM);
+        gSSVolCloudProgram.uniform1f(s_tex_mix, deck.mTextureMix);
+        gSSVolCloudProgram.uniform1f(s_puff_density, deck.mPuffDensity);
+        gSSVolCloudProgram.uniform1f(s_detail_scale, deck.mDetailScale);
+        gSSVolCloudProgram.uniform1f(s_drift_rate, deck.mDriftRate);
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (const Puff& puff : deck.mPuffs)
         {
-            const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;
-            normal = normal * (1.f - flatten) + LLVector3(0.f, 0.f, sgn) * flatten;
+            LLVector3 normal = cam_pos - puff.mPosAgent;
             if (normal.normalize() < 0.001f)
             {
-                normal.setVec(0.f, 0.f, sgn);
+                normal = LLVector3::z_axis;
             }
+
+            const F32 flatten = llclamp((fabsf(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
+            if (flatten > 0.f)
+            {
+                const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;
+                normal = normal * (1.f - flatten) + LLVector3(0.f, 0.f, sgn) * flatten;
+                if (normal.normalize() < 0.001f)
+                {
+                    normal.setVec(0.f, 0.f, sgn);
+                }
+            }
+
+            LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
+                          + LLVector3::x_axis * flatten;
+            ref.normalize();
+
+            LLVector3 base_right = ref % normal;
+            if (base_right.normalize() < 0.001f)
+            {
+                base_right = cam_right_fallback;
+            }
+            const LLVector3 base_up = normal % base_right;
+
+            const F32 layer_h = llclamp(
+                (puff.mPosAgent.mV[VZ] - deck.mBaseZ) / deck.mThicknessM, 0.f, 1.f);
+            const F32 round = llclamp(
+                (layer_h - PUFF_ROUND_LO) / (PUFF_ROUND_HI - PUFF_ROUND_LO), 0.f, 1.f);
+
+            const F32 wide = PUFF_WIDE + (1.f - PUFF_WIDE) * round;
+            const F32 tall = PUFF_TALL + (1.f - PUFF_TALL) * round;
+
+            const LLVector3 right = base_right * (puff.mRadius * wide);
+            const LLVector3 up = base_up * (puff.mRadius * tall);
+
+            gGL.color4f(puff.mColor.mV[0], puff.mColor.mV[1], puff.mColor.mV[2], puff.mAlpha);
+
+            const LLVector3 tl = puff.mPosAgent - right + up;
+            const LLVector3 bl = puff.mPosAgent - right - up;
+            const LLVector3 tr = puff.mPosAgent + right + up;
+            const LLVector3 br = puff.mPosAgent + right - up;
+
+            gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv(tl.mV);
+            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(bl.mV);
+            gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv(tr.mV);
+
+            gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv(tr.mV);
+            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(bl.mV);
+            gGL.texCoord2f(1.f, 0.f); gGL.vertex3fv(br.mV);
         }
-
-        LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
-                      + LLVector3::x_axis * flatten;
-        ref.normalize();
-
-        LLVector3 base_right = ref % normal;
-        if (base_right.normalize() < 0.001f)
-        {
-            base_right = cam_right_fallback;
-        }
-        const LLVector3 base_up = normal % base_right;
-
-        const F32 layer_h = llclamp(
-            (puff.mPosAgent.mV[VZ] - mBaseZ) / mThicknessM, 0.f, 1.f);
-        const F32 round = llclamp(
-            (layer_h - PUFF_ROUND_LO) / (PUFF_ROUND_HI - PUFF_ROUND_LO), 0.f, 1.f);
-
-        const F32 wide = PUFF_WIDE + (1.f - PUFF_WIDE) * round;
-        const F32 tall = PUFF_TALL + (1.f - PUFF_TALL) * round;
-
-        const LLVector3 right = base_right * (puff.mRadius * wide);
-        const LLVector3 up = base_up * (puff.mRadius * tall);
-
-        gGL.color4f(puff.mColor.mV[0], puff.mColor.mV[1], puff.mColor.mV[2], puff.mAlpha);
-
-        const LLVector3 tl = puff.mPosAgent - right + up;
-        const LLVector3 bl = puff.mPosAgent - right - up;
-        const LLVector3 tr = puff.mPosAgent + right + up;
-        const LLVector3 br = puff.mPosAgent + right - up;
-
-        gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv(tl.mV);
-        gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(bl.mV);
-        gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv(tr.mV);
-
-        gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv(tr.mV);
-        gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(bl.mV);
-        gGL.texCoord2f(1.f, 0.f); gGL.vertex3fv(br.mV);
+        gGL.end();
     }
-    gGL.end();
+
     gGL.flush();
 
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
     gSSVolCloudProgram.unbind();
 
     gGL.setColorMask(true, true);
+}
+
+// Binds a deck's authored textures, falling back to the sky dome's noise for an empty detail slot - per deck, since the two may carry different maps.
+bool SSVolCloud::fetchDeckTextures(Deck& deck)
+{
+    if (deck.mTextureRef.isNull() || deck.mTextureRef->getID() != deck.mTexture)
+    {
+        deck.mTextureRef = LLViewerTextureManager::getFetchedTexture(
+            deck.mTexture, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
+        if (deck.mTextureRef.notNull())
+        {
+            deck.mTextureRef->setNoDelete();
+        }
+    }
+    if (deck.mTextureRef.isNull()) return false;
+    deck.mTextureRef->addTextureStats((F32)MAX_IMAGE_AREA);
+
+    LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
+    const LLUUID detail_id = deck.mDetail.notNull()
+        ? deck.mDetail
+        : (sky ? sky->getCloudNoiseTextureId() : LLUUID::null);
+    if (detail_id.notNull() && (deck.mDetailRef.isNull() || deck.mDetailRef->getID() != detail_id))
+    {
+        deck.mDetailRef = LLViewerTextureManager::getFetchedTexture(
+            detail_id, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
+        if (deck.mDetailRef.notNull())
+        {
+            deck.mDetailRef->setNoDelete();
+        }
+    }
+    if (deck.mDetailRef.notNull())
+    {
+        deck.mDetailRef->addTextureStats((F32)MAX_IMAGE_AREA);
+    }
+
+    return true;
 }
