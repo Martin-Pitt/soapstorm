@@ -888,7 +888,7 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>74097f66856f1056fbec923d6965f7db</string>
+              <string>1fdf631acfa79b8b32758241a3bc2165</string>
               <key>hash_algorithm</key>
               <string>md5</string>
               <key>url</key>
@@ -902,7 +902,7 @@
             <key>archive</key>
             <map>
               <key>hash</key>
-              <string>4a0da36b4a31332df62dadf6438f935e</string>
+              <string>0c325511ef0ed1a453d3d2d324a1082d</string>
               <key>url</key>
               <string>file:///c:/cygwin/opt/firestorm/fmodstudio-2.03.07-windows64-251121127.tar.bz2</string>
             </map>
