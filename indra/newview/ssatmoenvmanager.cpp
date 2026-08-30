@@ -34,6 +34,7 @@
 #include <ctime>
 #include <functional>
 #include <sstream>
+#include <stdexcept>
 
 #ifdef LL_USESYSTEMLIBS
 #include <zlib.h>
@@ -507,15 +508,50 @@ void SSAtmoEnvManager::atmoFolderId(std::function<void(const LLUUID&)> on_ready)
 
 namespace
 {
+    // <SS:Nexii> Deep-copy guard. The create path copies the asset into its async callbacks, and
+    // two sessions in a row that copy died in std::vector::_Xlength - a wrecked container header
+    // somewhere inside the object, hit while the memory around it still reads as ordinary C++.
+    // Copying once here, under a guard, does three things: the insane-count case (the outer
+    // mTracks header) logs the raw numbers, the sane-count case still gets the deep copy's throw
+    // turned into a log line, and everything downstream - captures, notecard, adoptCreated -
+    // copies a known-good object instead of the tainted one. The fallback is the clean seed, so
+    // a creation attempt still completes; the log line is the diagnosis.
+    SSAtmoEnvAsset ss_atmo_env_sanitize(const SSAtmoEnvAsset& def)
+    {
+        if (def.mTracks.size() > (size_t)SS_ATMOENV_MAX_TRACKS)
+        {
+            LL_WARNS("AtmoMagicEnv") << "Atmo v3 asset corruption: mTracks.size() 0x" << std::hex
+                                     << def.mTracks.size() << std::dec << ", data "
+                                     << (const void*)def.mTracks.data()
+                                     << " - rebuilding a clean seed for the notecard" << LL_ENDL;
+            return SSAtmoEnvAsset::makeDefault();
+        }
+
+        try
+        {
+            return def;
+        }
+        catch (const std::exception& e)
+        {
+            LL_WARNS("AtmoMagicEnv") << "Atmo v3 asset corruption: deep copy threw '" << e.what()
+                                     << "' with a sane track count - a track's keyframe store is "
+                                        "wrecked - rebuilding a clean seed for the notecard"
+                                     << LL_ENDL;
+            return SSAtmoEnvAsset::makeDefault();
+        }
+    }
+
     void writeDefaultNotecard(const SSAtmoEnvAsset& def, const LLUUID& parent_id,
                                std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
     {
-        auto write = [def, on_created](const LLUUID& folder_id)
+        const SSAtmoEnvAsset safe_def = ss_atmo_env_sanitize(def);
+
+        auto write = [safe_def, on_created](const LLUUID& folder_id)
         {
-            writeAssetAsNotecard(def, def.mName, folder_id,
-                [def, on_created](const LLUUID& item_id, const LLUUID& asset_id)
+            writeAssetAsNotecard(safe_def, safe_def.mName, folder_id,
+                [safe_def, on_created](const LLUUID& item_id, const LLUUID& asset_id)
                 {
-                    if (on_created) on_created(item_id, asset_id, def);
+                    if (on_created) on_created(item_id, asset_id, safe_def);
                 });
         };
 
@@ -1058,7 +1094,9 @@ void SSAtmoEnvManager::saveNotecard(const std::string& name)
     // Self-containment is a save-time property: whatever the keyframes name travels with the asset.
     ssAtmoEnvEmbedReferencedPrecipTypes(mWorking);
 
-    mBaseline = mWorking;
+    const SSAtmoEnvAsset safe_working = ss_atmo_env_sanitize(mWorking);
+    mWorking = safe_working;
+    mBaseline = safe_working;
 
     if (mItemID.notNull())
     {
@@ -1066,10 +1104,9 @@ void SSAtmoEnvManager::saveNotecard(const std::string& name)
         return;
     }
 
-    const SSAtmoEnvAsset to_save = mWorking;
-    atmoFolderId([this, to_save, save_name](const LLUUID& folder_id)
+    atmoFolderId([this, safe_working, save_name](const LLUUID& folder_id)
     {
-        writeAssetAsNotecard(to_save, save_name, folder_id,
+        writeAssetAsNotecard(safe_working, save_name, folder_id,
             [this](const LLUUID& item_id, const LLUUID& asset_id)
             {
                 if (item_id.notNull()) mItemID = item_id;

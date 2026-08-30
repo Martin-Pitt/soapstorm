@@ -73,6 +73,14 @@ vec4 cloudNoiseLarge(vec2 uv)
 {
     return mix(cloudNoise(uv), texture(ss_noise_large, uv), ss_noise_large_on);
 }
+#else
+// <SS:Nexii> The broad octave's calls in the opacity lines below are ungated so both variants
+// share one body; in the stock build the large map does not exist, so the name resolves to the
+// plain cloud noise and stock renders exactly what it always did.
+vec4 cloudNoiseLarge(vec2 uv)
+{
+    return cloudNoise(uv);
+}
 #endif
 
 #ifdef SS_ATMO

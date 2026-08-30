@@ -1127,8 +1127,17 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     // and the water), so night stays exactly the stock night.
     if (mLightSlotsValid)
     {
-        const LLColor3 light_atten = (mLastBlueDensity + LLColor3(mLastHazeDensity * 0.25f))
+        LLColor3 light_atten = (mLastBlueDensity + LLColor3(mLastHazeDensity * 0.25f))
             * (mLastDensityMult * mLastMaxY);
+        // <SS:Nexii> Attenuation is a density product: negative is never physical, and here it is
+        // not merely wrong but explosive. A slot below the horizon reads 1/1e-6 for its cosecant,
+        // so one negative component drives exp() to +inf and the shader's max() then floods every
+        // lit pixel to white. NaN clamps to zero the same way (llmax answers the second argument
+        // for a NaN first), so a wrecked sky value degrades to an unattenuated slot, never a
+        // white screen.
+        light_atten.mV[0] = llmax(light_atten.mV[0], 0.f);
+        light_atten.mV[1] = llmax(light_atten.mV[1], 0.f);
+        light_atten.mV[2] = llmax(light_atten.mV[2], 0.f);
         auto slot_light = [&light_atten, this](const LLVector3& dir)
         {
             const F32 cosec = 1.f / llmax(1e-6f, dir.mV[VZ]);
