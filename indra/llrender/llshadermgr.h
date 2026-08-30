@@ -117,6 +117,7 @@ public:
         HERO_PROBE,                         //  "heroProbes"
         CLOUD_NOISE_MAP,                    //  "cloud_noise_texture"
         CLOUD_NOISE_MAP_NEXT,               //  "cloud_noise_texture_next"
+        SS_NOISE_LARGE_MAP,                 //  "ss_noise_large" <SS:Nexii> the dome band's authored large-scale map
         LIGHTNORM,                          //  "lightnorm"
         SUNLIGHT_COLOR,                     //  "sunlight_color"
         AMBIENT,                            //  "ambient_color"
@@ -370,6 +371,25 @@ public:
         // moon the moment the sun's centre sets, which would swing every sun-anchored term
         // over to the moon's azimuth mid-sunset. Unused (stock) while ss_sun_rise is 0.
         SS_SUN_DIR,                         //  "ss_sun_dir"
+
+        // <SS:Nexii> Atmo Magic: the sun slot disc's half-angle as a direction-z sine - the
+        // floor the sky dome and dome clouds hold their sun airmass at while any part of the
+        // disc is above the horizon (the just-cleared airmass, releasing as the centre climbs
+        // past it). Zero while no active Atmo environment drives the sky.
+        SS_SUN_RADIUS,                      //  "ss_sun_radius"
+
+        // <SS:Nexii> Atmo Magic: the two light slots' scene-light contributions after their OWN
+        // atmospheric attenuation (SSAtmoEnvApplier::sunSlotLight / moonSlotLight).
+        // atmosphericsFuncs.glsl takes their per-channel max as the scene light, so the
+        // sun/moon handover happens where the two lights are equally bright instead of at the
+        // lightnorm flip at centre-rise. Zero while no Atmo environment drives the sky.
+        SS_SUN_LIGHT,                       //  "ss_sun_light"
+        SS_MOON_LIGHT,                      //  "ss_moon_light"
+
+        // <SS:Nexii> Atmo Magic: the dominant-light handover gate - 1 while an Atmo environment
+        // with light-emitting bodies drives the sky, else 0, which leaves the stock
+        // single-lightnorm switch untouched.
+        SS_LIGHT_MAX,                       //  "ss_light_max"
         END_RESERVED_UNIFORMS
     } eGLSLReservedUniforms;
     // clang-format on

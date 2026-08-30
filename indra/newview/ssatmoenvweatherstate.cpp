@@ -199,8 +199,15 @@ std::string SSAtmoEnvWeatherResolver::generateForecastText(const SSAtmoEnvWeathe
     }
     else if (state.mConvectionPhase == SSAtmoEnvWeatherState::SEVERE)
     {
-        const bool snowy = (state.mPrecipitationType == "snow" || state.mPrecipitationType == "blizzard");
-        precip = snowy ? "Thundersnow" : "Thundery showers";
+        if (state.mPrecipitationType == "hail")
+        {
+            precip = "Thundery hail";
+        }
+        else
+        {
+            const bool snowy = (state.mPrecipitationType == "snow" || state.mPrecipitationType == "blizzard");
+            precip = snowy ? "Thundersnow" : "Thundery showers";
+        }
     }
     else
     {

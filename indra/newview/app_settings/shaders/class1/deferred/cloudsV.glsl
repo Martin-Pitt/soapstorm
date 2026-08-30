@@ -94,6 +94,12 @@ uniform float ss_sun_rise;
 // the moon's azimuth at centre-set without this. See the ss_sun_dir note in skyV.glsl.
 uniform vec3 ss_sun_dir;
 
+// <SS:Nexii> The disc's half-angle as a direction-z sine (SSAtmoEnvApplier::sunSlotRadius) - the
+// airmass floor the layer's sun term holds while any part of the disc is above the horizon, the
+// just-cleared light path, for the same reason skyV.glsl does. Zero while no Atmo environment
+// drives the sky.
+uniform float ss_sun_radius;
+
 // <SS:Nexii> The stock ray lift, as in skyV.glsl: the layer's atmosphere ray below is computed
 // 50 m above the geometry it belongs to (the + vec3(0, 50, 0) in rel_pos), a legacy fudge that
 // once rode along with the stock sun disc's own legacy 50 m drop. The Atmo discs draw at the TRUE
@@ -192,7 +198,9 @@ void main()
     // angular neighbourhood - so exactly there, and nowhere else, horizon clouds keep their body. The ramp spans roughly the width of a large authored sun disc.
     // <SS:Nexii> And the neighbourhood follows the DISC (ss_sun_dir), not the lightnorm: lightnorm hands the direction to the moon the moment the disc's centre sets, which silently revoked
     // the restore for the still-half-risen disc - the clouds around it collapsed onto their eased fade, and the disc burned through them exactly at centre-set. See skyV.glsl's ss_sun_dir note.
-    vec3 disc_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+    // .yzx puts the world-axes ss_sun_dir into the ogl frame rel_pos and lightnorm share - see
+    // the frame note in skyV.glsl.
+    vec3 disc_dir = (ss_sun_rise > 0.0) ? ss_sun_dir.yzx : lightnorm.xyz;
     float sun_prox = smoothstep(0.965, 0.992, dot(normalize(rel_pos), disc_dir));
     altitude_blend_factor = max(altitude_blend_factor, sun_prox);
 #else
@@ -224,13 +232,14 @@ void main()
 
 #ifdef SS_ATMO
     // <SS:Nexii> While any part of the disc is above the horizon, the sun's term in the light
-    // path floors at zero - see the long note in skyV.glsl. Stock collapses every ray near the
-    // horizon to unlit the moment the disc's CENTRE dips under, cutting the sunset band out
-    // from under a disc that is still half up; the floor holds the band at its horizon-sitting
-    // airmass and lets the risen share fade it instead. Rides the sun's TRUE elevation
-    // (ss_sun_dir.z), so the airmass agrees from both sides of the crossing wherever the moon
-    // is. No-op at full rise, stock with the gate off.
-    float sun_elev = (ss_sun_rise > 0.0) ? max(ss_sun_dir.z, 0.0) : lightnorm.y;
+    // path floors at the DISC'S OWN half-angle (ss_sun_radius) - see the long note in skyV.glsl.
+    // Stock collapses every ray near the horizon to unlit the moment the disc's CENTRE dips
+    // under, cutting the sunset band out from under a disc that is still half up; elevation 0 is
+    // the infinite airmass, not the horizon-sitting one, so the floor holds the just-cleared
+    // path (1/radius at the horizon line) and lets the risen share fade the band instead. The
+    // floor releases once the centre clears the radius - exactly where the risen fraction hits
+    // 1 - and the gate is stock with it off.
+    float sun_elev = (ss_sun_rise > 0.0) ? max(ss_sun_dir.z, ss_sun_radius) : lightnorm.y;
 #else
     float sun_elev = lightnorm.y;
 #endif
@@ -255,9 +264,10 @@ void main()
     // Compute haze glow
     // <SS:Nexii> The glow tracks the disc (ss_sun_dir), not the lightnorm - lightnorm belongs to
     // the moon below centre-set, and the layer's glow must stay on the sun while any part of it
-    // is in sight. See the ss_sun_dir note above and in skyV.glsl.
+    // is in sight. See the ss_sun_dir note above and in skyV.glsl. .yzx puts the world-axes
+    // ss_sun_dir into the ogl frame rel_pos and lightnorm share - see the frame note in skyV.
 #ifdef SS_ATMO
-    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir.yzx : lightnorm.xyz;
 #else
     vec3 glow_dir = lightnorm.xyz;
 #endif
@@ -270,21 +280,28 @@ void main()
     haze_glow = pow(haze_glow, glow.z);
         // glow.z should be negative, so we're doing a sort of (1 / "angle") function
 
-    haze_glow *= sun_moon_glow_factor;
-
-    // Add "minimum anti-solar illumination"
-    // For sun, add to glow.  For moon, remove glow entirely. SL-13768
-    haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (haze_glow + 0.25);
-
 #ifdef SS_ATMO
-    // <SS:Nexii> The glow is the light the disc sheds: it grows from nothing with the risen share
-    // of the disc instead of snapping on at centre-rise (sun_moon_glow_factor flips on
-    // getIsSunUp, the same centre-crossing step). At full rise this is the stock sun value.
+    // <SS:Nexii> The glow is the light the disc sheds, so during the rise band it is built from
+    // the RAW angular term and scaled by the risen share - the hotspot exists from the first
+    // sliver above the horizon. Stock's factor lines cannot be allowed to touch it there: below
+    // centre-rise the factor belongs to the moon (< 1.0), whose branch zeroes the term entirely
+    // (SL-13768 - right for the moon, which must not glow), and ramping on the zeroed term grew
+    // a FLAT 0.25 wash with no hotspot at all until the factor snapped to 1.0 at centre-rise -
+    // the sunrise horizon simply was not there while the disc poked over. See the matching note
+    // in skyV.glsl. At full rise this is exactly the stock sun line; stock with the gate off.
     if (ss_sun_rise > 0.0)
     {
         haze_glow = ss_sun_rise * (haze_glow + 0.25);
     }
+    else
 #endif
+    {
+        haze_glow *= sun_moon_glow_factor;
+
+        // Add "minimum anti-solar illumination"
+        // For sun, add to glow.  For moon, remove glow entirely. SL-13768
+        haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (haze_glow + 0.25);
+    }
 
     // Increase ambient when there are more clouds
     vec3 tmpAmbient = ambient_color;

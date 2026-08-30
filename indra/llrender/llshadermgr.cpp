@@ -1340,6 +1340,7 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("heroProbes");
     mReservedUniforms.push_back("cloud_noise_texture");
     mReservedUniforms.push_back("cloud_noise_texture_next");
+    mReservedUniforms.push_back("ss_noise_large"); // <SS:Nexii> the dome band's authored large-scale map
     mReservedUniforms.push_back("lightnorm");
     mReservedUniforms.push_back("sunlight_color");
     mReservedUniforms.push_back("ambient_color");
@@ -1597,6 +1598,14 @@ void LLShaderMgr::initAttribsAndUniforms()
 
     // <SS:Nexii> Atmo Magic sun direction takeover - see SSAtmoEnvApplier::sunSlotDirection
     mReservedUniforms.push_back("ss_sun_dir");
+
+    // <SS:Nexii> Atmo Magic sun disc half-angle - see SSAtmoEnvApplier::sunSlotRadius
+    mReservedUniforms.push_back("ss_sun_radius");
+
+    // <SS:Nexii> Atmo Magic dominant-light handover - see SSAtmoEnvApplier::sunSlotLight
+    mReservedUniforms.push_back("ss_sun_light");
+    mReservedUniforms.push_back("ss_moon_light");
+    mReservedUniforms.push_back("ss_light_max");
 
     llassert(mReservedUniforms.size() == END_RESERVED_UNIFORMS);
 

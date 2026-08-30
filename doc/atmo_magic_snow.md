@@ -651,11 +651,11 @@ outputs (ambient speed, snow presence, falling intensity, temperature) and exite
 gaps and minimum dwell times (~20-60 s). Each regime is a bundle of scalars, not new machinery:
 
 - gust envelope shape (the existing `gustDepth`/`gustLength`/`gustVeer` parameterisation),
-- drift and near-ring rate multipliers,
+- the near-camera ring rate multiplier (drift spawning itself stays physics-gated - the field's
+  lift decides it, per the rule below),
 - the whiteout ramp rates (squall onset collapses visibility over ~8 s; the lift after one takes
   ~20 s - when a squall onset collides with a gust spike the pass takes the `min` of the two
   demand curves, never the sum),
-- erosion/deposit aggressiveness,
 - an audio bed crossfade trigger and the packed-vs-fresh surface look.
 
 Three rules keep it honest. **Derived, not authored**: regimes come from the same params the

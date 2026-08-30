@@ -56,6 +56,13 @@ uniform float ss_sun_rise;
 // centre sets, which would swing the surface glow's hotspot across the sky to the moon's
 // azimuth mid-sunset - see the ss_sun_dir note in skyV.glsl.
 uniform vec3 ss_sun_dir;
+
+// <SS:Nexii> The two light slots' scene-light contributions, each already carried through the
+// atmosphere on its OWN elevation (SSAtmoEnvApplier::sunSlotLight / moonSlotLight), and the
+// gate for the dominant-light handover below. Zero keeps the stock single-lightnorm switch.
+uniform vec3  ss_sun_light;
+uniform vec3  ss_moon_light;
+uniform float ss_light_max;
 #endif
 
 float getAmbientClamp() { return 1.0f; }
@@ -76,16 +83,6 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
 
     vec3  sunlight     = (sun_up_factor == 1) ? sunlight_color: moonlight_color;
 
-#ifdef SS_ATMO
-    // <SS:Nexii> The disc sheds light as it rises, not the instant its centre clears the horizon:
-    // the light walks from the night value to the day value across the disc's own rise. Zero
-    // leaves the stock switch untouched - night, idle environments, and the fully-set case.
-    if (ss_sun_rise > 0.0)
-    {
-        sunlight = mix(moonlight_color, sunlight_color, ss_sun_rise);
-    }
-#endif
-
     // sunlight attenuation effect (hue and brightness) due to atmosphere
     // this is used later for sunlight modulation at various altitudes
     vec3 light_atten = (blue_density + vec3(haze_density * 0.25)) * (density_multiplier * max_y);
@@ -98,7 +95,30 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
 
     //(TERRAIN) compute sunlight from lightnorm y component. Factor is roughly cosecant(sun elevation) (for short rays like terrain)
     float above_horizon_factor = 1.0 / max(1e-6, lightnorm.y);
-    sunlight *= exp(-light_atten * above_horizon_factor);  // for sun [horizon..overhead] this maps to an exp curve [0..1]
+
+#ifdef SS_ATMO
+    // <SS:Nexii> Dominant-light handover. Stock picks ONE light with lightnorm (sun while its
+    // centre is up, else the moon) and attenuates it by THAT body's elevation - so at sunrise,
+    // the flip from a possibly-high moon to a horizon-grazing sun swaps a mild cosecant for a
+    // huge one and the whole scene light collapses to near-black in a frame. Here instead each
+    // slot's light arrives already carried through the atmosphere on its own elevation, and the
+    // scene takes the per-channel MAX: the light is always the DOMINANT emitter's, so a handover
+    // happens exactly where the two lights are equally bright and nowhere else. The moon keeps
+    // the world lit while the risen sun is still the dimmer source; bounded by the brighter
+    // single-light value, so the handover can never overexpose; and with a lone sun the sun
+    // contribution IS the stock line, so a plain EEP-style day reproduces stock exactly. The
+    // slots hold the top-2 light emitters (SSAtmoEnvPlanetaryResolver::resolveLightRoles), so
+    // two suns hand over by the same rule - the bigger star holds the light until the other's
+    // contribution crosses it.
+    if (ss_light_max > 0.0)
+    {
+        sunlight = max(ss_sun_light, ss_moon_light);
+    }
+    else
+#endif
+    {
+        sunlight *= exp(-light_atten * above_horizon_factor);  // for sun [horizon..overhead] this maps to an exp curve [0..1]
+    }
 
     // main atmospheric scattering line integral
     float density_dist = rel_pos_len * density_multiplier;
@@ -113,9 +133,11 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
 
     // compute haze glow
     // <SS:Nexii> The glow's direction tracks the disc (ss_sun_dir), not the lightnorm - lightnorm
-    // belongs to the moon below centre-set. See the ss_sun_dir note in skyV.glsl.
+    // belongs to the moon below centre-set. See the ss_sun_dir note in skyV.glsl. .yzx puts the
+    // world-axes ss_sun_dir into the ogl frame rel_pos and lightnorm share
+    // (LLEnvironment::toLightNorm permutes world x,y,z to y,z,x) - see the frame note in skyV.
 #ifdef SS_ATMO
-    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir : lightnorm.xyz;
+    vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir.yzx : lightnorm.xyz;
 #else
     vec3 glow_dir = lightnorm.xyz;
 #endif

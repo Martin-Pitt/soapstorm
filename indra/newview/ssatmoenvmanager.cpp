@@ -31,11 +31,24 @@
 
 #include <algorithm>
 #include <cstring>
+#include <ctime>
+#include <functional>
 #include <sstream>
+
+#ifdef LL_USESYSTEMLIBS
+#include <zlib.h>
+#else
+#include "zlib-ng/zlib.h"
+#endif
 
 #include "llagent.h"
 #include "llassetstorage.h"
+#include "llbase64.h"
+#include "lldate.h"
+#include "lldir.h"
+#include "lldiriterator.h"
 #include "llenvironment.h"
+#include "llfile.h"
 #include "llfilesystem.h"
 #include "llinventorymodel.h"
 #include "llnotecard.h"
@@ -47,7 +60,10 @@
 #include "llviewerassetupload.h"
 #include "llviewerinventory.h"
 #include "llviewerregion.h"
+#include "apr_base64.h"
 #include "roles_constants.h"
+
+#include <ctime>
 
 // Nothing loads implicitly - v3 is opt-in end to end.
 SSAtmoEnvManager::SSAtmoEnvManager()
@@ -70,23 +86,363 @@ void SSAtmoEnvManager::revertToBaseline()
 
 namespace
 {
+    const char* SS_ATMO_ENV_MAGIC = "SS-ATMO-ENV-COMPRESSED";
+    const size_t SS_ATMO_ENV_B64_COLS = 76;
+    const size_t SS_ATMO_ENV_INFLATE_LIMIT = 16 * 1024 * 1024;
+
+    std::string ss_atmo_b64_wrap(const std::string& b64)
+    {
+        std::string out;
+        out.reserve(b64.size() + b64.size() / SS_ATMO_ENV_B64_COLS + 2);
+        for (size_t i = 0; i < b64.size(); i += SS_ATMO_ENV_B64_COLS)
+        {
+            if (i > 0) out += '\n';
+            out.append(b64, i, SS_ATMO_ENV_B64_COLS);
+        }
+        return out;
+    }
+
+    std::string ss_atmo_b64_strip(const std::string& text)
+    {
+        std::string out;
+        out.reserve(text.size());
+        for (const char c : text)
+        {
+            if (c != '\r' && c != '\n' && c != ' ' && c != '\t')
+            {
+                out += c;
+            }
+        }
+        return out;
+    }
+
+    bool ss_atmo_b64decode(const std::string& b64, std::string& out)
+    {
+        const int size_guess = apr_base64_decode_len(b64.c_str());
+        if (size_guess <= 0) return false;
+        std::vector<U8> buf((size_t)size_guess);
+        const int decoded = apr_base64_decode_binary(buf.data(), b64.c_str());
+        if (decoded <= 0) return false;
+        out.assign((const char*)buf.data(), (size_t)decoded);
+        return true;
+    }
+
+    bool ss_atmo_deflate(const std::string& src, std::string& out)
+    {
+        z_stream strm;
+        memset(&strm, 0, sizeof(strm));
+        if (deflateInit(&strm, Z_BEST_COMPRESSION) != Z_OK) return false;
+        strm.next_in = (Bytef*)src.data();
+        strm.avail_in = (uInt)src.size();
+        U8 chunk[16384];
+        bool ok = true;
+        for (;;)
+        {
+            strm.next_out = chunk;
+            strm.avail_out = sizeof(chunk);
+            const int ret = deflate(&strm, Z_FINISH);
+            if (ret != Z_OK && ret != Z_STREAM_END)
+            {
+                ok = false;
+                break;
+            }
+            out.append((const char*)chunk, sizeof(chunk) - strm.avail_out);
+            if (ret == Z_STREAM_END) break;
+        }
+        deflateEnd(&strm);
+        return ok;
+    }
+
+    bool ss_atmo_inflate(const std::string& src, std::string& out)
+    {
+        z_stream strm;
+        memset(&strm, 0, sizeof(strm));
+        if (inflateInit(&strm) != Z_OK) return false;
+        strm.next_in = (Bytef*)src.data();
+        strm.avail_in = (uInt)src.size();
+        U8 chunk[16384];
+        bool ok = false;
+        for (;;)
+        {
+            strm.next_out = chunk;
+            strm.avail_out = sizeof(chunk);
+            const int ret = inflate(&strm, Z_NO_FLUSH);
+            if (ret == Z_STREAM_END)
+            {
+                out.append((const char*)chunk, sizeof(chunk) - strm.avail_out);
+                ok = true;
+                break;
+            }
+            if (ret != Z_OK) break;
+            out.append((const char*)chunk, sizeof(chunk) - strm.avail_out);
+            if (out.size() > SS_ATMO_ENV_INFLATE_LIMIT) break;
+        }
+        inflateEnd(&strm);
+        return ok;
+    }
+
+    bool ss_atmo_env_from_notecard_text(const std::string& text, LLSD& out_sd, std::string& out_error)
+    {
+        const size_t magic_len = strlen(SS_ATMO_ENV_MAGIC);
+        const bool compressed = text.size() >= magic_len
+                                && text.compare(0, magic_len, SS_ATMO_ENV_MAGIC) == 0;
+
+        if (compressed)
+        {
+            const size_t nl = text.find('\n', magic_len);
+            if (nl == std::string::npos)
+            {
+                out_error = "compressed payload missing header line";
+                return false;
+            }
+            const std::string header = text.substr(0, nl);
+            std::string version = header.substr(magic_len);
+            while (!version.empty()
+                   && (version.back() == ' ' || version.back() == '\t' || version.back() == '\r'))
+            {
+                version.pop_back();
+            }
+            if (version != " 1" && version != "1")
+            {
+                out_error = "unknown compressed format version '" + version + "'";
+                return false;
+            }
+
+            const std::string b64 = ss_atmo_b64_strip(text.substr(nl + 1));
+            std::string packed;
+            if (!ss_atmo_b64decode(b64, packed))
+            {
+                out_error = "base64 decode failed";
+                return false;
+            }
+
+            std::string raw;
+            if (!ss_atmo_inflate(packed, raw))
+            {
+                out_error = "inflate failed";
+                return false;
+            }
+
+            std::istringstream stream(raw);
+            if (LLSDSerialize::fromBinary(out_sd, stream, (llssize)raw.size())
+                == LLSDParser::PARSE_FAILURE)
+            {
+                out_error = "binary LLSD parse failed";
+                return false;
+            }
+
+            LL_INFOS("AtmoMagicEnv") << "Atmo v3 compressed payload check: b64 " << b64.size()
+                                     << " chars -> " << packed.size() << " packed bytes -> "
+                                     << raw.size() << " bytes LLSD, binary parse OK" << LL_ENDL;
+            return true;
+        }
+
+        bool parsed = false;
+        if (text.find("<llsd") != std::string::npos)
+        {
+            std::istringstream stream(text);
+            parsed = (LLSDSerialize::fromXML(out_sd, stream) != LLSDParser::PARSE_FAILURE);
+        }
+        if (!parsed)
+        {
+            std::istringstream retry(text);
+            parsed = (LLSDSerialize::fromNotation(out_sd, retry, (S32)text.size()) != LLSDParser::PARSE_FAILURE);
+        }
+        if (!parsed)
+        {
+            out_error = "not valid LLSD";
+        }
+        return parsed;
+    }
+
+    // <SS:Nexii> Debug cache: every save drops the environment's FULL asset LLSD into
+    // UserSettings/ss_weather/env_cache as timestamped pretty XML, and rewrites last.xml to name
+    // the current one (plus the inventory asset id once the upload lands). The notecard payload
+    // is deflate+base64 and useless in a text editor; these files are the same settings
+    // reviewable while debugging, and the history shows exactly what a session changed.
+    const size_t SS_ATMO_ENV_CACHE_KEEP = 24;
+
+    std::string ss_atmo_env_cache_dir()
+    {
+        const std::string parent = gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather");
+        if (!gDirUtilp->fileExists(parent))
+        {
+            LLFile::mkdir(parent);
+        }
+        const std::string dir = gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather", "env_cache");
+        if (!gDirUtilp->fileExists(dir))
+        {
+            LLFile::mkdir(dir);
+        }
+        return dir;
+    }
+
+    // Inventory names allow nearly anything; filenames do not.
+    std::string ss_atmo_cache_name(std::string name)
+    {
+        for (char& c : name)
+        {
+            const bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            if (!keep) c = '_';
+        }
+        return name;
+    }
+
+    // Dumps the full LLSD pretty XML and prunes old dumps; returns the dump's FILE NAME (not path).
+    std::string ss_atmo_env_cache_dump(const SSAtmoEnvAsset& asset, const std::string& name)
+    {
+        const std::string dir = ss_atmo_env_cache_dir();
+
+        std::time_t now = std::time(nullptr);
+        std::tm tm_now{};
+#ifdef LL_WINDOWS
+        localtime_s(&tm_now, &now);
+#else
+        localtime_r(&now, &tm_now);
+#endif
+        char stamp[32] = {};
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm_now);
+
+        std::ostringstream fname;
+        fname << stamp << "_" << ss_atmo_cache_name(name) << ".xml";
+        std::string file = fname.str();
+        std::string path = dir + gDirUtilp->getDirDelimiter() + file;
+        while (gDirUtilp->fileExists(path))
+        {
+            file += "_b";
+            path = dir + gDirUtilp->getDirDelimiter() + file;
+        }
+
+        llofstream out(path.c_str());
+        if (!out.is_open())
+        {
+            LL_WARNS("AtmoMagicEnv") << "Could not write Atmo env cache dump " << path << LL_ENDL;
+            return std::string();
+        }
+        LLSDSerialize::toPrettyXML(asset.asLLSD(), out);
+        out.close();
+
+        // Prune: newest SS_ATMO_ENV_CACHE_KEEP dumps survive; last.xml is the pointer, not a dump.
+        std::vector<std::string> dumps;
+        LLDirIterator dir_iter(dir, "*.xml");
+        std::string found;
+        while (dir_iter.next(found))
+        {
+            if (found != "last.xml") dumps.push_back(found);
+        }
+        std::sort(dumps.begin(), dumps.end(), std::greater<std::string>());
+        for (size_t i = SS_ATMO_ENV_CACHE_KEEP; i < dumps.size(); ++i)
+        {
+            LLFile::remove((dir + gDirUtilp->getDirDelimiter() + dumps[i]).c_str());
+        }
+
+        LL_INFOS("AtmoMagicEnv") << "Atmo env cache: dumped full LLSD to " << path << LL_ENDL;
+        return file;
+    }
+
+    // The last.xml pointer: which dump is current, when it was written, and (after the upload
+    // completes) which inventory asset carries it. asset_id empty means "still uploading".
+    void ss_atmo_env_cache_last(const std::string& name, const std::string& dump_file,
+                                const LLUUID& asset_id)
+    {
+        const std::string dir = ss_atmo_env_cache_dir();
+        const std::string path = dir + gDirUtilp->getDirDelimiter() + "last.xml";
+
+        LLSD sd = LLSD::emptyMap();
+        sd["name"] = name;
+        sd["saved"] = LLDate::now().asString();
+        sd["dump"] = dump_file;
+        sd["asset_id"] = asset_id;
+
+        llofstream out(path.c_str());
+        if (!out.is_open())
+        {
+            LL_WARNS("AtmoMagicEnv") << "Could not write Atmo env cache pointer" << LL_ENDL;
+            return;
+        }
+        LLSDSerialize::toPrettyXML(sd, out);
+    }
+
+    bool ss_atmo_env_to_notecard_text(const SSAtmoEnvAsset& asset, std::string& out_text, std::string& out_error)
+    {
+        const LLSD sd = asset.asLLSD();
+
+        std::ostringstream bin;
+        LLSDSerialize::toBinary(sd, bin);
+        const std::string raw = bin.str();
+
+        std::string packed;
+        if (!ss_atmo_deflate(raw, packed))
+        {
+            out_error = "deflate failed";
+            return false;
+        }
+
+        const std::string b64 = LLBase64::encode((const U8*)packed.data(), packed.size());
+        out_text = std::string(SS_ATMO_ENV_MAGIC) + " 1\n" + ss_atmo_b64_wrap(b64);
+
+        LL_INFOS("AtmoMagicEnv") << "Atmo v3 payload: LLSD " << raw.size() << "B -> deflate "
+                                 << packed.size() << "B -> base64 " << b64.size()
+                                 << "B -> notecard text " << out_text.size() << "B (limit "
+                                 << LLNotecard::MAX_SIZE << ")" << LL_ENDL;
+
+        if (out_text.size() >= (size_t)LLNotecard::MAX_SIZE)
+        {
+            out_error = "environment too large for a notecard (" + std::to_string(out_text.size())
+                        + " bytes)";
+            return false;
+        }
+
+        LLSD roundtrip;
+        std::string check_error;
+        if (!ss_atmo_env_from_notecard_text(out_text, roundtrip, check_error)
+            || !llsd_equals(roundtrip, sd))
+        {
+            out_error = "round-trip self-check failed: " + check_error;
+            return false;
+        }
+
+        LL_INFOS("AtmoMagicEnv") << "Atmo v3 payload round-trip self-check OK ("
+                                 << out_text.size() << "B)" << LL_ENDL;
+        return true;
+    }
+}
+
+namespace
+{
     void writeAssetAsNotecard(const SSAtmoEnvAsset& asset, const std::string& name,
                                const LLUUID& parent_id_in,
                                std::function<void(const LLUUID& item_id, const LLUUID& asset_id)> on_created)
     {
-        std::ostringstream body;
-        LLSDSerialize::toPrettyXML(asset.asLLSD(), body);
+        // <SS:Nexii> The debug cache is written FIRST - even a serialization failure below is
+        // exactly what the dump is for.
+        const std::string dump_file = ss_atmo_env_cache_dump(asset, name);
+        ss_atmo_env_cache_last(name, dump_file, LLUUID::null);
+
+        std::string env_text;
+        std::string error;
+        if (!ss_atmo_env_to_notecard_text(asset, env_text, error))
+        {
+            LL_WARNS("AtmoMagicEnv") << "Could not serialize Atmo v3 environment '" << name
+                                     << "': " << error << LL_ENDL;
+            if (on_created) on_created(LLUUID::null, LLUUID::null);
+            return;
+        }
 
         LLNotecard nc(LLNotecard::MAX_SIZE);
-        nc.setText(body.str());
+        nc.setText(env_text);
         std::ostringstream wrapped;
         nc.exportStream(wrapped);
         const std::string asset_text = wrapped.str();
 
+        LL_INFOS("AtmoMagicEnv") << "Atmo v3 notecard for '" << name << "': full asset text "
+                                 << asset_text.size() << "B" << LL_ENDL;
+
         const LLUUID parent_id = parent_id_in;
 
         LLPointer<LLInventoryCallback> cb = new LLBoostFuncInventoryCallback(
-            [asset_text, name, on_created](const LLUUID& new_item_id)
+            [asset_text, name, dump_file, on_created](const LLUUID& new_item_id)
             {
                 LLViewerRegion* region = gAgent.getRegion();
                 const std::string url = region
@@ -101,10 +457,12 @@ namespace
 
                 LLResourceUploadInfo::ptr_t info = std::make_shared<LLBufferedAssetUploadInfo>(
                     new_item_id, LLAssetType::AT_NOTECARD, asset_text,
-                    [name, new_item_id, on_created](LLUUID, LLUUID new_asset_id, LLUUID, LLSD)
+                    [name, dump_file, new_item_id, on_created](LLUUID, LLUUID new_asset_id, LLUUID, LLSD)
                     {
                         LL_INFOS("AtmoMagicEnv") << "Saved Atmo v3 environment '" << name
                                                  << "' as asset " << new_asset_id << LL_ENDL;
+                        // The pointer file now carries the asset id the dump was saved under.
+                        ss_atmo_env_cache_last(name, dump_file, new_asset_id);
                         if (on_created) on_created(new_item_id, new_asset_id);
                     },
                     nullptr);
@@ -735,10 +1093,16 @@ void SSAtmoEnvManager::updateExistingNotecard(const std::string& name)
         gInventory.notifyObservers();
     }
 
-    std::ostringstream body;
-    LLSDSerialize::toPrettyXML(mWorking.asLLSD(), body);
+    std::string env_text;
+    std::string error;
+    if (!ss_atmo_env_to_notecard_text(mWorking, env_text, error))
+    {
+        LL_WARNS("AtmoMagicEnv") << "Could not serialize Atmo v3 environment '" << name
+                                 << "': " << error << LL_ENDL;
+        return;
+    }
     LLNotecard nc(LLNotecard::MAX_SIZE);
-    nc.setText(body.str());
+    nc.setText(env_text);
     std::ostringstream wrapped;
     nc.exportStream(wrapped);
 
@@ -872,22 +1236,10 @@ void SSAtmoEnvManager::onAssetLoaded(const LLUUID& asset_id, LLAssetType::EType 
 bool SSAtmoEnvManager::applyNotecardText(const std::string& text, bool /*from_inventory_permission_check*/)
 {
     LLSD sd;
-    std::istringstream stream(text);
-
-    bool parsed = false;
-    if (text.find("<llsd") != std::string::npos)
+    std::string error;
+    if (!ss_atmo_env_from_notecard_text(text, sd, error))
     {
-        parsed = (LLSDSerialize::fromXML(sd, stream) != LLSDParser::PARSE_FAILURE);
-    }
-    if (!parsed)
-    {
-        std::istringstream retry(text);
-        parsed = (LLSDSerialize::fromNotation(sd, retry, (S32)text.size()) != LLSDParser::PARSE_FAILURE);
-    }
-
-    if (!parsed)
-    {
-        LL_WARNS("AtmoMagicEnv") << "Atmo v3 environment notecard is not valid LLSD" << LL_ENDL;
+        LL_WARNS("AtmoMagicEnv") << "Atmo v3 environment notecard rejected: " << error << LL_ENDL;
         mStatus = "notecard is not valid LLSD";
         return false;
     }

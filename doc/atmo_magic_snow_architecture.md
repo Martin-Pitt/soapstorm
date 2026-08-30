@@ -98,10 +98,11 @@ struct SSGranularParams
     F32 mLiftLo, mLiftHi;        // the m/s band
     F32 mLiftRate, mDepositRate, mCreepRate;
     F32 mDepositGap;             // deposit threshold = mLiftLo * mDepositGap (hysteresis, ~0.7)
-    F32 mGustScalar;             // gust envelope, applied once per tick, never per cell
-    F32 mRegimeLiftScale;        // regime bundle scalars - presentation only, see rules
-    F32 mRegimeDepositScale;
-    F32 mTemperatureC;
+    F32 mLiftTemp, mSnowDepth, mReposeRad;
+    F32 mGust;                   // gust envelope, applied once per tick, never per cell
+    const LLVector4* mFlow;      // n*n ground-flow grid (xyz wind, w exposure), pre-sampled by
+                                 // the caller - regimes deliberately do NOT appear here: the
+                                 // regime directs, the field decides
 };
 
 namespace SSGranular
@@ -116,14 +117,15 @@ bool bindGroundWindow(LLGLSLShader& shader, S32 channel);    // + ssWindOrigin u
                                                              // spare channel: lift x depth target
 
 // ssatmomagic.h - the single lift authority and the regime machine
-F32  liftAt(const LLVector3& pos_agent) const;   // 0-1: band x sampleGround x gust x temp x preset rate
-F32  squallFactor() const;                        // 0-1 derived in refreshParams()
-bool granularWeather() const;                     // preset().isGranular()
+F32  liftAt(const LLVector3& pos_agent) const;   // 0-1: band x sampleGround x temp (rate and gust
+                                                 // applied by the caller, once per call site)
+bool granularWeather() const;
+F32  squallFactor() const;                        // 0-1 derived, smoothed
+void fillTransportParams(SSGranularParams& params) const;   // assembled once per tick
 enum class ERegime { CALM, SALTATION, DRIFT, BLIZZARD, SQUALL };
 ERegime regime() const;                           // derived; hysteresis + dwell; fixed-step transitions
 typedef boost::signals2::signal<void(ERegime, ERegime)> RegimeSignal;  // bounded subscribers:
 RegimeSignal& regimeSignal();                     // soundscape, floater stats, whiteout ramp
-const SSGranularParams& transportParams() const;  // assembled once per tick, plain aggregate
 
 // sssurfacefield.h - the one write path, and the snow pass
 void depositAt(const LLVector3& pos_agent, F32 depth);  // forwards to the transport's repose logic

@@ -285,6 +285,16 @@ struct SSAtmoEnvCloudField
     // plain cluster noise it has always used.
     SSAtmoEnvKeyframed<LLUUID> mNoiseTexture;
 
+    // <SS:Nexii> The vertical profile ramp: a thin strip texture whose four channels are four
+    // curves over the deck's height (v = 0 at the cloud base, 1 at the lid, painted bottom to
+    // top), expressing HOW the convection noise map applies vertically. Red is the tower/ramp
+    // weight - how much the map counts at this height, ramping toward white near the lid so the
+    // top consolidates into the anvil. Green is the carve guard - where the anvil's underside
+    // may bite (keep the base band black so the deck keeps its body). Blue is the torn cap band.
+    // Alpha is the thick-base fill - a density floor that makes the bottom read solid. None runs
+    // the built-in curves the deck has always used.
+    SSAtmoEnvKeyframed<LLUUID> mProfileTexture;
+
     SSAtmoEnvKeyframed<F32> mTextureMix{0.4f};
 
     SSAtmoEnvKeyframed<F32> mPuffDensity{0.8f};
@@ -352,6 +362,13 @@ struct SSAtmoEnvCloudDome
     SSAtmoEnvKeyframed<F32> mDetailD{1.f};
 
     SSAtmoEnvKeyframed<LLUUID> mNoiseTexture{LLUUID::null};
+
+    // <SS:Nexii> The broad octave's OWN map, for when the cloud noise's blob scale is wrong for
+    // the dome band's now huge tile (8 km): a purpose-made large-scale map draws the broad
+    // composition - the warps, the base octave and its self-shadow read it - while the fine
+    // octave keeps the cloud noise. Null means not in use: every octave reads the cloud noise,
+    // exactly as before this existed.
+    SSAtmoEnvKeyframed<LLUUID> mLargeNoiseTexture{LLUUID::null};
 
     static const char* const CLOUD_TEXTURE_LAYERED;
     static const char* const CLOUD_TEXTURE_CUMULONIMBUS;

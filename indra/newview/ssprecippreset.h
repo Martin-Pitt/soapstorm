@@ -195,6 +195,15 @@ struct SSPrecipPreset
     F32 mSnowMelt = 0.f;
     F32 mSnowDepth = 0.f;
     F32 mSnowRepose = 45.f;
+
+    // <SS:Nexii> Granular transport: what the wind does to the settled snow this type leaves.
+    // The threshold band is global settings (physics, not art); these are the per-type rates.
+    // mSnowCreepRate 0 leaves the cascades off - the shed store only fills from creep spill.
+    F32 mSnowLiftRate = 0.f;     // metres of depth per second eroded at full lift; 0 = never blows
+    F32 mSnowDepositRate = 0.f;  // metres of depth per second banking in a lee
+    F32 mSnowCreepRate = 0.f;    // creep advection strength feeding drifts and eave spill
+    F32 mSnowDriftAge = 2.5f;    // drift particle life cap, seconds
+
     F32 mPuddleRate = 0.f;
     F32 mPuddleDepth = 0.f;
     F32 mPuddleDrain = 0.f;
@@ -210,6 +219,13 @@ struct SSPrecipPreset
     void fromLLSD(const LLSD& sd);
 
     bool risesFromGround() const { return mArchetype == SSPrecipArchetype::RISER; }
+    // <SS:Nexii> FLAKE and SOLID are granular - the settled field is a drift surface the wind
+    // works on, and the runoff cascades are dithered grains rather than water sheets. LIQUID and
+    // RISER are not. The code keeps its mSnow* names; the channel is the granular channel.
+    bool isGranular() const
+    {
+        return mArchetype == SSPrecipArchetype::FLAKE || mArchetype == SSPrecipArchetype::SOLID;
+    }
     bool makesImpacts() const { return mImpactStrength > 0.f && !risesFromGround(); }
     bool makesRipples() const { return mRippleSize > 0.f && mRippleAlpha > 0.f && mRippleLife > 0.f; }
     bool makesCrowns() const { return mCrownSize > 0.f && mCrownAlpha > 0.f && mCrownLife > 0.f; }

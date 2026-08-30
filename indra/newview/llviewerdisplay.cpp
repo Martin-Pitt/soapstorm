@@ -93,6 +93,7 @@
 #include "sswater.h"
 #include "ssrainshadow.h"
 #include "sswindflow.h"
+#include "ssworldfield.h"
 // </SS:Nexii>
 
 #include <boost/json.hpp>
@@ -1001,6 +1002,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
                     SSRainShadowMap::getInstance()->capture();
                     SSWindFlowMap::getInstance()->update();
+                    SSWorldField::getInstance()->update();
 
                     // Atmo Magic: this singleton is otherwise never
                     // touched (it is purely event-driven via

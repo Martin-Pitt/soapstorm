@@ -47,9 +47,11 @@ struct SSAtmoEnvCloudFieldState
     LLUUID mDetailTexture;
 
     // <SS:Nexii> The convection noise map and its metres-per-tile multiplier, straight off the
-    // authored keyframes - the deck does its own shaping (see ssvolcloud).
+    // authored keyframes - the deck does its own shaping (see ssvolcloud). mProfileTexture is the
+    // vertical profile ramp: none runs the built-in vertical curves.
     LLUUID mNoiseTexture;
     F32 mNoiseScale = 1.f;
+    LLUUID mProfileTexture;
 
     F32 mTextureMix = 0.f;
     F32 mPuffDensity = 0.8f;

@@ -1,6 +1,14 @@
 # Atmo Magic: the shared world field (second proposal)
 
-This is a design, not a build log — nothing here exists yet. It supersedes
+> **Implementation status (2026-08-30):** the capture service (`ssworldfield.h/cpp`,
+> `SSWorldField`) has landed as the sidecar of migration step 1-2: staged band-sliced
+> capture, the column store, `buildSurfaceGrid` with rain shadow's exact contract, the
+> interest/channel registry, `coverageAt`/`surfaceTop`, and the dirty-rect re-peel path.
+> The wet field reads it behind `SSWorldFieldSurfaceTop` (default off); rain shadow and
+> the wind flowmap still own their captures. Steps 3-7 are unbuilt.
+
+This is a design, not a build log. The implementation status block above says
+what exists. It supersedes
 `doc/archive/atmo_magic_worldfield.md` (archived 2026-08-26 as an unbuilt
 sketch). That sketch was written before the wind flowmap grew its probe carve,
 its passage bridge, its multigrid solve, its async build stages and its
@@ -303,6 +311,144 @@ Region crossings swap tiers; a far build that comes into camera range
 re-peels at near detail. The existing margin-overlap discipline keeps the
 seam where it already is — a documented soft seam, same as today.
 
+### Design H — worker-pool analytic refinement over copied geometry (recommended precision layer)
+
+Everything above is a raster answer: it is only ever as precise as a texel of
+an ortho depth capture, and that ceiling is load-bearing for the questions it
+answers well — open/solid, indoor/outdoor, is-there-structure-there all
+tolerate a few centimetres of fuzz because nothing renders exactly *at* the
+boundary. An eave lip does not have that luxury: a stream is a ribbon a few
+tens of centimetres wide, anchored at a point `SSRunoff::refineEdge` finds by
+walking the *captured depth map* outward from the coarse trace cell until it
+falls off the upper surface — which finds where the **capture** stopped
+resolving a surface, not where the **roof** actually ends. Two things stack
+against it right at the point it matters most: a texel straddling a real
+edge holds one arbitrary sample, not a blend, and a fall direction that
+meets the lip at a grazing angle foreshortens exactly the geometry the walk
+is trying to resolve. The visible result is a drip or a stream anchored a
+few centimetres on the wrong side of the tile it should be leaving from —
+reads as clipping through the roof, because it is.
+
+**The question underneath "where does the surface end" is actually "which
+object ends here, and what shape is it" — and asking that first changes how
+much of this needs to be expensive at all.** An eave is, definitionally, the
+edge of *something* — the trace already knows a solid column stops here,
+which means there is a specific prim or mesh whose own boundary the eave
+line traces. Most roofs are not arbitrary triangle soup: a gabled roof is
+two prisms, a hipped one a handful of cut boxes, a dome a sculpt or a
+sphere-cut primitive. Every one of the built-in primitive shapes
+(`LLVolumeParams` — box, cylinder, prism, sphere, torus, tube, ring, and
+their path/profile cuts) has a **closed-form boundary**: given the object's
+transform and its params, the exact XY extent at any Z is a handful of trig
+and vector operations, not a search. There is nothing to refine for that
+case — there is an answer to compute.
+
+That reframes the whole design into **identify, then answer**, cheapest path
+first:
+
+1. **Identify the owning object and face.** The viewer already has the tool
+   for this — `LLPickInfo`/`renderForSelect`'s colour-encoded object-ID
+   buffer, the same technique mouse-picking uses to turn a screen pixel back
+   into an `LLViewerObject*` and a face index. Rendered as a second target
+   alongside the eave capture's own ortho depth pass (one extra attachment
+   on a render that is already happening, not a second render), it turns
+   every lip texel from "a height" into "a height, and the specific
+   object and face that produced it."
+2. **Primitive shape → closed form, on the main thread, no snapshot at
+   all.** If that object's volume is one of the parametric types and its
+   cuts aren't warped past where the closed form is worth deriving, the
+   exact edge at the eave's height comes straight out of `LLVolumeParams`
+   and the object's transform — a handful of vector ops per lip point,
+   cheap enough to run inline in the trace itself. No copy, no worker, no
+   race with live scene state, because nothing here touches the live object
+   longer than the single read of its already-thread-unsafe params, done on
+   the main thread where that's fine. This is very likely most of the
+   answer: a warehouse roof, a gabled cottage, a walled courtyard — all
+   primitives, all exact for free.
+3. **Mesh, sculpt, or a cut past the closed form's reach → the worker pool.**
+   Only here does anything need to be genuinely expensive, and only here is
+   a triangle-level query actually earning its keep rather than solving a
+   problem step 2 already solved for free. This is where the rest of this
+   design applies, unchanged:
+   - **Snapshot, not reference.** Once `SSAtmoMagic::settleEdits`' existing
+     debounce (~3 s since last churn) clears a region, the mesh/sculpt
+     objects step 2 couldn't answer for — a small, trace-identified subset,
+     not every prim in the region — have their transform and a decimated
+     triangle set (or physics hull, where one exists; the render mesh
+     otherwise, LOD-matched to what the capture itself used) copied into a
+     small, immutable, thread-safe snapshot. Copied, exactly the way the
+     wind build already copies `mWindDir` for the same reason, scaled from
+     one `LLVector3` to a per-object triangle buffer — `LLDrawable`/
+     `LLVolume` are mutated by the main thread's update and rebuild
+     pipeline, so a worker touching them live is the bug this avoids.
+   - **A worker pool, not a worker.** The wind build's `postWorker` is
+     deliberately one job at a time, because its stages share one set of
+     scratch buffers and the state machine's whole safety argument rests on
+     there being only one build in flight. Lip refinement has the opposite
+     shape: every lip point's answer is independent of every other's, which
+     is what makes it worth fanning across several workers rather than
+     queuing them one behind another. Each job carries its own copy of
+     whatever geometry its lip point is near and needs no scratch shared
+     with any other job.
+   - **The query.** A short ray-vs-triangle sweep against the object's own
+     copied mesh — no raster resolution to hit a ceiling against, because
+     the answer comes from the actual triangles the roof is made of. This
+     is the same exact answer `lineSegmentIntersectWorldGeometry` gives
+     live (and which `SSSoundscape`'s probes already call, at a scale — 7
+     rays every 50 ms — that is why it never got used more widely); the
+     snapshot and the pool are what make the same precision affordable at
+     the hundreds of lip points a busy region's trace produces.
+4. **Where it lands.** Either path replaces `refineEdge`'s raster walk for
+   **eave lips specifically** — the one query in the whole store where the
+   answer is drawn close enough to see the error. Everything else
+   `SURFACE_TOP` answers (rain landing, coverage, the bulk of the drainage
+   trace) stays on the raster path; sub-centimetre accuracy is wasted on a
+   question nothing renders flush against. Graceful degradation matters at
+   every tier: no ID-buffer hit, a shape the closed form can't cover, or a
+   mesh snapshot not yet ready all fall back to today's raster answer rather
+   than stalling the run waiting for a better one.
+
+This is a companion to Designs E–G, not a substitute: the peel-and-flood
+substrate stays the source of *what exists and where*; this is a narrow,
+opt-in precision pass over the small set of points the substrate's own
+resolution isn't good enough for, and most of that pass should turn out to
+be step 2 — cheap, exact, and synchronous — with the worker pool doing real
+work only on the minority of eaves that are actually mesh. The same
+identify-then-answer shape is the natural tool for anything else in the
+store that turns out to want better-than-texel accuracy later (a parkour
+ledge lip, a close-range cover edge), without it needing to be built for
+those yet.
+
+**Adversarial review.**
+
+- *Copy cost and staleness.* A triangle buffer per mesh lip-owning object is more
+  to copy than one `LLVector3`, and it has to be re-copied whenever that
+  object's geometry serial moves — bounded by the settle debounce already
+  gating everything else here, but worth budgeting (object count, triangle
+  count per snapshot) before assuming it's free.
+- *Not every object has a cheap mesh to copy.* Sculpts and mesh objects at a
+  low resident LOD, or a physics shape simplified past what the visual edge
+  needs, both degrade the refinement's own accuracy — the raster fallback is
+  not just a safety net for missing data, it's the answer whenever the copy
+  itself is coarser than the capture.
+- *Worker pool sizing is a scheduling question, not a design one.* How many
+  concurrent jobs, and against which general work queue, is the same
+  trade-off the viewer already makes everywhere else it fans work out; it
+  does not need a bespoke answer here.
+- *The ID buffer has the same edge problem one level up.* A texel straddling
+  two objects' boundary still picks one ID, arbitrarily — which is fine here
+  in a way it isn't for depth: getting the *object* wrong at one texel means
+  falling back to the mesh path (or the raster answer) for that one lip
+  rather than computing a confidently wrong closed-form edge, since a
+  misidentified object's params describe the wrong shape entirely rather
+  than a slightly-off one.
+- *Not every primitive cut has a clean closed form.* A simple box or prism
+  does; a heavily twisted, tapered, and profile-cut tube approaches "just
+  raycast it" territory anyway. The dividing line between "derive the
+  closed form" and "treat it as the mesh case" is a real decision, not a
+  given — and getting it wrong only costs a slower answer, never a wrong
+  one, if the mesh path is always the fallback.
+
 ## Part 3 — channels
 
 The column store is cheap and always on when Atmo Magic is on. Everything
@@ -539,9 +685,18 @@ frame cascade.
 5. **`DRAINAGE` replaces the edge-cell trace.** Priority-flood + D8 per span
    level; eaves and pools feed the existing reservoir/shed code unchanged;
    the puddle mask's slope test becomes filled-depression membership.
-6. **`WALKABLE`** lands as a channel (Recast over spans, tile cache).
-7. **`ACOUSTIC`** probes bake; the soundscape's probe cycle becomes a lookup.
-8. Snow never moves: the field windows, `sampleGround`, `liftAt`,
+6. **Design H lands behind its own setting, after step 5, identify tier
+   first.** It needs the trace to already know which cells are lips before
+   it has anything to refine. The ID buffer and the closed-form primitive
+   path are the first half — cheap, synchronous, no worker involved — and
+   are worth shipping and measuring alone before the mesh snapshot and
+   worker pool are built at all, since they may turn out to cover most real
+   content by themselves. `refineEdge` falls back to today's raster walk
+   wherever neither tier answers. The raster answer stays correct on its
+   own the whole time — this step only ever tightens it.
+7. **`WALKABLE`** lands as a channel (Recast over spans, tile cache).
+8. **`ACOUSTIC`** probes bake; the soundscape's probe cycle becomes a lookup.
+9. Snow never moves: the field windows, `sampleGround`, `liftAt`,
    `forEachLiftCell` and the granular tick keep their exact contracts; only
    the provider of their geometry changes underneath them in step 1.
 
@@ -563,6 +718,8 @@ tier caps the damage):
 | Drainage network | ~500 KB/region | per-span D8 + runs; rebuilt on geometry serial only |
 | Navmesh tiles | ~1–4 MB/region | Recast polymesh at agent scale, cached, tile-cache patched |
 | Acoustic probes | ~10 KB/region | 16 m lattice, few floats per probe |
+| Edge ID buffer | one extra render target on the eave capture | reused every peel, not a separate pass |
+| Edge refinement snapshots | a few hundred KB/region, transient, mesh lips only | primitive lips are a closed-form read, no snapshot; only mesh/sculpt lips reach the worker pool |
 
 The GPU solve keeps its current budget (one tile at a time, staged, throttled);
 the peel adds passes but retires two standalone ortho captures, and the
@@ -594,6 +751,24 @@ encloses.
   carve the shared store now, so the store's span flags must answer
   "open at height z", not just at span boundaries — a small interpolation
   rule, to be fixed before wind migrates.
+- **How much of real content is primitive vs. mesh at the eave.** This is
+  the number that decides whether Design H's worker pool is a core piece of
+  the system or a rarely-used fallback — measure it against real builds
+  (SLMC regions specifically) before sizing anything around it.
+- **What the closed-form/mesh dividing line actually is.** Which cut/path
+  combinations still get a clean analytic edge and which don't is a
+  `LLVolumeParams`-shaped question that wants answering against real content
+  rather than derived from first principles.
+- **What Design H's mesh snapshot actually holds.** Physics hull, decimated
+  render mesh, or something built specifically for this — unresolved, and
+  the choice trades snapshot cost against how much better the answer
+  actually is than the raster one; decide against measured
+  `refineEdge` error, not a guess at it.
+- **Worker pool scope.** Whether mesh lip refinement gets its own bounded
+  pool or shares the viewer's general work queue is a scheduling decision
+  that should follow from measuring how many mesh lips a busy region's
+  trace actually produces per retrace, not precede it — likely a much
+  smaller number than "every lip" once primitives are handled separately.
 
 ## Research notes
 

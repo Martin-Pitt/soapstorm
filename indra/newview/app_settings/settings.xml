@@ -26066,6 +26066,72 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>60.0</real>
     </map>
+    <key>SSWorldField</key>
+      <map>
+      <key>Comment</key>
+      <string>Master toggle for the shared world field: one region-anchored band-sliced capture of the world's solid structure that surface, coverage and future channels read instead of each capturing its own. Builds nothing until a channel is demanded</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSWorldFieldSurfaceTop</key>
+      <map>
+      <key>Comment</key>
+      <string>Serve the surface field's landing grid (wet/snow/puddle, runoff) from the shared world field's SURFACE_TOP channel instead of the rain shadow capture</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSWorldFieldCell</key>
+      <map>
+      <key>Comment</key>
+      <string>World field column size in metres; 2.0 over a 256m region is a 128x128 column grid</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSWorldFieldBand</key>
+      <map>
+      <key>Comment</key>
+      <string>Height of one capture band in metres. One ortho depth pass per band, stacked bottom-up, so the field is a multi-span column store; finer bands resolve more interior surfaces at the cost of more passes</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>16.0</real>
+    </map>
+    <key>SSWorldFieldCeiling</key>
+      <map>
+      <key>Comment</key>
+      <string>Altitude in metres above which the world field stops capturing. A full build also stops early once the sky has been empty for a few consecutive bands</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>256.0</real>
+    </map>
+    <key>SSWorldFieldMaxAge</key>
+      <map>
+      <key>Comment</key>
+      <string>Seconds before a cached world field tile is recaptured even without prim updates - the LOD and asset-timing recovery path</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>120.0</real>
+    </map>
     <key>SSAtmoGlowScale</key>
       <map>
       <key>Comment</key>
@@ -26560,6 +26626,116 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowLiftLo</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: wind speed at the ground, metres per second, where settled snow begins to lift and saltate. Evaluated against the local flow field, not the ambient, so the alley jets reach it before the open ground does</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.5</real>
+    </map>
+    <key>SSAtmoSnowLiftHi</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: wind speed at the ground where snow transport saturates. Between this and the lift threshold the effect ramps - a ground blizzard is every exposed cell at once, not a new code path</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>8.0</real>
+    </map>
+    <key>SSAtmoSnowLiftTemp</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: air temperature, degrees C, at which blowing snow dies entirely - wet snow does not lift. Scales to zero between 0 and this figure</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.5</real>
+    </map>
+    <key>SSAtmoSnowDepositGap</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: where the redeposit gate sits as a fraction of the lift threshold - the hysteresis that keeps one cell from eroding and banking in the same wind range. 0.7 means snow only banks once the local flow has dropped under 70 percent of where it started lifting</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.7</real>
+    </map>
+    <key>SSAtmoSnowCreep</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: global multiplier on the presets' snow creep - the downwind advection that migrates drift sheets, feeds the eave spill and banks drifts against obstacles. 0 disables the exchange entirely</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowDriftBudget</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: share of SSAtmoParticleBudget the blowing-snow pool may take. The pool is separate on purpose - a blizzard must never starve falling snow of budget, or the reverse</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.15</real>
+    </map>
+    <key>SSAtmoSnowDriftRadius</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: radius in metres around the camera the blowing-snow pool spawns in. The tier bands belong to the falling snow; this one is the drift pool's own</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>48.0</real>
+    </map>
+    <key>SSAtmoLodDrift</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: multiplier on the blowing-snow radius, beside the other per-tier LOD dials</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowRegimeOverride</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: force the weather regime - -1 derives it from the weather as usual, 0 calm, 1 saltation, 2 drift, 3 blizzard, 4 squall. For debug and screenshots; regimes direct the presentation, the field still decides where snow actually lifts</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>-1</integer>
+    </map>
+    <key>SSAtmoSnowDebug</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: snow debug views - 0 off, 1 the per-cell lift figure drawn over the ground. Higher styles land with their features</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>0</integer>
     </map>
     <key>SSAtmoSoundResponse</key>
       <map>

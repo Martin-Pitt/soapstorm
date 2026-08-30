@@ -187,6 +187,10 @@ LLSD SSPrecipPreset::asLLSD() const
     sd["snow_melt"] = mSnowMelt;
     sd["snow_depth"] = mSnowDepth;
     sd["snow_repose"] = mSnowRepose;
+    sd["snow_lift_rate"] = mSnowLiftRate;
+    sd["snow_deposit_rate"] = mSnowDepositRate;
+    sd["snow_creep_rate"] = mSnowCreepRate;
+    sd["snow_drift_age"] = mSnowDriftAge;
     sd["puddle_rate"] = mPuddleRate;
     sd["puddle_depth"] = mPuddleDepth;
     sd["puddle_drain"] = mPuddleDrain;
@@ -292,6 +296,10 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     if (sd.has("snow_melt")) mSnowMelt = (F32)sd["snow_melt"].asReal();
     if (sd.has("snow_depth")) mSnowDepth = (F32)sd["snow_depth"].asReal();
     if (sd.has("snow_repose")) mSnowRepose = (F32)sd["snow_repose"].asReal();
+    if (sd.has("snow_lift_rate")) mSnowLiftRate = (F32)sd["snow_lift_rate"].asReal();
+    if (sd.has("snow_deposit_rate")) mSnowDepositRate = (F32)sd["snow_deposit_rate"].asReal();
+    if (sd.has("snow_creep_rate")) mSnowCreepRate = (F32)sd["snow_creep_rate"].asReal();
+    if (sd.has("snow_drift_age")) mSnowDriftAge = (F32)sd["snow_drift_age"].asReal();
     if (sd.has("puddle_rate")) mPuddleRate = (F32)sd["puddle_rate"].asReal();
     if (sd.has("puddle_depth")) mPuddleDepth = (F32)sd["puddle_depth"].asReal();
     if (sd.has("puddle_drain")) mPuddleDrain = (F32)sd["puddle_drain"].asReal();
@@ -606,6 +614,11 @@ void SSPrecipPresetManager::buildDefaults()
         p.mSnowRate = 0.00004f; p.mSnowMelt = 0.0000045f;
         p.mSnowDepth = 0.09f;   p.mSnowRepose = 46.f;
 
+        // <SS:Nexii> Granular transport: light saltation in a breeze, gentle lee banking. Creep
+        // stays off until the cascade look is tuned - the store only fills from creep spill.
+        p.mSnowLiftRate = 0.002f;   p.mSnowDepositRate = 0.0008f;
+        p.mSnowCreepRate = 0.f;     p.mSnowDriftAge = 2.5f;
+
         p.mWetRate = 0.004f;    p.mDryRate = 0.0015f;
         mPresets.push_back(p);
     }
@@ -627,6 +640,16 @@ void SSPrecipPresetManager::buildDefaults()
 
         p.mSnowRate = 0.00013f; p.mSnowMelt = 0.0000035f;
         p.mSnowDepth = 0.22f;   p.mSnowRepose = 52.f;
+
+        // <SS:Nexii> Ground-blizzard rates: sustained wind scours the open ground and banks it
+        // in every lee. Erosion must comfortably beat settle (mSnowRate) or the storm never
+        // strips a cell; deposit runs about a fifth of lift, and creep stays off pending the
+        // cascade look. The falling-rate figure is rain's - a blizzard dumps as hard as rain
+        // does, and the old 0.15 was why snow skies read empty next to a rain preset.
+        p.mRate = 0.55f;
+        p.mSnowLiftRate = 0.010f;   p.mSnowDepositRate = 0.0015f;
+        p.mSnowCreepRate = 0.f;     p.mSnowDriftAge = 3.5f;
+
         p.mWetRate = 0.003f;    p.mDryRate = 0.0012f;
         mPresets.push_back(p);
     }

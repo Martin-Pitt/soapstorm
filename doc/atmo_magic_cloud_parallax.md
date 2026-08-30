@@ -39,17 +39,22 @@ vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
 
 `ss_cloud_alt_m` is the band's height above the camera, and there is ONE band on the dome mesh:
 
-- **The dome band** — the deck-tracking sheet. Its height is the merge derivation
-  (`SSAtmoEnvApplier::cloudDomeAltitudeMetres`): it starts at the authored dome height (Clouds >
-  Sky Dome, `SSAtmoEnvCloudDome::mHeightM`, keyframed like every other value on that tab, default
-  6000m; the Auto box stands in for the height with the same default) and merges down onto the
-  deck's mid-altitude as the deck's coverage builds (smoothstep over coverage 0.05..0.30), so
-  exactly when the band and the deck merge visually at the rim, they also agree about where the
-  cloud IS and parallax at the same rate. As convection anvils the deck, the merge source
-  descends onto the deck's lid, ending ~300 m over the deck's max height — by full anvil, band
-  and deck read as one integrated structure. Its density is the live sky's cloud shadow — the
-  tracked blend of the authored coverage lifted toward the deck's — which also dims the world, so
-  band, deck and world light overcast in lockstep.
+- **The dome band** — the cirrus layer. Its height is the Sky Dome's ANIMATABLE
+  height param (`SSAtmoEnvCloudDome::mHeightM`, keyframed like every other value
+  on that tab, default 6000m) relative to the owning track's floor — the same
+  convention both decks' base heights use, so an imported day cycle's height
+  keyframes play through it and a sky build's track carries it whole
+  (`SSAtmoEnvApplier::cloudDomeAltitudeMetres`). Moisture never moves it: an
+  earlier derivation merged the band down onto the deck's mid-altitude as the
+  deck's coverage built, which let three hundredths of moisture drag a 6 km
+  cirrus deck down onto a 1 km storm. The cirrus belongs at the cirrus level;
+  the ONLY thing that brings it down is convection — as the deck anvils (the
+  same ramp that flattens the deck's own tops, 0.6..0.9) the band descends onto
+  the deck's lid, ending ~300 m over the deck's max height: a towering anvil
+  reaches UP and hits the cirrus, never the other way round. Its density is the
+  live sky's cloud shadow — the tracked blend of the authored coverage lifted
+  toward the deck's — which also dims the world, so band, deck and world light
+  overcast in lockstep.
 
 (A two-band design — a separate cirrus veil at the authored height, over an overcast band
 tracking the deck — shipped and was removed. Two passes over one noise texture with per-band
@@ -76,23 +81,36 @@ dropped once it stopped doing anything.
 - `region_offset` (`lldrawpoolwlsky.cpp`) is the camera's true region
   position minus the region's centre, in metres. Centring avoids a bias from
   always measuring off the SW corner; it does not affect the parallax rate.
-- The rate is normalised by the layer altitude (`ss_cloud_alt_m`) — not by
-  region size. Region width (256 m stock, more on a
-  varregion) has nothing to do with how high the clouds sit; typical EEP
-  `max_y` defaults to ~1605 m and presets are generally 1000–2000 m+. Dividing
-  by region width instead made a short walk shift the pattern as if the
-  clouds were only as high as one region is wide. Dividing by the altitude
-  means a short walk under a high cirrus layer barely shifts it while a low
-  storm deck slides properly, same as real clouds.
-- The UV shift reaches `1/16` once you've walked a distance equal to the
-  layer altitude
-  from the region centre (the `/16` is the `vary_texcoord2`/`vary_texcoord3`
-  compensation above, not a separate dial).
-- The parallax is horizontal only in the FLAT fallback - gaining or losing
-  camera altitude does not add to it there, and the layer altitude stays
-  "N metres above the camera", re-centred every frame. With curvature the
-  deck is a real shell: rising past its height sweeps it down under the
-  camera like the real thing.
+- **The tile is pinned** (`SS_DOME_TILE_M`, 4000 m). The divisor
+  used to be `2 * height * cloud_scale`, which cancelled the height out of
+  the flat mapping's own static pattern — reach scaled with height and so did
+  metres-per-UV, so the pattern never moved vertically at all — and it let
+  the texture zoom every time the band's altitude moved and let an imported
+  day cycle's keyframed Cloud Scale dial breathe the whole dome, zoom and
+  parallax rate swinging together cycle after cycle. Pinned, one tile is one
+  fixed piece of world: the height above the camera survives into the pattern
+  (vertical parallax on both the flat and curved paths), altitude changes
+  slide instead of zoom, and cloud_scale stays out of the Atmo render
+  entirely — imported cycles animating it can no longer reach the dome. The
+  value is sized so the FINE layer lands near 290 m of world - the old
+  proportional calibration's detail scale at cirrus height - because a finer
+  tile than the noise can carry at that distance stops reading as cloud and
+  starts reading as the speck grid every high-contrast texel stamps across
+  the sky.
+- **The fine layers run at 13.7x, not stock's 16x** (`SS_FINE_LAYER`): an
+  exact integer harmonic aligns the fine grid with the large one, and two
+  aligned grids beat into a visible lattice - the same clumps repeating in
+  rows. A non-integer ratio makes the joint pattern effectively aperiodic;
+  stock's texcoord path keeps its 16.
+- The horizontal camera travel and wind drift run DAMPED (one eighth) to
+  match the rate of the vertex nudge this replaced — the eye tuned to that
+  rate, and the undamped plane rate read as the deck swimming. The vertical
+  term is honest: rising toward the deck's height expands the pattern
+  radially from the zenith at the true rate, and the band dissolves across
+  its own altitude (40..300 m) because the mapping degenerates as the camera
+  meets the plane — the deck's own volume takes over exactly there. Rays
+  heading away from the plane see none of it, so a camera above the band sees
+  it from above and clear sky overhead.
 - It is computed per FRAGMENT now, from the true view ray (cloudsV hands the
   camera-relative ray down in `vary_ray_dir`; cloudsF intersects it with the
   band's deck and maps the intersection point). The first version shifted the
@@ -104,6 +122,34 @@ dropped once it stopped doing anything.
   at tan(elevation); the dome mesh compresses at whatever rate its vertices
   are laid out. Intersecting the ray with the deck per fragment makes the
   anchored parallax exact and the curvature the deck's own.
+- The tile repeats are made APERIODIC by nested domain warping - the GPU-practical
+  equivalent of aperiodic tiling (Penrose and kin need per-tile art with matching
+  rules; a coordinate transform instead makes the composite lookup quasiperiodic,
+  so no two patches of sky ever sample the same composite point). The noise is
+  seamless, so the horizon compression marches the tile repeats into converging
+  rows - each elevation where the ray crosses another tile multiple lands on a
+  copy of the same lump. A single warp cannot break that: a displacement field
+  sampled from the same tiling map is itself periodic, so the warped grid is
+  still a grid, just bent. Three NESTED levels at incommensurate frequencies
+  (~11, ~2.7 and ~1.2 tiles - the middle one comparable to the ground spacing of
+  the compressed rows), each sampled in a differently-rotated frame (golden angle
+  and two other irrations), do break it: the pattern repeats only where all three
+  warp fields AND the base map agree, which is a period no viewer will cross.
+  Amplitudes run 0.55 / 0.28 / 0.12 tiles - the broad warp lays out the whole
+  deck's composition, the middle breaks row-to-row repetition, the fine knocks
+  off the last recognisable repeats. The fine layers (13.7x, not stock's 16 -
+  another non-harmonic) additionally read a rotated frame, so the fine grid can
+  neither align with the broad one nor repeat in step across the sky. Stock's
+  texcoord path keeps its 16 and its unwrapped look.
+- **The fine octaves fade with distance** (terrain-LOD logic, `SS_DETAIL_LO_M`
+  / `SS_DETAIL_HI_M`, 8–20 km of ray): past ~8 km the fine tiles sit under a
+  degree wide and perspective compresses their tiling into tight horizontal
+  stripes - an anisotropic squeeze no warp can decorrelate, because it is the
+  mapping itself, not the repetition. The fine octave's voice in the opacity
+  and in the storm variance fades over the same range (the term is zero-mean,
+  so the far field's coverage is untouched - only its texture simplifies), and
+  the broad warped layer carries the far deck alone: structure without
+  resolvable detail, which is what a real distant sheet is.
 - The deck CURVES: cloudsF intersects the ray with a sphere centred on the
   planet at radius `orbit + deck height` (`ss_planet_orbit_m` is the camera's
   distance from the home body's centre, home radius plus camera height), so
@@ -111,13 +157,16 @@ dropped once it stopped doing anything.
   tangent elevation sqrt(2*height/orbit), about 1.4 degrees for a 1500 m deck
   under a 5000 km home planet - instead of stretching flat into the world's
   horizon line, and it sweeps down under a camera that climbs past it. The
-  band's alpha fades across the last third of the approach to the edge
+  band's alpha fades across the last stretch of the approach to the edge
   (ss_deck_edge_fade), so the rim reads as a curved cloud horizon dissolving
-  into the atmosphere. No home body (orbit 0) falls back to the flat deck,
-  whose grazing reach softens as (1+F)*height/(|up| + F) - never the hard
-  max(up, 0.02) clamp an earlier cut shipped: that froze the UVs into an
-  azimuth-only stripe field below ~1.2 degrees and kinked the mip selection
-  into a grid of tile boundaries at the clamp line.
+  into the atmosphere. A track with no home body falls back to an Earth-sized
+  default radius rather than to flat (see the applier) - "no planet authored"
+  should not read as "flat cartoon sky", and the curved rim is the visible
+  tell of the curvature. No-orbit flat fallback remains as the shader's
+  orbit-0 guard, whose grazing reach softens as (1+F)*height/(|up| + F) -
+  never the hard max(up, 0.02) clamp an earlier cut shipped: that froze the
+  UVs into an azimuth-only stripe field below ~1.2 degrees and kinked the mip
+  selection into a grid of tile boundaries at the clamp line.
 - metres_per_uv anchors the cloud_scale dial to stock: stock's dome texcoords
   tile every 2*cloud_scale radians of arc at the zenith, and a tile of
   2*height*cloud_scale metres subtends exactly that from a camera one deck

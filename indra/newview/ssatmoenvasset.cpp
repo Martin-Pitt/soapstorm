@@ -893,6 +893,7 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
     sd["base_texture"] = mBaseTexture.asLLSD();
     sd["detail_texture"] = mDetailTexture.asLLSD();
     sd["noise_texture"] = mNoiseTexture.asLLSD();
+    sd["profile_texture"] = mProfileTexture.asLLSD();
     sd["texture_mix"] = mTextureMix.asLLSD();
     sd["puff_density"] = mPuffDensity.asLLSD();
     sd["detail_scale"] = mDetailScale.asLLSD();
@@ -918,6 +919,7 @@ bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
     if (sd.has("base_texture")) mBaseTexture.fromLLSD(sd["base_texture"], def.mBaseTexture.valueAt(0.0));
     if (sd.has("detail_texture")) mDetailTexture.fromLLSD(sd["detail_texture"], def.mDetailTexture.valueAt(0.0));
     if (sd.has("noise_texture")) mNoiseTexture.fromLLSD(sd["noise_texture"], def.mNoiseTexture.valueAt(0.0));
+    if (sd.has("profile_texture")) mProfileTexture.fromLLSD(sd["profile_texture"], def.mProfileTexture.valueAt(0.0));
     if (sd.has("texture_mix")) mTextureMix.fromLLSD(sd["texture_mix"], 0.4f);
     if (sd.has("puff_density")) mPuffDensity.fromLLSD(sd["puff_density"], 0.8f);
     if (sd.has("detail_scale")) mDetailScale.fromLLSD(sd["detail_scale"], 3.f);
@@ -1015,6 +1017,7 @@ void SSAtmoEnvCloudDome::collapseConstantKeyframes()
     mDetailD.collapseIfConstant(SEED_COLLAPSE_EPSILON);
 
     mNoiseTexture.collapseIfConstant(SEED_COLLAPSE_EPSILON);
+    mLargeNoiseTexture.collapseIfConstant(SEED_COLLAPSE_EPSILON);
 }
 
 const char* const SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED =
@@ -1050,6 +1053,7 @@ LLSD SSAtmoEnvCloudDome::asLLSD() const
     sd["detail_d"]  = mDetailD.asLLSD();
 
     sd["noise_texture"] = mNoiseTexture.asLLSD();
+    sd["large_noise_texture"] = mLargeNoiseTexture.asLLSD();
     return sd;
 }
 
@@ -1080,6 +1084,7 @@ bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
     if (sd.has("detail_d"))  mDetailD.fromLLSD(sd["detail_d"], def.mDetailD.valueAt(0.0));
 
     if (sd.has("noise_texture")) mNoiseTexture.fromLLSD(sd["noise_texture"], LLUUID::null);
+    if (sd.has("large_noise_texture")) mLargeNoiseTexture.fromLLSD(sd["large_noise_texture"], LLUUID::null);
     return true;
 }
 

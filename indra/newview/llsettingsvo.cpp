@@ -876,6 +876,23 @@ void LLSettingsVOSky::applySpecial(void *ptarget, bool force)
     // azimuth the moment the centre sets - see SSAtmoEnvApplier::sunSlotDirection.
     shader->uniform3fv(LLShaderMgr::SS_SUN_DIR, SSAtmoEnvApplier::instance().sunSlotDirection());
 
+    // ...and the disc's half-angle sine, the just-cleared airmass the dome shaders hold the
+    // sun's light path at while any part of the disc is above the horizon - see
+    // SSAtmoEnvApplier::sunSlotRadius. Zero while no active Atmo environment drives the sky.
+    shader->uniform1f(LLShaderMgr::SS_SUN_RADIUS, SSAtmoEnvApplier::instance().sunSlotRadius());
+
+    // <SS:Nexii> Atmo Magic: the two light slots' scene-light contributions after their OWN
+    // atmospheric attenuation, for the dominant-light handover in atmosphericsFuncs.glsl - the
+    // scene light is their per-channel max, so the moon hands over to the rising sun exactly
+    // where their light crosses instead of lightnorm's flip at centre-rise dropping everything
+    // to near-black. ss_light_max gates it: 1 while an Atmo environment with light-emitting
+    // bodies drives the sky, 0 otherwise, so stock keeps its single-lightnorm switch. Zero
+    // contribution uniforms while the gate is off.
+    shader->uniform1f(LLShaderMgr::SS_LIGHT_MAX,
+                      SSAtmoEnvApplier::instance().lightSlotsValid() ? 1.f : 0.f);
+    shader->uniform3fv(LLShaderMgr::SS_SUN_LIGHT, SSAtmoEnvApplier::instance().sunSlotLight().mV);
+    shader->uniform3fv(LLShaderMgr::SS_MOON_LIGHT, SSAtmoEnvApplier::instance().moonSlotLight().mV);
+
     shader->uniform1f(LLShaderMgr::DENSITY_MULTIPLIER, getDensityMultiplier());
     shader->uniform1f(LLShaderMgr::DISTANCE_MULTIPLIER, getDistanceMultiplier());
 

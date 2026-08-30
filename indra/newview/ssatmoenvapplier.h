@@ -67,17 +67,14 @@ public:
 
     const LLVector2& cloudDriftMetres() const { return mCloudDriftM; }
 
-    // <SS:Nexii> The dome band's two altitudes, resolved per call rather than cached with the rest
-    // of the sky walk - both read the volumetric field's LIVE geometry, which moves between
-    // applies. cloudDomeAltitudeMetres is the dome band's: the authored dome height while the air
-    // is calm, merging down onto the deck's mid-altitude as the deck's coverage builds, so band
-    // and deck agree about where the cloud IS as they merge at the rim
-    // (doc/atmo_magic_cloud_parallax.md). cirrusAltitudeMetres is the merge's SOURCE - the same
-    // authored height, before the deck pulls it - and what the floater's greyed-out dome row
-    // shows.
+    // <SS:Nexii> The dome band's altitude, resolved per call rather than cached with the rest of
+    // the sky walk - it reads the volumetric field's LIVE geometry, which moves between applies.
+    // The band IS the cirrus layer: the Sky Dome's animatable height param relative to the owning
+    // track's floor, brought down only by convection's anvil ramp (doc/atmo_magic_cloud_parallax.md).
+    // cloudDomeAltitudeMetres and cirrusAltitudeMetres are the same number - the pool and the
+    // floater's greyed-out dome row just read it by their own names.
     F32 cloudDomeAltitudeMetres() const;
     F32 cirrusAltitudeMetres() const;
-    static F32 autoCloudDomeAltitudeMetres();
 
     // <SS:Nexii> The home planet's radius, metres, from the applied track's planetary system -
     // the curvature authority the dome cloud's deck mapping curves around (cloudsF.glsl via
@@ -85,12 +82,28 @@ public:
     // flat-deck fallback.
     F32 homePlanetRadiusM() const { return mHomePlanetRadiusM; }
 
+    // <SS:Nexii> The dome's authored large-scale noise map, sampled at the applied phase - the
+    // broad octave's art when one is set (null: every octave reads the cloud noise). No
+    // LLSettingsSky home; the sky pool fetches and binds it straight off this id.
+    const LLUUID& cloudLargeNoiseId() const { return mLargeNoiseId; }
+
     // <SS:Nexii> Whether the sky dome's lower half takes the nearer depth slot that clips what it
     // draws over at the horizon (SSAtmoEnvAtmosphere::mHorizonClip). Sampled at the applied phase
     // like the dome altitude; the sky pool reads it when it binds the dome shader.
     bool horizonClip() const { return mHorizonClip; }
 
     const LLVector3& moonSunDirection() const { return mMoonSunDir; }
+
+    // <SS:Nexii> The two light slots' scene-light contributions after their OWN atmospheric
+    // attenuation, and whether they mean anything (an active environment with light-emitting
+    // bodies - see applyCelestial). Zero and invalid while inactive, which leaves the shaders
+    // on stock's single-lightnorm switch. atmosphericsFuncs.glsl takes the per-channel max of
+    // the two as the scene light - the dominant-light handover: the light is always whichever
+    // emitter is currently brighter, so the moon hands over to the rising sun exactly where
+    // their light crosses, never at the lightnorm flip, and never dimmer than either one.
+    bool lightSlotsValid() const { return mActive && mLightSlotsValid; }
+    LLColor3 sunSlotLight() const { return lightSlotsValid() ? mSunSlotLight : LLColor3(0.f, 0.f, 0.f); }
+    LLColor3 moonSlotLight() const { return lightSlotsValid() ? mMoonSlotLight : LLColor3(0.f, 0.f, 0.f); }
 
     bool sunSlotEmissive() const { return mSunSlotEmissive; }
     bool moonSlotEmissive() const { return mMoonSlotEmissive; }
@@ -113,6 +126,13 @@ public:
     // below the horizon, so nothing was left looking at the sun to jump. Atmo's ramps keep the glow, the horizon band and the clouds' disc-neighbourhood body alive through the rise band, and
     // every one of those has to keep aiming at the SUN or it leaps to the moon's azimuth at centre-set. Only meaningful while sunRiseFraction() is in (0, 1); the shader ramps gate on that.
     const LLVector3& sunSlotDirection() const { return mSunSlotDir; }
+
+    // <SS:Nexii> The sun slot disc's half-angle as a direction-z sine - the same value the rise
+    // fraction is measured against (sunRiseFraction hits 1 exactly when the centre clears this).
+    // The dome shaders hold the sun's airmass at this while any part of the disc is above the
+    // horizon, so the horizon line keeps the just-cleared light path for the whole rise instead
+    // of collapsing to the infinite-airmass clamp. Zero while inactive.
+    F32 sunSlotRadius() const { return mActive ? mSunSlotRadius : 0.f; }
 
     const LLVector3& observerPole() const { return mObserverPole; }
 
@@ -149,15 +169,22 @@ private:
     SSAtmoEnvSkyModulation mLastModulation;
     LLVector2 mCloudDriftM;
 
-    // <SS:Nexii> The dome band's authored dry altitude and its auto flag, sampled at the applied
-    // phase - the merge source cirrusAltitudeMetres reads.
+    // <SS:Nexii> The dome band's authored height and its auto flag, sampled at the applied phase -
+    // the ANIMATABLE Sky Dome height keyframes, metres relative to the owning track's floor
+    // (cirrusAltitudeMetres adds the floor back). The auto flag no longer substitutes an altitude:
+    // the height param always rules.
     bool mCloudDomeAuto = false;
     F32 mCloudDomeHeightM = 6000.f;
 
-    // <SS:Nexii> The track's convection, sampled at the applied phase - the anvil ramp that pulls
-    // the merge source down onto the deck's lid rides it - and the home planet's radius, metres.
+    // <SS:Nexii> The applied track's floor and convection - the cirrus altitude is floor-relative
+    // and its anvil ramp rides the convection - and the home planet's radius, metres.
+    F32 mTrackFloorZ = 0.f;
     F32 mLastConvection = 0.f;
     F32 mHomePlanetRadiusM = 0.f;
+
+    // <SS:Nexii> The dome's authored large-scale noise id, sampled at the applied phase - see
+    // cloudLargeNoiseId.
+    LLUUID mLargeNoiseId;
 
     // <SS:Nexii> The horizon clip, sampled at the applied phase - see horizonClip.
     bool mHorizonClip = true;
@@ -172,6 +199,14 @@ private:
     LLVector3 mSunSlotSunDir;
     F32 mSunSlotSunlight = 1.f;
     F32 mMoonSlotSunlight = 1.f;
+
+    // <SS:Nexii> The light slots' post-attenuation contributions and their validity flag - see
+    // lightSlotsValid. Computed at the end of applyCelestial, against the sky values applySky
+    // just wrote, so the CPU side of the handover cannot drift from the shader's own formula.
+    LLColor3 mSunSlotLight{0.f, 0.f, 0.f};
+    LLColor3 mMoonSlotLight{0.f, 0.f, 0.f};
+    bool mLightSlotsValid = false;
+
     LLVector3 mObserverPole = LLVector3::z_axis;
     F32 mSunSlotAngularDeg = 0.53f;
     F32 mMoonSlotAngularDeg = 0.53f;
@@ -181,6 +216,12 @@ private:
 
     // <SS:Nexii> The sun slot's true direction, sampled at the applied phase - see sunSlotDirection.
     LLVector3 mSunSlotDir = LLVector3::z_axis;
+
+    // <SS:Nexii> The sun slot disc's half-angle as a direction-z sine - the same sizing chain
+    // updateHeavenlyBodyGeometry lays the disc out with, and the airmass floor the sky dome and
+    // dome clouds hold their sun term at while any part of the disc is above the horizon (see
+    // sunSlotRadius). Sampled with the rise fraction.
+    F32 mSunSlotRadius = 0.f;
 
     std::vector<LLPointer<class LLHUDText> > mDebugLabels;
     void releaseDebugLabels();

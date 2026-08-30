@@ -549,7 +549,7 @@
      top_delta="0"
      height="25"
      width="25"
-     name="ucloud_detail_image_next_button"
+     name="ucloud_noise_image_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -566,9 +566,73 @@
      top_pad="10"
      height="14"
      width="110"
-     name="ucloud_noise_image_label"
+     name="ucloud_profile_image_label"
      font="SansSerifSmall">
-        Noise Map
+        Profile Ramp
+    </text>
+    <texture_picker
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-4"
+     height="22"
+     width="30"
+     show_caption="false"
+     name="ucloud_profile_image"
+     tool_tip="Vertical profile strip, base at the bottom edge, lid at the top. Red: how much the Noise Map counts (ramp to white for the anvil). Green: where the anvil carve may bite (keep the base black). Blue: torn cap band. Alpha: thick-base fill. None runs the built-in curves" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="-2"
+     height="25"
+     width="25"
+     name="ucloud_profile_image_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="ucloud_profile_image_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="ucloud_profile_image_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="ucloud_texture_mix_label"
+     font="SansSerifSmall">
+        Image Mix
     </text>
     <texture_picker
      follows="left|top"

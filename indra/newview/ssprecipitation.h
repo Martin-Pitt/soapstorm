@@ -118,9 +118,11 @@ public:
 
     const std::vector<SSPrecipParticle>& particles() const { return mParticles; }
     const std::vector<SSPrecipParticle>& ripples() const { return mRipples; }
+    const std::vector<SSPrecipParticle>& drift() const { return mDrift; }
     LLViewerTexture* texture(U8 index) const;
-    bool empty() const { return mParticles.empty() && mRipples.empty() && mStreams.empty(); }
+    bool empty() const { return mParticles.empty() && mRipples.empty() && mStreams.empty() && mDrift.empty(); }
     S32 tierCount(SSPrecipTier tier) const { return mTierCount[tier]; }
+    S32 driftCount() const { return (S32)mDrift.size(); }
 
     static void tierBands(SSPrecipTier tier, const SSPrecipPreset& preset,
                           F32& in_lo, F32& in_hi, F32& out_lo, F32& out_hi);
@@ -146,6 +148,18 @@ private:
     std::vector<SSPrecipParticle> mParticles;
     std::vector<SSPrecipParticle> mRipples;
     S32 mDripCount = 0;
+
+    // <SS:Nexii> Blowing snow: a separate pool on purpose. mTierCount/mTierTarget/tierBands stay
+    // the falling tiers' alone - a blizzard must never starve falling snow of budget, or the
+    // reverse - so drift carries its own cap and its own cull radius, and the renderer batches
+    // it as one more source. Spawning walks the surface field's lift cells (the transport's
+    // output) plus a regime-scaled near-camera ring.
+    std::vector<SSPrecipParticle> mDrift;
+    void updateDrift(F32 dt);
+    void spawnDriftTick(U64 tick, F64 tick_time);
+    void emitDrift(const LLVector3& ground_pos, const LLVector3& flow, F32 lift,
+                   SSRandStream& rng);
+    U64 mLastDriftTick = 0;
 
     std::vector<SSPrecipParticle> mStreams;
     void updateStreams(F32 dt);

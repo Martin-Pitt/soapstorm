@@ -86,6 +86,29 @@ uniform float ss_tex_mix;       // authored bias toward the detail map
 uniform float ss_puff_density;  // ceiling on one puff's opacity
 uniform float ss_detail_scale;  // multiplies the fine octaves' size
 uniform float ss_drift_rate;    // multiplies how fast they boil
+uniform float ss_noise_tile;    // metres per tile of the convection noise map; 0 = none
+uniform float ss_noise_hole;    // the map's hole strength as baked by the builder - the veil's gate shares it
+uniform vec2  ss_tower_ramp;    // the tower ramp's window as baked by the builder - widened as the weather consolidates
+uniform float ss_profile;       // 1: the authored vertical profile ramp is bound on bumpMap2
+uniform float ss_sheet;         // 0: fragment is a puff. 1: fragment is the deck's base veil
+
+// The DECK'S vertical profile ramp - one thin strip, sampled once at this fragment's height
+// through the deck (v 0 base, v 1 lid), whose four channels are four vertical curves: RED the
+// tower/ramp weight (how much the noise map counts, ramping toward white near the lid so the
+// top consolidates into the anvil), GREEN the carve guard (where the anvil's underside may
+// bite - the base band stays black so the deck keeps its body), BLUE the torn cap band, ALPHA
+// the thick-base fill. Named bumpMap2 because that is one of LLShaderMgr's RESERVED uniform
+// names, and only reserved names can be bound as textures - the same lesson depthMap and
+// altDiffuseMap carry.
+uniform sampler2D bumpMap2;
+
+// The DECK'S OWN convection noise map - the one the field's towers were grown from, bound here so
+// the carving below reads the same geography the builder did. Named altDiffuseMap because that is
+// one of LLShaderMgr's RESERVED uniform names, and only reserved names can be bound as textures -
+// the same lesson the depthMap declaration above carries: a sampler under a custom name has no
+// reserved channel, and bindTexture would index the reserved table with its raw location.
+uniform sampler2D altDiffuseMap;
+
 uniform vec2 ss_wind;       // unit, the direction the air is travelling
 
 uniform vec2 ss_drift;      // metres the air has travelled, east and north
@@ -199,6 +222,10 @@ const float SS_SKEW_M = 1400.0;
 // than as bodies of cloud. Stretching it puts the structure back at the scale of the cloud rather than the scale of the map.
 const float SS_NOISE_M = 880.0;
 
+// Metres of world per tile of the BASE VEIL's read of the puff texture. Matched to SS_NOISE_M deliberately: the veil is the deck's own floor, so its mottle sits at the same scale as the field's
+// base octave and the two read as one body of cloud rather than as a sheet painted under one.
+const float SS_SHEET_TILE_M = 880.0;
+
 // Eye-space distance from a depth-buffer reading. The projection is the ordinary one, so this is just its inverse.
 float ss_eye_z(float d)
 {
@@ -234,17 +261,6 @@ float ss_mixed(vec2 uv, float m)
 
 void main()
 {
-    // A soft radial window. The art has no edge of its own - it is seamless noise, opaque corner to corner, with no alpha channel - so without a window every puff draws as its quad, hard borders and
-    // all. That was the wall of rectangles.
-    vec2 p = vary_texcoord0.xy * 2.0 - 1.0;
-    float r = length(p);
-    float shape = 1.0 - smoothstep(SS_PUFF_CORE, 1.0, r);
-
-    // ...and a hard stop at the rim, which the window above cannot provide on its own. The window is ADDED to the noise below, so where it falls to zero the noise alone can still carry a fragment -
-    // and it does, right out to the corners of the quad. That is why the puffs were reading as rounded rectangles rather than as cloud: the shape was suggesting an edge while the noise kept drawing
-    // past it. This multiplies, so nothing survives the boundary whatever the noise says.
-    float rim = 1.0 - smoothstep(SS_PUFF_RIM, 1.0, r);
-
     // The noise sampled in the AIR's frame, not the quad's. This is the difference between a field of clouds and a field of stickers. The map is world-space noise for a whole body of cloud; a puff
     // is one lump inside that body, so what belongs on a puff is the part of the field it happens to occupy. Sampled per quad - the whole tile on every one, as it was - every puff carries an
     // identical copy of the same picture, and no amount of jittering their positions hides that. Sampled by position, neighbouring puffs continue each other and the lumps that emerge belong to the
@@ -268,6 +284,84 @@ void main()
 
     vec3 air = world_true - vec3(ss_drift, 0.0);
 
+    // <SS:Nexii> Two fragments share this shader and diverge only here: the puffs, and the deck's
+    // BASE VEIL - one soft sheet inset into the deck's floor, drawn under the puffs so the field
+    // reads with its gaps filled rather than as balls over empty sky. Both paths hand the shared
+    // tail below the same three answers: density (the alpha driver), noise_v (the mottle the
+    // shading reads), and sphere_n (what the wrapped light wraps around).
+    float density;
+    float noise_v;
+    vec3 sphere_n;
+
+    // The layer's ceiling, uniform-derived so it sits at main scope: both paths' cuts run under
+    // it, and the strike veil in the shared tail below windows itself with it too.
+    float top_z = ss_base_z + ss_layer_thick;
+
+    if (ss_sheet > 0.5)
+    {
+        // The veil reads the PUFF TEXTURE - the same map the puffs wear, so sheet and puffs are
+        // unambiguously one material - but an ordinary tiling read would print the map's grid
+        // across ten kilometres of open sheet. So it is read five ways at once: five copies of
+        // the same lookup, each rotated a fifth of a turn and scaled by a power of the golden
+        // ratio - Penrose's own angles and proportion, the P2 tiling's numbers. Five square
+        // lattices at incommensurate scales share no repeat period; the blend keeps the cloud
+        // character and loses the grid, the cheap honest cousin of an aperiodic tiling.
+        vec2 suv = air.xy / SS_SHEET_TILE_M;
+        float acc = 0.0;
+        float wsum = 0.0;
+        for (int k = 0; k < 5; ++k)
+        {
+            float fk  = float(k);
+            float ang = 1.2566371 * fk;
+            float c   = cos(ang);
+            float s   = sin(ang);
+            float sc  = pow(1.6180339887, fk - 2.0);
+            vec2 ruv  = mat2(c, -s, s, c) * (suv * sc);
+            float wk  = 1.0 / (1.0 + 0.30 * fk);
+            acc += ss_density(ruv) * wk;
+            wsum += wk;
+        }
+        float sheet_n = acc / wsum;
+
+        // The field's own geography decides where the veil exists at all: the convection noise
+        // map's holes cut it exactly as they cut the puffs, so a gap in the deck stays a gap all
+        // the way through and the veil can never paper over what the map opened.
+        float presence = 1.0;
+        if (ss_noise_tile > 0.0)
+        {
+            float n_map = dot(texture(altDiffuseMap, air.xy / ss_noise_tile).rgb, vec3(0.3333));
+            float cut = smoothstep(0.16, 0.52, n_map);
+            presence = 1.0 - (1.0 - cut) * ss_noise_hole;
+        }
+
+        // And the same edge-of-field fade the puffs run, so sheet and puffs dissolve together
+        // toward the dome handoff instead of the sheet outliving them.
+        float horiz = length(world_true.xy - ss_cam_pos.xy);
+        float edge = 1.0 - smoothstep(3400.0, 4900.0, horiz);
+
+        // Soft by construction: the mottle shapes the veil but never cuts it, and the ceiling is
+        // held at 0.75 - the veil is THIN cloud, and its thin half is where the shared sun-through
+        // fringe lives. Run it denser and it reads as a black slab under the deck (the body
+        // colour is gloom-crushed in a storm); this soft it glows faintly through its own mottle
+        // and reads as the deck's floor lit from within.
+        density = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75) * presence * edge;
+        noise_v = sheet_n;
+        sphere_n = vec3(0.0, 0.0, 1.0);
+    }
+    else
+    {
+
+    // A soft radial window. The art has no edge of its own - it is seamless noise, opaque corner to corner, with no alpha channel - so without a window every puff draws as its quad, hard borders and
+    // all. That was the wall of rectangles.
+    vec2 p = vary_texcoord0.xy * 2.0 - 1.0;
+    float r = length(p);
+    float shape = 1.0 - smoothstep(SS_PUFF_CORE, 1.0, r);
+
+    // ...and a hard stop at the rim, which the window above cannot provide on its own. The window is ADDED to the noise below, so where it falls to zero the noise alone can still carry a fragment -
+    // and it does, right out to the corners of the quad. That is why the puffs were reading as rounded rectangles rather than as cloud: the shape was suggesting an edge while the noise kept drawing
+    // past it. This multiplies, so nothing survives the boundary whatever the noise says.
+    float rim = 1.0 - smoothstep(SS_PUFF_RIM, 1.0, r);
+
     // Sampled on all three planes, weighted by the quad's own facing. Two planes was not enough, and failed in a way worth recording: a billboard turned side-on to one of them has almost no
     // variation left in that plane's first coordinate across the whole quad, so the lookup collapses to a single line of the map stretched down the puff. That is where the vertical streaking came
     // from - not an alpha artefact, a texture being read along one axis. The quad's frame, built from the camera rather than from screen-space derivatives. Derivatives were the obvious way to get it
@@ -282,7 +376,7 @@ void main()
     vec3 ref = (abs(nrm.z) < 0.95) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
     vec3 tan_u = normalize(cross(ref, nrm));
     vec3 tan_v = cross(nrm, tan_u);
-    vec3 sphere_n = normalize(tan_u * p.x + tan_v * p.y + nrm * sqrt(max(1.0 - r * r, 0.0)));
+    sphere_n = normalize(tan_u * p.x + tan_v * p.y + nrm * sqrt(max(1.0 - r * r, 0.0)));
     tri /= max(tri.x + tri.y + tri.z, 1.0e-4);
 
     // Stretched along the wind, by however little convection there is.
@@ -375,18 +469,84 @@ void main()
 
     // Window and noise combined by ADDING, the same way the dome layer biases its own noise with coverage (cloudsF.glsl). Multiplying would give a circle with texture painted on it; adding lets the
     // noise decide where the edge falls - solid through the core where the window dominates, ragged and broken toward the rim where the noise does.
-    float density = clamp((noise - 0.5) * SS_PUFF_CONTRAST + shape, 0.0, 1.0) * rim;
+    density = clamp((noise - 0.5) * SS_PUFF_CONTRAST + shape, 0.0, 1.0) * rim;
 
     // ...and cut flat underneath - see SS_BASE_SOFT_M. Softened over a few tens of metres rather than a hard edge, because a real cloud base is ragged at the scale of the wisps hanging off it, just
     // not at the scale of the deck.
     density *= smoothstep(ss_base_z, ss_base_z + SS_BASE_SOFT_M, world_true.z);
 
-    // ...and flat on top too, once there is an anvil to flatten - see SS_TOP_SOFT_M. Faded in by ss_anvil so an ordinary convective sky keeps its rounded tops and only a driven one gets the table.
-    float top_z = ss_base_z + ss_layer_thick;
-    float lid = 1.0 - smoothstep(top_z - SS_TOP_SOFT_M, top_z, world_true.z);
-    density *= mix(1.0, lid, ss_anvil);
+    // <SS:Nexii> The convection noise map, read again at the fragment level. The CPU shaped the
+    // FIELD with this map - which columns stand up as towers, which fall into pockets - and this
+    // stage runs the same two reads the builder does, in the same direction: map HIGHS are
+    // towers, map LOWS are pockets. What the map must never do down here is shape the BOTTOM -
+    // that inversion (spiky undersides, flattened tops) is what the first cut did before the
+    // guard below, and it read as the map being applied upside down. Two cuts, both gated by the
+    // anvil weight so an ordinary convective sky keeps every ball it grew:
+    //
+    //   The height ramp - the map blends toward 70% white as the fragment climbs the deck's last
+    //   stretch toward the cirrus band, so near the lid EVERY column passes the tower window and
+    //   the whole top consolidates into the anvil rather than only the strong columns' tops.
+    //
+    //   The slope carve - the anvil's UNDERSIDE, deep where a tower feeds it, thinning to a
+    //   sheet away from one - guarded so it can only bite in the deck's upper half. The base
+    //   band is where the cloud keeps its body; an anvil carve that reaches the floor is what
+    //   shredded the undersides.
+    //
+    // All three vertical windows - and the thick-base fill - come from the authored profile
+    // ramp when one is bound, from these built-ins when not. The ramp's four channels mean the
+    // author paints the whole vertical story in one strip: solid base, carving middle, white
+    // ramp to the anvil.
+    float v_h = (world_true.z - ss_base_z) / max(ss_layer_thick, 1.0);
+    vec4 prof = (ss_profile > 0.5) ? texture(bumpMap2, vec2(0.5, clamp(v_h, 0.0, 1.0))) : vec4(0.0);
 
-    float a = density * vary_color.a * ss_puff_density;
+    float anvil_w = ss_anvil;
+    if (ss_noise_tile > 0.0)
+    {
+        float n_map = dot(texture(altDiffuseMap, air.xy / ss_noise_tile).rgb, vec3(0.3333));
+
+        // The tower weight: the map, maxed with the profile's ramp-to-white - built-in
+        // 0.7 across the top 30% when no strip is bound.
+        float ramp_h = mix(0.7 * smoothstep(0.70, 1.25, v_h), prof.r, ss_profile);
+        float tower = smoothstep(ss_tower_ramp.x, ss_tower_ramp.y, max(n_map, ramp_h));
+
+        // The early anvil: the same ramp the builder runs, so the top of the deck takes the lid -
+        // and with it both cuts - before the deck-wide anvil figure says so.
+        anvil_w = max(anvil_w, smoothstep(0.40, 0.70, ss_churn) * tower);
+
+        // The carve guard: profile green, built-in the upper half only.
+        float base_guard = mix(smoothstep(0.20, 0.45, v_h), prof.g, ss_profile);
+
+        float sheet_m = min(ss_layer_thick * 0.35, 420.0);
+        float floor_z = mix(top_z - sheet_m, ss_base_z, tower);
+        density *= mix(1.0, smoothstep(floor_z - 120.0, floor_z, world_true.z), anvil_w * base_guard);
+
+        // The thick-base fill: profile alpha, none built-in. A density floor, fed by the map's
+        // own mottle so the solid base still varies with the geography the deck was carved by.
+        float fill = prof.a * clamp(0.6 + 0.8 * (n_map - 0.5), 0.0, 1.0);
+        density = max(density, fill * step(v_h, 1.0));
+    }
+
+    // ...and flat on top too, once there is an anvil to flatten - see SS_TOP_SOFT_M. Faded in by
+    // the anvil weight - the map's early ramp included - so an ordinary convective sky keeps its
+    // rounded tops and only a driven one gets the table.
+    float lid = 1.0 - smoothstep(top_z - SS_TOP_SOFT_M, top_z, world_true.z);
+    density *= mix(1.0, lid, anvil_w);
+
+    // The torn cap band: profile blue where authored, the built-in metres-wide band under the
+    // lid otherwise; the noise the puff carries decides what survives inside it.
+    float cap_band = mix(smoothstep(top_z - 260.0, top_z - 30.0, world_true.z), prof.b, ss_profile);
+    if (cap_band > 0.001 && (ss_profile > 0.5 || ss_noise_tile > 0.0))
+    {
+        float chunk = smoothstep(0.32, 0.52, noise);
+        density *= mix(1.0, chunk, anvil_w * cap_band);
+    }
+
+    noise_v = noise;
+    }
+
+    // The shared alpha multiply, with the one difference the two paths answer to: the puffs'
+    // ceiling is the Puff Density dial, the sheet's ceiling rode in whole on vary_color.a.
+    float a = density * vary_color.a * mix(ss_puff_density, 1.0, ss_sheet);
 
     // Fade out where the puff meets solid geometry. The depth test only ever gives the all-or-nothing answer: a fragment is in front of the surface or it is gone, and the boundary between those two
     // is the quad's own outline drawn across whatever it ran into. That is the hard intersection - the one thing that says "card" no matter how good the shape is. What is wanted is the DISTANCE to
@@ -417,7 +577,7 @@ void main()
 
     vec3 body = vary_color.rgb
               * mix(mix(SS_FORM_DARK, 1.0, wrap), 0.78, form_flat)
-              * mix(mix(1.0 - SS_PUFF_SHADE, 1.0, noise), 0.83, form_flat);
+              * mix(mix(1.0 - SS_PUFF_SHADE, 1.0, noise_v), 0.83, form_flat);
 
     // The bright fringe where the puff is thin enough for light to come through it - see SS_RIM.
     float thin = 1.0 - density;

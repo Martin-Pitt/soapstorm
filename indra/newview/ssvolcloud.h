@@ -27,6 +27,7 @@
 #include "llsingleton.h"
 #include "llpointer.h"
 #include "lluuid.h"
+#include "llimage.h"
 #include "llrendertarget.h"
 #include "llviewertexture.h"
 #include "v2math.h"
@@ -87,6 +88,13 @@ public:
     // precipitation pays for any of the gating.
     bool precipNoiseReady() const;
 
+    // <SS:Nexii> The generated stand-ins a picker previews for each deck's noise map and
+    // profile ramp: the procedural map or the built-in strip while it is what the deck runs,
+    // null once an authored texture covers the field (the picker then shows the real asset).
+    // These are live previews of the built decks, not of the edited asset.
+    LLViewerTexture* noisePreviewTexture(bool under_deck) const;
+    LLViewerTexture* profilePreviewTexture(bool under_deck) const;
+
 private:
     struct Puff
     {
@@ -95,6 +103,12 @@ private:
         F32 mAlpha = 0.f;
         LLColor3 mColor;
         F32 mCamDistSq = 0.f;
+
+        // <SS:Nexii> This puff's anvil figure - the deck's own anvil raised by the noise map's
+        // tower ramp where the column is one of the strong ones, and by the height ramp wherever
+        // the puff climbs the deck's upper stretch toward the cirrus band. Rides on the puff so
+        // the renderer can shear its top into a skirt without re-deriving anything.
+        F32 mAnvil = 0.f;
     };
 
     // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are
@@ -113,12 +127,13 @@ private:
         LLUUID mDetail;
         LLPointer<LLViewerFetchedTexture> mDetailRef;
 
-        // <SS:Nexii> The convection noise map and its CPU copy. The GPU never sees this one:
-        // it is a FIELD map, read per cell by the builder and per column by precipitation, so
-        // it is read back once out of VRAM (the way sculpties read their maps) into a small
-        // wrapped greyscale grid. mNoiseW zero means "no map, or not read back yet" - every
-        // consumer then treats the field as unmodulated, and the cache fills a frame or two
-        // later once the fetch lands.
+        // <SS:Nexii> The convection noise map and its CPU copy. The GPU sees the same map the
+        // field was shaped with - bound as the fragment stage's altDiffuseMap (a reserved
+        // LLShaderMgr channel; only reserved names can be bound as textures, see the depthMap
+        // note in ssVolCloudF.glsl) so the anvil's carving reads the same geography the towers
+        // were grown from. mNoiseW zero means "no map, or not read back yet" - every consumer
+        // then treats the field as unmodulated, and the cache fills a frame or two later once
+        // the fetch lands.
         LLUUID mNoise;
         LLPointer<LLViewerFetchedTexture> mNoiseRef;
         std::vector<F32> mNoiseLuma;
@@ -126,6 +141,31 @@ private:
         S32 mNoiseH = 0;
         S32 mNoiseSrcW = 0;     // the raw image's size at cache time, to re-cache on upgrade
         S32 mNoiseSrcH = 0;
+
+        // <SS:Nexii> And when nothing is authored, a square tileable map generated from the
+        // weather seed - the same FBM for every client sharing the environment, so the tower
+        // geography (and the holes it cuts) is syncable without anyone having to upload a
+        // texture. The raw image is the single source: the CPU grid folds down out of it and
+        // the GPU texture uploads from it.
+        U32 mNoiseProcSeed = 0;
+        LLPointer<LLImageRaw> mNoiseProcRaw;
+        LLPointer<LLViewerTexture> mNoiseProcRef;
+
+        // <SS:Nexii> The vertical profile ramp, when one is authored: the same fetch/readback
+        // ladder as the noise map, but folded into a one-dimensional curve per channel - rows
+        // of the readback averaged across, row 0 the deck's BASE (the same v the shader's
+        // texture read samples). R tower weight, G carve guard, B cap band, A base fill.
+        // mProfileN zero means "none authored, or not read back yet" - every consumer then runs
+        // the built-in vertical curves.
+        LLUUID mProfile;
+        LLPointer<LLViewerFetchedTexture> mProfileRef;
+        std::vector<F32> mProfileCurve;
+        S32 mProfileN = 0;
+
+        // <SS:Nexii> And when nothing is authored, a small strip painted from those built-in
+        // curves - display only (it never reaches the shader; the built-ins ARE the shader's
+        // maths), so a picker has something honest to preview for the None state.
+        LLPointer<LLViewerTexture> mProfileProcRef;
 
         F32 mBaseZ = 0.f;
         F32 mThicknessM = 1.f;
@@ -143,9 +183,22 @@ private:
         // reads exactly the field the deck drew with. mNoiseTileM is metres per tile after the
         // Noise Scale slider (zero when there is no map); mNoiseHole is how hard the map's low
         // end cuts holes once moisture has lifted the floor and convection has kept the storm
-        // gaps open.
+        // gaps open. mNoiseTowerLo/Hi are the tower ramp's window - widened as the weather
+        // consolidates into a storm, so the carving calms into large solid cells instead of
+        // shredding the deck - and the shader's own carving reads the same window back.
         F32 mNoiseTileM = 0.f;
         F32 mNoiseHole = 0.f;
+        F32 mNoiseTowerLo = 0.42f;
+        F32 mNoiseTowerHi = 0.78f;
+
+        // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the
+        // puffs so the field reads with its gaps filled instead of as balls over empty sky. Same
+        // texture as the puffs, sampled aperiodically in the shader; the colour here is the shade
+        // a puff at the deck's floor would wear - the same formulas - so sheet and lowest puffs
+        // share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
+        LLColor3 mSheetColor;
+        F32 mSheetZ = 0.f;
+        F32 mSheetAlpha = 0.f;
 
         F32 mMeanDistSq = 0.f;
     };
@@ -164,6 +217,16 @@ private:
 
     // Folds the noise map's raw readback into the deck's small wrapped sample grid.
     void cacheNoiseGrid(Deck& deck, LLImageRaw* raw);
+
+    // Generates (once per seed) the deck's square procedural noise map when nothing is
+    // authored, and folds it into the same grid an authored map would fill.
+    void ensureProceduralNoise(Deck& deck, U32 salt);
+
+    // The vertical profile ramp: fetched and read back like the noise map, folded into one
+    // averaged curve per channel (row 0 = the deck's base), and read on the CPU by the puff
+    // placement so geometry and fragment carving run the same authored profile.
+    void cacheProfileCurve(Deck& deck, LLImageRaw* raw);
+    F32 profileSample(const Deck& deck, F32 v, S32 channel) const;
 
     // Which deck the weather reads: the authored source when it names the under deck and that
     // deck is on, the main field otherwise - the same default every "how much cloud is overhead"

@@ -48,6 +48,8 @@
 #include "ssatmoenvtrackstate.h"
 #include "ssvolcloud.h" // <SS:Nexii> the auto dome altitude reads the volumetric deck
 
+#include "v3colorutil.h" // <SS:Nexii> componentMult/componentExp, the light handover's attenuation
+
 #include <algorithm>
 #include <cmath>
 
@@ -93,21 +95,23 @@ F32 SSAtmoEnvApplier::celestialDiscScale(F32 angular_diameter_deg)
                    CELESTIAL_SCALE_MIN, CELESTIAL_SCALE_MAX);
 }
 
-// <SS:Nexii> The dome band's altitude derivation. The band sits at its authored dome height while
-// the air is calm and merges down onto the deck's mid-altitude as the deck's coverage builds, so
-// band and deck agree about where the cloud IS exactly as they merge at the rim. As convection
-// anvils the deck, the merge source descends onto the deck's lid - the same ramp that flattens
-// the deck's own tops (SSAtmoEnvCloudFieldResolver::mAnvil) - so by full anvil the band hangs
-// just over the deck's max height and the two read as one integrated structure. What the dome's
-// Auto flag hands the dry altitude back to, and what the floater shows in the greyed-out row.
-static const F32 SS_CIRRUS_M         = 6000.f;
+// <SS:Nexii> The dome band's altitude. The band IS the cirrus layer: it sits at the Sky Dome's
+// ANIMATABLE height param, relative to the owning track's floor - the same convention both decks'
+// base heights use, so an imported day cycle's height keyframes play through it and a sky build's
+// track carries it whole. Moisture never moves it - an earlier derivation merged the band down
+// onto the deck's mid-altitude as the deck's coverage built, which let three hundredths of
+// moisture drag a 6 km cirrus deck down onto a 1 km storm: the cirrus belongs at the cirrus level.
+// The ONLY thing that brings it down is convection: as the deck anvils (the same ramp that
+// flattens the deck's own tops, SSAtmoEnvCloudFieldResolver::mAnvil) the band descends onto the
+// deck's lid, ending ~300 m over the deck's max height - a towering anvil reaches UP and hits the
+// cirrus, never the other way round. What the floater shows in the greyed-out row.
 static const F32 SS_CIRRUS_LID_GAP_M = 300.f;
 static const F32 SS_ANVIL_ONSET      = 0.6f;
 static const F32 SS_ANVIL_FULL       = 0.9f;
 
 F32 SSAtmoEnvApplier::cirrusAltitudeMetres() const
 {
-    const F32 dry = mCloudDomeAuto ? SS_CIRRUS_M : llmax(mCloudDomeHeightM, 1.f);
+    const F32 dry = llmax(mTrackFloorZ + mCloudDomeHeightM, 1.f);
 
     SSVolCloud* vol = SSVolCloud::getInstance();
     if (!vol || vol->empty()) return dry;
@@ -118,22 +122,10 @@ F32 SSAtmoEnvApplier::cirrusAltitudeMetres() const
     return lerp(dry, lid, anvil);
 }
 
-F32 SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()
-{
-    SSVolCloud* vol = SSVolCloud::getInstance();
-    const F32 source = instance().cirrusAltitudeMetres();
-    if (!vol || vol->empty()) return source;
-
-    const F32 merge = cubic_step((vol->lastCoverage() - 0.05f) / 0.25f);
-    const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
-    return lerp(source, llmax(deck_mid, 300.f), merge);
-}
-
-// The altitude the shaders actually get, WORLD height: the dome band tracks the deck through the
-// merge derivation - the authored height governs the calm-air source, the deck pulls it down.
+// The altitude the shaders actually get, WORLD height.
 F32 SSAtmoEnvApplier::cloudDomeAltitudeMetres() const
 {
-    return autoCloudDomeAltitudeMetres();
+    return cirrusAltitudeMetres();
 }
 
 // Per-frame: resolve the primary track, evaluate its keyframes at the phase, and push sky/water/celestial through EEP's ENV_LOCAL slot.
@@ -188,9 +180,14 @@ void SSAtmoEnvApplier::apply()
     const SSAtmoEnvTrack& track = asset.mTracks[static_cast<size_t>(track_index)];
 
     // <SS:Nexii> The home body's radius - the curvature authority the dome cloud's deck mapping
-    // curves around (cloudsF.glsl, fed by lldrawpoolwlsky). Zero when the track carries no home
-    // body, which leaves the shader on its flat-deck fallback.
-    mHomePlanetRadiusM = 0.f;
+    // curves around (cloudsF.glsl, fed by lldrawpoolwlsky). A track with no home body falls back
+    // to an Earth-sized default rather than to flat: the deck's own curved horizon - a finite disc
+    // terminating at its tangent elevation instead of rows of compressed tiles running into the
+    // world's horizon line - is the whole point of the curved mapping, and "no planet authored"
+    // should not read as "flat cartoon sky". A track with a home body overrides with its real
+    // radius.
+    static const F32 SS_DEFAULT_PLANET_RADIUS_M = 5.0e6f;
+    mHomePlanetRadiusM = SS_DEFAULT_PLANET_RADIUS_M;
     const S32 home_index = track.mPlanetary.homeBodyIndex();
     if (home_index >= 0 && home_index < static_cast<S32>(track.mPlanetary.mBodies.size()))
     {
@@ -316,6 +313,18 @@ void SSAtmoEnvApplier::renderCelestialDebug()
             line += llformat("\nsize %.2f deg", mark.mAngularDiameterDeg);
             line += mark.mEmissive ? "\nemissive"
                                    : llformat("\nlit %.0f%%", mark.mSunlight * 100.f);
+            if (mark.mIsSunSlot || mark.mIsMoonSlot)
+            {
+                // <SS:Nexii> Which slot owns the scene light right now - the dominant-light
+                // handover (applyCelestial) crosses where these swap, not at centre-rise.
+                const bool sun_dominant =
+                    llmax(mSunSlotLight.mV[0], mSunSlotLight.mV[1], mSunSlotLight.mV[2])
+                    >= llmax(mMoonSlotLight.mV[0], mMoonSlotLight.mV[1], mMoonSlotLight.mV[2]);
+                if (mark.mIsSunSlot == sun_dominant)
+                {
+                    line += "\nlight dominant";
+                }
+            }
 
             mDebugLabels[i]->setString(line);
             mDebugLabels[i]->setColor(colour);
@@ -595,13 +604,16 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
 
     const SSAtmoEnvCloudDome& dome = track.mCloudDome;
 
-    // <SS:Nexii> Not put()s - the dome altitude pair has no LLSettingsSky home to write into. It
-    // goes to the cloud and disc shaders straight off this applier, so all that is kept here is
-    // the sample. The live sky's cloud shadow below is the tracked blend (authored floor lifted
-    // toward the deck's coverage), lights the world, and is the ONE density the dome band draws
-    // with - band, deck and world light overcast in lockstep.
+    // <SS:Nexii> Not put()s - the dome altitude has no LLSettingsSky home to write into. It goes
+    // to the cloud and disc shaders straight off this applier, so all that is kept here is the
+    // sample: the ANIMATABLE dome height (floor-relative - cirrusAltitudeMetres adds the track's
+    // floor back) and the floor itself. The live sky's cloud shadow below is the tracked blend
+    // (authored floor lifted toward the deck's coverage), lights the world, and is the ONE density
+    // the dome band draws with - band, deck and world light overcast in lockstep.
     mCloudDomeAuto = dome.mAuto;
     mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
+    mTrackFloorZ = track.mFloorZ;
+    mLargeNoiseId = dome.mLargeNoiseTexture.valueAt(phase);
 
     // Same for the horizon clip: no LLSettingsSky home either - the sky pool reads it straight off this applier when it binds the dome shader, and turns it into the lower dome's depth gate (LL_SHADER_CONST_HORIZON_DEPTH in skyF.glsl).
     mHorizonClip = atm.mHorizonClip;
@@ -792,6 +804,9 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     {
         emitters = planetary.lightEmitterIndices();
     }
+    // <SS:Nexii> The dominant-light handover only means something when there is a light to
+    // dominate - no emitters leaves the stock single-lightnorm switch in place (lightSlotsValid).
+    mLightSlotsValid = !emitters.empty();
 
     const F32 tilt_deg = (home_index >= 0)
         ? planetary.mBodies[static_cast<size_t>(home_index)].mAxialTiltDeg
@@ -1079,6 +1094,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         half_tan = sun_scale * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
     }
     const F32 half_sin = half_tan / sqrtf(1.f + half_tan * half_tan);
+    mSunSlotRadius = half_sin;
     if (half_sin > 1e-6f)
     {
         const F32 u = llclamp(sun_dir.mV[VZ] / half_sin, -1.f, 1.f);
@@ -1092,6 +1108,42 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     // ...and the direction itself, for everything that must keep aiming at the SUN through the
     // rise band - see sunSlotDirection.
     mSunSlotDir = sun_dir;
+
+    // <SS:Nexii> The two slots' scene-light contributions, each carried through the atmosphere
+    // on its OWN elevation - the same exp(-light_atten * 1/elev) cosecant curve
+    // calcAtmosphericVars applies to whichever body lightnorm belongs to
+    // (atmosphericsFuncs.glsl), replicated here against the sky values applySky just wrote so
+    // the CPU side of the handover cannot drift from the shader's own formula. The shader takes
+    // the per-channel max of the two, which makes the scene light the DOMINANT emitter's: the
+    // moon keeps the world lit at its own value until the rising sun genuinely outshines it,
+    // instead of lightnorm's flip at centre-rise swapping a high moon's mild attenuation for
+    // the horizon sun's crushed one and dropping everything to near-black in a frame. Bounded
+    // by the brighter single-light value, so the handover can never overexpose, and a lone sun
+    // is exactly the stock line - its own contribution, through its own elevation. The slots
+    // hold the top-2 light emitters (SSAtmoEnvPlanetaryResolver::resolveLightRoles), so two
+    // suns hand over by the same rule: the bigger star holds the light until the other's
+    // contribution crosses it. Deliberately unscaled by the moon's authored brightness and
+    // phase - stock's scene light never scaled by them either (they drive the disc, the glow
+    // and the water), so night stays exactly the stock night.
+    if (mLightSlotsValid)
+    {
+        const LLColor3 light_atten = (mLastBlueDensity + LLColor3(mLastHazeDensity * 0.25f))
+            * (mLastDensityMult * mLastMaxY);
+        auto slot_light = [&light_atten, this](const LLVector3& dir)
+        {
+            const F32 cosec = 1.f / llmax(1e-6f, dir.mV[VZ]);
+            return componentMult(mLastSunlight, componentExp(light_atten * -cosec));
+        };
+        mSunSlotLight = slot_light(sun_dir);
+        mMoonSlotLight = slot_light(moon_dir);
+    }
+    else
+    {
+        mSunSlotLight = LLColor3(0.f, 0.f, 0.f);
+        mMoonSlotLight = LLColor3(0.f, 0.f, 0.f);
+        // No emitters - no disc to hold an airmass for either.
+        mSunSlotRadius = 0.f;
+    }
 
     mCelestialCacheValid = true;
 

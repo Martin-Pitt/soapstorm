@@ -50,6 +50,7 @@
 #include "llviewercontrol.h"
 #include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
 #include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic celestial billboards
+#include "llviewertexturelist.h" // <SS:Nexii> fetching the dome's authored large-scale noise
 
 extern bool gCubeSnapshot;
 
@@ -567,14 +568,38 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         // The deck-mapping gate.
         cloudshader->uniform1f(sCloudPlane, atmo_env_active ? 1.f : 0.f);
 
+        // <SS:Nexii> The dome band's authored large-scale noise map, when one is set: the broad
+        // composition (warp fields, base octave, self-shadow) reads it, the fine octave keeps the
+        // cloud noise. Fetched on change and cached - the applier hands over the id, the pool owns
+        // the binding. Gate 0 (idle sky, or no map authored) leaves every octave on the cloud
+        // noise, exactly as stock.
+        static LLStaticHashedString sNoiseLargeOn("ss_noise_large_on");
+        static LLUUID s_large_noise_id;
+        static LLPointer<LLViewerFetchedTexture> s_large_noise_tex;
+        const LLUUID& large_noise_id = SSAtmoEnvApplier::instance().cloudLargeNoiseId();
+        bool large_noise_on = false;
+        if (atmo_env_active && large_noise_id.notNull())
+        {
+            if (large_noise_id != s_large_noise_id || s_large_noise_tex.isNull())
+            {
+                s_large_noise_id = large_noise_id;
+                s_large_noise_tex = LLViewerTextureManager::getFetchedTexture(large_noise_id);
+            }
+            cloudshader->bindTexture(LLShaderMgr::SS_NOISE_LARGE_MAP, s_large_noise_tex, LLTexUnit::TT_TEXTURE);
+            large_noise_on = true;
+        }
+        cloudshader->uniform1f(sNoiseLargeOn, large_noise_on ? 1.f : 0.f);
+        // </SS:Nexii>
+
         // <SS:Nexii> The scale the dome mesh draws at: 0.3325 of the dome radius when Atmo owns the
         // sky, the stock 0.333 when not - twelve metres of headroom over the haze backdrop, see the
         // note at the old single-pass draw.
         const F32 dome_scale = atmo_env_active ? 0.3325f : 0.333f;
 
         // <SS:Nexii> The planet the deck curves around: the home body's radius plus the camera's
-        // height above the region floor - the camera's orbit. Zero (no home body) leaves the
-        // shader on its flat-deck fallback.
+        // height above the region floor - the camera's orbit. A track with no home body falls back
+        // to an Earth-sized default (see the applier), so the deck always curves and terminates at
+        // its own rim rather than running flat into the world's horizon line.
         const F32 planet_orbit_m = atmo_env_active
             ? SSAtmoEnvApplier::instance().homePlanetRadiusM() + llmax(camPosLocal.mV[VZ], 0.f)
             : 0.f;
@@ -592,14 +617,11 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         {
             // <SS:Nexii> ONE dome band. Two bands over one noise texture with per-band parallax
             // rates ghost apart the moment the camera moves - the same pattern twice, shifted, a
-            // second ghost layer - and the altitude a band maps at cancels out of its own static
-            // pattern entirely, so a separate veil pass bought nothing its height dial could show.
-            // The band's altitude is the deck-tracking merge: the authored dome height while the
-            // air is calm (the Sky Dome height dial's authority), merging down onto the deck's
-            // mid-altitude as the deck's coverage builds, so band and deck agree about where the
-            // cloud IS as they merge at the rim. Its density is the live sky's cloud shadow - the
-            // tracked blend of the authored coverage lifted toward the deck's - which also dims
-            // the world, so band, deck and world light overcast in lockstep.
+            // second ghost layer. The band IS the cirrus layer: the Sky Dome's animatable height
+            // param, floor-relative, brought down only by convection's anvil ramp
+            // (cloudDomeAltitudeMetres) - moisture never moves it. Its density is the live sky's
+            // cloud shadow - the tracked blend of the authored coverage lifted toward the deck's -
+            // which also dims the world, so band, deck and world light overcast in lockstep.
             // </SS:Nexii>
             SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
 

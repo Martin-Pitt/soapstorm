@@ -57,6 +57,7 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     state.mBaseTexture = field.mBaseTexture.valueAt(phase);
     state.mDetailTexture = field.mDetailTexture.valueAt(phase);
     state.mNoiseTexture = field.mNoiseTexture.valueAt(phase);
+    state.mProfileTexture = field.mProfileTexture.valueAt(phase);
 
     state.mTextureMix = llclamp(field.mTextureMix.valueAt(phase), 0.f, 1.f);
     state.mPuffDensity = llclamp(field.mPuffDensity.valueAt(phase), 0.f, 1.f);

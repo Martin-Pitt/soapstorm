@@ -2182,6 +2182,97 @@ F32 SSWindFlowMap::exposure(const LLVector3& pos_agent) const
     return a * (1.f - tz) + b * tz;
 }
 
+// <SS:Nexii> Granular reads: the bottom slab of the solved field, gust layer excluded. The
+// transport and the erosion tick run this per cell, so it must stay a cheap bilinear with no
+// fbm anywhere in the call path - the gust envelope is a scalar the caller applies once per tick.
+LLVector4 SSWindFlowMap::groundCell(const Tile& tile, const LLVector3& tile_origin_agent, F32 cell,
+                                    const LLVector3& pos_agent) const
+{
+    const F32 fx = (pos_agent.mV[VX] - tile_origin_agent.mV[VX]) / cell - 0.5f;
+    const F32 fy = (pos_agent.mV[VY] - tile_origin_agent.mV[VY]) / cell - 0.5f;
+
+    if (fx < 0.f || fy < 0.f || fx >= (F32)(tile.mRes - 1) || fy >= (F32)(tile.mRes - 1))
+    {
+        const LLVector3 ambient = SSAtmoMagic::getInstance()->windXY();
+        return LLVector4(ambient.mV[VX], ambient.mV[VY], ambient.mV[VZ], 1.f);
+    }
+
+    const S32 x0 = (S32)fx, y0 = (S32)fy;
+    const F32 tx = fx - (F32)x0, ty = fy - (F32)y0;
+
+    auto bilinear = [&](S32 slab)
+    {
+        const LLVector4& a = tile.mFlow[index(tile, x0,     y0,     slab)];
+        const LLVector4& b = tile.mFlow[index(tile, x0 + 1, y0,     slab)];
+        const LLVector4& c = tile.mFlow[index(tile, x0,     y0 + 1, slab)];
+        const LLVector4& d = tile.mFlow[index(tile, x0 + 1, y0 + 1, slab)];
+
+        const LLVector4 top = a * (1.f - tx) + b * tx;
+        const LLVector4 bot = c * (1.f - tx) + d * tx;
+        return top * (1.f - ty) + bot * ty;
+    };
+
+    // The ground slab owns the boundary layer - the slab the saltation threshold is defined at.
+    const LLVector4 cell_v = bilinear(0);
+    return cell_v;
+}
+
+LLVector3 SSWindFlowMap::sampleGround(const LLVector3& pos_agent) const
+{
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return SSAtmoMagic::getInstance()->windXY();
+
+    auto it = mTiles.find(regionp->getHandle());
+    if (it == mTiles.end() || !it->second.mValid || it->second.mFlow.empty())
+    {
+        return SSAtmoMagic::getInstance()->windXY();
+    }
+
+    const Tile& tile = it->second;
+    const LLVector3 origin = regionp->getOriginAgent() + tile.mOriginRegion;
+    const F32 cell = tile.mExtent / (F32)tile.mRes;
+
+    const LLVector4 v = groundCell(tile, origin, cell, pos_agent);
+    return LLVector3(v.mV[0], v.mV[1], v.mV[2]);
+}
+
+// Bulk-samples one region's field lattice: the SSGranular step's per-cell wind, read straight out
+// of the CPU-resident tiles. Cells outside the tile answer with the ambient wind at full exposure;
+// with no solved tile at all the whole grid answers ambient, so the transport degrades to an
+// ambient-driven uniform instead of stalling (the same fallback sample() takes).
+bool SSWindFlowMap::sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell,
+                                     std::vector<LLVector4>& out) const
+{
+    out.clear();
+    if (!regionp || n < 1 || cell <= 0.f) return false;
+
+    auto it = mTiles.find(regionp->getHandle());
+    const bool have_tile = it != mTiles.end() && it->second.mValid && !it->second.mFlow.empty();
+
+    const Tile* tile = have_tile ? &it->second : nullptr;
+    const LLVector3 tile_origin = tile ? (regionp->getOriginAgent() + tile->mOriginRegion)
+                                       : LLVector3::zero;
+    const F32 tile_cell = tile ? (tile->mExtent / (F32)tile->mRes) : 0.f;
+
+    out.resize((size_t)n * n);
+    const LLVector3 origin = regionp->getOriginAgent();
+    const LLVector3 ambient = SSAtmoMagic::getInstance()->windXY();
+    const LLVector4 ambient_cell(ambient.mV[VX], ambient.mV[VY], ambient.mV[VZ], 1.f);
+
+    for (S32 y = 0; y < n; ++y)
+    {
+        for (S32 x = 0; x < n; ++x)
+        {
+            const LLVector3 pos(origin.mV[VX] + ((F32)x + 0.5f) * cell,
+                                origin.mV[VY] + ((F32)y + 0.5f) * cell, 0.f);
+            out[(size_t)y * n + x] = tile ? groundCell(*tile, tile_origin, tile_cell, pos)
+                                          : ambient_cell;
+        }
+    }
+    return true;
+}
+// </SS:Nexii>
+
 // Debug colour for a flow vector.
 static LLColor4 flowColor(const LLVector3& v, F32 exposure, F32 alpha)
 {

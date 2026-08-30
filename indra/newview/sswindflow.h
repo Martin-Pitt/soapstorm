@@ -80,6 +80,15 @@ public:
 
     LLVector3 sample(const LLVector3& pos_agent) const;
 
+    // <SS:Nexii> Granular transport reads. The ground slab of the solved field without the gust
+    // layer - gusts are a scalar every consumer applies once per tick, never per cell, which is
+    // what keeps the erosion tick and the spawn walk linear. The grid variant bulk-samples one
+    // region's field lattice for SSGranular::step(); cells outside the tile answer with the
+    // ambient wind at full exposure.
+    LLVector3 sampleGround(const LLVector3& pos_agent) const;
+    bool sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell,
+                          std::vector<LLVector4>& out) const;
+
     F32 exposure(const LLVector3& pos_agent) const;
 
     void gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32& veer) const;
@@ -230,6 +239,9 @@ private:
     }
 
     static void sliceAt(const Tile& tile, F32 z, S32& k, F32& frac);
+
+    LLVector4 groundCell(const Tile& tile, const LLVector3& tile_origin_agent, F32 cell,
+                         const LLVector3& pos_agent) const;
 
     bool mShadersReady = false;
     bool mShaderFailed = false;
