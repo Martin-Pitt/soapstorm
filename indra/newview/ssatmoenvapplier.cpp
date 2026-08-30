@@ -93,14 +93,13 @@ F32 SSAtmoEnvApplier::celestialDiscScale(F32 angular_diameter_deg)
                    CELESTIAL_SCALE_MIN, CELESTIAL_SCALE_MAX);
 }
 
-// <SS:Nexii> The dome's two altitudes. The cirrus veil sits cirrus-high while the air is calm and
-// descends onto the deck's lid as convection anvils - the same ramp that flattens the deck's own
-// tops (SSAtmoEnvCloudFieldResolver::mAnvil), so veil and lid choreograph one storm: by full anvil
-// the veil hangs just over the deck's max height and the two read as one integrated structure. The
-// overcast band then merges from wherever the veil currently IS down onto the deck's mid-altitude
-// as the deck's coverage builds, so band, deck and veil agree about where the cloud IS exactly as
-// they merge at the rim. What the dome's Auto flag hands the dry altitude back to, and what the
-// floater shows in the greyed-out row.
+// <SS:Nexii> The dome band's altitude derivation. The band sits at its authored dome height while
+// the air is calm and merges down onto the deck's mid-altitude as the deck's coverage builds, so
+// band and deck agree about where the cloud IS exactly as they merge at the rim. As convection
+// anvils the deck, the merge source descends onto the deck's lid - the same ramp that flattens
+// the deck's own tops (SSAtmoEnvCloudFieldResolver::mAnvil) - so by full anvil the band hangs
+// just over the deck's max height and the two read as one integrated structure. What the dome's
+// Auto flag hands the dry altitude back to, and what the floater shows in the greyed-out row.
 static const F32 SS_CIRRUS_M         = 6000.f;
 static const F32 SS_CIRRUS_LID_GAP_M = 300.f;
 static const F32 SS_ANVIL_ONSET      = 0.6f;
@@ -122,16 +121,16 @@ F32 SSAtmoEnvApplier::cirrusAltitudeMetres() const
 F32 SSAtmoEnvApplier::autoCloudDomeAltitudeMetres()
 {
     SSVolCloud* vol = SSVolCloud::getInstance();
-    const F32 veil = instance().cirrusAltitudeMetres();
-    if (!vol || vol->empty()) return veil;
+    const F32 source = instance().cirrusAltitudeMetres();
+    if (!vol || vol->empty()) return source;
 
     const F32 merge = cubic_step((vol->lastCoverage() - 0.05f) / 0.25f);
     const F32 deck_mid = (vol->cloudBaseZ() + vol->cloudTopZ()) * 0.5f;
-    return lerp(veil, llmax(deck_mid, 300.f), merge);
+    return lerp(source, llmax(deck_mid, 300.f), merge);
 }
 
-// The altitude the shaders actually get. The overcast band always tracks the deck through the merge
-// derivation - the authored height governs the cirrus veil now, not the band.
+// The altitude the shaders actually get, WORLD height: the dome band tracks the deck through the
+// merge derivation - the authored height governs the calm-air source, the deck pulls it down.
 F32 SSAtmoEnvApplier::cloudDomeAltitudeMetres() const
 {
     return autoCloudDomeAltitudeMetres();
@@ -187,6 +186,17 @@ void SSAtmoEnvApplier::apply()
         track_index = 0;
     }
     const SSAtmoEnvTrack& track = asset.mTracks[static_cast<size_t>(track_index)];
+
+    // <SS:Nexii> The home body's radius - the curvature authority the dome cloud's deck mapping
+    // curves around (cloudsF.glsl, fed by lldrawpoolwlsky). Zero when the track carries no home
+    // body, which leaves the shader on its flat-deck fallback.
+    mHomePlanetRadiusM = 0.f;
+    const S32 home_index = track.mPlanetary.homeBodyIndex();
+    if (home_index >= 0 && home_index < static_cast<S32>(track.mPlanetary.mBodies.size()))
+    {
+        mHomePlanetRadiusM =
+            0.5f * track.mPlanetary.mBodies[static_cast<size_t>(home_index)].mDiameterM;
+    }
 
     const F64 phase = mgr->hasPreviewPhaseOverride()
         ? mgr->previewPhaseOverride()
@@ -432,7 +442,7 @@ void SSAtmoEnvApplier::deactivate()
 SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack& track, F64 phase)
 {
     // Sampled before the influence gate, not behind it: the volumetric deck ignores that gate
-    // (SSVolCloud::update resolves straight off the weather cube), and the cirrus veil integrates
+    // (SSVolCloud::update resolves straight off the weather cube), and the dome band integrates
     // with the DECK - with the deck, not with the influence switch.
     mLastConvection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
 
@@ -553,7 +563,7 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
 
     put(mLastHazeHorizon, atm.mHazeHorizon.valueAt(phase),
         [this](F32 v) { mSky->setHazeHorizon(v); });
-    put(mLastHazeDensity, mod.hazeDensity(atm.mHazeDensity.valueAt(phase)),
+    put(mLastHazeDensity, atm.mHazeDensity.valueAt(phase),
         [this](F32 v) { mSky->setHazeDensity(v); });
     put(mLastSkyMoisture, mod.skyMoistureLevel(atm.mSkyMoistureLevel.valueAt(phase)),
         [this](F32 v) { mSky->setSkyMoistureLevel(v); });
@@ -563,7 +573,7 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         [this](F32 v) { mSky->setSkyIceLevel(v); });
     put(mLastDensityMult, atm.mDensityMultiplier.valueAt(phase),
         [this](F32 v) { mSky->setDensityMultiplier(v); });
-    put(mLastDistanceMult, mod.distanceMultiplier(atm.mDistanceMultiplier.valueAt(phase)),
+    put(mLastDistanceMult, atm.mDistanceMultiplier.valueAt(phase),
         [this](F32 v) { mSky->setDistanceMultiplier(v); });
     put(mLastMaxY, atm.mMaxAltitude.valueAt(phase),
         [this](F32 v) { mSky->setMaxY(v); });
@@ -585,14 +595,13 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
 
     const SSAtmoEnvCloudDome& dome = track.mCloudDome;
 
-    // <SS:Nexii> Not put()s - neither the dome altitude pair nor the cirrus coverage has an
-    // LLSettingsSky home to write into. They go to the cloud and disc shaders straight off this
-    // applier, so all that is kept here is the sample. The live sky's cloud shadow below is the
-    // tracked blend (authored floor lifted toward the deck's coverage) and lights the world; the
-    // cirrus veil draws from the raw authored sample instead, because it does not track the deck.
+    // <SS:Nexii> Not put()s - the dome altitude pair has no LLSettingsSky home to write into. It
+    // goes to the cloud and disc shaders straight off this applier, so all that is kept here is
+    // the sample. The live sky's cloud shadow below is the tracked blend (authored floor lifted
+    // toward the deck's coverage), lights the world, and is the ONE density the dome band draws
+    // with - band, deck and world light overcast in lockstep.
     mCloudDomeAuto = dome.mAuto;
     mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
-    mCirrusCoverage = llclamp(dome.mCoverage.valueAt(phase), 0.f, 1.f);
 
     // Same for the horizon clip: no LLSettingsSky home either - the sky pool reads it straight off this applier when it binds the dome shader, and turns it into the lower dome's depth gate (LL_SHADER_CONST_HORIZON_DEPTH in skyF.glsl).
     mHorizonClip = atm.mHorizonClip;
@@ -829,7 +838,10 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     LLVector3 moon_dir = -LLVector3::z_axis;
     F32 sun_scale = 1.f;
     F32 moon_scale = 1.f;
-    LLUUID sun_texture = LLSettingsSky::GetDefaultSunTextureId();
+    // <SS:Nexii> EEP's default sun id is null, which means "no disc" - the stock pool only
+    // draws a sun face that has a texture (see lldrawpoolwlsky's tex_a/tex_b gate). So the
+    // stand-in here is the blank-sun disc ASSET, the same drawable default the billboards use.
+    LLUUID sun_texture = LLSettingsSky::GetBlankSunTextureId();
     LLUUID moon_texture = LLSettingsSky::GetDefaultMoonTextureId();
 
     if (!emitters.empty())
@@ -842,16 +854,17 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         const S32 moon_body = moon_resolved.mBodyIndex;
         moon_slot_body = moon_body;
 
-        auto fallbackFor = [&planetary](S32 body_index, bool sun_slot) -> LLUUID
+        // <SS:Nexii> The null-texture fallback follows the BODY's kind, not the slot it landed
+        // in: a textureless SUN-kind body shows a sun disc in either slot, anything else the
+        // stock moon disc. Both stand-ins are real assets - EEP's own default sun id is null
+        // and a null id would drop the disc entirely (a null custom texture means "the stock
+        // disc", not "no disc").
+        auto fallbackFor = [&planetary](S32 body_index) -> LLUUID
         {
             const bool is_sun_kind = planetary.mBodies[static_cast<size_t>(body_index)].mKind
                 == SSAtmoEnvCelestialBody::SUN;
-            if (is_sun_kind)
-            {
-                return sun_slot ? LLSettingsSky::GetDefaultSunTextureId()
-                                : LLSettingsSky::GetBlankSunTextureId();
-            }
-            return LLSettingsSky::GetDefaultMoonTextureId();
+            return is_sun_kind ? LLSettingsSky::GetBlankSunTextureId()
+                               : LLSettingsSky::GetDefaultMoonTextureId();
         };
 
         if (sun_body >= 0)
@@ -867,7 +880,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
             sun_scale = celestialDiscScale(sun_resolved.mAngularDiameterDeg);
             mSunSlotAngularDeg = sun_resolved.mAngularDiameterDeg;
             sun_texture = body.mCustomTexture.notNull()
-                ? body.mCustomTexture : fallbackFor(sun_body, true);
+                ? body.mCustomTexture : fallbackFor(sun_body);
         }
         if (moon_body >= 0)
         {
@@ -881,7 +894,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
             moon_scale = celestialDiscScale(moon_resolved.mAngularDiameterDeg);
             mMoonSlotAngularDeg = moon_resolved.mAngularDiameterDeg;
             moon_texture = body.mCustomTexture.notNull()
-                ? body.mCustomTexture : fallbackFor(moon_body, false);
+                ? body.mCustomTexture : fallbackFor(moon_body);
         }
     }
 

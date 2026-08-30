@@ -1245,8 +1245,8 @@ LLSD SSAtmoEnvWeatherInfluence::asLLSD() const
     sd["cloud_cover_strength"]    = (LLSD::Real)mCloudCoverStrength;
     sd["wind_scroll_enabled"]     = mWindScrollEnabled;
     sd["wind_scroll_strength"]    = (LLSD::Real)mWindScrollStrength;
-    sd["haze_enabled"]            = mHazeEnabled;
-    sd["haze_strength"]           = (LLSD::Real)mHazeStrength;
+    sd["water_fog_enabled"]       = mWaterFogEnabled;
+    sd["water_fog_strength"]      = (LLSD::Real)mWaterFogStrength;
     sd["storm_darkening_enabled"] = mStormDarkeningEnabled;
     sd["storm_darkening_strength"]= (LLSD::Real)mStormDarkeningStrength;
     sd["cold_sky_enabled"]        = mColdSkyEnabled;
@@ -1275,8 +1275,21 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     strength("cloud_cover_strength", mCloudCoverStrength);
     flag("wind_scroll_enabled", mWindScrollEnabled);
     strength("wind_scroll_strength", mWindScrollStrength);
-    flag("haze_enabled", mHazeEnabled);
-    strength("haze_strength", mHazeStrength);
+    // <SS:Nexii> water_fog_* used to be written as haze_*: the pair gated the moisture -> haze
+    // mapping as well as precipitation -> water fog, and the haze mapping is retired. A document
+    // from before the rename still reads, because an author who switched "haze" off did so
+    // because the weather was wrecking their atmosphere - exactly the intent this gate now
+    // carries on its own. </SS:Nexii>
+    if (sd.has("water_fog_enabled") || sd.has("water_fog_strength"))
+    {
+        flag("water_fog_enabled", mWaterFogEnabled);
+        strength("water_fog_strength", mWaterFogStrength);
+    }
+    else
+    {
+        flag("haze_enabled", mWaterFogEnabled);
+        strength("haze_strength", mWaterFogStrength);
+    }
     flag("storm_darkening_enabled", mStormDarkeningEnabled);
     strength("storm_darkening_strength", mStormDarkeningStrength);
     flag("cold_sky_enabled", mColdSkyEnabled);
@@ -1305,48 +1318,64 @@ const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates()
     return templates;
 }
 
-bool ssAtmoEnvApplyTemplate(SSAtmoEnvTrack& track, const std::string& key)
+const SSAtmoEnvTemplate* ssAtmoEnvFindTemplate(const std::string& key)
 {
-    const SSAtmoEnvTemplate* tmpl = nullptr;
     for (const SSAtmoEnvTemplate& candidate : ssAtmoEnvTemplates())
     {
-        if (key == candidate.mKey) { tmpl = &candidate; break; }
+        if (key == candidate.mKey) return &candidate;
     }
-    if (!tmpl) return false;
+    return nullptr;
+}
 
-    // Assigning a fresh SSAtmoEnvKeyframed drops any keyframes the field carried, which is the
-    // intent: a seed replaces what the track said, it does not blend with it.
-    track.mDayLengthSeconds = tmpl->mDayLengthHours * 60.0 * 60.0;
+// Everything the template names that is NOT the sky's look. Assigning a fresh SSAtmoEnvKeyframed
+// drops any keyframes the field carried, which is the intent: a seed replaces what the track
+// said, it does not blend with it.
+void ssAtmoEnvApplyTemplateWorld(SSAtmoEnvTrack& track, const SSAtmoEnvTemplate& tmpl)
+{
+    track.mDayLengthSeconds = tmpl.mDayLengthHours * 60.0 * 60.0;
 
-    track.mWater.mEnabled    = tmpl->mWaterEnabled;
-    track.mWater.mHeight     = SSAtmoEnvKeyframed<F32>(tmpl->mWaterHeightM);
-    track.mWater.mFogColor   = SSAtmoEnvKeyframed<LLColor3>(tmpl->mWaterFogColor);
-    track.mWater.mFogDensity = SSAtmoEnvKeyframed<F32>(tmpl->mWaterFogDensity);
+    track.mWater.mEnabled    = tmpl.mWaterEnabled;
+    track.mWater.mHeight     = SSAtmoEnvKeyframed<F32>(tmpl.mWaterHeightM);
+    track.mWater.mFogColor   = SSAtmoEnvKeyframed<LLColor3>(tmpl.mWaterFogColor);
+    track.mWater.mFogDensity = SSAtmoEnvKeyframed<F32>(tmpl.mWaterFogDensity);
 
     track.mCloudField.mAuto           = false;
-    track.mCloudField.mBaseHeightM    = SSAtmoEnvKeyframed<F32>(tmpl->mDeckBaseM);
-    track.mCloudField.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(tmpl->mDeckThicknessM);
-    track.mCloudField.mCoverageScale  = SSAtmoEnvKeyframed<F32>(tmpl->mDeckCoverage);
-    track.mCloudField.mStormDarkening = SSAtmoEnvKeyframed<F32>(tmpl->mDeckStormDarkening);
+    track.mCloudField.mBaseHeightM    = SSAtmoEnvKeyframed<F32>(tmpl.mDeckBaseM);
+    track.mCloudField.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(tmpl.mDeckThicknessM);
+    track.mCloudField.mCoverageScale  = SSAtmoEnvKeyframed<F32>(tmpl.mDeckCoverage);
+    track.mCloudField.mStormDarkening = SSAtmoEnvKeyframed<F32>(tmpl.mDeckStormDarkening);
 
-    track.mUnderField.mEnabled        = tmpl->mUnderEnabled;
-    track.mUnderField.mBaseHeightM    = SSAtmoEnvKeyframed<F32>(tmpl->mUnderBaseM);
-    track.mUnderField.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(tmpl->mUnderThicknessM);
+    track.mUnderField.mEnabled        = tmpl.mUnderEnabled;
+    track.mUnderField.mBaseHeightM    = SSAtmoEnvKeyframed<F32>(tmpl.mUnderBaseM);
+    track.mUnderField.mBaseThicknessM = SSAtmoEnvKeyframed<F32>(tmpl.mUnderThicknessM);
 
-    track.mCloudDome.mAuto     = tmpl->mDomeAuto;
-    track.mCloudDome.mHeightM  = SSAtmoEnvKeyframed<F32>(tmpl->mDomeHeightM);
-    track.mCloudDome.mCoverage = SSAtmoEnvKeyframed<F32>(tmpl->mDomeCoverage);
+    track.mCloudDome.mAuto     = tmpl.mDomeAuto;
+    track.mCloudDome.mHeightM  = SSAtmoEnvKeyframed<F32>(tmpl.mDomeHeightM);
+    track.mCloudDome.mCoverage = SSAtmoEnvKeyframed<F32>(tmpl.mDomeCoverage);
 
-    track.mWeather.mTemperatureC = SSAtmoEnvKeyframed<F32>(tmpl->mTemperatureC);
-    track.mWeather.mMoisture     = SSAtmoEnvKeyframed<F32>(tmpl->mMoisture);
-    track.mWeather.mConvection   = SSAtmoEnvKeyframed<F32>(tmpl->mConvection);
-    track.mWeather.mWindSpeed    = SSAtmoEnvKeyframed<F32>(tmpl->mWindSpeed);
+    track.mWeather.mTemperatureC = SSAtmoEnvKeyframed<F32>(tmpl.mTemperatureC);
+    track.mWeather.mMoisture     = SSAtmoEnvKeyframed<F32>(tmpl.mMoisture);
+    track.mWeather.mConvection   = SSAtmoEnvKeyframed<F32>(tmpl.mConvection);
+    track.mWeather.mWindSpeed    = SSAtmoEnvKeyframed<F32>(tmpl.mWindSpeed);
+}
 
-    track.mAtmosphere.mBlueHorizon = SSAtmoEnvKeyframed<LLColor3>(tmpl->mBlueHorizon);
-    track.mAtmosphere.mBlueDensity = SSAtmoEnvKeyframed<LLColor3>(tmpl->mBlueDensity);
-    track.mAtmosphere.mHazeDensity = SSAtmoEnvKeyframed<F32>(tmpl->mHazeDensity);
-    track.mAtmosphere.mMaxAltitude = SSAtmoEnvKeyframed<F32>(tmpl->mMaxAltitudeM);
+// The atmosphere columns as a constant sky - the template's mood with no day attached. The
+// fallback when no seed skies are fetched; the seeded path tints them over the cycle instead.
+static void ssAtmoEnvApplyTemplateAtmosphere(SSAtmoEnvTrack& track, const SSAtmoEnvTemplate& tmpl)
+{
+    track.mAtmosphere.mBlueHorizon = SSAtmoEnvKeyframed<LLColor3>(tmpl.mBlueHorizon);
+    track.mAtmosphere.mBlueDensity = SSAtmoEnvKeyframed<LLColor3>(tmpl.mBlueDensity);
+    track.mAtmosphere.mHazeDensity = SSAtmoEnvKeyframed<F32>(tmpl.mHazeDensity);
+    track.mAtmosphere.mMaxAltitude = SSAtmoEnvKeyframed<F32>(tmpl.mMaxAltitudeM);
+}
 
+bool ssAtmoEnvApplyTemplate(SSAtmoEnvTrack& track, const std::string& key)
+{
+    const SSAtmoEnvTemplate* tmpl = ssAtmoEnvFindTemplate(key);
+    if (!tmpl) return false;
+
+    ssAtmoEnvApplyTemplateWorld(track, *tmpl);
+    ssAtmoEnvApplyTemplateAtmosphere(track, *tmpl);
     return true;
 }
 

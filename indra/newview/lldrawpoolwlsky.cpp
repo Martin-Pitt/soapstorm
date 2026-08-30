@@ -50,7 +50,6 @@
 #include "llviewercontrol.h"
 #include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
 #include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic celestial billboards
-#include "ssvolcloud.h" // <SS:Nexii> the overcast band tracks the deck's live coverage
 
 extern bool gCubeSnapshot;
 
@@ -72,12 +71,18 @@ static LLStaticHashedString sPhaseShaded("ss_phase_shaded");
 static LLStaticHashedString sDaylight("ss_daylight");
 static LLStaticHashedString sFaceRot("ss_face_rot");
 
-// <SS:Nexii> The dome bands' virtual ALTITUDES, metres - the overcast band's is the deck-tracking
-// merge (SSAtmoEnvApplier::cloudDomeAltitudeMetres), the cirrus veil's its own authored-then-
-// integrated derivation (cirrusAltitudeMetres). Both the plane-mapped UVs (cloudsF) and the disc
-// occlusion (ssCelestialF, band only) scale by them - one authority per band, or the two slide
-// apart, which is why they are resolved in the applier and only read here.
+// <SS:Nexii> The dome band's virtual ALTITUDE above the CAMERA, metres - the deck-tracking merge
+// (SSAtmoEnvApplier::cloudDomeAltitudeMetres) read against the camera's own height, so the shell
+// the shader intersects stays put while the camera climbs. Both the curved-deck UVs (cloudsF) and
+// the disc occlusion (ssCelestialF, by depth) derive from it - one authority, which is why it is
+// resolved in the applier and only read here.
 static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
+
+// <SS:Nexii> The camera's distance from the home planet's CENTRE, metres (home radius + camera
+// height) - the curvature term for the dome cloud's deck mapping (cloudsF.glsl): the deck is a
+// spherical shell, terminates at its own curved horizon and fades there. Zero falls back to the
+// flat-deck mapping.
+static LLStaticHashedString sPlanetOrbit("ss_planet_orbit_m");
 
 // <SS:Nexii> The horizon clip's uniform (SSAtmoEnvAtmosphere::mHorizonClip) - the on/off gate the
 // dome fragment shader tests before it writes the lower half of the dome into its own depth slot
@@ -96,10 +101,9 @@ static LLStaticHashedString sHorizonClip("ss_horizon_clip");
 // idle viewer's plain EEP sky shades below the horizon the way stock always has.
 static LLStaticHashedString sHorizonMirror("ss_horizon_mirror");
 
-// <SS:Nexii> The dome cloud bands' own depth slots (cloudsV.glsl): the cirrus veil 0.999985 and the
-// overcast band 0.99998 when an ACTIVE Atmo environment is driving the sky - the slots order the
-// two bands against each other and against the Atmo discs - and 0 for stock's untouched projection
-// squash.
+// <SS:Nexii> The dome cloud band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo
+// environment is driving the sky - the slot orders the band against the Atmo discs - and 0 for
+// stock's untouched projection squash.
 static LLStaticHashedString sCloudDepth("ss_cloud_depth");
 
 // <SS:Nexii> The stock atmosphere ray lift (skyV.glsl, cloudsV.glsl): 1 computes the
@@ -544,16 +548,14 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
         cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
 
-        // <SS:Nexii> The dome layers' own depth slots (cloudsV.glsl): the cirrus veil 0.999985, the
-        // overcast band 0.99998 when an ACTIVE Atmo environment is driving the sky - the slots
-        // order the two bands against each other and against the Atmo discs - and 0 for stock's
-        // untouched projection squash (the file-scope sCloudDepth).
-        static const F32 SS_CIRRUS_DEPTH  = 0.999985f;
+        // <SS:Nexii> The dome band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo
+        // environment is driving the sky - it orders the band against the Atmo discs - and 0 for
+        // stock's untouched projection squash (the file-scope sCloudDepth).
         static const F32 SS_BAND_DEPTH    = 0.99998f;
 
-        // <SS:Nexii> The plane-mapping gate (cloudsF.glsl): 1 computes the dome cloud UVs from the
-        // true view ray's intersection with a plane at the layer's own altitude - exact parallax and
-        // the real horizon compression of a flat deck - and 0 keeps the stock dome-mesh texcoords.
+        // <SS:Nexii> The deck-mapping gate (cloudsF.glsl): 1 computes the dome cloud UVs from the
+        // true view ray's intersection with the band's curved deck - per-band parallax, the deck's
+        // own horizon curvature and fade - and 0 keeps the stock dome-mesh texcoords.
         static LLStaticHashedString sCloudPlane("ss_cloud_plane");
 
         // The stock ray lift, riding the same gate as the discs: the deck's glow
@@ -562,13 +564,21 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         // sRayLift above.
         cloudshader->uniform1f(sRayLift, ss_atmo_discs_active() ? 0.f : 1.f);
 
-        // The plane-mapping gate, shared by both bands.
+        // The deck-mapping gate.
         cloudshader->uniform1f(sCloudPlane, atmo_env_active ? 1.f : 0.f);
 
         // <SS:Nexii> The scale the dome mesh draws at: 0.3325 of the dome radius when Atmo owns the
         // sky, the stock 0.333 when not - twelve metres of headroom over the haze backdrop, see the
         // note at the old single-pass draw.
         const F32 dome_scale = atmo_env_active ? 0.3325f : 0.333f;
+
+        // <SS:Nexii> The planet the deck curves around: the home body's radius plus the camera's
+        // height above the region floor - the camera's orbit. Zero (no home body) leaves the
+        // shader on its flat-deck fallback.
+        const F32 planet_orbit_m = atmo_env_active
+            ? SSAtmoEnvApplier::instance().homePlanetRadiusM() + llmax(camPosLocal.mV[VZ], 0.f)
+            : 0.f;
+        cloudshader->uniform1f(sPlanetOrbit, planet_orbit_m);
 
         if (!atmo_env_active)
         {
@@ -580,27 +590,21 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         }
         else
         {
-            // <SS:Nexii> Two bands, one dome mesh drawn twice, far band first. The CIRRUS VEIL sits
-            // at its own altitude (calm: the authored dome height; storm: descended onto the deck's
-            // lid - see SSAtmoEnvApplier::cirrusAltitudeMetres) and carries the AUTHORED coverage -
-            // it is the dome's own cloud, not the weather's. The OVERCAST BAND tracks the deck:
-            // the deck's live coverage for density and the deck-tracking merge for altitude
-            // (cloudDomeAltitudeMetres), so band and deck overcast in lockstep and the veil stays
-            // visible above and through the band until the deck is solid enough to hide it. Both
-            // override the shared cloud-shadow uniform per pass: that uniform also dims the world
-            // through the live settings, and neither band's density is the world's dim.
+            // <SS:Nexii> ONE dome band. Two bands over one noise texture with per-band parallax
+            // rates ghost apart the moment the camera moves - the same pattern twice, shifted, a
+            // second ghost layer - and the altitude a band maps at cancels out of its own static
+            // pattern entirely, so a separate veil pass bought nothing its height dial could show.
+            // The band's altitude is the deck-tracking merge: the authored dome height while the
+            // air is calm (the Sky Dome height dial's authority), merging down onto the deck's
+            // mid-altitude as the deck's coverage builds, so band and deck agree about where the
+            // cloud IS as they merge at the rim. Its density is the live sky's cloud shadow - the
+            // tracked blend of the authored coverage lifted toward the deck's - which also dims
+            // the world, so band, deck and world light overcast in lockstep.
             // </SS:Nexii>
             SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
-            SSVolCloud* vol = SSVolCloud::getInstance();
 
-            cloudshader->uniform1f(LLShaderMgr::CLOUD_SHADOW, applier.cirrusCoverage());
-            cloudshader->uniform1f(sCloudAltM, applier.cirrusAltitudeMetres());
-            cloudshader->uniform1f(sCloudDepth, SS_CIRRUS_DEPTH);
-            renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
-
-            const F32 band_coverage = (vol && !vol->empty()) ? vol->lastCoverage() : 0.f;
-            cloudshader->uniform1f(LLShaderMgr::CLOUD_SHADOW, band_coverage);
-            cloudshader->uniform1f(sCloudAltM, applier.cloudDomeAltitudeMetres());
+            const F32 band_world_height_m = applier.cloudDomeAltitudeMetres();
+            cloudshader->uniform1f(sCloudAltM, band_world_height_m - camPosLocal.mV[VZ]);
             cloudshader->uniform1f(sCloudDepth, SS_BAND_DEPTH);
             renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
         }

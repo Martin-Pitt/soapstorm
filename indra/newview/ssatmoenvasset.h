@@ -47,13 +47,24 @@ const F32 SS_ATMOENV_REGION_CEILING = 4096.f;
 
 const F32 SS_ATMOENV_MIN_TRACK_FLOOR = 256.f;
 
-const F32 SS_ATMOENV_WATER_CEILING = 100.f;
+// <SS:Nexii> The water height window the slider dials: a near-surface band that reaches below
+// sea level for sunken seas and up over lifted lakes. Values past the slider's ends show there
+// pinned at the rail.
+const F32 SS_ATMOENV_WATER_FLOOR = -50.f;
+const F32 SS_ATMOENV_WATER_CEILING = 200.f;
 
 // <SS:Nexii> The water height the spinner will take by hand: sky-themed builds put the ocean
-// way below the platform, so the typed range runs -10 km to +10 km while the slider keeps its
-// honest near-surface dial. Values past the slider's ends show there pinned at the rail.
+// way below the platform, so the typed range runs -10 km to +10 km, far past the slider's dial.
+// Values past the slider's ends show there pinned at the rail.
 const F32 SS_ATMOENV_WATER_MIN = -10000.f;
 const F32 SS_ATMOENV_WATER_MAX = 10000.f;
+
+// <SS:Nexii> The under deck's base height, in the same floor-relative frame: the slider spans
+// a hang-below-the-track window (-400 m) up to the region ceiling, while the spinner takes the
+// same wide hand-typed range the water plane does.
+const F32 SS_ATMOENV_UDECK_BASE_FLOOR = -400.f;
+const F32 SS_ATMOENV_UDECK_BASE_MIN = -10000.f;
+const F32 SS_ATMOENV_UDECK_BASE_MAX = 10000.f;
 
 const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
 
@@ -416,8 +427,12 @@ struct SSAtmoEnvWeatherInfluence
     bool mWindScrollEnabled = true;
     F32  mWindScrollStrength = 1.f;
 
-    bool mHazeEnabled = true;
-    F32  mHazeStrength = 1.f;
+    // <SS:Nexii> Gates precipitation -> water fog. Was the haze pair: it used to gate moisture ->
+    // haze density / distance multiplier as well, and that mapping is retired - the haze lift
+    // blew whole scenes out on custom skies (see SSAtmoEnvSkyWeatherModulator::compute), and the
+    // row it owned in the Weather Influence floater is now the water-fog row alone. </SS:Nexii>
+    bool mWaterFogEnabled = true;
+    F32  mWaterFogStrength = 1.f;
 
     bool mStormDarkeningEnabled = true;
     F32  mStormDarkeningStrength = 1.f;
@@ -531,6 +546,15 @@ struct SSAtmoEnvTemplate
 };
 
 const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates();
+
+// Looks a template up by key; null when the key is unknown.
+const SSAtmoEnvTemplate* ssAtmoEnvFindTemplate(const std::string& key);
+
+// Everything the template names that is NOT the sky's look: day length, water, both decks, the
+// dome's structure (auto, height, coverage) and the weather. The atmosphere columns are the
+// template's mood and travel separately - a constant sky here (ssAtmoEnvApplyTemplate), or a
+// tint over the seeded stock day cycle there (SSAtmoEnvManager::applyTemplateToTrack).
+void ssAtmoEnvApplyTemplateWorld(SSAtmoEnvTrack& track, const SSAtmoEnvTemplate& tmpl);
 
 // Returns false only for an unknown key. Everything the template names is overwritten on the track,
 // keyframes included - a seed is destructive by design, which is why the UI confirms first.

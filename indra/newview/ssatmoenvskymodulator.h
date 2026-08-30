@@ -58,8 +58,6 @@ struct SSAtmoEnvSkyModulation
 
     LLVector2 cloudScrollRate(const LLVector2& base) const;
 
-    F32 hazeDensity(F32 base) const;
-    F32 distanceMultiplier(F32 base) const;
     F32 sceneGamma(F32 base) const;
     LLColor3 ambientColor(const LLColor3& base) const;
     LLColor3 blueDensity(const LLColor3& base) const;
@@ -76,7 +74,6 @@ struct SSAtmoEnvSkyModulation
     F32 mWind = 0.f;
     LLVector2 mDriftVelocity;
     LLVector2 mScrollDelta;
-    F32 mHaze = 0.f;
     F32 mPrecip = 0.f;
     F32 mDarkening = 0.f;
     F32 mCold = 0.f;

@@ -329,12 +329,21 @@ bool SSFloaterAtmoEnv::postBuild()
     }
 
     // <SS:Nexii> The height is authored relative to the track's floor. The slider keeps its
-    // honest near-floor dial (SS_ATMOENV_WATER_CEILING); the spinner takes the whole authored
-    // range by hand, so a sky-themed build can put its ocean kilometres below the track it rides.
-    // Values past the slider's ends read there pinned at the rail. </SS:Nexii>
+    // honest near-floor dial (SS_ATMOENV_WATER_FLOOR..CEILING); the spinner takes the whole
+    // authored range by hand, so a sky-themed build can put its ocean kilometres below the
+    // track it rides. Values past the slider's ends read there pinned at the rail. </SS:Nexii>
+    getChild<LLSliderCtrl>("water_height_slider")->setMinValue(SS_ATMOENV_WATER_FLOOR);
     getChild<LLSliderCtrl>("water_height_slider")->setMaxValue(SS_ATMOENV_WATER_CEILING);
     getChild<LLSpinCtrl>("water_height_value_spinner")->setMinValue(SS_ATMOENV_WATER_MIN);
     getChild<LLSpinCtrl>("water_height_value_spinner")->setMaxValue(SS_ATMOENV_WATER_MAX);
+
+    // <SS:Nexii> The under deck hangs below its track the same way: the slider reaches down
+    // into hang-below-the-floor territory while the spinner takes the water plane's whole
+    // hand-typed range. </SS:Nexii>
+    getChild<LLSliderCtrl>("ucloud_base_height_slider")->setMinValue(SS_ATMOENV_UDECK_BASE_FLOOR);
+    getChild<LLSliderCtrl>("ucloud_base_height_slider")->setMaxValue(SS_ATMOENV_REGION_CEILING);
+    getChild<LLSpinCtrl>("ucloud_base_height_value_spinner")->setMinValue(SS_ATMOENV_UDECK_BASE_MIN);
+    getChild<LLSpinCtrl>("ucloud_base_height_value_spinner")->setMaxValue(SS_ATMOENV_UDECK_BASE_MAX);
 
     static const F32 SCALE_SUN_AMBIENT = 3.f;
     static const F32 SCALE_BLUE = 2.f;
@@ -1883,6 +1892,8 @@ void SSFloaterAtmoEnv::onClickRemoveTrack()
 
 // <SS:Nexii> Seeds the selected track from a world archetype. Confirmed first because it overwrites
 // the track wholesale, keyframes included - there is no partial apply and no undo beyond Revert.
+// The sky arrives as the stock four-sky day cycle tinted by the template's atmosphere, so the
+// seeding fetches assets and completes asynchronously.
 void SSFloaterAtmoEnv::onClickApplyTemplate()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1894,33 +1905,41 @@ void SSFloaterAtmoEnv::onClickApplyTemplate()
 
     LLSD args;
     args["MESSAGE"] = "Seed \"" + combo->getSelectedItemLabel() + "\" onto this track? Its water, "
-                      "cloud decks, sky and weather are replaced, keyframes included.";
+                      "cloud decks and weather are replaced, and its sky reseeds as the stock day "
+                      "cycle tinted by the template - keyframes included.";
     // The floater can be closed while the confirmation is up, so the callback goes through a
-    // handle rather than capturing this - same pattern as the dropped-settings load above.
+    // handle rather than capturing this - same pattern as the dropped-settings load above. The
+    // seed itself completes after an asset fetch, so the refresh rides a second handle resolve.
     LLHandle<LLFloater> handle = getHandle();
     LLNotificationsUtil::add("GenericAlertYesCancel", args, LLSD(),
         [handle, key](const LLSD& notification, const LLSD& response)
         {
             if (LLNotificationsUtil::getSelectedOption(notification, response) != 0) return;
 
-            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
-            if (!self) return;
-
             SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
             if (!mgr->hasAsset()) return;
 
             SSAtmoEnvAsset& asset = mgr->editable();
-            if (self->mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
-            if (!ssAtmoEnvApplyTemplate(asset.mTracks[self->mSelectedTrackIndex], key)) return;
+            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+            const S32 track_index = self ? self->mSelectedTrackIndex : 0;
+            if (self && track_index >= (S32)asset.mTracks.size()) return;
 
-            self->refreshTrackRail();
-            self->refreshTrackTab();
-            self->refreshWaterRows();
-            self->refreshAutoRows();
-            self->refreshLightningRows();
-            self->refreshPlanetaryScales();
-            self->refreshStatus();
-            self->refreshPreview();
+            SSAtmoEnvManager::applyTemplateToTrack(asset, track_index, key,
+                [handle](bool ok)
+                {
+                    if (!ok) return;
+                    SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+                    if (!self) return;
+
+                    self->refreshTrackRail();
+                    self->refreshTrackTab();
+                    self->refreshWaterRows();
+                    self->refreshAutoRows();
+                    self->refreshLightningRows();
+                    self->refreshPlanetaryScales();
+                    self->refreshStatus();
+                    self->refreshPreview();
+                });
         });
 }
 

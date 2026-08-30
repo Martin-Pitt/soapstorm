@@ -573,8 +573,7 @@ function, tuned per track from the Weather Influence sub-floater.
   | Deck coverage | dome overcast band coverage (cloud_shadow) | the band tracks the deck's live coverage - lift only, authored coverage is a floor; one coverage, two layers |
   | Wind heading/speed | cloud layer drift | the deck actually travels over the world - see below |
   | Convection | dome scroll rate (churn) | scroll is evolution, not travel - see below |
-  | Moisture | haze density up, distance multiplier down | full effect +1.5 haze / -50% distance |
-  | Precipitation intensity | water fog modifier | multiplier, so rain thickens whatever the author set |
+  | Precipitation intensity | water fog modifier | multiplier, so rain thickens whatever the author set; the old moisture -> haze mapping (haze density up, distance multiplier down) is retired - on skies authored with heavy haze the lifted airlight blew whole scenes out, and the authored haze now renders exactly as keyframed |
   | Convection (past 0.55) | gamma and ambient down | the design's "pitch-black boiling sky": dimmer light, heavier deck - the deck's own gloom and thickness carry the weight, and the overcast band tracks the deck rather than being pushed past it |
   | Convection (anvil, 0.6-0.9) | cirrus veil altitude | the veil descends from its authored height onto the deck's lid, ending ~300 m over the deck's max height - the deck integrates with its cirrus |
   | Sub-freezing AND dry | sky ice level up, blue density crisper | both gates required - freezing fog is not a halo sky |
@@ -627,7 +626,7 @@ function, tuned per track from the Weather Influence sub-floater.
   from a button on each tab a mapping reaches - Weather, Water, Clouds >
   Sky Dome, Atmosphere > Sky. One floater rather than four sections
   because the mappings have to be compared against each other to be tuned
-  ("is my storm darkening fighting my haze?"). Each row shows what that
+  ("is my storm darkening fighting my rainbow window?"). Each row shows what that
   mapping is doing right now, read from the applier's last modulation, so
   the readout is what the renderer actually did rather than a second
   opinion.

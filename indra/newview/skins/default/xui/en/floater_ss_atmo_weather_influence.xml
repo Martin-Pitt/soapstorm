@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="470"
+ height="498"
  layout="topleft"
  name="floater_ss_atmo_weather_influence"
  save_rect="true"
@@ -14,8 +14,8 @@
          authored sky. One floater rather than a section per tab, opened
          from a button on each tab it affects: the mappings have to be
          compared against each other to be tuned sensibly ("is my storm
-         darkening fighting my haze?"), which splitting them across four
-         tabs would prevent.
+         darkening fighting my rainbow window?"), which splitting them across
+         four tabs would prevent.
 
          Sections are grouped by the tab whose parameters each mapping
          reaches, so a row is findable from wherever the author noticed
@@ -151,40 +151,6 @@
      top_pad="6"
      height="16"
      width="250"
-     name="haze_enabled"
-     tool_tip="Moisture thickens haze and closes the view in - and, in rain, thickens the underwater fog on the Water tab too."
-     label="Moisture thickens haze" />
-    <slider
-     follows="left|top"
-     layout="topleft"
-     left_pad="4"
-     top_delta="-2"
-     height="18"
-     width="140"
-     name="haze_strength"
-     show_text="false"
-     min_val="0.0"
-     max_val="1.0"
-     increment="0.05"
-     initial_value="1.0" />
-    <text
-     follows="left|top"
-     layout="topleft"
-     left_pad="8"
-     height="14"
-     width="80"
-     name="haze_readout"
-     font="SansSerifSmall">
-        -
-    </text>
-
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="25"
-     top_pad="6"
-     height="16"
-     width="250"
      name="storm_enabled"
      tool_tip="Convection past the breezy band churns the cloud layer and pulls gamma and ambient light down - the design's pitch-black boiling sky."
      label="Storms darken the sky" />
@@ -276,6 +242,53 @@
      height="14"
      width="80"
      name="rainbow_readout"
+     font="SansSerifSmall">
+        -
+    </text>
+
+    <!-- ================= Water ================= -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="14"
+     height="14"
+     width="480"
+     name="water_header"
+     font="SansSerifSmallBold">
+        Water
+    </text>
+
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="25"
+     top_pad="6"
+     height="16"
+     width="250"
+     name="water_fog_enabled"
+     tool_tip="In rain, thickens the underwater fog on the Water tab. Weather never touches the authored haze."
+     label="Rain thickens water fog" />
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-2"
+     height="18"
+     width="140"
+     name="water_fog_strength"
+     show_text="false"
+     min_val="0.0"
+     max_val="1.0"
+     increment="0.05"
+     initial_value="1.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     height="14"
+     width="80"
+     name="water_fog_readout"
      font="SansSerifSmall">
         -
     </text>

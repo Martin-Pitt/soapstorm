@@ -190,6 +190,7 @@ public:
     bool hasKeyframes() const { return !mKeyframes.empty(); }
     size_t keyframeCount() const { return mKeyframes.size(); }
     const std::vector<SSAtmoEnvKeyframe<T>>& keyframes() const { return mKeyframes; }
+    std::vector<SSAtmoEnvKeyframe<T>>& keyframes() { return mKeyframes; }
 
     T valueAt(F64 phase) const
     {

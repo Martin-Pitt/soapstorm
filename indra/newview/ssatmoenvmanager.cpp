@@ -408,6 +408,51 @@ namespace
         ground.mCloudDome.collapseConstantKeyframes();
         return def;
     }
+
+    // <SS:Nexii> The template's atmosphere columns as a TINT over the seeded cycle: each column
+    // divides its value out of the reference sky (Daylight - the "no mood" anchor the dial was
+    // tuned against), and the factor multiplies every stamped keyframe, so the archetype's mood
+    // rides the whole day - Alien World stays alien at dawn and dusk - instead of flattening the
+    // cycle back to a constant.
+    void tintSeededCycle(SSAtmoEnvTrack& track, const SSAtmoEnvTemplate& tmpl, const LLSettingsSky& reference)
+    {
+        const LLColor3 ref_horizon = reference.getBlueHorizon();
+        const LLColor3 ref_density = reference.getBlueDensity();
+        const LLColor3 horizon_factor(tmpl.mBlueHorizon.mV[0] / llmax(ref_horizon.mV[0], 0.01f),
+                                      tmpl.mBlueHorizon.mV[1] / llmax(ref_horizon.mV[1], 0.01f),
+                                      tmpl.mBlueHorizon.mV[2] / llmax(ref_horizon.mV[2], 0.01f));
+        const LLColor3 density_factor(tmpl.mBlueDensity.mV[0] / llmax(ref_density.mV[0], 0.01f),
+                                      tmpl.mBlueDensity.mV[1] / llmax(ref_density.mV[1], 0.01f),
+                                      tmpl.mBlueDensity.mV[2] / llmax(ref_density.mV[2], 0.01f));
+        const F32 haze_factor   = tmpl.mHazeDensity  / llmax(reference.getHazeDensity(), 0.001f);
+        const F32 maxalt_factor = tmpl.mMaxAltitudeM / llmax(reference.getMaxY(), 1.f);
+        const F32 cover_factor  = tmpl.mDomeCoverage / llmax(reference.getCloudShadow(), 0.01f);
+
+        for (SSAtmoEnvKeyframe<LLColor3>& kf : track.mAtmosphere.mBlueHorizon.keyframes())
+        {
+            kf.mValue = LLColor3(kf.mValue.mV[0] * horizon_factor.mV[0],
+                                 kf.mValue.mV[1] * horizon_factor.mV[1],
+                                 kf.mValue.mV[2] * horizon_factor.mV[2]);
+        }
+        for (SSAtmoEnvKeyframe<LLColor3>& kf : track.mAtmosphere.mBlueDensity.keyframes())
+        {
+            kf.mValue = LLColor3(kf.mValue.mV[0] * density_factor.mV[0],
+                                 kf.mValue.mV[1] * density_factor.mV[1],
+                                 kf.mValue.mV[2] * density_factor.mV[2]);
+        }
+        for (SSAtmoEnvKeyframe<F32>& kf : track.mAtmosphere.mHazeDensity.keyframes())
+        {
+            kf.mValue = llmax(kf.mValue * haze_factor, 0.f);
+        }
+        for (SSAtmoEnvKeyframe<F32>& kf : track.mAtmosphere.mMaxAltitude.keyframes())
+        {
+            kf.mValue = llmax(kf.mValue * maxalt_factor, 1.f);
+        }
+        for (SSAtmoEnvKeyframe<F32>& kf : track.mCloudDome.mCoverage.keyframes())
+        {
+            kf.mValue = llclamp(kf.mValue * cover_factor, 0.f, 1.f);
+        }
+    }
 }
 
 // Creates a plain midday-defaults environment: no fetching, no seeding.
@@ -469,6 +514,83 @@ void SSAtmoEnvManager::createDefaultNotecard(const LLUUID& parent_id,
         [parent_id, on_created](const SeedSkyCollector& skies)
         {
             writeDefaultNotecard(buildSeededDefault(skies), parent_id, on_created);
+        });
+}
+
+// The template seed: the template's world settings overwrite wholesale, and the track's sky
+// reseeds as the stock four-sky day cycle with the template's atmosphere columns tinted over it -
+// see the header note. Falls back to the plain constant template when the skies cannot be fetched.
+void SSAtmoEnvManager::applyTemplateToTrack(SSAtmoEnvAsset& asset, S32 track_index, const std::string& key,
+                                            std::function<void(bool success)> on_done)
+{
+    const SSAtmoEnvTemplate* tmpl = ssAtmoEnvFindTemplate(key);
+    if (!tmpl || track_index < 0 || track_index >= static_cast<S32>(asset.mTracks.size()))
+    {
+        if (on_done) on_done(false);
+        return;
+    }
+
+    SSAtmoEnvTrack& track = asset.mTracks[static_cast<size_t>(track_index)];
+
+    if (!gAssetStorage)
+    {
+        LL_WARNS("AtmoMagicEnv") << "Asset system unavailable; seeding the template with its constant sky instead of the stock day cycle" << LL_ENDL;
+        ssAtmoEnvApplyTemplate(track, key);
+        if (on_done) on_done(true);
+        return;
+    }
+
+    std::vector<LLUUID> ids;
+    std::vector<std::string> names;
+    ids.reserve(STOCK_SEED_SKY_COUNT);
+    names.reserve(STOCK_SEED_SKY_COUNT);
+    for (S32 slot = 0; slot < STOCK_SEED_SKY_COUNT; ++slot)
+    {
+        ids.push_back(LLUUID(STOCK_SEED_SKY_ID[slot]));
+        names.push_back(STOCK_SEED_SKY_NAME[slot]);
+    }
+
+    fetchSeedSkies(ids, names,
+        [tmpl, &track, on_done, key](const SeedSkyCollector& skies)
+        {
+            ssAtmoEnvApplyTemplateWorld(track, *tmpl);
+
+            std::vector<size_t> arrived;
+            for (size_t slot = 0; slot < skies.mSkies.size(); ++slot)
+            {
+                if (skies.mSkies[slot]) arrived.push_back(slot);
+            }
+
+            if (arrived.empty())
+            {
+                // No seed sky arrived: the template's constant sky is all there is.
+                ssAtmoEnvApplyTemplate(track, key);
+                if (on_done) on_done(true);
+                return;
+            }
+
+            std::vector<F64> phase;
+            seedSkyPhases(track, skies, phase);
+
+            for (size_t slot : arrived)
+            {
+                track.mAtmosphere.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
+                track.mCloudDome.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
+            }
+
+            track.mCloudDome.mNoiseTexture =
+                SSAtmoEnvKeyframed<LLUUID>(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED));
+
+            // The tint reference: the Daylight slot when it arrived, the first arrival otherwise.
+            const LLSettingsSky& reference =
+                *(skies.mSkies[0] ? skies.mSkies[0] : skies.mSkies[arrived.front()]);
+
+            tintSeededCycle(track, *tmpl, reference);
+
+            track.mAtmosphere.collapseConstantKeyframes();
+            track.mCloudDome.collapseConstantKeyframes();
+
+            if (on_done) on_done(true);
         });
 }
 

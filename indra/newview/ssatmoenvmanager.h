@@ -89,6 +89,15 @@ public:
                                    const LLUUID& parent_id,
                                    std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
 
+    // <SS:Nexii> Seeds a world template onto ONE track of an existing asset. The template's world
+    // settings overwrite wholesale, and the track's sky reseeds as the stock four-sky day cycle -
+    // the same measured-phase stamp the Default create path runs - with the template's atmosphere
+    // columns tinted over every stamped keyframe, so the archetype's mood rides the whole day
+    // instead of flattening it. Falls back to the plain constant template when the seed skies
+    // cannot be fetched. on_done(false) only for an unknown key or a bad track index.
+    static void applyTemplateToTrack(SSAtmoEnvAsset& asset, S32 track_index, const std::string& key,
+                                     std::function<void(bool success)> on_done);
+
     void adoptCreated(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset);
 
     static void atmoFolderId(std::function<void(const LLUUID&)> on_ready);

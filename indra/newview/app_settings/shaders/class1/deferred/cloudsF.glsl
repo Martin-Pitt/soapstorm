@@ -52,37 +52,88 @@ in vec2 vary_texcoord3;
 in float altitude_blend_factor;
 
 #ifdef SS_ATMO
-// <SS:Nexii> The plane mapping (doc/atmo_magic_cloud_parallax.md). Each dome band's UVs are
+// <SS:Nexii> The deck mapping (doc/atmo_magic_cloud_parallax.md). Each dome band's UVs are
 // derived HERE, per fragment, from the true view ray cloudsV hands down - not from the dome mesh's
-// own texcoords plus a patch. Two things that buys: the parallax is exact (a metre of camera travel
-// moves the ray's intersection with the band's plane exactly one metre, instead of being
-// approximated per dome-mesh vertex and linearly interpolated across triangles whose size the
-// mapping never asked for), and the sky curvature is the band's own - a real flat deck compresses
-// into the horizon at tan(elevation), and so does this, rather than at whatever rate the dome mesh
-// happens to distribute its vertices. Per-fragment costs one normalize already paid in the vertex
-// stage and one divide.
+// own texcoords plus a patch. Two things that buys: the parallax rate is per-band and exact in the
+// anchored terms, and the sky curvature is the deck's own rather than whatever rate the dome mesh
+// happens to distribute its vertices at. Per-fragment costs one normalize already paid in the
+// vertex stage and a divide.
 uniform vec2 region_offset;    // camera pos - region centre, metres, world X/Y
 uniform vec2 ss_cloud_drift;   // metres the band has travelled on the wind, east and north
-uniform float ss_cloud_alt_m;  // the BAND'S OWN altitude, metres - what a metre of camera travel is worth in uv
+uniform float ss_cloud_alt_m;  // the BAND'S OWN height above the CAMERA, metres (world deck height minus camera)
+uniform float ss_planet_orbit_m; // camera's distance from the planet's centre, metres - 0 falls back to the flat deck
 uniform float ss_cloud_plane;  // 1: derive UVs from the view ray (active Atmo). 0: stock dome texcoords
 uniform vec3 lightnorm;        // the self-shadow offset's direction - stock derived texcoord1 from it per-vertex
 in vec3 vary_ray_dir;
 
-// One band's base UVs: intersect the view ray with a horizontal plane at the band's own altitude
-// above the camera, anchor at the region centre, subtract the wind travel, and divide by the
-// band's metres-per-UV. vary_ray_dir rides the dome mesh's Y-up local space (renderDome's 120
-// degree permute: local y is world UP, local x is world Y, local z is world X), so the horizontal
-// components reach plane_xy as (ray.z, ray.x) - east, north, matching region_offset's (world X,
-// world Y) order - and the grazing clamp is on the UP component. Sign conventions are the old
-// vertex patches': world north runs down the texture's v, and the wind travel negates the same
-// way. The clamp holds the intersection finite below ~1.2 degrees of elevation, where the horizon
-// fade has already taken the band's alpha to nothing.
+// One band's base UVs: intersect the view ray with the band's deck, anchor at the region centre,
+// subtract the wind travel, and divide by the band's metres-per-UV. vary_ray_dir rides the dome
+// mesh's Y-up local space (renderDome's 120 degree permute: local y is world UP, local x is world
+// Y, local z is world X), so the horizontal components reach deck_m as (ray.z, ray.x) - east,
+// north, matching region_offset's (world X, world Y) order.
+//
+// THE DECK CURVES. With ss_planet_orbit_m set, the ray meets a SPHERE centred on the planet at
+// radius orbit + deck height - t = -orbit*dy + sqrt(orbit^2*dy^2 + 2*orbit*alt + alt^2) - so the
+// deck is a finite disc that terminates at its own curved horizon (the tangent elevation
+// sqrt(2*alt/orbit), about 1.4 degrees for a 1500 m deck under a 5000 km home planet) instead of
+// stretching flat into the world's horizon line, and climbs overhead into view when the camera
+// rises past it. Orbit 0 keeps the flat-deck fallback for an environment without a home body.
+//
+// metres_per_uv anchors the cloud_scale dial to stock: stock's dome texcoords tile every
+// 2*cloud_scale radians of arc at the zenith, and a tile of 2*alt*cloud_scale metres subtends
+// exactly that from a camera alt metres under the deck - so overhead clouds match stock EEP at
+// the same slider setting. Away from the zenith this mapping tiles denser than stock's
+// direction-linear projection on purpose: a real deck compresses toward its horizon where stock
+// stretches (its tiles blow up), which is the whole point of the design.
+//
+// The flat fallback's denominator is SOFTENED, not clamped: (1+F)*alt / (|up| + F) is smooth in
+// the ray everywhere, exact at the zenith, and caps the deck distance at ~10 band-altitudes in
+// the horizon fold. The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
+// never hid: below ~1.2 degrees it froze the UVs into an azimuth-only field, which smears the
+// band into vertical stripes toward the horizon, and exactly on the clamp line the screen-space
+// derivative jumps, which collapses the mip selection into a grid of tile boundaries in the
+// distance. The sphere needs no fold: it is smooth to its own edge and bounded beyond it.
+//
+// The world-anchored terms - camera travel and wind drift - run DAMPED: the shipped vertex nudge
+// moved at one eighth of the plane-honest rate (its /16 compensation over the stock 2*cs-radian
+// zenith tile, hand-tuned in the live viewer), and the undamped plane rate read as the deck
+// swimming. The ray's own hit keeps the honest geometry; only the terms that MOVE are damped, so
+// the motion matches the version the eye tuned. Sign conventions are the old vertex patches':
+// world north runs down the texture's v, and the wind travel negates the same way.
 vec2 ss_plane_base(float alt)
 {
-    float dy = max(vary_ray_dir.y, 0.02);
-    vec2 plane_xy = region_offset + vec2(vary_ray_dir.z, vary_ray_dir.x) * (alt / dy);
-    float metres_per_uv = 16.0 * alt * cloud_scale;
-    return vec2(plane_xy.x - ss_cloud_drift.x, -plane_xy.y + ss_cloud_drift.y) / metres_per_uv;
+    const float SS_DECK_FOLD     = 0.1;
+    const float SS_PARALLAX_DAMP = 0.125;
+    float dy = vary_ray_dir.y;
+    float reach;
+    if (ss_planet_orbit_m > 0.0 && alt > 0.0)
+    {
+        float a = ss_planet_orbit_m;
+        float disc = a * a * dy * dy + 2.0 * a * alt + alt * alt;
+        reach = -a * dy + sqrt(max(disc, 0.0));
+    }
+    else
+    {
+        reach = (1.0 + SS_DECK_FOLD) * alt / (abs(dy) + SS_DECK_FOLD);
+    }
+    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach;
+    vec2 world_m = SS_PARALLAX_DAMP * (region_offset - ss_cloud_drift);
+    float metres_per_uv = 2.0 * alt * cloud_scale;
+    return vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / metres_per_uv;
+}
+
+// The curved deck's own horizon fade. The deck exists ABOVE the tangent elevation
+// sqrt(2*alt/orbit) - below it the ray passes under the shell's rim and there is no deck at all -
+// and the last stretch before the rim compresses endlessly, so the band dissolves across the
+// approach: alpha zero at the rim, full a fraction of the rim's elevation above it. The edge
+// reads as a curved cloud horizon melting into the atmosphere rather than a smeared seam, and a
+// low storm deck and a high cirrus shell each fade across about a third of their own rim height.
+float ss_deck_edge_fade(float alt)
+{
+    if (ss_planet_orbit_m <= 0.0 || alt <= 0.0) return 1.0;
+    float a = ss_planet_orbit_m;
+    float edge_dy = sqrt(max(2.0 * a * alt + alt * alt, 0.0)) / a;
+    return smoothstep(edge_dy, edge_dy * 1.35, vary_ray_dir.y);
 }
 #endif
 
@@ -110,6 +161,7 @@ void main()
     vec2 uv2;
     vec2 uv3;
     vec2 uv4;
+    float deck_edge_fade = 1.0;
 #ifdef SS_ATMO
     if (ss_cloud_plane > 0.0)
     {
@@ -117,6 +169,7 @@ void main()
         uv2 = uv1 + vec2(lightnorm.x, lightnorm.z) * 0.0125;
         uv3 = uv1 * 16.0;
         uv4 = uv2 * 16.0;
+        deck_edge_fade = ss_deck_edge_fade(ss_cloud_alt_m);
     }
     else
     {
@@ -156,7 +209,7 @@ void main()
     alpha1 = 1. - alpha1 * alpha1;
     alpha1 = 1. - alpha1 * alpha1;
 
-    alpha1 *= altitude_blend_factor;
+    alpha1 *= altitude_blend_factor * deck_edge_fade;
     alpha1 = clamp(alpha1, 0.0, 1.0);
 
     // Compute alpha2, for self shadowing effect

@@ -34,10 +34,6 @@ namespace
 
     const F32 CHURN_FULL_ADD = 0.5f;
 
-    const F32 HAZE_FULL_ADD = 1.5f;
-
-    const F32 DISTANCE_FULL_CUT = 0.5f;
-
     const F32 WATERFOG_FULL_BOOST = 0.5f;
 
     const F32 GAMMA_FULL_CUT    = 0.5f;
@@ -101,8 +97,14 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
             * (in.mWindSpeedMS * blend);
     }
 
-    mod.mHaze   = ss_effect(in.mMoisture, influence.mHazeEnabled, influence.mHazeStrength);
-    mod.mPrecip = ss_effect(in.mPrecipitationIntensity, influence.mHazeEnabled, influence.mHazeStrength);
+    // <SS:Nexii> Precipitation -> water fog. The one atmosphere-adjacent mapping left, and it
+    // reaches the Water tab's fog, not the sky: moisture's haze mapping (haze density up,
+    // distance multiplier down) is retired - moisture's +1.5 haze drove the fog term's airlight
+    // past what custom skies with heavy haze_horizon/glow could hold, blowing the whole scene
+    // out under dynamic exposure, and muggy-by-numbers was never worth that. The authored haze
+    // density and distance multiplier now render exactly as keyframed; rain still thickens the
+    // underwater fog on its own toggle. </SS:Nexii>
+    mod.mPrecip = ss_effect(in.mPrecipitationIntensity, influence.mWaterFogEnabled, influence.mWaterFogStrength);
 
     mod.mDarkening = ss_effect(ss_ramp(in.mConvection, DARKENING_ONSET, 1.f),
                                influence.mStormDarkeningEnabled, influence.mStormDarkeningStrength);
@@ -154,18 +156,6 @@ LLVector2 SSAtmoEnvSkyModulation::cloudScrollRate(const LLVector2& base) const
 void SSAtmoEnvSkyModulation::setChurn(const LLVector2& along)
 {
     mScrollDelta = along * (mDarkening * CHURN_FULL_ADD);
-}
-
-// Moisture adds haze.
-F32 SSAtmoEnvSkyModulation::hazeDensity(F32 base) const
-{
-    return base + mHaze * HAZE_FULL_ADD;
-}
-
-// Haze pulls the fog distance in.
-F32 SSAtmoEnvSkyModulation::distanceMultiplier(F32 base) const
-{
-    return base * (1.f - mHaze * DISTANCE_FULL_CUT);
 }
 
 // Storm darkening flattens gamma.

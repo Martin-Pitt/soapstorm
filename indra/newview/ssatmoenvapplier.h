@@ -67,19 +67,23 @@ public:
 
     const LLVector2& cloudDriftMetres() const { return mCloudDriftM; }
 
-    // <SS:Nexii> The dome's two altitudes, resolved per call rather than cached with the rest of the sky walk - both read the volumetric field's LIVE geometry, which moves between applies.
-    // cloudDomeAltitudeMetres is the overcast band's: the deck-tracking merge, and the single
-    // altitude authority the disc occlusion shares (doc/atmo_magic_cloud_parallax.md).
-    // cirrusAltitudeMetres is the cirrus veil's: the authored dome height while the air is calm,
-    // descending onto the deck's lid as convection anvils the deck into it.
+    // <SS:Nexii> The dome band's two altitudes, resolved per call rather than cached with the rest
+    // of the sky walk - both read the volumetric field's LIVE geometry, which moves between
+    // applies. cloudDomeAltitudeMetres is the dome band's: the authored dome height while the air
+    // is calm, merging down onto the deck's mid-altitude as the deck's coverage builds, so band
+    // and deck agree about where the cloud IS as they merge at the rim
+    // (doc/atmo_magic_cloud_parallax.md). cirrusAltitudeMetres is the merge's SOURCE - the same
+    // authored height, before the deck pulls it - and what the floater's greyed-out dome row
+    // shows.
     F32 cloudDomeAltitudeMetres() const;
     F32 cirrusAltitudeMetres() const;
     static F32 autoCloudDomeAltitudeMetres();
 
-    // <SS:Nexii> The dome's AUTHORED coverage, sampled at the applied phase - the cirrus pass's
-    // density. The live sky's cloud shadow is the tracked blend (authored floor lifted toward the
-    // deck's coverage); the cirrus veil does not track the deck, so it draws from this raw sample.
-    F32 cirrusCoverage() const { return mCirrusCoverage; }
+    // <SS:Nexii> The home planet's radius, metres, from the applied track's planetary system -
+    // the curvature authority the dome cloud's deck mapping curves around (cloudsF.glsl via
+    // lldrawpoolwlsky). Zero when the track carries no home body, which leaves the shader on its
+    // flat-deck fallback.
+    F32 homePlanetRadiusM() const { return mHomePlanetRadiusM; }
 
     // <SS:Nexii> Whether the sky dome's lower half takes the nearer depth slot that clips what it
     // draws over at the horizon (SSAtmoEnvAtmosphere::mHorizonClip). Sampled at the applied phase
@@ -145,17 +149,15 @@ private:
     SSAtmoEnvSkyModulation mLastModulation;
     LLVector2 mCloudDriftM;
 
-    // <SS:Nexii> The cirrus veil's authored dry altitude and its auto flag, sampled at the applied
-    // phase - see cirrusAltitudeMetres. The overcast band no longer uses either: it always tracks
-    // the deck.
+    // <SS:Nexii> The dome band's authored dry altitude and its auto flag, sampled at the applied
+    // phase - the merge source cirrusAltitudeMetres reads.
     bool mCloudDomeAuto = false;
     F32 mCloudDomeHeightM = 6000.f;
 
-    // <SS:Nexii> The track's convection, sampled at the applied phase - the cirrus integration ramp
-    // rides it - and the dome's authored coverage, sampled at the applied phase - the cirrus pass's
-    // density. See cirrusCoverage.
+    // <SS:Nexii> The track's convection, sampled at the applied phase - the anvil ramp that pulls
+    // the merge source down onto the deck's lid rides it - and the home planet's radius, metres.
     F32 mLastConvection = 0.f;
-    F32 mCirrusCoverage = 0.f;
+    F32 mHomePlanetRadiusM = 0.f;
 
     // <SS:Nexii> The horizon clip, sampled at the applied phase - see horizonClip.
     bool mHorizonClip = true;

@@ -37,35 +37,30 @@ vary_texcoord0.xy += vec2(region_offset.x, -region_offset.y) / metres_per_uv;
 vary_texcoord0.xy += vec2(-ss_cloud_drift.x, ss_cloud_drift.y) / metres_per_uv;
 ```
 
-`ss_cloud_alt_m` is the LAYER'S OWN altitude, and there are now two layers
-on the dome mesh, each with its own:
+`ss_cloud_alt_m` is the band's height above the camera, and there is ONE band on the dome mesh:
 
-- **The overcast band** — the dome's deck-tracking sheet. Its altitude is
-  always the merge derivation (`SSAtmoEnvApplier::cloudDomeAltitudeMetres`):
-  it starts wherever the cirrus veil currently is and merges down onto the
-  deck's mid-altitude as the deck's coverage builds (smoothstep over coverage
-  0.05..0.30), so exactly when the band and the deck merge visually at the
-  rim, they also agree about where the cloud IS and parallax at the same
-  rate. Its density is the deck's live coverage — the band overcasts in
-  lockstep with the puffs, never past them.
-- **The cirrus veil** — the dome's own cloud, high above the band. Calm air
-  leaves it at the authored dome height (`SSAtmoEnvCloudDome::mHeightM`,
-  keyframed like every other value on the Clouds > Sky Dome tab, default
-  6000m; the Auto box stands in for the height with the same default). As
-  convection anvils the deck (0.6..0.9, the same ramp that flattens the
-  deck's own tops) the veil descends onto the deck's lid, ending ~300 m over
-  the deck's max height — by full anvil, veil and deck read as one integrated
-  structure. Its density is the AUTHORED dome coverage, untouched by the
-  weather: the veil is what the author pinned, the band is what the sky is
-  doing. The two draw far-band-first at their own depth slots (veil
-  0.999985, band 0.99998), so the band composites over the veil and the veil
-  stays visible above and through it until the deck is solid enough to hide
-  it. The disc occlusion (ssCelestialF.glsl) mirrors the band's gate and
-  altitude; keep those in sync.
+- **The dome band** — the deck-tracking sheet. Its height is the merge derivation
+  (`SSAtmoEnvApplier::cloudDomeAltitudeMetres`): it starts at the authored dome height (Clouds >
+  Sky Dome, `SSAtmoEnvCloudDome::mHeightM`, keyframed like every other value on that tab, default
+  6000m; the Auto box stands in for the height with the same default) and merges down onto the
+  deck's mid-altitude as the deck's coverage builds (smoothstep over coverage 0.05..0.30), so
+  exactly when the band and the deck merge visually at the rim, they also agree about where the
+  cloud IS and parallax at the same rate. As convection anvils the deck, the merge source
+  descends onto the deck's lid, ending ~300 m over the deck's max height — by full anvil, band
+  and deck read as one integrated structure. Its density is the live sky's cloud shadow — the
+  tracked blend of the authored coverage lifted toward the deck's — which also dims the world, so
+  band, deck and world light overcast in lockstep.
 
-The altitude is a parallax RATE, not a position - each band is drawn on a
-fixed dome radius either way (`renderDome(..., 0.3325f)`), and the number
-only says how far away the layer behaves.
+(A two-band design — a separate cirrus veil at the authored height, over an overcast band
+tracking the deck — shipped and was removed. Two passes over one noise texture with per-band
+parallax rates ghost apart the moment the camera moves: the same pattern twice, shifted, a second
+ghost layer. And a band's altitude cancels out of its own static pattern entirely — the plane
+reach scales with altitude and so does the metres-per-UV — so the veil's height dial had nothing
+to show for it.)
+
+The height is a parallax RATE and a curvature radius, not a dome-mesh position - the band is
+drawn on a fixed dome radius either way (`renderDome(..., 0.3325f)`); the number says how far
+away the deck behaves and how strongly the planet curves it.
 
 The `/16.0` compensates for `vary_texcoord2`/`vary_texcoord3`, built as
 `vary_texcoord0 * 16` a few lines down — the fine detail/self-shadow layer
@@ -93,23 +88,49 @@ dropped once it stopped doing anything.
   layer altitude
   from the region centre (the `/16` is the `vary_texcoord2`/`vary_texcoord3`
   compensation above, not a separate dial).
-- The parallax is horizontal only — gaining or losing camera altitude does
-  not add to it; the layer altitude is "N metres above the camera",
-  re-centred every frame, rather than a fixed world height.
+- The parallax is horizontal only in the FLAT fallback - gaining or losing
+  camera altitude does not add to it there, and the layer altitude stays
+  "N metres above the camera", re-centred every frame. With curvature the
+  deck is a real shell: rising past its height sweeps it down under the
+  camera like the real thing.
 - It is computed per FRAGMENT now, from the true view ray (cloudsV hands the
-  camera-relative ray down in `vary_ray_dir`; cloudsF intersects it with a
-  horizontal plane at the band's own altitude and maps the intersection
-  point). The first version shifted the dome mesh's own texcoords by a
-  uniform amount per VERTEX, which was correct in rate but wrong in two
-  ways: the shift was interpolated linearly across the dome mesh's triangles
-  while the true mapping is nonlinear in exactly the place that matters
-  (the horizon), and the base mapping was the dome's curvature rather than
-  the flat deck's — a real plane compresses into the horizon at
-  tan(elevation); the dome mesh compresses at whatever rate its vertices
-  are laid out. Intersecting the ray with the plane per fragment makes the
-  parallax exact (a metre of travel moves the intersection a metre) and the
-  curvature the band's own. The UVs clamp below ~1.2° elevation, where the
-  horizon fade has already taken the band's alpha to nothing.
+  camera-relative ray down in `vary_ray_dir`; cloudsF intersects it with the
+  band's deck and maps the intersection point). The first version shifted the
+  dome mesh's own texcoords by a uniform amount per VERTEX, which was correct
+  in rate but wrong in two ways: the shift was interpolated linearly across
+  the dome mesh's triangles while the true mapping is nonlinear in exactly
+  the place that matters (the horizon), and the base mapping was the dome's
+  curvature rather than the deck's - a real deck compresses into the horizon
+  at tan(elevation); the dome mesh compresses at whatever rate its vertices
+  are laid out. Intersecting the ray with the deck per fragment makes the
+  anchored parallax exact and the curvature the deck's own.
+- The deck CURVES: cloudsF intersects the ray with a sphere centred on the
+  planet at radius `orbit + deck height` (`ss_planet_orbit_m` is the camera's
+  distance from the home body's centre, home radius plus camera height), so
+  the deck is a finite disc that terminates at its own curved horizon - the
+  tangent elevation sqrt(2*height/orbit), about 1.4 degrees for a 1500 m deck
+  under a 5000 km home planet - instead of stretching flat into the world's
+  horizon line, and it sweeps down under a camera that climbs past it. The
+  band's alpha fades across the last third of the approach to the edge
+  (ss_deck_edge_fade), so the rim reads as a curved cloud horizon dissolving
+  into the atmosphere. No home body (orbit 0) falls back to the flat deck,
+  whose grazing reach softens as (1+F)*height/(|up| + F) - never the hard
+  max(up, 0.02) clamp an earlier cut shipped: that froze the UVs into an
+  azimuth-only stripe field below ~1.2 degrees and kinked the mip selection
+  into a grid of tile boundaries at the clamp line.
+- metres_per_uv anchors the cloud_scale dial to stock: stock's dome texcoords
+  tile every 2*cloud_scale radians of arc at the zenith, and a tile of
+  2*height*cloud_scale metres subtends exactly that from a camera one deck
+  height below - so overhead clouds match stock EEP at the same slider
+  setting. Away from the zenith the deck tiles denser than stock's
+  direction-linear projection on purpose: a real deck compresses toward its
+  horizon where stock stretches.
+- The world-anchored terms - camera travel and wind drift - run DAMPED to
+  one eighth of the plane-honest rate (SS_PARALLAX_DAMP): the shipped vertex
+  nudge moved at that rate (its /16 compensation over the stock zenith tile),
+  hand-tuned in the live viewer, and the undamped rate read as the deck
+  swimming. The ray's own hit keeps the honest geometry; only the terms that
+  move are damped.
 
 ## The altitude parameter
 

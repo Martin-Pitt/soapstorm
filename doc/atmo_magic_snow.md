@@ -164,6 +164,24 @@ off the inside of porches keeps whiteout off the inside of rooms.
 Sky pixels (no depth) take the squall veil only, faded by distance toward the horizon - the storm
 deck and atmospherics carry most of that look already, so the sky term stays modest.
 
+**The display-density layer.** The march above is static structure - it says where fog *can* be,
+not where it *is right now*. One layer adds the time dimension: a per-region 2D airborne-density
+texture (~128², `SSAtmoSnowDensityRes`), GPU ping-ponged every frame - advected by the ground
+flow window and relaxed toward a CPU-authored target (lift x depth, packed into the ground
+window's spare channel). The whiteout multiplies its drift/squall terms by this texture, so gust
+fronts sweep as visible fog waves, and the air stays hazy for seconds after a gust passes. Two
+facts make this cheap where a 3D volume was refused: the flowmap is divergence-free by
+construction, so advection over it needs no solver of our own, and the *targets* - not the sim -
+own the ground truth. This is the stack's one approximate layer, by rule: **ground state exact,
+air approximate** - the texture is never read by any state-owning system, and nothing feeds back
+from it into spawning, erosion or deposits (field -> targets -> air, one way). At High quality
+the drift pool can splat enrich the targets (actual particle positions added onto the analytic
+floor, never replacing it).
+
+Interiors are safe by construction: both factors need the column to be exposed, and the
+exposure march already answers "is anything above this fragment" - the same test that keeps rain
+off the inside of porches keeps whiteout off the inside of rooms.
+
 ## 4. The snow surface shader
 
 The accumulation field is done; the *shading* is the missing half. The wet pass pattern -
@@ -261,9 +279,12 @@ New keys, in the house style (`SSAtmoSnow*`):
   dials, mirroring the `SSAtmoWet*` family.
 - `SSAtmoWhiteoutStrength`, `SSAtmoWhiteoutBand`, `SSAtmoWhiteoutRange`,
   `SSAtmoWhiteoutCorridor` - the fog pass, with the corridor ratio and the band height.
-- `SSAtmoSnowDebug` - Render Metadata styles, matching the wind flow debug family: 0 off, 1 the
+| `SSAtmoSnowDebug` - Render Metadata styles, matching the wind flow debug family: 0 off, 1 the
   erosion/deposit field (red scouring, blue banking), 2 the lift rate per cell, 3 the whiteout
   density.
+- `SSAtmoSnowDensityRes` - the air layer's texture resolution (128 default; a quality-tier
+  lever, not an art dial).
+- `SSAtmoSnowRegimeOverride` - -1 auto, 0-4 forces a regime (debug and screenshots).
 
 Everything above degrades gracefully when `SSAtmoWindFlow` is off (or the GL 4.3 requirement
 fails): `sample()` falls back to the ambient vector, so the threshold simply becomes an ambient
@@ -303,6 +324,8 @@ fullscreen shading passes in the wet-pass family. Per feature:
 | Snow surface pass | none | one fullscreen pre-lighting pass (+ its commit draw) | zero - gated on `peakSnow() > 0` and the field window, exactly like `renderWetPass` gates on wet strength |
 | Whiteout pass | none | one fullscreen post pass, ~8 texture fetches (depth, colour, field window, flow window, 3-4 band taps) | zero - gated on lift activity + squall intensity |
 | Granular runoff | the shed cursor already walks edges within a fixed visit budget; creep adds one neighbour exchange per ticked cell | the precip renderer's existing stream/drip buckets, dithered branch | zero - the shed accumulator only fills while creep or spilling feeds it |
+| Air density layer | none - targets ride the ground window upload | two ~128² mini passes per region (advect + relax) | zero - gated on lift activity |
+| Regime machine | a few scalars per fixed tick | none | zero |
 | Avatar caking / footsteps | per-avatar idle bookkeeping (`MAX_SHADED` = 8) and point field samples | rides the existing passes | zero |
 
 Two fetch-cost notes that are design decisions, not implementation details:
@@ -338,6 +361,7 @@ One enum drives the whole feature set, in the house style of a single setting wi
 | Whiteout | off | 2 taps, half-res | 4 taps, half-res | 6 taps, half-res | 6 taps, full res |
 | Compaction / caking | - | off | caking only | both | both |
 | Granular runoff | off | cascades blended, no creep | dither near + creep | + clump spawn | full |
+| Regimes / air layer | off | regimes only | air layer 96² | air layer 128² | + particle splat |
 | Field tick cadence | - | relaxed | default | default | default |
 
 The individual strengths already proposed (`SSAtmoSnowLift`, `SSAtmoSnowSurfaceStrength`,
@@ -512,14 +536,21 @@ Attacking the combination, not the parts:
   "easy to keep adding" items; both are hard-capped - the layer at a few hundred particles and a
   first-cut quality tier, the potential field behind an explicit phase gate. The rejection of the
   running volume is the load-bearing decision; everything deferred stays behind it.
-- *What was genuinely given up from B:* spatial gust waves in the fog. The gust envelope modulates
-  whiteout density globally, so a blizzard pulses, but the fog never shows a front sweeping one
-  street while the next stays clear. Only a running volume does that, and that price was declined.
+- *What was genuinely given up from B:* spatial gust waves in the fog - as of the first round.
+  The second design round (`doc/atmo_magic_snow_review.md`) recovered them with the display-
+  density layer: a GPU-relaxed 2D air texture chasing CPU-authored, deterministic targets. What
+  remains given up from B: a true 3D volume (sub-band detail, vertical plume structure beyond the
+  surface-relative band) and per-viewer identical air swirls - accepted, bounded, and stated as
+  the "ground exact, air approximate" rule.
 - *What was genuinely given up from C:* its simplicity - kept deliberately, because the ground
   changing state is the brief.
 - *Perf:* the amendments cost two to three field taps in the whiteout pass and a few hundred
   particles; section 9's envelope and table gain one row (near-camera layer: first cut, off below
   Medium) and otherwise stand.
+
+The second round's synthesis added two layers on top of everything above - the display-density
+layer (section 3) and the regime machine (section 14). Their rules, and the adversarial review of
+the combination, live in `doc/atmo_magic_snow_review.md`.
 
 ## 13. Granular runoff: creep, eave cascades and the sand skin
 
@@ -610,6 +641,31 @@ roofline overshoots and machine-guns the store); creep must be slope-gated (wall
 exposure-driven film and do not creep sideways); and the dither's one honest cost is a faint
 static pattern visible on a perfectly still cascade at close range - accepted, because a perfectly
 still cascade of granular material at close range is a few frames from being a pile.
+
+## 14. Regime choreography
+
+Intensity scaling needs *timing*, not just magnitudes: blizzards have beginnings, squalls arrive,
+lulls let the fog lift before the next front. A regime state machine over shared time provides
+that shape: CALM -> SALTATION -> DRIFT -> BLIZZARD -> SQUALL, entered on the env resolver's own
+outputs (ambient speed, snow presence, falling intensity, temperature) and exited with hysteresis
+gaps and minimum dwell times (~20-60 s). Each regime is a bundle of scalars, not new machinery:
+
+- gust envelope shape (the existing `gustDepth`/`gustLength`/`gustVeer` parameterisation),
+- drift and near-ring rate multipliers,
+- the whiteout ramp rates (squall onset collapses visibility over ~8 s; the lift after one takes
+  ~20 s - when a squall onset collides with a gust spike the pass takes the `min` of the two
+  demand curves, never the sum),
+- erosion/deposit aggressiveness,
+- an audio bed crossfade trigger and the packed-vs-fresh surface look.
+
+Three rules keep it honest. **Derived, not authored**: regimes come from the same params the
+weather resolver already produces (per-preset overrides are the only authoring surface), so they
+cannot fight the environment track. **The regime directs, the field decides**: regimes scale
+presentation and global envelopes only - local lift never reads the regime, so a corridor jet
+still saltates in CALM, it just does not drag the storm's fog and audio with it. **Fixed-step
+transitions**: regime changes evaluate on the same shared-time tick boundaries the transport
+steps on, with the initial regime a pure function of current params, so a viewer joining
+mid-storm converges at the next boundary rather than replaying history.
 
 ## Deferred / known limits
 

@@ -64,10 +64,10 @@ void SSFloaterAtmoInfluence::buildRows()
           [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mWindScrollStrength; },
           effect([](const SSAtmoEnvSkyModulation& m) { return m.mWind; }) },
 
-        { "haze",
-          [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mHazeEnabled; },
-          [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mHazeStrength; },
-          effect([](const SSAtmoEnvSkyModulation& m) { return m.mHaze; }) },
+        { "water_fog",
+          [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mWaterFogEnabled; },
+          [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mWaterFogStrength; },
+          effect([](const SSAtmoEnvSkyModulation& m) { return m.mPrecip; }) },
 
         { "storm",
           [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mStormDarkeningEnabled; },

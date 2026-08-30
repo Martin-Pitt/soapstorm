@@ -28,12 +28,16 @@
 #include <cmath>
 
 // Which track's altitude band contains world_z; track 0 is the implicit ground fallback.
+// A band whose ceiling is the region ceiling is open ended: alt-cam can put the camera past
+// 4096m, and the sky up there is still the topmost track's, not a fall back to the ground.
 S32 SSAtmoEnvTrackResolver::trackContaining(const SSAtmoEnvAsset& asset, F32 world_z)
 {
     for (size_t i = 1; i < asset.mTracks.size(); ++i)
     {
         const SSAtmoEnvTrack& t = asset.mTracks[i];
-        if (world_z >= t.mFloorZ && world_z < asset.trackCeilingZ((S32)i)) return (S32)i;
+        const F32 ceiling = asset.trackCeilingZ((S32)i);
+        if (world_z >= t.mFloorZ &&
+            (world_z < ceiling || ceiling >= SS_ATMOENV_REGION_CEILING)) return (S32)i;
     }
     return 0;
 }

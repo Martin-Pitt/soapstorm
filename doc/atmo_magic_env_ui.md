@@ -70,6 +70,16 @@ not drift, so the UI name and the storage name diverge deliberately.
 `Volumetric Field` and `Sky Dome` become `Main Deck`, `Under Deck` and `Dome` - what they are in
 the sky, not which code path draws them.
 
+The Weather Influence floater's haze row becomes **Rain thickens water fog** under a `Water`
+header. It gated moisture -> haze (haze density up, distance multiplier down) as well as
+precipitation -> water fog, and the haze half is retired: on skies authored with heavy haze the
++1.5 haze density lifted the fog term's airlight past what the tonemapper could hold and whole
+scenes read as overexposed. The authored haze density and distance multiplier now render exactly
+as keyframed, and the row is what it actually still gates. The asset fields follow
+(`mHazeEnabled`/`mHazeStrength` become `mWaterFogEnabled`/`mWaterFogStrength`, LLSD keys
+`water_fog_*` with the old `haze_*` keys still read); the mapping removal lives in
+ssatmoenvskymodulator.cpp.
+
 `Precipitation` is kept. It reads as forecast language, which is intended, and "stuff falling from
 the sky onto people" covers the artillery case honestly enough that renaming it to a
 mechanism-neutral word would cost more in tone than it gains in reach.

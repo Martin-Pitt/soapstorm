@@ -17,26 +17,35 @@ refer to the design doc.
   writes to it. Its one new output is a CPU-windowed copy of the ground slab for shaders.
 - **Reuse over new tiers.** Drift is a separate particle pool with riser-shaped emission, not a
   `SSPrecipTier`; granular runoff is a re-feed of `shedRegion`, not a second shed path.
+- **Ground exact, air approximate.** The field, regimes and lift are deterministic. The
+  display-density texture (`SSWhiteout`) is the one GPU-resident, approximate layer - relaxed
+  toward CPU-authored targets, never read by any state-owning system, one-way:
+  field -> targets -> air.
+- **Transport is extracted.** Lift/creep/deposit/spill live in `SSGranularTransport` as a pure
+  stepped subsystem; `SSSurfaceField` is storage, windows, passes and plumbing.
+- **Fixed-step ticks.** The field tick and regime transitions step in exact quanta of shared
+  time, so transport is frame-rate independent and identical across viewers.
 
 ## Module map
 
 | File | Change | Responsibilities added |
 |---|---|---|
-| `sswindflow.h/cpp` | modify | `sampleGround()`, the ground-window GPU texture + binding |
-| `sssurfacefield.h/cpp` | modify | lift/creep/deposit in `tick()`, `depositAt()`, `renderSnowPass()`, extended `Sample` |
-| `ssatmomagic.h/cpp` | modify | `liftAt()`, `squallFactor()`, granular deposit routing in `processImpacts()` |
+| `ssgranular.h/cpp` | **new** | the transport subsystem: lift, creep, deposit, spill, hysteresis - `step(Field&, const Geometry&, const Params&, F32 dt)`; pure and testable, no singletons inside |
+| `sswindflow.h/cpp` | modify | `sampleGround()`, the ground-window GPU texture + binding (with the lift x depth target packed into its spare channel) |
+| `sssurfacefield.h/cpp` | modify | fixed-step `tick()` calling the transport, `depositAt()` (thin forwarder), `renderSnowPass()`, extended `Sample` |
+| `ssatmomagic.h/cpp` | modify | `liftAt()`, `squallFactor()`, the regime machine (derived, hysteresis+dwell, bounded change signal), granular deposit routing in `processImpacts()` |
 | `ssprecippreset.h/cpp` | modify | granular authoring fields, `isGranular()`, the Sand built-in |
-| `ssprecipitation.h/cpp` | modify | `mDrift` pool, `updateDrift()`, `emitDrift()`, granular stream/drip look, near-camera ring |
+| `ssprecipitation.h/cpp` | modify | `mDrift` pool, `updateDrift()`, `emitDrift()`, granular stream/drip look, near-camera ring (Low-tier screen-space fallback) |
 | `sspreciprenderer.h/cpp` | modify | one extra source loop over the drift pool in `render()`'s batching |
-| `sswhiteout.h/cpp` | **new** | the whiteout pass singleton: intensity state, half-res density + composite |
+| `sswhiteout.h/cpp` | **new** | the whiteout pass singleton: intensity state, display-density layer (advect + relax mini passes), half-res density + composite |
 | `ssavatarwet.h/cpp` | modify | caking channel on the existing capsules |
 | `shaders/class1/deferred/ssSurfaceSnowF.glsl` | **new** | snow surface: coverage, albedo lift, creep scroll, POM, sparkle |
-| `shaders/class1/deferred/ssWhiteoutF.glsl` | **new** | density pass (half-res), reused by a tiny composite entry |
+| `shaders/class1/deferred/ssWhiteoutF.glsl` | **new** | density pass (half-res, band march x air texture), composite entry |
 | `shaders/.../ssPrecipRainF.glsl` (and `ssPrecipLitF.glsl`) | modify | the dithered granular branch |
 | `llviewershadermgr.cpp` | modify | `gSSSurfaceSnowProgram`, `gSSWhiteoutProgram` registration (wet-pass pattern) |
 | `pipeline.cpp` | modify | snow pass call in the wet block; whiteout call after `doAtmospherics()` |
 | `settings.xml` | modify | the `SSAtmoSnow*` / `SSAtmoWhiteout*` keys |
-| `sssoundscape.cpp` | modify (phase 5) | snow surfaces at the `STEP_TERRAIN_*` resolution site (line ~1350) |
+| `sssoundscape.cpp` | modify (phase 5) | snow surfaces at the `STEP_TERRAIN_*` resolution site (line ~1350); regime audio bed crossfade subscriber |
 | `llviewermenu.cpp`, `ssfloatersim.cpp`, `ssatmomagic.cpp` (`drawInfo`) | modify | debug entries + stats lines |
 
 ## Data model
@@ -83,17 +92,41 @@ whiteout corridor term and the snow surface pass's creep scroll.
 ## Key APIs
 
 ```cpp
+// ssgranular.h - the extracted transport (pure; no singletons, no settings lookups)
+struct SSGranularParams
+{
+    F32 mLiftLo, mLiftHi;        // the m/s band
+    F32 mLiftRate, mDepositRate, mCreepRate;
+    F32 mDepositGap;             // deposit threshold = mLiftLo * mDepositGap (hysteresis, ~0.7)
+    F32 mGustScalar;             // gust envelope, applied once per tick, never per cell
+    F32 mRegimeLiftScale;        // regime bundle scalars - presentation only, see rules
+    F32 mRegimeDepositScale;
+    F32 mTemperatureC;
+};
+
+namespace SSGranular
+{
+    void step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry& geom,
+              const SSGranularParams& p, F32 dt);
+}
+
 // sswindflow.h - the cheap field read and the shader window
 LLVector3 sampleGround(const LLVector3& pos_agent) const;   // bottom slab bilinear, NO gust
 bool bindGroundWindow(LLGLSLShader& shader, S32 channel);    // + ssWindOrigin uniform
+                                                             // spare channel: lift x depth target
 
-// ssatmomagic.h - the single lift authority
+// ssatmomagic.h - the single lift authority and the regime machine
 F32  liftAt(const LLVector3& pos_agent) const;   // 0-1: band x sampleGround x gust x temp x preset rate
 F32  squallFactor() const;                        // 0-1 derived in refreshParams()
 bool granularWeather() const;                     // preset().isGranular()
+enum class ERegime { CALM, SALTATION, DRIFT, BLIZZARD, SQUALL };
+ERegime regime() const;                           // derived; hysteresis + dwell; fixed-step transitions
+typedef boost::signals2::signal<void(ERegime, ERegime)> RegimeSignal;  // bounded subscribers:
+RegimeSignal& regimeSignal();                     // soundscape, floater stats, whiteout ramp
+const SSGranularParams& transportParams() const;  // assembled once per tick, plain aggregate
 
 // sssurfacefield.h - the one write path, and the snow pass
-void depositAt(const LLVector3& pos_agent, F32 depth);  // repose-capped; overflow discarded
+void depositAt(const LLVector3& pos_agent, F32 depth);  // forwards to the transport's repose logic
 void renderSnowPass();                                   // called inside renderWetPass()'s block
 Sample sample(...) const;                                // Sample gains F32 mLift
 
@@ -103,17 +136,19 @@ void emitDrift(const LLVector3& ground, const LLVector3& flow, F32 lift, SSRandS
 const std::vector<SSPrecipParticle>& drift() const;
 S32  driftCount() const;
 
-// sswhiteout.h - new singleton
+// sswhiteout.h - new singleton; owns the system's only GPU-resident weather state
 class SSWhiteout : public LLSingleton<SSWhiteout>
 {
 public:
-    void idle(F32 dt);     // intensity state: lift activity + squall factor, window liveness
-    void render();         // half-res density pass, then full-res composite onto the target
+    void idle(F32 dt);     // ramped intensity state (regime rates), window liveness
+    void render();         // air-layer mini passes, half-res density pass, composite
     void clear();
     void releaseGL();
     F32  intensity() const;
 private:
     LLRenderTarget mDensity;      // half-res
+    LLRenderTarget mAir[2];       // ~1282 ping-pong, advected toward CPU-authored targets
+    S32 mAirRead = 0;
     bool mDensityValid = false;
 };
 
@@ -137,25 +172,33 @@ caller of `liftAt` applies `gustEnvelopeAt(sharedTime())` as a scalar multiplier
 
 1. `SSAtmoMagic::idle` - params, squall derivation (existing `refreshParams` grows the squall
    factor).
-2. `SSWindFlowMap::update` - unchanged solve; ground window refresh appended.
-3. `SSSurfaceField::idle` -> `tick()` per region, in the existing cursor order, now four stages
-   per cell: settle/melt (unchanged) -> lift (`mLift[i]`) -> creep (row-buffered downwind
-   exchange, CFL-capped, spilling into `mStore[ui]` at edge cells) -> deposit from calm (the lee
-   term, hysteresis gap below the lift threshold). `shedEdges()` then runs unchanged - for a
-   granular preset its inflow is what creep spilled into `mStore`, for liquid the existing rain
-   feed.
-4. `SSPrecipSim::update` - falling tiers (unchanged) then `updateDrift(dt)`:
+2. `SSWindFlowMap::update` - unchanged solve; ground window refresh appended (with the lift x
+   depth target packed into the spare channel).
+3. `SSSurfaceField::idle` -> `tick()` per region, in the existing cursor order, **stepped in
+   exact `TICK_DT` quanta of shared time** (the `mTickAccum` accumulator formalised - transport
+   must never vary with frame rate). Each region's tick calls `SSGranular::step()`, which runs
+   four stages per cell: settle/melt (unchanged) -> lift (`mLift[i]`) -> creep (row-buffered
+   downwind exchange, CFL-capped, spilling into `mStore[ui]` at edge cells) -> deposit from calm
+   (the lee term, hysteresis gap below the lift threshold). `shedEdges()` then runs unchanged -
+   for a granular preset its inflow is what creep spilled into `mStore`, for liquid the existing
+   rain feed.
+4. `SSAtmoMagic` regime evaluation on the same tick boundaries - derived from current params,
+   hysteresis + dwell; a transition fires the bounded `regimeSignal` (soundscape bed crossfade,
+   floater stats, whiteout ramp rates) and swaps the bundle scalars folded into
+   `transportParams()`.
+5. `SSPrecipSim::update` - falling tiers (unchanged) then `updateDrift(dt)`:
    - field walk: `SSSurfaceField` hands the sim lift cells around the camera (`forEachLiftCell`,
      a small iterator over `mLift` above a floor, camera-radius bounded), spawn weighted by lift
      x depth, deterministic from the shared-clock cell hash;
    - near-camera ring: a capped ring spawn when `liftAt(camera)` or `squallFactor()` is above
-     zero;
+     zero, scaled by the regime's near-ring multiplier;
    - integrate the pool: flow advection plus decaying loft, ground clamp via
      `SSRainShadowMap::resolveColumn` on a slice, fade by `mSnowDriftAge`.
-5. `SSAtmoMagic::processImpacts` - granular drips land: instead of ripples, `depositAt(land,
+6. `SSAtmoMagic::processImpacts` - granular drips land: instead of ripples, `depositAt(land,
    clump_depth)`; the `from_runoff` flag already marks these.
-6. `SSAvatarWet::idle` - soak (existing) plus caking gain/decay.
-7. `SSWhiteout::idle` - intensity state only (cheap; no per-frame CPU field reads).
+7. `SSAvatarWet::idle` - soak (existing) plus caking gain/decay.
+8. `SSWhiteout::idle` - ramped intensity state (the regime's rate limits applied to the demand
+   curves; the pass takes the `min` of regime ramp and gust spike); no per-frame CPU field reads.
 
 ### GPU (render order)
 
@@ -166,10 +209,11 @@ caller of `liftAt` applies `gustEnvelopeAt(sharedTime())` as a scalar multiplier
    Ahead of all lighting, same reasoning as wet.
 3. Lighting, SSAO, etc. - untouched.
 4. Pool pass, `doAtmospherics()` site (pipeline.cpp:4453): immediately after
-   `done_atmospherics`, `SSWhiteout::render()` - half-res density (depth, field window, wind
-   ground window, band march with heightfield occlusion taps), then a composite lerp to the fog
-   colour on the scene target. Before the weather block, so flakes and cascades stay in front of
-   their own fog.
+   `done_atmospherics`, `SSWhiteout::render()` - the air-layer mini passes (advect toward the
+   uploaded targets, relax/decay), half-res density (depth, field window, wind ground window,
+   band march with heightfield occlusion taps, multiplied by the air texture), then a composite
+   lerp to the fog colour on the scene target. Before the weather block, so flakes and cascades
+   stay in front of their own fog.
 5. Weather block: `SSPrecipRenderer::render()` batches `mParticles`, `mRipples`, `mStreams` and
    now `mDrift` through the same material buckets; granular streams/drips take the dithered
    branch (below).
@@ -212,15 +256,33 @@ Reused unchanged: `SSAtmoRunoff`, `SSAtmoRunoffScale`, `SSAtmoRunoffRadius`,
 
 | Phase | Files |
 |---|---|
-| 1. Erosion + drift | `sssurfacefield`, `sswindflow` (`sampleGround`), `ssatmomagic` (`liftAt`), `ssprecipitation` (`updateDrift`/`emitDrift`/`mDrift`), `sspreciprenderer` (one loop), `ssprecippreset` (fields), `settings.xml` |
-| 2. Redeposit | `sssurfacefield` (`tick` deposit term, hysteresis) |
+| 1. Erosion + drift + fixed step | `ssgranular.*` (new: lift + settle handoff), `sssurfacefield` (fixed-step tick, storage), `sswindflow` (`sampleGround`), `ssatmomagic` (`liftAt`), `ssprecipitation` (`updateDrift`/`emitDrift`/`mDrift`), `sspreciprenderer` (one loop), `ssprecippreset` (fields), `settings.xml` |
+| 2. Redeposit + regimes | `ssgranular` (deposit term, hysteresis), `ssatmomagic` (regime machine + `regimeSignal` + bundle scalars), `sssoundscape` (bed crossfade subscriber) |
 | 3. Snow surface | `ssSurfaceSnowF.glsl`, `llviewershadermgr`, `sssurfacefield` (`renderSnowPass`), `pipeline.cpp` (one call) |
-| 4. Whiteout + squall | `sswhiteout.*` (new), `ssWhiteoutF.glsl`, `sswindflow` (ground window), `llviewershadermgr`, `pipeline.cpp` (one call), `ssatmomagic` (`squallFactor`), `ssatmoenvweatherstate` (squall derivation + forecast text) |
-| 5. Caking, footsteps, compaction | `ssavatarwet`, `sssoundscape.cpp:~1350` (+ `SSStepSurface` enums in `ssprecippreset.h`), `sssurfacefield` (compaction channel) |
-| 6. Granular runoff | `sssurfacefield` (creep + shed re-feed), `ssprecipitation` (granular stream/drip look), `ssPrecipRainF.glsl`/`ssPrecipLitF.glsl` (dither branch), `ssatmomagic` (`processImpacts` deposit routing), Sand built-in preset |
+| 4. Whiteout + air layer | `sswhiteout.*` (new: density + air ping-pong), `ssWhiteoutF.glsl`, `sswindflow` (ground window + target channel), `llviewershadermgr`, `pipeline.cpp` (one call), `ssatmomagic` (`squallFactor`, ramp rates), `ssatmoenvweatherstate` (squall derivation + forecast text) |
+| 5. Caking, footsteps, compaction | `ssavatarwet`, `sssoundscape.cpp:~1350` (+ `SSStepSurface` enums in `ssprecippreset.h`), `ssgranular` (compaction channel) |
+| 6. Granular runoff | `ssgranular` (creep + spill), `sssurfacefield` (shed re-feed), `ssprecipitation` (granular stream/drip look), `ssPrecipRainF.glsl`/`ssPrecipLitF.glsl` (dither branch), `ssatmomagic` (`processImpacts` deposit routing), Sand built-in preset |
+
+The design rationale for the extraction and the rejected alternatives (in-place monolith,
+GPU-resident field, top-level fixed-step core) is in `doc/atmo_magic_snow_review.md`.
 
 ## Guards and known sharp edges
 
+- **The Params struct is the seam.** `SSGranularParams` stays a plain aggregate of floats - no
+  LLSD, no settings lookups, no singletons inside `SSGranular::step()`. The moment the transport
+  reaches out for the world, the extraction has collapsed back into the monolith it exists to
+  avoid.
+- **One-way: field -> targets -> air.** The air texture is never read by any state-owning
+  system; drift spawning reads `mLift`, never density. Enforced by convention and written here
+  so review has something to point at.
+- **The event seam stays bounded.** `regimeSignal` subscribers: soundscape, floater stats,
+  whiteout ramp. A second event type gets promoted to a real pump consciously, not by accretion.
+- **Fixed-step changes existing feel.** Rain/puddle dry-down timing shifts slightly when the
+  accumulator locks to shared-time quanta. It is a change toward determinism, and it gets its own
+  test-plan line rather than riding along silently.
+- **`depositAt` is a forwarder, not a bypass.** The transport owns the repose cap; a debug-only
+  assert on repose compliance catches any future caller writing `mSnow` directly and breaking
+  the ledger.
 - **`mLift` is per-tick state, not per-frame.** Consumers (drift spawn, near ring) read the last
   tick's figure; the tick interval (sub-second) is far below the visibility threshold for a
   quantity that ramps over seconds.
@@ -238,3 +300,5 @@ Reused unchanged: `SSAtmoRunoff`, `SSAtmoRunoffScale`, `SSAtmoRunoffRadius`,
 - **`sampleGround()` returns the solved field, gusts excluded** - every consumer applies the
   scalar gust envelope itself, once per call site, never per cell. This is the rule that keeps
   the erosion tick and the spawn walk linear.
+- **The Low-tier near-layer fallback is a documented lie**: below Medium, the near ring may
+  degrade to a screen-space streak sheet. It never becomes the default path.

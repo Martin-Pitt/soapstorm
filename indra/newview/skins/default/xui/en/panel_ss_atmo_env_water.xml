@@ -52,8 +52,8 @@
      width="280"
      name="water_height_slider"
      show_text="false"
-     min_val="0"
-     max_val="100"
+     min_val="-50"
+     max_val="200"
      increment="0.01"
      initial_value="0"
      tool_tip="Near-surface dial; the spinner takes the full -10 km to +10 km range by hand" />

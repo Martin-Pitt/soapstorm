@@ -74,10 +74,10 @@ uniform vec3 cloud_color;
 uniform float cloud_scale;
 
 #ifdef SS_ATMO
-// <SS:Nexii> Region-relative cloud parallax and wind travel (doc/atmo_magic_cloud_parallax.md) have moved to the FRAGMENT stage, which derives each band's UVs from the true view ray - the vertex
+// <SS:Nexii> Region-relative cloud parallax and wind travel (doc/atmo_magic_cloud_parallax.md) have moved to the FRAGMENT stage, which derives the band's UVs from the true view ray - the vertex
 // stage's only remaining job is to hand that ray down. Atmo-only, so a stock environment compiles the pristine texcoord path.
-// The layer's own depth slot, 0.999985 (cirrus veil) or 0.99998 (overcast band) - or 0 for the stock projection squash. Zero unless an
-// ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the bands against each other and the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
+// The layer's own depth slot, 0.99998 - or 0 for the stock projection squash. Zero unless an
+// ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the band against the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
 uniform float ss_cloud_depth;
 
 // <SS:Nexii> How much of the sun's disc has cleared the horizon
