@@ -169,7 +169,7 @@ void ssROCMineAssets(const std::vector<U8>& blob, std::vector<LLUUID>& out)
         if (!dp.unpackU32(u32, "ScratchPadSize")) return;
         std::vector<U8> pad(scratch.size(), 0);
         S32 pad_size = 0;
-        if (!dp.unpackBinaryData(pad.data(), pad_size, "PartData")) return;
+        if (!dp.unpackBinaryData(pad.data(), (S32)pad.size(), pad_size, "PartData")) return;
     }
 
     if (special & 0x4)
@@ -202,7 +202,7 @@ void ssROCMineAssets(const std::vector<U8>& blob, std::vector<LLUUID>& out)
         U16 param_type = 0;
         S32 param_size = 0;
         if (!dp.unpackU16(param_type, "param_type")) return;
-        if (!dp.unpackBinaryData(param_block.data(), param_size, "param_data")) return;
+        if (!dp.unpackBinaryData(param_block.data(), (S32)param_block.size(), param_size, "param_data")) return;
         if (param_size <= 0) continue;
 
         LLDataPackerBinaryBuffer pdp(param_block.data(), param_size);
