@@ -36,7 +36,7 @@ jobs:
     strategy:
       matrix:
         os: ["macos-15","ubuntu-24.04","windows-2022"]
-        grid: ["sl","os"]
+        grid: ["sl"]
         variant: ["regular","avx"]
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container_image }}
@@ -47,6 +47,15 @@ jobs:
       viewer_build: ${{ steps.version.outputs.viewer_build }}
       viewer_release_type: ${{ steps.version.outputs.viewer_release_type }}
     steps:
+      - name: Free Disk Space (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/share/boost
+
       - name: Free Disk Space (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -127,11 +136,6 @@ jobs:
           EOF
         shell: bash
 
-      - name: Free Disk Space (Ubuntu)
-        if: runner.os == 'Linux'
-        uses: jlumbroso/free-disk-space@main
-        with: 
-          swap-storage: false
 
       - name: Install GCC 14.1
         if: runner.os == 'Linux'
