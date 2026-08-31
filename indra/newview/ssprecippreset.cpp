@@ -614,10 +614,10 @@ void SSPrecipPresetManager::buildDefaults()
         p.mSnowRate = 0.00004f; p.mSnowMelt = 0.0000045f;
         p.mSnowDepth = 0.09f;   p.mSnowRepose = 46.f;
 
-        // <SS:Nexii> Granular transport: light saltation in a breeze, gentle lee banking. Creep
-        // stays off until the cascade look is tuned - the store only fills from creep spill.
+        // <SS:Nexii> Granular transport: light saltation in a breeze, gentle lee banking,
+        // a little creep moving the drift sheets. The cascade look shares the creep dial.
         p.mSnowLiftRate = 0.002f;   p.mSnowDepositRate = 0.0008f;
-        p.mSnowCreepRate = 0.f;     p.mSnowDriftAge = 2.5f;
+        p.mSnowCreepRate = 0.4f;    p.mSnowDriftAge = 2.5f;
 
         p.mWetRate = 0.004f;    p.mDryRate = 0.0015f;
         mPresets.push_back(p);
@@ -643,12 +643,12 @@ void SSPrecipPresetManager::buildDefaults()
 
         // <SS:Nexii> Ground-blizzard rates: sustained wind scours the open ground and banks it
         // in every lee. Erosion must comfortably beat settle (mSnowRate) or the storm never
-        // strips a cell; deposit runs about a fifth of lift, and creep stays off pending the
-        // cascade look. The falling-rate figure is rain's - a blizzard dumps as hard as rain
-        // does, and the old 0.15 was why snow skies read empty next to a rain preset.
+        // strips a cell; deposit runs about a fifth of lift, and creep feeds the drift sheets
+        // and the eave spill. The falling-rate figure is rain's - a blizzard dumps as hard as
+        // rain does, and the old 0.15 was why snow skies read empty next to a rain preset.
         p.mRate = 0.55f;
         p.mSnowLiftRate = 0.010f;   p.mSnowDepositRate = 0.0015f;
-        p.mSnowCreepRate = 0.f;     p.mSnowDriftAge = 3.5f;
+        p.mSnowCreepRate = 1.0f;    p.mSnowDriftAge = 3.5f;
 
         p.mWetRate = 0.003f;    p.mDryRate = 0.0012f;
         mPresets.push_back(p);
@@ -729,6 +729,38 @@ void SSPrecipPresetManager::buildDefaults()
         p.mTiers[TIER_DROPS]    = { true, KIND_STREAK, 0.05f, 0.22f, 1.00f, 28.f };
         p.mTiers[TIER_CLUSTERS] = { true, KIND_STREAK, 0.3f,  0.9f,  0.18f, 96.f };
         p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET,  8.f,   16.f,  0.05f, 224.f };
+        mPresets.push_back(p);
+    }
+
+    // <SS:Nexii> The sand skin. The granular stack is material-generic: this is
+    // the snow system wearing desert - repose lower (sand slips at 34 degrees),
+    // no melt (wind ablation is the only loss), a tan tint, and the same
+    // transport rates the blizzard carries. A dust veil is the whiteout pass
+    // recoloured by this tint; dune slip faces are the repose-shed cascade.
+    {
+        SSPrecipPreset p;
+        p.mName = "Sand";
+        p.mBuiltIn = true;
+        p.mArchetype = SSPrecipArchetype::FLAKE;
+        p.mFallSpeed = 1.8f;
+        p.mFallLo = 5.f;  p.mFallHi = 9.f;
+        p.mSway = 1.8f;
+        p.mWindResponse = 1.6f;
+        p.mRate = 0.5f;
+        p.mTint = LLColor4(0.82f, 0.71f, 0.52f, 1.f);
+        p.mImpactStrength = 0.f;
+        p.mTiers[TIER_DROPS]    = { true, KIND_ROUND, 0.05f, 0.05f, 0.70f, 24.f };
+        p.mTiers[TIER_CLUSTERS] = { true, KIND_ROUND, 0.30f, 0.30f, 0.30f, 64.f };
+        p.mTiers[TIER_SHEETS]   = { true, KIND_SHEET, 4.f,   8.f,   0.10f, 128.f };
+
+        p.mSnowRate = 0.00006f; p.mSnowMelt = 0.f;   // dry granular: no melt, wind ablation only
+        p.mSnowDepth = 0.15f;   p.mSnowRepose = 34.f;
+
+        p.mSnowLiftRate = 0.006f;   p.mSnowDepositRate = 0.0012f;
+        p.mSnowCreepRate = 0.8f;    p.mSnowDriftAge = 3.f;
+
+        p.mWetRate = 0.f;       p.mDryRate = 0.002f;
+        p.mPuddleRate = 0.f;    p.mPuddleDepth = 0.f;   p.mPuddleDrain = 0.f;
         mPresets.push_back(p);
     }
 }

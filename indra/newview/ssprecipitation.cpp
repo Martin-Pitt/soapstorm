@@ -954,6 +954,13 @@ void SSPrecipSim::updateDrift(F32 dt)
         const LLVector3 target(wind.mV[VX] * response, wind.mV[VY] * response, 0.f);
         p.mVel = lerp(p.mVel, target, blend);
 
+        // The plume grows as it rides: a puff leaving the ground swells into
+        // the broad sheet it becomes downwind, capped so old particles never
+        // balloon.
+        const F32 grow = 1.f + llmin(0.25f * dt, 0.25f);
+        if (p.mSizeX < 2.5f) p.mSizeX *= grow;
+        if (p.mSizeY < 2.5f) p.mSizeY *= grow;
+
         p.mPos += p.mVel * dt;
 
         if ((i % GROUND_CHECK_SLICES) == (sDriftSlicePhase++ % GROUND_CHECK_SLICES))
@@ -1122,8 +1129,6 @@ void SSPrecipSim::emitDrift(const LLVector3& ground_pos, const LLVector3& flow, 
     LLColor4 tint;
     F32 pbr_glow = 0.f;
     LLViewerTexture* custom = atmo->pickParticleTexture(rng, tint, pbr_glow);
-    LLViewerTexture* texturep = SSPrecipVariants::getInstance()->get(preset, TIER_CLUSTERS,
-        (U32)rng.rand((S32)SSPrecipVariants::VARIANT_COUNT), custom);
     tint.mV[0] *= preset.mTint.mV[0];
     tint.mV[1] *= preset.mTint.mV[1];
     tint.mV[2] *= preset.mTint.mV[2];
@@ -1131,15 +1136,20 @@ void SSPrecipSim::emitDrift(const LLVector3& ground_pos, const LLVector3& flow, 
     SSPrecipParticle part;
     part.mSeed = vis_seed;
     part.mTier = TIER_CLUSTERS;   // renderer band fade only; the pool's count is its own
-    part.mKind = (rng.frand() < 0.35f) ? KIND_STREAK : KIND_ROUND;
+    part.mKind = (rng.frand() < 0.75f) ? KIND_STREAK : KIND_ROUND;
     part.mFlags = (preset.mSway >= 1.5f) ? PART_GUSTY : PART_SWAY;
     part.mPhase = rng.frand(0.f, F_TWO_PI);
     part.mSizeX = visual.mSizeX * size_jitter;
     part.mSizeY = visual.mSizeY * size_jitter;
     part.mAlpha = llmin(1.f, visual.mAlpha * 1.5f);   // small sprites read dim otherwise
     part.mGlow = llmax(presetGlow(preset), pbr_glow);
-    part.mMaterial = preset.material();
-    part.mTex = textureIndex(texturep);
+    // The granular material: same lit shading, screen-door dithered near the
+    // camera - grains, never a liquid sheet.
+    part.mMaterial = MAT_GRANULAR;
+    // The plume: dense head growing into a wide faint skirt along the sprite's
+    // length axis, which the streak renderer stretches along velocity - a
+    // growing cloud sideways, a wide soft blob end-on.
+    part.mTex = textureIndex(SSPrecipVariants::getInstance()->utility(SSPrecipVariants::UTIL_PLUME));
     part.mTint.setVec((U8)llclamp((S32)(tint.mV[0] * 255.f), 0, 255),
                       (U8)llclamp((S32)(tint.mV[1] * 255.f), 0, 255),
                       (U8)llclamp((S32)(tint.mV[2] * 255.f), 0, 255), 255);
@@ -1440,7 +1450,8 @@ void SSPrecipSim::refreshStream(U32 key, const LLVector3& lip_agent, const LLVec
                        (U8)llclamp((S32)(tint.mV[2] * 255.f), 0, 255),
                        255);
         s.mGlow = llmax(presetGlow(preset), pbr_glow);
-        s.mMaterial = preset.material();
+        // Granular cascades: same lit shading, screen-door dithered near the camera.
+        s.mMaterial = preset.isGranular() ? MAT_GRANULAR : preset.material();
 
         existing = &(*mStreams.insert(slot, s));
     }
@@ -1534,6 +1545,13 @@ void SSPrecipSim::spawnDrip(const LLVector3& lip_agent, const LLVector3& out_dir
                    (U8)llclamp((S32)(tint.mV[2] * 255.f), 0, 255),
                    255);
     p.mGlow = llmax(presetGlow(preset), pbr_glow);
+
+    // Granular runoff clumps: the dithered material, so a cascade of clumps
+    // down a wall reads as grains rather than as a blended water sheet.
+    if (preset.isGranular())
+    {
+        p.mMaterial = MAT_GRANULAR;
+    }
 
     pushRipple(p);
 

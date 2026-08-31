@@ -98,7 +98,17 @@ enum SSCarveFlag : U8
 static const F32 PROBE_SCALE          = 4.f;
 static const F32 PROBE_PERCENTILE     = 0.995f;
 
+// <SS:Nexii> One handle per GL stage, all nested under the umbrella in advanceBuild(). A single
+// shared handle got promoted to the profile root: LLTrace infers the timer tree from the call
+// stack, and a handle entered from five different stages has no stable parent, so
+// incrementalUpdateTimerTree() bubbles it up until it lands somewhere that is an ancestor of all
+// of them. The readback's GPU stall was invisible inside that one summed bar. </SS:Nexii>
 static LLTrace::BlockTimerStatHandle FTM_SS_WINDFLOW("Atmo Magic Wind Flow");
+static LLTrace::BlockTimerStatHandle FTM_SS_WIND_CAPTURE_TOP("Wind Capture Top");
+static LLTrace::BlockTimerStatHandle FTM_SS_WIND_CAPTURE_PROBE("Wind Capture Probe");
+static LLTrace::BlockTimerStatHandle FTM_SS_WIND_SOLVE_INIT("Wind Solve Init");
+static LLTrace::BlockTimerStatHandle FTM_SS_WIND_SOLVE_RUN("Wind Solve Run");
+static LLTrace::BlockTimerStatHandle FTM_SS_WIND_READBACK("Wind Readback");
 
 // The wind flow solve is submitted with raw GL commands, not through the
 // viewer's bind()/gGL path, so the shared-context worker never mutates the
@@ -2390,14 +2400,14 @@ bool SSWindFlowMap::beginBuild(Tile& tile)
 // Stage: height capture.
 bool SSWindFlowMap::stageCaptureTop(Tile& tile)
 {
-    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    LL_RECORD_BLOCK_TIME(FTM_SS_WIND_CAPTURE_TOP);
     return captureHeights(tile);
 }
 
 // Stage: one side probe.
 bool SSWindFlowMap::stageCaptureProbe(Tile& tile, S32 which)
 {
-    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    LL_RECORD_BLOCK_TIME(FTM_SS_WIND_CAPTURE_PROBE);
     return captureProbe(tile, which);
 }
 
@@ -2434,7 +2444,7 @@ void SSWindFlowMap::stageReduce(Tile& tile)
 // Stage: solver seed.
 bool SSWindFlowMap::stageSolveInit(Tile& tile)
 {
-    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    LL_RECORD_BLOCK_TIME(FTM_SS_WIND_SOLVE_INIT);
 
     if (!ensureResources(tile.mRes, SS_WIND_MAX_SLICES)) return false;
     return solveInit(tile);
@@ -2449,14 +2459,14 @@ void SSWindFlowMap::stageBridge(Tile& tile)
 // Stage: the solve itself.
 bool SSWindFlowMap::stageSolveRun(Tile& tile)
 {
-    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    LL_RECORD_BLOCK_TIME(FTM_SS_WIND_SOLVE_RUN);
     return solveRun(tile);
 }
 
 // Stage: GPU readback.
 bool SSWindFlowMap::stageReadback(Tile& tile)
 {
-    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
+    LL_RECORD_BLOCK_TIME(FTM_SS_WIND_READBACK);
     readback(tile);
     return true;
 }
@@ -2538,6 +2548,8 @@ void SSWindFlowMap::stageCommit(Tile& live)
 bool SSWindFlowMap::advanceBuild()
 {
     if (mStage == EStage::IDLE) return false;
+
+    LL_RECORD_BLOCK_TIME(FTM_SS_WINDFLOW);
 
     if (mWorkerBusy) return true;
 

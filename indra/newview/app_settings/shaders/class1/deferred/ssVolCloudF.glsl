@@ -226,6 +226,13 @@ const float SS_NOISE_M = 880.0;
 // base octave and the two read as one body of cloud rather than as a sheet painted under one.
 const float SS_SHEET_TILE_M = 880.0;
 
+// The BASE VEIL's near fade, in metres of TRUE eye distance: gone by the near rail, whole by the far one. The veil is one flat plane and the eye can get arbitrarily close to it - flying up into the
+// deck, or standing on ground the under deck's floor nearly touches - and up close a plane is the one thing a billboard field never is: a surface with no parallax, near-constant alpha, sliding
+// across the whole screen as a lid. The puffs never need this because they are small and the soft-particle depth fade already dissolves them against whatever they meet; the veil meets nothing, so
+// nothing dissolves it. The far rail sits well inside the puffs' own scale so the sheet is always the first thing to go, and the near rail is short enough that the fade is spent before the plane
+// can reach the near clip and flash. [interaction: SSVolCloud soft-particle fade, which handles the geometry case and not this one]
+const vec2 SS_SHEET_NEAR_M = vec2(8.0, 96.0);
+
 // Eye-space distance from a depth-buffer reading. The projection is the ordinary one, so this is just its inverse.
 float ss_eye_z(float d)
 {
@@ -339,12 +346,16 @@ void main()
         float horiz = length(world_true.xy - ss_cam_pos.xy);
         float edge = 1.0 - smoothstep(3400.0, 4900.0, horiz);
 
+        // And the near end of the same idea - see SS_SHEET_NEAR_M. Off TRUE distance, not the drawn one, so the fade measures the metres the eye would actually cross rather than the squashed
+        // metres the geometry sits at; near the eye the two agree anyway, and reading eye_dist keeps it agreeing with every other ranged term in this shader.
+        float near_fade = smoothstep(SS_SHEET_NEAR_M.x, SS_SHEET_NEAR_M.y, eye_dist);
+
         // Soft by construction: the mottle shapes the veil but never cuts it, and the ceiling is
         // held at 0.75 - the veil is THIN cloud, and its thin half is where the shared sun-through
         // fringe lives. Run it denser and it reads as a black slab under the deck (the body
         // colour is gloom-crushed in a storm); this soft it glows faintly through its own mottle
         // and reads as the deck's floor lit from within.
-        density = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75) * presence * edge;
+        density = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75) * presence * edge * near_fade;
         noise_v = sheet_n;
         sphere_n = vec3(0.0, 0.0, 1.0);
     }

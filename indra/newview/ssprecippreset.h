@@ -54,6 +54,7 @@ enum SSPrecipMaterial : U8
     MAT_WATER,
     MAT_EMISSIVE,
     MAT_DECAL,
+    MAT_GRANULAR,   // <SS:Nexii> sand/snow-family particles: screen-door dithered near the camera, so a cascade reads as grains rather than a liquid sheet
     MAT_COUNT
 };
 

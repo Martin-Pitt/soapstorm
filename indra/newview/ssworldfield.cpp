@@ -25,6 +25,7 @@
 
 #include "ssworldfield.h"
 #include "ssatmomagic.h"
+#include "ssglreadback.h"
 
 #include "llfasttimer.h"
 #include "llrender.h"
@@ -40,6 +41,7 @@
 
 #include <cfloat>
 #include <cmath>
+#include <cstring>
 
 static const F32 NEIGHBOR_REACH   = 64.f;
 static const F32 DEPTH_MISS       = 0.9999f;
@@ -143,6 +145,9 @@ void SSWorldField::markDirty(const LLVector3& pos_agent, F32 radius)
 
 void SSWorldField::clear()
 {
+    // A read in flight still references mTarget's depth texture - let it land
+    // first, then tear the target down from the read's completion.
+    if (mReadbackPending) { mClearPending = true; return; }
     mTiles.clear();
     mBuild.mActive = false;
     mTarget.release();
@@ -389,7 +394,9 @@ void SSWorldField::evict()
 }
 
 // One band step: capture, splice, then either move to the next band, stop
-// early on empty sky, or commit.
+// early on empty sky, or commit. The depth readback is async (SSGLReadback):
+// capture renders and submits, applyBand runs on the step after the texels
+// land, and the whole build waits a step while one is in flight.
 bool SSWorldField::advanceBuild()
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(mBuild.mRegionHandle);
@@ -398,6 +405,36 @@ bool SSWorldField::advanceBuild()
     {
         mBuild.mActive = false;
         return false;
+    }
+
+    // A band readback is still in flight: neither splice it (the texels are
+    // not here yet) nor render the shared capture target into again.
+    if (mReadbackPending) return true;
+
+    // The previous band's capture rendered and its readback landed; splice it
+    // in and advance the build state that depends on it.
+    if (mBuild.mJustCaptured)
+    {
+        mBuild.mJustCaptured = false;
+        applyBand(*tile);
+        ++mBuild.mBand;
+
+        // Full builds stop early once the sky has been genuinely empty for a
+        // few consecutive bands; rect builds run to their target so the
+        // spliced columns stay consistent with the neighbours around them.
+        if (!mBuild.mRectOnly && mBuild.mEmptyRun >= EMPTY_BANDS_TO_STOP)
+        {
+            commitBuild(*tile);
+            return false;
+        }
+
+        if (mBuild.mBand >= tile->mBandTarget)
+        {
+            commitBuild(*tile);
+            return false;
+        }
+
+        return true;
     }
 
     if (mBuild.mBand >= tile->mBandTarget)
@@ -414,24 +451,7 @@ bool SSWorldField::advanceBuild()
         return false;
     }
 
-    applyBand(*tile);
-    ++mBuild.mBand;
-
-    // Full builds stop early once the sky has been genuinely empty for a few
-    // consecutive bands; rect builds run to their target so the spliced
-    // columns stay consistent with the neighbours around them.
-    if (!mBuild.mRectOnly && mBuild.mEmptyRun >= EMPTY_BANDS_TO_STOP)
-    {
-        commitBuild(*tile);
-        return false;
-    }
-
-    if (mBuild.mBand >= tile->mBandTarget)
-    {
-        commitBuild(*tile);
-        return false;
-    }
-
+    mBuild.mJustCaptured = true;
     return true;
 }
 
@@ -525,10 +545,49 @@ bool SSWorldField::captureBand(Tile& tile)
             gPipeline.popRenderTypeMask();
         }
 
-        mBuild.mDepth.resize((size_t)res * res);
-        glReadPixels(0, 0, res, res, GL_DEPTH_COMPONENT, GL_FLOAT, mBuild.mDepth.data());
-
         mTarget.flush();
+
+        // <SS:Nexii> The band's depth lands via the shared SSGLReadback worker:
+        // the synchronous glReadPixels that used to block here becomes a
+        // glGetTexImage on a dedicated GL thread, and applyBand() runs on the
+        // step after the texels come back (see mJustCaptured). The worker
+        // writes only its own buffer; mDone copies into mBuild.mDepth on the
+        // main thread, so the Build never sees a partial read.
+        mBuild.mDepth.assign((size_t)res * res, 0.f);
+        mReadbackPending = true;
+        const U32 tres = (U32)res;
+
+        SSGLReadback::Job job;
+        job.mTexture = mTarget.getDepth();
+        job.mTarget = GL_TEXTURE_2D;
+        job.mWidth = tres;
+        job.mHeight = tres;
+        job.mFormat = GL_DEPTH_COMPONENT;
+        job.mType = GL_FLOAT;
+        job.mDone = [this, tres](const U8* data, size_t bytes)
+        {
+            mReadbackPending = false;
+            if (mClearPending)
+            {
+                mClearPending = false;
+                clear();
+                return;
+            }
+            const size_t n = (size_t)tres * tres;
+            if (bytes >= n * sizeof(F32) && mBuild.mDepth.size() >= n)
+            {
+                memcpy(mBuild.mDepth.data(), data, n * sizeof(F32));
+            }
+        };
+        if (!SSGLReadback::getInstance()->submit(job))
+        {
+            // Could not even stage the read - GL trouble. Abandon rather than
+            // leave mReadbackPending stuck and the build spinning.
+            mReadbackPending = false;
+            mBuild.mJustCaptured = false;
+            ok = false;
+        }
+        // </SS:Nexii>
     }
 
     set_current_modelview(saved_view);

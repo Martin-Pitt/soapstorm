@@ -192,6 +192,7 @@ private:
         std::vector<F32> mDepth;   // last band's depth readback
         S32 mEmptyRun = 0;         // consecutive empty bands seen by the live build
         bool mChanged = false;     // any spliced column differed from what was stored
+        bool mJustCaptured = false;// a band was rendered and its readback landed; apply it next step
     };
 
     Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
@@ -221,6 +222,14 @@ private:
     bool surfaceTopDemanded() const;
 
     LLRenderTarget mTarget;
+
+    // <SS:Nexii> One band readback in flight, served by SSGLReadback. mTarget
+    // must not be re-rendered (or torn down) until the outstanding read lands:
+    // mReadbackPending gated by advanceBuild()/capture, and a clear requested
+    // mid-read is deferred to the read's completion.
+    bool mReadbackPending = false;
+    bool mClearPending = false;
+    // </SS:Nexii>
 
     F64 mNow = 0.0;
     F64 mLastBandAt = 0.0;

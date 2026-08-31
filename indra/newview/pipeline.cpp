@@ -5695,8 +5695,8 @@ void LLPipeline::renderDebug()
         SSWindFlowMap::getInstance()->renderDebug();
     }
 
-    // Atmo Magic rain shadow: each cached tile projected back onto the region
-    // along the fall direction
+    // Atmo Magic rain shadow: every captured depth texel unprojected to the
+    // world point it saw, so holes, eaves and grazed faces read directly
     if (mRenderDebugMask & RENDER_DEBUG_RAIN_SHADOW)
     {
         SSRainShadowMap::getInstance()->renderDebug();

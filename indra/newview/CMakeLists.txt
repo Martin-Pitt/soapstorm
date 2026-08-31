@@ -221,6 +221,7 @@ set(viewer_SOURCE_FILES
     ssprecipvariants.cpp
     sspreciprenderer.cpp
     ssgranular.cpp
+    ssglreadback.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
     sswhiteout.cpp
@@ -1137,6 +1138,7 @@ set(viewer_HEADER_FILES
     ssprecipvariants.h
     sspreciprenderer.h
     ssgranular.h
+    ssglreadback.h
     ssrainshadow.h
     sssurfacefield.h
     sswhiteout.h

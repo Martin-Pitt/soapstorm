@@ -38,6 +38,13 @@ uniform float ss_scene_lit;
 // 1 when the bound decal art is the generated ripple, whose colour channels carry the wave's tangent-space normal rather than a tint. A developer-set ripple texture is ordinary art and clears this.
 uniform float ss_decal_normals;
 
+// 1 for the granular family (drift, snow cascades): near the camera the alpha
+// becomes a screen-door stipple - fragments kept at full brightness, the rest
+// discarded - so a cascade of grains never reads as a blended liquid sheet.
+// The stipple crossfades back to plain blending by ~24 m, where stipple
+// aliasing would outshout the coverage it is faking.
+uniform float ss_granular;
+
 // Also declared by shadowUtil, which is only attached when shadows are on;
 // these are separate compilation units, so the duplicate is fine and this
 // keeps the sun direction available in the no-shadow build too.
@@ -151,6 +158,25 @@ void main()
     color.a = final_alpha;
 
     color.rgb = applySkyAndWaterFog(pos, additive, atten, color).rgb;
+
+    // The granular screen-door. A stable per-pixel hash (not animated - the
+    // quad moves across a fixed pattern, which reads as grains passing), kept
+    // fraction scales with the fragment's own alpha and with proximity, and
+    // kept fragments write at full weight.
+    if (ss_granular > 0.5)
+    {
+        float dist = length(vary_position);
+        float dither = clamp((24.0 - dist) / 12.0, 0.0, 1.0);
+        if (dither > 0.001)
+        {
+            float n = fract(sin(dot(floor(gl_FragCoord.xy), vec2(12.9898, 78.233))) * 43758.5453);
+            if (n > color.a * dither)
+            {
+                discard;
+            }
+            color.a = mix(color.a, 1.0, dither);
+        }
+    }
 
     frag_color = max(color, vec4(0));
 }

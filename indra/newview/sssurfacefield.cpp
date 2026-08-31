@@ -96,7 +96,18 @@ static const F32 FALLBACK_DRY   = 0.002f;
 static const F32 FALLBACK_MELT  = 0.0000045f;
 static const F32 FALLBACK_DRAIN = 0.0001f;
 
+// <SS:Nexii> The tick lands every quarter second, so the whole cost of one step shows up on one
+// frame. Split per stage: geometry rebuild, ground-flow sample, the transport steps, the shed
+// cursor and the window rebuild all have completely different fixes, and a single summed handle
+// cannot tell them apart. The upload is timed apart from the fill it uploads because only the
+// fill can ever move off this thread. </SS:Nexii>
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE("Atmo Magic Surface Field");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_GEOM("Surface Geometry");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_FLOW("Surface Ground Flow");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_TICK("Surface Tick");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_SHED("Surface Shed");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_WINDOW("Surface Window");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_UPLOAD("Surface Upload");
 
 // Drops all fields, geometry and GL - full rebuild on demand.
 void SSSurfaceField::clear()
@@ -263,6 +274,8 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
 // grid shape and serial semantics are identical, so nothing downstream changes.
 void SSSurfaceField::refreshGeometry()
 {
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_GEOM);
+
     static LLCachedControl<bool> use_field(gSavedSettings, "SSWorldFieldSurfaceTop", false);
     SSWorldField* field = use_field ? SSWorldField::getInstance() : nullptr;
     SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
@@ -308,6 +321,8 @@ static const F32 SHED_STORE_CEILING = 8.f;
 // Spends the frame's rain on every region's shelter edges, spawning runoff drips.
 void SSSurfaceField::shedEdges(F32 dt)
 {
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_SHED);
+
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     SSPrecipSim* sim = atmo ? atmo->sim() : nullptr;
     if (!sim || dt <= 0.f) return;
@@ -495,6 +510,8 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
                           const SSPrecipPreset& preset, F32 intensity,
                           const SSGranularParams& granular, const LLVector4* flow)
 {
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_TICK);
+
     const S32 n = geom.mN;
     const F32 cell = geom.mCell;
     const F32 cell_area = cell * cell;
@@ -741,6 +758,8 @@ void SSSurfaceField::idle(F32 dt)
         const LLVector4* flow = nullptr;
         if (blows_here)
         {
+            LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_FLOW);
+
             LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
             flow_grid.clear();
             if (regionp && SSWindFlowMap::getInstance()->sampleGroundGrid(regionp, geom.mN, geom.mCell,
@@ -904,6 +923,8 @@ void SSSurfaceField::updateWindow()
         return;
     }
 
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_WINDOW);
+
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     F32 cell = 0.f;
     {
@@ -1031,15 +1052,19 @@ void SSSurfaceField::updateWindow()
                               << " cells square" << LL_ENDL;
     }
 
-    glBindTexture(GL_TEXTURE_2D, mWindowTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
-                    GL_RGBA, GL_FLOAT, mWindowData.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
+    {
+        LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_UPLOAD);
 
-    glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
-                    GL_RGBA, GL_FLOAT, mWindowFlowData.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(GL_TEXTURE_2D, mWindowTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                        GL_RGBA, GL_FLOAT, mWindowData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                        GL_RGBA, GL_FLOAT, mWindowFlowData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 
     mWindowCell = cell;
     mWindowOrigin = origin;

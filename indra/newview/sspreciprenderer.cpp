@@ -573,6 +573,7 @@ void SSPrecipRenderer::render()
     {
         static LLStaticHashedString ssDecal("ss_decal");
         static LLStaticHashedString ssSceneLit("ss_scene_lit");
+        static LLStaticHashedString ssGranular("ss_granular");
         LLGLSLShader* lit = &gSSPrecipLitProgram;
         if (lit->isComplete())
         {
@@ -585,7 +586,14 @@ void SSPrecipRenderer::render()
             lit->uniform1f(ssDecalNormals, decal_normals);
 
             lit->uniform1f(ssDecal, 0.f);
+            lit->uniform1f(ssGranular, 0.f);
             drawMaterial(sim, MAT_LIT);
+
+            // The granular family draws through the same lit shading with the
+            // screen-door on - same light, grain-stippled coverage.
+            lit->uniform1f(ssGranular, 1.f);
+            drawMaterial(sim, MAT_GRANULAR);
+            lit->uniform1f(ssGranular, 0.f);
 
             lit->uniform1f(ssDecal, 1.f);
             drawMaterial(sim, MAT_DECAL);
@@ -595,6 +603,7 @@ void SSPrecipRenderer::render()
         {
             bind_fullbright();
             drawMaterial(sim, MAT_LIT);
+            drawMaterial(sim, MAT_GRANULAR);
             drawMaterial(sim, MAT_DECAL);
         }
     }

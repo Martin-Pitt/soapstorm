@@ -28,6 +28,7 @@
 #include "llsingleton.h"
 #include "v3math.h"
 #include "v3dmath.h"
+#include "v4coloru.h"
 
 #include <map>
 #include <vector>
@@ -107,20 +108,24 @@ private:
         U32 mCapturedSerial = 0;
     };
 
-    struct ShadowMesh
+    // <SS:Nexii> The debug view is the depth map itself, not a re-trace of it: every kept texel is unprojected along the fall direction to the world point it actually saw, and drawn as the quad footprint it covers. Holes, eaves, vertical smear and the tilt overscan are then all visible directly rather than inferred.
+    struct DebugCloud
     {
-        S32 mN = 0;
         std::vector<LLVector3> mPos;
-        std::vector<F32> mShade;
+        std::vector<LLColor4U> mColor;
+
+        LLVector3 mRight, mUp;
+        F32 mHalf = 0.f;
 
         F64 mBuiltFrom = -1.0;
-        LLVector3 mBuiltDir;
-        F32 mBuiltStep = 0.f;
+        U32 mBuiltStride = 0;
+        U32 mBuiltRes = 0;
         F32 mBuiltFloor = 0.f;
         bool mBuiltSky = false;
     };
 
-    void buildShadowMesh(const Tile& tile, ShadowMesh& mesh);
+    void buildDebugCloud(const Tile& tile, DebugCloud& cloud);
+    // </SS:Nexii>
 
     Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
     bool needsCapture(const Tile& tile) const;
@@ -128,9 +133,18 @@ private:
     void evict();
 
     std::map<U64, Tile> mTiles;
-    std::map<U64, ShadowMesh> mDebugMesh;
+    std::map<U64, DebugCloud> mDebugCloud;
     LLRenderTarget mTarget;
     F64 mLastCapture = 0.0;
+
+    // <SS:Nexii> One readback in flight, served by SSGLReadback. The shared
+    // mTarget must not be re-rendered (or torn down) until the outstanding
+    // read lands; mReadbackPending gates capture() and evict(), and a clear
+    // requested mid-read is deferred to the read's completion.
+    bool mReadbackPending = false;
+    bool mClearPending = false;
+    U64 mReadbackRegion = 0;
+    // </SS:Nexii>
 
     U32 mCaptureCount = 0;
     U32 mDirtyCaptures = 0;
