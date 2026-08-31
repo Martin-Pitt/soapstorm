@@ -238,7 +238,7 @@ jobs:
           rclone_config: ${{ secrets.RCLONE_CONFIG }}
 
       - name: Set OS/SL flags
-        run: echo "FS_GRID=-DOPENSIM:BOOL=$([ "${{ matrix.grid }}" == "os" ] && echo "ON" || echo "OFF") -DHAVOK_TPV:BOOL=$([ "${{ matrix.grid }}" == "sl" ] && echo "ON" || echo "OFF")" >> $GITHUB_ENV
+        run: echo "FS_GRID=-DOPENSIM:BOOL=$([ "${{ matrix.grid }}" == "os" ] && echo "ON" || echo "OFF") -DHAVOK_TPV:BOOL=OFF" >> $GITHUB_ENV
         shell: bash
 
       - name: find channel from Branch name
@@ -392,10 +392,16 @@ jobs:
               if [ "$package" == "fmodstudio" ]; then
                 echo "EXTRA_ARGS=${EXTRA_ARGS} -DUSE_FMODSTUDIO=ON" >> $GITHUB_ENV
               fi
+              if [ "$package" == "llphysicsextensions_tpv" ]; then
+                echo "FS_GRID=${FS_GRID} -DHAVOK_TPV:BOOL=ON" >> $GITHUB_ENV
+              fi
             else
               echo "No bundle found for ${package}. Package will not be available for build."
               if [ "$package" == "fmodstudio" ]; then
                 echo "EXTRA_ARGS=${EXTRA_ARGS} -DUSE_FMODSTUDIO=OFF" >> $GITHUB_ENV
+              fi
+              if [ "$package" == "llphysicsextensions_tpv" ]; then
+                echo "FS_GRID=${FS_GRID} -DHAVOK_TPV:BOOL=OFF" >> $GITHUB_ENV
               fi
             fi
           done
