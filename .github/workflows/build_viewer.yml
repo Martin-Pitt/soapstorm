@@ -81,18 +81,53 @@ jobs:
       - name: Free Disk Space (macOS)
         if: runner.os == 'macOS'
         run: |
-          sudo rm -rf /Users/runner/Library/Android/sdk
-          sudo rm -rf /Library/Developer/CoreSimulator/Volumes/*
-          sudo rm -rf /Users/runner/Library/Caches/Homebrew
-          # Keep the active/default Xcode version, delete others to reclaim ~40-80 GB
+          echo "=== Disk space before cleanup ==="
+          df -h /
+
+          # 1. Delete iOS / tvOS / watchOS / visionOS simulator runtimes (reclaims 30-50 GB)
+          sudo xcrun simctl erase all 2>/dev/null || true
+          sudo xcrun simctl runtime delete all 2>/dev/null || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Images/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Volumes/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Caches/* || true
+
+          # 2. Keep the active/default Xcode version, delete others (~20-50 GB)
           ACTIVE_XCODE=$(xcode-select -p)
           echo "Active Xcode developer directory: $ACTIVE_XCODE"
-          for xcode in /Applications/Xcode_*.app; do
+          shopt -s nullglob
+          for xcode in /Applications/Xcode*.app; do
             if [[ "$ACTIVE_XCODE" != *"$xcode"* ]]; then
               echo "Deleting unused Xcode: $xcode"
               sudo rm -rf "$xcode"
             fi
           done
+
+          # 3. Delete hosted toolcache (Go, Java, PyPy, Ruby, CodeQL, etc. ~10-15 GB)
+          sudo rm -rf /Users/runner/hostedtoolcache || true
+          sudo rm -rf /Users/runner/Library/Caches/* || true
+
+          # 4. Delete Android SDK / NDK (~10-15 GB)
+          sudo rm -rf /Users/runner/Library/Android || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/local/share/android-sdk || true
+
+          # 5. Delete .NET / dotnet (~3-5 GB)
+          sudo rm -rf /usr/local/share/dotnet || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf ~/.dotnet || true
+
+          # 6. Delete Haskell / GHC / other tools
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf ~/.ghcup || true
+
+          # 7. Clean Homebrew cache
+          brew cleanup -s --prune=all 2>/dev/null || true
+          sudo rm -rf "$(brew --cache)" 2>/dev/null || true
+
+          echo "=== Disk space after cleanup ==="
+          df -h /
 
       - name: Free Disk Space (Windows)
         if: runner.os == 'Windows'
@@ -106,16 +141,13 @@ jobs:
       - name: Install Bash 4 and GNU sed on Mac
         if: runner.os == 'macOS'
         run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          # aws/tap is preinstalled on the runner but is not used by this workflow.
-          if brew tap | grep -qx 'aws/tap'; then
-            brew untap aws/tap
+          if brew tap 2>/dev/null | grep -qx 'aws/tap'; then
+            brew untap aws/tap || true
           fi
-          brew install bash
-          brew install gnu-sed
-
-          echo "/usr/local/bin" >> $GITHUB_PATH
-          echo "$(brew --prefix)/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
+          brew install bash gnu-sed
+          BREW_PREFIX="$(brew --prefix)"
+          echo "${BREW_PREFIX}/bin" >> $GITHUB_PATH
+          echo "${BREW_PREFIX}/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
 
       - uses: actions/checkout@v7
       # Use apt-based Python when inside the Ubuntu 22.04 container
@@ -483,8 +515,8 @@ jobs:
           echo "AZURE_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
           echo "AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
         shell: bash
-      - name: Clean autobuild cache (Linux)
-        if: runner.os == 'Linux'
+      - name: Clean autobuild cache
+        if: runner.os == 'Linux' || runner.os == 'macOS'
         run: |
           echo "Cleaning autobuild package cache to reclaim disk space before compilation..."
           rm -rf ~/.autobuild/cache/* || true
