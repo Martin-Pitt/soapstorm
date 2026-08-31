@@ -304,7 +304,7 @@ jobs:
         shell: bash
 
       - name: rclone the private 3p packages for this platform (both 64 & 32)
-        run: 'rclone copy fs_bundles: --filter "- Alpha/*" --filter "+ *${{ env.fallback_platform }}*bz2" .'
+        run: 'rclone copy fs_bundles: --filter "- Alpha/**" --filter "+ *${{ env.fallback_platform }}*bz2" --filter "- *" .'
         
       - name: rclone any extra private 3p packages for Alpha (allows library updates not in the main repo)
         if: env.FS_RELEASE_TYPE == 'Alpha'
