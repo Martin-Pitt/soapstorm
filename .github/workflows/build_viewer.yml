@@ -20,7 +20,7 @@ on:
     - cron: '00 03 * * *' # Run every day at 3am UTC
 env:
   AUTOBUILD_VARIABLES_FILE: ${{github.workspace}}/build-variables/variables
-  EXTRA_ARGS: -DUSE_FMODSTUDIO=ON -DUSE_KDU=ON --crashreporting --lto
+  EXTRA_ARGS: -DUSE_KDU=OFF --crashreporting --lto
   build_secrets_checkout: ${{github.workspace}}/signing
   XZ_DEFAULTS: -T0
   FS_RELEASE_TYPE: Unknown
@@ -362,31 +362,35 @@ jobs:
           fi
           function find_most_recent_bundle() {
             local pattern="$1-.*$2[-_]+.*"
-            local most_recent_file=$(ls -t "${{ github.workspace }}" | egrep "$pattern" | head -1)
+            local most_recent_file=$(ls -t "${{ github.workspace }}" 2>/dev/null | egrep "$pattern" | head -1)
             if [ -z "$most_recent_file" ]; then
               echo ""
             else
               echo "$most_recent_file"
             fi
           }
-          packages=("fmodstudio" "llphysicsextensions_tpv" "kdu")
+          packages=("fmodstudio" "llphysicsextensions_tpv")
           for package in "${packages[@]}"; do
             package_file=$(find_most_recent_bundle $package ${{ env.platform }})
-            full_package_path="${{ github.workspace }}${path_sep}${package_file}"
-            if [ -n "$package_file" ]; then
-              echo "Installing ${package_file}"
-              autobuild installables remove ${package} 
-              autobuild installables add ${package} platform=${{ env.platform }} url="file:///${full_package_path}"
-            else
-              echo "No bundle found for ${package} on ${{ env.platform }}"
+            if [ -z "$package_file" ]; then
               package_file=$(find_most_recent_bundle $package ${{ env.fallback_platform }})
+              target_plat=${{ env.fallback_platform }}
+            else
+              target_plat=${{ env.platform }}
+            fi
+
+            if [ -n "$package_file" ]; then
               full_package_path="${{ github.workspace }}${path_sep}${package_file}"
-              if [ -n "$package_file" ]; then
-                echo "Installing ${package_file}"
-                autobuild installables remove ${package} 
-                autobuild installables add ${package} platform=${{ env.fallback_platform }} url="file:///${full_package_path}"
-              else
-                echo "No bundle found for ${package} on ${{ env.fallback_platform }}. Package will not be available for build."
+              echo "Installing ${package_file} for ${target_plat}"
+              autobuild installables remove ${package} || true
+              autobuild installables add ${package} platform=${target_plat} url="file:///${full_package_path}"
+              if [ "$package" == "fmodstudio" ]; then
+                echo "EXTRA_ARGS=${EXTRA_ARGS} -DUSE_FMODSTUDIO=ON" >> $GITHUB_ENV
+              fi
+            else
+              echo "No bundle found for ${package}. Package will not be available for build."
+              if [ "$package" == "fmodstudio" ]; then
+                echo "EXTRA_ARGS=${EXTRA_ARGS} -DUSE_FMODSTUDIO=OFF" >> $GITHUB_ENV
               fi
             fi
           done
@@ -435,13 +439,13 @@ jobs:
             echo "No custom user-agent string provided."
           fi
         shell: bash
-      - name: Clean up packages to give more space
-        run: rm *${{ env.fallback_platform }}*bz2
-        shell: bash
       - name: Configure
         run: |
           autobuild configure -c ReleaseFS -A${addrsize} -- --package --chan ${{env.FS_RELEASE_CHAN}} ${{env.EXTRA_ARGS}} ${{env.FS_GRID}}
           echo "BUGSPLAT_DB=$BUGSPLAT_DB" >> $GITHUB_ENV
+        shell: bash
+      - name: Clean up packages to give more space
+        run: rm -f *${{ env.fallback_platform }}*.bz2 *${{ env.fallback_platform }}*.tar.* 2>/dev/null || true
         shell: bash
       - name: Generate metadata.json
         if: runner.os == 'Windows'
