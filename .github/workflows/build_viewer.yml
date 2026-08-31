@@ -60,6 +60,26 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           sudo rm -rf /Users/runner/Library/Android/sdk
+          sudo rm -rf /Library/Developer/CoreSimulator/Volumes/*
+          sudo rm -rf /Users/runner/Library/Caches/Homebrew
+          # Keep the active/default Xcode version, delete others to reclaim ~40-80 GB
+          ACTIVE_XCODE=$(xcode-select -p)
+          echo "Active Xcode developer directory: $ACTIVE_XCODE"
+          for xcode in /Applications/Xcode_*.app; do
+            if [[ "$ACTIVE_XCODE" != *"$xcode"* ]]; then
+              echo "Deleting unused Xcode: $xcode"
+              sudo rm -rf "$xcode"
+            fi
+          done
+
+      - name: Free Disk Space (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows\Ruby" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows\Go" -ErrorAction SilentlyContinue
 
       - name: Install Bash 4 and GNU sed on Mac
         if: runner.os == 'macOS'
