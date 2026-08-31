@@ -315,13 +315,17 @@ jobs:
         shell: bash
 
       - name: Install certificate
-        if: runner.os == 'macOS' && secrets.FS_CERT != ''
+        if: runner.os == 'macOS'
         env:
           FS_CERT: ${{ secrets.FS_CERT }}
           FS_CERT_PASS: ${{ secrets.FS_CERT_PASS }}
           FS_KEYCHAIN_PASS: ${{ secrets.FS_KEYCHAIN_PASS }}
           NOTARIZE_CREDS: ${{ secrets.NOTARIZE_CREDS }}
         run: |
+          if [ -z "$FS_CERT" ]; then
+            echo "No macOS signing certificate (FS_CERT) configured. Skipping certificate installation (ad-hoc signing will be used)."
+            exit 0
+          fi
           build_secrets_dir="${{ github.workspace }}/signing"
           mkdir -p "${build_secrets_dir}/code-signing-osx"
           echo -n "$FS_CERT" | base64 --decode --output "${build_secrets_dir}/code-signing-osx/fs-cert.p12"
