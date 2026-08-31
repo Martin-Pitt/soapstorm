@@ -44,14 +44,17 @@ uniform float sky_ambient_scale;
 uniform int classic_mode;
 
 #ifdef SS_ATMO
-// <SS:Nexii> How much of the sun's disc has cleared the horizon (SSAtmoEnvApplier::sunRiseFraction):
-// 0 fully set - or no active Atmo environment, which is exactly stock - up to 1 fully risen,
-// ramping across the disc's own angular span. Stock switches the sunlight and the sun glow the
-// moment the disc's CENTRE crosses zero, which reads as the whole sunrise lighting snapping on
-// at once; the ramps below grow it with the disc instead.
+// <SS:Nexii> The sun's horizon-band share (SSAtmoEnvApplier::sunRiseFraction): 1 the whole time
+// the disc's centre stands at or above the horizon, easing smoothly to 0 across the twilight band
+// below it; 0 also means no active Atmo environment, which is exactly stock. Stock switches the
+// sunlight and the sun glow the moment the disc's CENTRE crosses zero, which reads as the whole
+// sunrise lighting snapping on at once; the ramps below grow it through the band instead - and
+// because the band runs down from the horizon rather than across the disc's span, the sunset
+// glow holds its full authored strength while the sun hangs at the horizon and eases out through
+// the dusk after it sets.
 uniform float ss_sun_rise;
 
-// <SS:Nexii> The sun's TRUE direction while any part of the disc is in sight
+// <SS:Nexii> The sun's TRUE direction while the rise band is live
 // (SSAtmoEnvApplier::sunSlotDirection). lightnorm switches to the moon the moment the disc's
 // centre sets, which would swing the surface glow's hotspot across the sky to the moon's
 // azimuth mid-sunset - see the ss_sun_dir note in skyV.glsl.
@@ -162,9 +165,10 @@ void calcAtmosphericVars(vec3 inPositionEye, vec3 light_dir, float ambFactor, ou
     haze_glow *= sun_moon_glow_factor;
 
 #ifdef SS_ATMO
-    // <SS:Nexii> And the glow walks with the risen share too - the sun sheds its share of the
-    // full glow, never less than whatever the sun-down state already shed - instead of snapping
-    // at centre-rise. Continuous at both ends of the band, and the stock sun value at full rise.
+    // <SS:Nexii> And the glow walks with the horizon-band share too - full while the disc's
+    // centre is up (the stock sun value), easing out through the dusk below the horizon, never
+    // less than whatever the sun-down state already shed - instead of snapping at centre-rise.
+    // Continuous at both ends of the band.
     if (ss_sun_rise > 0.0)
     {
         haze_glow *= max(sun_moon_glow_factor, ss_sun_rise);

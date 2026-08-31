@@ -39,6 +39,7 @@
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
+#include "llviewerregion.h"
 #include "llworld.h"
 #include "lldrawable.h"
 #include "llhudobject.h"

@@ -60,10 +60,33 @@ namespace
 
     const F32 TELEPORT_JUMP_M(60.f);
 
-    const F32 CELESTIAL_SCALE_MIN(0.1f);
+    // <SS:Nexii> Disc scale bounds. The floor sits under the real Sun's own scale (0.53 deg /
+    // 5.72 deg = 0.093, once the quad's true angles drove the conversion - the old 0.1 floor
+    // was fine only while the 10x reference bug was quietly doing the clamping's work) so a
+    // correctly authored system is never clamped up; the ceiling keeps a body parked on its
+    // home's doorstep from asking for an infinite quad.
+    const F32 CELESTIAL_SCALE_MIN(0.01f);
     const F32 CELESTIAL_SCALE_MAX(20.f);
 
+    // The disc art's visible fraction of the quad for a body's padding, floored so a disc never
+    // shrinks below a tenth of its quad - the same clamp celestialDiscScale divides by, so the
+    // scale math and the disc shader agree on where the art's disc sits.
+    const F32 SS_MIN_DISC_FRACTION = 0.1f;
+    F32 ss_disc_fraction(F32 disc_padding)
+    {
+        return llmax(1.f - 2.f * disc_padding, SS_MIN_DISC_FRACTION);
+    }
+
     const F32 BILLBOARD_MIN_DIAMETER_DEG(0.05f);
+
+    // <SS:Nexii> The sunrise/sunset twilight band the glow ramps out over once the disc's centre
+    // sets: six of the disc's OWN radii below the horizon, so the dusk keeps proportion to
+    // whatever sun the sky authors - floored and capped in degrees because the twilight belongs
+    // to the ATMOSPHERE, not the disc: a stock-sized sun still gets a real dusk (its six radii
+    // are barely a degree and a half) and a colossal one must not paint a quarter-sky twilight.
+    const F32 SS_SUN_TWILIGHT_RADII(6.f);
+    const F32 SS_SUN_TWILIGHT_MIN_DEG(3.f);
+    const F32 SS_SUN_TWILIGHT_MAX_DEG(10.f);
 
     // Shortest arc taking +X onto a direction - the engine's own sun/moon rotation convention, inverted.
     LLQuaternion quat_from_direction(const LLVector3& dir)
@@ -86,13 +109,6 @@ namespace
 // Singleton shell.
 SSAtmoEnvApplier::SSAtmoEnvApplier()
 {
-}
-
-// Angular diameter to EEP's disc scale.
-F32 SSAtmoEnvApplier::celestialDiscScale(F32 angular_diameter_deg)
-{
-    return llclamp(angular_diameter_deg / SS_ATMOENV_REFERENCE_DISC_DEG,
-                   CELESTIAL_SCALE_MIN, CELESTIAL_SCALE_MAX);
 }
 
 // <SS:Nexii> The dome band's altitude. The band IS the cirrus layer: it sits at the Sky Dome's
@@ -225,10 +241,11 @@ void SSAtmoEnvApplier::apply()
     }
 }
 
-// Inverse of celestialDiscScale, for the overlay.
-F32 SSAtmoEnvApplier::celestialAngularFromScale(F32 scale)
+// Angular diameter to EEP's disc scale - see the header comment.
+F32 SSAtmoEnvApplier::celestialDiscScale(F32 angular_diameter_deg, F32 disc_fraction, F32 quad_deg)
 {
-    return scale * SS_ATMOENV_REFERENCE_DISC_DEG;
+    return llclamp(angular_diameter_deg / (llmax(disc_fraction, SS_MIN_DISC_FRACTION) * quad_deg),
+                   CELESTIAL_SCALE_MIN, CELESTIAL_SCALE_MAX);
 }
 
 // Kills the celestial debug HUD texts.
@@ -615,6 +632,22 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     mTrackFloorZ = track.mFloorZ;
     mLargeNoiseId = dome.mLargeNoiseTexture.valueAt(phase);
 
+    // <SS:Nexii> The large map's crossfade, only when both ends are authored maps - the gate
+    // switches whole octaves between the cloud noise and the large map, so a fade onto or off of
+    // None has no honest mix and snaps as it always did.
+    mLargeNoiseTo = mLargeNoiseId;
+    mLargeNoiseBlend = 0.f;
+    {
+        LLUUID large_from, large_to;
+        F32 large_blend = 0.f;
+        if (dome.mLargeNoiseTexture.blendAt(phase, large_from, large_to, large_blend)
+            && large_from.notNull() && large_to.notNull())
+        {
+            mLargeNoiseTo = large_to;
+            mLargeNoiseBlend = (large_to != large_from) ? large_blend : 0.f;
+        }
+    }
+
     // Same for the horizon clip: no LLSettingsSky home either - the sky pool reads it straight off this applier when it binds the dome shader, and turns it into the lower dome's depth gate (LL_SHADER_CONST_HORIZON_DEPTH in skyF.glsl).
     mHorizonClip = atm.mHorizonClip;
     // </SS:Nexii>
@@ -658,6 +691,26 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     }
     put(mLastCloudNoise, cloud_noise,
         [this](const LLUUID& v) { mSky->setCloudNoiseTextureId(v); });
+
+    // <SS:Nexii> The dome noise's crossfade. valueAt holds the fade's FROM keyframe, so the sky's
+    // own noise id above keeps the current map while the pair below hands the sky pool both ends
+    // of the fade - it rebinds its two noise channels and puts the eased weight into the stock
+    // blend factor. Both ids resolve through the default cloud noise so the pair is concrete.
+    mDomeNoiseFrom = cloud_noise;
+    mDomeNoiseTo = cloud_noise;
+    mDomeNoiseBlend = 0.f;
+    {
+        LLUUID noise_from, noise_to;
+        F32 noise_blend = 0.f;
+        if (dome.mNoiseTexture.blendAt(phase, noise_from, noise_to, noise_blend))
+        {
+            if (noise_from.isNull()) noise_from = LLSettingsSky::GetDefaultCloudNoiseTextureId();
+            if (noise_to.isNull())   noise_to = LLSettingsSky::GetDefaultCloudNoiseTextureId();
+            mDomeNoiseFrom = noise_from;
+            mDomeNoiseTo = noise_to;
+            mDomeNoiseBlend = (noise_to != noise_from) ? noise_blend : 0.f;
+        }
+    }
 
     mSkyCacheValid = true;
 
@@ -709,6 +762,39 @@ void SSAtmoEnvApplier::applyWater(const SSAtmoEnvTrack& track, F64 phase,
     put(mLastNormalMap, normal_map,
         [this](const LLUUID& v) { mWater->setNormalMapID(v); });
 
+    // <SS:Nexii> The normal map's crossfade. valueAt holds the fade's FROM keyframe, so the put
+    // above keeps the current map at the fade's start; the partner and the eased weight ride the
+    // stock next-channel plumbing (setNextNormalMapID -> updateSettings -> the pool's two bump
+    // bindings; the weight itself the pool reads live at bind time). Both ids resolve through the
+    // default water's normal map so the pair is concrete, and a fade between two keyframes that
+    // resolve to the same map is skipped.
+    LLUUID normal_next = normal_map;
+    F32 normal_blend = 0.f;
+    {
+        LLUUID normal_from, normal_to;
+        F32 blend = 0.f;
+        if (water.mNormalMap.blendAt(phase, normal_from, normal_to, blend))
+        {
+            if (normal_from.isNull()) normal_from = mDefaultWater->getNormalMapID();
+            if (normal_to.isNull())   normal_to = mDefaultWater->getNormalMapID();
+            normal_next = normal_to;
+            normal_blend = (normal_to != normal_from) ? blend : 0.f;
+        }
+    }
+
+    bool blend_dirty = false;
+    if (!mWaterCacheValid || !(mLastNormalMapNext == normal_next))
+    {
+        mLastNormalMapNext = normal_next;
+        mWater->setNextNormalMapID(normal_next);
+        blend_dirty = true;
+    }
+    if (!mWaterCacheValid || llabs(mLastNormalBlend - normal_blend) > 1.0e-4f)
+    {
+        mLastNormalBlend = normal_blend;
+        mWater->setBlendWeight(normal_blend);
+    }
+
     const LLVector3 normal_scale(water.mNormalScaleX.valueAt(phase),
                                  water.mNormalScaleY.valueAt(phase),
                                  water.mNormalScaleZ.valueAt(phase));
@@ -729,7 +815,7 @@ void SSAtmoEnvApplier::applyWater(const SSAtmoEnvTrack& track, F64 phase,
 
     mWaterCacheValid = true;
 
-    if (dirty)
+    if (dirty || blend_dirty)
     {
         mWater->update();
     }
@@ -767,6 +853,20 @@ void SSAtmoEnvApplier::applyWaterDefaults()
         [this](F32 v) { mWater->setFresnelOffset(v); });
     put(mLastNormalMap, mDefaultWater->getNormalMapID(),
         [this](const LLUUID& v) { mWater->setNormalMapID(v); });
+
+    // <SS:Nexii> The defaults walk carries no crossfade: park the partner on the default map and
+    // the weight at zero, so a track that just lost its water plane cannot leave a fade behind.
+    if (!mWaterCacheValid || !(mLastNormalMapNext == mDefaultWater->getNormalMapID()))
+    {
+        mLastNormalMapNext = mDefaultWater->getNormalMapID();
+        mWater->setNextNormalMapID(mDefaultWater->getNormalMapID());
+        dirty = true;
+    }
+    if (!mWaterCacheValid || mLastNormalBlend != 0.f)
+    {
+        mLastNormalBlend = 0.f;
+        mWater->setBlendWeight(0.f);
+    }
     put(mLastNormalScale, mDefaultWater->getNormalScale(),
         [this](const LLVector3& v) { mWater->setNormalScale(v); });
     put(mLastWave1, mDefaultWater->getWave1Dir(),
@@ -844,6 +944,8 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     mSunSlotSunDir = LLVector3::z_axis;
     mSunSlotSunlight = 1.f;
     mMoonSlotSunlight = 1.f;
+    mSunSlotDiscFraction = 1.f;
+    mMoonSlotDiscFraction = 1.f;
     mSunSlotAngularDeg = 0.53f;
     mMoonSlotAngularDeg = 0.53f;
     mSunRiseFraction = 0.f;
@@ -892,7 +994,10 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
             sun_slot_body = sun_body;
             sun_dir = SSAtmoEnvPlanetaryResolver::resolveObserverDirection(
                 sun_resolved.mDirection, tilt_deg, lat_deg, phase);
-            sun_scale = celestialDiscScale(sun_resolved.mAngularDiameterDeg);
+            sun_scale = celestialDiscScale(sun_resolved.mAngularDiameterDeg,
+                                           ss_disc_fraction(body.mDiscPadding),
+                                           SS_ATMOENV_SUN_QUAD_DEG);
+            mSunSlotDiscFraction = ss_disc_fraction(body.mDiscPadding);
             mSunSlotAngularDeg = sun_resolved.mAngularDiameterDeg;
             sun_texture = body.mCustomTexture.notNull()
                 ? body.mCustomTexture : fallbackFor(sun_body);
@@ -906,7 +1011,10 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
             mMoonSlotPhaseShaded = body.mPhaseShaded;
             moon_dir = SSAtmoEnvPlanetaryResolver::resolveObserverDirection(
                 moon_resolved.mDirection, tilt_deg, lat_deg, phase);
-            moon_scale = celestialDiscScale(moon_resolved.mAngularDiameterDeg);
+            moon_scale = celestialDiscScale(moon_resolved.mAngularDiameterDeg,
+                                            ss_disc_fraction(body.mDiscPadding),
+                                            SS_ATMOENV_MOON_QUAD_DEG);
+            mMoonSlotDiscFraction = ss_disc_fraction(body.mDiscPadding);
             mMoonSlotAngularDeg = moon_resolved.mAngularDiameterDeg;
             moon_texture = body.mCustomTexture.notNull()
                 ? body.mCustomTexture : fallbackFor(moon_body);
@@ -1011,6 +1119,7 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         billboard.mBodyIndex = body.mBodyIndex;
         billboard.mEmissive = authored.mEmissive;
         billboard.mPhaseShaded = authored.mPhaseShaded;
+        billboard.mDiscFraction = ss_disc_fraction(authored.mDiscPadding);
         illuminate(body.mBodyIndex, billboard.mSunDirection, billboard.mSunlight);
         mBillboards.push_back(billboard);
     }
@@ -1037,11 +1146,11 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
 
         if (debug_slot_sun >= 0)
         {
-            add_mark(debug_slot_sun, sun_dir, celestialAngularFromScale(sun_scale), 1.f, true, false);
+            add_mark(debug_slot_sun, sun_dir, mSunSlotAngularDeg, 1.f, true, false);
         }
         if (debug_slot_moon >= 0)
         {
-            add_mark(debug_slot_moon, moon_dir, celestialAngularFromScale(moon_scale),
+            add_mark(debug_slot_moon, moon_dir, mMoonSlotAngularDeg,
                      mMoonSlotBrightness, false, true);
         }
         for (const SSAtmoEnvBillboard& bb : mBillboards)
@@ -1079,26 +1188,39 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     put(mLastMoonTexture, moon_texture,
         [this](const LLUUID& v) { mSky->setMoonTextureId(v); });
 
-    // <SS:Nexii> The sun slot's risen fraction, from the RESOLVED direction and disc - see
-    // sunRiseFraction. The band spans the slot quad's OWN half-angle - the same sizing chain
-    // updateHeavenlyBodyGeometry lays the disc out with (scale * HEAVENLY_BODY_FACTOR * the
-    // sun's disk radius, over the HEAVENLY_BODY_DIST shell) - so the ramp tracks what the disc
-    // actually draws, through its whole rise, however large it is authored. And the fraction is
-    // the share of the disc's area above the horizon - the share of it that sheds light on the
-    // observer. That is what makes the ramp start as the top edge breaks, run through half light
-    // at centre-rise where stock flips its switch, and complete when the full disc stands clear,
-    // gently at both ends.
-    F32 half_tan = sun_scale * HEAVENLY_BODY_FACTOR * 0.5f; // llvosky.cpp's SUN_DISK_RADIUS
+    // <SS:Nexii> The sun's horizon-band share, from the RESOLVED direction and disc - see
+    // sunRiseFraction. Full the whole time the disc's centre stands at or above the horizon -
+    // the condition the authored skies painted against, stock's own glow and sunlight run at
+    // their full sun values from centre-rise to centre-set - and easing out over the twilight
+    // BELOW it: the disc's light hits the atmosphere long before the disc itself reaches the
+    // horizon and keeps lighting it long after, so the ramp runs DOWN from the horizon crossing
+    // instead of across the quad's span. Sizing the band across the disc (the first cut) scaled
+    // the glow by the risen SHARE of the disc, which halved the sunset exactly at the horizon
+    // where the authored skies put it at full strength, and ended it the frame the last sliver
+    // slipped under - a sunrise that only exists while the disc does. The fade spans the disc's
+    // own radii (SS_SUN_TWILIGHT_RADII, floored and capped in degrees) and is smoothstepped, so
+    // both ends land gently: a rising sun carries near-full glow from its first sliver and the
+    // dusk's tail settles flat into the night.
+    //
+    // The half-angle below is the DISC's, not the quad's. sun_scale is the quad scale, inflated
+    // by 1/disc_fraction so padded art lands its visible disc on the authored diameter - fed
+    // straight through, the quad's half-angle would size the band (and the dome shaders' held
+    // airmass) off the transparent margin, stretching every sunset by exactly that factor.
+    // Multiplying the fraction back out lands the band on the disc the quads actually draw.
+    F32 half_tan = sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * 0.5f; // llvosky.cpp's SUN_DISK_RADIUS
     if (gSky.mVOSkyp.notNull())
     {
-        half_tan = sun_scale * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
+        half_tan = sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
     }
     const F32 half_sin = half_tan / sqrtf(1.f + half_tan * half_tan);
     mSunSlotRadius = half_sin;
     if (half_sin > 1e-6f)
     {
-        const F32 u = llclamp(sun_dir.mV[VZ] / half_sin, -1.f, 1.f);
-        mSunRiseFraction = (u * sqrtf(1.f - u * u) + asinf(u)) / F_PI + 0.5f;
+        const F32 fade = llmin(llmax(SS_SUN_TWILIGHT_RADII * half_sin,
+                                     sinf(SS_SUN_TWILIGHT_MIN_DEG * DEG_TO_RAD)),
+                               sinf(SS_SUN_TWILIGHT_MAX_DEG * DEG_TO_RAD));
+        const F32 t = llclamp((sun_dir.mV[VZ] + fade) / fade, 0.f, 1.f);
+        mSunRiseFraction = t * t * (3.f - 2.f * t);
     }
     else
     {

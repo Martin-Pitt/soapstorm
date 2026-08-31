@@ -127,6 +127,18 @@ private:
         LLUUID mDetail;
         LLPointer<LLViewerFetchedTexture> mDetailRef;
 
+        // <SS:Nexii> The base and detail maps' crossfade partners and the two eased weights,
+        // live while the day cycle fades between keyframed textures. Bound on the shader's spare
+        // reserved channels (bumpMap, specularMap) and mixed per sample; both weights 0 - and the
+        // partners pinned on the current maps - whenever no fade runs.
+        LLUUID mTextureNext;
+        LLPointer<LLViewerFetchedTexture> mTextureNextRef;
+        F32 mTextureBlend = 0.f;
+
+        LLUUID mDetailNext;
+        LLPointer<LLViewerFetchedTexture> mDetailNextRef;
+        F32 mDetailBlend = 0.f;
+
         // <SS:Nexii> The convection noise map and its CPU copy. The GPU sees the same map the
         // field was shaped with - bound as the fragment stage's altDiffuseMap (a reserved
         // LLShaderMgr channel; only reserved names can be bound as textures, see the depthMap

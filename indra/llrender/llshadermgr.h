@@ -118,6 +118,7 @@ public:
         CLOUD_NOISE_MAP,                    //  "cloud_noise_texture"
         CLOUD_NOISE_MAP_NEXT,               //  "cloud_noise_texture_next"
         SS_NOISE_LARGE_MAP,                 //  "ss_noise_large" <SS:Nexii> the dome band's authored large-scale map
+        SS_NOISE_LARGE_MAP_NEXT,            //  "ss_noise_large_next" <SS:Nexii> the large map's crossfade partner
         LIGHTNORM,                          //  "lightnorm"
         SUNLIGHT_COLOR,                     //  "sunlight_color"
         AMBIENT,                            //  "ambient_color"

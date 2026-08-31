@@ -424,13 +424,19 @@ void SSVolCloud::update(F32 dt)
 // noise map's hole-cutting is what moisture moderates.
 void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt)
 {
-    deck.mTexture = field.mBaseTexture.notNull()
-        ? field.mBaseTexture
-        : LLUUID(field.mHasAnvil || convection > 0.6f
-                 ? SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS
-                 : SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS);
+    // <SS:Nexii> The base map and its crossfade partner both fall back to the same built-in art
+    // when their keyframe is empty, so a fade between an authored texture and None - either
+    // direction - fades between real maps instead of cutting through the fallback logic.
+    const bool stormy = field.mHasAnvil || convection > 0.6f;
+    const LLUUID base_fallback(stormy ? SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS
+                                      : SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS);
+    deck.mTexture = field.mBaseTexture.notNull() ? field.mBaseTexture : base_fallback;
+    deck.mTextureNext = field.mBaseTextureNext.notNull() ? field.mBaseTextureNext : base_fallback;
+    deck.mTextureBlend = field.mBaseTextureBlend;
 
     deck.mDetail = field.mDetailTexture;
+    deck.mDetailNext = field.mDetailTextureNext;
+    deck.mDetailBlend = field.mDetailTextureBlend;
     deck.mNoise = field.mNoiseTexture;
     deck.mProfile = field.mProfileTexture;
 
@@ -863,6 +869,8 @@ void SSVolCloud::render()
     static LLStaticHashedString s_base_z("ss_base_z");
     static LLStaticHashedString s_thick("ss_layer_thick");
     static LLStaticHashedString s_tex_mix("ss_tex_mix");
+    static LLStaticHashedString s_base_blend("ss_base_blend");
+    static LLStaticHashedString s_detail_blend("ss_detail_blend");
     static LLStaticHashedString s_puff_density("ss_puff_density");
     static LLStaticHashedString s_detail_scale("ss_detail_scale");
     static LLStaticHashedString s_drift_rate("ss_drift_rate");
@@ -973,6 +981,21 @@ void SSVolCloud::render()
         gSSVolCloudProgram.bindTexture(LLShaderMgr::CLOUD_NOISE_MAP,
                                        deck.mDetailRef.notNull() ? deck.mDetailRef.get() : deck.mTextureRef.get(),
                                        LLTexUnit::TT_TEXTURE);
+
+        // <SS:Nexii> The crossfade partners on the spare reserved channels (bumpMap, specularMap -
+        // same reserved-name rule as altDiffuseMap above), pinned on the current maps when no fade
+        // runs so the shader's partner samples never read an unbound unit. The weights mix the
+        // pairs per sample in the fragment stage.
+        LLViewerFetchedTexture* tex_next = deck.mTextureNextRef.notNull()
+            ? deck.mTextureNextRef.get()
+            : deck.mTextureRef.get();
+        gSSVolCloudProgram.bindTexture(LLShaderMgr::BUMP_MAP, tex_next, LLTexUnit::TT_TEXTURE);
+        gSSVolCloudProgram.uniform1f(s_base_blend, deck.mTextureBlend);
+
+        LLViewerFetchedTexture* det_cur = deck.mDetailRef.notNull() ? deck.mDetailRef.get() : deck.mTextureRef.get();
+        LLViewerFetchedTexture* det_next = deck.mDetailNextRef.notNull() ? deck.mDetailNextRef.get() : det_cur;
+        gSSVolCloudProgram.bindTexture(LLShaderMgr::SPECULAR_MAP, det_next, LLTexUnit::TT_TEXTURE);
+        gSSVolCloudProgram.uniform1f(s_detail_blend, deck.mDetailBlend);
 
         // <SS:Nexii> The convection noise map, bound for the fragment stage's anvil carving -
         // the same map the field was shaped with, authored or procedural, so the shader cuts
@@ -1344,6 +1367,56 @@ bool SSVolCloud::fetchDeckTextures(Deck& deck)
     if (deck.mDetailRef.notNull())
     {
         deck.mDetailRef->addTextureStats((F32)MAX_IMAGE_AREA);
+    }
+
+    // <SS:Nexii> The crossfade partners, fetched only while a fade is live - the same ladder as
+    // the primaries, keyed by id so a fade holds one fetch. The detail partner falls back to the
+    // dome's cloud noise exactly as the primary does; a partner that lands on the current map is
+    // skipped and the renderer pins that pair on the primary, so a fade to the same texture costs
+    // nothing. Dropped the moment the weight reaches the rail.
+    deck.mTextureNextRef = nullptr;
+    deck.mDetailNextRef = nullptr;
+    if (deck.mTextureBlend > 0.f && deck.mTextureNext.notNull() && deck.mTextureNext != deck.mTexture)
+    {
+        if (deck.mTextureNextRef.isNull() || deck.mTextureNextRef->getID() != deck.mTextureNext)
+        {
+            deck.mTextureNextRef = LLViewerTextureManager::getFetchedTexture(
+                deck.mTextureNext, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
+            if (deck.mTextureNextRef.notNull())
+            {
+                deck.mTextureNextRef->setNoDelete();
+            }
+        }
+        if (deck.mTextureNextRef.notNull())
+        {
+            deck.mTextureNextRef->addTextureStats((F32)MAX_IMAGE_AREA);
+        }
+    }
+
+    if (deck.mDetailBlend > 0.f)
+    {
+        const LLUUID detail_cur_id = deck.mDetail.notNull()
+            ? deck.mDetail
+            : (sky ? sky->getCloudNoiseTextureId() : LLUUID::null);
+        const LLUUID detail_next_id = deck.mDetailNext.notNull()
+            ? deck.mDetailNext
+            : (sky ? sky->getCloudNoiseTextureId() : LLUUID::null);
+        if (detail_next_id.notNull() && detail_next_id != detail_cur_id)
+        {
+            if (deck.mDetailNextRef.isNull() || deck.mDetailNextRef->getID() != detail_next_id)
+            {
+                deck.mDetailNextRef = LLViewerTextureManager::getFetchedTexture(
+                    detail_next_id, FTT_DEFAULT, true, LLGLTexture::BOOST_HIGH);
+                if (deck.mDetailNextRef.notNull())
+                {
+                    deck.mDetailNextRef->setNoDelete();
+                }
+            }
+            if (deck.mDetailNextRef.notNull())
+            {
+                deck.mDetailNextRef->addTextureStats((F32)MAX_IMAGE_AREA);
+            }
+        }
     }
 
     return true;

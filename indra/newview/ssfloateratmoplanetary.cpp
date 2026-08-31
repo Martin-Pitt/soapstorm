@@ -1062,7 +1062,7 @@ bool SSFloaterAtmoPlanetary::postBuild()
     const char* body_scalar_fields[] = { "body_diameter_spinner", "body_mass_spinner",
                                          "body_orbital_radius_spinner", "body_inclination_spinner",
                                          "body_phase_spinner", "body_axial_tilt_spinner",
-                                         "body_latitude_spinner" };
+                                         "body_latitude_spinner", "body_disc_padding_spinner" };
     for (const char* name : body_scalar_fields)
     {
         getChild<LLUICtrl>(name)->setCommitCallback(
@@ -1138,6 +1138,42 @@ void SSFloaterAtmoPlanetary::draw()
     }
 
     LLFloater::draw();
+
+    // <SS:Nexii> The disc-padding guide. While the padding spinner is hovered - or held, mid
+    // drag, with the cursor gone wandering off it - draw the disc the renderer will actually
+    // use onto the Texture swatch: the central 1 - 2*padding circle, the same fraction the
+    // celestial chain treats as the body (ss_disc_fraction in ssatmoenvapplier.cpp). Pure UI
+    // feedback; the value read here is the spinner's live one, so the circle tracks the drag.
+    LLView* padding_spinner = getChildView("body_disc_padding_spinner");
+    S32 mouse_x, mouse_y;
+    LLUI::getInstance()->getMousePositionLocal(padding_spinner, &mouse_x, &mouse_y);
+    LLView* held = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
+    const bool padding_hovered = padding_spinner->getEnabled()
+        && (padding_spinner->pointInView(mouse_x, mouse_y)
+            || (held && held->hasAncestor(padding_spinner)));
+    if (!padding_hovered) return;
+
+    LLView* picker = getChildView("body_custom_texture");
+    const F32 padding = llclamp(
+        (F32)getChild<LLUICtrl>("body_disc_padding_spinner")->getValue().asReal(), 0.f, 0.45f);
+
+    // The picker's rect in THIS floater's local space - the drawChildren translate has been
+    // popped back to it by the time LLFloater::draw() returns, so these are draw-ready.
+    S32 picker_left = 0;
+    S32 picker_bottom = 0;
+    for (LLView* view = picker; view && view != this; view = view->getParent())
+    {
+        picker_left += view->getRect().mLeft;
+        picker_bottom += view->getRect().mBottom;
+    }
+    const LLRect& picker_rect = picker->getRect();
+    const F32 centre_x = (F32)picker_left + (F32)picker_rect.getWidth() * 0.5f;
+    const F32 centre_y = (F32)picker_bottom + (F32)picker_rect.getHeight() * 0.5f;
+    const F32 disc_radius = (1.f - 2.f * padding)
+        * 0.5f * (F32)llmin(picker_rect.getWidth(), picker_rect.getHeight());
+
+    gGL.color4f(1.f, 0.4f, 0.8f, 0.9f);
+    gl_circle_2d(centre_x, centre_y, disc_radius, 48, false);
 }
 
 // Retargets the designer at another track.
@@ -1370,6 +1406,7 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
         "body_orbital_radius_spinner", "body_inclination_spinner", "body_phase_spinner",
         "body_axial_tilt_spinner", "body_latitude_spinner", "body_star_type_combo",
         "body_diameter_spinner", "body_mass_spinner", "body_custom_texture",
+        "body_disc_padding_spinner",
         "body_ring_check", "body_ring_inner_spinner", "body_ring_outer_spinner",
         "body_ring_texture", "body_home_check", "body_light_check",
         "body_emissive_check", "body_phase_check",
@@ -1495,6 +1532,11 @@ void SSFloaterAtmoPlanetary::refreshBodyFields()
     }
 
     getChild<LLTextureCtrl>("body_custom_texture")->setValue(body.mCustomTexture);
+    LLSpinCtrl* padding_spinner = getChild<LLSpinCtrl>("body_disc_padding_spinner");
+    if (!padding_spinner->hasFocus())
+    {
+        padding_spinner->setValue(body.mDiscPadding);
+    }
     getChild<LLTextureCtrl>("body_ring_texture")->setValue(body.mRingTexture);
 
     LLUICtrl* home_check = getChild<LLUICtrl>("body_home_check");
@@ -1649,6 +1691,8 @@ void SSFloaterAtmoPlanetary::onCommitBodyScalars()
     body->mAxialTiltDeg = (F32)getChild<LLUICtrl>("body_axial_tilt_spinner")->getValue().asReal();
     body->mLatitudeDeg = llclamp(
         (F32)getChild<LLUICtrl>("body_latitude_spinner")->getValue().asReal(), -90.f, 90.f);
+    body->mDiscPadding = llclamp(
+        (F32)getChild<LLUICtrl>("body_disc_padding_spinner")->getValue().asReal(), 0.f, 0.45f);
 
     p->autoNameBodies();
 

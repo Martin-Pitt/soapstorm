@@ -64,29 +64,40 @@ uniform float haze_density;
 // sky (lldrawpoolwlsky.cpp), so an enabled-but-idle viewer's EEP sky stays stock.
 uniform float ss_horizon_mirror;
 
-// <SS:Nexii> How much of the sun's disc has cleared the horizon (SSAtmoEnvApplier::sunRiseFraction):
-// 0 fully set - or no active Atmo environment, which is exactly stock - up to 1 fully risen,
-// ramping across the disc's own angular span. The dome's light and its sun glow are ramped on
-// this below, because stock switches BOTH the moment the disc's centre crosses zero, which reads
-// as the whole sunrise horizon snapping on at once instead of growing with the disc.
+// <SS:Nexii> The horizon clip (SSAtmoEnvAtmosphere::mHorizonClip), sampled at the applied phase
+// like the mirror - the same uniform skyF.glsl reads for the depth write and the optics cut. 1
+// while the authored sky asks for the hard waterline: the lower dome draws (to take the disc
+// with it), and the sun's glow and haze effects stop at the horizon line - see the fade below.
+uniform float ss_horizon_clip;
+
+// <SS:Nexii> The sun's horizon-band share (SSAtmoEnvApplier::sunRiseFraction): 1 the whole time
+// the disc's centre stands at or above the horizon, easing smoothly to 0 across the twilight band
+// below it; 0 also means no active Atmo environment, which is exactly stock. The dome's light and
+// its sun glow are ramped on this below. Stock switches BOTH the moment the disc's centre crosses
+// zero - and the first cut of the ramp ran it across the disc's own span, which scaled the glow
+// down by the risen share of the disc and halved the sunset exactly where the authored skies put
+// it at full strength. So the band runs DOWN from the horizon instead: the disc's light hits the
+// atmosphere long before the disc reaches the horizon and keeps lighting it long after, and the
+// ramp now honours both - full glow from centre-rise to centre-set, the dusk easing out below.
 uniform float ss_sun_rise;
 
-// <SS:Nexii> The sun's TRUE direction while any part of the disc is in sight
+// <SS:Nexii> The sun's TRUE direction while the rise band is live
 // (SSAtmoEnvApplier::sunSlotDirection). The shared lightnorm direction switches from the sun to
 // the moon the moment the disc's CENTRE sets (LLSettingsSky::getLightDirection) - stock never
 // saw it because stock zeroes the glow and culls the disc below the horizon, but the ramps keep
-// both alive through the rise band, and the takeover rule is sun > moon until the sun is
-// completely out of sight: the glow and the extinction below keep aiming at the SUN while
+// both alive through the whole band, dusk included, and the takeover rule is sun > moon until
+// the band is spent: the glow and the extinction below keep aiming at the SUN while
 // ss_sun_rise is positive, and the moon takes the lightnorm back only once it is not.
 uniform vec3 ss_sun_dir;
 
 // <SS:Nexii> The disc's half-angle as a direction-z sine (SSAtmoEnvApplier::sunSlotRadius) - the
-// same value the risen fraction is measured against. The extinction below holds the sun's airmass
-// at the JUST-CLEARED path (off_axis 1/radius at the horizon line) while any part of the disc is
-// above the horizon, because elevation 0 is not the horizon-sitting airmass - it is the infinite
-// one, and 1/max(1e-6, rel_pos.y + 0) collapses every horizon ray to unlit. The floor releases
-// continuously as the centre climbs past it and is exact at full rise: the risen fraction hits 1
-// precisely when the centre clears the radius. Zero while no Atmo environment drives the sky.
+// unit the horizon band is sized in. The extinction below holds the sun's airmass at the
+// JUST-CLEARED path (off_axis 1/radius at the horizon line) while the rise band is live - through
+// the whole rise AND the whole dusk below the horizon - because elevation 0 is not the
+// horizon-sitting airmass - it is the infinite one, and 1/max(1e-6, rel_pos.y + 0) collapses every
+// horizon ray to unlit. The floor releases continuously once the centre climbs past it, and the
+// afterglow keeps the just-cleared light path while the band's share fades it out. Zero while no
+// Atmo environment drives the sky.
 uniform float ss_sun_radius;
 
 // <SS:Nexii> The stock ray lift. The atmosphere ray below is computed 50 m above the geometry it
@@ -98,6 +109,17 @@ uniform float ss_sun_radius;
 // droop. 1 is exactly stock - 50 * 1.0 is the same ray bit for bit - which is what an
 // enabled-but-idle viewer keeps.
 uniform float ss_ray_lift;
+
+// <SS:Nexii> The glow light's extinction ceiling, in optical depths on the densest attenuation
+// channel. 2.0 is the warm-orange horizon band of a real sunset - deep enough to burn, shallow
+// enough to stay bright; raise it toward the darker reds, lower it toward the golds. See the
+// long note at the glow light below.
+const float SS_SUN_GLOW_DEPTH = 2.0;
+
+// <SS:Nexii> How far below the horizon line the sun's glow and haze effects fade out over when
+// the clip is on, as a SINE of the angle below eye level - about a degree - so the cut reads the
+// same from any camera height. See the fade at vary_ss_below_horizon below.
+const float SS_SUN_HORIZON_FADE = 0.02;
 #endif
 
 uniform float cloud_shadow;
@@ -125,6 +147,23 @@ void main()
     // <SS:Nexii> Which half of the dome this vertex belongs to, for the horizon clip
     // (SSAtmoEnvAtmosphere::mHorizonClip - see skyF.glsl and lldrawpoolwlsky.cpp).
     vary_ss_below_horizon = position.y - camPosLocal.y;
+
+    // <SS:Nexii> Under the clip the sun's glow and haze effects stop at the horizon line. The
+    // clip already takes the disc and the weather optics with it (skyF.glsl's depth write and
+    // ss_clipped_below), but the glow's true-ray hotspot and its capped light would otherwise
+    // carry on down past the waterline - the natural continuation the mirror was built to
+    // provide. An authored sky that asks for the clip asked for the hard waterline instead, so
+    // the directional glow term fades out over SS_SUN_HORIZON_FADE below the line (sine of the
+    // angle below eye level - scale-free, the same cut from any height) and only the mirrored
+    // AIR - the body terms - continues below. With the clip off the fade stays 1 and the glow
+    // keeps its continuation.
+    float ss_glow_horizon_fade = 1.0;
+    if (ss_horizon_clip > 0.0)
+    {
+        vec3 ss_dome_ray = position.xyz - camPosLocal.xyz;
+        float ss_below_sin = clamp(-ss_dome_ray.y / max(length(ss_dome_ray), 1e-6), 0.0, 1.0);
+        ss_glow_horizon_fade = 1.0 - smoothstep(0.0, SS_SUN_HORIZON_FADE, ss_below_sin);
+    }
 #endif
 
     // Get relative position
@@ -167,12 +206,22 @@ void main()
     // -32000 branch stays compiled because the SS_ATMO variant serves both
     // the idle (stock collapse) and active (mirror) cases per frame, and
     // under the mirror it is simply unreachable: the abs keeps y >= 0.
-    // </SS:Nexii>
+    //
+    // The mirror is for the AIR terms only - extinction and haze body, which
+    // have no direction of their own. The directional terms (the glow's
+    // hotspot, the rainbow and halo strip, the weather optics) scatter from
+    // the light at a TRUE angle, so they read the ray captured here before
+    // the flip: feeding them the mirrored ray painted a second copy of the
+    // sun's glow and corona below the horizon, the mirror image of the one
+    // above it.
 #ifdef SS_ATMO
+    vec3 ss_true_dir = vec3(0.0);
     if (ss_horizon_mirror > 0.)
     {
+        ss_true_dir = normalize(rel_pos);
         rel_pos.y = abs(rel_pos.y);
     }
+    // </SS:Nexii>
 #endif
     if (rel_pos.y > 0.)
     {
@@ -188,24 +237,37 @@ void main()
     float rel_pos_len  = length(rel_pos);
 
     // Grab this value and pass to frag shader for rainbows
+    // <SS:Nexii> Under the mirror the rainbow and halo strip read the true ray (see above), so
+    // their rings land at true angular distances from the light below the horizon too - never
+    // mirrored ones.
     float rel_pos_lightnorm_dot = dot(rel_pos_norm, lightnorm.xyz);
+#ifdef SS_ATMO
+    if (ss_horizon_mirror > 0.)
+    {
+        rel_pos_lightnorm_dot = dot(ss_true_dir, lightnorm.xyz);
+    }
+#endif
     vary_LightNormPosDot = rel_pos_lightnorm_dot;
 
 #ifdef SS_ATMO
     // <SS:Nexii> The view ray, for the weather-driven optics (ssOptics in skyF.glsl) to split into
     // corona, 22/46 halos, sundogs and the aligned-plate arcs by true angular position around the
     // light. Same frame as lightnorm, so the fragment stage compares it against the same light
-    // direction uniform and the same +Y up the dome already shades with.
-    vary_ss_view_dir = rel_pos_norm;
+    // direction uniform and the same +Y up the dome already shades with. Under the mirror this is
+    // the TRUE ray (see above): a below-horizon fragment gets only what its real angle from the
+    // light scatters - the natural continuation of the phenomena across the horizon line - never
+    // the mirrored copy the flipped ray used to paint.
+    vary_ss_view_dir = (ss_horizon_mirror > 0.) ? ss_true_dir : rel_pos_norm;
 #endif
 
     // Initialize temp variables
     vec3 sunlight = (sun_up_factor == 1) ? sunlight_color : moonlight_color * 0.7; //magic 0.7 to match legacy color
 
 #ifdef SS_ATMO
-    // <SS:Nexii> The disc sheds light as it rises, not the instant its centre clears the horizon:
-    // the dome's sunlight walks from the night value to the day value across the disc's own rise
-    // (ss_sun_rise is the risen share of the disc), so the haze it lights up grows in with it.
+    // <SS:Nexii> The disc sheds light across the horizon band, not the instant its centre clears
+    // the horizon: the dome's sunlight is the full day colour from centre-rise up - the condition
+    // the authored skies painted against - and walks back down to the night value as the sun
+    // sinks through the twilight below the horizon (ss_sun_rise is the horizon-band share).
     // Zero leaves the stock switch untouched - night, idle environments, and the fully-set case.
     if (ss_sun_rise > 0.0)
     {
@@ -218,17 +280,16 @@ void main()
     vec3 light_atten = (blue_density + vec3(haze_density * 0.25)) * (density_multiplier * max_y);
 
 #ifdef SS_ATMO
-    // <SS:Nexii> While any part of the disc is above the horizon, the sun's term in the light
-    // path floors at the DISC'S OWN half-angle (ss_sun_radius). Stock feeds the raw (clamped)
-    // lightnorm elevation in here, so the moment the disc's CENTRE dips under, every ray near
-    // the horizon loses its light path - the max(1e-6, ...) below collapses them to unlit - and
-    // the whole sunset band is cut out from under a disc that is still half up. Holding the
-    // elevation at the radius is the JUST-CLEARED airmass (1/radius at the horizon line, the
-    // same path a sun that has only just cleared gets), so the band stays lit for the whole
-    // rise and the sunrise horizon exists from the first sliver; held at 0 the horizon rays get
-    // the infinite-airmass clamp and die exactly as they do in stock. The floor releases
-    // continuously once the centre clears the radius - the risen fraction hits 1 exactly there -
-    // and the gate is stock with it off.
+    // <SS:Nexii> While the rise band is live, the sun's term in the light path floors at the
+    // DISC'S OWN half-angle (ss_sun_radius). Stock feeds the raw (clamped) lightnorm elevation in
+    // here, so the moment the disc's CENTRE dips under, every ray near the horizon loses its
+    // light path - the max(1e-6, ...) below collapses them to unlit - and the whole sunset band
+    // is cut out from under a disc that is still half up. Holding the elevation at the radius is
+    // the JUST-CLEARED airmass (1/radius at the horizon line, the same path a sun that has only
+    // just cleared gets), so the band stays lit for the whole rise, and the dusk below the
+    // horizon keeps that same just-cleared path while the band's share fades it out - the
+    // afterglow dies of the fade, never of the airmass. The floor releases continuously once the
+    // centre clears the radius, and the gate is stock with it off.
     float sun_elev = (ss_sun_rise > 0.0) ? max(ss_sun_dir.z, ss_sun_radius) : lightnorm.y;
 #else
     float sun_elev = lightnorm.y;
@@ -241,6 +302,11 @@ void main()
 
     // Compute sunlight from rel_pos & lightnorm (for long rays like sky)
     float off_axis = 1.0 / max(1e-6, max(0., rel_pos_norm.y) + sun_elev);
+#ifdef SS_ATMO
+    // The pre-attenuation light, kept for the glow's own extinction below - the glow is
+    // scattered light, not the beam, and does not have to take the beam's full fate.
+    vec3 ss_raw_light = sunlight;
+#endif
     sunlight *= exp(-light_atten * off_axis);
 
     // Distance
@@ -261,10 +327,16 @@ void main()
     // puts both directions in one frame. ss_sun_dir.z keeps meaning the true elevation.
 #ifdef SS_ATMO
     vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir.yzx : lightnorm.xyz;
+    // <SS:Nexii> The hotspot is forward scatter from the light at a true angle, so under the
+    // mirror it reads the true ray (see above): below the horizon it carries on down from the
+    // horizon line, decaying with angle, instead of growing a second sun mirrored under the
+    // first. The extinction above keeps the mirrored ray - that is what the mirror is for.
+    vec3 glow_ray = (ss_horizon_mirror > 0.) ? ss_true_dir : rel_pos_norm;
 #else
     vec3 glow_dir = lightnorm.xyz;
+    vec3 glow_ray = rel_pos_norm;
 #endif
-    float haze_glow = 1.0 - dot(rel_pos_norm, glow_dir);
+    float haze_glow = 1.0 - dot(glow_ray, glow_dir);
     // haze_glow is 0 at the sun and increases away from sun
     haze_glow = max(haze_glow, .001);
     // Set a minimum "angle" (smaller glow.y allows tighter, brighter hotspot)
@@ -276,14 +348,15 @@ void main()
     // Add "minimum anti-solar illumination"
     // For sun, add to glow.  For moon, remove glow entirely. SL-13768
 #ifdef SS_ATMO
-    // <SS:Nexii> The glow is the light the disc sheds, so during the rise band it is built from
-    // the RAW angular term and scaled by the risen share - the hotspot exists from the first
-    // sliver above the horizon. Stock's factor line cannot be allowed to touch it there: below
-    // centre-rise the factor belongs to the moon (< 1.0), whose branch zeroes the term entirely
-    // (SL-13768 - right for the moon, which must not glow), and ramping on the zeroed term grew
-    // a FLAT 0.25 wash with no hotspot at all until the factor snapped to 1.0 at centre-rise -
-    // the sunrise horizon simply was not there while the disc poked over. At full rise this is
-    // exactly the stock sun line (ss_sun_rise 1 * (raw + 0.25)); with the gate off, stock.
+    // <SS:Nexii> The glow is the light the disc sheds, so while the rise band is live it is
+    // built from the RAW angular term and scaled by the horizon-band share - full strength the
+    // whole time the disc is up, which is exactly the stock sun line and the condition the
+    // authored skies painted against, then easing out across the twilight below the horizon.
+    // Stock's factor line cannot be allowed to touch it in the band: below centre-rise the
+    // factor belongs to the moon (< 1.0), whose branch zeroes the term entirely (SL-13768 -
+    // right for the moon, which must not glow), and ramping on the zeroed term grew a FLAT 0.25
+    // wash with no hotspot at all until the factor snapped to 1.0 at centre-rise - the sunrise
+    // horizon simply was not there while the disc poked over. With the gate off, stock.
     if (ss_sun_rise > 0.0)
     {
         haze_glow = ss_sun_rise * (haze_glow + 0.25);
@@ -294,9 +367,47 @@ void main()
         haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (sun_moon_glow_factor * (haze_glow + 0.25));
     }
 
+#ifdef SS_ATMO
+    // <SS:Nexii> The horizon clip's cut of the sun's effects at the waterline - see the note at
+    // ss_glow_horizon_fade above. 1 unless the clip is on and this vertex sits below the line.
+    haze_glow *= ss_glow_horizon_fade;
+#endif
+
+#ifdef SS_ATMO
+    // <SS:Nexii> The sun's glow and haze get their OWN light, with the beam extinction's crush
+    // BOUNDED rather than the beam's. The beam maths above (off_axis 1/elevation) hands horizon
+    // rays an effectively infinite airmass, and the density product exp()s the sun's colour to
+    // black there - the glow's SHAPE survives but arrives colourless, which is the grey horizon
+    // band, the "edge" the authored sunset is supposed to burn through. (A radial fade of the
+    // extinction around the disc was tried first and read as a giant ball: the window's inner
+    // zone rode the hotspot at full strength, the mid-ring swept through the deepest saturation,
+    // and the window's edge popped back to the crushed sky - a bullseye around the sun quad,
+    // which is itself correct.) So instead the glow's extinction is CAPPED: its airmass may not
+    // exceed the depth at which the densest attenuation channel has shed SS_SUN_GLOW_DEPTH
+    // optical depths - scaled uniformly across the channels, so the hue survives and the band
+    // deepens TO its colour, never through it and out the other side. Where the beam maths is
+    // mild the cap never binds and the stock line stands; it only binds where the crush was
+    // total, and a min() has no edge to see - the grey band simply becomes the bright warm
+    // gradient a real sunset carries, core to horizon and on down past it. Density keeps every
+    // other duty untouched - the dome body, the blue_horizon wash, the distance haze, the
+    // (1 - combined_haze) scale. Live only while the rise band is (ss_sun_rise > 0): an idle
+    // environment keeps the stock line bit for bit.
+    vec3 ss_glow_light = sunlight;
+    if (ss_sun_rise > 0.0)
+    {
+        float ss_max_atten = max(light_atten.r, max(light_atten.g, light_atten.b));
+        float ss_glow_airmass = min(off_axis, SS_SUN_GLOW_DEPTH / max(ss_max_atten, 1e-6));
+        ss_glow_light = ss_raw_light * exp(-light_atten * ss_glow_airmass);
+    }
+#endif
+
     // Haze color above cloud
     vec3 color = (blue_horizon * blue_weight * (sunlight + ambient_color)
+#ifdef SS_ATMO
+               + (haze_horizon * haze_weight) * (ss_glow_light * haze_glow + ambient_color));
+#else
                + (haze_horizon * haze_weight) * (sunlight * haze_glow + ambient_color));
+#endif
 
     // Final atmosphere additive
     color *= (1. - combined_haze);
@@ -306,10 +417,17 @@ void main()
 
     // Dim sunlight by cloud shadow percentage
     sunlight *= max(0.0, (1. - cloud_shadow));
+#ifdef SS_ATMO
+    ss_glow_light *= max(0.0, (1. - cloud_shadow));
+#endif
 
     // Haze color below cloud
     vec3 add_below_cloud = (blue_horizon * blue_weight * (sunlight + ambient)
+#ifdef SS_ATMO
+                         + (haze_horizon * haze_weight) * (ss_glow_light * haze_glow + ambient));
+#else
                          + (haze_horizon * haze_weight) * (sunlight * haze_glow + ambient));
+#endif
 
     // Attenuate cloud color by atmosphere
     combined_haze = sqrt(combined_haze);  // less atmos opacity (more transparency) below clouds

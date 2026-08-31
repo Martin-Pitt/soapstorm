@@ -95,6 +95,7 @@ namespace
             && body.mEmissive == standard.mEmissive
             && body.mPhaseShaded == standard.mPhaseShaded
             && !body.mHasRing
+            && body.mDiscPadding == standard.mDiscPadding
             && body.mCustomTexture == standard.mCustomTexture;
     }
     // The default planetary system a freshly created track starts with: the standard sun, an
@@ -273,6 +274,7 @@ LLSD SSAtmoEnvCelestialBody::asLLSD() const
     sd["bound_partner_index"] = mBoundPartnerIndex;
 
     if (mCustomTexture.notNull()) sd["custom_texture"] = mCustomTexture;
+    if (mDiscPadding > 0.f) sd["disc_padding"] = (LLSD::Real)mDiscPadding;
 
     sd["has_ring"] = mHasRing;
     if (mHasRing)
@@ -317,6 +319,9 @@ bool SSAtmoEnvCelestialBody::fromLLSD(const LLSD& sd)
     mBoundPartnerIndex = sd.has("bound_partner_index") ? sd["bound_partner_index"].asInteger() : -1;
 
     mCustomTexture = sd.has("custom_texture") ? sd["custom_texture"].asUUID() : LLUUID::null;
+
+    mDiscPadding = llclamp(sd.has("disc_padding") ? (F32)sd["disc_padding"].asReal() : 0.f,
+                           0.f, 0.45f);
 
     mHasRing = sd.has("has_ring") ? sd["has_ring"].asBoolean() : false;
     if (sd.has("ring_inner_radius")) mRingInnerRadius = (F32)sd["ring_inner_radius"].asReal();

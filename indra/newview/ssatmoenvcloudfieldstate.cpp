@@ -59,6 +59,17 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     state.mNoiseTexture = field.mNoiseTexture.valueAt(phase);
     state.mProfileTexture = field.mProfileTexture.valueAt(phase);
 
+    // <SS:Nexii> Mid-fade the pair rides along; the partner starts parked on the current map so
+    // the renderer can bind it unconditionally. blendAt rewrites the current id with the fade's
+    // FROM keyframe - the same answer valueAt held.
+    state.mBaseTextureNext = state.mBaseTexture;
+    state.mBaseTextureBlend = 0.f;
+    field.mBaseTexture.blendAt(phase, state.mBaseTexture, state.mBaseTextureNext, state.mBaseTextureBlend);
+
+    state.mDetailTextureNext = state.mDetailTexture;
+    state.mDetailTextureBlend = 0.f;
+    field.mDetailTexture.blendAt(phase, state.mDetailTexture, state.mDetailTextureNext, state.mDetailTextureBlend);
+
     state.mTextureMix = llclamp(field.mTextureMix.valueAt(phase), 0.f, 1.f);
     state.mPuffDensity = llclamp(field.mPuffDensity.valueAt(phase), 0.f, 1.f);
     state.mDetailScale = llmax(0.01f, field.mDetailScale.valueAt(phase));

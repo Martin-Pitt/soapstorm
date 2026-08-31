@@ -106,13 +106,14 @@ dry -30C sky renders no ice at all; the old Ice Level keyframed value is the bas
 lifts from. The former `cold` row keeps only the dry-air blue-density shift ("Cold dry air
 sharpens the sky colour"), which is why the old all-in-one "Cold clear air makes ice halos" is gone.
 
-Two behaviours worth knowing when tuning. The optics ramp on the SUN'S risen share of its disc
-(`SSAtmoEnvApplier::sunRiseFraction`), not on the stock centre-crossing test - a low sun's halos
-burn in from the first sliver of quad above the horizon and fade as it sets instead of popping at
-centre-rise, and the ring keeps aiming at the sun's true position the whole way. And the crystal
-"frost" drive ramps from nothing at freezing down to full at -20C; there is deliberately no ice
-anywhere above 0C, so scrubbing temperature fades halos in and out across the freezing band rather
-than snapping them off.
+Two behaviours worth knowing when tuning. The optics ramp on the SUN'S horizon-band share
+(`SSAtmoEnvApplier::sunRiseFraction`) - full while the disc's centre is up, easing out across the
+twilight below the horizon - not on the stock centre-crossing test - a low sun's halos burn in
+from the first sliver of quad above the horizon and fade through the dusk after it sets instead
+of popping at centre-rise, and the ring keeps aiming at the sun's true position the whole way.
+And the crystal "frost" drive ramps from nothing at freezing down to full at -20C; there is
+deliberately no ice anywhere above 0C, so scrubbing temperature fades halos in and out across the
+freezing band rather than snapping them off.
 
 ## The altitude rail
 

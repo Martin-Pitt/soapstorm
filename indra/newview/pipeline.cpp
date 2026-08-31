@@ -9813,10 +9813,11 @@ void LLPipeline::renderDeferredLighting()
             LLEnvironment &environment = LLEnvironment::instance();
 
             soften_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
-            // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the atmospheric module ramps
-            // its sunlight and sun glow across the disc's rise instead of snapping at centre-rise.
+            // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the atmospheric module ramps
+            // its sunlight and sun glow on the twilight band (full while the disc is up, easing
+            // out through the dusk below the horizon) instead of snapping at centre-rise.
             soften_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
-            // ...and the sun's true direction while any part of the disc is in sight - see
+            // ...and the sun's true direction while the rise band is live - see
             // SSAtmoEnvApplier::sunSlotDirection.
             soften_shader.uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
             soften_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
@@ -10238,10 +10239,11 @@ void LLPipeline::doAtmospherics()
 
         LLEnvironment& environment = LLEnvironment::instance();
         haze_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
-        // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the haze additive ramps its sun
-        // glow across the disc's rise instead of snapping at centre-rise.
+        // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the haze additive ramps its sun
+        // glow on the twilight band (full while the disc is up, easing out through the dusk below
+        // the horizon) instead of snapping at centre-rise.
         haze_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
-        // ...and the sun's true direction while any part of the disc is in sight - see
+        // ...and the sun's true direction while the rise band is live - see
         // SSAtmoEnvApplier::sunSlotDirection.
         haze_shader.uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
         haze_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);

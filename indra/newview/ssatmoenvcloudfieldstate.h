@@ -46,6 +46,16 @@ struct SSAtmoEnvCloudFieldState
     LLUUID mBaseTexture;
     LLUUID mDetailTexture;
 
+    // <SS:Nexii> The base and detail maps' crossfade partners, filled when the day cycle is
+    // mid-fade between two keyframed textures (blend is the eased 0..1 weight; 0 means "no fade,
+    // the partner is unused"). The noise and profile maps deliberately do NOT fade: the CPU field
+    // - puff placement, the convection grid - belongs to exactly one map, so their cut keeps the
+    // geometry and the carving in agreement.
+    LLUUID mBaseTextureNext;
+    F32 mBaseTextureBlend = 0.f;
+    LLUUID mDetailTextureNext;
+    F32 mDetailTextureBlend = 0.f;
+
     // <SS:Nexii> The convection noise map and its metres-per-tile multiplier, straight off the
     // authored keyframes - the deck does its own shaping (see ssvolcloud). mProfileTexture is the
     // vertical profile ramp: none runs the built-in vertical curves.

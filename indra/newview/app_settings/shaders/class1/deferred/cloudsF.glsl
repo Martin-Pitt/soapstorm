@@ -62,15 +62,27 @@ vec4 cloudNoise(vec2 uv)
 #ifdef SS_ATMO
 // <SS:Nexii> The dome's authored LARGE-SCALE map, when one is set (lldrawpoolwlsky binds it and
 // raises the gate): the broad octave and its self-shadow read it, while the fine octave keeps
-// the cloud noise. At an 8 km tile the cloud noise's blob scale is too small to art-direct the
-// broad composition, and one map for every octave means the broad sky is the fine map stretched.
-// Gate 0 leaves every octave on the cloud noise, exactly as before this existed.
+// the cloud noise. The cloud noise's own blob scale is tuned for the fine octave, so a broad
+// composition art-directed on it comes out samey - one map for every octave means the broad sky
+// is the fine map stretched. Gate 0 leaves every octave on the cloud noise, exactly as before
+// this existed.
 uniform sampler2D ss_noise_large;
 uniform float ss_noise_large_on;
 
+// <SS:Nexii> The large map's crossfade partner and weight, live while the day cycle fades the
+// broad octave between two authored maps. The pool pins the partner on the same map with weight
+// 0 whenever no fade runs, so the inner mix below is a no-op then.
+uniform sampler2D ss_noise_large_next;
+uniform float ss_noise_large_blend;
+
 vec4 cloudNoiseLarge(vec2 uv)
 {
-    return mix(cloudNoise(uv), texture(ss_noise_large, uv), ss_noise_large_on);
+    vec4 large = texture(ss_noise_large, uv);
+    if (ss_noise_large_blend > 0.0)
+    {
+        large = mix(large, texture(ss_noise_large_next, uv), ss_noise_large_blend);
+    }
+    return mix(cloudNoise(uv), large, ss_noise_large_on);
 }
 #else
 // <SS:Nexii> The broad octave's calls in the opacity lines below are ungated so both variants
@@ -97,37 +109,41 @@ uniform float ss_cloud_plane;  // 1: derive UVs from the view ray (active Atmo).
 uniform vec3 lightnorm;        // the self-shadow offset's direction - stock derived texcoord1 from it per-vertex
 in vec3 vary_ray_dir;
 
-// Metres of world per tile of the large map. See ss_plane_base - pinned against both the band's
-// height and cloud_scale on purpose. Deliberately enormous: at 8 km a tile spans more than the
-// visible plane at deck heights, so the broad composition never repeats across the sky, and the
-// fine layer (at 2x, 4 km) carries the masses. The old 4 km tile put visible clumps at a few
-// hundred metres and the same clumps marched across the whole sky in rows.
-const float SS_DOME_TILE_M = 8000.0;
+// Metres of world per tile of the dome's noise. Pinned - deliberately free of both the band's
+// height and cloud_scale, so one tile is one fixed piece of world: the convection merge can
+// descend the cirrus band without breathing the pattern, and an imported day cycle's keyframed
+// Scale dial cannot zoom the dome. Calibrated for the band's 6 km DEFAULT (the cirrus layer's
+// default height): one tile spans half the band's height, and the reach saturation below holds
+// the whole sky to ~4 tile repeats - the 3x3-to-4x4 field the dome is tuned for. (The earlier
+// 8 km pin put a single continent-scale blob across half the dome - a ~24x zoom next to this
+// calibration; the stock-anchored 2*alt*cloud_scale divisor it replaced breathed the pattern
+// every time the band moved.)
+const float SS_DOME_TILE_M = 3000.0;
 
-// The fine layers' multiplier. Stock's 16 made the fine tile a few hundred metres of world -
+// The fine layers' multiplier. Stock's 16 made the fine tile a fraction of the broad one -
 // dozens of copies of the same clump across the sky, marching in rows under the perspective
-// compression. At 2x the fine tile is half the broad one: two close octaves, each covering more
-// sky than the eye can span, so neither octave's tiling can read. Stock's texcoord path keeps
+// compression. At 2x the fine tile is half the broad one: two close octaves a single factor
+// apart, so their repetitions never align into a visible grid. Stock's texcoord path keeps
 // its 16.
 const float SS_FINE_LAYER = 2.0;
 
 // One band's base UVs, and how much of the band survives. Intersect the view ray with the band's
 // deck, anchor at the region centre, subtract the wind travel, and divide by a PINNED
-// metres-per-uv. vary_ray_dir rides the dome mesh's Y-up local space (renderDome's 120 degree
+// metres-per-uv (see THE TILE IS PINNED below). vary_ray_dir rides the dome mesh's Y-up local space (renderDome's 120 degree
 // permute: local y is world UP, local x is world Y, local z is world X), so the horizontal
 // components reach deck_m as (ray.z, ray.x) - east, north, matching region_offset's (world X,
 // world Y) order.
 //
-// THE TILE IS PINNED - deliberately free of both the band's height and cloud_scale. The old
-// 2*alt*cloud_scale divisor cancelled alt out of the flat mapping's own static pattern
-// (reach divided by metres_per_uv left no h), which is why the pattern never moved vertically;
-// it also zoomed the texture every time the band's altitude moved (the merge descending onto the
-// deck), and let an imported day cycle's keyframed scale dial breathe the whole dome - zoom and
-// parallax rate swinging together, cycle after cycle. Pinned, one tile is one fixed piece of
-// world: the height above the camera survives into the pattern (vertical parallax, on the flat
-// fallback too), altitude changes slide instead of zoom, and the scale dial stays out of the Atmo
-// render entirely. The value is the old calibration's at the stock ceiling and default scale
-// (2 x 1605 x 0.42), so the default look is preserved.
+// THE TILE IS PINNED - deliberately free of both the band's height and cloud_scale. One tile is
+// one fixed piece of world: the height above the camera survives into the pattern (vertical
+// parallax, on the flat fallback too), and altitude changes slide instead of zoom - the
+// convection merge descending onto the deck does not breathe the pattern, and an imported day
+// cycle's keyframed Scale dial stays out of the Atmo render entirely. The calibration is the
+// DEFAULT band height's, not the live band's - see SS_DOME_TILE_M above. (Two earlier cuts:
+// anchoring the tile at 2*alt*cloud_scale - stock EEP's zenith calibration - matched stock at
+// any altitude but breathed the pattern as the band moved and cancelled the vertical parallax
+// out of the static pattern entirely; pinning at 8 km fixed both but put one continent-scale
+// blob across half the dome.)
 //
 // THE DECK CURVES. With ss_planet_orbit_m set, the ray meets a SPHERE centred on the planet at
 // radius orbit + deck height - the deck is a finite disc that terminates at its own curved horizon
@@ -138,8 +154,9 @@ const float SS_FINE_LAYER = 2.0;
 // and only down-rays hit - the deck seen from above. Orbit 0 keeps the flat-deck fallback.
 //
 // The flat fallback's denominator is SOFTENED, not clamped: (1+F)*alt / (|up| + F) is smooth in
-// the ray everywhere, exact at the zenith, and caps the deck distance at ~10 band-altitudes in
-// the horizon fold. The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
+// the ray everywhere and exact at the zenith, and the far field on BOTH paths is then saturated
+// at SS_DECK_SPAN band-heights (see THE HORIZON SATURATES below), so no fold tail ever draws.
+// The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
 // never hid: below ~1.2 degrees it froze the UVs into an azimuth-only field, which smears the
 // band into vertical stripes toward the horizon, and exactly on the clamp line the screen-space
 // derivative jumps, which collapses the mip selection into a grid of tile boundaries in the
@@ -153,22 +170,25 @@ const float SS_FINE_LAYER = 2.0;
 // world north runs down the texture's v, and the wind travel negates the same way.
 //
 // NO DOMAIN WARP. An earlier cut ran three nested warp levels at incommensurate frequencies and
-// rotated frames - an attempt at aperiodic tiling against the OLD, small tile, where the same
-// clumps genuinely marched across the sky in rows. The tile scale-up (SS_DOME_TILE_M at 8 km, the
-// fine layer at 2x) removed the repetition at its root - the visible plane spans barely one tile
-// of each octave - and the warp fields, sampled from the same map they displaced, only smeared
-// and buckled the composition. The mapping is a straight, honest lookup now.
+// rotated frames - an attempt at aperiodic tiling against the pinned tile, where the same
+// clumps can genuinely march across the sky in rows toward the horizon. It read as smear and
+// buckle, not as aperiodicity: a displacement field sampled from the same map it displaces is
+// itself periodic, so the warped grid was still a grid, just bent. The mapping is a straight,
+// honest lookup now - the repetition is softened by the fine octave's distance fade and by an
+// authored large map (ss_noise_large) art-directing the broad octave when one is set.
 vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
 {
     const float SS_DECK_FOLD     = 0.1;
     const float SS_PARALLAX_DAMP = 0.125;
     const float SS_THROUGH_LO_M  = 40.0;
     const float SS_THROUGH_HI_M  = 300.0;
+    // Band-heights the deck's UV reach saturates across - see THE HORIZON SATURATES below.
+    const float SS_DECK_SPAN     = 2.0;
     // Where the fine layers give up. Perspective compresses the deck toward its horizon, and the
-    // fine detail's angular size collapses with it. With a 4 km fine tile that point sits far out
-    // - sub-degree tiles only arrive near the deck's own rim - so the fade is a rim-zone cleanup
-    // rather than a mid-sky tool: the last stretch before the melt, where the compression spikes,
-    // lets the broad layer carry the sheet alone.
+    // fine detail's angular size collapses with it. The fade is a rim-zone cleanup: the last
+    // stretch before the melt, where the compression spikes, lets the broad layer carry the
+    // sheet alone. The reach saturation keeps the compression from ever getting that far at the
+    // current calibration, so this sits idle - a guard for a wider span or smaller tile.
     const float SS_DETAIL_LO_M   = 100000.0;
     const float SS_DETAIL_HI_M   = 250000.0;
 
@@ -204,7 +224,19 @@ vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
 
     detail_fade = 1.0 - smoothstep(SS_DETAIL_LO_M, SS_DETAIL_HI_M, reach);
 
-    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach;
+    // THE HORIZON SATURATES. The plane-honest reach runs to tens of band-heights at the rim
+    // (the flat fold ~11, the sphere's rim sqrt(2*orbit*alt) - hundreds of km), and a tiled
+    // texture under that perspective compression marches dozens of copies of the same clump
+    // across the horizon band - the ~100-row field a planar mapping always grows, and the
+    // stock dome never showed because its texcoords are angular, not planar. The reach
+    // therefore saturates smoothly at SS_DECK_SPAN band-heights: linear in the mid sky, short
+    // of the zenith calibration by ~10% there, asymptotic at the fold, and C-infinity in the
+    // ray so no derivative jump kinks the mip selection. Zenith to rim holds
+    // SS_DECK_SPAN*alt/SS_DOME_TILE_M repeats - 4 at the 6 km calibration - instead of ~100.
+    float span      = max(ah * SS_DECK_SPAN, 1.0);
+    float reach_eff = span * reach / sqrt(span * span + reach * reach);
+
+    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach_eff;
     vec2 world_m = SS_PARALLAX_DAMP * (region_offset - ss_cloud_drift);
 
     return vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / SS_DOME_TILE_M;

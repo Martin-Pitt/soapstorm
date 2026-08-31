@@ -40,6 +40,7 @@ uniform float ss_emissive;       // 1 the body makes its own light
 uniform float ss_phase_shaded;   // 1 shade it as a sphere
 uniform float ss_daylight;       // 0 the observer is in night, 1 in full day
 uniform vec2 ss_face_rot;        // (cos, sin) of the body's roll on its quad
+uniform float ss_disc_fraction;  // the art's disc as a fraction of the quad (1 = full-bleed)
 
 in vec2 vary_texcoord0;
 
@@ -126,10 +127,12 @@ void main()
     }
     else
     {
-        // Shaded as the sphere the disc stands in for. The billboard already carries the normal implicitly: the disc IS the projection of a sphere, so the UV gives it.
+        // Shaded as the sphere the disc stands in for. The billboard already carries the normal implicitly: the disc IS the projection of a sphere, so the UV gives it. Padded art puts that sphere
+        // in the central ss_disc_fraction of the quad, so the coordinate is normalised into the art's disc before it maps a normal - with full-bleed art the fraction is 1 and this is the raw
+        // coordinate, bit for bit.
         if (ss_phase_shaded > 0.5)
         {
-            vec2 p = vary_texcoord0.xy * 2.0 - 1.0;
+            vec2 p = (vary_texcoord0.xy * 2.0 - 1.0) / max(ss_disc_fraction, 0.001);
             float r2 = min(dot(p, p), 1.0);
 
             // At the centre of the disc the surface faces the observer, which is -ss_body_dir; the rest is the quad's own two axes.

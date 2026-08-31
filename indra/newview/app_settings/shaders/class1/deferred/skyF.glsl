@@ -258,8 +258,19 @@ void main()
 
         float  rel_pos_lightnorm = vary_LightNormPosDot;
         float optic_d = rel_pos_lightnorm;
-        color.rgb += rainbow(optic_d);
 #ifdef SS_ATMO
+        // <SS:Nexii> The horizon clip cuts the lower dome at eye level - and the sun with it, since
+        // under the clip's grace band the disc keeps drawing until it is ENTIRELY below the horizon.
+        // No optical effect may trace an arc below that cut: without this the rainbow and the halo
+        // strip carry on down off the anti-solar point and the weather optics continue under the
+        // horizon, painting the half the clip exists to deny. Each fragment reads its own side of
+        // the cut via vary_ss_below_horizon; with the clip off nothing is removed, so the phenomena
+        // keep their natural continuation across the line as before. </SS:Nexii>
+        const bool ss_clipped_below = (ss_horizon_clip > 0.0) && (vary_ss_below_horizon < 0.0);
+        if (!ss_clipped_below)
+        {
+            color.rgb += rainbow(optic_d);
+        }
         if (ss_optic_active > 0.001)
         {
             // <SS:Nexii> Weather-driven optics take over while an active Atmo environment drives the
@@ -268,16 +279,17 @@ void main()
             // the halo step is switched off the strip is skipped too - an active Atmo sky never draws
             // the old corona-plus-wide-ring halo_map. An IDLE Atmo viewer (boosted master switch, no
             // environment) keeps the stock strip below, so it stays bit-for-bit. </SS:Nexii>
-            if (ss_optic_gate > 0.001)
+            if (ss_optic_gate > 0.001 && !ss_clipped_below)
             {
                 color.rgb += ss_optics(normalize(vary_ss_view_dir));
             }
         }
-        else
+        else if (!ss_clipped_below)
         {
             color.rgb += halo22(optic_d);
         }
 #else
+        color.rgb += rainbow(optic_d);
         color.rgb += halo22(optic_d);
 #endif
         color.rgb *= 2.;

@@ -1341,6 +1341,7 @@ void LLShaderMgr::initAttribsAndUniforms()
     mReservedUniforms.push_back("cloud_noise_texture");
     mReservedUniforms.push_back("cloud_noise_texture_next");
     mReservedUniforms.push_back("ss_noise_large"); // <SS:Nexii> the dome band's authored large-scale map
+    mReservedUniforms.push_back("ss_noise_large_next"); // <SS:Nexii> the large map's crossfade partner
     mReservedUniforms.push_back("lightnorm");
     mReservedUniforms.push_back("sunlight_color");
     mReservedUniforms.push_back("ambient_color");

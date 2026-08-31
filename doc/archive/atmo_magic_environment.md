@@ -421,8 +421,14 @@ How the authored asset actually reaches the screen, phased:
   go by apparent size, not list order: the emitter subtending the larger
   angular diameter takes the sun slot, the other the moon slot (ties to
   the lower body index). Emitter angular size maps to the sun/moon disc
-  scale (0.53 deg - the real Sun's apparent size - equals scale 1.0); a
-  non-null custom texture replaces the stock disc, and a null one falls
+  scale against the slot's QUAD angle (ss_atmoenv_quad_deg: a scale-1.0
+  quad subtends 5.72 deg of sun, 5.15 of moon - the angle the geometry
+  chain actually draws, which the old 0.53 deg reference described as ten
+  times smaller, and every body drew oversized as a result); a body's
+  optional disc padding (transparent art margin, 0 = full-bleed) inflates
+  the quad by 1/(1 - 2*padding) so the VISIBLE disc lands on the authored
+  angle. A non-null custom texture replaces the stock disc, and a null
+  one falls
   back by the BODY's kind (sun-kind gets a sun disc, anything else the
   moon disc, whichever slot it landed in). An emitter coincident with
   the home body (distance ~0) has no sky direction and counts as absent.
@@ -431,11 +437,11 @@ How the authored asset actually reaches the screen, phased:
   sun.
 - **Billboard bodies:** every non-emitter, non-home body is published by
   the applier as an `SSAtmoEnvBillboard` (diurnally-swept direction,
-  angular diameter, custom texture) and drawn by
+  angular diameter, custom texture, resolved disc fraction) and drawn by
   `LLDrawPoolWLSky::renderHeavenlyBodies()` as a camera-facing quad after
-  the sun and moon, through the moon shader - same disc-scale mapping,
-  sizing chain and horizon treatment as the moon, so equal angular
-  diameters render equal, and positioned on the same effective shell the
+  the sun and moon, through the moon shader - same disc-scale mapping
+  (against the moon slot's quad angle, padding and all), sizing chain and
+  horizon treatment as the moon, so equal angular diameters render equal, and positioned on the same effective shell the
   sun/moon quads occupy (their upstream camera-offset included), so
   nothing parallaxes apart as the camera moves. Null texture falls back
   by the body's kind - sun-kind bodies to the stock sun disc, the rest to

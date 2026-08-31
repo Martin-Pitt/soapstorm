@@ -39,6 +39,14 @@ uniform sampler2D cloud_noise_texture;
 uniform sampler2D depthMap;
 uniform vec2 screen_res;
 
+// <SS:Nexii> The base and detail maps' crossfade partners - bumpMap and specularMap are
+// RESERVED names (see the depthMap note below: only reserved names can be bound as textures).
+// Weights 0 with the partners pinned on the current maps whenever no fade runs.
+uniform sampler2D bumpMap;
+uniform sampler2D specularMap;
+uniform float ss_base_blend;
+uniform float ss_detail_blend;
+
 // Agent-to-view, for handing calcAtmosphericVars a view-space position of the TRUE fragment. Reserved name, auto-bound from the fixed-function matrix state.
 uniform mat4 modelview_matrix;
 
@@ -243,12 +251,28 @@ float ss_eye_z(float d)
 
 float ss_density(vec2 uv)
 {
-    return dot(texture(diffuseMap, uv).rgb, vec3(0.3333));
+    // <SS:Nexii> The base map's crossfade partner (bumpMap, a reserved channel) and the eased
+    // weight, live while the day cycle fades the deck between two keyframed textures. The branch
+    // is on a uniform, so every fragment takes the same path and a idle weight costs one sample,
+    // as before this existed.
+    vec4 s = texture(diffuseMap, uv);
+    if (ss_base_blend > 0.0)
+    {
+        s = mix(s, texture(bumpMap, uv), ss_base_blend);
+    }
+    return dot(s.rgb, vec3(0.3333));
 }
 
 float ss_detail(vec2 uv)
 {
-    return dot(texture(cloud_noise_texture, uv).rgb, vec3(0.3333));
+    // <SS:Nexii> The detail map's own partner (specularMap) and weight - the fade runs
+    // independently of the base's, the two fields keyframe separately.
+    vec4 s = texture(cloud_noise_texture, uv);
+    if (ss_detail_blend > 0.0)
+    {
+        s = mix(s, texture(specularMap, uv), ss_detail_blend);
+    }
+    return dot(s.rgb, vec3(0.3333));
 }
 
 // One detail sample, ADVECTED - the flow-map trick. Two copies of the same lookup half a cycle apart, each dragged along the flow by how far through its own cycle it is, cross-faded on a triangle so

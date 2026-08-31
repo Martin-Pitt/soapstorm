@@ -80,24 +80,26 @@ uniform float cloud_scale;
 // ACTIVE Atmo environment is driving the sky (lldrawpoolwlsky.cpp): the slot exists to order the band against the Atmo discs, and with no discs drawn an idle EEP sky keeps stock depth.
 uniform float ss_cloud_depth;
 
-// <SS:Nexii> How much of the sun's disc has cleared the horizon
-// (SSAtmoEnvApplier::sunRiseFraction): 0 fully set - or no active Atmo environment, which is
-// exactly stock - up to 1 fully risen. The layer's sun glow ramps on it below, because stock
-// switches the glow the moment the disc's centre crosses zero.
+// <SS:Nexii> The sun's horizon-band share (SSAtmoEnvApplier::sunRiseFraction): 1 the whole time
+// the disc's centre stands at or above the horizon, easing smoothly to 0 across the twilight band
+// below it; 0 also means no active Atmo environment, which is exactly stock. The layer's sun glow
+// ramps on it below - full strength while the sun hangs at the horizon, the condition the authored
+// skies painted against, easing out through the dusk after it sets.
 uniform float ss_sun_rise;
 
-// <SS:Nexii> The sun's TRUE direction while any part of the disc is in sight
+// <SS:Nexii> The sun's TRUE direction while the rise band is live
 // (SSAtmoEnvApplier::sunSlotDirection). lightnorm hands the direction to the moon the moment
-// the disc's centre sets, and TWO things here must keep looking at the sun through the rise
-// band: the glow hotspot below, and the disc-neighbourhood body restore further down - the one
-// that keeps horizon clouds solid around the disc so it cannot burn through them. Both swing to
-// the moon's azimuth at centre-set without this. See the ss_sun_dir note in skyV.glsl.
+// the disc's centre sets, and TWO things here must keep looking at the sun through the whole
+// band, dusk included: the glow hotspot below, and the disc-neighbourhood body restore further
+// down - the one that keeps horizon clouds solid around the disc so it cannot burn through them.
+// Both swing to the moon's azimuth at centre-set without this. See the ss_sun_dir note in
+// skyV.glsl.
 uniform vec3 ss_sun_dir;
 
 // <SS:Nexii> The disc's half-angle as a direction-z sine (SSAtmoEnvApplier::sunSlotRadius) - the
-// airmass floor the layer's sun term holds while any part of the disc is above the horizon, the
-// just-cleared light path, for the same reason skyV.glsl does. Zero while no Atmo environment
-// drives the sky.
+// airmass floor the layer's sun term holds while the rise band is live - through the whole rise
+// AND the whole dusk below the horizon - the just-cleared light path, for the same reason
+// skyV.glsl does. Zero while no Atmo environment drives the sky.
 uniform float ss_sun_radius;
 
 // <SS:Nexii> The stock ray lift, as in skyV.glsl: the layer's atmosphere ray below is computed
@@ -109,6 +111,11 @@ uniform float ss_sun_radius;
 // which is ring-shaped about a direction, so a lifted ray swings the whole ring off the disc it
 // is there to frame. 1 is exactly stock, which is what an enabled-but-idle viewer keeps.
 uniform float ss_ray_lift;
+
+// <SS:Nexii> The glow light's extinction ceiling, in optical depths on the densest attenuation
+// channel - see the long note at the glow light below, and the matching one in skyV.glsl. Keep
+// in sync with skyV.glsl.
+const float SS_SUN_GLOW_DEPTH = 2.0;
 #endif
 // </SS:Nexii>
 
@@ -231,14 +238,14 @@ void main()
     light_atten = (blue_density + vec3(haze_density * 0.25)) * (density_multiplier * max_y);
 
 #ifdef SS_ATMO
-    // <SS:Nexii> While any part of the disc is above the horizon, the sun's term in the light
-    // path floors at the DISC'S OWN half-angle (ss_sun_radius) - see the long note in skyV.glsl.
-    // Stock collapses every ray near the horizon to unlit the moment the disc's CENTRE dips
-    // under, cutting the sunset band out from under a disc that is still half up; elevation 0 is
-    // the infinite airmass, not the horizon-sitting one, so the floor holds the just-cleared
-    // path (1/radius at the horizon line) and lets the risen share fade the band instead. The
-    // floor releases once the centre clears the radius - exactly where the risen fraction hits
-    // 1 - and the gate is stock with it off.
+    // <SS:Nexii> While the rise band is live, the sun's term in the light path floors at the
+    // DISC'S OWN half-angle (ss_sun_radius) - see the long note in skyV.glsl. Stock collapses
+    // every ray near the horizon to unlit the moment the disc's CENTRE dips under, cutting the
+    // sunset band out from under a disc that is still half up; elevation 0 is the infinite
+    // airmass, not the horizon-sitting one, so the floor holds the just-cleared path (1/radius
+    // at the horizon line) through the whole rise, and the dusk below the horizon keeps it
+    // while the band's share fades the glow out. The floor releases once the centre clears the
+    // radius and the gate is stock with it off.
     float sun_elev = (ss_sun_rise > 0.0) ? max(ss_sun_dir.z, ss_sun_radius) : lightnorm.y;
 #else
     float sun_elev = lightnorm.y;
@@ -251,6 +258,10 @@ void main()
 
     // Compute sunlight from rel_pos & lightnorm (for long rays like sky)
     float off_axis = 1.0 / max(1e-6, max(0., rel_pos_norm.y) + sun_elev);
+#ifdef SS_ATMO
+    // The pre-attenuation light, kept for the glow's own extinction below - see skyV.glsl.
+    vec3 ss_raw_light = sunlight;
+#endif
     sunlight *= exp(-light_atten * off_axis);
 
     // Distance
@@ -281,14 +292,16 @@ void main()
         // glow.z should be negative, so we're doing a sort of (1 / "angle") function
 
 #ifdef SS_ATMO
-    // <SS:Nexii> The glow is the light the disc sheds, so during the rise band it is built from
-    // the RAW angular term and scaled by the risen share - the hotspot exists from the first
-    // sliver above the horizon. Stock's factor lines cannot be allowed to touch it there: below
-    // centre-rise the factor belongs to the moon (< 1.0), whose branch zeroes the term entirely
-    // (SL-13768 - right for the moon, which must not glow), and ramping on the zeroed term grew
-    // a FLAT 0.25 wash with no hotspot at all until the factor snapped to 1.0 at centre-rise -
-    // the sunrise horizon simply was not there while the disc poked over. See the matching note
-    // in skyV.glsl. At full rise this is exactly the stock sun line; stock with the gate off.
+    // <SS:Nexii> The glow is the light the disc sheds, so while the rise band is live it is
+    // built from the RAW angular term and scaled by the horizon-band share - full strength the
+    // whole time the disc is up (the stock sun line, and the condition the authored skies
+    // painted against), easing out across the twilight below the horizon. Stock's factor lines
+    // cannot be allowed to touch it in the band: below centre-rise the factor belongs to the
+    // moon (< 1.0), whose branch zeroes the term entirely (SL-13768 - right for the moon, which
+    // must not glow), and ramping on the zeroed term grew a FLAT 0.25 wash with no hotspot at
+    // all until the factor snapped to 1.0 at centre-rise - the sunrise horizon simply was not
+    // there while the disc poked over. See the matching note in skyV.glsl. With the gate off,
+    // stock.
     if (ss_sun_rise > 0.0)
     {
         haze_glow = ss_sun_rise * (haze_glow + 0.25);
@@ -303,16 +316,39 @@ void main()
         haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (haze_glow + 0.25);
     }
 
+#ifdef SS_ATMO
+    // <SS:Nexii> The layer's glow rides the same capped light as the dome (see the long note in
+    // skyV.glsl): the extinction crush is bounded - airmass floored at the depth where the
+    // densest channel has shed SS_SUN_GLOW_DEPTH optical depths, scaled uniformly so the hue
+    // survives - and binds only where the beam maths would total the colour. It is a ceiling,
+    // not a window: no edge to see, the sunset band simply keeps its fire. Live only while the
+    // rise band is; idle environments keep stock bit for bit.
+    vec3 ss_glow_light = sunlight;
+    if (ss_sun_rise > 0.0)
+    {
+        float ss_max_atten = max(light_atten.r, max(light_atten.g, light_atten.b));
+        float ss_glow_airmass = min(off_axis, SS_SUN_GLOW_DEPTH / max(ss_max_atten, 1e-6));
+        ss_glow_light = ss_raw_light * exp(-light_atten * ss_glow_airmass);
+    }
+#endif
+
     // Increase ambient when there are more clouds
     vec3 tmpAmbient = ambient_color;
     tmpAmbient += (1. - tmpAmbient) * cloud_shadow * 0.5;
 
     // Dim sunlight by cloud shadow percentage
     sunlight *= (1. - cloud_shadow);
+#ifdef SS_ATMO
+    ss_glow_light *= (1. - cloud_shadow);
+#endif
 
     // Haze color below cloud
     vec3 additiveColorBelowCloud =
+#ifdef SS_ATMO
+        (blue_horizon * blue_weight * (sunlight + tmpAmbient) + (haze_horizon * haze_weight) * (ss_glow_light * haze_glow + tmpAmbient));
+#else
         (blue_horizon * blue_weight * (sunlight + tmpAmbient) + (haze_horizon * haze_weight) * (sunlight * haze_glow + tmpAmbient));
+#endif
 
     // CLOUDS
     sunlight = sunlight_color;
