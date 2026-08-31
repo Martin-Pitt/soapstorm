@@ -26,6 +26,7 @@
 
 #include "llsingleton.h"
 #include "lluuid.h"
+#include "ssworldfield.h"
 #include "v3math.h"
 
 #include <map>
@@ -259,6 +260,14 @@ private:
     void releaseLoop(Loop& loop);
 
     Loop mLoops[LOOP_COUNT];
+
+    // <SS:Nexii> The COVERAGE stake in the shared world field, held for the
+    // camera's region while SSWorldFieldCoverage routes the cover and burial
+    // questions through the field's band stack instead of the up-raycasts.
+    // Holding the handle is what makes the field build tiles here at all.
+    SSWorldField::Interest mCoverageClaim;
+    U64 mCoverageRegion = 0;
+    // </SS:Nexii>
 
     LLVector3 mProbeAnchor;
     F64 mLastCycleDone = -1000.0;

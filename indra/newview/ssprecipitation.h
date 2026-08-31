@@ -63,6 +63,11 @@ struct SSPrecipParticle
     LLVector3 mNormal = LLVector3(0.f, 0.f, 1.f);
     F32 mPlaneD = -FLT_MAX;
     F32 mFloorZ = -FLT_MAX;
+    // <SS:Nexii> The z the particle started its fall from. The renderer fades a falling particle
+    // in over the top part of that run (scaled to the run, capped at SS_PRECIP_TOP_FADE), so it
+    // needs the top, not just the floor. Zero for anything that doesn't fall from a top (risers,
+    // ripples, streams, drift). </SS:Nexii>
+    F32 mFallTop = 0.f;
     F32 mAge = 0.f;
     F32 mMaxAge = 1.f;
     F32 mSizeX = 0.05f;
@@ -84,6 +89,12 @@ struct SSPrecipParticle
 };
 
 inline F32 ssPrecipFadeOut(U8 tier) { return (tier == TIER_SHEETS) ? 0.8f : 0.25f; }
+
+// <SS:Nexii> The cap on the fade-in band at the top of a falling particle's run: drops materialize
+// across the top stretch of their fall instead of popping in at the spawn point, scaled to about
+// 60% of the run and never more than this. The deck-spawned cluster and sheet curtains hit the
+// full band; short near drops fade in over a few metres and are dense below. </SS:Nexii>
+static const F32 SS_PRECIP_TOP_FADE = 48.f;
 
 class SSPrecipSim
 {

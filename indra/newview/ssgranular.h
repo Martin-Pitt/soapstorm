@@ -57,6 +57,13 @@ struct SSGranularParams
     F32 mGust = 1.f;           // the shared gust envelope, applied once per tick - never per cell
     F32 mTemperatureC = 0.f;   // ambient air temperature this tick - the wet-blow gate's input
 
+    // Grade-vs-structure depth scaling, from the capture's height-above-terrain channel: a cell
+    // standing mStructAboveH metres over the terrain holds mStructDepth of the ordinary ceiling,
+    // fading in from half that height. Deep piles belong at grade; a tower deck still whitens
+    // but the wind and the repose rule both treat it as the scoured thing it is.
+    F32 mStructAboveH = 12.f;
+    F32 mStructDepth = 1.f;
+
     // n*n ground-flow cells for one region (xyz wind, w exposure), sampled from the solved
     // flowmap's bottom slab without the gust layer. Owned by the caller for the call's duration.
     const LLVector4* mFlow = nullptr;

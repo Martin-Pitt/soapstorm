@@ -157,6 +157,7 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
     out.mGeomSerial = grid.mGeomSerial;
     out.mZ = grid.mZ;
     out.mFlags = grid.mFlags;
+    out.mAbove = grid.mAbove;
     out.mSlopeX.assign(count, 0.f);
     out.mSlopeY.assign(count, 0.f);
     out.mSlope.assign(count, 0.f);
@@ -259,6 +260,16 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
 
             const F32 len = sqrtf(ox * ox + oy * oy);
             if (len < 0.0001f) continue;
+
+            // A drip line is an architectural thing: water gathering along a
+            // roof lip and coming off it as drops. A terrain ledge drops just
+            // as sharply and is not that - rain runs down a hillside as a
+            // sheet, and hanging drip curtains off every terraced cliff is
+            // what the capture's height-above-terrain channel exists to stop.
+            // A lip has to be standing structure, not ground that happens to
+            // step down.
+            static LLCachedControl<F32> edge_min_above(gSavedSettings, "SSAtmoRunoffEdgeMinAbove", 1.f);
+            if (out.above(i) < llmax((F32)edge_min_above, 0.f)) continue;
 
             out.mEdge[i] = 1;
             out.mEdgeX[i] = ox / len;
@@ -551,6 +562,25 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
         return lerp(1.f, patch * patch * (3.f - 2.f * patch), mask_amt);
     };
 
+    // How much of a standing structure a cell is, 0 at grade to 1 from
+    // SSAtmoSurfaceStructAbove metres over the terrain - the capture's
+    // height-above-terrain channel as a factor. Faded in over the top half of
+    // that span rather than stepped, so a low porch roof is still mostly
+    // ground-like and only genuinely tall decks are treated as towers.
+    static LLCachedControl<F32> struct_above(gSavedSettings, "SSAtmoSurfaceStructAbove", 12.f);
+    const F32 struct_h = llmax((F32)struct_above, 1.f);
+    auto structFactor = [&](size_t i)
+    {
+        const F32 t = llclamp((geom.above(i) - struct_h * 0.5f) / (struct_h * 0.5f), 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+    };
+
+    // Deep snow piles belong at grade. A tall roof still whitens - snowfall
+    // lands there like anywhere - but it holds a fraction of the ground's
+    // depth ceiling rather than growing the same drifts a street does.
+    static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
+    const F32 snow_struct_frac = llclamp((F32)snow_struct, 0.f, 1.f);
+
     F32 peak_wet = 0.f, peak_snow = 0.f, peak_puddle = 0.f;
 
     for (S32 y = 0; y < n; ++y)
@@ -612,7 +642,8 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
 
             if (snowing)
             {
-                const F32 room = preset.mSnowDepth * lieHere() - fld.mSnow[i];
+                const F32 depth_scale = lerp(1.f, snow_struct_frac, structFactor(i));
+                const F32 room = preset.mSnowDepth * depth_scale * lieHere() - fld.mSnow[i];
                 if (room > 0.f)
                 {
                     fld.mSnow[i] += llmin(room, snow_gain);
@@ -626,9 +657,16 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
                 fld.mSnow[i] = llmax(0.f, fld.mSnow[i] - snow_loss);
             }
 
-            if (pooling && geom.mPool[i])
+            // Standing water is a grade phenomenon: a hollow in a street
+            // fills, a hollow in a tower roof drains through whatever the
+            // build actually is up there, and a puddle field on a skyline
+            // deck reads as a bug even when the trace found a genuine dip.
+            // Tall structure cells stop accumulating and let what they hold
+            // drain out through the ordinary loss path.
+            const F32 grade = 1.f - structFactor(i);
+            if (pooling && geom.mPool[i] && grade > 0.01f)
             {
-                const F32 mask = puddleMask(x, y);
+                const F32 mask = puddleMask(x, y) * grade;
                 fld.mPuddle[i] = llmin(puddle_depth_ceiling * mask,
                                        fld.mPuddle[i] + puddle_gain * mask);
             }
@@ -743,6 +781,16 @@ void SSSurfaceField::idle(F32 dt)
     // layer (the envelope rides the bundle as one scalar, never per cell).
     SSGranularParams granular;
     atmo->fillTransportParams(granular);
+
+    // Grade-vs-structure depth scaling, handed in as plain figures the way
+    // every other input reaches the transport - it reads no settings itself.
+    {
+        static LLCachedControl<F32> struct_above(gSavedSettings, "SSAtmoSurfaceStructAbove", 12.f);
+        static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
+        granular.mStructAboveH = llmax((F32)struct_above, 1.f);
+        granular.mStructDepth = llclamp((F32)snow_struct, 0.f, 1.f);
+    }
+
     const bool blows_here = granular.mLiftRate > 0.f || granular.mDepositRate > 0.f
                          || granular.mCreepRate > 0.f;
 
@@ -854,8 +902,18 @@ void SSSurfaceField::depositAt(const LLVector3& pos_agent, F32 depth)
 
     const S32 i = y * geom.mN + x;
     const SSPrecipPreset& preset = atmo->preset();
-    const F32 ceiling = llmax(preset.mSnowDepth, 0.f);
     const F32 repose = llclamp(preset.mSnowRepose, 5.f, 89.f) * DEG_TO_RAD;
+
+    // The same grade-vs-structure depth scaling the settle and transport paths
+    // apply, so a clump landing on a tower deck banks against the deck's own
+    // reduced ceiling rather than the street's.
+    static LLCachedControl<F32> struct_above(gSavedSettings, "SSAtmoSurfaceStructAbove", 12.f);
+    static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
+    const F32 h = llmax((F32)struct_above, 1.f);
+    const F32 t = llclamp((geom.above(i) - h * 0.5f) / (h * 0.5f), 0.f, 1.f);
+    const F32 scale = lerp(1.f, llclamp((F32)snow_struct, 0.f, 1.f), t * t * (3.f - 2.f * t));
+
+    const F32 ceiling = llmax(preset.mSnowDepth, 0.f) * scale;
     SSGranular::depositAt(fld, geom, i, depth, ceiling, repose);
     mPeakSnow = llmax(mPeakSnow, fld.mSnow[i]);
 }

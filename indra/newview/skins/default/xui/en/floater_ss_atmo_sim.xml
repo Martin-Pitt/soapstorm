@@ -34,7 +34,7 @@
      left="0"
      top="0"
        width="406"
-       height="1448"
+       height="1426"
        background_visible="false">
 
     <!-- <SS:Nexii> Debug views first.
@@ -201,8 +201,11 @@
       control_name="SSAtmoShadowDebugView" name="C_shadow_view"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="250"
-      tool_tip="Texel cloud unprojects every captured depth texel to the world point it actually saw: olive on the ground, green through blue as a hit climbs clear of it, violet for tall structures, magenta where the fall only grazed a near-vertical face and the shelter answer there is a guess. Gaps are texels that saw nothing, and dimmed texels landed outside the region on the frustum's tilt overscan">
+      tool_tip="Texel cloud unprojects every captured depth texel to the world point it saw: olive on the ground, green through blue as a hit climbs clear of it, violet for tall structures, magenta where the fall only grazed a near-vertical face and the shelter answer there is a guess. Landing grid is the same capture resampled the way the surface field and the drainage trace read it, loud red on cells the capture never reached and that silently fall back to the bare heightmap. Depth map draws the capture itself in the corner of the screen, holes black, the only view that can be read against the resolution setting. Capture volume draws the ortho box, the band it spans and each tile's state, for regions that never got a usable map at all">
         <combo_box.item label="Texel cloud" value="0" name="shadow_view_cloud" />
+        <combo_box.item label="Landing grid" value="1" name="shadow_view_shelter" />
+        <combo_box.item label="Depth map on screen" value="2" name="shadow_view_map" />
+        <combo_box.item label="Capture volume" value="3" name="shadow_view_volume" />
     </combo_box>
     <text
       follows="left|top" layout="topleft"
@@ -214,45 +217,20 @@
     <slider_bar
       control_name="SSAtmoShadowDebugStride" name="SB_shadow_stride"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="1" max_val="32" increment="1" decimal_digits="0"
-      tool_tip="Draw every Nth depth texel; 1 is the map at full resolution and the heaviest to bake. Raised automatically if a map would bake more points than the view holds" />
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0.25" max_val="32" increment="0.25" decimal_digits="2"
+      tool_tip="Sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 the cloud interpolates between texels the way the map is read when sampled - smoother, not more detailed - and is doubled automatically if the map is too fine to bake that many points" />
     <spinner
       control_name="SSAtmoShadowDebugStride" name="S_shadow_stride"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="1" max_val="32" increment="1" decimal_digits="0"
-      tool_tip="Draw every Nth depth texel; 1 is the map at full resolution and the heaviest to bake. Raised automatically if a map would bake more points than the view holds" />
+      label_width="0" border_visible="false" min_val="0.25" max_val="32" increment="0.25" decimal_digits="2"
+      tool_tip="Sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 the cloud interpolates between texels the way the map is read when sampled - smoother, not more detailed - and is doubled automatically if the map is too fine to bake that many points" />
     <button
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="0" height="20" width="24"
       name="D_shadow_stride" label="D"
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoShadowDebugStride" />
-    </button>
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="6" height="16" width="106"
-      name="T_shadow_range"
-      tool_tip="How far from the camera the texel cloud is drawn, fading out over the last part of it">
-        Shadow range:
-    </text>
-    <slider_bar
-      control_name="SSAtmoShadowDebugRange" name="SB_shadow_range"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="8" max_val="512" increment="8" decimal_digits="0"
-      tool_tip="How far from the camera in meters the texel cloud is drawn, fading out over the last part of it" />
-    <spinner
-      control_name="SSAtmoShadowDebugRange" name="S_shadow_range"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="8" max_val="512" increment="8" decimal_digits="0"
-      tool_tip="How far from the camera in meters the texel cloud is drawn, fading out over the last part of it" />
-    <button
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="20" width="24"
-      name="D_shadow_range" label="D"
-      tool_tip="Reset to the default value">
-        <button.commit_callback function="ResetControl" parameter="SSAtmoShadowDebugRange" />
     </button>
 
     <!-- <SS:Nexii> Snow: the drift and whiteout debug views, plus the layer

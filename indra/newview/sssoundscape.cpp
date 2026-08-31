@@ -39,6 +39,7 @@
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
+#include "llworld.h"
 #include "lldrawable.h"
 #include "llhudobject.h"
 #include "llhudtext.h"
@@ -187,6 +188,75 @@ void SSSoundscape::updateProbes(F64 now)
     mProbeOrigin = cam;
     mLastCycleDone = now;
 
+    // <SS:Nexii> Cover and burial from the shared world field where it has an
+    // answer - a handful of band-stack reads standing in for the three tilted
+    // raycasts, plus a burial figure that walks the actual span stack rather
+    // than one column-top subtraction. The claim handle is what makes the
+    // field build here; the raycasts below stay as the fallback for the
+    // stretch before a tile exists and for when the switch is off.
+    static LLCachedControl<bool> field_coverage(gSavedSettings, "SSWorldFieldCoverage", false);
+    bool field_answered = false;
+    if (field_coverage)
+    {
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(cam);
+        if (regionp)
+        {
+            if (!mCoverageClaim || mCoverageRegion != regionp->getHandle())
+            {
+                mCoverageRegion = regionp->getHandle();
+                mCoverageClaim = SSWorldField::getInstance()->claim(
+                    mCoverageRegion, SSWorldField::EChannel::COVERAGE);
+            }
+        }
+
+        // Five taps - the camera and a short cross around it - so coverage is
+        // a fraction rather than one cell's yes/no, the same reason the ray
+        // version wiggles its three rays. All five must be covered for
+        // mCovered, matching the rays' all-must-hit rule.
+        SSWorldField* field = SSWorldField::getInstance();
+        static const F32 TAP_REACH = 2.5f;
+        static const LLVector3 taps[5] = {
+            LLVector3(0.f, 0.f, 0.f),
+            LLVector3(TAP_REACH, 0.f, 0.f), LLVector3(-TAP_REACH, 0.f, 0.f),
+            LLVector3(0.f, TAP_REACH, 0.f), LLVector3(0.f, -TAP_REACH, 0.f)
+        };
+
+        bool centre_covered = false;
+        F32 centre_ceiling = 0.f, centre_top = 0.f;
+        S32 answered = 0, covered_count = 0;
+        for (S32 i = 0; i < 5; ++i)
+        {
+            bool covered = false;
+            F32 ceiling_z = 0.f, top_z = 0.f;
+            if (!field->coverageDetail(cam + taps[i], covered, ceiling_z, top_z)) continue;
+
+            ++answered;
+            if (covered) ++covered_count;
+            if (i == 0)
+            {
+                centre_covered = covered;
+                centre_ceiling = ceiling_z;
+                centre_top = top_z;
+            }
+        }
+
+        if (answered == 5)
+        {
+            field_answered = true;
+            mCoverage = (F32)covered_count / 5.f;
+            mCovered = (covered_count == 5) && centre_covered;
+            mRoofDist = mCovered ? llclamp(centre_ceiling - cam.mV[VZ], 0.f, UP_RAY_LENGTH) : 0.f;
+            mBuriedDepth = mCovered ? llmax(0.f, centre_top - centre_ceiling) : 0.f;
+        }
+    }
+    else if (mCoverageClaim)
+    {
+        mCoverageClaim = SSWorldField::Interest();
+        mCoverageRegion = 0;
+    }
+
+    if (!field_answered)
+    {
     S32 up_hits = 0;
     F32 roof_dist = UP_RAY_LENGTH;
     for (S32 i = 0; i < UP_RAY_COUNT; ++i)
@@ -213,6 +283,8 @@ void SSSoundscape::updateProbes(F64 now)
             mBuriedDepth = llmax(0.f, column_top - ceiling);
         }
     }
+    }
+    // </SS:Nexii>
 
     S32 walls = 0;
     F32 sum = 0.f;

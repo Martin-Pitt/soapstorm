@@ -81,6 +81,21 @@ static F32 ageFade(const SSPrecipParticle& p)
     return llmin(1.f, p.mAge / t_in) * llclamp((p.mMaxAge - p.mAge) / t_out, 0.f, 1.f);
 }
 
+// <SS:Nexii> Fade in over the top of a falling run: a drop materializes across the first stretch
+// of its fall rather than popping in, and is fully visible once past it. The band is capped at
+// SS_PRECIP_TOP_FADE and scaled with the run so a short near drop finishes fading half-way down
+// (staying dense at the ground) while the deck-spawned curtains keep the full band off the deck.
+// Nothing that doesn't fall from a top (risers, ripples, streams, drift) carries a mFallTop and is
+// left at full alpha. </SS:Nexii>
+static F32 topFade(const SSPrecipParticle& p)
+{
+    if (p.mFallTop <= 0.f) return 1.f;
+    const F32 fallen = p.mFallTop - p.mPos.mV[VZ];
+    const F32 span = llmax(p.mFallTop - p.mFloorZ, 0.5f);
+    const F32 fade = llmin(SS_PRECIP_TOP_FADE, span * 0.6f);
+    return smooth01(fallen / fade);
+}
+
 // Emits a stream particle as a chain of gravity-bent ribbon segments with scrolling texture.
 template <typename EmitFn>
 U32 SSPrecipRenderer::emitStream(const SSPrecipParticle& p, F32 alpha, F32 stretch,
@@ -289,7 +304,8 @@ void SSPrecipRenderer::render()
         const F32 dx = p.mPos.mV[VX] - cam_pos.mV[VX];
         const F32 dy = p.mPos.mV[VY] - cam_pos.mV[VY];
         const F32 dist = sqrtf(dx * dx + dy * dy);
-        const F32 alpha = p.mAlpha * drop_alpha * ageFade(p) * bandFade(dist, bands[p.mTier]);
+        const F32 alpha = p.mAlpha * drop_alpha * ageFade(p) * bandFade(dist, bands[p.mTier])
+                        * topFade(p);
         if (alpha < 0.004f) continue;
         mBuckets[p.mMaterial % MAT_COUNT][p.mTex % SS_PRECIP_MAX_TEXTURES].push_back({ &p, llmin(alpha, 1.f) });
     }

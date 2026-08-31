@@ -31,6 +31,7 @@
 #include "llrender.h"
 #include "lltimer.h"
 #include "llviewercamera.h"
+#include "workqueue.h"
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "llviewerregion.h"
@@ -150,6 +151,7 @@ void SSWorldField::clear()
     if (mReadbackPending) { mClearPending = true; return; }
     mTiles.clear();
     mBuild.mActive = false;
+    ++mFloodGeneration;     // a flood in flight lands into nothing
     mTarget.release();
 }
 
@@ -307,6 +309,23 @@ void SSWorldField::update()
     }
 
     evict();
+
+    // Catch-up for the connectivity labels: a tile that committed while a
+    // flood was already in flight was skipped rather than queued, and this
+    // is where it gets its turn - one tile per call, oldest debt first being
+    // unnecessary at this scale (four tiles).
+    if (!mFloodBusy)
+    {
+        for (auto& entry : mTiles)
+        {
+            Tile& tile = entry.second;
+            if (tile.mValid && tile.mAirSerial != tile.mGeomSerial && !tile.mDirty)
+            {
+                scheduleFlood(tile);
+                break;
+            }
+        }
+    }
 
     if (mBuild.mActive)
     {
@@ -758,6 +777,15 @@ void SSWorldField::commitBuild(Tile& tile)
     tile.mCaptureTime = mNow;
     tile.mLastTouched = mNow;
     mBuild.mActive = false;
+
+    // The connectivity labels follow every commit rather than only the ones
+    // that changed something: they are also serving their first fill, and a
+    // commit that changed nothing left mAirSerial already matching, in which
+    // case scheduleFlood's serial check makes the walk a no-op store.
+    if (tile.mAirSerial != tile.mGeomSerial)
+    {
+        scheduleFlood(tile);
+    }
 }
 
 // Resolves the landing-surface grid for a region - SSRainShadowMap's exact
@@ -784,6 +812,7 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
     out.mGeomSerial = tile.mGeomSerial;
     out.mZ.assign((size_t)n * n, -FLT_MAX);
     out.mFlags.assign((size_t)n * n, 0);
+    out.mAbove.assign((size_t)n * n, 0.f);
 
     const F32 water_z = regionp->getWaterHeight();
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
@@ -825,6 +854,25 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
                 {
                     out.mZ[oidx] = z;
                     out.mFlags[oidx] = flags | SSRainShadowMap::SURF_MAPPED;
+
+                    // Same figure the rain shadow builder derives: metres over
+                    // the terrain-or-water reference (the sky track floor in a
+                    // skybox), so the two sources hand consumers identical
+                    // ground-vs-structure data and the SSWorldFieldSurfaceTop
+                    // switch stays behaviour-neutral.
+                    F32 ground;
+                    if (sky)
+                    {
+                        ground = sky_floor;
+                    }
+                    else
+                    {
+                        const LLVector3 centre(regionp->getOriginAgent().mV[VX] + out.axis(gx),
+                                               regionp->getOriginAgent().mV[VY] + out.axis(gy),
+                                               water_z);
+                        ground = llmax(LLWorld::getInstance()->resolveLandHeightAgent(centre), water_z);
+                    }
+                    out.mAbove[oidx] = llmax(z - ground, 0.f);
                 }
             }
             else if (sky)
@@ -905,4 +953,173 @@ bool SSWorldField::coverageAt(const LLVector3& pos_agent, bool& outdoor, F32& bu
     buried_depth = llmax(0.f, top - pos_agent.mV[VZ]);
     return true;
 }
+
+bool SSWorldField::coverageDetail(const LLVector3& pos_agent, bool& covered,
+                                  F32& ceiling_z, F32& column_top_z) const
+{
+    covered = false;
+    ceiling_z = 0.f;
+    column_top_z = 0.f;
+
+    const Tile* tile = tileAt(pos_agent);
+    if (!tile || !tile->mValid) return false;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return false;
+
+    const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile->mCell), 0, tile->mRes - 1);
+    const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile->mCell), 0, tile->mRes - 1);
+    const size_t col = (size_t)cy * tile->mRes + cx;
+
+    // The half metre of grace keeps the surface being stood on from reading
+    // as its own ceiling - a capture texel of the floor under the camera can
+    // land a hair above the camera's own feet.
+    const F32 over = pos_agent.mV[VZ] + 0.5f;
+
+    bool any = false;
+    for (S32 b = 0; b < tile->mBandCount; ++b)
+    {
+        const size_t bi = (size_t)b * (size_t)tile->mRes * (size_t)tile->mRes + col;
+        const F32 z = tile->mBandTop[bi];
+        if (z <= -FLT_MAX * 0.5f) continue;
+
+        any = true;
+        column_top_z = llmax(column_top_z, z);
+        if (z > over && (!covered || z < ceiling_z))
+        {
+            covered = true;
+            ceiling_z = z;
+        }
+    }
+
+    return any;
+}
+
+// <SS:Nexii> Air connectivity lookup: the band the point stands in, read from
+// the labels the flood stored, or AIR_UNKNOWN when there is nothing current
+// to read - after an edit, before the first flood, or off-tile entirely.
+U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
+{
+    const Tile* tile = tileAt(pos_agent);
+    if (!tile || !tile->mValid) return AIR_UNKNOWN;
+    if (tile->mAirLabel.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_UNKNOWN;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return AIR_UNKNOWN;
+
+    const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile->mCell), 0, tile->mRes - 1);
+    const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile->mCell), 0, tile->mRes - 1);
+    const S32 band = llclamp((S32)(pos_agent.mV[VZ] / tile->mBandHeight), 0, tile->mBandCount - 1);
+
+    const size_t bi = ((size_t)band * tile->mRes + cy) * tile->mRes + cx;
+    return (bi < tile->mAirLabel.size()) ? tile->mAirLabel[bi] : (U8)AIR_UNKNOWN;
+}
+
+// The flood itself, run on the general worker queue against a snapshot. A
+// band-cell is solid where the capture found a surface in that band; air
+// otherwise. Every air cell in the top band, and every air cell on the
+// horizontal border, starts OUTSIDE; the flood walks 6-connected through air.
+// Whatever air is left is INTERIOR - a room, a sealed box - which is exactly
+// what the wind solve wants to skip and the soundscape wants to know it is
+// standing in. Evidence-only in the same spirit as the probe carve: a passage
+// narrower than a cell stays uncounted rather than invented.
+static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
+                        std::vector<U8>& label)
+{
+    const size_t layer = (size_t)res * res;
+    const size_t cells = layer * (size_t)bands;
+    label.assign(cells, SSWorldField::AIR_INTERIOR);
+
+    std::vector<S32> queue;
+    queue.reserve(cells / 8);
+
+    auto isAir = [&](size_t i) { return band_top[i] <= -FLT_MAX * 0.5f; };
+
+    for (size_t i = 0; i < cells; ++i)
+    {
+        if (!isAir(i))
+        {
+            label[i] = SSWorldField::AIR_SOLID;
+            continue;
+        }
+
+        const S32 b = (S32)(i / layer);
+        const S32 y = (S32)((i % layer) / res);
+        const S32 x = (S32)(i % res);
+        if (b == bands - 1 || x == 0 || y == 0 || x == res - 1 || y == res - 1)
+        {
+            label[i] = SSWorldField::AIR_OUTSIDE;
+            queue.push_back((S32)i);
+        }
+    }
+
+    for (size_t head = 0; head < queue.size(); ++head)
+    {
+        const S32 i = queue[head];
+        const S32 b = (S32)((size_t)i / layer);
+        const S32 y = (S32)(((size_t)i % layer) / res);
+        const S32 x = (S32)((size_t)i % res);
+
+        static const S32 DX[6] = { 1, -1, 0, 0, 0, 0 };
+        static const S32 DY[6] = { 0, 0, 1, -1, 0, 0 };
+        static const S32 DB[6] = { 0, 0, 0, 0, 1, -1 };
+
+        for (S32 d = 0; d < 6; ++d)
+        {
+            const S32 nx = x + DX[d], ny = y + DY[d], nb = b + DB[d];
+            if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
+
+            const size_t j = ((size_t)nb * res + ny) * (size_t)res + nx;
+            if (label[j] != SSWorldField::AIR_INTERIOR) continue;
+
+            label[j] = SSWorldField::AIR_OUTSIDE;
+            queue.push_back((S32)j);
+        }
+    }
+}
+
+void SSWorldField::scheduleFlood(Tile& tile)
+{
+    if (mFloodBusy) return;                     // this commit's successor will reschedule
+    if (tile.mBandCount < 1 || tile.mRes < 1) return;
+
+    LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
+    LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
+    if (!general || !main) return;              // no worker: labels stay AIR_UNKNOWN, consumers cope
+
+    mFloodBusy = true;
+    const U32 generation = mFloodGeneration;
+    const U64 region = tile.mRegionHandle;
+    const U32 serial = tile.mGeomSerial;
+    const S32 res = tile.mRes;
+    const S32 bands = tile.mBandCount;
+
+    // Snapshot: the walk must never read the live band stack, which the next
+    // build splices on the main thread while the worker is mid-flood.
+    auto snapshot = std::make_shared<std::vector<F32> >(
+        tile.mBandTop.begin(),
+        tile.mBandTop.begin() + (size_t)bands * res * res);
+    auto labels = std::make_shared<std::vector<U8> >();
+
+    main->postTo(
+        general,
+        [res, bands, snapshot, labels]()
+        {
+            ss_wf_flood(res, bands, *snapshot, *labels);
+            return true;
+        },
+        [this, generation, region, serial, labels](bool)
+        {
+            mFloodBusy = false;
+            if (generation != mFloodGeneration) return;
+
+            auto it = mTiles.find(region);
+            if (it == mTiles.end() || !it->second.mValid) return;
+            if (it->second.mGeomSerial != serial) return;   // edited mid-walk; the next commit refloods
+
+            it->second.mAirLabel = std::move(*labels);
+            it->second.mAirSerial = serial;
+        });
+}
+// </SS:Nexii>
 

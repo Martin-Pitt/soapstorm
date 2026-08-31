@@ -25673,7 +25673,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoShadowDebugView</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata rain shadow debug: which view to draw. 0 the texel cloud, every captured depth texel unprojected to the world point it actually saw</string>
+      <string>Render Metadata rain shadow debug: which view to draw. 0 the texel cloud, every captured depth texel unprojected to the world point it saw; 1 the resampled landing grid its consumers read, loud red where the capture never reached; 2 the raw depth map on screen; 3 the capture volume, band and tile state</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25684,24 +25684,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoShadowDebugStride</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata rain shadow debug: draw every Nth depth texel. 1 is the map at full resolution and the heaviest to bake, higher thins it out. Raised automatically if a map would bake more points than the view will hold</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>U32</string>
-      <key>Value</key>
-      <integer>4</integer>
-    </map>
-    <key>SSAtmoShadowDebugRange</key>
-      <map>
-      <key>Comment</key>
-      <string>Render Metadata rain shadow debug: how far from the camera in meters the texel cloud is drawn, fading out over the last part of it</string>
+      <string>Render Metadata rain shadow debug: sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 there are no more texels to show, so the cloud interpolates between them the way the map is read when it is sampled - a smoother surface, not more detail. Doubled automatically if a map would bake more points than the view will hold, so a sub-texel spacing only survives on a coarse enough map</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>96.0</real>
+      <real>1.0</real>
     </map>
     <key>SSAtmoRunoff</key>
       <map>
@@ -26125,6 +26114,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <map>
       <key>Comment</key>
       <string>Serve the surface field's landing grid (wet/snow/puddle, runoff) from the shared world field's SURFACE_TOP channel instead of the rain shadow capture</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSWorldFieldCoverage</key>
+      <map>
+      <key>Comment</key>
+      <string>Serve the soundscape's roof cover and burial questions from the shared world field's COVERAGE channel (band-stack lookups) instead of the up-raycasts and the wind tile's column top. Falls back to raycasts wherever no tile is built yet</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27220,6 +27220,39 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>F32</string>
     <key>Value</key>
     <real>3.0</real>
+  </map>
+  <key>SSAtmoSurfaceStructAbove</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: metres above the terrain at which a surface counts as fully standing structure rather than ground, fading in from half this height. Gates puddles off tall decks, thins their snow ceiling, and is read wherever grade-vs-structure matters.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>12.0</real>
+  </map>
+  <key>SSAtmoSnowStructDepth</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: fraction of the snow depth ceiling a fully tall structure may hold. Roofs still whiten; deep piles belong at grade. 1 disables the distinction.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.4</real>
+  </map>
+  <key>SSAtmoRunoffEdgeMinAbove</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: metres a lip must stand above the terrain to shed drips and streams - a roof edge is architecture, a terrain ledge is not.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
   </map>
   <key>SSAtmoWetPuddleMask</key>
   <map>

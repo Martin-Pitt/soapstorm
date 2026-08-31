@@ -50,6 +50,17 @@ namespace
         x = llclamp(x, 0.f, 1.f);
         return x * x * (3.f - 2.f * x);
     }
+
+    // The depth-ceiling scale for a cell's standing over the terrain: 1 at grade, easing to the
+    // params' structure fraction from half the structure height up. The same grade-vs-structure
+    // reading the settle path applies, taken from the same capture channel, so a drift and the
+    // snowfall under it agree about how much a tower deck may hold.
+    F32 structScale(const SSSurfaceField::Geometry& geom, size_t i, const SSGranularParams& p)
+    {
+        const F32 h = llmax(p.mStructAboveH, 1.f);
+        const F32 t = smooth01((geom.above(i) - h * 0.5f) / (h * 0.5f));
+        return lerp(1.f, llclamp(p.mStructDepth, 0.f, 1.f), t);
+    }
 }
 
 // The share of its ceiling a cell of this slope can hold - the settle path's lieHere() as a
@@ -197,7 +208,7 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
                 const S32 i = y * n + x;
                 if (!geom.solid(i) || geom.water(i)) continue;
 
-                const F32 room = roomAt(geom, i, p.mSnowDepth, p.mReposeRad);
+                const F32 room = roomAt(geom, i, p.mSnowDepth * structScale(geom, i, p), p.mReposeRad);
                 const F32 over = fld.mSnow[i] - room;
                 if (over <= MIN_DRIFT_SNOW) continue;
 
@@ -249,7 +260,7 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
             const F32 speed = sqrtf(f.mV[0] * f.mV[0] + f.mV[1] * f.mV[1]);
             if (speed >= deposit_gate) continue;
 
-            const F32 room = roomAt(geom, (S32)i, p.mSnowDepth, p.mReposeRad);
+            const F32 room = roomAt(geom, (S32)i, p.mSnowDepth * structScale(geom, i, p), p.mReposeRad);
             const F32 spare = room - fld.mSnow[i];
             if (spare <= 0.f) continue;
 

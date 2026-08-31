@@ -124,6 +124,34 @@ public:
     // currently derives from the wind tile's column top.
     bool coverageAt(const LLVector3& pos_agent, bool& outdoor, F32& buried_depth) const;
 
+    // The richer form the soundscape's probe cycle wants: whether anything
+    // stands over the point at all, the altitude of the nearest such surface
+    // (the ceiling of the space the point is in, to band precision), and the
+    // altitude of the column's sky-open top. Burial - the build stacked
+    // between the ceiling and the sky - is their difference, floor-count
+    // aware where the single column-top subtraction never was. False when no
+    // valid tile covers the point; the caller keeps its raycasts for that.
+    bool coverageDetail(const LLVector3& pos_agent, bool& covered,
+                        F32& ceiling_z, F32& column_top_z) const;
+
+    // <SS:Nexii> Air connectivity, the flood-fill pass of the worldfield
+    // design: every air cell of a tile's band stack is labelled by whether it
+    // can actually be reached from the sky or the tile's horizontal borders.
+    // A courtyard, an underpass and the gap under a skyway are OUTSIDE - the
+    // flood walks in; a sealed room is INTERIOR. Solved on the general worker
+    // queue from a snapshot of the band stack, so a build committing on the
+    // main thread never races the walk, and stored against the tile's
+    // geometry serial so a stale answer is never served after an edit.
+    enum EAirLabel : U8
+    {
+        AIR_SOLID = 0,      // a surface occupies the band here
+        AIR_OUTSIDE,        // air the flood reached from sky or border
+        AIR_INTERIOR,       // air the flood could not reach
+        AIR_UNKNOWN         // no tile, no labels yet, or stale
+    };
+    U8 airLabelAt(const LLVector3& pos_agent) const;
+    // </SS:Nexii>
+
     bool tileValid(U64 region_handle) const;
     U32 geometrySerial(U64 region_handle) const;
 
@@ -169,6 +197,12 @@ private:
         // only this sub-frustum and splices only these columns.
         S32 mDirtyX0 = 0, mDirtyY0 = 0, mDirtyX1 = 0, mDirtyY1 = 0;
 
+        // Air connectivity labels, EAirLabel per band-cell, same layout as
+        // mBandTop. Valid only while mAirSerial matches mGeomSerial - an edit
+        // invalidates them until the flood re-runs behind the next commit.
+        std::vector<U8> mAirLabel;
+        U32 mAirSerial = 0;
+
         U32 mGeomSerial = 1;
 
         S32 mBandTarget = 0;       // bands the next/active build runs
@@ -207,6 +241,11 @@ private:
     void applyBand(Tile& tile);
     void commitBuild(Tile& tile);
 
+    // Post the connectivity flood for a committed tile to the general worker
+    // queue. Snapshot in, labels out; the completion stores them only if the
+    // tile's geometry serial has not moved underneath the walk.
+    void scheduleFlood(Tile& tile);
+
     void evict();
 
     static F32 bandTopZ(S32 band, F32 band_height) { return (F32)(band + 1) * band_height; }
@@ -229,6 +268,13 @@ private:
     // mid-read is deferred to the read's completion.
     bool mReadbackPending = false;
     bool mClearPending = false;
+
+    // One flood in flight at a time; a tile committing while one runs simply
+    // schedules again on its own commit. A generation counter, not a pointer,
+    // decides whether a finished walk still applies - clear() and eviction
+    // both move it.
+    bool mFloodBusy = false;
+    U32 mFloodGeneration = 0;
     // </SS:Nexii>
 
     F64 mNow = 0.0;

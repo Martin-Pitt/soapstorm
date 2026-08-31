@@ -102,6 +102,11 @@ public:
         std::vector<F32> mZ;
         std::vector<U8> mFlags;
 
+        // Metres the surface stands above the terrain/water reference under it - carried through
+        // from the grid so the tick can tell a street from a tower roof: puddles and deep snow
+        // piles belong at grade, and a terrain ledge is not a roof edge however sharply it drops.
+        std::vector<F32> mAbove;
+
         std::vector<F32> mSlopeX;
         std::vector<F32> mSlopeY;
         std::vector<F32> mSlope;
@@ -117,6 +122,7 @@ public:
         bool valid() const { return mN > 0 && !mZ.empty(); }
         bool solid(size_t i) const { return mFlags[i] != 0; }
         bool water(size_t i) const { return (mFlags[i] & SSRainShadowMap::SURF_WATER) != 0; }
+        F32 above(size_t i) const { return mAbove.empty() ? 0.f : mAbove[i]; }
     };
 
     struct Field
