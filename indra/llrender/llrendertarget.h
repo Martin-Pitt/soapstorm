@@ -169,6 +169,8 @@ public:
 
     static LLRenderTarget* getCurrentBoundTarget() { return sBoundTarget; }
 
+    U32 getFBO() const { return mFBO; } // <SS:Nexii/> for blitting into this target from a framebuffer we don't own
+
     // *HACK
     void swapFBORefs(LLRenderTarget& other);
 

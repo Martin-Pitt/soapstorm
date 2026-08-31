@@ -1362,6 +1362,8 @@ void LLPipeline::releaseGLBuffers()
 
     mUIScreen.release();
 
+    mHUDScreen.release(); // <SS:Nexii/> reallocated lazily by beginHUDSupersample
+
     mDownResMap.release();
 
     mBakeMap.release();
@@ -8276,6 +8278,136 @@ void LLPipeline::applyCAS(LLRenderTarget* src, LLRenderTarget* dst)
 
     dst->flush();
 }
+
+// <SS:Nexii> HUD supersampling
+bool LLPipeline::beginHUDSupersample()
+{
+    static LLCachedControl<U32> hud_supersample(gSavedSettings, "SSHUDSupersample", 2U);
+
+    mHUDSupersampleFactor = 1;
+
+    if (gCubeSnapshot || !gHUDDownsampleProgram.isComplete())
+    {
+        return false;
+    }
+
+    U32 factor = llclamp(hud_supersample(), 1U, 4U);
+    if (factor < 2)
+    {
+        return false;
+    }
+
+    LLRect world_rect = gViewerWindow->getWorldViewRectRaw();
+    U32 base_width = (U32)llmax(world_rect.getWidth(), 1);
+    U32 base_height = (U32)llmax(world_rect.getHeight(), 1);
+
+    // 4x on a large display asks for a target past what the driver will hand out; step the factor down rather than fail outright and drop the HUD entirely
+    U32 max_dim = (U32)llmax(gGLManager.mGLMaxTextureSize, 1024);
+    while (factor > 1 && (base_width * factor > max_dim || base_height * factor > max_dim))
+    {
+        factor /= 2;
+    }
+
+    if (factor < 2)
+    {
+        return false;
+    }
+
+    U32 width = base_width * factor;
+    U32 height = base_height * factor;
+
+    if (mHUDScreen.getWidth() != width || mHUDScreen.getHeight() != height)
+    {
+        mHUDScreen.release();
+
+        // depth is required: HUD attachments depth sort against each other, and the direct path relies on a depth buffer being present for the same reason
+        if (!mHUDScreen.allocate(width, height, GL_RGBA, true))
+        {
+            mHUDScreen.release();
+            LL_WARNS() << "Failed to allocate " << width << "x" << height << " HUD supersample target; falling back to direct HUD rendering" << LL_ENDL;
+            return false;
+        }
+    }
+
+    mHUDSupersampleFactor = factor;
+
+    // Point-upscale the presented frame into the target before the HUD draws over it. This is what keeps the whole
+    // feature simple: the HUD then blends against a real background exactly as it does when drawn straight to the
+    // screen, so nothing has to be done about blend modes, colour masks or what the alpha channel means. Because every
+    // one of a destination pixel's factor x factor source texels is the same point-sampled texel, the box resolve puts
+    // the background back unchanged; only the HUD geometry, which is genuinely rasterised at the higher resolution,
+    // gains anything from the round trip.
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, mHUDScreen.getFBO());
+    glBlitFramebuffer(gGLViewport[0], gGLViewport[1], gGLViewport[0] + gGLViewport[2], gGLViewport[1] + gGLViewport[3],
+                      0, 0, (GLint)width, (GLint)height,
+                      GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    mHUDScreen.bindTarget(); // also sets the viewport to the full target
+
+    {
+        // colour already holds the upscaled frame, so only depth needs resetting; glClear honours the depth mask, hence forcing it writable here
+        LLGLDepthTest clear_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+        glClear(GL_DEPTH_BUFFER_BIT);
+    }
+
+    return true;
+}
+
+void LLPipeline::endHUDSupersample()
+{
+    LL_PROFILE_GPU_ZONE("HUD downsample");
+
+    llassert(mHUDSupersampleFactor > 1);
+
+    mHUDScreen.flush();
+
+    // restore the world view viewport that renderFinalize left in place, since bindTarget stomped it with the supersampled size
+    glViewport(gGLViewport[0], gGLViewport[1], gGLViewport[2], gGLViewport[3]);
+
+    // Depth writes stay on and the resolve shader emits gl_FragDepth. Without this the HUD's depth would be stranded in
+    // mHUDScreen and everything drawn afterwards that depth tests -- avatar nametags, non-HUD hover text -- would stop
+    // being occluded by HUD attachments. Nothing is lost by overwriting: renderFinalize's present pass has already reset
+    // the default framebuffer's depth to a constant with GL_ALWAYS, so there is no world depth here left to preserve.
+    LLGLDepthTest depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+    LLGLDisable cull(GL_CULL_FACE);
+
+    // The target already holds the finished composite of background plus HUD, so this replaces the frame rather than
+    // blending into it. No blending means no alpha channel to get right, which is the point of doing it this way.
+    LLGLDisable blend(GL_BLEND);
+    gGL.setColorMask(true, false);
+
+    gHUDDownsampleProgram.bind();
+
+    S32 channel = gHUDDownsampleProgram.enableTexture(LLShaderMgr::DEFERRED_DIFFUSE, mHUDScreen.getUsage());
+    if (channel > -1)
+    {
+        // point sampling: the shader gathers the exact factor x factor texel block per output pixel, so bilinear taps would only smear neighbouring blocks in
+        mHUDScreen.bindTexture(0, channel, LLTexUnit::TFO_POINT);
+    }
+
+    // depth of the same block, so the resolve can hand the HUD's occlusion back to the default framebuffer
+    gHUDDownsampleProgram.bindTexture(LLShaderMgr::DEFERRED_DEPTH, &mHUDScreen, true, LLTexUnit::TFO_POINT);
+
+    static LLStaticHashedString sHUDSupersample("hud_supersample");
+    static LLStaticHashedString sHUDTexelSize("hud_texel_size");
+
+    gHUDDownsampleProgram.uniform1i(sHUDSupersample, (S32)mHUDSupersampleFactor);
+    gHUDDownsampleProgram.uniform2f(sHUDTexelSize, 1.f / (GLfloat)mHUDScreen.getWidth(), 1.f / (GLfloat)mHUDScreen.getHeight());
+
+    mScreenTriangleVB->setBuffer();
+    mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+
+    gHUDDownsampleProgram.disableTexture(LLShaderMgr::DEFERRED_DIFFUSE, mHUDScreen.getUsage());
+    gHUDDownsampleProgram.disableTexture(LLShaderMgr::DEFERRED_DEPTH, mHUDScreen.getUsage());
+    gHUDDownsampleProgram.unbind();
+
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+    mHUDSupersampleFactor = 1;
+}
+// </SS:Nexii>
 
 void LLPipeline::applyFXAA(LLRenderTarget* src, LLRenderTarget* dst)
 {
