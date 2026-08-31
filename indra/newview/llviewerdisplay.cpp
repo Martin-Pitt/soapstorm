@@ -93,6 +93,8 @@
 #include "sswater.h"
 #include "ssrainshadow.h"
 #include "sswindflow.h"
+#include "ssglreadback.h"
+#include "ssworldfield.h"
 // </SS:Nexii>
 
 #include <boost/json.hpp>
@@ -1001,6 +1003,13 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
                     SSRainShadowMap::getInstance()->capture();
                     SSWindFlowMap::getInstance()->update();
+                    SSWorldField::getInstance()->update();
+
+                    // Atmo Magic: the readback worker's per-frame poll. Completes
+                    // texture readbacks the worker has finished and, after a
+                    // holdout, reads a stranded one inline so a dead worker can
+                    // never leave a capture hanging (see ssglreadback.cpp).
+                    SSGLReadback::getInstance()->poll();
 
                     // Atmo Magic: this singleton is otherwise never
                     // touched (it is purely event-driven via

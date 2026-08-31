@@ -25,20 +25,25 @@
 
 #include "ssrainshadow.h"
 #include "ssatmomagic.h"
+#include "ssglreadback.h"
 
 #include "llagent.h"
 #include "llfasttimer.h"
+#include "llimagegl.h"
 #include "llrender.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
 #include "llviewerregion.h"
+#include "llsurface.h"
+#include "llviewerwindow.h"
 #include "llworld.h"
 #include "pipeline.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cfloat>
+#include <cstring>
 
 static const F64 CAPTURE_INTERVAL   = 0.25;
 static const F64 DIRTY_MIN_INTERVAL = 2.0;
@@ -63,11 +68,16 @@ U32 SSRainShadowMap::resolution() const
     return 0;
 }
 
-// Drops every tile - full recapture on demand.
+// Drops every tile - full recapture on demand. A clear requested while a
+// readback is in flight is deferred to the read's completion, when the shared
+// target is once more untouched.
 void SSRainShadowMap::clearCache()
 {
+    if (mReadbackPending) { mClearPending = true; return; }
     mTiles.clear();
-    mDebugMesh.clear();
+    mDebugCloud.clear();
+    mDebugGrid.clear();
+    mDebugMapFrom = -1.0;
 }
 
 // Settled geometry changed inside a tile's captured band - the settle queue's entry point.
@@ -217,8 +227,6 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     }
 
     tile.mRes = res;
-    tile.mDepth.resize((size_t)res * res);
-    glReadPixels(0, 0, res, res, GL_DEPTH_COMPONENT, GL_FLOAT, tile.mDepth.data());
 
     mTarget.flush();
 
@@ -238,9 +246,58 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     tile.mBandBottom = band_bottom;
     tile.mCaptureTime = SSAtmoMagic::getInstance()->sharedTime();
     tile.mDirty = false;
-    tile.mValid = true;
+
+    // <SS:Nexii> The depth readback rides the shared SSGLReadback worker: the
+    // synchronous glReadPixels that used to stall the frame loop here is now a
+    // glGetTexImage on a dedicated GL thread. mValid stays false until the
+    // texels land back on the main thread, so every consumer (surface grid,
+    // resolveColumn, the debug mesh) keeps reading only complete tiles, and
+    // capture() won't re-render the shared target while the read is in flight.
+    tile.mValid = false;
+    tile.mDepth.assign((size_t)res * res, 0.f);
 
     tile.mCapturedSerial = tile.mGeomSerial;
+
+    mReadbackPending = true;
+    mReadbackRegion = tile.mRegionHandle;
+    const U64 region = tile.mRegionHandle;
+    const U32 tres = res;
+
+    SSGLReadback::Job job;
+    job.mTexture = mTarget.getDepth();
+    job.mTarget = GL_TEXTURE_2D;
+    job.mWidth = tres;
+    job.mHeight = tres;
+    job.mFormat = GL_DEPTH_COMPONENT;
+    job.mType = GL_FLOAT;
+    job.mDone = [this, region, tres](const U8* data, size_t bytes)
+    {
+        mReadbackPending = false;
+        mReadbackRegion = 0;
+        if (mClearPending)
+        {
+            mClearPending = false;
+            clearCache();
+            return;
+        }
+        auto it = mTiles.find(region);
+        if (it == mTiles.end()) return;
+        Tile& tile = it->second;
+        const size_t n = (size_t)tres * tres;
+        if (bytes >= n * sizeof(F32) && tile.mDepth.size() >= n)
+        {
+            memcpy(tile.mDepth.data(), data, n * sizeof(F32));
+            tile.mValid = true;
+        }
+    };
+    if (!SSGLReadback::getInstance()->submit(job))
+    {
+        // Could not even stage the read - GL trouble. Leave the tile invalid
+        // (and the target free) so the next capture retries it.
+        mReadbackPending = false;
+        mReadbackRegion = 0;
+        return false;
+    }
 
     return true;
 }
@@ -266,6 +323,8 @@ void SSRainShadowMap::evict()
         {
             if (it->second.mLastTouched < oldest->second.mLastTouched) oldest = it;
         }
+        // Never drop the tile an in-flight readback is copying into.
+        if (oldest->second.mRegionHandle == mReadbackRegion) break;
         mTiles.erase(oldest);
     }
 }
@@ -276,8 +335,30 @@ void SSRainShadowMap::capture()
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     if (!atmo->hasWeather())
     {
+        // A read in flight still references mTarget's depth texture - let it
+        // land first, then tear the target down next frame.
+        if (mReadbackPending)
+        {
+            evict();
+            return;
+        }
         if (!mTiles.empty()) clearCache();
         if (mTarget.getWidth() > 0) mTarget.release();
+        if (mDebugMapTex)
+        {
+            LLImageGL::deleteTextures(1, &mDebugMapTex);
+            mDebugMapTex = 0;
+            mDebugMapFrom = -1.0;
+        }
+        return;
+    }
+
+    // The shared capture target must not be rendered into again until the
+    // outstanding readback has copied its contents off; capture() waits for it
+    // rather than racing the worker.
+    if (mReadbackPending)
+    {
+        evict();
         return;
     }
 
@@ -351,184 +432,716 @@ F64 SSRainShadowMap::lastCaptureAge() const
     return SSAtmoMagic::getInstance()->sharedTime() - mLastCapture;
 }
 
-static const F32 DEBUG_DIR_EPSILON = 0.9995f;
+// Debug view: the drawn footprint of one texel shrinks a touch so neighbours read as separate cells rather than a sealed sheet.
+static const F32 DEBUG_QUAD_FILL   = 0.92f;
+// Above this many world metres of hit drift across one texel the surface is near-parallel to the fall - the map is smearing a vertical face across the column, and every shelter answer taken from it is a guess.
+static const F32 DEBUG_GRAZE_RATIO = 3.f;
+// Height above the ground at which a hit is unambiguously sheltering geometry rather than the terrain the map was aimed at.
+static const F32 DEBUG_SHELTER_TOP = 12.f;
+// Lift along the fall direction, so a quad floats just clear of the surface it saw instead of z-fighting it. Along -dir rather than +Z because that is the axis the map looked down, so the quad is always in front of its own texel.
+static const F32 DEBUG_LIFT        = 0.08f;
+// How far from the camera the world views draw. Fixed rather than a dial: the cloud is a point per texel, so the honest range is whatever the frame can carry at full map resolution, and that does not vary by taste.
+static const F32 DEBUG_RANGE       = 96.f;
+// Sample spacing in texels. Below 1 there are no more texels to show, so the cloud interpolates between them the way resolveColumn does when it reads the map - a smoother surface, not more information.
+static const F32 DEBUG_STRIDE_MIN  = 0.25f;
+static const F32 DEBUG_STRIDE_MAX  = 32.f;
+// Hard ceiling on baked points per tile - the stride is doubled until the cloud fits, so a fine stride on a large map degrades to a coarser one instead of eating a gigabyte.
+static const size_t DEBUG_MAX_POINTS = 1500000;
 
-// Bakes the debug mesh: one column per sample, the vertex sitting on whatever it lands on, seeds stepped upwind so tilted falls stay on-region.
-void SSRainShadowMap::buildShadowMesh(const Tile& tile, ShadowMesh& mesh)
+// The stride actually used: the requested one, doubled until a map of this resolution bakes within the point ceiling. A sub-texel stride therefore only survives on maps coarse enough to have room for it, which is where it was wanted anyway.
+static F32 fittedStride(U32 res, F32 stride)
 {
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp)
+    stride = llclamp(stride, DEBUG_STRIDE_MIN, DEBUG_STRIDE_MAX);
+    while (stride < DEBUG_STRIDE_MAX)
     {
-        mesh.mN = 0;
-        return;
+        const size_t steps = (size_t)llmax(1.f, floorf((F32)res / stride));
+        if (steps * steps <= DEBUG_MAX_POINTS) break;
+        stride *= 2.f;
+    }
+    return stride;
+}
+
+// Debug colour ramp: olive on the ground, through green and cyan to blue as a hit climbs clear of it, violet for the tall stuff. Magenta means the texel grazed a near-vertical face, so its shelter answer is not to be trusted.
+static LLColor4U shadowTexelColor(F32 above_ground, bool graze, bool off_region, bool submerged)
+{
+    F32 r, g, b;
+
+    const F32 t = llclamp(above_ground / DEBUG_SHELTER_TOP, 0.f, 1.f);
+    if (above_ground < 0.35f)
+    {
+        r = 0.78f; g = 0.62f; b = 0.18f;
+    }
+    else if (t < 0.5f)
+    {
+        const F32 k = t * 2.f;
+        r = lerp(0.45f, 0.10f, k); g = lerp(0.80f, 0.90f, k); b = lerp(0.25f, 0.80f, k);
+    }
+    else
+    {
+        const F32 k = (t - 0.5f) * 2.f;
+        r = lerp(0.10f, 0.62f, k); g = lerp(0.90f, 0.30f, k); b = lerp(0.80f, 1.00f, k);
     }
 
-    static LLCachedControl<F32> step_setting(gSavedSettings, "SSAtmoShadowDebugStep", 2.f);
-    const F32 step = llclamp((F32)step_setting, 0.5f, 16.f);
+    F32 a = (above_ground < 0.35f) ? 0.45f : lerp(0.55f, 0.85f, t);
 
-    const F32 width = regionp->getWidth();
+    if (submerged)
+    {
+        r *= 0.35f; g = lerp(g, 0.65f, 0.5f); b = lerp(b, 0.85f, 0.6f); a *= 0.7f;
+    }
 
-    const S32 n = llclamp((S32)(width / step) + 1, 2, 1025);
-    const F32 grid_step = width / (F32)(n - 1);
+    if (graze)
+    {
+        r = lerp(r, 1.f, 0.75f); g = lerp(g, 0.15f, 0.75f); b = lerp(b, 0.95f, 0.75f); a *= 0.8f;
+    }
+
+    // The capture frustum is wider than the region so a tilted fall still covers it - those texels landed on a neighbour or the void, and are dimmed rather than dropped so the overscan itself stays legible.
+    if (off_region) a *= 0.3f;
+
+    return LLColor4U((U8)(llclamp(r, 0.f, 1.f) * 255.f), (U8)(llclamp(g, 0.f, 1.f) * 255.f),
+                     (U8)(llclamp(b, 0.f, 1.f) * 255.f), (U8)(llclamp(a, 0.f, 1.f) * 255.f));
+}
+
+// Bakes a tile's depth texels into world points. This is a straight unprojection - the same arithmetic buildSurfaceGrid uses - so what the cloud shows is exactly what every consumer of the map reads, with no second trace to disagree with it.
+void SSRainShadowMap::buildDebugCloud(const Tile& tile, DebugCloud& cloud)
+{
+    cloud.mPos.clear();
+    cloud.mColor.clear();
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    if (!regionp || tile.mDepth.empty() || tile.mRes == 0) return;
+
+    static LLCachedControl<F32> stride_setting(gSavedSettings, "SSAtmoShadowDebugStride", 1.f);
+
+    const U32 res = tile.mRes;
+    const F32 stride = fittedStride(res, (F32)stride_setting);
+    const S32 steps = (S32)llmax(1.f, floorf((F32)res / stride));
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const bool sky = atmo->isSkyTrack();
     const F32 sky_floor = atmo->groundZero();
-    const LLVector3 region_origin = regionp->getOriginAgent();
 
-    mesh.mN = n;
-    mesh.mPos.resize((size_t)n * n);
-    mesh.mShade.resize((size_t)n * n);
+    const LLVector3 origin = regionp->getOriginAgent();
+    const LLVector3 eye = origin + tile.mEyeRegion;
+    const F32 range = tile.mFar - tile.mNear;
+    const F32 width = regionp->getWidth();
+    const F32 water_z = regionp->getWaterHeight();
+    const LLSurface& land = regionp->getLand();
 
-    for (S32 j = 0; j < n; ++j)
+    const F32 su = 2.f * tile.mHalfW / (F32)res;
+    const F32 sv = 2.f * tile.mHalfH / (F32)res;
+    const LLVector3 right_step = tile.mRight * (su * stride);
+    const LLVector3 up_step    = tile.mUp * (sv * stride);
+    const LLVector3 dir_range  = tile.mDir * range;
+    const LLVector3 row_start  = eye
+        + tile.mRight * (-tile.mHalfW + 0.5f * su)
+        + tile.mUp * (-tile.mHalfH + 0.5f * sv)
+        + tile.mDir * tile.mNear;
+
+    // The graze test always steps whole texels - it is asking what the stored surface does between neighbouring samples of the map, which is not a question a sub-texel stride changes.
+    const S32 istep = llmax(1, (S32)(stride + 0.5f));
+    const F32 graze_limit = su * (F32)istep * DEBUG_GRAZE_RATIO;
+
+    auto texel = [&](S32 ax, S32 ay) -> F32
     {
-        for (S32 i = 0; i < n; ++i)
+        ax = llclamp(ax, 0, (S32)res - 1);
+        ay = llclamp(ay, 0, (S32)res - 1);
+        return tile.mDepth[(size_t)ay * res + ax];
+    };
+
+    const size_t reserve = (size_t)steps * steps / 2;
+    cloud.mPos.reserve(reserve);
+    cloud.mColor.reserve(reserve);
+
+    for (S32 sy = 0; sy < steps; ++sy)
+    {
+        const F32 fy = (F32)sy * stride;
+        const S32 iy = llmin((S32)fy, (S32)res - 1);
+
+        LLVector3 p = row_start + up_step * (F32)sy;
+
+        for (S32 sx = 0; sx < steps; ++sx, p += right_step)
         {
-            const F32 lx = llmin((F32)i * grid_step, width);
-            const F32 ly = llmin((F32)j * grid_step, width);
+            const F32 fx = (F32)sx * stride;
+            const S32 ix = llmin((S32)fx, (S32)res - 1);
 
-            const LLVector3 start(region_origin.mV[VX] + lx,
-                                  region_origin.mV[VY] + ly,
-                                  tile.mBandTop);
+            F32 d;
+            if (stride < 1.f)
+            {
+                // Asking for more samples than the map has texels, so read it the way resolveColumn does - bilinear between the four around this point. A miss in any corner leaves the whole sample a miss, so holes stay the shape they really are instead of being feathered away.
+                const F32 gx = fx - 0.5f;
+                const F32 gy = fy - 0.5f;
+                const S32 x0 = (S32)floorf(gx);
+                const S32 y0 = (S32)floorf(gy);
 
-            LLVector3 hit;
-            bool on_water = false;
-            resolveColumn(start, hit, on_water);
+                const F32 d00 = texel(x0, y0),     d10 = texel(x0 + 1, y0);
+                const F32 d01 = texel(x0, y0 + 1), d11 = texel(x0 + 1, y0 + 1);
+                if (d00 >= DEPTH_MISS || d10 >= DEPTH_MISS || d01 >= DEPTH_MISS || d11 >= DEPTH_MISS) continue;
 
-            const LLVector3 corrected(2.f * start.mV[VX] - hit.mV[VX],
-                                      2.f * start.mV[VY] - hit.mV[VY],
-                                      tile.mBandTop);
-            const bool mapped = resolveColumn(corrected, hit, on_water);
+                const F32 wx = gx - (F32)x0;
+                const F32 wy = gy - (F32)y0;
+                d = lerp(lerp(d00, d10, wx), lerp(d01, d11, wx), wy);
+            }
+            else
+            {
+                d = texel(ix, iy);
+                if (d >= DEPTH_MISS) continue;
+            }
 
-            const size_t idx = (size_t)j * n + i;
+            const LLVector3 hit = p + dir_range * d;
 
-            mesh.mPos[idx].set(hit.mV[VX] - region_origin.mV[VX],
-                               hit.mV[VY] - region_origin.mV[VY],
-                               hit.mV[VZ] + 0.12f);
+            const F32 lx = hit.mV[VX] - origin.mV[VX];
+            const F32 ly = hit.mV[VY] - origin.mV[VY];
+            const bool off_region = (lx < 0.f || ly < 0.f || lx >= width || ly >= width);
 
-            mesh.mShade[idx] = mapped ? 1.f : 0.f;
+            F32 ground;
+            if (sky)
+            {
+                ground = sky_floor;
+            }
+            else if (off_region)
+            {
+                ground = water_z;
+            }
+            else
+            {
+                ground = llmax(land.resolveHeightRegion(lx, ly), water_z);
+            }
+
+            // Neighbouring texels along both map axes - a large swing means the column walked down a wall between one texel and the next.
+            auto tap = [&](S32 ax, S32 ay) -> F32
+            {
+                const F32 v = texel(ax, ay);
+                return (v >= DEPTH_MISS) ? d : v;
+            };
+
+            const F32 du = fabsf(tap(ix + istep, iy) - tap(ix - istep, iy)) * range * 0.5f;
+            const F32 dv = fabsf(tap(ix, iy + istep) - tap(ix, iy - istep)) * range * 0.5f;
+            const bool graze = llmax(du, dv) > graze_limit;
+
+            cloud.mPos.push_back(hit - origin - tile.mDir * DEBUG_LIFT);
+            cloud.mColor.push_back(shadowTexelColor(hit.mV[VZ] - ground, graze, off_region,
+                                                    !sky && hit.mV[VZ] < water_z - 0.05f));
         }
     }
 
-    mesh.mBuiltFrom  = tile.mCaptureTime;
-    mesh.mBuiltDir   = atmo->rainDirection();
-    mesh.mBuiltStep  = step;
-    mesh.mBuiltFloor = sky ? sky_floor : 0.f;
-    mesh.mBuiltSky   = sky;
+    cloud.mRight = tile.mRight;
+    cloud.mUp = tile.mUp;
+    cloud.mHalf = su * stride * 0.5f * DEBUG_QUAD_FILL;
+
+    cloud.mBuiltFrom   = tile.mCaptureTime;
+    cloud.mBuiltStride = stride;
+    cloud.mBuiltRes    = res;
+    cloud.mBuiltFloor  = sky ? sky_floor : 0.f;
+    cloud.mBuiltSky    = sky;
 }
 
-// Casts the map back onto the world - cool where depth was captured, warm where a column fell back to the heightmap.
+// The landing grid the surface field and the drainage trace resample the capture into - same figure, so this view and theirs cannot disagree.
+static const S32 DEBUG_GRID_RES = 128;
+// A landing this far above the terrain under it is sheltered by something rather than sitting on the ground.
+static const F32 DEBUG_SHELTER_MIN = 0.5f;
+
+// Bakes the resampled landing grid and its colours. What this view says that the texel cloud cannot: which cells the capture never reached at all, because those fall back to the bare heightmap and every consumer takes that fallback without knowing.
+void SSRainShadowMap::buildDebugGrid(const Tile& tile, DebugGrid& grid)
+{
+    grid.mColor.clear();
+
+    if (!buildSurfaceGrid(tile.mRegionHandle, DEBUG_GRID_RES, grid.mGrid))
+    {
+        grid.mGrid.mN = 0;
+        return;
+    }
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    if (!regionp)
+    {
+        grid.mGrid.mN = 0;
+        return;
+    }
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const bool sky = atmo->isSkyTrack();
+    const F32 sky_floor = atmo->groundZero();
+    const F32 water_z = regionp->getWaterHeight();
+    const LLSurface& land = regionp->getLand();
+
+    const S32 n = grid.mGrid.mN;
+    grid.mColor.resize((size_t)n * n);
+
+    for (S32 gy = 0; gy < n; ++gy)
+    {
+        for (S32 gx = 0; gx < n; ++gx)
+        {
+            const size_t idx = (size_t)gy * n + gx;
+            const U8 flags = grid.mGrid.mFlags[idx];
+            const F32 z = grid.mGrid.mZ[idx];
+
+            F32 r, g, b, a;
+
+            if (flags & SURF_FALLBACK)
+            {
+                // The loud one on purpose: the capture told this cell nothing, so its landing came off the heightmap and no roof over it is being felt at all.
+                r = 1.f; g = 0.25f; b = 0.1f; a = 0.6f;
+            }
+            else
+            {
+                const F32 ground = sky ? sky_floor
+                                       : llmax(land.resolveHeightRegion(grid.mGrid.axis(gx), grid.mGrid.axis(gy)), water_z);
+                const F32 shelter = z - ground;
+
+                if (shelter < DEBUG_SHELTER_MIN)
+                {
+                    r = 0.32f; g = 0.36f; b = 0.42f; a = 0.28f;
+                }
+                else
+                {
+                    const F32 t = llclamp(shelter / DEBUG_SHELTER_TOP, 0.f, 1.f);
+                    if (t < 0.5f)
+                    {
+                        const F32 k = t * 2.f;
+                        r = lerp(0.35f, 0.10f, k); g = lerp(0.90f, 0.85f, k); b = lerp(0.30f, 0.95f, k);
+                    }
+                    else
+                    {
+                        const F32 k = (t - 0.5f) * 2.f;
+                        r = lerp(0.10f, 0.70f, k); g = lerp(0.85f, 0.25f, k); b = lerp(0.95f, 1.00f, k);
+                    }
+                    a = lerp(0.5f, 0.9f, t);
+                }
+
+                if (flags & SURF_WATER)
+                {
+                    r *= 0.4f; g = lerp(g, 0.75f, 0.4f); b = lerp(b, 0.95f, 0.5f);
+                }
+            }
+
+            grid.mColor[idx] = LLColor4U((U8)(llclamp(r, 0.f, 1.f) * 255.f), (U8)(llclamp(g, 0.f, 1.f) * 255.f),
+                                         (U8)(llclamp(b, 0.f, 1.f) * 255.f), (U8)(llclamp(a, 0.f, 1.f) * 255.f));
+        }
+    }
+
+    grid.mBuiltFrom  = tile.mCaptureTime;
+    grid.mBuiltFloor = sky ? sky_floor : 0.f;
+    grid.mBuiltSky   = sky;
+}
+
+// Shared setup for the two world-space views.
+static void beginWorldDebug()
+{
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+}
+
+// View 0: the capture's own texels, each drawn as the footprint it covers.
+void SSRainShadowMap::drawTexelCloud()
+{
+    beginWorldDebug();
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const F32 reach_sq = DEBUG_RANGE * DEBUG_RANGE;
+    const F32 fade_from = DEBUG_RANGE * 0.6f;
+    const F32 fade_from_sq = fade_from * fade_from;
+
+    for (const auto& entry : mDebugCloud)
+    {
+        const DebugCloud& cloud = entry.second;
+        if (cloud.mPos.empty()) continue;
+
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
+        if (!regionp) continue;
+
+        const LLVector3 base = regionp->getOriginAgent();
+        // Each quad is the texel's own footprint, laid in the map plane rather than flat - so a face the fall grazes shows up edge-on and stretched, exactly as the map stores it.
+        const LLVector3 ru = cloud.mRight * cloud.mHalf;
+        const LLVector3 uu = cloud.mUp * cloud.mHalf;
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (size_t i = 0; i < cloud.mPos.size(); ++i)
+        {
+            const LLVector3 c = base + cloud.mPos[i];
+
+            const F32 dist_sq = (c - cam).magVecSquared();
+            if (dist_sq > reach_sq) continue;
+
+            LLColor4U col = cloud.mColor[i];
+            if (dist_sq > fade_from_sq)
+            {
+                const F32 k = 1.f - (sqrtf(dist_sq) - fade_from) / llmax(0.01f, DEBUG_RANGE - fade_from);
+                col.mV[3] = (U8)((F32)col.mV[3] * llclamp(k, 0.f, 1.f));
+                if (col.mV[3] == 0) continue;
+            }
+
+            gGL.color4ubv(col.mV);
+
+            const LLVector3 a = c - ru - uu;
+            const LLVector3 b = c + ru - uu;
+            const LLVector3 e = c + ru + uu;
+            const LLVector3 f = c - ru + uu;
+
+            gGL.vertex3fv(a.mV); gGL.vertex3fv(b.mV); gGL.vertex3fv(e.mV);
+            gGL.vertex3fv(a.mV); gGL.vertex3fv(e.mV); gGL.vertex3fv(f.mV);
+        }
+        gGL.end();
+    }
+}
+
+// View 1: the resampled landing grid, flat cells over the ground they stand for.
+void SSRainShadowMap::drawShelterGrid()
+{
+    beginWorldDebug();
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const F32 reach_sq = DEBUG_RANGE * DEBUG_RANGE;
+
+    for (const auto& entry : mDebugGrid)
+    {
+        const DebugGrid& grid = entry.second;
+        const S32 n = grid.mGrid.mN;
+        if (n < 2 || grid.mColor.empty()) continue;
+
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
+        if (!regionp) continue;
+
+        const LLVector3 origin = regionp->getOriginAgent();
+        const F32 half = grid.mGrid.mCell * 0.45f;
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 gy = 0; gy < n; ++gy)
+        {
+            for (S32 gx = 0; gx < n; ++gx)
+            {
+                const size_t idx = (size_t)gy * n + gx;
+
+                const LLVector3 c(origin.mV[VX] + grid.mGrid.axis(gx),
+                                  origin.mV[VY] + grid.mGrid.axis(gy),
+                                  grid.mGrid.mZ[idx] + 0.06f);
+                if ((c - cam).magVecSquared() > reach_sq) continue;
+
+                gGL.color4ubv(grid.mColor[idx].mV);
+
+                gGL.vertex3f(c.mV[VX] - half, c.mV[VY] - half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] + half, c.mV[VY] - half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] + half, c.mV[VY] + half, c.mV[VZ]);
+
+                gGL.vertex3f(c.mV[VX] - half, c.mV[VY] - half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] + half, c.mV[VY] + half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] - half, c.mV[VY] + half, c.mV[VZ]);
+            }
+        }
+        gGL.end();
+    }
+}
+
+// View 2: the capture as captured, on screen. Nothing is unprojected or resampled here, so this is the one view that can be read against SSAtmoShadowRes: holes are black, and if detail is missing at this size it was never in the map to begin with.
+void SSRainShadowMap::drawDepthMap()
+{
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
+
+    const Tile* tile = nullptr;
+    U64 handle = 0;
+    if (cam_region)
+    {
+        auto it = mTiles.find(cam_region->getHandle());
+        if (it != mTiles.end() && it->second.mValid && !it->second.mDepth.empty())
+        {
+            tile = &it->second;
+            handle = it->first;
+        }
+    }
+    if (!tile)
+    {
+        for (const auto& entry : mTiles)
+        {
+            if (entry.second.mValid && !entry.second.mDepth.empty())
+            {
+                tile = &entry.second;
+                handle = entry.first;
+                break;
+            }
+        }
+    }
+    if (!tile) return;
+
+    const U32 res = tile->mRes;
+
+    if (mDebugMapFrom != tile->mCaptureTime || mDebugMapRegion != handle || mDebugMapRes != res)
+    {
+        // Stretched between the nearest and furthest thing the capture actually saw - the raw range is a thin slice of the far plane, and unstretched it reads as one flat grey.
+        F32 lo = 1.f, hi = 0.f;
+        for (F32 d : tile->mDepth)
+        {
+            if (d >= DEPTH_MISS) continue;
+            lo = llmin(lo, d);
+            hi = llmax(hi, d);
+        }
+        const F32 span = llmax(hi - lo, 0.0001f);
+
+        std::vector<U8> rgba((size_t)res * res * 4);
+        for (size_t i = 0; i < (size_t)res * res; ++i)
+        {
+            const F32 d = tile->mDepth[i];
+            U8* px = &rgba[i * 4];
+            if (d >= DEPTH_MISS)
+            {
+                // A hole: the fall passed clean through and hit nothing at all.
+                px[0] = 70; px[1] = 12; px[2] = 16; px[3] = 255;
+            }
+            else
+            {
+                // Near is bright, so roofs and canopy stand out white over dark ground.
+                const U8 v = (U8)(llclamp(1.f - (d - lo) / span, 0.f, 1.f) * 255.f);
+                px[0] = v; px[1] = v; px[2] = v; px[3] = 255;
+            }
+        }
+
+        if (mDebugMapTex == 0) LLImageGL::generateTextures(1, &mDebugMapTex);
+        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mDebugMapTex);
+        LLImageGL::setManualImage(GL_TEXTURE_2D, 0, GL_RGBA8, (S32)res, (S32)res, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data(), false);
+        // Point filtering, and no mips - a smoothed debug map would hide exactly the single-texel holes it is here to show.
+        gGL.getTexUnit(0)->setTextureFilteringOption(LLTexUnit::TFO_POINT);
+
+        mDebugMapFrom = tile->mCaptureTime;
+        mDebugMapRegion = handle;
+        mDebugMapRes = res;
+    }
+
+    if (mDebugMapTex == 0) return;
+
+    const LLRect world = gViewerWindow->getWorldViewRectScaled();
+    const F32 vw = (F32)world.getWidth();
+    const F32 vh = (F32)world.getHeight();
+    const F32 size = llmin(384.f, llmin(vw, vh) * 0.4f);
+    const F32 margin = 16.f;
+    const F32 x0 = vw - size - margin;
+    const F32 y0 = margin;
+    const F32 x1 = x0 + size;
+    const F32 y1 = y0 + size;
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadIdentity();
+    gGL.ortho(0.f, vw, 0.f, vh, -1.f, 1.f);
+
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadIdentity();
+
+    {
+        LLGLDisable depth_test(GL_DEPTH_TEST);
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+        gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mDebugMapTex);
+        gGL.color4f(1.f, 1.f, 1.f, 1.f);
+        gGL.begin(LLRender::TRIANGLES);
+        // Flipped in v: the capture's first row is the bottom of the map plane, and ortho here puts y=0 at the bottom of the screen, so an unflipped draw would show it upside down against the world.
+        gGL.texCoord2f(0.f, 1.f); gGL.vertex3f(x0, y0, 0.f);
+        gGL.texCoord2f(1.f, 1.f); gGL.vertex3f(x1, y0, 0.f);
+        gGL.texCoord2f(1.f, 0.f); gGL.vertex3f(x1, y1, 0.f);
+        gGL.texCoord2f(0.f, 1.f); gGL.vertex3f(x0, y0, 0.f);
+        gGL.texCoord2f(1.f, 0.f); gGL.vertex3f(x1, y1, 0.f);
+        gGL.texCoord2f(0.f, 0.f); gGL.vertex3f(x0, y1, 0.f);
+        gGL.end();
+
+        gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+        gGL.color4f(0.35f, 0.75f, 1.f, 0.9f);
+        gGL.begin(LLRender::LINES);
+        gGL.vertex3f(x0, y0, 0.f); gGL.vertex3f(x1, y0, 0.f);
+        gGL.vertex3f(x1, y0, 0.f); gGL.vertex3f(x1, y1, 0.f);
+        gGL.vertex3f(x1, y1, 0.f); gGL.vertex3f(x0, y1, 0.f);
+        gGL.vertex3f(x0, y1, 0.f); gGL.vertex3f(x0, y0, 0.f);
+        gGL.end();
+    }
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGLLastMatrix = nullptr;
+}
+
+// View 3: the frame each capture was taken in - the ortho box, the band it spans, and what state the tile is in. The view for "why did this region never get a usable map", which none of the others can answer because they only draw captures that worked.
+void SSRainShadowMap::drawCaptureVolume()
+{
+    beginWorldDebug();
+
+    const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+
+    for (const auto& entry : mTiles)
+    {
+        const Tile& tile = entry.second;
+        if (tile.mRes == 0) continue;
+
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
+        if (!regionp) continue;
+
+        const LLVector3 origin = regionp->getOriginAgent();
+        const LLVector3 eye = origin + tile.mEyeRegion;
+        const F32 width = regionp->getWidth();
+
+        LLColor4 col;
+        if (!tile.mValid)            col.set(1.f, 0.25f, 0.85f, 0.85f);   // readback still in flight, or it never landed
+        else if (tile.mDirty)        col.set(1.f, 0.72f, 0.15f, 0.85f);   // geometry moved under it; waiting on a recapture
+        else if (needsCapture(tile)) col.set(0.9f, 0.9f, 0.35f, 0.7f);    // stale for some other reason - age, drift, the camera leaving the band
+        else                         col.set(0.3f, 0.9f, 1.f, 0.7f);      // current
+
+        const LLVector3 r = tile.mRight * tile.mHalfW;
+        const LLVector3 u = tile.mUp * tile.mHalfH;
+        const LLVector3 near_c = eye + tile.mDir * tile.mNear;
+        const LLVector3 far_c  = eye + tile.mDir * tile.mFar;
+
+        LLVector3 corner[8];
+        corner[0] = near_c - r - u; corner[1] = near_c + r - u;
+        corner[2] = near_c + r + u; corner[3] = near_c - r + u;
+        corner[4] = far_c  - r - u; corner[5] = far_c  + r - u;
+        corner[6] = far_c  + r + u; corner[7] = far_c  - r + u;
+
+        gGL.begin(LLRender::LINES);
+        gGL.color4fv(col.mV);
+        for (S32 i = 0; i < 4; ++i)
+        {
+            const S32 j = (i + 1) % 4;
+            gGL.vertex3fv(corner[i].mV);     gGL.vertex3fv(corner[j].mV);
+            gGL.vertex3fv(corner[i + 4].mV); gGL.vertex3fv(corner[j + 4].mV);
+            gGL.vertex3fv(corner[i].mV);     gGL.vertex3fv(corner[i + 4].mV);
+        }
+
+        // The eye, as a cross in the map plane.
+        const LLVector3 tick_r = tile.mRight * 4.f;
+        const LLVector3 tick_u = tile.mUp * 4.f;
+        gGL.vertex3fv((eye - tick_r).mV); gGL.vertex3fv((eye + tick_r).mV);
+        gGL.vertex3fv((eye - tick_u).mV); gGL.vertex3fv((eye + tick_u).mV);
+
+        // The fall direction out of the eye, so the box can be read against the direction that shaped it.
+        gGL.vertex3fv(eye.mV);
+        gGL.vertex3fv((eye + tile.mDir * 24.f).mV);
+
+        // The band the capture spans, as the region footprint at its top and bottom - what markDirty tests geometry against.
+        for (S32 k = 0; k < 2; ++k)
+        {
+            const F32 z = k ? tile.mBandTop : tile.mBandBottom;
+            gGL.color4f(col.mV[0], col.mV[1], col.mV[2], k ? 0.55f : 0.3f);
+
+            const LLVector3 p0(origin.mV[VX],         origin.mV[VY],         z);
+            const LLVector3 p1(origin.mV[VX] + width, origin.mV[VY],         z);
+            const LLVector3 p2(origin.mV[VX] + width, origin.mV[VY] + width, z);
+            const LLVector3 p3(origin.mV[VX],         origin.mV[VY] + width, z);
+
+            gGL.vertex3fv(p0.mV); gGL.vertex3fv(p1.mV);
+            gGL.vertex3fv(p1.mV); gGL.vertex3fv(p2.mV);
+            gGL.vertex3fv(p2.mV); gGL.vertex3fv(p3.mV);
+            gGL.vertex3fv(p3.mV); gGL.vertex3fv(p0.mV);
+        }
+
+        // Age since capture, as a bar rising up the eye - a tile that never refreshes grows a visibly long one.
+        if (tile.mValid)
+        {
+            const F32 age = llclamp((F32)(now - tile.mCaptureTime), 0.f, 60.f);
+            gGL.color4f(1.f, 1.f, 1.f, 0.5f);
+            gGL.vertex3fv(eye.mV);
+            gGL.vertex3f(eye.mV[VX], eye.mV[VY], eye.mV[VZ] + age);
+        }
+        gGL.end();
+    }
+}
+
+// Draws the captured depth maps, in whichever of the four views SSAtmoShadowDebugView picks. Only the active view's cache is baked, and the others are dropped, so switching views does not leave the one you are not looking at costing memory.
 void SSRainShadowMap::renderDebug()
 {
     if (mTiles.empty())
     {
-        mDebugMesh.clear();
+        mDebugCloud.clear();
+        mDebugGrid.clear();
         return;
     }
 
+    static LLCachedControl<U32> view_setting(gSavedSettings, "SSAtmoShadowDebugView", 0);
+    static LLCachedControl<F32> stride_setting(gSavedSettings, "SSAtmoShadowDebugStride", 1.f);
+
+    const U32 view = ((U32)view_setting < DEBUG_VIEW_COUNT) ? (U32)view_setting : (U32)DEBUG_CLOUD;
+    const F32 requested_stride = llclamp((F32)stride_setting, DEBUG_STRIDE_MIN, DEBUG_STRIDE_MAX);
+
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
-    const LLVector3 dir = atmo->rainDirection();
     const bool sky = atmo->isSkyTrack();
     const F32 sky_floor = atmo->groundZero();
 
-    static LLCachedControl<F32> step_setting(gSavedSettings, "SSAtmoShadowDebugStep", 2.f);
-    const F32 step = llclamp((F32)step_setting, 0.5f, 16.f);
+    if (view != DEBUG_CLOUD) mDebugCloud.clear();
+    if (view != DEBUG_SHELTER) mDebugGrid.clear();
 
-    std::vector<U64> handles;
-    handles.reserve(mTiles.size());
-    for (const auto& entry : mTiles)
+    for (auto it = mDebugCloud.begin(); it != mDebugCloud.end(); )
     {
-        if (entry.second.mValid && !entry.second.mDepth.empty())
-        {
-            handles.push_back(entry.first);
-        }
+        it = (mTiles.count(it->first) == 0) ? mDebugCloud.erase(it) : std::next(it);
+    }
+    for (auto it = mDebugGrid.begin(); it != mDebugGrid.end(); )
+    {
+        it = (mTiles.count(it->first) == 0) ? mDebugGrid.erase(it) : std::next(it);
     }
 
-    for (auto it = mDebugMesh.begin(); it != mDebugMesh.end(); )
+    // Both bakes are copies of a capture, so they only go stale when the capture is replaced or when what they are measured against moves - a shifting fall direction needs no rebake, because the texels already fell the way they fell.
+    if (view == DEBUG_CLOUD || view == DEBUG_SHELTER)
     {
-        it = (mTiles.count(it->first) == 0) ? mDebugMesh.erase(it) : std::next(it);
-    }
-
-    for (U64 handle : handles)
-    {
-        const Tile& tile = mTiles[handle];
-        ShadowMesh& mesh = mDebugMesh[handle];
-
-        const bool stale = mesh.mN == 0
-                        || mesh.mBuiltFrom != tile.mCaptureTime
-                        || fabsf(mesh.mBuiltStep - step) > 0.01f
-                        || mesh.mBuiltSky != sky
-                        || (sky && fabsf(mesh.mBuiltFloor - sky_floor) > 0.5f)
-                        || mesh.mBuiltDir * dir < DEBUG_DIR_EPSILON;
-
-        if (stale)
+        for (const auto& entry : mTiles)
         {
-            buildShadowMesh(tile, mesh);
+            const Tile& tile = entry.second;
+            if (!tile.mValid || tile.mDepth.empty()) continue;
+
+            if (view == DEBUG_CLOUD)
+            {
+                DebugCloud& cloud = mDebugCloud[entry.first];
+
+                const F32 fitted = fittedStride(tile.mRes, requested_stride);
+
+                const bool stale = cloud.mBuiltFrom != tile.mCaptureTime
+                                || cloud.mBuiltStride != fitted
+                                || cloud.mBuiltRes != tile.mRes
+                                || cloud.mBuiltSky != sky
+                                || (sky && fabsf(cloud.mBuiltFloor - sky_floor) > 0.5f);
+
+                if (stale) buildDebugCloud(tile, cloud);
+            }
+            else
+            {
+                DebugGrid& grid = mDebugGrid[entry.first];
+
+                const bool stale = grid.mBuiltFrom != tile.mCaptureTime
+                                || grid.mBuiltSky != sky
+                                || (sky && fabsf(grid.mBuiltFloor - sky_floor) > 0.5f);
+
+                if (stale) buildDebugGrid(tile, grid);
+            }
         }
     }
 
     LLGLEnable blend(GL_BLEND);
     LLGLDepthTest depth(GL_TRUE, GL_FALSE);
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
-    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
-    for (U64 handle : handles)
+    switch (view)
     {
-        const ShadowMesh& mesh = mDebugMesh[handle];
-        if (mesh.mN < 2) continue;
+        case DEBUG_SHELTER: drawShelterGrid();   break;
+        case DEBUG_MAP:     drawDepthMap();      break;
+        case DEBUG_VOLUME:  drawCaptureVolume(); break;
+        default:            drawTexelCloud();    break;
+    }
 
-        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(handle);
-        if (!regionp) continue;
+    // The fall direction, drawn from the camera's own column down to where that column lands, so every world view can be read against the direction that produced it. Skipped for the on-screen map, which has no world to draw it in.
+    if (view != DEBUG_MAP)
+    {
+        const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+        const LLVector3 dir = atmo->rainDirection();
 
-        const LLVector3 base = regionp->getOriginAgent();
-        const S32 n = mesh.mN;
+        LLVector3 landing;
+        bool on_water = false;
+        const bool mapped = resolveColumn(cam, landing, on_water);
 
-        auto vert = [&](S32 i, S32 j)
-        {
-            const size_t idx = (size_t)j * n + i;
-            const F32 s = mesh.mShade[idx];
-
-            gGL.color4f(lerp(0.85f, 0.04f, s),
-                        lerp(0.40f, 0.07f, s),
-                        lerp(0.10f, 0.16f, s),
-                        lerp(0.60f, 0.30f, s));
-
-            const LLVector3& p = mesh.mPos[idx];
-            gGL.vertex3f(base.mV[VX] + p.mV[VX], base.mV[VY] + p.mV[VY], p.mV[VZ]);
-        };
-
-        gGL.begin(LLRender::TRIANGLES);
-        for (S32 j = 0; j + 1 < n; ++j)
-        {
-            for (S32 i = 0; i + 1 < n; ++i)
-            {
-                const F32 z00 = mesh.mPos[(size_t)j * n + i].mV[VZ];
-                const F32 z10 = mesh.mPos[(size_t)j * n + i + 1].mV[VZ];
-                const F32 z01 = mesh.mPos[(size_t)(j + 1) * n + i].mV[VZ];
-                const F32 z11 = mesh.mPos[(size_t)(j + 1) * n + i + 1].mV[VZ];
-                const F32 spread = llmax(llmax(z00, z10), llmax(z01, z11))
-                                 - llmin(llmin(z00, z10), llmin(z01, z11));
-                if (spread > llmax(4.f, step * 4.f)) continue;
-
-                vert(i, j);     vert(i + 1, j);     vert(i + 1, j + 1);
-                vert(i, j);     vert(i + 1, j + 1); vert(i, j + 1);
-            }
-        }
+        gGL.begin(LLRender::LINES);
+        gGL.color4f(mapped ? 0.4f : 1.f, mapped ? 0.85f : 0.55f, mapped ? 1.f : 0.15f, 0.9f);
+        gGL.vertex3fv((landing - dir * 24.f).mV);
+        gGL.vertex3fv(landing.mV);
         gGL.end();
     }
 
-    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-    const F32 land = sky ? sky_floor : LLWorld::getInstance()->resolveLandHeightAgent(cam);
-    const LLVector3 marker(cam.mV[VX], cam.mV[VY], land + 0.2f);
-
-    gGL.begin(LLRender::LINES);
-    gGL.color4f(0.4f, 0.7f, 1.f, 0.7f);
-    gGL.vertex3fv(marker.mV);
-    gGL.vertex3fv((marker - dir * 20.f).mV);
-    gGL.end();
-
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
 }
+
 
 // Handles and geometry serials of usable tiles, for consumers deciding whether to retrace.
 void SSRainShadowMap::validTiles(std::vector<std::pair<U64, U32> >& out) const
@@ -567,6 +1180,7 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
     out.mGeomSerial = tile.mCapturedSerial;
     out.mZ.assign((size_t)n * n, -FLT_MAX);
     out.mFlags.assign((size_t)n * n, 0);
+    out.mAbove.assign((size_t)n * n, 0.f);
 
     const LLVector3 eye = origin + tile.mEyeRegion;
     const F32 range = tile.mFar - tile.mNear;
@@ -635,6 +1249,26 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
                 else
                 {
                     out.mFlags[idx] = SURF_MAPPED;
+
+                    // Height over the ground reference under this cell - the
+                    // debug cloud's colour ramp, kept as data. The reference is
+                    // the terrain-or-water the fallback path would have used;
+                    // in a skybox it is the track floor, so a platform's decks
+                    // read as the structure they are rather than as terrain
+                    // four thousand metres below them.
+                    F32 ground;
+                    if (sky)
+                    {
+                        ground = sky_floor;
+                    }
+                    else
+                    {
+                        const LLVector3 centre(origin.mV[VX] + out.axis(gx),
+                                               origin.mV[VY] + out.axis(gy),
+                                               water_z);
+                        ground = llmax(worldp->resolveLandHeightAgent(centre), water_z);
+                    }
+                    out.mAbove[idx] = llmax(z - ground, 0.f);
                 }
                 continue;
             }

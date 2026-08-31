@@ -39,6 +39,12 @@ in vec2 vary_fragcoord;
 
 uniform sampler2D ssCommitSource;
 
+// Which attachment the source lands in: 1 specular (the wetness pass), 2 normal (the flatten
+// pass), 0 diffuse (the snow pass lifts albedo). The draw-buffers mask at the call site is what
+// actually steers the write - this only picks which output the source is written through, and
+// every other output stays masked to GL_NONE.
+uniform float ssCommitTarget;
+
 // Diagnostic. Above zero, the diffuse attachment is painted a flat magenta as well as the specular being written. Albedo multiplies straight into the final colour on every path there is, so this
 // cannot be mistaken for a subtle lighting change, cannot be swallowed by an overcast sky, and cannot be argued with. It separates "nothing this pass writes lands anywhere" from "the specular buffer
 // lands and the lighting does nothing with it", which are the only two possibilities left and want opposite fixes.
@@ -46,9 +52,25 @@ uniform float ssCommitDebugPaint;
 
 void main()
 {
-    frag_data[1] = texture(ssCommitSource, vary_fragcoord.xy);
+    vec4 src = texture(ssCommitSource, vary_fragcoord.xy);
 
-    if (ssCommitDebugPaint > 0.0)
+    // Every output written, every frame, unconditionally: an output the call site's
+    // draw-buffers mask routes somewhere is undefined until written, and this exact hole bit
+    // once - the normal commit only filled frag_data[2] while the mask routed the untouched
+    // frag_data[1] into the normal attachment, so the first frame the flatten pass had real
+    // work to do, the gbuffer normals became whatever the undefined output held. Black world.
+    // The mask is what steers these; this only guarantees nothing is undefined.
+    frag_data[0] = src;
+    frag_data[1] = src;
+    frag_data[2] = src;
+    frag_data[3] = src;
+
+    if (ssCommitTarget < 0.5)
+    {
+        return;
+    }
+
+    if (ssCommitDebugPaint > 0.0 && ssCommitTarget < 1.5)
     {
         frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
 

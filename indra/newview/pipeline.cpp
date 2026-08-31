@@ -111,6 +111,7 @@
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
+#include "sswhiteout.h"     // <SS:Nexii> Atmo Magic whiteout
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
 #include "llmutelist.h"
@@ -4462,6 +4463,22 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
             {
                 SSLightningRender::getInstance()->renderFlash();
                 SSVolCloud::getInstance()->render();
+
+                // <SS:Nexii> Atmo Magic whiteout: the local, height-limited fog
+                // veil, composited exactly like the haze above - depth staged, one
+                // alpha-lerped fullscreen pass. This is its proven placement - the
+                // identical machinery moved after the alpha pools flickered the
+                // whole frame (world frozen, UI and sky strobing), and back here
+                // it draws clean. Drawn after the volumetric deck so the puffs
+                // dissolve into the fog with the sky behind them when the camera
+                // stands in the storm; before the lightning and the precipitation,
+                // which stay crisp in front of their own weather. The trade:
+                // alpha surfaces drawn later - windows, foliage - composite over
+                // the veil and read unfogged, their fog taken from the geometry
+                // behind them.
+                SSWhiteout::getInstance()->render();
+                // </SS:Nexii>
+
                 SSLightningRender::getInstance()->render();
                 SSPrecipRenderer::getInstance()->render();
 
@@ -5678,8 +5695,8 @@ void LLPipeline::renderDebug()
         SSWindFlowMap::getInstance()->renderDebug();
     }
 
-    // Atmo Magic rain shadow: each cached tile projected back onto the region
-    // along the fall direction
+    // Atmo Magic rain shadow: every captured depth texel unprojected to the
+    // world point it saw, so holes, eaves and grazed faces read directly
     if (mRenderDebugMask & RENDER_DEBUG_RAIN_SHADOW)
     {
         SSRainShadowMap::getInstance()->renderDebug();
@@ -9766,6 +9783,10 @@ void LLPipeline::renderDeferredLighting()
         // all read one consistent gbuffer rather than each being taught about
         // the weather on its own.
         SSSurfaceField::getInstance()->renderWetPass();
+        // <SS:Nexii> Atmo Magic snow surfaces: same family, same reasoning -
+        // the settled depth the field carries becomes albedo before anything
+        // lights it.
+        SSSurfaceField::getInstance()->renderSnowPass();
         // </SS:Nexii>
 
         screen_target->bindTarget();
@@ -9792,10 +9813,11 @@ void LLPipeline::renderDeferredLighting()
             LLEnvironment &environment = LLEnvironment::instance();
 
             soften_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
-            // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the atmospheric module ramps
-            // its sunlight and sun glow across the disc's rise instead of snapping at centre-rise.
+            // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the atmospheric module ramps
+            // its sunlight and sun glow on the twilight band (full while the disc is up, easing
+            // out through the dusk below the horizon) instead of snapping at centre-rise.
             soften_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
-            // ...and the sun's true direction while any part of the disc is in sight - see
+            // ...and the sun's true direction while the rise band is live - see
             // SSAtmoEnvApplier::sunSlotDirection.
             soften_shader.uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
             soften_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
@@ -10217,10 +10239,11 @@ void LLPipeline::doAtmospherics()
 
         LLEnvironment& environment = LLEnvironment::instance();
         haze_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
-        // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the haze additive ramps its sun
-        // glow across the disc's rise instead of snapping at centre-rise.
+        // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the haze additive ramps its sun
+        // glow on the twilight band (full while the disc is up, easing out through the dusk below
+        // the horizon) instead of snapping at centre-rise.
         haze_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
-        // ...and the sun's true direction while any part of the disc is in sight - see
+        // ...and the sun's true direction while the rise band is live - see
         // SSAtmoEnvApplier::sunSlotDirection.
         haze_shader.uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
         haze_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);

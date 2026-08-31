@@ -25670,16 +25670,27 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>SSAtmoShadowDebugStep</key>
+    <key>SSAtmoShadowDebugView</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata rain shadow debug: spacing in meters of the grid the shadow is draped on. Smaller is sharper and slower to rebake</string>
+      <string>Render Metadata rain shadow debug: which view to draw. 0 the texel cloud, every captured depth texel unprojected to the world point it saw; 1 the resampled landing grid its consumers read, loud red where the capture never reached; 2 the raw depth map on screen; 3 the capture volume, band and tile state</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoShadowDebugStride</key>
+      <map>
+      <key>Comment</key>
+      <string>Render Metadata rain shadow debug: sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 there are no more texels to show, so the cloud interpolates between them the way the map is read when it is sampled - a smoother surface, not more detail. Doubled automatically if a map would bake more points than the view will hold, so a sub-texel spacing only survives on a coarse enough map</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>2.0</real>
+      <real>1.0</real>
     </map>
     <key>SSAtmoRunoff</key>
       <map>
@@ -25812,6 +25823,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>Boolean</string>
       <key>Value</key>
       <integer>1</integer>
+    </map>
+    <key>SSWaterSkyReflect</key>
+      <map>
+      <key>Comment</key>
+      <string>Strength of the water's distant sky mirror - far water taps the sky probe straight along the mirror angle so the sky's structure (sunrise bands, halos, cloud deck) reads in the reflection instead of averaging away in the wave normals. 0 reverts to stock wave-normal reflections</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
     </map>
     <key>SSAtmoWetPuddleSpecular</key>
       <map>
@@ -26011,6 +26033,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>1.0</real>
     </map>
+    <key>SSAtmoWetSurfaces</key>
+      <map>
+      <key>Comment</key>
+      <string>Render the wet surface material - wet floors, rooftops and streets tighten against rain and hold the roof runoff. Off freezes the look even at full SSAtmoWetStrength; the wetness field keeps accumulating underneath so toggling back on resumes where it was</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWetPuddles</key>
+      <map>
+      <key>Comment</key>
+      <string>Let lying water pool into puddle patches on flat ground and show them in the wet material. Off drains the visible puddles (the pooled water still rains down and runs off, it just does not collect)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
     <key>SSAtmoWetSpread</key>
       <map>
       <key>Comment</key>
@@ -26065,6 +26109,83 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>60.0</real>
+    </map>
+    <key>SSWorldField</key>
+      <map>
+      <key>Comment</key>
+      <string>Master toggle for the shared world field: one region-anchored band-sliced capture of the world's solid structure that surface, coverage and future channels read instead of each capturing its own. Builds nothing until a channel is demanded</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSWorldFieldSurfaceTop</key>
+      <map>
+      <key>Comment</key>
+      <string>Serve the surface field's landing grid (wet/snow/puddle, runoff) from the shared world field's SURFACE_TOP channel instead of the rain shadow capture</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSWorldFieldCoverage</key>
+      <map>
+      <key>Comment</key>
+      <string>Serve the soundscape's roof cover and burial questions from the shared world field's COVERAGE channel (band-stack lookups) instead of the up-raycasts and the wind tile's column top. Falls back to raycasts wherever no tile is built yet</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSWorldFieldCell</key>
+      <map>
+      <key>Comment</key>
+      <string>World field column size in metres; 2.0 over a 256m region is a 128x128 column grid</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSWorldFieldBand</key>
+      <map>
+      <key>Comment</key>
+      <string>Height of one capture band in metres. One ortho depth pass per band, stacked bottom-up, so the field is a multi-span column store; finer bands resolve more interior surfaces at the cost of more passes</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>16.0</real>
+    </map>
+    <key>SSWorldFieldCeiling</key>
+      <map>
+      <key>Comment</key>
+      <string>Altitude in metres above which the world field stops capturing. A full build also stops early once the sky has been empty for a few consecutive bands</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>256.0</real>
+    </map>
+    <key>SSWorldFieldMaxAge</key>
+      <map>
+      <key>Comment</key>
+      <string>Seconds before a cached world field tile is recaptured even without prim updates - the LOD and asset-timing recovery path</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>120.0</real>
     </map>
     <key>SSAtmoGlowScale</key>
       <map>
@@ -26286,6 +26407,39 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>1.0</real>
     </map>
+    <key>SSAtmoWindFlowPartial</key>
+      <map>
+      <key>Comment</key>
+      <string>Rebuild the wind flowmap in a box around a settled edit instead of the whole region. The box is the edit plus a little upwind (the stagnation pocket in front of a new wall) and everything downwind, warm-started from the previous field, so a prim rezzing or derezzing settles in a handful of cheap frames instead of a full recapture and re-solve. Off restores the old whole-tile rebuild, which can be useful for benchmarking or stepping on a bug</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWindFlowWorkerGL</key>
+      <map>
+      <key>Comment</key>
+      <string>Run the wind flow solve - including the blocking glGetTexImage readback - on a dedicated GL worker thread with a context shared with the viewer's, so a rebuild never stalls the frame loop. Falls back to the main thread automatically where a shared context cannot be created (headless, pre-4.3 GL, some Intel drivers); turn off to force the old in-frame rebuild for benchmarking or stepping on a bug</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSGLReadbackWorker</key>
+      <map>
+      <key>Comment</key>
+      <string>Run texture->CPU readbacks (rain shadow tiles, world field bands, and any consumer of SSGLReadback) on a dedicated GL worker thread with a context shared with the viewer's, so the synchronous glGetTexImage never stalls the frame loop. Falls back to the main thread automatically where a shared context cannot be created; turn off to force the old in-frame readback for benchmarking or stepping on a bug</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
     <key>SSAtmoWindFlowDebugStyle</key>
       <map>
       <key>Comment</key>
@@ -26443,13 +26597,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowIterations</key>
       <map>
       <key>Comment</key>
-      <string>Pressure solver passes for the wind flowmap. Jacobi carries information one cell per pass, so this wants to be of the same order as the texel count or the flow barely notices buildings</string>
+      <string>Pressure solver passes for the wind flowmap. Jacobi carries information one cell per pass, so this wants to be of the same order as the texel count or the flow barely notices buildings. Defaults high because partial rebuilds only run the box and the GL worker thread keeps the cost off the frame</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>128</integer>
+      <integer>256</integer>
     </map>
     <key>SSAtmoWindFlowMargin</key>
       <map>
@@ -26465,13 +26619,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowProbeRes</key>
       <map>
       <key>Comment</key>
-      <string>Wind flowmap: probe capture resolution as a multiple of the mask resolution, 1 to 4. The probe box is wider than the region and the ground inside it is foreshortened by the tilt, so at 1 a probe texel covers several mask cells and a cell tests against a ray that does not pass through it</string>
+      <string>Wind flowmap: probe capture resolution as a multiple of the mask resolution, 1 to 4. The probe box is wider than the region and the ground inside it is foreshortened by the tilt, so at 1 a probe texel covers several mask cells and a cell tests against a ray that does not pass through it. Defaults to 3 so the carve matches the raised solve resolution</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>2</integer>
+      <integer>3</integer>
     </map>
     <key>SSAtmoWindFlowProbes</key>
       <map>
@@ -26509,13 +26663,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowRes</key>
       <map>
       <key>Comment</key>
-      <string>Maximum texels per axis of a region's wind flowmap. A ceiling on the solve, not the resolution itself: cell size comes from SSAtmoWindFlowCell, and this is what stops a wide varregion or a very small cell size from running away. Memory and solve time both go with the square of it</string>
+      <string>Maximum texels per axis of a region's wind flowmap. A ceiling on the solve, not the resolution itself: cell size comes from SSAtmoWindFlowCell, and this is what stops a wide varregion or a very small cell size from running away. Memory and solve time both go with the square of it. Defaults high because partial rebuilds and the GL worker thread mean a rebuild no longer costs the frame; on a tight VRAM budget pull it down first</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>384</integer>
+      <integer>768</integer>
     </map>
     <key>SSAtmoWindFlowShelterSteps</key>
       <map>
@@ -26537,7 +26691,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>12</integer>
+      <integer>16</integer>
     </map>
     <key>SSAtmoWindFlowSliceMin</key>
       <map>
@@ -26560,6 +26714,237 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowLiftLo</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: wind speed at the ground, metres per second, where settled snow begins to lift and saltate. Evaluated against the local flow field, not the ambient, so the alley jets reach it before the open ground does</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.5</real>
+    </map>
+    <key>SSAtmoSnowLiftHi</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: wind speed at the ground where snow transport saturates. Between this and the lift threshold the effect ramps - a ground blizzard is every exposed cell at once, not a new code path</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>8.0</real>
+    </map>
+    <key>SSAtmoSnowLiftTemp</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: air temperature, degrees C, at which blowing snow dies entirely - wet snow does not lift. Scales to zero between 0 and this figure</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.5</real>
+    </map>
+    <key>SSAtmoSnowDepositGap</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: where the redeposit gate sits as a fraction of the lift threshold - the hysteresis that keeps one cell from eroding and banking in the same wind range. 0.7 means snow only banks once the local flow has dropped under 70 percent of where it started lifting</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.7</real>
+    </map>
+    <key>SSAtmoSnowCreep</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: global multiplier on the presets' snow creep - the downwind advection that migrates drift sheets, feeds the eave spill and banks drifts against obstacles. 0 disables the exchange entirely</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowDriftBudget</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: share of SSAtmoParticleBudget the blowing-snow pool may take. The pool is separate on purpose - a blizzard must never starve falling snow of budget, or the reverse</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.15</real>
+    </map>
+    <key>SSAtmoSnowDriftRadius</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: radius in metres around the camera the blowing-snow pool spawns in. The tier bands belong to the falling snow; this one is the drift pool's own</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>48.0</real>
+    </map>
+    <key>SSAtmoLodDrift</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: multiplier on the blowing-snow radius, beside the other per-tier LOD dials</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowDriftDebug</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: force the drift tier - blowing snow spawns regardless of weather and lift gates, oversized and solid magenta. If you cannot see these streaming along the ground, the drift tier is not rendering</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoSnowRegimeOverride</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: force the weather regime - -1 derives it from the weather as usual, 0 calm, 1 saltation, 2 drift, 3 blizzard, 4 squall. For debug and screenshots; regimes direct the presentation, the field still decides where snow actually lifts</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>-1</integer>
+    </map>
+    <key>SSAtmoSnowSurfaceStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: master dial on the snow surface pass - how strongly settled depth lifts albedo toward the drift colour. 0 removes the pass entirely</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowSurfaces</key>
+      <map>
+      <key>Comment</key>
+      <string>Render the accumulated snow material on surfaces - settled depth lifts albedo toward white and picks up sparkle. Off freezes the look even at full SSAtmoSnowSurfaceStrength; the snow field keeps accumulating underneath so toggling back on resumes where it was</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoSnowDepthFull</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: settled depth, metres, that reads as fully snow-covered on the surface pass. The field's repose gate keeps depths honest; this only sets where full white starts</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.02</real>
+    </map>
+    <key>SSAtmoSnowSparkle</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: how hard the snow surface's stable glints bite, 0 to 1 - the per-cell grain sparkle that separates fresh snow from flat paint</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.6</real>
+    </map>
+    <key>SSAtmoSnowDebug</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: snow debug views - 0 off, 1 the per-cell lift figure drawn over the ground. Higher styles land with their features</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoWhiteoutDebug</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: whiteout diagnosis - 0 off, 1 the final veil coverage as grayscale, 2 the outdoor-air gate, 3 the density split (red squall, green drift, blue height falloff). Drawn over the scene</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSAtmoWhiteoutFalloff</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: multiplier on the whiteout layer's vertical depth scale - the fog is strongest at the ground and fades out over 10 m in light snow up to 100 m in a blizzard, times this</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoWhiteoutStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: master dial on the whiteout layer - the local, height-limited fog veil the squall and the ground blizzard drive. 0 removes the layer entirely; the environment's own fog is never touched</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoWhiteout</key>
+      <map>
+      <key>Comment</key>
+      <string>Render the snow whiteout volumetric fog - the local, height-limited veil that collapses visibility inside the squall and the ground blizzard. Off freezes the layer even during a full whiteout; it ramps back in when turned on mid-storm</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoWhiteoutBand</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: height in metres of the drifting-snow band above the stored surface - how thick the ground-hugging veil is</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.5</real>
+    </map>
+    <key>SSAtmoWhiteoutRange</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: distance in metres over which the whiteout veil collapses visibility - the near field stays readable, everything past this goes into the fog colour</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>48.0</real>
     </map>
     <key>SSAtmoSoundResponse</key>
       <map>
@@ -26846,6 +27231,39 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>F32</string>
     <key>Value</key>
     <real>3.0</real>
+  </map>
+  <key>SSAtmoSurfaceStructAbove</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: metres above the terrain at which a surface counts as fully standing structure rather than ground, fading in from half this height. Gates puddles off tall decks, thins their snow ceiling, and is read wherever grade-vs-structure matters.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>12.0</real>
+  </map>
+  <key>SSAtmoSnowStructDepth</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: fraction of the snow depth ceiling a fully tall structure may hold. Roofs still whiten; deep piles belong at grade. 1 disables the distinction.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.4</real>
+  </map>
+  <key>SSAtmoRunoffEdgeMinAbove</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: metres a lip must stand above the terrain to shed drips and streams - a roof edge is architecture, a terrain ledge is not.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
   </map>
   <key>SSAtmoWetPuddleMask</key>
   <map>

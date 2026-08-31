@@ -64,6 +64,10 @@ static LLStaticHashedString sLightAngularRadius("ss_light_angular_radius");
 static LLStaticHashedString sMoonlit("ss_moonlit");
 static LLStaticHashedString sSunUp("ss_sun_up");
 
+// ...and how far the distant sky mirror takes over from the wavy probe tap.
+static LLStaticHashedString sSkyReflect("ss_sky_reflect");
+// </SS:Nexii>
+
 LLDrawPoolWater::LLDrawPoolWater() : LLFacePool(POOL_WATER)
 {
     // <FS:Zi> Render speedup for water parameters
@@ -345,15 +349,28 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // it. Handing the shader the angular radius lets it widen the specular
     // lobe to match what is being reflected.
     // Toggleable as a whole: with SSAtmoWaterPunctualLight off, the water's punctual treatment reverts to stock - point-light angular size and no moon punctual - for A/B comparison and taste.
+    // The toggle off must hold that contract exactly: a point light has NO angular radius, so
+    // the stock fallback (the 0.53 degree sun) only applies while the feature is on and no
+    // active Atmo environment is driving the sky.
     static LLCachedControl<bool> ss_punctual(gSavedSettings, "SSAtmoWaterPunctualLight", true);
 
-    F32 light_angular_radius = 0.5f * 0.53f * DEG_TO_RAD;   // stock sun, near enough
-    if (ss_punctual && SSAtmoEnvApplier::instance().isActive())
+    F32 light_angular_radius = 0.f;   // a point light - stock's assumption
+    if (ss_punctual)
     {
-        const F32 diameter_deg = sun_up
-            ? SSAtmoEnvApplier::instance().sunSlotAngularDeg()
-            : SSAtmoEnvApplier::instance().moonSlotAngularDeg();
-        light_angular_radius = 0.5f * llclamp(diameter_deg, 0.05f, 30.f) * DEG_TO_RAD;
+        if (SSAtmoEnvApplier::instance().isActive())
+        {
+            const F32 diameter_deg = sun_up
+                ? SSAtmoEnvApplier::instance().sunSlotAngularDeg()
+                : SSAtmoEnvApplier::instance().moonSlotAngularDeg();
+            // The VISIBLE disc's diameter, same figure the celestial quads draw - the quad
+            // scale inflates by 1/disc_fraction for padded art, but the disc itself does not
+            // grow, so the glitter keys on the diameter and stays matched to the quad.
+            light_angular_radius = 0.5f * llclamp(diameter_deg, 0.05f, 30.f) * DEG_TO_RAD;
+        }
+        else
+        {
+            light_angular_radius = 0.5f * 0.53f * DEG_TO_RAD;   // stock sun, near enough
+        }
     }
     shader->uniform1f(sLightAngularRadius, light_angular_radius);
 
@@ -372,6 +389,14 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
         : LLColor3(0.f, 0.f, 0.f);
     shader->uniform3fv(sMoonlit, 1, moonlit.mV);
     shader->uniform1f(sSunUp, sun_up ? 1.f : 0.f);
+    // </SS:Nexii>
+
+    // <SS:Nexii> The distant sky mirror's strength (see waterF.glsl): far water
+    // taps the sky probe straight along the mirror angle so the sky's structure
+    // reads in the reflection instead of averaging away in the wave normals.
+    // 0 is stock water, kept for A/B comparison and fallback.
+    static LLCachedControl<F32> ss_sky_reflect(gSavedSettings, "SSWaterSkyReflect", 1.f);
+    shader->uniform1f(sSkyReflect, llclamp(ss_sky_reflect(), 0.f, 1.f));
     // </SS:Nexii>
 
     shader->uniform3fv(LLShaderMgr::WATER_NORM_SCALE, 1, pwater->getNormalScale().mV);
@@ -399,11 +424,12 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     shader->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up ? 1 : 0);
 
-    // <SS:Nexii> Atmo Magic: the sun disc's risen fraction - the water's atmospheric lighting
-    // ramps its sun glow across the disc's rise instead of snapping at centre-rise.
+    // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the water's atmospheric lighting
+    // ramps its sun glow on the twilight band (full while the disc is up, easing out through the
+    // dusk below the horizon) instead of snapping at centre-rise.
     shader->uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
 
-    // ...and the sun's true direction while any part of the disc is in sight - see
+    // ...and the sun's true direction while the rise band is live - see
     // SSAtmoEnvApplier::sunSlotDirection.
     shader->uniform3fv(LLShaderMgr::SS_SUN_DIR, 1, SSAtmoEnvApplier::instance().sunSlotDirection().mV);
 

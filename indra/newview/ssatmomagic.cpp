@@ -28,13 +28,16 @@
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvbridge.h"
 #include "ssatmoenvmanager.h"
+#include "ssgranular.h"
 #include "ssrainshadow.h"
 #include "ssavatarwet.h"
 #include "ssvolcloud.h"
 #include "sslightning.h"
 #include "sslightningrender.h"
 #include "sssurfacefield.h"
+#include "sswhiteout.h"
 #include "sswindflow.h"
+#include "ssworldfield.h"
 
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
@@ -66,6 +69,19 @@ static const F32 IMPACT_SEE_RADIUS  = 32.f;
 static const F64 ASSET_POLL_PERIOD  = 2.0;
 
 static const U32 SS_ATMO_SEED = 0x5EED1337u;
+
+// <SS:Nexii> Regime derivation. Enter thresholds are the whole story - the hysteresis both ways
+// is the dwell time, since a regime must hold its candidate for the entire dwell before the
+// switch fires, and a lull has to last just as long to climb back down. See section 14 of
+// doc/atmo_magic_snow.md: regimes direct, the field decides.
+static const F32 REGIME_ENTER_SALTATION = 4.0f;
+static const F32 REGIME_ENTER_DRIFT     = 6.5f;
+static const F32 REGIME_ENTER_BLIZZARD  = 8.5f;
+static const F32 REGIME_SQUALL_WIND     = 7.5f;
+static const F32 REGIME_SQUALL_PRECIP   = 0.55f;
+static const F32 REGIME_SQUALL_GUST     = 0.35f;
+static const F32 REGIME_DWELL           = 20.f;
+static const F32 REGIME_DWELL_SQUALL    = 30.f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_ATMO("Atmo Magic");
 static LLTrace::BlockTimerStatHandle FTM_SS_ATMO_IMPACTS("Impacts");
@@ -207,20 +223,20 @@ void SSAtmoMagic::refreshParams()
     const SSPrecipPreset& target_preset = named ? *named : mgr.active();
 
     const F32 dt = llclamp((F32)gFrameIntervalSeconds, 0.f, 0.25f);
-    const bool preset_changed = (target_preset.mName != mPresetName);
 
-    const F32 blend_target = (track_runs && !preset_changed) ? 1.f : 0.f;
+    // <SS:Nexii> The blend tracks whether weather RUNS at all - an environment
+    // arriving or leaving fades the precipitation in and out. A preset swap is
+    // not a weather change: rain becoming snow as temperature crosses zero is
+    // the same sky handing over different particles, and dipping the intensity
+    // through zero for it read as the storm dying and restarting (observed at
+    // the crossover). Swap in place, immediately, every time.
+    const F32 blend_target = track_runs ? 1.f : 0.f;
     mBlend += (blend_target - mBlend) * llclamp(TRACK_FADE_RATE * dt, 0.f, 1.f);
 
-    if (preset_changed && mBlend <= 0.02f)
+    if (track_runs)
     {
         mPreset = target_preset;
         mPresetName = target_preset.mName;
-        mBlend = 0.f;
-    }
-    else if (!preset_changed)
-    {
-        mPreset = target_preset;
     }
 
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
@@ -481,6 +497,17 @@ void SSAtmoMagic::processImpacts()
                                  (U32)(S32)(impact.mPosAgent.mV[VY] * 16.f))));
         rng.next();
 
+        // <SS:Nexii> Granular runoff lands as mass, not as water: a cascade clump credits the
+        // cell it lands on, and the eave drift pile forms there. The from_runoff flag marks
+        // exactly these; ordinary falling snow still makes no ripples at all (FLAKE presets
+        // carry mImpactStrength 0, so they never queue impacts).
+        if (impact.mRunoff && granularWeather() && !impact.mOnWater)
+        {
+            SSSurfaceField::getInstance()->depositAt(impact.mPosAgent,
+                                                     0.0006f * llmax(impact.mStrength, 0.4f));
+            continue;
+        }
+
         if (ripples && mSim)
         {
             mSim->spawnRipple(impact.mPosAgent, impact.mStrength, impact.mOnWater, impact.mNormal, rng);
@@ -494,6 +521,148 @@ void SSAtmoMagic::processImpacts()
     }
 }
 
+// <SS:Nexii> Granular weather: lift authority, transport bundle, regime machine.
+
+// Is snow lifting here, and how hard - 0 to 1, physical, no preset rate and no gust in the
+// figure. Callers scale by the preset's rate and apply gustEnvelopeAt() once; the transport gets
+// both as scalars in its bundle. The threshold band is evaluated against the flowmap's ground
+// slab, not the ambient - the alley jets reach it before the open ground does, which is the
+// whole point of the capture stack.
+F32 SSAtmoMagic::liftAt(const LLVector3& pos_agent) const
+{
+    const SSPrecipPreset& p = preset();
+    if (!hasWeather() || !p.isGranular() || p.mSnowLiftRate <= 0.f) return 0.f;
+
+    static LLCachedControl<F32> lift_lo(gSavedSettings, "SSAtmoSnowLiftLo", 3.5f);
+    static LLCachedControl<F32> lift_hi(gSavedSettings, "SSAtmoSnowLiftHi", 8.0f);
+    static LLCachedControl<F32> lift_temp(gSavedSettings, "SSAtmoSnowLiftTemp", 1.5f);
+
+    const F32 temp_scale = llclamp(1.f - mTemperatureC / llmax((F32)lift_temp, 0.1f), 0.f, 1.f);
+    if (temp_scale <= 0.f) return 0.f;
+
+    const LLVector3 flow = SSWindFlowMap::getInstance()->sampleGround(pos_agent);
+    const F32 speed = sqrtf(flow.mV[VX] * flow.mV[VX] + flow.mV[VY] * flow.mV[VY]);
+
+    const F32 lo = llmax((F32)lift_lo, 0.1f);
+    const F32 hi = llmax((F32)lift_hi, lo + 0.1f);
+    if (speed <= lo) return 0.f;
+
+    const F32 band = llclamp((speed - lo) / (hi - lo), 0.f, 1.f);
+    return band * band * (3.f - 2.f * band) * temp_scale;
+}
+
+bool SSAtmoMagic::granularWeather() const
+{
+    return hasWeather() && mPreset.isGranular();
+}
+
+// The transport's bundle for this tick. Plain floats only; the gust envelope rides in as one
+// scalar, applied by the transport once per tick rather than per cell.
+void SSAtmoMagic::fillTransportParams(SSGranularParams& params) const
+{
+    const SSPrecipPreset& p = preset();
+
+    static LLCachedControl<F32> lift_lo(gSavedSettings, "SSAtmoSnowLiftLo", 3.5f);
+    static LLCachedControl<F32> lift_hi(gSavedSettings, "SSAtmoSnowLiftHi", 8.0f);
+    static LLCachedControl<F32> lift_temp(gSavedSettings, "SSAtmoSnowLiftTemp", 1.5f);
+    static LLCachedControl<F32> deposit_gap(gSavedSettings, "SSAtmoSnowDepositGap", 0.7f);
+    static LLCachedControl<F32> creep_scale(gSavedSettings, "SSAtmoSnowCreep", 1.f);
+
+    params.mLiftLo = llmax((F32)lift_lo, 0.1f);
+    params.mLiftHi = llmax((F32)lift_hi, params.mLiftLo + 0.1f);
+    params.mLiftRate = granularWeather() ? llmax(p.mSnowLiftRate, 0.f) : 0.f;
+    params.mDepositRate = granularWeather() ? llmax(p.mSnowDepositRate, 0.f) : 0.f;
+    params.mCreepRate = granularWeather() ? llmax(p.mSnowCreepRate, 0.f) * llmax((F32)creep_scale, 0.f) : 0.f;
+    params.mDepositGap = llclamp((F32)deposit_gap, 0.1f, 1.f);
+    params.mLiftTemp = llmax((F32)lift_temp, 0.1f);
+    params.mTemperatureC = mTemperatureC;
+    params.mSnowDepth = llmax(p.mSnowDepth, 0.f);
+    params.mReposeRad = llclamp(p.mSnowRepose, 5.f, 89.f) * DEG_TO_RAD;
+    params.mGust = llclamp(gustEnvelopeAt(mNow), 0.f, 2.5f);
+    params.mFlow = nullptr;
+}
+
+const char* SSAtmoMagic::regimeName(ERegime r)
+{
+    switch (r)
+    {
+        case ERegime::SALTATION: return "saltation";
+        case ERegime::DRIFT:     return "drift";
+        case ERegime::BLIZZARD:  return "blizzard";
+        case ERegime::SQUALL:    return "squall";
+        case ERegime::CALM:      return "calm";
+        default:                 return "?";
+    }
+}
+
+// The regime director: derived from the same params the weather resolver already produces, with
+// the dwell time as the hysteresis in both directions. Fixed-step discipline - the dwell
+// accumulates only real elapsed time, and the initial regime is derived, so a viewer joining
+// mid-storm starts right without replaying history.
+void SSAtmoMagic::updateRegime(F32 dt)
+{
+    static LLCachedControl<S32> override_regime(gSavedSettings, "SSAtmoSnowRegimeOverride", -1);
+
+    const F32 wind = mWindXY.magVec();
+    const bool cold = mTemperatureC <= 1.5f;
+    const bool snow_present = hasWeather() && mPreset.isGranular() && mPreset.mSnowRate > 0.f;
+    const bool falling = snow_present && mPrecipitation > 0.05f;
+
+    ERegime candidate = ERegime::CALM;
+    if (cold && snow_present)
+    {
+        if (falling && mPrecipitation >= REGIME_SQUALL_PRECIP && wind >= REGIME_SQUALL_WIND
+            && mGustDepth >= REGIME_SQUALL_GUST)
+        {
+            candidate = ERegime::SQUALL;
+        }
+        else if (wind >= REGIME_ENTER_BLIZZARD)
+        {
+            candidate = ERegime::BLIZZARD;
+        }
+        else if (wind >= REGIME_ENTER_DRIFT)
+        {
+            candidate = ERegime::DRIFT;
+        }
+        else if (wind >= REGIME_ENTER_SALTATION)
+        {
+            candidate = ERegime::SALTATION;
+        }
+    }
+
+    if ((S32)override_regime >= 0 && (S32)override_regime < (S32)ERegime::COUNT)
+    {
+        candidate = (ERegime)(S32)override_regime;
+    }
+
+    if (!mRegimeReady)
+    {
+        mRegime = candidate;
+        mRegimeReady = true;
+        mRegimeCandidateTime = 0.f;
+        return;
+    }
+
+    if (candidate == mRegime)
+    {
+        mRegimeCandidateTime = 0.f;
+        return;
+    }
+
+    mRegimeCandidateTime += dt;
+    const F32 dwell = (mRegime == ERegime::SQUALL || candidate == ERegime::SQUALL)
+                          ? REGIME_DWELL_SQUALL : REGIME_DWELL;
+    if (mRegimeCandidateTime >= dwell)
+    {
+        const ERegime previous = mRegime;
+        mRegime = candidate;
+        mRegimeCandidateTime = 0.f;
+        mRegimeSignal(previous, mRegime);
+    }
+}
+
+// </SS:Nexii>
+
 // The per-frame heartbeat: params, sim, sounds, fields, lightning - everything driven from here.
 void SSAtmoMagic::idle()
 {
@@ -504,6 +673,19 @@ void SSAtmoMagic::idle()
     SSAtmoTrackManager::getInstance()->idle();
 
     refreshParams();
+
+    // <SS:Nexii> Regime evaluation on the frame clock (the dwell is seconds of real time; the
+    // transport itself is fixed-step below this) and the squall figure the whiteout ramp reads.
+    updateRegime(gFrameIntervalSeconds);
+    {
+        const bool falling = hasWeather() && mPreset.isGranular() && mPreset.mSnowRate > 0.f
+                          && mPrecipitation > 0.05f;
+        const F32 target = (falling && mTemperatureC <= 0.f && mGustDepth >= 0.3f)
+                               ? llmin(mPrecipitation, mGustDepth * 2.f) : 0.f;
+        const F32 blend = 1.f - expf(-gFrameIntervalSeconds * 1.5f);
+        mSquallFactor = lerp(mSquallFactor, llclamp(target, 0.f, 1.f), blend);
+    }
+    // </SS:Nexii>
 
     if (mEnabled && mNow - mLastAssetPoll > ASSET_POLL_PERIOD)
     {
@@ -521,6 +703,11 @@ void SSAtmoMagic::idle()
     }
 
     SSSurfaceField::getInstance()->idle(gFrameIntervalSeconds);
+
+    // <SS:Nexii> The whiteout layer's intensity state: regime ramps applied
+    // CPU-side, the pass itself draws in the pool loop after the haze.
+    SSWhiteout::getInstance()->idle(gFrameIntervalSeconds);
+    // </SS:Nexii>
 
     SSAvatarWet::getInstance()->idle(gFrameIntervalSeconds);
 
@@ -633,6 +820,7 @@ void SSAtmoMagic::settleEdits()
 
         SSRainShadowMap::getInstance()->markDirty(it->second.mPos, it->second.mRadius);
         SSWindFlowMap::markDirty(it->second.mPos, it->second.mRadius);
+        SSWorldField::markDirty(it->second.mPos, it->second.mRadius);
         ++mSettledEdits;
 
         it = mPendingEdits.erase(it);
@@ -782,39 +970,14 @@ void SSAtmoMagic::drawInfo()
     lines.push_back("-- geometry edits --");
     lines.push_back(llformat("queue      %d settling   %u believed",
                              (S32)atmo->pendingEdits(), atmo->settledEdits()));
-
     {
-        std::vector<const std::pair<const LLUUID, PendingEdit>*> worst;
+        U32 rearming = 0;
         for (const auto& entry : atmo->mPendingEdits)
         {
-            if (entry.second.mResets >= 2) worst.push_back(&entry);
+            if (entry.second.mResets >= 2) ++rearming;
         }
-        std::sort(worst.begin(), worst.end(),
-                  [](const std::pair<const LLUUID, PendingEdit>* a,
-                     const std::pair<const LLUUID, PendingEdit>* b)
-                  { return a->second.mResets > b->second.mResets; });
-
-        if (worst.empty())
-        {
-            lines.push_back("           nothing re-arming, queue is passing through");
-        }
-        else
-        {
-            lines.push_back(llformat("re-arming  %d of %d never settling",
-                                     (S32)worst.size(), (S32)atmo->pendingEdits()));
-        }
-
-        for (size_t i = 0; i < worst.size() && i < 5; ++i)
-        {
-            const PendingEdit& edit = worst[i]->second;
-            const LLVector3 delta = edit.mPos - cam;
-            lines.push_back(llformat("  %s  x%u in %.0fs   %.0fm away   %.0f %.0f %.0f  r%.1f",
-                                     worst[i]->first.asString().substr(0, 8).c_str(),
-                                     edit.mResets, (F32)(atmo->mNow - edit.mFirstSeen),
-                                     delta.magVec(),
-                                     edit.mPos.mV[VX], edit.mPos.mV[VY], edit.mPos.mV[VZ],
-                                     edit.mRadius));
-        }
+        lines.push_back(llformat("re-arming  %u of %d never settling",
+                                 rearming, (S32)atmo->pendingEdits()));
     }
 
     lines.push_back("-- wind flow --");
@@ -834,6 +997,16 @@ void SSAtmoMagic::drawInfo()
                                  flow->cellSize(), flow->tileCount()));
         lines.push_back(llformat("solved     %.0fs ago   builds %u",
                                  (F32)flow->age(), flow->buildCount()));
+
+        // <SS:Nexii> Rebuild telemetry: is the solve off the main thread, and
+        // how well the smarter rebuilds are doing.
+        lines.push_back(llformat("worker     %s   solve %s",
+                                 flow->workerActive() ? "GL thread" : "main thread",
+                                 flow->lastSolveOnWorker() ? "on" : "in-frame"));
+        lines.push_back(llformat("rebuilds   %u full / %u partial   box avg %.0f%% of tile",
+                                 flow->fullBuildCount(), flow->partialBuildCount(),
+                                 flow->partialBoxShare() * 100.f));
+        // </SS:Nexii>
 
         std::string slabs;
         for (S32 i = 0; i <= flow->sliceCount(); ++i)
@@ -858,7 +1031,12 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("gust wave  x%.2f   veer %+.0f deg   fronts every %.1fs",
                                  gust_scale, gust_veer * RAD_TO_DEG,
                                  gust_length / gust_speed));
-        lines.push_back(llformat("build      %.1f ms", flow->lastSolveMS()));
+        lines.push_back(llformat("build      %.1f ms%s",
+                                 flow->lastSolveOnWorker() ? flow->workerSolveMS() : flow->lastSolveMS(),
+                                 flow->lastBuildPartial() ? "  (last partial)" : ""));
+
+        lines.push_back(llformat("solver     %.0f MB VRAM",
+                                 flow->vramMB()));
 
         F32 top = 0.f;
         if (flow->surfaceAt(cam, top))
@@ -907,6 +1085,52 @@ void SSAtmoMagic::drawInfo()
                                  surface->lastTickMS()));
     }
 
+    // <SS:Nexii> Snow: every link of the chain in one look - type and temperature (the gate that
+    // turns the whole system off), the regime, the lift the transport computed at the camera, and
+    // the drift pool's standing population.
+    {
+        const LLVector3 ground_flow = SSWindFlowMap::getInstance()->sampleGround(cam);
+        const F32 ground_speed = sqrtf(ground_flow.mV[VX] * ground_flow.mV[VX]
+                                     + ground_flow.mV[VY] * ground_flow.mV[VY]);
+
+        lines.push_back("-- snow --");
+        lines.push_back(llformat("type       %s   temp %.1f C   %s",
+                                 preset.mName.c_str(), atmo->temperatureC(),
+                                 atmo->granularWeather() ? "granular"
+                                     : "NOT granular (warm or liquid type - nothing will blow)"));
+        lines.push_back(llformat("regime     %s   squall %.2f   ground wind %.1f m/s   lift here %.2f",
+                                 regimeName(atmo->regime()), atmo->squallFactor(),
+                                 ground_speed, atmo->liftAt(cam)));
+
+        SSSurfaceField* surface = SSSurfaceField::getInstance();
+        S32 lift_cells = 0;
+        F32 peak_lift = 0.f;
+        surface->forEachLiftCell(cam, 64.f,
+            [&](const LLVector3&, F32, F32 lift)
+            {
+                ++lift_cells;
+                peak_lift = llmax(peak_lift, lift);
+            });
+
+        const S32 drift_count = atmo->sim() ? atmo->sim()->driftCount() : 0;
+        lines.push_back(llformat("drift      %d live   lift cells %d within 64m   peak %.2f",
+                                 drift_count, lift_cells, peak_lift));
+        if (!atmo->granularWeather())
+        {
+            lines.push_back("           no drift: the active type is not granular");
+        }
+        else if (lift_cells == 0 && drift_count == 0)
+        {
+            lines.push_back("           no lift: is snow settled, is the wind over SSAtmoSnowLiftLo?");
+        }
+
+        SSWhiteout* whiteout = SSWhiteout::getInstance();
+        lines.push_back(llformat("whiteout  in %.2f   squall %.2f   drift %.2f   falloff %.0fm",
+                                 whiteout->intensity(), whiteout->squallPart(),
+                                 whiteout->liftPart(), whiteout->falloff()));
+    }
+    // </SS:Nexii>
+
     lines.push_back("-- audio --");
     lines.push_back(llformat("analysis   %d sounds ready   %d pending",
                              SSSoundMeta::getInstance()->readyCount(),
@@ -932,20 +1156,9 @@ void SSAtmoMagic::drawInfo()
                                  next < 0.0 ? "not thundery"
                                             : llformat("next in %.0fs", next).c_str(),
                                  audio->pendingThunder()));
-        {
-            const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
-            lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
-                                     ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));
-        }
-        for (const SSStrike& st : lit->strikes())
-        {
-            lines.push_back(llformat("  %-6s %5.0fm   %+.2fs   leader %.2f   bright %.2f   ch %d   st %d%s",
-                                     SSLightning::kindName(st.mKind),
-                                     st.mDistanceM, st.mT,
-                                     st.mLeaderProgress, st.mChannelBrightness,
-                                     (S32)st.mChannel.size(), st.mStrokeCount,
-                                     st.mAudible ? "" : "   [silent, shadow zone]"));
-        }
+        const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
+        lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
+                                 ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));
     }
 
     for (S32 self = 1; self >= 0; --self)

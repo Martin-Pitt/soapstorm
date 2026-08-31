@@ -51,6 +51,49 @@ in vec2 vary_texcoord2;
 in vec2 vary_texcoord3;
 in float altitude_blend_factor;
 
+vec4 cloudNoise(vec2 uv)
+{
+   vec4 a = texture(cloud_noise_texture, uv);
+   vec4 b = texture(cloud_noise_texture_next, uv);
+   vec4 cloud_noise_sample = mix(a, b, blend_factor);
+   return cloud_noise_sample;
+}
+
+#ifdef SS_ATMO
+// <SS:Nexii> The dome's authored LARGE-SCALE map, when one is set (lldrawpoolwlsky binds it and
+// raises the gate): the broad octave and its self-shadow read it, while the fine octave keeps
+// the cloud noise. The cloud noise's own blob scale is tuned for the fine octave, so a broad
+// composition art-directed on it comes out samey - one map for every octave means the broad sky
+// is the fine map stretched. Gate 0 leaves every octave on the cloud noise, exactly as before
+// this existed.
+uniform sampler2D ss_noise_large;
+uniform float ss_noise_large_on;
+
+// <SS:Nexii> The large map's crossfade partner and weight, live while the day cycle fades the
+// broad octave between two authored maps. The pool pins the partner on the same map with weight
+// 0 whenever no fade runs, so the inner mix below is a no-op then.
+uniform sampler2D ss_noise_large_next;
+uniform float ss_noise_large_blend;
+
+vec4 cloudNoiseLarge(vec2 uv)
+{
+    vec4 large = texture(ss_noise_large, uv);
+    if (ss_noise_large_blend > 0.0)
+    {
+        large = mix(large, texture(ss_noise_large_next, uv), ss_noise_large_blend);
+    }
+    return mix(cloudNoise(uv), large, ss_noise_large_on);
+}
+#else
+// <SS:Nexii> The broad octave's calls in the opacity lines below are ungated so both variants
+// share one body; in the stock build the large map does not exist, so the name resolves to the
+// plain cloud noise and stock renders exactly what it always did.
+vec4 cloudNoiseLarge(vec2 uv)
+{
+    return cloudNoise(uv);
+}
+#endif
+
 #ifdef SS_ATMO
 // <SS:Nexii> The deck mapping (doc/atmo_magic_cloud_parallax.md). Each dome band's UVs are
 // derived HERE, per fragment, from the true view ray cloudsV hands down - not from the dome mesh's
@@ -66,29 +109,54 @@ uniform float ss_cloud_plane;  // 1: derive UVs from the view ray (active Atmo).
 uniform vec3 lightnorm;        // the self-shadow offset's direction - stock derived texcoord1 from it per-vertex
 in vec3 vary_ray_dir;
 
-// One band's base UVs: intersect the view ray with the band's deck, anchor at the region centre,
-// subtract the wind travel, and divide by the band's metres-per-UV. vary_ray_dir rides the dome
-// mesh's Y-up local space (renderDome's 120 degree permute: local y is world UP, local x is world
-// Y, local z is world X), so the horizontal components reach deck_m as (ray.z, ray.x) - east,
-// north, matching region_offset's (world X, world Y) order.
+// Metres of world per tile of the dome's noise. Pinned - deliberately free of both the band's
+// height and cloud_scale, so one tile is one fixed piece of world: the convection merge can
+// descend the cirrus band without breathing the pattern, and an imported day cycle's keyframed
+// Scale dial cannot zoom the dome. Calibrated for the band's 6 km DEFAULT (the cirrus layer's
+// default height): one tile spans half the band's height, and the reach saturation below holds
+// the whole sky to ~4 tile repeats - the 3x3-to-4x4 field the dome is tuned for. (The earlier
+// 8 km pin put a single continent-scale blob across half the dome - a ~24x zoom next to this
+// calibration; the stock-anchored 2*alt*cloud_scale divisor it replaced breathed the pattern
+// every time the band moved.)
+const float SS_DOME_TILE_M = 3000.0;
+
+// The fine layers' multiplier. Stock's 16 made the fine tile a fraction of the broad one -
+// dozens of copies of the same clump across the sky, marching in rows under the perspective
+// compression. At 2x the fine tile is half the broad one: two close octaves a single factor
+// apart, so their repetitions never align into a visible grid. Stock's texcoord path keeps
+// its 16.
+const float SS_FINE_LAYER = 2.0;
+
+// One band's base UVs, and how much of the band survives. Intersect the view ray with the band's
+// deck, anchor at the region centre, subtract the wind travel, and divide by a PINNED
+// metres-per-uv (see THE TILE IS PINNED below). vary_ray_dir rides the dome mesh's Y-up local space (renderDome's 120 degree
+// permute: local y is world UP, local x is world Y, local z is world X), so the horizontal
+// components reach deck_m as (ray.z, ray.x) - east, north, matching region_offset's (world X,
+// world Y) order.
+//
+// THE TILE IS PINNED - deliberately free of both the band's height and cloud_scale. One tile is
+// one fixed piece of world: the height above the camera survives into the pattern (vertical
+// parallax, on the flat fallback too), and altitude changes slide instead of zoom - the
+// convection merge descending onto the deck does not breathe the pattern, and an imported day
+// cycle's keyframed Scale dial stays out of the Atmo render entirely. The calibration is the
+// DEFAULT band height's, not the live band's - see SS_DOME_TILE_M above. (Two earlier cuts:
+// anchoring the tile at 2*alt*cloud_scale - stock EEP's zenith calibration - matched stock at
+// any altitude but breathed the pattern as the band moved and cancelled the vertical parallax
+// out of the static pattern entirely; pinning at 8 km fixed both but put one continent-scale
+// blob across half the dome.)
 //
 // THE DECK CURVES. With ss_planet_orbit_m set, the ray meets a SPHERE centred on the planet at
-// radius orbit + deck height - t = -orbit*dy + sqrt(orbit^2*dy^2 + 2*orbit*alt + alt^2) - so the
-// deck is a finite disc that terminates at its own curved horizon (the tangent elevation
-// sqrt(2*alt/orbit), about 1.4 degrees for a 1500 m deck under a 5000 km home planet) instead of
-// stretching flat into the world's horizon line, and climbs overhead into view when the camera
-// rises past it. Orbit 0 keeps the flat-deck fallback for an environment without a home body.
-//
-// metres_per_uv anchors the cloud_scale dial to stock: stock's dome texcoords tile every
-// 2*cloud_scale radians of arc at the zenith, and a tile of 2*alt*cloud_scale metres subtends
-// exactly that from a camera alt metres under the deck - so overhead clouds match stock EEP at
-// the same slider setting. Away from the zenith this mapping tiles denser than stock's
-// direction-linear projection on purpose: a real deck compresses toward its horizon where stock
-// stretches (its tiles blow up), which is the whole point of the design.
+// radius orbit + deck height - the deck is a finite disc that terminates at its own curved horizon
+// (the tangent elevation sqrt(2*alt/orbit), about 1.4 degrees for a 1500 m deck under a 5000 km
+// home planet) instead of stretching flat into the world's horizon line. The camera's own height
+// rides the orbit uniform, so the shell stays at its world altitude while you fly: rising toward
+// it brings its rim up and over. Above the shell the near intersection switches to the minus root
+// and only down-rays hit - the deck seen from above. Orbit 0 keeps the flat-deck fallback.
 //
 // The flat fallback's denominator is SOFTENED, not clamped: (1+F)*alt / (|up| + F) is smooth in
-// the ray everywhere, exact at the zenith, and caps the deck distance at ~10 band-altitudes in
-// the horizon fold. The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
+// the ray everywhere and exact at the zenith, and the far field on BOTH paths is then saturated
+// at SS_DECK_SPAN band-heights (see THE HORIZON SATURATES below), so no fold tail ever draws.
+// The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
 // never hid: below ~1.2 degrees it froze the UVs into an azimuth-only field, which smears the
 // band into vertical stripes toward the horizon, and exactly on the clamp line the screen-space
 // derivative jumps, which collapses the mip selection into a grid of tile boundaries in the
@@ -100,26 +168,78 @@ in vec3 vary_ray_dir;
 // swimming. The ray's own hit keeps the honest geometry; only the terms that MOVE are damped, so
 // the motion matches the version the eye tuned. Sign conventions are the old vertex patches':
 // world north runs down the texture's v, and the wind travel negates the same way.
-vec2 ss_plane_base(float alt)
+//
+// NO DOMAIN WARP. An earlier cut ran three nested warp levels at incommensurate frequencies and
+// rotated frames - an attempt at aperiodic tiling against the pinned tile, where the same
+// clumps can genuinely march across the sky in rows toward the horizon. It read as smear and
+// buckle, not as aperiodicity: a displacement field sampled from the same map it displaces is
+// itself periodic, so the warped grid was still a grid, just bent. The mapping is a straight,
+// honest lookup now - the repetition is softened by the fine octave's distance fade and by an
+// authored large map (ss_noise_large) art-directing the broad octave when one is set.
+vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
 {
     const float SS_DECK_FOLD     = 0.1;
     const float SS_PARALLAX_DAMP = 0.125;
-    float dy = vary_ray_dir.y;
+    const float SS_THROUGH_LO_M  = 40.0;
+    const float SS_THROUGH_HI_M  = 300.0;
+    // Band-heights the deck's UV reach saturates across - see THE HORIZON SATURATES below.
+    const float SS_DECK_SPAN     = 2.0;
+    // Where the fine layers give up. Perspective compresses the deck toward its horizon, and the
+    // fine detail's angular size collapses with it. The fade is a rim-zone cleanup: the last
+    // stretch before the melt, where the compression spikes, lets the broad layer carry the
+    // sheet alone. The reach saturation keeps the compression from ever getting that far at the
+    // current calibration, so this sits idle - a guard for a wider span or smaller tile.
+    const float SS_DETAIL_LO_M   = 100000.0;
+    const float SS_DETAIL_HI_M   = 250000.0;
+
+    // The band holds a signed height over the camera. Under it, up-rays hit; over it, down-rays
+    // do - the deck seen from above. Rays heading away from the plane see none of it, and the band
+    // dissolves across its own altitude (the mapping degenerates as the camera meets the plane,
+    // and the deck's own volume takes over exactly there).
+    float side = (alt >= 0.0) ? 1.0 : -1.0;
+    float ah = abs(alt);
+    plane_fade = step(0.0, vary_ray_dir.y * side)
+               * smoothstep(SS_THROUGH_LO_M, SS_THROUGH_HI_M, ah);
+
     float reach;
-    if (ss_planet_orbit_m > 0.0 && alt > 0.0)
+    if (ss_planet_orbit_m > 0.0)
     {
         float a = ss_planet_orbit_m;
-        float disc = a * a * dy * dy + 2.0 * a * alt + alt * alt;
-        reach = -a * dy + sqrt(max(disc, 0.0));
+        if (alt >= 0.0)
+        {
+            float u = max(vary_ray_dir.y, 0.0);
+            float disc = a * a * u * u + 2.0 * a * alt + alt * alt;
+            reach = -a * u + sqrt(max(disc, 0.0));
+        }
+        else
+        {
+            float disc = a * a * vary_ray_dir.y * vary_ray_dir.y + 2.0 * a * alt + alt * alt;
+            reach = -a * vary_ray_dir.y - sqrt(max(disc, 0.0));
+        }
     }
     else
     {
-        reach = (1.0 + SS_DECK_FOLD) * alt / (abs(dy) + SS_DECK_FOLD);
+        reach = (1.0 + SS_DECK_FOLD) * ah / (max(vary_ray_dir.y * side, 0.0) + SS_DECK_FOLD);
     }
-    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach;
+
+    detail_fade = 1.0 - smoothstep(SS_DETAIL_LO_M, SS_DETAIL_HI_M, reach);
+
+    // THE HORIZON SATURATES. The plane-honest reach runs to tens of band-heights at the rim
+    // (the flat fold ~11, the sphere's rim sqrt(2*orbit*alt) - hundreds of km), and a tiled
+    // texture under that perspective compression marches dozens of copies of the same clump
+    // across the horizon band - the ~100-row field a planar mapping always grows, and the
+    // stock dome never showed because its texcoords are angular, not planar. The reach
+    // therefore saturates smoothly at SS_DECK_SPAN band-heights: linear in the mid sky, short
+    // of the zenith calibration by ~10% there, asymptotic at the fold, and C-infinity in the
+    // ray so no derivative jump kinks the mip selection. Zenith to rim holds
+    // SS_DECK_SPAN*alt/SS_DOME_TILE_M repeats - 4 at the 6 km calibration - instead of ~100.
+    float span      = max(ah * SS_DECK_SPAN, 1.0);
+    float reach_eff = span * reach / sqrt(span * span + reach * reach);
+
+    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach_eff;
     vec2 world_m = SS_PARALLAX_DAMP * (region_offset - ss_cloud_drift);
-    float metres_per_uv = 2.0 * alt * cloud_scale;
-    return vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / metres_per_uv;
+
+    return vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / SS_DOME_TILE_M;
 }
 
 // The curved deck's own horizon fade. The deck exists ABOVE the tangent elevation
@@ -130,20 +250,13 @@ vec2 ss_plane_base(float alt)
 // low storm deck and a high cirrus shell each fade across about a third of their own rim height.
 float ss_deck_edge_fade(float alt)
 {
-    if (ss_planet_orbit_m <= 0.0 || alt <= 0.0) return 1.0;
+    if (ss_planet_orbit_m <= 0.0 || alt < 0.0) return 1.0;
     float a = ss_planet_orbit_m;
     float edge_dy = sqrt(max(2.0 * a * alt + alt * alt, 0.0)) / a;
-    return smoothstep(edge_dy, edge_dy * 1.35, vary_ray_dir.y);
+    if (edge_dy <= 0.0) return 1.0;
+    return smoothstep(edge_dy, edge_dy * 1.6, vary_ray_dir.y);
 }
 #endif
-
-vec4 cloudNoise(vec2 uv)
-{
-   vec4 a = texture(cloud_noise_texture, uv);
-   vec4 b = texture(cloud_noise_texture_next, uv);
-   vec4 cloud_noise_sample = mix(a, b, blend_factor);
-   return cloud_noise_sample;
-}
 
 void main()
 {
@@ -162,13 +275,15 @@ void main()
     vec2 uv3;
     vec2 uv4;
     float deck_edge_fade = 1.0;
+    float plane_fade = 1.0;
+    float detail_fade = 1.0;
 #ifdef SS_ATMO
     if (ss_cloud_plane > 0.0)
     {
-        uv1 = ss_plane_base(ss_cloud_alt_m);
+        uv1 = ss_plane_base(ss_cloud_alt_m, plane_fade, detail_fade);
         uv2 = uv1 + vec2(lightnorm.x, lightnorm.z) * 0.0125;
-        uv3 = uv1 * 16.0;
-        uv4 = uv2 * 16.0;
+        uv3 = uv1 * SS_FINE_LAYER;
+        uv4 = uv2 * SS_FINE_LAYER;
         deck_edge_fade = ss_deck_edge_fade(ss_cloud_alt_m);
     }
     else
@@ -188,7 +303,9 @@ void main()
     }
 
     vec2 disturbance  = vec2(cloudNoise(uv1 / 8.0f).x, cloudNoise((uv3 + uv1) / 16.0f).x) * cloud_variance * (1.0f - cloud_scale * 0.25f);
-    vec2 disturbance2 = vec2(cloudNoise((uv1 + uv3) / 4.0f).x, cloudNoise((uv4 + uv2) / 8.0f).x) * cloud_variance * (1.0f - cloud_scale * 0.25f);
+    // <SS:Nexii> The fine-sourced disturbance rides the same distance fade as the fine layer
+    // itself - past it the far deck's variance comes from the broad octaves alone.
+    vec2 disturbance2 = vec2(cloudNoise((uv1 + uv3) / 4.0f).x, cloudNoise((uv4 + uv2) / 8.0f).x) * cloud_variance * (1.0f - cloud_scale * 0.25f) * detail_fade;
 
     // Offset texture coords
     uv1 += cloud_pos_density1.xy + (disturbance * 0.2);    //large texture, visible density
@@ -201,20 +318,23 @@ void main()
     cloudDensity *= 1.0 - (density_variance * density_variance);
 
     // Compute alpha1, the main cloud opacity
-
-    float alpha1 = (cloudNoise(uv1).x - 0.5) + (cloudNoise(uv3).x - 0.5) * cloud_pos_density2.z;
+    // <SS:Nexii> The fine octave's weight rides detail_fade: past the fade's range the fine
+    // tiling compresses into sub-degree rows that read as striping, so its voice in the opacity
+    // fades with its angular size and the broad layer carries the far deck alone. The term is
+    // zero-mean, so the fade changes the far field's TEXTURE, not its coverage.
+    float alpha1 = (cloudNoiseLarge(uv1).x - 0.5) + (cloudNoise(uv3).x - 0.5) * cloud_pos_density2.z * detail_fade;
     alpha1 = min(max(alpha1 + cloudDensity, 0.) * 10 * cloud_pos_density1.z, 1.);
 
     // And smooth
     alpha1 = 1. - alpha1 * alpha1;
     alpha1 = 1. - alpha1 * alpha1;
 
-    alpha1 *= altitude_blend_factor * deck_edge_fade;
+    alpha1 *= altitude_blend_factor * deck_edge_fade * plane_fade;
     alpha1 = clamp(alpha1, 0.0, 1.0);
 
     // Compute alpha2, for self shadowing effect
     // (1 - alpha2) will later be used as percentage of incoming sunlight
-    float alpha2 = (cloudNoise(uv2).x - 0.5);
+    float alpha2 = (cloudNoiseLarge(uv2).x - 0.5);
     alpha2 = min(max(alpha2 + cloudDensity, 0.) * 2.5 * cloud_pos_density1.z, 1.);
 
     // And smooth
@@ -248,4 +368,3 @@ void main()
     frag_data[0] = vec4(color.rgb, alpha1);
 #endif
 }
-

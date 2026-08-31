@@ -63,6 +63,11 @@ struct SSPrecipParticle
     LLVector3 mNormal = LLVector3(0.f, 0.f, 1.f);
     F32 mPlaneD = -FLT_MAX;
     F32 mFloorZ = -FLT_MAX;
+    // <SS:Nexii> The z the particle started its fall from. The renderer fades a falling particle
+    // in over the top part of that run (scaled to the run, capped at SS_PRECIP_TOP_FADE), so it
+    // needs the top, not just the floor. Zero for anything that doesn't fall from a top (risers,
+    // ripples, streams, drift). </SS:Nexii>
+    F32 mFallTop = 0.f;
     F32 mAge = 0.f;
     F32 mMaxAge = 1.f;
     F32 mSizeX = 0.05f;
@@ -84,6 +89,12 @@ struct SSPrecipParticle
 };
 
 inline F32 ssPrecipFadeOut(U8 tier) { return (tier == TIER_SHEETS) ? 0.8f : 0.25f; }
+
+// <SS:Nexii> The cap on the fade-in band at the top of a falling particle's run: drops materialize
+// across the top stretch of their fall instead of popping in at the spawn point, scaled to about
+// 60% of the run and never more than this. The deck-spawned cluster and sheet curtains hit the
+// full band; short near drops fade in over a few metres and are dense below. </SS:Nexii>
+static const F32 SS_PRECIP_TOP_FADE = 48.f;
 
 class SSPrecipSim
 {
@@ -118,9 +129,15 @@ public:
 
     const std::vector<SSPrecipParticle>& particles() const { return mParticles; }
     const std::vector<SSPrecipParticle>& ripples() const { return mRipples; }
+    const std::vector<SSPrecipParticle>& drift() const { return mDrift; }
     LLViewerTexture* texture(U8 index) const;
-    bool empty() const { return mParticles.empty() && mRipples.empty() && mStreams.empty(); }
+    bool empty() const { return mParticles.empty() && mRipples.empty() && mStreams.empty() && mDrift.empty(); }
     S32 tierCount(SSPrecipTier tier) const { return mTierCount[tier]; }
+    S32 driftCount() const { return (S32)mDrift.size(); }
+
+    // The drift pool's own cull radius - the tier bands are the falling tiers' alone, and the
+    // renderer needs the same figure for the drift pool's far fade.
+    static F32 driftCullRadius();
 
     static void tierBands(SSPrecipTier tier, const SSPrecipPreset& preset,
                           F32& in_lo, F32& in_hi, F32& out_lo, F32& out_hi);
@@ -146,6 +163,18 @@ private:
     std::vector<SSPrecipParticle> mParticles;
     std::vector<SSPrecipParticle> mRipples;
     S32 mDripCount = 0;
+
+    // <SS:Nexii> Blowing snow: a separate pool on purpose. mTierCount/mTierTarget/tierBands stay
+    // the falling tiers' alone - a blizzard must never starve falling snow of budget, or the
+    // reverse - so drift carries its own cap and its own cull radius, and the renderer batches
+    // it as one more source. Spawning walks the surface field's lift cells (the transport's
+    // output) plus a regime-scaled near-camera ring.
+    std::vector<SSPrecipParticle> mDrift;
+    void updateDrift(F32 dt);
+    void spawnDriftTick(U64 tick, F64 tick_time);
+    void emitDrift(const LLVector3& ground_pos, const LLVector3& flow, F32 lift,
+                   SSRandStream& rng);
+    U64 mLastDriftTick = 0;
 
     std::vector<SSPrecipParticle> mStreams;
     void updateStreams(F32 dt);

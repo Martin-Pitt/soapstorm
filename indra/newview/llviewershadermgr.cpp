@@ -189,6 +189,8 @@ LLGLSLShader            gSSLightningProgram;
 LLGLSLShader            gSSCelestialProgram;
 LLGLSLShader            gSSSurfaceNormalProgram;
 LLGLSLShader            gSSSurfaceCommitProgram;
+LLGLSLShader            gSSSurfaceSnowProgram;
+LLGLSLShader            gSSWhiteoutProgram;
 LLGLSLShader            gSSPrecipProjProgram;
 LLGLSLShader            gSSWindInitProgram;
 LLGLSLShader            gSSWindDivProgram;
@@ -470,6 +472,8 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSCelestialProgram);
     mShaderList.push_back(&gSSSurfaceNormalProgram);
     mShaderList.push_back(&gSSSurfaceCommitProgram);
+    mShaderList.push_back(&gSSSurfaceSnowProgram);
+    mShaderList.push_back(&gSSWhiteoutProgram);
     mShaderList.push_back(&gSSPrecipProjProgram);
     // </SS:Nexii>
     mShaderList.push_back(&gHUDFullbrightProgram);
@@ -1266,6 +1270,8 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSCelestialProgram.unload();
         gSSSurfaceNormalProgram.unload();
         gSSSurfaceCommitProgram.unload();
+        gSSSurfaceSnowProgram.unload();
+        gSSWhiteoutProgram.unload();
         // </SS:Nexii>
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
@@ -2285,6 +2291,51 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             gSSSurfaceCommitProgram.unload();
             gSSSurfaceWetProgram.unload();
             gSSSurfaceNormalProgram.unload();
+        }
+    }
+
+    // Snow surfaces. The same shape as the wetness shader - screen space over
+    // the gbuffer, the field window for coverage - but writing the diffuse
+    // attachment instead of the specular one: the settled depth the field has
+    // always carried becomes visible albedo.
+    if (success)
+    {
+        gSSSurfaceSnowProgram.mName = "SS Surface Snow Shader";
+        gSSSurfaceSnowProgram.mFeatures.isDeferred = true;
+        gSSSurfaceSnowProgram.mShaderFiles.clear();
+        gSSSurfaceSnowProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSSurfaceSnowProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceSnowProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceSnowF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceSnowProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSSurfaceSnowProgram.clearPermutations();
+        add_common_permutations(&gSSSurfaceSnowProgram);
+        if (!gSSSurfaceSnowProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Surface snow shader failed to compile;"
+                               << " settled snow will not shade" << LL_ENDL;
+            gSSSurfaceSnowProgram.unload();
+        }
+    }
+
+    // The whiteout veil. Deferred util for the depth/normal reads and the
+    // surface field include for the exposure march; the call site composites
+    // it as an alpha fog lerp over the lit screen.
+    if (success)
+    {
+        gSSWhiteoutProgram.mName = "SS Whiteout Shader";
+        gSSWhiteoutProgram.mFeatures.isDeferred = true;
+        gSSWhiteoutProgram.mShaderFiles.clear();
+        gSSWhiteoutProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSWhiteoutProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSWhiteoutProgram.mShaderFiles.push_back(make_pair("deferred/ssWhiteoutF.glsl", GL_FRAGMENT_SHADER));
+        gSSWhiteoutProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSWhiteoutProgram.clearPermutations();
+        add_common_permutations(&gSSWhiteoutProgram);
+        if (!gSSWhiteoutProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Whiteout shader failed to compile;"
+                               << " no whiteout layer" << LL_ENDL;
+            gSSWhiteoutProgram.unload();
         }
     }
 

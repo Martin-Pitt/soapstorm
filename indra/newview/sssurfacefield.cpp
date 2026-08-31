@@ -27,10 +27,13 @@
 
 #include "ssatmomagic.h"
 #include "ssavatarwet.h"
+#include "ssgranular.h"
 #include "ssvolcloud.h"
+#include "sswindflow.h"
 #include "ssprecippreset.h"
 #include "ssprecipitation.h"
 #include "ssrainshadow.h"
+#include "ssworldfield.h"
 
 #include "llappviewer.h"
 #include "llenvironment.h"
@@ -93,14 +96,25 @@ static const F32 FALLBACK_DRY   = 0.002f;
 static const F32 FALLBACK_MELT  = 0.0000045f;
 static const F32 FALLBACK_DRAIN = 0.0001f;
 
+// <SS:Nexii> The tick lands every quarter second, so the whole cost of one step shows up on one
+// frame. Split per stage: geometry rebuild, ground-flow sample, the transport steps, the shed
+// cursor and the window rebuild all have completely different fixes, and a single summed handle
+// cannot tell them apart. The upload is timed apart from the fill it uploads because only the
+// fill can ever move off this thread. </SS:Nexii>
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE("Atmo Magic Surface Field");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_GEOM("Surface Geometry");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_FLOW("Surface Ground Flow");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_TICK("Surface Tick");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_SHED("Surface Shed");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_WINDOW("Surface Window");
+static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_UPLOAD("Surface Upload");
 
 // Drops all fields, geometry and GL - full rebuild on demand.
 void SSSurfaceField::clear()
 {
     mFields.clear();
     mWindowValid = false;
-    mTickAccum = 0.f;
+    mLastStep = -1.0;
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
 }
 
@@ -143,6 +157,7 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
     out.mGeomSerial = grid.mGeomSerial;
     out.mZ = grid.mZ;
     out.mFlags = grid.mFlags;
+    out.mAbove = grid.mAbove;
     out.mSlopeX.assign(count, 0.f);
     out.mSlopeY.assign(count, 0.f);
     out.mSlope.assign(count, 0.f);
@@ -246,6 +261,16 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
             const F32 len = sqrtf(ox * ox + oy * oy);
             if (len < 0.0001f) continue;
 
+            // A drip line is an architectural thing: water gathering along a
+            // roof lip and coming off it as drops. A terrain ledge drops just
+            // as sharply and is not that - rain runs down a hillside as a
+            // sheet, and hanging drip curtains off every terraced cliff is
+            // what the capture's height-above-terrain channel exists to stop.
+            // A lip has to be standing structure, not ground that happens to
+            // step down.
+            static LLCachedControl<F32> edge_min_above(gSavedSettings, "SSAtmoRunoffEdgeMinAbove", 1.f);
+            if (out.above(i) < llmax((F32)edge_min_above, 0.f)) continue;
+
             out.mEdge[i] = 1;
             out.mEdgeX[i] = ox / len;
             out.mEdgeY[i] = oy / len;
@@ -255,12 +280,26 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
 }
 
 // Rebuilds geometry for tiles whose captures changed - the retrace gate.
+// The grid source is the rain shadow capture by default; SSWorldFieldSurfaceTop
+// routes it through the shared world field's SURFACE_TOP channel instead. The
+// grid shape and serial semantics are identical, so nothing downstream changes.
 void SSSurfaceField::refreshGeometry()
 {
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_GEOM);
+
+    static LLCachedControl<bool> use_field(gSavedSettings, "SSWorldFieldSurfaceTop", false);
+    SSWorldField* field = use_field ? SSWorldField::getInstance() : nullptr;
     SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
 
     std::vector<std::pair<U64, U32> > tiles;
-    shadow->validTiles(tiles);
+    if (field)
+    {
+        field->validTiles(tiles);
+    }
+    else
+    {
+        shadow->validTiles(tiles);
+    }
 
     for (const auto& entry : tiles)
     {
@@ -268,7 +307,9 @@ void SSSurfaceField::refreshGeometry()
         if (geom.valid() && geom.mGeomSerial == entry.second) continue;
 
         SSRainShadowMap::SurfaceGrid grid;
-        if (!shadow->buildSurfaceGrid(entry.first, GEOM_RES, grid)) continue;
+        const bool have = field ? field->buildSurfaceGrid(entry.first, GEOM_RES, grid)
+                                : shadow->buildSurfaceGrid(entry.first, GEOM_RES, grid);
+        if (!have) continue;
 
         buildGeometry(grid, geom);
     }
@@ -291,6 +332,8 @@ static const F32 SHED_STORE_CEILING = 8.f;
 // Spends the frame's rain on every region's shelter edges, spawning runoff drips.
 void SSSurfaceField::shedEdges(F32 dt)
 {
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_SHED);
+
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     SSPrecipSim* sim = atmo ? atmo->sim() : nullptr;
     if (!sim || dt <= 0.f) return;
@@ -356,12 +399,17 @@ void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& 
         const S32 i = geom.mEdgeCells[(size_t)k];
         const size_t ui = (size_t)i;
 
-        const F32 slope_norm = llclamp(geom.mSlope[ui] / SLOPE_RUN_FULL, 0.f, 1.f);
-        const F32 feed = cell_area * lerp(SHED_FEED_FLAT, SHED_FEED_STEEP, slope_norm);
+        // <SS:Nexii> Granular weather feeds the store from the transport's creep spill, not from
+        // the rain rate - the lip is debited where the creep pass delivers, and this cursor only
+        // drains it into cascades. Liquid keeps the inflow it always had.
+        const F32 inflow = atmo->granularWeather() ? 0.f
+                                                   : cell_area * lerp(SHED_FEED_FLAT, SHED_FEED_STEEP, llclamp(geom.mSlope[ui] / SLOPE_RUN_FULL, 0.f, 1.f)) * rate_m2;
 
-        const F32 inflow = feed * rate_m2;
-        fld.mStore[ui] = llmin(fld.mStore[ui] + inflow * dt,
-                               inflow * SHED_STORE_CEILING + 1.f);
+        if (inflow > 0.f)
+        {
+            fld.mStore[ui] = llmin(fld.mStore[ui] + inflow * dt,
+                                   inflow * SHED_STORE_CEILING + 1.f);
+        }
 
         const F32 outflow = fld.mStore[ui] / SHED_DRAIN_TAU;
         fld.mStore[ui] = llmax(0.f, fld.mStore[ui] - outflow * dt);
@@ -455,6 +503,8 @@ SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const Geometr
         fld.mWet.assign(geom.mZ.size(), 0.f);
         fld.mSnow.assign(geom.mZ.size(), 0.f);
         fld.mPuddle.assign(geom.mZ.size(), 0.f);
+        fld.mLift.assign(geom.mZ.size(), 0.f);
+        fld.mInflow.assign(geom.mZ.size(), 0.f);
         fld.mStore.assign(geom.mZ.size(), 0.f);
         fld.mAccum.assign(geom.mZ.size(), 0.f);
 
@@ -465,10 +515,14 @@ SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const Geometr
     return &fld;
 }
 
-// Integrates one region's field for a step: wetting, drying, snow settle and melt, puddle fill and drainage flow.
+// Integrates one region's field for a step: wetting, drying, snow settle and melt, puddle fill and drainage flow,
+// then what the wind does to all of it.
 void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
-                          const SSPrecipPreset& preset, F32 intensity)
+                          const SSPrecipPreset& preset, F32 intensity,
+                          const SSGranularParams& granular, const LLVector4* flow)
 {
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_TICK);
+
     const S32 n = geom.mN;
     const F32 cell = geom.mCell;
     const F32 cell_area = cell * cell;
@@ -476,9 +530,12 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
 
     const F32 repose = llclamp(preset.mSnowRepose, 5.f, 89.f) * DEG_TO_RAD;
 
+    static LLCachedControl<bool> puddles_on(gSavedSettings, "SSAtmoWetPuddles", true);
+
     const bool wetting  = falling && preset.mWetRate > 0.f;
     const bool snowing  = falling && preset.mSnowRate > 0.f && preset.mSnowDepth > 0.f;
-    const bool pooling  = falling && preset.mPuddleRate > 0.f && preset.mPuddleDepth > 0.f;
+    const bool pooling  = falling && preset.mPuddleRate > 0.f && preset.mPuddleDepth > 0.f
+                          && puddles_on;
 
     const F32 wet_rate    = wetting ? preset.mWetRate * intensity
                                     : (preset.mDryRate > 0.f ? preset.mDryRate : FALLBACK_DRY);
@@ -504,6 +561,25 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
         const F32 patch = llclamp((v - 0.36f) / 0.34f, 0.f, 1.f);
         return lerp(1.f, patch * patch * (3.f - 2.f * patch), mask_amt);
     };
+
+    // How much of a standing structure a cell is, 0 at grade to 1 from
+    // SSAtmoSurfaceStructAbove metres over the terrain - the capture's
+    // height-above-terrain channel as a factor. Faded in over the top half of
+    // that span rather than stepped, so a low porch roof is still mostly
+    // ground-like and only genuinely tall decks are treated as towers.
+    static LLCachedControl<F32> struct_above(gSavedSettings, "SSAtmoSurfaceStructAbove", 12.f);
+    const F32 struct_h = llmax((F32)struct_above, 1.f);
+    auto structFactor = [&](size_t i)
+    {
+        const F32 t = llclamp((geom.above(i) - struct_h * 0.5f) / (struct_h * 0.5f), 0.f, 1.f);
+        return t * t * (3.f - 2.f * t);
+    };
+
+    // Deep snow piles belong at grade. A tall roof still whitens - snowfall
+    // lands there like anywhere - but it holds a fraction of the ground's
+    // depth ceiling rather than growing the same drifts a street does.
+    static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
+    const F32 snow_struct_frac = llclamp((F32)snow_struct, 0.f, 1.f);
 
     F32 peak_wet = 0.f, peak_snow = 0.f, peak_puddle = 0.f;
 
@@ -566,7 +642,8 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
 
             if (snowing)
             {
-                const F32 room = preset.mSnowDepth * lieHere() - fld.mSnow[i];
+                const F32 depth_scale = lerp(1.f, snow_struct_frac, structFactor(i));
+                const F32 room = preset.mSnowDepth * depth_scale * lieHere() - fld.mSnow[i];
                 if (room > 0.f)
                 {
                     fld.mSnow[i] += llmin(room, snow_gain);
@@ -580,9 +657,16 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
                 fld.mSnow[i] = llmax(0.f, fld.mSnow[i] - snow_loss);
             }
 
-            if (pooling && geom.mPool[i])
+            // Standing water is a grade phenomenon: a hollow in a street
+            // fills, a hollow in a tower roof drains through whatever the
+            // build actually is up there, and a puddle field on a skyline
+            // deck reads as a bug even when the trace found a genuine dip.
+            // Tall structure cells stop accumulating and let what they hold
+            // drain out through the ordinary loss path.
+            const F32 grade = 1.f - structFactor(i);
+            if (pooling && geom.mPool[i] && grade > 0.01f)
             {
-                const F32 mask = puddleMask(x, y);
+                const F32 mask = puddleMask(x, y) * grade;
                 fld.mPuddle[i] = llmin(puddle_depth_ceiling * mask,
                                        fld.mPuddle[i] + puddle_gain * mask);
             }
@@ -600,6 +684,25 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
     mPeakWet = llmax(mPeakWet, peak_wet);
     mPeakSnow = llmax(mPeakSnow, peak_snow);
     mPeakPuddle = llmax(mPeakPuddle, peak_puddle);
+
+    // <SS:Nexii> Granular transport: what the wind does to what settle just left. Runs after the
+    // settle pass so fresh snow can lift in the same step it landed; the peak scan is re-run
+    // afterwards because erosion and banking both move it.
+    if (flow)
+    {
+        SSGranularParams p = granular;
+        p.mFlow = flow;
+        SSGranular::step(fld, geom, p, dt);
+
+        F32 wind_peak = 0.f;
+        for (const F32 depth : fld.mSnow)
+        {
+            wind_peak = llmax(wind_peak, depth);
+        }
+        peak_snow = llmax(peak_snow, wind_peak);
+        mPeakSnow = llmax(mPeakSnow, peak_snow);
+    }
+    // </SS:Nexii>
 }
 
 // Drops fields and geometry for regions that left the world.
@@ -623,9 +726,12 @@ void SSSurfaceField::evict(F64 now)
     }
 }
 
-// Per-frame drive: refresh geometry, tick fields on a budget, shed edges, refresh the GPU window.
+// Per-frame drive: refresh geometry, step fields on the fixed shared-time clock, shed edges,
+// refresh the GPU window.
 void SSSurfaceField::idle(F32 dt)
 {
+    (void)dt; // the transport steps on shared time; presentation below uses the fixed quanta too
+
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
     if (!atmo->isEnabled())
@@ -636,25 +742,59 @@ void SSSurfaceField::idle(F32 dt)
 
     const SSPrecipPreset& preset = atmo->preset();
 
-    const bool marks = preset.marksSurface();
+    const bool blows = atmo->granularWeather() && preset.mSnowLiftRate > 0.f;
+    const bool marks = preset.marksSurface() || blows;
     if (!marks && mFields.empty()) return;
 
-    mTickAccum += dt;
-    if (mTickAccum < TICK_INTERVAL) return;
-
-    const F32 step = llmin(mTickAccum, MAX_TICK_DT);
-    mTickAccum = 0.f;
+    // <SS:Nexii> The transport clock. Steps land on exact quanta of shared time rather than
+    // whatever the frame hands over, so creep, erosion and the regime evaluation are identical
+    // across viewers and frame rates - the discipline the architecture doc fixes for anything
+    // that changes ground state. Presentation (the shed cursor, drip spawns) still runs once per
+    // frame below, on the frame's own accumulated dt.
+    const F64 now = atmo->sharedTime();
+    if (mLastStep < 0.0) mLastStep = now;
+    F64 elapsed = now - mLastStep;
+    if (elapsed > (F64)MAX_TICK_DT)
+    {
+        // stalled or joined mid-session: resync instead of replaying an eight-second storm
+        mLastStep = now;
+        elapsed = 0.0;
+    }
+    U32 steps = (U32)(elapsed / (F64)TICK_INTERVAL);
+    if (steps == 0) return;
+    static const U32 MAX_STEPS_PER_FRAME = 4;
+    const U32 ran = llmin(steps, MAX_STEPS_PER_FRAME);
+    mLastStep += (F64)ran * (F64)TICK_INTERVAL;
+    // </SS:Nexii>
 
     LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE);
     LLTimer timer;
 
-    const F64 now = atmo->sharedTime();
     const F32 intensity = atmo->hasWeather() ? llclamp(atmo->precipitation(), 0.f, 1.f) : 0.f;
 
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
 
     refreshGeometry();
 
+    // <SS:Nexii> Granular transport inputs, assembled once: the parameter bundle and each
+    // region's ground-flow grid, sampled straight out of the solved flowmap without the gust
+    // layer (the envelope rides the bundle as one scalar, never per cell).
+    SSGranularParams granular;
+    atmo->fillTransportParams(granular);
+
+    // Grade-vs-structure depth scaling, handed in as plain figures the way
+    // every other input reaches the transport - it reads no settings itself.
+    {
+        static LLCachedControl<F32> struct_above(gSavedSettings, "SSAtmoSurfaceStructAbove", 12.f);
+        static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
+        granular.mStructAboveH = llmax((F32)struct_above, 1.f);
+        granular.mStructDepth = llclamp((F32)snow_struct, 0.f, 1.f);
+    }
+
+    const bool blows_here = granular.mLiftRate > 0.f || granular.mDepositRate > 0.f
+                         || granular.mCreepRate > 0.f;
+
+    std::vector<LLVector4> flow_grid;
     for (const auto& entry : mGeometry)
     {
         const Geometry& geom = entry.second;
@@ -663,10 +803,28 @@ void SSSurfaceField::idle(F32 dt)
         Field* fld = fieldFor(entry.first, geom, now);
         if (!fld) continue;
 
-        tick(*fld, geom, step, preset, intensity);
-    }
+        const LLVector4* flow = nullptr;
+        if (blows_here)
+        {
+            LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_FLOW);
 
-    shedEdges(step);
+            LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
+            flow_grid.clear();
+            if (regionp && SSWindFlowMap::getInstance()->sampleGroundGrid(regionp, geom.mN, geom.mCell,
+                                                                          geom.mZ.data(), flow_grid))
+            {
+                flow = flow_grid.data();
+            }
+        }
+
+        for (U32 s = 0; s < ran; ++s)
+        {
+            tick(*fld, geom, TICK_INTERVAL, preset, intensity, granular, flow);
+        }
+    }
+    // </SS:Nexii>
+
+    shedEdges((F32)ran * TICK_INTERVAL);
 
     evict(now);
     updateWindow();
@@ -697,6 +855,7 @@ SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
     out.mWet = fld.mWet[i];
     out.mSnow = fld.mSnow[i];
     out.mPuddle = fld.mPuddle[i];
+    out.mLift = fld.mLift.empty() ? 0.f : fld.mLift[i];
     out.mSurfaceZ = fld.mZ[i];
     out.mValid = true;
 
@@ -715,6 +874,104 @@ SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
     return out;
 }
 
+// <SS:Nexii> Granular access: the one write path into mSnow from outside, and the drift tier's
+// spawn walk over the lift the transport computed.
+
+// Credits a landing clump against the cell's repose room. The preset's ceiling and repose own the
+// cap; the transport's depositAt does the clamping.
+void SSSurfaceField::depositAt(const LLVector3& pos_agent, F32 depth)
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    if (!atmo->granularWeather() || depth <= 0.f) return;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return;
+
+    auto geom_it = mGeometry.find(regionp->getHandle());
+    auto fld_it = mFields.find(regionp->getHandle());
+    if (geom_it == mGeometry.end() || fld_it == mFields.end()) return;
+
+    const Geometry& geom = geom_it->second;
+    Field& fld = fld_it->second;
+    if (!geom.valid() || geom.mN != fld.mN) return;
+
+    const LLVector3 local = pos_agent - regionp->getOriginAgent();
+    const S32 x = (S32)(local.mV[VX] / geom.mCell);
+    const S32 y = (S32)(local.mV[VY] / geom.mCell);
+    if (x < 0 || y < 0 || x >= geom.mN || y >= geom.mN) return;
+
+    const S32 i = y * geom.mN + x;
+    const SSPrecipPreset& preset = atmo->preset();
+    const F32 repose = llclamp(preset.mSnowRepose, 5.f, 89.f) * DEG_TO_RAD;
+
+    // The same grade-vs-structure depth scaling the settle and transport paths
+    // apply, so a clump landing on a tower deck banks against the deck's own
+    // reduced ceiling rather than the street's.
+    static LLCachedControl<F32> struct_above(gSavedSettings, "SSAtmoSurfaceStructAbove", 12.f);
+    static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
+    const F32 h = llmax((F32)struct_above, 1.f);
+    const F32 t = llclamp((geom.above(i) - h * 0.5f) / (h * 0.5f), 0.f, 1.f);
+    const F32 scale = lerp(1.f, llclamp((F32)snow_struct, 0.f, 1.f), t * t * (3.f - 2.f * t));
+
+    const F32 ceiling = llmax(preset.mSnowDepth, 0.f) * scale;
+    SSGranular::depositAt(fld, geom, i, depth, ceiling, repose);
+    mPeakSnow = llmax(mPeakSnow, fld.mSnow[i]);
+}
+
+// Walks every lifted, snow-holding cell in a circle - deterministic order, cheap rejection by
+// bounding box first. The sim's drift spawn runs this at its own tick rate.
+void SSSurfaceField::forEachLiftCell(const LLVector3& center_agent, F32 radius_m,
+                                     const std::function<void(const LLVector3& pos_agent, F32 depth, F32 lift)>& fn) const
+{
+    if (radius_m <= 0.f) return;
+    const F32 radius_sq = radius_m * radius_m;
+
+    for (const auto& entry : mFields)
+    {
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
+        auto geom_it = mGeometry.find(entry.first);
+        if (!regionp || geom_it == mGeometry.end()) continue;
+
+        const Geometry& geom = geom_it->second;
+        const Field& fld = entry.second;
+        if (!geom.valid() || geom.mN != fld.mN || fld.mLift.size() != fld.mSnow.size()) continue;
+
+        const LLVector3 origin = regionp->getOriginAgent();
+        const F32 span = geom.mCell * (F32)geom.mN;
+
+        // bounding box of the circle against this region's grid
+        const S32 x0 = llclamp((S32)floorf((center_agent.mV[VX] - radius_m - origin.mV[VX]) / geom.mCell), 0, geom.mN - 1);
+        const S32 x1 = llclamp((S32)floorf((center_agent.mV[VX] + radius_m - origin.mV[VX]) / geom.mCell), 0, geom.mN - 1);
+        const S32 y0 = llclamp((S32)floorf((center_agent.mV[VY] - radius_m - origin.mV[VY]) / geom.mCell), 0, geom.mN - 1);
+        const S32 y1 = llclamp((S32)floorf((center_agent.mV[VY] + radius_m - origin.mV[VY]) / geom.mCell), 0, geom.mN - 1);
+        if (origin.mV[VX] > center_agent.mV[VX] + radius_m || origin.mV[VX] + span < center_agent.mV[VX] - radius_m
+            || origin.mV[VY] > center_agent.mV[VY] + radius_m || origin.mV[VY] + span < center_agent.mV[VY] - radius_m)
+        {
+            continue;
+        }
+
+        for (S32 y = y0; y <= y1; ++y)
+        {
+            for (S32 x = x0; x <= x1; ++x)
+            {
+                const size_t i = (size_t)y * geom.mN + x;
+                const F32 lift = fld.mLift[i];
+                if (lift <= 0.01f || fld.mSnow[i] <= 2.0e-4f) continue;
+
+                const LLVector3 pos(origin.mV[VX] + ((F32)x + 0.5f) * geom.mCell,
+                                    origin.mV[VY] + ((F32)y + 0.5f) * geom.mCell,
+                                    fld.mZ[i]);
+                const F32 dx = pos.mV[VX] - center_agent.mV[VX];
+                const F32 dy = pos.mV[VY] - center_agent.mV[VY];
+                if (dx * dx + dy * dy > radius_sq) continue;
+
+                fn(pos, fld.mSnow[i], lift);
+            }
+        }
+    }
+}
+// </SS:Nexii>
+
 // Re-bakes the camera-centred texture window the shaders read, snapped to the field grid.
 void SSSurfaceField::updateWindow()
 {
@@ -723,6 +980,8 @@ void SSSurfaceField::updateWindow()
         mWindowValid = false;
         return;
     }
+
+    LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_WINDOW);
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     F32 cell = 0.f;
@@ -851,15 +1110,19 @@ void SSSurfaceField::updateWindow()
                               << " cells square" << LL_ENDL;
     }
 
-    glBindTexture(GL_TEXTURE_2D, mWindowTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
-                    GL_RGBA, GL_FLOAT, mWindowData.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
+    {
+        LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_UPLOAD);
 
-    glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
-                    GL_RGBA, GL_FLOAT, mWindowFlowData.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
+        glBindTexture(GL_TEXTURE_2D, mWindowTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                        GL_RGBA, GL_FLOAT, mWindowData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindTexture(GL_TEXTURE_2D, mWindowFlowTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                        GL_RGBA, GL_FLOAT, mWindowFlowData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 
     mWindowCell = cell;
     mWindowOrigin = origin;
@@ -936,7 +1199,8 @@ void SSSurfaceField::renderWetPass()
 
     static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoWetStrength", 1.f);
     const F32 wet_strength = llclamp((F32)strength, 0.f, 2.f);
-    if (wet_strength <= 0.f) { note(3, "idle, SSAtmoWetStrength is zero"); return; }
+    static LLCachedControl<bool> wet_on(gSavedSettings, "SSAtmoWetSurfaces", true);
+    if (wet_strength <= 0.f || !wet_on) { note(3, "idle, SSAtmoWetStrength is zero or wet surfaces disabled"); return; }
 
     LLRenderTarget* gbuffer = &gPipeline.mRT->deferredScreen;
     const U32 w = gbuffer->getWidth();
@@ -1003,6 +1267,13 @@ void SSSurfaceField::renderWetPass()
     static LLStaticHashedString wet_puddle_rough_min("ssWetPuddleRoughMin");
     static LLStaticHashedString wet_puddle_spec("ssWetPuddleSpecular");
     static LLStaticHashedString wet_puddle_gloss("ssWetPuddleGloss");
+    static LLStaticHashedString wet_night("ssWetNight");
+
+    // The night factor the puddle treatment yields to: a near-mirror under a
+    // moonless zenith reads as a black hole, so full-puddle patches pull back
+    // toward damp after dark. The sun's clamped direction carries the day cycle.
+    const F32 sun_z = LLEnvironment::instance().getSunDirection().mV[VZ];
+    const F32 night = llclamp(1.f - (sun_z + 0.1f) * 4.f, 0.f, 1.f);
 
     const glm::mat4 inv = glm::inverse(get_current_modelview());
     gSSSurfaceWetProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
@@ -1054,6 +1325,7 @@ void SSSurfaceField::renderWetPass()
     gSSSurfaceWetProgram.uniform1f(wet_puddle_rough_min, llclamp((F32)puddle_rough_min, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_puddle_spec, llclamp((F32)puddle_spec, 0.f, 1.f) * spec_dim);
     gSSSurfaceWetProgram.uniform1f(wet_puddle_gloss, llclamp((F32)puddle_gloss, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_night, night);
 
     {
         static LLStaticHashedString mask_amt_u("ssPuddleMaskAmt");
@@ -1264,6 +1536,7 @@ void SSSurfaceField::renderWetPass()
 
     static LLStaticHashedString commit_src("ssCommitSource");
     static LLStaticHashedString commit_paint("ssCommitDebugPaint");
+    static LLStaticHashedString commit_target("ssCommitTarget");
 
     gbuffer->bindTarget();
 
@@ -1296,6 +1569,7 @@ void SSSurfaceField::renderWetPass()
     gGL.getTexUnit(0)->activate();
     gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratch.getTexture(0));
     gSSSurfaceCommitProgram.uniform1i(commit_src, 0);
+    gSSSurfaceCommitProgram.uniform1f(commit_target, 1.f);
 
     static LLCachedControl<F32> commit_debug_paint_setting(gSavedSettings, "SSAtmoCommitDebugPaint", 0.f);
     const F32 ssCommitDebugPaint = llclamp((F32)commit_debug_paint_setting, 0.f, 1.f);
@@ -1352,13 +1626,17 @@ void SSSurfaceField::renderWetPass()
 
     if (do_normal && mScratchNormal.getNumTextures() >= 1)
     {
-        const GLenum normal_bufs[4] = { GL_NONE, GL_COLOR_ATTACHMENT2, GL_NONE, GL_NONE };
+        // frag_data[2] - the commit shader writes every output, so the mask must route the
+        // normal one here (the old layout routed slot 1, which the generalized commit no longer
+        // pairs with this target).
+        const GLenum normal_bufs[4] = { GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT2, GL_NONE };
         glDrawBuffers(4, normal_bufs);
 
         gSSSurfaceCommitProgram.bind();
         gGL.getTexUnit(0)->activate();
         gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratchNormal.getTexture(0));
         gSSSurfaceCommitProgram.uniform1i(commit_src, 0);
+        gSSSurfaceCommitProgram.uniform1f(commit_target, 2.f);
         gSSSurfaceCommitProgram.uniform1f(commit_paint, 0.f);
 
         {
@@ -1389,10 +1667,115 @@ void SSSurfaceField::renderWetPass()
     gbuffer->flush();
 }
 
-// Draws the field over the world for inspection.
+// <SS:Nexii> Snow surfaces. The same screen-space shape as the wet pass - field window in,
+// scratch target, commit back into the gbuffer - but writing the diffuse attachment: the snow
+// channel the field has always carried becomes visible albedo. Runs after the wet pass so it
+// covers it; the gloss interplay (wet ground going matte under snow) is the commit's next target,
+// not this pass's job yet.
+void SSSurfaceField::renderSnowPass()
+{
+    if (gCubeSnapshot) return;
+    if (!hasWindow()) return;
+    if (!gSSSurfaceSnowProgram.isComplete()) return;
+    if (!gSSSurfaceCommitProgram.isComplete()) return;
+
+    static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoSnowSurfaceStrength", 1.f);
+    const F32 snow_strength = llclamp((F32)strength, 0.f, 2.f);
+    static LLCachedControl<bool> snow_on(gSavedSettings, "SSAtmoSnowSurfaces", true);
+    if (snow_strength <= 0.f || !snow_on) return;
+    if (peakSnow() <= 0.f) return;
+
+    LLRenderTarget* gbuffer = &gPipeline.mRT->deferredScreen;
+    const U32 w = gbuffer->getWidth();
+    const U32 h = gbuffer->getHeight();
+    if (w == 0 || h == 0) return;
+
+    if (mScratch.getWidth() != w || mScratch.getHeight() != h)
+    {
+        mScratch.release();
+        if (!mScratch.allocate(w, h, GL_RGBA, false)) return;
+    }
+
+    LL_PROFILE_GPU_ZONE("atmo surface snow");
+
+    mScratch.bindTarget();
+
+    gPipeline.bindDeferredShader(gSSSurfaceSnowProgram);
+
+    const S32 field_channel = gSSSurfaceSnowProgram.mActiveTextureChannels;
+    bindForShader(gSSSurfaceSnowProgram, field_channel);
+
+    static LLStaticHashedString inv_view("ssFieldInvView");
+    static LLStaticHashedString snow_strength_u("ssSnowStrength");
+    static LLStaticHashedString snow_depth_full("ssSnowDepthFull");
+    static LLStaticHashedString snow_sparkle("ssSnowSparkle");
+
+    const glm::mat4 inv = glm::inverse(get_current_modelview());
+    gSSSurfaceSnowProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
+
+    static LLCachedControl<F32> depth_full(gSavedSettings, "SSAtmoSnowDepthFull", 0.02f);
+    static LLCachedControl<F32> sparkle(gSavedSettings, "SSAtmoSnowSparkle", 0.6f);
+
+    gSSSurfaceSnowProgram.uniform1f(snow_strength_u, snow_strength);
+    gSSSurfaceSnowProgram.uniform1f(snow_depth_full, llmax((F32)depth_full, 0.005f));
+    gSSSurfaceSnowProgram.uniform1f(snow_sparkle, llclamp((F32)sparkle, 0.f, 1.f));
+
+    {
+        LLGLDepthTest depth(GL_FALSE);
+        LLGLDisable blend(GL_BLEND);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+    }
+
+    gGL.getTexUnit(field_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    gPipeline.unbindDeferredShader(gSSSurfaceSnowProgram);
+
+    mScratch.flush();
+
+    // Commit the lifted albedo into the diffuse attachment.
+    gbuffer->bindTarget();
+
+    const GLenum albedo_bufs[4] = { GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE, GL_NONE };
+    glDrawBuffers(4, albedo_bufs);
+
+    gSSSurfaceCommitProgram.bind();
+    gGL.getTexUnit(0)->activate();
+    gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratch.getTexture(0));
+    static LLStaticHashedString snow_commit_src("ssCommitSource");
+    static LLStaticHashedString snow_commit_target("ssCommitTarget");
+    static LLStaticHashedString snow_commit_paint("ssCommitDebugPaint");
+    gSSSurfaceCommitProgram.uniform1i(snow_commit_src, 0);
+    gSSSurfaceCommitProgram.uniform1f(snow_commit_target, 0.f);
+    gSSSurfaceCommitProgram.uniform1f(snow_commit_paint, 0.f);
+
+    {
+        LLGLDepthTest depth(GL_FALSE);
+        LLGLDisable blend(GL_BLEND);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+    }
+
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+    gSSSurfaceCommitProgram.unbind();
+
+    const GLenum restore_bufs[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                                     GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
+    glDrawBuffers(4, restore_bufs);
+
+    gbuffer->flush();
+}
+// </SS:Nexii>
+
+// Draws the field over the world for inspection. SSAtmoSnowDebug 1 replaces the wet/puddle
+// colouring with the transport's per-cell lift figure - what the drift pool's spawn walk reads.
 void SSSurfaceField::renderDebug()
 {
     if (mFields.empty()) return;
+
+    static LLCachedControl<S32> snow_debug(gSavedSettings, "SSAtmoSnowDebug", 0);
+    const bool lift_view = (S32)snow_debug == 1;
 
     LLGLEnable blend(GL_BLEND);
     LLGLDepthTest depth(GL_TRUE, GL_FALSE);
@@ -1417,6 +1800,33 @@ void SSSurfaceField::renderDebug()
         gGL.begin(LLRender::TRIANGLES);
         for (S32 i = 0; i < (S32)fld.mZ.size(); ++i)
         {
+            if (lift_view)
+            {
+                const F32 lift = fld.mLift.empty() ? 0.f : fld.mLift[i];
+                if (lift <= 0.01f) continue;
+
+                const LLVector3 c(origin.mV[VX] + ((F32)(i % n) + 0.5f) * cell,
+                                  origin.mV[VY] + ((F32)(i / n) + 0.5f) * cell,
+                                  fld.mZ[i] + 0.06f);
+                if ((c - cam).magVecSquared() > reach * reach) continue;
+
+                // cold blue at onset through white to hot orange at saturation
+                const F32 t = llclamp(fld.mLift[i], 0.f, 1.f);
+                const F32 r = lerp(0.15f, 1.f, t);
+                const F32 g = lerp(0.35f, 0.85f, llmin(t * 2.f, 1.f)) * (1.f - 0.55f * llmax(0.f, t - 0.5f) * 2.f);
+                const F32 b = lerp(1.f, 0.1f, llclamp(t * 2.f, 0.f, 1.f));
+                gGL.color4f(r, g, b, 0.35f + 0.6f * t);
+
+                gGL.vertex3f(c.mV[VX] - half, c.mV[VY] - half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] + half, c.mV[VY] - half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] + half, c.mV[VY] + half, c.mV[VZ]);
+
+                gGL.vertex3f(c.mV[VX] - half, c.mV[VY] - half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] + half, c.mV[VY] + half, c.mV[VZ]);
+                gGL.vertex3f(c.mV[VX] - half, c.mV[VY] + half, c.mV[VZ]);
+                continue;
+            }
+
             const F32 wet = fld.mWet[i];
             const F32 snow = fld.mSnow[i];
             const F32 puddle = fld.mPuddle[i];

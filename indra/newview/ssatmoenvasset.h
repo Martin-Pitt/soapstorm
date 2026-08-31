@@ -68,11 +68,29 @@ const F32 SS_ATMOENV_UDECK_BASE_MAX = 10000.f;
 
 const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
 
-// <SS:Nexii> EEP's reference disc: the angular diameter a body-or-sky disc of scale 1.0 draws.
-// SSAtmoEnvApplier::celestialDiscScale() divides a body's angular size by this to get EEP's disc
-// scale, and the sky-to-body translation below multiplies a sky's disc scale by it to go the
-// other way - one number, so both directions of the conversion agree by construction.
+// <SS:Nexii> EEP's reference disc: the angular diameter a stock sky's disc scale of 1.0 states -
+// the real Sun's apparent size, which is what scale 1.0 was always MEANT to draw. It is the
+// convention a sky's disc scale is read under when an import becomes a body (see
+// SSAtmoEnvPlanetary::translateSettingsSky); what the quad GEOMETRY actually draws at scale 1.0
+// is the much larger ss_atmoenv_quad_deg below, which is exactly the bug the quad angles exist
+// to fix - the two numbers used to be one, and every body drew ~10x its authored size.
 const F32 SS_ATMOENV_REFERENCE_DISC_DEG = 0.53f;
+
+// <SS:Nexii> The angular diameter the WHOLE celestial quad subtends at disc scale 1.0, per slot
+// kind. updateHeavenlyBodyGeometry sizes a quad's half-extent at HEAVENLY_BODY_DIST *
+// HEAVENLY_BODY_FACTOR * disk_radius (llvosky.h: factor 0.1, the sun's disk radius 0.5, the
+// moon's 0.45), so the shell distance cancels out of the angle and scale 1.0 is simply
+// 2*atan(0.1 * r) - 5.72 degrees of sun, 5.15 of moon. EEP never converted its own chain to
+// degrees, which is how the 0.53 reference above ended up describing a quad ten times smaller
+// than the one it draws. Disc art fills the quad (ssCelestialF inscribes the phase-shaded sphere
+// in it), so the drawn body IS the quad: the conversion from an authored angular diameter runs
+// through these, with the 0.53 convention left to the import translation alone.
+inline F32 ss_atmoenv_quad_deg(F32 disk_radius)
+{
+    return 2.f * RAD_TO_DEG * atanf(0.1f * disk_radius);
+}
+const F32 SS_ATMOENV_SUN_QUAD_DEG  = ss_atmoenv_quad_deg(0.5f);
+const F32 SS_ATMOENV_MOON_QUAD_DEG = ss_atmoenv_quad_deg(0.45f);
 
 inline F64 ss_atmoenv_snap_phase(F64 phase)
 {
@@ -189,6 +207,14 @@ struct SSAtmoEnvCelestialBody
 
     LLUUID mCustomTexture;
 
+    // <SS:Nexii> The transparent margin the disc art carries, as a fraction of the texture's
+    // width on EACH side - the stock sun art is glow past a small core, lunar art is full-bleed.
+    // The disc the renderer treats as the body is the central 1 - 2*padding of the quad, so the
+    // quad overdrawing the authored angular diameter by exactly that factor is what makes a
+    // padded texture land its art on the authored size. Zero - full-bleed art, the whole texture
+    // is the body - and capped at 0.45 so a disc never shrinks below a tenth of its quad.
+    F32 mDiscPadding = 0.f;
+
     bool mHasRing = false;
     F32 mRingInnerRadius = 1.5f;
     F32 mRingOuterRadius = 2.2f;
@@ -230,12 +256,14 @@ struct SSAtmoEnvPlanetary
     S32 standardMoonIndex() const;
 
     // Translates a fetched EEP sky's disc values onto the standard sun/moon this system still
-    // carries - the sky says what its disc DRAWS like, the body stores what it IS. Disc scale
-    // becomes a physical diameter at the body's resolved home-to-body distance (the same
-    // distance the renderer's resolver turns back into an angular size on screen, so the body
-    // draws what the sky would have drawn), and a disc texture the sky does not name at its own
-    // stock value replaces the body's. Only the groups named in `groups` take part; a group with
-    // no standard body left silently does nothing.
+    // carries. The sky's disc scale is read against EEP's reference disc (SS_ATMOENV_REFERENCE_
+    // DISC_DEG - the convention scale 1.0 was authored under, the real Sun's apparent size) and
+    // becomes a physical diameter at the body's resolved home-to-body distance; a disc texture
+    // the sky does not name at its own stock value replaces the body's. The body then renders
+    // through the physical chain (ss_atmoenv_quad_deg), so what arrives from a stock sky is the
+    // body its scale STATES - the real Sun for 1.0 - drawn at that body's true apparent size
+    // rather than at EEP's oversized glow quad. Only the groups named in `groups` take part; a
+    // group with no standard body left silently does nothing.
     void translateSettingsSky(const LLSettingsSky& sky, U32 groups);
 
     bool setBoundPartner(S32 a, S32 b);
@@ -284,6 +312,16 @@ struct SSAtmoEnvCloudField
     // Scale slider scales how many metres one tile of the map spans. None leaves the deck to the
     // plain cluster noise it has always used.
     SSAtmoEnvKeyframed<LLUUID> mNoiseTexture;
+
+    // <SS:Nexii> The vertical profile ramp: a thin strip texture whose four channels are four
+    // curves over the deck's height (v = 0 at the cloud base, 1 at the lid, painted bottom to
+    // top), expressing HOW the convection noise map applies vertically. Red is the tower/ramp
+    // weight - how much the map counts at this height, ramping toward white near the lid so the
+    // top consolidates into the anvil. Green is the carve guard - where the anvil's underside
+    // may bite (keep the base band black so the deck keeps its body). Blue is the torn cap band.
+    // Alpha is the thick-base fill - a density floor that makes the bottom read solid. None runs
+    // the built-in curves the deck has always used.
+    SSAtmoEnvKeyframed<LLUUID> mProfileTexture;
 
     SSAtmoEnvKeyframed<F32> mTextureMix{0.4f};
 
@@ -352,6 +390,13 @@ struct SSAtmoEnvCloudDome
     SSAtmoEnvKeyframed<F32> mDetailD{1.f};
 
     SSAtmoEnvKeyframed<LLUUID> mNoiseTexture{LLUUID::null};
+
+    // <SS:Nexii> The broad octave's OWN map, for when the cloud noise's blob scale is wrong for
+    // the dome band's now huge tile (8 km): a purpose-made large-scale map draws the broad
+    // composition - the warps, the base octave and its self-shadow read it - while the fine
+    // octave keeps the cloud noise. Null means not in use: every octave reads the cloud noise,
+    // exactly as before this existed.
+    SSAtmoEnvKeyframed<LLUUID> mLargeNoiseTexture{LLUUID::null};
 
     static const char* const CLOUD_TEXTURE_LAYERED;
     static const char* const CLOUD_TEXTURE_CUMULONIMBUS;
@@ -442,6 +487,20 @@ struct SSAtmoEnvWeatherInfluence
 
     bool mRainbowEnabled = true;
     F32  mRainbowStrength = 1.f;
+
+    // <SS:Nexii> Water-drop optics: the corona's diffraction rings around the light. Liquid only -
+    // it needs mist (moisture), droplets lingering in rain's wake, or light drizzle, and freezes
+    // out below about -4C. Heavy precipitation hides the disc itself and suppresses it. </SS:Nexii>
+    bool mCoronaEnabled = true;
+    F32  mCoronaStrength = 1.f;
+
+    // <SS:Nexii> Ice-crystal optics: the 22° halo family from small cirrus platelets, the 46° halo
+    // family (large plates/columns), sundogs and the circumzenithal + supralateral arcs from still
+    // air that lets plates align. Every drive gates on MOISTURE as well as cold - crystals need
+    // something to freeze - so a record-cold dry sky renders exactly as authored with no phantom
+    // ice, and the phenomena separate by depth of cold, loft and wind as the weather moves. </SS:Nexii>
+    bool mIceHaloEnabled = true;
+    F32  mIceHaloStrength = 1.f;
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);

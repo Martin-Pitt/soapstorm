@@ -27,6 +27,7 @@ Timers → `LLGLTFMaterialList::flushUpdates` → **`gMainloopWork.runFor(MainWo
 | Mesh: `LLMeshRepoThread` + `LLPhysicsDecomp` + "MeshLodProcessing" ×2 | llmeshrepository.cpp:4336, :984 |
 | `LLWindowWin32Thread` (OS message loop, width 1) | llwindowwin32.cpp:527 |
 | **`LLImageGLThread`** (width 1, shared GL context) | llimagegl.cpp:2694; gated `RenderGLMultiThreadedTextures` (default OFF), needs GL>3.95 |
+| **SSGLReadback** (width 1, shared GL context; `SSGLReadbackWorker`) | ssglreadback.cpp — generic texture→CPU `glGetTexImage` worker; rainshadow tiles + world-field bands read depth off it |
 | llcorehttp `HttpService` (curl) | _httpservice.cpp:199 |
 | Media plugin poll, CEF cache purge, pickers, watchdog, chat log, model loader, WebRTC | various |
 | VBO worker `LLGLWorkerThread` — **compiled out** (`ENABLE_GL_WORK_QUEUE 0`) | llvertexbuffer.cpp:74 |
@@ -37,6 +38,7 @@ Timers → `LLGLTFMaterialList::flushUpdates` → **`gMainloopWork.runFor(MainWo
 - `WorkQueue gMainloopWork("mainloop")` (llappviewer.cpp:415), drained under the `MainWorkTime` budget. `postTo(target, work, followup)` runs work on target and posts followup back to origin (workqueue.h:121).
 - Coroutines: `LLCoros::launch` (158 call sites), rethrown into main each frame (:1711). `LLCoprocedureManager` named pools (5 coros each).
 - Precedent for offloading CPU work: **`SSWindFlowMap::postWorker()`** (sswindflow.cpp:1525) — `main->postTo(general, work, followup)` with a generation counter to abandon stale results, GL halves kept on main, inline fallback if queues absent. Copy this pattern.
+- Precedent for offloading GL readbacks: **`SSGLReadback`** (ssglreadback.cpp) — a generic 1-wide shared-context thread that guards the caller's writes with a `glFenceSync` the worker `glWaitSync`s before `glGetTexImage`, then posts the packed texels back to the mainloop queue. Rain shadow tiles (`ssrainshadow.cpp:221`) and world-field bands (`ssworldfield.cpp:529`) now read their depth off it; the wind flow solve+readback uses its own `SSWindFlowGLWorker` (sswindflow.cpp:117). The texture must survive, and must not be re-rendered, until the completion callback runs — the capture pipelines serialize with a pending flag.
 - Mesh repo: 6 mutexes with documented lock order (llmeshrepository.h:447); main thread uses trylock-and-skip.
 
 ## Main-thread heavy spots (offload/optimization candidates)

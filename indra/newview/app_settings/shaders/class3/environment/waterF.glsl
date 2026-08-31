@@ -106,6 +106,11 @@ uniform float ss_light_angular_radius;
 uniform vec3 ss_moonlit;
 uniform float ss_sun_up;
 
+// <SS:Nexii> How far the distant sky mirror (below) is allowed to take over
+// from the stock wavy probe tap - SSWaterSkyReflect, 0 is exactly stock.
+uniform float ss_sky_reflect;
+// </SS:Nexii>
+
 uniform float blurMultiplier;
 uniform float refScale;
 uniform float kd;
@@ -144,6 +149,11 @@ vec3 transform_normal(vec3 vNt)
 
 void sampleReflectionProbesWater(inout vec3 ambenv, inout vec3 glossenv,
         vec2 tc, vec3 pos, vec3 norm, float glossiness, vec3 amblit_linear);
+
+// <SS:Nexii> Direct tap of the sky probe along a mirror direction - defined
+// in deferred/reflectionProbeF.glsl, feeds the distant sky mirror below.
+vec3 ssSampleSkyProbe(vec3 dir, float roughness);
+// </SS:Nexii>
 
 void sampleReflectionProbes(inout vec3 ambenv, inout vec3 glossenv,
         vec2 tc, vec3 pos, vec3 norm, float glossiness, bool transparent, vec3 amblit_linear);
@@ -327,6 +337,36 @@ void main()
 #elif WATER_MINIMAL_PLUS
     sampleReflectionProbes(irradiance, radiance, distort2, pos.xyz, wave_ibl.xyz, gloss, false, amblit);
 #endif
+
+    // <SS:Nexii> The distant sky mirror.
+    //
+    // Every probe tap above reflects off the wave normal itself, and that
+    // normal carries normScale (default 2) of horizontal scramble - so the
+    // sky comes back as the average of everything near the mirror angle, not
+    // as an image of it. That average was fine when the sky was a two colour
+    // gradient, but the sky this viewer draws now is full of structure that
+    // averaging erases: the sunrise and sunset bands, the corona and the
+    // halos, the cloud deck's shape. Real water resolves that structure as
+    // the eye recedes and the waves shrink against the grazing angle.
+    //
+    // So tap the sky probe a second time, along the reflection off the
+    // flattened surface normal, and blend it in over distance - nearby water
+    // keeps the stock wavy tap untouched while far water hands the sky
+    // reflection over to the mirror image, 90% flattened so a whisper of the
+    // waves always stays alive. The hand-off runs from 16 m to 128 m,
+    // smoothstepped. ss_sky_reflect (SSWaterSkyReflect) scales the whole
+    // effect; 0 leaves the stock tap alone. The flat-normal fresnel df2.y
+    // applied further down scales both taps together, so the mirror still
+    // fades out when the eye looks down into the water.
+    float ss_flat = clamp((dist - 16.0) / (128.0 - 16.0), 0.0, 1.0);
+    ss_flat *= ss_flat * (3.0 - 2.0 * ss_flat);
+    if (ss_sky_reflect > 0.0 && ss_flat > 0.0)
+    {
+        vec3 ss_norm = normalize(mix(wave_ibl, up, ss_flat * 0.9));
+        vec3 ss_sky = ssSampleSkyProbe(reflect(viewVec, ss_norm), perceptualRoughness);
+        radiance = mix(radiance, ss_sky, ss_sky_reflect * ss_flat);
+    }
+    // </SS:Nexii>
 
     vec3 diffuseColor = vec3(0);
     vec3 specularColor = vec3(0);

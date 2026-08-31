@@ -35,6 +35,7 @@
 #include "ssfloateratmoenvcreate.h"
 #include "ssprecippreset.h"
 #include "ssatmoenvbridge.h"
+#include "ssvolcloud.h" // <SS:Nexii> the deck's generated stand-ins for the texture pickers
 
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
@@ -384,12 +385,15 @@ bool SSFloaterAtmoEnv::postBuild()
     mTextureRows = {
         { "water_normal_map", [water]() -> SSAtmoEnvKeyframed<LLUUID>& { return water().mNormalMap; } },
         { "dome_image",       [dome]() -> SSAtmoEnvKeyframed<LLUUID>& { return dome().mNoiseTexture; } },
+        { "dome_large_image", [dome]() -> SSAtmoEnvKeyframed<LLUUID>& { return dome().mLargeNoiseTexture; } },
         { "cloud_field_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mBaseTexture; } },
         { "cloud_detail_image",[clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mDetailTexture; } },
         { "cloud_noise_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mNoiseTexture; } },
+        { "cloud_profile_image", [clouds]() -> SSAtmoEnvKeyframed<LLUUID>& { return clouds().mProfileTexture; } },
         { "ucloud_field_image", [under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mBaseTexture; } },
         { "ucloud_detail_image",[under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mDetailTexture; } },
         { "ucloud_noise_image", [under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mNoiseTexture; } },
+        { "ucloud_profile_image", [under]() -> SSAtmoEnvKeyframed<LLUUID>& { return under().mProfileTexture; } },
     };
     for (const KeyRow<LLUUID>& row : mTextureRows)
     {
@@ -401,6 +405,11 @@ bool SSFloaterAtmoEnv::postBuild()
     LLTextureCtrl* dome_image = getChild<LLTextureCtrl>("dome_image");
     dome_image->setDefaultImageAssetID(LLSettingsSky::GetDefaultCloudNoiseTextureId());
     dome_image->setAllowNoTexture(true);
+
+    // <SS:Nexii> The large-scale noise's picker has no stock default to preview: None (null) IS
+    // its off state - every octave reads the cloud noise until a large map is authored.
+    LLTextureCtrl* dome_large_image = getChild<LLTextureCtrl>("dome_large_image");
+    dome_large_image->setAllowNoTexture(true);
 
     mStringRows = {
         { "precipitation_combo", [this]() -> SSAtmoEnvKeyframed<std::string>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mPrecipitationOverride; } },
@@ -2603,6 +2612,35 @@ void SSFloaterAtmoEnv::refreshTextureRow(const KeyRow<LLUUID>& row, F64 phase)
 {
     const SSAtmoEnvKeyframed<LLUUID>& field = row.mField();
     getChild<LLTextureCtrl>(row.mPrefix)->setValue(field.valueAt(phase));
+
+    // <SS:Nexii> The deck's generated stand-ins preview on their pickers while the authored
+    // field is None - the procedural noise map and the built-in profile strip, dimmed, exactly
+    // what the deck is running. An authored value clears the placeholder and the picker
+    // previews the real asset as texture pickers always have. Live previews of the BUILT decks
+    // (main or under by row), not of the edited asset - a different track's decks are whatever
+    // the camera is standing under. [interaction: SSVolCloud]
+    LLTextureCtrl* picker = getChild<LLTextureCtrl>(row.mPrefix);
+    if (row.mPrefix == "cloud_noise_image")
+    {
+        picker->setPlaceholderImage(SSVolCloud::getInstance()->noisePreviewTexture(false));
+    }
+    else if (row.mPrefix == "ucloud_noise_image")
+    {
+        picker->setPlaceholderImage(SSVolCloud::getInstance()->noisePreviewTexture(true));
+    }
+    else if (row.mPrefix == "cloud_profile_image")
+    {
+        picker->setPlaceholderImage(SSVolCloud::getInstance()->profilePreviewTexture(false));
+    }
+    else if (row.mPrefix == "ucloud_profile_image")
+    {
+        picker->setPlaceholderImage(SSVolCloud::getInstance()->profilePreviewTexture(true));
+    }
+    else
+    {
+        picker->setPlaceholderImage(nullptr);
+    }
+
     refreshKeyframeControls<LLUUID>(row.mPrefix, field, phase);
 }
 

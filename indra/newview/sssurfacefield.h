@@ -28,12 +28,15 @@
 #include "llsingleton.h"
 #include "ssrainshadow.h"
 #include "v3math.h"
+#include "v4math.h"
 
+#include <functional>
 #include <map>
 #include <vector>
 
 struct SSPrecipPreset;
 class LLGLSLShader;
+struct SSGranularParams;
 
 class SSSurfaceField : public LLSingleton<SSSurfaceField>
 {
@@ -53,10 +56,19 @@ public:
         F32 mWet = 0.f;
         F32 mSnow = 0.f;
         F32 mPuddle = 0.f;
+        F32 mLift = 0.f;
         F32 mSurfaceZ = 0.f;
         bool mValid = false;
     };
     Sample sample(const LLVector3& pos_agent) const;
+
+    // Landing credit for a granular runoff clump - the one write path anything outside the field
+    // has into mSnow. Forwards to the transport's repose logic.
+    void depositAt(const LLVector3& pos_agent, F32 depth);
+
+    // Walks every cell holding settled snow and lift around a point - the drift tier's spawn walk.
+    void forEachLiftCell(const LLVector3& center_agent, F32 radius_m,
+                         const std::function<void(const LLVector3& pos_agent, F32 depth, F32 lift)>& fn) const;
 
     bool bindForShader(LLGLSLShader& shader, S32 channel);
     bool hasWindow() const { return mWindowTex != 0 && mWindowValid; }
@@ -68,6 +80,8 @@ public:
 
     void renderWetPass();
 
+    void renderSnowPass();
+
     S32 fieldCount() const { return (S32)mFields.size(); }
     F32 lastTickMS() const { return mLastTickMS; }
     F32 peakWet() const { return mPeakWet; }
@@ -75,6 +89,10 @@ public:
     F32 peakPuddle() const { return mPeakPuddle; }
 
 private:
+    // Field and Geometry are the transport's working data - SSGranular::step() integrates over
+    // them directly, so they live in the public eye with the storage-only caveat that implies:
+    // anything outside the field writes mSnow through depositAt() and nothing else.
+public:
     struct Geometry
     {
         S32 mN = 0;
@@ -83,6 +101,11 @@ private:
 
         std::vector<F32> mZ;
         std::vector<U8> mFlags;
+
+        // Metres the surface stands above the terrain/water reference under it - carried through
+        // from the grid so the tick can tell a street from a tower roof: puddles and deep snow
+        // piles belong at grade, and a terrain ledge is not a roof edge however sharply it drops.
+        std::vector<F32> mAbove;
 
         std::vector<F32> mSlopeX;
         std::vector<F32> mSlopeY;
@@ -99,12 +122,8 @@ private:
         bool valid() const { return mN > 0 && !mZ.empty(); }
         bool solid(size_t i) const { return mFlags[i] != 0; }
         bool water(size_t i) const { return (mFlags[i] & SSRainShadowMap::SURF_WATER) != 0; }
+        F32 above(size_t i) const { return mAbove.empty() ? 0.f : mAbove[i]; }
     };
-
-    void refreshGeometry();
-    static void buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geometry& out);
-
-    std::map<U64, Geometry> mGeometry;
 
     struct Field
     {
@@ -118,11 +137,23 @@ private:
         std::vector<F32> mSnow;
         std::vector<F32> mPuddle;
 
+        // The granular transport's state: the per-cell lift figure the drift tier's spawn walk
+        // reads, and the creep pass's inflow accumulator (one step's arrivals, applied after the
+        // outflows so the exchange is order-independent).
+        std::vector<F32> mLift;
+        std::vector<F32> mInflow;
+
         std::vector<F32> mStore;
         std::vector<F32> mAccum;
 
         F64 mLastTouched = 0.0;
     };
+
+private:
+    void refreshGeometry();
+    static void buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geometry& out);
+
+    std::map<U64, Geometry> mGeometry;
 
     void shedEdges(F32 dt);
 
@@ -135,12 +166,15 @@ private:
     Field* fieldFor(U64 region_handle, const Geometry& geom, F64 now);
     void updateWindow();
     void tick(Field& fld, const Geometry& geom, F32 dt,
-              const SSPrecipPreset& preset, F32 intensity);
+              const SSPrecipPreset& preset, F32 intensity,
+              const SSGranularParams& granular, const LLVector4* flow);
     void evict(F64 now);
 
     std::map<U64, Field> mFields;
 
-    F32 mTickAccum = 0.f;
+    // The fixed-step transport clock: steps land on exact quanta of shared time, so creep,
+    // erosion and regime transitions never vary with frame rate (or with the viewer).
+    F64 mLastStep = -1.0;
 
     LLRenderTarget mScratch;
 

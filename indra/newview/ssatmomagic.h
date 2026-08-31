@@ -32,6 +32,8 @@
 #include "v3math.h"
 #include "v4color.h"
 
+#include <boost/signals2.hpp>
+
 #include <map>
 #include <memory>
 #include <vector>
@@ -39,6 +41,7 @@
 class LLViewerObject;
 class LLViewerTexture;
 class SSPrecipSim;
+struct SSGranularParams;
 
 namespace SSAtmoNoise
 {
@@ -107,6 +110,35 @@ public:
 
     F32 temperatureC() const { return mTemperatureC; }
 
+    // <SS:Nexii> Granular weather: the single lift authority and the regime machine. liftAt()
+    // answers "is snow lifting here and how hard" (0-1, physical, no preset rate, no gust - the
+    // caller applies those); the regimes derived from the same env params the resolver already
+    // produces direct the presentation only. doc/atmo_magic_snow.md sections 1 and 14.
+    F32 liftAt(const LLVector3& pos_agent) const;
+    bool granularWeather() const;
+    F32 squallFactor() const { return mSquallFactor; }
+
+    // The transport's parameter bundle for this tick - plain floats, assembled from settings,
+    // preset, regime and the gust envelope. Defined in ssgranular.h; consumers include that.
+    void fillTransportParams(SSGranularParams& params) const;
+
+    enum class ERegime : U8
+    {
+        CALM = 0,
+        SALTATION,
+        DRIFT,
+        BLIZZARD,
+        SQUALL,
+        COUNT
+    };
+    ERegime regime() const { return mRegime; }
+    static const char* regimeName(ERegime r);
+
+    // Bounded by design: soundscape bed crossfade, floater stats, whiteout ramp. A second event
+    // type gets promoted to a real pump consciously, never by accretion.
+    typedef boost::signals2::signal<void(ERegime, ERegime)> RegimeSignal;
+    RegimeSignal& regimeSignal() { return mRegimeSignal; }
+
     bool lightningOn() const { return mLightning; }
 
     const LLColor3& lightningColor() const { return mLightningColor; }
@@ -173,6 +205,7 @@ private:
     void refreshAssets();
     void ensureSim();
     void processImpacts();
+    void updateRegime(F32 dt);
     LLViewerTexture* textureFor(const SSAtmoAsset& asset, LLColor4& tint, F32& glow);
 
     struct PendingEdit
@@ -227,6 +260,14 @@ private:
     LLVector3 mRainDirection;
     SSPrecipPreset mPreset;
     bool mHasWeather = false;
+
+    // <SS:Nexii> Regime state. The dwell timer is the hysteresis in both directions; the
+    // initial regime is derived, so a viewer joining mid-storm starts right without history.
+    ERegime mRegime = ERegime::CALM;
+    F32 mRegimeCandidateTime = 0.f;
+    bool mRegimeReady = false;
+    F32 mSquallFactor = 0.f;
+    RegimeSignal mRegimeSignal;
 
     S32 mTrack = 1;
     F32 mGroundZero = 0.f;

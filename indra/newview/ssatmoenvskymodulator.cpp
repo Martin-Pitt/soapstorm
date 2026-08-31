@@ -41,7 +41,6 @@ namespace
 
     const F32 DARKENING_ONSET = 0.55f;
 
-    const F32 ICE_FULL_ADD        = 0.5f;
     const F32 BLUE_FULL_BOOST     = 0.20f;
     const F32 RED_FULL_CUT        = 0.10f;
     const F32 COLD_FULL_BELOW_C   = 15.f;
@@ -53,6 +52,33 @@ namespace
 
     const F32 RAINBOW_SUN_FULL_DEG = 42.f;
     const F32 RAINBOW_SUN_GONE_DEG = 60.f;
+
+    // <SS:Nexii> Water-drop optics (corona). Liquid droplets must be in the air along the sight
+    // line - mist, or droplets lingering in the rain's wake, or light drizzle - and they freeze
+    // out below about -4C. Heavy precipitation hides the disc itself, so it suppresses the ring.
+    const F32 CORONA_MIST_MIN       = 0.30f;
+    const F32 CORONA_MIST_FULL      = 0.75f;
+    const F32 CORONA_AFTER_RAIN_S   = 240.f;
+    const F32 CORONA_DRIZZLE_AT     = 0.35f;
+    const F32 CORONA_HIDE_MIN       = 0.5f;
+    const F32 CORONA_FREEZE_C       = -4.f;
+    const F32 CORONA_MELT_C         = 1.f;
+
+    // <SS:Nexii> Ice-crystal optics (halos). Crystals need BOTH sub-zero air and moisture - there
+    // is nothing to freeze in a dry -30C sky, so that case drives NO ice. Small platelets form a
+    // thin cirrus veil (22° family); deep cold plus a little convection lofts large plates and
+    // columns (46° family); still air lets the plates settle horizontal, which is what makes
+    // sundogs and the circumzenithal arc sharp instead of smeared.
+    const F32 ICE_MOIST_MIN         = 0.05f;
+    const F32 ICE_MOIST_FULL        = 0.45f;
+    const F32 ICE_FROST_FIRST_C     = 0.f;
+    const F32 ICE_FROST_FULL_C      = -20.f;
+    const F32 ICE_DEEP_FULL_C       = -38.f;
+    const F32 ICE_CONVECTION_MIN    = 0.05f;
+    const F32 ICE_CONVECTION_FULL   = 0.30f;
+    const F32 ICE_ALIGN_CALM_MS     = 2.f;
+    const F32 ICE_ALIGN_FULL_MS     = 7.f;
+    const F32 ICE_LEVEL_FULL_ADD    = 0.35f;
 
     // Linear ramp of value across [lo, hi] to 0..1.
     F32 ss_ramp(F32 value, F32 lo, F32 hi)
@@ -122,6 +148,51 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
         mod.mCold = ss_effect(cold * clear, influence.mColdSkyEnabled, influence.mColdSkyStrength);
     }
 
+    // <SS:Nexii> Corona: diffraction rings around the light from liquid water drops in the air.
+    // Mist (moisture) is the steady source; droplets lingering in the rain's wake give the same
+    // ring for a few minutes, and light drizzle works too. Heavy fall still washes the disc out
+    // behind the drops, and sub-freezing air freezes the droplets out of the corona entirely -
+    // what forms the crystal halos below is NOT what forms this.
+    {
+        const F32 mist       = ss_ramp(in.mMoisture, CORONA_MIST_MIN, CORONA_MIST_FULL);
+        F32 lingering        = 0.f;
+        if (in.mSecondsSinceRainStopped >= 0.f)
+        {
+            lingering = 1.f - ss_ramp(in.mSecondsSinceRainStopped, 0.f, CORONA_AFTER_RAIN_S);
+        }
+        const F32 drizzle    = ss_ramp(in.mPrecipitationIntensity, 0.f, CORONA_DRIZZLE_AT);
+        const F32 uncovered  = 1.f - ss_ramp(in.mPrecipitationIntensity, CORONA_HIDE_MIN, 1.f);
+        const F32 liquid     = ss_ramp(in.mTemperatureC, CORONA_FREEZE_C, CORONA_MELT_C);
+
+        F32 drops = llmax(mist, llmax(lingering * 0.7f, drizzle * 0.6f));
+        drops *= uncovered * liquid;
+
+        mod.mCorona = ss_effect(drops, influence.mCoronaEnabled, influence.mCoronaStrength);
+    }
+
+    // <SS:Nexii> Ice-crystal optics. The base veil of small platelets (22° halo family) wants
+    // cold AND moisture - frost ramps in from freezing down to -20C, with nothing at all above
+    // freezing - and the deep-cold 46° family additionally wants a trace of convection to loft
+    // big plates/columns; plate ALIGNMENT for sundogs and the circumzenithal arc wants the still,
+    // settling air the wind row churns away. All three sub-channels ride the single ice halo
+    // influence so authors flip "halos on" as one decision. </SS:Nexii>
+    {
+        const F32 frost    = ss_ramp(-in.mTemperatureC, -ICE_FROST_FIRST_C, -ICE_FROST_FULL_C);
+        const F32 vapour   = ss_ramp(in.mMoisture, ICE_MOIST_MIN, ICE_MOIST_FULL);
+        const F32 crystals = frost * vapour;
+
+        const F32 deep     = ss_ramp(-in.mTemperatureC, -ICE_FROST_FULL_C, -ICE_DEEP_FULL_C);
+        const F32 loft     = ss_ramp(in.mConvection, ICE_CONVECTION_MIN, ICE_CONVECTION_FULL);
+        const F32 large    = crystals * deep * loft;
+
+        const F32 calm     = 1.f - ss_ramp(in.mWindSpeedMS, ICE_ALIGN_CALM_MS, ICE_ALIGN_FULL_MS);
+        const F32 aligned  = crystals * calm;
+
+        mod.mIceHalo      = ss_effect(crystals, influence.mIceHaloEnabled, influence.mIceHaloStrength);
+        mod.mIceHalo46    = ss_effect(large, influence.mIceHaloEnabled, influence.mIceHaloStrength);
+        mod.mCrystalAlign = ss_effect(aligned, influence.mIceHaloEnabled, influence.mIceHaloStrength);
+    }
+
     if (in.mSecondsSinceRainStopped >= 0.f && in.mSunElevationSin > 0.f)
     {
         const F32 decay = 1.f - ss_ramp(in.mSecondsSinceRainStopped, 0.f, RAINBOW_WINDOW_S);
@@ -181,10 +252,12 @@ LLColor3 SSAtmoEnvSkyModulation::blueDensity(const LLColor3& base) const
     return out;
 }
 
-// Cold adds sky ice.
+// <SS:Nexii> Sky ice mirrors the moisture-gated crystal drive - it comes from the ice halo
+// mapping, never from cold alone. A clear dry -30C sky has no crystals to form, so it renders
+// exactly as authored instead of frosting over.
 F32 SSAtmoEnvSkyModulation::skyIceLevel(F32 base) const
 {
-    return llclamp(base + mCold * ICE_FULL_ADD, 0.f, 1.f);
+    return llclamp(base + mIceHalo * ICE_LEVEL_FULL_ADD, 0.f, 1.f);
 }
 
 // A live rainbow raises sky moisture toward its full value.

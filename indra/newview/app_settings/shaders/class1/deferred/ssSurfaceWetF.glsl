@@ -64,6 +64,13 @@ uniform float ssWetSpecular;
 // slightly lower amount of the same thing.
 uniform float ssWetSpecularMatte;
 
+// 0 by day, 1 at night. A full puddle is a near-mirror, and a mirror under a
+// moonless zenith reflects almost nothing - full puddle patches read as pitch
+// black holes in the ground after dark (observed: soft mask-shaped blobs that
+// only the whiteout's veil covered). The night factor pulls the puddle
+// treatment back toward damp so the patches stay readable.
+uniform float ssWetNight;
+
 // Standing water is not the same thing as a damp surface, and reusing the wetness dials for it would have made the two impossible to tune apart: a puddle is a pool of actual water sitting on top of
 // the material rather than a film soaked into it, so it wants to read as close to a mirror as this pass can make it, independent of how shiny the material underneath would ever get from being merely
 // rained on. Driven off the drainage's own standing-depth channel rather than a second wetness figure, because a puddle is a place water collects and stays, which is exactly what that channel
@@ -353,8 +360,9 @@ void main()
     }
 
     // What actually drives the blend toward the wet/puddle look below - a spot can be a full puddle while the general wetness pass call for this frame is low (just after the rain stopped, say), and
-    // it should still shine like standing water rather than fade with the film around it.
-    float wetBlend = max(wet, puddle);
+    // it should still shine like standing water rather than fade with the film around it. The puddle's own weight yields at night - see ssWetNight.
+    float puddle_night = puddle * mix(1.0, 0.3, clamp(ssWetNight, 0.0, 1.0));
+    float wetBlend = max(wet, puddle_night);
 
     if (GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_HAS_PBR))
     {

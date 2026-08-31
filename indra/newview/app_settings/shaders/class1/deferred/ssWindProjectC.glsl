@@ -37,6 +37,17 @@ uniform float uExtent;          // domain width in metres
 uniform float uSliceZ[17];      // uSlices+1 boundary altitudes, ascending
 uniform vec3  uAmbient[16];      // ambient wind per slab; sky tracks differ
 
+// A partial rebuild projects only inside its solve box; the preserved field
+// outside it is left exactly as it was.
+uniform ivec2 uBoxMin;
+uniform ivec2 uBoxMax;
+
+bool inBox(ivec3 c)
+{
+    return c.x >= uBoxMin.x && c.y >= uBoxMin.y
+        && c.x <= uBoxMax.x && c.y <= uBoxMax.y;
+}
+
 float cellSize() { return uExtent / float(uRes); }
 
 float sliceCentre(int k) { return 0.5 * (uSliceZ[k] + uSliceZ[k + 1]); }
@@ -94,6 +105,7 @@ void main()
 {
     ivec3 c = ivec3(gl_GlobalInvocationID);
     if (!inBounds(c)) return;
+    if (!inBox(c)) return;
 
     float solid = imageLoad(uSolid, c).r;
     vec3 v = imageLoad(uVel, c).xyz;

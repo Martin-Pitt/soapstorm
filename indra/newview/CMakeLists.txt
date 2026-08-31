@@ -220,14 +220,18 @@ set(viewer_SOURCE_FILES
     ssprecipitation.cpp
     ssprecipvariants.cpp
     sspreciprenderer.cpp
+    ssgranular.cpp
+    ssglreadback.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
+    sswhiteout.cpp
     sslightning.cpp
     sslightningrender.cpp
     sssoundmeta.cpp
     sssoundscape.cpp
     sswater.cpp
     sswindflow.cpp
+    ssworldfield.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1133,14 +1137,18 @@ set(viewer_HEADER_FILES
     ssprecipitation.h
     ssprecipvariants.h
     sspreciprenderer.h
+    ssgranular.h
+    ssglreadback.h
     ssrainshadow.h
     sssurfacefield.h
+    sswhiteout.h
     sslightning.h
     sslightningrender.h
     sssoundmeta.h
     sssoundscape.h
     sswater.h
     sswindflow.h
+    ssworldfield.h
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h

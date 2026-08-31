@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes" ?>
-<floater
+ <floater
  positioning="cascading"
  can_minimize="true"
  can_resize="true"
- height="640"
+ height="680"
  layout="topleft"
- min_height="640"
+ min_height="680"
  min_width="760"
  name="floater_ss_atmo_planetary"
  save_rect="true"
@@ -95,7 +95,7 @@
          layout="topleft"
          left="0"
          top_pad="4"
-         height="110"
+         height="76"
          width="286"
          name="body_list"
          can_sort="false"
@@ -421,17 +421,48 @@
             Texture
         </text>
         <!-- Square swatch: the texture maps onto the body's flat square
-              quad, so the preview previews exactly that shape. -->
+              quad, so the preview previews exactly that shape. Three times
+              the old 30 px: it is the canvas the disc-padding guide circle
+              draws on while its spinner is hovered. -->
         <texture_picker
          follows="left|top"
          layout="topleft"
          left_pad="6"
          top_delta="-4"
-         height="30"
-         width="30"
+         height="90"
+         width="90"
          show_caption="false"
          name="body_custom_texture"
          tool_tip="Custom texture for this body - blank uses the stock disc" />
+        <!-- <SS:Nexii> The body's disc padding, as its own row so it lines up
+              with the other spinners. Hover the spinner and the guide circle
+              on the Texture swatch shows where the renderer will draw the
+              disc inside the texture. -->
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="6"
+         height="14"
+         width="110"
+         name="body_disc_padding_label"
+         font="SansSerifSmall">
+            Disc padding
+        </text>
+        <spinner
+         follows="left|top"
+         layout="topleft"
+         left_pad="6"
+         top_delta="-3"
+         height="20"
+         width="170"
+         label_width="0"
+         name="body_disc_padding_spinner"
+         min_val="0"
+         max_val="0.45"
+         increment="0.01"
+         decimal_digits="2"
+         tool_tip="Transparent margin around the disc art, as a fraction of the texture on each side - 0 means the art fills the quad. Hover here to see the disc the renderer will use, drawn on the Texture swatch" />
         <check_box
          follows="left|top"
          layout="topleft"

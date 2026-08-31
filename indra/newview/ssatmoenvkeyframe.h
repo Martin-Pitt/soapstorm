@@ -197,43 +197,35 @@ public:
         if (mKeyframes.empty()) return mPlainValue;
         if (mKeyframes.size() == 1) return mKeyframes.front().mValue;
 
-        phase = wrapPhase(phase);
+        const SSAtmoEnvKeyframe<T>* a;
+        const SSAtmoEnvKeyframe<T>* b;
+        F32 t = 0.f;
+        segmentAt(phase, a, b, t);
+        return ss_atmoenv_lerp(a->mValue, b->mValue, t);
+    }
 
-        const SSAtmoEnvKeyframe<T>& first = mKeyframes.front();
-        const SSAtmoEnvKeyframe<T>& last  = mKeyframes.back();
+    // <SS:Nexii> The crossfade valueAt() cannot express. Discrete values hold between keyframes -
+    // ss_atmoenv_lerp keeps the earlier one - so a field travelling between two textures CUTS when
+    // the day cycle plays through it. The render side can do better: blendAt() hands back the pair
+    // the phase sits between and the same eased weight valueAt used to pick the survivor, so a
+    // moving cycle fades between the two maps instead of snapping. False when there is nothing to
+    // fade - a plain or single-keyframe value, a HOLD on the segment, an equal pair, or a weight
+    // already at either rail.
+    bool blendAt(F64 phase, T& out_from, T& out_to, F32& out_blend) const
+    {
+        if (mKeyframes.size() < 2) return false;
 
-        if (phase < first.mTime || phase > last.mTime)
-        {
-            if (last.mCurve == SSAtmoEnvCurve::HOLD) return last.mValue;
+        const SSAtmoEnvKeyframe<T>* a;
+        const SSAtmoEnvKeyframe<T>* b;
+        F32 t = 0.f;
+        segmentAt(phase, a, b, t);
 
-            const F64 span = (first.mTime + 1.0) - last.mTime;
-            const F64 elapsed = (phase < first.mTime) ? (phase + 1.0 - last.mTime)
-                                                      : (phase - last.mTime);
-            F32 t = span > 0.0 ? (F32)(elapsed / span) : 0.f;
-            if (last.mCurve == SSAtmoEnvCurve::EASE)
-            {
-                t = cubic_step(t);
-            }
-            return ss_atmoenv_lerp(last.mValue, first.mValue, t);
-        }
+        if (t <= 0.f || t >= 1.f || !(a->mValue != b->mValue)) return false;
 
-        for (size_t i = 0; i + 1 < mKeyframes.size(); ++i)
-        {
-            const SSAtmoEnvKeyframe<T>& a = mKeyframes[i];
-            const SSAtmoEnvKeyframe<T>& b = mKeyframes[i + 1];
-            if (phase < a.mTime || phase > b.mTime) continue;
-
-            if (a.mCurve == SSAtmoEnvCurve::HOLD) return a.mValue;
-
-            const F64 span = b.mTime - a.mTime;
-            F32 t = span > 0.0 ? (F32)((phase - a.mTime) / span) : 0.f;
-            if (a.mCurve == SSAtmoEnvCurve::EASE)
-            {
-                t = cubic_step(t);
-            }
-            return ss_atmoenv_lerp(a.mValue, b.mValue, t);
-        }
-        return mKeyframes.back().mValue;
+        out_from = a->mValue;
+        out_to = b->mValue;
+        out_blend = t;
+        return true;
     }
 
     static constexpr F64 PHASE_EPSILON = 0.001;
@@ -383,6 +375,63 @@ private:
         phase = std::fmod(phase, 1.0);
         if (phase < 0.0) phase += 1.0;
         return phase;
+    }
+
+    // The keyframe pair phase sits between, and the eased 0..1 weight through the pair. A HOLD
+    // curve weighs everything onto the pair's earlier keyframe (t 0) - exactly the answer the old
+    // hold branches returned - so valueAt is this plus one lerp. Always produces a pair for a
+    // multi-keyframe field: the wrap segment (last back around to first) covers the phase outside
+    // [first, last], and the sorted keys guarantee a match inside it.
+    void segmentAt(F64 phase, const SSAtmoEnvKeyframe<T>*& a, const SSAtmoEnvKeyframe<T>*& b, F32& t) const
+    {
+        phase = wrapPhase(phase);
+
+        const SSAtmoEnvKeyframe<T>& first = mKeyframes.front();
+        const SSAtmoEnvKeyframe<T>& last  = mKeyframes.back();
+
+        if (phase < first.mTime || phase > last.mTime)
+        {
+            const F64 span = (first.mTime + 1.0) - last.mTime;
+            const F64 elapsed = (phase < first.mTime) ? (phase + 1.0 - last.mTime)
+                                                      : (phase - last.mTime);
+            t = span > 0.0 ? (F32)(elapsed / span) : 0.f;
+            if (last.mCurve == SSAtmoEnvCurve::EASE)
+            {
+                t = cubic_step(t);
+            }
+            else if (last.mCurve == SSAtmoEnvCurve::HOLD)
+            {
+                t = 0.f;
+            }
+            a = &last;
+            b = &first;
+            return;
+        }
+
+        for (size_t i = 0; i + 1 < mKeyframes.size(); ++i)
+        {
+            const SSAtmoEnvKeyframe<T>& ka = mKeyframes[i];
+            const SSAtmoEnvKeyframe<T>& kb = mKeyframes[i + 1];
+            if (phase < ka.mTime || phase > kb.mTime) continue;
+
+            t = 0.f;
+            if (ka.mCurve != SSAtmoEnvCurve::HOLD)
+            {
+                const F64 span = kb.mTime - ka.mTime;
+                t = span > 0.0 ? (F32)((phase - ka.mTime) / span) : 0.f;
+                if (ka.mCurve == SSAtmoEnvCurve::EASE)
+                {
+                    t = cubic_step(t);
+                }
+            }
+            a = &ka;
+            b = &kb;
+            return;
+        }
+
+        a = &last;
+        b = &last;
+        t = 0.f;
     }
 
     S32 findAt(F64 time, F64 epsilon) const

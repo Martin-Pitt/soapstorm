@@ -33,6 +33,9 @@
 
 #include "llviewermenu.h"
 #include "sslightning.h"
+// <SS:Nexii> Atmo Magic: menu check state for the World > Environment > Atmo Magic item.
+#include "ssatmoenvapplier.h"
+// </SS:Nexii>
 
 // linden library includes
 #include "llavatarnamecache.h"  // IDEVO (I Are Not Men!)
@@ -12332,6 +12335,19 @@ class LLWorldEnableEnvSettings : public view_listener_t
     }
 };
 
+// <SS:Nexii> Atmo Magic: checked state for the World > Environment > Atmo Magic item.
+// Mirrors how the time-of-day overrides tick - the item shows a check whenever an
+// Atmo Magic environment is actually driving the sky (master switch on, asset loaded,
+// tracks present), not just because the floater is open.
+class SSWorldEnableSSAtmoEnv : public view_listener_t
+{
+    bool handleEvent(const LLSD& userdata)
+    {
+        return SSAtmoEnvApplier::instance().isActive();
+    }
+};
+// </SS:Nexii>
+
 class LLWorldEnvPreset : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
@@ -12991,6 +13007,9 @@ void initialize_menus()
 
     view_listener_t::addMenu(new LLWorldEnvSettings(), "World.EnvSettings");
     view_listener_t::addMenu(new LLWorldEnableEnvSettings(), "World.EnableEnvSettings");
+    // <SS:Nexii> Atmo Magic: tick state for the Worlds Environment > Atmo Magic item.
+    view_listener_t::addMenu(new SSWorldEnableSSAtmoEnv(), "World.EnableSSAtmoEnv");
+    // </SS:Nexii>
     view_listener_t::addMenu(new LLWorldEnvPreset(), "World.EnvPreset");
     view_listener_t::addMenu(new LLWorldEnableEnvPreset(), "World.EnableEnvPreset");
     view_listener_t::addMenu(new LLWorldCheckBanLines() , "World.CheckBanLines");

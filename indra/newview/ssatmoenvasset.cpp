@@ -95,6 +95,7 @@ namespace
             && body.mEmissive == standard.mEmissive
             && body.mPhaseShaded == standard.mPhaseShaded
             && !body.mHasRing
+            && body.mDiscPadding == standard.mDiscPadding
             && body.mCustomTexture == standard.mCustomTexture;
     }
     // The default planetary system a freshly created track starts with: the standard sun, an
@@ -273,6 +274,7 @@ LLSD SSAtmoEnvCelestialBody::asLLSD() const
     sd["bound_partner_index"] = mBoundPartnerIndex;
 
     if (mCustomTexture.notNull()) sd["custom_texture"] = mCustomTexture;
+    if (mDiscPadding > 0.f) sd["disc_padding"] = (LLSD::Real)mDiscPadding;
 
     sd["has_ring"] = mHasRing;
     if (mHasRing)
@@ -317,6 +319,9 @@ bool SSAtmoEnvCelestialBody::fromLLSD(const LLSD& sd)
     mBoundPartnerIndex = sd.has("bound_partner_index") ? sd["bound_partner_index"].asInteger() : -1;
 
     mCustomTexture = sd.has("custom_texture") ? sd["custom_texture"].asUUID() : LLUUID::null;
+
+    mDiscPadding = llclamp(sd.has("disc_padding") ? (F32)sd["disc_padding"].asReal() : 0.f,
+                           0.f, 0.45f);
 
     mHasRing = sd.has("has_ring") ? sd["has_ring"].asBoolean() : false;
     if (sd.has("ring_inner_radius")) mRingInnerRadius = (F32)sd["ring_inner_radius"].asReal();
@@ -893,6 +898,7 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
     sd["base_texture"] = mBaseTexture.asLLSD();
     sd["detail_texture"] = mDetailTexture.asLLSD();
     sd["noise_texture"] = mNoiseTexture.asLLSD();
+    sd["profile_texture"] = mProfileTexture.asLLSD();
     sd["texture_mix"] = mTextureMix.asLLSD();
     sd["puff_density"] = mPuffDensity.asLLSD();
     sd["detail_scale"] = mDetailScale.asLLSD();
@@ -918,6 +924,7 @@ bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
     if (sd.has("base_texture")) mBaseTexture.fromLLSD(sd["base_texture"], def.mBaseTexture.valueAt(0.0));
     if (sd.has("detail_texture")) mDetailTexture.fromLLSD(sd["detail_texture"], def.mDetailTexture.valueAt(0.0));
     if (sd.has("noise_texture")) mNoiseTexture.fromLLSD(sd["noise_texture"], def.mNoiseTexture.valueAt(0.0));
+    if (sd.has("profile_texture")) mProfileTexture.fromLLSD(sd["profile_texture"], def.mProfileTexture.valueAt(0.0));
     if (sd.has("texture_mix")) mTextureMix.fromLLSD(sd["texture_mix"], 0.4f);
     if (sd.has("puff_density")) mPuffDensity.fromLLSD(sd["puff_density"], 0.8f);
     if (sd.has("detail_scale")) mDetailScale.fromLLSD(sd["detail_scale"], 3.f);
@@ -1015,6 +1022,7 @@ void SSAtmoEnvCloudDome::collapseConstantKeyframes()
     mDetailD.collapseIfConstant(SEED_COLLAPSE_EPSILON);
 
     mNoiseTexture.collapseIfConstant(SEED_COLLAPSE_EPSILON);
+    mLargeNoiseTexture.collapseIfConstant(SEED_COLLAPSE_EPSILON);
 }
 
 const char* const SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED =
@@ -1050,6 +1058,7 @@ LLSD SSAtmoEnvCloudDome::asLLSD() const
     sd["detail_d"]  = mDetailD.asLLSD();
 
     sd["noise_texture"] = mNoiseTexture.asLLSD();
+    sd["large_noise_texture"] = mLargeNoiseTexture.asLLSD();
     return sd;
 }
 
@@ -1080,6 +1089,7 @@ bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
     if (sd.has("detail_d"))  mDetailD.fromLLSD(sd["detail_d"], def.mDetailD.valueAt(0.0));
 
     if (sd.has("noise_texture")) mNoiseTexture.fromLLSD(sd["noise_texture"], LLUUID::null);
+    if (sd.has("large_noise_texture")) mLargeNoiseTexture.fromLLSD(sd["large_noise_texture"], LLUUID::null);
     return true;
 }
 
@@ -1253,6 +1263,10 @@ LLSD SSAtmoEnvWeatherInfluence::asLLSD() const
     sd["cold_sky_strength"]       = (LLSD::Real)mColdSkyStrength;
     sd["rainbow_enabled"]         = mRainbowEnabled;
     sd["rainbow_strength"]        = (LLSD::Real)mRainbowStrength;
+    sd["corona_enabled"]          = mCoronaEnabled;
+    sd["corona_strength"]         = (LLSD::Real)mCoronaStrength;
+    sd["ice_halo_enabled"]        = mIceHaloEnabled;
+    sd["ice_halo_strength"]       = (LLSD::Real)mIceHaloStrength;
     return sd;
 }
 
@@ -1296,6 +1310,10 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     strength("cold_sky_strength", mColdSkyStrength);
     flag("rainbow_enabled", mRainbowEnabled);
     strength("rainbow_strength", mRainbowStrength);
+    flag("corona_enabled", mCoronaEnabled);
+    strength("corona_strength", mCoronaStrength);
+    flag("ice_halo_enabled", mIceHaloEnabled);
+    strength("ice_halo_strength", mIceHaloStrength);
     return true;
 }
 
