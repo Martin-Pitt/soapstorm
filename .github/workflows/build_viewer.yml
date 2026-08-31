@@ -21,7 +21,6 @@ on:
 env:
   AUTOBUILD_VARIABLES_FILE: ${{github.workspace}}/build-variables/variables
   EXTRA_ARGS: -DUSE_FMODSTUDIO=ON -DUSE_KDU=OFF --crashreporting --lto
-  build_secrets_checkout: ${{github.workspace}}/signing
   XZ_DEFAULTS: -T0
   FS_RELEASE_TYPE: Unknown
   platform: Unknown
@@ -316,25 +315,27 @@ jobs:
         shell: bash
 
       - name: Install certificate
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && secrets.FS_CERT != ''
         env:
           FS_CERT: ${{ secrets.FS_CERT }}
           FS_CERT_PASS: ${{ secrets.FS_CERT_PASS }}
           FS_KEYCHAIN_PASS: ${{ secrets.FS_KEYCHAIN_PASS }}
           NOTARIZE_CREDS: ${{ secrets.NOTARIZE_CREDS }}
         run: |
-          mkdir -p ${build_secrets_checkout}/code-signing-osx
-          echo -n "$FS_CERT" | base64 --decode --output ${build_secrets_checkout}/code-signing-osx/fs-cert.p12
-          echo -n "$FS_CERT_PASS" >${build_secrets_checkout}/code-signing-osx/password.txt
-          echo -n "$NOTARIZE_CREDS" | base64 --decode --output ${build_secrets_checkout}/code-signing-osx/notarize_creds.sh
+          build_secrets_dir="${{ github.workspace }}/signing"
+          mkdir -p "${build_secrets_dir}/code-signing-osx"
+          echo -n "$FS_CERT" | base64 --decode --output "${build_secrets_dir}/code-signing-osx/fs-cert.p12"
+          echo -n "$FS_CERT_PASS" >"${build_secrets_dir}/code-signing-osx/password.txt"
+          echo -n "$NOTARIZE_CREDS" | base64 --decode --output "${build_secrets_dir}/code-signing-osx/notarize_creds.sh"
           security create-keychain -p "$FS_KEYCHAIN_PASS" ~/Library/Keychains/viewer.keychain
           # notarize tool uses a specific database keychain by default we need to override this to ours.
           security default-keychain -s viewer.keychain
           security set-keychain-settings -lut 21600 ~/Library/Keychains/viewer.keychain
           security unlock-keychain -p "$FS_KEYCHAIN_PASS" ~/Library/Keychains/viewer.keychain
-          security import ${build_secrets_checkout}/code-signing-osx/fs-cert.p12 -P "$FS_CERT_PASS" -A -t cert -f pkcs12 -k ~/Library/Keychains/viewer.keychain
+          security import "${build_secrets_dir}/code-signing-osx/fs-cert.p12" -P "$FS_CERT_PASS" -A -t cert -f pkcs12 -k ~/Library/Keychains/viewer.keychain
           security set-key-partition-list -S apple-tool:,apple:, -s -k "$FS_KEYCHAIN_PASS" -t private ~/Library/Keychains/viewer.keychain
           security list-keychain -d user -s ~/Library/Keychains/viewer.keychain
+          echo "build_secrets_checkout=${build_secrets_dir}" >> $GITHUB_ENV
 
       - name: Install required Ubuntu packages and release some space.
         if: runner.os == 'Linux'
