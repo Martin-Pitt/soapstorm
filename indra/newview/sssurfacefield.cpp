@@ -740,7 +740,8 @@ void SSSurfaceField::idle(F32 dt)
         {
             LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
             flow_grid.clear();
-            if (regionp && SSWindFlowMap::getInstance()->sampleGroundGrid(regionp, geom.mN, geom.mCell, flow_grid))
+            if (regionp && SSWindFlowMap::getInstance()->sampleGroundGrid(regionp, geom.mN, geom.mCell,
+                                                                          geom.mZ.data(), flow_grid))
             {
                 flow = flow_grid.data();
             }
@@ -875,7 +876,7 @@ void SSSurfaceField::forEachLiftCell(const LLVector3& center_agent, F32 radius_m
             {
                 const size_t i = (size_t)y * geom.mN + x;
                 const F32 lift = fld.mLift[i];
-                if (lift <= 0.01f || fld.mSnow[i] <= 0.001f) continue;
+                if (lift <= 0.01f || fld.mSnow[i] <= 2.0e-4f) continue;
 
                 const LLVector3 pos(origin.mV[VX] + ((F32)x + 0.5f) * geom.mCell,
                                     origin.mV[VY] + ((F32)y + 0.5f) * geom.mCell,
@@ -1440,6 +1441,7 @@ void SSSurfaceField::renderWetPass()
 
     static LLStaticHashedString commit_src("ssCommitSource");
     static LLStaticHashedString commit_paint("ssCommitDebugPaint");
+    static LLStaticHashedString commit_target("ssCommitTarget");
 
     gbuffer->bindTarget();
 
@@ -1472,6 +1474,7 @@ void SSSurfaceField::renderWetPass()
     gGL.getTexUnit(0)->activate();
     gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratch.getTexture(0));
     gSSSurfaceCommitProgram.uniform1i(commit_src, 0);
+    gSSSurfaceCommitProgram.uniform1f(commit_target, 1.f);
 
     static LLCachedControl<F32> commit_debug_paint_setting(gSavedSettings, "SSAtmoCommitDebugPaint", 0.f);
     const F32 ssCommitDebugPaint = llclamp((F32)commit_debug_paint_setting, 0.f, 1.f);
@@ -1535,6 +1538,7 @@ void SSSurfaceField::renderWetPass()
         gGL.getTexUnit(0)->activate();
         gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratchNormal.getTexture(0));
         gSSSurfaceCommitProgram.uniform1i(commit_src, 0);
+        gSSSurfaceCommitProgram.uniform1f(commit_target, 2.f);
         gSSSurfaceCommitProgram.uniform1f(commit_paint, 0.f);
 
         {
@@ -1564,6 +1568,106 @@ void SSSurfaceField::renderWetPass()
 
     gbuffer->flush();
 }
+
+// <SS:Nexii> Snow surfaces. The same screen-space shape as the wet pass - field window in,
+// scratch target, commit back into the gbuffer - but writing the diffuse attachment: the snow
+// channel the field has always carried becomes visible albedo. Runs after the wet pass so it
+// covers it; the gloss interplay (wet ground going matte under snow) is the commit's next target,
+// not this pass's job yet.
+void SSSurfaceField::renderSnowPass()
+{
+    if (gCubeSnapshot) return;
+    if (!hasWindow()) return;
+    if (!gSSSurfaceSnowProgram.isComplete()) return;
+    if (!gSSSurfaceCommitProgram.isComplete()) return;
+
+    static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoSnowSurfaceStrength", 1.f);
+    const F32 snow_strength = llclamp((F32)strength, 0.f, 2.f);
+    if (snow_strength <= 0.f) return;
+    if (peakSnow() <= 0.f) return;
+
+    LLRenderTarget* gbuffer = &gPipeline.mRT->deferredScreen;
+    const U32 w = gbuffer->getWidth();
+    const U32 h = gbuffer->getHeight();
+    if (w == 0 || h == 0) return;
+
+    if (mScratch.getWidth() != w || mScratch.getHeight() != h)
+    {
+        mScratch.release();
+        if (!mScratch.allocate(w, h, GL_RGBA, false)) return;
+    }
+
+    LL_PROFILE_GPU_ZONE("atmo surface snow");
+
+    mScratch.bindTarget();
+
+    gPipeline.bindDeferredShader(gSSSurfaceSnowProgram);
+
+    const S32 field_channel = gSSSurfaceSnowProgram.mActiveTextureChannels;
+    bindForShader(gSSSurfaceSnowProgram, field_channel);
+
+    static LLStaticHashedString inv_view("ssFieldInvView");
+    static LLStaticHashedString snow_strength_u("ssSnowStrength");
+    static LLStaticHashedString snow_depth_full("ssSnowDepthFull");
+    static LLStaticHashedString snow_sparkle("ssSnowSparkle");
+
+    const glm::mat4 inv = glm::inverse(get_current_modelview());
+    gSSSurfaceSnowProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
+
+    static LLCachedControl<F32> depth_full(gSavedSettings, "SSAtmoSnowDepthFull", 0.04f);
+    static LLCachedControl<F32> sparkle(gSavedSettings, "SSAtmoSnowSparkle", 0.6f);
+
+    gSSSurfaceSnowProgram.uniform1f(snow_strength_u, snow_strength);
+    gSSSurfaceSnowProgram.uniform1f(snow_depth_full, llmax((F32)depth_full, 0.005f));
+    gSSSurfaceSnowProgram.uniform1f(snow_sparkle, llclamp((F32)sparkle, 0.f, 1.f));
+
+    {
+        LLGLDepthTest depth(GL_FALSE);
+        LLGLDisable blend(GL_BLEND);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+    }
+
+    gGL.getTexUnit(field_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    gPipeline.unbindDeferredShader(gSSSurfaceSnowProgram);
+
+    mScratch.flush();
+
+    // Commit the lifted albedo into the diffuse attachment.
+    gbuffer->bindTarget();
+
+    const GLenum albedo_bufs[4] = { GL_COLOR_ATTACHMENT0, GL_NONE, GL_NONE, GL_NONE };
+    glDrawBuffers(4, albedo_bufs);
+
+    gSSSurfaceCommitProgram.bind();
+    gGL.getTexUnit(0)->activate();
+    gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mScratch.getTexture(0));
+    static LLStaticHashedString snow_commit_src("ssCommitSource");
+    static LLStaticHashedString snow_commit_target("ssCommitTarget");
+    static LLStaticHashedString snow_commit_paint("ssCommitDebugPaint");
+    gSSSurfaceCommitProgram.uniform1i(snow_commit_src, 0);
+    gSSSurfaceCommitProgram.uniform1f(snow_commit_target, 0.f);
+    gSSSurfaceCommitProgram.uniform1f(snow_commit_paint, 0.f);
+
+    {
+        LLGLDepthTest depth(GL_FALSE);
+        LLGLDisable blend(GL_BLEND);
+        LLGLDisable scissor(GL_SCISSOR_TEST);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+    }
+
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+    gSSSurfaceCommitProgram.unbind();
+
+    const GLenum restore_bufs[4] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1,
+                                     GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3 };
+    glDrawBuffers(4, restore_bufs);
+
+    gbuffer->flush();
+}
+// </SS:Nexii>
 
 // Draws the field over the world for inspection. SSAtmoSnowDebug 1 replaces the wet/puddle
 // colouring with the transport's per-cell lift figure - what the drift pool's spawn walk reads.

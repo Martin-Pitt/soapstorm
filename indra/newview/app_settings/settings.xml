@@ -26726,6 +26726,39 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>-1</integer>
     </map>
+    <key>SSAtmoSnowSurfaceStrength</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: master dial on the snow surface pass - how strongly settled depth lifts albedo toward the drift colour. 0 removes the pass entirely</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoSnowDepthFull</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: settled depth, metres, that reads as fully snow-covered on the surface pass. The field's repose gate keeps depths honest; this only sets where full white starts</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.04</real>
+    </map>
+    <key>SSAtmoSnowSparkle</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: how hard the snow surface's stable glints bite, 0 to 1 - the per-cell grain sparkle that separates fresh snow from flat paint</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.6</real>
+    </map>
     <key>SSAtmoSnowDebug</key>
       <map>
       <key>Comment</key>

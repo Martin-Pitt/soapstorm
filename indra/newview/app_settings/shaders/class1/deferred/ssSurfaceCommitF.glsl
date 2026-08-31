@@ -39,6 +39,12 @@ in vec2 vary_fragcoord;
 
 uniform sampler2D ssCommitSource;
 
+// Which attachment the source lands in: 1 specular (the wetness pass), 2 normal (the flatten
+// pass), 0 diffuse (the snow pass lifts albedo). The draw-buffers mask at the call site is what
+// actually steers the write - this only picks which output the source is written through, and
+// every other output stays masked to GL_NONE.
+uniform float ssCommitTarget;
+
 // Diagnostic. Above zero, the diffuse attachment is painted a flat magenta as well as the specular being written. Albedo multiplies straight into the final colour on every path there is, so this
 // cannot be mistaken for a subtle lighting change, cannot be swallowed by an overcast sky, and cannot be argued with. It separates "nothing this pass writes lands anywhere" from "the specular buffer
 // lands and the lighting does nothing with it", which are the only two possibilities left and want opposite fixes.
@@ -46,16 +52,29 @@ uniform float ssCommitDebugPaint;
 
 void main()
 {
-    frag_data[1] = texture(ssCommitSource, vary_fragcoord.xy);
+    vec4 src = texture(ssCommitSource, vary_fragcoord.xy);
 
-    if (ssCommitDebugPaint > 0.0)
+    if (ssCommitTarget < 0.5)
     {
-        frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
+        frag_data[0] = src;
+    }
+    else if (ssCommitTarget < 1.5)
+    {
+        frag_data[1] = src;
 
-        // The diffuse paint above is already proven to reach the screen (the freeze-frame test). This is the same proof for the OTHER channel this pass writes - the one the wetness effect actually
-        // uses - which has never independently been checked. ORM = (0 occlusion, 0 roughness, 1 metal): every PBR surface should go a hard mirror, and every legacy surface should carry a strange
-        // blue-tinted specular. If this channel reaches the screen the same way diffuse did, this is unmistakable regardless of lighting or haze.
-        frag_data[1] = vec4(0.0, 0.0, 1.0, 0.0);
+        if (ssCommitDebugPaint > 0.0)
+        {
+            frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
+
+            // The diffuse paint above is already proven to reach the screen (the freeze-frame test). This is the same proof for the OTHER channel this pass writes - the one the wetness effect actually
+            // uses - which has never independently been checked. ORM = (0 occlusion, 0 roughness, 1 metal): every PBR surface should go a hard mirror, and every legacy surface should carry a strange
+            // blue-tinted specular. If this channel reaches the screen the same way diffuse did, this is unmistakable regardless of lighting or haze.
+            frag_data[1] = vec4(0.0, 0.0, 1.0, 0.0);
+        }
+    }
+    else
+    {
+        frag_data[2] = src;
     }
 }
 

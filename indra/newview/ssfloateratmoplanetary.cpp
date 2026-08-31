@@ -558,8 +558,42 @@ void SSOrbitViewCtrl::draw()
             fill.mV[1] = llmin(fill.mV[1] * 1.25f, 1.f);
             fill.mV[2] = llmin(fill.mV[2] * 1.25f, 1.f);
         }
-        gGL.color4fv(fill.mV);
-        gl_circle_2d(p.mX, p.mY, p.mDrawRadius, 24, true);
+
+        // <SS:Nexii> A body carrying a custom texture draws as a quad with that art
+        // - the same billboard the world renderer shows - instead of the flat
+        // kind-coloured disc. The texture is fetched the way the renderer fetches
+        // its billboards (see lldrawpoolwlsky.cpp), so the designer previews the
+        // exact disc a resident will see. Bodies without a texture keep the disc.
+        if (body.mCustomTexture.notNull())
+        {
+            LLViewerFetchedTexture* tex = LLViewerTextureManager::getFetchedTexture(
+                body.mCustomTexture, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
+            if (tex)
+            {
+                tex->addTextureStats(F32(llmax(1, (S32)(p.mDrawRadius * 2.f))
+                                         * llmax(1, (S32)(p.mDrawRadius * 2.f))));
+                const S32 r = (S32)p.mDrawRadius;
+                gl_draw_scaled_image((S32)p.mX - r, (S32)p.mY - r, r * 2, r * 2, tex,
+                                     UI_VERTEX_COLOR, LLRectf(0.f, 1.f, 1.f, 0.f));
+                // Keep the hover/selection cue the old fill brightening gave,
+                // without tinting the art itself.
+                if (selected || body_hovered)
+                {
+                    gGL.color4f(1.f, 1.f, 1.f, body_hovered ? 0.25f : 0.45f);
+                    gl_circle_2d(p.mX, p.mY, p.mDrawRadius, 24, true);
+                }
+            }
+            else
+            {
+                gGL.color4fv(fill.mV);
+                gl_circle_2d(p.mX, p.mY, p.mDrawRadius, 24, true);
+            }
+        }
+        else
+        {
+            gGL.color4fv(fill.mV);
+            gl_circle_2d(p.mX, p.mY, p.mDrawRadius, 24, true);
+        }
 
         if (body.mIsHome)
         {

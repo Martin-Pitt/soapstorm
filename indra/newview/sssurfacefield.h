@@ -80,6 +80,8 @@ public:
 
     void renderWetPass();
 
+    void renderSnowPass();
+
     S32 fieldCount() const { return (S32)mFields.size(); }
     F32 lastTickMS() const { return mLastTickMS; }
     F32 peakWet() const { return mPeakWet; }

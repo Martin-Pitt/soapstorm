@@ -80,13 +80,16 @@ public:
 
     LLVector3 sample(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> Granular transport reads. The ground slab of the solved field without the gust
-    // layer - gusts are a scalar every consumer applies once per tick, never per cell, which is
-    // what keeps the erosion tick and the spawn walk linear. The grid variant bulk-samples one
-    // region's field lattice for SSGranular::step(); cells outside the tile answer with the
-    // ambient wind at full exposure.
+    // <SS:Nexii> Granular transport reads. The solved field without the gust layer - gusts are a
+    // scalar every consumer applies once per tick, never per cell, which is what keeps the
+    // erosion tick and the spawn walk linear. There is no "ground slab": terrain and builds
+    // slope across many slabs, so the read picks, per column, the first slab whose ceiling
+    // clears the column's own surface height. pos_agent.z IS that surface - callers pass the
+    // field cell's stored height, or the camera's. The grid variant bulk-samples one region's
+    // field lattice for SSGranular::step(); surface_z is the field's n*n height array; cells
+    // outside the tile answer with the ambient wind at full exposure.
     LLVector3 sampleGround(const LLVector3& pos_agent) const;
-    bool sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell,
+    bool sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell, const F32* surface_z,
                           std::vector<LLVector4>& out) const;
 
     F32 exposure(const LLVector3& pos_agent) const;

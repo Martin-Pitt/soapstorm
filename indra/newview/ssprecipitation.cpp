@@ -530,8 +530,12 @@ void SSPrecipSim::spawnTier(SSPrecipTier tier, U64 tick, F64 tick_time)
         ? llclamp(mMeanLife[tier], nominal_life * 0.5f, nominal_life * 8.f)
         : nominal_life;
 
-    mTierTarget[tier] = llmin(mTierSpawnAccum[tier] * (F32)TIER_SPEC[tier].mHz * mean_life,
-                              (F32)tierCap(tier));
+    // <SS:Nexii> The envelope swings hard under deep turbulence, and this target is what the
+    // spawn headroom and the respawn gate both read - tracking it instantaneously makes the
+    // standing population pump with every gust front. Ease toward it instead.
+    const F32 raw_target = llmin(mTierSpawnAccum[tier] * (F32)TIER_SPEC[tier].mHz * mean_life,
+                                 (F32)tierCap(tier));
+    mTierTarget[tier] = lerp(mTierTarget[tier], raw_target, 0.35f);
 }
 
 // Spawns one cell's particles: placement, landing resolve, kind selection.

@@ -333,8 +333,10 @@ Two fetch-cost notes that are design decisions, not implementation details:
 - **The field tick must not call `SSWindFlowMap::sample()` per cell.** `sample()` runs `gustAt()` -
   fbm calls - per invocation, and a region grid is thousands of cells. Gusts vary over ~100 m
   wavelengths while the field cell is well under a metre, so gust structure is lost at field
-  resolution anyway: add a `sampleGround()` to `SSWindFlowMap` that bilinears the bottom slab
-  straight out of the CPU-resident `mFlow` tiles with no gust evaluation, and apply the gust
+  resolution anyway: add a `sampleGround()` to `SSWindFlowMap` that bilinears the solved field
+  straight out of the CPU-resident `mFlow` tiles with no gust evaluation - picking, per column,
+  the first slab whose ceiling clears that column's own surface height, because terrain and
+  builds slope across many slabs and no one slab is "the ground" - and apply the gust
   envelope once per region per tick (it is a scalar here, not a per-cell veer). Same answer, an
   order of magnitude fewer trig calls.
 - **The whiteout pass runs at half resolution by default.** Fog density is the lowest-frequency

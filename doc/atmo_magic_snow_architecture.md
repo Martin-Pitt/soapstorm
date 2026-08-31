@@ -112,7 +112,7 @@ namespace SSGranular
 }
 
 // sswindflow.h - the cheap field read and the shader window
-LLVector3 sampleGround(const LLVector3& pos_agent) const;   // bottom slab bilinear, NO gust
+LLVector3 sampleGround(const LLVector3& pos_agent) const;   // first air slab above pos.z, NO gust
 bool bindGroundWindow(LLGLSLShader& shader, S32 channel);    // + ssWindOrigin uniform
                                                              // spare channel: lift x depth target
 

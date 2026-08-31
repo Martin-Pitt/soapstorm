@@ -28,6 +28,7 @@
 #include "llmath.h"
 
 #include <algorithm>
+#include <cmath>
 
 // How far a slope walk may reach for a neighbouring height before it is treated as a wall - the
 // settle path in sssurfacefield.cpp carries the same figure as SLOPE_STEP_MAX. Kept here rather
@@ -124,10 +125,16 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
         }
         fld.mLift[i] = lift;
 
+        // Exponential decay, not a fixed flux. A hard rate strips a cell to zero in one step at
+        // gale strength, which flickers the lift figure on and off as the cell oscillates between
+        // "snow" and "bare" (observed: orange tiles strobing, lift cells vanishing under the
+        // spawn walk's own floor). Proportional erosion leaves a thin residual at equilibrium -
+        // settle divided by the decay constant - so a gale keeps a dusting on the ground and the
+        // air carries the rest, which is what a ground blizzard actually looks like.
         if (lift > 0.f && p.mLiftRate > 0.f && p.mGust > 0.f)
         {
-            const F32 flux = llmin(fld.mSnow[i], p.mLiftRate * lift * p.mGust * dt);
-            fld.mSnow[i] -= flux;
+            const F32 k = p.mLiftRate * 10.f * lift * p.mGust;
+            fld.mSnow[i] -= fld.mSnow[i] * (1.f - expf(-k * dt));
         }
     }
 

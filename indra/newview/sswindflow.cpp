@@ -2200,21 +2200,30 @@ LLVector4 SSWindFlowMap::groundCell(const Tile& tile, const LLVector3& tile_orig
     const S32 x0 = (S32)fx, y0 = (S32)fy;
     const F32 tx = fx - (F32)x0, ty = fy - (F32)y0;
 
-    auto bilinear = [&](S32 slab)
+    auto bilinear = [&](S32 s)
     {
-        const LLVector4& a = tile.mFlow[index(tile, x0,     y0,     slab)];
-        const LLVector4& b = tile.mFlow[index(tile, x0 + 1, y0,     slab)];
-        const LLVector4& c = tile.mFlow[index(tile, x0,     y0 + 1, slab)];
-        const LLVector4& d = tile.mFlow[index(tile, x0 + 1, y0 + 1, slab)];
+        const LLVector4& a = tile.mFlow[index(tile, x0,     y0,     s)];
+        const LLVector4& b = tile.mFlow[index(tile, x0 + 1, y0,     s)];
+        const LLVector4& c = tile.mFlow[index(tile, x0,     y0 + 1, s)];
+        const LLVector4& d = tile.mFlow[index(tile, x0 + 1, y0 + 1, s)];
 
         const LLVector4 top = a * (1.f - tx) + b * tx;
         const LLVector4 bot = c * (1.f - tx) + d * tx;
         return top * (1.f - ty) + bot * ty;
     };
 
-    // The ground slab owns the boundary layer - the slab the saltation threshold is defined at.
-    const LLVector4 cell_v = bilinear(0);
-    return cell_v;
+    // There is no "ground slab": terrain and builds slope across many slabs, so a single
+    // region-wide pick is wrong everywhere but one height. Per column, the ground read wants the
+    // first slab that actually holds air above THIS column's surface - the first whose ceiling
+    // clears pos_agent.z (the column's stored surface height) by a metre. On a slope different
+    // columns pick different slabs; a rooftop reads its own air, the valley below reads its own.
+    S32 slab = 0;
+    while (slab + 1 < tile.mSlices && tile.mSliceZ[slab + 1] <= pos_agent.mV[VZ] + 1.0f)
+    {
+        ++slab;
+    }
+
+    return bilinear(slab);
 }
 
 LLVector3 SSWindFlowMap::sampleGround(const LLVector3& pos_agent) const
@@ -2237,10 +2246,12 @@ LLVector3 SSWindFlowMap::sampleGround(const LLVector3& pos_agent) const
 }
 
 // Bulk-samples one region's field lattice: the SSGranular step's per-cell wind, read straight out
-// of the CPU-resident tiles. Cells outside the tile answer with the ambient wind at full exposure;
-// with no solved tile at all the whole grid answers ambient, so the transport degrades to an
-// ambient-driven uniform instead of stalling (the same fallback sample() takes).
-bool SSWindFlowMap::sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell,
+// of the CPU-resident tiles. Each column picks the first slab clearing ITS OWN surface height
+// (surface_z, the field's height array - there is no region-wide ground slab); cells outside the
+// tile answer with the ambient wind at full exposure, and with no solved tile at all the whole
+// grid answers ambient, so the transport degrades to an ambient-driven uniform instead of
+// stalling (the same fallback sample() takes).
+bool SSWindFlowMap::sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell, const F32* surface_z,
                                      std::vector<LLVector4>& out) const
 {
     out.clear();
@@ -2263,8 +2274,10 @@ bool SSWindFlowMap::sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell,
     {
         for (S32 x = 0; x < n; ++x)
         {
+            // z is the column's own surface - the slab pick is per column, never per region
+            const F32 z = surface_z ? surface_z[(size_t)y * n + x] : 0.f;
             const LLVector3 pos(origin.mV[VX] + ((F32)x + 0.5f) * cell,
-                                origin.mV[VY] + ((F32)y + 0.5f) * cell, 0.f);
+                                origin.mV[VY] + ((F32)y + 0.5f) * cell, z);
             out[(size_t)y * n + x] = tile ? groundCell(*tile, tile_origin, tile_cell, pos)
                                           : ambient_cell;
         }

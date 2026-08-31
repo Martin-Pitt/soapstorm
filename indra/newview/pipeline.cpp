@@ -9766,6 +9766,10 @@ void LLPipeline::renderDeferredLighting()
         // all read one consistent gbuffer rather than each being taught about
         // the weather on its own.
         SSSurfaceField::getInstance()->renderWetPass();
+        // <SS:Nexii> Atmo Magic snow surfaces: same family, same reasoning -
+        // the settled depth the field carries becomes albedo before anything
+        // lights it.
+        SSSurfaceField::getInstance()->renderSnowPass();
         // </SS:Nexii>
 
         screen_target->bindTarget();
