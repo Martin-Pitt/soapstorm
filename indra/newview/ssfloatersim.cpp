@@ -28,23 +28,14 @@
 #include "llfloaterreg.h"
 
 #include "ssrainshadow.h"
-#include "sssurfacefield.h"
 #include "sswindflow.h"
-#include "ssatmomagic.h"
-#include "ssprecipitation.h"
 
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
-#include "lltextbox.h"
-#include "lluictrl.h"
 #include "llcontrol.h"
-#include "llviewercamera.h"
-#include "llviewerregion.h"
-#include "llworld.h"
+#include "lluictrl.h"
 #include "llviewercontrol.h"
 #include "pipeline.h"
-
-static const F64 STATUS_POLL_INTERVAL = 0.5;
 
 // Floater shell; all content is wired in postBuild.
 SSFloaterSimulation::SSFloaterSimulation(const LLSD& key) :
@@ -55,7 +46,6 @@ SSFloaterSimulation::SSFloaterSimulation(const LLSD& key) :
 // Wires rebuild buttons, overlay checkboxes, and setting watchers that invalidate the right map.
 bool SSFloaterSimulation::postBuild()
 {
-
     getChild<LLButton>("shadow_rebuild_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickRecaptureShadow(); });
     getChild<LLButton>("flow_rebuild_button")->setClickedCallback(
@@ -77,15 +67,31 @@ bool SSFloaterSimulation::postBuild()
     }
 
     getChild<LLCheckBoxCtrl>("flow_overlay_check")->setCommitCallback(
-        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WIND_FLOW); });
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WIND_FLOW);
+            syncOverlayChecks();
+        });
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->setCommitCallback(
-        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW); });
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW);
+            syncOverlayChecks();
+        });
     getChild<LLCheckBoxCtrl>("settle_overlay_check")->setCommitCallback(
-        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_GEOM_SETTLE); });
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_GEOM_SETTLE);
+            syncOverlayChecks();
+        });
     getChild<LLCheckBoxCtrl>("runoff_overlay_check")->setCommitCallback(
-        [](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF); });
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF);
+            syncOverlayChecks();
+        });
 
-    refreshStatus();
+    syncOverlayChecks();
     return true;
 }
 
@@ -111,77 +117,32 @@ void SSFloaterSimulation::watch(const std::string& control, EInvalidate what)
             {
                 SSWindFlowMap::getInstance()->rebuildAll();
             }
-            refreshStatus();
         }));
 }
 
-// Fresh status on open.
+// Fresh overlay state on open.
 void SSFloaterSimulation::onOpen(const LLSD& key)
 {
-    refreshStatus();
-}
-
-// Polls status twice a second - solves finish in the background.
-void SSFloaterSimulation::draw()
-{
-    const F64 now = LLTimer::getElapsedSeconds();
-    if (now - mLastPoll > STATUS_POLL_INTERVAL)
-    {
-        mLastPoll = now;
-        refreshStatus();
-    }
-    LLFloater::draw();
+    syncOverlayChecks();
 }
 
 // Explicit rain-shadow recapture.
 void SSFloaterSimulation::onClickRecaptureShadow()
 {
     SSRainShadowMap::getInstance()->clearCache();
-    refreshStatus();
 }
 
 // Explicit flowmap re-solve.
 void SSFloaterSimulation::onClickRebuildFlow()
 {
     SSWindFlowMap::getInstance()->rebuildAll();
-    refreshStatus();
 }
 
-// Rewrites every status line and overlay checkbox from the live maps.
-void SSFloaterSimulation::refreshStatus()
+// Mirrors the debug-view masks into the overlay checkboxes. The live status of
+// every map lives in the Atmo Magic info overlay; this floater only carries the
+// toggles and the dials, so it just reflects what the debug masks say.
+void SSFloaterSimulation::syncOverlayChecks()
 {
-    SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
-    const U32 shadow_res = shadow->resolution();
-
-    getChild<LLTextBox>("shadow_status")->setText(
-        shadow->tileCount() == 0
-            ? std::string("no regions mapped yet")
-            : llformat("%d region%s mapped at %d texels",
-                       shadow->tileCount(), shadow->tileCount() == 1 ? "" : "s",
-                       (S32)shadow_res));
-
-    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-
-    LLTextBox* flow_status = getChild<LLTextBox>("flow_status");
-    SSWindFlowMap* flow = SSWindFlowMap::getInstance();
-
-    if (!SSWindFlowMap::isSupported())
-    {
-        flow_status->setText(std::string("unavailable: needs OpenGL 4.3"));
-    }
-    else if (flow->tileCount() == 0)
-    {
-        flow_status->setText(std::string("no regions solved yet"));
-    }
-    else
-    {
-        flow_status->setText(llformat(
-            "%d region%s solved, %.1fm cells, %d slabs, %.0fms, solved %.0fs ago",
-            flow->tileCount(), flow->tileCount() == 1 ? "" : "s",
-            flow->cellSize(), flow->sliceCount(),
-            flow->lastSolveMS(), (F32)flow->age()));
-    }
-
     getChild<LLCheckBoxCtrl>("flow_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WIND_FLOW));
     getChild<LLCheckBoxCtrl>("shadow_overlay_check")->set(
@@ -190,38 +151,4 @@ void SSFloaterSimulation::refreshStatus()
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
     getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
-
-    SSSurfaceField* surface = SSSurfaceField::getInstance();
-    SSPrecipSim* sim = SSAtmoMagic::getInstance()->sim();
-    getChild<LLTextBox>("runoff_status")->setText(
-        surface->fieldCount() == 0
-            ? std::string("no surface dressed yet")
-            : llformat("%d region%s dressed. Peak wet %.2f, snow %.0f mm, puddle %.0f mm, in %.1f ms. Live drips %d, streams %d",
-                       surface->fieldCount(), surface->fieldCount() == 1 ? "" : "s",
-                       surface->peakWet(), surface->peakSnow() * 1000.f,
-                       surface->peakPuddle() * 1000.f, surface->lastTickMS(),
-                       sim ? sim->dripCount() : 0, sim ? sim->streamCount() : 0));
-
-    LLTextBox* capture_status = getChild<LLTextBox>("flow_capture_status");
-    static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);
-
-    capture_status->setVisible(capture_view != 0);
-
-    if (capture_view == 0)
-    {
-    }
-    else if (flow->capturedRegion() == 0)
-    {
-        capture_status->setText(std::string("nothing captured yet"));
-    }
-    else
-    {
-        LLViewerRegion* captured = LLWorld::getInstance()->getRegionFromHandle(flow->capturedRegion());
-        LLViewerRegion* here = LLWorld::getInstance()->getRegionFromPosAgent(cam);
-
-        const std::string name = captured ? captured->getName() : std::string("a region that has gone");
-        capture_status->setText(llformat("showing %s%s",
-            name.c_str(),
-            (captured && captured == here) ? "" : ", which is not the region you are in"));
-    }
 }

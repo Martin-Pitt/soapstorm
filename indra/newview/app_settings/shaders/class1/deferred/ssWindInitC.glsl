@@ -38,6 +38,18 @@ uniform float uSliceZ[17];      // uSlices+1 boundary altitudes, ascending
 uniform vec3  uAmbient[16];      // ambient wind per slab; sky tracks differ
 uniform vec2  uOrigin;          // agent-space XY of texel (0,0)
 
+// A partial rebuild only re-derives the mask where an edit landed. The box is
+// those cells, inclusive; everything else keeps the field it already had, so
+// this pass must not touch it.
+uniform ivec2 uBoxMin;
+uniform ivec2 uBoxMax;
+
+bool inBox(ivec3 c)
+{
+    return c.x >= uBoxMin.x && c.y >= uBoxMin.y
+        && c.x <= uBoxMax.x && c.y <= uBoxMax.y;
+}
+
 float cellSize() { return uExtent / float(uRes); }
 
 float sliceCentre(int k) { return 0.5 * (uSliceZ[k] + uSliceZ[k + 1]); }
@@ -142,6 +154,7 @@ void main()
 {
     ivec3 c = ivec3(gl_GlobalInvocationID);
     if (!inBounds(c)) return;
+    if (!inBox(c)) return;
 
     float top = imageLoad(uHeight, c.xy).r;
 

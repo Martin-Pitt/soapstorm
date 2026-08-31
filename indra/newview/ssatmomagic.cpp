@@ -35,6 +35,7 @@
 #include "sslightning.h"
 #include "sslightningrender.h"
 #include "sssurfacefield.h"
+#include "sswhiteout.h"
 #include "sswindflow.h"
 #include "ssworldfield.h"
 
@@ -222,20 +223,20 @@ void SSAtmoMagic::refreshParams()
     const SSPrecipPreset& target_preset = named ? *named : mgr.active();
 
     const F32 dt = llclamp((F32)gFrameIntervalSeconds, 0.f, 0.25f);
-    const bool preset_changed = (target_preset.mName != mPresetName);
 
-    const F32 blend_target = (track_runs && !preset_changed) ? 1.f : 0.f;
+    // <SS:Nexii> The blend tracks whether weather RUNS at all - an environment
+    // arriving or leaving fades the precipitation in and out. A preset swap is
+    // not a weather change: rain becoming snow as temperature crosses zero is
+    // the same sky handing over different particles, and dipping the intensity
+    // through zero for it read as the storm dying and restarting (observed at
+    // the crossover). Swap in place, immediately, every time.
+    const F32 blend_target = track_runs ? 1.f : 0.f;
     mBlend += (blend_target - mBlend) * llclamp(TRACK_FADE_RATE * dt, 0.f, 1.f);
 
-    if (preset_changed && mBlend <= 0.02f)
+    if (track_runs)
     {
         mPreset = target_preset;
         mPresetName = target_preset.mName;
-        mBlend = 0.f;
-    }
-    else if (!preset_changed)
-    {
-        mPreset = target_preset;
     }
 
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
@@ -703,6 +704,11 @@ void SSAtmoMagic::idle()
 
     SSSurfaceField::getInstance()->idle(gFrameIntervalSeconds);
 
+    // <SS:Nexii> The whiteout layer's intensity state: regime ramps applied
+    // CPU-side, the pass itself draws in the pool loop after the haze.
+    SSWhiteout::getInstance()->idle(gFrameIntervalSeconds);
+    // </SS:Nexii>
+
     SSAvatarWet::getInstance()->idle(gFrameIntervalSeconds);
 
     SSLightning::getInstance()->idle(gFrameIntervalSeconds);
@@ -964,39 +970,14 @@ void SSAtmoMagic::drawInfo()
     lines.push_back("-- geometry edits --");
     lines.push_back(llformat("queue      %d settling   %u believed",
                              (S32)atmo->pendingEdits(), atmo->settledEdits()));
-
     {
-        std::vector<const std::pair<const LLUUID, PendingEdit>*> worst;
+        U32 rearming = 0;
         for (const auto& entry : atmo->mPendingEdits)
         {
-            if (entry.second.mResets >= 2) worst.push_back(&entry);
+            if (entry.second.mResets >= 2) ++rearming;
         }
-        std::sort(worst.begin(), worst.end(),
-                  [](const std::pair<const LLUUID, PendingEdit>* a,
-                     const std::pair<const LLUUID, PendingEdit>* b)
-                  { return a->second.mResets > b->second.mResets; });
-
-        if (worst.empty())
-        {
-            lines.push_back("           nothing re-arming, queue is passing through");
-        }
-        else
-        {
-            lines.push_back(llformat("re-arming  %d of %d never settling",
-                                     (S32)worst.size(), (S32)atmo->pendingEdits()));
-        }
-
-        for (size_t i = 0; i < worst.size() && i < 5; ++i)
-        {
-            const PendingEdit& edit = worst[i]->second;
-            const LLVector3 delta = edit.mPos - cam;
-            lines.push_back(llformat("  %s  x%u in %.0fs   %.0fm away   %.0f %.0f %.0f  r%.1f",
-                                     worst[i]->first.asString().substr(0, 8).c_str(),
-                                     edit.mResets, (F32)(atmo->mNow - edit.mFirstSeen),
-                                     delta.magVec(),
-                                     edit.mPos.mV[VX], edit.mPos.mV[VY], edit.mPos.mV[VZ],
-                                     edit.mRadius));
-        }
+        lines.push_back(llformat("re-arming  %u of %d never settling",
+                                 rearming, (S32)atmo->pendingEdits()));
     }
 
     lines.push_back("-- wind flow --");
@@ -1016,6 +997,16 @@ void SSAtmoMagic::drawInfo()
                                  flow->cellSize(), flow->tileCount()));
         lines.push_back(llformat("solved     %.0fs ago   builds %u",
                                  (F32)flow->age(), flow->buildCount()));
+
+        // <SS:Nexii> Rebuild telemetry: is the solve off the main thread, and
+        // how well the smarter rebuilds are doing.
+        lines.push_back(llformat("worker     %s   solve %s",
+                                 flow->workerActive() ? "GL thread" : "main thread",
+                                 flow->lastSolveOnWorker() ? "on" : "in-frame"));
+        lines.push_back(llformat("rebuilds   %u full / %u partial   box avg %.0f%% of tile",
+                                 flow->fullBuildCount(), flow->partialBuildCount(),
+                                 flow->partialBoxShare() * 100.f));
+        // </SS:Nexii>
 
         std::string slabs;
         for (S32 i = 0; i <= flow->sliceCount(); ++i)
@@ -1040,7 +1031,12 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("gust wave  x%.2f   veer %+.0f deg   fronts every %.1fs",
                                  gust_scale, gust_veer * RAD_TO_DEG,
                                  gust_length / gust_speed));
-        lines.push_back(llformat("build      %.1f ms", flow->lastSolveMS()));
+        lines.push_back(llformat("build      %.1f ms%s",
+                                 flow->lastSolveOnWorker() ? flow->workerSolveMS() : flow->lastSolveMS(),
+                                 flow->lastBuildPartial() ? "  (last partial)" : ""));
+
+        lines.push_back(llformat("solver     %.0f MB VRAM",
+                                 flow->vramMB()));
 
         F32 top = 0.f;
         if (flow->surfaceAt(cam, top))
@@ -1127,6 +1123,11 @@ void SSAtmoMagic::drawInfo()
         {
             lines.push_back("           no lift: is snow settled, is the wind over SSAtmoSnowLiftLo?");
         }
+
+        SSWhiteout* whiteout = SSWhiteout::getInstance();
+        lines.push_back(llformat("whiteout  in %.2f   squall %.2f   drift %.2f   falloff %.0fm",
+                                 whiteout->intensity(), whiteout->squallPart(),
+                                 whiteout->liftPart(), whiteout->falloff()));
     }
     // </SS:Nexii>
 
@@ -1155,20 +1156,9 @@ void SSAtmoMagic::drawInfo()
                                  next < 0.0 ? "not thundery"
                                             : llformat("next in %.0fs", next).c_str(),
                                  audio->pendingThunder()));
-        {
-            const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
-            lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
-                                     ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));
-        }
-        for (const SSStrike& st : lit->strikes())
-        {
-            lines.push_back(llformat("  %-6s %5.0fm   %+.2fs   leader %.2f   bright %.2f   ch %d   st %d%s",
-                                     SSLightning::kindName(st.mKind),
-                                     st.mDistanceM, st.mT,
-                                     st.mLeaderProgress, st.mChannelBrightness,
-                                     (S32)st.mChannel.size(), st.mStrokeCount,
-                                     st.mAudible ? "" : "   [silent, shadow zone]"));
-        }
+        const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
+        lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
+                                 ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));
     }
 
     for (S32 self = 1; self >= 0; --self)

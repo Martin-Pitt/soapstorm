@@ -310,14 +310,22 @@ void SSPrecipRenderer::render()
         mBuckets[p.mMaterial % MAT_COUNT][p.mTex % SS_PRECIP_MAX_TEXTURES].push_back({ &p, llmin(alpha, 1.f) });
     }
 
-    // <SS:Nexii> Blowing snow: the ground pool, faded like the tier it wears and distance-banded
-    // like the rest - the drift pool owns its own cull radius, this is only the per-frame alpha.
+    // <SS:Nexii> Blowing snow: the ground pool fades by its OWN cull radius -
+    // the falling tiers' bands start metres out and would blank drift exactly
+    // where it matters: right under the camera, overhead views, the near field.
+    // Full alpha at zero distance, easing out across the outer half of the
+    // footprint.
+    const F32 cull_r = SSPrecipSim::driftCullRadius();
+    const F32 fade_start = cull_r * 0.55f;
+    const F32 fade_span = llmax(cull_r - fade_start, 1.f);
+
     for (const SSPrecipParticle& p : sim->drift())
     {
         const F32 dx = p.mPos.mV[VX] - cam_pos.mV[VX];
         const F32 dy = p.mPos.mV[VY] - cam_pos.mV[VY];
         const F32 dist = sqrtf(dx * dx + dy * dy);
-        const F32 alpha = p.mAlpha * drop_alpha * ageFade(p) * bandFade(dist, bands[p.mTier]);
+        const F32 far_fade = 1.f - llclamp((dist - fade_start) / fade_span, 0.f, 1.f);
+        const F32 alpha = p.mAlpha * drop_alpha * ageFade(p) * far_fade * far_fade;
         if (alpha < 0.004f) continue;
         mBuckets[p.mMaterial % MAT_COUNT][p.mTex % SS_PRECIP_MAX_TEXTURES].push_back({ &p, llmin(alpha, 1.f) });
     }

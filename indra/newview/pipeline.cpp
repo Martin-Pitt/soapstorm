@@ -111,6 +111,7 @@
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
+#include "sswhiteout.h"     // <SS:Nexii> Atmo Magic whiteout
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
 #include "llmutelist.h"
@@ -4462,6 +4463,22 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
             {
                 SSLightningRender::getInstance()->renderFlash();
                 SSVolCloud::getInstance()->render();
+
+                // <SS:Nexii> Atmo Magic whiteout: the local, height-limited fog
+                // veil, composited exactly like the haze above - depth staged, one
+                // alpha-lerped fullscreen pass. This is its proven placement - the
+                // identical machinery moved after the alpha pools flickered the
+                // whole frame (world frozen, UI and sky strobing), and back here
+                // it draws clean. Drawn after the volumetric deck so the puffs
+                // dissolve into the fog with the sky behind them when the camera
+                // stands in the storm; before the lightning and the precipitation,
+                // which stay crisp in front of their own weather. The trade:
+                // alpha surfaces drawn later - windows, foliage - composite over
+                // the veil and read unfogged, their fog taken from the geometry
+                // behind them.
+                SSWhiteout::getInstance()->render();
+                // </SS:Nexii>
+
                 SSLightningRender::getInstance()->render();
                 SSPrecipRenderer::getInstance()->render();
 

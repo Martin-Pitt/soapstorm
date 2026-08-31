@@ -37,6 +37,19 @@ uniform float uExtent;          // domain width in metres
 uniform float uSliceZ[17];      // uSlices+1 boundary altitudes, ascending
 uniform vec3  uAmbient[16];      // ambient wind per slab; sky tracks differ
 
+// A partial rebuild relaxes pressure only inside its box, warm-started from the
+// previous field. The dispatch walks the box plus a one-cell ring: the ring
+// copies its value through each pass instead of relaxing, so the alternating
+// read/write pressure buffers both stay valid at the box's edge.
+uniform ivec2 uBoxMin;
+uniform ivec2 uBoxMax;
+
+bool inBox(ivec3 c)
+{
+    return c.x >= uBoxMin.x && c.y >= uBoxMin.y
+        && c.x <= uBoxMax.x && c.y <= uBoxMax.y;
+}
+
 float cellSize() { return uExtent / float(uRes); }
 
 float sliceCentre(int k) { return 0.5 * (uSliceZ[k] + uSliceZ[k + 1]); }
@@ -90,6 +103,16 @@ void main()
     if (!inBounds(c)) return;
 
     float here = imageLoad(uPIn, c).r;
+
+    // Copy the ring around the box through unchanged instead of relaxing it.
+    // The box's edge then meets the previous field - its genuine boundary - and
+    // the untouched region never decays into the undefined half-solved state a
+    // single-buffer box would leave behind.
+    if (!inBox(c))
+    {
+        imageStore(uPOut, c, vec4(here, 0.0, 0.0, 0.0));
+        return;
+    }
 
     // Inside a solid there is no fluid to solve for. Its stored pressure is never read as-is - loadP mirrors across the face instead - so this only has to leave the cell alone.
     float solid = imageLoad(uSolid, c).r;

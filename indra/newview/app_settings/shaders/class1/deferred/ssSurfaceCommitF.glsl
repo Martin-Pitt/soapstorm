@@ -54,27 +54,30 @@ void main()
 {
     vec4 src = texture(ssCommitSource, vary_fragcoord.xy);
 
+    // Every output written, every frame, unconditionally: an output the call site's
+    // draw-buffers mask routes somewhere is undefined until written, and this exact hole bit
+    // once - the normal commit only filled frag_data[2] while the mask routed the untouched
+    // frag_data[1] into the normal attachment, so the first frame the flatten pass had real
+    // work to do, the gbuffer normals became whatever the undefined output held. Black world.
+    // The mask is what steers these; this only guarantees nothing is undefined.
+    frag_data[0] = src;
+    frag_data[1] = src;
+    frag_data[2] = src;
+    frag_data[3] = src;
+
     if (ssCommitTarget < 0.5)
     {
-        frag_data[0] = src;
+        return;
     }
-    else if (ssCommitTarget < 1.5)
-    {
-        frag_data[1] = src;
 
-        if (ssCommitDebugPaint > 0.0)
-        {
-            frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
-
-            // The diffuse paint above is already proven to reach the screen (the freeze-frame test). This is the same proof for the OTHER channel this pass writes - the one the wetness effect actually
-            // uses - which has never independently been checked. ORM = (0 occlusion, 0 roughness, 1 metal): every PBR surface should go a hard mirror, and every legacy surface should carry a strange
-            // blue-tinted specular. If this channel reaches the screen the same way diffuse did, this is unmistakable regardless of lighting or haze.
-            frag_data[1] = vec4(0.0, 0.0, 1.0, 0.0);
-        }
-    }
-    else
+    if (ssCommitDebugPaint > 0.0 && ssCommitTarget < 1.5)
     {
-        frag_data[2] = src;
+        frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
+
+        // The diffuse paint above is already proven to reach the screen (the freeze-frame test). This is the same proof for the OTHER channel this pass writes - the one the wetness effect actually
+        // uses - which has never independently been checked. ORM = (0 occlusion, 0 roughness, 1 metal): every PBR surface should go a hard mirror, and every legacy surface should carry a strange
+        // blue-tinted specular. If this channel reaches the screen the same way diffuse did, this is unmistakable regardless of lighting or haze.
+        frag_data[1] = vec4(0.0, 0.0, 1.0, 0.0);
     }
 }
 

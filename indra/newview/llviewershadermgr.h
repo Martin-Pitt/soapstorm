@@ -283,6 +283,7 @@ extern LLGLSLShader         gSSCelestialProgram;
 extern LLGLSLShader         gSSSurfaceNormalProgram;
 extern LLGLSLShader         gSSSurfaceCommitProgram;
 extern LLGLSLShader         gSSSurfaceSnowProgram;
+extern LLGLSLShader         gSSWhiteoutProgram;
 // Wind flowmap compute passes; only created when GL 4.3 is present
 extern LLGLSLShader         gSSWindInitProgram;
 extern LLGLSLShader         gSSWindDivProgram;

@@ -81,7 +81,7 @@ dropped once it stopped doing anything.
 - `region_offset` (`lldrawpoolwlsky.cpp`) is the camera's true region
   position minus the region's centre, in metres. Centring avoids a bias from
   always measuring off the SW corner; it does not affect the parallax rate.
-- **The tile is pinned** (`SS_DOME_TILE_M`, 4000 m). The divisor
+- **The tile is pinned** (`SS_DOME_TILE_M`, 8000 m). The divisor
   used to be `2 * height * cloud_scale`, which cancelled the height out of
   the flat mapping's own static pattern — reach scaled with height and so did
   metres-per-UV, so the pattern never moved vertically at all — and it let
@@ -91,17 +91,22 @@ dropped once it stopped doing anything.
   fixed piece of world: the height above the camera survives into the pattern
   (vertical parallax on both the flat and curved paths), altitude changes
   slide instead of zoom, and cloud_scale stays out of the Atmo render
-  entirely — imported cycles animating it can no longer reach the dome. The
-  value is sized so the FINE layer lands near 290 m of world - the old
-  proportional calibration's detail scale at cirrus height - because a finer
-  tile than the noise can carry at that distance stops reading as cloud and
-  starts reading as the speck grid every high-contrast texel stamps across
-  the sky.
-- **The fine layers run at 13.7x, not stock's 16x** (`SS_FINE_LAYER`): an
-  exact integer harmonic aligns the fine grid with the large one, and two
-  aligned grids beat into a visible lattice - the same clumps repeating in
-  rows. A non-integer ratio makes the joint pattern effectively aperiodic;
-  stock's texcoord path keeps its 16.
+  entirely — imported cycles animating it can no longer reach the dome.
+  Deliberately enormous: at 8 km a tile spans more than the visible plane at
+  deck heights, so neither octave's tiling can read — the repetition problem
+  the warp machinery once chased is gone at the root.
+- **The fine layers run at 2x, not stock's 16x** (`SS_FINE_LAYER`): stock's 16
+  put the fine tile at a few hundred metres of world - dozens of copies of the
+  same clump across the sky, marching in rows under the perspective
+  compression. At 2x the fine tile is half the broad one (4 km): two close
+  octaves, each covering more sky than the eye can span. Stock's texcoord path
+  keeps its 16.
+- **The broad octave can read its own map** (`SSAtmoEnvCloudDome::
+  mLargeNoiseTexture`, the Sky Dome tab's "Large Noise" picker): the warps,
+  base octave and self-shadow read the authored large-scale map when one is
+  set, the fine octave keeps the cloud noise. At an 8 km tile the cloud
+  noise's blob scale is too small to art-direct the broad composition. Null
+  keeps every octave on the cloud noise; keyframable like every dome param.
 - The horizontal camera travel and wind drift run DAMPED (one eighth) to
   match the rate of the vertex nudge this replaced — the eye tuned to that
   rate, and the undamped plane rate read as the deck swimming. The vertical
@@ -122,25 +127,14 @@ dropped once it stopped doing anything.
   at tan(elevation); the dome mesh compresses at whatever rate its vertices
   are laid out. Intersecting the ray with the deck per fragment makes the
   anchored parallax exact and the curvature the deck's own.
-- The tile repeats are made APERIODIC by nested domain warping - the GPU-practical
-  equivalent of aperiodic tiling (Penrose and kin need per-tile art with matching
-  rules; a coordinate transform instead makes the composite lookup quasiperiodic,
-  so no two patches of sky ever sample the same composite point). The noise is
-  seamless, so the horizon compression marches the tile repeats into converging
-  rows - each elevation where the ray crosses another tile multiple lands on a
-  copy of the same lump. A single warp cannot break that: a displacement field
-  sampled from the same tiling map is itself periodic, so the warped grid is
-  still a grid, just bent. Three NESTED levels at incommensurate frequencies
-  (~11, ~2.7 and ~1.2 tiles - the middle one comparable to the ground spacing of
-  the compressed rows), each sampled in a differently-rotated frame (golden angle
-  and two other irrations), do break it: the pattern repeats only where all three
-  warp fields AND the base map agree, which is a period no viewer will cross.
-  Amplitudes run 0.55 / 0.28 / 0.12 tiles - the broad warp lays out the whole
-  deck's composition, the middle breaks row-to-row repetition, the fine knocks
-  off the last recognisable repeats. The fine layers (13.7x, not stock's 16 -
-  another non-harmonic) additionally read a rotated frame, so the fine grid can
-  neither align with the broad one nor repeat in step across the sky. Stock's
-  texcoord path keeps its 16 and its unwrapped look.
+- **No domain warp.** An earlier cut ran three nested warp levels at incommensurate
+  frequencies and rotated frames - an attempt at aperiodic tiling against the old,
+  small tile, where the same clumps genuinely marched across the sky in rows. It
+  read as smear and buckle, not as aperiodicity: a displacement field sampled from
+  the same map it displaces is itself periodic, so the warped grid was still a
+  grid, just bent. The tile scale-up (next bullet) removed the repetition at its
+  root - the visible plane spans barely one tile of each octave - and the mapping
+  is a straight, honest lookup now.
 - **The fine octaves fade with distance** (terrain-LOD logic, `SS_DETAIL_LO_M`
   / `SS_DETAIL_HI_M`, 8–20 km of ray): past ~8 km the fine tiles sit under a
   degree wide and perspective compresses their tiling into tight horizontal

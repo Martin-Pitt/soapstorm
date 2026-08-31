@@ -31,6 +31,10 @@ out vec4 frag_color;
 
 in vec2 vary_fragcoord;
 
+// The albedo attachment, declared here the way the wetness pass declares the specular one -
+// gbufferUtil is not attached to this program family, so the sampler is ours to name.
+uniform sampler2D diffuseRect;
+
 // Agent space from view space. The field is anchored to the world; everything the gbuffer hands back is relative to the eye.
 uniform mat4 ssFieldInvView;
 
@@ -112,9 +116,16 @@ void main()
     // quarter of the result, so a dark roof under 3cm of snow reads as snowy dark-grey rather
     // than as paper, and the relief of the surface survives the lift.
     float shade = 0.72 + 0.28 * clamp(dot(col.rgb, vec3(0.333)), 0.0, 1.0);
-    vec3 snow_col = vec3(0.86, 0.88, 0.93) * shade * (1.0 + glint * 0.45);
+    vec3 snow_col = vec3(0.86, 0.88, 0.93) * shade;
 
-    frag_color = vec4(mix(col.rgb, snow_col, pow(coverage, 1.25)), col.a);
+    vec3 out_col = mix(col.rgb, snow_col, pow(coverage, 1.25));
+
+    // The glints ride ON TOP of the mix rather than inside it - at a dusting the mix is nearly
+    // the untouched albedo and glints folded into snow_col would be invisible exactly when the
+    // first snow starts catching light. A dusting sparkles; a full cover sparkles over white.
+    out_col += vec3(glint * 0.30) * smoothstep(0.02, 0.25, coverage);
+
+    frag_color = vec4(out_col, col.a);
 }
 
 // </SS:Nexii>

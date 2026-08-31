@@ -51,7 +51,8 @@ public:
         UTIL_RING = 0,
         UTIL_DOT,
         UTIL_SHARD,
-        UTIL_PUFF
+        UTIL_PUFF,
+        UTIL_PLUME
     };
     LLViewerTexture* utility(EUtility kind);
 

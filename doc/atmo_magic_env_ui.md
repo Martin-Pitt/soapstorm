@@ -84,6 +84,36 @@ ssatmoenvskymodulator.cpp.
 the sky onto people" covers the artillery case honestly enough that renaming it to a
 mechanism-neutral word would cost more in tone than it gains in reach.
 
+### Optics: halos split out of the texture strip
+
+The old `ice_level` path was one histogram of the `halo_map` texture column stretched over the
+whole 0-84 degrees around the light, which fused the sun's corona with a wide coloured ring into a
+single texture read - not the 22-degree halo it claimed to be. Under an active Atmo environment
+`skyF.glsl` now renders optics procedurally (`ssOptics`), each phenomenon at its true angular
+position from the view ray around the light: the corona hugs the light, the 22° halo is a ring at
+22°, the 46° halo family at 46°, sundogs where the 22° small circle crosses the light's altitude
+plane, the circumzenithal arc arching over the zenith while the light rides below ~32°, and the
+supralateral arc crowning the 46° ring when the light is low. Idle viewers (no active environment)
+still get stock `halo_map` bit for bit.
+
+Weather drives which phenomena speak and how hard - the Weather Influence floater gains an
+`Optics` section with two rows. **Corona rings in misty air** is water drops: moisture, residual
+droplets in the rain's wake (a few minutes) or light drizzle, freezes out below ~-4C. **Ice halos
+from cold moist air** is the crystal family - the 22° veil of small platelets, the deep-cold 46°
+family (large plates/columns lofter by a little convection), and still-air plate alignment for
+sundogs and the circumzenithal arc. Every crystal drive gates on moisture as well as cold, so a
+dry -30C sky renders no ice at all; the old Ice Level keyframed value is the base the weather
+lifts from. The former `cold` row keeps only the dry-air blue-density shift ("Cold dry air
+sharpens the sky colour"), which is why the old all-in-one "Cold clear air makes ice halos" is gone.
+
+Two behaviours worth knowing when tuning. The optics ramp on the SUN'S risen share of its disc
+(`SSAtmoEnvApplier::sunRiseFraction`), not on the stock centre-crossing test - a low sun's halos
+burn in from the first sliver of quad above the horizon and fade as it sets instead of popping at
+centre-rise, and the ring keeps aiming at the sun's true position the whole way. And the crystal
+"frost" drive ramps from nothing at freezing down to full at -20C; there is deliberately no ice
+anywhere above 0C, so scrubbing temperature fades halos in and out across the freezing band rather
+than snapping them off.
+
 ## The altitude rail
 
 The floater already carries a vertical multislider on the left whose thumbs are the track selector.

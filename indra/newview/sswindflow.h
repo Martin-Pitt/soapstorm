@@ -46,6 +46,8 @@
 
 #include <functional>
 #include <map>
+#include <memory>
+#include <atomic>
 #include <vector>
 
 class LLViewerObject;
@@ -64,6 +66,8 @@ class SSWindFlowMap : public LLSingleton<SSWindFlowMap>
     LLSINGLETON_EMPTY_CTOR(SSWindFlowMap);
 
 public:
+    ~SSWindFlowMap() override;
+
     static bool isSupported();
 
     void update();
@@ -117,6 +121,20 @@ public:
     F64 age() const;
     U32 buildCount() const { return mBuildCount; }
     S32 tileCount() const { return (S32)mTiles.size(); }
+    bool lastBuildPartial() const { return mLastBuildPartial; }
+
+    // <SS:Nexii> Rebuild telemetry for the info overlay: whether the solve
+    // rides the GL worker thread, the full/partial split, the average partial
+    // box as a share of the tile, how long the last solver block actually took
+    // (even off-main), and the estimated VRAM the solver textures hold.
+    bool workerActive() const { return mWorkerReady; }
+    bool lastSolveOnWorker() const { return mLastSolveWorker; }
+    S32 partialBuildCount() const { return mPartialBuilds; }
+    S32 fullBuildCount() const { return mFullBuilds; }
+    F32 partialBoxShare() const;
+    F32 workerSolveMS() const { return mSolveBlockMS; }
+    F32 vramMB() const;
+    // </SS:Nexii>
 
 private:
     struct Tile
@@ -141,6 +159,13 @@ private:
 
         std::vector<U8> mSolid;
 
+        // <SS:Nexii> Partial rebuilds: the pressure field from the last solve,
+        // kept so an edit rebuild can warm-start the Poisson relaxation from
+        // the previous answer instead of from zero - the whole reason a local
+        // change can be re-solved in a box against the old field. Fine level
+        // only; the pyramid levels are rebuilt from scratch every time.
+        std::vector<F32> mPressure;
+
         std::vector<F32> mSurfaceTop;
 
         F32 mCarved = 0.f;
@@ -150,6 +175,12 @@ private:
         U32 mTuning = 0;
         F64 mBuildTime = 0.0;
         bool mDirty = false;
+        // Pending geometry edits, as a box of tile-local cells (inclusive),
+        // so a settled rebuild only re-solves the flow it can change (a little
+        // upwind, everything downwind) rather than the whole domain. Empty when
+        // mDirty is false; a union of every un-settled markDirty that landed.
+        S32 mDirtyC0[2] = { -1, -1 };
+        S32 mDirtyC1[2] = { -1, -1 };
         bool mValid = false;
         F64 mLastTouched = 0.0;
     };
@@ -159,6 +190,7 @@ private:
     const Tile* cameraTile() const;
 
     bool needsSolve(const Tile& tile) const;
+    std::string solveStaleReason(const Tile& tile) const;
     void evict();
 
     enum class EStage
@@ -172,6 +204,7 @@ private:
         SOLVE_RUN,
         READBACK,
         CONVERT,
+        SOLVE_GL,
         COMMIT
     };
 
@@ -182,6 +215,11 @@ private:
     void releaseScratch();
 
     void postWorker(std::function<void()> work, EStage next);
+    // The solve+readback+convert unit, submitted to the GL worker thread when
+    // one is available (see glWorker()); without a worker the existing staged
+    // READBACK/CONVERT path runs instead.
+    void postSolveGL(const Tile& tile);
+    bool solveRunWorker(const Tile& tile);
 
     Tile* buildTile();
 
@@ -225,6 +263,19 @@ private:
     void bridgePassages(const Tile& tile);
     void uploadBridgedMask(const Tile& tile);
 
+    // <SS:Nexii> Partial rebuild support. hasPendingEdits() is the box-empty
+    // test; partialBoxes() turns a tile's pending edit box into the mask box
+    // (where the solid mask can change), the capture footprint around it, and
+    // the solve box (mask box + a little headwind + everything downwind);
+    // restoreConsumedDirty() returns an abandoned partial build's edits to the
+    // tile so they are not lost.
+    static bool hasPendingEdits(const Tile& tile)
+    {
+        return tile.mDirty && tile.mDirtyC0[0] >= 0 && tile.mDirtyC0[1] >= 0;
+    }
+    bool partialBoxes(const Tile& tile, const LLVector3& wind_h);
+    void restoreConsumedDirty();
+
     void placeSlices(Tile& tile);
 
     bool solveInit(const Tile& tile);
@@ -259,6 +310,12 @@ private:
 
     S32              mProbeRes = 0;
 
+    // The probe footprint actually captured this build. Always tile-scale for
+    // a full solve (probe texels over the whole region, the uProbeRes image the
+    // shader indexes); for a partial solve it is the edit box's share of that
+    // image, uploaded as a sub-rect, and this is its local resolution.
+    S32              mProbeTake = 0;
+
     struct ProbeFrame
     {
         LLVector3 mEye;
@@ -272,6 +329,15 @@ private:
     S32              mCaptureRes = 0;
     F32              mCaptureCell = 0.f;
     LLVector3        mCaptureOrigin;
+
+    // The footprint the captures this build covered - the whole tile for a full
+    // solve, the edit box plus margins for a partial one. The captures and the
+    // solve both hang off this, so a partial build never renders or dispatches
+    // outside it.
+    S32              mCaptureC0[2] = { 0, 0 };    // tile-local cell of the capture image origin
+    S32              mCaptureC1[2] = { -1, -1 };  // last tile-local cell the image covers
+    F32              mCaptureExtent = 0.f;        // metres across the captured footprint
+    LLVector3        mCaptureCentre;              // agent XY of the footprint centre
     bool             mProbeUsable[SS_WIND_PROBES] = { false };
     F32              mProbeMiss[SS_WIND_PROBES] = { 1.f };
 
@@ -296,6 +362,20 @@ private:
     F64 mLastBuild = 0.0;
     F32 mSolveMS = 0.f;
     U32 mBuildCount = 0;
+    bool mLastBuildPartial = false;
+
+    // <SS:Nexii> Rebuild telemetry backing the info overlay accessors.
+    bool mWorkerReady = false;           // the GL solve worker is live
+    bool mLastSolveWorker = false;       // the last build's block ran on the worker
+    U32 mPartialBuilds = 0;              // how many rebuilds were box solves
+    U32 mFullBuilds = 0;                 // how many were whole-tile solves
+    F64 mPartialAreaSum = 0.0;           // box-area/tile-area, for the average
+    U32 mPartialCount = 0;
+    std::atomic<F32> mSolveBlockMS{ 0.f }; // solve+readback+convert wall time (worker writes)
+    // </SS:Nexii>
+
+    std::string mLastRebuildReason;    // the last logged rebuild driver (throttle)
+    F64 mLastRebuildLog = 0.0;
 
     EStage mStage = EStage::IDLE;
 
@@ -307,7 +387,43 @@ private:
     bool mWorkerBusy = false;
     bool mClearPending = false;
 
+    // Partial-build state: whether the in-flight build is a box against the
+    // old field rather than a whole-tile solve, and which boxes. All boxes are
+    // inclusive tile-local cell ranges.
+    bool mPartial = false;
+    S32 mBoxC0[2] = { 0, 0 };      // solve box: where pressure/velocity is recomputed
+    S32 mBoxC1[2] = { -1, -1 };
+    S32 mMaskC0[2] = { 0, 0 };     // mask box: where the solid mask and capture change
+    S32 mMaskC1[2] = { -1, -1 };
+
+    // The edit box a partial build consumed, restored to the tile if the build
+    // is abandoned so the edits are not lost.
+    S32 mConsumedDirty[4] = { -1, -1, -1, -1 };
+
+    S32 mJacobiBuffer = 0;         // pressure buffer the last Jacobi runs left in
+
+    // Readback for the pressure warm-start volume.
+    std::vector<F32> mPressureRaw;
+
+    bool glWorker();
+    void glSolveDone(U32 generation);
+
     U32 mBuildGeneration = 0;
+    bool mSolveFail = false;
+
+    struct SSWindFlowGLWorker;
+    // Raw pointer, not a smart pointer: the worker type is only complete in
+    // sswindflow.cpp, and a unique_ptr to an incomplete type would break every
+    // TU that includes this header. Created and destroyed only here.
+    SSWindFlowGLWorker* mGLWorker = nullptr;
+    bool mGLWorkerTried = false;
+
+    // Cross-context sync for the solve worker (GLsync stored as void*): the
+    // main thread fences after its init writes, the worker waits on it before
+    // touching the shared textures, and the worker fences its readback so the
+    // next build's init on the main thread does not race the tail of the last.
+    void* mSolveFence = nullptr;
+    void* mReadbackFence = nullptr;
 
     std::vector<U8> mMaskRaw;
     std::vector<U8> mMaskBridged;

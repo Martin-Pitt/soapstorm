@@ -37,6 +37,7 @@ out float vary_LightNormPosDot;
 
 #ifdef SS_ATMO
 out float vary_ss_below_horizon;
+out vec3 vary_ss_view_dir;
 #endif
 
 #ifdef HAS_HDRI
@@ -189,6 +190,14 @@ void main()
     // Grab this value and pass to frag shader for rainbows
     float rel_pos_lightnorm_dot = dot(rel_pos_norm, lightnorm.xyz);
     vary_LightNormPosDot = rel_pos_lightnorm_dot;
+
+#ifdef SS_ATMO
+    // <SS:Nexii> The view ray, for the weather-driven optics (ssOptics in skyF.glsl) to split into
+    // corona, 22/46 halos, sundogs and the aligned-plate arcs by true angular position around the
+    // light. Same frame as lightnorm, so the fragment stage compares it against the same light
+    // direction uniform and the same +Y up the dome already shades with.
+    vary_ss_view_dir = rel_pos_norm;
+#endif
 
     // Initialize temp variables
     vec3 sunlight = (sun_up_factor == 1) ? sunlight_color : moonlight_color * 0.7; //magic 0.7 to match legacy color

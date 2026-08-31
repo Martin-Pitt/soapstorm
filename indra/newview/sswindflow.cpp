@@ -39,8 +39,11 @@
 #include "llviewerobject.h"
 #include "llviewerregion.h"
 #include "llviewershadermgr.h"
+#include "llviewerwindow.h"
+#include "llwindow.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "threadpool.h"
 #include "workqueue.h"
 
 #include <algorithm>
@@ -66,6 +69,20 @@ static const F32 HIDDEN_CLEARANCE     = 1.5f;
 
 static const F32 PROBE_MAX_MISS       = 0.98f;
 
+// <SS:Nexii> Partial rebuild geometry. A settled geometry edit only changes the
+// flow it can physically change: a little upwind of the edit (the stagnation
+// pocket in front of a new wall) and everything downwind (the wake, the alleys
+// it now deflects air down). These are the margins in cells that grid the
+// edit box into a solve box, and the slack around it that the capture and mask
+// rebuild cover so a door or roof edge sitting on the box boundary is caught.
+static const S32 PARTIAL_UPWIND_CELLS   = 3;
+static const S32 PARTIAL_LATERAL_CELLS   = 3;
+static const S32 PARTIAL_CAPTURE_CELLS   = 2;
+// Above this share of the tile the box solve is the whole solve plus
+// bookkeeping, so just run the full one.
+static const F32 PARTIAL_FRACTION_CAP   = 0.8f;
+// </SS:Nexii>
+
 static const S32 SS_WIND_LINE_WIDTHS = 4;
 
 static const S32 CAPTURE_VIEW_CANDIDATES = SS_WIND_PROBES + 2;
@@ -83,6 +100,79 @@ static const F32 PROBE_PERCENTILE     = 0.995f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_WINDFLOW("Atmo Magic Wind Flow");
 
+// The wind flow solve is submitted with raw GL commands, not through the
+// viewer's bind()/gGL path, so the shared-context worker never mutates the
+// main thread's GL state machine (gGL, LLVertexBuffer, the bound-shader
+// statics). See solveRunWorker() below.
+static void bindProgramRaw(const LLGLSLShader& shader)
+{
+    glUseProgram(shader.mProgramObject);
+}
+
+// <SS:Nexii> A single worker thread carrying its own GL context, shared with
+// the viewer's. The wind flow solve is a long GPU task plus a synchronous
+// glGetTexImage readback; running that block on this thread keeps the 50-400ms
+// rebuild spike out of the frame loop entirely. Mirrors LLImageGLThread's
+// context lifecycle (createSharedContext -> makeContextCurrent -> gGL.init).
+struct SSWindFlowMap::SSWindFlowGLWorker
+{
+    class Pool : public LL::ThreadPool
+    {
+    public:
+        Pool(const std::string& name, LLWindow* window, void* context)
+            : LL::ThreadPool(name, 1)
+            , mWindow(window)
+            , mContext(context)
+        {
+        }
+
+        void run() override
+        {
+            mWindow->makeContextCurrent(mContext);
+            gGL.init(false);
+            LL_PROFILER_GPU_CONTEXT_NS("SSWindFlow Context", 17);
+            LL::ThreadPool::run();
+            gGL.shutdown();
+            mWindow->destroySharedContext(mContext);
+            mContext = nullptr;
+        }
+
+    private:
+        LLWindow* mWindow;
+        void* mContext;
+    };
+
+    bool create(LLWindow* window)
+    {
+        if (mPool) return mContext != nullptr;
+        mWindow = window;
+        mContext = mWindow ? mWindow->createSharedContext() : nullptr;
+        if (!mContext) return false;
+
+        mPool = std::make_unique<Pool>("SSWindFlow", mWindow, mContext);
+        mPool->start();
+        return true;
+    }
+
+    bool ready() const { return mPool && mContext; }
+
+    LL::WorkQueue& queue() { return mPool->getQueue(); }
+
+    LLWindow* mWindow = nullptr;
+    void* mContext = nullptr;
+    std::unique_ptr<Pool> mPool;
+};
+// </SS:Nexii>
+
+SSWindFlowMap::~SSWindFlowMap()
+{
+    // mGLWorker owns a GL context bound to the viewer's window; dropping it
+    // here (where SSWindFlowGLWorker is complete) stops its pool, which closes
+    // the thread, before the window tears down.
+    delete mGLWorker;
+    mGLWorker = nullptr;
+}
+
 // Needs compute-capable GL (4.3).
 bool SSWindFlowMap::isSupported()
 {
@@ -95,15 +185,15 @@ bool SSWindFlowMap::isSupported()
 // Grid resolution, extent and off-region margin the settings ask for.
 static void desiredGeometry(LLViewerRegion* regionp, S32& res, F32& extent, F32& margin)
 {
-    static LLCachedControl<F32> cell_setting(gSavedSettings, "SSAtmoWindFlowCell", 4.f);
+    static LLCachedControl<F32> cell_setting(gSavedSettings, "SSAtmoWindFlowCell", 1.f);
     static LLCachedControl<F32> margin_setting(gSavedSettings, "SSAtmoWindFlowMargin", 64.f);
-    static LLCachedControl<U32> res_cap(gSavedSettings, "SSAtmoWindFlowRes", 192);
+    static LLCachedControl<U32> res_cap(gSavedSettings, "SSAtmoWindFlowRes", 768);
 
     const F32 cell = llclamp((F32)cell_setting, 1.f, 32.f);
     margin = llclamp((F32)margin_setting, 0.f, 256.f);
     extent = regionp->getWidth() + margin * 2.f;
 
-    res = llclamp((S32)llround(extent / cell), 32, (S32)llclamp((U32)res_cap, 32u, 512u));
+    res = llclamp((S32)llround(extent / cell), 32, (S32)llclamp((U32)res_cap, 32u, 1024u));
 
     res = llmax(32, (res / 16) * 16);
 }
@@ -373,7 +463,10 @@ bool SSWindFlowMap::drivesWind()
         && SSWindFlowMap::getInstance()->isValid();
 }
 
-// Settled geometry changed - the covering tile re-solves.
+// Settled geometry changed - the covering tile re-solves. Edits accumulate as a
+// unioned box of cells rather than a single flag, so a handful of objects
+// settling close together all ride the same rebuild, and the rebuild only has
+// to cover the flow that box can change.
 void SSWindFlowMap::markDirty(const LLVector3& pos, F32 radius)
 {
     SSWindFlowMap* self = getInstance();
@@ -383,47 +476,85 @@ void SSWindFlowMap::markDirty(const LLVector3& pos, F32 radius)
     for (auto& entry : self->mTiles)
     {
         Tile& tile = entry.second;
-        if (!tile.mValid || tile.mDirty) continue;
+        if (!tile.mValid || tile.mRes < SS_WIND_MIN_LEVEL_RES) continue;
 
         LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
         if (!regionp) continue;
 
-        const LLVector3 origin = regionp->getOriginAgent() + tile.mOriginRegion;
-
-        if (pos.mV[VX] + radius < origin.mV[VX] ||
-            pos.mV[VY] + radius < origin.mV[VY] ||
-            pos.mV[VX] - radius > origin.mV[VX] + tile.mExtent ||
-            pos.mV[VY] - radius > origin.mV[VY] + tile.mExtent ||
-            pos.mV[VZ] + radius < tile.mBandBottom ||
+        if (pos.mV[VZ] + radius < tile.mBandBottom ||
             pos.mV[VZ] - radius > tile.mBandTop)
         {
             continue;
+        }
+
+        const LLVector3 origin = regionp->getOriginAgent() + tile.mOriginRegion;
+        const F32 cell = tile.mExtent / (F32)tile.mRes;
+        if (cell <= 0.f) continue;
+
+        const S32 x0 = llfloor((pos.mV[VX] - origin.mV[VX] - radius) / cell);
+        const S32 x1 = llfloor((pos.mV[VX] - origin.mV[VX] + radius) / cell);
+        const S32 y0 = llfloor((pos.mV[VY] - origin.mV[VY] - radius) / cell);
+        const S32 y1 = llfloor((pos.mV[VY] - origin.mV[VY] + radius) / cell);
+
+        if (x1 < 0 || y1 < 0 || x0 >= tile.mRes || y0 >= tile.mRes) continue;
+
+        const S32 cx0 = llmax(x0, 0);
+        const S32 cx1 = llmin(x1, tile.mRes - 1);
+        const S32 cy0 = llmax(y0, 0);
+        const S32 cy1 = llmin(y1, tile.mRes - 1);
+
+        if (tile.mDirty && tile.mDirtyC0[0] >= 0)
+        {
+            tile.mDirtyC0[0] = llmin(tile.mDirtyC0[0], cx0);
+            tile.mDirtyC0[1] = llmin(tile.mDirtyC0[1], cy0);
+            tile.mDirtyC1[0] = llmax(tile.mDirtyC1[0], cx1);
+            tile.mDirtyC1[1] = llmax(tile.mDirtyC1[1], cy1);
+        }
+        else
+        {
+            tile.mDirtyC0[0] = cx0;
+            tile.mDirtyC0[1] = cy0;
+            tile.mDirtyC1[0] = cx1;
+            tile.mDirtyC1[1] = cy1;
         }
 
         tile.mDirty = true;
     }
 }
 
-// Whether a tile's solve is stale: dirty, tuning change, or wind swing.
-bool SSWindFlowMap::needsSolve(const Tile& tile) const
+// Whether a tile's solve is stale, and if so, why - the reason is logged at
+// build start, so a tile churning through rebuilds names its own driver.
+// Returns an empty string when the solve is current.
+std::string SSWindFlowMap::solveStaleReason(const Tile& tile) const
 {
-    if (!tile.mValid) return true;
-    if (tile.mDirty) return true;
+    if (!tile.mValid) return "invalid";
+    if (tile.mDirty) return "dirty (edits)";
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp) return false;
+    if (!regionp) return "region gone";
 
-    if (tile.mTrack != SSAtmoTrackManager::getInstance()->currentTrack()) return true;
+    if (tile.mTrack != SSAtmoTrackManager::getInstance()->currentTrack()) return "track change";
 
-    if ((SSAtmoMagic::getInstance()->wind() - tile.mBuiltWind).magVec() > WIND_EPSILON) return true;
+    const LLVector3 wind_now = SSAtmoMagic::getInstance()->wind();
+    if ((wind_now - tile.mBuiltWind).magVec() > WIND_EPSILON)
+    {
+        return llformat("wind %.2f -> %.2f, %.2f %.2f", tile.mBuiltWind.magVec(), wind_now.magVec(),
+                        wind_now.mV[VX], wind_now.mV[VY]);
+    }
 
-    if (tile.mTuning != tuningSignature()) return true;
+    if (tile.mTuning != tuningSignature()) return "tuning change";
 
     S32 res; F32 extent, margin;
     desiredGeometry(regionp, res, extent, margin);
-    if (tile.mRes != res || fabsf(tile.mExtent - extent) > 0.5f) return true;
+    if (tile.mRes != res || fabsf(tile.mExtent - extent) > 0.5f) return "geometry change";
 
-    return false;
+    return std::string();
+}
+
+// Whether a tile's solve is stale: dirty, tuning change, or wind swing.
+bool SSWindFlowMap::needsSolve(const Tile& tile) const
+{
+    return !solveStaleReason(tile).empty();
 }
 
 // Picks the vertical band the slices cover for this region's build.
@@ -534,58 +665,83 @@ bool SSWindFlowMap::captureAlong(LLRenderTarget& target, S32 res, const Tile& ti
     return true;
 }
 
-// The top-down height capture the voxelisation starts from.
+// The top-down height capture the voxelisation starts from. For a partial build
+// it is taken over only the capture footprint (the edit box plus margins) and
+// merged into the previous heights, so every column outside the edit keeps its
+// old answer and only the changed columns re-solidify.
 bool SSWindFlowMap::captureHeights(Tile& tile)
 {
     const F32 nominal = tile.mBandTop - tile.mBandBottom;
     const F32 probe_top = tile.mBandBottom + nominal * PROBE_SCALE;
-    const F32 half = tile.mExtent * 0.5f;
+    const F32 half = mCaptureExtent * 0.5f;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp) return false;
 
-    const LLVector3 region_origin = regionp->getOriginAgent();
-    const LLVector3 centre(region_origin.mV[VX] + tile.mOriginRegion.mV[VX] + half,
-                           region_origin.mV[VY] + tile.mOriginRegion.mV[VY] + half,
-                           0.f);
+    const F32 range = llmax(probe_top - tile.mBandBottom, 1.f);
+    const LLVector3 eye(mCaptureCentre.mV[VX], mCaptureCentre.mV[VY], probe_top);
 
+    std::vector<F32> depth;
+    glm::mat4 unused;
+    if (!captureAlong(mCapture, mCaptureRes, tile, LLVector3(0.f, 0.f, -1.f),
+                      eye, half, range, depth, unused))
     {
-        const F32 range = llmax(probe_top - tile.mBandBottom, 1.f);
-        const LLVector3 eye(centre.mV[VX], centre.mV[VY], probe_top);
+        return false;
+    }
 
-        std::vector<F32> depth;
-        glm::mat4 unused;
-        if (!captureAlong(mCapture, tile.mRes, tile, LLVector3(0.f, 0.f, -1.f),
-                          eye, half, range, depth, unused))
+    if (mPartial)
+    {
+        mTop = mBuild.mSurfaceTop;
+        if (mTop.size() < (size_t)tile.mRes * tile.mRes)
         {
-            return false;
-        }
-
-        mTop.resize(depth.size());
-        for (size_t i = 0; i < depth.size(); ++i)
-        {
-            mTop[i] = (depth[i] >= PROBE_MISS * 0.5f) ? NO_SURFACE : (probe_top - depth[i]);
+            mTop.assign((size_t)tile.mRes * tile.mRes, NO_SURFACE);
         }
     }
+    mTop.resize((size_t)tile.mRes * tile.mRes);
 
-    std::vector<F32> surfaces;
-    surfaces.reserve(mTop.size());
-    for (F32 h : mTop)
+    const S32 cap = mCaptureRes;
+    for (S32 ly = 0; ly < cap; ++ly)
     {
-        if (h > NO_SURFACE * 0.5f) surfaces.push_back(h);
+        for (S32 lx = 0; lx < cap; ++lx)
+        {
+            const size_t d = (size_t)ly * cap + lx;
+            const F32 h = (depth[d] >= PROBE_MISS * 0.5f) ? NO_SURFACE : (probe_top - depth[d]);
+
+            if (!mPartial)
+            {
+                mTop[(size_t)ly * tile.mRes + lx] = h;
+            }
+            else
+            {
+                const S32 gx = mCaptureC0[0] + lx;
+                const S32 gy = mCaptureC0[1] + ly;
+                if (gx < 0 || gy < 0 || gx >= tile.mRes || gy >= tile.mRes) continue;
+                mTop[(size_t)gy * tile.mRes + gx] = h;
+            }
+        }
     }
 
-    F32 ceiling = tile.mBandTop;
-    if (!surfaces.empty())
+    if (!mPartial)
     {
-        const size_t nth = (size_t)((F32)(surfaces.size() - 1) * PROBE_PERCENTILE);
-        std::nth_element(surfaces.begin(), surfaces.begin() + nth, surfaces.end());
-        const F32 tall = surfaces[nth];
+        std::vector<F32> surfaces;
+        surfaces.reserve(mTop.size());
+        for (F32 h : mTop)
+        {
+            if (h > NO_SURFACE * 0.5f) surfaces.push_back(h);
+        }
 
-        ceiling = tall + llmax(16.f, (tall - tile.mBandBottom) * 0.25f);
+        F32 ceiling = tile.mBandTop;
+        if (!surfaces.empty())
+        {
+            const size_t nth = (size_t)((F32)(surfaces.size() - 1) * PROBE_PERCENTILE);
+            std::nth_element(surfaces.begin(), surfaces.begin() + nth, surfaces.end());
+            const F32 tall = surfaces[nth];
+
+            ceiling = tall + llmax(16.f, (tall - tile.mBandBottom) * 0.25f);
+        }
+
+        tile.mBandTop = llclamp(ceiling, tile.mBandBottom + 48.f, probe_top);
     }
-
-    tile.mBandTop = llclamp(ceiling, tile.mBandBottom + 48.f, probe_top);
 
     for (F32& h : mTop)
     {
@@ -667,12 +823,17 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
     }
 }
 
-// Sets up the horizontal probe captures.
+// Sets up the horizontal probe captures. The probe *image* always maps the
+// capture footprint this build solved - the whole tile for a full solve, the
+// edit box plus margins for a partial one - at a texel density graded up from
+// the mask cells, and is uploaded from the corner of the probe array each build.
 void SSWindFlowMap::beginProbes(Tile& tile)
 {
-    static LLCachedControl<U32> probe_mult(gSavedSettings, "SSAtmoWindFlowProbeRes", 2);
+    static LLCachedControl<U32> probe_mult(gSavedSettings, "SSAtmoWindFlowProbeRes", 3);
 
     mProbeRes = llclamp(tile.mRes * (S32)llclamp((U32)probe_mult, 1u, 4u), tile.mRes, 1536);
+    mProbeTake = llmax(4, llclamp((S32)llround((F32)mCaptureRes * ((F32)mProbeRes / (F32)tile.mRes)),
+                                  4, mProbeRes));
 
     mHidden.clear();
     for (S32 i = 0; i < SS_WIND_PROBES; ++i)
@@ -683,12 +844,15 @@ void SSWindFlowMap::beginProbes(Tile& tile)
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     mCaptureRegion = tile.mRegionHandle;
-    mCaptureRes = tile.mRes;
     mCaptureCell = tile.mExtent / (F32)tile.mRes;
-    mCaptureOrigin = (regionp ? regionp->getOriginAgent() : LLVector3::zero) + tile.mOriginRegion;
+    mCaptureOrigin.mV[VX] = mCaptureCentre.mV[VX] - mCaptureExtent * 0.5f;
+    mCaptureOrigin.mV[VY] = mCaptureCentre.mV[VY] - mCaptureExtent * 0.5f;
+    mCaptureOrigin.mV[VZ] = 0.f;
 }
 
 // One horizontal probe capture - sees under overhangs the top-down capture cannot.
+// The probes are centred on this build's capture footprint, so a partial rebuild
+// only renders the handful of texels around the edit it is solving.
 bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
 {
     static LLCachedControl<F32> elevation(gSavedSettings, "SSAtmoWindFlowProbeAngle", 30.f);
@@ -696,8 +860,7 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp) return false;
 
-    const F32 half_extent = tile.mExtent * 0.5f;
-    const LLVector3 region_origin = regionp->getOriginAgent();
+    const F32 half_extent = mCaptureExtent * 0.5f;
 
     const F32 band_lo = tile.mBandBottom;
     const F32 band_hi = tile.mBandTop;
@@ -714,8 +877,7 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
         const F32 az = (F32)i * F_PI_BY_TWO;
         const LLVector3 dir(sinf(az) * ce, cosf(az) * ce, -se);
 
-        const LLVector3 centre(region_origin.mV[VX] + tile.mOriginRegion.mV[VX] + half_extent,
-                               region_origin.mV[VY] + tile.mOriginRegion.mV[VY] + half_extent,
+        const LLVector3 centre(mCaptureCentre.mV[VX], mCaptureCentre.mV[VY],
                                0.5f * (z_lo + z_hi));
 
         const F32 diag = half_extent * F_SQRT2;
@@ -727,7 +889,7 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
 
         mProbeHalf[i] = half;
 
-        if (!captureAlong(mProbeCapture, mProbeRes, tile, dir, eye, half, range,
+        if (!captureAlong(mProbeCapture, mProbeTake, tile, dir, eye, half, range,
                           mProbeDepth[i], mProbeView[i]))
         {
             return false;
@@ -769,17 +931,21 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
 }
 
 // Combines the probes to carve out space the height capture wrongly filled.
+// For a partial build the probes only cover the edit footprint, so the hits
+// land back onto the tile grid through the capture offset instead of from the
+// tile origin.
 void SSWindFlowMap::reconstructHidden(Tile& tile)
 {
     mHidden.clear();
 
     const F32 cell = tile.mExtent / (F32)tile.mRes;
     const LLVector3 grid_origin = mCaptureOrigin;
+    const S32 take = mProbeTake;
 
     for (S32 i = 0; i < SS_WIND_PROBES; ++i)
     {
         if (!mProbeUsable[i]) continue;
-        if ((S32)mProbeDepth[i].size() < mProbeRes * mProbeRes) continue;
+        if ((S32)mProbeDepth[i].size() < take * take) continue;
 
         const LLVector3& eye = mProbeFrame[i].mEye;
         const LLVector3& dir = mProbeFrame[i].mDir;
@@ -787,19 +953,23 @@ void SSWindFlowMap::reconstructHidden(Tile& tile)
         const LLVector3& fu = mProbeFrame[i].mUp;
         const F32 half = mProbeHalf[i];
 
-        for (S32 y = 0; y < mProbeRes; ++y)
+        for (S32 y = 0; y < take; ++y)
         {
-            for (S32 x = 0; x < mProbeRes; ++x)
+            for (S32 x = 0; x < take; ++x)
             {
-                const F32 d = mProbeDepth[i][(size_t)y * mProbeRes + x];
+                const F32 d = mProbeDepth[i][(size_t)y * take + x];
                 if (d >= PROBE_MISS * 0.5f) continue;
 
-                const F32 u = ((F32)x + 0.5f) / (F32)mProbeRes * 2.f - 1.f;
-                const F32 v = ((F32)y + 0.5f) / (F32)mProbeRes * 2.f - 1.f;
+                const F32 u = ((F32)x + 0.5f) / (F32)take * 2.f - 1.f;
+                const F32 v = ((F32)y + 0.5f) / (F32)take * 2.f - 1.f;
                 const LLVector3 hit = eye + fr * (u * half) + fu * (v * half) + dir * d;
 
-                const S32 cx = (S32)((hit.mV[VX] - grid_origin.mV[VX]) / cell);
-                const S32 cy = (S32)((hit.mV[VY] - grid_origin.mV[VY]) / cell);
+                const S32 lx = (S32)((hit.mV[VX] - grid_origin.mV[VX]) / cell);
+                const S32 ly = (S32)((hit.mV[VY] - grid_origin.mV[VY]) / cell);
+                if (lx < 0 || ly < 0 || lx >= mCaptureRes || ly >= mCaptureRes) continue;
+
+                const S32 cx = mCaptureC0[0] + lx;
+                const S32 cy = mCaptureC0[1] + ly;
                 if (cx < 0 || cy < 0 || cx >= tile.mRes || cy >= tile.mRes) continue;
 
                 const F32 top = mTop[(size_t)cy * tile.mRes + cx];
@@ -811,11 +981,14 @@ void SSWindFlowMap::reconstructHidden(Tile& tile)
         }
     }
 
-    const F32 samples = (F32)mProbeRes * (F32)mProbeRes * (F32)SS_WIND_PROBES;
+    const F32 samples = (F32)take * (F32)take * (F32)SS_WIND_PROBES;
     tile.mCarved = (samples > 0.f) ? (F32)mHidden.size() / samples : 0.f;
 }
 
 // Marks which cells the probes carved, for the solver and the debug view.
+// A partial build only re-audits the box it re-masked, so its debug view does
+// not paint the whole tile with "no evidence" - everything outside the box is
+// untouched and stays out of the picture.
 void SSWindFlowMap::buildCarveFlags(const Tile& tile)
 {
     static LLCachedControl<U32> capture_view(gSavedSettings, "SSAtmoWindFlowDebugCapture", 0);
@@ -829,6 +1002,12 @@ void SSWindFlowMap::buildCarveFlags(const Tile& tile)
     const S32 slices = tile.mSlices;
     const F32 cell = tile.mExtent / (F32)res;
     const F32 bias = 1.5f * cell;
+    const S32 take = mProbeTake;
+
+    const S32 x0 = mPartial ? mMaskC0[0] : 0;
+    const S32 y0 = mPartial ? mMaskC0[1] : 0;
+    const S32 x1 = mPartial ? mMaskC1[0] : res - 1;
+    const S32 y1 = mPartial ? mMaskC1[1] : res - 1;
 
     mCarveFlags.assign((size_t)res * res * slices, CARVE_AIR);
 
@@ -837,15 +1016,15 @@ void SSWindFlowMap::buildCarveFlags(const Tile& tile)
         const F32 lo = tile.mSliceZ[k];
         const F32 hi = tile.mSliceZ[k + 1];
 
-        for (S32 y = 0; y < res; ++y)
+        for (S32 y = y0; y <= y1; ++y)
         {
-            for (S32 x = 0; x < res; ++x)
+            for (S32 x = x0; x <= x1; ++x)
             {
                 const F32 top = mTop[(size_t)y * res + x];
                 if (top <= NO_SURFACE * 0.5f || top <= lo) continue;
 
-                const F32 wx = mCaptureOrigin.mV[VX] + ((F32)x + 0.5f) * cell;
-                const F32 wy = mCaptureOrigin.mV[VY] + ((F32)y + 0.5f) * cell;
+                const F32 wx = mCaptureOrigin.mV[VX] + ((F32)(x - mCaptureC0[0]) + 0.5f) * cell;
+                const F32 wy = mCaptureOrigin.mV[VY] + ((F32)(y - mCaptureC0[1]) + 0.5f) * cell;
                 const F32 z = 0.5f * (lo + llmin(hi, top));
 
                 bool seen = false;
@@ -863,9 +1042,9 @@ void SSWindFlowMap::buildCarveFlags(const Tile& tile)
                     const F32 w = v.y / mProbeHalf[i] * 0.5f + 0.5f;
                     if (u < 0.f || u > 1.f || w < 0.f || w > 1.f) continue;
 
-                    const S32 tx = llclamp((S32)(u * (F32)mProbeRes), 0, mProbeRes - 1);
-                    const S32 ty = llclamp((S32)(w * (F32)mProbeRes), 0, mProbeRes - 1);
-                    const F32 hit = mProbeDepth[i][(size_t)ty * mProbeRes + tx];
+                    const S32 tx = llclamp((S32)(u * (F32)take), 0, take - 1);
+                    const S32 ty = llclamp((S32)(w * (F32)take), 0, take - 1);
+                    const F32 hit = mProbeDepth[i][(size_t)ty * take + tx];
 
                     if (hit >= PROBE_MISS * 0.5f) continue;
 
@@ -885,7 +1064,7 @@ void SSWindFlowMap::buildCarveFlags(const Tile& tile)
 void SSWindFlowMap::placeSlices(Tile& tile)
 {
     static LLCachedControl<F32> min_sep(gSavedSettings, "SSAtmoWindFlowSliceMin", 3.f);
-    static LLCachedControl<U32> max_slices(gSavedSettings, "SSAtmoWindFlowSliceMax", 6);
+    static LLCachedControl<U32> max_slices(gSavedSettings, "SSAtmoWindFlowSliceMax", 12);
 
     const F32 sep = llmax(1.f, (F32)min_sep);
     const S32 cap = llclamp((S32)max_slices, SS_WIND_MIN_SLICES, SS_WIND_MAX_SLICES);
@@ -1110,6 +1289,9 @@ void SSWindFlowMap::uploadBridgedMask(const Tile& tile)
 }
 
 // Opens one-cell passages the voxelisation pinched shut, so wind can thread doorways and arches.
+// A partial build only re-examines the box it re-masked - the preserved mask
+// outside it is already bridged, so rescanning it would be wasted work and the
+// box is grown by the bridge reach so a passage crossing its edge is caught.
 void SSWindFlowMap::bridgePassages(const Tile& tile)
 {
     static LLCachedControl<U32> gap(gSavedSettings, "SSAtmoWindFlowPassageGap", 4);
@@ -1145,6 +1327,11 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
         return carved[index(tile, x, y, k)] != 0;
     };
 
+    const S32 x0 = mPartial ? llmax(mMaskC0[0] - reach, 0) : 0;
+    const S32 y0 = mPartial ? llmax(mMaskC0[1] - reach, 0) : 0;
+    const S32 x1 = mPartial ? llmin(mMaskC1[0] + reach, res - 1) : res - 1;
+    const S32 y1 = mPartial ? llmin(mMaskC1[1] + reach, res - 1) : res - 1;
+
     mMaskBridged.assign(solid.begin(), solid.begin() + active);
     std::vector<U8>& bridged = mMaskBridged;
     size_t opened = 0;
@@ -1153,9 +1340,9 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
 
     for (S32 k = 0; k < slices; ++k)
     {
-        for (S32 y = 0; y < res; ++y)
+        for (S32 y = y0; y <= y1; ++y)
         {
-            for (S32 x = 0; x < res; ++x)
+            for (S32 x = x0; x <= x1; ++x)
             {
                 const size_t idx = index(tile, x, y, k);
                 if (solid[idx] < 128) continue;
@@ -1197,13 +1384,14 @@ void SSWindFlowMap::bridgePassages(const Tile& tile)
                           << " between carved ones" << LL_ENDL;
 }
 
-// Uniform location with a warning on miss.
+// Uniform location with a warning on miss. The warning set is thread-local:
+// the solve worker (a second GL thread) asks for the same names.
 static S32 uniformLoc(const LLGLSLShader& shader, const char* name)
 {
     const S32 loc = glGetUniformLocation(shader.mProgramObject, name);
     if (loc < 0)
     {
-        static std::set<std::string> reported;
+        static thread_local std::set<std::string> reported;
         if (reported.insert(shader.mName + "." + name).second)
         {
             LL_WARNS("AtmoMagic") << "wind flow shader " << shader.mName
@@ -1221,6 +1409,15 @@ static void setGrid(LLGLSLShader& shader, S32 res, S32 slices)
 {
     glUniform1i(uniformLoc(shader, "uRes"), res);
     glUniform1i(uniformLoc(shader, "uSlices"), slices);
+}
+
+// Binds the box a pass is restricted to, inclusive tile-local cells. A partial
+// rebuild solves a box against the preserved field, so every pass carries its
+// own box and every shader early-outs outside it.
+static void setBox(LLGLSLShader& shader, const S32 box_min[2], const S32 box_max[2])
+{
+    glUniform2i(uniformLoc(shader, "uBoxMin"), box_min[0], box_min[1]);
+    glUniform2i(uniformLoc(shader, "uBoxMax"), box_max[0], box_max[1]);
 }
 
 // Binds the world extent.
@@ -1248,7 +1445,10 @@ static void setAmbient(LLGLSLShader& shader, const LLVector3* ambient, S32 slice
     glUniform3fv(uniformLoc(shader, "uAmbient"), slices, amb);
 }
 
-// Seeds the velocity volume with ambient wind and the solid mask.
+// Seeds the velocity volume with ambient wind and the solid mask. A partial
+// build first restores the previous mask everywhere so the init pass only has
+// to overwrite the box it re-captured, and the dispatch (and the mask) are
+// confined to that box.
 bool SSWindFlowMap::solveInit(const Tile& tile)
 {
     LL_PROFILE_GPU_ZONE("atmo wind flow init");
@@ -1256,15 +1456,60 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     const S32 res = tile.mRes;
     const S32 slices = tile.mSlices;
 
-    glBindTexture(GL_TEXTURE_2D, mHeightTex);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, res, res, GL_RED, GL_FLOAT, mTop.data());
-    glBindTexture(GL_TEXTURE_2D, 0);
+    // Wait for the previous solve's readback (done on the worker) so this
+    // build's uploads do not race the tail of the last one in the share group.
+    if (mReadbackFence)
+    {
+        glWaitSync((GLsync)mReadbackFence, 0, GL_TIMEOUT_IGNORED);
+        glFlush();
+        glDeleteSync((GLsync)mReadbackFence);
+        mReadbackFence = nullptr;
+    }
+
+    if (mPartial)
+    {
+        const size_t active = (size_t)res * res * slices;
+        if (tile.mSolid.size() >= active)
+        {
+            glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
+            glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, res, res, slices,
+                            GL_RED, GL_UNSIGNED_BYTE, tile.mSolid.data());
+            glBindTexture(GL_TEXTURE_3D, 0);
+        }
+        // Restore the previous velocity outside the mask box while the init
+        // pass re-seeds the box itself: the divergence pass reads that old,
+        // already-converged field everywhere outside the box, and its ~zero
+        // divergence is what lets the projection carry the box's change
+        // downwind through the old field.
+        if (tile.mFlow.size() >= active)
+        {
+            glBindTexture(GL_TEXTURE_3D, mVelTex[0]);
+            glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, res, res, slices,
+                            GL_RGBA, GL_FLOAT, (const F32*)tile.mFlow.data());
+            glBindTexture(GL_TEXTURE_3D, 0);
+        }
+    }
+
+    if (mPartial && mCaptureRes > 0)
+    {
+        glBindTexture(GL_TEXTURE_2D, mHeightTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, mCaptureC0[0], mCaptureC0[1],
+                        mCaptureRes, mCaptureRes, GL_RED, GL_FLOAT,
+                        mTop.data() + (size_t)mCaptureC0[1] * res + mCaptureC0[0]);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    else
+    {
+        glBindTexture(GL_TEXTURE_2D, mHeightTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, res, res, GL_RED, GL_FLOAT, mTop.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 
     glBindTexture(GL_TEXTURE_2D_ARRAY, mProbeTex);
     for (S32 i = 0; i < SS_WIND_PROBES; ++i)
     {
-        if ((S32)mProbeDepth[i].size() < mProbeRes * mProbeRes) continue;
-        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, mProbeRes, mProbeRes, 1,
+        if ((S32)mProbeDepth[i].size() < mProbeTake * mProbeTake) continue;
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, mProbeTake, mProbeTake, 1,
                         GL_RED, GL_FLOAT, mProbeDepth[i].data());
     }
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
@@ -1278,6 +1523,7 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     setExtent(gSSWindInitProgram, tile.mExtent);
     setSliceZ(gSSWindInitProgram, tile.mSliceZ, slices);
     setAmbient(gSSWindInitProgram, tile.mAmbient, slices);
+    setBox(gSSWindInitProgram, mMaskC0, mMaskC1);
     glUniform1f(uniformLoc(gSSWindInitProgram, "uSolidCurve"),
                 llclamp((F32)solid_curve, 0.1f, 4.f));
 
@@ -1305,7 +1551,7 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
         glUniformMatrix4fv(uniformLoc(gSSWindInitProgram, "uProbeView"),
                            SS_WIND_PROBES, GL_FALSE, glm::value_ptr(views[0]));
         glUniform1i(uniformLoc(gSSWindInitProgram, "uProbeCount"), usable);
-        glUniform1i(uniformLoc(gSSWindInitProgram, "uProbeRes"), mProbeRes);
+        glUniform1i(uniformLoc(gSSWindInitProgram, "uProbeRes"), mProbeTake);
         F32 halves[SS_WIND_PROBES] = { 0.f };
         for (S32 i = 0, n = 0; i < SS_WIND_PROBES; ++i)
         {
@@ -1320,40 +1566,67 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     glBindImageTexture(0, mHeightTex,   0, GL_FALSE, 0, GL_READ_ONLY,  GL_R32F);
     glBindImageTexture(1, mSolidTex[0], 0, GL_TRUE,  0, GL_WRITE_ONLY, GL_R8);
     glBindImageTexture(2, mVelTex[0],   0, GL_TRUE,  0, GL_WRITE_ONLY, GL_RGBA16F);
-    glDispatchCompute(groupsFor(res), groupsFor(res), (GLuint)slices);
+    const S32 mw = mMaskC1[0] - mMaskC0[0] + 1;
+    const S32 mh = mMaskC1[1] - mMaskC0[1] + 1;
+    glDispatchCompute(groupsFor(mw), groupsFor(mh), (GLuint)slices);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
     readMaskForBridge(tile);
+
+    // Fence this context's init writes so the worker can safely consume them
+    // in the shared group on its own thread.
+    if (mSolveFence) glDeleteSync((GLsync)mSolveFence);
+    mSolveFence = (void*)glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    glFlush();
+
     return true;
 }
 
 // The iterative compute solve: pressure projection around the solids until the field is divergence-free enough.
+// A partial build skips the pyramid, restores the solved field every, and lets
+// the pressure keep its previous values: the relaxation then only has to absorb
+// the box's change instead of re-establishing the whole field from zero.
 bool SSWindFlowMap::solveRun(const Tile& tile)
 {
     LL_PROFILE_GPU_ZONE("atmo wind flow solve");
 
     drainGLErrors();
 
-    static LLCachedControl<U32> iterations(gSavedSettings, "SSAtmoWindFlowIterations", 128);
+    static LLCachedControl<U32> iterations(gSavedSettings, "SSAtmoWindFlowIterations", 256);
     const S32 iters = llclamp((S32)iterations, 4, 512);
 
     const S32 res = tile.mRes;
     const S32 slices = tile.mSlices;
-    const S32 levels = llmin(mTexLevels, levelCount(res));
+    const S32 levels = mPartial ? 1 : llmin(mTexLevels, levelCount(res));
+
+    const S32 bw = mBoxC1[0] - mBoxC0[0] + 1;
+    const S32 bh = mBoxC1[1] - mBoxC0[1] + 1;
 
     auto groupsFor = [](S32 r) { return (GLuint)((r + 7) / 8); };
 
+    // The Jacobi relaxation alternates two pressure buffers, so the cells it
+    // reads for the box's edge must stay valid in BOTH of them. The solve box is
+    // grown by one cell and the ring around it copies its previous value through
+    // each pass instead of relaxing, keeping both buffers honest outside the box.
+    const GLuint jgx = mPartial ? groupsFor(llmin(mBoxC1[0] + 1, res - 1)
+                                             - llmax(mBoxC0[0] - 1, 0) + 1) : 0u;
+    const GLuint jgy = mPartial ? groupsFor(llmin(mBoxC1[1] + 1, res - 1)
+                                             - llmax(mBoxC0[1] - 1, 0) + 1) : 0u;
+
     uploadBridgedMask(tile);
 
-    gSSWindSeedProgram.bind();
-    setGrid(gSSWindSeedProgram, res, slices);
-    setAmbient(gSSWindSeedProgram, tile.mAmbient, slices);
-    glBindImageTexture(1, mSolidTex[0], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
-    glBindImageTexture(2, mVelTex[0],   0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-    glDispatchCompute(groupsFor(res), groupsFor(res), (GLuint)slices);
-    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    if (!mPartial)
+    {
+        gSSWindSeedProgram.bind();
+        setGrid(gSSWindSeedProgram, res, slices);
+        setAmbient(gSSWindSeedProgram, tile.mAmbient, slices);
+        glBindImageTexture(1, mSolidTex[0], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
+        glBindImageTexture(2, mVelTex[0],   0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+        glDispatchCompute(groupsFor(res), groupsFor(res), (GLuint)slices);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    }
 
-    if (levels > 1)
+    if (!mPartial && levels > 1)
     {
         gSSWindRestrictProgram.bind();
         for (S32 L = 1; L < levels; ++L)
@@ -1371,7 +1644,8 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
     for (S32 L = levels - 1; L >= 0; --L)
     {
         const S32 r = levelRes(res, L);
-        const GLuint groups = groupsFor(r);
+        const GLuint groups_x = mPartial ? groupsFor(bw) : groupsFor(r);
+        const GLuint groups_y = mPartial ? groupsFor(bh) : groupsFor(r);
 
         if (L > 0)
         {
@@ -1380,7 +1654,7 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
             setAmbient(gSSWindSeedProgram, tile.mAmbient, slices);
             glBindImageTexture(1, mSolidTex[L], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
             glBindImageTexture(2, mVelTex[L],   0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-            glDispatchCompute(groups, groups, (GLuint)slices);
+            glDispatchCompute(groupsFor(r), groupsFor(r), (GLuint)slices);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         }
 
@@ -1389,17 +1663,32 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
         setExtent(gSSWindDivProgram, tile.mExtent);
         setSliceZ(gSSWindDivProgram, tile.mSliceZ, slices);
         setAmbient(gSSWindDivProgram, tile.mAmbient, slices);
+        setBox(gSSWindDivProgram, mBoxC0, mBoxC1);
         glBindImageTexture(2, mVelTex[L], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_RGBA16F);
         glBindImageTexture(3, mDivTex[L], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R32F);
-        glDispatchCompute(groups, groups, (GLuint)slices);
+        glDispatchCompute(groups_x, groups_y, (GLuint)slices);
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
         if (L == levels - 1)
         {
-            std::vector<F32> zeros((size_t)r * r * slices, 0.f);
-            glBindTexture(GL_TEXTURE_3D, mPressureTex[L][0]);
-            glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, r, r, slices, GL_RED, GL_FLOAT, zeros.data());
-            glBindTexture(GL_TEXTURE_3D, 0);
+            if (mPartial && tile.mPressure.size() >= (size_t)r * r * slices)
+            {
+                // Warm start the pressure Poisson from the previous answer. The
+                // box's edges then meet the real previous field instead of an
+                // invented zero curtain, so the re-solve only adjusts what the
+                // edit changed.
+                glBindTexture(GL_TEXTURE_3D, mPressureTex[L][0]);
+                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, r, r, slices,
+                                GL_RED, GL_FLOAT, tile.mPressure.data());
+                glBindTexture(GL_TEXTURE_3D, 0);
+            }
+            else
+            {
+                std::vector<F32> zeros((size_t)r * r * slices, 0.f);
+                glBindTexture(GL_TEXTURE_3D, mPressureTex[L][0]);
+                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, r, r, slices, GL_RED, GL_FLOAT, zeros.data());
+                glBindTexture(GL_TEXTURE_3D, 0);
+            }
         }
         else
         {
@@ -1407,7 +1696,7 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
             setGrid(gSSWindProlongProgram, r, slices);
             glBindImageTexture(6, mPressureTex[L + 1][src], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
             glBindImageTexture(7, mPressureTex[L][0],       0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R32F);
-            glDispatchCompute(groups, groups, (GLuint)slices);
+            glDispatchCompute(groupsFor(r), groupsFor(r), (GLuint)slices);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
         }
 
@@ -1415,6 +1704,7 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
         setGrid(gSSWindJacobiProgram, r, slices);
         setExtent(gSSWindJacobiProgram, tile.mExtent);
         setSliceZ(gSSWindJacobiProgram, tile.mSliceZ, slices);
+        setBox(gSSWindJacobiProgram, mBoxC0, mBoxC1);
         glBindImageTexture(1, mSolidTex[L], 0, GL_TRUE, 0, GL_READ_ONLY, GL_R8);
         glBindImageTexture(3, mDivTex[L],   0, GL_TRUE, 0, GL_READ_ONLY, GL_R32F);
 
@@ -1423,11 +1713,13 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
         {
             glBindImageTexture(4, mPressureTex[L][src],     0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
             glBindImageTexture(5, mPressureTex[L][1 - src], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R32F);
-            glDispatchCompute(groups, groups, (GLuint)slices);
+            glDispatchCompute(mPartial ? jgx : groups_x, mPartial ? jgy : groups_y, (GLuint)slices);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
             src = 1 - src;
         }
     }
+
+    mJacobiBuffer = src;
 
     static LLCachedControl<U32> shelter(gSavedSettings, "SSAtmoWindFlowShelterSteps", 2);
     static LLCachedControl<F32> shelter_amt(gSavedSettings, "SSAtmoWindFlowShelterAmount", 0.4f);
@@ -1439,14 +1731,15 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
     setExtent(gSSWindProjectProgram, tile.mExtent);
     setSliceZ(gSSWindProjectProgram, tile.mSliceZ, slices);
     setAmbient(gSSWindProjectProgram, tile.mAmbient, slices);
+    setBox(gSSWindProjectProgram, mBoxC0, mBoxC1);
     glUniform1i(uniformLoc(gSSWindProjectProgram, "uShelterSteps"), llclamp((S32)shelter, 0, 32));
     glUniform1f(uniformLoc(gSSWindProjectProgram, "uShelterAmount"), llclamp((F32)shelter_amt, 0.f, 1.f));
     glUniform1f(uniformLoc(gSSWindProjectProgram, "uStrength"), llclamp((F32)strength, 0.f, 8.f));
     glUniform1f(uniformLoc(gSSWindProjectProgram, "uMaxGain"), llclamp((F32)max_gain, 0.f, 32.f));
-    glBindImageTexture(1, mSolidTex[0],          0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
-    glBindImageTexture(2, mVelTex[0],            0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA16F);
-    glBindImageTexture(4, mPressureTex[0][src],  0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
-    glDispatchCompute(groupsFor(res), groupsFor(res), (GLuint)slices);
+    glBindImageTexture(1, mSolidTex[0],         0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
+    glBindImageTexture(2, mVelTex[0],           0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA16F);
+    glBindImageTexture(4, mPressureTex[0][src], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
+    glDispatchCompute(groupsFor(mPartial ? bw : res), groupsFor(mPartial ? bh : res), (GLuint)slices);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
 
     gSSWindProjectProgram.unbind();
@@ -1454,7 +1747,163 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
     return glGetError() == GL_NO_ERROR;
 }
 
-// Copies the solved volume off the GPU.
+// <SS:Nexii> The same solve, submitted with raw GL on the worker thread's own
+// shared context. It deliberately does not call LLGLSLShader::bind() or touch
+// gGL: those are the main thread's state machine, and racing on them from a
+// second context is exactly the crash the worker exists to avoid. Program
+// binding and the uniform writes are context-local and safe.
+bool SSWindFlowMap::solveRunWorker(const Tile& tile)
+{
+    drainGLErrors();
+
+    static LLCachedControl<U32> iterations(gSavedSettings, "SSAtmoWindFlowIterations", 256);
+    const S32 iters = llclamp((S32)iterations, 4, 512);
+
+    const S32 res = tile.mRes;
+    const S32 slices = tile.mSlices;
+    const S32 levels = mPartial ? 1 : llmin(mTexLevels, levelCount(res));
+
+    const S32 bw = mBoxC1[0] - mBoxC0[0] + 1;
+    const S32 bh = mBoxC1[1] - mBoxC0[1] + 1;
+
+    auto groupsFor = [](S32 r) { return (GLuint)((r + 7) / 8); };
+
+    const GLuint jgx = mPartial ? groupsFor(llmin(mBoxC1[0] + 1, res - 1)
+                                             - llmax(mBoxC0[0] - 1, 0) + 1) : 0u;
+    const GLuint jgy = mPartial ? groupsFor(llmin(mBoxC1[1] + 1, res - 1)
+                                             - llmax(mBoxC0[1] - 1, 0) + 1) : 0u;
+
+    if (!mPartial)
+    {
+        bindProgramRaw(gSSWindSeedProgram);
+        setGrid(gSSWindSeedProgram, res, slices);
+        setAmbient(gSSWindSeedProgram, tile.mAmbient, slices);
+        glBindImageTexture(1, mSolidTex[0], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
+        glBindImageTexture(2, mVelTex[0],   0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+        glDispatchCompute(groupsFor(res), groupsFor(res), (GLuint)slices);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    }
+
+    if (!mPartial && levels > 1)
+    {
+        bindProgramRaw(gSSWindRestrictProgram);
+        for (S32 L = 1; L < levels; ++L)
+        {
+            const S32 r = levelRes(res, L);
+            setGrid(gSSWindRestrictProgram, r, slices);
+            glBindImageTexture(6, mSolidTex[L - 1], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
+            glBindImageTexture(7, mSolidTex[L],     0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R8);
+            glDispatchCompute(groupsFor(r), groupsFor(r), (GLuint)slices);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        }
+    }
+
+    S32 src = 0;
+    for (S32 L = levels - 1; L >= 0; --L)
+    {
+        const S32 r = levelRes(res, L);
+        const GLuint groups_x = mPartial ? groupsFor(bw) : groupsFor(r);
+        const GLuint groups_y = mPartial ? groupsFor(bh) : groupsFor(r);
+
+        if (L > 0)
+        {
+            bindProgramRaw(gSSWindSeedProgram);
+            setGrid(gSSWindSeedProgram, r, slices);
+            setAmbient(gSSWindSeedProgram, tile.mAmbient, slices);
+            glBindImageTexture(1, mSolidTex[L], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
+            glBindImageTexture(2, mVelTex[L],   0, GL_TRUE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+            glDispatchCompute(groupsFor(r), groupsFor(r), (GLuint)slices);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        }
+
+        bindProgramRaw(gSSWindDivProgram);
+        setGrid(gSSWindDivProgram, r, slices);
+        setExtent(gSSWindDivProgram, tile.mExtent);
+        setSliceZ(gSSWindDivProgram, tile.mSliceZ, slices);
+        setAmbient(gSSWindDivProgram, tile.mAmbient, slices);
+        setBox(gSSWindDivProgram, mBoxC0, mBoxC1);
+        glBindImageTexture(2, mVelTex[L], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_RGBA16F);
+        glBindImageTexture(3, mDivTex[L], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R32F);
+        glDispatchCompute(groups_x, groups_y, (GLuint)slices);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+        if (L == levels - 1)
+        {
+            if (mPartial && tile.mPressure.size() >= (size_t)r * r * slices)
+            {
+                glBindTexture(GL_TEXTURE_3D, mPressureTex[L][0]);
+                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, r, r, slices,
+                                GL_RED, GL_FLOAT, tile.mPressure.data());
+                glBindTexture(GL_TEXTURE_3D, 0);
+            }
+            else
+            {
+                std::vector<F32> zeros((size_t)r * r * slices, 0.f);
+                glBindTexture(GL_TEXTURE_3D, mPressureTex[L][0]);
+                glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, r, r, slices, GL_RED, GL_FLOAT, zeros.data());
+                glBindTexture(GL_TEXTURE_3D, 0);
+            }
+        }
+        else
+        {
+            bindProgramRaw(gSSWindProlongProgram);
+            setGrid(gSSWindProlongProgram, r, slices);
+            glBindImageTexture(6, mPressureTex[L + 1][src], 0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
+            glBindImageTexture(7, mPressureTex[L][0],       0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R32F);
+            glDispatchCompute(groupsFor(r), groupsFor(r), (GLuint)slices);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+        }
+
+        bindProgramRaw(gSSWindJacobiProgram);
+        setGrid(gSSWindJacobiProgram, r, slices);
+        setExtent(gSSWindJacobiProgram, tile.mExtent);
+        setSliceZ(gSSWindJacobiProgram, tile.mSliceZ, slices);
+        setBox(gSSWindJacobiProgram, mBoxC0, mBoxC1);
+        glBindImageTexture(1, mSolidTex[L], 0, GL_TRUE, 0, GL_READ_ONLY, GL_R8);
+        glBindImageTexture(3, mDivTex[L],   0, GL_TRUE, 0, GL_READ_ONLY, GL_R32F);
+
+        src = 0;
+        for (S32 i = 0; i < iters; ++i)
+        {
+            glBindImageTexture(4, mPressureTex[L][src],     0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
+            glBindImageTexture(5, mPressureTex[L][1 - src], 0, GL_TRUE, 0, GL_WRITE_ONLY, GL_R32F);
+            glDispatchCompute(mPartial ? jgx : groups_x, mPartial ? jgy : groups_y, (GLuint)slices);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            src = 1 - src;
+        }
+    }
+
+    mJacobiBuffer = src;
+
+    static LLCachedControl<U32> shelter(gSavedSettings, "SSAtmoWindFlowShelterSteps", 2);
+    static LLCachedControl<F32> shelter_amt(gSavedSettings, "SSAtmoWindFlowShelterAmount", 0.4f);
+    static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoWindFlowStrength", 2.f);
+    static LLCachedControl<F32> max_gain(gSavedSettings, "SSAtmoWindFlowMaxGain", 4.f);
+
+    bindProgramRaw(gSSWindProjectProgram);
+    setGrid(gSSWindProjectProgram, res, slices);
+    setExtent(gSSWindProjectProgram, tile.mExtent);
+    setSliceZ(gSSWindProjectProgram, tile.mSliceZ, slices);
+    setAmbient(gSSWindProjectProgram, tile.mAmbient, slices);
+    setBox(gSSWindProjectProgram, mBoxC0, mBoxC1);
+    glUniform1i(uniformLoc(gSSWindProjectProgram, "uShelterSteps"), llclamp((S32)shelter, 0, 32));
+    glUniform1f(uniformLoc(gSSWindProjectProgram, "uShelterAmount"), llclamp((F32)shelter_amt, 0.f, 1.f));
+    glUniform1f(uniformLoc(gSSWindProjectProgram, "uStrength"), llclamp((F32)strength, 0.f, 8.f));
+    glUniform1f(uniformLoc(gSSWindProjectProgram, "uMaxGain"), llclamp((F32)max_gain, 0.f, 32.f));
+    glBindImageTexture(1, mSolidTex[0],          0, GL_TRUE, 0, GL_READ_ONLY,  GL_R8);
+    glBindImageTexture(2, mVelTex[0],            0, GL_TRUE, 0, GL_READ_WRITE, GL_RGBA16F);
+    glBindImageTexture(4, mPressureTex[0][src],  0, GL_TRUE, 0, GL_READ_ONLY,  GL_R32F);
+    glDispatchCompute(groupsFor(mPartial ? bw : res), groupsFor(mPartial ? bh : res), (GLuint)slices);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_TEXTURE_UPDATE_BARRIER_BIT);
+
+    glUseProgram(0);
+
+    return glGetError() == GL_NO_ERROR;
+}
+// </SS:Nexii>
+
+// Copies the solved volume off the GPU. The pressure comes back too - it is a
+// per-tile thing a later partial rebuild warm-starts from.
 void SSWindFlowMap::readback(Tile& tile)
 {
     const size_t allocated = (size_t)mTexRes * mTexRes * mTexSlices;
@@ -1468,22 +1917,55 @@ void SSWindFlowMap::readback(Tile& tile)
     glBindTexture(GL_TEXTURE_3D, mSolidTex[0]);
     glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_UNSIGNED_BYTE, mSolidRaw.data());
     glBindTexture(GL_TEXTURE_3D, 0);
+
+    mPressureRaw.resize(allocated);
+    glBindTexture(GL_TEXTURE_3D, mPressureTex[0][mJacobiBuffer]);
+    glGetTexImage(GL_TEXTURE_3D, 0, GL_RED, GL_FLOAT, mPressureRaw.data());
+    glBindTexture(GL_TEXTURE_3D, 0);
 }
 
-// Unpacks the readback into the CPU-sampleable arrays.
+// Unpacks the readback into the CPU-sampleable arrays. A partial build only
+// overwrites the solve box - everything else keeps the field it already had.
 void SSWindFlowMap::unpackVolume(Tile& tile)
 {
     const size_t active = (size_t)tile.mRes * tile.mRes * tile.mSlices;
     if (mVolumeRaw.size() < active * 4 || mSolidRaw.size() < active) return;
 
-    tile.mFlow.resize(active);
-    for (size_t i = 0; i < active; ++i)
+    if (mPartial)
     {
-        tile.mFlow[i].set(mVolumeRaw[i * 4], mVolumeRaw[i * 4 + 1],
-                          mVolumeRaw[i * 4 + 2], mVolumeRaw[i * 4 + 3]);
+        if (tile.mFlow.size() < active) tile.mFlow.resize(active, LLVector4(0.f, 0.f, 0.f, 0.f));
+        if (tile.mSolid.size() < active) tile.mSolid.assign(active, 0);
+
+        for (S32 y = mBoxC0[1]; y <= mBoxC1[1]; ++y)
+        {
+            for (S32 x = mBoxC0[0]; x <= mBoxC1[0]; ++x)
+            {
+                for (S32 k = 0; k < tile.mSlices; ++k)
+                {
+                    const size_t idx = index(tile, x, y, k);
+                    tile.mFlow[idx].set(mVolumeRaw[idx * 4], mVolumeRaw[idx * 4 + 1],
+                                        mVolumeRaw[idx * 4 + 2], mVolumeRaw[idx * 4 + 3]);
+                    tile.mSolid[idx] = mSolidRaw[idx];
+                }
+            }
+        }
+    }
+    else
+    {
+        tile.mFlow.resize(active);
+        for (size_t i = 0; i < active; ++i)
+        {
+            tile.mFlow[i].set(mVolumeRaw[i * 4], mVolumeRaw[i * 4 + 1],
+                              mVolumeRaw[i * 4 + 2], mVolumeRaw[i * 4 + 3]);
+        }
+
+        tile.mSolid.assign(mSolidRaw.begin(), mSolidRaw.begin() + active);
     }
 
-    tile.mSolid.assign(mSolidRaw.begin(), mSolidRaw.begin() + active);
+    if (mPressureRaw.size() >= active)
+    {
+        tile.mPressure.assign(mPressureRaw.begin(), mPressureRaw.begin() + active);
+    }
 }
 
 // The tile currently being built.
@@ -1507,16 +1989,37 @@ void SSWindFlowMap::releaseScratch()
     mVolumeRaw.shrink_to_fit();
     mSolidRaw.clear();
     mSolidRaw.shrink_to_fit();
+    mPressureRaw.clear();
+    mPressureRaw.shrink_to_fit();
     mMaskChanged = false;
+
+    mPartial = false;
+    mBoxC0[0] = mBoxC0[1] = 0;
+    mBoxC1[0] = mBoxC1[1] = -1;
+    mMaskC0[0] = mMaskC0[1] = 0;
+    mMaskC1[0] = mMaskC1[1] = -1;
+    mCaptureC0[0] = mCaptureC0[1] = 0;
+    mCaptureC1[0] = mCaptureC1[1] = -1;
+    mProbeTake = 0;
+    mJacobiBuffer = 0;
+
+    if (mSolveFence) { glDeleteSync((GLsync)mSolveFence); mSolveFence = nullptr; }
+    if (mReadbackFence) { glDeleteSync((GLsync)mReadbackFence); mReadbackFence = nullptr; }
 }
 
 // Cancels the in-flight build cleanly.
 void SSWindFlowMap::abandonBuild()
 {
+    // A partial build consumed the tile's edit box; put it back so the edits
+    // it was reacting to are not silently lost with the build.
+    if (mBuildRegion != 0 && mConsumedDirty[0] >= 0) restoreConsumedDirty();
+
     ++mBuildGeneration;
     mStage = EStage::IDLE;
     mBuildRegion = 0;
     mBuildProbe = 0;
+    mConsumedDirty[0] = mConsumedDirty[1] = -1;
+    mConsumedDirty[2] = mConsumedDirty[3] = -1;
 
     if (!mWorkerBusy) releaseScratch();
 }
@@ -1564,6 +2067,237 @@ void SSWindFlowMap::postWorker(std::function<void()> work, EStage next)
         });
 }
 
+// <SS:Nexii> The GL worker backing the solve thread, created lazily on the
+// first rebuild that wants it. Only a platform that can hand over a context
+// shared with the viewer's (Windows/SDL shared contexts, not headless) counts;
+// on anything else the rebuild falls back to the main-thread path unchanged.
+bool SSWindFlowMap::glWorker()
+{
+    static LLCachedControl<bool> worker_setting(gSavedSettings, "SSAtmoWindFlowWorkerGL", true);
+    if (!worker_setting) return false;
+    if (mGLWorkerTried) return mGLWorker && mGLWorker->ready();
+    mGLWorkerTried = true;
+
+    if (!gViewerWindow)
+    {
+        return false;
+    }
+
+    mGLWorker = new SSWindFlowGLWorker();
+    LLWindow* window = gViewerWindow->getWindow();
+    if (!window || !mGLWorker->create(window))
+    {
+        LL_WARNS("AtmoMagic") << "Wind flow: no shared GL context for the solve "
+                                 "worker; falls back to the main thread" << LL_ENDL;
+        delete mGLWorker;
+        mGLWorker = nullptr;
+        return false;
+    }
+
+    LL_INFOS("AtmoMagic") << "Wind flow: the solve now runs on a dedicated GL "
+                             "worker thread behind the frame loop" << LL_ENDL;
+    mWorkerReady = true;
+    return true;
+}
+
+// Completion of the worker's solve+readback block, back on the main thread.
+void SSWindFlowMap::glSolveDone(U32 generation)
+{
+    mWorkerBusy = false;
+
+    if (mClearPending)
+    {
+        mClearPending = false;
+        clear();
+        return;
+    }
+
+    if (generation != mBuildGeneration)
+    {
+        releaseScratch();
+        return;
+    }
+
+    if (mSolveFail)
+    {
+        mSolveFail = false;
+        LL_WARNS("AtmoMagic") << "Wind flow build abandoned: the solve failed "
+                                 "on the GL worker" << LL_ENDL;
+        abandonBuild();
+        return;
+    }
+
+    mStage = EStage::COMMIT;
+}
+
+// Posts the whole solve+readback+convert to the GL worker. The blocking
+// glGetTexImage - the rebuild's single biggest cost - runs on that worker
+// thread behind the frame loop, and the CPU halves (unpack, carve flags) ride
+// along so the main thread only has to COMMIT when it reports back. The build
+// tile (mBuild) is fully populated by the time this is called, and only this
+// worker (or the main thread) touches it until COMMIT, so it needs no locking.
+void SSWindFlowMap::postSolveGL(const Tile&)
+{
+    if (!glWorker()) return;
+
+    mWorkerBusy = true;
+    mSolveFail = false;
+    mLastSolveWorker = true;
+    const U32 generation = mBuildGeneration;
+    LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
+    const F64 block_start = LLTimer::getElapsedSeconds();
+
+    mGLWorker->queue().post([this, generation, main, block_start]()
+    {
+        // Acquire the main context's init writes before touching the shared
+        // textures, then let the readback below ride its own fence back.
+        if (mSolveFence)
+        {
+            glWaitSync((GLsync)mSolveFence, 0, GL_TIMEOUT_IGNORED);
+            glFlush();
+            glDeleteSync((GLsync)mSolveFence);
+            mSolveFence = nullptr;
+        }
+
+        uploadBridgedMask(mBuild);
+        if (!solveRunWorker(mBuild)) mSolveFail = true;
+        readback(mBuild);
+        stageConvert(mBuild);
+
+        mSolveBlockMS.store((F32)((LLTimer::getElapsedSeconds() - block_start) * 1000.0),
+                            std::memory_order_relaxed);
+
+        if (mReadbackFence) glDeleteSync((GLsync)mReadbackFence);
+        mReadbackFence = (void*)glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+        glFlush();
+
+        if (main)
+        {
+            main->post([this, generation]() { glSolveDone(generation); });
+        }
+        else
+        {
+            glSolveDone(generation);
+        }
+    });
+}
+// </SS:Nexii>
+
+// Turns a tile's pending edit box into the three regions a partial rebuild
+// needs. The mask box is where the solid mask can change - the edits plus a
+// cell of slack, so a wall flush with the edge of the box is caught and not
+// left frozen on the old side of the line. The capture footprint wraps the mask
+// box a little more, so the height capture and the probes have geometry on
+// every side to carve and measure against. The solve box keeps all of that and
+// runs downwind to the tile edge: a change is only felt downwind of itself,
+// plus the stagnation pocket immediately upwind. Returns false when the box has
+// grown to most of the tile - then the full solve it would reduce to is cheaper
+// than solving it with a box, so the caller does the full thing.
+//
+// All boxes are inclusive tile-local cell ranges, and the wind's horizontal
+// projection picks the downwind sides.
+bool SSWindFlowMap::partialBoxes(const Tile& tile, const LLVector3& wind_h)
+{
+    const S32 res = tile.mRes;
+
+    const S32 dx0 = tile.mDirtyC0[0];
+    const S32 dy0 = tile.mDirtyC0[1];
+    const S32 dx1 = tile.mDirtyC1[0];
+    const S32 dy1 = tile.mDirtyC1[1];
+
+    if (dx0 < 0 || dy0 < 0 || dx1 < dx0 || dy1 < dy0) return false;
+
+    mMaskC0[0] = llmax(dx0 - 1, 0);
+    mMaskC0[1] = llmax(dy0 - 1, 0);
+    mMaskC1[0] = llmin(dx1 + 1, res - 1);
+    mMaskC1[1] = llmin(dy1 + 1, res - 1);
+
+    mCaptureC0[0] = llmax(mMaskC0[0] - PARTIAL_CAPTURE_CELLS, 0);
+    mCaptureC0[1] = llmax(mMaskC0[1] - PARTIAL_CAPTURE_CELLS, 0);
+    mCaptureC1[0] = llmin(mMaskC1[0] + PARTIAL_CAPTURE_CELLS, res - 1);
+    mCaptureC1[1] = llmin(mMaskC1[1] + PARTIAL_CAPTURE_CELLS, res - 1);
+
+    const S32 cap_w = mCaptureC1[0] - mCaptureC0[0] + 1;
+    const S32 cap_h = mCaptureC1[1] - mCaptureC0[1] + 1;
+    mCaptureRes = llmax(cap_w, cap_h);
+
+    const F32 cell = tile.mExtent / (F32)res;
+    mCaptureExtent = (F32)mCaptureRes * cell;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    const LLVector3 base = (regionp ? regionp->getOriginAgent() : LLVector3::zero)
+                         + tile.mOriginRegion;
+    mCaptureCentre.mV[VX] = base.mV[VX] + ((F32)mCaptureC0[0] + (F32)mCaptureRes * 0.5f) * cell;
+    mCaptureCentre.mV[VY] = base.mV[VY] + ((F32)mCaptureC0[1] + (F32)mCaptureRes * 0.5f) * cell;
+    mCaptureCentre.mV[VZ] = 0.f;
+
+    const F32 wx = wind_h.mV[VX];
+    const F32 wy = wind_h.mV[VY];
+
+    if (fabsf(wx) < 0.01f && fabsf(wy) < 0.01f)
+    {
+        // No wind to speak of: an edit only disturbs a compact neighbourhood.
+        mBoxC0[0] = llmax(mMaskC0[0] - PARTIAL_UPWIND_CELLS, 0);
+        mBoxC0[1] = llmax(mMaskC0[1] - PARTIAL_LATERAL_CELLS, 0);
+        mBoxC1[0] = llmin(mMaskC1[0] + PARTIAL_UPWIND_CELLS, res - 1);
+        mBoxC1[1] = llmin(mMaskC1[1] + PARTIAL_LATERAL_CELLS, res - 1);
+    }
+    else if (fabsf(wx) >= fabsf(wy))
+    {
+        // Wind mostly along X: tail to the downwind edge, headwind pocket on X,
+        // wake width roughly symmetric across Y.
+        mBoxC0[0] = (wx < 0.f) ? 0 : llmax(mMaskC0[0] - PARTIAL_UPWIND_CELLS, 0);
+        mBoxC1[0] = (wx < 0.f) ? llmin(mMaskC1[0] + PARTIAL_UPWIND_CELLS, res - 1)
+                               : res - 1;
+        mBoxC0[1] = llmax(mMaskC0[1] - PARTIAL_LATERAL_CELLS, 0);
+        mBoxC1[1] = llmin(mMaskC1[1] + PARTIAL_LATERAL_CELLS, res - 1);
+    }
+    else
+    {
+        mBoxC0[1] = (wy < 0.f) ? 0 : llmax(mMaskC0[1] - PARTIAL_UPWIND_CELLS, 0);
+        mBoxC1[1] = (wy < 0.f) ? llmin(mMaskC1[1] + PARTIAL_UPWIND_CELLS, res - 1)
+                               : res - 1;
+        mBoxC0[0] = llmax(mMaskC0[0] - PARTIAL_LATERAL_CELLS, 0);
+        mBoxC1[0] = llmin(mMaskC1[0] + PARTIAL_LATERAL_CELLS, res - 1);
+    }
+
+    const S32 bw = mBoxC1[0] - mBoxC0[0] + 1;
+    const S32 bh = mBoxC1[1] - mBoxC0[1] + 1;
+    return ((F32)bw * (F32)bh) <= PARTIAL_FRACTION_CAP * (F32)res * (F32)res;
+}
+
+// Returns an abandoned partial build's edits to the tile that owned them. A
+// consumed box is held in mConsumedDirty throughout the build, so a failed
+// capture or solve does not permanently smuggle the edit it was reacting to.
+void SSWindFlowMap::restoreConsumedDirty()
+{
+    const S32 x0 = mConsumedDirty[0];
+    const S32 y0 = mConsumedDirty[1];
+    const S32 x1 = mConsumedDirty[2];
+    const S32 y1 = mConsumedDirty[3];
+    if (x0 < 0 || mBuildRegion == 0) return;
+
+    auto it = mTiles.find(mBuildRegion);
+    if (it == mTiles.end() || !it->second.mValid) return;
+
+    Tile& tile = it->second;
+    if (tile.mDirty && tile.mDirtyC0[0] >= 0)
+    {
+        tile.mDirtyC0[0] = llmin(tile.mDirtyC0[0], x0);
+        tile.mDirtyC0[1] = llmin(tile.mDirtyC0[1], y0);
+        tile.mDirtyC1[0] = llmax(tile.mDirtyC1[0], x1);
+        tile.mDirtyC1[1] = llmax(tile.mDirtyC1[1], y1);
+    }
+    else
+    {
+        tile.mDirtyC0[0] = x0;
+        tile.mDirtyC0[1] = y0;
+        tile.mDirtyC1[0] = x1;
+        tile.mDirtyC1[1] = y1;
+    }
+    tile.mDirty = true;
+}
+
 // Starts a tile's staged build.
 bool SSWindFlowMap::beginBuild(Tile& tile)
 {
@@ -1573,20 +2307,82 @@ bool SSWindFlowMap::beginBuild(Tile& tile)
     S32 res; F32 extent, margin;
     desiredGeometry(regionp, res, extent, margin);
 
-    mBuild = Tile();
-    mBuild.mRegionHandle = tile.mRegionHandle;
-    mBuild.mRes = res;
-    mBuild.mExtent = extent;
-    mBuild.mMargin = margin;
-    mBuild.mOriginRegion.set(-margin, -margin, 0.f);
+    // An edit-only staleness is a box solve: the previous field minus whatever
+    // the edit box took downwind of itself can be carried over. Anything else -
+    // a wind swing, a track move, a tuning or geometry change - invalidates the
+    // whole field and must solve it whole under the current settings.
+    static LLCachedControl<bool> partial_setting(gSavedSettings, "SSAtmoWindFlowPartial", true);
 
-    chooseBand(mBuild, regionp);
+    mPartial = false;
+    const LLVector3 wind_now = SSAtmoMagic::getInstance()->wind();
+    if (partial_setting && tile.mValid && hasPendingEdits(tile)
+        && (wind_now - tile.mBuiltWind).magVec() <= WIND_EPSILON
+        && tile.mTuning == tuningSignature()
+        && tile.mTrack == SSAtmoTrackManager::getInstance()->currentTrack()
+        && tile.mRes == res && fabsf(tile.mExtent - extent) <= 0.5f)
+    {
+        mPartial = partialBoxes(tile, wind_now);
+    }
+
+    // Name the driver: one line per rebuild, throttled to reason changes (a
+    // tile churning through rebuilds logs the same cause once, then again only
+    // when the cause itself changes or thirty seconds have passed).
+    const std::string reason = solveStaleReason(tile);
+    if (reason != mLastRebuildReason || SSAtmoMagic::getInstance()->sharedTime() - mLastRebuildLog > 30.0)
+    {
+        LL_INFOS("AtmoMagic") << "flow rebuild r" << (S32)(tile.mRegionHandle & 0xffff)
+                              << ": " << reason
+                              << (mPartial ? llformat(" (partial box %d-%d, %d-%d of %d)",
+                                                      mBoxC0[0], mBoxC1[0], mBoxC0[1], mBoxC1[1], res)
+                                           : std::string())
+                              << LL_ENDL;
+        mLastRebuildReason = reason;
+        mLastRebuildLog = SSAtmoMagic::getInstance()->sharedTime();
+    }
+
+    // The build rides on a copy of the live tile. A partial one needs the old
+    // field to merge the solve box into; a full one replaces it wholesale. The
+    // build never runs against a region origin shift in mid-flight either way.
+    mBuild = tile;
+
+    if (!mPartial)
+    {
+        mBuild.mRes = res;
+        mBuild.mExtent = extent;
+        mBuild.mMargin = margin;
+        mBuild.mOriginRegion.set(-margin, -margin, 0.f);
+
+        chooseBand(mBuild, regionp);
+
+        mBoxC0[0] = mBoxC0[1] = 0;
+        mBoxC1[0] = mBoxC1[1] = res - 1;
+        mMaskC0[0] = mMaskC0[1] = 0;
+        mMaskC1[0] = mMaskC1[1] = res - 1;
+        mCaptureC0[0] = mCaptureC0[1] = 0;
+        mCaptureC1[0] = mCaptureC1[1] = res - 1;
+        mCaptureRes = res;
+        mCaptureExtent = extent;
+        mCaptureCentre.set(regionp->getOriginAgent().mV[VX] - margin + extent * 0.5f,
+                           regionp->getOriginAgent().mV[VY] - margin + extent * 0.5f,
+                           0.f);
+    }
+
+    // Consume the pending edits so anything that lands during the build starts
+    // a fresh box. They are carried into the committed tile or restored on
+    // abandon.
+    mConsumedDirty[0] = (hasPendingEdits(tile)) ? tile.mDirtyC0[0] : -1;
+    mConsumedDirty[1] = (hasPendingEdits(tile)) ? tile.mDirtyC0[1] : -1;
+    mConsumedDirty[2] = (hasPendingEdits(tile)) ? tile.mDirtyC1[0] : -1;
+    mConsumedDirty[3] = (hasPendingEdits(tile)) ? tile.mDirtyC1[1] : -1;
 
     tile.mDirty = false;
+    tile.mDirtyC0[0] = tile.mDirtyC0[1] = -1;
+    tile.mDirtyC1[0] = tile.mDirtyC1[1] = -1;
 
     mBuildRegion = tile.mRegionHandle;
     mBuildProbe = 0;
     mBuildStart = LLTimer::getElapsedSeconds();
+    mSolveFail = false;
     mStage = EStage::CAPTURE_TOP;
     return true;
 }
@@ -1605,11 +2401,14 @@ bool SSWindFlowMap::stageCaptureProbe(Tile& tile, S32 which)
     return captureProbe(tile, which);
 }
 
-// Stage: probe reconstruction and slice placement, off-thread.
+// Stage: probe reconstruction and slice placement, off-thread. A partial build
+// keeps the previous slab layout - re-placing slices would invalidate the whole
+// volume it is carefully merging into - so only the hidden-surface
+// reconstruction runs and the solid fill is re-measured over the merged heights.
 void SSWindFlowMap::stageReduce(Tile& tile)
 {
     reconstructHidden(tile);
-    placeSlices(tile);
+    if (!mPartial) placeSlices(tile);
 
     tile.mSurfaceTop = mTop;
     tile.mSolidFill = 0.f;
@@ -1677,8 +2476,21 @@ void SSWindFlowMap::stageCommit(Tile& live)
     mBuild.mBuildTime = SSAtmoMagic::getInstance()->sharedTime();
     mBuild.mValid = true;
 
+    // Anything that settled while we were building stays pending.
     mBuild.mDirty = live.mDirty;
     mBuild.mLastTouched = live.mLastTouched;
+    if (live.mDirty)
+    {
+        mBuild.mDirtyC0[0] = live.mDirtyC0[0];
+        mBuild.mDirtyC0[1] = live.mDirtyC0[1];
+        mBuild.mDirtyC1[0] = live.mDirtyC1[0];
+        mBuild.mDirtyC1[1] = live.mDirtyC1[1];
+    }
+    else
+    {
+        mBuild.mDirtyC0[0] = mBuild.mDirtyC0[1] = -1;
+        mBuild.mDirtyC1[0] = mBuild.mDirtyC1[1] = -1;
+    }
 
     live = std::move(mBuild);
     mBuild = Tile();
@@ -1687,10 +2499,31 @@ void SSWindFlowMap::stageCommit(Tile& live)
 
     ++mBuildCount;
     mSolveMS = (F32)((LLTimer::getElapsedSeconds() - mBuildStart) * 1000.0);
+    mLastBuildPartial = mPartial;
 
-    auditProbes(tile);
+    // <SS:Nexii> Telemetry: the full/partial split and the box's share of the
+    // tile feed the info overlay's "how well the rebuilds are doing".
+    if (mPartial)
+    {
+        ++mPartialBuilds;
+        const F64 area = (F64)(mBoxC1[0] - mBoxC0[0] + 1) * (F64)(mBoxC1[1] - mBoxC0[1] + 1);
+        const F64 total = (F64)tile.mRes * tile.mRes;
+        if (total > 0.0)
+        {
+            mPartialAreaSum += area / total;
+            ++mPartialCount;
+        }
+    }
+    else
+    {
+        ++mFullBuilds;
+    }
+    // </SS:Nexii>
+
+    if (!mPartial) auditProbes(tile);
 
     LL_INFOS("AtmoMagic") << "Wind flow solved region " << tile.mRegionHandle
+                          << (mPartial ? " (partial)" : "")
                           << ": " << tile.mRes << " cells, " << tile.mSlices << " slabs, "
                           << llformat("%.0f%% solid", tile.mSolidFill * 100.f)
                           << llformat(", %.2f%% of probe rays landed below the overhead surface", tile.mCarved * 100.f)
@@ -1756,12 +2589,30 @@ bool SSWindFlowMap::advanceBuild()
             return true;
 
         case EStage::SOLVE_RUN:
-            if (!stageSolveRun(tile))
+            // The whole solve + readback + unpack block goes to the GL worker
+            // when it exists; without one, the staged READBACK/CONVERT path on
+            // the main thread runs exactly as before.
+            if (glWorker())
             {
-                mShaderFailed = true;
-                return fail("the pressure solve");
+                postSolveGL(tile);
+                mStage = EStage::SOLVE_GL;
+                return true;
             }
-            mStage = EStage::READBACK;
+            {
+                mLastSolveWorker = false;
+                const F64 block_start = LLTimer::getElapsedSeconds();
+                if (!stageSolveRun(tile))
+                {
+                    mShaderFailed = true;
+                    return fail("the pressure solve");
+                }
+                mStage = EStage::READBACK;
+                mSolveBlockMS.store((F32)((LLTimer::getElapsedSeconds() - block_start) * 1000.0),
+                                    std::memory_order_relaxed);
+                return true;
+            }
+
+        case EStage::SOLVE_GL:
             return true;
 
         case EStage::READBACK:
@@ -1891,6 +2742,36 @@ F64 SSWindFlowMap::age() const
     if (!tile) return 0.0;
     return SSAtmoMagic::getInstance()->sharedTime() - tile->mBuildTime;
 }
+
+// <SS:Nexii> Average partial rebuild box, as a share of the whole tile. A
+// value well under 1 means edits are settling cheaply; creeping toward 1 means
+// the union box grows (a big rez-in, or edits scattered across the region).
+F32 SSWindFlowMap::partialBoxShare() const
+{
+    return (mPartialCount > 0) ? (F32)(mPartialAreaSum / (F64)mPartialCount) : 0.f;
+}
+
+// Estimated GPU memory the solver holds, for the overlay.
+F32 SSWindFlowMap::vramMB() const
+{
+    if (!mHeightTex || mTexRes <= 0) return 0.f;
+
+    F64 bytes = 0.0;
+    bytes += (F64)mTexRes * mTexRes * 4;                     // heightfield R32F
+    bytes += (F64)mProbeTexRes * mProbeTexRes * SS_WIND_PROBES * 4; // probe array R32F
+    for (S32 L = 0; L < mTexLevels; ++L)
+    {
+        const F64 r = levelRes(mTexRes, L);
+        // solid R8 + velocity RGBA16F + divergence + 2x pressure R32F
+        bytes += r * r * mTexSlices * (1 + 8 + 4 + 4 + 4);
+    }
+    if (mCapture.getWidth() > 0)
+    {
+        bytes += (F64)mCapture.getWidth() * mCapture.getWidth() * 4;
+    }
+    return (F32)(bytes / (1024.0 * 1024.0));
+}
+// </SS:Nexii>
 
 // Live slice count.
 S32 SSWindFlowMap::sliceCount() const
@@ -2321,6 +3202,10 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
     const F32 cell = mCaptureCell;
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
+    const Tile* tile = nullptr;
+    auto it = mTiles.find(mCaptureRegion);
+    if (it != mTiles.end()) tile = &it->second;
+
     static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
     const F32 full = llclamp((F32)range_setting, 16.f, 4096.f);
 
@@ -2338,6 +3223,17 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
         gGL.vertex3f(p.mV[VX], p.mV[VY] + size, p.mV[VZ]);
     };
 
+    // The captures store into the full-res arrays at the footprint offset, so
+    // every read here has to add it back on.
+    auto topAt = [&](S32 x, S32 y) -> F32
+    {
+        if (!tile || x < 0 || y < 0) return NO_SURFACE;
+        const S32 gx = mCaptureC0[0] + x;
+        const S32 gy = mCaptureC0[1] + y;
+        if (gx >= tile->mRes || gy >= tile->mRes) return NO_SURFACE;
+        return mTop[(size_t)gy * tile->mRes + gx];
+    };
+
     gGL.begin(LLRender::LINES);
 
     if (which == 0)
@@ -2353,7 +3249,7 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
                 const S32 step = (away < full) ? 1 : (away < full * 2.f) ? 2 : 4;
                 if ((x % step) || (y % step)) continue;
 
-                const F32 h = mTop[(size_t)y * res + x];
+                const F32 h = topAt(x, y);
                 if (h > NO_SURFACE * 0.5f)
                 {
                     mark(LLVector3(cx, cy, h), LLColor4(0.3f, 1.f, 0.4f, 0.8f), cell * 0.4f);
@@ -2369,9 +3265,6 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
             return;
         }
 
-        const Tile* tile = nullptr;
-        auto it = mTiles.find(mCaptureRegion);
-        if (it != mTiles.end()) tile = &it->second;
         if (!tile)
         {
             gGL.end();
@@ -2387,13 +3280,17 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
             {
                 for (S32 x = 0; x < res; ++x)
                 {
-                    const size_t idx = index(*tile, x, y, k);
+                    const S32 gx = mCaptureC0[0] + x;
+                    const S32 gy = mCaptureC0[1] + y;
+                    if (gx < 0 || gy < 0 || gx >= tile->mRes || gy >= tile->mRes) continue;
+
+                    const size_t idx = index(*tile, gx, gy, k);
                     if (idx >= mCarveFlags.size()) continue;
 
                     const U8 flag = mCarveFlags[idx];
                     if (flag == CARVE_AIR) continue;
 
-                    const F32 top = mTop[(size_t)y * res + x];
+                    const F32 top = mTop[(size_t)gy * tile->mRes + gx];
                     const F32 z = 0.5f * (lo + llmin(hi, top));
 
                     const F32 cx = mCaptureOrigin.mV[VX] + ((F32)x + 0.5f) * cell;
@@ -2435,15 +3332,15 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
             LLColor4(0.9f, 0.4f, 1.f, 0.8f)
         };
 
-        for (S32 y = 0; y < mProbeRes; ++y)
+        for (S32 y = 0; y < mProbeTake; ++y)
         {
-            for (S32 x = 0; x < mProbeRes; ++x)
+            for (S32 x = 0; x < mProbeTake; ++x)
             {
-                const F32 d = mProbeDepth[i][(size_t)y * mProbeRes + x];
+                const F32 d = mProbeDepth[i][(size_t)y * mProbeTake + x];
                 if (d >= PROBE_MISS * 0.5f) continue;
 
-                const F32 u = ((F32)x + 0.5f) / (F32)mProbeRes * 2.f - 1.f;
-                const F32 v = ((F32)y + 0.5f) / (F32)mProbeRes * 2.f - 1.f;
+                const F32 u = ((F32)x + 0.5f) / (F32)mProbeTake * 2.f - 1.f;
+                const F32 v = ((F32)y + 0.5f) / (F32)mProbeTake * 2.f - 1.f;
                 const LLVector3 hit = f.mEye + f.mRight * (u * mProbeHalf[i])
                                              + f.mUp * (v * mProbeHalf[i]) + f.mDir * d;
 

@@ -1258,6 +1258,10 @@ LLSD SSAtmoEnvWeatherInfluence::asLLSD() const
     sd["cold_sky_strength"]       = (LLSD::Real)mColdSkyStrength;
     sd["rainbow_enabled"]         = mRainbowEnabled;
     sd["rainbow_strength"]        = (LLSD::Real)mRainbowStrength;
+    sd["corona_enabled"]          = mCoronaEnabled;
+    sd["corona_strength"]         = (LLSD::Real)mCoronaStrength;
+    sd["ice_halo_enabled"]        = mIceHaloEnabled;
+    sd["ice_halo_strength"]       = (LLSD::Real)mIceHaloStrength;
     return sd;
 }
 
@@ -1301,6 +1305,10 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     strength("cold_sky_strength", mColdSkyStrength);
     flag("rainbow_enabled", mRainbowEnabled);
     strength("rainbow_strength", mRainbowStrength);
+    flag("corona_enabled", mCoronaEnabled);
+    strength("corona_strength", mCoronaStrength);
+    flag("ice_halo_enabled", mIceHaloEnabled);
+    strength("ice_halo_strength", mIceHaloStrength);
     return true;
 }
 

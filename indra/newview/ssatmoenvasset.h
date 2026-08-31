@@ -460,6 +460,20 @@ struct SSAtmoEnvWeatherInfluence
     bool mRainbowEnabled = true;
     F32  mRainbowStrength = 1.f;
 
+    // <SS:Nexii> Water-drop optics: the corona's diffraction rings around the light. Liquid only -
+    // it needs mist (moisture), droplets lingering in rain's wake, or light drizzle, and freezes
+    // out below about -4C. Heavy precipitation hides the disc itself and suppresses it. </SS:Nexii>
+    bool mCoronaEnabled = true;
+    F32  mCoronaStrength = 1.f;
+
+    // <SS:Nexii> Ice-crystal optics: the 22° halo family from small cirrus platelets, the 46° halo
+    // family (large plates/columns), sundogs and the circumzenithal + supralateral arcs from still
+    // air that lets plates align. Every drive gates on MOISTURE as well as cold - crystals need
+    // something to freeze - so a record-cold dry sky renders exactly as authored with no phantom
+    // ice, and the phenomena separate by depth of cold, loft and wind as the weather moves. </SS:Nexii>
+    bool mIceHaloEnabled = true;
+    F32  mIceHaloStrength = 1.f;
+
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
 };

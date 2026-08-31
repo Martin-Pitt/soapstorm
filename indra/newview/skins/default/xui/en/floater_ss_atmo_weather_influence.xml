@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="498"
+ height="574"
  layout="topleft"
  name="floater_ss_atmo_weather_influence"
  save_rect="true"
@@ -186,8 +186,8 @@
      height="16"
      width="250"
      name="cold_enabled"
-     tool_tip="Sub-freezing air, only while it is dry, raises the sky's ice level for halos and shifts blue density crisper."
-     label="Cold clear air makes ice halos" />
+     tool_tip="Sub-freezing, dry air shifts the blue density crisper - red down, blue up. It no longer touches ice: halos come from the Ice halos row, which needs both cold air and moisture."
+     label="Cold dry air sharpens the sky colour" />
     <slider
      follows="left|top"
      layout="topleft"
@@ -242,6 +242,87 @@
      height="14"
      width="80"
      name="rainbow_readout"
+     font="SansSerifSmall">
+        -
+    </text>
+
+    <!-- ================= Optics ================= -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="15"
+     top_pad="14"
+     height="14"
+     width="480"
+     name="optics_header"
+     font="SansSerifSmallBold">
+        Optics
+    </text>
+
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="25"
+     top_pad="6"
+     height="16"
+     width="250"
+     name="corona_enabled"
+     tool_tip="Diffraction rings around the light from liquid water drops in the air - mist, or droplets lingering after rain (a few minutes), or light drizzle. Freezes out below about -4C."
+     label="Corona rings in misty air" />
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-2"
+     height="18"
+     width="140"
+     name="corona_strength"
+     show_text="false"
+     min_val="0.0"
+     max_val="1.0"
+     increment="0.05"
+     initial_value="1.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     height="14"
+     width="80"
+     name="corona_readout"
+     font="SansSerifSmall">
+        -
+    </text>
+
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="25"
+     top_pad="6"
+     height="16"
+     width="250"
+     name="ice_halo_enabled"
+     tool_tip="Ice halos derived from cold moist air - crystals need both, so a dry -30C sky shows none. Small platelets make the 22 deg halo; deep cold and a little convection make the 46 deg halo family; still air aligns plates for sundogs and the circumzenithal arc."
+     label="Ice halos from cold moist air" />
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-2"
+     height="18"
+     width="140"
+     name="ice_halo_strength"
+     show_text="false"
+     min_val="0.0"
+     max_val="1.0"
+     increment="0.05"
+     initial_value="1.0" />
+    <text
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     height="14"
+     width="80"
+     name="ice_halo_readout"
      font="SansSerifSmall">
         -
     </text>

@@ -40,20 +40,18 @@ public:
 
     bool postBuild() override;
     void onOpen(const LLSD& key) override;
-    void draw() override;
 
 private:
     void onClickRecaptureShadow();
     void onClickRebuildFlow();
 
-    void refreshStatus();
+    void syncOverlayChecks();
 
     enum class EInvalidate { SHADOW, FLOW };
 
     void watch(const std::string& control, EInvalidate what);
 
     std::vector<boost::signals2::scoped_connection> mConnections;
-    F64 mLastPoll = 0.0;
 };
 
 #endif

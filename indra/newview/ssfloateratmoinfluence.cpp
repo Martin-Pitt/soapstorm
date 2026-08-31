@@ -83,6 +83,16 @@ void SSFloaterAtmoInfluence::buildRows()
           [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mRainbowEnabled; },
           [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mRainbowStrength; },
           effect([](const SSAtmoEnvSkyModulation& m) { return m.mRainbow; }) },
+
+        { "corona",
+          [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mCoronaEnabled; },
+          [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mCoronaStrength; },
+          effect([](const SSAtmoEnvSkyModulation& m) { return m.mCorona; }) },
+
+        { "ice_halo",
+          [](SSAtmoEnvWeatherInfluence& i) -> bool& { return i.mIceHaloEnabled; },
+          [](SSAtmoEnvWeatherInfluence& i) -> F32&  { return i.mIceHaloStrength; },
+          effect([](const SSAtmoEnvSkyModulation& m) { return m.mIceHalo; }) },
     };
 }
 

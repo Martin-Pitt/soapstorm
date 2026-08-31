@@ -502,9 +502,12 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
 
     const F32 repose = llclamp(preset.mSnowRepose, 5.f, 89.f) * DEG_TO_RAD;
 
+    static LLCachedControl<bool> puddles_on(gSavedSettings, "SSAtmoWetPuddles", true);
+
     const bool wetting  = falling && preset.mWetRate > 0.f;
     const bool snowing  = falling && preset.mSnowRate > 0.f && preset.mSnowDepth > 0.f;
-    const bool pooling  = falling && preset.mPuddleRate > 0.f && preset.mPuddleDepth > 0.f;
+    const bool pooling  = falling && preset.mPuddleRate > 0.f && preset.mPuddleDepth > 0.f
+                          && puddles_on;
 
     const F32 wet_rate    = wetting ? preset.mWetRate * intensity
                                     : (preset.mDryRate > 0.f ? preset.mDryRate : FALLBACK_DRY);
@@ -1113,7 +1116,8 @@ void SSSurfaceField::renderWetPass()
 
     static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoWetStrength", 1.f);
     const F32 wet_strength = llclamp((F32)strength, 0.f, 2.f);
-    if (wet_strength <= 0.f) { note(3, "idle, SSAtmoWetStrength is zero"); return; }
+    static LLCachedControl<bool> wet_on(gSavedSettings, "SSAtmoWetSurfaces", true);
+    if (wet_strength <= 0.f || !wet_on) { note(3, "idle, SSAtmoWetStrength is zero or wet surfaces disabled"); return; }
 
     LLRenderTarget* gbuffer = &gPipeline.mRT->deferredScreen;
     const U32 w = gbuffer->getWidth();
@@ -1180,6 +1184,13 @@ void SSSurfaceField::renderWetPass()
     static LLStaticHashedString wet_puddle_rough_min("ssWetPuddleRoughMin");
     static LLStaticHashedString wet_puddle_spec("ssWetPuddleSpecular");
     static LLStaticHashedString wet_puddle_gloss("ssWetPuddleGloss");
+    static LLStaticHashedString wet_night("ssWetNight");
+
+    // The night factor the puddle treatment yields to: a near-mirror under a
+    // moonless zenith reads as a black hole, so full-puddle patches pull back
+    // toward damp after dark. The sun's clamped direction carries the day cycle.
+    const F32 sun_z = LLEnvironment::instance().getSunDirection().mV[VZ];
+    const F32 night = llclamp(1.f - (sun_z + 0.1f) * 4.f, 0.f, 1.f);
 
     const glm::mat4 inv = glm::inverse(get_current_modelview());
     gSSSurfaceWetProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
@@ -1231,6 +1242,7 @@ void SSSurfaceField::renderWetPass()
     gSSSurfaceWetProgram.uniform1f(wet_puddle_rough_min, llclamp((F32)puddle_rough_min, 0.f, 1.f));
     gSSSurfaceWetProgram.uniform1f(wet_puddle_spec, llclamp((F32)puddle_spec, 0.f, 1.f) * spec_dim);
     gSSSurfaceWetProgram.uniform1f(wet_puddle_gloss, llclamp((F32)puddle_gloss, 0.f, 1.f));
+    gSSSurfaceWetProgram.uniform1f(wet_night, night);
 
     {
         static LLStaticHashedString mask_amt_u("ssPuddleMaskAmt");
@@ -1531,7 +1543,10 @@ void SSSurfaceField::renderWetPass()
 
     if (do_normal && mScratchNormal.getNumTextures() >= 1)
     {
-        const GLenum normal_bufs[4] = { GL_NONE, GL_COLOR_ATTACHMENT2, GL_NONE, GL_NONE };
+        // frag_data[2] - the commit shader writes every output, so the mask must route the
+        // normal one here (the old layout routed slot 1, which the generalized commit no longer
+        // pairs with this target).
+        const GLenum normal_bufs[4] = { GL_NONE, GL_NONE, GL_COLOR_ATTACHMENT2, GL_NONE };
         glDrawBuffers(4, normal_bufs);
 
         gSSSurfaceCommitProgram.bind();
@@ -1583,7 +1598,8 @@ void SSSurfaceField::renderSnowPass()
 
     static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoSnowSurfaceStrength", 1.f);
     const F32 snow_strength = llclamp((F32)strength, 0.f, 2.f);
-    if (snow_strength <= 0.f) return;
+    static LLCachedControl<bool> snow_on(gSavedSettings, "SSAtmoSnowSurfaces", true);
+    if (snow_strength <= 0.f || !snow_on) return;
     if (peakSnow() <= 0.f) return;
 
     LLRenderTarget* gbuffer = &gPipeline.mRT->deferredScreen;
@@ -1614,7 +1630,7 @@ void SSSurfaceField::renderSnowPass()
     const glm::mat4 inv = glm::inverse(get_current_modelview());
     gSSSurfaceSnowProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
 
-    static LLCachedControl<F32> depth_full(gSavedSettings, "SSAtmoSnowDepthFull", 0.04f);
+    static LLCachedControl<F32> depth_full(gSavedSettings, "SSAtmoSnowDepthFull", 0.02f);
     static LLCachedControl<F32> sparkle(gSavedSettings, "SSAtmoSnowSparkle", 0.6f);
 
     gSSSurfaceSnowProgram.uniform1f(snow_strength_u, snow_strength);

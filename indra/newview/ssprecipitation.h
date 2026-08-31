@@ -124,6 +124,10 @@ public:
     S32 tierCount(SSPrecipTier tier) const { return mTierCount[tier]; }
     S32 driftCount() const { return (S32)mDrift.size(); }
 
+    // The drift pool's own cull radius - the tier bands are the falling tiers' alone, and the
+    // renderer needs the same figure for the drift pool's far fade.
+    static F32 driftCullRadius();
+
     static void tierBands(SSPrecipTier tier, const SSPrecipPreset& preset,
                           F32& in_lo, F32& in_hi, F32& out_lo, F32& out_hi);
 

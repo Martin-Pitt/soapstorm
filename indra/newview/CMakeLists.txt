@@ -223,6 +223,7 @@ set(viewer_SOURCE_FILES
     ssgranular.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
+    sswhiteout.cpp
     sslightning.cpp
     sslightningrender.cpp
     sssoundmeta.cpp
@@ -1138,6 +1139,7 @@ set(viewer_HEADER_FILES
     ssgranular.h
     ssrainshadow.h
     sssurfacefield.h
+    sswhiteout.h
     sslightning.h
     sslightningrender.h
     sssoundmeta.h

@@ -61,11 +61,10 @@ vec4 cloudNoise(vec2 uv)
 
 #ifdef SS_ATMO
 // <SS:Nexii> The dome's authored LARGE-SCALE map, when one is set (lldrawpoolwlsky binds it and
-// raises the gate): the broad composition - the warp fields, the base octave and its self-shadow
-// - reads it, while the fine octave keeps the cloud noise. At an 8 km tile the cloud noise's blob
-// scale is too small to art-direct the broad composition, and one map for every octave means the
-// broad sky is the fine map stretched. Gate 0 leaves every octave on the cloud noise, exactly as
-// before this existed.
+// raises the gate): the broad octave and its self-shadow read it, while the fine octave keeps
+// the cloud noise. At an 8 km tile the cloud noise's blob scale is too small to art-direct the
+// broad composition, and one map for every octave means the broad sky is the fine map stretched.
+// Gate 0 leaves every octave on the cloud noise, exactly as before this existed.
 uniform sampler2D ss_noise_large;
 uniform float ss_noise_large_on;
 
@@ -108,9 +107,8 @@ const float SS_DOME_TILE_M = 8000.0;
 // The fine layers' multiplier. Stock's 16 made the fine tile a few hundred metres of world -
 // dozens of copies of the same clump across the sky, marching in rows under the perspective
 // compression. At 2x the fine tile is half the broad one: two close octaves, each covering more
-// sky than the eye can span. Alignment is not a concern at this ratio - the fine layers read a
-// rotated frame (irrational angle, see main), so the two grids can never row up regardless.
-// Stock's texcoord path keeps its 16.
+// sky than the eye can span, so neither octave's tiling can read. Stock's texcoord path keeps
+// its 16.
 const float SS_FINE_LAYER = 2.0;
 
 // One band's base UVs, and how much of the band survives. Intersect the view ray with the band's
@@ -154,25 +152,12 @@ const float SS_FINE_LAYER = 2.0;
 // the motion matches the version the eye tuned. Sign conventions are the old vertex patches':
 // world north runs down the texture's v, and the wind travel negates the same way.
 //
-// The lookup is then made APERIODIC by nested domain warping - the GPU-practical equivalent of
-// aperiodic tiling (Penrose and kin need per-tile art with matching rules; what a coordinate
-// transform can do instead is make the composite lookup quasiperiodic, so no two patches of sky
-// ever sample the same composite point). The seamless noise is a tiling texture, and the horizon
-// compression marches its repeats into converging rows: every elevation where the ray crosses
-// another tile multiple lands on a copy of the same lump. A single warp cannot break that - a
-// displacement field sampled from the same tiling map is itself periodic, so the warped grid is
-// still a grid, just bent. Three NESTED levels at incommensurate frequencies, each sampled in a
-// differently-rotated frame, do break it: the pattern repeats only where all three warp fields
-// AND the base map agree, which is a period no viewer will ever cross. The fine layers inherit
-// the warped coordinates and add their own rotated frame, so the fine grid can neither align with
-// the broad one nor repeat in step across the sky.
-vec2 ss_rotate(vec2 v, float a)
-{
-    float c = cos(a);
-    float s = sin(a);
-    return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
-}
-
+// NO DOMAIN WARP. An earlier cut ran three nested warp levels at incommensurate frequencies and
+// rotated frames - an attempt at aperiodic tiling against the OLD, small tile, where the same
+// clumps genuinely marched across the sky in rows. The tile scale-up (SS_DOME_TILE_M at 8 km, the
+// fine layer at 2x) removed the repetition at its root - the visible plane spans barely one tile
+// of each octave - and the warp fields, sampled from the same map they displaced, only smeared
+// and buckled the composition. The mapping is a straight, honest lookup now.
 vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
 {
     const float SS_DECK_FOLD     = 0.1;
@@ -217,31 +202,12 @@ vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
         reach = (1.0 + SS_DECK_FOLD) * ah / (max(vary_ray_dir.y * side, 0.0) + SS_DECK_FOLD);
     }
 
+    detail_fade = 1.0 - smoothstep(SS_DETAIL_LO_M, SS_DETAIL_HI_M, reach);
+
     vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach;
     vec2 world_m = SS_PARALLAX_DAMP * (region_offset - ss_cloud_drift);
 
-    vec2 p = vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / SS_DOME_TILE_M;
-
-    // Warp level 1: the broad bend. Period ~11 tiles (44 km), amplitude over half a tile - the
-    // whole deck's layout is laid out by it. Frame rotated by the golden angle so its grid and
-    // the base map's share no axis.
-    vec2 q1 = ss_rotate(p, 2.399963);
-    p += (vec2(cloudNoiseLarge(q1 * 0.09 + vec2(0.37, 0.11)).x,
-               cloudNoiseLarge(q1 * 0.09 + vec2(0.71, 0.53)).x) - 0.5) * 0.55;
-
-    // Warp level 2: the row breaker. Period ~2.7 tiles - comparable to the ground spacing of the
-    // horizon-compressed tile rows - so neighbouring rows read from visibly different parts of
-    // the map. Another frame, another incommensurate frequency.
-    vec2 q2 = ss_rotate(p, 1.13);
-    p += (vec2(cloudNoiseLarge(q2 * 0.37 + vec2(0.11, 0.67)).x,
-               cloudNoiseLarge(q2 * 0.37 + vec2(0.53, 0.29)).x) - 0.5) * 0.35;
-
-    // Warp level 3: the fine jitter. Period ~1.2 tiles, small amplitude - it only has to knock
-    // the last recognisable repeats off.
-    vec2 w3 = vec2(cloudNoise(p * 0.83 + vec2(0.29, 0.83)).x,
-                   cloudNoise(p * 0.83 + vec2(0.67, 0.41)).x) - 0.5;
-    detail_fade = 1.0 - smoothstep(SS_DETAIL_LO_M, SS_DETAIL_HI_M, reach);
-    return p + w3 * 0.12;
+    return vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / SS_DOME_TILE_M;
 }
 
 // The curved deck's own horizon fade. The deck exists ABOVE the tangent elevation
@@ -284,11 +250,8 @@ void main()
     {
         uv1 = ss_plane_base(ss_cloud_alt_m, plane_fade, detail_fade);
         uv2 = uv1 + vec2(lightnorm.x, lightnorm.z) * 0.0125;
-        // The fine layers read a ROTATED frame: an irrational-angle rotation between the broad
-        // grid and the fine one means the two can never align their rows, anywhere in the sky -
-        // the noise is isotropic, so the rotation itself paints nothing.
-        uv3 = ss_rotate(uv1, -1.618034) * SS_FINE_LAYER;
-        uv4 = ss_rotate(uv2, -1.618034) * SS_FINE_LAYER;
+        uv3 = uv1 * SS_FINE_LAYER;
+        uv4 = uv2 * SS_FINE_LAYER;
         deck_edge_fade = ss_deck_edge_fade(ss_cloud_alt_m);
     }
     else

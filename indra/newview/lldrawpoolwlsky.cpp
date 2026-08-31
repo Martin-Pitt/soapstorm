@@ -115,6 +115,19 @@ static LLStaticHashedString sCloudDepth("ss_cloud_depth");
 // glow lands on the disc exactly when there is an unfudged disc to land on: with the
 // stock discs drawing, the dome keeps the stock pairing.
 static LLStaticHashedString sRayLift("ss_ray_lift");
+
+// <SS:Nexii> Weather-driven optics (ssOptics in skyF.glsl): the corona, the 22/46 deg halos and
+// the aligned-plate arcs, all rendered at true angular positions from the light direction and the
+// weather's drive amplitudes. ss_optic_gate is the on/off: 0 unless an ACTIVE Atmo environment is
+// pushing at least one drive, which is what keeps the stock halo_map strip pristine for idle
+// viewers.
+static LLStaticHashedString sOpticGate("ss_optic_gate");
+static LLStaticHashedString sOpticActive("ss_optic_active");
+static LLStaticHashedString sOpticLight("ss_optic_light");
+static LLStaticHashedString sOpticCorona("ss_optic_corona");
+static LLStaticHashedString sOpticHalo22("ss_optic_halo22");
+static LLStaticHashedString sOpticHalo46("ss_optic_halo46");
+static LLStaticHashedString sOpticAlign("ss_optic_align");
 // </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
@@ -399,6 +412,53 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         // ...and the ray lift drops only when the Atmo discs own the sky, taking the
         // glow's hotspot with it onto the disc - see sRayLift above.
         sky_shader->uniform1f(sRayLift, ss_atmo_discs_active() ? 0.f : 1.f);
+
+        // <SS:Nexii> Weather-driven optics (ssOptics in skyF.glsl). The halo grows with the DISC,
+        // not the disc's centre: while any part of the sun's quad is above the horizon - or has
+        // just tipped over it - the optics ramp on the SAME risen share of the disc the glow ramps
+        // on (ss_sun_rise, SSAtmoEnvApplier::sunRiseFraction) and aim at the sun's true direction,
+        // so a low sun's halos burn in from the first sliver above the horizon and fade out as it
+        // sets, never popping the moment the centre crosses. Moonlight halos are fainter and
+        // switch on the moon's whole disc. The gate is active-env AND a light being up (in
+        // whatever share) AND at least one drive speaking: leave it all absent and the stock
+        // halo_map strip renders as always.
+        const SSAtmoEnvSkyModulation& ssm = atmo_applier.lastModulation();
+
+        float optic_gate = 0.f;
+        LLVector3 optic_dir(0.f, 1.f, 0.f);
+        if (atmo_applier.isActive())
+        {
+            const F32 sun_rise = atmo_applier.sunRiseFraction();
+            if (sun_rise > 0.001f)
+            {
+                optic_gate = sun_rise;
+                // The light-norm permutation toLightNorm() applies (world x,y,z -> ogl y,z,x),
+                // inlined here rather than widening that private helper's access; sunSlotDirection
+                // is the sun's TRUE direction from the applier, valid through the whole rise band.
+                const LLVector3& sun_dir = atmo_applier.sunSlotDirection();
+                optic_dir.set(sun_dir.mV[1], sun_dir.mV[2], sun_dir.mV[0]);
+            }
+            else if (psky->getIsMoonUp())
+            {
+                optic_gate = 0.35f;               // moonlight halos exist, but faint
+                const LLVector3& world_dir = psky->getMoonDirection();
+                optic_dir.set(world_dir.mV[1], world_dir.mV[2], world_dir.mV[0]);
+            }
+        }
+        if (optic_gate > 0.001f)
+        {
+            const F32 max_drive = llmax(ssm.mCorona,
+                                        llmax(ssm.mIceHalo, llmax(ssm.mIceHalo46, ssm.mCrystalAlign)));
+            optic_gate *= (max_drive > 0.001f) ? 1.f : 0.f;
+        }
+
+        sky_shader->uniform1f(sOpticGate, optic_gate);
+        sky_shader->uniform1f(sOpticActive, atmo_applier.isActive() ? 1.f : 0.f);
+        sky_shader->uniform3fv(sOpticLight, 1, optic_dir.mV);
+        sky_shader->uniform1f(sOpticCorona, ssm.mCorona);
+        sky_shader->uniform1f(sOpticHalo22, ssm.mIceHalo);
+        sky_shader->uniform1f(sOpticHalo46, ssm.mIceHalo46);
+        sky_shader->uniform1f(sOpticAlign, ssm.mCrystalAlign);
         // </SS:Nexii>
 
         /// Render the skydome
