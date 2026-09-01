@@ -182,8 +182,11 @@ vec3 ss_optics(vec3 view)
     if (ss_optic_halo22 > 0.001)
     {
         float w = 1.9;
+        // <SS:Nexii> The veil rides a deliberately stingy cold drive (SSAtmoEnvSkyWeatherModulator's
+        // ice block), so its shader scale may stand a little stronger than stock's 0.18 - the drive
+        // is what keeps the halo an event, not the multiplier. </SS:Nexii>
         col += ss_optic_halo22 * exp(-pow((rho - 22.0) / w, 2.0))
-             * ss_optic_color(rho, 22.0, w) * 0.18;
+             * ss_optic_color(rho, 22.0, w) * 0.24;
     }
 
     // 46 deg halo family (large plates/columns) - wider and fainter still.
@@ -202,8 +205,11 @@ vec3 ss_optics(vec3 view)
         {
             float dog = exp(-pow((rho - 22.0) / 1.7, 2.0))
                       * exp(-pow((psid - 90.0) / 9.0, 2.0));
+            // <SS:Nexii> The dog's shader presence: the align drive already demands deep cold,
+            // moisture and calm, so the spot may read brighter than stock's 0.55 - it is the
+            // rare winter's bright spot, not a daily glare. </SS:Nexii>
             col += ss_optic_align * alt_ok * dog
-                 * ss_optic_color(rho, 22.0, 1.7) * 0.55;
+                 * ss_optic_color(rho, 22.0, 1.7) * 0.8;
         }
 
         float arc_ok = smoothstep(3.0, 9.0, elev) * (1.0 - smoothstep(30.0, 34.0, elev));

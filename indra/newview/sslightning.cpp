@@ -84,11 +84,13 @@ namespace
 
     const F32 PREPARE_LEAD_S = 10.f;
 
-    // <SS:Nexii> The temperature mix of the charge network: +12C and warmer is all negative
-    // cloud-base discharges (the summer norm), -10C and colder all positive anvil bolts (the
-    // winter norm), sliding between the two. </SS:Nexii>
-    const F32 POSITIVE_WARM_C = 12.f;
-    const F32 POSITIVE_COLD_C = -10.f;
+    // <SS:Nexii> The temperature mix of the charge network, spanning the SAME season rack as the
+    // cloud altitudes: +35C and warmer is all negative cloud-base discharges (the summer
+    // heatwave norm), the mix slides through spring and autumn, and -15C and colder is all
+    // positive anvil bolts (deep winter), with the summer's own few positive strikes growing
+    // out of that slide as the ridges offer them up. </SS:Nexii>
+    const F32 POSITIVE_WARM_C = 35.f;
+    const F32 POSITIVE_COLD_C = -15.f;
 
     // <SS:Nexii> How many positive discharges become bolts from the blue - the long near-
     // horizontal trunk out of the anvil, striking ground miles from the storm. The rest of the
@@ -147,9 +149,10 @@ const LLColor4& SSLightning::kindDebugColor(SSStrikeKind k)
     }
 }
 
-// <SS:Nexii> The charge network's temperature mix: +12C and above is the summer all-negative
-// world, the mix climbs through freezing, and -10C and below is the winter all-positive one.
-// Spawn rolls each strike against this; the overlay reads it to label the mood. </SS:Nexii>
+// <SS:Nexii> The charge network's temperature mix: +35C and above is the summer all-negative
+// world, the mix slides across the whole season range, and -15C and below is the winter
+// all-positive one. Spawn rolls each strike against this; the overlay reads it to label the
+// mood. </SS:Nexii>
 F32 SSLightning::positiveSkew(F32 temperature_c)
 {
     return llclamp((POSITIVE_WARM_C - temperature_c)

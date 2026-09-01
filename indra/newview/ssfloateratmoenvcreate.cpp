@@ -38,7 +38,6 @@
 #include "lltextbox.h"
 #include "llviewerinventory.h"
 
-#include <algorithm>
 #include <cctype>
 
 // Registration name this floater lives under - see LLViewerFloaterReg.
@@ -47,57 +46,11 @@ static const std::string CREATE_FLOATER_NAME = "ss_atmo_env_create";
 // The editor floater this chooser opens inside of.
 static const std::string ENV_FLOATER_NAME = "ss_atmo_env";
 
-// <SS:Nexii> The fixed day positions the "From skies I choose" mode maps onto, addressed by the
-// sky's inventory NAME - the mirror of the stamping table in SSAtmoEnvManager::seedSkyPhases.
-// The two lists must stay in step, and the F64 here is the day-phase (0=midnight, 0.25=sunrise,
-// 0.5=noon, 0.75=sunset).
+// <SS:Nexii> What a sky's NAME claims about its placement: the side of noon it belongs to, or
+// one of the two extreme anchors. The mirror of SSAtmoEnvManager::seedSkyNameHint - the
+// placement itself is the sky's measured dominant-body elevation, the name only sorts.
 namespace
 {
-    struct SSSeedPosition
-    {
-        const char* mName;
-        F64 mPhase;
-    };
-
-    const SSSeedPosition SEED_POSITIONS[] = {
-        { "midnight",                 0.00 },
-        { "dawn",                     0.21 },
-        { "sunrise",                  0.25 },
-        { "post sunrise",             0.27 },
-        { "morning golden hour",      0.30 },
-        { "morning umbra",            0.36 },
-        { "noon",                     0.50 },
-        { "afternoon",                0.56 },
-        { "evening golden hour",      0.67 },
-        { "sunset",                   0.75 },
-        { "evening near sunset",      0.78 },
-        { "dusk",                     0.83 },
-        { "evening umbra",            0.86 },
-        { "evening",                  0.81 },
-        { "night",                    0.94 },
-    };
-
-    // Position names that are also their own slot, ordered most-specific first so "Evening
-    // Umbra" beats "Umbra" and the phase pairs with the position table.
-    const char* const NAMED_SLOTS[] = {
-        "evening golden hour",
-        "evening near sunset",
-        "evening sunset",
-        "evening umbra",
-        "morning golden hour",
-        "morning post sunrise",
-        "morning sunrise",
-        "morning umbra",
-        "noon",
-        "daylight",
-        "dusk",
-        "dawn",
-        "night",
-        "sunset",
-        "sunrise",
-        "midnight",
-    };
-
     std::string ss_to_lower(std::string s)
     {
         for (char& c : s) c = (char)tolower((unsigned char)c);
@@ -105,43 +58,41 @@ namespace
     }
 }
 
-F64 SSFloaterAtmoEnvCreate::slotForName(const std::string& name)
+SSFloaterAtmoEnvCreate::ESeedHint SSFloaterAtmoEnvCreate::hintForName(const std::string& name)
 {
     const std::string lower = ss_to_lower(name);
 
-    for (const char* slot : NAMED_SLOTS)
-    {
-        if (lower.find(slot) == std::string::npos) continue;
-
-        for (const SSSeedPosition& pos : SEED_POSITIONS)
-        {
-            if (lower.find(pos.mName) != std::string::npos)
-            {
-                return pos.mPhase;
-            }
-        }
-        return -1.0;
-    }
-    return -1.0;
+    if (lower.find("midnight") != std::string::npos) return ESeedHint::MIDNIGHT;
+    if (lower.find("daylight") != std::string::npos) return ESeedHint::NOON;
+    if (lower.find("noon") != std::string::npos
+        && lower.find("afternoon") == std::string::npos) return ESeedHint::NOON;
+    if (lower.find("sunrise") != std::string::npos) return ESeedHint::RISING;
+    if (lower.find("sunset") != std::string::npos) return ESeedHint::SETTING;
+    if (lower.find("night") != std::string::npos) return ESeedHint::MIDNIGHT;
+    if (lower.find("morning") != std::string::npos
+        || lower.find("dawn") != std::string::npos) return ESeedHint::RISING;
+    if (lower.find("evening") != std::string::npos
+        || lower.find("dusk") != std::string::npos) return ESeedHint::SETTING;
+    return ESeedHint::AUTO;
 }
 
-// The human-readable position for a slot phase; the "auto" label shows the sky will be
-// measured against the dominant body of the sky - whichever of sun and moon stands higher.
-std::string SSFloaterAtmoEnvCreate::slotLabel(F64 slot)
+// The row label for a dropped sky's placement claim - the actual placement is the sky's
+// measured elevation, this is just what the name promises.
+std::string SSFloaterAtmoEnvCreate::hintLabel(ESeedHint hint)
 {
-    if (slot < 0.0) return "auto (dominant body)";
-
-    const F64 day = std::fmod(slot, 1.0);
-    const F64 hours_since_midnight = day * 24.0;
-    const int whole = (int)std::floor(hours_since_midnight);
-    const int frac = (int)std::floor((hours_since_midnight - (double)whole) * 60.0);
-    return llformat("%02d:%02d", whole, frac);
+    switch (hint)
+    {
+        case ESeedHint::MIDNIGHT: return "midnight";
+        case ESeedHint::NOON:     return "noon";
+        case ESeedHint::RISING:   return "morning side";
+        case ESeedHint::SETTING:  return "evening side";
+        default:                  return "auto (measured)";
+    }
 }
 
 std::string SSFloaterAtmoEnvCreate::rowForSky(const DroppedSky& sky)
 {
-    const std::string pos = (sky.mSlot < 0.0) ? "auto (dominant body)" : slotLabel(sky.mSlot);
-    return pos + " - " + sky.mName;
+    return hintLabel(sky.mHint) + " - " + sky.mName;
 }
 
 // Floater shell; all content is wired in postBuild.
@@ -230,9 +181,9 @@ void SSFloaterAtmoEnvCreate::refresh()
         {
             const size_t count = mDroppedSkies.size();
             summary = (count == 0)
-                ? "Drag skies from Inventory onto this window. Each is measured against the dominant body of the sky - whichever of its sun and moon stands higher - and stamped as keyframes. Skies whose name names a position (e.g. \"Morning Golden Hour\", \"Noon\") land at that fixed slot instead."
-                : llformat("%zd sky%s supplied - named skies land on their slot (Morning Golden Hour, Noon...), the rest are measured against the dominant body of the sky (whichever of sun and moon stands higher) and stamped as keyframes.",
-                           count, count == 1 ? "" : "s");
+                ? "Drag skies from Inventory onto this window. Each is placed by its dominant body's height (sun while it is up, moon when the sun is deep down) - the name only sorts it to the right side of noon. A \"Morning Umbra\" with its sun below the horizon lands before sunrise, not in daylight."
+                : llformat("%zd skies supplied - each is placed by its dominant body's height; the name sorts it to the right side of noon. Sunrise, Sunset, Noon and Midnight skies pin their phases and sketch the pack's sun path, which the other skies place themselves on.",
+                           count);
 
             can_create = count > 0;
             break;
@@ -330,8 +281,8 @@ bool SSFloaterAtmoEnvCreate::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
         if (is_sky)
         {
             bool have = false;
-            const F64 slot = slotForName(item->getName());
-            if (slot < 0.0)
+            const ESeedHint hint = hintForName(item->getName());
+            if (hint == ESeedHint::AUTO)
             {
                 for (const DroppedSky& sky : mDroppedSkies)
                 {
@@ -348,7 +299,7 @@ bool SSFloaterAtmoEnvCreate::handleDragAndDrop(S32 x, S32 y, MASK mask, bool dro
                 DroppedSky sky;
                 sky.mAssetId = item->getAssetUUID();
                 sky.mName = item->getName();
-                sky.mSlot = slot;
+                sky.mHint = hint;
                 mDroppedSkies.push_back(sky);
                 rebuildSkyList();
             }

@@ -255,18 +255,38 @@ void SSFloaterAtmoSkyImport::onClickImport()
                 {
                     const LLUUID& adopted =
                         track.mPlanetary.mBodies[(size_t)sun_body].mCustomTexture;
+                    LL_INFOS("AtmoMagicEnv") << "Sky import sun body " << sun_body
+                        << ": texture before " << sun_texture_before << ", adopted " << adopted
+                        << ", groups 0x" << std::hex << groups << std::dec << LL_ENDL;
                     if (adopted != sun_texture_before)
                     {
+                        LL_INFOS("AtmoMagicEnv") << "Sky import auto-deriving disc padding for sun "
+                            << sun_body << " from " << adopted << LL_ENDL;
                         ssDiscPadAutoDerive(mTrackIndex, sun_body, adopted);
+                    }
+                    else
+                    {
+                        LL_INFOS("AtmoMagicEnv") << "Sky import sun body " << sun_body
+                            << ": adopted texture equals pre-import texture - no derive" << LL_ENDL;
                     }
                 }
                 if (moon_body >= 0)
                 {
                     const LLUUID& adopted =
                         track.mPlanetary.mBodies[(size_t)moon_body].mCustomTexture;
+                    LL_INFOS("AtmoMagicEnv") << "Sky import moon body " << moon_body
+                        << ": texture before " << moon_texture_before << ", adopted " << adopted
+                        << ", groups 0x" << std::hex << groups << std::dec << LL_ENDL;
                     if (adopted != moon_texture_before)
                     {
+                        LL_INFOS("AtmoMagicEnv") << "Sky import auto-deriving disc padding for moon "
+                            << moon_body << " from " << adopted << LL_ENDL;
                         ssDiscPadAutoDerive(mTrackIndex, moon_body, adopted);
+                    }
+                    else
+                    {
+                        LL_INFOS("AtmoMagicEnv") << "Sky import moon body " << moon_body
+                            << ": adopted texture equals pre-import texture - no derive" << LL_ENDL;
                     }
                 }
                 // One immediate re-check of a just-queued derivation - the sky's own disc art

@@ -579,7 +579,7 @@
          height="16"
          width="130"
          name="body_emissive_check"
-         label="Lit / emissive"
+         label="Emissive"
          tool_tip="Draw this body at full brightness with no dark side - it makes its own light. On by default for suns; turn it on for a moon or planet that glows" />
         <check_box
          follows="left|top"
@@ -590,7 +590,7 @@
          width="140"
          name="body_phase_check"
          label="Phase shading"
-         tool_tip="Shade the disc as a sphere lit by this body star, so it shows a phase. Off draws a flat disc the way the stock sky does. Ignored while Lit / emissive is on" />
+         tool_tip="Shade the disc as a sphere lit by this body star, so it shows a phase. Off draws a flat disc the way the stock sky does. Ignored while Emissive is on" />
     </panel>
 
     <!-- The orbit canvas - see SSOrbitViewCtrl. -->

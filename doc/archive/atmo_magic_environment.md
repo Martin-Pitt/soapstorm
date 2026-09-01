@@ -155,24 +155,47 @@ environment system that carries the Atmo Magic branding forward as a
   settings are refused with an alert (water import is a trivial follow-up;
   day cycles a bigger one).
 - **Creation's "From skies I choose" mode accepts multiple sky drops at once**
-  (a whole inventory selection in one gesture) and pins each supplied sky by
-  **inventory name** to a fixed day position instead of measuring a body: the
-  position table (`SSAtmoEnvManager::seedSkyPhases`) recognizes
-  Morning/Evening Golden Hour, Morning/Evening Umbra, Morning/Post
-  Sunrise, Evening/Near Sunset, Noon, plus the wide picks Daylight, Dusk,
-  Dawn, Night, Sunset, Sunrise and Midnight. A name names a *position* first
-  (e.g. "Morning Post Sunrise" is its own slot), and the match is scanned
-  inside the name so a pack prefix or suffix rides along. A sky without a
-  matching name is still measured, exactly as before — but measured against
-  the **dominant body of the sky itself**, whichever of sun and moon stands
-  higher: a night sky whose author parked the sun deep below the horizon
-  (out of sight, arbitrary) and moved its moon around the sky is placed by
-  that moon, so the visible body is the one that gets the faithful
-  day-position; a pre-dawn/dusk sun just under the horizon still rules the
-  light and still rules the measure. The single sun and moon bodies are
-  translated from the faces that matter: the sun disc from the sky where the
-  sun stands highest (the day's face), the moon disc from the sky where the
-  moon stands highest (the night's face).
+  (a whole inventory selection in one gesture) and places each supplied sky
+  by the **actual elevation** of its dominant body: the phase where the
+  track's reference body (sun or moon) reaches the height the sky drew it.
+  The sky's **inventory name** sorts the placement to the right side of
+  noon and names the fixed anchors — Sunrise (0.25), Sunset (0.75), Noon
+  and Midnight pin their phases outright, **"Daylight" implies Noon** and
+  **"Night" implies Midnight** (a night sky is never parked in daylight
+  even when it carries no moon), and Morning/Evening/Dawn/Dusk claim the
+  rising/setting side. Sunrise, Sunset, Noon and Midnight skies also
+  supply the height their sun was drawn at, and together they **fit the
+  pack's own sun path** — the daily elevation curve
+  `sin(alt) = a − b·cos(2π·phase)`, whose midpoint comes straight from the
+  horizon skies and whose half-day swing comes from the noon/midnight
+  pair. Every other sky then lands at the root of that fitted curve on
+  its named side, so no planetary tilt or latitude ever has to be
+  guessed: the phases in the planetary system are the curve's roots. The
+  fit is only trusted when the anchored skies agree (a "sunrise" sun far
+  from the curve's midpoint rejects it); otherwise the default arc stands
+  in. A "Morning Umbra" with its sun below the horizon lands in the
+  pre-dawn hours, not in daylight. A sky without a name claim keeps the
+  unique azimuth-derived measurement, and a night sky whose author parked
+  the sun deep below the horizon (out of sight) while moving its moon is
+  still placed by that moon, the visible body. The single sun and moon
+  bodies are translated from the faces that matter: the sun disc from the
+  sky where the sun stands highest (the day's face), the moon disc from
+  the sky where the moon stands highest (the night's face). Creating from
+  an EEP day cycle adopts the same two faces from the cycle's own
+  keyframes. Every adopted disc texture gets its padding auto-derived from
+  the alpha (the tightened 85%-solid-edge rule), exactly as a texture pick
+  in the planetary designer does. The body
+  diameters store the VISIBLE disc's physics: the sky's angular scale is
+  authored against EEP's quad (a glow-boarded pre-padding sun is huge
+  because its baked-in glow fills the quad), so once the padding lands the
+  diameter rescales by the disc fraction - quad x (1 - 2 x padding) - and
+  a 10.985-quad sun with 0.43 padding reads a ~1.5 solar-diameter body.
+  The renderer draws the quad via the uncompressed distance divided by the
+  perception scale, so the perception dials never leak into the authored
+  world.
+- The stock four-sky day cycle is itself just these anchors: Daylight noon,
+  Night midnight, Sunrise and Sunset at the horizon — so the shipped seed
+  and a user's "Daylight/Night/Sunrise/Sunset" pack place identically.
 - **Auto-apply on parcel entry**, unless the Atmo Magic floater is currently open
   (treated as "mid-edit, don't clobber").
 

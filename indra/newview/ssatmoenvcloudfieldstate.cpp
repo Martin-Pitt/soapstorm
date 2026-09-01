@@ -32,11 +32,21 @@ namespace
     // <SS:Nexii> The seasonal rack: -15C is deep winter, +35C a summer heatwave - the storm
     // deck's base rides between the two rails, and no deck ever grows past a kilometre of
     // thickness. Winter air is dense and squashes the atmosphere down (a winter storm's base
-    // hangs low over the ground); summer heat lifts the whole sky. </SS:Nexii>
+    // hangs low over the ground); summer heat lifts the whole sky.
+    //
+    // The base follows the temperature NONLINEARLY - a cubic centred on the neutral
+    // 10C midpoint that is FLAT in the middle and steepest at the rails: through ordinary
+    // spring/autumn weather (and a day's worth of temperature drift) the deck parks near its
+    // mid altitude, and only climbs to the summer high or sinks to the winter low as the
+    // temperature approaches the season's extremes. The extremes set the rack; the curve
+    // keeps everyday weather from dragging the deck around.
     const F32 DECK_BASE_MIN_C = -15.f;
     const F32 DECK_BASE_MAX_C = 35.f;
     const F32 DECK_BASE_WINTER_M = 400.f;
     const F32 DECK_BASE_SUMMER_M = 1200.f;
+    const F32 DECK_MID_C = (DECK_BASE_MIN_C + DECK_BASE_MAX_C) * 0.5f;   // 10C
+    const F32 DECK_HALF_C = (DECK_BASE_MAX_C - DECK_BASE_MIN_C) * 0.5f;  // 25C
+    const F32 DECK_MID_M  = (DECK_BASE_WINTER_M + DECK_BASE_SUMMER_M) * 0.5f; // 800m
     const F32 DECK_LID_M = 1000.f;
 }
 
@@ -136,10 +146,12 @@ void SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(F32 moisture, F32 convectio
 
     if (seasonal_altitude)
     {
-        const F32 season = llclamp((temperature_c - DECK_BASE_MIN_C)
-                                   / (DECK_BASE_MAX_C - DECK_BASE_MIN_C), 0.f, 1.f);
-        out_base_height = DECK_BASE_WINTER_M
-            + (DECK_BASE_SUMMER_M - DECK_BASE_WINTER_M) * season;
+        // The cubic: flat at the neutral middle (10C), steepest at the seasonal rails. The
+        // deck parks near its mid altitude through ordinary weather - a spring day swinging
+        // 8-18C moves it a few metres - and only climbs to the summer high or sinks to the
+        // winter low as the temperature approaches the extremes.
+        const F32 t = llclamp((temperature_c - DECK_MID_C) / DECK_HALF_C, -1.f, 1.f);
+        out_base_height = DECK_MID_M + (DECK_BASE_SUMMER_M - DECK_MID_M) * t * t * t;
     }
     else
     {

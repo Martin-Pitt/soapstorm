@@ -68,8 +68,8 @@ namespace
     {
         SSAtmoEnvCelestialBody body;
         body.mKind = SSAtmoEnvCelestialBody::MOON;
-        body.mDiameterM = 3.4748e6f;
-        body.mMassRelative = 1.f;
+        body.mDiameterM = 3.475e6f;
+        body.mMassRelative = 0.0123f;
         body.mOrbitalRadius = 3.844e8f;
         body.mOrbitalInclinationDeg = 5.145f;
         body.mOrbitalPhaseDeg = 30.f;
@@ -765,7 +765,10 @@ S32 SSAtmoEnvPlanetary::standardMoonIndex() const
     return -1;
 }
 
-// Translates a fetched EEP sky's disc values onto the standard sun/moon bodies.
+// Translates a fetched EEP sky's disc values onto the standard sun/moon bodies. A custom disc
+// texture is adopted as a LIT surface (mEmissive off, mPhaseShaded on) - the sky's disc art is
+// a body, not an emissive sprite - and the quad diameter is marked for the first disc-padding
+// derive to shrink (see mPadPendingTranslation).
 void SSAtmoEnvPlanetary::translateSettingsSky(const LLSettingsSky& sky, U32 groups)
 {
     const S32 sun_index = (groups & SS_SKY_IMPORT_SUN) ? standardSunIndex() : -1;
@@ -774,15 +777,21 @@ void SSAtmoEnvPlanetary::translateSettingsSky(const LLSettingsSky& sky, U32 grou
 
     // The distances the renderer itself will use: the same home-to-body span the resolver turns
     // back into an angular size when the body is drawn, so the translated diameter draws what
-    // the sky's disc would have drawn.
+    // the sky's disc would have drawn. The resolver applies the sun-planet and planet-moon
+    // scales (the perception dials) to the orbit radii, so its distances are COMPRESSED - the
+    // true physical span is distance / scale, the same correction the applier makes before any
+    // angular math.
     const std::vector<SSAtmoEnvResolvedBody> sky_bodies =
         SSAtmoEnvPlanetaryResolver::resolveSky(*this);
 
-    auto distanceFor = [&sky_bodies](S32 body_index) -> F32
+    auto distanceFor = [&sky_bodies](S32 body_index, F32 scale) -> F32
     {
         for (const SSAtmoEnvResolvedBody& resolved : sky_bodies)
         {
-            if (resolved.mBodyIndex == body_index) return resolved.mDistance;
+            if (resolved.mBodyIndex == body_index)
+            {
+                return resolved.mDistance / llmax(scale, 0.001f);
+            }
         }
         return 0.f;
     };
@@ -792,7 +801,9 @@ void SSAtmoEnvPlanetary::translateSettingsSky(const LLSettingsSky& sky, U32 grou
     {
         // The sky's disc scale states an angular diameter against EEP's reference disc; the body
         // stores the physical size that draws the same angle from where the observer stands.
-        const F32 distance = distanceFor(body_index);
+        const bool is_sun = mBodies[(size_t)body_index].mKind == SSAtmoEnvCelestialBody::SUN;
+        const F32 scale = is_sun ? mSunPlanetScale : mPlanetMoonScale;
+        const F32 distance = distanceFor(body_index, scale);
         if (distance > 0.f)
         {
             const F32 angular_rad = disc_scale * SS_ATMOENV_REFERENCE_DISC_DEG * DEG_TO_RAD;
@@ -800,11 +811,27 @@ void SSAtmoEnvPlanetary::translateSettingsSky(const LLSettingsSky& sky, U32 grou
             mBodies[(size_t)body_index].mDiameterM = llmax(radius * 2.f, 0.f);
         }
 
+        // <SS:Nexii> EEP authored disc_scale against the QUAD - a sun with a huge embedded glow
+        // is giant because the glow fills the quad, not because the sun is. The body diameter
+        // holds the VISIBLE disc's physics, so a freshly-translated QUAD diameter is marked for
+        // the first disc-padding derive to shrink (it knows the solid fraction once the pixels
+        // land). The author's later spinner/texture-pick edits carry no mark and never rescale.
+        if (disc_texture != stock_texture && !disc_texture.isNull())
+        {
+            mBodies[(size_t)body_index].mPadPendingTranslation = true;
+        }
+
         // The sky's own stock disc value means it has nothing custom to say about the look - the
-        // standard texture the body already carries stays. Anything else is a look to adopt.
+        // standard texture the body already carries stays. Anything else is a look to adopt; a
+        // sky's CUSTOM disc art is a SURFACE, so the body renders LIT (phase-shaded, not a bare
+        // emissive sprite) - the sun disc a sky author drew is meant to ride the day as an
+        // actual body, changing with the sun's angles, not glow like a sticker. The author can
+        // flip Emissive back on in the designer when that was the actual intent.
         if (disc_texture != stock_texture)
         {
             mBodies[(size_t)body_index].mCustomTexture = disc_texture;
+            mBodies[(size_t)body_index].mEmissive = false;
+            mBodies[(size_t)body_index].mPhaseShaded = true;
         }
     };
 

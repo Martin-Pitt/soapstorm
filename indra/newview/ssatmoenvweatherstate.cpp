@@ -31,11 +31,12 @@ namespace
 {
     const F32 CLEAR_MOISTURE_THRESHOLD = 0.02f;
 
-    // <SS:Nexii> The temperature band the lightning season fades over: full frequency at +10C
-    // and above (the summer norm), a twentieth by -5C - a winter storm still owns a few rare
-    // anvil bolts, but "thundersnow" is a headline, not a Tuesday. </SS:Nexii>
-    const F32 LIGHTNING_WARM_C = 10.f;
-    const F32 LIGHTNING_COLD_C = -5.f;
+    // <SS:Nexii> The temperature band the lightning season fades over: the SAME season rack the
+    // cloud altitudes use (-15C is deep winter, +35C a summer heatwave). Full frequency only in
+    // the real heat - the summer network discharges freely - throttling down to a twentieth by
+    // deep winter, when the rare storm still owns its few anvil bolts. </SS:Nexii>
+    const F32 LIGHTNING_WARM_C = 35.f;
+    const F32 LIGHTNING_COLD_C = -15.f;
     const F32 LIGHTNING_FLOOR  = 0.05f;
 
     // Lerp.
@@ -99,7 +100,7 @@ std::string SSAtmoEnvWeatherResolver::derivePrecipitationType(F32 convection, F3
     return (convection > 0.95f) ? "hail" : "rain";
 }
 
-// <SS:Nexii> Temperature's grip on lightning frequency. Summer warmth lets convection discharge
+// <SS:Nexii> Temperature's grip on lightning frequency. Summer heat lets convection discharge
 // freely; the cold of winter throttles the network down to the rare storm - "thundersnow" is a
 // headline, not a Tuesday, and the few strikes it does own are the powerful positive anvil
 // bolts the lightning model favours at those temperatures. The floor keeps that rare winter

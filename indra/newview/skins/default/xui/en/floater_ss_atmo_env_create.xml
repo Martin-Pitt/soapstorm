@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="false"
  can_resize="false"
- height="480"
+ height="510"
  layout="topleft"
  name="floater_ss_atmo_env_create"
  single_instance="true"
@@ -72,7 +72,7 @@
     <scroll_list
      commit_on_selection_change="true"
      follows="left|top"
-     height="200"
+     height="150"
      layout="topleft"
      left="15"
      multi_select="true"
@@ -94,7 +94,7 @@
      layout="topleft"
      left="15"
      name="remove_sky_button"
-     top_pad="6"
+     top_pad="8"
      width="140" />
 
     <!-- The supplied day cycle, fed by drops; one at a time, a later drop replaces it. -->
@@ -124,11 +124,11 @@
 
     <text
      follows="left|top"
-     height="34"
+     height="48"
      layout="topleft"
      left="15"
      name="hint_text"
-     top="376"
+     top="330"
      width="440"
      wrap="true">
         -
@@ -141,7 +141,7 @@
      layout="topleft"
      left="15"
      name="create_button"
-     top="418"
+     top="448"
      width="120" />
     <button
      follows="left|top"
@@ -150,6 +150,6 @@
      layout="topleft"
      left_pad="10"
      name="cancel_button"
-     top="418"
+     top="448"
      width="120" />
 </floater>

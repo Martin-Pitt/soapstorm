@@ -74,12 +74,13 @@ public:
                                     std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
 
     // A list of skies of the author's choosing, run through the same measure-and-stamp algorithm
-    // as the stock day cycle. A sky whose inventory name names a day position (see the position
-    // table in ssatmoenvmanager.cpp, e.g. "Morning Golden Hour", "Noon", "Night") is stamped at
-    // that fixed position instead of being body-measured, so a named pack falls into its authored
-    // slots. An unnamed sky is measured against the dominant body of the sky itself - whichever
-    // of its sun and moon stands higher. Names are log-only otherwise and may be empty. An empty
-    // list makes the empty environment.
+    // as the stock day cycle. Every sky lands at the phase where its dominant body reaches the
+    // height the sky drew it - the order of the day falls out of the heights. The inventory name
+    // sorts the placement to the right side of noon and names the fixed anchors: Sunrise, Sunset,
+    // Noon and Midnight pin their phases outright (and "Daylight" implies Noon, "Night" implies
+    // Midnight - a night sky is never parked in daylight even when it has no moon). A "Morning
+    // Umbra" with its sun below the horizon lands in the pre-dawn hours, not in daylight. Names
+    // are log-only otherwise and may be empty. An empty list makes the empty environment.
     static void createFromSkies(const std::vector<LLUUID>& sky_asset_ids,
                                 const std::vector<std::string>& sky_names,
                                 const LLUUID& parent_id,

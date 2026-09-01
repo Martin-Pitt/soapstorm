@@ -26025,7 +26025,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoDiscPadAuto</key>
       <map>
       <key>Comment</key>
-      <string>When a celestial body's disc texture is newly picked or adopted by a sky import, analyze its alpha to auto-derive the disc padding: sample slightly rotated cardinal and diagonal lines out from the texture centre - the rotation keeps the lines off diffraction-spike rays - and take the disc radius the majority of the lines agree on. A texture whose lines cannot agree errors out to 0 padding (full-bleed; the spinner stays the authority)</string>
+      <string>When a celestial body's disc texture is newly picked or adopted (sky import, or creating an environment from skies or a day cycle), analyze its ALPHA to auto-derive the disc padding: sample slightly rotated octagonal lines out from the texture centre - the rotation keeps the lines off diffraction-spike rays - and take the disc radius the majority of lines agree on, reading the 90%-of-max alpha contour (just inside where a radial glow falloff leaves the near-opaque plateau). A texture whose lines cannot agree errors out to 0 padding (full-bleed; the spinner stays the authority)</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

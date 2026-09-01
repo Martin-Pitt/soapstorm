@@ -61,13 +61,24 @@ private:
         MODE_DAY_CYCLE = 3
     };
 
+    // <SS:Nexii> What a sky's NAME claims about its placement: the side of noon it belongs to
+    // (Morning/Dawn/Sunrise rise, Evening/Dusk/Sunset/Night set) or one of the two extreme
+    // anchors (Noon, Midnight). The placement itself is the sky's measured dominant-body
+    // elevation - see SSAtmoEnvManager::seedSkyNameHint for the mirror table.
+    enum class ESeedHint
+    {
+        AUTO,     // no name claim - measured by the dominant body, both sides possible
+        RISING,   // morning side of the day
+        SETTING,  // evening side of the day
+        NOON,     // the highest point of the cycle
+        MIDNIGHT  // the lowest point of the cycle
+    };
+
     struct DroppedSky
     {
         LLUUID mAssetId;
         std::string mName;
-        // -1 when the name names no position, otherwise the fixed slot phase (0=midnight,
-        // 0.25=sunrise, 0.5=noon, 0.75=sunset) the sky lands at instead of being measured.
-        F64 mSlot = -1.0;
+        ESeedHint mHint = ESeedHint::AUTO;
     };
 
     EMode currentMode() const;
@@ -78,8 +89,8 @@ private:
     void onClickCreate();
     void onClickRemoveSky();
 
-    static F64 slotForName(const std::string& name);
-    static std::string slotLabel(F64 slot);
+    static ESeedHint hintForName(const std::string& name);
+    static std::string hintLabel(ESeedHint hint);
     static std::string rowForSky(const DroppedSky& sky);
 
     std::vector<DroppedSky> mDroppedSkies;

@@ -77,8 +77,6 @@ namespace
         return llmax(1.f - 2.f * disc_padding, SS_MIN_DISC_FRACTION);
     }
 
-    const F32 BILLBOARD_MIN_DIAMETER_DEG(0.05f);
-
     // <SS:Nexii> The sunrise/sunset twilight band the glow ramps out over once the disc's centre
     // sets: six of the disc's OWN radii below the horizon, so the dusk keeps proportion to
     // whatever sun the sky authors - floored and capped in degrees because the twilight belongs
@@ -127,7 +125,36 @@ static const F32 SS_ANVIL_FULL       = 0.9f;
 
 F32 SSAtmoEnvApplier::cirrusAltitudeMetres() const
 {
-    const F32 dry = llmax(mTrackFloorZ + mCloudDomeHeightM, 1.f);
+    // <SS:Nexii> The seasonal band (SSAtmoCirrusSeason): temperature sets the cirrus layer's
+    // home - winter air is dense and squashes the atmosphere down, so the same cirrus that
+    // rides ~8km in a summer heatwave hangs at ~5km in -15C cold - with the authored dome
+    // height keeping its day-cycle SHAPE: the seasonal altitude is scaled by the authored
+    // height over the 6km reference it was authored under, so a deck authored low stays
+    // proportionally low. Like the storm deck's base, the band follows the temperature as a
+    // cubic centred on the neutral 10C midpoint - flat in the middle so a day's drift barely
+    // moves the cirrus, steepest at the seasonal rails. The anvil descent below still brings
+    // the band onto the storm deck's lid, exactly as always. </SS:Nexii>
+    static const F32 CIRRUS_WINTER_M = 5000.f;
+    static const F32 CIRRUS_SUMMER_M = 8000.f;
+    static const F32 CIRRUS_KIND_MIN_C = -15.f;
+    static const F32 CIRRUS_KIND_MAX_C = 35.f;
+    static const F32 CIRRUS_AUTHORED_REFERENCE_M = 6000.f;
+
+    static LLCachedControl<bool> season_setting(gSavedSettings, "SSAtmoCirrusSeason", true);
+
+    const F32 authored = llmax(mCloudDomeHeightM, 1.f);
+
+    F32 base = mTrackFloorZ + authored;
+    if (season_setting)
+    {
+        const F32 mid_c = (CIRRUS_KIND_MIN_C + CIRRUS_KIND_MAX_C) * 0.5f;
+        const F32 half_c = (CIRRUS_KIND_MAX_C - CIRRUS_KIND_MIN_C) * 0.5f;
+        const F32 mid_m = (CIRRUS_WINTER_M + CIRRUS_SUMMER_M) * 0.5f;
+        const F32 t = llclamp((mLastTemperatureC - mid_c) / half_c, -1.f, 1.f);
+        const F32 seasonal = mid_m + (CIRRUS_SUMMER_M - mid_m) * t * t * t;
+        base = mTrackFloorZ + seasonal * (authored / CIRRUS_AUTHORED_REFERENCE_M);
+    }
+    const F32 dry = llmax(base, 1.f);
 
     SSVolCloud* vol = SSVolCloud::getInstance();
     if (!vol || vol->empty()) return dry;
@@ -471,6 +498,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
     // (SSVolCloud::update resolves straight off the weather cube), and the dome band integrates
     // with the DECK - with the deck, not with the influence switch.
     mLastConvection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
+    mLastTemperatureC = llclamp(track.mWeather.mTemperatureC.valueAt(phase), -60.f, 60.f);
 
     const SSAtmoEnvWeatherInfluence& influence = track.mWeatherInfluence;
 
@@ -656,33 +684,22 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         [this](const LLColor3& v) { mSky->setCloudColor(v); });
     put(mLastCloudCoverage, mod.cloudCoverage(dome.mCoverage.valueAt(phase)),
         [this](F32 v) { mSky->setCloudShadow(v); });
-    put(mLastCloudScale, dome.mScale.valueAt(phase),
-        [this](F32 v) { mSky->setCloudScale(v); });
-    // <SS:Nexii> The Scale dial's crossfade. valueAt above holds the fade's FROM keyframe - the
-    // sky's own cloud_scale uniform keeps it, exactly as the dome noise's id keeps the fade's
-    // from map - and this pair hands the ground mapping's OTHER end and the eased weight to the
-    // sky pool, which binds them into the dome shader (ss_cloud_scale_to / ss_cloud_scale_blend).
-    // The shader then samples the band at BOTH endpoint scales and mixes the resulting opacities:
-    // the pattern is scaled by the endpoints and the two renderings are crossfaded, never the
-    // scale itself interpolated. That interpolation was the erratic-motion bug this re-add
-    // exists to avoid - a continuously zoomed tile drags every feature sideways as the pivot
-    // point moves, so keyframing the dial read as the clouds drifting when they should stand
-    // still; the crossfade slides between two fixed patterns instead. An authored 0.25 is the
-    // anchor (SS_SCALE_ANCHOR in the shader): it tiles exactly as the render did before the dial
-    // was re-added. A degenerate endpoint (authored scale ~0) has no honest tile, so the fade is
-    // skipped and the layer draws at the surviving endpoint. Different keyframe timing from the
-    // Cloud Image is fine: each field fades on its own axis, and the noise pair's mix happens
-    // inside the sampler both plates share.
-    mCloudScaleTo = dome.mScale.valueAt(phase);
-    mCloudScaleBlend = 0.f;
+    // <SS:Nexii> The Scale dial: the live sky's cloud_scale uniform stays on the FROM keyframe's
+    // FIXED value through a blend, never valueAt's continuous lerp. A lerped scale fed into
+    // ss_plane_base's divisor would zoom the tile continuously mid-fade - the clouds visibly
+    // stretch and shrink against the fixed-height band, reading as the layer changing altitude
+    // when it has not moved. The TO endpoint and the eased weight ride the cloudScaleTo/
+    // cloudScaleBlend pair instead, and the shader crossfades the two fixed-ratio plates.
+    // Off-blend the fallback is valueAt (the single-keyframe/plain value, unchanged).
     {
         F32 scale_from = 0.f, scale_to = 0.f, scale_blend = 0.f;
-        if (dome.mScale.blendAt(phase, scale_from, scale_to, scale_blend)
-            && scale_from > 0.001f && scale_to > 0.001f)
-        {
-            mCloudScaleTo = scale_to;
-            mCloudScaleBlend = scale_blend;
-        }
+        const bool fading = dome.mScale.blendAt(phase, scale_from, scale_to, scale_blend)
+                         && scale_from > 0.001f && scale_to > 0.001f;
+        const F32 live_scale = fading ? scale_from : dome.mScale.valueAt(phase);
+        put(mLastCloudScale, live_scale,
+            [this](F32 v) { mSky->setCloudScale(v); });
+        mCloudScaleTo = fading ? scale_to : dome.mScale.valueAt(phase);
+        mCloudScaleBlend = fading ? scale_blend : 0.f;
     }
     // </SS:Nexii>
     // <SS:Nexii> Deliberately unmodulated - the one weather mapping that was removed rather than
@@ -1151,14 +1168,18 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
         }
     }
 
+    // <SS:Nexii> Every resolved body becomes a billboard - no angular-size floor. An early cut
+    // dropped bodies smaller than ~1-2 pixels against the advertent "a subpixel quad shimmers",
+    // but a realistically-scaled system - the authoring norm, per the defaults - puts every
+    // planet save the home's moon below that band (Jupiter is 0.014 deg), so the floor silently
+    // hid whole systems from both the sky AND the body-location debug overlay. There is no need
+    // for it: celestialDiscScale's CELESTIAL_SCALE_MIN floor already keeps the quad at a stable
+    // visible size, and a far planet at the floored size is a dim dot that behaves, whereas
+    // dropping it turned the body into nothing at all.
     mBillboards.clear();
     for (const SSAtmoEnvResolvedBody& body : sky_bodies)
     {
         if (std::find(emitters.begin(), emitters.end(), body.mBodyIndex) != emitters.end())
-        {
-            continue;
-        }
-        if (body.mAngularDiameterDeg < BILLBOARD_MIN_DIAMETER_DEG)
         {
             continue;
         }

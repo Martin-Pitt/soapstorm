@@ -224,6 +224,13 @@ struct SSAtmoEnvCelestialBody
     // is the body - and capped at 0.45 so a disc never shrinks below a tenth of its quad.
     F32 mDiscPadding = 0.f;
 
+    // <SS:Nexii> Runtime-only, never serialized: the diameter this body carries was written by
+    // a sky translation (translateSettingsSky) at the EEP QUAD size - the glow-inclusive size a
+    // pre-padding sky authored - and the first disc-padding derive must shrink it to the solid
+    // visible disc exactly once, then clear the flag. The author's own later edits (spinner,
+    // another texture pick) travel with no flag and never rescale behind their back.
+    bool mPadPendingTranslation = false;
+
     bool mHasRing = false;
     F32 mRingInnerRadius = 1.5f;
     F32 mRingOuterRadius = 2.2f;

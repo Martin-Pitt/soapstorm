@@ -229,22 +229,19 @@
      follows="left|top"
      layout="topleft"
      left="10"
-     top_pad="18"
-     height="42"
+     top_pad="26"
+     height="56"
      width="560"
      name="planetary_designer_text"
      wrap="true"
      font="SansSerifSmall">
-        This track's suns, planets and moons are edited in the System
-        Designer - an orbital map of the whole system where bodies are
-        selected by clicking them and repositioned by dragging them along
-        their rings. The designer follows whichever track is selected here.
+        This track's suns, planets and moons are edited in the System Designer - an orbital map of the whole system where bodies are selected by clicking them and repositioned by dragging them along their rings. The designer follows whichever track is selected here.
     </text>
     <button
      follows="left|top"
      layout="topleft"
      left="10"
-     top_pad="8"
+     top_pad="10"
      height="23"
      width="560"
      name="open_planetary_designer_button"
