@@ -173,6 +173,13 @@ public:
 
     bool isActive() const { return mActive; }
 
+    // <SS:Nexii> The track the applier resolved this frame - the landscape world's lifecycle
+    // hub. -1 while inactive. Published the same way the billboard list is: the resolver's
+    // active-track decision is expensive to recompute and the landscape world must follow the
+    // exact same cut the sky does.
+    S32 primaryTrackIndex() const { return mActive ? mPrimaryTrackIndex : -1; }
+    // </SS:Nexii>
+
     bool waterPlaneOn() const { return mWaterPlaneOn; }
 
     const std::vector<SSAtmoEnvBillboard>& celestialBillboards() const { return mBillboards; }
@@ -295,6 +302,12 @@ private:
     void setWaterRendering(bool enabled);
     bool mWaterDerendered = false;
     bool mWaterPlaneOn = false;
+
+    // <SS:Nexii> The resolved primary track of the most recent apply() - published via
+    // primaryTrackIndex() to the landscape world. Kept alongside mActive so an inactive
+    // applier reads -1 without extra state machines.
+    S32 mPrimaryTrackIndex = -1;
+    // </SS:Nexii>
 
     void applyCelestial(const SSAtmoEnvTrack& track, F64 phase);
 

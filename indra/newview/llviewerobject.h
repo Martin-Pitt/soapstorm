@@ -607,6 +607,12 @@ public:
     inline bool     flagObjectCopy() const          { return ((mFlags & FLAGS_OBJECT_COPY) != 0); }
     inline bool     flagObjectMove() const          { return ((mFlags & FLAGS_OBJECT_MOVE) != 0); }
     inline bool     flagObjectTransfer() const      { return ((mFlags & FLAGS_OBJECT_TRANSFER) != 0); }
+
+    // <SS:Nexii> Viewer-local content - an object that exists only on this client (Atmo Magic
+    // landscape scenery). Every server send touching such objects is gated on this flag.
+    bool ssIsLocalContent() const { return mIsLocalContent; }
+    void ssSetLocalContent(bool v) { mIsLocalContent = v; }
+    // </SS:Nexii>
     inline bool     flagObjectPermanent() const     { return ((mFlags & FLAGS_AFFECTS_NAVMESH) != 0); }
     inline bool     flagCharacter() const           { return ((mFlags & FLAGS_CHARACTER) != 0); }
     inline bool     flagVolumeDetect() const        { return ((mFlags & FLAGS_VOLUME_DETECT) != 0); }
@@ -820,6 +826,10 @@ public:
 private:
     // Grabbed from UPDATE_FLAGS
     U32             mFlags;
+
+    // <SS:Nexii> Viewer-local content flag - see ssIsLocalContent() above.
+    bool            mIsLocalContent = false;
+    // </SS:Nexii>
 
     bool mFlexibleObjectDataInUse = false,
         mLightParamsInUse = false,

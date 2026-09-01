@@ -1444,6 +1444,174 @@ void ssAtmoEnvEmbedReferencedPrecipTypes(SSAtmoEnvAsset& asset)
 }
 
 // One track out to its notecard document.
+// <SS:Nexii> Landscape record serialization - pretty-XML-friendly, sparse faces, tolerant.
+LLSD SSAtmoEnvLandscapeFace::asLLSD() const
+{
+    LLSD sd = LLSD::emptyMap();
+    if (!mTexture.isNull())
+    {
+        sd["texture"] = mTexture;
+    }
+    if (!mMaterial.isNull())
+    {
+        sd["material"] = mMaterial;
+    }
+    sd["repeats"] = LLSD::emptyArray();
+    sd["repeats"].append((LLSD::Real)mRepeats.mV[VX]);
+    sd["repeats"].append((LLSD::Real)mRepeats.mV[VY]);
+    sd["repeats"].append((LLSD::Real)mRepeats.mV[VZ]);
+    sd["repeats"].append((LLSD::Real)mRepeats.mV[VW]);
+    if (mRotation != 0.f)
+    {
+        sd["rotation"] = (LLSD::Real)mRotation;
+    }
+    sd["color"] = LLSD::emptyArray();
+    sd["color"].append((LLSD::Real)mColor.mV[VR]);
+    sd["color"].append((LLSD::Real)mColor.mV[VG]);
+    sd["color"].append((LLSD::Real)mColor.mV[VB]);
+    sd["color"].append((LLSD::Real)mColor.mV[VA]);
+    if (mAlphaMode != 0)
+    {
+        sd["alpha_mode"] = (LLSD::Integer)mAlphaMode;
+    }
+    return sd;
+}
+
+bool SSAtmoEnvLandscapeFace::fromLLSD(const LLSD& sd)
+{
+    if (!sd.isMap()) return false;
+
+    mTexture = sd.has("texture") ? sd["texture"].asUUID() : LLUUID::null;
+    mMaterial = sd.has("material") ? sd["material"].asUUID() : LLUUID::null;
+    mAlphaMode = sd.has("alpha_mode") ? (S32)sd["alpha_mode"].asInteger() : 0;
+    if (sd.has("repeats") && sd["repeats"].isArray())
+    {
+        const LLSD& r = sd["repeats"];
+        for (S32 i = 0; i < 4 && i < (S32)r.size(); ++i)
+        {
+            mRepeats.mV[i] = (F32)r[i].asReal();
+        }
+    }
+    else mRepeats = LLVector4(1.f, 1.f, 0.f, 0.f);
+    mRotation = sd.has("rotation") ? (F32)sd["rotation"].asReal() : 0.f;
+    if (sd.has("color") && sd["color"].isArray())
+    {
+        const LLSD& c = sd["color"];
+        for (S32 i = 0; i < 4 && i < (S32)c.size(); ++i)
+        {
+            mColor.mV[i] = (F32)c[i].asReal();
+        }
+    }
+    else mColor = LLColor4::white;
+    return true;
+}
+
+LLSD SSAtmoEnvLandscape::asLLSD() const
+{
+    LLSD sd = LLSD::emptyMap();
+    sd["mesh_id"] = mMeshId;
+    sd["name"] = mName;
+    sd["desc"] = mDesc;
+    if (!mCreator.isNull()) sd["creator"] = mCreator;
+    if (!mLastOwner.isNull()) sd["last_owner"] = mLastOwner;
+    if (mCreated != 0.0) sd["created"] = (LLSD::Real)mCreated;
+
+    sd["pos_mode"] = mLocked ? "locked" : "free";
+    sd["offset"] = LLSD::emptyArray();
+    sd["offset"].append((LLSD::Real)mLockedOffset.mV[VX]);
+    sd["offset"].append((LLSD::Real)mLockedOffset.mV[VY]);
+    sd["offset"].append((LLSD::Real)mLockedOffset.mV[VZ]);
+    sd["global"] = LLSD::emptyArray();
+    sd["global"].append((LLSD::Real)mFreeGlobal.mdV[VX]);
+    sd["global"].append((LLSD::Real)mFreeGlobal.mdV[VY]);
+    sd["global"].append((LLSD::Real)mFreeGlobal.mdV[VZ]);
+    sd["rotation"] = LLSD::emptyArray();
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VX]);
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VY]);
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VZ]);
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VW]);
+    sd["scale"] = LLSD::emptyArray();
+    sd["scale"].append((LLSD::Real)mScale.mV[VX]);
+    sd["scale"].append((LLSD::Real)mScale.mV[VY]);
+    sd["scale"].append((LLSD::Real)mScale.mV[VZ]);
+
+    if (!mFaces.empty())
+    {
+        LLSD faces = LLSD::emptyArray();
+        for (const SSAtmoEnvLandscapeFace& f : mFaces)
+        {
+            faces.append(f.asLLSD());
+        }
+        sd["faces"] = faces;
+    }
+    return sd;
+}
+
+bool SSAtmoEnvLandscape::fromLLSD(const LLSD& sd)
+{
+    if (!sd.isMap()) return false;
+
+    if (sd.has("mesh_id")) mMeshId = sd["mesh_id"].asUUID();
+    if (sd.has("name")) mName = sd["name"].asString();
+    if (sd.has("desc")) mDesc = sd["desc"].asString();
+    if (sd.has("creator")) mCreator = sd["creator"].asUUID();
+    if (sd.has("last_owner")) mLastOwner = sd["last_owner"].asUUID();
+    if (sd.has("created")) mCreated = sd["created"].asReal();
+
+    if (sd.has("pos_mode")) mLocked = (sd["pos_mode"].asString() != "free");
+    if (sd.has("offset") && sd["offset"].isArray())
+    {
+        const LLSD& o = sd["offset"];
+        for (S32 i = 0; i < 3 && i < (S32)o.size(); ++i)
+        {
+            mLockedOffset.mV[i] = (F32)o[i].asReal();
+        }
+    }
+    if (sd.has("global") && sd["global"].isArray())
+    {
+        const LLSD& g = sd["global"];
+        for (S32 i = 0; i < 3 && i < (S32)g.size(); ++i)
+        {
+            mFreeGlobal.mdV[i] = g[i].asReal();
+        }
+    }
+    if (sd.has("rotation") && sd["rotation"].isArray())
+    {
+        const LLSD& r = sd["rotation"];
+        if (r.size() == 4)
+        {
+            mRotation.mQ[VX] = (F32)r[0].asReal();
+            mRotation.mQ[VY] = (F32)r[1].asReal();
+            mRotation.mQ[VZ] = (F32)r[2].asReal();
+            mRotation.mQ[VW] = (F32)r[3].asReal();
+        }
+    }
+    if (sd.has("scale") && sd["scale"].isArray())
+    {
+        const LLSD& s = sd["scale"];
+        for (S32 i = 0; i < 3 && i < (S32)s.size(); ++i)
+        {
+            mScale.mV[i] = (F32)s[i].asReal();
+        }
+    }
+
+    mFaces.clear();
+    if (sd.has("faces") && sd["faces"].isArray())
+    {
+        const LLSD& faces = sd["faces"];
+        for (U32 i = 0; i < faces.size(); ++i)
+        {
+            SSAtmoEnvLandscapeFace f;
+            if (f.fromLLSD(faces[i]))
+            {
+                mFaces.push_back(f);
+            }
+        }
+    }
+    return true;
+}
+// </SS:Nexii>
+
 LLSD SSAtmoEnvTrack::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -1463,6 +1631,17 @@ LLSD SSAtmoEnvTrack::asLLSD() const
     sd["atmosphere"] = mAtmosphere.asLLSD();
     sd["weather_influence"] = mWeatherInfluence.asLLSD();
     sd["weather_source_deck"] = (LLSD::Integer)mWeatherSourceDeck;
+    // <SS:Nexii> Landscape scenery, sparse.
+    if (!mLandscapes.empty())
+    {
+        LLSD landscapes = LLSD::emptyArray();
+        for (const SSAtmoEnvLandscape& l : mLandscapes)
+        {
+            landscapes.append(l.asLLSD());
+        }
+        sd["landscape"] = landscapes;
+    }
+    // </SS:Nexii>
     return sd;
 }
 
@@ -1489,6 +1668,22 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
     if (sd.has("weather_influence")) mWeatherInfluence.fromLLSD(sd["weather_influence"]);
     mWeatherSourceDeck = sd.has("weather_source_deck")
         ? (S32)sd["weather_source_deck"].asInteger() : SS_ATMOENV_DECK_DERIVED;
+
+    // <SS:Nexii> Landscape scenery: absent key is an empty (no scenery) track.
+    mLandscapes.clear();
+    if (sd.has("landscape") && sd["landscape"].isArray())
+    {
+        const LLSD& ls = sd["landscape"];
+        for (U32 i = 0; i < ls.size(); ++i)
+        {
+            SSAtmoEnvLandscape l;
+            if (l.fromLLSD(ls[i]))
+            {
+                mLandscapes.push_back(l);
+            }
+        }
+    }
+    // </SS:Nexii>
 
     return true;
 }

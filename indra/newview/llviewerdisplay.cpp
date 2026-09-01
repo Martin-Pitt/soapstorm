@@ -91,6 +91,7 @@
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvdiscovery.h"
 #include "sswater.h"
+#include "ssatmolandscape.h"
 #include "ssrainshadow.h"
 #include "sswindflow.h"
 #include "ssglreadback.h"
@@ -1000,6 +1001,10 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     // after the applier so it sees the same frame's active
                     // state (doc/atmo_magic_water.md).
                     SSWaterWorld::getInstance()->update();
+
+                    // Atmo Magic: the landscape scenery set ticks after the applier and
+                    // water, so it follows the same frame's resolved track.
+                    SSAtmoLandscapeWorld::getInstance()->update();
 
                     SSRainShadowMap::getInstance()->capture();
                     SSWindFlowMap::getInstance()->update();

@@ -230,6 +230,8 @@ set(viewer_SOURCE_FILES
     sssoundmeta.cpp
     sssoundscape.cpp
     sswater.cpp
+    ssatmolandscape.cpp
+    ssatmolandscapeobject.cpp
     sswindflow.cpp
     ssworldfield.cpp
     fsscriptlibrary.cpp
@@ -1147,6 +1149,8 @@ set(viewer_HEADER_FILES
     sssoundmeta.h
     sssoundscape.h
     sswater.h
+    ssatmolandscape.h
+    ssatmolandscapeobject.h
     sswindflow.h
     ssworldfield.h
     fsscriptlibrary.h

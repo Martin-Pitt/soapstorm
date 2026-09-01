@@ -704,6 +704,32 @@ public:
     virtual void addGeometryCount(LLSpatialGroup* group, U32 &vertex_count, U32& index_count) { LLVolumeGeometryManager::addGeometryCount(group, vertex_count, index_count); }
 };
 
+// <SS:Nexii> Spatial partition for Atmo Magic landscape scenery - the volume partition's exact
+// machinery (faces, LOD, pools) plus an infinite far clip, so scenery keeps rendering out past
+// the user's draw distance the way the sky does. Drawable type stays RENDER_TYPE_VOLUME on
+// purpose: the volume pools, culling walks and pick lists all key on it, so landscape objects
+// behave exactly like volumes everywhere except that the far clip never rejects them.
+class SSLandscapePartition : public LLSpatialPartition, public LLVolumeGeometryManager
+{
+public:
+    SSLandscapePartition(LLViewerRegion* regionp)
+        : LLSpatialPartition(LLVOVolume::VERTEX_DATA_MASK, true, regionp),
+          LLVolumeGeometryManager()
+    {
+        mLODPeriod = 32;
+        mDepthMask = false;
+        mInfiniteFarClip = true;
+        mDrawableType = LLPipeline::RENDER_TYPE_VOLUME;
+        mPartitionType = LLViewerRegion::PARTITION_LANDSCAPE;
+        mSlopRatio = 0.25f;
+    }
+    virtual void rebuildGeom(LLSpatialGroup* group) { LLVolumeGeometryManager::rebuildGeom(group); }
+    virtual void getGeometry(LLSpatialGroup* group) { LLVolumeGeometryManager::getGeometry(group); }
+    virtual void rebuildMesh(LLSpatialGroup* group) { LLVolumeGeometryManager::rebuildMesh(group); }
+    virtual void addGeometryCount(LLSpatialGroup* group, U32 &vertex_count, U32& index_count) { LLVolumeGeometryManager::addGeometryCount(group, vertex_count, index_count); }
+};
+// </SS:Nexii>
+
 //spatial bridge that uses volume geometry manager (implemented in LLVOVolume.cpp)
 class LLVolumeBridge : public LLSpatialBridge, public LLVolumeGeometryManager
 {

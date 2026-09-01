@@ -727,6 +727,11 @@ void LLToolGrabBase::handleHoverActive(S32 x, S32 y, MASK mask)
                 // Transmit update to simulator
                 LLVector3 grab_pos_region = objectp->getRegion()->getPosRegionFromGlobal( grab_point_global );
 
+                // <SS:Nexii> Local-content objects (Atmo Magic landscape) are grabbed
+                // client-side - no move update to the sim.
+                if (!objectp->ssIsLocalContent())
+                {
+                // </SS:Nexii>
                 LLMessageSystem *msg = gMessageSystem;
                 msg->newMessageFast(_PREHASH_ObjectGrabUpdate);
                 msg->nextBlockFast(_PREHASH_AgentData);
@@ -746,6 +751,9 @@ void LLToolGrabBase::handleHoverActive(S32 x, S32 y, MASK mask)
                 msg->addVector3("Binormal", mGrabPick.mBinormal);
 
                 msg->sendMessage( objectp->getRegion()->getHost() );
+                // <SS:Nexii> ...end of the local-content gate above.
+                }
+                // </SS:Nexii>
             }
         }
 
@@ -894,8 +902,12 @@ void LLToolGrabBase::handleHoverNonPhysical(S32 x, S32 y, MASK mask)
         changed_since_last_update = true;
     }
 
-    if (changed_since_last_update)
+    if (changed_since_last_update && !(objectp && objectp->ssIsLocalContent()))
     {
+        // <SS:Nexii> Local-content objects (Atmo Magic landscape) are grabbed client-side -
+        // no move update to the sim. The local object still moved above - this gate only
+        // suppresses the announce.
+        // </SS:Nexii>
         LLMessageSystem *msg = gMessageSystem;
         msg->newMessageFast(_PREHASH_ObjectGrabUpdate);
         msg->nextBlockFast(_PREHASH_AgentData);

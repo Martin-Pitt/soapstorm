@@ -53,6 +53,7 @@
 // viewer includes
 #include "llagent.h"
 #include "llagentcamera.h"
+#include "ssatmolandscape.h" // <SS:Nexii> local-content gate + select-node seeding
 #include "llattachmentsmgr.h"
 #include "llaudioengine.h" // <FS:PP> For object deletion sound
 #include "llviewerwindow.h"
@@ -515,14 +516,20 @@ LLObjectSelectionHandle LLSelectMgr::selectObjectOnly(LLViewerObject* object, S3
 
     // Always send to simulator, so you get a copy of the
     // permissions structure back.
-    gMessageSystem->newMessageFast(_PREHASH_ObjectSelect);
-    gMessageSystem->nextBlockFast(_PREHASH_AgentData);
-    gMessageSystem->addUUIDFast(_PREHASH_AgentID, gAgent.getID() );
-    gMessageSystem->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
-    gMessageSystem->nextBlockFast(_PREHASH_ObjectData);
-    gMessageSystem->addU32Fast(_PREHASH_ObjectLocalID, object->getLocalID() );
-    LLViewerRegion* regionp = object->getRegion();
-    gMessageSystem->sendReliable( regionp->getHost());
+    // <SS:Nexii> Local-content objects (Atmo Magic landscape) have no sim counterpart - the
+    // select announcement is client-side bookkeeping only.
+    if (!object->ssIsLocalContent())
+    {
+        gMessageSystem->newMessageFast(_PREHASH_ObjectSelect);
+        gMessageSystem->nextBlockFast(_PREHASH_AgentData);
+        gMessageSystem->addUUIDFast(_PREHASH_AgentID, gAgent.getID() );
+        gMessageSystem->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+        gMessageSystem->nextBlockFast(_PREHASH_ObjectData);
+        gMessageSystem->addU32Fast(_PREHASH_ObjectLocalID, object->getLocalID() );
+        LLViewerRegion* regionp = object->getRegion();
+        gMessageSystem->sendReliable( regionp->getHost());
+    }
+    // </SS:Nexii>
 
     updatePointAt();
     updateSelectionCenter();
@@ -980,6 +987,13 @@ void LLSelectMgr::deselectObjectAndFamily(LLViewerObject* object, bool send_to_s
     LLMessageSystem* msg = gMessageSystem;
     for (U32 i = 0; i < objects.size(); i++)
     {
+        // <SS:Nexii> Local-content objects (Atmo Magic landscape) are never announced to
+        // the sim - not even on deselect.
+        if (objects[i]->ssIsLocalContent())
+        {
+            continue;
+        }
+        // </SS:Nexii>
         if (start_new_message)
         {
             msg->newMessageFast(_PREHASH_ObjectDeselect);
@@ -1027,14 +1041,19 @@ void LLSelectMgr::deselectObjectOnly(LLViewerObject* object, bool send_to_sim)
 
     if (send_to_sim)
     {
-        LLViewerRegion* region = object->getRegion();
-        gMessageSystem->newMessageFast(_PREHASH_ObjectDeselect);
-        gMessageSystem->nextBlockFast(_PREHASH_AgentData);
-        gMessageSystem->addUUIDFast(_PREHASH_AgentID, gAgent.getID() );
-        gMessageSystem->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
-        gMessageSystem->nextBlockFast(_PREHASH_ObjectData);
-        gMessageSystem->addU32Fast(_PREHASH_ObjectLocalID, object->getLocalID() );
-        gMessageSystem->sendReliable(region->getHost());
+        // <SS:Nexii> Local-content objects (Atmo Magic landscape) have no sim counterpart.
+        if (!object->ssIsLocalContent())
+        {
+            LLViewerRegion* region = object->getRegion();
+            gMessageSystem->newMessageFast(_PREHASH_ObjectDeselect);
+            gMessageSystem->nextBlockFast(_PREHASH_AgentData);
+            gMessageSystem->addUUIDFast(_PREHASH_AgentID, gAgent.getID() );
+            gMessageSystem->addUUIDFast(_PREHASH_SessionID, gAgent.getSessionID());
+            gMessageSystem->nextBlockFast(_PREHASH_ObjectData);
+            gMessageSystem->addU32Fast(_PREHASH_ObjectLocalID, object->getLocalID() );
+            gMessageSystem->sendReliable(region->getHost());
+        }
+        // </SS:Nexii>
     }
 
     // This will refresh dialogs.
@@ -1066,6 +1085,10 @@ void LLSelectMgr::addAsFamily(std::vector<LLViewerObject*>& objects, bool add_to
         if (!objectp->isSelected())
         {
             LLSelectNode *nodep = new LLSelectNode(objectp, true);
+            // <SS:Nexii> Local-content objects (Atmo Magic landscape) get their node seeded
+            // from the record - the sim would otherwise never reply with properties.
+            ss_seed_local_select_node(nodep);
+            // </SS:Nexii>
             if (add_to_end)
             {
                 mSelectedObjects->addNodeAtEnd(nodep);
@@ -1112,6 +1135,10 @@ void LLSelectMgr::addAsIndividual(LLViewerObject *objectp, S32 face, bool undoab
     if (!nodep)
     {
         nodep = new LLSelectNode(objectp, true);
+        // <SS:Nexii> Local-content objects (Atmo Magic landscape) get their node seeded
+        // from the record - see ss_seed_local_select_node.
+        ss_seed_local_select_node(nodep);
+        // </SS:Nexii>
         mSelectedObjects->addNode(nodep);
         llassert_always(nodep->getObject());
     }
@@ -5992,10 +6019,13 @@ void LLSelectMgr::sendListToRegions(LLObjectSelectionHandle selected_handle,
         push_all(std::queue<LLSelectNode*>& n) : nodes_to_send(n) {}
         virtual bool apply(LLSelectNode* node)
         {
-            if (node->getObject())
+            // <SS:Nexii> Local-content objects (Atmo Magic landscape) are never announced to
+            // the sim - this functor is the funnel every send_type flows through.
+            if (node->getObject() && !node->getObject()->ssIsLocalContent())
             {
                 nodes_to_send.push(node);
             }
+            // </SS:Nexii>
             return true;
         }
     };
@@ -6151,6 +6181,13 @@ void LLSelectMgr::sendListToRegions(LLObjectSelectionHandle selected_handle,
 
 void LLSelectMgr::requestObjectPropertiesFamily(LLViewerObject* object)
 {
+    // <SS:Nexii> Local-content objects (Atmo Magic landscape) have no server-side
+    // properties to request - their record IS the property store.
+    if (!object || object->ssIsLocalContent())
+    {
+        return;
+    }
+    // </SS:Nexii>
     LLMessageSystem* msg = gMessageSystem;
 
     msg->newMessageFast(_PREHASH_RequestObjectPropertiesFamily);
@@ -6172,6 +6209,13 @@ void LLSelectMgr::requestObjectPropertiesFamily(LLViewerObject* object)
 // list, so user selection state is unaffected.
 void LLSelectMgr::requestObjectPropertiesViaSelect(LLViewerObject* object)
 {
+    // <SS:Nexii> Local-content objects (Atmo Magic landscape) must not trigger the
+    // select/deselect ping - there is no sim object to elicit a reply from.
+    if (!object || object->ssIsLocalContent())
+    {
+        return;
+    }
+    // </SS:Nexii>
     LLViewerRegion* regionp = object->getRegion();
     if (!regionp)
     {
@@ -9182,6 +9226,24 @@ void LLSelectMgr::sendSelectionMove()
         return;
     }
 
+    // <SS:Nexii> All-local-content selection (Atmo Magic landscape): the move already applied
+    // client-side in selectionMove(); there is nothing to announce, so skip the packet.
+    bool any_server_object = false;
+    for (LLObjectSelection::root_iterator it = getSelection()->root_begin();
+         it != getSelection()->root_end(); ++it)
+    {
+        if (!(*it)->getObject()->ssIsLocalContent())
+        {
+            any_server_object = true;
+            break;
+        }
+    }
+    if (!any_server_object)
+    {
+        return;
+    }
+    // </SS:Nexii>
+
     //saveSelectedObjectTransform(SELECT_ACTION_TYPE_PICK);
 
     U32 update_type = UPD_POSITION | UPD_ROTATION;
@@ -9204,6 +9266,14 @@ void LLSelectMgr::sendSelectionMove()
          it != getSelection()->root_end(); ++it)
     {
         obj = (*it)->getObject();
+
+        // <SS:Nexii> Local-content objects (Atmo Magic landscape) get no server
+        // transform updates - their structure is held client-side.
+        if (obj->ssIsLocalContent())
+        {
+            continue;
+        }
+        // </SS:Nexii>
 
         // note: following code adapted from sendListToRegions() (@3924)
         last_region = curr_region;

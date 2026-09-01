@@ -28,6 +28,13 @@
 
 #include "llsd.h"
 #include "lluuid.h"
+// <SS:Nexii> Landscape records carry a global double position and a placement quaternion,
+// per-face colour and repeats.
+#include "m3math.h"
+#include "v3dmath.h"
+#include "llcolor4.h"
+#include "llvector4.h"
+// </SS:Nexii>
 
 #include <cfloat>
 #include <map>
@@ -67,6 +74,70 @@ const F32 SS_ATMOENV_UDECK_BASE_MIN = -10000.f;
 const F32 SS_ATMOENV_UDECK_BASE_MAX = 10000.f;
 
 const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
+
+// <SS:Nexii> Landscape caps - a notecard-budget decision, not a code limit: a fully loaded
+// record is ~2 KB of pretty XML, so worst-case 16 per track and 32 per asset stay inside the
+// 64 KiB notecard ceiling. Enforced at add time in the landscape UI, surfaced as a friendly
+// error, never a silent truncation. See doc/atmo_landscape/design_synthesis.md.
+const S32 SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK = 16;
+const S32 SS_ATMOENV_MAX_LANDSCAPE_TOTAL = 32;
+
+// <SS:Nexii> Atmo Magic landscape scenery: a client-side mesh object owned by the environment
+// asset instead of the region. The record is everything the runtime object needs to exist -
+// asset uuid, placement, per-face texture state - and everything the object captures back
+// when the author edits it. Faces are sparse: a face block is only present for a face that
+// differs from the default texture entry, keeping plain meshes tiny on disk.
+struct SSAtmoEnvLandscapeFace
+{
+    // <SS:Nexii> Set when this face is authored away from the TE default; a face may carry a
+    // texture, a material, or neither (a texture-less face is tint-only).
+    LLUUID mTexture;
+    LLVector4 mRepeats{1.f, 1.f, 0.f, 0.f}; // U,V repeats + S,T offset, the TE layout
+    F32 mRotation = 0.f;
+    LLColor4 mColor{LLColor4::white};
+    S32 mAlphaMode = 0;
+
+    // <SS:Nexii> The PBR render material id when this face was authored with one - empty when
+    // the face is legacy lit.
+    LLUUID mMaterial;
+
+    LLSD asLLSD() const;
+    bool fromLLSD(const LLSD& sd);
+};
+
+struct SSAtmoEnvLandscape
+{
+    LLUUID mMeshId;
+
+    std::string mName;
+    std::string mDesc;
+
+    // <SS:Nexii> Read-only provenance captured at drop - surfaced in the landscape list, not
+    // edited in-world.
+    LLUUID mCreator;
+    LLUUID mLastOwner;
+    F64 mCreated = 0.0;
+
+    // <SS:Nexii> Placement. "locked" stores a region-local offset and re-anchors into whatever
+    // region the agent is in, so an environment copied across an estate renders the scenery at
+    // the same spot relative to every region's origin. "free" stores one global position the
+    // object keeps no matter which region is crossed. Z needs no anchoring either way: it is a
+    // shared sea-level datum.
+    bool mLocked = true;
+    LLVector3 mLockedOffset;
+    LLVector3d mFreeGlobal;
+
+    LLQuaternion mRotation;
+    LLVector3 mScale{1.f, 1.f, 1.f};
+
+    // <SS:Nexii> Sparse per-face texture state - index must be < the loaded mesh's face count;
+    // entries beyond it are ignored on apply and dropped on reconcile.
+    std::vector<SSAtmoEnvLandscapeFace> mFaces;
+
+    LLSD asLLSD() const;
+    bool fromLLSD(const LLSD& sd);
+};
+// </SS:Nexii>
 
 // <SS:Nexii> EEP's reference disc: the angular diameter a stock sky's disc scale of 1.0 states -
 // the real Sun's apparent size, which is what scale 1.0 was always MEANT to draw. It is the
@@ -549,6 +620,12 @@ struct SSAtmoEnvTrack
     // the upper deck while a lower one is enabled for looks. Not keyframed: it is a property of the
     // track, not of a moment. See doc/atmo_magic_env_ui.md.
     S32 mWeatherSourceDeck = SS_ATMOENV_DECK_DERIVED;
+
+    // <SS:Nexii> The track's landscape scenery. Optional - an empty list is a sky track with no
+    // scenery. Lifecycle is track-bound: crossing into this track hydrates its records, crossing
+    // out is an instant cut to the next track's set. See ssatmolandscape.cpp.
+    std::vector<SSAtmoEnvLandscape> mLandscapes;
+    // </SS:Nexii>
 
     F64 currentDayCyclePhase() const;
 
