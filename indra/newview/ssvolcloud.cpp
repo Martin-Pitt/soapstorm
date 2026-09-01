@@ -44,6 +44,7 @@
 #include "pipeline.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 
 extern bool gCubeSnapshot;
@@ -303,7 +304,6 @@ void SSVolCloud::update(F32 dt)
 {
     mPrimary.mPuffs.clear();
     mUnder.mPuffs.clear();
-    mLastCoverage = 0.f;
     mLastBuildMS = 0.f;
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoVolumetricClouds", true);
@@ -388,7 +388,6 @@ void SSVolCloud::update(F32 dt)
     if (field.mCoverage >= COVERAGE_FLOOR && field.mThicknessM > 1.f)
     {
         buildDeck(mPrimary, field, convection, moisture, 0u);
-        mLastCoverage = field.mCoverage;
     }
 
     // <SS:Nexii> The under deck: the same resolver and the same builder against the track's second
@@ -1648,6 +1647,14 @@ F32 SSVolCloud::precipBaseZ() const
 {
     const Deck* deck = weatherDeck();
     return (deck && !deck->mPuffs.empty()) ? deck->mBaseZ : cloudBaseZ();
+}
+
+// The weather deck's ceiling - the top of the band precipitation falls out of. Same deck choice
+// as precipBaseZ, so both ends of the weather span stay one deck's band.
+F32 SSVolCloud::precipTopZ() const
+{
+    const Deck* deck = weatherDeck();
+    return (deck && !deck->mPuffs.empty()) ? deck->mBaseZ + deck->mThicknessM : -FLT_MAX;
 }
 
 // How solid the under deck is over one point of the sky: the same noise-map presence gate the

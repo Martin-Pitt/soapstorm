@@ -736,19 +736,20 @@
     <!-- CRUD row, docked at the floater's bottom edge, same as Save/Cancel
          on floater_edit_ext_day_cycle.xml. Save writes immediately using
          the Name field above (no "As" dialog - there's nothing to pick,
-         the name is already right there); Load opens inventory and reveals
-         the "Atmo Magic" settings subfolder rather than filtering the whole
-         panel. -->
+         the name is already right there). Load From Parcel fetches and
+         applies the environment the parcel advertises in its description
+         (atmo:<uuid>) and only enables while it advertises one; notecards
+         still load by dragging them onto this floater. -->
     <button
      follows="left|bottom"
      layout="topleft"
      left="15"
      bottom="-14"
      height="23"
-     width="100"
-     name="load_button"
-     tool_tip="Opens inventory to the Atmo Magic folder - drag a notecard onto this floater to load it, or drop a full-perm EEP sky to stamp its look at the current preview time"
-     label="Load..." />
+     width="118"
+     name="load_from_parcel_button"
+     tool_tip="Loads the environment this parcel advertises in its description (atmo:&lt;uuid&gt;). Disabled while the parcel advertises none - notecards load by dragging them onto this floater"
+     label="Load From Parcel" />
     <button
      follows="left|bottom"
      layout="topleft"

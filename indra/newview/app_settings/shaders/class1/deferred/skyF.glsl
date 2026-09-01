@@ -69,6 +69,18 @@ uniform float ss_optic_align;
 // angle by this relative to the stock quad's 0.05, so it stays a rim around WHATEVER disc is
 // drawn rather than the fixed-angle aureole tuned for the old 10x quad.
 uniform float ss_sun_radius;
+
+// <SS:Nexii> The physical rainbow's gate (SSAtmoRainbow, lldrawpoolwlsky.cpp): 1 lets
+// ss_rainbow below take the stock strip's place, 0 keeps the stock single bow bit for bit.
+uniform float ss_rainbow_gate;
+
+// <SS:Nexii> The rainbow grades itself by its light, both already uploaded to this program:
+// lightnorm is the active light's direction in the dome's own frame (+Y up, so lightnorm.y is
+// its elevation sine) and sun_up_factor says whether that light is the sun. A sun within a few
+// degrees of the horizon has the short wavelengths scattered out of its long light path - the
+// monochrome red rainbow - and moonlight is too dim for the cones - the white moonbow.
+uniform vec3 lightnorm;
+uniform int  sun_up_factor;
 #endif
 
 out vec4 frag_data[4];
@@ -101,6 +113,83 @@ vec3 rainbow(float d)
     float rad = (droplet_radius - 5.0f) / 1024.0f;
     return pow(texture(rainbow_map, vec2(rad+0.5, d)).rgb, vec3(1.8)) * moisture_level;
 }
+
+#ifdef SS_ATMO
+// <SS:Nexii> The physical rainbow, painted from the same strip texture the stock lookup reads.
+// Stock sweeps one texcoord across the whole strip and adds whatever is there at one strength -
+// the bow band and the bright interior stretch together - which is why the interior arrives as
+// the blinding wash below the arc. The three phenomena the strip (and physics) carry are read
+// separately here, each at its own strength:
+//
+//   * the PRIMARY bow, the colour band at 34.4..41.4 deg off the antisolar point (red outer,
+//     violet inner), at ~30% - a real bow is a faint thing against the storm light behind it;
+//   * the INTERIOR brightening - light re-scattered inside the bow - on the stock stretch above
+//     the band, at ~8%: real photos show it, never as a wash;
+//   * the SECONDARY bow at ~49..55 deg, the same colour band read REVERSED (red inner, violet
+//     outer) at ~a third of the primary. Every rainbow is a double: the second bow rides two
+//     internal reflections instead of one and arrives faint. The gap between the bows is
+//     Alexander's band and renders as exactly nothing - darker than either bow in every photo.
+//
+// The light's own state then grades the result: a sun within a few degrees of the horizon has
+// blue and green scattered away before the drops ever see it (the monochrome red rainbow), and
+// a moonbow is too dim for the cones - the full spectrum is present but the eye reads white,
+// at a fraction of the strength. The gate (ss_rainbow_gate) leaves the stock strip above
+// untouched when the debug setting is down.
+vec3 ss_rainbow(float d)
+{
+    if (moisture_level <= 0.0)
+    {
+        return vec3(0.0);
+    }
+
+    // Stock's remap, unclamped: t sweeps 0.175..0.25 across the band (red outer, violet
+    // inner), 0.25..0.425 across the interior stretch, and 0..0.081 across the secondary's
+    // angular window.
+    float t   = -0.575 - d;
+    float rad = (droplet_radius - 5.0f) / 1024.0f;
+
+    // Primary bow: the band clamp, faded at the red edge where the strip hands over to black.
+    // The (1 - w) share keeps it off the interior's half of the stretch.
+    float w    = smoothstep(0.25, 0.258, t);
+    float m_in = smoothstep(0.172, 0.178, t);
+    vec3 bow = pow(texture(rainbow_map, vec2(rad + 0.5, clamp(t, 0.175, 0.25))).rgb, vec3(1.8));
+
+    // Interior: the stock stretched lookup, dead until the violet edge has passed.
+    vec3 interior = pow(texture(rainbow_map, vec2(rad + 0.5, 0.25 + max(t - 0.25, 0.0) * 4.2857)).rgb, vec3(1.8));
+
+    // Secondary bow: the colour band reversed - s 1 is the red inner edge (t 0.081, 49 deg off
+    // the antisolar point), s 0 the violet outer one (t 0.0, ~55 deg) - windowed so neither
+    // edge smears into Alexander's band.
+    float s     = clamp(t / 0.081, 0.0, 1.0);
+    float m_sec = smoothstep(0.0, 0.005, t) * (1.0 - smoothstep(0.076, 0.081, t));
+    vec3 secondary = pow(texture(rainbow_map, vec2(rad + 0.5, 0.25 - s * 0.075)).rgb, vec3(1.8));
+
+    vec3 col = bow * (m_in * (1.0 - w)) * 0.30
+             + interior * w * 0.08
+             + secondary * m_sec * 0.09;
+
+    col *= moisture_level;
+
+    // The light's grade. lightnorm.y is the active light's elevation sine either way;
+    // sun_up_factor says whether that light is the sun.
+    float luma = dot(col, vec3(0.299, 0.587, 0.114));
+    if (sun_up_factor == 0)
+    {
+        // Moonbow: needs a near-full moon to see at all, and the cones stand down - the
+        // spectrum is present but reads white, at a quarter strength.
+        col = mix(vec3(luma), col, 0.2) * 0.25;
+    }
+    else
+    {
+        // Red rainbow: the lower the sun, the longer the light path and the more of the short
+        // wavelengths is scattered away before the drops ever see it. Full monochrome inside
+        // two degrees of the horizon, gone by seven.
+        float mono = 1.0 - smoothstep(1.0, 7.0, degrees(asin(clamp(lightnorm.y, -1.0, 1.0))));
+        col = mix(col, vec3(luma) * vec3(0.85, 0.22, 0.07), mono);
+    }
+    return col;
+}
+#endif
 
 vec3 halo22(float d)
 {
@@ -183,10 +272,10 @@ vec3 ss_optics(vec3 view)
     {
         float w = 1.9;
         // <SS:Nexii> The veil rides a deliberately stingy cold drive (SSAtmoEnvSkyWeatherModulator's
-        // ice block), so its shader scale may stand a little stronger than stock's 0.18 - the drive
-        // is what keeps the halo an event, not the multiplier. </SS:Nexii>
+        // ice block), so the shader scale stays well below stock's 0.18 - the drive is what keeps
+        // the halo an event, not the multiplier. </SS:Nexii>
         col += ss_optic_halo22 * exp(-pow((rho - 22.0) / w, 2.0))
-             * ss_optic_color(rho, 22.0, w) * 0.24;
+             * ss_optic_color(rho, 22.0, w) * 0.048;
     }
 
     // 46 deg halo family (large plates/columns) - wider and fainter still.
@@ -194,22 +283,36 @@ vec3 ss_optics(vec3 view)
     {
         float w = 2.3;
         col += ss_optic_halo46 * exp(-pow((rho - 46.0) / w, 2.0))
-             * ss_optic_color(rho, 46.0, w) * 0.12;
+             * ss_optic_color(rho, 46.0, w) * 0.048;
     }
 
     // Aligned-plate phenomena: need the plates to settle, not just plenty of crystals.
     if (ss_optic_align > 0.001)
     {
-        float alt_ok = smoothstep(2.0, 10.0, elev) * (1.0 - smoothstep(42.0, 58.0, elev));
-        if (alt_ok > 0.001)              // sundogs: the 22 deg circle at the light's own altitude
+        // <SS:Nexii> Sundogs - the mock suns. The old spot was a bare brightening of the ring,
+        // which read as "a slightly stronger halo on the sides". A real sundog is a SECOND SUN:
+        // a bright disc with the sun's own glow character, seated on the 22 deg parhelic circle
+        // at the light's altitude, strongest when the light rides LOW. The glow is a modified
+        // copy of the sun's - a hot core with a soft falloff - soft-masked by the halo's INNER
+        // circle (cut inside ~19 deg), so each dog reads as a half-sun sliced by the ring; and
+        // when the light sits on the horizon the ring falls below the clip while the two dogs
+        // stay, flanking the light as two warm half-suns. The disc wears the halo's own
+        // red-inward / blue-outward fringe. </SS:Nexii>
         {
-            float dog = exp(-pow((rho - 22.0) / 1.7, 2.0))
-                      * exp(-pow((psid - 90.0) / 9.0, 2.0));
-            // <SS:Nexii> The dog's shader presence: the align drive already demands deep cold,
-            // moisture and calm, so the spot may read brighter than stock's 0.55 - it is the
-            // rare winter's bright spot, not a daily glare. </SS:Nexii>
-            col += ss_optic_align * alt_ok * dog
-                 * ss_optic_color(rho, 22.0, 1.7) * 0.8;
+            float dog_elev = smoothstep(0.2, 2.5, elev)
+                           * (1.0 - smoothstep(45.0, 58.0, elev));
+            if (dog_elev > 0.001)
+            {
+                float core = exp(-pow((rho - 22.0) / 1.2, 2.0))
+                           * exp(-pow((psid - 90.0) / 5.0, 2.0));
+                float glow = exp(-pow((rho - 23.5) / 3.5, 2.0))
+                           * exp(-pow((psid - 90.0) / 9.0, 2.0));
+                float inner = smoothstep(18.5, 21.0, rho);
+                float dog = (core + 0.55 * glow) * inner * dog_elev;
+                vec3 dog_col = mix(vec3(1.0, 0.97, 0.92),
+                                   ss_optic_color(rho, 22.0, 3.0), 0.45);
+                col += ss_optic_align * dog_col * dog;
+            }
         }
 
         float arc_ok = smoothstep(3.0, 9.0, elev) * (1.0 - smoothstep(30.0, 34.0, elev));
@@ -290,7 +393,10 @@ void main()
         const bool ss_clipped_below = (ss_horizon_clip > 0.0) && (vary_ss_below_horizon < 0.0);
         if (!ss_clipped_below)
         {
-            color.rgb += rainbow(optic_d);
+            // <SS:Nexii> The physical rainbow (ss_rainbow above) takes the stock strip's place
+            // while the SSAtmoRainbow gate is up; gate down keeps the stock single bow bit for
+            // bit. </SS:Nexii>
+            color.rgb += (ss_rainbow_gate > 0.0) ? ss_rainbow(optic_d) : rainbow(optic_d);
         }
         if (ss_optic_active > 0.001)
         {

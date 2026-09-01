@@ -55,15 +55,34 @@ public:
 
     static LLUUID parseDescription(const std::string& desc);
 
+    // The asset id the agent's current parcel advertises in its description,
+    // if any - the floater's Load From Parcel button keys its enabled state
+    // off this.
+    static LLUUID parcelAssetId();
+
+    // The explicit load: the floater button asking for the parcel's
+    // environment by name. Unlike the automatic path it applies while the
+    // editor floater is open (the user asked for it from inside the editor)
+    // and lifts a decline recorded by an earlier Unload, since the click is
+    // the user changing their mind.
+    bool loadFromParcel();
+
 private:
-    void requestFetch(const LLUUID& asset_id);
+    void requestFetch(const LLUUID& asset_id, bool force = false);
 
-    void onFetchResult(const LLUUID& asset_id, const LLSD& data);
+    void onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force);
 
-    bool applyText(const LLUUID& asset_id, const std::string& text);
+    bool applyText(const LLUUID& asset_id, const std::string& text, bool force);
 
     LLUUID mAppliedAssetId;
     LLUUID mPendingAssetId;
+
+    // The parcel environment the user unloaded by hand while the parcel still
+    // advertises it. Holds the unload down until the tag disappears or the
+    // parcel advertises a different environment - otherwise the next parcel
+    // property update re-applies the cached notecard and the weather,
+    // wind and rain beds come straight back mid-session.
+    LLUUID mDeclinedAssetId;
 };
 
 #endif

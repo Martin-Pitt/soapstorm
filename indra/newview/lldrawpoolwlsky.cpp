@@ -139,6 +139,9 @@ static LLStaticHashedString sOpticCorona("ss_optic_corona");
 static LLStaticHashedString sOpticHalo22("ss_optic_halo22");
 static LLStaticHashedString sOpticHalo46("ss_optic_halo46");
 static LLStaticHashedString sOpticAlign("ss_optic_align");
+
+// <SS:Nexii> The physical rainbow's gate (SSAtmoRainbow, ss_rainbow in skyF.glsl).
+static LLStaticHashedString sRainbowGate("ss_rainbow_gate");
 // </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
@@ -407,6 +410,13 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         sky_shader->uniform1f(LLShaderMgr::MOISTURE_LEVEL, moisture_level);
         sky_shader->uniform1f(LLShaderMgr::DROPLET_RADIUS, droplet_radius);
         sky_shader->uniform1f(LLShaderMgr::ICE_LEVEL, ice_level);
+
+        // <SS:Nexii> The physical rainbow's gate (ss_rainbow in skyF.glsl): the double-bow look
+        // with the interior wash cut, the reversed secondary, the red low-sun grade and the white
+        // moonbow - versus the stock single strip. A plain bool, not weather-driven: the look is
+        // the same correction at every sky. </SS:Nexii>
+        static LLCachedControl<bool> s_rainbow_phys(gSavedSettings, "SSAtmoRainbow", true);
+        sky_shader->uniform1f(sRainbowGate, s_rainbow_phys ? 1.f : 0.f);
 
         sky_shader->uniform1f(LLShaderMgr::SUN_MOON_GLOW_FACTOR, psky->getSunMoonGlowFactor());
 
@@ -777,8 +787,9 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             // second ghost layer. The band IS the cirrus layer: the Sky Dome's animatable height
             // param, floor-relative, brought down only by convection's anvil ramp
             // (cloudDomeAltitudeMetres) - moisture never moves it. Its density is the live sky's
-            // cloud shadow - the tracked blend of the authored coverage lifted toward the deck's -
-            // which also dims the world, so band, deck and world light overcast in lockstep.
+            // cloud shadow - the dome's authored coverage, its own layer after the deck-coverage
+            // lift was removed (no moisture term reaches the dome band) - which also dims the
+            // world, so band and world light overcast together.
             // </SS:Nexii>
             SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
 

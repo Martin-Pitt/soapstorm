@@ -25,6 +25,7 @@
 
 #include "ssfloateratmoenv.h"
 #include "ssatmoenvmanager.h"
+#include "ssatmoenvdiscovery.h" // <SS:Nexii> the Load From Parcel button and its enabled state
 #include "ssdiscpad.h" // <SS:Nexii> disc-padding auto-derive poll
 #include "ssatmoenvweatherstate.h"
 #include "ssatmoenvcloudfieldstate.h"
@@ -111,8 +112,8 @@ bool SSFloaterAtmoEnv::postBuild()
 {
     getChild<LLButton>("create_new_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickCreateNew(); });
-    getChild<LLButton>("load_button")->setClickedCallback(
-        [this](LLUICtrl*, const LLSD&) { onClickLoad(); });
+    getChild<LLButton>("load_from_parcel_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickLoadFromParcel(); });
     getChild<LLButton>("save_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickSave(); });
     getChild<LLButton>("revert_button")->setClickedCallback(
@@ -1823,6 +1824,12 @@ void SSFloaterAtmoEnv::refreshStatus()
 
     setTitle(std::string("Edit Atmo Magic Environment") + (modified ? " - Unsaved changes*" : ""));
 
+    // <SS:Nexii> Load From Parcel is only meaningful when the parcel advertises an
+    // environment at all. Polled from draw(), so crossing a parcel boundary while the
+    // floater is open moves the button with it rather than leaving a stale verdict.
+    getChild<LLUICtrl>("load_from_parcel_button")->setEnabled(
+        SSAtmoEnvDiscoveryManager::parcelAssetId().notNull());
+
     getChild<LLUICtrl>("revert_button")->setEnabled(modified);
     getChild<LLUICtrl>("save_button")->setEnabled(mgr->hasAsset());
 }
@@ -1834,20 +1841,19 @@ void SSFloaterAtmoEnv::onClickCreateNew()
     SSFloaterAtmoEnvCreate::show();
 }
 
-// Inventory picker for an environment notecard.
-void SSFloaterAtmoEnv::onClickLoad()
+// Loads the environment the agent's parcel advertises in its description. The button is
+// enabled only while there is one (refreshStatus polls it); the fetch force-applies so the
+// editor itself may load it, and the synchronous (cached) path refreshes the whole editor
+// here - an async Bridge reply lands under the status poll instead.
+void SSFloaterAtmoEnv::onClickLoadFromParcel()
 {
-    LLFloaterSidePanelContainer* inv = LLFloaterReg::showTypedInstance<LLFloaterSidePanelContainer>(
-        "inventory", LLSD());
-    if (!inv) return;
+    if (!SSAtmoEnvDiscoveryManager::getInstance()->loadFromParcel()) return;
 
-    LLInventoryPanel* panel = inv->findChild<LLInventoryPanel>("All Items", true);
-    if (!panel) return;
-
-    SSAtmoEnvManager::atmoFolderId([panel](const LLUUID& folder_id)
-    {
-        panel->setSelectionByID(folder_id, false);
-    });
+    refreshVisibility();
+    refreshPrecipitationTypes();
+    refreshTrackRail();
+    refreshTrackTab();
+    refreshStatus();
 }
 
 // Saves to the loaded notecard (or a new one).

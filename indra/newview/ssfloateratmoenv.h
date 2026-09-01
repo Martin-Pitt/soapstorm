@@ -67,7 +67,7 @@ private:
     void refreshStatus();
 
     void onClickCreateNew();
-    void onClickLoad();
+    void onClickLoadFromParcel();
     void onClickSave();
     void onClickRevert();
 

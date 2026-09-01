@@ -121,6 +121,30 @@ LLUUID SSAtmoEnvDiscoveryManager::parseDescription(const std::string& desc)
     return LLUUID::null;
 }
 
+// The asset id the agent's current parcel advertises, if any.
+LLUUID SSAtmoEnvDiscoveryManager::parcelAssetId()
+{
+    LLParcel* parcel = LLViewerParcelMgr::getInstance()->getAgentParcel();
+    return parseDescription(parcel ? parcel->getDesc() : LLStringUtil::null);
+}
+
+// The floater's Load From Parcel button: the deliberate, editor-visible version
+// of what changed() does on its own. Already-live is a no-op so clicking twice
+// cannot stomp unsaved edits, an Unload decline is lifted (the click IS the
+// change of mind), and the fetch force-applies past the editor-open refusal.
+bool SSAtmoEnvDiscoveryManager::loadFromParcel()
+{
+    const LLUUID asset_id = parcelAssetId();
+    if (asset_id.isNull()) return false;
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (asset_id == mAppliedAssetId && mgr->hasAsset()) return true;
+
+    mDeclinedAssetId.setNull();
+    requestFetch(asset_id, true);
+    return true;
+}
+
 // Parcel changed: apply, refetch or unload the parcel environment - never while the editor floater is open.
 void SSAtmoEnvDiscoveryManager::changed()
 {
@@ -142,13 +166,38 @@ void SSAtmoEnvDiscoveryManager::changed()
             mAppliedAssetId.setNull();
             mPendingAssetId.setNull();
         }
+        // The parcel stopped advertising (or the agent left it): an unload by
+        // hand no longer has to stick, a fresh arrival may apply again.
+        mDeclinedAssetId.setNull();
         return;
     }
+
+    // Still advertised, but the user declined it: keep the environment off
+    // rather than resurrecting it on every parcel property update.
+    if (asset_id == mDeclinedAssetId) return;
+    // A different id than the declined one - the decline no longer applies.
+    mDeclinedAssetId.setNull();
 
     if (asset_id == mAppliedAssetId && mgr->hasAsset())
     {
         return;
     }
+
+    // The parcel still advertises the environment that was applied from it, but
+    // none is live anymore: it was unloaded by hand (the environment floater).
+    // Record the decline instead of falling through to a refetch - the cached
+    // notecard would re-apply it silently, and the wind and rain beds the user
+    // just unloaded would come straight back.
+    if (asset_id == mAppliedAssetId && !mgr->hasAsset())
+    {
+        LL_INFOS("AtmoMagicEnv") << "Parcel still advertises the unloaded Atmo Magic"
+                                    " environment; leaving it off until the parcel changes" << LL_ENDL;
+        mDeclinedAssetId = asset_id;
+        mAppliedAssetId.setNull();
+        mPendingAssetId.setNull();
+        return;
+    }
+
     if (asset_id == mPendingAssetId) return;
 
     if (!editing && mgr->hasAsset() && mgr->cameFromParcel() && mAppliedAssetId != asset_id)
@@ -161,12 +210,14 @@ void SSAtmoEnvDiscoveryManager::changed()
 }
 
 // Cache first, then the LSL Bridge; without a Bridge the environment simply stays unloaded.
-void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id)
+// Forced fetches (the floater button) apply through the editor-open refusal; automatic ones
+// never do.
+void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id, bool force)
 {
     const std::string cached = readCachedNotecardBody(asset_id);
     if (!cached.empty())
     {
-        applyText(asset_id, cached);
+        applyText(asset_id, cached, force);
         return;
     }
 
@@ -181,11 +232,11 @@ void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id)
 
     FSLSLBridge::instance().viewerToLSL(
         std::string(FETCH_COMMAND) + asset_id.asString(),
-        [this, asset_id](const LLSD& data) { onFetchResult(asset_id, data); });
+        [this, asset_id, force](const LLSD& data) { onFetchResult(asset_id, data, force); });
 }
 
 // Bridge reply: cache and apply the fetched notecard text, ignoring stale replies.
-void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data)
+void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force)
 {
     if (asset_id != mPendingAssetId) return;
     mPendingAssetId.setNull();
@@ -212,7 +263,7 @@ void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD
 
     cacheNotecardBody(asset_id, text);
 
-    applyText(asset_id, text);
+    applyText(asset_id, text, force);
 }
 
 // The editor owns the environment while visible - discovery must not stomp an edit in progress.
@@ -222,10 +273,11 @@ bool SSAtmoEnvDiscoveryManager::editorIsOpen()
     return floater && floater->getVisible();
 }
 
-// Hands fetched text to the manager and records where it came from; refused while the editor is open.
-bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::string& text)
+// Hands fetched text to the manager and records where it came from; refused while the editor
+// is open unless a force fetch (the floater's own Load From Parcel button) carries it.
+bool SSAtmoEnvDiscoveryManager::applyText(const LLUUID& asset_id, const std::string& text, bool force)
 {
-    if (editorIsOpen())
+    if (!force && editorIsOpen())
     {
         LL_INFOS("AtmoMagicEnv") << "Atmo v3 environment " << asset_id
                                  << " available but not applied - floater is open" << LL_ENDL;

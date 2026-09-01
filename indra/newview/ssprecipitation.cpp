@@ -88,6 +88,17 @@ static const SSTierSpec TIER_SPEC[TIER_COUNT] = {
     { 32.f, 2.0, 0.004f, 0.08f },
 };
 
+// <SS:Nexii> The weather source's ceiling - the weather deck's top in world metres. Precipitation
+// forms inside the deck's vertical band and falls out of it, so a landing surface above the ceiling
+// (a sky platform riding over the deck, camera there or not) has no weather source above it and
+// that column stays dry. -FLT_MAX when no weather deck is built, which never gates.
+// [interaction: SSVolCloud] </SS:Nexii>
+static F32 precipDeckTopZ()
+{
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    return vol ? vol->precipTopZ() : -FLT_MAX;
+}
+
 // Particle budget per tier.
 static S32 tierCap(SSPrecipTier tier)
 {
@@ -673,6 +684,25 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
         const bool found_surface =
             SSRainShadowMap::getInstance()->resolveColumn(anchor, hit, on_water, &normal);
 
+        // <SS:Nexii> The deck band's ceiling: precipitation forms in the weather deck's own
+        // vertical span and falls out of it, so its run may never start past the deck's top, and
+        // a landing surface above the top (a sky platform riding over the deck) has no weather
+        // source above it at all - that column stays dry even though the wind-tilted noise map
+        // would read a full deck over the ground far below. The run is shortened to begin right
+        // under the deck instead of poking into the air above it. Rising weather is ground-sourced,
+        // never touches the deck, and keeps its own path. [interaction: SSVolCloud]
+        F32 run_fall = fall_len;
+        if (!rises)
+        {
+            const F32 precip_top = precipDeckTopZ();
+            if (precip_top > -FLT_MAX)
+            {
+                if (hit.mV[VZ] > precip_top) continue;
+                run_fall = llmin(run_fall, precip_top - hit.mV[VZ]);
+                if (run_fall <= 0.f) continue;
+            }
+        }
+
         const bool no_platform = sky && !found_surface;
         if (no_platform && platform_roll > fall_through) continue;
 
@@ -684,7 +714,7 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
                 const LLVector3 wind_h = windAt(hit) * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f))
                                        * llmax(0.f, preset.mWindResponse);
                 const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -v_fall);
-                atmo->queueImpact(tick_time + fall_len / v_fall, hit, strength * strength_jitter,
+                atmo->queueImpact(tick_time + run_fall / v_fall, hit, strength * strength_jitter,
                                   on_water, normal, impact_vel, preset.mShatter);
             }
         }
@@ -692,14 +722,14 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
         if (headroom <= 0.f) continue;
         if (headroom < 1.f && ll_frand() > headroom) continue;
 
-        const F32 spawn_z = rises ? hit.mV[VZ] : hit.mV[VZ] + fall_len;
+        const F32 spawn_z = rises ? hit.mV[VZ] : hit.mV[VZ] + run_fall;
         const F32 band = VIS_BAND + (tier == TIER_SHEETS ? fall_hi : 0.f);
         if (hit.mV[VZ] - cam_agent.mV[VZ] > band) continue;
         if (spawn_z - cam_agent.mV[VZ] < -band) continue;
 
         if (mTierCount[tier] >= cap) continue;
 
-        emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
+        emitParticle(tier, hit, run_fall, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
                      found_surface || !sky);
     }
 }
@@ -873,6 +903,22 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
 
     if (atmo->isSkyTrack() && !found_surface) return;
 
+    // <SS:Nexii> The same deck-band ceiling the spawner enforces: a recycle never lands a drop
+    // on a surface above the weather deck's top, and its run is clipped under the deck like the
+    // initial spawn's. [interaction: SSVolCloud]
+    const bool rises = preset.risesFromGround();
+    F32 run_fall = fall_len;
+    if (!rises)
+    {
+        const F32 precip_top = precipDeckTopZ();
+        if (precip_top > -FLT_MAX)
+        {
+            if (hit.mV[VZ] > precip_top) return;
+            run_fall = llmin(run_fall, precip_top - hit.mV[VZ]);
+            if (run_fall <= 0.f) return;
+        }
+    }
+
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     if (tier == TIER_DROPS && preset.makesImpacts()
         && (hit - cam).magVec() < IMPACT_QUEUE_RADIUS)
@@ -881,12 +927,12 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
                                * llmax(0.f, preset.mWindResponse);
         const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -preset.mFallSpeed);
 
-        atmo->queueImpact(atmo->sharedTime() + fall_len / llmax(0.1f, preset.mFallSpeed),
+        atmo->queueImpact(atmo->sharedTime() + run_fall / llmax(0.1f, preset.mFallSpeed),
                           hit, preset.mImpactStrength * strength_jitter,
                           on_water, normal, impact_vel, preset.mShatter);
     }
 
-    emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
+    emitParticle(tier, hit, run_fall, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
                  found_surface || !atmo->isSkyTrack());
 }
 
@@ -1303,6 +1349,14 @@ F32 SSPrecipSim::dropRateAt(const LLVector3& pos_agent)
             bool on_water = false;
             if (SSRainShadowMap::getInstance()->resolveColumn(pos_agent, hit, on_water))
             {
+                // <SS:Nexii> The deck-band ceiling, same as the spawner: a point whose column
+                // lands on a surface above the weather deck's top has no weather source above it,
+                // so nothing arrives there - the wind-tilted noise gate may read a full deck over
+                // the ground far below, but that rain never reaches a surface above the deck.
+                // [interaction: SSVolCloud]
+                const F32 precip_top = precipDeckTopZ();
+                if (precip_top > -FLT_MAX && hit.mV[VZ] > precip_top) return 0.f;
+
                 const LLVector3 wind_h = windAt(hit);
                 const F32 fall_t = llmax(0.f, vol->precipBaseZ() - hit.mV[VZ])
                                  / llmax(0.1f, preset.mFallSpeed);

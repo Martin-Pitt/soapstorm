@@ -539,10 +539,6 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
     in.mTemperatureC = track.mWeather.mTemperatureC.valueAt(phase);
     in.mWindHeadingDeg = state.mWindHeading;
     in.mWindSpeedMS = state.mWindSpeed;
-    // The overcast band's target: the deck's own coverage, so dome and deck move as one. Last
-    // frame's build at worst - the same staleness the dome altitude derivation accepts.
-    SSVolCloud* vol = SSVolCloud::getInstance();
-    in.mDeckCoverage = (vol && !vol->empty()) ? vol->lastCoverage() : 0.f;
     in.mMaxAltitudeM = track.mAtmosphere.mMaxAltitude.valueAt(phase);
     in.mCloudScale = track.mCloudDome.mScale.valueAt(phase);
     in.mPrecipitationIntensity = state.mPrecipitationIntensity;
@@ -652,9 +648,10 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     // <SS:Nexii> Not put()s - the dome altitude has no LLSettingsSky home to write into. It goes
     // to the cloud and disc shaders straight off this applier, so all that is kept here is the
     // sample: the ANIMATABLE dome height (floor-relative - cirrusAltitudeMetres adds the track's
-    // floor back) and the floor itself. The live sky's cloud shadow below is the tracked blend
-    // (authored floor lifted toward the deck's coverage), lights the world, and is the ONE density
-    // the dome band draws with - band, deck and world light overcast in lockstep.
+    // floor back) and the floor itself. The live sky's cloud shadow is the dome band's authored
+    // coverage alone (the deck-coverage lift that tracked the layers together is removed - the
+    // dome overcast sits as its own layer now), lights the world, and is the ONE density the dome
+    // band draws with.
     mCloudDomeAuto = dome.mAuto;
     mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
     mTrackFloorZ = track.mFloorZ;

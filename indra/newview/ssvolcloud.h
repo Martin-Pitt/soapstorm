@@ -98,6 +98,11 @@ public:
     // ground a drop's column reaches.
     F32 precipBaseZ() const;
 
+    // <SS:Nexii> The weather deck's ceiling, metres - the top of the band precipitation forms in.
+    // Mirrors precipBaseZ's deck choice, so both ends of the weather span come from one deck.
+    // -FLT_MAX when no weather deck is built (nothing gates on it). [interaction: precipitation]
+    F32 precipTopZ() const;
+
     // Whether the weather deck has a built field and a noise map read back - checked before
     // precipitation pays for any of the gating.
     bool precipNoiseReady() const;
@@ -264,7 +269,6 @@ private:
 
     S32 mWeatherDeck = 0;
 
-    F32 mLastCoverage = 0.f;
     F32 mLastBuildMS = 0.f;
 
     LLColor3 mAmbient;
@@ -280,7 +284,6 @@ private:
 
 public:
     F32 squashScale(F32 true_dist) const;
-    F32 lastCoverage() const { return mLastCoverage; }
     F32 squashKnee() const { return mSquashKnee; }
     F32 squashCap() const { return mSquashCap; }
     F32 virtualRadius() const { return mEffRadius; }

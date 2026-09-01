@@ -102,14 +102,17 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     SSAtmoEnvSkyModulation mod;
     if (!influence.mEnabled) return mod;
 
-    // <SS:Nexii> The dome's overcast band tracks the main deck's live coverage - the same number
-    // the puffs render with, so band and deck can never disagree about how overcast it is. The
-    // okta count this replaces was the forecast's wording stepped into the render: every eighth of
-    // moisture popped the band 12.5% in one frame. Okta stays where wording belongs, in the
-    // forecast text; authored coverage below stays a floor (the cirrus duty), so the target only
-    // ever lifts.
-    mod.mCoverTarget = llclamp(in.mDeckCoverage, 0.f, 1.f);
-    mod.mCoverBlend  = ss_effect(1.f, influence.mCloudCoverEnabled, influence.mCloudCoverStrength);
+    // <SS:Nexii> The dome's overcast band is its own layer again. It used to track the main deck's
+    // live coverage - the same number the puffs render with, one coverage, two layers - but that
+    // wired moisture into the sky dome: whatever lifted the deck's coverage (its moisture floor,
+    // its convection consolidation) lifted the dome's overcast with it, and the band no longer sat
+    // separately with the deck the author built. The tracking is removed for now - the dome draws
+    // at its authored coverage alone, and the two layers only ever match when the author says so.
+    // mCoverTarget/mCoverBlend stay on the modulation struct (frozen at 0) so cloudCoverage is
+    // identity until the coupling is reworked around the horizon and colour issues that drove it
+    // off. </SS:Nexii>
+    mod.mCoverTarget = 0.f;
+    mod.mCoverBlend = 0.f;
 
     {
         const F32 blend = ss_effect(1.f, influence.mWindScrollEnabled,
@@ -207,11 +210,11 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     return mod;
 }
 
-// Blends authored coverage toward the deck's live coverage, lift only: weather can pile cloud on,
-// but a sky authored overcast stays overcast in fair weather. The old storm-cover push is gone with
-// the okta drive - a band that overcasts past the deck it tracks is exactly the disagreement the
-// tracking exists to prevent; a storm's weight comes from the deck's own gloom, thickness and the
-// gamma/ambient cuts below.
+// Blends authored coverage toward the modulation's target. The target is frozen at 0 while the
+// dome band sits apart from the deck again (see compute), so this passes the authored coverage
+// through untouched - the dome draws exactly as authored. When the coupling is reworked, the old
+// "weather can pile cloud on, but an authored overcast stays overcast" lift is the shape to bring
+// back.
 F32 SSAtmoEnvSkyModulation::cloudCoverage(F32 base) const
 {
     return base + (llmax(base, mCoverTarget) - base) * mCoverBlend;
