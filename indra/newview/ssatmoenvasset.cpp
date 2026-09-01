@@ -196,6 +196,13 @@ LLSD SSAtmoEnvWater::asLLSD() const
     sd["fog_density"]         = mFogDensity.asLLSD();
     sd["underwater_modifier"] = mUnderwaterModifier.asLLSD();
 
+    // <SS:Nexii> Written only when authored: false with no keyframes is the unset default
+    // (lit fog), and an asset that never mentions the flag keeps its document clean. </SS:Nexii>
+    if (mFogEmissive.hasKeyframes() || mFogEmissive.valueAt(0.0))
+    {
+        sd["fog_emissive"] = mFogEmissive.asLLSD();
+    }
+
     sd["fresnel_scale"]  = mFresnelScale.asLLSD();
     sd["fresnel_offset"] = mFresnelOffset.asLLSD();
 
@@ -227,6 +234,7 @@ bool SSAtmoEnvWater::fromLLSD(const LLSD& sd)
     if (sd.has("fog_color"))           mFogColor.fromLLSD(sd["fog_color"], def.mFogColor.valueAt(0.0));
     if (sd.has("fog_density"))         mFogDensity.fromLLSD(sd["fog_density"], def.mFogDensity.valueAt(0.0));
     if (sd.has("underwater_modifier")) mUnderwaterModifier.fromLLSD(sd["underwater_modifier"], def.mUnderwaterModifier.valueAt(0.0));
+    if (sd.has("fog_emissive"))        mFogEmissive.fromLLSD(sd["fog_emissive"], false);
 
     if (sd.has("fresnel_scale"))  mFresnelScale.fromLLSD(sd["fresnel_scale"], def.mFresnelScale.valueAt(0.0));
     if (sd.has("fresnel_offset")) mFresnelOffset.fromLLSD(sd["fresnel_offset"], def.mFresnelOffset.valueAt(0.0));
@@ -834,8 +842,10 @@ bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
     mBodies.clear();
     if (!sd.isMap()) return false;
 
-    mSunPlanetScale = sd.has("sun_planet_scale") ? llmax(0.001f, (F32)sd["sun_planet_scale"].asReal()) : 1.f;
-    mPlanetMoonScale = sd.has("planet_moon_scale") ? llmax(0.001f, (F32)sd["planet_moon_scale"].asReal()) : 1.f;
+    mSunPlanetScale = sd.has("sun_planet_scale") ? llmax(0.001f, (F32)sd["sun_planet_scale"].asReal())
+                                                 : 1.f / 3.f;
+    mPlanetMoonScale = sd.has("planet_moon_scale") ? llmax(0.001f, (F32)sd["planet_moon_scale"].asReal())
+                                                   : 1.f / 3.f;
 
     if (sd.has("bodies") && sd["bodies"].isArray())
     {

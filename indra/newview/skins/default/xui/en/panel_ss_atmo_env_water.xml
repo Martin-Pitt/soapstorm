@@ -956,6 +956,74 @@
      hover_glow_amount="0.15"
      label="" />
 
+    <!-- <SS:Nexii> The fog's light switch. Off (the unset default) the applied fog colour is
+         lit - scaled by whatever light the sky actually has, going black on a moonless night.
+         On, the colour is emissive: applied exactly as authored, fullbright, for a glowing
+         sea. Animatable like every row here. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="water_fog_emissive_label"
+     font="SansSerifSmall">
+        Fog Lighting
+    </text>
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="16"
+     width="160"
+     name="water_fog_emissive"
+     label="Emissive (fullbright)"
+     tool_tip="On: the fog colour ignores the sky's light entirely - a glowing sea. Off: the fog is lit, darkening with the sun and moon" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="486"
+     top_delta="-2"
+     height="25"
+     width="25"
+     name="water_fog_emissive_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="513"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="water_fog_emissive_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="540"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="water_fog_emissive_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
     <text
      follows="left|top"
      layout="topleft"

@@ -181,7 +181,9 @@ public:
     // subtends quad_deg (SS_ATMOENV_SUN_QUAD_DEG / SS_ATMOENV_MOON_QUAD_DEG - see
     // ss_atmoenv_quad_deg in ssatmoenvasset.h). disc_fraction is the art's visible fraction of
     // the quad (1 = full-bleed, ss_disc_fraction of the body's padding): the quad must overdraw
-    // the authored angle by 1/disc_fraction so the visible disc lands on it.
+    // the authored angle by 1/disc_fraction so the visible disc lands on it. Perception - how
+    // much the discs LOOM - is not an input here: it lives in the track's distance dials, which
+    // shrink the resolved distances the authored angle was measured across.
     static F32 celestialDiscScale(F32 angular_diameter_deg, F32 disc_fraction, F32 quad_deg);
 
 private:

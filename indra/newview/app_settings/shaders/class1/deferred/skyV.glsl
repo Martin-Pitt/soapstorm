@@ -332,11 +332,23 @@ void main()
     // horizon line, decaying with angle, instead of growing a second sun mirrored under the
     // first. The extinction above keeps the mirrored ray - that is what the mirror is for.
     vec3 glow_ray = (ss_horizon_mirror > 0.) ? ss_true_dir : rel_pos_norm;
+
+    // <SS:Nexii> The hotspot's shape was EEP-tuned against the stock ~5.7 degree quad. Scale
+    // the angular term by the DRAWN disc's half-angle relative to stock's - 0.05 is
+    // HEAVENLY_BODY_FACTOR * SUN_DISK_RADIUS, the scale-1.0 quad's half-extent ratio - because
+    // (1 - dot) grows as the SQUARE of the angle, the whole lobe, its 0.001 floor included,
+    // compresses onto whatever disc is actually drawn: the glow hugs the disc at 3x perceived
+    // just as it hugged the stock quad. 1.0 while no Atmo environment drives the sky, which
+    // keeps stock's glow bit for bit.
+    float ss_disc = (ss_sun_radius > 0.0) ? max(ss_sun_radius, 1e-5) / 0.05 : 1.0;
 #else
     vec3 glow_dir = lightnorm.xyz;
     vec3 glow_ray = rel_pos_norm;
 #endif
     float haze_glow = 1.0 - dot(glow_ray, glow_dir);
+#ifdef SS_ATMO
+    haze_glow *= ss_disc * ss_disc;
+#endif
     // haze_glow is 0 at the sun and increases away from sun
     haze_glow = max(haze_glow, .001);
     // Set a minimum "angle" (smaller glow.y allows tighter, brighter hotspot)

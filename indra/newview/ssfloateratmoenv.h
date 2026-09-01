@@ -203,6 +203,10 @@ private:
 
     void onCommitPlanetaryScales();
 
+    // <SS:Nexii> The Space tab's disc perception dial - radios or the custom slider/spinner,
+    // one value whichever moved (the source control carries it).
+    void onCommitCelestialPerception(LLUICtrl* src);
+
     void onClickOpenPlanetaryDesigner();
 
     struct FloatRow
@@ -228,6 +232,7 @@ private:
     std::vector<KeyRow<LLVector2>> mVectorRows;
     std::vector<KeyRow<LLUUID>>    mTextureRows;
     std::vector<KeyRow<std::string>> mStringRows;
+    std::vector<KeyRow<bool>>      mBoolRows;
 
     void refreshPreview();
     void onCommitPreviewTime();
@@ -287,6 +292,8 @@ private:
     void commitTextureRow(const KeyRow<LLUUID>& row);
     void refreshStringRow(const KeyRow<std::string>& row, F64 phase);
     void commitStringRow(const KeyRow<std::string>& row);
+    void refreshBoolRow(const KeyRow<bool>& row, F64 phase);
+    void commitBoolRow(const KeyRow<bool>& row);
 
     F64 mPreviewPhase = 0.0;
 

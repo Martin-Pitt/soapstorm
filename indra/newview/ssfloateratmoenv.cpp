@@ -56,6 +56,7 @@
 #include "llsettingsvo.h"
 #include "llsliderctrl.h"
 #include "llspinctrl.h"
+#include "llradiogroup.h"
 #include "lltabcontainer.h"
 #include "lltexturectrl.h"
 #include "lltextbox.h"
@@ -192,6 +193,10 @@ bool SSFloaterAtmoEnv::postBuild()
         getChild<LLUICtrl>(name)->setCommitCallback(
             [this](LLUICtrl*, const LLSD&) { onCommitPlanetaryScales(); });
     }
+    // <SS:Nexii> The Space tab's Disc Perception radios - a preset front-end on the two
+    // distance dials (the dials ARE the perception control): picking one writes both to 1/N.
+    getChild<LLUICtrl>("celestial_perception_radio")->setCommitCallback(
+        [this](LLUICtrl* src, const LLSD&) { onCommitCelestialPerception(src); });
     getChild<LLButton>("open_planetary_designer_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickOpenPlanetaryDesigner(); });
 
@@ -419,6 +424,16 @@ bool SSFloaterAtmoEnv::postBuild()
         getChild<LLUICtrl>(row.mPrefix)->setCommitCallback(
             [this, row](LLUICtrl*, const LLSD&) { commitStringRow(row); refreshPreview(); refreshStatus(); });
         bindKeyframeButtons<std::string>(row.mPrefix, row.mField);
+    }
+
+    mBoolRows = {
+        { "water_fog_emissive", [water]() -> SSAtmoEnvKeyframed<bool>& { return water().mFogEmissive; } },
+    };
+    for (const KeyRow<bool>& row : mBoolRows)
+    {
+        getChild<LLUICtrl>(row.mPrefix)->setCommitCallback(
+            [this, row](LLUICtrl*, const LLSD&) { commitBoolRow(row); refreshPreview(); refreshStatus(); });
+        bindKeyframeButtons<bool>(row.mPrefix, row.mField);
     }
 
     // <SS:Nexii> The rail's mode follows the selected tab and nothing else, so the tab container is
@@ -2385,7 +2400,8 @@ bool SSFloaterAtmoEnv::rowAutoOwned(const std::string& prefix) const
     return false;
 }
 
-// Rewrites the planetary scale spinners.
+// Rewrites the planetary scale sliders and spinners, and derives the Disc Perception radio
+// selection from them - the dials ARE the perception, the radios just preset them.
 void SSFloaterAtmoEnv::refreshPlanetaryScales()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -2404,6 +2420,18 @@ void SSFloaterAtmoEnv::refreshPlanetaryScales()
     {
         getChild<LLUICtrl>("planet_moon_scale_spinner")->setValue(planetary.mPlanetMoonScale);
     }
+
+    // <SS:Nexii> The radio selection is DERIVED from the dials - the dials ARE the perception:
+    // a preset owns the radio only while BOTH dials sit on its 1/N, and any hand-moved value
+    // deselects the radios (allow_deselect clears it).
+    auto at_preset = [](F32 dial, F32 n) { return llabs(dial - 1.f / n) < 0.001f; };
+    const F32 sun  = planetary.mSunPlanetScale;
+    const F32 moon = planetary.mPlanetMoonScale;
+    S32 preset = -1;
+    if (at_preset(sun, 1.f) && at_preset(moon, 1.f))      preset = 0;
+    else if (at_preset(sun, 3.f) && at_preset(moon, 3.f)) preset = 1;
+    else if (at_preset(sun, 8.f) && at_preset(moon, 8.f)) preset = 2;
+    getChild<LLRadioGroup>("celestial_perception_radio")->setSelectedIndex(preset);
 }
 
 // Planetary scale spinners into the asset.
@@ -2425,6 +2453,29 @@ void SSFloaterAtmoEnv::onCommitPlanetaryScales()
 
     planetary.mSunPlanetScale  = (F32)getChild<LLUICtrl>(sun_src)->getValue().asReal();
     planetary.mPlanetMoonScale = (F32)getChild<LLUICtrl>(moon_src)->getValue().asReal();
+
+    refreshPlanetaryScales();
+    refreshStatus();
+}
+
+// <SS:Nexii> The Space tab's Disc Perception radios: a preset front-end on the two distance
+// dials, which are the perception control itself. Picking N writes BOTH dials to 1/N - the sun
+// and moons loom N times through the dials' own mechanism - and the shared refresh moves the
+// sliders to match. Hand-moving a slider stays the custom path (the commit below re-derives
+// the radio selection and deselects when no preset matches).
+void SSFloaterAtmoEnv::onCommitCelestialPerception(LLUICtrl* src)
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    SSAtmoEnvPlanetary& planetary = asset.mTracks[mSelectedTrackIndex].mPlanetary;
+    const F32 perception = (F32)src->getValue().asReal();
+    if (perception < 0.5f) return;
+    planetary.mSunPlanetScale  = 1.f / perception;
+    planetary.mPlanetMoonScale = 1.f / perception;
 
     refreshPlanetaryScales();
     refreshStatus();
@@ -2672,6 +2723,22 @@ void SSFloaterAtmoEnv::commitStringRow(const KeyRow<std::string>& row)
         getChild<LLComboBox>(row.mPrefix)->getSelectedValue().asString());
 }
 
+// Bool row out of the field at the phase.
+void SSFloaterAtmoEnv::refreshBoolRow(const KeyRow<bool>& row, F64 phase)
+{
+    const SSAtmoEnvKeyframed<bool>& field = row.mField();
+    getChild<LLUICtrl>(row.mPrefix)->setValue(field.valueAt(phase));
+
+    refreshKeyframeControls<bool>(row.mPrefix, field, phase);
+}
+
+// Bool row into the field.
+void SSFloaterAtmoEnv::commitBoolRow(const KeyRow<bool>& row)
+{
+    row.mField().setValueAtHead(mPreviewPhase,
+        getChild<LLUICtrl>(row.mPrefix)->getValue().asBoolean());
+}
+
 // Float row (slider + spinner) out of the field at the phase.
 void SSFloaterAtmoEnv::refreshFloatRow(const FloatRow& row, F64 phase)
 {
@@ -2761,6 +2828,10 @@ void SSFloaterAtmoEnv::refreshPreview()
     for (const KeyRow<std::string>& row : mStringRows)
     {
         refreshStringRow(row, mPreviewPhase);
+    }
+    for (const KeyRow<bool>& row : mBoolRows)
+    {
+        refreshBoolRow(row, mPreviewPhase);
     }
 
     const SSAtmoEnvWeatherState resolved = SSAtmoEnvWeatherResolver::resolve(

@@ -147,6 +147,15 @@ struct SSAtmoEnvWater
     SSAtmoEnvKeyframed<F32> mFogDensity{16.f};
     SSAtmoEnvKeyframed<F32> mUnderwaterModifier{0.25f};
 
+    // <SS:Nexii> Whether the fog colour is EMISSIVE - applied exactly as authored, ignoring
+    // whatever light the sky has, the fullbright look - or LIT: scaled by the light the applied
+    // sky actually has, so a fog colour authored for day darkens to black on a moonless night
+    // instead of glowing. Unset and false are the same state - lit, the default; the key only
+    // exists in a document once an author has turned the flag on (or keyframed it), so every
+    // asset written before the flag existed reads as lit. Animatable like any field here: a
+    // glowing sea can switch itself off for the day.
+    SSAtmoEnvKeyframed<bool> mFogEmissive{false};
+
     SSAtmoEnvKeyframed<F32> mFresnelScale{0.4f};
     SSAtmoEnvKeyframed<F32> mFresnelOffset{0.5f};
 
@@ -228,8 +237,15 @@ struct SSAtmoEnvPlanetary
 {
     std::vector<SSAtmoEnvCelestialBody> mBodies;
 
-    F32 mSunPlanetScale = 1.f;
-    F32 mPlanetMoonScale = 1.f;
+    // <SS:Nexii> The two distance dials ARE the perception control: compressing the Sun-Planet
+    // and Planet-Moon distances makes the sun and moons loom in the sky without touching any
+    // authored size. The Space tab's Disc Perception radios (1x physical truth, 3x what a
+    // person feels they saw, 8x game-cinematic) are a preset front-end that writes BOTH dials
+    // to 1/N; moving either dial by hand is the custom path and just deselects the radios.
+    // The seeding default is the perceptual one - 3x - so a fresh system looms out of the box;
+    // 1.0 on both is the authored-distance truth the 1x radio restores.
+    F32 mSunPlanetScale = 1.f / 3.f;
+    F32 mPlanetMoonScale = 1.f / 3.f;
 
     S32 homeBodyIndex() const;
     bool setHomeBody(S32 index);

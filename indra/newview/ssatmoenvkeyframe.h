@@ -79,6 +79,16 @@ inline std::string ss_atmoenv_lerp<std::string>(const std::string& a, const std:
     return a;
 }
 
+// <SS:Nexii> A flag steps at the segment midpoint rather than inheriting the numeric lerp,
+// whose bool cast is asymmetric - a false->true segment reads true for all but the first
+// instant, a true->false one stays true to the very end. Halfway is the answer that agrees
+// with the scrubber: the eased weight crosses 0.5 exactly when the animation looks switched.
+template <>
+inline bool ss_atmoenv_lerp<bool>(const bool& a, const bool& b, F32 t)
+{
+    return t < 0.5f ? a : b;
+}
+
 template <typename T>
 inline SSAtmoEnvCurve ss_atmoenv_default_curve() { return SSAtmoEnvCurve::EASE; }
 

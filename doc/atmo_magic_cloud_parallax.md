@@ -81,32 +81,23 @@ dropped once it stopped doing anything.
 - `region_offset` (`lldrawpoolwlsky.cpp`) is the camera's true region
   position minus the region's centre, in metres. Centring avoids a bias from
   always measuring off the SW corner; it does not affect the parallax rate.
-- **The tile is pinned and recalibrated** (`SS_DOME_TILE_M`, 3000 m). The divisor
+- **The tile is pinned and recalibrated** (`SS_DOME_TILE_M`, 32 km). The divisor
   used to be `2 * height * cloud_scale`, which cancelled the height out of
   the flat mapping's own static pattern — reach scaled with height and so did
   metres-per-UV, so the pattern never moved vertically at all — and it let
-  the texture zoom every time the band's altitude moved. Pinning fixed both,
-  but the first pin was calibrated for nothing: 8 km put a single
-  continent-scale blob across half the dome, reading as a ~24x zoom. The pin
-  now calibrates for the dome cirrus band's 6 km DEFAULT height: one tile
-  spans half the band's height. Pinned, one tile is one fixed piece of world:
-  the height above the camera survives into the pattern (vertical parallax on
+  the texture zoom every time the band's altitude moved. Pinning fixed both.
+  The calibration is the dome cirrus band's 6 km DEFAULT height: the visibly
+  solid sky spans ~4 band-heights of reach before the horizon fade takes it
+  (zenith to ~3 degrees of elevation), so a 32 km tile reads as a
+  3x3-to-4x4 repeat across the dome — one tile ~5x the band's height, the
+  broad non-repeating composition the layer is tuned for. (The first pin's
+  8 km read as ~24 repeats marching into the horizon; the stock-anchored
+  2*alt*cloud_scale divisor it replaced breathed the pattern every time the
+  band moved.) Pinned, one tile is one fixed piece of world: the
+  height above the camera survives into the pattern (vertical parallax on
   both the flat and curved paths), altitude changes slide instead of zoom,
   and cloud_scale stays out of the Atmo render entirely — imported cycles
   animating it can no longer reach the dome.
-- **The horizon saturates** (`SS_DECK_SPAN`, 2 band-heights). A planar
-  mapping's tile count grows with the ray's reach, and the reach runs to tens
-  of band-heights at the rim (the flat fold ~11, the sphere's rim
-  sqrt(2·orbit·alt)) — so however the tile is calibrated, the horizon packs
-  ~100 compressed copies of the same clump into the last few degrees and the
-  sky reads as 100x100 repeats, not 4x4. Stock never showed it because its
-  dome texcoords are ANGULAR, not planar: uniform density from zenith to
-  horizon. The reach therefore saturates smoothly —
-  `span·reach/sqrt(span² + reach²)` with `span = 2·alt` — linear in the mid
-  sky, asymptotic at the fold, C-infinity in the ray so no derivative jump
-  kinks the mip selection. Zenith to rim holds `SS_DECK_SPAN·alt /
-  SS_DOME_TILE_M` repeats — 4 at the 6 km calibration, the 3x3-to-4x4 field
-  the dome is tuned for — instead of ~100.
 - **The fine layers run at 2x, not stock's 16x** (`SS_FINE_LAYER`): stock's 16
   put the fine tile at a fraction of the broad one - dozens of copies of the
   same clump across the sky, marching in rows under the perspective
@@ -151,16 +142,15 @@ dropped once it stopped doing anything.
   octave's distance fade and by an authored large map (`SSAtmoEnvCloudDome::
   mLargeNoiseTexture`) art-directing the broad octave when one is set.
 - **The fine octaves fade with distance** (terrain-LOD logic, `SS_DETAIL_LO_M`
-  / `SS_DETAIL_HI_M`, 100–250 km of ray): perspective compresses a planar
-  deck's tiling into tight horizontal stripes toward its horizon - an
-  anisotropic squeeze no warp can decorrelate, because it is the mapping
-  itself, not the repetition. The fine octave's voice in the opacity
+  / `SS_DETAIL_HI_M`, 100–250 km of ray): toward the rim of a high deck's
+  curved horizon the fine tiles sit under a degree wide and perspective
+  compresses their tiling into tight horizontal stripes - an anisotropic squeeze
+  no warp can decorrelate, because it is the mapping itself, not the
+  repetition. The fine octave's voice in the opacity
   and in the storm variance fades over the same range (the term is zero-mean,
   so the far field's coverage is untouched - only its texture simplifies), and
-  the broad layer carries the far deck alone: structure without
-  resolvable detail, which is what a real distant sheet is. At the current
-  calibration the reach saturation keeps the compression from ever getting
-  that far, so the fade sits idle - a guard for a wider span or smaller tile.
+  the broad warped layer carries the far deck alone: structure without
+  resolvable detail, which is what a real distant sheet is.
 - The deck CURVES: cloudsF intersects the ray with a sphere centred on the
   planet at radius `orbit + deck height` (`ss_planet_orbit_m` is the camera's
   distance from the home body's centre, home radius plus camera height), so
@@ -177,10 +167,7 @@ dropped once it stopped doing anything.
   orbit-0 guard, whose grazing reach softens as (1+F)*height/(|up| + F) -
   never the hard max(up, 0.02) clamp an earlier cut shipped: that froze the
   UVs into an azimuth-only stripe field below ~1.2 degrees and kinked the mip
-  selection into a grid of tile boundaries at the clamp line. Both paths'
-  reach then saturates at SS_DECK_SPAN band-heights (see the saturation
-  bullet) - the rim's last stretch draws no new tiles, it fades
-  (ss_deck_edge_fade).
+  selection into a grid of tile boundaries at the clamp line.
 - The world-anchored terms - camera travel and wind drift - run DAMPED to
   one eighth of the plane-honest rate (SS_PARALLAX_DAMP): the shipped vertex
   nudge moved at that rate (its /16 compensation over the stock zenith tile),

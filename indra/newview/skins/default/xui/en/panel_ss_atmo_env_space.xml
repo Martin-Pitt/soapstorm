@@ -173,6 +173,58 @@
      increment="0.01"
      decimal_digits="2" />
 
+    <!-- <SS:Nexii> The Disc Perception radios: a preset front-end on the two
+          distance dials above, which ARE the perception control. The human
+          visual system reads the real Sun and Moon at roughly two to three
+          times their true angular size, so the seeding default compresses
+          both dials to 1/3 - the discs loom what a person feels they saw.
+          Picking a radio writes both dials to 1/N (1x restores the authored
+          distances); moving either dial by hand deselects the radios. -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="14"
+     width="110"
+     name="celestial_perception_label"
+     font="SansSerifSmall">
+        Disc Perception
+    </text>
+    <radio_group
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="-2"
+     height="18"
+     width="440"
+     name="celestial_perception_radio"
+     allow_deselect="true"
+     tool_tip="Presets for the two distance dials: 1x leaves the authored system, 3x and 8x pull the sun and moons closer so their discs loom. Moving either dial by hand deselects these">
+        <radio_item
+         name="perception_physical"
+         label="1x Physical"
+         value="1"
+         height="18"
+         width="130" />
+        <radio_item
+         name="perception_perceived"
+         label="3x Perceived"
+         value="3"
+         height="18"
+         width="130"
+         left_pad="6"
+         top_delta="0" />
+        <radio_item
+         name="perception_cinematic"
+         label="8x Cinematic"
+         value="8"
+         height="18"
+         width="130"
+         left_pad="6"
+         top_delta="0" />
+    </radio_group>
+
     <text
      follows="left|top"
      layout="topleft"

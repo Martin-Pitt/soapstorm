@@ -430,7 +430,14 @@ How the authored asset actually reaches the screen, phased:
   angle. A non-null custom texture replaces the stock disc, and a null
   one falls
   back by the BODY's kind (sun-kind gets a sun disc, anything else the
-  moon disc, whichever slot it landed in). An emitter coincident with
+  moon disc, whichever slot it landed in). How much the discs LOOM is the
+  track's two distance dials themselves (see Distance scale) - they are
+  the perception control: the human visual system reads the real Sun and
+  Moon at roughly two to three times their true size, so the seeding
+  default compresses both dials to 1/3 and the Space tab's Disc
+  Perception radios (1x physical truth / 3x perceived / 8x cinematic)
+  preset both dials to 1/N, while moving either dial by hand is the
+  custom path and deselects the radios. An emitter coincident with
   the home body (distance ~0) has no sky direction and counts as absent.
   One placeable emitter parks the moon below the horizon (no phantom
   moonlight); none = a dim, sun-below-horizon sky rather than a fallback
@@ -469,6 +476,17 @@ so ~5000m out) and the two z-fought. The draw pass now subtracts the baked
 offset from its own matrix, which fixes the sun, the moon and the
 billboards together and leaves LLVOSky's vertex data - shared with the
 reflection and glow paths, which want it in agent space - alone.
+
+Two sky-dome terms were tuned against EEP's stock ~5.7 degree quad and
+had to follow the discs when the honest quad angles shrank them: the sun
+glow's forward-scatter hotspot (skyV) compresses its angular term by the
+drawn disc's half-angle relative to the stock quad's (ss_sun_radius /
+0.05, squared - the term grows as the square of the angle), so the glow
+hugs whatever disc is drawn; and the weather corona (skyF ssOptics) scales
+every one of its angles by the same ratio, keeping it a rim around the
+disc. The crystal halos stay at true angles - droplet and ice optics are
+the weather's, not the disc's. Both fall back to stock's fixed angles
+while no Atmo environment drives the sky.
 
 ### The default world
 

@@ -113,12 +113,13 @@ in vec3 vary_ray_dir;
 // height and cloud_scale, so one tile is one fixed piece of world: the convection merge can
 // descend the cirrus band without breathing the pattern, and an imported day cycle's keyframed
 // Scale dial cannot zoom the dome. Calibrated for the band's 6 km DEFAULT (the cirrus layer's
-// default height): one tile spans half the band's height, and the reach saturation below holds
-// the whole sky to ~4 tile repeats - the 3x3-to-4x4 field the dome is tuned for. (The earlier
-// 8 km pin put a single continent-scale blob across half the dome - a ~24x zoom next to this
-// calibration; the stock-anchored 2*alt*cloud_scale divisor it replaced breathed the pattern
-// every time the band moved.)
-const float SS_DOME_TILE_M = 3000.0;
+// default height): the visibly solid sky spans ~4 band-heights of reach before the horizon
+// fade takes it (zenith to ~3 degrees of elevation), so a 32 km tile reads as a 3x3-to-4x4
+// repeat across the dome - one tile ~5x the band's height, the broad composition the layer
+// is tuned for. (The first pin's 8 km read as ~24 repeats marching into the horizon; the
+// stock-anchored 2*alt*cloud_scale divisor it replaced breathed the pattern every time the
+// band moved.)
+const float SS_DOME_TILE_M = 32000.0;
 
 // The fine layers' multiplier. Stock's 16 made the fine tile a fraction of the broad one -
 // dozens of copies of the same clump across the sky, marching in rows under the perspective
@@ -139,11 +140,10 @@ const float SS_FINE_LAYER = 2.0;
 // parallax, on the flat fallback too), and altitude changes slide instead of zoom - the
 // convection merge descending onto the deck does not breathe the pattern, and an imported day
 // cycle's keyframed Scale dial stays out of the Atmo render entirely. The calibration is the
-// DEFAULT band height's, not the live band's - see SS_DOME_TILE_M above. (Two earlier cuts:
-// anchoring the tile at 2*alt*cloud_scale - stock EEP's zenith calibration - matched stock at
-// any altitude but breathed the pattern as the band moved and cancelled the vertical parallax
-// out of the static pattern entirely; pinning at 8 km fixed both but put one continent-scale
-// blob across half the dome.)
+// DEFAULT band height's, not the live band's - see SS_DOME_TILE_M above. (An earlier cut
+// anchored the tile at 2*alt*cloud_scale - stock EEP's zenith calibration - which matched
+// stock at any altitude but breathed the pattern as the band moved and cancelled the vertical
+// parallax out of the static pattern entirely.)
 //
 // THE DECK CURVES. With ss_planet_orbit_m set, the ray meets a SPHERE centred on the planet at
 // radius orbit + deck height - the deck is a finite disc that terminates at its own curved horizon
@@ -154,9 +154,8 @@ const float SS_FINE_LAYER = 2.0;
 // and only down-rays hit - the deck seen from above. Orbit 0 keeps the flat-deck fallback.
 //
 // The flat fallback's denominator is SOFTENED, not clamped: (1+F)*alt / (|up| + F) is smooth in
-// the ray everywhere and exact at the zenith, and the far field on BOTH paths is then saturated
-// at SS_DECK_SPAN band-heights (see THE HORIZON SATURATES below), so no fold tail ever draws.
-// The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
+// the ray everywhere, exact at the zenith, and caps the deck distance at ~10 band-altitudes in
+// the horizon fold. The old hard max(up, 0.02) clamp did two kinds of damage the horizon fade
 // never hid: below ~1.2 degrees it froze the UVs into an azimuth-only field, which smears the
 // band into vertical stripes toward the horizon, and exactly on the clamp line the screen-space
 // derivative jumps, which collapses the mip selection into a grid of tile boundaries in the
@@ -182,13 +181,10 @@ vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
     const float SS_PARALLAX_DAMP = 0.125;
     const float SS_THROUGH_LO_M  = 40.0;
     const float SS_THROUGH_HI_M  = 300.0;
-    // Band-heights the deck's UV reach saturates across - see THE HORIZON SATURATES below.
-    const float SS_DECK_SPAN     = 2.0;
     // Where the fine layers give up. Perspective compresses the deck toward its horizon, and the
     // fine detail's angular size collapses with it. The fade is a rim-zone cleanup: the last
     // stretch before the melt, where the compression spikes, lets the broad layer carry the
-    // sheet alone. The reach saturation keeps the compression from ever getting that far at the
-    // current calibration, so this sits idle - a guard for a wider span or smaller tile.
+    // sheet alone.
     const float SS_DETAIL_LO_M   = 100000.0;
     const float SS_DETAIL_HI_M   = 250000.0;
 
@@ -224,19 +220,7 @@ vec2 ss_plane_base(float alt, out float plane_fade, out float detail_fade)
 
     detail_fade = 1.0 - smoothstep(SS_DETAIL_LO_M, SS_DETAIL_HI_M, reach);
 
-    // THE HORIZON SATURATES. The plane-honest reach runs to tens of band-heights at the rim
-    // (the flat fold ~11, the sphere's rim sqrt(2*orbit*alt) - hundreds of km), and a tiled
-    // texture under that perspective compression marches dozens of copies of the same clump
-    // across the horizon band - the ~100-row field a planar mapping always grows, and the
-    // stock dome never showed because its texcoords are angular, not planar. The reach
-    // therefore saturates smoothly at SS_DECK_SPAN band-heights: linear in the mid sky, short
-    // of the zenith calibration by ~10% there, asymptotic at the fold, and C-infinity in the
-    // ray so no derivative jump kinks the mip selection. Zenith to rim holds
-    // SS_DECK_SPAN*alt/SS_DOME_TILE_M repeats - 4 at the 6 km calibration - instead of ~100.
-    float span      = max(ah * SS_DECK_SPAN, 1.0);
-    float reach_eff = span * reach / sqrt(span * span + reach * reach);
-
-    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach_eff;
+    vec2 deck_m  = vec2(vary_ray_dir.z, vary_ray_dir.x) * reach;
     vec2 world_m = SS_PARALLAX_DAMP * (region_offset - ss_cloud_drift);
 
     return vec2(deck_m.x + world_m.x, -deck_m.y - world_m.y) / SS_DOME_TILE_M;

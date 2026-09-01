@@ -63,6 +63,12 @@ uniform float ss_optic_corona;
 uniform float ss_optic_halo22;
 uniform float ss_optic_halo46;
 uniform float ss_optic_align;
+
+// <SS:Nexii> The sun slot disc's half-angle as a direction-z sine (SSAtmoEnvApplier::
+// sunSlotRadius) - the same value skyV holds its airmass with. The corona scales its every
+// angle by this relative to the stock quad's 0.05, so it stays a rim around WHATEVER disc is
+// drawn rather than the fixed-angle aureole tuned for the old 10x quad.
+uniform float ss_sun_radius;
 #endif
 
 out vec4 frag_data[4];
@@ -149,11 +155,20 @@ vec3 ss_optics(vec3 view)
     // Corona: a thin bluish-white aureole hugging the light plus two faint diffraction rings
     // beyond it (water drops). Kept small and dim - the aureole is half gone by ~0.4 deg and
     // dead by ~1 deg, so a corona reads as a rim around the disc, never a glow that doubles it.
+    // Every angle below runs on rho scaled by the drawn disc relative to the stock quad
+    // (ss_disc), which is what kept it that rim when the discs shrank 10x off the old quad:
+    // the ring radii ride in the disc's own half-angle the way they originally rode in the
+    // stock quad's. The crystal halos further down stay at TRUE angles - droplet and ice
+    // optics, not disc-relative ones.
     if (ss_optic_corona > 0.001)
     {
-        const float aureole = exp(-pow(rho * 2.4, 2.0));
-        const float ringA   = exp(-pow((rho - 2.4) / 1.0, 2.0));
-        const float ringB   = exp(-pow((rho - 4.6) / 1.5, 2.0));
+        // No drawn disc (active environment, no emitter) keeps the fixed-angle corona rather
+        // than letting the 1e-5 floor blow the scale up into a full-sky wash.
+        float ss_disc       = (ss_sun_radius > 1e-6) ? ss_sun_radius / 0.05 : 1.0;
+        float cor_rho       = rho * ss_disc;
+        const float aureole = exp(-pow(cor_rho * 2.4, 2.0));
+        const float ringA   = exp(-pow((cor_rho - 2.4) / 1.0, 2.0));
+        const float ringB   = exp(-pow((cor_rho - 4.6) / 1.5, 2.0));
 
         vec3 ccol = vec3(0.42, 0.44, 0.48) * aureole
                   + vec3(0.12, 0.07, 0.04) * ringA

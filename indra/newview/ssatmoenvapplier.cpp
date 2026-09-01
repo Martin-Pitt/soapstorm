@@ -743,7 +743,28 @@ void SSAtmoEnvApplier::applyWater(const SSAtmoEnvTrack& track, F64 phase,
         }
     };
 
-    put(mLastFogColor, water.mFogColor.valueAt(phase),
+    // <SS:Nexii> The fog's light. The underwater fog's own in-scatter term (waterFogF.glsl)
+    // carries no light of its own - the colour is added to every underwater pixel exactly as
+    // authored - so a fog colour authored for day burns at full strength through the night: the
+    // sea lit from below that a moonless sky shows. Unless the track authors the fog as EMISSIVE
+    // (mFogEmissive - the deliberate fullbright look), the applied colour is scaled by the
+    // luminance of whichever body is currently the sky's light - the sun's attenuated diffuse by
+    // day, the moon's own diffuse by night, near zero with the moon down - so the fog tracks the
+    // same light the rest of the scene gets from this sky. The cosecant crush makes the handover
+    // continuous: a setting sun's diffuse is already black at centre-set, where the moon's 0.001
+    // brightness floor takes over. SSAtmoWaterFogLit reverts the whole behaviour to the constant
+    // authored fog for A/B comparison and fallback.
+    static LLCachedControl<bool> ss_fog_lit(gSavedSettings, "SSAtmoWaterFogLit", true);
+    LLColor3 fog_color = water.mFogColor.valueAt(phase);
+    if (ss_fog_lit && !water.mFogEmissive.valueAt(phase))
+    {
+        const LLColor3 fog_light = mSky->getIsSunUp() ? mSky->getSunDiffuse() : mSky->getMoonDiffuse();
+        const F32 fog_lum = llclamp(0.2126f * fog_light.mV[0]
+                                  + 0.7152f * fog_light.mV[1]
+                                  + 0.0722f * fog_light.mV[2], 0.f, 1.f);
+        fog_color *= fog_lum;
+    }
+    put(mLastFogColor, fog_color,
         [this](const LLColor3& v) { mWater->setWaterFogColor(v); });
     put(mLastFogDensity, water.mFogDensity.valueAt(phase),
         [this](F32 v) { mWater->setWaterFogDensity(v); });
