@@ -727,9 +727,6 @@ void LLViewerRegion::initPartitions()
     mImpl->mObjectPartition.push_back(new LLParticlePartition(this));   //PARTITION_PARTICLE
     mImpl->mObjectPartition.push_back(new LLGrassPartition(this));      //PARTITION_GRASS
     mImpl->mObjectPartition.push_back(new LLVolumePartition(this)); //PARTITION_VOLUME
-    // <SS:Nexii> Atmo Magic landscape scenery - must stay aligned with PARTITION_LANDSCAPE in the enum.
-    mImpl->mObjectPartition.push_back(new SSLandscapePartition(this)); //PARTITION_LANDSCAPE
-    // </SS:Nexii>
     mImpl->mObjectPartition.push_back(new LLBridgePartition(this)); //PARTITION_BRIDGE
     mImpl->mObjectPartition.push_back(new LLAvatarPartition(this)); //PARTITION_AVATAR
     mImpl->mObjectPartition.push_back(new LLControlAVPartition(this));  //PARTITION_CONTROL_AV

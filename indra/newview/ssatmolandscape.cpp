@@ -77,12 +77,15 @@ const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id)
 
 void ss_seed_local_select_node(LLSelectNode* nodep)
 {
-    if (!nodep || nodep->getObject().isNull() || !nodep->getObject()->ssIsLocalContent())
+    if (!nodep || !nodep->getObject() || !nodep->getObject()->ssIsLocalContent())
     {
         return;
     }
 
-    const SSAtmoEnvLandscape* record = ss_landscape_record_for_mesh(nodep->getObject()->getID());
+    // Records are keyed by mesh asset uuid; only landscape objects carry one.
+    const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>(nodep->getObject());
+    const SSAtmoEnvLandscape* record = landscape
+        ? ss_landscape_record_for_mesh(landscape->meshId()) : nullptr;
     if (!record)
     {
         return;
@@ -137,11 +140,25 @@ void SSAtmoLandscapeWorld::update()
         return;
     }
 
+    // The author's hand is on a scenery object: defer reshapes (track/region/record-set
+    // changes) until nothing is selected, so a mid-drag reconciliation cannot snap the
+    // object back to the stale record. Capture continues - the drag is preserved at
+    // capture cadence, and the deferred reshape then adopts the captured state.
+    bool editing = false;
+    for (const LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    {
+        if (objp.notNull() && objp->isSelected())
+        {
+            editing = true;
+            break;
+        }
+    }
+
     // Agent region change rebuilds the whole set: objects are anchored to a region origin
     // (locked records re-anchor by construction), and kill-and-recreate is the SSWaterWorld
     // idiom - the mesh repo's cache makes recreation cheap and pop-free.
     const U64 handle = region->getHandle();
-    if (handle != mAgentRegionHandle)
+    if (!editing && handle != mAgentRegionHandle)
     {
         mAgentRegionHandle = handle;
         clearLandscapeObjects();
@@ -156,16 +173,17 @@ void SSAtmoLandscapeWorld::update()
     }
     std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
 
-    // The signature is the record set's mesh-id run: any reshape (track crossing, load,
-    // revert, floater add/delete/reorder) reshapes the live set; content edits inside a
-    // record (application's own reconcile writes) deliberately do not.
+    // The signature is the active track's mesh-id run PLUS the track index itself: any reshape
+    // (track crossing, load, revert, floater add/delete/reorder) reshapes the live set;
+    // content edits inside a record (the reconcile's own capture writes) deliberately do not.
     std::string sig;
+    sig += llformat("t%d;", track);
     for (const SSAtmoEnvLandscape& r : records)
     {
         sig += r.mMeshId.asString();
         sig += ';';
     }
-    if (sig != mLastSignature)
+    if (!editing && sig != mLastSignature)
     {
         mLastSignature = sig;
         reconcile(asset, track, region);
@@ -187,16 +205,22 @@ void SSAtmoLandscapeWorld::reconcile(const SSAtmoEnvAsset& asset, S32 track_inde
     std::vector<LLPointer<SSAtmoLandscapeObject>> next;
     next.reserve(records.size());
 
+    // Pairing consumes: each live object is matched at most once, in record order, so two
+    // records holding the same mesh each get their own instance (and keep their own state)
+    // instead of both collapsing onto the first match.
+    std::vector<bool> taken(mObjects.size(), false);
+
     for (const SSAtmoEnvLandscape& record : records)
     {
         // UUID adoption: a live object with the same mesh keeps its instance and its loaded
         // mesh, adopting the record's placement + face state - no re-download, no rebuild pop.
         SSAtmoLandscapeObject* match = nullptr;
-        for (const LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+        for (size_t oi = 0; oi < mObjects.size(); ++oi)
         {
-            if (objp.notNull() && objp->meshId() == record.mMeshId)
+            if (!taken[oi] && mObjects[oi].notNull() && mObjects[oi]->meshId() == record.mMeshId)
             {
-                match = objp.get();
+                match = mObjects[oi].get();
+                taken[oi] = true;
                 break;
             }
         }
@@ -213,20 +237,11 @@ void SSAtmoLandscapeWorld::reconcile(const SSAtmoEnvAsset& asset, S32 track_inde
     }
 
     // Kill whatever did not survive the pairing - including surplus duplicates of a mesh id.
-    for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    for (size_t oi = 0; oi < mObjects.size(); ++oi)
     {
-        bool kept = false;
-        for (const LLPointer<SSAtmoLandscapeObject>& n : next)
+        if (!taken[oi] && mObjects[oi].notNull())
         {
-            if (n.get() == objp.get())
-            {
-                kept = true;
-                break;
-            }
-        }
-        if (!kept && objp.notNull())
-        {
-            gObjectList.killObject(objp);
+            gObjectList.killObject(mObjects[oi]);
         }
     }
 

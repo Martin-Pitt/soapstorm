@@ -6036,7 +6036,9 @@ void LLSelectMgr::sendListToRegions(LLObjectSelectionHandle selected_handle,
         push_some(std::queue<LLSelectNode*>& n, bool roots) : nodes_to_send(n), mRoots(roots) {}
         virtual bool apply(LLSelectNode* node)
         {
-            if (node->getObject())
+            // <SS:Nexii> Local-content objects (Atmo Magic landscape) are never announced to
+            // the sim - the root/child variant of the funnel gets the same gate.
+            if (node->getObject() && !node->getObject()->ssIsLocalContent())
             {
                 bool is_root = node->getObject()->isRootEdit();
                 if ((mRoots && is_root) || (!mRoots && !is_root))
@@ -6044,6 +6046,7 @@ void LLSelectMgr::sendListToRegions(LLObjectSelectionHandle selected_handle,
                     nodes_to_send.push(node);
                 }
             }
+            // </SS:Nexii>
             return true;
         }
     };

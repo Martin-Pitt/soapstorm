@@ -71,9 +71,6 @@ public:
     // The adoption key.
     const LLUUID& meshId() const { return mAuthored.mMeshId; }
 
-    // Its own partition - volume machinery plus an infinite far clip.
-    U32 getPartitionType() const override;
-
     // The relaxed landscape LOD range.
     F32 ssLODDistanceScale() const override { return SS_LANDSCAPE_LOD_STRETCH; }
 

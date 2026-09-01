@@ -57,7 +57,8 @@ namespace
 
     bool face_equiv(const SSAtmoEnvLandscapeFace& a, const SSAtmoEnvLandscapeFace& b)
     {
-        return a.mTexture == b.mTexture
+        return a.mIndex == b.mIndex
+            && a.mTexture == b.mTexture
             && a.mMaterial == b.mMaterial
             && a.mAlphaMode == b.mAlphaMode
             && near_v3(LLVector3(a.mRepeats.mV[VX], a.mRepeats.mV[VY], a.mRepeats.mV[VZ]), LLVector3(b.mRepeats.mV[VX], b.mRepeats.mV[VY], b.mRepeats.mV[VZ]))
@@ -139,13 +140,38 @@ void SSAtmoLandscapeObject::applyFaces()
     }
 
     const S32 max_face = (S32)mAuthored.mFaces.size();
-    for (S32 i = 0; i < num && i < max_face; ++i)
+
+    // The sparse list is indexed by face; a hand-edited block may omit the index (then it
+    // applies to its array position). Build the mapping once per apply.
+    std::vector<S32> by_face(static_cast<size_t>(num), -1);
+    for (S32 i = 0; i < max_face; ++i)
     {
         const SSAtmoEnvLandscapeFace& f = mAuthored.mFaces[static_cast<size_t>(i)];
+        S32 face_index = f.mIndex >= 0 ? f.mIndex : i;
+        if (face_index >= 0 && face_index < num)
+        {
+            by_face[static_cast<size_t>(face_index)] = i;
+        }
+    }
 
-        // A fully-empty block (nothing authored) is skippable - capture only writes blocks
-        // for faces that differ from the default texture entry.
-        const bool empty = f.mTexture.isNull() && f.mMaterial.isNull();
+    for (S32 i = 0; i < num; ++i)
+    {
+        const S32 src = by_face[static_cast<size_t>(i)];
+        if (src < 0)
+        {
+            continue;
+        }
+        const SSAtmoEnvLandscapeFace& f = mAuthored.mFaces[static_cast<size_t>(src)];
+
+        // A fully-default block (nothing authored) is skippable - capture only writes blocks
+        // that differ from the default texture entry. A tint-only block (texture and
+        // material both empty but colour authored) is NOT default, so the test mirrors the
+        // TE defaults rather than just the two ids.
+        const bool empty = f.mTexture.isNull() && f.mMaterial.isNull()
+            && near_v3(LLVector3(f.mRepeats.mV[VX], f.mRepeats.mV[VY], f.mRepeats.mV[VZ]), LLVector3(1.f, 1.f, 0.f))
+            && llabs(f.mRepeats.mV[VW]) < 1e-4f
+            && llabs(f.mRotation) < 1e-4f
+            && f.mColor == LLColor4::white;
         if (empty)
         {
             continue;
@@ -218,45 +244,51 @@ bool SSAtmoLandscapeObject::captureToRecord(SSAtmoEnvLandscape& record)
 
     // Sparse faces: a block is written only when the face differs from the default texture
     // entry (or carries a PBR material). The built list is compared against what we last
-    // applied, so an idle object writes nothing and the asset stays clean.
-    std::vector<SSAtmoEnvLandscapeFace> faces;
+    // applied, so an idle object writes nothing and the asset stays clean. Faces are only
+    // captured once mesh geometry actually exists - until then the record's authored set is
+    // authoritative and must not be replaced by the object's (still empty) face state.
     const S32 num = getNumFaces();
-    for (S32 i = 0; i < num; ++i)
+    if (num > 0 && mAppliedFaces >= 0)
     {
-        LLTextureEntry def;
-        LLTextureEntry te = (i < (S32)getNumTEs()) ? *getTE((U8)i) : def;
-        const LLUUID mat = getRenderMaterialID((U8)i);
-        if (te == def && mat.isNull())
+        std::vector<SSAtmoEnvLandscapeFace> faces;
+        for (S32 i = 0; i < num; ++i)
         {
-            continue;
-        }
-        SSAtmoEnvLandscapeFace f;
-        f.mTexture = te.getID();
-        f.mRepeats = LLVector4(te.getScaleS(), te.getScaleT(), te.getOffsetS(), te.getOffsetT());
-        f.mRotation = te.getRotation();
-        f.mColor = te.getColor();
-        f.mMaterial = mat;
-        faces.push_back(f);
-    }
-
-    if (faces.size() != mAuthored.mFaces.size())
-    {
-        changed = true;
-    }
-    else
-    {
-        for (size_t i = 0; i < faces.size(); ++i)
-        {
-            if (!face_equiv(faces[i], mAuthored.mFaces[i]))
+            LLTextureEntry def;
+            LLTextureEntry te = (i < (S32)getNumTEs()) ? *getTE((U8)i) : def;
+            const LLUUID mat = getRenderMaterialID((U8)i);
+            if (te == def && mat.isNull())
             {
-                changed = true;
-                break;
+                continue;
+            }
+            SSAtmoEnvLandscapeFace f;
+            f.mIndex = i;
+            f.mTexture = te.getID();
+            f.mRepeats = LLVector4(te.getScaleS(), te.getScaleT(), te.getOffsetS(), te.getOffsetT());
+            f.mRotation = te.getRotation();
+            f.mColor = te.getColor();
+            f.mMaterial = mat;
+            faces.push_back(f);
+        }
+
+        if (faces.size() != mAuthored.mFaces.size())
+        {
+            changed = true;
+        }
+        else
+        {
+            for (size_t i = 0; i < faces.size(); ++i)
+            {
+                if (!face_equiv(faces[i], mAuthored.mFaces[i]))
+                {
+                    changed = true;
+                    break;
+                }
             }
         }
-    }
-    if (changed)
-    {
-        record.mFaces = std::move(faces);
+        if (changed)
+        {
+            record.mFaces = std::move(faces);
+        }
     }
 
     // Advance the applied snapshot so the next capture diffs against what was just
@@ -264,9 +296,4 @@ bool SSAtmoLandscapeObject::captureToRecord(SSAtmoEnvLandscape& record)
     mAuthored = record;
 
     return changed;
-}
-
-U32 SSAtmoLandscapeObject::getPartitionType() const
-{
-    return LLViewerRegion::PARTITION_LANDSCAPE;
 }

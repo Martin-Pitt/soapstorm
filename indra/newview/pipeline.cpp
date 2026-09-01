@@ -7367,9 +7367,6 @@ LLViewerObject* LLPipeline::lineSegmentIntersectInWorld(const LLVector4a& start,
         for (U32 j = 0; j < LLViewerRegion::NUM_PARTITIONS; j++)
         {
             if ((j == LLViewerRegion::PARTITION_VOLUME) ||
-                // <SS:Nexii> Atmo Magic landscape scenery is pickable like any volume.
-                (j == LLViewerRegion::PARTITION_LANDSCAPE) ||
-                // </SS:Nexii>
                 (j == LLViewerRegion::PARTITION_BRIDGE) ||
                 (j == LLViewerRegion::PARTITION_AVATAR) || // for attachments
                 (j == LLViewerRegion::PARTITION_CONTROL_AV) ||
@@ -12841,9 +12838,6 @@ void LLPipeline::rebuildDrawInfo()
     const U32 types_to_traverse[] =
     {
         LLViewerRegion::PARTITION_VOLUME,
-        // <SS:Nexii> Atmo Magic landscape scenery - highlighted transparent like any volume.
-        LLViewerRegion::PARTITION_LANDSCAPE,
-        // </SS:Nexii>
         // <FS:Beq> Fix for alpha blend issues with highlight transparent resulting from fix for LL#2577
         // LLViewerRegion::PARTITION_BRIDGE,
         // LLViewerRegion::PARTITION_AVATAR,

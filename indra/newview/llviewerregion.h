@@ -97,10 +97,6 @@ public:
         PARTITION_PARTICLE,
         PARTITION_GRASS,
         PARTITION_VOLUME,
-        // <SS:Nexii> Atmo Magic landscape scenery - kept after PARTITION_VOLUME so the
-        // volume-family machinery (cull walks, pick whitelists) treats it as a sibling.
-        PARTITION_LANDSCAPE,
-        // </SS:Nexii>
         PARTITION_BRIDGE,
         PARTITION_AVATAR,
         PARTITION_CONTROL_AV, // Animesh

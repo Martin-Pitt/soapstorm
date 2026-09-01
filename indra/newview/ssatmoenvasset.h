@@ -75,12 +75,13 @@ const F32 SS_ATMOENV_UDECK_BASE_MAX = 10000.f;
 
 const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
 
-// <SS:Nexii> Landscape caps - a notecard-budget decision, not a code limit: a fully loaded
-// record is ~2 KB of pretty XML, so worst-case 16 per track and 32 per asset stay inside the
-// 64 KiB notecard ceiling. Enforced at add time in the landscape UI, surfaced as a friendly
-// error, never a silent truncation. See doc/atmo_landscape/design_synthesis.md.
-const S32 SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK = 16;
-const S32 SS_ATMOENV_MAX_LANDSCAPE_TOTAL = 32;
+// <SS:Nexii> Landscape caps - a notecard-budget decision, not a code limit. Worst case per
+// record is ~4.5 KB of pretty XML (a 40-face mesh fully authored); 8 per track and 12 per
+// asset keep even that pathological case under the 64 KiB notecard ceiling, and a typical
+// sparse record (2-8 faces) is 0.3-1.5 KB. Enforced at add time in the landscape UI, surfaced
+// as a friendly error, never a silent truncation. See doc/atmo_landscape/design_synthesis.md.
+const S32 SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK = 8;
+const S32 SS_ATMOENV_MAX_LANDSCAPE_TOTAL = 12;
 
 // <SS:Nexii> Atmo Magic landscape scenery: a client-side mesh object owned by the environment
 // asset instead of the region. The record is everything the runtime object needs to exist -
@@ -90,7 +91,12 @@ const S32 SS_ATMOENV_MAX_LANDSCAPE_TOTAL = 32;
 struct SSAtmoEnvLandscapeFace
 {
     // <SS:Nexii> Set when this face is authored away from the TE default; a face may carry a
-    // texture, a material, or neither (a texture-less face is tint-only).
+    // texture, a material, or neither (a texture-less face is tint-only). mIndex is the
+    // mesh face this block belongs to - faces are sparse and compaction would otherwise
+    // shift positions and put a face's art on the wrong TE. A hand-edited document may
+    // omit the index; then the block applies to the position it occupies in the array.
+    S32 mIndex = -1;
+
     LLUUID mTexture;
     LLVector4 mRepeats{1.f, 1.f, 0.f, 0.f}; // U,V repeats + S,T offset, the TE layout
     F32 mRotation = 0.f;

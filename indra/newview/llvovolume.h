@@ -435,8 +435,8 @@ protected:
     // ssLODDistanceScale() - a multiplier folded into the distance term at calcLOD's
     // sDistanceFactor line, so the stock formula, Mesh-detail preference and DebugObjectLODs
     // all keep working, just at scaled distances.
-    /*virtual*/ bool calcLOD();
-    /*virtual*/ F32 ssLODDistanceScale() const { return 1.f; }
+    virtual bool calcLOD();
+    virtual F32 ssLODDistanceScale() const { return 1.f; }
     // </SS:Nexii>
     LLFace* addFace(S32 face_index);
 

@@ -1448,6 +1448,10 @@ void ssAtmoEnvEmbedReferencedPrecipTypes(SSAtmoEnvAsset& asset)
 LLSD SSAtmoEnvLandscapeFace::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
+    if (mIndex >= 0)
+    {
+        sd["index"] = (LLSD::Integer)mIndex;
+    }
     if (!mTexture.isNull())
     {
         sd["texture"] = mTexture;
@@ -1481,6 +1485,7 @@ bool SSAtmoEnvLandscapeFace::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
+    mIndex = sd.has("index") ? (S32)sd["index"].asInteger() : -1;
     mTexture = sd.has("texture") ? sd["texture"].asUUID() : LLUUID::null;
     mMaterial = sd.has("material") ? sd["material"].asUUID() : LLUUID::null;
     mAlphaMode = sd.has("alpha_mode") ? (S32)sd["alpha_mode"].asInteger() : 0;
