@@ -110,6 +110,13 @@ public:
 
     F32 temperatureC() const { return mTemperatureC; }
 
+    // <SS:Nexii> Storm-approach look-ahead: how imminent an approaching thunderstorm is (0..1),
+    // read off the weather cube's next keyframe (SSAtmoEnvBridge::stormApproach), and the
+    // heading, degrees, it comes FROM (upwind) - negative when no storm approaches. The
+    // bolt-from-the-blue anticipation in SSLightning reads these every frame. </SS:Nexii>
+    F32 stormApproach() const { return mStormApproach; }
+    F32 stormApproachHeadingDeg() const { return mStormApproachHeading; }
+
     // <SS:Nexii> Granular weather: the single lift authority and the regime machine. liftAt()
     // answers "is snow lifting here and how hard" (0-1, physical, no preset rate, no gust - the
     // caller applies those); the regimes derived from the same env params the resolver already
@@ -236,6 +243,11 @@ private:
     bool mSwitchedOn = false;
 
     F32 mTemperatureC = 15.f;
+
+    // <SS:Nexii> The bolt-from-the-blue storm look-ahead, recomputed every refresh. See the
+    // getters. </SS:Nexii>
+    F32 mStormApproach = 0.f;
+    F32 mStormApproachHeading = -1.f;
 
     LLColor3 mLightningColor{0.62f, 0.55f, 1.f};
     F32 mLightningCoreWhite = 0.85f;

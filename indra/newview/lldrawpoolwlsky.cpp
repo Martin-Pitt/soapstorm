@@ -631,15 +631,15 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
                 {
                     s_noise_from_id = noise_from;
                     s_noise_from_tex = LLViewerTextureManager::getFetchedTexture(
-                        noise_from, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
-                    s_noise_from_tex->addTextureStats((F32)MAX_IMAGE_AREA;
+                        noise_from, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
+                    s_noise_from_tex->addTextureStats((F32)MAX_IMAGE_AREA);
                 }
                 if (noise_to != s_noise_to_id || s_noise_to_tex.isNull())
                 {
                     s_noise_to_id = noise_to;
                     s_noise_to_tex = LLViewerTextureManager::getFetchedTexture(
-                        noise_to, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
-                    s_noise_to_tex->addTextureStats((F32)MAX_IMAGE_AREA;
+                        noise_to, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
+                    s_noise_to_tex->addTextureStats((F32)MAX_IMAGE_AREA);
                 }
                 cloudshader->bindTexture(LLShaderMgr::CLOUD_NOISE_MAP, s_noise_from_tex, LLTexUnit::TT_TEXTURE);
                 cloudshader->bindTexture(LLShaderMgr::CLOUD_NOISE_MAP_NEXT, s_noise_to_tex, LLTexUnit::TT_TEXTURE);
@@ -710,8 +710,8 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             {
                 s_large_noise_id = large_noise_id;
                 s_large_noise_tex = LLViewerTextureManager::getFetchedTexture(
-                    large_noise_id, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
-                s_large_noise_tex->addTextureStats((F32)MAX_IMAGE_AREA;
+                    large_noise_id, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
+                s_large_noise_tex->addTextureStats((F32)MAX_IMAGE_AREA);
             }
             cloudshader->bindTexture(LLShaderMgr::SS_NOISE_LARGE_MAP, s_large_noise_tex, LLTexUnit::TT_TEXTURE);
             large_noise_on = true;
@@ -733,8 +733,8 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
                 {
                     s_large_noise_next_id = large_noise_next_id;
                     s_large_noise_next_tex = LLViewerTextureManager::getFetchedTexture(
-                        large_noise_next_id, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
-                    s_large_noise_next_tex->addTextureStats((F32)MAX_IMAGE_AREA;
+                        large_noise_next_id, FTT_DEFAULT, true, LLGLTexture::BOOST_UI);
+                    s_large_noise_next_tex->addTextureStats((F32)MAX_IMAGE_AREA);
                 }
                 cloudshader->bindTexture(LLShaderMgr::SS_NOISE_LARGE_MAP_NEXT, s_large_noise_next_tex, LLTexUnit::TT_TEXTURE);
                 cloudshader->uniform1f(sNoiseLargeBlend, large_noise_blend);

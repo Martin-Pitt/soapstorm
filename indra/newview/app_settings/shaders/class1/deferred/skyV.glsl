@@ -327,27 +327,18 @@ void main()
     // puts both directions in one frame. ss_sun_dir.z keeps meaning the true elevation.
 #ifdef SS_ATMO
     vec3 glow_dir = (ss_sun_rise > 0.0) ? ss_sun_dir.yzx : lightnorm.xyz;
-    // <SS:Nexii> The hotspot is forward scatter from the light at a true angle, so under the
-    // mirror it reads the true ray (see above): below the horizon it carries on down from the
-    // horizon line, decaying with angle, instead of growing a second sun mirrored under the
-    // first. The extinction above keeps the mirrored ray - that is what the mirror is for.
+    // <SS:Nexii> Calibration to EEP: the hotspot's shape was EEP-tuned against the stock
+    // ~5.7 degree quad. The drawn disc's angular size must NOT rescale it - the glow is the
+    // LIGHT the authored sky sheds, and EEP sized the lobe by the stock quad's angular width.
+    // Perceived disc size is a look, not a light: the lobe keeps the stock width whatever
+    // the Atmo discs draw. The horizon-band share (ss_sun_rise) already ramps the strength;
+    // the removed ss_disc * ss_disc term was the only disc-to-light coupling.
     vec3 glow_ray = (ss_horizon_mirror > 0.) ? ss_true_dir : rel_pos_norm;
-
-    // <SS:Nexii> The hotspot's shape was EEP-tuned against the stock ~5.7 degree quad. Scale
-    // the angular term by the DRAWN disc's half-angle relative to stock's - 0.05 is
-    // HEAVENLY_BODY_FACTOR * SUN_DISK_RADIUS, the scale-1.0 quad's half-extent ratio - because
-    // (1 - dot) grows as the SQUARE of the angle, the whole lobe, its 0.001 floor included,
-    // compresses onto whatever disc is actually drawn: the glow hugs the disc at 3x perceived
-    // just as it hugged the stock quad. 1.0 while no Atmo environment drives the sky, which
-    // keeps stock's glow bit for bit.
-    float ss_disc = (ss_sun_radius > 0.0) ? max(ss_sun_radius, 1e-5) / 0.05 : 1.0;
+    float haze_glow = 1.0 - dot(glow_ray, glow_dir);
 #else
     vec3 glow_dir = lightnorm.xyz;
     vec3 glow_ray = rel_pos_norm;
-#endif
     float haze_glow = 1.0 - dot(glow_ray, glow_dir);
-#ifdef SS_ATMO
-    haze_glow *= ss_disc * ss_disc;
 #endif
     // haze_glow is 0 at the sun and increases away from sun
     haze_glow = max(haze_glow, .001);

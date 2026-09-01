@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="false"
  can_resize="false"
- height="470"
+ height="480"
  layout="topleft"
  name="floater_ss_atmo_env_create"
  single_instance="true"
@@ -66,11 +66,13 @@
          width="440" />
     </radio_group>
 
-    <!-- The supplied skies, fed by drops; rows are removable. -->
+    <!-- The supplied skies, fed by drops; rows are removable. The leading "index" column is the
+         drag spacer - it keeps the row text away from the drag-handle icon the multi-select drags
+         draw on the left - and the actual content lives in the "skies" column. -->
     <scroll_list
      commit_on_selection_change="true"
      follows="left|top"
-     height="190"
+     height="200"
      layout="topleft"
      left="15"
      multi_select="true"
@@ -78,8 +80,11 @@
      top="132"
      width="440">
         <scroll_list.columns
-         label="Supplied skies"
-         name="skies" />
+         name="index"
+         width="20" />
+        <scroll_list.columns
+         name="skies"
+         relative_width="1" />
     </scroll_list>
 
     <button
@@ -123,7 +128,7 @@
      layout="topleft"
      left="15"
      name="hint_text"
-     top="368"
+     top="376"
      width="440"
      wrap="true">
         -
@@ -136,7 +141,7 @@
      layout="topleft"
      left="15"
      name="create_button"
-     top="410"
+     top="418"
      width="120" />
     <button
      follows="left|top"
@@ -145,6 +150,6 @@
      layout="topleft"
      left_pad="10"
      name="cancel_button"
-     top="410"
+     top="418"
      width="120" />
 </floater>

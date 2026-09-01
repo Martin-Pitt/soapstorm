@@ -26,6 +26,7 @@
 #include "sslightning.h"
 
 #include "ssatmomagic.h"
+#include "ssatmoenvweatherstate.h"
 #include "sssoundscape.h"
 #include "sswindflow.h"
 #include "ssvolcloud.h"
@@ -59,12 +60,6 @@ namespace
     // second. Long bolts visibly take time to travel; short ones still snap. </SS:Nexii>
     const F32 LEADER_SPEED_M_S = 2800.f;
 
-    const S32 RETURN_STROKES_MIN = 1;
-    const S32 RETURN_STROKES_MAX = 4;
-    const F32 RESTRIKE_MIN_S = 0.03f;
-    const F32 RESTRIKE_MAX_S = 0.09f;
-    const F32 STROKE_DECAY_S = 0.055f;
-
     const F32 THUNDER_SHADOW_ZONE_M = 20000.f;
 
     const F32 STRIKE_NEAR_M = 50.f;
@@ -88,6 +83,27 @@ namespace
     const S32 BRANCH_TRIES = 4;
 
     const F32 PREPARE_LEAD_S = 10.f;
+
+    // <SS:Nexii> The temperature mix of the charge network: +12C and warmer is all negative
+    // cloud-base discharges (the summer norm), -10C and colder all positive anvil bolts (the
+    // winter norm), sliding between the two. </SS:Nexii>
+    const F32 POSITIVE_WARM_C = 12.f;
+    const F32 POSITIVE_COLD_C = -10.f;
+
+    // <SS:Nexii> How many positive discharges become bolts from the blue - the long near-
+    // horizontal trunk out of the anvil, striking ground miles from the storm. The rest of the
+    // positive strikes still come off the top of the cloud, just closer to the deck they came
+    // from. </SS:Nexii>
+    const F32 BLUE_ODDS_POSITIVE = 0.30f;
+
+    // <SS:Nexii> A bolt from the blue's geometry, tuned for the 4km region the weather lives in
+    // and the 2km draw distance: the origin is the storm itself, miles off at the anvil crown
+    // (beyond the far clip, exactly where the storm appears to be), and the ground strike lands
+    // within view - the visible centre of its own far-flung trunk. </SS:Nexii>
+    const F32 BLUE_ORIGIN_MIN_M = 5000.f;
+    const F32 BLUE_ORIGIN_MAX_M = 14000.f;
+    const F32 BLUE_GROUND_MIN_M = 400.f;
+    const F32 BLUE_GROUND_MAX_M = 3200.f;
 
     // Setting read with a fallback when it does not exist.
     F32 settingF(const char* name, F32 fallback)
@@ -131,6 +147,15 @@ const LLColor4& SSLightning::kindDebugColor(SSStrikeKind k)
     }
 }
 
+// <SS:Nexii> The charge network's temperature mix: +12C and above is the summer all-negative
+// world, the mix climbs through freezing, and -10C and below is the winter all-positive one.
+// Spawn rolls each strike against this; the overlay reads it to label the mood. </SS:Nexii>
+F32 SSLightning::positiveSkew(F32 temperature_c)
+{
+    return llclamp((POSITIVE_WARM_C - temperature_c)
+                   / (POSITIVE_WARM_C - POSITIVE_COLD_C), 0.f, 1.f);
+}
+
 // Exports the brightest live strikes as deferred point lights, positioned at each channel's node nearest the camera.
 S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
                              std::vector<LLColor3>& out_color, S32 max_count) const
@@ -162,7 +187,9 @@ S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
             if (d2 < best_d2) { best_d2 = d2; best = node.mPos; }
         }
 
-        const F32 radius = llclamp(sqrtf(best_d2) * 0.6f, 60.f, 900.f);
+        // <SS:Nexii> A positive bolt's power throws its light further - the anvil strike is the
+        // storm's heavy hitter, ten times the current of a negative discharge. </SS:Nexii>
+        const F32 radius = llclamp(sqrtf(best_d2) * 0.6f * llmax(strike.mPower, 1.f), 60.f, 1500.f);
 
         if (sqrtf(best_d2) - radius > MAX_FAR_CLIP) continue;
 
@@ -210,6 +237,8 @@ void SSLightning::clear()
     mNextStrikeAt = -1.0;
     mFlash = 0.f;
     mFlashDir.clear();
+    mNextBlueAt = -1.0;
+    mBluePrepared = false;
 }
 
 // Seconds until the next scheduled strike, for the overlay.
@@ -235,15 +264,26 @@ void SSLightning::idle(F32 dt)
 
     const F32 convection = atmo->turbulence();
 
+    // <SS:Nexii> Cold stretches the intervals: the same convection that rattles a summer sky
+    // every few seconds is the rare winter storm when the temperature is against it. The
+    // resolver bakes the same scale into its own interval answers; this is the no-interval
+    // fallback's twin, so track-weather and cube-weather never disagree about the season.
+    // </SS:Nexii>
+    const F32 season = llmax(
+        SSAtmoEnvWeatherResolver::lightningTemperatureScale(atmo->temperatureC()), 0.02f);
+
     F32 interval_min = atmo->lightningIntervalMin();
     F32 interval_max = atmo->lightningIntervalMax();
     if (interval_max < 0.f)
     {
         interval_min = 0.f;
         interval_max = 0.f;
-        if (convection >= 0.75f)        { interval_min = 2.f;  interval_max = 5.f;  }
-        else if (convection >= 0.55f)   { interval_min = 30.f; interval_max = 60.f; }
+        if (convection >= 0.75f)      { interval_min = 2.f / season;  interval_max = 5.f / season; }
+        else if (convection >= 0.55f) { interval_min = 30.f / season; interval_max = 60.f / season; }
     }
+
+    // The strike-rate multiplier, shared by the ordinary scheduler and the blue-bolt clock.
+    const F32 rate = llclamp(settingF("SSAtmoLightningRate", 1.f), 0.05f, 8.f);
 
     if (interval_max <= 0.f)
     {
@@ -251,7 +291,6 @@ void SSLightning::idle(F32 dt)
     }
     else
     {
-        const F32 rate = llclamp(settingF("SSAtmoLightningRate", 1.f), 0.05f, 8.f);
         if (mNextStrikeAt < 0.0)
         {
             SSRandStream rng((U32)(now * 1000.0) ^ atmo->seed());
@@ -270,6 +309,45 @@ void SSLightning::idle(F32 dt)
             SSRandStream rng((U32)(now * 977.0) ^ atmo->seed() ^ 0x5eed1u);
             mNextStrikeAt = now + rng.frand(interval_min, interval_max) / rate;
             mPrepared = false;
+        }
+    }
+
+    // <SS:Nexii> The bolt from the blue: while a storm is on its way (the weather cube's next
+    // keyframe stormier than now, the storm approaching from upwind), lightning reaches ahead
+    // of it - rare positive anvil bolts out of the upwind, each striking the ground miles from
+    // its cloud, their rumble trailing in over the speed of sound. This scheduler is its OWN
+    // clock: it wants strikes before the current weather has turned thundery at all, so it
+    // ignores the ordinary interval and only needs the weather to be live.
+    static LLCachedControl<bool> blue_setting(gSavedSettings, "SSAtmoLightningBlue", true);
+    const F32 approach = atmo->stormApproach();
+    if (!blue_setting || approach <= 0.02f || !atmo->isEnabled() || !enabled || !atmo->lightningOn())
+    {
+        mNextBlueAt = -1.0;
+        mBluePrepared = false;
+    }
+    else
+    {
+        if (mNextBlueAt < 0.0)
+        {
+            SSRandStream rng((U32)(now * 104729.0) ^ atmo->seed() ^ 0x8a1eu);
+            const F32 interval = lerp(75.f, 18.f, llclamp(approach, 0.f, 1.f))
+                                 / llmax((F32)rate, 0.05f);
+            mNextBlueAt = now + rng.frand(interval * 0.6f, interval * 1.5f);
+        }
+        else if (!mBluePrepared && now >= mNextBlueAt - (F64)PREPARE_LEAD_S)
+        {
+            const F32 fierce = (atmo->lightningIntensity() >= 0.f)
+                ? atmo->lightningIntensity() : llmax(convection, 0.5f);
+            const F32 bearing = (atmo->stormApproachHeadingDeg() >= 0.f)
+                ? atmo->stormApproachHeadingDeg() * DEG_TO_RAD : -1.f;
+            spawn(fierce, mNextBlueAt, bearing, -1.f, STRIKE_KIND_COUNT, nullptr, true);
+            mBluePrepared = true;
+        }
+
+        if (mBluePrepared && now >= mNextBlueAt)
+        {
+            mNextBlueAt = -1.0;
+            mBluePrepared = false;
         }
     }
 
@@ -357,9 +435,10 @@ void SSLightning::triggerGroundNow()
     mPrepared = false;
 }
 
-// Builds a full strike for a future fire time: kind, placement, attachment, channel, and thunder handed to the soundscape with its lead. A forced kind or ground point (debug buttons) skips the rolls for that part.
+// Builds a full strike for a future fire time: kind, polarity, placement, attachment, channel, and thunder handed to the soundscape with its lead. A forced kind or ground point (debug buttons) skips the rolls for that part; a forced blue (the storm-approach anticipation) is always a positive bolt from the blue.
 void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force_dist,
-                        SSStrikeKind force_kind, const LLVector3* force_ground)
+                        SSStrikeKind force_kind, const LLVector3* force_ground,
+                        bool force_blue)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     const F64 now = atmo->sharedTime();
@@ -372,8 +451,9 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     strike.mIntensity = llclamp(intensity, 0.f, 1.f);
 
     // Debug buttons force their kind and/or attachment; those strikes are deliberately aimed,
-    // so they are exempt from the under deck's re-route to cloud-to-cloud.
-    strike.mForced = (force_kind < STRIKE_KIND_COUNT) || (force_ground != nullptr);
+    // so they are exempt from the under deck's re-route to cloud-to-cloud. Same for the
+    // bolt-from-the-blue: it is aimed at the storm it reaches ahead of.
+    strike.mForced = (force_kind < STRIKE_KIND_COUNT) || (force_ground != nullptr) || force_blue;
 
     if (force_kind < STRIKE_KIND_COUNT)
     {
@@ -398,6 +478,46 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         }
     }
 
+    // <SS:Nexii> Polarity by temperature: the summer network runs negative off the cloud base,
+    // the winter storm is the positive anvil's world, the mix sliding between. A bolt from the
+    // blue is always positive - it IS an anvil discharge, just one that travelled. Rolled from
+    // the same deterministic stream as everything else, so every client agrees on the charge.
+    // </SS:Nexii>
+    if (!force_blue)
+    {
+        static LLCachedControl<bool> polarity_setting(gSavedSettings, "SSAtmoLightningPolarity", true);
+        if (polarity_setting)
+        {
+            strike.mPositive = (rng.frand() < positiveSkew(atmo->temperatureC()));
+        }
+    }
+    else
+    {
+        strike.mPositive = true;
+    }
+
+    // <SS:Nexii> Some positive discharges are bolts from the blue: out of the anvil at the
+    // storm's edge, running the gap sideways for miles before they fall on ground far away. The
+    // rest of the positive strikes still come off the top of the cloud, closer to home. </SS:Nexii>
+    strike.mBlue = force_blue || (strike.mPositive && rng.frand() < BLUE_ODDS_POSITIVE);
+    if (strike.mBlue)
+    {
+        strike.mKind = STRIKE_GROUND;
+    }
+
+    // <SS:Nexii> The positive stroke's character: a rapid series of quick pulses that hold the
+    // glow longer - the winter storm's heavy hitter, ten times the current of a negative
+    // discharge, throwing its light further. Negative bolts keep the sharp single snap. </SS:Nexii>
+    if (strike.mPositive)
+    {
+        strike.mStrokesMin = 4;
+        strike.mStrokesMax = 9;
+        strike.mRestrikeMinS = 0.015f;
+        strike.mRestrikeMaxS = 0.040f;
+        strike.mStrokeDecayS = 0.085f;
+        strike.mPower = 1.8f;
+    }
+
     const LLVector3 cam = gAgent.getPositionAgent();
 
     F32 band_lo = cam.mV[VZ] + CLOUD_BASE_M;
@@ -409,27 +529,32 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         band_hi = llmax(field->cloudTopZ(), band_lo + 50.f);
     }
 
-    if (force_ground)
+    // <SS:Nexii> Where on the cloud the bolt comes from, by polarity: negative charges sit low
+    // in the deck (a summer storm's base is where the charge concentrates), positive bolts are
+    // anvil discharges - out of the TOP of the cloud, up to and above its lid. A bolt from the
+    // blue sits above the deck entirely, at the anvil crown. </SS:Nexii>
+    F32 origin_lo = band_lo;
+    F32 origin_hi = band_hi;
+    if (!strike.mBlue)
     {
-        // Debug placement: the bolt anchors at the given point exactly - no terrain resolve, no attach-bias
-        // search - with the cloud origin straight above it.
-        strike.mGround = *force_ground;
-        strike.mOrigin.set(strike.mGround.mV[VX], strike.mGround.mV[VY],
-                           band_lo + rng.frand(0.2f, 0.9f) * (band_hi - band_lo));
+        const F32 band = llmax(band_hi - band_lo, 50.f);
+        if (strike.mPositive)
+        {
+            origin_lo = band_lo + 0.45f * band;
+            origin_hi = band_hi + 0.45f * band;
+        }
+        else
+        {
+            origin_lo = band_lo + 0.05f * band;
+            origin_hi = band_lo + 0.55f * band;
+        }
     }
-    else
+
+    // Resolves the land height at a point, then - for ground strikes - lets the tall-structure
+    // capture pull the attachment toward anything worth hitting nearby.
+    auto resolve_ground = [&](const LLVector3& at) -> LLVector3
     {
-        const F32 t = rng.frand();
-        const F32 dist = (force_dist >= 0.f) ? force_dist
-            : STRIKE_NEAR_M + (STRIKE_FAR_M - STRIKE_NEAR_M) * t * t;
-        const F32 bearing = (force_bearing > -10.f && force_dist >= 0.f) ? force_bearing
-            : rng.frand(0.f, F_TWO_PI);
-
-        strike.mOrigin.set(cam.mV[VX] + cosf(bearing) * dist,
-                           cam.mV[VY] + sinf(bearing) * dist,
-                           band_lo + rng.frand(0.2f, 0.9f) * (band_hi - band_lo));
-
-        LLVector3 ground = strike.mOrigin;
+        LLVector3 ground = at;
         ground.mV[VZ] = cam.mV[VZ];
         if (LLViewerRegion* regionp = gAgent.getRegion())
         {
@@ -466,15 +591,67 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
 
             if (found) ground = best;
         }
+        return ground;
+    };
 
-        strike.mGround = ground;
+    if (force_ground)
+    {
+        // Debug placement: the bolt anchors at the given point exactly - no terrain resolve, no attach-bias
+        // search - with the cloud origin straight above it.
+        strike.mGround = *force_ground;
+        strike.mOrigin.set(strike.mGround.mV[VX], strike.mGround.mV[VY],
+                           origin_lo + rng.frand() * (origin_hi - origin_lo));
+    }
+    else if (strike.mBlue)
+    {
+        // <SS:Nexii> The bolt from the blue's geometry: the origin IS the storm - up at the
+        // anvil crown, miles off, far past the draw distance where the approaching storm sits -
+        // and the ground strike lands within view. The trunk runs the whole gap: the long
+        // near-horizontal travel of a positive discharge, arriving at the far clip and striking
+        // the ground. The forced bearing (the storm-approach scheduler's upwind) aims the whole
+        // bolt; otherwise it rolls like any other.
+        const F32 bearing = (force_bearing > -10.f) ? force_bearing
+            : rng.frand(0.f, F_TWO_PI);
+        const F32 origin_d = rng.frand(BLUE_ORIGIN_MIN_M, BLUE_ORIGIN_MAX_M);
+        strike.mOrigin.set(cam.mV[VX] + cosf(bearing) * origin_d,
+                           cam.mV[VY] + sinf(bearing) * origin_d,
+                           band_hi + rng.frand(0.15f, 0.7f) * llmax(band_hi - band_lo, 200.f));
+
+        const F32 ground_d = rng.frand(BLUE_GROUND_MIN_M, BLUE_GROUND_MAX_M);
+        strike.mGround = resolve_ground(cam
+            + LLVector3(cosf(bearing) * ground_d, sinf(bearing) * ground_d, 0.f));
+    }
+    else
+    {
+        const F32 t = rng.frand();
+        const F32 dist = (force_dist >= 0.f) ? force_dist
+            : STRIKE_NEAR_M + (STRIKE_FAR_M - STRIKE_NEAR_M) * t * t;
+        const F32 bearing = (force_bearing > -10.f && force_dist >= 0.f) ? force_bearing
+            : rng.frand(0.f, F_TWO_PI);
+
+        strike.mOrigin.set(cam.mV[VX] + cosf(bearing) * dist,
+                           cam.mV[VY] + sinf(bearing) * dist,
+                           origin_lo + rng.frand() * (origin_hi - origin_lo));
+
+        strike.mGround = resolve_ground(strike.mOrigin);
     }
 
-    strike.mDistanceM = (strike.mOrigin - cam).magVec();
+    // The falloff distance: a blue bolt's visible moment is its ground strike, not its far anvil
+    // origin - the flash reads by the part the light actually reaches.
+    strike.mDistanceM = (strike.mBlue)
+        ? (strike.mGround - cam).magVec()
+        : (strike.mOrigin - cam).magVec();
 
     if (strike.mKind != STRIKE_SHEET)
     {
         buildChannel(strike, strike.mIntensity);
+
+        // <SS:Nexii> The positive bolt's heavier current: the same channel, a thicker bolt.
+        // </SS:Nexii>
+        if (strike.mPositive)
+        {
+            for (SSStrikeNode& node : strike.mChannel) node.mWidth *= 1.35f;
+        }
     }
 
     LLVector3 thunder_pos = strike.mGround;
@@ -958,7 +1135,12 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
                   * rng.frand(0.85f, 1.2f),
                   LEADER_MIN_S, LEADER_MAX_S)
         : rng.frand(LEADER_MIN_S, LEADER_MAX_S);
-    const S32 strokes = RETURN_STROKES_MIN + rng.rand(RETURN_STROKES_MAX - RETURN_STROKES_MIN + 1);
+
+    // <SS:Nexii> The stroke count and timing rolled at spawn: negative bolts keep the sharp
+    // single snap, positive anvil bolts fire their rapid series of quick pulses. The same
+    // strike reads the same every frame - the stream is seeded by the fire time. </SS:Nexii>
+    const S32 strokes = strike.mStrokesMin
+        + rng.rand(strike.mStrokesMax - strike.mStrokesMin + 1);
 
     const F32 charge_s = SSAtmoMagic::getInstance()->lightningCharge()
         ? llclamp(settingF("SSAtmoLightningAnticipation", ANTICIPATION_DEFAULT_S), 0.f, ANTICIPATION_MAX_S)
@@ -1010,7 +1192,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
             {
                 const F32 since = strike.mT - at;
                 const F32 scale = 1.f / (1.f + (F32)i * 0.6f);
-                const F32 glow = scale * expf(-since / STROKE_DECAY_S);
+                const F32 glow = scale * expf(-since / strike.mStrokeDecayS);
                 brightness += glow;
 
                 if (strike.mStrokeCount < SSStrike::MAX_STROKES)
@@ -1020,7 +1202,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
                     ++strike.mStrokeCount;
                 }
             }
-            at += rng.frand(RESTRIKE_MIN_S, RESTRIKE_MAX_S);
+            at += rng.frand(strike.mRestrikeMinS, strike.mRestrikeMaxS);
         }
 
         // The stroke's honest exponential decay is only half the story: the tail after it is
@@ -1032,7 +1214,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
             const F32 tail_s = (dissolve > 0.f)
                 ? SSDissolve::LAG_S + (SSDissolve::SPAN_S + SSDissolve::EMBER_S) / dissolve + 0.1f
                 : 0.f;
-            if (strike.mT > at + STROKE_DECAY_S * 6.f + tail_s)
+            if (strike.mT > at + strike.mStrokeDecayS * 6.f + tail_s)
             {
                 brightness = 0.f;
                 strike.mDone = true;

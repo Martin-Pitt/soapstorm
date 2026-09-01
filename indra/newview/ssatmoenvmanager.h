@@ -74,8 +74,12 @@ public:
                                     std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
 
     // A list of skies of the author's choosing, run through the same measure-and-stamp algorithm
-    // as the stock day cycle. Names are for the log only and may be empty. An empty list makes
-    // the empty environment.
+    // as the stock day cycle. A sky whose inventory name names a day position (see the position
+    // table in ssatmoenvmanager.cpp, e.g. "Morning Golden Hour", "Noon", "Night") is stamped at
+    // that fixed position instead of being body-measured, so a named pack falls into its authored
+    // slots. An unnamed sky is measured against the dominant body of the sky itself - whichever
+    // of its sun and moon stands higher. Names are log-only otherwise and may be empty. An empty
+    // list makes the empty environment.
     static void createFromSkies(const std::vector<LLUUID>& sky_asset_ids,
                                 const std::vector<std::string>& sky_names,
                                 const LLUUID& parent_id,

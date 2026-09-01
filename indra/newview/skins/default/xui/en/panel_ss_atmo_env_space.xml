@@ -225,24 +225,6 @@
          top_delta="0" />
     </radio_group>
 
-    <!-- <SS:Nexii> Whether the Disc Perception dials above may also retime
-          the sunrise/sunset lighting transition. Off by default: the
-          lighting stays sized as the authored sky ships it (the EEP
-          benchmark), whatever the perception dials do to the drawn discs.
-          This switch re-couples them for authors who want the drawn disc
-          to drive the lighting too. -->
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="10"
-     height="18"
-     width="560"
-     name="perception_affects_light_check"
-     font="SansSerifSmall"
-     label="Disc perception also scales sunrise/sunset lighting"
-     tool_tip="Off keeps the lighting on the authored sky benchmark. On lets the drawn discs retime the sunrise and sunset lighting" />
-
     <text
      follows="left|top"
      layout="topleft"

@@ -227,10 +227,12 @@ private:
     bool mCloudDomeAuto = false;
     F32 mCloudDomeHeightM = 6000.f;
 
-    // <SS:Nexii> The applied track's floor and convection - the cirrus altitude is floor-relative
-    // and its anvil ramp rides the convection - and the home planet's radius, metres.
+    // <SS:Nexii> The applied track's floor, convection and temperature - the cirrus altitude is
+    // floor-relative, its anvil ramp rides the convection, and the seasonal band rides the
+    // temperature (SSAtmoCirrusSeason) - plus the home planet's radius, metres.
     F32 mTrackFloorZ = 0.f;
     F32 mLastConvection = 0.f;
+    F32 mLastTemperatureC = 15.f;
     F32 mHomePlanetRadiusM = 0.f;
 
     // <SS:Nexii> The dome's authored large-scale noise id, sampled at the applied phase - see

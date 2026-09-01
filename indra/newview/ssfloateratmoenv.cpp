@@ -198,10 +198,6 @@ bool SSFloaterAtmoEnv::postBuild()
     // distance dials (the dials ARE the perception control): picking one writes both to 1/N.
     getChild<LLUICtrl>("celestial_perception_radio")->setCommitCallback(
         [this](LLUICtrl* src, const LLSD&) { onCommitCelestialPerception(src); });
-    // <SS:Nexii> The perception-to-lighting coupling switch, in the Space tab checkbox. A
-    // rendering choice, not an asset field; it rides SSAtmoPerceptionAffectsLight directly.
-    getChild<LLUICtrl>("perception_affects_light_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&) { onCommitPerceptionAffectsLight(); });
     getChild<LLButton>("open_planetary_designer_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickOpenPlanetaryDesigner(); });
 
@@ -990,10 +986,14 @@ void SSFloaterAtmoEnv::effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under
 
     if (field.mAuto)
     {
+        static LLCachedControl<bool> ss_cloud_season(gSavedSettings, "SSAtmoCloudSeason", true);
+
         F32 coverage, dark;
         SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(
             track.mWeather.mMoisture.valueAt(mPreviewPhase),
             track.mWeather.mConvection.valueAt(mPreviewPhase),
+            track.mWeather.mTemperatureC.valueAt(mPreviewPhase),
+            ss_cloud_season,
             out_base, out_thickness, coverage, dark);
         return;
     }
@@ -2243,9 +2243,12 @@ void SSFloaterAtmoEnv::refreshAutoRows()
     const SSAtmoEnvWeatherState resolved = SSAtmoEnvWeatherResolver::resolve(weather, mPreviewPhase);
 
     F32 auto_height = 0.f, auto_thickness = 0.f, auto_coverage = 0.f, auto_dark = 0.f;
+    static LLCachedControl<bool> ss_cloud_season(gSavedSettings, "SSAtmoCloudSeason", true);
     SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(
         weather.mMoisture.valueAt(mPreviewPhase),
         weather.mConvection.valueAt(mPreviewPhase),
+        weather.mTemperatureC.valueAt(mPreviewPhase),
+        ss_cloud_season,
         auto_height, auto_thickness, auto_coverage, auto_dark);
 
     const struct { const char* mPrefix; bool mAuto; F32 mComputed; } rows[] = {
@@ -2442,11 +2445,6 @@ void SSFloaterAtmoEnv::refreshPlanetaryScales()
     else if (at_preset(sun, 3.f) && at_preset(moon, 3.f)) preset = 1;
     else if (at_preset(sun, 8.f) && at_preset(moon, 8.f)) preset = 2;
     getChild<LLRadioGroup>("celestial_perception_radio")->setSelectedIndex(preset);
-
-    // <SS:Nexii> The perception-to-lighting coupling switch lives from a setting (see
-    // SSAtmoPerceptionAffectsLight; it is a rendering preference, not an asset field.
-    static LLCachedControl<bool> perception_light(gSavedSettings, "SSAtmoPerceptionAffectsLight", false);
-    getChild<LLCheckBoxCtrl>("perception_affects_light_check")->set(perception_light);
 }
 
 // Planetary scale spinners into the asset.
@@ -2471,14 +2469,6 @@ void SSFloaterAtmoEnv::onCommitPlanetaryScales()
 
     refreshPlanetaryScales();
     refreshStatus();
-}
-
-// <SS:Nexii> The perception-to-lighting coupling switch drives the SSAtmoPerceptionAffectsLight
-// setting; it was a rendering choice, not an asset field, so no keyframe machinery.
-void SSFloaterAtmoEnv::onCommitPerceptionAffectsLight()
-{
-    static LLCachedControl<bool> perception_light(gSavedSettings, "SSAtmoPerceptionAffectsLight", false);
-    perception_light = getChild<LLCheckBoxCtrl>("perception_affects_light_check")->get();
 }
 
 // <SS:Nexii> The Space tab's Disc Perception radios: a preset front-end on the two distance

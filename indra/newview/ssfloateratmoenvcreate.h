@@ -31,6 +31,7 @@
 #include <vector>
 
 class LLScrollListItem;
+class LLScrollListCell;
 
 // <SS:Nexii> What "Create New Environment" means is a choice, not a behaviour. Four seeds exist -
 // plain midday defaults, the stock four-sky day cycle, a list of skies the author supplies (run
@@ -64,6 +65,9 @@ private:
     {
         LLUUID mAssetId;
         std::string mName;
+        // -1 when the name names no position, otherwise the fixed slot phase (0=midnight,
+        // 0.25=sunrise, 0.5=noon, 0.75=sunset) the sky lands at instead of being measured.
+        F64 mSlot = -1.0;
     };
 
     EMode currentMode() const;
@@ -73,6 +77,10 @@ private:
     void rebuildSkyList();
     void onClickCreate();
     void onClickRemoveSky();
+
+    static F64 slotForName(const std::string& name);
+    static std::string slotLabel(F64 slot);
+    static std::string rowForSky(const DroppedSky& sky);
 
     std::vector<DroppedSky> mDroppedSkies;
     LLUUID mDroppedDayCycle;

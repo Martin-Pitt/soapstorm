@@ -25,19 +25,43 @@
 
 #include "ssatmoenvcloudfieldstate.h"
 
+#include "llviewercontrol.h"
+
+namespace
+{
+    // <SS:Nexii> The seasonal rack: -15C is deep winter, +35C a summer heatwave - the storm
+    // deck's base rides between the two rails, and no deck ever grows past a kilometre of
+    // thickness. Winter air is dense and squashes the atmosphere down (a winter storm's base
+    // hangs low over the ground); summer heat lifts the whole sky. </SS:Nexii>
+    const F32 DECK_BASE_MIN_C = -15.f;
+    const F32 DECK_BASE_MAX_C = 35.f;
+    const F32 DECK_BASE_WINTER_M = 400.f;
+    const F32 DECK_BASE_SUMMER_M = 1200.f;
+    const F32 DECK_LID_M = 1000.f;
+}
+
 // Derives the live cloud field (coverage, height, gloom, churn) from the authored tunables and the moisture/convection cube. The authored base height is an offset above the track's floor, so the
 // floor rides along here - everything downstream of this resolver is world-frame.
 SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvCloudField& field,
-                                                              F32 moisture, F32 convection, F64 phase,
+                                                              F32 moisture, F32 convection,
+                                                              F32 temperature_c, F64 phase,
                                                               F32 track_floor_z)
 {
     SSAtmoEnvCloudFieldState state;
+
+    // <SS:Nexii> The seasonal altitude switch: on, the deck's base is temperature-driven - the
+    // summer/winter atmosphere rack - and the whole deck is capped at a kilometre of thickness.
+    // Off, the old moisture-and-convection base chain stands untouched. One read, shared by the
+    // derivation and the cap. </SS:Nexii>
+    static LLCachedControl<bool> season(gSavedSettings, "SSAtmoCloudSeason", true);
+    const bool seasonal = season;
 
     F32 base_height, thickness, coverage_scale;
     F32 auto_darkening = -1.f;
     if (field.mAuto)
     {
-        deriveAutoBaseline(moisture, convection, base_height, thickness, coverage_scale, auto_darkening);
+        deriveAutoBaseline(moisture, convection, temperature_c, seasonal,
+                           base_height, thickness, coverage_scale, auto_darkening);
     }
     else
     {
@@ -53,6 +77,14 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     const F32 height_factor = 1.f + llclamp(convection, 0.f, 1.f) * 4.f;
     state.mBaseHeightM = track_floor_z + base_height;
     state.mThicknessM = llmax(0.f, thickness) * height_factor;
+
+    // <SS:Nexii> The storm lid: however fierce the convection, the deck is a 4km-region sky -
+    // a kilometre up is a towering cumulonimbus, and nothing grows past it. Applies to authored
+    // decks too: the cap is a property of this sky's size, not of one deck's tuning. </SS:Nexii>
+    if (seasonal)
+    {
+        state.mThicknessM = llmin(state.mThicknessM, DECK_LID_M);
+    }
 
     state.mBaseTexture = field.mBaseTexture.valueAt(phase);
     state.mDetailTexture = field.mDetailTexture.valueAt(phase);
@@ -90,8 +122,10 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
 }
 
 // Auto mode: plausible base height, thickness and darkening straight from moisture and convection when nothing is authored. The base is an offset above the track's floor, not a world altitude -
-// the ground track sits at zero, where the two coincide.
+// the ground track sits at zero, where the two coincide. With the seasonal altitude on (SSAtmoCloudSeason), the BASE is temperature-driven instead: winter air squashes the atmosphere, summer
+// heat lifts it, and the base slides between the two rails while moisture and convection shape the thickness above it.
 void SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(F32 moisture, F32 convection,
+                                                     F32 temperature_c, bool seasonal_altitude,
                                                      F32& out_base_height, F32& out_thickness,
                                                      F32& out_coverage_scale, F32& out_darkening)
 {
@@ -100,7 +134,18 @@ void SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(F32 moisture, F32 convectio
 
     out_darkening = 0.45f + 1.25f * c + 0.3f * m * c;
 
-    out_base_height = 1400.f - 700.f * m - 200.f * c;
+    if (seasonal_altitude)
+    {
+        const F32 season = llclamp((temperature_c - DECK_BASE_MIN_C)
+                                   / (DECK_BASE_MAX_C - DECK_BASE_MIN_C), 0.f, 1.f);
+        out_base_height = DECK_BASE_WINTER_M
+            + (DECK_BASE_SUMMER_M - DECK_BASE_WINTER_M) * season;
+    }
+    else
+    {
+        out_base_height = 1400.f - 700.f * m - 200.f * c;
+    }
+
     out_thickness   = 150.f + 350.f * m;
 
     out_coverage_scale = 1.f;

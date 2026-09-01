@@ -30,6 +30,21 @@
 #include "ssatmoenvtrackstate.h"
 #include "ssatmoenvweatherstate.h"
 
+#include "llviewercontrol.h"
+
+// <SS:Nexii> The storm-approach window: a storm barely registers against the next keyframe
+// until the day phase has run most of the way toward it, and a keyframe level (or a drop) is
+// not a storm on the way at all - only a rise counts. The rising margin guards against noise.
+// </SS:Nexii>
+namespace
+{
+    const F64 APPROACH_RAMP_FROM = 0.55;
+    const F64 APPROACH_RAMP_TO   = 0.95;
+    const F32 APPROACH_MIN_RISE  = 0.05f;
+    const F32 APPROACH_MIN       = 0.02f;
+    const F32 APPROACH_STORM_C   = 0.55f;
+}
+
 // Maps a v3 precipitation type to the v2 preset name the legacy renderer keys on.
 std::string SSAtmoEnvBridge::presetNameForType(const std::string& v3_type)
 {
@@ -105,4 +120,68 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
     out_cfg.mFallThrough = 1.f;
 
     return true;
+}
+
+// <SS:Nexii> The bolt-from-the-blue storm look-ahead. The weather cube is a forecast: its next
+// convection keyframe is where the sky is heading, and when that is stormier than now - and the
+// day phase has run most of the way toward it - a thunderstorm is on its way. How imminent (the
+// approach, 0..1) scales how early and how often the lightning ahead of it arrives, and the
+// storm comes FROM upwind: the weather travels with the wind, so its source is on the far side
+// of where the wind is blowing. Moisture is the second opinion: a dry high-convection sky is
+// turbulence, not a storm. </SS:Nexii>
+F32 SSAtmoEnvBridge::stormApproach(F32 world_z, F32 prev_world_z, bool teleported,
+                                   F32& out_heading_deg)
+{
+    static LLCachedControl<bool> blue(gSavedSettings, "SSAtmoLightningBlue", true);
+    out_heading_deg = -1.f;
+    if (!blue) return 0.f;
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset() || mgr->asset().mTracks.empty()) return 0.f;
+
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    const SSAtmoEnvTrackBlend blend = SSAtmoEnvTrackResolver::resolve(
+        asset, world_z, prev_world_z, teleported);
+    const SSAtmoEnvTrack& track = asset.mTracks[blend.mPrimaryTrack];
+
+    const SSAtmoEnvWeather& weather = track.mWeather;
+    if (!weather.mConvection.hasKeyframes()) return 0.f;
+
+    const F64 phase = mgr->hasPreviewPhaseOverride() ? mgr->previewPhaseOverride()
+                                                     : track.currentDayCyclePhase();
+
+    // Storminess at a moment: convection is the thunder engine, moisture the moisture the charge
+    // needs - a wet high-convection sky is a storm, the same convection dry is clear-air.
+    auto stormy = [&](F64 p) -> F32
+    {
+        const F32 c = llclamp(weather.mConvection.valueAt(p), 0.f, 1.f);
+        const F32 m = llclamp(weather.mMoisture.valueAt(p), 0.f, 1.f);
+        return llclamp(llmax(c, m * APPROACH_STORM_C), 0.f, 1.f);
+    };
+
+    const F32 storm_now  = stormy(phase);
+    const F32 storm_next = stormy(weather.mConvection.nextKeyframeTime(phase));
+    const F32 rising = llclamp(storm_next - storm_now, 0.f, 1.f);
+    if (rising < APPROACH_MIN_RISE) return 0.f;
+
+    // How far the day phase has travelled between this keyframe and the next - the storm's
+    // approach within its own segment, wrap-safe.
+    const F64 prev_t = weather.mConvection.prevKeyframeTime(phase);
+    F64 seg = weather.mConvection.nextKeyframeTime(phase) - prev_t;
+    if (seg < 0.0) seg += 1.0;
+    F64 pos = phase - prev_t;
+    if (pos < 0.0) pos += 1.0;
+    if (seg <= 0.01) return 0.f;
+
+    const F64 along = pos / seg;
+    if (along <= APPROACH_RAMP_FROM) return 0.f;
+
+    const F32 imminent = cubic_step((F32)llclamp(
+        (along - APPROACH_RAMP_FROM) / (APPROACH_RAMP_TO - APPROACH_RAMP_FROM), 0.0, 1.0));
+    const F32 approach = imminent * rising;
+    if (approach < APPROACH_MIN) return 0.f;
+
+    // The storm comes from upwind: the heading the wind blows TOWARD, plus 180.
+    out_heading_deg = fmodf(weather.mWindHeading.valueAt(phase) + 180.f, 360.f);
+    return approach;
 }

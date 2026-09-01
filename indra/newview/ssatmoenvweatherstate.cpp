@@ -25,9 +25,18 @@
 
 #include "ssatmoenvweatherstate.h"
 
+#include "llviewercontrol.h"
+
 namespace
 {
     const F32 CLEAR_MOISTURE_THRESHOLD = 0.02f;
+
+    // <SS:Nexii> The temperature band the lightning season fades over: full frequency at +10C
+    // and above (the summer norm), a twentieth by -5C - a winter storm still owns a few rare
+    // anvil bolts, but "thundersnow" is a headline, not a Tuesday. </SS:Nexii>
+    const F32 LIGHTNING_WARM_C = 10.f;
+    const F32 LIGHTNING_COLD_C = -5.f;
+    const F32 LIGHTNING_FLOOR  = 0.05f;
 
     // Lerp.
     F32 ss_flerp(F32 a, F32 b, F32 t) { return a + (b - a) * t; }
@@ -88,6 +97,22 @@ std::string SSAtmoEnvWeatherResolver::derivePrecipitationType(F32 convection, F3
         return "slush_mix";
     }
     return (convection > 0.95f) ? "hail" : "rain";
+}
+
+// <SS:Nexii> Temperature's grip on lightning frequency. Summer warmth lets convection discharge
+// freely; the cold of winter throttles the network down to the rare storm - "thundersnow" is a
+// headline, not a Tuesday, and the few strikes it does own are the powerful positive anvil
+// bolts the lightning model favours at those temperatures. The floor keeps that rare winter
+// storm alive, never zero. With the polarity model switched off the answer is 1, so the old
+// convection-only intervals stand untouched. </SS:Nexii>
+F32 SSAtmoEnvWeatherResolver::lightningTemperatureScale(F32 temperature_c)
+{
+    static LLCachedControl<bool> polarity(gSavedSettings, "SSAtmoLightningPolarity", true);
+    if (!polarity) return 1.f;
+
+    const F32 season = llclamp((temperature_c - LIGHTNING_COLD_C)
+                               / (LIGHTNING_WARM_C - LIGHTNING_COLD_C), 0.f, 1.f);
+    return LIGHTNING_FLOOR + (1.f - LIGHTNING_FLOOR) * season;
 }
 
 // Moisture into named intensity bands, with the extra drizzle bands only for liquid types.
@@ -291,18 +316,25 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     state.mLightningCharge  = weather.mLightningCharge;
     state.mLightningSparks  = weather.mLightningSparks;
 
+    // <SS:Nexii> Cold stretches the intervals: summer convection discharges every few seconds,
+    // the same convection under a winter sky rattles off a strike a minute at most. The scale is
+    // divided into the base intervals so "rare in winter, common in summer" holds at every
+    // convection, and the winter storm's own rare strikes are the powerful positive anvil bolts
+    // the lightning model favours at those temperatures. </SS:Nexii>
+    const F32 season = llmax(lightningTemperatureScale(temperature), 0.02f);
+
     if (weather.mLightningAuto)
     {
         switch (state.mConvectionPhase)
         {
             case SSAtmoEnvWeatherState::TURBULENT:
-                state.mLightningIntervalMinSeconds = 30.f;
-                state.mLightningIntervalMaxSeconds = 60.f;
+                state.mLightningIntervalMinSeconds = 30.f / season;
+                state.mLightningIntervalMaxSeconds = 60.f / season;
                 state.mLightningIntensity = convection;
                 break;
             case SSAtmoEnvWeatherState::SEVERE:
-                state.mLightningIntervalMinSeconds = 2.f;
-                state.mLightningIntervalMaxSeconds = 5.f;
+                state.mLightningIntervalMinSeconds = 2.f / season;
+                state.mLightningIntervalMaxSeconds = 5.f / season;
                 state.mLightningIntensity = convection;
                 break;
             default:
@@ -317,13 +349,13 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
         state.mLightningIntensity = weather.mLightningIntensity.valueAt(phase);
         if (state.mConvectionPhase == SSAtmoEnvWeatherState::TURBULENT)
         {
-            state.mLightningIntervalMinSeconds = 30.f;
-            state.mLightningIntervalMaxSeconds = 60.f;
+            state.mLightningIntervalMinSeconds = 30.f / season;
+            state.mLightningIntervalMaxSeconds = 60.f / season;
         }
         else if (state.mConvectionPhase == SSAtmoEnvWeatherState::SEVERE)
         {
-            state.mLightningIntervalMinSeconds = 2.f;
-            state.mLightningIntervalMaxSeconds = 5.f;
+            state.mLightningIntervalMinSeconds = 2.f / season;
+            state.mLightningIntervalMaxSeconds = 5.f / season;
         }
     }
 

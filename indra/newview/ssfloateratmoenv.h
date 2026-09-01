@@ -204,11 +204,8 @@ private:
     void onCommitPlanetaryScales();
 
 // <SS:Nexii> The Space tab's disc perception dial - radios or the custom slider/spinner,
-    // one value whichever moved ((the source control carries it).
+    // one value whichever moved (the source control carries it).
     void onCommitCelestialPerception(LLUICtrl* src);
-
-    // <SS:Nexii> The perception-to-lighting coupling switch (SSAtmoPerceptionAffectsLight)));
-    void onCommitPerceptionAffectsLight();
 
     void onClickOpenPlanetaryDesigner();
 

@@ -249,6 +249,19 @@ void SSAtmoMagic::refreshParams()
 
     mTemperatureC = cfg.mTemperatureC;
 
+    // <SS:Nexii> The bolt-from-the-blue look-ahead: when the weather cube's next keyframe is
+    // stormier than now and the day phase has run most of the way toward it, a thunderstorm is
+    // approaching from upwind - lightning starts arriving from that direction before the storm
+    // itself does (SSLightning::idle's blue scheduler). Zero without a live environment. </SS:Nexii>
+    mStormApproach = 0.f;
+    mStormApproachHeading = -1.f;
+    if (v3_active)
+    {
+        mStormApproach = SSAtmoEnvBridge::stormApproach(
+            world_z, mV3PrevWorldZValid ? mV3PrevWorldZ : world_z, teleported,
+            mStormApproachHeading);
+    }
+
     mLightningColor = cfg.mLightningColor;
     mLightningCoreWhite = cfg.mLightningCoreWhite;
 
@@ -1194,6 +1207,10 @@ void SSAtmoMagic::drawInfo()
                                  next < 0.0 ? "not thundery"
                                             : llformat("next in %.0fs", next).c_str(),
                                  audio->pendingThunder()));
+        const F32 skew = SSLightning::positiveSkew(atmo->temperatureC());
+        lines.push_back(llformat("  charge    %s (%.0f%%)   storm approach %.0f%%",
+                                 skew >= 0.5f ? "positive" : "negative", skew * 100.f,
+                                 atmo->stormApproach() * 100.f));
         const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
         lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
                                  ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));

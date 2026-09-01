@@ -328,6 +328,7 @@ void SSVolCloud::update(F32 dt)
 
     const F32 moisture = llclamp(track.mWeather.mMoisture.valueAt(phase), 0.f, 1.f);
     const F32 convection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
+    const F32 temperature = llclamp(track.mWeather.mTemperatureC.valueAt(phase), -60.f, 60.f);
 
     LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
     const F32 sun_alt = sky ? sky->getSunDirection().mV[VZ] : 0.f;
@@ -372,7 +373,8 @@ void SSVolCloud::update(F32 dt)
     mSquashKnee = mSquashCap * 0.8f;
 
     const SSAtmoEnvCloudFieldState field =
-        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, phase, track.mFloorZ);
+        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, temperature,
+                                             phase, track.mFloorZ);
 
     // <SS:Nexii> Which deck the weather's noise gate reads: the authored source when it names
     // the under deck and that deck is on, the main field otherwise - which is every sky build's
@@ -396,7 +398,8 @@ void SSVolCloud::update(F32 dt)
     if (track.mUnderField.mEnabled)
     {
         const SSAtmoEnvCloudFieldState under =
-            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, phase, track.mFloorZ);
+            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, temperature,
+                                                 phase, track.mFloorZ);
         if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
         {
             buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT);

@@ -24,7 +24,7 @@
 #ifndef SS_DISCPAD_H
 #define SS_DISCPAD_H
 
-#include "lltypes.h"
+#include "llsd.h"
 
 class LLUUID;
 

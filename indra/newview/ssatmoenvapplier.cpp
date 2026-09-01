@@ -1261,32 +1261,22 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     // straight through, the quad's half-angle would size the band (and the dome shaders' held
     // airmass) off the transparent margin, stretching every sunset by exactly that factor.
     // Multiplying the fraction back out lands the band on the disc the quads actually draw.
-    // <SS:Nexii> The light's size base is the authored sky's sun - the physical (scale-1.0)
-    // angular size, NOT the disc the Disc Perception dials make it loom as now (unless
-    // SSAtmoPerceptionAffectsLight re-couples them - see below. Off by default keeps the
-    // lighting on the benchmark wherever the perception dials do to the drawn discs.
+    // <SS:Nexii> The light's size base is the authored sky's sun - its physical
+    // (scale-1.0) angular size, never the disc the Disc Perception dials make it draw.
+    // The lighting keeps the EEP benchmark whatever the drawn discs do: the twilight
+    // band, the airmass floor and the dusk glow all size themselves off the authored sun.
     F32 light_diameter_deg = mSunSlotAngularDeg;
     F32 light_sun_scale = sun_scale;
-
-    static LLCachedControl<bool> ss_perception_light(gSavedSettings, "SSAtmoPerceptionAffectsLight", false);
-    if (!ss_perception_light && ss_sun_phys_radius >  0.f && ss_sun_phys_dist >  0.f)
+    if (ss_sun_phys_radius > 0.f && ss_sun_phys_dist > 0.f)
     {
-
         light_diameter_deg = RAD_TO_DEG * 2.f * atanf(llclamp(ss_sun_phys_radius / ss_sun_phys_dist, 0.f, 1.f));
         light_sun_scale = celestialDiscScale(light_diameter_deg, mSunSlotDiscFraction, SS_ATMOENV_SUN_QUAD_DEG);
-
-
-
     }
-
-
-
 
     F32 half_tan = light_sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * 0.5f; // llvosky.cpp's SUN_DISK_RADIUS
     if (gSky.mVOSkyp.notNull())
     {
         half_tan = light_sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
-
     }
     const F32 half_sin = half_tan / sqrtf(1.f + half_tan * half_tan);
     mSunSlotRadius = half_sin;

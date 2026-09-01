@@ -154,6 +154,25 @@ environment system that carries the Atmo Magic branding forward as a
   from existing EEP presets. Non-full-perm items and water/day-cycle
   settings are refused with an alert (water import is a trivial follow-up;
   day cycles a bigger one).
+- **Creation's "From skies I choose" mode accepts multiple sky drops at once**
+  (a whole inventory selection in one gesture) and pins each supplied sky by
+  **inventory name** to a fixed day position instead of measuring a body: the
+  position table (`SSAtmoEnvManager::seedSkyPhases`) recognizes
+  Morning/Evening Golden Hour, Morning/Evening Umbra, Morning/Post
+  Sunrise, Evening/Near Sunset, Noon, plus the wide picks Daylight, Dusk,
+  Dawn, Night, Sunset, Sunrise and Midnight. A name names a *position* first
+  (e.g. "Morning Post Sunrise" is its own slot), and the match is scanned
+  inside the name so a pack prefix or suffix rides along. A sky without a
+  matching name is still measured, exactly as before — but measured against
+  the **dominant body of the sky itself**, whichever of sun and moon stands
+  higher: a night sky whose author parked the sun deep below the horizon
+  (out of sight, arbitrary) and moved its moon around the sky is placed by
+  that moon, so the visible body is the one that gets the faithful
+  day-position; a pre-dawn/dusk sun just under the horizon still rules the
+  light and still rules the measure. The single sun and moon bodies are
+  translated from the faces that matter: the sun disc from the sky where the
+  sun stands highest (the day's face), the moon disc from the sky where the
+  moon stands highest (the night's face).
 - **Auto-apply on parcel entry**, unless the Atmo Magic floater is currently open
   (treated as "mid-edit, don't clobber").
 

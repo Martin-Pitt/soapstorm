@@ -38,12 +38,13 @@
 
 namespace
 {
-    // The sample lines are the four cardinal and the four diagonal axes, each rotated off its
-    // exact direction by this angle. Diffraction-spike art (star bursts, flare crosses) paints
-    // its spikes ALONG those exact axes, and a line that runs along a spike would read the
-    // spike's tip as the disc edge - a small rotation slides every line a few texels off the
-    // spike's centre by the time it reaches the disc's rim (at 64 texels a 6-degree line sits
-    // ~6.7 texels clear of the spoke), so only a spike absurdly wide for its length survives.
+    // The sample lines are the eight axes every 22.5 degrees - the cardinals, the diagonals and
+    // the intercardinals - each rotated off its exact direction by this angle. Diffraction-spike
+    // art (star bursts, flare crosses) paints its spikes ALONG those exact axes, and a line that
+    // runs along a spike would read the spike's tip as the disc edge - a small rotation slides
+    // every line a few texels off the spike's centre by the time it reaches the disc's rim (at 64
+    // texels a 6-degree line sits ~6.7 texels clear of the spoke), so only a spike absurdly wide
+    // for its length survives.
     const F32 SS_DISC_PAD_SAMPLE_OFFSET_DEG = 6.f;
 
     // How many of the sixteen radial samples (eight lines, both directions) must fall in one
@@ -181,15 +182,13 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
     }
     const U8 threshold = llmax(centre_alpha / 2, 1);
 
-    // The cardinal and the diagonal axes, each rotated off its exact direction - the slight
-    // rotation is the whole point: it keeps the lines clear of diffraction spikes' thin rays
-    // along those exact bearings.
+    // The full half-turn of axes, each rotated off its exact bearing by this angle.
     const F32 offset = SS_DISC_PAD_SAMPLE_OFFSET_DEG * DEG_TO_RAD;
-    const F32 base_deg[4] = { 0.f, 45.f, 90.f, 135.f };
+    const F32 base_deg[8] = { 0.f, 22.5f, 45.f, 67.5f, 90.f, 112.5f, 135.f, 157.5f };
 
     std::vector<F32> fractions;
     fractions.reserve(16);
-    for (S32 i = 0; i < 4; ++i)
+    for (S32 i = 0; i < 8; ++i)
     {
         const F32 theta = base_deg[i] * DEG_TO_RAD + offset;
         const F32 dir_x = cosf(theta);

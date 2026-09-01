@@ -26033,17 +26033,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
-    <key>SSAtmoPerceptionAffectsLight</key>
-      <map>
-      <key>Comment</key>
-      <string>Atmo Magic disc-perception-to-lighting coupling switch. Off is the default, keeps benchmark lighting. On scales the lighting transition set with the drawn discs.</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>0</integer>
-    </map>
     <key>SSAtmoPlanetaryDebugOverlay</key>
       <map>
       <key>Comment</key>
@@ -27451,6 +27440,50 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>F32</string>
     <key>Value</key>
     <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningPolarity</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: the summer/winter charge model. Temperature drives both how often and what kind: warmth thins the air and discharges the network freely as NEGATIVE cloud-base bolts (sharp, from low in the cloud); the cold of winter throttles lightning right down and shifts it to rare POSITIVE anvil bolts - launched from the top of the storm, far more powerful, firing as a rapid series of quick pulses. Off restores the old convection-only lightning.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoLightningBlue</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: the bolt from the blue. Looks ahead at the weather cube's next keyframe - when the next weather is stormier than now and the day phase is most of the way toward it, a thunderstorm is approaching from upwind, and lightning with distant rumble starts arriving from that direction before the storm arrives. Those strikes are positive anvil bolts that strike the ground miles from their cloud, their trunks travelling into the far clip area. Off disables the look-ahead and the far strikes.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoCloudSeason</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: temperature-altitude of the storm deck. Winter air is dense and squashes the atmosphere down, so an auto-derived deck's base sits near 400m under a -15C sky and climbs to 1.2km in +35C summer heat, and the whole deck is capped at a kilometre of thickness. Off keeps the old moisture/convection base derivation.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoCirrusSeason</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: temperature-altitude of the cirrus layer. Winter air keeps the cirrus low (about 5km under a -15C sky), summer heat lifts it (about 8km at +35C), sliding around the authored dome height. Off keeps the authored height exactly.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
   </map>
     <key>FSKillFeedEnabled</key>
       <map>

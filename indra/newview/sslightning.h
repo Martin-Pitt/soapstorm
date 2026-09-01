@@ -112,7 +112,30 @@ struct SSStrike
     // kind: an explicitly aimed ground strike is not re-routed by the under deck. </SS:Nexii>
     bool mForced = false;
 
-    static const S32 MAX_STROKES = 4;
+    // <SS:Nexii> Polarity. Negative bolts - the summer norm - come off the BOTTOM of the cloud,
+    // close to the ground, sharp and quick. Positive bolts - the winter storm's network - are
+    // launched from the top of the cloud (the anvil), are far more powerful, and fire as a rapid
+    // series of quick pulses. Rolled at spawn from the temperature, deterministic per strike.
+    // </SS:Nexii>
+    bool mPositive = false;
+
+    // <SS:Nexii> Bolt from the blue: a positive anvil discharge that travels huge horizontal
+    // distance before falling on ground miles from its cloud. The origin sits at the anvil
+    // crown, far off - the storm's own position - and the trunk runs the whole gap, arriving at
+    // the far clip and striking ground within view. </SS:Nexii>
+    bool mBlue = false;
+
+    // <SS:Nexii> The polarity's stroke timing and power, rolled at spawn: positive bolts fire
+    // more return strokes in a quicker series and hold the glow longer, and throw light further.
+    // </SS:Nexii>
+    S32 mStrokesMin = 1;
+    S32 mStrokesMax = 4;
+    F32 mRestrikeMinS = 0.03f;
+    F32 mRestrikeMaxS = 0.09f;
+    F32 mStrokeDecayS = 0.055f;
+    F32 mPower = 1.f;
+
+    static const S32 MAX_STROKES = 12;
     S32 mStrokeCount = 0;
     F32 mStrokeAt[MAX_STROKES] = { 0.f };
     F32 mStrokeBright[MAX_STROKES] = { 0.f };
@@ -161,13 +184,19 @@ public:
     static const char* kindName(SSStrikeKind k);
     static const LLColor4& kindDebugColor(SSStrikeKind k);
 
+    // <SS:Nexii> How likely a strike is to be a positive anvil discharge at a temperature -
+    // the summer network runs negative, deep winter is all positive. The overlay reads it to
+    // label the mood. </SS:Nexii>
+    static F32 positiveSkew(F32 temperature_c);
+
     // The pending-strike debug overlay (markers and countdown label) hides this long before
     // impact, so the preview does not sit on top of the strike it announced.
     static constexpr F32 MARKER_HIDE_S = 0.5f;
 
 private:
     void spawn(F32 intensity, F64 fire_at, F32 force_bearing = -1.f, F32 force_dist = -1.f,
-               SSStrikeKind force_kind = STRIKE_KIND_COUNT, const LLVector3* force_ground = nullptr);
+               SSStrikeKind force_kind = STRIKE_KIND_COUNT, const LLVector3* force_ground = nullptr,
+               bool force_blue = false);
     void buildChannel(SSStrike& strike, F32 intensity);
 
     void growPath(SSStrike& strike, S32 parent,
@@ -197,6 +226,13 @@ private:
 
     F64 mNextStrikeAt = -1.0;
     bool mPrepared = false;
+
+    // <SS:Nexii> The bolt-from-the-blue scheduler: its own next-fire clock, independent of the
+    // ordinary strike interval, so lightning reaches ahead of an approaching storm even before
+    // the current weather is thundery. Cleared when the storm approach dies. </SS:Nexii>
+    F64 mNextBlueAt = -1.0;
+    bool mBluePrepared = false;
+
     F32 mFlash = 0.f;
     LLVector3 mFlashDir;
 };
