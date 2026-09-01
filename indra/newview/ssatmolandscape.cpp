@@ -165,7 +165,7 @@ void SSAtmoLandscapeWorld::update()
         mLastSignature.clear();
     }
 
-    const SSAtmoEnvAsset& asset = mgr->editable();
+    SSAtmoEnvAsset& asset = mgr->editable();
     S32 track = llmax(0, applier->primaryTrackIndex());
     if (track >= (S32)asset.mTracks.size())
     {
@@ -191,7 +191,11 @@ void SSAtmoLandscapeWorld::update()
 
     applyFacesToAll();
 
-    if (mCaptureTimer.getElapsedTimeF32() > SS_LANDSCAPE_CAPTURE_INTERVAL)
+    // Capture only while the live set matches the record set. While an object is selected a
+    // reshape is deferred by design, and writing the OLD objects' state into the NEW track's
+    // records would be cross-track contamination - so the capture skips that window and
+    // resumes once the deferred reshape has adopted the new records.
+    if (!editing && mCaptureTimer.getElapsedTimeF32() > SS_LANDSCAPE_CAPTURE_INTERVAL)
     {
         mCaptureTimer.reset();
         captureAll(records);
@@ -276,14 +280,28 @@ void SSAtmoLandscapeWorld::applyFacesToAll()
 
 void SSAtmoLandscapeWorld::captureAll(std::vector<SSAtmoEnvLandscape>& records)
 {
+    // Reconcile builds mObjects in record order and capture only runs when the sets are
+    // matched, so index pairing is exact - including for two records holding the same mesh,
+    // which each keep their own instance and their own captured state. The size guard is a
+    // belt-and-braces fallback to safe first-match pairing for any transient mismatch.
+    if (mObjects.size() == records.size())
+    {
+        for (size_t i = 0; i < mObjects.size(); ++i)
+        {
+            if (mObjects[i].notNull())
+            {
+                mObjects[i]->captureToRecord(records[i]);
+            }
+        }
+        return;
+    }
+
     for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
     {
         if (objp.isNull())
         {
             continue;
         }
-        // Match the live record by mesh id - capture never trusts object-side record
-        // pointers, so a floater add/remove between frames cannot dangle.
         for (SSAtmoEnvLandscape& record : records)
         {
             if (record.mMeshId == objp->meshId())
@@ -369,14 +387,27 @@ bool SSAtmoLandscapeWorld::toggleRecordLock(S32 index)
     record.mLocked = !record.mLocked;
 
     // Re-apply so the object follows the new mode this frame - content edits do not trip the
-    // reconcile signature, so this must apply directly.
-    for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    // reconcile signature, so this must apply directly. Index-paired like capture; the
+    // size-guarded fallback covers a transient mismatch.
+    SSAtmoLandscapeObject* objp = nullptr;
+    if (index >= 0 && index < (S32)mObjects.size())
     {
-        if (objp.notNull() && objp->meshId() == record.mMeshId)
+        objp = mObjects[static_cast<size_t>(index)].get();
+    }
+    if (!objp)
+    {
+        for (LLPointer<SSAtmoLandscapeObject>& o : mObjects)
         {
-            objp->applyRecord(record);
-            break;
+            if (o.notNull() && o->meshId() == record.mMeshId)
+            {
+                objp = o.get();
+                break;
+            }
         }
+    }
+    if (objp)
+    {
+        objp->applyRecord(record);
     }
 
     return record.mLocked;
@@ -450,8 +481,26 @@ S32 SSAtmoLandscapeWorld::addFromItem(const LLInventoryItem* item, std::string& 
     const S32 index = (S32)records.size();
     records.push_back(record);
 
-    // Hydrate now: the floater wants the scenery visible this click, not next frame.
-    reconcile(asset, track, gAgent.getRegion());
+    // Hydrate now: the floater wants the scenery visible this click, not next frame. But a
+    // drop lands mid-edit (another scenery object selected): defer like any reshape so an
+    // in-flight drag never snaps - the drop just waits out the drag.
+    bool editing = false;
+    for (const LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    {
+        if (objp.notNull() && objp->isSelected())
+        {
+            editing = true;
+            break;
+        }
+    }
+    if (editing)
+    {
+        mLastSignature.clear();
+    }
+    else
+    {
+        reconcile(asset, track, gAgent.getRegion());
+    }
 
     return index;
 }

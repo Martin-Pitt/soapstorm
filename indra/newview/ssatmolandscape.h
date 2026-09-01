@@ -92,7 +92,7 @@ private:
     void reconcile(const SSAtmoEnvAsset& asset, S32 track_index, LLViewerRegion* regionp);
     SSAtmoLandscapeObject* createObject(LLViewerRegion* regionp, const SSAtmoEnvLandscape& record);
     void applyFacesToAll();
-    void captureAll(const std::vector<SSAtmoEnvLandscape>& records);
+    void captureAll(std::vector<SSAtmoEnvLandscape>& records);
 
     std::vector<LLPointer<SSAtmoLandscapeObject>> mObjects;
 
