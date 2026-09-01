@@ -1096,6 +1096,15 @@ void SSGhillie::gatherAndPost(const LLViewerCamera& camera, LLCullResult& cull)
     const bool fast_rebuild = (mCameraState.mActivity == CAMERA_FAST_REBUILD);
     U32 wall_count = 0;
 
+    // Debug-world mode: capture the near-peek-deferred occluders so the
+    // on-world view can show what the peek gate is holding back.
+    static LLCachedControl<bool> debug_world_setting(gSavedSettings, "SSGhillieDebugWorld", false);
+    const bool debug_world = (bool)debug_world_setting && sActive;
+    if (debug_world)
+    {
+        mDebugDeferred.clear();
+    }
+
     S32 scanned = 0;
     for (LLCullResult::drawable_iterator iter = cull.beginVisibleList(); iter != cull.endVisibleList(); ++iter)
     {
@@ -1127,6 +1136,19 @@ void SSGhillie::gatherAndPost(const LLViewerCamera& camera, LLCullResult& cull)
         // user turns a corner. Static objects are stable even then.
         if (defer_near_peek && !static_obj && dist_sq < PEEK_DEFER_RADIUS * PEEK_DEFER_RADIUS)
         {
+            if (debug_world)
+            {
+                OccluderSolid s;
+                s.mKind = OC_SEG_BOX;
+                s.mPos = pos;
+                s.mRot = drawable->getWorldRotation();
+                s.mHalf = drawable->getScale() * 0.5f;
+                s.mProfile = 0;
+                if (mDebugDeferred.size() < 256)
+                {
+                    mDebugDeferred.push_back(s);
+                }
+            }
             continue;
         }
 
@@ -1673,37 +1695,74 @@ void SSGhillie::drawDebug()
 void SSGhillie::drawDebugWorld()
 {
     static LLCachedControl<bool> world_setting(gSavedSettings, "SSGhillieDebugWorld", false);
+    static LLCachedControl<U32> mode_setting(gSavedSettings, "SSGhillieDebugWorldMode", 0);
     if (!world_setting || !sActive || !activeForCurrentPass()) return;
 
-    // On-world debug: wireframe boxes around the occluders Ghillie is
-    // actually using (red, mesh slabs thick) and around every node it
-    // currently has occluded (green), so you can see what it thinks is
-    // blocking what and whether the peek/static gates behave.
+    const U32 mode = llclamp((U32)mode_setting, 0u, 2u);
+    const bool show_occluders = (mode != 2);   // 0 = both, 1 = occluders only
+    const bool show_culled    = (mode != 1);   // 2 = culled only
+
+    // On-world debug: wireframe boxes around
+    //   - the occluders Ghillie is actually using:
+    //       red thick   = mesh decomposition slab (static)
+    //       yellow      = static AABB fallback (parametered static object)
+    //       red-orange  = exact box (segment / decomposed hollow-cut walls)
+    //       dim gray    = near-peek-deferred occluders (being held back
+    //                     while the camera is actively moving)
+    //   - the nodes it currently has occluded (green, from the last
+    //     published verdicts).
     LLGLDisable depth(GL_DEPTH_TEST);
     LLGLEnable blend(GL_BLEND);
 
     gGL.setLineWidth(1.5f);
 
-    // Occluders from the current job (workers only read: safe on main).
-    gGL.color4f(1.f, 0.2f, 0.2f, 0.55f);
-    for (std::vector<OccluderSolid>::const_iterator it = mJob.mOccluders.begin(); it != mJob.mOccluders.end(); ++it)
+    if (show_occluders)
     {
-        drawBoxLines(it->mPos, it->mRot, it->mHalf, it->mKind == OC_STATIC_SLAB);
+        // Occluders from the current job (workers only read: safe on main).
+        for (std::vector<OccluderSolid>::const_iterator it = mJob.mOccluders.begin(); it != mJob.mOccluders.end(); ++it)
+        {
+            if (it->mKind == OC_STATIC_SLAB)
+            {
+                gGL.color4f(1.f, 0.2f, 0.2f, 0.6f);
+                drawBoxLines(it->mPos, it->mRot, it->mHalf, true);
+            }
+            else if (it->mKind == OC_STATIC_BOX)
+            {
+                gGL.color4f(1.f, 0.8f, 0.2f, 0.6f);
+                drawBoxLines(it->mPos, it->mRot, it->mHalf, false);
+            }
+            else
+            {
+                gGL.color4f(0.9f, 0.35f, 0.2f, 0.55f);
+                drawBoxLines(it->mPos, it->mRot, it->mHalf, false);
+            }
+        }
+
+        // Near-peek-deferred occluders (dim gray) so the peek gate itself
+        // can be reviewed.
+        gGL.color4f(0.5f, 0.5f, 0.5f, 0.45f);
+        for (std::vector<OccluderSolid>::const_iterator it = mDebugDeferred.begin(); it != mDebugDeferred.end(); ++it)
+        {
+            drawBoxLines(it->mPos, it->mRot, it->mHalf, false);
+        }
     }
 
-    // Occluded nodes from the last published verdicts.
-    const Result& result = mResults[mPublishedIdx.load(std::memory_order_relaxed)];
-    gGL.color4f(0.f, 1.f, 0.f, 0.5f);
-    for (std::vector<Verdict>::const_iterator it = result.mVerdicts.begin(); it != result.mVerdicts.end(); ++it)
+    if (show_culled)
     {
-        if (it->mGroup && it->mOccluded)
+        // Occluded nodes from the last published verdicts.
+        const Result& result = mResults[mPublishedIdx.load(std::memory_order_relaxed)];
+        gGL.color4f(0.f, 1.f, 0.f, 0.5f);
+        for (std::vector<Verdict>::const_iterator it = result.mVerdicts.begin(); it != result.mVerdicts.end(); ++it)
         {
-            const LLVector4a* bounds = it->mGroup->getBounds();
-            if (bounds)
+            if (it->mGroup && it->mOccluded)
             {
-                const LLVector3 c(bounds[0][0], bounds[0][1], bounds[0][2]);
-                const LLVector3 h(bounds[1][0], bounds[1][1], bounds[1][2]);
-                drawBoxLines(c, LLQuaternion::identity, h, false);
+                const LLVector4a* bounds = it->mGroup->getBounds();
+                if (bounds)
+                {
+                    const LLVector3 c(bounds[0][0], bounds[0][1], bounds[0][2]);
+                    const LLVector3 h(bounds[1][0], bounds[1][1], bounds[1][2]);
+                    drawBoxLines(c, LLQuaternion::identity, h, false);
+                }
             }
         }
     }

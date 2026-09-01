@@ -239,6 +239,13 @@ void ssGhillieDecomposeSquareBox(
 
     // Wall span axis per wall: +/-Y walls span X, +/-X walls span Y.
     static const S32 WALL_SPAN[4] = { 0, 1, 0, 1 };   // X-span for -Y/+Y (indices 0,2), Y-span for +X/-X (1,3)
+    // THE CRITICAL BIT: the t -> span mapping direction differs per wall.
+    // The square goes counter-clockwise: -Y wall runs (x from -hx to +hx),
+    // +X wall runs (y from -hy to +hy), but +Y wall runs (x from +hx to
+    // -hx) and -X wall runs (y from +hy to -hy). So the SPAN START is:
+    //   walls 0,1: -span_half, increasing
+    //   walls 2,3: +span_half, decreasing
+    static const S32 WALL_SPAN_SIGN[4] = { +1, +1, -1, -1 };
 
     for (S32 w = 0; w < 4; ++w)
     {
@@ -251,45 +258,50 @@ void ssGhillieDecomposeSquareBox(
         F32 frac = (hi_t - lo_t) / (w_hi - w_lo); // kept fraction 0..1
         if (frac <= 0.f) continue;
 
-        const S32 span_axis = WALL_SPAN[w];
-        // The wall's length axis center (0) and its half-length that a cut
-        // shrinks. +/-Y walls have their length along X; +/-X along Y.
+        const S32 span_axis  = WALL_SPAN[w];
+        const F32 span_sign  = (F32)WALL_SPAN_SIGN[w];
         const F32 span_half  = (span_axis == 0) ? hx : hy;
-        const F32 span_lo    = -span_half;
         const F32 span_len   = 2.f * span_half;
+        // Kept section along the wall, measured with the wall's own
+        // direction (start = +/-span_half).
+        const F32 lo_frac = (lo_t - w_lo) / (w_hi - w_lo);
+        const F32 hi_frac = (hi_t - w_lo) / (w_hi - w_lo);
+        const F32 kept_a = span_sign * span_half + lo_frac * span_len * span_sign;
+        const F32 kept_b = span_sign * span_half + hi_frac * span_len * span_sign;
+        const F32 kept_lo = llmin(kept_a, kept_b);
+        const F32 kept_hi = llmax(kept_a, kept_b);
+        const F32 kept_half = (kept_hi - kept_lo) * 0.5f;
+        const F32 kept_center = (kept_lo + kept_hi) * 0.5f;
 
         LLVector3 pos  = walls[w].pos;
         LLVector3 half = walls[w].half;
 
         if (hollow > 0.f)
         {
-            // A hollow box's wall is a thin slab at the outer surface.
-            if (walls[w].half.mV[0] <= 0.1f)  // +X / -X wall: thickness in X
+            // A hollow box's wall is a thin slab at the outer surface. The
+            // thin axis is the wall's NORMAL axis (complement of its span):
+            // +/-Y walls (span X) are thin in Y; +/-X walls (span Y) are
+            // thin in X.
+            if (span_axis == 0)
             {
-                half.mV[0] = wall_thick;
+                half.mV[1] = wall_thick;   // thin in Y (normal of -Y/+Y walls)
             }
-            else                               // -Y / +Y wall: thickness in Y
+            else
             {
-                half.mV[1] = wall_thick;
+                half.mV[0] = wall_thick;   // thin in X (normal of +X/-X walls)
             }
         }
 
         if (frac < 1.f)
         {
-            // Partial cut along the wall's span: the kept section runs from
-            // span_lo + lo_frac*span_len to span_lo + hi_frac*span_len.
-            const F32 lo_frac = (lo_t - w_lo) / (w_hi - w_lo);
-            const F32 hi_frac = (hi_t - w_lo) / (w_hi - w_lo);
-            const F32 kept_lo = span_lo + lo_frac * span_len;
-            const F32 kept_hi = span_lo + hi_frac * span_len;
-            const F32 kept_half = (kept_hi - kept_lo) * 0.5f;
-            const F32 kept_center = (kept_lo + kept_hi) * 0.5f;
-            if (span_axis == 0)        // wall spans X
+            // Partial cut: place the (possibly hollow) wall's span at the
+            // kept section, exactly aligned with the cut plane.
+            if (span_axis == 0)
             {
                 half.mV[0] = kept_half;
                 pos.mV[0]  = kept_center;
             }
-            else                       // wall spans Y
+            else
             {
                 half.mV[1] = kept_half;
                 pos.mV[1]  = kept_center;

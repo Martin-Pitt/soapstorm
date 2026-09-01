@@ -250,6 +250,7 @@ private:
     std::vector<Occluder> mCandScratch;                                 // occluder candidate scratch
     std::vector<F32> mCandDistScratch;
     std::vector<SS::GhillieMeshBox> mBoxScratch;                        // decomposed-wall scratch
+    std::vector<OccluderSolid> mDebugDeferred;                          // near-peek-deferred occluders (debug world view)
     std::unordered_map<LLUUID, ObjectRecord> mObjectRecords;
     std::unordered_map<LLUUID, MeshCacheEntry> mMeshCache;
     std::mutex mMeshCacheMutex;             // worker writes mDecomp/mReady under this
