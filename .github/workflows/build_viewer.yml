@@ -573,6 +573,7 @@ jobs:
 
       - name: Post Bugsplat Symbols
         uses: beqjanus/symbol-upload@main
+        continue-on-error: true
         with:
           clientId: ${{ 
             steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_ID || 
