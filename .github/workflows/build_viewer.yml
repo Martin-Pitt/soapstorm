@@ -20,7 +20,7 @@ on:
     - cron: '00 03 * * *' # Run every day at 3am UTC
 env:
   AUTOBUILD_VARIABLES_FILE: ${{github.workspace}}/build-variables/variables
-  EXTRA_ARGS: -DUSE_FMODSTUDIO=ON -DUSE_KDU=OFF --crashreporting --lto
+  EXTRA_ARGS: -DUSE_FMODSTUDIO=ON -DUSE_KDU=OFF --lto
   XZ_DEFAULTS: -T0
   FS_RELEASE_TYPE: Unknown
   platform: Unknown
@@ -571,37 +571,6 @@ jobs:
           find . -name '*.xcarchive.zip' -exec sh -c 'unzip -o "{}" -d "$(dirname "{}")"' \;
       
 
-      - name: Post Bugsplat Symbols
-        uses: beqjanus/symbol-upload@main
-        continue-on-error: true
-        with:
-          clientId: ${{ 
-            steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_ID || 
-            steps.version.outputs.viewer_release_type == 'Nightly' && secrets.BUGSPLAT_NIGHTLY_ID || 
-            steps.version.outputs.viewer_release_type == 'Manual' && secrets.BUGSPLAT_MANUAL_ID || 
-            steps.version.outputs.viewer_release_type == 'Beta' && secrets.BUGSPLAT_PREVIEW_ID || 
-            steps.version.outputs.viewer_release_type == 'Alpha' && secrets.BUGSPLAT_ALPHA_ID || 
-            secrets.BUGSPLAT_DEFAULT_ID }}
-          clientSecret: ${{ 
-            steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Nightly' && secrets.BUGSPLAT_NIGHTLY_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Manual' && secrets.BUGSPLAT_MANUAL_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Beta' && secrets.BUGSPLAT_PREVIEW_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Alpha' && secrets.BUGSPLAT_ALPHA_SECRET || 
-            secrets.BUGSPLAT_DEFAULT_SECRET }}
-          database: ${{ 
-            steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_DB || 
-            steps.version.outputs.viewer_release_type == 'Nightly' && secrets.BUGSPLAT_NIGHTLY_DB || 
-            steps.version.outputs.viewer_release_type == 'Manual' && secrets.BUGSPLAT_MANUAL_DB || 
-            steps.version.outputs.viewer_release_type == 'Beta' && secrets.BUGSPLAT_PREVIEW_DB || 
-            steps.version.outputs.viewer_release_type == 'Alpha' && secrets.BUGSPLAT_ALPHA_DB || 
-            secrets.BUGSPLAT_DEFAULT_DB }}
-          application: "Firestorm-${{ steps.version.outputs.viewer_channel}}"
-          version: ${{ steps.version.outputs.viewer_version }}.${{ steps.version.outputs.viewer_build }}
-          files: ${{ runner.os == 'Windows' && '**/Release/*.{pdb,exe,dll}' || runner.os == 'macOS' && '**/Release/{Firestorm,*.dSYM}' || '**/{do-not-run-directly-firestorm-bin,*.sym}' }}
-          directory: "build-*"
-          node-version: "24"
-          dumpSyms: false
       - name: Publish artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
@@ -713,8 +682,12 @@ jobs:
           FS_VIEWER_VERSION: ${{ needs.build_matrix.outputs.viewer_version }}
           FS_VIEWER_BUILD: ${{ needs.build_matrix.outputs.viewer_build }}
           FS_VIEWER_RELEASE_TYPE: ${{ needs.build_matrix.outputs.viewer_release_type }}
-          FS_VERSION_MGR_KEY: ${{ secrets.FS_VERSION_MGR_KEY }}
-        run: python ./fsutils/download_list.py ${{steps.download.outputs.download-path}} -w ${{ env.FS_BUILD_WEBHOOK_URL }}
+        run: |
+          if [ -n "$FS_BUILD_WEBHOOK_URL" ]; then
+            python ./fsutils/download_list.py "${{steps.download.outputs.download-path}}" -w "$FS_BUILD_WEBHOOK_URL"
+          else
+            python ./fsutils/download_list.py "${{steps.download.outputs.download-path}}"
+          fi
 
       - name: Setup rclone and download the folder
         uses: beqjanus/setup-rclone@main

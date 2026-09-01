@@ -401,8 +401,8 @@ def update_fs_version_mgr(build_info, config):
     # Read the secret key from environment variables
     secret_key = os.environ.get('FS_VERSION_MGR_KEY')
     if not secret_key:
-        print("Error: FS_VERSION_MGR_KEY not set")
-        sys.exit(1)
+        print("Warning: FS_VERSION_MGR_KEY not set, skipping version manager update.")
+        return
 
     secret_for_api = generate_secret(secret_key)  
     build_type = build_info["build_type"].lower()
@@ -519,9 +519,10 @@ def main():
 
         args = parser.parse_args()
 
-        # Create a webhook object with the webhook URL
-        if args.webhook:
-            webhook = DiscordWebhook(url=args.webhook)
+        # Create a webhook object with the webhook URL if provided
+        webhook = None
+        if args.webhook and args.webhook.strip():
+            webhook = DiscordWebhook(url=args.webhook.strip())
 
         # unzip the github artifact for this OS (`dir`) into the folder `dir`
         # get the .zip files in args.path_to_directory using glob 
@@ -535,7 +536,7 @@ def main():
             update_fs_version_mgr(build_info, config)
 
             discord_text = create_discord_message(build_info, config)
-            if args.webhook:
+            if webhook:
                 messages = split_discord_text_on_separator(discord_text)
                 for message in messages:
                     webhook.set_content(content=message)
