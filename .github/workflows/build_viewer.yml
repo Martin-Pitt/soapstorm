@@ -33,10 +33,14 @@ env:
 jobs:
   build_matrix:
     strategy:
+      fail-fast: false
       matrix:
         os: ["macos-15","ubuntu-24.04","windows-2022"]
         grid: ["sl"]
         variant: ["regular","avx"]
+        exclude:
+          - os: "macos-15"
+            variant: "avx"
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container_image }}
     outputs:
@@ -436,7 +440,7 @@ jobs:
         shell: bash
         run: echo "EXTRA_ARGS=${{ env.EXTRA_ARGS }} --tracy" >> $GITHUB_ENV
       - name: Add flags for AVX2 builds
-        if: ${{ matrix.variant == 'avx' }}
+        if: ${{ matrix.variant == 'avx' && runner.os != 'macOS' }}
         shell: bash
         run: echo "EXTRA_ARGS=${{ env.EXTRA_ARGS }} --avx2" >> $GITHUB_ENV
       - name: Add custom UA string if provided
