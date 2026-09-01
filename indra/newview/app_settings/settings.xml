@@ -17851,6 +17851,173 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <integer>1</integer>
   </map>
+  <!-- <SS:Nexii> Ghillie: multi-threaded software Hi-Z object occlusion culling </SS:Nexii> -->
+  <key>SSGhillieEnabled</key>
+  <map>
+    <key>Comment</key>
+    <string>Enable Ghillie: multi-threaded software Hi-Z object occlusion culling, replacing the GL occlusion query system (requires UseOcclusion). Occluders are strictly parametric opaque boxes; verdicts lag one frame and fail open.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSGhillieDebug</key>
+  <map>
+    <key>Comment</key>
+    <string>Show the Ghillie occlusion stats overlay (top left)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSGhillieMaxOccluders</key>
+  <map>
+    <key>Comment</key>
+    <string>Maximum number of occluder boxes rasterized into the Hi-Z buffer per frame, ranked nearest first</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>256</integer>
+  </map>
+  <key>SSGhillieHZBWidth</key>
+  <map>
+    <key>Comment</key>
+    <string>Width in texels of the Ghillie software Hi-Z depth buffer (height derived from the viewport aspect ratio)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>640</integer>
+  </map>
+  <key>SSGhillieHysteresis</key>
+  <map>
+    <key>Comment</key>
+    <string>Consecutive occluded verdicts required before an octree node is pruned by Ghillie</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>2</integer>
+  </map>
+  <key>SSGhillieStatic</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: track how long objects have not moved; static objects qualify for stable AABB/mesh occluders and faster re-cull after teleports. Always fails open.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSGhillieStaticFastSecs</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: seconds of observed stillness after which an object that has never been seen moving counts as static (fast path)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>30.0</real>
+  </map>
+  <key>SSGhillieStaticMinutes</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: minutes of consecutive stillness after which an object counts as static landscape (static tier)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>2.0</real>
+  </map>
+  <key>SSGhillieMesh</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: allow static meshes to be decomposed on a low-priority worker thread and used as occluders (wall/car sized meshes, static only)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSGhillieMeshMinArea</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: minimum surface area (m²) of a static mesh before it qualifies for decomposition as an occluder (a 0.5x8x4 wall is ~32 m²)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>16.0</real>
+  </map>
+  <key>SSGhillieMeshMaxBoxes</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: maximum number of boxes a mesh decomposition may emit</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>4</integer>
+  </map>
+<key>SSGhillieTerrain</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: raster the region terrain heightfield into the Hi-Z buffer as an occluder base layer. EXPERIMENTAL - default OFF: the above-ridge exemption (things standing past a crest must not be culled by it) is not implemented yet, so terrain-heavy scenes can pop false-occlusions with this on.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSGhillieWater</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: raster the water plane into the Hi-Z buffer when the camera is on the other side of it</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSGhillieDebugWorld</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: draw on-world wireframe boxes around the occluders in use (red/mesh thick) and currently-occluded nodes (green)</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
+  <key>SSGhillieFastLatencyFrames</key>
+  <map>
+    <key>Comment</key>
+    <string>Ghillie: on a teleport/death fast-rebuild, the search-latency budget multiplier for occluder count</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>4</integer>
+  </map>
+  <!-- </SS:Nexii> -->
     <key>ShowPhysicsShapeInEdit</key>
     <map>
       <key>Comment</key>

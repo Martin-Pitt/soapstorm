@@ -27,6 +27,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "pipeline.h"
+#include "ssghillie.h" // <SS:Nexii> Ghillie: software Hi-Z occlusion culling hooks
 
 // library includes
 #include "llimagepng.h"
@@ -2778,6 +2779,11 @@ void LLPipeline::markNotCulled(LLSpatialGroup* group, LLCamera& camera)
 
 void LLPipeline::markOccluder(LLSpatialGroup* group)
 {
+    // <SS:Nexii> Ghillie: no GL occlusion queries to schedule while software
+    // occlusion owns the main camera's verdicts (world camera only)
+    if (SSGhillie::activeForCurrentPass()) return;
+    // </SS:Nexii>
+
     if (sUseOcclusion > 1 && group && !group->isOcclusionState(LLSpatialGroup::ACTIVE_OCCLUSION))
     {
         LLSpatialGroup* parent = group->getParent();
@@ -2872,7 +2878,13 @@ void LLPipeline::doOcclusion(LLCamera& camera)
             LLSpatialGroup* group = *iter;
             if (!group->isDead())
             {
-                group->doOcclusion(&camera);
+                // <SS:Nexii> Ghillie: group verdicts come from the software Hi-Z, not from
+                // GL queries (world camera only, other passes keep stock)
+                if (!SSGhillie::activeForCurrentPass())
+                {
+                    group->doOcclusion(&camera);
+                }
+                // </SS:Nexii>
                 group->clearOcclusionState(LLSpatialGroup::ACTIVE_OCCLUSION);
             }
         }
@@ -3930,6 +3942,14 @@ void LLPipeline::postSort(LLCamera &camera)
     }
     }
 
+    // <SS:Nexii> Ghillie: sCull is fully populated; snapshot occluders and
+    // occludees, then post the worker job. Main camera world pass only.
+    if (SSGhillie::activeForCurrentPass())
+    {
+        SSGhillie::getInstance()->gatherAndPost(camera, *sCull);
+    }
+    // </SS:Nexii>
+
     LL_PUSH_CALLSTACKS();
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_PIPELINE("beacon rendering flags");
@@ -4511,6 +4531,11 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         mHighlightFaces.clear();
 
         renderDebug();
+
+        // <SS:Nexii> Ghillie: on-world occluder/occludee debug overlay
+        // (world camera is bound here; SSGhillieDebugWorld gates the draw)
+        SSGhillie::getInstance()->drawDebugWorld();
+        // </SS:Nexii>
     }
 
     if (gUseWireframe)

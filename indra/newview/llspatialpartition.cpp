@@ -44,6 +44,9 @@
 #include "llviewerregion.h"
 #include "llcamera.h"
 #include "pipeline.h"
+// <SS:Nexii> Ghillie: software Hi-Z occlusion consult in LLOctreeCull::earlyFail
+#include "ssghillie.h"
+// </SS:Nexii>
 #include "llmeshrepository.h"
 #include "llrender.h"
 #include "lldrawpool.h"
@@ -1062,6 +1065,15 @@ public:
         {
             return false;
         }
+
+        // <SS:Nexii> Ghillie: software Hi-Z verdicts replace the GL query state
+        // machine while active; consultNode also records the node so the worker
+        // job re-tests it every frame. Other passes keep the stock machine.
+        if (SSGhillie::activeForCurrentPass())
+        {
+            return SSGhillie::getInstance()->consultNode(base_group);
+        }
+        // </SS:Nexii>
 
         LLSpatialGroup* group = (LLSpatialGroup*)base_group;
         group->checkOcclusion();

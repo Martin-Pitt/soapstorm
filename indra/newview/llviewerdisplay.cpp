@@ -86,6 +86,7 @@
 #include "llvograss.h"
 #include "llworld.h"
 #include "pipeline.h"
+#include "ssghillie.h" // <SS:Nexii> Ghillie: verdict consumption before octree traversal
 
 #include <boost/json.hpp>
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
@@ -947,6 +948,9 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         static LLCullResult result;
         LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_WORLD;
         LLPipeline::sUnderWaterRender = LLViewerCamera::getInstance()->cameraUnderWater();
+        // <SS:Nexii> Ghillie: merge worker verdicts into per-node streaks ahead of traversal
+        SSGhillie::getInstance()->preCull(*LLViewerCamera::getInstance());
+        // </SS:Nexii>
         gPipeline.updateCull(*LLViewerCamera::getInstance(), result);
         stop_glerror();
 

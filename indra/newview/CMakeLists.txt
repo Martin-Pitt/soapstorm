@@ -188,6 +188,10 @@ set(viewer_SOURCE_FILES
     fsradarmenu.cpp
     fsregioncross.cpp
     fsrezqueue.cpp
+    # <SS:Nexii> Ghillie: offloaded software Hi-Z occlusion culling
+    ssghillie.cpp
+    ssghilliemesh.cpp
+    # </SS:Nexii>
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1060,6 +1064,10 @@ set(viewer_HEADER_FILES
     fsradarmenu.h
     fsregioncross.h
     fsrezqueue.h
+    # <SS:Nexii> Ghillie: offloaded software Hi-Z occlusion culling
+    ssghillie.h
+    ssghilliemesh.h
+    # </SS:Nexii>
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h

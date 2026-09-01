@@ -190,6 +190,7 @@
 #include "llworld.h"
 #include "llworldmapview.h"
 #include "pipeline.h"
+#include "ssghillie.h" // <SS:Nexii> Ghillie: occlusion debug overlay
 #include "llappviewer.h"
 #include "llviewerdisplay.h"
 #include "llspatialpartition.h"
@@ -3089,6 +3090,10 @@ void LLViewerWindow::draw()
 
         // <SS:Nexii> Rez queue warning above the crosshair
         FSRezQueue::draw();
+        // </SS:Nexii>
+
+        // <SS:Nexii> Ghillie: occlusion debug overlay
+        SSGhillie::getInstance()->drawDebug();
         // </SS:Nexii>
 
         if (inMouselook && fsMouselookCombatFeatures)

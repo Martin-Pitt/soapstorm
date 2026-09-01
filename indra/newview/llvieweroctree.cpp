@@ -28,6 +28,9 @@
 #include "llvieweroctree.h"
 #include "llviewerregion.h"
 #include "pipeline.h"
+// <SS:Nexii> Ghillie: skip GL occlusion query readback while software verdicts are active
+#include "ssghillie.h"
+// </SS:Nexii>
 #include "llviewercontrol.h"
 #include "llappviewer.h"
 #include "llglslshader.h"
@@ -1106,6 +1109,10 @@ U32 LLOcclusionCullingGroup::getLastOcclusionIssuedTime()
 
 void LLOcclusionCullingGroup::checkOcclusion()
 {
+    // <SS:Nexii> Ghillie: verdicts are merged on the main thread, no queries to read back
+    // (world camera only; shadow/reflection/HUD passes keep the GL state machine)
+    if (SSGhillie::activeForCurrentPass()) return;
+    // </SS:Nexii>
     if (LLPipeline::sUseOcclusion < 2) return;  // 0 - NoOcclusion, 1 = ReadOnly, 2 = ModifyOcclusionState  TODO: DJH 11-2021 ENUM this
 
     LL_PROFILE_ZONE_SCOPED_CATEGORY_OCTREE;
