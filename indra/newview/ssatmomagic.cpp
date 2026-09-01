@@ -61,6 +61,7 @@
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
 #include "llviewerwindow.h"
+#include "llworld.h"
 #include "pipeline.h"
 
 #include <algorithm>
@@ -1085,6 +1086,42 @@ void SSAtmoMagic::drawInfo()
                                  surface->lastTickMS()));
     }
 
+    // <SS:Nexii> The shared world field: capture health, the state of the air
+    // flood, and what its labels say about the camera's own cell.
+    lines.push_back("-- world field --");
+    {
+        SSWorldField* field = SSWorldField::getInstance();
+        const LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
+
+        lines.push_back(llformat("capture    %d tiles, %d cells/axis, %.0fm bands, %d cap",
+                                 field->tileCount(), field->resolution(),
+                                 (F32)field->bandHeight(), field->bandCount()));
+        lines.push_back(llformat("builds     %u total, %u dirty rects, last %.1f ms",
+                                 field->captureCount(), field->dirtyCaptureCount(),
+                                 field->lastCaptureMS()));
+
+        const F64 age = field->tileAge(cam);
+        if (age >= 0.0)
+        {
+            lines.push_back(llformat("tile       %.0fs old, %d bands live",
+                                     age, field->effectiveBands(cam)));
+        }
+
+        const U8 air = field->airLabelAt(cam);
+        static const char* AIR_NAME[] = { "solid", "outside", "interior", "unknown" };
+        const U32 air_depth = field->airDepthAt(cam);
+        lines.push_back(llformat("air        %s, depth %s",
+                                 AIR_NAME[llclamp((S32)air, 0, 3)],
+                                 air_depth == SSWorldField::AIR_DEPTH_UNREACHED
+                                     ? "n/a" : llformat("%u cells", air_depth).c_str()));
+        if (cam_region)
+        {
+            lines.push_back(llformat("flood      %.0f%% of cells labelled",
+                                     field->airCoverage(cam_region->getHandle()) * 100.f));
+        }
+    }
+    // </SS:Nexii>
+
     // <SS:Nexii> Snow: every link of the chain in one look - type and temperature (the gate that
     // turns the whole system off), the regime, the lift the transport computed at the camera, and
     // the drift pool's standing population.
@@ -1135,11 +1172,12 @@ void SSAtmoMagic::drawInfo()
     lines.push_back(llformat("analysis   %d sounds ready   %d pending",
                              SSSoundMeta::getInstance()->readyCount(),
                              SSSoundMeta::getInstance()->pendingCount()));
-    lines.push_back(llformat("cover      %s   space %s%s",
+    lines.push_back(llformat("cover      %s   space %s%s%s",
                              audio->isCovered() ? "ROOFED" : "open sky",
                              SSSoundscape::spaceName(audio->space()),
                              audio->isCovered() ? ""
-                                 : (std::string(" / ") + SSSoundscape::sizeName(audio->outdoorSize())).c_str()));
+                                 : (std::string(" / ") + SSSoundscape::sizeName(audio->outdoorSize())).c_str(),
+                             audio->isInterior() ? "   SEALED" : ""));
     if (audio->isCovered())
     {
         lines.push_back(llformat("roof       %.1fm above   buried %.1fm   occlusion %.2f",

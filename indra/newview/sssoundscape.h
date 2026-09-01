@@ -107,6 +107,11 @@ public:
     };
     bool isCovered() const { return mCovered; }
     F32 coverage() const { return mCoverage; }
+    // <SS:Nexii> Whether the air flood considers the listener's cell sealed -
+    // interior air the connectivity walk could not reach from sky or border.
+    // Reads true only on the field coverage path.
+    bool isInterior() const { return mInterior; }
+    // </SS:Nexii>
     ESpace space() const { return mSpace; }
 
     static const char* spaceName(ESpace space);
@@ -277,6 +282,10 @@ private:
     F32 mWallAvg = 0.f;
     F32 mCoverage = 0.f;
     bool mCovered = false;
+    // <SS:Nexii> Sealed-room verdict from the world field's air flood, set on
+    // the field coverage path and cleared everywhere else.
+    bool mInterior = false;
+    // </SS:Nexii>
     ESpace mSpace = SPACE_OUTDOOR;
     ESize mOutdoorSize = SIZE_LARGE;
     LLVector3 mProbeOrigin;

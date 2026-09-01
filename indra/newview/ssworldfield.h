@@ -141,7 +141,11 @@ public:
     // flood walks in; a sealed room is INTERIOR. Solved on the general worker
     // queue from a snapshot of the band stack, so a build committing on the
     // main thread never races the walk, and stored against the tile's
-    // geometry serial so a stale answer is never served after an edit.
+    // geometry serial so a stale answer is never served after an edit. The
+    // same job carries the occlusion depth: each outside-connected air cell's
+    // graph distance to the frontier, for the "how enclosed is this point"
+    // consumers (the design's sparse-air-solve and acoustic occlusion
+    // figures).
     enum EAirLabel : U8
     {
         AIR_SOLID = 0,      // a surface occupies the band here
@@ -150,6 +154,40 @@ public:
         AIR_UNKNOWN         // no tile, no labels yet, or stale
     };
     U8 airLabelAt(const LLVector3& pos_agent) const;
+
+    // The occlusion depth behind airLabelAt: graph distance in cells from the
+    // point's air band-cell to the nearest AIR_OUTSIDE cell (0 when the point
+    // itself is outside-connected air), or AIR_DEPTH_UNREACHED when the cell
+    // is interior, off-tile, or the labels are not current. Band steps count
+    // one cell and horizontal steps one cell, so the figure is a graph hop
+    // count over the store's own grid, not metres.
+    static constexpr U32 AIR_DEPTH_UNREACHED = 0xFFFFu;
+    U32 airDepthAt(const LLVector3& pos_agent) const;
+
+    // The share of a tile's air cells the flood actually labelled - 1.0 once
+    // the labels are current, less before the first flood or after an edit.
+    F32 airCoverage(U64 region_handle) const;
+    // </SS:Nexii>
+
+    // <SS:Nexii> Drainage topology over one landing-surface grid - the
+    // DRAINAGE_NETWORK channel core, materialised synchronously over whatever
+    // SurfaceGrid the caller already holds (the surface field's geometry, at
+    // its own n). A Barnes priority flood fills every depression to its spill
+    // elevation; a cell sitting below that level is a pool member (standing
+    // water, the figure that retires the surface field's local dips check);
+    // flow directions are D8 down the *filled* surface, so a pool's water
+    // drains toward its spill outlet rather than into its own floor. Nothing
+    // is cached here: the grid carries the geometry serial and the caller
+    // gates retraces on it already. Per-span levels wait on the multi-peel
+    // store; this is the landing-surface level the design ships first.
+    struct Drainage
+    {
+        std::vector<F32> mSpill;      // fill elevation per cell, NODATA where unmapped
+        std::vector<U8> mPool;        // 1 = cell sits under its spill level (depression member)
+        std::vector<U8> mD8;          // outflow cell on the filled surface, 3x3-indexed
+                                      // ((dy+1)*3 + (dx+1)); 4 = no outflow (sink or drain edge)
+    };
+    bool buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out) const;
     // </SS:Nexii>
 
     bool tileValid(U64 region_handle) const;
@@ -165,6 +203,12 @@ public:
     S32 resolution() const;
     F64 tileAge(const LLVector3& pos_agent) const;
     S32 effectiveBands(const LLVector3& pos_agent) const;
+
+    // <SS:Nexii> The world field's own overlay: what the capture saw, what the
+    // air flood decided, and what the drainage pass reads - view picked by
+    // SSWorldFieldDebugView, distance-thinned like the wind flowmap's overlay.
+    void renderDebug();
+    // </SS:Nexii>
 
 private:
     static constexpr S32 MAX_BANDS = 24;
@@ -201,6 +245,16 @@ private:
         // mBandTop. Valid only while mAirSerial matches mGeomSerial - an edit
         // invalidates them until the flood re-runs behind the next commit.
         std::vector<U8> mAirLabel;
+
+        // Air-connectivity occlusion depth, same layout and validity gate as
+        // mAirLabel: for every air band-cell the shortest 6-connected distance
+        // in cells to an AIR_OUTSIDE cell (0 on the frontier itself). Interior
+        // cells never reach the outside through air, so they keep
+        // AIR_DEPTH_UNREACHED - "maximally enclosed" is exactly the number the
+        // sealed-room consumers want. Produced by the same worker job as the
+        // labels, stored together; distances saturate at UNREACHED - 1 so the
+        // sentinel stays exclusive to "not walked".
+        std::vector<U16> mAirDepth;
         U32 mAirSerial = 0;
 
         U32 mGeomSerial = 1;

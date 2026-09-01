@@ -90,6 +90,12 @@ bool SSFloaterSimulation::postBuild()
             LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF);
             syncOverlayChecks();
         });
+    getChild<LLCheckBoxCtrl>("field_overlay_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WORLD_FIELD);
+            syncOverlayChecks();
+        });
 
     syncOverlayChecks();
     return true;
@@ -151,4 +157,6 @@ void SSFloaterSimulation::syncOverlayChecks()
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
     getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
+    getChild<LLCheckBoxCtrl>("field_overlay_check")->set(
+        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WORLD_FIELD));
 }

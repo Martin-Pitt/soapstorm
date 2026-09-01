@@ -65,6 +65,20 @@ public:
     F32 cloudTopZ() const { return mPrimary.mBaseZ + mPrimary.mThicknessM; }
     bool empty() const { return mPrimary.mPuffs.empty(); }
 
+    // <SS:Nexii> The under deck's live world-frame band and whether it has a built field at all.
+    // Lightning reads these to decide whether a ground strike would cross the deck (and so be
+    // re-routed to cloud-to-cloud) and how deep its in-cloud crawl may dive. The band is only
+    // meaningful while underPresent() holds. </SS:Nexii>
+    F32 underBaseZ() const { return mUnder.mBaseZ; }
+    F32 underTopZ() const { return mUnder.mBaseZ + mUnder.mThicknessM; }
+    bool underPresent() const { return !mUnder.mPuffs.empty(); }
+
+    // <SS:Nexii> How solid the under deck is over one point of the sky, 0-1 - the noise map's
+    // presence gate for the deck's own column, in the same air frame the clouds drift in. 1 is
+    // solid cloud at that spot, 0 a hole or gap. Neutral 1 when the deck has no map cached yet.
+    // </SS:Nexii>
+    F32 underPresenceAt(const LLVector3& pos_agent) const;
+
     F32 transmittance(const LLVector3& from_agent, const LLVector3& to_agent, F32 strength);
 
     S32 puffCount() const { return (S32)(mPrimary.mPuffs.size() + mUnder.mPuffs.size()); }

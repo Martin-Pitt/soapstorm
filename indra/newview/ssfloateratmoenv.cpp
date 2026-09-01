@@ -25,6 +25,7 @@
 
 #include "ssfloateratmoenv.h"
 #include "ssatmoenvmanager.h"
+#include "ssdiscpad.h" // <SS:Nexii> disc-padding auto-derive poll
 #include "ssatmoenvweatherstate.h"
 #include "ssatmoenvcloudfieldstate.h"
 #include "ssatmoenvplanetarystate.h"
@@ -197,6 +198,10 @@ bool SSFloaterAtmoEnv::postBuild()
     // distance dials (the dials ARE the perception control): picking one writes both to 1/N.
     getChild<LLUICtrl>("celestial_perception_radio")->setCommitCallback(
         [this](LLUICtrl* src, const LLSD&) { onCommitCelestialPerception(src); });
+    // <SS:Nexii> The perception-to-lighting coupling switch, in the Space tab checkbox. A
+    // rendering choice, not an asset field; it rides SSAtmoPerceptionAffectsLight directly.
+    getChild<LLUICtrl>("perception_affects_light_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onCommitPerceptionAffectsLight(); });
     getChild<LLButton>("open_planetary_designer_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickOpenPlanetaryDesigner(); });
 
@@ -594,6 +599,11 @@ void SSFloaterAtmoEnv::draw()
     if (now - mLastPoll > STATUS_POLL_INTERVAL)
     {
         mLastPoll = now;
+        // <SS:Nexii> A body disc texture that was still decoding when its padding auto-derive
+        // ran (a texture pick or a sky import) may be decoded by now - land the padding. Runs
+        // in the same poll that keeps the status fresh, so a just-imported sky's adopted disc
+        // textures settle their padding without the user having to re-touch anything.
+        ssDiscPadPoll();
         refreshStatus();
         refreshVisibility();
         refreshTrackTab();
@@ -2432,6 +2442,11 @@ void SSFloaterAtmoEnv::refreshPlanetaryScales()
     else if (at_preset(sun, 3.f) && at_preset(moon, 3.f)) preset = 1;
     else if (at_preset(sun, 8.f) && at_preset(moon, 8.f)) preset = 2;
     getChild<LLRadioGroup>("celestial_perception_radio")->setSelectedIndex(preset);
+
+    // <SS:Nexii> The perception-to-lighting coupling switch lives from a setting (see
+    // SSAtmoPerceptionAffectsLight; it is a rendering preference, not an asset field.
+    static LLCachedControl<bool> perception_light(gSavedSettings, "SSAtmoPerceptionAffectsLight", false);
+    getChild<LLCheckBoxCtrl>("perception_affects_light_check")->set(perception_light);
 }
 
 // Planetary scale spinners into the asset.
@@ -2456,6 +2471,14 @@ void SSFloaterAtmoEnv::onCommitPlanetaryScales()
 
     refreshPlanetaryScales();
     refreshStatus();
+}
+
+// <SS:Nexii> The perception-to-lighting coupling switch drives the SSAtmoPerceptionAffectsLight
+// setting; it was a rendering choice, not an asset field, so no keyframe machinery.
+void SSFloaterAtmoEnv::onCommitPerceptionAffectsLight()
+{
+    static LLCachedControl<bool> perception_light(gSavedSettings, "SSAtmoPerceptionAffectsLight", false);
+    perception_light = getChild<LLCheckBoxCtrl>("perception_affects_light_check")->get();
 }
 
 // <SS:Nexii> The Space tab's Disc Perception radios: a preset front-end on the two distance

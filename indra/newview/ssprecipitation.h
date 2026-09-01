@@ -92,7 +92,7 @@ inline F32 ssPrecipFadeOut(U8 tier) { return (tier == TIER_SHEETS) ? 0.8f : 0.25
 
 // <SS:Nexii> The cap on the fade-in band at the top of a falling particle's run: drops materialize
 // across the top stretch of their fall instead of popping in at the spawn point, scaled to about
-// 60% of the run and never more than this. The deck-spawned cluster and sheet curtains hit the
+// 60% of the run and never more than this. Long cluster and sheet curtains hit the
 // full band; short near drops fade in over a few metres and are dense below. </SS:Nexii>
 static const F32 SS_PRECIP_TOP_FADE = 48.f;
 

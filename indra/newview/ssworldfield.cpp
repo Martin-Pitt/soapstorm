@@ -43,6 +43,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <iterator>
+#include <queue>
 
 static const F32 NEIGHBOR_REACH   = 64.f;
 static const F32 DEPTH_MISS       = 0.9999f;
@@ -56,6 +58,22 @@ static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD_GRID("Atmo Magic World Fi
 // stays valid for the life of the process regardless of singleton teardown
 // order - a destroyed handle must always be able to release its count.
 static std::map<std::pair<U64, S32>, S32> sInterests;
+
+// <SS:Nexii> The debug overlay's materialised drainage view, cached per region
+// and rebuilt only when the tile's geometry serial moves - the same
+// drop-on-serial-change discipline the real channels will follow, so the
+// overlay never pays a per-frame priority flood just to be drawn. Declared
+// here with the other file statics because evict() drops it alongside the
+// tiles it belongs to.
+struct SS_WF_DrainDebug
+{
+    SSRainShadowMap::SurfaceGrid mGrid;
+    SSWorldField::Drainage mDrain;
+    S32 mN = 0;
+    U32 mSerial = 0;
+};
+static std::map<U64, SS_WF_DrainDebug> sDrainDebug;
+// </SS:Nexii>
 
 static S32 ss_wf_interest_count(U64 region_handle, S32 channel)
 {
@@ -387,14 +405,20 @@ void SSWorldField::update()
 }
 
 // Drops tiles for departed regions, then the least recently used beyond the
-// cache cap.
+// cache cap. Erasing a tile also moves the flood generation - a walk in
+// flight for the departed tile must not land on a fresh tile the same region
+// handle re-created (which also restarts at geometry serial 1, so the serial
+// gate alone would not stop it) - and drops its cached debug views.
 void SSWorldField::evict()
 {
+    bool erased = false;
     for (auto it = mTiles.begin(); it != mTiles.end();)
     {
         if (!LLWorld::getInstance()->getRegionFromHandle(it->first))
         {
+            sDrainDebug.erase(it->first);
             it = mTiles.erase(it);
+            erased = true;
         }
         else
         {
@@ -408,8 +432,11 @@ void SSWorldField::evict()
         {
             if (it->second.mLastTouched < oldest->second.mLastTouched) oldest = it;
         }
+        sDrainDebug.erase(oldest->first);
         mTiles.erase(oldest);
+        erased = true;
     }
+    if (erased) ++mFloodGeneration;
 }
 
 // One band step: capture, splice, then either move to the next band, stop
@@ -1015,6 +1042,208 @@ U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
     return (bi < tile->mAirLabel.size()) ? tile->mAirLabel[bi] : (U8)AIR_UNKNOWN;
 }
 
+// Occlusion depth behind airLabelAt: the distance walk the flood ran, per
+// band-cell, gated by the same serial check so a stale walk is never served.
+U32 SSWorldField::airDepthAt(const LLVector3& pos_agent) const
+{
+    const Tile* tile = tileAt(pos_agent);
+    if (!tile || !tile->mValid) return AIR_DEPTH_UNREACHED;
+    if (tile->mAirDepth.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_DEPTH_UNREACHED;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return AIR_DEPTH_UNREACHED;
+
+    const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile->mCell), 0, tile->mRes - 1);
+    const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile->mCell), 0, tile->mRes - 1);
+    const S32 band = llclamp((S32)(pos_agent.mV[VZ] / tile->mBandHeight), 0, tile->mBandCount - 1);
+
+    const size_t bi = ((size_t)band * tile->mRes + cy) * tile->mRes + cx;
+    return (bi < tile->mAirDepth.size()) ? (U32)tile->mAirDepth[bi] : AIR_DEPTH_UNREACHED;
+}
+
+// Share of a tile's band-cells carrying a current label - 1.0 once the first
+// flood has landed and nothing has edited since. The overlay reads this to
+// tell a settled field from one still catching up.
+F32 SSWorldField::airCoverage(U64 region_handle) const
+{
+    auto it = mTiles.find(region_handle);
+    if (it == mTiles.end() || !it->second.mValid) return 0.f;
+
+    const Tile& tile = it->second;
+    if (tile.mAirLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return 0.f;
+    if (tile.mBandCount < 1 || tile.mRes < 1) return 0.f;
+
+    const size_t cells = (size_t)tile.mBandCount * (size_t)tile.mRes * (size_t)tile.mRes;
+    if (tile.mAirLabel.size() < cells) return 0.f;
+
+    size_t labelled = 0;
+    for (size_t i = 0; i < cells; ++i)
+    {
+        const U8 l = tile.mAirLabel[i];
+        if (l != AIR_UNKNOWN) ++labelled;
+    }
+    return (F32)labelled / (F32)cells;
+}
+
+// The DRAINAGE_NETWORK core over one landing surface. Barnes' priority flood
+// is the O(n log n) way to fill every depression to its spill elevation: drains
+// (the grid border, water, and unmapped sky) seed the heap at their own
+// height, each cell pops once at the lowest spill that reaches it, and a cell
+// whose spill stands meaningfully above its own surface is standing water.
+// Flow directions then run down the FILLED surface, so a pool's water heads
+// for its outlet instead of into its own floor.
+bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out) const
+{
+    out.mSpill.clear();
+    out.mPool.clear();
+    out.mD8.clear();
+
+    const S32 n = grid.mN;
+    if (n < 3 || grid.mZ.size() < (size_t)n * n) return false;
+
+    const size_t count = (size_t)n * n;
+    out.mSpill.assign(count, -FLT_MAX);
+    out.mPool.assign(count, 0);
+    out.mD8.assign(count, 4);
+
+    // The hydrological domain: cells with any surface flag, water excluded -
+    // water, unmapped sky and the grid border are drains the fill opens out at.
+    // The height guard keeps a NODATA cell that somehow carried flags from
+    // seeding a -FLT_MAX spill that would poison every fill elevation it
+    // reached.
+    auto land = [&](size_t i)
+    {
+        const U8 f = grid.mFlags[i];
+        return (f & SSRainShadowMap::SURF_WATER) == 0 && f != 0
+            && grid.mZ[i] > -FLT_MAX * 0.5f;
+    };
+
+    static const S32 DX[8] = { -1, 0, 1, -1, 1, -1, 0, 1 };
+    static const S32 DY[8] = { -1, -1, -1, 0, 0, 1, 1, 1 };
+
+    struct Node
+    {
+        F32 mSpill;
+        S32 mIndex;
+    };
+    struct NodeHeapOrder
+    {
+        bool operator()(const Node& a, const Node& b) const
+        {
+            // Min-heap on spill; index tie-break keeps the walk deterministic.
+            if (a.mSpill != b.mSpill) return a.mSpill > b.mSpill;
+            return a.mIndex > b.mIndex;
+        }
+    };
+    std::priority_queue<Node, std::vector<Node>, NodeHeapOrder> heap;
+
+    std::vector<U8> visited(count, 0);
+
+    auto seed = [&](S32 i)
+    {
+        if (visited[i] || !land((size_t)i)) return;
+        visited[i] = 1;
+        out.mSpill[i] = grid.mZ[i];
+        heap.push({ out.mSpill[i], i });
+    };
+
+    for (S32 y = 0; y < n; ++y)
+    {
+        for (S32 x = 0; x < n; ++x)
+        {
+            const S32 i = y * n + x;
+            if (!land((size_t)i)) continue;
+
+            if (x == 0 || y == 0 || x == n - 1 || y == n - 1)
+            {
+                seed(i);
+                continue;
+            }
+
+            for (S32 d = 0; d < 8; ++d)
+            {
+                const S32 nx = x + DX[d], ny = y + DY[d];
+                if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+                if (!land((size_t)ny * n + nx))
+                {
+                    seed(i);
+                    break;
+                }
+            }
+        }
+    }
+
+    while (!heap.empty())
+    {
+        const S32 c = heap.top().mIndex;
+        heap.pop();
+
+        const F32 spill_c = out.mSpill[(size_t)c];
+        const S32 cx = c % n;
+        const S32 cy = c / n;
+
+        for (S32 d = 0; d < 8; ++d)
+        {
+            const S32 nx = cx + DX[d], ny = cy + DY[d];
+            if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+            const S32 ni = ny * n + nx;
+            if (visited[ni] || !land((size_t)ni)) continue;
+
+            visited[ni] = 1;
+            out.mSpill[ni] = llmax(spill_c, grid.mZ[(size_t)ni]);
+            heap.push({ out.mSpill[ni], ni });
+        }
+    }
+
+    // Pool membership: the fill is standing water where it rises clear of the
+    // surface - the depression's depth, not a sampled dip. Five centimetres is
+    // below the puddle thresholds that consume the mask, so this only gates
+    // genuine standing water and never a capture texel's jitter.
+    static const F32 POOL_FILL_EPS = 0.05f;
+
+    // Flow: D8 down the filled surface, 3x3-indexed ((dy+1)*3 + (dx+1)), 4 when
+    // nothing is lower - a pool floor, a sink, or a drain cell.
+    for (S32 c = 0; c < (S32)count; ++c)
+    {
+        const size_t i = (size_t)c;
+        if (!land(i)) continue;
+
+        if (out.mSpill[i] - grid.mZ[i] > POOL_FILL_EPS)
+        {
+            out.mPool[i] = 1;
+        }
+
+        const S32 cx = c % n;
+        const S32 cy = c / n;
+        const F32 here = out.mSpill[i];
+
+        S32 best_dir = 4;
+        F32 best_z = here;
+        for (S32 d = 0; d < 8; ++d)
+        {
+            const S32 nx = cx + DX[d], ny = cy + DY[d];
+            if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+            const size_t ni = (size_t)ny * n + nx;
+            if (!land(ni)) continue;
+
+            // Dropping the FILLED elevation from the outlet chain windows out
+            // the water-plane cases a raw-surface D8 gets wrong: a pool run
+            // into its own floor.
+            const F32 nz = out.mSpill[ni];
+            if (nz < best_z - 0.01f)
+            {
+                best_z = nz;
+                best_dir = (DY[d] + 1) * 3 + (DX[d] + 1);
+            }
+        }
+        out.mD8[i] = (U8)best_dir;
+    }
+
+    return true;
+}
+
 // The flood itself, run on the general worker queue against a snapshot. A
 // band-cell is solid where the capture found a surface in that band; air
 // otherwise. Every air cell in the top band, and every air cell on the
@@ -1022,13 +1251,19 @@ U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
 // Whatever air is left is INTERIOR - a room, a sealed box - which is exactly
 // what the wind solve wants to skip and the soundscape wants to know it is
 // standing in. Evidence-only in the same spirit as the probe carve: a passage
-// narrower than a cell stays uncounted rather than invented.
+// narrower than a cell stays uncounted rather than invented. The second walk
+// measures occlusion: every outside-connected air cell's graph distance in
+// cells to the nearest frontier cell, the "how enclosed is this air" figure
+// the acoustic channel's travel times and the sparse air solve both read.
+// Interior cells never reach the frontier through air, so they keep
+// AIR_DEPTH_UNREACHED - sealed is maximally enclosed by construction.
 static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
-                        std::vector<U8>& label)
+                        std::vector<U8>& label, std::vector<U16>& depth)
 {
     const size_t layer = (size_t)res * res;
     const size_t cells = layer * (size_t)bands;
     label.assign(cells, SSWorldField::AIR_INTERIOR);
+    depth.assign(cells, (U16)SSWorldField::AIR_DEPTH_UNREACHED);
 
     std::vector<S32> queue;
     queue.reserve(cells / 8);
@@ -1076,6 +1311,48 @@ static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
             queue.push_back((S32)j);
         }
     }
+
+    // Occlusion depth, one BFS from the whole outside frontier over air. The
+    // outside set was found by walking 6-connected air from that same frontier,
+    // so this reaches exactly it; interior air is unreachable and stays marked.
+    // Distances saturate at AIR_DEPTH_UNREACHED - 1: the sentinel itself must
+    // stay exclusive to "unvisited", or a cell whose true distance hit 0xFFFF
+    // would read as never visited and the walk would loop on it forever.
+    {
+        std::vector<S32> depth_q;
+        depth_q.reserve(queue.size());
+        for (const S32 i : queue)
+        {
+            depth[i] = 0;
+            depth_q.push_back(i);
+        }
+
+        for (size_t head = 0; head < depth_q.size(); ++head)
+        {
+            const S32 i = depth_q[head];
+            const S32 b = (S32)((size_t)i / layer);
+            const S32 y = (S32)(((size_t)i % layer) / res);
+            const S32 x = (S32)((size_t)i % res);
+
+            static const S32 DX[6] = { 1, -1, 0, 0, 0, 0 };
+            static const S32 DY[6] = { 0, 0, 1, -1, 0, 0 };
+            static const S32 DB[6] = { 0, 0, 0, 0, 1, -1 };
+
+            for (S32 d = 0; d < 6; ++d)
+            {
+                const S32 nx = x + DX[d], ny = y + DY[d], nb = b + DB[d];
+                if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
+
+                const size_t j = ((size_t)nb * res + ny) * (size_t)res + nx;
+                if (label[j] != SSWorldField::AIR_OUTSIDE) continue;
+                if (depth[j] != SSWorldField::AIR_DEPTH_UNREACHED) continue;
+
+                depth[j] = (U16)llmin((U32)depth[i] + 1u,
+                                      SSWorldField::AIR_DEPTH_UNREACHED - 1u);
+                depth_q.push_back((S32)j);
+            }
+        }
+    }
 }
 
 void SSWorldField::scheduleFlood(Tile& tile)
@@ -1100,15 +1377,16 @@ void SSWorldField::scheduleFlood(Tile& tile)
         tile.mBandTop.begin(),
         tile.mBandTop.begin() + (size_t)bands * res * res);
     auto labels = std::make_shared<std::vector<U8> >();
+    auto depths = std::make_shared<std::vector<U16> >();
 
     main->postTo(
         general,
-        [res, bands, snapshot, labels]()
+        [res, bands, snapshot, labels, depths]()
         {
-            ss_wf_flood(res, bands, *snapshot, *labels);
+            ss_wf_flood(res, bands, *snapshot, *labels, *depths);
             return true;
         },
-        [this, generation, region, serial, labels](bool)
+        [this, generation, region, serial, labels, depths](bool)
         {
             mFloodBusy = false;
             if (generation != mFloodGeneration) return;
@@ -1118,8 +1396,227 @@ void SSWorldField::scheduleFlood(Tile& tile)
             if (it->second.mGeomSerial != serial) return;   // edited mid-walk; the next commit refloods
 
             it->second.mAirLabel = std::move(*labels);
+            it->second.mAirDepth = std::move(*depths);
             it->second.mAirSerial = serial;
         });
+}
+// </SS:Nexii>
+
+// A band's surface hue for the overlay: the store's vertical
+// resolution reads as colour, blue at the floor through green to ember red at
+// the ceiling.
+static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
+{
+    t = llclamp(t, 0.f, 1.f);
+    const F32 c0[3] = { 0.25f, 0.5f, 1.f };
+    const F32 c1[3] = { 0.3f, 1.f, 0.4f };
+    const F32 c2[3] = { 1.f, 0.45f, 0.2f };
+    const F32* lo = (t < 0.5f) ? c0 : c1;
+    const F32* hi = (t < 0.5f) ? c1 : c2;
+    const F32 u = (t < 0.5f) ? t * 2.f : (t - 0.5f) * 2.f;
+    return LLColor4(lerp(lo[0], hi[0], u), lerp(lo[1], hi[1], u),
+                    lerp(lo[2], hi[2], u), alpha);
+}
+
+// The world field's own overlay: what the capture resolved, what the air flood
+// decided with its occlusion depth, and what the drainage pass reads - view
+// picked by SSWorldFieldDebugView, distance-thinned like the wind flowmap's.
+void SSWorldField::renderDebug()
+{
+    static LLCachedControl<U32> view(gSavedSettings, "SSWorldFieldDebugView", 1);
+    const S32 which = llclamp((S32)view, 0, 3);
+    if (which == 0 || mTiles.empty()) return;
+
+    static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
+    const F32 full = llclamp((F32)range_setting, 16.f, 4096.f);
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    auto mark = [&](const LLVector3& p, const LLColor4& c, F32 size)
+    {
+        gGL.color4fv(c.mV);
+        gGL.vertex3f(p.mV[VX] - size, p.mV[VY], p.mV[VZ]);
+        gGL.vertex3f(p.mV[VX] + size, p.mV[VY], p.mV[VZ]);
+        gGL.vertex3f(p.mV[VX], p.mV[VY] - size, p.mV[VZ]);
+        gGL.vertex3f(p.mV[VX], p.mV[VY] + size, p.mV[VZ]);
+    };
+
+    auto strideFor = [&](F32 wx, F32 wy) -> S32
+    {
+        const F32 away = llmax(fabsf(wx - cam.mV[VX]), fabsf(wy - cam.mV[VY]));
+        return (away < full) ? 1 : (away < full * 2.f) ? 2 : 4;
+    };
+
+    gGL.begin(LLRender::LINES);
+
+    for (const auto& entry : mTiles)
+    {
+        const Tile& tile = entry.second;
+        if (!tile.mValid) continue;
+
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+        if (!regionp) continue;
+
+        const LLVector3 origin = regionp->getOriginAgent();
+        const F32 cell = tile.mCell;
+        const F32 h = tile.mBandHeight;
+
+        // The tile's stack footprint, so a region nobody has captured yet reads
+        // as an empty box rather than as nothing at all.
+        {
+            const F32 x1 = origin.mV[VX] + (F32)tile.mRes * cell;
+            const F32 y1 = origin.mV[VY] + (F32)tile.mRes * cell;
+            const F32 z0 = 0.f;
+            const F32 z1 = (F32)llmax(tile.mBandCount, 1) * h;
+            gGL.color4f(0.5f, 0.55f, 0.7f, 0.35f);
+            const F32 bx[4] = { origin.mV[VX], x1, x1, origin.mV[VX] };
+            const F32 by[4] = { origin.mV[VY], origin.mV[VY], y1, y1 };
+            for (S32 i = 0; i < 4; ++i)
+            {
+                const S32 j = (i + 1) % 4;
+                gGL.vertex3f(bx[i], by[i], z0); gGL.vertex3f(bx[j], by[j], z0);
+                gGL.vertex3f(bx[i], by[i], z1); gGL.vertex3f(bx[j], by[j], z1);
+                gGL.vertex3f(bx[i], by[i], z0); gGL.vertex3f(bx[i], by[i], z1);
+            }
+        }
+
+        if (which == 1)
+        {
+            // Every band the capture gave a surface, standing at the altitude
+            // the store holds it at, hue by band so stacked storeys read
+            // separately instead of fusing into one roof.
+            const S32 b_last = llmax(tile.mBandCount - 1, 1);
+            for (S32 y = 0; y < tile.mRes; ++y)
+            {
+                const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
+                for (S32 x = 0; x < tile.mRes; ++x)
+                {
+                    const F32 wx = origin.mV[VX] + ((F32)x + 0.5f) * cell;
+                    const S32 step = strideFor(wx, wy);
+                    if ((x % step) || (y % step)) continue;
+
+                    for (S32 b = 0; b < tile.mBandCount; ++b)
+                    {
+                        const size_t bi = ((size_t)b * tile.mRes + y) * (size_t)tile.mRes + x;
+                        const F32 z = tile.mBandTop[bi];
+                        if (z <= -FLT_MAX * 0.5f) continue;
+
+                        mark(LLVector3(wx, wy, z),
+                             ss_wf_band_hue((F32)b / (F32)b_last, 0.85f), cell * 0.4f);
+                    }
+                }
+            }
+        }
+        else if (which == 2)
+        {
+            // The air flood: outside-connected air green and fading with
+            // occlusion depth, sealed interior air red. Solid cells draw
+            // nothing - the surfaces view shows those.
+            const bool current = !tile.mAirLabel.empty() && tile.mAirSerial == tile.mGeomSerial;
+            if (!current) continue;
+
+            for (S32 y = 0; y < tile.mRes; ++y)
+            {
+                const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
+                for (S32 x = 0; x < tile.mRes; ++x)
+                {
+                    const F32 wx = origin.mV[VX] + ((F32)x + 0.5f) * cell;
+                    const S32 step = strideFor(wx, wy);
+                    if ((x % step) || (y % step)) continue;
+
+                    for (S32 b = 0; b < tile.mBandCount; ++b)
+                    {
+                        const size_t bi = ((size_t)b * tile.mRes + y) * (size_t)tile.mRes + x;
+                        const U8 lab = tile.mAirLabel[bi];
+                        if (lab == AIR_SOLID || lab == AIR_UNKNOWN) continue;
+
+                        const F32 z = ((F32)b + 0.5f) * h;
+                        if (lab == AIR_OUTSIDE)
+                        {
+                            const U16 d = tile.mAirDepth[bi];
+                            const F32 a = llmax(0.9f / (1.f + (F32)d * 0.25f), 0.08f);
+                            mark(LLVector3(wx, wy, z), LLColor4(0.3f, 1.f, 0.4f, a), cell * 0.4f);
+                        }
+                        else
+                        {
+                            mark(LLVector3(wx, wy, z), LLColor4(1.f, 0.25f, 0.25f, 0.85f), cell * 0.4f);
+                        }
+                    }
+                }
+            }
+        }
+        else if (which == 3)
+        {
+            // Drainage topology at the tile's own resolution: standing water
+            // blue, and an arrow per cell down the filled surface's D8 - the
+            // outlet chain a pool's water will actually follow.
+            auto& cached = sDrainDebug[tile.mRegionHandle];
+            if (cached.mSerial != tile.mGeomSerial || cached.mN != tile.mRes)
+            {
+                cached.mGrid = SSRainShadowMap::SurfaceGrid();
+                cached.mDrain = Drainage();
+                cached.mN = tile.mRes;
+                cached.mSerial = tile.mGeomSerial;
+                if (!buildSurfaceGrid(tile.mRegionHandle, tile.mRes, cached.mGrid)
+                    || !buildDrainage(cached.mGrid, cached.mDrain))
+                {
+                    cached.mSerial = 0;
+                    continue;
+                }
+            }
+            const SSRainShadowMap::SurfaceGrid& grid = cached.mGrid;
+            const Drainage& drain = cached.mDrain;
+
+            for (S32 y = 0; y < tile.mRes; ++y)
+            {
+                const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
+                for (S32 x = 0; x < tile.mRes; ++x)
+                {
+                    const F32 wx = origin.mV[VX] + ((F32)x + 0.5f) * cell;
+                    const S32 step = strideFor(wx, wy);
+                    if ((x % step) || (y % step)) continue;
+
+                    const size_t i = (size_t)y * tile.mRes + x;
+                    const U8 f = grid.mFlags[i];
+                    if (f == 0 || (f & SSRainShadowMap::SURF_WATER)) continue;
+
+                    const F32 z = grid.mZ[i];
+                    if (drain.mPool[i])
+                    {
+                        mark(LLVector3(wx, wy, z), LLColor4(0.2f, 0.5f, 1.f, 0.9f), cell * 0.45f);
+                    }
+                    else if (drain.mD8[i] != 4)
+                    {
+                        const S32 di = drain.mD8[i];
+                        const F32 len = cell * 0.7f;
+                        const F32 dx = (F32)((di % 3) - 1) * len;
+                        const F32 dy = (F32)((di / 3) - 1) * len;
+                        gGL.color4f(0.7f, 0.85f, 1.f, 0.55f);
+                        gGL.vertex3f(wx, wy, z + 0.4f);
+                        gGL.vertex3f(wx + dx, wy + dy, z + 0.4f);
+                    }
+                }
+            }
+        }
+        else
+        {
+            // No view selected: the box alone, so the capture presence reads.
+        }
+    }
+
+    gGL.end();
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+    // Drop debug views for regions the field no longer holds.
+    for (auto it = sDrainDebug.begin(); it != sDrainDebug.end();)
+    {
+        it = mTiles.count(it->first) ? std::next(it) : sDrainDebug.erase(it);
+    }
 }
 // </SS:Nexii>
 

@@ -25,6 +25,7 @@
 
 #include "ssfloateratmoplanetary.h"
 #include "ssatmoenvmanager.h"
+#include "ssdiscpad.h"
 
 #include "llbutton.h"
 #include "llcombobox.h"
@@ -1129,6 +1130,10 @@ void SSFloaterAtmoPlanetary::draw()
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
         {
+            // A disc texture that was still decoding when the auto-derive ran may be decoded by
+            // now - land its padding, and refreshAll shows what landed. Skipped while the
+            // user captures the mouse on a control, which is mid-edit and must not be fought.
+            ssDiscPadPoll();
             refreshAll();
         }
         else
@@ -1766,13 +1771,21 @@ void SSFloaterAtmoPlanetary::onCommitBodyRing()
     refreshAll();
 }
 
-// Texture pick into the body.
+// Texture pick into the body. A newly picked texture also gets its disc padding auto-derived
+// from the alpha (ssDiscPadAutoDerive; gated on SSAtmoDiscPadAuto) - the derivation writes
+// the body's padding and the spinner refresh below shows it, leaving the spinner the
+// authority for whatever the author dials after.
 void SSFloaterAtmoPlanetary::onCommitBodyTexture()
 {
     SSAtmoEnvCelestialBody* body = selectedBody();
     if (!body) return;
 
-    body->mCustomTexture = getChild<LLTextureCtrl>("body_custom_texture")->getValue().asUUID();
+    const LLUUID new_texture = getChild<LLTextureCtrl>("body_custom_texture")->getValue().asUUID();
+    if (new_texture != body->mCustomTexture)
+    {
+        body->mCustomTexture = new_texture;
+        ssDiscPadAutoDerive(mTrackIndex, mSelectedBodyIndex, new_texture);
+    }
 
     refreshAll();
 }

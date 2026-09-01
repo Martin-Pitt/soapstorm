@@ -312,6 +312,24 @@ void SSSurfaceField::refreshGeometry()
         if (!have) continue;
 
         buildGeometry(grid, geom);
+
+        // <SS:Nexii> With the world field as the grid source, the pool mask
+        // comes from its DRAINAGE_NETWORK topology - the priority-flood
+        // depression fill - instead of buildGeometry's local dips check. What
+        // that changes: standing water now needs a genuine depression with a
+        // spill outlet, so a flat roof row stops holding puddles and a real
+        // basin starts to. The rain shadow source keeps the dips check exactly
+        // as it was; the gate is the same SSWorldFieldSurfaceTop switch by
+        // which the grid itself moved.
+        if (field)
+        {
+            SSWorldField::Drainage drain;
+            if (field->buildDrainage(grid, drain) && drain.mPool.size() == geom.mPool.size())
+            {
+                geom.mPool = std::move(drain.mPool);
+            }
+        }
+        // </SS:Nexii>
     }
 
     for (auto it = mGeometry.begin(); it != mGeometry.end(); )

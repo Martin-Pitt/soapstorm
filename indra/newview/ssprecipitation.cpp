@@ -144,41 +144,6 @@ static void fallLength(const SSPrecipPreset& preset, SSPrecipTier tier, F32& lo,
     }
 }
 
-// <SS:Nexii> The weather deck's base height above the surface under the camera - the ceiling the
-// cluster and sheet tiers stretch toward. Zero when the deck doesn't overhang anything resolvable
-// (open sky, a deck sitting below the drop tier's own top) so those tiers keep their own figures.
-// [interaction: SSVolCloud] </SS:Nexii>
-static F32 deckCeilingAroundCamera()
-{
-    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-    LLVector3 hit;
-    LLVector3 normal;
-    bool on_water = false;
-    if (!SSRainShadowMap::getInstance()->resolveColumn(cam, hit, on_water, &normal))
-    {
-        return 0.f;
-    }
-    SSVolCloud* vol = SSVolCloud::getInstance();
-    return vol ? llmax(0.f, vol->precipBaseZ() - hit.mV[VZ]) : 0.f;
-}
-
-// <SS:Nexii> Where a tier's fall run actually begins, per layer: the drops keep their authored
-// spawn height, clusters hang halfway between it and the weather deck's bottom, and sheets drop
-// straight from the bottom of the deck itself. The deck only talks when it overhangs the tier's
-// normal top - a grounded weather or a low deck leaves every tier where it was. </SS:Nexii>
-static F32 tierSpawnTopAbove(SSPrecipTier tier, F32 drafted_above, const F32* deck_above)
-{
-    if (tier == TIER_CLUSTERS && deck_above && *deck_above > drafted_above)
-    {
-        return (drafted_above + *deck_above) * 0.5f;
-    }
-    if (tier == TIER_SHEETS && deck_above && *deck_above > drafted_above)
-    {
-        return *deck_above;
-    }
-    return drafted_above;
-}
-
 // Emissive glow for fantasy weather.
 static F32 presetGlow(const SSPrecipPreset& preset)
 {
@@ -578,33 +543,9 @@ void SSPrecipSim::spawnTier(SSPrecipTier tier, U64 tick, F64 tick_time)
     F32 fall_lo, fall_hi;
     fallLength(preset, tier, fall_lo, fall_hi);
 
-    // <SS:Nexii> The cluster and sheet tiers fall from the weather deck when it's overhead, so
-    // their standing-population estimate has to cover the deck-stretched run too - else the life
-    // clamps would budget them as near-ground tiers and starve the curtains of their target.
-    // The deck ceiling is measured once, under the camera; per particle it's the column's own. </SS:Nexii>
-    F32 eff_lo = fall_lo;
-    F32 eff_hi = fall_hi;
-    if (!preset.risesFromGround())
-    {
-        const F32 deck_above = deckCeilingAroundCamera();
-        if (deck_above > 0.f)
-        {
-            if (tier == TIER_CLUSTERS)
-            {
-                eff_lo = (fall_lo + deck_above) * 0.5f;
-                eff_hi = (fall_hi + deck_above) * 0.5f;
-            }
-            else if (tier == TIER_SHEETS)
-            {
-                eff_lo = deck_above;
-                eff_hi = llmax(deck_above, fall_hi);
-            }
-        }
-    }
-
     const F32 nominal_life = preset.risesFromGround()
         ? 2.25f
-        : ((eff_lo + eff_hi) * 0.5f) / llmax(0.1f, preset.mFallSpeed);
+        : ((fall_lo + fall_hi) * 0.5f) / llmax(0.1f, preset.mFallSpeed);
 
     const F32 mean_life = (mMeanLife[tier] > 0.f)
         ? llclamp(mMeanLife[tier], nominal_life * 0.5f, nominal_life * 8.f)
@@ -735,18 +676,6 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
         const bool no_platform = sky && !found_surface;
         if (no_platform && platform_roll > fall_through) continue;
 
-        // <SS:Nexii> The tier's real fall length this particle: the authored drop height, or the
-        // deck-stretched run when the weather deck overhangs this column and the tier falls from
-        // it (clusters midway, sheets from the deck bottom). Drops are left untouched. </SS:Nexii>
-        F32 eff_fall = fall_len;
-        if (!rises)
-        {
-            SSVolCloud* vol = SSVolCloud::getInstance();
-            const F32 deck_z = vol ? vol->precipBaseZ() : 0.f;
-            const F32 deck_above = deck_z - hit.mV[VZ];
-            eff_fall = tierSpawnTopAbove(tier, fall_len, &deck_above);
-        }
-
         if (tier == TIER_DROPS && !no_platform)
         {
             const F32 strength = preset.mImpactStrength;
@@ -763,14 +692,14 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
         if (headroom <= 0.f) continue;
         if (headroom < 1.f && ll_frand() > headroom) continue;
 
-        const F32 spawn_z = rises ? hit.mV[VZ] : hit.mV[VZ] + eff_fall;
+        const F32 spawn_z = rises ? hit.mV[VZ] : hit.mV[VZ] + fall_len;
         const F32 band = VIS_BAND + (tier == TIER_SHEETS ? fall_hi : 0.f);
         if (hit.mV[VZ] - cam_agent.mV[VZ] > band) continue;
         if (spawn_z - cam_agent.mV[VZ] < -band) continue;
 
         if (mTierCount[tier] >= cap) continue;
 
-        emitParticle(tier, hit, eff_fall, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
+        emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
                      found_surface || !sky);
     }
 }
@@ -854,11 +783,10 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
         F32 fall_time = fall_len / llmax(0.1f, v_fall);
         part.mVel = LLVector3(wind_h.mV[VX], wind_h.mV[VY], -v_fall);
 
-        // <SS:Nexii> Only the drops ride the impact branch. It exists to park a landing drop
-        // exactly where its splash will play, and it caps a long run to the drift ceilings - the
-        // cluster and sheet curtains fall from the weather deck far above, so capping would cut
-        // their deck run down to a near-ground hop. They stream through the same winding path the
-        // outer drops use instead. </SS:Nexii>
+        // <SS:Nexii> Only the drops ride the impact branch: it exists to park a landing drop
+        // exactly where its splash will play, and it caps a long run to the drift ceilings.
+        // Clusters and sheets never land anything - they stream through the same winding path
+        // the outer drops use instead. </SS:Nexii>
         if (tier == TIER_DROPS && preset.makesImpacts())
         {
             const F32 max_drift = MAX_SPAWN_DRIFT;
@@ -945,17 +873,6 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
 
     if (atmo->isSkyTrack() && !found_surface) return;
 
-    // <SS:Nexii> The same deck-stretched fall a fresh spawn would have - a recycled cluster or
-    // sheet particle must re-materialize from the deck, not hop from the ground. </SS:Nexii>
-    F32 eff_fall = fall_len;
-    if (!preset.risesFromGround())
-    {
-        SSVolCloud* vol = SSVolCloud::getInstance();
-        const F32 deck_z = vol ? vol->precipBaseZ() : 0.f;
-        const F32 deck_above = deck_z - hit.mV[VZ];
-        eff_fall = tierSpawnTopAbove(tier, fall_len, &deck_above);
-    }
-
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     if (tier == TIER_DROPS && preset.makesImpacts()
         && (hit - cam).magVec() < IMPACT_QUEUE_RADIUS)
@@ -969,7 +886,7 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
                           on_water, normal, impact_vel, preset.mShatter);
     }
 
-    emitParticle(tier, hit, eff_fall, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
+    emitParticle(tier, hit, fall_len, env, size_jitter, phase, riser_age, gust_jitter, vis_seed,
                  found_surface || !atmo->isSkyTrack());
 }
 

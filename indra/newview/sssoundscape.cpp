@@ -62,6 +62,11 @@ static const F32 COVER_BLEND_RATE = 8.f;
 static const F32 BURIAL_FULL       = 12.f;
 static const F32 BURIAL_MAX_DUCK   = 0.85f;
 static const F32 BURIAL_BLEND_RATE = 2.5f;
+// The burial figure the air flood's sealed-room verdict wants to stand at: a
+// point the connectivity walk cannot reach from sky or border is as enclosed
+// as the muffle can express, whether or not the band stack shows a roof only
+// a few metres up.
+static const F32 BURIAL_INTERIOR_DEPTH = 18.f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO("Atmo Magic Audio");
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO_PROBE("Cover Probes");
@@ -180,6 +185,12 @@ void SSSoundscape::updateProbes(F64 now)
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
 
+    // The sealed-room verdict only survives a cycle that re-answers it: reset
+    // here, above the movement/staleness gates, so turning the field source
+    // off or losing its tile clears the flag on the very next frame instead of
+    // carrying a stale interior boost into an open area.
+    mInterior = false;
+
     const bool moved = (cam - mProbeAnchor).magVec() > MOVE_TRIGGER;
     const bool stale = now - mLastCycleDone > STALE_TRIGGER;
     if (!moved && !stale) return;
@@ -248,6 +259,18 @@ void SSSoundscape::updateProbes(F64 now)
             mCovered = (covered_count == 5) && centre_covered;
             mRoofDist = mCovered ? llclamp(centre_ceiling - cam.mV[VZ], 0.f, UP_RAY_LENGTH) : 0.f;
             mBuriedDepth = mCovered ? llmax(0.f, centre_top - centre_ceiling) : 0.f;
+
+            // Sealed-room verdict from the air flood: a camera cell the
+            // connectivity walk could not reach from sky or tile border is
+            // inside a volume the store considers sealed, and that matters to
+            // the mix even where the coverage taps found no roof to measure -
+            // a mezzanine air band under a deck roof draws no ceiling the band
+            // stack can name, but the flood still proves it cannot leave.
+            mInterior = (field->airLabelAt(cam) == SSWorldField::AIR_INTERIOR);
+            if (mInterior)
+            {
+                mBuriedDepth = llmax(mBuriedDepth, BURIAL_INTERIOR_DEPTH);
+            }
         }
     }
     else if (mCoverageClaim)

@@ -1647,6 +1647,24 @@ F32 SSVolCloud::precipBaseZ() const
     return (deck && !deck->mPuffs.empty()) ? deck->mBaseZ : cloudBaseZ();
 }
 
+// How solid the under deck is over one point of the sky: the same noise-map presence gate the
+// builder ran for the column, read in the air frame so it drifts with the deck. No map read
+// back yet answers neutral - the deck is there until proven a hole.
+F32 SSVolCloud::underPresenceAt(const LLVector3& pos_agent) const
+{
+    if (mUnder.mPuffs.empty() || mUnder.mNoiseW <= 0 || mUnder.mNoiseTileM <= 0.f) return 1.f;
+
+    const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+
+    F32 presence = 1.f;
+    F32 tower = 0.f;
+    noiseFieldAt(mUnder,
+                 pos_agent.mV[VX] - drift.mV[0],
+                 pos_agent.mV[VY] - drift.mV[1],
+                 presence, tower);
+    return presence;
+}
+
 // The picker previews' stand-ins: what the deck is actually running while its authored field is
 // None. An authored texture hands back null - the picker then previews the real asset by its
 // own uuid, as texture pickers always have.

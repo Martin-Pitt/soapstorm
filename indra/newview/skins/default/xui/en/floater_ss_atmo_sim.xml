@@ -118,6 +118,26 @@
      label="Draw the roof runoff"
      tool_tip="The eaves, the water they hold and what they shed, in the mode picked below. Same overlay as Develop &gt; Render Metadata &gt; Roof runoff" />
     <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="4"
+     height="16"
+     width="382"
+     name="field_overlay_check"
+     label="Draw the world field"
+     tool_tip="The shared field's view, picked below. Same overlay as Develop &gt; Render Metadata &gt; World field" />
+    <combo_box
+      control_name="SSWorldFieldDebugView" name="C_field_view"
+      follows="left|top" layout="topleft"
+      left="12" top_pad="4" height="20" width="250"
+      tool_tip="Band surfaces: every surface the capture resolved, hue by band so stacked storeys read separately. Air labels: the connectivity flood, outside-connected air green and fading with occlusion depth, sealed interior air red. Drainage: standing water blue and the D8 outlet chain of the filled surface">
+        <combo_box.item label="Off" value="0" name="field_view_off" />
+        <combo_box.item label="Band surfaces" value="1" name="field_view_bands" />
+        <combo_box.item label="Air labels" value="2" name="field_view_air" />
+        <combo_box.item label="Drainage" value="3" name="field_view_drain" />
+    </combo_box>
+    <check_box
      control_name="SSAtmoDebugStrikeMarkers"
      follows="left|top"
      layout="topleft"

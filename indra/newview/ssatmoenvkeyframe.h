@@ -101,8 +101,14 @@ inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 
     return a;
 }
 
+// <SS:Nexii> Texture tracks keyframe at EASE, not HOLD. ss_atmoenv_lerp never interpolates a
+// UUID - valueAt holds the earlier map, which is exactly the crossfade's FROM keyframe - so the
+// curve's only render role is the weight blendAt() hands the renderer, and HOLD weighed that to
+// 0 on every segment: the editor has no curve control on a texture row, so the crossfade could
+// never engage and every cloud image change snapped. HOLD stays expressible for an authored
+// hard cut (setCurveAt, or a saved asset carrying "hold").
 template <>
-inline SSAtmoEnvCurve ss_atmoenv_default_curve<LLUUID>() { return SSAtmoEnvCurve::HOLD; }
+inline SSAtmoEnvCurve ss_atmoenv_default_curve<LLUUID>() { return SSAtmoEnvCurve::EASE; }
 
 template <typename T>
 inline bool ss_atmoenv_near_equal(const T& a, const T& b, F32 epsilon)

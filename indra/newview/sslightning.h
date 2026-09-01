@@ -35,6 +35,17 @@
 class SSRandStream;
 class LLHUDText;
 
+// <SS:Nexii> The dissolve-to-sparks decay timing, shared by the model and the renderer so the
+// strike's lifetime always covers the beam breaking apart plus its dying sparks: after a return
+// stroke each segment's alpha mask turns up at its own random moment inside the window, and the
+// ember left behind burns EMBER_S more. </SS:Nexii>
+namespace SSDissolve
+{
+    constexpr F32 LAG_S = 0.05f;
+    constexpr F32 SPAN_S = 0.30f;
+    constexpr F32 EMBER_S = 0.18f;
+}
+
 enum SSStrikeKind : U8
 {
     STRIKE_SHEET = 0,
@@ -84,6 +95,22 @@ struct SSStrike
     LLVector3 mBranchConeAxis;
     F32 mBranchConeDot = 0.f;
     F32 mBranchFloorZ = 0.f;
+
+    // <SS:Nexii> How far an in-cloud channel's runs sag below their own endpoints as they
+    // travel horizontally - the dip that takes an intra-cloud bolt under the deck's base and
+    // back up. Zero for the straight-down trunk of a ground strike. Filled by buildChannel.
+    // </SS:Nexii>
+    F32 mCloudDipM = 0.f;
+
+    // <SS:Nexii> The channel's total path length from its root, derived after build. Every
+    // node's reach is its path distance from the root (see buildChannel), so the leader sweeps
+    // the whole bolt at one continuous crawl, and its duration is the distance divided by the
+    // visible leader speed - long bolts take time to travel. </SS:Nexii>
+    F32 mChannelLenM = 0.f;
+
+    // <SS:Nexii> Debug-forced placements (the Strike Now / Ground Strike buttons) keep their
+    // kind: an explicitly aimed ground strike is not re-routed by the under deck. </SS:Nexii>
+    bool mForced = false;
 
     static const S32 MAX_STROKES = 4;
     S32 mStrokeCount = 0;
@@ -147,11 +174,23 @@ private:
                   const LLVector3& from, const LLVector3& to,
                   S32 levels, F32 width_start, F32 width_end,
                   F32 t_start, F32 t_end, bool trunk,
-                  SSRandStream& rng, std::vector<S32>& out_nodes);
+                  SSRandStream& rng, std::vector<S32>& out_nodes,
+                  bool sag = false);
 
     void growBranches(SSStrike& strike, const std::vector<S32>& along,
                       S32 depth, S32 levels, F32 intensity, SSRandStream& rng,
                       F32 fecundity = 1.f);
+
+    // <SS:Nexii> Re-routes a ground strike whose channel would cross the under deck into a
+    // cloud-to-cloud crawler with branching ends inside that deck - the bolt to nowhere below a
+    // floating build becomes a fork instead. Grows the channel itself; true when re-routed.
+    // </SS:Nexii>
+    bool underDeckDivert(SSStrike& strike, SSRandStream& rng);
+
+    // After all geometry is grown: every node's reach becomes its path distance from the root
+    // (normalized to progress), and the total length is stored for the leader's travel time.
+    void finishChannel(SSStrike& strike);
+
     void advance(SSStrike& strike, F32 dt);
 
     std::vector<SSStrike> mStrikes;

@@ -52,8 +52,12 @@ namespace
     const F32 ANTICIPATION_DEFAULT_S = 3.f;
 
     const F32 LEADER_MIN_S = 0.05f;
-    const F32 LEADER_MAX_S = 0.18f;
+    const F32 LEADER_MAX_S = 1.2f;
     const F32 LEADER_GLOW = 0.12f;
+
+    // <SS:Nexii> The visible speed the leader front crawls the channel at, in metres per
+    // second. Long bolts visibly take time to travel; short ones still snap. </SS:Nexii>
+    const F32 LEADER_SPEED_M_S = 2800.f;
 
     const S32 RETURN_STROKES_MIN = 1;
     const S32 RETURN_STROKES_MAX = 4;
@@ -367,6 +371,10 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     strike.mFireAt = fire_at;
     strike.mIntensity = llclamp(intensity, 0.f, 1.f);
 
+    // Debug buttons force their kind and/or attachment; those strikes are deliberately aimed,
+    // so they are exempt from the under deck's re-route to cloud-to-cloud.
+    strike.mForced = (force_kind < STRIKE_KIND_COUNT) || (force_ground != nullptr);
+
     if (force_kind < STRIKE_KIND_COUNT)
     {
         strike.mKind = force_kind;
@@ -499,12 +507,14 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     mStrikes.push_back(strike);
 }
 
-// One midpoint-displaced run of channel between two points - the self-similar kinked geometry everything else hangs off.
+// One midpoint-displaced run of channel between two points - the self-similar kinked geometry everything else hangs off. With sag, an in-cloud run also settles below its own endpoints in
+// a smooth arc: the dip that takes a horizontally-travelling bolt under the deck and back up. Trunks to the ground and branches never ask.
 void SSLightning::growPath(SSStrike& strike, S32 parent,
                            const LLVector3& from, const LLVector3& to,
                            S32 levels, F32 width_start, F32 width_end,
                            F32 t_start, F32 t_end, bool trunk,
-                           SSRandStream& rng, std::vector<S32>& out_nodes)
+                           SSRandStream& rng, std::vector<S32>& out_nodes,
+                           bool sag)
 {
     out_nodes.clear();
 
@@ -548,6 +558,20 @@ void SSLightning::growPath(SSStrike& strike, S32 parent,
 
         pts.swap(next);
         amp *= 0.55f;
+    }
+
+    // The in-cloud dip: a smooth sag between the run's endpoints, deepest mid-run, so the bolt
+    // reads as diving under its own chord (and under the deck) and climbing back rather than
+    // drifting flat. Capped so a short run never folds in on itself.
+    if (sag && strike.mCloudDipM > 1.f)
+    {
+        const F32 dip = llmin(strike.mCloudDipM, len * 0.30f);
+        const F32 n = (F32)(pts.size() - 1);
+        for (size_t k = 1; k + 1 < pts.size(); ++k)
+        {
+            const F32 f = (F32)k / n;
+            pts[k].mV[VZ] -= dip * sinf(f * F_PI);
+        }
     }
 
     S32 prev = parent;
@@ -658,6 +682,25 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     const bool to_ground = (strike.mKind == STRIKE_GROUND);
 
+    // <SS:Nexii> Under-deck re-route: with an under deck between origin and ground, most ground
+    // strikes - especially the ones over the void or falling through the gaps of a floating
+    // build - stop being bolts to nowhere and become cloud-to-cloud forks with branching ends
+    // inside that deck. Forced debug strikes keep their kind.
+    // [interaction: SSVolCloud under deck] </SS:Nexii>
+    if (to_ground && underDeckDivert(strike, rng))
+    {
+        finishChannel(strike);
+        return;
+    }
+
+    if (!to_ground)
+    {
+        // The in-cloud dip: how far the channel's runs settle below their own chord as they
+        // travel, taking the bolt under the deck's base and back up. Ground trunks stay straight.
+        const F32 dip_scale = llclamp(settingF("SSAtmoLightningDip", 1.f), 0.f, 2.f);
+        strike.mCloudDipM = rng.frand(70.f, 240.f) * (0.6f + intensity * 0.8f) * dip_scale;
+    }
+
     if (to_ground)
     {
         // Hold forked channels off the strike point: a cone about the main line's descent,
@@ -689,7 +732,7 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
         if (to_ground)
         {
             growPath(strike, -1, strike.mOrigin, strike.mGround, levels,
-                     1.f, 0.6f, 0.f, 1.f, true, rng, trunk);
+                     1.f, 0.6f, 0.f, 1.f, true, rng, trunk, false);
         }
 
         const S32 arm_levels = llmax(levels - 2, 3);
@@ -704,7 +747,8 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
             const LLVector3 tip = strike.mOrigin
                 + LLVector3(cosf(bearing) * reach, sinf(bearing) * reach, rng.frand(-120.f, 120.f));
             growPath(strike, -1, strike.mOrigin, tip, arm_levels,
-                     0.85f, 0.3f, 0.f, 1.f, !to_ground && a == 0, rng, arm_nodes[(size_t)a]);
+                     0.85f, 0.3f, 0.f, 1.f, !to_ground && a == 0, rng, arm_nodes[(size_t)a],
+                     !to_ground && strike.mCloudDipM > 0.f);
         }
         if (to_ground)
         {
@@ -714,11 +758,15 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
         {
             growBranches(strike, arm_nodes[(size_t)a], depth, arm_levels, intensity * 0.85f, rng, 2.f);
         }
+        finishChannel(strike);
         return;
     }
 
     if (!to_ground && rng.frand() < 0.5f)
     {
+        // Bidirectional crawler: two runs out of the origin in roughly opposite directions,
+        // forked along their length, so both ends carry the branching forks real in-cloud
+        // discharges show. The runs sag, so the bolt dives under the deck and climbs back.
         const F32 bearing = rng.frand(0.f, F_TWO_PI);
 
         std::vector<S32> run_a, run_b;
@@ -727,7 +775,7 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
             const LLVector3 tip = strike.mOrigin
                 + LLVector3(cosf(bearing) * reach, sinf(bearing) * reach, rng.frand(-150.f, 150.f));
             growPath(strike, -1, strike.mOrigin, tip, levels,
-                     1.f, 0.6f, 0.f, 1.f, true, rng, run_a);
+                     1.f, 0.6f, 0.f, 1.f, true, rng, run_a, true);
         }
         {
             const F32 back = bearing + F_PI + rng.frand(-0.5f, 0.5f);
@@ -735,10 +783,11 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
             const LLVector3 tip = strike.mOrigin
                 + LLVector3(cosf(back) * reach, sinf(back) * reach, rng.frand(-150.f, 150.f));
             growPath(strike, -1, strike.mOrigin, tip, levels,
-                     0.9f, 0.5f, 0.f, 1.f, true, rng, run_b);
+                     0.9f, 0.5f, 0.f, 1.f, true, rng, run_b, true);
         }
         growBranches(strike, run_a, depth, levels, intensity, rng);
         growBranches(strike, run_b, depth, levels, intensity * 0.85f, rng);
+        finishChannel(strike);
         return;
     }
 
@@ -748,7 +797,8 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     std::vector<S32> trunk;
     growPath(strike, -1, strike.mOrigin, tip, levels,
-             1.f, 0.6f, 0.f, 1.f, true, rng, trunk);
+             1.f, 0.6f, 0.f, 1.f, true, rng, trunk,
+             !to_ground && strike.mCloudDipM > 0.f);
 
     if (to_ground)
     {
@@ -775,6 +825,121 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
     }
 
     growBranches(strike, trunk, depth, levels, intensity, rng);
+
+    finishChannel(strike);
+}
+
+// After every run, branch and re-route is grown: the leader front sweeps the whole bolt as one
+// continuous crawl, so each node's reach becomes its path distance from the root (normalized to
+// the leader's progress), not a per-run clock - a long channel visibly takes time to travel, and
+// a side branch is reached when the front gets there, not when its own run would have finished.
+void SSLightning::finishChannel(SSStrike& strike)
+{
+    strike.mChannelLenM = 0.f;
+    if (strike.mChannel.empty()) return;
+
+    strike.mChannel[0].mReachedAt = 0.f;
+    for (size_t i = 1; i < strike.mChannel.size(); ++i)
+    {
+        const S32 p = strike.mChannel[i].mParent;
+        if (p < 0) continue;
+        const F32 d = (strike.mChannel[i].mPos - strike.mChannel[(size_t)p].mPos).magVec();
+        strike.mChannel[i].mReachedAt = strike.mChannel[(size_t)p].mReachedAt + d;
+    }
+    for (const SSStrikeNode& node : strike.mChannel)
+    {
+        strike.mChannelLenM = llmax(strike.mChannelLenM, node.mReachedAt);
+    }
+    if (strike.mChannelLenM > 1.f)
+    {
+        for (SSStrikeNode& node : strike.mChannel)
+        {
+            node.mReachedAt = llclamp(node.mReachedAt / strike.mChannelLenM, 0.f, 1.f);
+        }
+    }
+}
+
+// The under-deck re-route for ground strikes: with the under deck (the cloud band hung below a
+// floating build) standing between the cloud origin and the ground, the bolt would fall through
+// the void or a gap to nothing. Most such strikes become a cloud-to-cloud crawler inside that
+// deck instead, branching at both ends like the in-cloud discharge it now is. The trunk must
+// actually cross the deck band for the re-route to apply, and the roll scales with how solid
+// the deck is right there - a bolt diving through a hole still re-routes, just a little less
+// certainly than one swallowed by solid cloud. Grows the channel; true when re-routed, so the
+// caller skips all the ground morphologies.
+bool SSLightning::underDeckDivert(SSStrike& strike, SSRandStream& rng)
+{
+    if (strike.mForced) return false;
+
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    if (!vol->underPresent()) return false;
+
+    F32 divert = llclamp(settingF("SSAtmoLightningDeckRedirect", 0.65f), 0.f, 1.f);
+    if (divert <= 0.f) return false;
+
+    const F32 deck_lo = vol->underBaseZ();
+    const F32 deck_hi = vol->underTopZ();
+    if (deck_hi - deck_lo < 20.f) return false;
+
+    const F32 trunk_lo = llmin(strike.mOrigin.mV[VZ], strike.mGround.mV[VZ]);
+    const F32 trunk_hi = llmax(strike.mOrigin.mV[VZ], strike.mGround.mV[VZ]);
+    if (trunk_hi < deck_lo || trunk_lo > deck_hi) return false;
+
+    const F32 presence = vol->underPresenceAt(strike.mGround);
+    const F32 p = divert * (0.55f + 0.45f * presence);
+    if (rng.frand() >= p) return false;
+
+    static LLCachedControl<S32> depth_setting(gSavedSettings, "SSAtmoLightningBranchDepth", 3);
+    const S32 depth = llclamp((S32)depth_setting, 0, 5);
+
+    // The re-route's root: where the old trunk would have crossed the deck band's middle,
+    // jittered, and the strike is re-held as a fork - stroke physics, sparks and markers all
+    // read cloud-to-cloud from here on.
+    const F32 band_mid = (deck_lo + deck_hi) * 0.5f;
+    const F32 dz = strike.mGround.mV[VZ] - strike.mOrigin.mV[VZ];
+    F32 t = (dz != 0.f) ? (band_mid - strike.mOrigin.mV[VZ]) / dz : 0.5f;
+    t = llclamp(t, 0.f, 1.f);
+    LLVector3 centre = strike.mOrigin + (strike.mGround - strike.mOrigin) * t;
+    centre.mV[VX] += rng.frand(-160.f, 160.f);
+    centre.mV[VY] += rng.frand(-160.f, 160.f);
+    centre.mV[VZ] = band_mid + rng.frand(-0.45f, 0.45f) * (deck_hi - deck_lo);
+
+    strike.mKind = STRIKE_FORK;
+    strike.mOrigin = centre;
+    strike.mGround = centre;
+    strike.mDistanceM = (centre - gAgent.getPositionAgent()).magVec();
+    const F32 dip_scale = llclamp(settingF("SSAtmoLightningDip", 1.f), 0.f, 2.f);
+    strike.mCloudDipM = llmax(40.f, (deck_hi - deck_lo) * 0.45f) * dip_scale;
+
+    S32 levels = 3;
+    if (strike.mDistanceM < 800.f)       levels = 6;
+    else if (strike.mDistanceM < 2500.f) levels = 5;
+    else if (strike.mDistanceM < 6000.f) levels = 4;
+
+    strike.mChannel.reserve(256);
+
+    // A bidirectional crawler inside the deck band, forked along both runs - the "branching
+    // forks at either end" the re-routed bolt grows into.
+    const F32 bearing = rng.frand(0.f, F_TWO_PI);
+    std::vector<S32> run_a, run_b;
+    {
+        const F32 reach = rng.frand(600.f, 2400.f);
+        const LLVector3 tip = centre
+            + LLVector3(cosf(bearing) * reach, sinf(bearing) * reach, rng.frand(-120.f, 120.f));
+        growPath(strike, -1, centre, tip, levels,
+                 1.f, 0.6f, 0.f, 1.f, true, rng, run_a, true);
+        growBranches(strike, run_a, depth, levels, strike.mIntensity, rng, 1.6f);
+    }
+    {
+        const F32 back = bearing + F_PI + rng.frand(-0.5f, 0.5f);
+        const F32 reach = rng.frand(400.f, 1600.f);
+        const LLVector3 tip = centre
+            + LLVector3(cosf(back) * reach, sinf(back) * reach, rng.frand(-120.f, 120.f));
+        growPath(strike, -1, centre, tip, levels,
+                 0.9f, 0.5f, 0.f, 1.f, true, rng, run_b, true);
+        growBranches(strike, run_b, depth, levels, strike.mIntensity * 0.85f, rng, 1.6f);
+    }
+    return true;
 }
 
 // Runs one strike through its phases: charge, leader descent, summed return strokes, flash decay, retirement.
@@ -784,7 +949,15 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
 
     SSRandStream rng((U32)(strike.mFireAt * 3571.0) ^ 0x11feu);
 
-    const F32 leader_s = rng.frand(LEADER_MIN_S, LEADER_MAX_S);
+    // The leader's duration is the channel's own: total path length at a visible crawl speed,
+    // so a bolt spanning kilometres takes clear time to trace out while a nearby short one
+    // snaps in. Sheet strikes have no channel and keep the plain roll.
+    const F32 leader_s = (strike.mChannelLenM > 1.f)
+        ? llclamp(strike.mChannelLenM
+                  / llmax(settingF("SSAtmoLightningLeaderSpeed", LEADER_SPEED_M_S), 100.f)
+                  * rng.frand(0.85f, 1.2f),
+                  LEADER_MIN_S, LEADER_MAX_S)
+        : rng.frand(LEADER_MIN_S, LEADER_MAX_S);
     const S32 strokes = RETURN_STROKES_MIN + rng.rand(RETURN_STROKES_MAX - RETURN_STROKES_MIN + 1);
 
     const F32 charge_s = SSAtmoMagic::getInstance()->lightningCharge()
@@ -850,14 +1023,33 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
             at += rng.frand(RESTRIKE_MIN_S, RESTRIKE_MAX_S);
         }
 
-        if (strike.mT > at + STROKE_DECAY_S * 6.f)
+        // The stroke's honest exponential decay is only half the story: the tail after it is
+        // the dissolve-to-sparks, where the beam breaks apart into individually extinguished
+        // segments and dying sparks. The strike lives through that theatre - last pop, ember
+        // linger and margin - before retiring. Slower dissolve settings stretch the window.
         {
-            brightness = 0.f;
-            strike.mDone = true;
+            const F32 dissolve = llclamp(settingF("SSAtmoLightningDissolve", 1.f), 0.f, 2.f);
+            const F32 tail_s = (dissolve > 0.f)
+                ? SSDissolve::LAG_S + (SSDissolve::SPAN_S + SSDissolve::EMBER_S) / dissolve + 0.1f
+                : 0.f;
+            if (strike.mT > at + STROKE_DECAY_S * 6.f + tail_s)
+            {
+                brightness = 0.f;
+                strike.mDone = true;
+            }
         }
     }
 
-    strike.mChannelBrightness = llclamp(brightness, 0.f, 1.f);
+    // During the dissolve tail the real channel is dark, but it keeps a whisper of presence so
+    // the renderer stays live long enough for the dying sparks - the beam is already gone, only
+    // its embers are left, and they need the channel pass running to draw.
+    F32 channel_brightness = llclamp(brightness, 0.f, 1.f);
+    if (channel_brightness <= 0.001f && !strike.mChannel.empty()
+        && strike.mT >= 0.f && !strike.mDone)
+    {
+        channel_brightness = LEADER_GLOW * 0.02f;
+    }
+    strike.mChannelBrightness = channel_brightness;
 
     static LLCachedControl<bool> markers(gSavedSettings, "SSAtmoDebugStrikeMarkers", false);
     if (markers && strike.mT <= -MARKER_HIDE_S && !strike.mDone)

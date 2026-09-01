@@ -191,6 +191,7 @@ set(viewer_SOURCE_FILES
     ssatmomagic.cpp
     ssatmotrack.cpp
     ssatmoenvapplier.cpp
+    ssdiscpad.cpp
     ssavatarwet.cpp
     ssatmoenvasset.cpp
     ssatmoenvmanager.cpp
@@ -215,6 +216,7 @@ set(viewer_SOURCE_FILES
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
     ssfloatersim.cpp
+    ssfloaterworldfield.cpp
     ssatmostore.cpp
     ssprecippreset.cpp
     ssprecipitation.cpp
@@ -1107,6 +1109,7 @@ set(viewer_HEADER_FILES
     ssatmomagic.h
     ssatmotrack.h
     ssatmoenvapplier.h
+    ssdiscpad.h
     ssavatarwet.h
     ssatmoenvasset.h
     ssatmoenvkeyframe.h

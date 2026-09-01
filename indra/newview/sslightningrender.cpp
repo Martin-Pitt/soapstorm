@@ -34,6 +34,8 @@
 #include "llviewershadermgr.h"
 #include "llviewertexture.h"
 #include "llviewertexturelist.h"
+#include "llworld.h"
+#include "llsurface.h"
 #include "llrender.h"
 #include "pipeline.h"
 
@@ -44,6 +46,23 @@ namespace
     const F32 SPARK_LIFE_S = 1.4f;
     const F32 SPARK_GRAVITY = 9.8f;
     const S32 SPARK_COUNT = 40;
+
+    // <SS:Nexii> The recorded ground-strike finish: the last 10-20m of a ground bolt turns
+    // from the authored bolt colour to a yellow-red amber and flares much hotter than the
+    // mid-air channel as it comes down to the attachment. </SS:Nexii>
+    const LLColor3 AMBER_COLOR(1.f, 0.42f, 0.07f);
+    const F32 AMBER_ZONE_M = 18.f;
+    const F32 AMBER_BOOST = 2.2f;
+
+    // <SS:Nexii> The decay's dissolve-to-sparks: after a return stroke peaks, the beam does not
+    // dim as one ribbon - each segment keeps its own random extinction threshold, so the
+    // channel breaks apart into chunks and finally individual sparks. The instant a segment
+    // pops, it leaves a dying ember spark behind. Timing lives in SSDissolve (sslightning.h),
+    // shared with the model so the strike's lifetime always covers the show. </SS:Nexii>
+
+    // <SS:Nexii> Secondary sparks: what a primary impact spark throws off where its arc comes
+    // down on a surface - smaller, dimmer, shorter-lived, no further generations. </SS:Nexii>
+    const F32 SECONDARY_LIFE_S = 0.6f;
 
     // The pre-strike charge field: sparks live a fraction of a second, then respawn
     // elsewhere (the duty cycle is at least double the life) until the strike fires.
@@ -390,6 +409,16 @@ void SSLightningRender::render()
 
             const F32 dist_scale = llmax(1.f, strike.mDistanceM / 1000.f);
 
+            // The strike's stable per-node hash seed, so the dissolve thresholds and ember
+            // sparks hold the same pattern every frame and every return stroke.
+            const U32 strike_seed = (U32)(strike.mFireAt * 3571.0) ^ 0x11feu;
+
+            static LLCachedControl<F32> amber_setting(gSavedSettings, "SSAtmoLightningGroundAmber", 1.f);
+            const F32 amber_str = llclamp((F32)amber_setting, 0.f, 2.f);
+
+            static LLCachedControl<F32> dissolve_setting(gSavedSettings, "SSAtmoLightningDissolve", 1.f);
+            const F32 dissolve = llclamp((F32)dissolve_setting, 0.f, 2.f);
+
             // Merged corners. Each node with exactly one child is a turn, not a fork, so the
             // quad ending there and the quad starting there share one side vector - the
             // average of the two segments' own sides - and both quads' corner edges at the
@@ -440,10 +469,12 @@ void SSLightningRender::render()
             for (S32 k = 0; k < strike.mStrokeCount; ++k)
             {
                 const F32 b = strike.mStrokeBright[k] * strike.mIntensity;
-                if (b <= 0.012f) continue;
+                if (b <= 0.012f && dissolve <= 0.f) continue;
 
                 const LLVector3 off = wind
                     * (strike.mStrokeAt[k] * llclamp((F32)ribbon_drift, 0.f, 5.f));
+
+                const F32 since = llmax(0.f, strike.mT - strike.mStrokeAt[k]);
 
                 for (S32 i = 0; i < node_n; ++i)
                 {
@@ -467,6 +498,54 @@ void SSLightningRender::render()
                     const F32 seg_len = (pb - pa).magVec();
                     const F32 v_span = seg_len / llmax(wa * 2.f, 0.001f);
 
+                    // The dissolve-to-sparks mask: each segment keeps its own random extinction
+                    // threshold over the stroke's tail - the alpha mask turned up until that
+                    // piece is fully discarded - so the beam breaks apart into chunks and then
+                    // individual sparks instead of dimming as one ribbon. The instant a segment
+                    // pops it leaves a dying ember spark behind at its centre.
+                    F32 seg = 1.f;
+                    F32 ember = 0.f;
+                    if (dissolve > 0.f)
+                    {
+                        const F32 thr = hashUnit(hash3(strike_seed ^ (U32)i * 1313u));
+                        // The instant this segment's mask is turned up: its own random
+                        // threshold inside the dissolve window, sped by the setting.
+                        const F32 pop_at = SSDissolve::LAG_S
+                            + thr * (SSDissolve::SPAN_S / dissolve);
+                        const F32 age = since - pop_at;
+                        if (age >= 0.f)
+                        {
+                            seg = llclamp(1.f - age * 90.f, 0.f, 1.f);
+                            // The ember lingers its own short life after the pop - a dying
+                            // spark where the piece was, not just a snapped-off edge.
+                            ember = llclamp(1.f - age / (SSDissolve::EMBER_S / dissolve), 0.f, 1.f);
+                        }
+                    }
+                    if (seg <= 0.f && ember <= 0.f) continue;
+
+                    // The amber ground flash: the last 10-20m of a ground bolt turns from the
+                    // authored colour to a yellow-red amber and flares much hotter down there.
+                    F32 amber = 0.f;
+                    F32 amber_boost = 1.f;
+                    if (strike.mKind == STRIKE_GROUND)
+                    {
+                        const F32 h = (pa.mV[VZ] + pb.mV[VZ]) * 0.5f - strike.mGround.mV[VZ];
+                        amber = (1.f - llclamp(h / AMBER_ZONE_M, 0.f, 1.f)) * amber_str;
+                        if (amber > 0.f) amber_boost = 1.f + amber * AMBER_BOOST;
+                    }
+                    LLColor3 core_col = CORE_COLOR;
+                    LLColor3 glow_col = GLOW_COLOR;
+                    if (amber > 0.f)
+                    {
+                        const F32 na = 1.f - amber;
+                        core_col.mV[0] = CORE_COLOR.mV[0] * na + AMBER_COLOR.mV[0] * amber;
+                        core_col.mV[1] = CORE_COLOR.mV[1] * na + AMBER_COLOR.mV[1] * amber;
+                        core_col.mV[2] = CORE_COLOR.mV[2] * na + AMBER_COLOR.mV[2] * amber;
+                        glow_col.mV[0] = GLOW_COLOR.mV[0] * na + AMBER_COLOR.mV[0] * amber;
+                        glow_col.mV[1] = GLOW_COLOR.mV[1] * na + AMBER_COLOR.mV[1] * amber;
+                        glow_col.mV[2] = GLOW_COLOR.mV[2] * na + AMBER_COLOR.mV[2] * amber;
+                    }
+
                     // The joint side lives on the shared node, so both quads of a turn read
                     // the same vector from opposite ends of their common corner.
                     const LLVector3* start_side = joint_side[(size_t)node.mParent].magVecSquared() > 0.f
@@ -474,19 +553,45 @@ void SSLightningRender::render()
                     const LLVector3* end_side = joint_side[(size_t)i].magVecSquared() > 0.f
                         ? &joint_side[(size_t)i] : nullptr;
 
-                    const F32 bo = b * occ;
-                    gGL.color4f(GLOW_COLOR.mV[0] * bo * 0.22f,
-                                GLOW_COLOR.mV[1] * bo * 0.22f,
-                                GLOW_COLOR.mV[2] * bo * 0.22f, glow * bo * 0.3f);
-                    ribbon(pa, pb, cam,
-                           wa * GLOW_WIDTH_MULT, wb * GLOW_WIDTH_MULT, 0.f, v_span,
-                           start_side, end_side);
+                    const F32 bo = b * occ * seg * amber_boost;
+                    if (bo > 0.012f)
+                    {
+                        gGL.color4f(glow_col.mV[0] * bo * 0.22f,
+                                    glow_col.mV[1] * bo * 0.22f,
+                                    glow_col.mV[2] * bo * 0.22f, glow * bo * 0.3f);
+                        ribbon(pa, pb, cam,
+                               wa * GLOW_WIDTH_MULT, wb * GLOW_WIDTH_MULT, 0.f, v_span,
+                               start_side, end_side);
 
-                    gGL.color4f(CORE_COLOR.mV[0] * bo,
-                                CORE_COLOR.mV[1] * bo,
-                                CORE_COLOR.mV[2] * bo, glow * bo);
-                    ribbon(pa, pb, cam, wa, wb, 0.f, v_span, start_side, end_side);
-                    mStats.mSegments++;
+                        gGL.color4f(core_col.mV[0] * bo,
+                                    core_col.mV[1] * bo,
+                                    core_col.mV[2] * bo, glow * bo);
+                        ribbon(pa, pb, cam, wa, wb, 0.f, v_span, start_side, end_side);
+                        mStats.mSegments++;
+                    }
+
+                    // The dying spark a popped segment leaves behind - bright on its own, not
+                    // riding the stroke's decayed glow, so the falling-apart tail keeps reading
+                    // as individual sparks until the channel is fully discarded.
+                    if (ember > 0.03f)
+                    {
+                        const U32 eh = hash3(strike_seed ^ (U32)i * 977u);
+                        const F32 ea = hashUnit(eh ^ 7u) * F_TWO_PI;
+                        const F32 et = (hashUnit(eh ^ 13u) - 0.5f) * 1.3f;
+                        const LLVector3 edir(cosf(ea) * cosf(et), sinf(ea) * cosf(et), sinf(et));
+                        const F32 elen = llmax(wa, wb) * (1.5f + 3.5f * hashUnit(eh ^ 19u));
+                        const F32 er = llmax(wa, wb) * (0.2f + 0.15f * hashUnit(eh ^ 23u));
+                        const F32 eb = strike.mIntensity * ember * (0.30f + 0.25f * hashUnit(eh ^ 29u));
+                        if (eb > 0.02f)
+                        {
+                            const LLVector3 emid = (pa + pb) * 0.5f;
+                            const LLVector3 e0 = emid - edir * elen * 0.5f;
+                            const LLVector3 e1 = emid + edir * elen * 0.5f;
+                            gGL.color4f(core_col.mV[0] * eb, core_col.mV[1] * eb * 0.95f,
+                                        core_col.mV[2] * eb * 0.9f, glow * eb);
+                            ribbon(e0, e1, cam, er * 0.4f, er * 0.7f, 0.f, 1.f);
+                        }
+                    }
                 }
             }
         }
@@ -584,10 +689,14 @@ void SSLightningRender::render()
         }
 
         if (sparks_on && strike.mKind == STRIKE_GROUND
-            && strike.mT >= 0.f && strike.mT < SPARK_LIFE_S)
+            && strike.mT >= 0.f && strike.mT < SPARK_LIFE_S + SECONDARY_LIFE_S)
         {
+            static LLCachedControl<F32> secondary_setting(gSavedSettings, "SSAtmoLightningSecondarySparks", 1.f);
+            const F32 secondary = llclamp((F32)secondary_setting, 0.f, 2.f);
+
             const U32 seed = (U32)(strike.mFireAt * 613.0) ^ 0x5a7au;
             const S32 count = (S32)(SPARK_COUNT * (0.4f + strike.mIntensity * 0.6f));
+            const F32 ground_z = strike.mGround.mV[VZ];
 
             for (S32 i = 0; i < count; ++i)
             {
@@ -597,30 +706,95 @@ void SSLightningRender::render()
                 if (t <= 0.f) continue;
 
                 const F32 life = SPARK_LIFE_S * (0.45f + 0.55f * hashUnit(h ^ 5u));
-                if (t > life) continue;
 
                 const F32 ang = hashUnit(h) * F_TWO_PI;
                 const F32 speed = 3.f + 9.f * hashUnit(h ^ 9u) * (0.5f + strike.mIntensity);
                 const F32 rise = 0.5f + 1.6f * hashUnit(h ^ 15u);
 
-                LLVector3 vel(cosf(ang) * speed, sinf(ang) * speed, speed * rise);
+                // The arc's own flight: risen out of the attachment, pulled back by gravity.
+                // The parabola returns to its launch height at t_hit - that crossing is the
+                // surface impact, and everything after it is the secondary sparks' moment.
+                const F32 vel_z0 = speed * rise;
+                const F32 t_hit = 2.f * vel_z0 / SPARK_GRAVITY;
+                const bool hit_surface = (t_hit > 0.f) && (t_hit < life);
+                const F32 sec_age = strike.mT - t_hit;
 
+                // A secondary only outlives its primary: once the primary's own arc is done
+                // and no secondary is still alight there is nothing left to draw for this index.
+                if (t > life && !(hit_surface && sec_age >= 0.f && sec_age < SECONDARY_LIFE_S))
+                {
+                    continue;
+                }
+
+                LLVector3 vel(cosf(ang) * speed, sinf(ang) * speed, vel_z0);
                 LLVector3 pos = strike.mGround + vel * t;
                 pos.mV[VZ] -= 0.5f * SPARK_GRAVITY * t * t;
-                if (pos.mV[VZ] < strike.mGround.mV[VZ]) continue;
+                vel.mV[VZ] = vel_z0 - SPARK_GRAVITY * t;
 
-                vel.mV[VZ] -= SPARK_GRAVITY * t;
+                // The surface under the spark: the attachment's own height (a deck, a build
+                // roof) or the terrain where the arc has travelled to, whichever is higher.
+                const F32 surf = llmax(ground_z,
+                    LLWorld::getInstance()->resolveLandHeightAgent(pos));
+                if (pos.mV[VZ] < surf) continue;
 
-                const F32 fade = 1.f - (t / life);
-                const F32 a = fade * fade * strike.mIntensity;
-                if (a < 0.02f) continue;
+                if (t <= life)
+                {
+                    const F32 fade = 1.f - (t / life);
+                    const F32 a = fade * fade * strike.mIntensity;
+                    if (a >= 0.02f)
+                    {
+                        const LLVector3 tail = pos - vel * 0.035f;
+                        const F32 r = 0.05f + 0.05f * hashUnit(h ^ 21u);
 
-                const LLVector3 tail = pos - vel * 0.035f;
-                const F32 r = 0.05f + 0.05f * hashUnit(h ^ 21u);
+                        gGL.color4f(CORE_COLOR.mV[0] * a, CORE_COLOR.mV[1] * a * 0.8f,
+                                    CORE_COLOR.mV[2] * a * 0.55f, glow * a * 0.5f);
+                        ribbon(tail, pos, cam, r * 0.35f, r, 0.f, 1.f);
+                    }
+                }
 
-                gGL.color4f(CORE_COLOR.mV[0] * a, CORE_COLOR.mV[1] * a * 0.8f,
-                            CORE_COLOR.mV[2] * a * 0.55f, glow * a * 0.5f);
-                ribbon(tail, pos, cam, r * 0.35f, r, 0.f, 1.f);
+                // The impact: when the primary's parabola comes back down on a surface, it
+                // throws off a few smaller, dimmer secondary sparks that scatter, fall under
+                // the same gravity, and die with no further generations. Stateless like the
+                // primary - every secondary's whole flight is hashed out of its parent's roll.
+                if (hit_surface && secondary > 0.f && sec_age >= 0.f && sec_age < SECONDARY_LIFE_S)
+                {
+                    const LLVector3 hit(
+                        strike.mGround.mV[VX] + cosf(ang) * speed * t_hit,
+                        strike.mGround.mV[VY] + sinf(ang) * speed * t_hit, 0.f);
+                    const F32 surf_hit = llmax(ground_z,
+                        LLWorld::getInstance()->resolveLandHeightAgent(hit));
+
+                    const S32 sec_n = 1 + ((hashUnit(h ^ 37u) < 0.55f) ? 1 : 0);
+                    const U32 sg = hash3(h ^ 0x5151u);
+                    for (S32 j = 0; j < sec_n; ++j)
+                    {
+                        const U32 sh = hash3(sg + (U32)j * 331u);
+
+                        const F32 s_ang = hashUnit(sh ^ 3u) * F_TWO_PI;
+                        const F32 s_spd = (1.5f + 4.5f * hashUnit(sh ^ 7u))
+                                        * (0.4f + strike.mIntensity * 0.6f) * secondary;
+                        const F32 s_rise = 0.3f + 1.1f * hashUnit(sh ^ 11u);
+                        const F32 s_life = SECONDARY_LIFE_S * (0.45f + 0.55f * hashUnit(sh ^ 13u));
+                        if (sec_age > s_life) continue;
+
+                        const F32 s_vz = s_spd * s_rise;
+                        const LLVector3 s_vel(cosf(s_ang) * s_spd, sinf(s_ang) * s_spd, s_vz);
+                        LLVector3 s_pos = hit + s_vel * sec_age;
+                        s_pos.mV[VZ] -= 0.5f * SPARK_GRAVITY * sec_age * sec_age;
+                        if (s_pos.mV[VZ] < surf_hit) continue;
+
+                        const F32 s_fade = 1.f - sec_age / s_life;
+                        const F32 s_a = s_fade * s_fade * strike.mIntensity * 0.55f;
+                        if (s_a < 0.02f) continue;
+
+                        const LLVector3 s_tail = s_pos - s_vel * 0.025f;
+                        const F32 s_r = 0.03f + 0.03f * hashUnit(sh ^ 17u);
+
+                        gGL.color4f(CORE_COLOR.mV[0] * s_a, CORE_COLOR.mV[1] * s_a * 0.8f,
+                                    CORE_COLOR.mV[2] * s_a * 0.55f, glow * s_a * 0.4f);
+                        ribbon(s_tail, s_pos, cam, s_r * 0.35f, s_r, 0.f, 1.f);
+                    }
+                }
             }
         }
     }

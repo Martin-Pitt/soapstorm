@@ -81,7 +81,8 @@ dropped once it stopped doing anything.
 - `region_offset` (`lldrawpoolwlsky.cpp`) is the camera's true region
   position minus the region's centre, in metres. Centring avoids a bias from
   always measuring off the SW corner; it does not affect the parallax rate.
-- **The tile is pinned and recalibrated** (`SS_DOME_TILE_M`, 32 km). The divisor
+- **The tile is anchored and the Scale dial re-enters as a crossfade**
+  (`SS_DOME_TILE_M`, 32 km at the anchor; `SS_SCALE_ANCHOR`, 0.25). The divisor
   used to be `2 * height * cloud_scale`, which cancelled the height out of
   the flat mapping's own static pattern — reach scaled with height and so did
   metres-per-UV, so the pattern never moved vertically at all — and it let
@@ -95,9 +96,19 @@ dropped once it stopped doing anything.
   2*alt*cloud_scale divisor it replaced breathed the pattern every time the
   band moved.) Pinned, one tile is one fixed piece of world: the
   height above the camera survives into the pattern (vertical parallax on
-  both the flat and curved paths), altitude changes slide instead of zoom,
-  and cloud_scale stays out of the Atmo render entirely — imported cycles
-  animating it can no longer reach the dome.
+  both the flat and curved paths), altitude changes slide instead of zoom.
+  The Scale dial is back, but as a CROSSFADE, not a zoom: at an authored
+  0.25 the divisor is exactly the pin (0.25 is the anchor — the pre-dial
+  look), and any keyframed move between two authored scales renders the band
+  at BOTH endpoint tiles and blends the two opacities by the eased weight
+  (`ss_cloud_scale_to`/`ss_cloud_scale_blend` in cloudsF, sampled in the
+  applier from the same `blendAt` the noise crossfades use). Interpolating
+  the divisor itself was the erratic-motion bug: mid-fade it dragged every
+  feature sideways as the tile zoomed, reading as clouds drifting when they
+  should stand still. Because the noise pair's mix happens inside the shared
+  sampler before either plate samples it, a Cloud Image keyframe set on
+  different timepoints composes exactly — the two dials fade on independent
+  axes.
 - **The fine layers run at 2x, not stock's 16x** (`SS_FINE_LAYER`): stock's 16
   put the fine tile at a fraction of the broad one - dozens of copies of the
   same clump across the sky, marching in rows under the perspective

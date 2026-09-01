@@ -658,6 +658,33 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         [this](F32 v) { mSky->setCloudShadow(v); });
     put(mLastCloudScale, dome.mScale.valueAt(phase),
         [this](F32 v) { mSky->setCloudScale(v); });
+    // <SS:Nexii> The Scale dial's crossfade. valueAt above holds the fade's FROM keyframe - the
+    // sky's own cloud_scale uniform keeps it, exactly as the dome noise's id keeps the fade's
+    // from map - and this pair hands the ground mapping's OTHER end and the eased weight to the
+    // sky pool, which binds them into the dome shader (ss_cloud_scale_to / ss_cloud_scale_blend).
+    // The shader then samples the band at BOTH endpoint scales and mixes the resulting opacities:
+    // the pattern is scaled by the endpoints and the two renderings are crossfaded, never the
+    // scale itself interpolated. That interpolation was the erratic-motion bug this re-add
+    // exists to avoid - a continuously zoomed tile drags every feature sideways as the pivot
+    // point moves, so keyframing the dial read as the clouds drifting when they should stand
+    // still; the crossfade slides between two fixed patterns instead. An authored 0.25 is the
+    // anchor (SS_SCALE_ANCHOR in the shader): it tiles exactly as the render did before the dial
+    // was re-added. A degenerate endpoint (authored scale ~0) has no honest tile, so the fade is
+    // skipped and the layer draws at the surviving endpoint. Different keyframe timing from the
+    // Cloud Image is fine: each field fades on its own axis, and the noise pair's mix happens
+    // inside the sampler both plates share.
+    mCloudScaleTo = dome.mScale.valueAt(phase);
+    mCloudScaleBlend = 0.f;
+    {
+        F32 scale_from = 0.f, scale_to = 0.f, scale_blend = 0.f;
+        if (dome.mScale.blendAt(phase, scale_from, scale_to, scale_blend)
+            && scale_from > 0.001f && scale_to > 0.001f)
+        {
+            mCloudScaleTo = scale_to;
+            mCloudScaleBlend = scale_blend;
+        }
+    }
+    // </SS:Nexii>
     // <SS:Nexii> Deliberately unmodulated - the one weather mapping that was removed rather than
     // retuned. Storm darkening used to add the dome a little variance for texture, but EEP's
     // variance erodes (cloudsF.glsl: cloudDensity *= 1 - density_variance^2, saturated wherever
@@ -972,6 +999,9 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     mSunRiseFraction = 0.f;
     mSunSlotDir = LLVector3::z_axis;
 
+    F32 ss_sun_phys_radius = 0.f;
+    F32 ss_sun_phys_dist = 0.f;
+
     LLVector3 sun_dir = -LLVector3::z_axis;
     LLVector3 moon_dir = -LLVector3::z_axis;
     F32 sun_scale = 1.f;
@@ -1020,6 +1050,9 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
                                            SS_ATMOENV_SUN_QUAD_DEG);
             mSunSlotDiscFraction = ss_disc_fraction(body.mDiscPadding);
             mSunSlotAngularDeg = sun_resolved.mAngularDiameterDeg;
+
+            ss_sun_phys_radius = body.mDiameterM * 0.5f;
+            ss_sun_phys_dist  = sun_resolved.mDistance / llmax(planetary.mSunPlanetScale, 0.001f);
             sun_texture = body.mCustomTexture.notNull()
                 ? body.mCustomTexture : fallbackFor(sun_body);
         }
@@ -1228,10 +1261,32 @@ void SSAtmoEnvApplier::applyCelestial(const SSAtmoEnvTrack& track, F64 phase)
     // straight through, the quad's half-angle would size the band (and the dome shaders' held
     // airmass) off the transparent margin, stretching every sunset by exactly that factor.
     // Multiplying the fraction back out lands the band on the disc the quads actually draw.
-    F32 half_tan = sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * 0.5f; // llvosky.cpp's SUN_DISK_RADIUS
+    // <SS:Nexii> The light's size base is the authored sky's sun - the physical (scale-1.0)
+    // angular size, NOT the disc the Disc Perception dials make it loom as now (unless
+    // SSAtmoPerceptionAffectsLight re-couples them - see below. Off by default keeps the
+    // lighting on the benchmark wherever the perception dials do to the drawn discs.
+    F32 light_diameter_deg = mSunSlotAngularDeg;
+    F32 light_sun_scale = sun_scale;
+
+    static LLCachedControl<bool> ss_perception_light(gSavedSettings, "SSAtmoPerceptionAffectsLight", false);
+    if (!ss_perception_light && ss_sun_phys_radius >  0.f && ss_sun_phys_dist >  0.f)
+    {
+
+        light_diameter_deg = RAD_TO_DEG * 2.f * atanf(llclamp(ss_sun_phys_radius / ss_sun_phys_dist, 0.f, 1.f));
+        light_sun_scale = celestialDiscScale(light_diameter_deg, mSunSlotDiscFraction, SS_ATMOENV_SUN_QUAD_DEG);
+
+
+
+    }
+
+
+
+
+    F32 half_tan = light_sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * 0.5f; // llvosky.cpp's SUN_DISK_RADIUS
     if (gSky.mVOSkyp.notNull())
     {
-        half_tan = sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
+        half_tan = light_sun_scale * mSunSlotDiscFraction * HEAVENLY_BODY_FACTOR * gSky.mVOSkyp->getSun().getDiskRadius();
+
     }
     const F32 half_sin = half_tan / sqrtf(1.f + half_tan * half_tan);
     mSunSlotRadius = half_sin;

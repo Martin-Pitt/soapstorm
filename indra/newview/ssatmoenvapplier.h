@@ -107,6 +107,19 @@ public:
     const LLUUID& cloudLargeNoiseNextId() const { return mLargeNoiseTo; }
     F32 cloudLargeNoiseBlend() const { return mLargeNoiseBlend; }
 
+    // <SS:Nexii> The dome band's Scale crossfade, sampled at the applied phase: mid-fade the TO
+    // keyframe's authored scale and the eased weight. The sky's own cloud_scale (setCloudScale in
+    // applySky) keeps holding the fade's FROM value - valueAt and blendAt agree about which
+    // keyframe that is - so the sky pool only binds this half of the pair (ss_cloud_scale_to and
+    // ss_cloud_scale_blend in cloudsF.glsl). The shader tiles the band by BOTH endpoints and
+    // crossfades the two renderings: the pattern is never zoomed, because an interpolated divisor
+    // is exactly the "clouds moving when they shouldn't" this re-add exists to stop - mid-fade it
+    // drags every feature sideways as the pivot point moves. Off-fade, to equals the live value
+    // and the blend is 0 - the single-sample rail. An authored scale of 0.25 is the anchor: it
+    // tiles exactly as the render did before the dial was re-added (SS_SCALE_ANCHOR in cloudsF).
+    F32 cloudScaleTo() const { return mCloudScaleTo; }
+    F32 cloudScaleBlend() const { return mCloudScaleBlend; }
+
     // <SS:Nexii> Whether the sky dome's lower half takes the nearer depth slot that clips what it
     // draws over at the horizon (SSAtmoEnvAtmosphere::mHorizonClip). Sampled at the applied phase
     // like the dome altitude; the sky pool reads it when it binds the dome shader.
@@ -235,6 +248,13 @@ private:
     LLUUID mDomeNoiseFrom;
     LLUUID mDomeNoiseTo;
     F32 mDomeNoiseBlend = 0.f;
+
+    // <SS:Nexii> The dome band's Scale crossfade, sampled at the applied phase - see cloudScaleTo.
+    // The FROM endpoint lives in the sky's own cloud_scale (mLastCloudScale above), so only these
+    // two ride the pair. The blend stays 0 unless a fade is actually between two Scale keyframes -
+    // the shader's single-sample rail needs no extra branching at all.
+    F32 mCloudScaleTo = 0.f;
+    F32 mCloudScaleBlend = 0.f;
 
     // <SS:Nexii> The horizon clip, sampled at the applied phase - see horizonClip.
     bool mHorizonClip = true;

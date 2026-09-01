@@ -1,11 +1,22 @@
 # Atmo Magic: the shared world field (second proposal)
 
-> **Implementation status (2026-08-30):** the capture service (`ssworldfield.h/cpp`,
-> `SSWorldField`) has landed as the sidecar of migration step 1-2: staged band-sliced
-> capture, the column store, `buildSurfaceGrid` with rain shadow's exact contract, the
-> interest/channel registry, `coverageAt`/`surfaceTop`, and the dirty-rect re-peel path.
-> The wet field reads it behind `SSWorldFieldSurfaceTop` (default off); rain shadow and
-> the wind flowmap still own their captures. Steps 3-7 are unbuilt.
+> **Implementation status (2026-09-01):** the capture service (`ssworldfield.h/cpp`,
+> `SSWorldField`) is the sidecar of migration steps 1-2 and 4: staged band-sliced
+> capture, the column store, `buildSurfaceGrid` with rain shadow's exact contract,
+> the interest/channel registry, `coverageAt`/`surfaceTop`/`coverageDetail`,
+> the dirty-rect re-peel path, and the async readback. The wet field reads it
+> behind `SSWorldFieldSurfaceTop` (default off), and the soundscape's cover and
+> burial come from the COVERAGE channel behind `SSWorldFieldCoverage` (default
+> off). The air-connectivity flood fill (labels + occlusion depth) runs on the
+> General worker queue per committed tile, snapshot-gated by geometry serial.
+> The DRAINAGE_NETWORK core (priority-flood depression fill + pool mask + D8 on
+> the filled surface, `buildDrainage`) ships as the surface field's pool source
+> under the same `SSWorldFieldSurfaceTop` switch. A world field debug overlay
+> (`RENDER_DEBUG_WORLD_FIELD`, Develop > Render Metadata > World field) shows
+> the band surfaces, the air labels with occlusion depth, and the drainage
+> topology. Still unbuilt: the wind solve's interior-skip (part of step 3; gated
+> on multi-peel spans - see the architecture note at Part 3, SOLID_VOLUME_3D),
+> wind capture absorption, WALKABLE (7), ACOUSTIC (8) and Design H (6).
 
 This is a design, not a build log. The implementation status block above says
 what exists. It supersedes
@@ -474,6 +485,31 @@ capture, and `refineEdge`/`resolveColumn` become reads of the same store at
 full capture resolution.
 
 ### SOLID_VOLUME_3D and the sparse air solve
+
+> **Architecture note (2026-09-01) - what gates the interior-skip.** The shipped
+> capture stores ONE surface per band per column. Air under that surface - a
+> room, an underpass, a stilt space - shares its band-cell with the surface and
+> reads SOLID, so the connectivity flood can only see air in bands the surface
+> never touched. Consequences, all verified against the code rather than the
+> sketch:
+>
+> - The flood's INTERIOR labels fire only for sealed air with a full band of
+>   headroom (a warehouse mezzanine, a roofed atrium spanning 16 m+ of open
+>   band above its floor). Courtyards, underpasses and single-storey rooms are
+>   outside the store's reach entirely.
+> - Feeding those labels into the wind solve is therefore a no-op for sealed
+>   halls (the top-down mask already says solid, and probes cannot see what
+>   their rays cannot reach) and actively harmful wherever the carve
+>   legitimately opened a space the coarse band labels sealed (a gateway hall,
+>   a stilt floor - connected by construction, since a probe saw in). The
+>   carve already implements "skip what is not outside-seen"; trustable
+>   interior-skip needs the multi-peel span store first.
+> - The preconditions for the interior-skip and per-span drainage are the same:
+>   the band-sliced capture gains a second peel per band (per-column spans
+>   within each band), and `mBandTop`/`mBandFlags` become span lists. Until
+>   then, `buildDrainage` runs over the landing surface only - which is the
+>   level the surface field actually consumes, so step 5's core ships now and
+>   its per-span generalisation lands with the peel.
 
 The wind solve keeps its shape (voxel init → multigrid pressure projection →
 project + shelter → readback), with two changes the shared store makes possible:

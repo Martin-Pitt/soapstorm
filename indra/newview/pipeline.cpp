@@ -111,6 +111,7 @@
 #include "ssrainshadow.h" // <SS:Nexii> Atmo Magic rain shadow maps
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
+#include "ssworldfield.h"   // <SS:Nexii> Atmo Magic shared world field
 #include "sswhiteout.h"     // <SS:Nexii> Atmo Magic whiteout
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
@@ -5720,6 +5721,14 @@ void LLPipeline::renderDebug()
     if (mRenderDebugMask & RENDER_DEBUG_SURFACE_FIELD)
     {
         SSSurfaceField::getInstance()->renderDebug();
+    }
+
+    // Atmo Magic world field: what the shared capture resolved, what the air
+    // flood decided about its connectivity, and the drainage topology it
+    // feeds - view chosen by SSWorldFieldDebugView
+    if (mRenderDebugMask & RENDER_DEBUG_WORLD_FIELD)
+    {
+        SSWorldField::getInstance()->renderDebug();
     }
 
     // Atmo Magic roof runoff: the eaves, the water they hold, the gates that

@@ -51,6 +51,7 @@
 #include "llagent.h" // <SS:Nexii> for gAgent.getRegion()
 #include "ssatmoenvapplier.h" // <SS:Nexii> Atmo Magic celestial billboards
 #include "llviewertexturelist.h" // <SS:Nexii> fetching the dome's authored large-scale noise
+#include "ssvolcloud.h" // <SS:Nexii> the deck's top, for the dome band's horizon melt
 
 extern bool gCubeSnapshot;
 
@@ -58,6 +59,15 @@ static LLStaticHashedString sCamPosLocal("camPosLocal");
 static LLStaticHashedString sCustomAlpha("custom_alpha");
 static LLStaticHashedString sRegionOffset("region_offset"); // <SS:Nexii> cloud parallax
 static LLStaticHashedString sCloudDrift("ss_cloud_drift"); // <SS:Nexii> wind-driven cloud travel
+
+// <SS:Nexii> The dome band's Scale crossfade pair (cloudsF.glsl, SSAtmoEnvApplier::cloudScaleTo /
+// cloudScaleBlend): the ground mapping tiles the band by the sky's own cloud_scale AND by this
+// partner, and mixes the two endpoint-scale renderings by the eased weight - the pattern is never
+// zoomed, which is what made the old interpolated Scale read as erratic cloud motion. Zero unless
+// the day cycle sits between two Scale keyframes.
+static LLStaticHashedString sCloudScaleTo("ss_cloud_scale_to");
+static LLStaticHashedString sCloudScaleBlend("ss_cloud_scale_blend");
+
 
 // <SS:Nexii> Atmo Magic celestial discs - see ssCelestialF.glsl. Every look
 // constant lives in the shader; these are the per-body handles.
@@ -620,12 +630,16 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
                 if (noise_from != s_noise_from_id || s_noise_from_tex.isNull())
                 {
                     s_noise_from_id = noise_from;
-                    s_noise_from_tex = LLViewerTextureManager::getFetchedTexture(noise_from);
+                    s_noise_from_tex = LLViewerTextureManager::getFetchedTexture(
+                        noise_from, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
+                    s_noise_from_tex->addTextureStats((F32)MAX_IMAGE_AREA;
                 }
                 if (noise_to != s_noise_to_id || s_noise_to_tex.isNull())
                 {
                     s_noise_to_id = noise_to;
-                    s_noise_to_tex = LLViewerTextureManager::getFetchedTexture(noise_to);
+                    s_noise_to_tex = LLViewerTextureManager::getFetchedTexture(
+                        noise_to, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
+                    s_noise_to_tex->addTextureStats((F32)MAX_IMAGE_AREA;
                 }
                 cloudshader->bindTexture(LLShaderMgr::CLOUD_NOISE_MAP, s_noise_from_tex, LLTexUnit::TT_TEXTURE);
                 cloudshader->bindTexture(LLShaderMgr::CLOUD_NOISE_MAP_NEXT, s_noise_to_tex, LLTexUnit::TT_TEXTURE);
@@ -652,6 +666,14 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         // the only thing that knows what the wind is doing.
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
         cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
+
+        // <SS:Nexii> The band's Scale crossfade (SSAtmoEnvApplier::cloudScaleTo/cloudScaleBlend):
+        // the fragment ground mapping samples the band at both endpoint scales and blends the two
+        // renderings by the eased weight - the sky's own cloud_scale uniform keeps the FROM
+        // endpoint. Zero when no Atmo environment drives the sky, or between equal keyframes,
+        // which leaves the shader on its single-sample branch - idle EEP skies are untouched.
+        cloudshader->uniform1f(sCloudScaleTo, SSAtmoEnvApplier::instance().cloudScaleTo());
+        cloudshader->uniform1f(sCloudScaleBlend, SSAtmoEnvApplier::instance().cloudScaleBlend());
 
         // <SS:Nexii> The dome band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo
         // environment is driving the sky - it orders the band against the Atmo discs - and 0 for
@@ -687,7 +709,9 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             if (large_noise_id != s_large_noise_id || s_large_noise_tex.isNull())
             {
                 s_large_noise_id = large_noise_id;
-                s_large_noise_tex = LLViewerTextureManager::getFetchedTexture(large_noise_id);
+                s_large_noise_tex = LLViewerTextureManager::getFetchedTexture(
+                    large_noise_id, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
+                s_large_noise_tex->addTextureStats((F32)MAX_IMAGE_AREA;
             }
             cloudshader->bindTexture(LLShaderMgr::SS_NOISE_LARGE_MAP, s_large_noise_tex, LLTexUnit::TT_TEXTURE);
             large_noise_on = true;
@@ -708,7 +732,9 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
                 if (large_noise_next_id != s_large_noise_next_id || s_large_noise_next_tex.isNull())
                 {
                     s_large_noise_next_id = large_noise_next_id;
-                    s_large_noise_next_tex = LLViewerTextureManager::getFetchedTexture(large_noise_next_id);
+                    s_large_noise_next_tex = LLViewerTextureManager::getFetchedTexture(
+                        large_noise_next_id, FTT_DEFAULT, true,, LLGLTexture::BOOST_UI);
+                    s_large_noise_next_tex->addTextureStats((F32)MAX_IMAGE_AREA;
                 }
                 cloudshader->bindTexture(LLShaderMgr::SS_NOISE_LARGE_MAP_NEXT, s_large_noise_next_tex, LLTexUnit::TT_TEXTURE);
                 cloudshader->uniform1f(sNoiseLargeBlend, large_noise_blend);
@@ -758,6 +784,28 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
 
             const F32 band_world_height_m = applier.cloudDomeAltitudeMetres();
             cloudshader->uniform1f(sCloudAltM, band_world_height_m - camPosLocal.mV[VZ]);
+
+            // <SS:Nexii> The volumetric deck's perceived edge, as an elevation sine over the
+            // camera: the deck's top slab seen at the field's own edge distance - the 4900 m the
+            // deck's puffs and base veil dissolve by (ssVolCloudF.glsl). The dome band's horizon
+            // melt runs up to this line: past the deck's edge the band has no cloud in front of
+            // it, so it fades toward the horizon instead of running the overcast sheet flat into
+            // it. Zero - no deck, or the camera at/over its top - leaves the old narrow rim melt.
+            static LLStaticHashedString sDeckEdgeSin("ss_deck_edge_sin");
+            F32 deck_edge_sin = 0.f;
+            SSVolCloud* vol = SSVolCloud::getInstance();
+            if (vol && !vol->empty())
+            {
+                const F32 deck_top_m = vol->cloudTopZ() - camPosLocal.mV[VZ];
+                if (deck_top_m > 0.f)
+                {
+                    static const F32 SS_DECK_EDGE_M = 4900.f;
+                    deck_edge_sin = deck_top_m / sqrtf(deck_top_m * deck_top_m
+                                                       + SS_DECK_EDGE_M * SS_DECK_EDGE_M);
+                }
+            }
+            cloudshader->uniform1f(sDeckEdgeSin, deck_edge_sin);
+
             cloudshader->uniform1f(sCloudDepth, SS_BAND_DEPTH);
             renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
         }

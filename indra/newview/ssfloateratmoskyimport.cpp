@@ -26,6 +26,7 @@
 #include "ssfloateratmoskyimport.h"
 
 #include "ssatmoenvmanager.h"
+#include "ssdiscpad.h" // <SS:Nexii> auto-derived disc padding for adopted disc textures
 #include "ssfloateratmoenv.h"
 
 #include "llbutton.h"
@@ -211,11 +212,66 @@ void SSFloaterAtmoSkyImport::onClickImport()
             if (groups)
             {
                 SSAtmoEnvTrack& track = asset.mTracks[(size_t)mTrackIndex];
+
+                // <SS:Nexii> Snapshot the standard bodies' disc textures so an adopted texture
+                // can be told from a sky that offered nothing new (its stock value). The bodies
+                // are the ones the translation below may rewrite - the same standard-body
+                // checks it performs - so a snapshot:body match stays meaningful across it.
+                S32 sun_body = -1;
+                S32 moon_body = -1;
+                LLUUID sun_texture_before;
+                LLUUID moon_texture_before;
+                if (groups & SS_SKY_IMPORT_SUN)
+                {
+                    sun_body = track.mPlanetary.standardSunIndex();
+                    if (sun_body >= 0)
+                    {
+                        sun_texture_before =
+                            track.mPlanetary.mBodies[(size_t)sun_body].mCustomTexture;
+                    }
+                }
+                if (groups & SS_SKY_IMPORT_MOON)
+                {
+                    moon_body = track.mPlanetary.standardMoonIndex();
+                    if (moon_body >= 0)
+                    {
+                        moon_texture_before =
+                            track.mPlanetary.mBodies[(size_t)moon_body].mCustomTexture;
+                    }
+                }
+
                 track.mAtmosphere.addKeyframesFromSky(*mSky, mPhase, groups);
                 track.mCloudDome.addKeyframesFromSky(*mSky, mPhase, groups);
                 // The body groups re-check their standard bodies inside - whatever the author
                 // redesigned between the drop and this click is left exactly as they left it.
                 track.mPlanetary.translateSettingsSky(*mSky, groups);
+
+                // <SS:Nexii> A disc texture the import actually adopted (the sky's own sun or
+                // moon art, not the stock value it had nothing to say about) gets its disc
+                // padding auto-derived from the alpha, the same way a hand-picked texture does
+                // (ssdiscpad.h; gated on SSAtmoDiscPadAuto). A still-loading texture is left
+                // in the module's retry slot - the environment floater's draw poll lands it.
+                if (sun_body >= 0)
+                {
+                    const LLUUID& adopted =
+                        track.mPlanetary.mBodies[(size_t)sun_body].mCustomTexture;
+                    if (adopted != sun_texture_before)
+                    {
+                        ssDiscPadAutoDerive(mTrackIndex, sun_body, adopted);
+                    }
+                }
+                if (moon_body >= 0)
+                {
+                    const LLUUID& adopted =
+                        track.mPlanetary.mBodies[(size_t)moon_body].mCustomTexture;
+                    if (adopted != moon_texture_before)
+                    {
+                        ssDiscPadAutoDerive(mTrackIndex, moon_body, adopted);
+                    }
+                }
+                // One immediate re-check of a just-queued derivation - the sky's own disc art
+                // is the common case and is usually already decoded by now.
+                ssDiscPadPoll();
 
                 if (SSFloaterAtmoEnv* parent = (SSFloaterAtmoEnv*)mParent.get())
                 {

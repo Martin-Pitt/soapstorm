@@ -251,6 +251,7 @@
 #include "ssfloaterassets.h" // <SS:Nexii> Atmo Magic global assets
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
 #include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
+#include "ssfloaterworldfield.h" // <SS:Nexii> Atmo Magic world field settings
 #include "quickprefs.h"
 #include "vjfloaterlocalmesh.h" // local mesh
 #include "fsfloaterwhitelisthelper.h" // fs whitelist helper
@@ -698,6 +699,9 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
     LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("ss_atmo_sim", "floater_ss_atmo_sim.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSimulation>);
+    // </SS:Nexii>
+    // <SS:Nexii> Atmo Magic world field settings
+    LLFloaterReg::add("ss_atmo_worldfield", "floater_ss_atmo_worldfield.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterWorldField>);
     // </SS:Nexii>
     // <SS:Nexii> Atmo Magic unified environment (independent of v2 weather above)
     LLFloaterReg::add("ss_atmo_env", "floater_ss_atmo_env.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnv>);

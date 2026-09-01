@@ -634,6 +634,156 @@
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningGroundAmber"
+      tool_tip="How hard a ground bolt turns yellow-red amber and flares in its last 10-20m; 0 keeps it one colour">
+        Ground amber:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningGroundAmber" name="SB_SSAtmoLightningGroundAmber"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How hard a ground bolt turns yellow-red amber and flares in its last 10-20m; 0 keeps it one colour" />
+    <spinner
+      control_name="SSAtmoLightningGroundAmber" name="S_SSAtmoLightningGroundAmber"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How hard a ground bolt turns yellow-red amber and flares in its last 10-20m; 0 keeps it one colour" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningGroundAmber" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningGroundAmber" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningDissolve"
+      tool_tip="How the beam decays: it breaks apart into extinguishing segments and dying sparks instead of dimming as one ribbon; 0 is a uniform fade">
+        Dissolve:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningDissolve" name="SB_SSAtmoLightningDissolve"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How the beam decays: it breaks apart into extinguishing segments and dying sparks instead of dimming as one ribbon; 0 is a uniform fade" />
+    <spinner
+      control_name="SSAtmoLightningDissolve" name="S_SSAtmoLightningDissolve"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How the beam decays: it breaks apart into extinguishing segments and dying sparks instead of dimming as one ribbon; 0 is a uniform fade" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningDissolve" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningDissolve" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningDip"
+      tool_tip="How far in-cloud bolts sag under the deck as they travel, dipping below and climbing back; 0 keeps them flat">
+        Cloud dip:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningDip" name="SB_SSAtmoLightningDip"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How far in-cloud bolts sag under the deck as they travel, dipping below and climbing back; 0 keeps them flat" />
+    <spinner
+      control_name="SSAtmoLightningDip" name="S_SSAtmoLightningDip"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How far in-cloud bolts sag under the deck as they travel, dipping below and climbing back; 0 keeps them flat" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningDip" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningDip" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningDeckRedirect"
+      tool_tip="Chance a ground strike crossing the under deck is re-routed as a cloud-to-cloud fork with branching ends inside that deck; 0 keeps every ground strike">
+        Deck redirect:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningDeckRedirect" name="SB_SSAtmoLightningDeckRedirect"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.01" decimal_digits="2"
+      tool_tip="Chance a ground strike crossing the under deck is re-routed as a cloud-to-cloud fork with branching ends inside that deck; 0 keeps every ground strike" />
+    <spinner
+      control_name="SSAtmoLightningDeckRedirect" name="S_SSAtmoLightningDeckRedirect"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="1" increment="0.01" decimal_digits="2"
+      tool_tip="Chance a ground strike crossing the under deck is re-routed as a cloud-to-cloud fork with branching ends inside that deck; 0 keeps every ground strike" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningDeckRedirect" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningDeckRedirect" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningLeaderSpeed"
+      tool_tip="The visible speed the leader traces the channel at, metres per second; lower makes long bolts visibly take time to travel">
+        Leader speed:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningLeaderSpeed" name="SB_SSAtmoLightningLeaderSpeed"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="500" max_val="12000" increment="100" decimal_digits="0"
+      tool_tip="The visible speed the leader traces the channel at, metres per second; lower makes long bolts visibly take time to travel" />
+    <spinner
+      control_name="SSAtmoLightningLeaderSpeed" name="S_SSAtmoLightningLeaderSpeed"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="500" max_val="12000" increment="100" decimal_digits="0"
+      tool_tip="The visible speed the leader traces the channel at, metres per second; lower makes long bolts visibly take time to travel" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningLeaderSpeed" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningLeaderSpeed" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
+      name="T_SSAtmoLightningSecondarySparks"
+      tool_tip="How many secondary sparks a primary impact spark throws off where it hits; 0 is primary sparks only">
+        Secondary sparks:
+    </text>
+    <slider_bar
+      control_name="SSAtmoLightningSecondarySparks" name="SB_SSAtmoLightningSecondarySparks"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How many secondary sparks a primary impact spark throws off where it hits; 0 is primary sparks only" />
+    <spinner
+      control_name="SSAtmoLightningSecondarySparks" name="S_SSAtmoLightningSecondarySparks"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      tool_tip="How many secondary sparks a primary impact spark throws off where it hits; 0 is primary sparks only" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoLightningSecondarySparks" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningSecondarySparks" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="8" height="16" width="122"
       name="T_SSAtmoLightningBranchDepth"
       tool_tip="Generations of forking; 0 is a bare channel, 3 looks like lightning, higher costs geometry">
         Branch depth:

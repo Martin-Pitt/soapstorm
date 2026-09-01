@@ -26022,6 +26022,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.25</real>
     </map>
+    <key>SSAtmoDiscPadAuto</key>
+      <map>
+      <key>Comment</key>
+      <string>When a celestial body's disc texture is newly picked or adopted by a sky import, analyze its alpha to auto-derive the disc padding: sample slightly rotated cardinal and diagonal lines out from the texture centre - the rotation keeps the lines off diffraction-spike rays - and take the disc radius the majority of the lines agree on. A texture whose lines cannot agree errors out to 0 padding (full-bleed; the spinner stays the authority)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoPerceptionAffectsLight</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic disc-perception-to-lighting coupling switch. Off is the default, keeps benchmark lighting. On scales the lighting transition set with the drawn discs.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>SSAtmoPlanetaryDebugOverlay</key>
       <map>
       <key>Comment</key>
@@ -26197,6 +26219,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>120.0</real>
+    </map>
+    <key>SSWorldFieldDebugView</key>
+      <map>
+      <key>Comment</key>
+      <string>What the world field overlay draws: 0 off, 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's connectivity labels - outside-connected air green fading with occlusion depth, sealed interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>1</integer>
     </map>
     <key>SSAtmoGlowScale</key>
       <map>
@@ -27242,6 +27275,72 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>F32</string>
     <key>Value</key>
     <real>3.0</real>
+  </map>
+  <key>SSAtmoLightningGroundAmber</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how strongly the last 10-20m of a ground strike's channel turns from the bolt's own colour to a yellow-red amber and flares at the attachment, the way recorded footage ends a ground bolt. 0 keeps the whole channel one colour.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningDissolve</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how the beam decays - each segment keeps its own random extinction threshold, so the channel breaks apart into chunks and finally individual sparks instead of dimming as one ribbon, with a dying spark left where each piece pops. 0 is the old uniform fade; higher shreds the bolt faster.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningDip</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how far in-cloud channels sag below their own endpoints as they travel horizontally - the dip that takes an intra-cloud bolt under the deck's base and back up. 0 keeps them flat along the cloud.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningDeckRedirect</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: chance a ground strike whose channel would cross the under deck - the cloud band below a floating build, so the bolt would fall through the void or a gap to nothing - is re-routed into a cloud-to-cloud fork with branching ends inside that deck instead. 0 keeps every ground strike.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.65</real>
+  </map>
+  <key>SSAtmoLightningLeaderSpeed</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: the visible speed the leader front crawls the channel at, in metres per second. Lower makes bolts spanning long distances take clear time to trace out frame by frame; higher snaps them in. Sheet strikes have no channel and ignore this.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>2800.0</real>
+  </map>
+  <key>SSAtmoLightningSecondarySparks</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how many secondary sparks a primary impact spark throws off where its arc comes back down on a surface - smaller, dimmer, shorter-lived, no further generations. 0 is primary sparks only.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
   </map>
   <key>SSAtmoSurfaceStructAbove</key>
   <map>
