@@ -89,7 +89,7 @@
      top="1075"
      width="560">
         Drop a full-perm mesh here to add it to this track's scenery. Transactions:
-        the scenery renders only while Atmo Magic is active and this gate is on
-        (SSAtmoLandscape in the Develop menu).
+        the scenery renders only while Atmo Magic is active and its own gate is on
+        (the SSAtmoLandscape debug setting, layered under SSAtmoEnabled).
     </text>
 </panel>
