@@ -543,7 +543,7 @@ jobs:
         shell: bash
       - name: build
         id: build
-        run: autobuild build -c ReleaseFS -A${addrsize} --no-configure
+        run: autobuild build -c ReleaseFS -A${addrsize} --no-configure -- ${{ env.EXTRA_ARGS }}
         shell: bash
       - name: List macOS build tree
         if: runner.os == 'macOS'
