@@ -9,18 +9,9 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Weather > Conditions - the simulation inputs. What
-         the air is doing, before anything falls out of it or discharges through
-         it. Lightning and precipitation are outputs and live on their own
-         sub-tabs. See doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> Atmo Magic: Weather > Conditions - the simulation inputs. What the air is doing, before anything falls out of it or discharges through it. Lightning and precipitation are outputs and live on their own sub-tabs. See doc/atmo_magic_env_ui.md. -->
 
-    <!-- <SS:Nexii> Atmo Magic: the moisture/convection/temperature cube,
-         AE-style keyframe rows - see ssatmoenvkeyframe.h and the FloatRow
-         comment in ssfloateratmoenv.h.
-
-         Units live in the parameter label rather than glued to the number.
-         That is what lets every tab share one right-aligned spinner column
-         instead of each number drifting by the width of its own suffix. -->
+    <!-- <SS:Nexii> Atmo Magic: the moisture/convection/temperature cube, AE-style keyframe rows - see ssatmoenvkeyframe.h and the FloatRow comment in ssfloateratmoenv.h. Units live in the parameter label rather than glued to the number. That is what lets every tab share one right-aligned spinner column instead of each number drifting by the width of its own suffix. -->
 
     <text
      follows="left|top"
@@ -660,18 +651,7 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
-         sections grouped by the tab each mapping reaches) - the tuning
-         surface for how far this track's weather may bend the values on
-         this tab.
-
-         Positioned by an absolute top against the panel's own height rather
-         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
-         measured downward from the panel's top edge, so that put the button
-         at the very top of the panel, overlapping the rows there and
-         reading as a stray control floating above the tab. Only a negative
-         value would have meant "up from the bottom", and an absolute top is
-         plainer than relying on either reading. -->
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater, sections grouped by the tab each mapping reaches) - the tuning surface for how far this track's weather may bend the values on this tab. Positioned by an absolute top against the panel's own height rather than by bottom="8". Under layout="topleft" a POSITIVE bottom is measured downward from the panel's top edge, so that put the button at the very top of the panel, overlapping the rows there and reading as a stray control floating above the tab. Only a negative value would have meant "up from the bottom", and an absolute top is plainer than relying on either reading. -->
     <button
      follows="left|bottom"
      layout="topleft"

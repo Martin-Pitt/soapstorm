@@ -25,9 +25,9 @@
 // <SS:Nexii> Atmo Magic wind flowmap
 
 // ---------------------------------------------------------------------------
-// Shared domain description. The domain is a camera-centred box, snapped to a texel grid so it translates in whole cells rather than jittering every frame. Horizontally it is a uniform grid: uRes
-// texels across uExtent metres. Vertically it is uSlices adaptive slabs whose boundaries live in uSliceZ, placed where the captured height field actually has detail. That makes the z spacing
-// non-uniform, so every vertical difference is weighted by the real slab thickness rather than assuming a constant step. Declared in full in each pass: separately compiled GLSL units do not share
+// Shared domain description. A camera-centred box snapped to a texel grid so it translates in whole cells rather than jittering every frame. Horizontally a uniform grid: uRes
+// texels across uExtent metres. Vertically uSlices adaptive slabs whose boundaries live in uSliceZ, placed where the captured height field has detail. That makes the z spacing
+// non-uniform, so every vertical difference is weighted by the real slab thickness rather than a constant step. Declared in full in each pass: separately compiled GLSL units do not share
 // uniform declarations, so there is nothing to gain from a common file.
 // ---------------------------------------------------------------------------
 
@@ -81,10 +81,10 @@ layout(r32f, binding = 3) uniform readonly  image3D uDiv;
 layout(r32f, binding = 4) uniform readonly  image3D uPIn;
 layout(r32f, binding = 5) uniform writeonly image3D uPOut;
 
-// Boundary conditions: horizontal edges and the top slab are open, so pressure there is ambient (zero) and air may enter or leave freely; the ground below the lowest slab is a wall, so pressure
-// mirrors (Neumann) and nothing flows through it; a solid neighbour mirrors this cell's own pressure, for the same reason. That last one is what makes a building a building. Returning the pressure
-// stored in a solid cell instead holds the wall at zero, which is an open drain: air pours into the geometry, no pressure builds against a windward face, and the field barely deflects no matter how
-// fine the grid or how many passes it gets. Mirroring puts a zero gradient across the face, so nothing crosses it and the air has to go around - which is where the acceleration through a gap comes
+// Boundary conditions: horizontal edges and the top slab are open - pressure is ambient (zero), air may enter or leave freely; the ground below the lowest slab is a wall, so pressure
+// mirrors (Neumann) and nothing flows through it; a solid neighbour mirrors this cell's pressure, for the same reason - what makes a building a building. Returning the pressure
+// stored in a solid cell holds the wall at zero instead, an open drain: air pours into the geometry, no pressure builds against a windward face, and the field barely deflects no matter how
+// fine the grid or how many passes. Mirroring puts a zero gradient across the face, so nothing crosses it and the air has to go around - where the acceleration through a gap comes
 // from.
 float loadP(ivec3 c, float here)
 {
@@ -114,7 +114,7 @@ void main()
         return;
     }
 
-    // Inside a solid there is no fluid to solve for. Its stored pressure is never read as-is - loadP mirrors across the face instead - so this only has to leave the cell alone.
+    // Inside a solid there is no fluid to solve for. Its stored pressure is never read as-is - loadP mirrors across the face - so this only has to leave the cell alone.
     float solid = imageLoad(uSolid, c).r;
     if (solid > 0.99)
     {
@@ -147,4 +147,3 @@ void main()
     imageStore(uPOut, c, vec4(num / den, 0.0, 0.0, 0.0));
 }
 
-// </SS:Nexii>

@@ -104,23 +104,7 @@ namespace
 
     const F32 CLUSTER_EDGE_HEIGHT = 0.3f;
 
-    // <SS:Nexii> The convection noise map. One authored tileable greyscale map per deck, read
-    // back to the CPU and sampled per cell to give the deck's response to convection a
-    // geography. The map's values run through two ramps:
-    //
-    //   the HOLE window - below its low edge the cell is cut away entirely, so where the map
-    //   runs low the sky opens; this is what breaks a dry stable deck into cloud and holes,
-    //
-    //   the TOWER window - the gradient ramp overlaid on the same values, deciding which
-    //   columns are rising thermals. As the convection dial climbs, tower-weighted cells keep
-    //   the full climb to the lid while the pockets between them are held low, and the tower
-    //   columns take the anvil's flat-and-flare spread before the dial alone would allow it -
-    //   which is how the anvil forms early, on the strong towers first.
-    //
-    // Moisture then lifts the whole map: the same values that broke a dry stable sky leave a
-    // moist one unbroken, the overcast nimbostratus sheet. The tile is the field-scale metre
-    // count at Noise Scale 1, and the grid is the cached readback's fixed resolution - the
-    // structure it carries is kilometres wide, so 64 across carries it with texels to spare.
+    // <SS:Nexii> The convection noise map. One authored tileable greyscale map per deck, read back to the CPU and sampled per cell to give the deck's response to convection a geography. The map's values run through two ramps: the HOLE window - below its low edge the cell is cut away entirely, so where the map runs low the sky opens; this is what breaks a dry stable deck into cloud and holes, the TOWER window - the gradient ramp overlaid on the same values, deciding which columns are rising thermals. As the convection dial climbs, tower-weighted cells keep the full climb to the lid while the pockets between them are held low, and the tower columns take the anvil's flat-and-flare spread before the dial alone would allow it - which is how the anvil forms early, on the strong towers first. Moisture then lifts the whole map: the same values that broke a dry stable sky leave a moist one unbroken, the overcast nimbostratus sheet. The tile is the field-scale metre count at Noise Scale 1, and the grid is the cached readback's fixed resolution - the structure it carries is kilometres wide, so 64 across carries it with texels to spare.
     const F32 SS_NOISE_TILE_M = 2048.f;
     const S32 SS_NOISE_GRID = 64;
 
@@ -156,10 +140,7 @@ namespace
     // field it was before two decks existed.
     constexpr U32 SS_UNDER_DECK_SALT = 61u;
 
-    // <SS:Nexii> The procedural fallback for the convection noise map, for decks with no authored
-    // texture. Square by construction (the field map is a tiling square, and a square tile is what
-    // every consumer of it assumes), tileable by wrapping lattice, and seeded off the weather - so
-    // every client sharing an environment grows the same geography without anyone uploading a map.
+    // <SS:Nexii> The procedural fallback for the convection noise map, for decks with no authored texture. Square by construction (the field map is a tiling square, and a square tile is what every consumer of it assumes), tileable by wrapping lattice, and seeded off the weather - so every client sharing an environment grows the same geography without anyone uploading a map.
     const S32 SS_NOISE_PROC_SIZE = 256;
 
     // One octave of tileable value noise: a period-cell lattice over the unit square, every
@@ -342,16 +323,7 @@ void SSVolCloud::update(F32 dt)
     LLColor3 ambient(0.4f, 0.4f, 0.5f);
     if (sky)
     {
-        // <SS:Nexii> Lit from the SAME light the dome band paints its clouds with (cloudsV.glsl),
-        // not the raw authored preset values - which stay near-white whatever the sun is up to,
-        // so the deck sat flat grey-white while the dome beside it tinted and glowed. The sun
-        // colour is run through EEP's atmosphere extinction along the sun ray (off_axis, the term
-        // that reddens a low sun and dims it toward the horizon), and it keeps that reddened HUE
-        // through the whole visible sunset - the extinction itself is what dims it as it sets, so
-        // the deck stays tinted like the band instead of flattening to grey the moment twilight
-        // begins. It hands off to the moon only once the sun is actually down, where the same
-        // extinction has already taken the sun colour to nothing. The ambient is lifted toward
-        // daylight by overcast (cloudsV's tmpAmbient) and dimmed at night.
+        // <SS:Nexii> Lit from the SAME light the dome band paints its clouds with (cloudsV.glsl), not the raw authored preset values - which stay near-white whatever the sun is up to, so the deck sat flat grey-white while the dome beside it tinted and glowed. The sun colour is run through EEP's atmosphere extinction along the sun ray (off_axis, the term that reddens a low sun and dims it toward the horizon), and it keeps that reddened HUE through the whole visible sunset - the extinction itself is what dims it as it sets, so the deck stays tinted like the band instead of flattening to grey the moment twilight begins. It hands off to the moon only once the sun is actually down, where the same extinction has already taken the sun colour to nothing. The ambient is lifted toward daylight by overcast (cloudsV's tmpAmbient) and dimmed at night.
         const F32 sun_elev = llmax(sun_alt, 0.0001f);
         const F32 off_axis = 1.f / (sun_elev * 2.f);
         const LLColor3 light_atten = (LLColor3(sky->getBlueDensity())
@@ -403,12 +375,7 @@ void SSVolCloud::update(F32 dt)
         SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, temperature,
                                              phase, track.mFloorZ);
 
-    // <SS:Nexii> Which deck the weather's noise gate reads: the authored source when it names
-    // the under deck and that deck is on, the main field otherwise - which is every sky build's
-    // answer, since its under deck hangs below the platform and is nobody's weather. The same
-    // rule the environment editor's derivation follows, kept where the deck lives so
-    // precipitation and deck can never disagree about who is making weather.
-    // [interaction: precipitation]
+    // <SS:Nexii> Which deck the weather's noise gate reads: the authored source when it names the under deck and that deck is on, the main field otherwise - which is every sky build's answer, since its under deck hangs below the platform and is nobody's weather. The same rule the environment editor's derivation follows, kept where the deck lives so precipitation and deck can never disagree about who is making weather. [interaction: precipitation]
     mWeatherDeck = (track.mWeatherSourceDeck == SS_ATMOENV_DECK_UNDER
                     && track.mUnderField.mEnabled) ? 1 : 0;
 
@@ -417,10 +384,7 @@ void SSVolCloud::update(F32 dt)
         buildDeck(mPrimary, field, convection, moisture, 0u);
     }
 
-    // <SS:Nexii> The under deck: the same resolver and the same builder against the track's second
-    // field, hashed with its own salt so the two decks' cloud patterns are independent - a mirror
-    // copy of the main deck at a different altitude would read as exactly the artifact it is.
-    // </SS:Nexii>
+    // <SS:Nexii> The under deck: the same resolver and the same builder against the track's second field, hashed with its own salt so the two decks' cloud patterns are independent - a mirror copy of the main deck at a different altitude would read as exactly the artifact it is.
     if (track.mUnderField.mEnabled)
     {
         const SSAtmoEnvCloudFieldState under =
@@ -453,9 +417,7 @@ void SSVolCloud::update(F32 dt)
 // noise map's hole-cutting is what moisture moderates.
 void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt)
 {
-    // <SS:Nexii> The base map and its crossfade partner both fall back to the same built-in art
-    // when their keyframe is empty, so a fade between an authored texture and None - either
-    // direction - fades between real maps instead of cutting through the fallback logic.
+    // <SS:Nexii> The base map and its crossfade partner both fall back to the same built-in art when their keyframe is empty, so a fade between an authored texture and None - either direction - fades between real maps instead of cutting through the fallback logic.
     const bool stormy = field.mHasAnvil || convection > 0.6f;
     const LLUUID base_fallback(stormy ? SSAtmoEnvCloudDome::CLOUD_TEXTURE_CUMULONIMBUS
                                       : SSAtmoEnvCloudDome::CLOUD_TEXTURE_ALTOCUMULUS);
@@ -469,11 +431,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mNoise = field.mNoiseTexture;
     deck.mProfile = field.mProfileTexture;
 
-    // <SS:Nexii> No authored map, the deck still gets the feature: a square procedural tile
-    // grown from the weather seed. Generated once and folded into the same grid cache an
-    // authored map would fill, so the builder, the precipitation gate and the shader's anvil
-    // carving all read one field whether it came from a texture or from the seed. Toggleable
-    // (SSAtmoCloudProceduralNoise) so a plain sky is always one switch away.
+    // <SS:Nexii> No authored map, the deck still gets the feature: a square procedural tile grown from the weather seed. Generated once and folded into the same grid cache an authored map would fill, so the builder, the precipitation gate and the shader's anvil carving all read one field whether it came from a texture or from the seed. Toggleable (SSAtmoCloudProceduralNoise) so a plain sky is always one switch away.
     static LLCachedControl<bool> proc_noise_setting(gSavedSettings, "SSAtmoCloudProceduralNoise", true);
     if (deck.mNoise.isNull())
     {
@@ -502,26 +460,16 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mDriftRate = field.mDriftRate;
     deck.mChurn = llclamp(field.mChurn, 0.f, 1.f);
     deck.mCoverage = field.mCoverage;
+    deck.mSalt = salt;
 
-    // <SS:Nexii> The noise map's resolved shaping, baked once per build so every consumer of the
-    // field - this builder, and the precipitation gate reading the deck from outside - runs the
-    // same numbers. The tile scales off the authored Noise Scale slider; the hole weight is what
-    // survives of the map's low end once moisture has lifted the floor over it and convection has
-    // kept the storm gaps open in what is left. The procedural fallback counts as a map here the
-    // same as an authored one.
+    // <SS:Nexii> The noise map's resolved shaping, baked once per build so every consumer of the field - this builder, and the precipitation gate reading the deck from outside - runs the same numbers. The tile scales off the authored Noise Scale slider; the hole weight is what survives of the map's low end once moisture has lifted the floor over it and convection has kept the storm gaps open in what is left. The procedural fallback counts as a map here the same as an authored one.
     deck.mNoiseTileM = (field.mNoiseTexture.notNull() || deck.mNoiseProcRaw.notNull())
         ? SS_NOISE_TILE_M * llmax(0.05f, field.mNoiseScale)
         : 0.f;
     const F32 nimbus = ss_smoothstep(SS_NIMBUS_LO, SS_NIMBUS_HI, moisture);
     deck.mNoiseHole = (1.f - nimbus) * (1.f - SS_STORM_GAP * llclamp(convection, 0.f, 1.f));
 
-    // <SS:Nexii> The storm consolidation: high moisture DRIVING high convection is not the regime
-    // the map's carving is for - a rain cloud busy making weather is a large solid mass, not a
-    // shredded one. As the two climb together the tower ramp's window widens until most of the
-    // map passes it, so the deck's convection variety calms from pockets-and-spikes into the
-    // 1-3km connected cells of a thunderstorm, and the pocket suppression eases off with it.
-    // The window is baked onto the deck so the shader's carving and the precipitation gate run
-    // the same numbers as this builder.
+    // <SS:Nexii> The storm consolidation: high moisture DRIVING high convection is not the regime the map's carving is for - a rain cloud busy making weather is a large solid mass, not a shredded one. As the two climb together the tower ramp's window widens until most of the map passes it, so the deck's convection variety calms from pockets-and-spikes into the 1-3km connected cells of a thunderstorm, and the pocket suppression eases off with it. The window is baked onto the deck so the shader's carving and the precipitation gate run the same numbers as this builder.
     const F32 storm = ss_smoothstep(0.55f, 0.85f, moisture)
                     * ss_smoothstep(0.45f, 0.75f, convection);
     deck.mNoiseTowerLo = lerp(SS_TOWER_LO, 0.12f, storm);
@@ -544,12 +492,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     const LLVector3 light_dir = mLightDir;
     const F32 beam = mBeam;
 
-    // <SS:Nexii> The base veil's lighting, resolved here rather than per fragment: the shade a
-    // puff at the deck's floor would wear, run through the same formulas the puff loop below
-    // uses - the facing term at a representative low up, the exponential shade through the layer
-    // from that height, the beam gate, the gloom. The sheet is a fragment of the same body of
-    // cloud as the puffs, so it wears the same colour a puff in its place would, and the blend
-    // at the boundary is a lighting match rather than a hope.
+    // <SS:Nexii> The base veil's lighting, resolved here rather than per fragment: the shade a puff at the deck's floor would wear, run through the same formulas the puff loop below uses - the facing term at a representative low up, the exponential shade through the layer from that height, the beam gate, the gloom. The sheet is a fragment of the same body of cloud as the puffs, so it wears the same colour a puff in its place would, and the blend at the boundary is a lighting match rather than a hope.
     {
         const F32 sun_z = llclamp(light_dir.mV[VZ], -1.f, 1.f);
         const F32 th = (0.5f + llclamp(field.mThicknessM / 500.f, 0.f, 1.f))
@@ -586,11 +529,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             const F32 gate_raw = clusterUnit(cx, cy, salt) * CLUSTER_WEIGHT
                                + hashUnit(cx, cy, 1u + salt) * (1.f - CLUSTER_WEIGHT);
 
-            // <SS:Nexii> The noise map's say over this cell - two ramps over one sample, taken in
-            // the air frame so the pattern drifts with the deck exactly as the cells do. Presence
-            // runs the hole window: where the map runs low, the cell's gate is pushed toward a
-            // certain skip, and the sky opens. Tower runs the gradient ramp window overlaid on
-            // the same values, and decides what this column does with whatever height it keeps.
+            // <SS:Nexii> The noise map's say over this cell - two ramps over one sample, taken in the air frame so the pattern drifts with the deck exactly as the cells do. Presence runs the hole window: where the map runs low, the cell's gate is pushed toward a certain skip, and the sky opens. Tower runs the gradient ramp window overlaid on the same values, and decides what this column does with whatever height it keeps.
             F32 presence = 1.f;
             F32 tower = 0.f;
             noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower);
@@ -601,14 +540,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             const F32 coreness = llclamp(
                 (field.mCoverage - gate) / llmax(field.mCoverage, 0.01f), 0.f, 1.f);
 
-            // <SS:Nexii> The tower shaping. Convection decides how much say the map gets over
-            // heights at all - a stable sky keeps every column at the cluster's own height and
-            // only the holes differ - and past that the map decides which columns RISE:
-            // tower-weighted cells keep the full climb to the lid while the pockets between
-            // them are held low, which is what stands a cumulonimbus tower up in the gaps of
-            // its own field. The stretch to the towers comes free with the same stroke: a
-            // column the map marks high spans the layer's whole convective thickness, base to
-            // lid, because nothing pulls it back down.
+            // <SS:Nexii> The tower shaping. Convection decides how much say the map gets over heights at all - a stable sky keeps every column at the cluster's own height and only the holes differ - and past that the map decides which columns RISE: tower-weighted cells keep the full climb to the lid while the pockets between them are held low, which is what stands a cumulonimbus tower up in the gaps of its own field. The stretch to the towers comes free with the same stroke: a column the map marks high spans the layer's whole convective thickness, base to lid, because nothing pulls it back down.
             const F32 conv_gain = ss_smoothstep(0.12f, 0.55f, convection) * (1.f - storm);
             const F32 height_shape = lerp(1.f, SS_POCKET_H + (1.f - SS_POCKET_H) * tower, conv_gain);
 
@@ -640,12 +572,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
                 const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
 
-                // <SS:Nexii> The anvil is a TOP feature and must behave like one. The height
-                // weight comes from the authored profile ramp's RED channel when there is one -
-                // the same curve the shader's carving samples - and from the built-in window
-                // otherwise. Either way it is gated by convection: a stable sky keeps rounded
-                // tops whatever the profile says, and the ramp can only bring the anvil
-                // forward, never hold it back once the deck-wide figure takes over.
+                // <SS:Nexii> The anvil is a TOP feature and must behave like one. The height weight comes from the authored profile ramp's RED channel when there is one - the same curve the shader's carving samples - and from the built-in window otherwise. Either way it is gated by convection: a stable sky keeps rounded tops whatever the profile says, and the ramp can only bring the anvil forward, never hold it back once the deck-wide figure takes over.
                 const F32 ramp_v = (deck.mProfileN > 0)
                     ? profileSample(deck, up, 0)
                     : ss_smoothstep(0.55f, 0.85f, up);
@@ -830,9 +757,7 @@ void SSVolCloud::render()
         return;
     }
 
-    // <SS:Nexii> Depth copy: taken once before either deck draws - the primary deck is the occluder
-    // the soft edges belong to, and the under deck at the bottom of a build blends against world
-    // geometry plus the primary deck above it in the one copy. </SS:Nexii>
+    // <SS:Nexii> Depth copy: taken once before either deck draws - the primary deck is the occluder the soft edges belong to, and the under deck at the bottom of a build blends against world geometry plus the primary deck above it in the one copy.
     LL_PROFILE_GPU_ZONE("atmo volumetric clouds");
 
     bool have_depth_copy = false;
@@ -905,6 +830,8 @@ void SSVolCloud::render()
     static LLStaticHashedString s_drift_rate("ss_drift_rate");
     static LLStaticHashedString s_noise_tile("ss_noise_tile");
     static LLStaticHashedString s_noise_hole("ss_noise_hole");
+    static LLStaticHashedString s_coverage("ss_coverage");
+    static LLStaticHashedString s_cell_salt("ss_cell_salt");
     static LLStaticHashedString s_tower_ramp("ss_tower_ramp");
     static LLStaticHashedString s_profile("ss_profile");
     static LLStaticHashedString s_sheet("ss_sheet");
@@ -979,19 +906,11 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
-    // <SS:Nexii> The puff tessellation toggle. Off (the default), every puff is the single
-    // camera-facing quad it has always been. On, each becomes a 4x4 grid of sub-quads the
-    // renderer can shear, curl and dissolve per row - the anvil skirt. It exists as a toggle
-    // because it is an experiment in shaping: the fragment carving works either way, and the
-    // grid is there to see how much of the anvil the GEOMETRY carrying it adds over the
-    // fragment work alone.
+    // <SS:Nexii> The puff tessellation toggle. Off (the default), every puff is the single camera-facing quad it has always been. On, each becomes a 4x4 grid of sub-quads the renderer can shear, curl and dissolve per row - the anvil skirt. It exists as a toggle because it is an experiment in shaping: the fragment carving works either way, and the grid is there to see how much of the anvil the GEOMETRY carrying it adds over the fragment work alone.
     static LLCachedControl<bool> tessellate_setting(gSavedSettings, "SSAtmoCloudTessellation", false);
     const bool tessellate = tessellate_setting;
 
-    // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the
-    // build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer
-    // one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and
-    // the shared uniforms above survive across both. </SS:Nexii>
+    // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and the shared uniforms above survive across both.
     const bool under_on_top = mUnder.mMeanDistSq < mPrimary.mMeanDistSq;
     Deck* order[2] = { under_on_top ? &mPrimary : &mUnder,
                        under_on_top ? &mUnder    : &mPrimary };
@@ -1011,10 +930,7 @@ void SSVolCloud::render()
                                        deck.mDetailRef.notNull() ? deck.mDetailRef.get() : deck.mTextureRef.get(),
                                        LLTexUnit::TT_TEXTURE);
 
-        // <SS:Nexii> The crossfade partners on the spare reserved channels (bumpMap, specularMap -
-        // same reserved-name rule as altDiffuseMap above), pinned on the current maps when no fade
-        // runs so the shader's partner samples never read an unbound unit. The weights mix the
-        // pairs per sample in the fragment stage.
+        // <SS:Nexii> The crossfade partners on the spare reserved channels (bumpMap, specularMap - same reserved-name rule as altDiffuseMap above), pinned on the current maps when no fade runs so the shader's partner samples never read an unbound unit. The weights mix the pairs per sample in the fragment stage.
         LLViewerFetchedTexture* tex_next = deck.mTextureNextRef.notNull()
             ? deck.mTextureNextRef.get()
             : deck.mTextureRef.get();
@@ -1026,11 +942,7 @@ void SSVolCloud::render()
         gSSVolCloudProgram.bindTexture(LLShaderMgr::SPECULAR_MAP, det_next, LLTexUnit::TT_TEXTURE);
         gSSVolCloudProgram.uniform1f(s_detail_blend, deck.mDetailBlend);
 
-        // <SS:Nexii> The convection noise map, bound for the fragment stage's anvil carving -
-        // the same map the field was shaped with, authored or procedural, so the shader cuts
-        // the puffs by the very geography the towers were grown from. A reserved channel
-        // (altDiffuseMap): only reserved names can be bound as textures, see the depthMap note
-        // in ssVolCloudF.glsl. Tile metres of zero tells the shader there is nothing to read.
+        // <SS:Nexii> The convection noise map, bound for the fragment stage's anvil carving - the same map the field was shaped with, authored or procedural, so the shader cuts the puffs by the very geography the towers were grown from. A reserved channel (altDiffuseMap): only reserved names can be bound as textures, see the depthMap note in ssVolCloudF.glsl. Tile metres of zero tells the shader there is nothing to read.
         LLTexture* noise_map = deck.mNoiseRef.notNull()
             ? (LLTexture*)deck.mNoiseRef.get()
             : (LLTexture*)deck.mNoiseProcRef.get();
@@ -1042,11 +954,11 @@ void SSVolCloud::render()
         gSSVolCloudProgram.uniform1f(s_noise_hole, deck.mNoiseHole);
         gSSVolCloudProgram.uniform2f(s_tower_ramp, deck.mNoiseTowerLo, deck.mNoiseTowerHi);
 
-        // <SS:Nexii> The vertical profile ramp, bound for the fragment stage's four vertical
-        // curves (tower weight, carve guard, cap band, base fill) on the bumpMap2 reserved
-        // channel - same rule as altDiffuseMap above: only reserved names can be bound as
-        // textures. Sampled clamped at the deck's base and lid, so the strip must address
-        // CLAMP, not the fetched default's wrap - or v 0 would blend with v 1 at both rails.
+        // <SS:Nexii> The cell gate's inputs, for the base veil: the builder's coverage threshold and this deck's hash salt, so the veil's fragment stage can re-run the exact cell gate the puff loop above ran (cluster noise, cell hash, the presence push, gate vs coverage) and open its gaps precisely under the sky the builder left empty of puffs. [interaction: buildDeck's gate at the coverage check - the two must run the same numbers or veil and field disagree about where the deck is]
+        gSSVolCloudProgram.uniform1f(s_coverage, deck.mCoverage);
+        gSSVolCloudProgram.uniform1f(s_cell_salt, (F32)deck.mSalt);
+
+        // <SS:Nexii> The vertical profile ramp, bound for the fragment stage's four vertical curves (tower weight, carve guard, cap band, base fill) on the bumpMap2 reserved channel - same rule as altDiffuseMap above: only reserved names can be bound as textures. Sampled clamped at the deck's base and lid, so the strip must address CLAMP, not the fetched default's wrap - or v 0 would blend with v 1 at both rails.
         LLTexture* profile_map = deck.mProfileRef.notNull() ? (LLTexture*)deck.mProfileRef.get() : nullptr;
         if (profile_map)
         {
@@ -1067,38 +979,15 @@ void SSVolCloud::render()
         gSSVolCloudProgram.uniform1f(s_detail_scale, deck.mDetailScale);
         gSSVolCloudProgram.uniform1f(s_drift_rate, deck.mDriftRate);
 
-        // <SS:Nexii> The base veil: one horizontal sheet inset into the deck's floor, camera-
-        // centred and drawn BEFORE the deck's puffs, so the field's gaps read filled - the puffs
-        // pile up over their own floor and the spaces between them show it. The sheet is the
-        // deck's underside, so it is wound to face DOWN (the camera sees its front from below);
-        // from above the deck it is a backface and rightly culls - the gaps over a deck open on
-        // what is behind the deck, not on its floor. It rides the same shader as the puffs with
-        // ss_sheet switched on: same texture, aperiodically read, same lighting vocabulary, the
-        // same fog and dome handoff - which is the whole point of it blending rather than
-        // sitting under the deck as a second material.
+        // <SS:Nexii> The base veil: one horizontal sheet inset into the deck's floor, camera- centred and drawn BEFORE the deck's puffs, so the field's gaps read filled - the puffs pile up over their own floor and the spaces between them show it. The sheet is the deck's underside, so it is wound to face DOWN (the camera sees its front from below); from above the deck it is a backface and rightly culls - the gaps over a deck open on what is behind the deck, not on its floor. It rides the same shader as the puffs with ss_sheet switched on: same texture, aperiodically read, same lighting vocabulary, the same fog and dome handoff - which is the whole point of it blending rather than sitting under the deck as a second material.
         gSSVolCloudProgram.uniform1f(s_sheet, 1.f);
         {
-            // <SS:Nexii> Culling off for the sheet: it is wound to face down - the deck's
-            // underside - but the pass's cull state is not this function's to reason about, and
-            // a wrongly-fallen winding would silent-drop the whole layer. A two-triangle quad
-            // drawn double-sided costs nothing; the veil is soft enough that its back face
-            // reading through the deck's gaps from above reads as the floor it is.
+            // <SS:Nexii> Culling off for the sheet: it is wound to face down - the deck's underside - but the pass's cull state is not this function's to reason about, and a wrongly-fallen winding would silent-drop the whole layer. A two-triangle quad drawn double-sided costs nothing; the veil is soft enough that its back face reading through the deck's gaps from above reads as the floor it is.
             LLGLDisable no_cull(GL_CULL_FACE);
 
             const F32 z = deck.mSheetZ;
 
-            // <SS:Nexii> The sheet is TILED, on the same air-frame cell grid the puffs are placed
-            // on (CELL_M steps about the camera's cell, corners slid back by the drift into world
-            // space), not drawn as the one camera-centred rect it used to be. The far-field squash
-            // is exact per VERTEX, and the fragment stage un-squashes per fragment along the view
-            // ray - but a fragment inside a triangle gets its drawn position by interpolation, and
-            // the squash bends the sheet's plane, so a triangle as wide as the old 10 km rect
-            // reconstructed a world position tens to hundreds of metres off its true plane point,
-            // by an amount that changes with the camera's relation to the sheet: the veil swam
-            // across the field with every camera move and its texture would not sit under the
-            // puffs. At puff-quad scale the interpolation error collapses to nothing, sheet and
-            // field read from one anchored frame, and the per-tile cull keeps the pass inside the
-            // same draw radius the puffs run.
+            // <SS:Nexii> The sheet is TILED, on the same air-frame cell grid the puffs are placed on (CELL_M steps about the camera's cell, corners slid back by the drift into world space), not drawn as the one camera-centred rect it used to be. The far-field squash is exact per VERTEX, and the fragment stage un-squashes per fragment along the view ray - but a fragment inside a triangle gets its drawn position by interpolation, and the squash bends the sheet's plane, so a triangle as wide as the old 10 km rect reconstructed a world position tens to hundreds of metres off its true plane point, by an amount that changes with the camera's relation to the sheet: the veil swam across the field with every camera move and its texture would not sit under the puffs. At puff-quad scale the interpolation error collapses to nothing, sheet and field read from one anchored frame, and the per-tile cull keeps the pass inside the same draw radius the puffs run.
             const F32 draw_sq = FIELD_DRAW_M * FIELD_DRAW_M;
             const S32 sheet_radius = llceil(FIELD_DRAW_M / CELL_M);
             const S32 scx0 = llfloor((cam_pos.mV[VX] - drift.mV[0]) / CELL_M);
@@ -1178,15 +1067,7 @@ void SSVolCloud::render()
             const LLVector3 right = base_right * (puff.mRadius * wide);
             const LLVector3 up = base_up * (puff.mRadius * tall);
 
-            // <SS:Nexii> One corner of the puff's quad, parameterised over the billboard: (0,0)
-            // is the bottom left, (1,1) the top right, exactly the corners the single quad used.
-            // With tessellation on (SSAtmoCloudTessellation) the quad becomes a 4x4 grid of
-            // sub-quads, and the top rows shear out along the wind, widen, curl down and
-            // dissolve - the anvil skirt. A shear is linear and one quad could carry it; the
-            // CURL is not, and the alpha dissolve wants rows to pull apart. That is the whole
-            // reason the toggle exists: puffs are a single flat quad each, and no amount of
-            // fragment noise can bend what the geometry does not have. Off, the corner maths
-            // collapses to exactly the quad that was always drawn.
+            // <SS:Nexii> One corner of the puff's quad, parameterised over the billboard: (0,0) is the bottom left, (1,1) the top right, exactly the corners the single quad used. With tessellation on (SSAtmoCloudTessellation) the quad becomes a 4x4 grid of sub-quads, and the top rows shear out along the wind, widen, curl down and dissolve - the anvil skirt. A shear is linear and one quad could carry it; the CURL is not, and the alpha dissolve wants rows to pull apart. That is the whole reason the toggle exists: puffs are a single flat quad each, and no amount of fragment noise can bend what the geometry does not have. Off, the corner maths collapses to exactly the quad that was always drawn.
             const LLVector3 wind3(wind.mV[VX], wind.mV[VY], 0.f);
             auto emit_corner = [&](F32 u, F32 v)
             {
@@ -1235,12 +1116,7 @@ void SSVolCloud::render()
 // Binds a deck's authored textures, falling back to the sky dome's noise for an empty detail slot - per deck, since the two may carry different maps.
 bool SSVolCloud::fetchDeckTextures(Deck& deck)
 {
-    // <SS:Nexii> The convection noise map: fetched like the other maps, then read back out of
-    // VRAM once it has one - the way sculpties read theirs - into the small wrapped grid the
-    // builder and the precipitation gate sample on the CPU. The GPU reads the same map through
-    // its own binding in render(), for the anvil's carving; the CPU grid is the same geography
-    // at field scale. readbackRawImage keeps its raw copy current as better mips stream in, so
-    // re-caching whenever that copy's size changes keeps both sides honest through the load.
+    // <SS:Nexii> The convection noise map: fetched like the other maps, then read back out of VRAM once it has one - the way sculpties read theirs - into the small wrapped grid the builder and the precipitation gate sample on the CPU. The GPU reads the same map through its own binding in render(), for the anvil's carving; the CPU grid is the same geography at field scale. readbackRawImage keeps its raw copy current as better mips stream in, so re-caching whenever that copy's size changes keeps both sides honest through the load.
     if (deck.mNoise.notNull())
     {
         if (deck.mNoiseRef.isNull() || deck.mNoiseRef->getID() != deck.mNoise)
@@ -1281,9 +1157,7 @@ bool SSVolCloud::fetchDeckTextures(Deck& deck)
     }
     else
     {
-        // <SS:Nexii> Nothing authored: the procedural map is the noise map. Its CPU grid was
-        // folded by the builder; this is where its GPU copy uploads - once per generation -
-        // wrapped, mipmapped, and ready for the fragment stage's carving.
+        // <SS:Nexii> Nothing authored: the procedural map is the noise map. Its CPU grid was folded by the builder; this is where its GPU copy uploads - once per generation - wrapped, mipmapped, and ready for the fragment stage's carving.
         deck.mNoiseRef = nullptr;
         if (deck.mNoiseProcRaw.notNull())
         {
@@ -1307,11 +1181,7 @@ bool SSVolCloud::fetchDeckTextures(Deck& deck)
         }
     }
 
-    // <SS:Nexii> The vertical profile ramp: authored only (none runs the built-in curves), read
-    // back through the same ladder as the noise map and folded into one averaged curve per
-    // channel. The readback's rows arrive in GL order - row 0 is v 0, the deck's base - which is
-    // exactly the orientation the shader's own texture read samples, so CPU and GPU run one
-    // profile however the author painted it.
+    // <SS:Nexii> The vertical profile ramp: authored only (none runs the built-in curves), read back through the same ladder as the noise map and folded into one averaged curve per channel. The readback's rows arrive in GL order - row 0 is v 0, the deck's base - which is exactly the orientation the shader's own texture read samples, so CPU and GPU run one profile however the author painted it.
     if (deck.mProfile.notNull())
     {
         if (deck.mProfileRef.isNull() || deck.mProfileRef->getID() != deck.mProfile)
@@ -1358,9 +1228,7 @@ bool SSVolCloud::fetchDeckTextures(Deck& deck)
     }
     else if (deck.mProfileProcRef.isNull())
     {
-        // <SS:Nexii> Nothing authored: paint the built-in curves once so the picker's
-        // placeholder preview has something honest to show for the None state. Display only -
-        // the shader runs these curves as maths, never as a texture.
+        // <SS:Nexii> Nothing authored: paint the built-in curves once so the picker's placeholder preview has something honest to show for the None state. Display only - the shader runs these curves as maths, never as a texture.
         LLPointer<LLImageRaw> strip = makeProfilePreview();
         if (strip.notNull())
         {
@@ -1398,11 +1266,7 @@ bool SSVolCloud::fetchDeckTextures(Deck& deck)
         deck.mDetailRef->addTextureStats((F32)MAX_IMAGE_AREA);
     }
 
-    // <SS:Nexii> The crossfade partners, fetched only while a fade is live - the same ladder as
-    // the primaries, keyed by id so a fade holds one fetch. The detail partner falls back to the
-    // dome's cloud noise exactly as the primary does; a partner that lands on the current map is
-    // skipped and the renderer pins that pair on the primary, so a fade to the same texture costs
-    // nothing. Dropped the moment the weight reaches the rail.
+    // <SS:Nexii> The crossfade partners, fetched only while a fade is live - the same ladder as the primaries, keyed by id so a fade holds one fetch. The detail partner falls back to the dome's cloud noise exactly as the primary does; a partner that lands on the current map is skipped and the renderer pins that pair on the primary, so a fade to the same texture costs nothing. Dropped the moment the weight reaches the rail.
     deck.mTextureNextRef = nullptr;
     deck.mDetailNextRef = nullptr;
     if (deck.mTextureBlend > 0.f && deck.mTextureNext.notNull() && deck.mTextureNext != deck.mTexture)

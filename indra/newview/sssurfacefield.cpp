@@ -96,11 +96,7 @@ static const F32 FALLBACK_DRY   = 0.002f;
 static const F32 FALLBACK_MELT  = 0.0000045f;
 static const F32 FALLBACK_DRAIN = 0.0001f;
 
-// <SS:Nexii> The tick lands every quarter second, so the whole cost of one step shows up on one
-// frame. Split per stage: geometry rebuild, ground-flow sample, the transport steps, the shed
-// cursor and the window rebuild all have completely different fixes, and a single summed handle
-// cannot tell them apart. The upload is timed apart from the fill it uploads because only the
-// fill can ever move off this thread. </SS:Nexii>
+// <SS:Nexii> The tick lands every quarter second, so the whole cost of one step shows up on one frame. Split per stage: geometry rebuild, ground-flow sample, the transport steps, the shed cursor and the window rebuild all have completely different fixes, and a single summed handle cannot tell them apart. The upload is timed apart from the fill it uploads because only the fill can ever move off this thread.
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE("Atmo Magic Surface Field");
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_GEOM("Surface Geometry");
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_FLOW("Surface Ground Flow");
@@ -313,14 +309,7 @@ void SSSurfaceField::refreshGeometry()
 
         buildGeometry(grid, geom);
 
-        // <SS:Nexii> With the world field as the grid source, the pool mask
-        // comes from its DRAINAGE_NETWORK topology - the priority-flood
-        // depression fill - instead of buildGeometry's local dips check. What
-        // that changes: standing water now needs a genuine depression with a
-        // spill outlet, so a flat roof row stops holding puddles and a real
-        // basin starts to. The rain shadow source keeps the dips check exactly
-        // as it was; the gate is the same SSWorldFieldSurfaceTop switch by
-        // which the grid itself moved.
+        // <SS:Nexii> With the world field as the grid source, the pool mask comes from its DRAINAGE_NETWORK topology - the priority-flood depression fill - instead of buildGeometry's local dips check. What that changes: standing water now needs a genuine depression with a spill outlet, so a flat roof row stops holding puddles and a real basin starts to. The rain shadow source keeps the dips check exactly as it was; the gate is the same SSWorldFieldSurfaceTop switch by which the grid itself moved.
         if (field)
         {
             SSWorldField::Drainage drain;
@@ -329,7 +318,6 @@ void SSSurfaceField::refreshGeometry()
                 geom.mPool = std::move(drain.mPool);
             }
         }
-        // </SS:Nexii>
     }
 
     for (auto it = mGeometry.begin(); it != mGeometry.end(); )
@@ -417,9 +405,7 @@ void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& 
         const S32 i = geom.mEdgeCells[(size_t)k];
         const size_t ui = (size_t)i;
 
-        // <SS:Nexii> Granular weather feeds the store from the transport's creep spill, not from
-        // the rain rate - the lip is debited where the creep pass delivers, and this cursor only
-        // drains it into cascades. Liquid keeps the inflow it always had.
+        // <SS:Nexii> Granular weather feeds the store from the transport's creep spill, not from the rain rate - the lip is debited where the creep pass delivers, and this cursor only drains it into cascades. Liquid keeps the inflow it always had.
         const F32 inflow = atmo->granularWeather() ? 0.f
                                                    : cell_area * lerp(SHED_FEED_FLAT, SHED_FEED_STEEP, llclamp(geom.mSlope[ui] / SLOPE_RUN_FULL, 0.f, 1.f)) * rate_m2;
 
@@ -703,9 +689,7 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
     mPeakSnow = llmax(mPeakSnow, peak_snow);
     mPeakPuddle = llmax(mPeakPuddle, peak_puddle);
 
-    // <SS:Nexii> Granular transport: what the wind does to what settle just left. Runs after the
-    // settle pass so fresh snow can lift in the same step it landed; the peak scan is re-run
-    // afterwards because erosion and banking both move it.
+    // <SS:Nexii> Granular transport: what the wind does to what settle just left. Runs after the settle pass so fresh snow can lift in the same step it landed; the peak scan is re-run afterwards because erosion and banking both move it.
     if (flow)
     {
         SSGranularParams p = granular;
@@ -720,7 +704,6 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
         peak_snow = llmax(peak_snow, wind_peak);
         mPeakSnow = llmax(mPeakSnow, peak_snow);
     }
-    // </SS:Nexii>
 }
 
 // Drops fields and geometry for regions that left the world.
@@ -764,11 +747,7 @@ void SSSurfaceField::idle(F32 dt)
     const bool marks = preset.marksSurface() || blows;
     if (!marks && mFields.empty()) return;
 
-    // <SS:Nexii> The transport clock. Steps land on exact quanta of shared time rather than
-    // whatever the frame hands over, so creep, erosion and the regime evaluation are identical
-    // across viewers and frame rates - the discipline the architecture doc fixes for anything
-    // that changes ground state. Presentation (the shed cursor, drip spawns) still runs once per
-    // frame below, on the frame's own accumulated dt.
+    // <SS:Nexii> The transport clock. Steps land on exact quanta of shared time rather than whatever the frame hands over, so creep, erosion and the regime evaluation are identical across viewers and frame rates - the discipline the architecture doc fixes for anything that changes ground state. Presentation (the shed cursor, drip spawns) still runs once per frame below, on the frame's own accumulated dt.
     const F64 now = atmo->sharedTime();
     if (mLastStep < 0.0) mLastStep = now;
     F64 elapsed = now - mLastStep;
@@ -783,7 +762,6 @@ void SSSurfaceField::idle(F32 dt)
     static const U32 MAX_STEPS_PER_FRAME = 4;
     const U32 ran = llmin(steps, MAX_STEPS_PER_FRAME);
     mLastStep += (F64)ran * (F64)TICK_INTERVAL;
-    // </SS:Nexii>
 
     LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE);
     LLTimer timer;
@@ -794,9 +772,7 @@ void SSSurfaceField::idle(F32 dt)
 
     refreshGeometry();
 
-    // <SS:Nexii> Granular transport inputs, assembled once: the parameter bundle and each
-    // region's ground-flow grid, sampled straight out of the solved flowmap without the gust
-    // layer (the envelope rides the bundle as one scalar, never per cell).
+    // <SS:Nexii> Granular transport inputs, assembled once: the parameter bundle and each region's ground-flow grid, sampled straight out of the solved flowmap without the gust layer (the envelope rides the bundle as one scalar, never per cell).
     SSGranularParams granular;
     atmo->fillTransportParams(granular);
 
@@ -840,7 +816,6 @@ void SSSurfaceField::idle(F32 dt)
             tick(*fld, geom, TICK_INTERVAL, preset, intensity, granular, flow);
         }
     }
-    // </SS:Nexii>
 
     shedEdges((F32)ran * TICK_INTERVAL);
 
@@ -892,8 +867,7 @@ SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
     return out;
 }
 
-// <SS:Nexii> Granular access: the one write path into mSnow from outside, and the drift tier's
-// spawn walk over the lift the transport computed.
+// <SS:Nexii> Granular access: the one write path into mSnow from outside, and the drift tier's spawn walk over the lift the transport computed.
 
 // Credits a landing clump against the cell's repose room. The preset's ceiling and repose own the
 // cap; the transport's depositAt does the clamping.
@@ -988,7 +962,6 @@ void SSSurfaceField::forEachLiftCell(const LLVector3& center_agent, F32 radius_m
         }
     }
 }
-// </SS:Nexii>
 
 // Re-bakes the camera-centred texture window the shaders read, snapped to the field grid.
 void SSSurfaceField::updateWindow()
@@ -1685,11 +1658,7 @@ void SSSurfaceField::renderWetPass()
     gbuffer->flush();
 }
 
-// <SS:Nexii> Snow surfaces. The same screen-space shape as the wet pass - field window in,
-// scratch target, commit back into the gbuffer - but writing the diffuse attachment: the snow
-// channel the field has always carried becomes visible albedo. Runs after the wet pass so it
-// covers it; the gloss interplay (wet ground going matte under snow) is the commit's next target,
-// not this pass's job yet.
+// <SS:Nexii> Snow surfaces. The same screen-space shape as the wet pass - field window in, scratch target, commit back into the gbuffer - but writing the diffuse attachment: the snow channel the field has always carried becomes visible albedo. Runs after the wet pass so it covers it; the gloss interplay (wet ground going matte under snow) is the commit's next target, not this pass's job yet.
 void SSSurfaceField::renderSnowPass()
 {
     if (gCubeSnapshot) return;
@@ -1784,7 +1753,6 @@ void SSSurfaceField::renderSnowPass()
 
     gbuffer->flush();
 }
-// </SS:Nexii>
 
 // Draws the field over the world for inspection. SSAtmoSnowDebug 1 replaces the wet/puddle
 // colouring with the transport's per-cell lift figure - what the drift pool's spawn walk reads.

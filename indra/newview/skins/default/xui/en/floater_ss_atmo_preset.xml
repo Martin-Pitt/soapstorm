@@ -198,11 +198,7 @@
              height="16" width="410" label="Shatter into shards on impact"
              tool_tip="Throws glowing shards off the surface at the speed it hit" />
 
-            <!-- <SS:Nexii> What an impact does to the person standing in it. Stubs: shown so the
-                 intent is documented where it belongs rather than living only in a design note,
-                 disabled because nothing reads them yet. They matter to impact-carrying archetypes
-                 - a barrage built out of the solid archetype is the case that wants them - and are
-                 meaningless to a riser, which never lands. See doc/atmo_magic_env_ui.md. -->
+            <!-- <SS:Nexii> What an impact does to the person standing in it. Stubs: shown so the intent is documented where it belongs rather than living only in a design note, disabled because nothing reads them yet. They matter to impact-carrying archetypes - a barrage built out of the solid archetype is the case that wants them - and are meaningless to a riser, which never lands. See doc/atmo_magic_env_ui.md. -->
             <text name="shock_label" follows="left|top" layout="topleft" left="10" top_pad="14"
              height="14" width="410" font="SansSerifSmallBold">Felt Impact (not yet implemented)</text>
             <slider name="shock_camera" follows="left|top" layout="topleft" left="10" top_pad="6"
@@ -305,14 +301,7 @@
         <panel name="tab_assets" label="Assets" follows="all" layout="topleft"
          left="0" top="0" width="436" height="494">
 
-        <!-- <SS:Nexii> The content is taller than the tab and has to scroll.
-             Same arrangement the sim floater uses: an inner panel of fixed
-             height carrying everything, and a container that follows the
-             window and scrolls it. The rows are laid out against the PANEL,
-             so its height is the sum of what it holds rather than whatever
-             the floater happens to be - which is what stopped the footstep
-             grid being cut off at the bottom, and stops the next thing added
-             here from being cut off either. -->
+        <!-- <SS:Nexii> The content is taller than the tab and has to scroll. Same arrangement the sim floater uses: an inner panel of fixed height carrying everything, and a container that follows the window and scrolls it. The rows are laid out against the PANEL, so its height is the sum of what it holds rather than whatever the floater happens to be - which is what stopped the footstep grid being cut off at the bottom, and stops the next thing added here from being cut off either. -->
         <scroll_container
          color="DkGray2"
          opaque="true"
@@ -376,19 +365,7 @@
             <text name="steps_desc" follows="left|top" layout="topleft" left="10" top_pad="2"
              height="28" width="410" word_wrap="true" font="SansSerifSmall">One list per surface and action, drawn from at random. Dry ground is in Global Assets.</text>
 
-            <!-- <SS:Nexii> A grid, and so laid out as one: every cell carries
-                 its own absolute left and top inside this panel.
-                 Chaining would work here too, with care - the trouble is
-                 what it costs to get wrong. left_pad measures from the
-                 previous sibling and top_delta from its top, so every cell
-                 inherits its neighbour's mistakes: a stray top_delta of -3 on
-                 each chip walked three pixels higher across every row, and
-                 each surface label, chained off the last chip of the row
-                 above, arrived carrying the whole accumulated drift and
-                 climbed into the row before it. One wrong number, twenty-eight
-                 wrong positions. Absolute coordinates are not more capable,
-                 only independent - which for a grid that will grow a surface
-                 or an action later is the property worth having. -->
+            <!-- <SS:Nexii> A grid, and so laid out as one: every cell carries its own absolute left and top inside this panel. Chaining would work here too, with care - the trouble is what it costs to get wrong. left_pad measures from the previous sibling and top_delta from its top, so every cell inherits its neighbour's mistakes: a stray top_delta of -3 on each chip walked three pixels higher across every row, and each surface label, chained off the last chip of the row above, arrived carrying the whole accumulated drift and climbed into the row before it. One wrong number, twenty-eight wrong positions. Absolute coordinates are not more capable, only independent - which for a grid that will grow a surface or an action later is the property worth having. -->
             <panel name="steps_panel" follows="left|top" layout="topleft"
              left="6" top_pad="4" width="424" height="114"
              background_visible="false" border="false">

@@ -421,11 +421,11 @@ LLPointer<LLViewerTexture> SSPrecipVariants::buildUtility(EUtility kind)
     }
     else if (kind == UTIL_PLUME)
     {
-        // The blowing-snow plume: a dense small head that grows into a wide,
+        // The blowing-snow plume: a dense small head growing into a wide,
         // faint skirt along the sprite's length axis (the same axis the shard
         // bakes its length along, which is the axis the streak renderer
-        // stretches along velocity). Viewed sideways the drift reads as a small
-        // cloud growing into a big one as it lifts; viewed end-on the skirt's
+        // stretches along velocity). Sideways the drift reads as a small
+        // cloud growing into a big one; end-on the skirt's
         // width reads as one wide soft cloud.
         const F32 head_y = res * 0.34f;
         drawDot(data, res, c, head_y, res * 0.12f, 0.85f, 0.35f);

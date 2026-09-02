@@ -45,28 +45,10 @@
 // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssatmomagic.h"
 #include "sswindflow.h"
-// </SS:Nexii>
 
 const F32 PART_SIM_BOX_SIDE = 16.f;
 
-// <SS:Nexii> Atmo Magic wind flowmap
-// Whether the wind a particle feels comes from the flowmap instead of the
-// sim's own wind field.
-//
-// That field is a smooth region-wide breeze which knows nothing about the
-// build standing in it. Where Atmo Magic has a flowmap solved it replaces that
-// field outright rather than blending with it, so wind-tagged particles -
-// smoke, leaves, dust, steam - funnel down the same alleys the rain does,
-// stall against windward faces, lift over rooftops and go slack in a
-// courtyard. Two wind fields averaged together is a third field that is
-// neither, and the one thing it always loses is exactly what the solve is for:
-// a courtyard the flowmap says is still gets the sim's breeze blowing through
-// it anyway.
-//
-// Calm weather is not a reason to hand back either. Atmo Magic owns the wind
-// while it is running, and when it says the air is still the air is still.
-// Nothing here depends on where a particle is, so it is answered once per
-// group rather than once per particle.
+// <SS:Nexii> Atmo Magic wind flowmap Whether the wind a particle feels comes from the flowmap instead of the sim's own wind field. That field is a smooth region-wide breeze which knows nothing about the build standing in it. Where Atmo Magic has a flowmap solved it replaces that field outright rather than blending with it, so wind-tagged particles - smoke, leaves, dust, steam - funnel down the same alleys the rain does, stall against windward faces, lift over rooftops and go slack in a courtyard. Two wind fields averaged together is a third field that is neither, and the one thing it always loses is exactly what the solve is for: a courtyard the flowmap says is still gets the sim's breeze blowing through it anyway. Calm weather is not a reason to hand back either. Atmo Magic owns the wind while it is running, and when it says the air is still the air is still. Nothing here depends on where a particle is, so it is answered once per group rather than once per particle.
 static bool ss_flow_wind_controls()
 {
     static LLCachedControl<bool> flow_parts(gSavedSettings, "SSAtmoWindFlowParticles", true);
@@ -94,7 +76,6 @@ static F32 ss_flow_wind_response()
     static LLCachedControl<F32> response(gSavedSettings, "SSAtmoWindFlowParticleResponse", 4.f);
     return llclamp((F32)response, 0.1f, 20.f);
 }
-// </SS:Nexii>
 
 //static
 S32 LLViewerPartSim::sMaxParticleCount = 0;
@@ -337,7 +318,6 @@ void LLViewerPartGroup::updateParticles(const F32 lastdt)
     // <SS:Nexii> Atmo Magic wind flowmap
     const bool flow_wind = ss_flow_wind_controls();
     const F32 wind_rate = 0.1f * (flow_wind ? ss_flow_wind_response() : 1.f);
-    // </SS:Nexii>
     // <FS:Beq> FIRE-34600 - Bugsplat AVX2 particle count mismatch    
     // S32 end = (S32) mParticles.size();
     bool changed = false;
@@ -369,15 +349,7 @@ void LLViewerPartGroup::updateParticles(const F32 lastdt)
 
         if (part->mFlags & LLPartData::LL_PART_WIND_MASK)
         {
-            // <SS:Nexii> Atmo Magic wind flowmap: the local field where one is
-            // solved, sampled in full so the updraft over a rooftop is kept -
-            // it is most of what makes smoke read as smoke. Outside a solved
-            // tile the flowmap already answers with the ambient wind, so a
-            // particle in another region needs no branch of its own.
-            //
-            // The take-up rate and the drag are the same number, so whatever
-            // it is set to the particle still settles at the speed of the air
-            // around it rather than above or below it. </SS:Nexii>
+            // <SS:Nexii> Atmo Magic wind flowmap: the local field where one is solved, sampled in full so the updraft over a rooftop is kept - it is most of what makes smoke read as smoke. Outside a solved tile the flowmap already answers with the ambient wind, so a particle in another region needs no branch of its own. The take-up rate and the drag are the same number, so whatever it is set to the particle still settles at the speed of the air around it rather than above or below it.
             const LLVector3 wind = flow_wind
                 ? SSWindFlowMap::getInstance()->sample(part->mPosAgent)
                 : regionp->mWind.getVelocity(regionp->getPosRegionFromAgent(part->mPosAgent));

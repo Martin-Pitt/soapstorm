@@ -200,12 +200,7 @@ void SSSoundscape::updateProbes(F64 now)
     mProbeOrigin = cam;
     mLastCycleDone = now;
 
-    // <SS:Nexii> Cover and burial from the shared world field where it has an
-    // answer - a handful of band-stack reads standing in for the three tilted
-    // raycasts, plus a burial figure that walks the actual span stack rather
-    // than one column-top subtraction. The claim handle is what makes the
-    // field build here; the raycasts below stay as the fallback for the
-    // stretch before a tile exists and for when the switch is off.
+    // <SS:Nexii> Cover and burial from the shared world field where it has an answer - a handful of band-stack reads standing in for the three tilted raycasts, plus a burial figure that walks the actual span stack rather than one column-top subtraction. The claim handle is what makes the field build here; the raycasts below stay as the fallback for the stretch before a tile exists and for when the switch is off.
     static LLCachedControl<bool> field_coverage(gSavedSettings, "SSWorldFieldCoverage", false);
     bool field_answered = false;
     if (field_coverage)
@@ -308,7 +303,6 @@ void SSSoundscape::updateProbes(F64 now)
         }
     }
     }
-    // </SS:Nexii>
 
     S32 walls = 0;
     F32 sum = 0.f;

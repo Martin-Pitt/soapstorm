@@ -9,17 +9,7 @@
  top="0"
  width="580"
  height="540">
-    <!-- <SS:Nexii> Atmo Magic: Atmosphere > Sun and Moon sub-tab - the
-         non-positional lighting dials from EEP's Sun and Moon panel
-         (panel_settings_sky_sunmoon.xml), in its order. Position, disc
-         image and disc scale are all deliberately absent: those belong
-         to the Planetary tab's bodies and resolver.
-
-         The two glow dials keep "Glow" in their labels on purpose: plain
-         "Sun Focus"/"Sun Size" was proposed, but "Sun Size" would collide
-         with the planetary system's actual sun disc size (an emitter's
-         angular diameter drives setSunScale), so the labels keep "Glow"
-         to name the effect and gain "Sun" to say whose glow it is. -->
+    <!-- <SS:Nexii> Atmo Magic: Atmosphere > Sun and Moon sub-tab - the non-positional lighting dials from EEP's Sun and Moon panel (panel_settings_sky_sunmoon.xml), in its order. Position, disc image and disc scale are all deliberately absent: those belong to the Planetary tab's bodies and resolver. The two glow dials keep "Glow" in their labels on purpose: plain "Sun Focus"/"Sun Size" was proposed, but "Sun Size" would collide with the planetary system's actual sun disc size (an emitter's angular diameter drives setSunScale), so the labels keep "Glow" to name the effect and gain "Sun" to say whose glow it is. -->
 
     <text
      follows="left|top"

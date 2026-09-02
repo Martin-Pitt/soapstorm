@@ -54,9 +54,7 @@ static const F32 DRIFT_FALL_SLACK = 40.f;
 static const F32 DRIFT_SLACK_PER_WIND = 6.f;
 static const F32 DRIFT_MAX_AGE = 90.f;
 
-// <SS:Nexii> Blowing snow. The drift tier ticks on its own deterministic shared-clock cadence -
-// same rule as the falling tiers, same cell-hash spawns, just ground-anchored and gated on the
-// transport's lift figures.
+// <SS:Nexii> Blowing snow: the drift tier ticks on its own deterministic shared-clock cadence - like the falling tiers, same cell-hash spawns, but ground-anchored and gated on the transport's lift figures.
 static const F64 SS_DRIFT_HZ = 8.0;
 static const F32 DRIFT_RING_RADIUS = 6.f;
 
@@ -66,9 +64,7 @@ static const F32 COVER_TOLERANCE = 2.f;
 
 static const F32 LIFE_EMA = 0.02f;
 
-// <SS:Nexii> When precipitation ends, how long a surviving falling particle may keep falling
-// before the air is clear - the cap on remaining life once the weather is gone, per tier so the
-// far sheet layer clears as promptly as the near drops rather than hanging for minutes.
+// <SS:Nexii> When precipitation ends, cap a surviving falling particle's remaining life so the air clears - per tier, so the far sheet layer drains as promptly as the near drops rather than hanging for minutes.
 static const F32 PRECIP_STOP_DRAIN[TIER_COUNT] = { 1.5f, 2.0f, 2.5f };
 
 static LLTrace::BlockTimerStatHandle FTM_SS_SIM("Atmo Magic Sim");
@@ -88,11 +84,7 @@ static const SSTierSpec TIER_SPEC[TIER_COUNT] = {
     { 32.f, 2.0, 0.004f, 0.08f },
 };
 
-// <SS:Nexii> The weather source's ceiling - the weather deck's top in world metres. Precipitation
-// forms inside the deck's vertical band and falls out of it, so a landing surface above the ceiling
-// (a sky platform riding over the deck, camera there or not) has no weather source above it and
-// that column stays dry. -FLT_MAX when no weather deck is built, which never gates.
-// [interaction: SSVolCloud] </SS:Nexii>
+// <SS:Nexii> The weather source's ceiling - the deck's top in world metres. Precipitation forms inside the deck's band and falls out of it, so a surface above the ceiling (a sky platform riding over the deck, camera there or not) has no weather source above it and that column stays dry. -FLT_MAX when no deck is built, which never gates. [interaction: SSVolCloud]
 static F32 precipDeckTopZ()
 {
     SSVolCloud* vol = SSVolCloud::getInstance();
@@ -322,10 +314,7 @@ void SSPrecipSim::update(F32 dt)
     static LLCachedControl<bool> respawn_setting(gSavedSettings, "SSAtmoRespawnOnImpact", true);
     const F32 respawn_env = SSAtmoMagic::getInstance()->gustEnvelopeAt(
         SSAtmoMagic::getInstance()->sharedTime());
-    // <SS:Nexii> The respawn recycle is a "keep the falls continuous" device, and nothing may
-    // recycle once the rain has stopped: with the weather gone, respawn_env (a pure turbulence
-    // envelope - it ignores precipitation) and the frozen tier targets would otherwise keep
-    // re-filling the air with a phantom drizzle for as long as the pool's residue lives.
+    // <SS:Nexii> The respawn recycle is a "keep the falls continuous" device, and nothing may recycle once the rain has stopped: with the weather gone, respawn_env (pure turbulence - it ignores precipitation) and the frozen tier targets would keep re-filling the air with phantom drizzle for as long as the pool's residue lives.
     const bool atmo_weather_live = SSAtmoMagic::getInstance()->hasWeather();
     struct Respawn { SSPrecipTier mTier; U32 mSeed; LLVector3 mPos; };
     std::vector<Respawn> respawns;
@@ -463,11 +452,7 @@ void SSPrecipSim::update(F32 dt)
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     if (!atmo->hasWeather())
     {
-        // <SS:Nexii> The air clears when the rain does. The integrate loop above already aged
-        // every surviving particle this frame; cap each one's remaining life at the drain window
-        // so the pool empties over the next few seconds instead of lingering for minutes. A
-        // particle near the floor keeps its shorter remaining life and finishes its fall
-        // naturally; only the freshly spawned high drops (and the far sheets) are cut.
+        // <SS:Nexii> The air clears when the rain does. The integrate loop above already aged every survivor this frame; cap each one's remaining life at the drain window so the pool empties over the next few seconds instead of lingering for minutes. A particle near the floor keeps its shorter remaining life and finishes naturally; only freshly spawned high drops (and far sheets) are cut.
         for (SSPrecipParticle& p : mParticles)
         {
             p.mMaxAge = llmin(p.mMaxAge, p.mAge + PRECIP_STOP_DRAIN[p.mTier]);
@@ -495,8 +480,7 @@ void SSPrecipSim::update(F32 dt)
     }
     }
 
-    // <SS:Nexii> Blowing snow: the ground-anchored pool, spawned from the transport's lift
-    // figures and advected by the same flow the falling tiers ride.
+    // <SS:Nexii> Blowing snow: the ground-anchored pool, spawned from the transport's lift figures and advected by the flow the falling tiers ride.
     updateDrift(dt);
 }
 
@@ -562,9 +546,7 @@ void SSPrecipSim::spawnTier(SSPrecipTier tier, U64 tick, F64 tick_time)
         ? llclamp(mMeanLife[tier], nominal_life * 0.5f, nominal_life * 8.f)
         : nominal_life;
 
-    // <SS:Nexii> The envelope swings hard under deep turbulence, and this target is what the
-    // spawn headroom and the respawn gate both read - tracking it instantaneously makes the
-    // standing population pump with every gust front. Ease toward it instead.
+    // <SS:Nexii> The envelope swings hard under deep turbulence, and this target is what spawn headroom and the respawn gate both read - tracking it instantly makes the standing population pump with every gust front. Ease toward it instead.
     const F32 raw_target = llmin(mTierSpawnAccum[tier] * (F32)TIER_SPEC[tier].mHz * mean_life,
                                  (F32)tierCap(tier));
     mTierTarget[tier] = lerp(mTierTarget[tier], raw_target, 0.35f);
@@ -596,15 +578,7 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
     const F32 cell_agent_x = (F32)((F64)cx * spec.mCell - agent_origin_global.mdV[VX]);
     const F32 cell_agent_y = (F32)((F64)cy * spec.mCell - agent_origin_global.mdV[VY]);
 
-    // <SS:Nexii> The deck's convection noise map, asked about the column this cell's weather
-    // falls out of - and asked where the rain COMES FROM, not where it lands. Wind tips the
-    // fall, so a drop that lands here entered the deck's base a wind-drift upwind of here;
-    // sampling the tilted point is what keeps it raining on a spot right under a gap when the
-    // wind carries the weather across it, and what dries the spot the wind has carried AWAY
-    // from. Presence gates the rate - a hole in the map takes its rain with it - and the tower
-    // weight tweaks intensity slightly toward the high, dense parts. Weather that rises from
-    // the ground never passes through the deck and is left alone.
-    // [interaction: SSVolCloud]
+    // <SS:Nexii> The deck's convection noise map, asked about the column this cell's weather falls out of - where the rain COMES FROM, not where it lands. Wind tips the fall, so a drop landing here entered the deck's base a wind-drift upwind; sampling the tilted point keeps it raining on a spot right under a gap when wind carries the weather across it, and dries the spot the wind carried AWAY from. Presence gates the rate - a map hole takes its rain with it - and the tower weight tweaks intensity slightly toward the high, dense parts. Ground-risen weather never passes through the deck and is left alone. [interaction: SSVolCloud]
     F32 noise_presence = 1.f;
     F32 noise_tower = 0.f;
     if (!preset.risesFromGround())
@@ -684,13 +658,7 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
         const bool found_surface =
             SSRainShadowMap::getInstance()->resolveColumn(anchor, hit, on_water, &normal);
 
-        // <SS:Nexii> The deck band's ceiling: precipitation forms in the weather deck's own
-        // vertical span and falls out of it, so its run may never start past the deck's top, and
-        // a landing surface above the top (a sky platform riding over the deck) has no weather
-        // source above it at all - that column stays dry even though the wind-tilted noise map
-        // would read a full deck over the ground far below. The run is shortened to begin right
-        // under the deck instead of poking into the air above it. Rising weather is ground-sourced,
-        // never touches the deck, and keeps its own path. [interaction: SSVolCloud]
+        // <SS:Nexii> The deck band's ceiling: precipitation forms in the deck's vertical span and falls out of it, so a run may never start past the deck's top, and a surface above it (a sky platform riding over the deck) has no weather source above it - that column stays dry even though the wind-tilted noise map reads a full deck over ground far below. The run is shortened to begin right under the deck instead of poking above it. Ground-risen weather never touches the deck and keeps its own path. [interaction: SSVolCloud]
         F32 run_fall = fall_len;
         if (!rises)
         {
@@ -813,10 +781,7 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
         F32 fall_time = fall_len / llmax(0.1f, v_fall);
         part.mVel = LLVector3(wind_h.mV[VX], wind_h.mV[VY], -v_fall);
 
-        // <SS:Nexii> Only the drops ride the impact branch: it exists to park a landing drop
-        // exactly where its splash will play, and it caps a long run to the drift ceilings.
-        // Clusters and sheets never land anything - they stream through the same winding path
-        // the outer drops use instead. </SS:Nexii>
+        // <SS:Nexii> Only the drops ride the impact branch: it exists to park a landing drop exactly where its splash will play, and caps a long run to the drift ceilings. Clusters and sheets never land anything - they stream the winding path the outer drops use.
         if (tier == TIER_DROPS && preset.makesImpacts())
         {
             const F32 max_drift = MAX_SPAWN_DRIFT;
@@ -846,10 +811,7 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
 
             if (has_floor) part.mFloorZ = hit_pos.mV[VZ];
         }
-        // <SS:Nexii> Where this run began - the renderer fades the particle in over the top part
-        // of the fall (scaled to the run, capped at SS_PRECIP_TOP_FADE). The nominal run top, not
-        // the possibly wind-retracted spawn point, so a gust that shortens the visible run
-        // doesn't dim the drop for its whole life. </SS:Nexii>
+        // <SS:Nexii> Where this run began - the renderer fades the particle in over the top of the fall (scaled to the run, capped at SS_PRECIP_TOP_FADE). The nominal run top, not the possibly wind-retracted spawn point, so a gust that shortens the visible run doesn't dim the drop for its whole life.
         part.mFallTop = hit_pos.mV[VZ] + fall_len;
         part.mMaxAge = llclamp(fall_time, 0.2f,
                                (tier == TIER_DROPS && preset.makesImpacts()) ? 25.f : DRIFT_MAX_AGE);
@@ -903,9 +865,7 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
 
     if (atmo->isSkyTrack() && !found_surface) return;
 
-    // <SS:Nexii> The same deck-band ceiling the spawner enforces: a recycle never lands a drop
-    // on a surface above the weather deck's top, and its run is clipped under the deck like the
-    // initial spawn's. [interaction: SSVolCloud]
+    // <SS:Nexii> The same deck-band ceiling the spawner enforces: a recycle never lands a drop on a surface above the deck's top, and its run is clipped under the deck like the initial spawn's. [interaction: SSVolCloud]
     const bool rises = preset.risesFromGround();
     F32 run_fall = fall_len;
     if (!rises)
@@ -940,7 +900,7 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
 
 // One pool, two jobs: the field walk (mass-following - spawn where the transport says the wind is
 // lifting settled snow) and the near-camera ring (storm feel at the lens, regime-scaled, capped).
-// Everything here is presentation; the mass ledger lives entirely in SSGranular.
+// Everything here is presentation; the mass ledger lives in SSGranular.
 static F32 regimeRingScale(SSAtmoMagic::ERegime regime)
 {
     switch (regime)
@@ -986,7 +946,7 @@ void SSPrecipSim::updateDrift(F32 dt)
     const F32 radius = driftCullRadius();
     const F32 cull_r2 = (radius + 8.f) * (radius + 8.f);
 
-    // Integrate: flow advection with a decaying loft, ground clamp on a slice, cull by radius.
+    // Integrate: flow advection with decaying loft, ground clamp on a slice, cull by radius.
     // No tier machinery touches these particles - their count is the pool's own.
     for (size_t i = 0; i < mDrift.size(); )
     {
@@ -1010,7 +970,7 @@ void SSPrecipSim::updateDrift(F32 dt)
         const LLVector3 target(wind.mV[VX] * response, wind.mV[VY] * response, 0.f);
         p.mVel = lerp(p.mVel, target, blend);
 
-        // The plume grows as it rides: a puff leaving the ground swells into
+        // The plume grows as it rides: a puff swells into
         // the broad sheet it becomes downwind, capped so old particles never
         // balloon.
         const F32 grow = 1.f + llmin(0.25f * dt, 0.25f);
@@ -1038,7 +998,7 @@ void SSPrecipSim::updateDrift(F32 dt)
 
     if (!active)
     {
-        // run the pool down rather than popping it - a storm ending should clear the air over a
+        // run the pool down rather than popping it - a storm ending clears the air over a
         // second or two, not in one frame
         return;
     }
@@ -1108,10 +1068,10 @@ void SSPrecipSim::spawnDriftTick(U64 tick, F64 tick_time)
                                      (U32)(S32)(pos.mV[VY] * 4.f))))));
             rng.next();
 
-            // The spawn weight rides on LIFT, not on remaining depth - a cell being scoured
-            // hardest is exactly the cell the wind carries the most from, so gating on depth
+            // The spawn weight rides on LIFT, not remaining depth - a cell scoured
+            // hardest is the cell the wind carries most from, so gating on depth
             // there would silence the ground blizzard by its own success. Depth only saturates
-            // the weight near a couple of millimetres: deeper than that and the air is already
+            // the weight near a couple of millimetres: deeper and the air is already
             // full.
             const F32 depth_fill = llclamp(depth / 0.002f, 0.f, 1.f);
             const F32 mean = 3.f * lift * depth_fill
@@ -1129,7 +1089,7 @@ void SSPrecipSim::spawnDriftTick(U64 tick, F64 tick_time)
             }
         });
 
-    // The near-camera ring. Regime-scaled presentation, gated on the camera cell's own lift
+    // The near-camera ring: regime-scaled presentation, gated on the camera cell's own lift
     // figure or the squall - a sheltered courtyard does not storm at the lens. The debug
     // switch forces it on at full rate so the tier is visible regardless of weather.
     static LLCachedControl<bool> drift_debug(gSavedSettings, "SSAtmoSnowDriftDebug", false);
@@ -1241,7 +1201,6 @@ void SSPrecipSim::emitDrift(const LLVector3& ground_pos, const LLVector3& flow, 
     mDrift.push_back(part);
 }
 
-// </SS:Nexii>
 
 // Converts a landed particle into its ripple or splash.
 void SSPrecipSim::pushRipple(const SSPrecipParticle& part)
@@ -1337,9 +1296,7 @@ F32 SSPrecipSim::dropRateAt(const LLVector3& pos_agent)
     const F32 area_factor = atmo->areaFactorAt(global.mdV[VX], global.mdV[VY]);
     F32 p = powf(atmo->precipitation(), 1.4f);
 
-    // <SS:Nexii> The same noise gate the spawner runs, wind tilt included: whatever consumes
-    // the arrival rate - impacts, wetness, the sound of it - follows the holes and the dense
-    // parts of the deck rather than averaging over them. [interaction: SSVolCloud]
+    // <SS:Nexii> The same noise gate the spawner runs, wind tilt included: whatever consumes the arrival rate - impacts, wetness, sound - follows the deck's holes and dense parts rather than averaging over them. [interaction: SSVolCloud]
     if (!preset.risesFromGround())
     {
         SSVolCloud* vol = SSVolCloud::getInstance();
@@ -1349,11 +1306,7 @@ F32 SSPrecipSim::dropRateAt(const LLVector3& pos_agent)
             bool on_water = false;
             if (SSRainShadowMap::getInstance()->resolveColumn(pos_agent, hit, on_water))
             {
-                // <SS:Nexii> The deck-band ceiling, same as the spawner: a point whose column
-                // lands on a surface above the weather deck's top has no weather source above it,
-                // so nothing arrives there - the wind-tilted noise gate may read a full deck over
-                // the ground far below, but that rain never reaches a surface above the deck.
-                // [interaction: SSVolCloud]
+                // <SS:Nexii> The deck-band ceiling, same as the spawner: a point whose column lands above the deck's top has no weather source above it, so nothing arrives there - the wind-tilted noise gate may read a full deck over ground far below, but that rain never reaches a surface above the deck. [interaction: SSVolCloud]
                 const F32 precip_top = precipDeckTopZ();
                 if (precip_top > -FLT_MAX && hit.mV[VZ] > precip_top) return 0.f;
 
@@ -1610,8 +1563,8 @@ void SSPrecipSim::spawnDrip(const LLVector3& lip_agent, const LLVector3& out_dir
                    255);
     p.mGlow = llmax(presetGlow(preset), pbr_glow);
 
-    // Granular runoff clumps: the dithered material, so a cascade of clumps
-    // down a wall reads as grains rather than as a blended water sheet.
+// Granular runoff clumps: the dithered material, so a cascade of clumps
+        // down a wall reads as grains, not a blended water sheet.
     if (preset.isGranular())
     {
         p.mMaterial = MAT_GRANULAR;

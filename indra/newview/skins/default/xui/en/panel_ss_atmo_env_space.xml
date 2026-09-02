@@ -87,14 +87,7 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- <SS:Nexii> Atmo Magic: this track celestial bodies. The body
-         hierarchy itself is edited in the dedicated System Designer
-         sub-floater (floater_ss_atmo_planetary.xml) - an orbital map with
-         the sun at centre - opened by the button below. Only the two
-         per-track distance-scale dials stay on this tab: they are dials on
-         the track, not on any one body, and belong beside the track's
-         other per-track controls. Nothing on this tab is keyframed: a
-         solar system is structural, like a water plane existing. -->
+    <!-- <SS:Nexii> Atmo Magic: this track celestial bodies. The body hierarchy itself is edited in the dedicated System Designer sub-floater (floater_ss_atmo_planetary.xml) - an orbital map with the sun at centre - opened by the button below. Only the two per-track distance-scale dials stay on this tab: they are dials on the track, not on any one body, and belong beside the track's other per-track controls. Nothing on this tab is keyframed: a solar system is structural, like a water plane existing. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -173,13 +166,7 @@
      increment="0.01"
      decimal_digits="2" />
 
-    <!-- <SS:Nexii> The Disc Perception radios: a preset front-end on the two
-          distance dials above, which ARE the perception control. The human
-          visual system reads the real Sun and Moon at roughly two to three
-          times their true angular size, so the seeding default compresses
-          both dials to 1/3 - the discs loom what a person feels they saw.
-          Picking a radio writes both dials to 1/N (1x restores the authored
-          distances); moving either dial by hand deselects the radios. -->
+    <!-- <SS:Nexii> The Disc Perception radios: a preset front-end on the two distance dials above, which ARE the perception control. The human visual system reads the real Sun and Moon at roughly two to three times their true angular size, so the seeding default compresses both dials to 1/3 - the discs loom what a person feels they saw. Picking a radio writes both dials to 1/N (1x restores the authored distances); moving either dial by hand deselects the radios. -->
     <text
      follows="left|top"
      layout="topleft"

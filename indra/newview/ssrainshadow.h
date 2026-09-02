@@ -57,11 +57,7 @@ public:
 
     void renderDebug();
 
-    // <SS:Nexii> The debug views, in SSAtmoShadowDebugView order. Cloud and
-    // shelter are the same capture read two ways - the raw texels, and the
-    // resampled grid its consumers actually take - so a disagreement between
-    // them is resampling loss. Map is the capture itself, volume is the frame
-    // it was taken in.
+    // <SS:Nexii> The debug views, in SSAtmoShadowDebugView order. Cloud and shelter are the same capture read two ways - the raw texels, and the resampled grid its consumers take - so a disagreement is resampling loss. Map is the capture itself, volume the frame it was taken in.
     enum EDebugView
     {
         DEBUG_CLOUD = 0,
@@ -70,7 +66,6 @@ public:
         DEBUG_VOLUME,
         DEBUG_VIEW_COUNT
     };
-    // </SS:Nexii>
 
     enum
     {
@@ -87,14 +82,8 @@ public:
         std::vector<F32> mZ;
         std::vector<U8> mFlags;
 
-        // <SS:Nexii> Metres the surface stands above the ground reference under it - the terrain
-        // heightmap (or water where that is higher; the sky track floor in a skybox). Zero is true
-        // ground, anything meaningfully positive is standing structure. The same figure the debug
-        // texel cloud colours by, kept per cell because the consumers want it too: puddles do not
-        // stand on tower roofs, deep snow piles belong at grade, and a drip line belongs on a roof
-        // edge rather than a terrain ledge.
+        // <SS:Nexii> Metres the surface stands above the ground reference under it - the terrain heightmap (or water where higher; the sky track floor in a skybox). Zero is true ground, anything meaningfully positive is standing structure. The same figure the debug texel cloud colours by, kept per cell because consumers want it too: puddles don't stand on tower roofs, deep snow piles belong at grade, and a drip line belongs on a roof edge, not a terrain ledge.
         std::vector<F32> mAbove;
-        // </SS:Nexii>
 
         U32 mGeomSerial = 0;
 
@@ -134,7 +123,7 @@ private:
         U32 mCapturedSerial = 0;
     };
 
-    // <SS:Nexii> The debug view is the depth map itself, not a re-trace of it: every kept texel is unprojected along the fall direction to the world point it actually saw, and drawn as the quad footprint it covers. Holes, eaves, vertical smear and the tilt overscan are then all visible directly rather than inferred.
+    // <SS:Nexii> The debug view is the depth map itself, not a re-trace: every kept texel unprojects along the fall direction to the world point it actually saw, drawn as the quad footprint it covers. Holes, eaves, vertical smear and the tilt overscan are then visible directly rather than inferred.
     struct DebugCloud
     {
         std::vector<LLVector3> mPos;
@@ -152,7 +141,7 @@ private:
 
     void buildDebugCloud(const Tile& tile, DebugCloud& cloud);
 
-    // The resampled landing grid, coloured by how far each cell's landing sits above the terrain under it - so the cells the capture never reached, which every consumer silently takes off the heightmap instead, are visible as themselves.
+    // The resampled landing grid, coloured by how far each cell's landing sits above the terrain under it - so the cells the capture never reached, which every consumer silently takes off the heightmap, are visible as themselves.
     struct DebugGrid
     {
         SurfaceGrid mGrid;
@@ -169,7 +158,6 @@ private:
     void drawShelterGrid();
     void drawDepthMap();
     void drawCaptureVolume();
-    // </SS:Nexii>
 
     Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
     bool needsCapture(const Tile& tile) const;
@@ -180,26 +168,18 @@ private:
     std::map<U64, DebugCloud> mDebugCloud;
     std::map<U64, DebugGrid> mDebugGrid;
 
-    // <SS:Nexii> The on-screen map view's upload of a tile's depth texels. Held
-    // as a raw GL name rather than an LLRenderTarget because nothing renders
-    // into it - it is only ever an upload of CPU-side depth the readback
-    // already delivered.
+    // <SS:Nexii> The on-screen map view's upload of a tile's depth texels. A raw GL name rather than an LLRenderTarget because nothing renders into it - only an upload of CPU-side depth the readback already delivered.
     U32 mDebugMapTex = 0;
     U64 mDebugMapRegion = 0;
     F64 mDebugMapFrom = -1.0;
     U32 mDebugMapRes = 0;
-    // </SS:Nexii>
     LLRenderTarget mTarget;
     F64 mLastCapture = 0.0;
 
-    // <SS:Nexii> One readback in flight, served by SSGLReadback. The shared
-    // mTarget must not be re-rendered (or torn down) until the outstanding
-    // read lands; mReadbackPending gates capture() and evict(), and a clear
-    // requested mid-read is deferred to the read's completion.
+    // <SS:Nexii> One readback in flight, served by SSGLReadback. The shared mTarget must not be re-rendered (or torn down) until the outstanding read lands; mReadbackPending gates capture() and evict(), and a clear requested mid-read is deferred to the read's completion.
     bool mReadbackPending = false;
     bool mClearPending = false;
     U64 mReadbackRegion = 0;
-    // </SS:Nexii>
 
     U32 mCaptureCount = 0;
     U32 mDirtyCaptures = 0;

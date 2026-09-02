@@ -1333,12 +1333,9 @@ private:
     const static LLUUID sStepSounds[LL_MCODE_END];
     // const static LLUUID  sStepSoundOnLand; - <FS:PP> Commented out for FIRE-3169: Option to change the default footsteps sound
 
-    // <SS:Nexii> Atmo Magic surface-aware footstep sounds. Kept as plain S32
-    // action codes here (0=walk, 1=run, 2=jump, 3=land, matching SSStepAction
-    // in ssprecippreset.h) so this header does not need to pull that one in.
+    // <SS:Nexii> Atmo Magic surface-aware footstep sounds. Kept as plain S32 action codes here (0=walk, 1=run, 2=jump, 3=land, matching SSStepAction in ssprecippreset.h) so this header does not need to pull that one in.
     void        playFootstepSound(const LLVector3& foot_pos_agent, S32 action);
     bool        mWasJumping = false;
-    // </SS:Nexii>
 
     //--------------------------------------------------------------------
     // Foot step state (for generating sounds)
@@ -1357,7 +1354,6 @@ private:
     F32                 mSSFootHigh[2]  = { 0.f, 0.f };
     bool                mSSFootArmed[2] = { false, false };
     bool                mSSFootTracking = false;
-    // </SS:Nexii>
     bool                mWasOnGroundRight;
 
 /**                    Sounds

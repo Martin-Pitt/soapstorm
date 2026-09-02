@@ -65,11 +65,7 @@
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoParticleBudget" />
     </button>
-    <!-- <SS:Nexii> The impact toggles, moved here from the settings window.
-         Everything around them is about what happens when a drop lands -
-         ripple tuning, the tier the splash is drawn at, how long it lasts -
-         so the two switches that decide whether any of it happens at all
-         belong with it rather than one window away from it. -->
+    <!-- <SS:Nexii> The impact toggles, moved here from the settings window. Everything around them is about what happens when a drop lands - ripple tuning, the tier the splash is drawn at, how long it lasts - so the two switches that decide whether any of it happens at all belong with it rather than one window away from it. -->
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
      height="14" width="356" name="impact_label" font="SansSerifSmallBold">

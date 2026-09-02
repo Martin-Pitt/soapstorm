@@ -91,8 +91,8 @@ bool SSFloaterAtmoSkyImport::postBuild()
     return true;
 }
 
-// Opens the floater, then arms it. Two drops racing only matters in that the second payload
-// replaces the first - the newer sky is the one the author dropped last.
+// Opens the floater, then arms it. Racing drops only matter in that the second payload
+// replaces the first - the newest sky is the one the author dropped last.
 void SSFloaterAtmoSkyImport::show(LLSettingsSky::ptr_t sky, S32 track_index, F64 phase,
                                   const std::string& item_name, LLHandle<LLFloater> parent)
 {
@@ -107,9 +107,9 @@ void SSFloaterAtmoSkyImport::show(LLSettingsSky::ptr_t sky, S32 track_index, F64
     floater->setPayload(sky, track_index, phase, item_name, parent);
 }
 
-// Arms the dialog with a fresh drop. Groupings default to all on: a drop with nothing picked
-// is refused by the button, not silently half-imported, and unticking is the deliberate act.
-// The body groups appear only when the track's system still has the standard sun/moon to
+// Arms the dialog with a fresh drop. Groupings default to all on: an empty pick
+// is refused by the button, not silently half-imported; unticking is deliberate.
+// Body groups appear only when the track's system still has the standard sun/moon to
 // translate onto - a drop offers what exists, nothing more.
 void SSFloaterAtmoSkyImport::setPayload(LLSettingsSky::ptr_t sky, S32 track_index, F64 phase,
                                         const std::string& item_name, LLHandle<LLFloater> parent)
@@ -170,7 +170,7 @@ U32 SSFloaterAtmoSkyImport::checkedGroups() const
 }
 
 // Target line and button state. The asset the drop was captured against may have been unloaded
-// or reshaped while this dialog sat open - the target text says so rather than letting Import
+// or reshaped while the dialog sat open - the text says so rather than letting Import
 // silently do nothing.
 void SSFloaterAtmoSkyImport::refresh()
 {
@@ -197,9 +197,9 @@ void SSFloaterAtmoSkyImport::refresh()
     getChild<LLUICtrl>("import_button")->setEnabled(can_import);
 }
 
-// Stamps the checked groupings into the captured track at the captured phase. The same guards
-// refresh() showed are re-run here - not because the text could have gone stale a frame ago,
-// but because the asset can change between the last poll and this click.
+// Stamps the checked groupings into the captured track at the captured phase. The guards
+// refresh() showed are re-run - not from stale text, but the asset can change
+// between the last poll and this click.
 void SSFloaterAtmoSkyImport::onClickImport()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -213,10 +213,7 @@ void SSFloaterAtmoSkyImport::onClickImport()
             {
                 SSAtmoEnvTrack& track = asset.mTracks[(size_t)mTrackIndex];
 
-                // <SS:Nexii> Snapshot the standard bodies' disc textures so an adopted texture
-                // can be told from a sky that offered nothing new (its stock value). The bodies
-                // are the ones the translation below may rewrite - the same standard-body
-                // checks it performs - so a snapshot:body match stays meaningful across it.
+                // <SS:Nexii> Snapshot the standard bodies' disc textures so an adopted texture is distinguishable from one the sky left at stock. The bodies below may be rewritten - the same standard-body checks it performs - so a snapshot:body match stays meaningful across it.
                 S32 sun_body = -1;
                 S32 moon_body = -1;
                 LLUUID sun_texture_before;
@@ -243,14 +240,10 @@ void SSFloaterAtmoSkyImport::onClickImport()
                 track.mAtmosphere.addKeyframesFromSky(*mSky, mPhase, groups);
                 track.mCloudDome.addKeyframesFromSky(*mSky, mPhase, groups);
                 // The body groups re-check their standard bodies inside - whatever the author
-                // redesigned between the drop and this click is left exactly as they left it.
+                // redesigned between drop and click is left as they left it.
                 track.mPlanetary.translateSettingsSky(*mSky, groups);
 
-                // <SS:Nexii> A disc texture the import actually adopted (the sky's own sun or
-                // moon art, not the stock value it had nothing to say about) gets its disc
-                // padding auto-derived from the alpha, the same way a hand-picked texture does
-                // (ssdiscpad.h; gated on SSAtmoDiscPadAuto). A still-loading texture is left
-                // in the module's retry slot - the environment floater's draw poll lands it.
+                // <SS:Nexii> A disc texture the import actually adopted (the sky's own sun/moon art, not a stock value) gets its disc padding auto-derived from the alpha, like a hand-picked texture (ssdiscpad.h; gated on SSAtmoDiscPadAuto). A still-loading texture is left in the module's retry slot - the environment floater's draw poll lands it.
                 if (sun_body >= 0)
                 {
                     const LLUUID& adopted =

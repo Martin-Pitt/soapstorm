@@ -66,7 +66,6 @@ static LLStaticHashedString sSunUp("ss_sun_up");
 
 // ...and how far the distant sky mirror takes over from the wavy probe tap.
 static LLStaticHashedString sSkyReflect("ss_sky_reflect");
-// </SS:Nexii>
 
 LLDrawPoolWater::LLDrawPoolWater() : LLFacePool(POOL_WATER)
 {
@@ -112,12 +111,7 @@ void LLDrawPoolWater::prerender()
 
 S32 LLDrawPoolWater::getNumPostDeferredPasses()
 {
-    // <SS:Nexii> Water renders at every camera height. This used to gate on the camera's height
-    // above the water plane (1024m dating from when that was the skybox top, then MAX_FAR_CLIP
-    // once the SS planes went in) on the theory that the surface stops being visible that far up
-    // - but the far-field squash pulls the surface into the far disc at any altitude, so the
-    // ocean below a sky build is exactly what the pass exists to draw. Faces still frustum-cull
-    // individually; an empty pass costs one fullscreen depth copy.
+    // <SS:Nexii> Water renders at every camera height. This used to gate on the camera's height above the water plane (1024m dating from when that was the skybox top, then MAX_FAR_CLIP once the SS planes went in) on the theory that the surface stops being visible that far up - but the far-field squash pulls the surface into the far disc at any altitude, so the ocean below a sky build is exactly what the pass exists to draw. Faces still frustum-cull individually; an empty pass costs one fullscreen depth copy.
     return 1;
 }
 
@@ -189,25 +183,12 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     // so only use this color when the moon alone is showing
     else if (moon_up)
     {
-        // <SS:Nexii> getMoonlightColor() is literally getSunlightColor() -
-        // "moon and sun share light color" (llsettingssky.cpp) - so this
-        // used to put the SUN's hue on the water at night, which is most of
-        // why a moon's glitter path read as a second sun. getMoonDiffuse()
-        // is the derived one: the same light through the atmosphere's
-        // transmittance and scaled by the moon's own brightness, which now
-        // carries its phase.
-        //
-        // Then shifted toward the scotopic blue EEP already keeps for moon
-        // ambient (moonlight_b in calculateLightSettings). Night vision is
-        // cool and desaturated; leaving the glitter warm is the tell that it
-        // is really sunlight in disguise. Magnitude is set below regardless,
-        // so this is purely about hue.
+        // <SS:Nexii> getMoonlightColor() is literally getSunlightColor() - "moon and sun share light color" (llsettingssky.cpp) - so this used to put the SUN's hue on the water at night, which is most of why a moon's glitter path read as a second sun. getMoonDiffuse() is the derived one: the same light through the atmosphere's transmittance and scaled by the moon's own brightness, which now carries its phase. Then shifted toward the scotopic blue EEP already keeps for moon ambient (moonlight_b in calculateLightSettings). Night vision is cool and desaturated; leaving the glitter warm is the tell that it is really sunlight in disguise. Magnitude is set below regardless, so this is purely about hue.
         static const LLColor3 SS_SCOTOPIC(0.66f, 0.66f, 1.2f);
         static const F32 SS_SCOTOPIC_MIX = 0.5f;
 
         LLColor3 moon_hue = psky->getMoonDiffuse();
         light_diffuse += lerp(moon_hue, SS_SCOTOPIC * moon_hue.length(), SS_SCOTOPIC_MIX);
-        // </SS:Nexii>
     }
 
     // Apply magic numbers translating light direction into intensities
@@ -218,19 +199,7 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
         light_diffuse *= (1.5f + (6.f * ground_proj_sq));
     }
 
-    // <SS:Nexii> Moonlight is not sunlight.
-    //
-    // The normalize() above throws the light colour's MAGNITUDE away and the
-    // line after it scales whatever is left to a fixed intensity - so the
-    // glitter path off the moon came out exactly as strong as the sun's,
-    // differing only in tint. On a dark sea that reads as a second sun: the
-    // one thing a moon's reflection should not look like.
-    //
-    // Scaled here rather than by fixing the normalize, because the code
-    // above is upstream's (its own comment says as much) and everything else
-    // downstream is tuned against the intensity it produces. The sky's own
-    // moon brightness drives it, so an author who has turned the moon up
-    // gets a stronger glade and one who has turned it off gets none.
+    // <SS:Nexii> Moonlight is not sunlight. The normalize() above throws the light colour's MAGNITUDE away and the line after it scales whatever is left to a fixed intensity - so the glitter path off the moon came out exactly as strong as the sun's, differing only in tint. On a dark sea that reads as a second sun: the one thing a moon's reflection should not look like. Scaled here rather than by fixing the normalize, because the code above is upstream's (its own comment says as much) and everything else downstream is tuned against the intensity it produces. The sky's own moon brightness drives it, so an author who has turned the moon up gets a stronger glade and one who has turned it off gets none.
     if (!sun_up && moon_up)
     {
         // The moon's brightness now carries its PHASE as well as its
@@ -242,7 +211,6 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
         const F32 moon_bright = llclamp(psky->getMoonBrightness(), 0.f, 1.f);
         light_diffuse *= MOON_GLINT_SPAN * moon_bright;
     }
-    // </SS:Nexii>
 
     LLTexUnit::eTextureFilterOptions filter_mode = has_normal_mips ? LLTexUnit::TFO_ANISOTROPIC : LLTexUnit::TFO_POINT;
 
@@ -315,9 +283,7 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
     shader->uniform1f(LLShaderMgr::WATER_TIME, phase_time);
     shader->uniform3fv(LLShaderMgr::WATER_EYEVEC, 1, LLViewerCamera::getInstance()->getOrigin().mV);
 
-    // <SS:Nexii> Atmo water far-field squash (ss_squash: knee, cap, ring reach - see waterV.glsl).
-    // Keyed on the family swap: stock water never wears Atmo geometry, so it gets zeros -
-    // passthrough - and never inherits a stale band from a previous Atmo frame. </SS:Nexii>
+    // <SS:Nexii> Atmo water far-field squash (ss_squash: knee, cap, ring reach - see waterV.glsl). Keyed on the family swap: stock water never wears Atmo geometry, so it gets zeros - passthrough - and never inherits a stale band from a previous Atmo frame.
     {
         static LLStaticHashedString ss_squash("ss_squash");
         if (SSWaterWorld::atmoWaterLive())
@@ -339,19 +305,7 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     shader->uniform3fv(LLShaderMgr::WATER_LIGHT_DIR, 1, light_dir.mV);
 
-    // <SS:Nexii> How big the light in the sky actually is.
-    //
-    // The water shades with a PUNCTUAL light - a point, zero angular size -
-    // so the glitter path's spread comes entirely from surface roughness.
-    // That is the old single-sun assumption: a body drawn as a two-degree
-    // disc and one drawn at half a degree laid down exactly the same
-    // reflection, which is what made the water disagree with the sky above
-    // it. Handing the shader the angular radius lets it widen the specular
-    // lobe to match what is being reflected.
-    // Toggleable as a whole: with SSAtmoWaterPunctualLight off, the water's punctual treatment reverts to stock - point-light angular size and no moon punctual - for A/B comparison and taste.
-    // The toggle off must hold that contract exactly: a point light has NO angular radius, so
-    // the stock fallback (the 0.53 degree sun) only applies while the feature is on and no
-    // active Atmo environment is driving the sky.
+    // <SS:Nexii> How big the light in the sky actually is. The water shades with a PUNCTUAL light - a point, zero angular size - so the glitter path's spread comes entirely from surface roughness. That is the old single-sun assumption: a body drawn as a two-degree disc and one drawn at half a degree laid down exactly the same reflection, which is what made the water disagree with the sky above it. Handing the shader the angular radius lets it widen the specular lobe to match what is being reflected. Toggleable as a whole: with SSAtmoWaterPunctualLight off, the water's punctual treatment reverts to stock - point-light angular size and no moon punctual - for A/B comparison and taste. The toggle off must hold that contract exactly: a point light has NO angular radius, so the stock fallback (the 0.53 degree sun) only applies while the feature is on and no active Atmo environment is driving the sky.
     static LLCachedControl<bool> ss_punctual(gSavedSettings, "SSAtmoWaterPunctualLight", true);
 
     F32 light_angular_radius = 0.f;   // a point light - stock's assumption
@@ -389,15 +343,10 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
         : LLColor3(0.f, 0.f, 0.f);
     shader->uniform3fv(sMoonlit, 1, moonlit.mV);
     shader->uniform1f(sSunUp, sun_up ? 1.f : 0.f);
-    // </SS:Nexii>
 
-    // <SS:Nexii> The distant sky mirror's strength (see waterF.glsl): far water
-    // taps the sky probe straight along the mirror angle so the sky's structure
-    // reads in the reflection instead of averaging away in the wave normals.
-    // 0 is stock water, kept for A/B comparison and fallback.
+    // <SS:Nexii> The distant sky mirror's strength (see waterF.glsl): far water taps the sky probe straight along the mirror angle so the sky's structure reads in the reflection instead of averaging away in the wave normals. 0 is stock water, kept for A/B comparison and fallback.
     static LLCachedControl<F32> ss_sky_reflect(gSavedSettings, "SSWaterSkyReflect", 1.f);
     shader->uniform1f(sSkyReflect, llclamp(ss_sky_reflect(), 0.f, 1.f));
-    // </SS:Nexii>
 
     shader->uniform3fv(LLShaderMgr::WATER_NORM_SCALE, 1, pwater->getNormalScale().mV);
     shader->uniform1f(LLShaderMgr::WATER_FRESNEL_SCALE, pwater->getFresnelScale());
@@ -424,9 +373,7 @@ void LLDrawPoolWater::renderPostDeferred(S32 pass)
 
     shader->uniform1i(LLShaderMgr::SUN_UP_FACTOR, sun_up ? 1 : 0);
 
-    // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the water's atmospheric lighting
-    // ramps its sun glow on the twilight band (full while the disc is up, easing out through the
-    // dusk below the horizon) instead of snapping at centre-rise.
+    // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the water's atmospheric lighting ramps its sun glow on the twilight band (full while the disc is up, easing out through the dusk below the horizon) instead of snapping at centre-rise.
     shader->uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
 
     // ...and the sun's true direction while the rise band is live - see
@@ -477,7 +424,6 @@ void LLDrawPoolWater::pushWaterPlanes(int pass)
         {
             continue;
         }
-        // </SS:Nexii>
 
         face->renderIndexed();
 
@@ -493,8 +439,7 @@ void LLDrawPoolWater::pushWaterPlanes(int pass)
     }
 }
 
-// <SS:Nexii> The water haze pass (LLPipeline::doWaterHaze) re-pushes this pool's faces through the base loop, which knows nothing of the stock-versus-Atmo family swap - without this gate the
-// hidden family's planes would still paint haze over the live one's.
+// <SS:Nexii> The water haze pass (LLPipeline::doWaterHaze) re-pushes this pool's faces through the base loop, which knows nothing of the stock-versus-Atmo family swap - without this gate the hidden family's planes would still paint haze over the live one's.
 void LLDrawPoolWater::pushFaceGeometry()
 {
     for (LLFace* const& face : mDrawFace)
@@ -505,7 +450,6 @@ void LLDrawPoolWater::pushFaceGeometry()
         }
     }
 }
-// </SS:Nexii>
 
 LLViewerTexture *LLDrawPoolWater::getDebugTexture()
 {

@@ -49,7 +49,7 @@ public:
 private:
     void syncOverlayCheck();
 
-    // Wires a tuning control's commit to dropping the cached field tiles so
+    // Drops the cached field tiles on a tuning control's commit so
     // they rebuild under the new setting.
     void watch(const std::string& control);
 

@@ -395,4 +395,3 @@ void main()
     frag_color = spec;
 }
 
-// </SS:Nexii>

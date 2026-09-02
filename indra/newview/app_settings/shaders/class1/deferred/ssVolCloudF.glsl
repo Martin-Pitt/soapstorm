@@ -39,9 +39,7 @@ uniform sampler2D cloud_noise_texture;
 uniform sampler2D depthMap;
 uniform vec2 screen_res;
 
-// <SS:Nexii> The base and detail maps' crossfade partners - bumpMap and specularMap are
-// RESERVED names (see the depthMap note below: only reserved names can be bound as textures).
-// Weights 0 with the partners pinned on the current maps whenever no fade runs.
+// <SS:Nexii> The base and detail maps' crossfade partners - bumpMap and specularMap are RESERVED names (see the depthMap note below: only reserved names can be bound as textures). Weights 0 with the partners pinned on the current maps whenever no fade runs.
 uniform sampler2D bumpMap;
 uniform sampler2D specularMap;
 uniform float ss_base_blend;
@@ -96,6 +94,8 @@ uniform float ss_detail_scale;  // multiplies the fine octaves' size
 uniform float ss_drift_rate;    // multiplies how fast they boil
 uniform float ss_noise_tile;    // metres per tile of the convection noise map; 0 = none
 uniform float ss_noise_hole;    // the map's hole strength as baked by the builder - the veil's gate shares it
+uniform float ss_coverage;      // the builder's coverage threshold - cells whose gate exceeds it hold no puffs
+uniform float ss_cell_salt;     // this deck's cell-hash salt (0 primary, 61 under), so both decks' veils gap on their own fields
 uniform vec2  ss_tower_ramp;    // the tower ramp's window as baked by the builder - widened as the weather consolidates
 uniform float ss_profile;       // 1: the authored vertical profile ramp is bound on bumpMap2
 uniform float ss_sheet;         // 0: fragment is a puff. 1: fragment is the deck's base veil
@@ -251,10 +251,7 @@ float ss_eye_z(float d)
 
 float ss_density(vec2 uv)
 {
-    // <SS:Nexii> The base map's crossfade partner (bumpMap, a reserved channel) and the eased
-    // weight, live while the day cycle fades the deck between two keyframed textures. The branch
-    // is on a uniform, so every fragment takes the same path and a idle weight costs one sample,
-    // as before this existed.
+    // <SS:Nexii> The base map's crossfade partner (bumpMap, a reserved channel) and the eased weight, live while the day cycle fades the deck between two keyframed textures. The branch is on a uniform, so every fragment takes the same path and a idle weight costs one sample, as before this existed.
     vec4 s = texture(diffuseMap, uv);
     if (ss_base_blend > 0.0)
     {
@@ -265,8 +262,7 @@ float ss_density(vec2 uv)
 
 float ss_detail(vec2 uv)
 {
-    // <SS:Nexii> The detail map's own partner (specularMap) and weight - the fade runs
-    // independently of the base's, the two fields keyframe separately.
+    // <SS:Nexii> The detail map's own partner (specularMap) and weight - the fade runs independently of the base's, the two fields keyframe separately.
     vec4 s = texture(cloud_noise_texture, uv);
     if (ss_detail_blend > 0.0)
     {
@@ -288,6 +284,79 @@ float ss_flow(vec2 uv, vec2 flow, float ph0, float ph1, float w)
 float ss_mixed(vec2 uv, float m)
 {
     return mix(ss_density(uv), ss_detail(uv), m);
+}
+
+// <SS:Nexii> The BUILDER'S CELL GATE, replicated exactly. The builder places puffs on a 260m air-frame cell grid and SKIPS a cell whenever its gate (cluster noise pushed toward a skip by the
+// noise map's holes) exceeds the coverage dial - so at any coverage under full, whole cluster-shaped regions of the field hold no puffs at all. The veil knew nothing of that gate: its only tie to
+// the field was the noise map's presence cut, so it drew its sheet under sky the gate had emptied and the deck's floor slid out past the deck. Everything the gate reads is a deterministic hash of
+// cell coordinates - the same property that lets every client grow the same field lets this shader grow it a second time - so the veil can ask, per fragment, the exact question the builder asked
+// per cell: does this cell hold puffs. The constants are the builder's own (CELL_M, the cluster lattice sizes and octave mix, CLUSTER_WEIGHT, the hole window) and must move with it.
+// [interaction: SSVolCloud::buildDeck's gate_raw/gate/coverage check, and hashCell/clusterUnit beside it - one gate, two implementations, byte-matched on the hash and bit-close on the floats]
+const float SS_CELL_M = 260.0;
+
+// hashCell: the C++ multiplies signed ints and casts - two's complement wrap, which uint arithmetic reproduces bit-for-bit.
+float ss_hash_unit(ivec2 c, uint salt)
+{
+    uint h = uint(c.x) * 374761393u ^ uint(c.y) * 668265263u ^ salt * 2246822519u;
+    h = (h ^ (h >> 13u)) * 1274126177u;
+    h = h ^ (h >> 16u);
+    return float(h & 0x00ffffffu) / 16777216.0;
+}
+
+// clusterOctave: value noise over the cell lattice, cubic-eased - cubic_step(t) is smoothstep's interior, so the easing matches the CPU's.
+float ss_cluster_octave(ivec2 c, float cells, uint salt, float shift)
+{
+    vec2 f = vec2(c) / cells + shift;
+    vec2 i = floor(f);
+    vec2 t = f - i;
+    t = t * t * (3.0 - 2.0 * t);
+    ivec2 b = ivec2(i);
+    float c00 = ss_hash_unit(b, salt);
+    float c10 = ss_hash_unit(b + ivec2(1, 0), salt);
+    float c01 = ss_hash_unit(b + ivec2(0, 1), salt);
+    float c11 = ss_hash_unit(b + ivec2(1, 1), salt);
+    return mix(mix(c00, c10, t.x), mix(c01, c11, t.x), t.y);
+}
+
+// clusterUnit: big masses with small-scale raggedness - CLUSTER_CELLS_BIG 9, SMALL 3, OCTAVE_MIX 0.4, and the builder's salts 101/137.
+float ss_cluster_unit(ivec2 c, uint salt)
+{
+    float big = ss_cluster_octave(c, 9.0, 101u + salt, 0.0);
+    float rag = ss_cluster_octave(c, 3.0, 137u + salt, 0.37);
+    return big * 0.6 + rag * 0.4;
+}
+
+// One cell's verdict: 1 the builder put puffs here, 0 it skipped. The presence read is the map at the CELL CENTRE - where the builder sampled - not at this fragment, and through the same hole
+// window (0.16/0.52, ss_noise_hole) the builder baked; the gate formula and the coverage comparison are the builder's line for line.
+float ss_cell_occupied(ivec2 c, uint salt)
+{
+    float gate_raw = ss_cluster_unit(c, salt) * 0.85 + ss_hash_unit(c, 1u + salt) * 0.15;
+    float presence = 1.0;
+    if (ss_noise_tile > 0.0)
+    {
+        // textureLod, not texture: this uv is constant across a cell, so implicit derivatives are zero inside a cell and enormous for the pixel quads straddling a cell wall - which would fetch the coarsest mip in a one-pixel seam along every boundary. The CPU gated off a 64-across box-filtered cache, so any fixed low lod is at least as faithful as the implicit one.
+        vec2 centre = (vec2(c) + 0.5) * SS_CELL_M;
+        float n_map = dot(textureLod(altDiffuseMap, centre / ss_noise_tile, 0.0).rgb, vec3(0.3333));
+        presence = 1.0 - (1.0 - smoothstep(0.16, 0.52, n_map)) * ss_noise_hole;
+    }
+    float gate = gate_raw + (1.0 - gate_raw) * (1.0 - presence);
+    return (gate <= ss_coverage) ? 1.0 : 0.0;
+}
+
+// The gate over the fragment's own air position: the four nearest cells' verdicts, eased bilinearly. The builder's answer is binary per cell and the puffs it places are jittered most of a cell
+// wide - so blending verdicts over exactly one cell puts the veil's edge where the outermost puffs of an occupied cell actually reach, soft at the scale a 260m cell is, with no seam at cell walls.
+float ss_field_occupancy(vec2 air_xy, uint salt)
+{
+    vec2 q = air_xy / SS_CELL_M - 0.5;
+    vec2 i = floor(q);
+    vec2 t = q - i;
+    t = t * t * (3.0 - 2.0 * t);
+    ivec2 b = ivec2(i);
+    float o00 = ss_cell_occupied(b, salt);
+    float o10 = ss_cell_occupied(b + ivec2(1, 0), salt);
+    float o01 = ss_cell_occupied(b + ivec2(0, 1), salt);
+    float o11 = ss_cell_occupied(b + ivec2(1, 1), salt);
+    return mix(mix(o00, o10, t.x), mix(o01, o11, t.x), t.y);
 }
 
 void main()
@@ -315,11 +384,7 @@ void main()
 
     vec3 air = world_true - vec3(ss_drift, 0.0);
 
-    // <SS:Nexii> Two fragments share this shader and diverge only here: the puffs, and the deck's
-    // BASE VEIL - one soft sheet inset into the deck's floor, drawn under the puffs so the field
-    // reads with its gaps filled rather than as balls over empty sky. Both paths hand the shared
-    // tail below the same three answers: density (the alpha driver), noise_v (the mottle the
-    // shading reads), and sphere_n (what the wrapped light wraps around).
+    // <SS:Nexii> Two fragments share this shader and diverge only here: the puffs, and the deck's BASE VEIL - one soft sheet inset into the deck's floor, drawn under the puffs so the field reads with its gaps filled rather than as balls over empty sky. Both paths hand the shared tail below the same three answers: density (the alpha driver), noise_v (the mottle the shading reads), and sphere_n (what the wrapped light wraps around).
     float density;
     float noise_v;
     vec3 sphere_n;
@@ -365,6 +430,13 @@ void main()
             presence = 1.0 - (1.0 - cut) * ss_noise_hole;
         }
 
+        // ...and the builder's cell gate decides it too - see ss_field_occupancy. The presence
+        // cut above only knows the noise map; the gate also knows the cluster noise and the
+        // coverage dial, which between them empty whole regions of cells at any partial
+        // coverage. Without this the veil drew its floor under sky the builder gave no puffs,
+        // and the sheet's mottle sat unrelated to where the field actually stood.
+        float occupancy = ss_field_occupancy(air.xy, uint(ss_cell_salt));
+
         // And the same edge-of-field fade the puffs run, so sheet and puffs dissolve together
         // toward the dome handoff instead of the sheet outliving them.
         float horiz = length(world_true.xy - ss_cam_pos.xy);
@@ -379,7 +451,7 @@ void main()
         // fringe lives. Run it denser and it reads as a black slab under the deck (the body
         // colour is gloom-crushed in a storm); this soft it glows faintly through its own mottle
         // and reads as the deck's floor lit from within.
-        density = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75) * presence * edge * near_fade;
+        density = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75) * presence * occupancy * edge * near_fade;
         noise_v = sheet_n;
         sphere_n = vec3(0.0, 0.0, 1.0);
     }
@@ -510,27 +582,7 @@ void main()
     // not at the scale of the deck.
     density *= smoothstep(ss_base_z, ss_base_z + SS_BASE_SOFT_M, world_true.z);
 
-    // <SS:Nexii> The convection noise map, read again at the fragment level. The CPU shaped the
-    // FIELD with this map - which columns stand up as towers, which fall into pockets - and this
-    // stage runs the same two reads the builder does, in the same direction: map HIGHS are
-    // towers, map LOWS are pockets. What the map must never do down here is shape the BOTTOM -
-    // that inversion (spiky undersides, flattened tops) is what the first cut did before the
-    // guard below, and it read as the map being applied upside down. Two cuts, both gated by the
-    // anvil weight so an ordinary convective sky keeps every ball it grew:
-    //
-    //   The height ramp - the map blends toward 70% white as the fragment climbs the deck's last
-    //   stretch toward the cirrus band, so near the lid EVERY column passes the tower window and
-    //   the whole top consolidates into the anvil rather than only the strong columns' tops.
-    //
-    //   The slope carve - the anvil's UNDERSIDE, deep where a tower feeds it, thinning to a
-    //   sheet away from one - guarded so it can only bite in the deck's upper half. The base
-    //   band is where the cloud keeps its body; an anvil carve that reaches the floor is what
-    //   shredded the undersides.
-    //
-    // All three vertical windows - and the thick-base fill - come from the authored profile
-    // ramp when one is bound, from these built-ins when not. The ramp's four channels mean the
-    // author paints the whole vertical story in one strip: solid base, carving middle, white
-    // ramp to the anvil.
+    // <SS:Nexii> The convection noise map, read again at the fragment level. The CPU shaped the FIELD with this map - which columns stand up as towers, which fall into pockets - and this stage runs the same two reads the builder does, in the same direction: map HIGHS are towers, map LOWS are pockets. What the map must never do down here is shape the BOTTOM - that inversion (spiky undersides, flattened tops) is what the first cut did before the guard below, and it read as the map being applied upside down. Two cuts, both gated by the anvil weight so an ordinary convective sky keeps every ball it grew: The height ramp - the map blends toward 70% white as the fragment climbs the deck's last stretch toward the cirrus band, so near the lid EVERY column passes the tower window and the whole top consolidates into the anvil rather than only the strong columns' tops. The slope carve - the anvil's UNDERSIDE, deep where a tower feeds it, thinning to a sheet away from one - guarded so it can only bite in the deck's upper half. The base band is where the cloud keeps its body; an anvil carve that reaches the floor is what shredded the undersides. All three vertical windows - and the thick-base fill - come from the authored profile ramp when one is bound, from these built-ins when not. The ramp's four channels mean the author paints the whole vertical story in one strip: solid base, carving middle, white ramp to the anvil.
     float v_h = (world_true.z - ss_base_z) / max(ss_layer_thick, 1.0);
     vec4 prof = (ss_profile > 0.5) ? texture(bumpMap2, vec2(0.5, clamp(v_h, 0.0, 1.0))) : vec4(0.0);
 
@@ -696,4 +748,3 @@ void main()
     frag_color = vec4(shaded, a);
 }
 
-// </SS:Nexii>

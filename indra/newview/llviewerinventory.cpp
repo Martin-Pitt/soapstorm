@@ -2352,11 +2352,7 @@ void menu_create_inventory_item(LLInventoryPanel* panel, LLUUID dest_id, const L
                       PERM_ALL,
                       created_cb);    // overridden in create_new_item
     }
-    // <SS:Nexii> Atmo Magic: a plain notecard, like "notecard" above, but
-    // pre-filled with the default v3 environment body rather than left
-    // empty - there is no new asset type to hang this off, so the whole
-    // unified environment lives in an ordinary notecard from the moment it
-    // is created. See doc/archive/atmo_magic_environment.md.
+    // <SS:Nexii> Atmo Magic: a plain notecard, like "notecard" above, but pre-filled with the default v3 environment body rather than left empty - there is no new asset type to hang this off, so the whole unified environment lives in an ordinary notecard from the moment it is created. See doc/archive/atmo_magic_environment.md.
     else if ("atmoenv" == type_name)
     {
         // created_cb only wants the item id (it's the generic
@@ -2371,7 +2367,6 @@ void menu_create_inventory_item(LLInventoryPanel* panel, LLUUID dest_id, const L
                 if (created_cb) created_cb(item_id);
             });
     }
-    // </SS:Nexii>
     else if ("gesture" == type_name)
     {
         const LLUUID parent_id = dest_id.notNull() ? dest_id : gInventory.findCategoryUUIDForType(LLFolderType::FT_GESTURE);

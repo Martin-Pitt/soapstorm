@@ -30,14 +30,14 @@
 #include <algorithm>
 #include <cmath>
 
-// How far a slope walk may reach for a neighbouring height before it is treated as a wall - the
+// How far a slope walk may reach for a neighbour height before it counts as a wall - the
 // settle path in sssurfacefield.cpp carries the same figure as SLOPE_STEP_MAX. Kept here rather
 // than shared so the transport stays free of that file's internals.
 static const F32 GRANULAR_SLOPE_STEP_MAX = 3.f;
 
 // A step may never move more than this fraction of a cell's depth, however hard the wind blows -
-// the CFL-style cap that keeps one gust from overshooting the store and machine-gunning the
-// cascades (doc/atmo_magic_snow.md, granular runoff).
+// a CFL-style cap against one gust overshooting the store and machine-gunning the cascades
+// (doc/atmo_magic_snow.md, granular runoff).
 static const F32 CREEP_CFL_CAP = 0.25f;
 
 // Below this depth a cell is dust, not a drift; lift has nothing to grip.
@@ -51,10 +51,10 @@ namespace
         return x * x * (3.f - 2.f * x);
     }
 
-    // The depth-ceiling scale for a cell's standing over the terrain: 1 at grade, easing to the
-    // params' structure fraction from half the structure height up. The same grade-vs-structure
-    // reading the settle path applies, taken from the same capture channel, so a drift and the
-    // snowfall under it agree about how much a tower deck may hold.
+    // Cell's depth-ceiling scale over terrain: 1 at grade, easing to the params' structure
+    // fraction from half the structure height up. Same grade-vs-structure reading the settle
+    // path takes from the same capture channel, so a drift and its snowfall agree on how much
+    // a tower deck may hold.
     F32 structScale(const SSSurfaceField::Geometry& geom, size_t i, const SSGranularParams& p)
     {
         const F32 h = llmax(p.mStructAboveH, 1.f);
@@ -63,8 +63,8 @@ namespace
     }
 }
 
-// The share of its ceiling a cell of this slope can hold - the settle path's lieHere() as a
-// standalone figure, so deposit and creep pile against the same repose rule settle does.
+// A cell of this slope's share of its ceiling - the settle path's lieHere() standalone, so
+// deposit and creep pile against the same repose rule settle does.
 F32 SSGranular::roomAt(const SSSurfaceField::Geometry& geom, S32 index, F32 ceiling, F32 repose_rad)
 {
     const S32 n = geom.mN;
@@ -102,8 +102,8 @@ F32 SSGranular::roomAt(const SSSurfaceField::Geometry& geom, S32 index, F32 ceil
     return ceiling * llclamp(1.f - angle / llmax(repose_rad, 0.01f), 0.f, 1.f);
 }
 
-// One fixed step. Stages run as separate passes over the grid - order-independent, cache friendly
-// and honest about what each one consumes: lift reads flow and depth, creep reads lift and depth,
+// One fixed step. Stages run as separate grid passes - order-independent, cache friendly, and
+// honest about what each consumes: lift reads flow and depth, creep reads lift and depth,
 // deposit reads flow and the room the repose rule grants.
 void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry& geom,
                       const SSGranularParams& p, F32 dt)
@@ -120,7 +120,7 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
     const F32 deposit_gate = p.mLiftLo * llclamp(p.mDepositGap, 0.1f, 1.f);
 
     // Lift. Always computed while a flow grid exists - the drift tier's spawn walk reads this
-    // figure even when the preset's own rates are zero - and the erosion it pays for when asked.
+    // figure even when the preset's rates are zero - plus the erosion it pays for when asked.
     for (size_t i = 0; i < cells; ++i)
     {
         F32 lift = 0.f;
@@ -136,12 +136,12 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
         }
         fld.mLift[i] = lift;
 
-        // Exponential decay, not a fixed flux. A hard rate strips a cell to zero in one step at
-        // gale strength, which flickers the lift figure on and off as the cell oscillates between
-        // "snow" and "bare" (observed: orange tiles strobing, lift cells vanishing under the
-        // spawn walk's own floor). Proportional erosion leaves a thin residual at equilibrium -
-        // settle divided by the decay constant - so a gale keeps a dusting on the ground and the
-        // air carries the rest, which is what a ground blizzard actually looks like.
+        // Exponential decay, not a fixed flux. A hard rate would strip a cell to zero in one
+        // step at gale strength, flickering the lift figure as the cell oscillates between snow
+        // and bare (observed: orange tiles strobing, lift cells vanishing under the spawn walk's
+        // own floor). Proportional erosion leaves a thin residual at equilibrium - settle divided
+        // by the decay constant - so a gale keeps a dusting on the ground and the air carries
+        // the rest: a ground blizzard.
         if (lift > 0.f && p.mLiftRate > 0.f && p.mGust > 0.f)
         {
             const F32 k = p.mLiftRate * 10.f * lift * p.mGust;
@@ -149,10 +149,10 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
         }
     }
 
-    // Creep. A downwind exchange on the flow's dominant axis - the on-grid stand-in for a
+    // Creep. A downwind exchange on the flow's dominant axis - the on-grid stand-in for
     // continuous advection, good enough at these cell sizes and impossible to overshoot. Mass
-    // arriving at an eave cell bypasses the field entirely and feeds the shed store: one ledger,
-    // debited here, paid out as cascades by the shed cursor.
+    // arriving at an eave cell bypasses the field and feeds the shed store: one ledger, debited
+    // here, paid out as cascades by the shed cursor.
     if (p.mCreepRate > 0.f && p.mGust > 0.f)
     {
         std::fill(fld.mInflow.begin(), fld.mInflow.end(), 0.f);
@@ -200,7 +200,7 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
         }
 
         // Slump: anything past its repose room sheds one cell downwind (or into the store at an
-        // eave) per step - the multi-stage pour of a drift over a lip is this pass iterating.
+        // eave) per step - a drift's multi-stage pour over a lip is this pass iterating.
         for (S32 y = 0; y < n; ++y)
         {
             for (S32 x = 0; x < n; ++x)
@@ -233,8 +233,8 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
                     fld.mSnow[i] -= over;
                     fld.mInflow[j] += over;
                 }
-                // nowhere to go (region border, open cell): hold the surplus; the room cap on
-                // future settle keeps it from growing without bound
+                // nowhere to go (region border, open cell): hold the surplus; future settle's
+                // room cap keeps it from growing without bound
             }
         }
 
@@ -247,9 +247,9 @@ void SSGranular::step(SSSurfaceField::Field& fld, const SSSurfaceField::Geometry
         }
     }
 
-    // Deposit. Banks in the lee once the wind has dropped under the hysteresis gate - strictly
-    // below the lift threshold, so a cell cannot erode and bank in the same step range - weighted
-    // by how sheltered the flow says the cell is.
+    // Deposit. Banks in the lee once wind drops under the hysteresis gate - strictly below the
+    // lift threshold, so a cell cannot erode and bank in the same step range - weighted by how
+    // sheltered the flow says the cell is.
     if (p.mDepositRate > 0.f)
     {
         for (size_t i = 0; i < cells; ++i)

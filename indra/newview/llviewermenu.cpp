@@ -35,7 +35,6 @@
 #include "sslightning.h"
 // <SS:Nexii> Atmo Magic: menu check state for the World > Environment > Atmo Magic item.
 #include "ssatmoenvapplier.h"
-// </SS:Nexii>
 
 // linden library includes
 #include "llavatarnamecache.h"  // IDEVO (I Are Not Men!)
@@ -1393,7 +1392,6 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_WORLD_FIELD;
     }
-    // </SS:Nexii>
     else if ("texel density" == info_display)
     {
         return LLPipeline::RENDER_DEBUG_TEXEL_DENSITY;
@@ -12340,10 +12338,7 @@ class LLWorldEnableEnvSettings : public view_listener_t
     }
 };
 
-// <SS:Nexii> Atmo Magic: checked state for the World > Environment > Atmo Magic item.
-// Mirrors how the time-of-day overrides tick - the item shows a check whenever an
-// Atmo Magic environment is actually driving the sky (master switch on, asset loaded,
-// tracks present), not just because the floater is open.
+// <SS:Nexii> Atmo Magic: checked state for the World > Environment > Atmo Magic item. Mirrors how the time-of-day overrides tick - the item shows a check whenever an Atmo Magic environment is actually driving the sky (master switch on, asset loaded, tracks present), not just because the floater is open.
 class SSWorldEnableSSAtmoEnv : public view_listener_t
 {
     bool handleEvent(const LLSD& userdata)
@@ -12351,7 +12346,6 @@ class SSWorldEnableSSAtmoEnv : public view_listener_t
         return SSAtmoEnvApplier::instance().isActive();
     }
 };
-// </SS:Nexii>
 
 class LLWorldEnvPreset : public view_listener_t
 {
@@ -12684,7 +12678,6 @@ void initialize_spellcheck_menu()
     // <SS:Nexii> Atmo Magic: the Effects & LOD floater's debug strike buttons; registered here because that floater is a plain LLFloater with no class of its own to hang a callback on.
     commit.add("SSAtmo.StrikeNow", [](LLUICtrl*, const LLSD&) { SSLightning::getInstance()->triggerNow(); });
     commit.add("SSAtmo.StrikeGround", [](LLUICtrl*, const LLSD&) { SSLightning::getInstance()->triggerGroundNow(); });
-    // </SS:Nexii>
     commit.add("SpellCheck.ReplaceWithSuggestion", boost::bind(&handle_spellcheck_replace_with_suggestion, _1, _2));
     enable.add("SpellCheck.VisibleSuggestion", boost::bind(&visible_spellcheck_suggestion, _1, _2));
     commit.add("SpellCheck.AddToDictionary", boost::bind(&handle_spellcheck_add_to_dictionary, _1));
@@ -13014,7 +13007,6 @@ void initialize_menus()
     view_listener_t::addMenu(new LLWorldEnableEnvSettings(), "World.EnableEnvSettings");
     // <SS:Nexii> Atmo Magic: tick state for the Worlds Environment > Atmo Magic item.
     view_listener_t::addMenu(new SSWorldEnableSSAtmoEnv(), "World.EnableSSAtmoEnv");
-    // </SS:Nexii>
     view_listener_t::addMenu(new LLWorldEnvPreset(), "World.EnvPreset");
     view_listener_t::addMenu(new LLWorldEnableEnvPreset(), "World.EnableEnvPreset");
     view_listener_t::addMenu(new LLWorldCheckBanLines() , "World.CheckBanLines");

@@ -71,10 +71,7 @@ static const F64 ASSET_POLL_PERIOD  = 2.0;
 
 static const U32 SS_ATMO_SEED = 0x5EED1337u;
 
-// <SS:Nexii> Regime derivation. Enter thresholds are the whole story - the hysteresis both ways
-// is the dwell time, since a regime must hold its candidate for the entire dwell before the
-// switch fires, and a lull has to last just as long to climb back down. See section 14 of
-// doc/atmo_magic_snow.md: regimes direct, the field decides.
+// <SS:Nexii> Regime derivation. Enter thresholds are the whole story - the hysteresis both ways is the dwell time: a regime must hold its candidate the entire dwell before the switch fires, and a lull must last just as long to climb back down. See section 14 of doc/atmo_magic_snow.md: regimes direct, the field decides.
 static const F32 REGIME_ENTER_SALTATION = 4.0f;
 static const F32 REGIME_ENTER_DRIFT     = 6.5f;
 static const F32 REGIME_ENTER_BLIZZARD  = 8.5f;
@@ -210,10 +207,7 @@ void SSAtmoMagic::refreshParams()
     SSAtmoTrackManager* tracks = SSAtmoTrackManager::getInstance();
     mTrack = tracks->currentTrack();
 
-    // <SS:Nexii> An environment is the whole system's master gate, not just the sky's: with none
-    // resolved, every Atmo Magic feature - precipitation, wind, lightning, the sound engine,
-    // footsteps - stands down and the viewer runs pristine. The deprecated legacy track layer no
-    // longer drives anything here; ssatmoenvapplier.cpp's want_active is the sky-side twin of this.
+    // <SS:Nexii> An environment is the whole system's master gate, not just the sky's: with none resolved, every Atmo Magic feature - precipitation, wind, lightning, the sound engine, footsteps - stands down and the viewer runs pristine. The deprecated legacy track layer no longer drives anything here; ssatmoenvapplier.cpp's want_active is the sky-side twin.
     static const SSAtmoTrackConfig no_env_cfg;
     const SSAtmoTrackConfig& cfg = v3_active ? v3_cfg : no_env_cfg;
 
@@ -225,12 +219,7 @@ void SSAtmoMagic::refreshParams()
 
     const F32 dt = llclamp((F32)gFrameIntervalSeconds, 0.f, 0.25f);
 
-    // <SS:Nexii> The blend tracks whether weather RUNS at all - an environment
-    // arriving or leaving fades the precipitation in and out. A preset swap is
-    // not a weather change: rain becoming snow as temperature crosses zero is
-    // the same sky handing over different particles, and dipping the intensity
-    // through zero for it read as the storm dying and restarting (observed at
-    // the crossover). Swap in place, immediately, every time.
+    // <SS:Nexii> The blend tracks whether weather RUNS at all - an environment arriving or leaving fades precipitation in and out. A preset swap is not a weather change: rain becoming snow as temperature crosses zero is the same sky handing over different particles, and dipping intensity through zero for it read as the storm dying and restarting (observed at the crossover). Swap in place, immediately, every time.
     const F32 blend_target = track_runs ? 1.f : 0.f;
     mBlend += (blend_target - mBlend) * llclamp(TRACK_FADE_RATE * dt, 0.f, 1.f);
 
@@ -242,17 +231,12 @@ void SSAtmoMagic::refreshParams()
 
     mEnabled = enabled && (cfg.runs() || mBlend > 0.01f);
 
-    // <SS:Nexii> Switched-on means the setting AND a live environment: the footstep picker and the
-    // sound-meta analyser read this directly, and both must fall back to stock viewer behaviour
-    // (stock step sounds, no analysis) the moment no environment answers.
+    // <SS:Nexii> Switched-on means the setting AND a live environment: the footstep picker and sound-meta analyser read this directly, and both must fall back to stock behaviour (stock step sounds, no analysis) the moment no environment answers.
     mSwitchedOn = enabled && v3_active;
 
     mTemperatureC = cfg.mTemperatureC;
 
-    // <SS:Nexii> The bolt-from-the-blue look-ahead: when the weather cube's next keyframe is
-    // stormier than now and the day phase has run most of the way toward it, a thunderstorm is
-    // approaching from upwind - lightning starts arriving from that direction before the storm
-    // itself does (SSLightning::idle's blue scheduler). Zero without a live environment. </SS:Nexii>
+    // <SS:Nexii> The bolt-from-the-blue look-ahead: when the weather cube's next keyframe is stormier than now and the day phase has run most of the way toward it, a thunderstorm approaches from upwind - lightning starts arriving from that direction before the storm itself does (SSLightning::idle's blue scheduler). Zero without a live environment.
     mStormApproach = 0.f;
     mStormApproachHeading = -1.f;
     if (v3_active)
@@ -511,10 +495,7 @@ void SSAtmoMagic::processImpacts()
                                  (U32)(S32)(impact.mPosAgent.mV[VY] * 16.f))));
         rng.next();
 
-        // <SS:Nexii> Granular runoff lands as mass, not as water: a cascade clump credits the
-        // cell it lands on, and the eave drift pile forms there. The from_runoff flag marks
-        // exactly these; ordinary falling snow still makes no ripples at all (FLAKE presets
-        // carry mImpactStrength 0, so they never queue impacts).
+        // <SS:Nexii> Granular runoff lands as mass, not water: a cascade clump credits the cell it lands on, and the eave drift pile forms there. The from_runoff flag marks exactly these; ordinary falling snow still makes no ripples (FLAKE presets carry mImpactStrength 0, so they never queue impacts).
         if (impact.mRunoff && granularWeather() && !impact.mOnWater)
         {
             SSSurfaceField::getInstance()->depositAt(impact.mPosAgent,
@@ -537,11 +518,7 @@ void SSAtmoMagic::processImpacts()
 
 // <SS:Nexii> Granular weather: lift authority, transport bundle, regime machine.
 
-// Is snow lifting here, and how hard - 0 to 1, physical, no preset rate and no gust in the
-// figure. Callers scale by the preset's rate and apply gustEnvelopeAt() once; the transport gets
-// both as scalars in its bundle. The threshold band is evaluated against the flowmap's ground
-// slab, not the ambient - the alley jets reach it before the open ground does, which is the
-// whole point of the capture stack.
+// Is snow lifting here, and how hard - 0 to 1, physical, no preset rate or gust in the figure. Callers scale by the preset's rate and apply gustEnvelopeAt() once; the transport gets both as scalars in its bundle. The threshold band evaluates against the flowmap's ground slab, not the ambient - the alley jets reach it before the open ground does, the whole point of the capture stack.
 F32 SSAtmoMagic::liftAt(const LLVector3& pos_agent) const
 {
     const SSPrecipPreset& p = preset();
@@ -570,8 +547,7 @@ bool SSAtmoMagic::granularWeather() const
     return hasWeather() && mPreset.isGranular();
 }
 
-// The transport's bundle for this tick. Plain floats only; the gust envelope rides in as one
-// scalar, applied by the transport once per tick rather than per cell.
+// The transport's bundle for this tick. Plain floats only; the gust envelope rides in as one scalar, applied once per tick rather than per cell.
 void SSAtmoMagic::fillTransportParams(SSGranularParams& params) const
 {
     const SSPrecipPreset& p = preset();
@@ -609,10 +585,7 @@ const char* SSAtmoMagic::regimeName(ERegime r)
     }
 }
 
-// The regime director: derived from the same params the weather resolver already produces, with
-// the dwell time as the hysteresis in both directions. Fixed-step discipline - the dwell
-// accumulates only real elapsed time, and the initial regime is derived, so a viewer joining
-// mid-storm starts right without replaying history.
+// The regime director: derived from the same params the weather resolver already produces, with the dwell time as hysteresis in both directions. Fixed-step discipline - the dwell accumulates only real elapsed time, and the initial regime is derived, so a viewer joining mid-storm starts right without replaying history.
 void SSAtmoMagic::updateRegime(F32 dt)
 {
     static LLCachedControl<S32> override_regime(gSavedSettings, "SSAtmoSnowRegimeOverride", -1);
@@ -675,7 +648,6 @@ void SSAtmoMagic::updateRegime(F32 dt)
     }
 }
 
-// </SS:Nexii>
 
 // The per-frame heartbeat: params, sim, sounds, fields, lightning - everything driven from here.
 void SSAtmoMagic::idle()
@@ -688,8 +660,7 @@ void SSAtmoMagic::idle()
 
     refreshParams();
 
-    // <SS:Nexii> Regime evaluation on the frame clock (the dwell is seconds of real time; the
-    // transport itself is fixed-step below this) and the squall figure the whiteout ramp reads.
+    // <SS:Nexii> Regime evaluation on the frame clock (the dwell is seconds of real time; the transport below is fixed-step) and the squall figure the whiteout ramp reads.
     updateRegime(gFrameIntervalSeconds);
     {
         const bool falling = hasWeather() && mPreset.isGranular() && mPreset.mSnowRate > 0.f
@@ -699,7 +670,6 @@ void SSAtmoMagic::idle()
         const F32 blend = 1.f - expf(-gFrameIntervalSeconds * 1.5f);
         mSquallFactor = lerp(mSquallFactor, llclamp(target, 0.f, 1.f), blend);
     }
-    // </SS:Nexii>
 
     if (mEnabled && mNow - mLastAssetPoll > ASSET_POLL_PERIOD)
     {
@@ -718,10 +688,8 @@ void SSAtmoMagic::idle()
 
     SSSurfaceField::getInstance()->idle(gFrameIntervalSeconds);
 
-    // <SS:Nexii> The whiteout layer's intensity state: regime ramps applied
-    // CPU-side, the pass itself draws in the pool loop after the haze.
+    // <SS:Nexii> The whiteout layer's intensity state: regime ramps applied CPU-side, the pass itself draws in the pool loop after the haze.
     SSWhiteout::getInstance()->idle(gFrameIntervalSeconds);
-    // </SS:Nexii>
 
     SSAvatarWet::getInstance()->idle(gFrameIntervalSeconds);
 
@@ -1012,15 +980,13 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("solved     %.0fs ago   builds %u",
                                  (F32)flow->age(), flow->buildCount()));
 
-        // <SS:Nexii> Rebuild telemetry: is the solve off the main thread, and
-        // how well the smarter rebuilds are doing.
+        // <SS:Nexii> Rebuild telemetry: is the solve off the main thread, and how well the smarter rebuilds are doing.
         lines.push_back(llformat("worker     %s   solve %s",
                                  flow->workerActive() ? "GL thread" : "main thread",
                                  flow->lastSolveOnWorker() ? "on" : "in-frame"));
         lines.push_back(llformat("rebuilds   %u full / %u partial   box avg %.0f%% of tile",
                                  flow->fullBuildCount(), flow->partialBuildCount(),
                                  flow->partialBoxShare() * 100.f));
-        // </SS:Nexii>
 
         std::string slabs;
         for (S32 i = 0; i <= flow->sliceCount(); ++i)
@@ -1099,8 +1065,7 @@ void SSAtmoMagic::drawInfo()
                                  surface->lastTickMS()));
     }
 
-    // <SS:Nexii> The shared world field: capture health, the state of the air
-    // flood, and what its labels say about the camera's own cell.
+    // <SS:Nexii> The shared world field: capture health, the state of the air flood, and what its labels say about the camera's own cell.
     lines.push_back("-- world field --");
     {
         SSWorldField* field = SSWorldField::getInstance();
@@ -1133,11 +1098,8 @@ void SSAtmoMagic::drawInfo()
                                      field->airCoverage(cam_region->getHandle()) * 100.f));
         }
     }
-    // </SS:Nexii>
 
-    // <SS:Nexii> Snow: every link of the chain in one look - type and temperature (the gate that
-    // turns the whole system off), the regime, the lift the transport computed at the camera, and
-    // the drift pool's standing population.
+    // <SS:Nexii> Snow: every link of the chain in one look - type and temperature (the gate that turns the whole system off), the regime, the lift the transport computed at the camera, and the drift pool's standing population.
     {
         const LLVector3 ground_flow = SSWindFlowMap::getInstance()->sampleGround(cam);
         const F32 ground_speed = sqrtf(ground_flow.mV[VX] * ground_flow.mV[VX]
@@ -1179,7 +1141,6 @@ void SSAtmoMagic::drawInfo()
                                  whiteout->intensity(), whiteout->squallPart(),
                                  whiteout->liftPart(), whiteout->falloff()));
     }
-    // </SS:Nexii>
 
     lines.push_back("-- audio --");
     lines.push_back(llformat("analysis   %d sounds ready   %d pending",
@@ -1259,8 +1220,7 @@ void SSAtmoMagic::drawInfo()
                                  st.mMode == 'L' ? "attached loop" : "-"));
         if (st.mMode == 'S')
         {
-            // The number to eyeball against the gait: SL walks a step roughly every 0.5s and runs one roughly every 0.3s, so a gap near double that means footfalls are being missed rather than
-            // played per step. Any drops at all mean the anti-spam gate is firing, which it should not have to during a steady walk.
+            // The number to eyeball against the gait: SL walks a step roughly every 0.5s and runs one roughly every 0.3s, so a gap near double that means footfalls are being missed rather than played per step. Any drops at all mean the anti-spam gate is firing, which it should not during a steady walk.
             lines.push_back(llformat("  cadence  %.2fs between steps   %.1f/s   %d dropped",
                                      st.mStepGap,
                                      st.mStepGap > 0.01f ? 1.f / st.mStepGap : 0.f,

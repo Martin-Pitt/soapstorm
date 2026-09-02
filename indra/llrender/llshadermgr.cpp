@@ -569,15 +569,12 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
     S32 major_version = gGLManager.mGLSLVersionMajor;
     S32 minor_version = gGLManager.mGLSLVersionMinor;
 
-    // <SS:Nexii> Compute shaders need GLSL 4.30 whatever the rest of the tree
-    // targets. They are only ever loaded behind a GL 4.3 capability check, so
-    // pinning the version here cannot regress the normal render path.
+    // <SS:Nexii> Compute shaders need GLSL 4.30 whatever the rest of the tree targets. They are only ever loaded behind a GL 4.3 capability check, so pinning the version here cannot regress the normal render path.
     if (type == GL_COMPUTE_SHADER)
     {
         shader_code_text[shader_code_count++] = strdup("#version 430\n");
     }
     else
-    // </SS:Nexii>
     if (major_version == 1 && minor_version < 30)
     {
         llassert(false); // GL 3.1 or later required
@@ -635,13 +632,11 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
     {
         extra_code_text[extra_code_count++] = strdup("#define FRAGMENT_SHADER 1\n");
     }
-    // <SS:Nexii> The compute stage is neither, and must not claim to be a
-    // vertex shader or shared includes pull in stage-specific declarations
+    // <SS:Nexii> The compute stage is neither, and must not claim to be a vertex shader or shared includes pull in stage-specific declarations
     else if (type == GL_COMPUTE_SHADER)
     {
         extra_code_text[extra_code_count++] = strdup("#define COMPUTE_SHADER 1\n");
     }
-    // </SS:Nexii>
     else
     {
         extra_code_text[extra_code_count++] = strdup("#define VERTEX_SHADER 1\n");

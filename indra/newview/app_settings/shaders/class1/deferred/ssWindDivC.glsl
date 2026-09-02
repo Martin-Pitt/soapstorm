@@ -24,9 +24,9 @@
 // <SS:Nexii> Atmo Magic wind flowmap
 
 // ---------------------------------------------------------------------------
-// Shared domain description. The domain is a camera-centred box, snapped to a texel grid so it translates in whole cells rather than jittering every frame. Horizontally it is a uniform grid: uRes
-// texels across uExtent metres. Vertically it is uSlices adaptive slabs whose boundaries live in uSliceZ, placed where the captured height field actually has detail. That makes the z spacing
-// non-uniform, so every vertical difference is weighted by the real slab thickness rather than assuming a constant step. Declared in full in each pass: separately compiled GLSL units do not share
+// Shared domain description. A camera-centred box snapped to a texel grid so it translates in whole cells rather than jittering every frame. Horizontally a uniform grid: uRes
+// texels across uExtent metres. Vertically uSlices adaptive slabs whose boundaries live in uSliceZ, placed where the captured height field has detail. That makes the z spacing
+// non-uniform, so every vertical difference is weighted by the real slab thickness rather than a constant step. Declared in full in each pass: separately compiled GLSL units do not share
 // uniform declarations, so there is nothing to gain from a common file.
 // ---------------------------------------------------------------------------
 
@@ -76,7 +76,7 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(rgba16f, binding = 2) uniform readonly  image3D uVel;
 layout(r32f,    binding = 3) uniform writeonly image3D uDiv;
 
-// Outside the domain the air is undisturbed, so reads clamp to the ambient wind of the nearest slab rather than to zero - clamping to zero would make the domain edge behave like a wall and stall the
+// Outside the domain the air is undisturbed, so reads clamp to the nearest slab's ambient wind rather than zero - clamping to zero would make the domain edge a wall and stall the
 // whole field.
 vec3 loadVel(ivec3 c)
 {
@@ -112,4 +112,3 @@ void main()
     imageStore(uDiv, c, vec4(div, 0.0, 0.0, 0.0));
 }
 
-// </SS:Nexii>

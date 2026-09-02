@@ -54,19 +54,13 @@ public:
                            EDragAndDropType cargo_type, void* cargo_data,
                            EAcceptance* accept, std::string& tooltip_msg) override;
 
-    // <SS:Nexii> The EEP sky import dialog drives the same preview/status refresh the drop path
-    // used to - the stamp happens over there now, and the poll alone would leave the fresh
-    // keyframes and the modified asterisk up to half a second late.
+    // <SS:Nexii> The EEP sky import dialog drives the same preview/status refresh the drop path used to - the stamp happens there now, and the poll alone would leave fresh keyframes and the modified asterisk up to half a second late.
     friend class SSFloaterAtmoSkyImport;
 
 private:
     void handleSettingsDrop(const LLInventoryItem* item);
 
-    // <SS:Nexii> The drop session: a single drag-and-drop can carry many cargo items, and the
-    // editor only acts once the whole batch is known. Only two shapes are accepted - an all-skies
-    // drop (any number, which seeds a new environment when none is loaded and stamps a day cycle
-    // across the selected track when one is) and a SINGLE day cycle or water preset. Mixed drops
-    // are refused at the hover pass, so they never reach the drop pass at all.
+    // <SS:Nexii> The drop session: a drag-and-drop can carry many cargo items, and the editor only acts once the whole batch is known. Only two shapes are accepted - an all-skies drop (any number, seeding a new environment when none is loaded or stamping a day cycle across the selected track) and a SINGLE day cycle or water preset. Mixed drops are refused at the hover pass, so they never reach the drop pass.
     enum class EDropKind
     {
         NONE,
@@ -83,14 +77,14 @@ private:
         LLSettingsType::type_e mType = LLSettingsType::ST_NONE;
     };
 
-    // Classifies one dropped settings item against the editor's rules; ok=false carries a
-    // tooltip message (the reason) in tooltip_msg.
+    // Classifies one dropped settings item against the editor's rules; ok=false carries the
+    // reason in tooltip_msg.
     EDropKind classifySettingsDrop(const LLViewerInventoryItem* item, bool& ok, std::string& tooltip_msg) const;
     // Acceptance + tooltip for the hover pass; accumulates the per-drag kind so a mixed batch
     // reads as refused. Runs once per cargo item, reset at cargo index 0.
     void hoverAcceptSettings(const LLViewerInventoryItem* item, bool& ok, std::string& tooltip_msg);
-    // The drop pass: buffers each dropped settings item and, on the last cargo item of the
-    // batch, runs the whole session's chosen action.
+    // The drop pass: buffers each dropped settings item; on the last cargo of the
+    // batch, runs the session's chosen action.
     void dropBufferSettings(const LLViewerInventoryItem* item);
     void flushDropSession();
     void handleWaterStamp(const DropItem& item);
@@ -98,21 +92,18 @@ private:
     // The settings drop acted on only once the whole drag has settled.
     std::vector<DropItem> mDropItems;
     EDropKind mDropKind = EDropKind::NONE;
-    // The hover pass's accumulating kind for the current drag - it decides whether a mixed
+    // The hover pass's accumulating kind for the current drag - decides whether a mixed
     // batch is refused and whether the batch is a group or a single item.
     EDropKind mHoverKind = EDropKind::NONE;
 
-    // <SS:Nexii> The transitionary state: an async fetch-and-seed (or notecard load) is in
-    // flight, so the floater refuses further input until it settles. Counted so nested and
-    // racing completions cannot clear a busy state a sibling is still using.
+    // <SS:Nexii> The transitionary state: an async fetch-and-seed (or notecard load) is in flight, so the floater refuses input until it settles. Counted so nested and racing completions cannot clear a busy state a sibling still uses.
     void setBusy(const std::string& label);
     void clearBusy();
     void refreshBusy();
     void refreshLandingBullets();
     S32 mBusyOps = 0;
     std::string mBusyLabel;
-    // <SS:Nexii> The landing rows' bullet glyphs are hung from code once so the en skin stays
-    // ASCII-only; guards against double-prefixing when the panel is shown again.
+    // <SS:Nexii> The landing rows' bullet glyphs hang from code once so the en skin stays ASCII-only; guards against double-prefixing when the panel is shown again.
     bool mLandingBulletsPrepared = false;
 
     void refreshVisibility();
@@ -152,17 +143,7 @@ private:
 
     S32 mSelectedTrackIndex = 0;
 
-    // <SS:Nexii> The altitude rail runs in two modes rather than there being two rails. Track mode
-    // is the region scale with a marker per track, the way it has always been. Selecting any other
-    // tab switches to layer mode: the scale fits the selected track's own contents and the markers
-    // become the things stacked inside it - water plane, main deck, optional under deck - with
-    // Space and the Dome pinned above as fixed anchors excluded from the fit.
-    //
-    // One widget with two modes because the track markers already carry two meanings (altitude and
-    // tab selection) and hanging a third kind of object off them would overload the same control
-    // again. A fixed scale cannot serve both a coastal build inside 100m and a sky archipelago
-    // spanning 10km, and a piecewise one is worse - the same drag would mean 64m at one end and
-    // 800m at the other. See doc/atmo_magic_env_ui.md.
+    // <SS:Nexii> The altitude rail runs in two modes rather than there being two rails. Track mode is the region scale with a marker per track, as always. Any other tab switches to layer mode: the scale fits the selected track's own contents and the markers become the things stacked inside it - water plane, main deck, optional under deck - with Space and the Dome pinned above as fixed anchors excluded from the fit. One widget with two modes because the track markers already carry two meanings (altitude and tab selection) and a third kind of object would overload the control. A fixed scale cannot serve both a coastal build inside 100m and a sky archipelago spanning 10km, and a piecewise one is worse - the same drag would mean 64m at one end and 800m at the other. See doc/atmo_magic_env_ui.md.
     enum class ERailMode { TRACK, LAYER };
 
     // Marker slots in layer mode, in the order the rail lists them.
@@ -173,9 +154,7 @@ private:
     static const S32 LAYER_COUNT = 3;
 
     void refreshRailMode();
-    // <SS:Nexii> Tab to rail: a tab clicked directly has to press the marker it belongs to, or
-    // clear the still-pressed one when nothing on the rail corresponds to it - the reverse half
-    // of the marker-to-tab selection the rail already does.
+    // <SS:Nexii> Tab to rail: a directly clicked tab must press the marker it belongs to, or clear the still-pressed one when nothing on the rail corresponds - the reverse half of the rail's marker-to-tab selection.
     void syncSelectionToTab();
     void refreshLayerRail();
     void railRangeForTrack(F32& out_min, F32& out_max) const;
@@ -190,7 +169,7 @@ private:
     // Base and thickness a deck resolves to at the preview phase: the auto derivation off the
     // track's weather when the field owns its numbers, else the authored keyframes. The rail
     // reads this rather than the raw keyframes so markers, fit and weather bracket follow the
-    // deck the renderer draws - an auto deck's height wanders, and its authored row does not.
+    // deck the renderer draws - an auto deck's height wanders; its authored row does not.
     void effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under_deck,
                            F32& out_base, F32& out_thickness) const;
 
@@ -201,9 +180,7 @@ private:
     void onCommitWeatherSource();
     void refreshWeatherSource();
 
-    // <SS:Nexii> The precipitation combo lists two tiers: the shipped derivation vocabulary, read
-    // once from the XUI so the panel stays the single place it is written down, and whatever types
-    // this environment carries of its own. Rebuilt whenever the environment's set changes.
+    // <SS:Nexii> The precipitation combo lists two tiers: the shipped derivation vocabulary, read once from the XUI so the panel stays the single place it is written, and whatever types this environment carries of its own. Rebuilt whenever the environment's set changes.
     void refreshPrecipitationTypes();
     void onClickNewPrecipType();
     void onClickEditPrecipTypes();
@@ -216,7 +193,7 @@ private:
     S32 mSelectedLayer = LAYER_NONE;
 
     // The rail's live value range, and where it is heading. Interpolated in draw() so the mode
-    // switch reads as diving into the selected track rather than as the widget swapping contents.
+    // switch reads as diving into the selected track rather than the widget swapping contents.
     F32 mRailMin = 0.f;
     F32 mRailMax = SS_ATMOENV_REGION_CEILING;
     F32 mRailMinFrom = 0.f;
@@ -257,8 +234,7 @@ private:
 
     void onCommitPlanetaryScales();
 
-// <SS:Nexii> The Space tab's disc perception dial - radios or the custom slider/spinner,
-    // one value whichever moved (the source control carries it).
+// <SS:Nexii> Space tab's disc perception dial - radios or the custom slider/spinner, one value whichever moved (the source control carries it).
     void onCommitCelestialPerception(LLUICtrl* src);
 
     void onClickOpenPlanetaryDesigner();

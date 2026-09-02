@@ -199,7 +199,6 @@ LLGLSLShader            gSSWindProjectProgram;
 LLGLSLShader            gSSWindSeedProgram;
 LLGLSLShader            gSSWindRestrictProgram;
 LLGLSLShader            gSSWindProlongProgram;
-// </SS:Nexii>
 LLGLSLShader            gHUDAlphaProgram;
 LLGLSLShader            gDeferredSkinnedAlphaProgram;
 LLGLSLShader            gDeferredAlphaImpostorProgram;
@@ -295,15 +294,12 @@ static void add_common_permutations(LLGLSLShader* shader)
         shader->addPermutation("HAS_EMISSIVE", "1");
     }
 
-    // <SS:Nexii> The Atmo Magic shader variants, one define for all of them: any Atmo-era change to SHARED shading (the sky, the dome clouds, the atmospheric module) lives behind #ifdef SS_ATMO,
-    // so with the system off every stock shader compiles byte-for-byte pristine. The SSAtmoEnabled listener in llviewercontrol.cpp rebuilds shaders on toggle - compile-time, zero runtime cost
-    // either way. Runtime nuance (weather active vs idle) stays uniform-driven INSIDE the variant blocks; this define is only the master pristine/modified split.
+    // <SS:Nexii> The Atmo Magic shader variants, one define for all of them: any Atmo-era change to SHARED shading (the sky, the dome clouds, the atmospheric module) lives behind #ifdef SS_ATMO, so with the system off every stock shader compiles byte-for-byte pristine. The SSAtmoEnabled listener in llviewercontrol.cpp rebuilds shaders on toggle - compile-time, zero runtime cost either way. Runtime nuance (weather active vs idle) stays uniform-driven INSIDE the variant blocks; this define is only the master pristine/modified split.
     static LLCachedControl<bool> atmo(gSavedSettings, "SSAtmoEnabled", false);
     if (atmo)
     {
         shader->addPermutation("SS_ATMO", "1");
     }
-    // </SS:Nexii>
 }
 
 
@@ -475,7 +471,6 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSSurfaceSnowProgram);
     mShaderList.push_back(&gSSWhiteoutProgram);
     mShaderList.push_back(&gSSPrecipProjProgram);
-    // </SS:Nexii>
     mShaderList.push_back(&gHUDFullbrightProgram);
     mShaderList.push_back(&gDeferredFullbrightAlphaMaskProgram);
     mShaderList.push_back(&gHUDFullbrightAlphaMaskProgram);
@@ -568,9 +563,7 @@ S32 LLViewerShaderMgr::getShaderLevel(S32 type)
 //============================================================================
 // Shader Management
 
-// <SS:Nexii> A digest of every shader source file's size and write time.
-// Walked once per session, next to a shader load that reads all of them
-// anyway, so the directory scan is not worth caching.
+// <SS:Nexii> A digest of every shader source file's size and write time. Walked once per session, next to a shader load that reads all of them anyway, so the directory scan is not worth caching.
 static std::string ssShaderTreeSignature()
 {
     const std::string root =
@@ -630,7 +623,6 @@ static std::string ssShaderTreeSignature()
     }
     return signature;
 }
-// </SS:Nexii>
 
 void LLViewerShaderMgr::setShaders()
 {
@@ -660,14 +652,8 @@ void LLViewerShaderMgr::setShaders()
         {
             HBXXH128 hash_obj;
             hash_obj.update(LLVersionInfo::instance().getVersion());
-            // <SS:Nexii> The compiled-program cache was keyed on the viewer
-            // version alone, so an edited .glsl inside an unchanged build was
-            // never recompiled: the old binary came back and every uniform
-            // added since read as location -1, making its upload a silent
-            // no-op. Fold the shader tree's contents into the key so editing
-            // any shader invalidates the cache exactly once.
+            // <SS:Nexii> The compiled-program cache was keyed on the viewer version alone, so an edited .glsl inside an unchanged build was never recompiled: the old binary came back and every uniform added since read as location -1, making its upload a silent no-op. Fold the shader tree's contents into the key so editing any shader invalidates the cache exactly once.
             hash_obj.update(ssShaderTreeSignature());
-            // </SS:Nexii>
             current_cache_version = hash_obj.digest();
 
             old_cache_version = LLUUID(gSavedSettings.getString("RenderShaderCacheVersion"));
@@ -1272,7 +1258,6 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSSurfaceCommitProgram.unload();
         gSSSurfaceSnowProgram.unload();
         gSSWhiteoutProgram.unload();
-        // </SS:Nexii>
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
         gHUDFullbrightAlphaMaskProgram.unload();
@@ -2087,9 +2072,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         llassert(success);
     }
 
-    // <SS:Nexii> Atmo Magic rain particles: refraction/env/specular water
-    // shader. Failure is non-fatal; the precipitation renderer falls back to
-    // the fullbright path when this program is incomplete.
+    // <SS:Nexii> Atmo Magic rain particles: refraction/env/specular water shader. Failure is non-fatal; the precipitation renderer falls back to the fullbright path when this program is incomplete.
     if (success)
     {
         gSSCelestialProgram.mName = "SS Celestial Disc Shader";
@@ -2380,7 +2363,6 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             }
         }
     }
-    // </SS:Nexii>
 
     if (success)
     {
@@ -3315,9 +3297,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gEnvironmentMapProgram.clearPermutations();
         gEnvironmentMapProgram.addPermutation("HAS_HDRI", "1");
         add_common_permutations(&gEnvironmentMapProgram);
-        // <SS:Nexii> Both programs that compile skyF.glsl must carry the horizon depth const -
-        // skyF references LL_SHADER_CONST_HORIZON_DEPTH inside its SS_ATMO block, and a program
-        // without the define fails to compile rather than silently misbehaving.
+        // <SS:Nexii> Both programs that compile skyF.glsl must carry the horizon depth const - skyF references LL_SHADER_CONST_HORIZON_DEPTH inside its SS_ATMO block, and a program without the define fails to compile rather than silently misbehaving.
         gEnvironmentMapProgram.addConstant(LLGLSLShader::SHADER_CONST_HORIZON_DEPTH);
         gEnvironmentMapProgram.mShaderFiles.push_back(make_pair("deferred/skyV.glsl", GL_VERTEX_SHADER));
         gEnvironmentMapProgram.mShaderFiles.push_back(make_pair("deferred/skyF.glsl", GL_FRAGMENT_SHADER));

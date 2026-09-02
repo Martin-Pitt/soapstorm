@@ -4456,29 +4456,14 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
         { // do atmospherics against depth buffer before rendering alpha
             doAtmospherics();
 
-            // <SS:Nexii> Atmo Magic weather, WITH the atmospherics and BEFORE the alpha pools: glass and every other transparent surface then blends over clouds, bolts and rain - the transparency
-            // test the old end-of-function placement failed, because alpha writes no depth and weather drawn after it composited over nearer windows. The order inside the block is the lightning
-            // compositing: flash discs veiled under the puffs, ribbons occlusion-dimmed over them, rain in front of cloud. Known trade: rain BETWEEN the camera and a window now reads as behind the
-            // glass - the rarer and subtler failure of the two. doc/archive/atmo_magic_interactions.md
+            // <SS:Nexii> Atmo Magic weather, WITH the atmospherics and BEFORE the alpha pools: glass and every other transparent surface then blends over clouds, bolts and rain - the transparency test the old end-of-function placement failed, because alpha writes no depth and weather drawn after it composited over nearer windows. The order inside the block is the lightning compositing: flash discs veiled under the puffs, ribbons occlusion-dimmed over them, rain in front of cloud. Known trade: rain BETWEEN the camera and a window now reads as behind the glass - the rarer and subtler failure of the two. doc/archive/atmo_magic_interactions.md
             if (!gCubeSnapshot)
             {
                 SSLightningRender::getInstance()->renderFlash();
                 SSVolCloud::getInstance()->render();
 
-                // <SS:Nexii> Atmo Magic whiteout: the local, height-limited fog
-                // veil, composited exactly like the haze above - depth staged, one
-                // alpha-lerped fullscreen pass. This is its proven placement - the
-                // identical machinery moved after the alpha pools flickered the
-                // whole frame (world frozen, UI and sky strobing), and back here
-                // it draws clean. Drawn after the volumetric deck so the puffs
-                // dissolve into the fog with the sky behind them when the camera
-                // stands in the storm; before the lightning and the precipitation,
-                // which stay crisp in front of their own weather. The trade:
-                // alpha surfaces drawn later - windows, foliage - composite over
-                // the veil and read unfogged, their fog taken from the geometry
-                // behind them.
+                // <SS:Nexii> Atmo Magic whiteout: the local, height-limited fog veil, composited exactly like the haze above - depth staged, one alpha-lerped fullscreen pass. This is its proven placement - the identical machinery moved after the alpha pools flickered the whole frame (world frozen, UI and sky strobing), and back here it draws clean. Drawn after the volumetric deck so the puffs dissolve into the fog with the sky behind them when the camera stands in the storm; before the lightning and the precipitation, which stay crisp in front of their own weather. The trade: alpha surfaces drawn later - windows, foliage - composite over the veil and read unfogged, their fog taken from the geometry behind them.
                 SSWhiteout::getInstance()->render();
-                // </SS:Nexii>
 
                 SSLightningRender::getInstance()->render();
                 SSPrecipRenderer::getInstance()->render();
@@ -4487,7 +4472,6 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
                 gGL.setSceneBlendType(LLRender::BT_ALPHA);
                 gGL.setColorMask(true, false);
             }
-            // </SS:Nexii>
 
             done_atmospherics = true;
         }
@@ -4551,7 +4535,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
 
     if (!gCubeSnapshot)
     {
-        // <SS:Nexii> The Atmo Magic weather passes moved INTO the pool loop above, beside doAtmospherics - drawn before the alpha pools so transparent surfaces blend over weather. </SS:Nexii>
+        // <SS:Nexii> The Atmo Magic weather passes moved INTO the pool loop above, beside doAtmospherics - drawn before the alpha pools so transparent surfaces blend over weather.
 
         // debug displays
         renderHighlights();
@@ -5689,8 +5673,7 @@ void LLPipeline::renderDebug()
         gAgent.getRegion()->mWind.renderVectors();
     }
 
-    // <SS:Nexii> Atmo Magic wind flowmap: every slab translucently, plus an
-    // arrow field on the slab the camera is in
+    // <SS:Nexii> Atmo Magic wind flowmap: every slab translucently, plus an arrow field on the slab the camera is in
     if (mRenderDebugMask & RENDER_DEBUG_WIND_FLOW)
     {
         SSWindFlowMap::getInstance()->renderDebug();
@@ -5703,10 +5686,7 @@ void LLPipeline::renderDebug()
         SSRainShadowMap::getInstance()->renderDebug();
     }
 
-    // <SS:Nexii> Atmo Magic celestial debug: a ray and a label per body in
-    // the sky. Toggled from the System Designer rather than from Render
-    // Metadata, because it is an authoring aid for the floater beside it -
-    // hence a setting rather than a debug mask.
+    // <SS:Nexii> Atmo Magic celestial debug: a ray and a label per body in the sky. Toggled from the System Designer rather than from Render Metadata, because it is an authoring aid for the floater beside it - hence a setting rather than a debug mask.
     {
         static LLCachedControl<bool> celestial_debug(gSavedSettings, "SSAtmoPlanetaryDebugOverlay", false);
         if (celestial_debug)
@@ -5744,7 +5724,6 @@ void LLPipeline::renderDebug()
     {
         SSAtmoMagic::getInstance()->renderDebug();
     }
-    // </SS:Nexii>
 
     if (mRenderDebugMask & RENDER_DEBUG_COMPOSITION)
     {
@@ -9787,16 +9766,10 @@ void LLPipeline::renderDeferredLighting()
             unbindDeferredShader(gDeferredBlurLightProgram);
         }
 
-        // <SS:Nexii> Atmo Magic wet surfaces. Ahead of every lighting pass
-        // below, so the sun, the local lights, the projectors and the probes
-        // all read one consistent gbuffer rather than each being taught about
-        // the weather on its own.
+        // <SS:Nexii> Atmo Magic wet surfaces. Ahead of every lighting pass below, so the sun, the local lights, the projectors and the probes all read one consistent gbuffer rather than each being taught about the weather on its own.
         SSSurfaceField::getInstance()->renderWetPass();
-        // <SS:Nexii> Atmo Magic snow surfaces: same family, same reasoning -
-        // the settled depth the field carries becomes albedo before anything
-        // lights it.
+        // <SS:Nexii> Atmo Magic snow surfaces: same family, same reasoning - the settled depth the field carries becomes albedo before anything lights it.
         SSSurfaceField::getInstance()->renderSnowPass();
-        // </SS:Nexii>
 
         screen_target->bindTarget();
         // clear color buffer here - zeroing alpha (glow) is important or it will accumulate against sky
@@ -9822,9 +9795,7 @@ void LLPipeline::renderDeferredLighting()
             LLEnvironment &environment = LLEnvironment::instance();
 
             soften_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
-            // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the atmospheric module ramps
-            // its sunlight and sun glow on the twilight band (full while the disc is up, easing
-            // out through the dusk below the horizon) instead of snapping at centre-rise.
+            // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the atmospheric module ramps its sunlight and sun glow on the twilight band (full while the disc is up, easing out through the dusk below the horizon) instead of snapping at centre-rise.
             soften_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
             // ...and the sun's true direction while the rise band is live - see
             // SSAtmoEnvApplier::sunSlotDirection.
@@ -10033,21 +10004,7 @@ void LLPipeline::renderDeferredLighting()
                 LLGLDepthTest depth(GL_FALSE);
                 LL_PROFILE_GPU_ZONE("fullscreen lights");
 
-                // <SS:Nexii> Atmo Magic lightning as scene lights.
-                //
-                // Appended here rather than given a pass of their own,
-                // because a strike IS a local light and this is the list of
-                // local lights - it gets the same falloff, the same
-                // batching and the same shader every other light in the
-                // world gets, which is the whole reason it lights avatars
-                // and wet ground correctly without a line of shading code
-                // being written for it.
-                //
-                // At the back of the queue on purpose. The batcher takes
-                // what it can and lightning is the thing least missed if a
-                // scene is already at its light budget - a strike lasts
-                // fifty milliseconds, and nobody can tell which frame of one
-                // went unlit.
+                // <SS:Nexii> Atmo Magic lightning as scene lights. Appended here rather than given a pass of their own, because a strike IS a local light and this is the list of local lights - it gets the same falloff, the same batching and the same shader every other light in the world gets, which is the whole reason it lights avatars and wet ground correctly without a line of shading code being written for it. At the back of the queue on purpose. The batcher takes what it can and lightning is the thing least missed if a scene is already at its light budget - a strike lasts fifty milliseconds, and nobody can tell which frame of one went unlit.
                 {
                     std::vector<LLVector4> strike_lights;
                     std::vector<LLColor3> strike_colors;
@@ -10068,7 +10025,6 @@ void LLPipeline::renderDeferredLighting()
                                       strike_colors[i].mV[2], DEFERRED_LIGHT_FALLOFF));
                     }
                 }
-                // </SS:Nexii>
 
                 U32 count = 0;
 
@@ -10248,9 +10204,7 @@ void LLPipeline::doAtmospherics()
 
         LLEnvironment& environment = LLEnvironment::instance();
         haze_shader.uniform1i(LLShaderMgr::SUN_UP_FACTOR, environment.getIsSunUp() ? 1 : 0);
-        // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the haze additive ramps its sun
-        // glow on the twilight band (full while the disc is up, easing out through the dusk below
-        // the horizon) instead of snapping at centre-rise.
+        // <SS:Nexii> Atmo Magic: the sun's horizon-band share - the haze additive ramps its sun glow on the twilight band (full while the disc is up, easing out through the dusk below the horizon) instead of snapping at centre-rise.
         haze_shader.uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
         // ...and the sun's true direction while the rise band is live - see
         // SSAtmoEnvApplier::sunSlotDirection.
@@ -10392,7 +10346,6 @@ void LLPipeline::getNearbyProjectors(std::vector<LLDrawable*>& out, U32 max_coun
         if (out.size() >= max_count) break;
     }
 }
-// </SS:Nexii>
 
 void LLPipeline::setupSpotLight(LLGLSLShader& shader, LLDrawable* drawablep)
 {

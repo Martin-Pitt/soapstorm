@@ -38,35 +38,19 @@
 
 namespace
 {
-    // The sample lines are the eight axes every 22.5 degrees - the cardinals, the diagonals and
-    // the intercardinals - each rotated off its exact direction by this angle. Diffraction-spike
-    // art (star bursts, flare crosses) paints its spikes ALONG those exact axes, and a line that
-    // runs along a spike would read the spike's tip as the disc edge - a small rotation slides
-    // every line a few texels off the spike's centre by the time it reaches the disc's rim (at 64
-    // texels a 6-degree line sits ~6.7 texels clear of the spoke), so only a spike absurdly wide
-    // for its length survives.
+    // The sample lines: eight axes every 22.5 degrees (cardinals, diagonals, intercardinals), each rotated off its exact direction by this angle. Diffraction-spike art (star bursts, flare crosses) paints spikes ALONG those axes, so a line on one would read the spike's tip as the disc edge; the rotation slides each line ~6.7 texels clear of the spoke by the rim (64 texels, 6 degrees off), so only a spike absurdly wide for its length survives.
     const F32 SS_DISC_PAD_SAMPLE_OFFSET_DEG = 6.f;
 
-    // How many of the sixteen radial samples (eight lines, both directions) must fall in one
-    // agreement window for the disc to be trusted. A clean disc shows all sixteen agreeing; a
-    // couple of lines clipped by art - a stray ray, a hole, a crescent's gap - still leave a
-    // clear majority. Half-plus-one IS a clear consensus - a glow sun with a soft corona where
-    // a couple of rays ride the bright falloff reads 9 of 16 the same way. Less than this is
-    // no consensus, which is the error-out: 0 padding.
+    // How many of the sixteen radial samples (eight lines, both directions) must fall in one agreement window for the disc to be trusted. A clean disc shows all sixteen agreeing; a couple clipped by art - a stray ray, a hole, a crescent's gap - still leave a clear majority. Half-plus-one IS a clear consensus - a glow sun whose rays ride the bright corona falloff reads 9 of 16 the same way. Less than this is no consensus, which is the error-out: 0 padding.
     const S32 SS_DISC_PAD_MIN_AGREE = 9;
 
-    // The disc edge's alpha contour, as a fraction of the strongest alpha. 0.90: just inside
-    // where a radial glow falloff leaves the near-opaque plateau, the contour an author's
-    // hand-derived padding for the Nacon sun corresponds to. See the threshold comment in
-    // ssDiscPadAnalyze.
+    // The disc edge's alpha contour, as a fraction of the strongest alpha. 0.90: just inside where a radial glow falloff leaves the near-opaque plateau - the contour an author's hand-derived Nacon sun padding corresponds to. See the threshold comment in ssDiscPadAnalyze.
     const F32 SS_DISC_PAD_SOLID_ALPHA = 0.90f;
 
-    // The agreement window's width: samples are "the same disc" when their fractions of the
-    // quad differ by no more than this (5% of the quad width, ~8 texels on a 128 texture).
+    // The agreement window's width: samples are "the same disc" when their quad fractions differ by no more than this (5% of the quad width, ~8 texels on a 128 texture).
     const F32 SS_DISC_PAD_AGREE_WINDOW = 0.05f;
 
-    // Under this the derived padding is rounding noise - a disc so close to full-bleed that
-    // its margin means nothing (half a percent of the quad on each side).
+    // Under this the derived padding is rounding noise - a disc so close to full-bleed that its margin means nothing (half a percent of the quad on each side).
     const F32 SS_DISC_PAD_NOISE_EPS = 0.005f;
 
     // The asset's own padding ceiling - see SSAtmoEnvCelestialBody::mDiscPadding.
@@ -75,19 +59,13 @@ namespace
     // A raw image this small is still the loading placeholder, not the art.
     const S32 SS_DISC_PAD_MIN_SIDE = 4;
 
-    // How many poll ticks a still-loading derivation may wait before it errors out to 0. At
-    // the floaters' half-second cadence this lets a slow disc texture ~15 seconds before
-    // giving up and letting the spinner show the full-bleed fallback.
+    // Poll ticks a still-loading derivation may wait before erroring out to 0. At the floaters' half-second cadence that lets a slow disc texture ~15 seconds before giving up and showing the full-bleed fallback.
     const S32 SS_DISC_PAD_MAX_ATTEMPTS = 30;
 
-    // The pending pool's cap. A sky import derives the sun and moon together, so a single
-    // slot would drop one of the pair whenever both are still loading; the cap only guards
-    // against an author running an import on textures that never arrive one after another.
+    // The pending pool's cap. A sky import derives the sun and moon together, so a single slot would drop one whenever both are still loading; the cap only guards against an import on textures that never arrive.
     const S32 SS_DISC_PAD_MAX_PENDING = 8;
 
-    // The still-loading derivations an auto-derive may leave behind, re-checked one by one
-    // by ssDiscPadPoll(). A job is superseded when its body gets a newer texture, and a full
-    // pool drops the oldest job - the newest disc art is the one whose padding matters.
+    // Still-loading derivations an auto-derive leaves behind, re-checked one by one by ssDiscPadPoll(). A job is superseded when its body gets a newer texture; a full pool drops the oldest - the newest disc art is the one whose padding matters.
     struct SsDiscPadPendingJob
     {
         S32 mTrack = -1;
@@ -98,23 +76,11 @@ namespace
 
     std::vector<SsDiscPadPendingJob> gPendingPads;
 
-    // One radial sample: walks the line from the texture centre and returns the disc as a
-    // fraction of the quad (diameter over the frame's shorter side) read along this line, or
-    // 1 when the line's energy is spread flat enough that even half of it is past the frame.
+    // One radial sample: walks the line from the texture centre, returns the disc as a fraction of the quad (diameter over the frame's shorter side) read along that line, or 1 when the energy is spread flat enough that even half of it is past the frame.
     //
-    // The read is a HALF-ENERGY edge, not a threshold crossing. A glow-board sun is a tiny
-    // bright core inside a very large GENTLE gradient - the brightness may stay 97% of peak
-    // right out to the frame - so no fixed fraction of the peak (70%, 85%, 95%) ever finds the
-    // disc: it either never drops (padding 0, full-bleed) or clips near the core. But the
-    // radial ENERGY profile still separates them: the bright core carries most of the light in
-    // a small radius, and the glow's spread adds a long low tail. The radius that holds half
-    // the light is therefore small for such art and large for a uniform disc - exactly what the
-    // authored disc is. The signal is luminance (RGB), since alpha in this art is either flat
-    // opaque or premultiplied into the same gradient; a texture with real transparency still
-    // reads correctly because the transparent region contributes no energy.
+    // The read is a HALF-ENERGY edge, not a threshold crossing. A glow-board sun is a tiny bright core inside a very large GENTLE gradient - the brightness may stay 97% of peak right out to the frame - so no fixed fraction of the peak (70%, 85%, 95%) ever finds the disc: it either never drops (padding 0, full-bleed) or clips near the core. The radial ENERGY profile still separates them: the bright core carries most of the light in a small radius, and the glow's spread adds a long low tail, so the radius that holds half the light is small for such art and large for a uniform disc - exactly what the authored disc is. The signal is luminance (RGB), since alpha in this art is either flat opaque or premultiplied into the same gradient; a texture with real transparency still reads correctly because the transparent region contributes no energy.
     //
-    // Returns the disc fraction (diameter/ref) at the half-energy radius, with the half-texel
-    // correction, or 1.f when the line is flat enough that half the energy is at/past the edge.
+    // Returns the disc fraction (diameter/ref) at the half-energy radius, with the half-texel correction, or 1.f when the line is flat enough that half the energy is at/past the edge.
     F32 sampleDiscLine(const LLImageRaw& raw, F32 centre_x, F32 centre_y,
                        F32 dir_x, F32 dir_y, F32 max_t, F32 ref, S32 step_sign, U8 threshold)
     {
@@ -122,9 +88,7 @@ namespace
         const S32 height = raw.getHeight();
         const U8* data = raw.getData();
 
-        // The first sample must actually be ON the disc before any low alpha counts as an
-        // edge - a ring or glow disc's transparent centre should be skipped, not read as a
-        // zero-radius disc. "Seen the disc" flips when a texel clears the threshold.
+        // The first sample must be ON the disc before any low alpha counts as an edge - a ring or glow disc's transparent centre is skipped, not read as a zero-radius disc. "Seen the disc" flips when a texel clears the threshold.
         bool seen = false;
         for (S32 t = 1; t <= (S32)max_t; ++t)
         {
@@ -148,8 +112,7 @@ namespace
     }
 }
 
-// The analysis itself, agnostic of the asset: reads the texture's decoded pixels and finds
-// the disc's share of the quad. See ssdiscpad.h for the status contract.
+// The analysis itself, agnostic of the asset: reads the texture's decoded pixels and finds the disc's share of the quad. See ssdiscpad.h for the status contract.
 SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
 {
     if (texture_id.isNull())
@@ -163,15 +126,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
 
     if (!tex) return SSDiscPadStatus::LOADING;
 
-    // <SS:Nexii> FULL-RESOLUTION pixels only. The display-level raw (getRawImage/readback) is
-    // a coarse GL mip when the disc renders small - a sun a few dozen pixels on screen keeps
-    // discard 3+, whose averaged alpha washes the 90% contour out to full-bleed (the logs
-    // showed it: 12 of 16 lines reading "1.0"). The textured object keeps the full decode in
-    // its SAVED raw image - saveRawImage() runs when the loading decode is retired and keeps
-    // mRawImage at whatever level it decoded at, which is 0 for a normal texture - but only
-    // when a save was requested. So: ask for a level-0 save, and LOADING until it lands. The
-    // retry cadence (the seeded write's 0.1s timer / the floaters' poll) is exactly the wait
-    // this needs; the texture's own fetch has already been kicked by getFetchedTexture.
+    // <SS:Nexii> FULL-RESOLUTION pixels only. The display-level raw (getRawImage/readback) is a coarse GL mip when the disc renders small - a sun a few dozen pixels on screen keeps discard 3+, whose averaged alpha washes the 90% contour out to full-bleed (the logs: 12 of 16 lines reading "1.0"). The textured object keeps the full decode in its SAVED raw image - saveRawImage() runs when the loading decode is retired and keeps mRawImage at its decode level (0 for a normal texture) - but only when a save was requested. So: ask for a level-0 save, and LOADING until it lands. The retry cadence (the seeded write's 0.1s timer / the floaters' poll) is exactly the wait this needs; getFetchedTexture has already kicked the fetch.
     if (!tex->hasSavedRawImage() || tex->getSavedRawImageLevel() != 0)
     {
         tex->forceToSaveRawImage(0, F32_MAX);
@@ -196,8 +151,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
         return SSDiscPadStatus::LOADING;
     }
 
-    // No alpha channel: nothing is transparent, so the whole quad IS the disc - full-bleed
-    // is the correct reading, not an error.
+    // No alpha channel: nothing transparent, so the whole quad IS the disc - full-bleed is the correct reading, not an error.
     if (raw->getComponents() != 4)
     {
         out_padding = 0.f;
@@ -214,8 +168,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
     const F32 centre_y = (F32)(height - 1) * 0.5f;
     const F32 max_t = ref * 0.5f;
 
-    // The disc reference: the STRONGEST alpha near the centre - the exact centre texel can be
-    // transparent (glow, ring, crown discs), so probe a small disc-shaped patch around it.
+    // The disc reference: the STRONGEST alpha near the centre - the exact centre texel can be transparent (glow, ring, crown discs), so probe a small disc-shaped patch around it.
     U8 ref_alpha = 0;
     const S32 probe_r = llmax(1, (S32)(ref * 0.25f));
     for (S32 py = (S32)centre_y - probe_r; py <= (S32)centre_y + probe_r; ++py)
@@ -228,17 +181,12 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
     }
     if (ref_alpha <= 2)
     {
-        // Nothing opaque anywhere near the centre (the shader itself discards under ~2/255):
-        // the lines have no edge to read - error out.
+        // Nothing opaque anywhere near the centre (the shader discards under ~2/255): the lines have no edge to read - error out.
         out_padding = 0.f;
         return SSDiscPadStatus::FAILED;
     }
 
-    // The disc edge: 90% of the strongest alpha. Not half-max (which lands mid-glow, padding
-    // ~0.36 for the Nacon sun), not 95% (which clips the tiny 255 plateau at ~0.44), but the
-    // 90% contour - exactly where the Nacon sun's radial alpha falloff crosses ~229/255 at
-    // disc_fraction ~0.145, the author-derived 0.43 padding. The alpha reference is the
-    // STRONGEST value near the centre (a ring/crown disc can have a transparent centre texel).
+    // The disc edge: 90% of the strongest alpha. Not half-max (lands mid-glow, padding ~0.36 for the Nacon sun), not 95% (clips the tiny 255 plateau at ~0.44), but the 90% contour - exactly where the Nacon sun's radial alpha falloff crosses ~229/255 at disc_fraction ~0.145, the author-derived 0.43 padding. Reference is the STRONGEST centre-neighbour alpha (a ring/crown disc can have a transparent centre texel).
     const U8 threshold = llmax((U8)(ref_alpha * SS_DISC_PAD_SOLID_ALPHA), 1);
 
     // The full half-turn of axes, each rotated off its exact bearing by this angle.
@@ -260,9 +208,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
 
     std::sort(fractions.begin(), fractions.end());
 
-    // <SS:Nexii> Debug: the raw 16 fractions, so a wrong padding reads as data instead of a
-    // mystery - are all lines full-bleed (alpha flat to the edge), a few clipped by art,
-    // or genuinely asymmetric?
+    // <SS:Nexii> Debug: the raw 16 fractions, so a wrong padding reads as data instead of a mystery - all lines full-bleed (alpha flat to the edge), a few clipped by art, or genuinely asymmetric?
     {
         std::string dump;
         for (const F32 f : fractions)
@@ -274,9 +220,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
                                  << " threshold " << (S32)threshold << LL_ENDL;
     }
 
-    // Where most lines agree: the densest band of samples within the agreement window. A
-    // lone line clipped by a ray or a gap lands outside it and costs nothing; the disc is
-    // whatever the majority of the sixteen radial samples read together.
+    // Where most lines agree: the densest band of samples within the agreement window. A lone line clipped by a ray or a gap lands outside it and costs nothing; the disc is whatever the sixteen-sample majority reads.
     const S32 count = (S32)fractions.size();
     S32 best_start = 0;
     S32 best_count = 0;
@@ -305,8 +249,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
         return SSDiscPadStatus::FAILED;
     }
 
-    // The disc fraction: the MEDIAN sample of the agreed window. A mean lets a line barely
-    // inside the window pull the disc; the median is the sample most lines agree IS the disc.
+    // The disc fraction: the MEDIAN sample of the agreed window - a mean lets a barely-inside line pull the disc; the median is the sample most lines agree IS the disc.
     const S32 agreed_mid = best_start + best_count / 2;
     const F32 disc_fraction = fractions[agreed_mid];
     F32 padding = llclamp(0.5f * (1.f - disc_fraction), 0.f, SS_DISC_PAD_MAX_PADDING);
@@ -321,9 +264,7 @@ SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding)
 
 namespace
 {
-    // Writes a derived padding into a live asset body, only while the body still is the one
-    // the derivation was requested for - the author may have deleted it or moved on to a
-    // different texture while the pixels were decoding.
+    // Writes a derived padding into a live asset body, only while it's still the body the derivation was requested for - the author may have deleted it or moved to another texture while the pixels decoded.
     void applyDerivedPadding(S32 track_index, S32 body_index, const LLUUID& texture_id, F32 padding)
     {
         SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -339,11 +280,7 @@ namespace
 
         if (body.mDiscPadding == padding) return;
 
-        // <SS:Nexii> The body may carry a freshly-translated QUAD diameter (translateSettingsSky
-        // wrote the EEP glow-inclusive size and marked it mPadPendingTranslation). If so this
-        // FIRST derive shrinks the diameter to the solid visible disc exactly once, then clears
-        // the mark - the author's later edits travel mark-less and never rescale, and a re-import
-        // onto an already-worked body (mark already cleared) keeps its size.
+        // <SS:Nexii> The body may carry a freshly-translated QUAD diameter (translateSettingsSky wrote the EEP glow-inclusive size and set mPadPendingTranslation). If so, this FIRST derive shrinks the diameter to the solid visible disc exactly once, then clears the mark - later author edits travel mark-less and never rescale; a re-import onto an already-worked body (mark cleared) keeps its size.
         if (body.mPadPendingTranslation)
         {
             const F32 new_fraction = llmax(1.f - 2.f * padding, 0.1f);
@@ -358,8 +295,7 @@ namespace
     }
 }
 
-// Derives and applies a body's disc padding when its disc texture changed - a texture pick or
-// a sky import adopting the sky's disc art. See ssdiscpad.h.
+// Derives and applies a body's disc padding when its disc texture changed - a texture pick or a sky import adopting the sky's disc art. See ssdiscpad.h.
 void ssDiscPadAutoDerive(S32 track_index, S32 body_index, const LLUUID& texture_id)
 {
     static LLCachedControl<bool> auto_pad(gSavedSettings, "SSAtmoDiscPadAuto", true);
@@ -372,8 +308,7 @@ void ssDiscPadAutoDerive(S32 track_index, S32 body_index, const LLUUID& texture_
         return;
     }
 
-    // A job for this body is stale the moment its texture changes again - the new texture's
-    // derivation below replaces it outright, before the old one's pixels can land late.
+    // A job for this body is stale the moment its texture changes again - the new derivation below replaces it outright, before the old one's pixels can land late.
     auto superseded = [track_index, body_index](const SsDiscPadPendingJob& job)
     {
         return job.mTrack == track_index && job.mBody == body_index;

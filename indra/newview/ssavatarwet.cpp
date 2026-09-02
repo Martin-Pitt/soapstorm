@@ -60,7 +60,7 @@ void SSAvatarWet::clear()
     mPeakSoak = 0.f;
 }
 
-// How exposed to rain a standing avatar is: 1 in the open, fading to 0 as the surface field's cover closes over their head.
+// How exposed to rain a standing avatar is: 1 in the open, fading to 0 as the surface field's cover closes overhead.
 F32 SSAvatarWet::exposureAt(const LLVector3& foot_agent, F32 height) const
 {
     const SSSurfaceField::Sample sample = SSSurfaceField::getInstance()->sample(foot_agent);
@@ -75,7 +75,7 @@ F32 SSAvatarWet::exposureAt(const LLVector3& foot_agent, F32 height) const
     return 1.f - (above - COVER_CLEAR) / (COVER_FADE - COVER_CLEAR);
 }
 
-// Per-frame soak/dry integration for every avatar near the camera, keeping the nearest few as shader capsules.
+// Per-frame soak/dry integration for avatars near the camera, keeping the nearest few as shader capsules.
 void SSAvatarWet::idle(F32 dt)
 {
     mShaded.clear();

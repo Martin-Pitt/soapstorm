@@ -42,9 +42,7 @@ struct SSAtmoEnvCloudFieldState;
 
 static const S32 SS_MAX_STRIKE_LIGHTS = 4;
 
-// <SS:Nexii> The far-field squash cap as a fraction of MAX_FAR_CLIP: where the cloud field's drawn depth tops out, just short of the projection far plane so nothing rasterises against it. The
-// knee (0.8 of the cap, set in update()) is where the compression starts; between them the whole remaining field is folded into the last fifth of drawn depth. Shared with lightning so bolt and
-// cloud agree about drawn depth. [interaction: SSLightning] </SS:Nexii>
+// <SS:Nexii> The far-field squash cap as a fraction of MAX_FAR_CLIP: where the cloud field's drawn depth tops out, just short of the projection far plane so nothing rasterises against it. The knee (0.8 of the cap, set in update()) is where the compression starts; between them the whole remaining field is folded into the last fifth of drawn depth. Shared with lightning so bolt and cloud agree about drawn depth. [interaction: SSLightning]
 constexpr F32 SS_SQUASH_CAP_FRAC = 0.98f;
 
 class SSVolCloud : public LLSingleton<SSVolCloud>
@@ -58,25 +56,17 @@ public:
 
     void clear();
 
-    // <SS:Nexii> The primary deck's geometry and coverage: the auto dome altitude derivation and
-    // every consumer that asks "how much cloud is overhead" mean the main field, not the under
-    // deck bolted on below a sky build. </SS:Nexii>
+    // <SS:Nexii> The primary deck's geometry and coverage: the auto dome altitude derivation and every consumer that asks "how much cloud is overhead" mean the main field, not the under deck bolted on below a sky build.
     F32 cloudBaseZ() const { return mPrimary.mBaseZ; }
     F32 cloudTopZ() const { return mPrimary.mBaseZ + mPrimary.mThicknessM; }
     bool empty() const { return mPrimary.mPuffs.empty(); }
 
-    // <SS:Nexii> The under deck's live world-frame band and whether it has a built field at all.
-    // Lightning reads these to decide whether a ground strike would cross the deck (and so be
-    // re-routed to cloud-to-cloud) and how deep its in-cloud crawl may dive. The band is only
-    // meaningful while underPresent() holds. </SS:Nexii>
+    // <SS:Nexii> The under deck's live world-frame band and whether it has a built field at all. Lightning reads these to decide whether a ground strike would cross the deck (and so be re-routed to cloud-to-cloud) and how deep its in-cloud crawl may dive. The band is only meaningful while underPresent() holds.
     F32 underBaseZ() const { return mUnder.mBaseZ; }
     F32 underTopZ() const { return mUnder.mBaseZ + mUnder.mThicknessM; }
     bool underPresent() const { return !mUnder.mPuffs.empty(); }
 
-    // <SS:Nexii> How solid the under deck is over one point of the sky, 0-1 - the noise map's
-    // presence gate for the deck's own column, in the same air frame the clouds drift in. 1 is
-    // solid cloud at that spot, 0 a hole or gap. Neutral 1 when the deck has no map cached yet.
-    // </SS:Nexii>
+    // <SS:Nexii> How solid the under deck is over one point of the sky, 0-1 - the noise map's presence gate for the deck's own column, in the same air frame the clouds drift in. 1 is solid cloud at that spot, 0 a hole or gap. Neutral 1 when the deck has no map cached yet.
     F32 underPresenceAt(const LLVector3& pos_agent) const;
 
     F32 transmittance(const LLVector3& from_agent, const LLVector3& to_agent, F32 strength);
@@ -84,33 +74,21 @@ public:
     S32 puffCount() const { return (S32)(mPrimary.mPuffs.size() + mUnder.mPuffs.size()); }
     F32 lastBuildMS() const { return mLastBuildMS; }
 
-    // <SS:Nexii> The convection noise map's gate for the weather. Precipitation asks the deck
-    // it falls from two questions about a point of the sky: how much cloud is over it (x, a hole
-    // in the map reads zero and takes the rain with it) and how tower-like the column is (y,
-    // which tweaks the intensity toward the dense parts). The point handed in must already be
-    // the WIND-TILTED one - where a drop falling at the weather's angle entered the deck, not
-    // where it lands - because only the caller knows the fall; this side supplies everything
-    // else, drift included. A deck with no map, or whose map has not read back yet, answers
-    // neutral: everything present, nothing tower-like. [interaction: precipitation]
+    // <SS:Nexii> The convection noise map's gate for the weather. Precipitation asks the deck it falls from two questions about a point of the sky: how much cloud is over it (x, a hole in the map reads zero and takes the rain with it) and how tower-like the column is (y, which tweaks the intensity toward the dense parts). The point handed in must already be the WIND-TILTED one - where a drop falling at the weather's angle entered the deck, not where it lands - because only the caller knows the fall; this side supplies everything else, drift included. A deck with no map, or whose map has not read back yet, answers neutral: everything present, nothing tower-like. [interaction: precipitation]
     LLVector2 precipNoiseAt(const LLVector3& pos_agent) const;
 
     // The weather deck's base height, metres, for the same tilt maths - how far above the
     // ground a drop's column reaches.
     F32 precipBaseZ() const;
 
-    // <SS:Nexii> The weather deck's ceiling, metres - the top of the band precipitation forms in.
-    // Mirrors precipBaseZ's deck choice, so both ends of the weather span come from one deck.
-    // -FLT_MAX when no weather deck is built (nothing gates on it). [interaction: precipitation]
+    // <SS:Nexii> The weather deck's ceiling, metres - the top of the band precipitation forms in. Mirrors precipBaseZ's deck choice, so both ends of the weather span come from one deck. -FLT_MAX when no weather deck is built (nothing gates on it). [interaction: precipitation]
     F32 precipTopZ() const;
 
     // Whether the weather deck has a built field and a noise map read back - checked before
     // precipitation pays for any of the gating.
     bool precipNoiseReady() const;
 
-    // <SS:Nexii> The generated stand-ins a picker previews for each deck's noise map and
-    // profile ramp: the procedural map or the built-in strip while it is what the deck runs,
-    // null once an authored texture covers the field (the picker then shows the real asset).
-    // These are live previews of the built decks, not of the edited asset.
+    // <SS:Nexii> The generated stand-ins a picker previews for each deck's noise map and profile ramp: the procedural map or the built-in strip while it is what the deck runs, null once an authored texture covers the field (the picker then shows the real asset). These are live previews of the built decks, not of the edited asset.
     LLViewerTexture* noisePreviewTexture(bool under_deck) const;
     LLViewerTexture* profilePreviewTexture(bool under_deck) const;
 
@@ -123,19 +101,11 @@ private:
         LLColor3 mColor;
         F32 mCamDistSq = 0.f;
 
-        // <SS:Nexii> This puff's anvil figure - the deck's own anvil raised by the noise map's
-        // tower ramp where the column is one of the strong ones, and by the height ramp wherever
-        // the puff climbs the deck's upper stretch toward the cirrus band. Rides on the puff so
-        // the renderer can shear its top into a skirt without re-deriving anything.
+        // <SS:Nexii> This puff's anvil figure - the deck's own anvil raised by the noise map's tower ramp where the column is one of the strong ones, and by the height ramp wherever the puff climbs the deck's upper stretch toward the cirrus band. Rides on the puff so the renderer can shear its top into a skirt without re-deriving anything.
         F32 mAnvil = 0.f;
     };
 
-    // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are
-    // the same renderer run twice - each with its own resolved field state, textures, puff set and
-    // uniforms - so a sky-themed build can hang a second layer at the bottom of the build while the
-    // weather-driven deck stays overhead. Drawn far deck first; within a deck the puffs stay
-    // depth-sorted, and decks separated by hundreds of metres hide the cross-deck ordering.
-    // </SS:Nexii>
+    // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are the same renderer run twice - each with its own resolved field state, textures, puff set and uniforms - so a sky-themed build can hang a second layer at the bottom of the build while the weather-driven deck stays overhead. Drawn far deck first; within a deck the puffs stay depth-sorted, and decks separated by hundreds of metres hide the cross-deck ordering.
     struct Deck
     {
         std::vector<Puff> mPuffs;
@@ -146,10 +116,7 @@ private:
         LLUUID mDetail;
         LLPointer<LLViewerFetchedTexture> mDetailRef;
 
-        // <SS:Nexii> The base and detail maps' crossfade partners and the two eased weights,
-        // live while the day cycle fades between keyframed textures. Bound on the shader's spare
-        // reserved channels (bumpMap, specularMap) and mixed per sample; both weights 0 - and the
-        // partners pinned on the current maps - whenever no fade runs.
+        // <SS:Nexii> The base and detail maps' crossfade partners and the two eased weights, live while the day cycle fades between keyframed textures. Bound on the shader's spare reserved channels (bumpMap, specularMap) and mixed per sample; both weights 0 - and the partners pinned on the current maps - whenever no fade runs.
         LLUUID mTextureNext;
         LLPointer<LLViewerFetchedTexture> mTextureNextRef;
         F32 mTextureBlend = 0.f;
@@ -158,13 +125,7 @@ private:
         LLPointer<LLViewerFetchedTexture> mDetailNextRef;
         F32 mDetailBlend = 0.f;
 
-        // <SS:Nexii> The convection noise map and its CPU copy. The GPU sees the same map the
-        // field was shaped with - bound as the fragment stage's altDiffuseMap (a reserved
-        // LLShaderMgr channel; only reserved names can be bound as textures, see the depthMap
-        // note in ssVolCloudF.glsl) so the anvil's carving reads the same geography the towers
-        // were grown from. mNoiseW zero means "no map, or not read back yet" - every consumer
-        // then treats the field as unmodulated, and the cache fills a frame or two later once
-        // the fetch lands.
+        // <SS:Nexii> The convection noise map and its CPU copy. The GPU sees the same map the field was shaped with - bound as the fragment stage's altDiffuseMap (a reserved LLShaderMgr channel; only reserved names can be bound as textures, see the depthMap note in ssVolCloudF.glsl) so the anvil's carving reads the same geography the towers were grown from. mNoiseW zero means "no map, or not read back yet" - every consumer then treats the field as unmodulated, and the cache fills a frame or two later once the fetch lands.
         LLUUID mNoise;
         LLPointer<LLViewerFetchedTexture> mNoiseRef;
         std::vector<F32> mNoiseLuma;
@@ -173,29 +134,18 @@ private:
         S32 mNoiseSrcW = 0;     // the raw image's size at cache time, to re-cache on upgrade
         S32 mNoiseSrcH = 0;
 
-        // <SS:Nexii> And when nothing is authored, a square tileable map generated from the
-        // weather seed - the same FBM for every client sharing the environment, so the tower
-        // geography (and the holes it cuts) is syncable without anyone having to upload a
-        // texture. The raw image is the single source: the CPU grid folds down out of it and
-        // the GPU texture uploads from it.
+        // <SS:Nexii> And when nothing is authored, a square tileable map generated from the weather seed - the same FBM for every client sharing the environment, so the tower geography (and the holes it cuts) is syncable without anyone having to upload a texture. The raw image is the single source: the CPU grid folds down out of it and the GPU texture uploads from it.
         U32 mNoiseProcSeed = 0;
         LLPointer<LLImageRaw> mNoiseProcRaw;
         LLPointer<LLViewerTexture> mNoiseProcRef;
 
-        // <SS:Nexii> The vertical profile ramp, when one is authored: the same fetch/readback
-        // ladder as the noise map, but folded into a one-dimensional curve per channel - rows
-        // of the readback averaged across, row 0 the deck's BASE (the same v the shader's
-        // texture read samples). R tower weight, G carve guard, B cap band, A base fill.
-        // mProfileN zero means "none authored, or not read back yet" - every consumer then runs
-        // the built-in vertical curves.
+        // <SS:Nexii> The vertical profile ramp, when one is authored: the same fetch/readback ladder as the noise map, but folded into a one-dimensional curve per channel - rows of the readback averaged across, row 0 the deck's BASE (the same v the shader's texture read samples). R tower weight, G carve guard, B cap band, A base fill. mProfileN zero means "none authored, or not read back yet" - every consumer then runs the built-in vertical curves.
         LLUUID mProfile;
         LLPointer<LLViewerFetchedTexture> mProfileRef;
         std::vector<F32> mProfileCurve;
         S32 mProfileN = 0;
 
-        // <SS:Nexii> And when nothing is authored, a small strip painted from those built-in
-        // curves - display only (it never reaches the shader; the built-ins ARE the shader's
-        // maths), so a picker has something honest to preview for the None state.
+        // <SS:Nexii> And when nothing is authored, a small strip painted from those built-in curves - display only (it never reaches the shader; the built-ins ARE the shader's maths), so a picker has something honest to preview for the None state.
         LLPointer<LLViewerTexture> mProfileProcRef;
 
         F32 mBaseZ = 0.f;
@@ -210,23 +160,16 @@ private:
         F32 mChurn = 0.f;
         F32 mCoverage = 0.f;
 
-        // <SS:Nexii> The noise map's resolved shaping, baked at build time so precipitation
-        // reads exactly the field the deck drew with. mNoiseTileM is metres per tile after the
-        // Noise Scale slider (zero when there is no map); mNoiseHole is how hard the map's low
-        // end cuts holes once moisture has lifted the floor and convection has kept the storm
-        // gaps open. mNoiseTowerLo/Hi are the tower ramp's window - widened as the weather
-        // consolidates into a storm, so the carving calms into large solid cells instead of
-        // shredding the deck - and the shader's own carving reads the same window back.
+        // The deck's cell-hash salt (0 primary, SS_UNDER_DECK_SALT under), kept so the render pass can hand the base veil's shader the same salt the builder gated cells with - the veil re-runs the gate per fragment to open its own gaps exactly where the builder skipped cells.
+        U32 mSalt = 0;
+
+        // <SS:Nexii> The noise map's resolved shaping, baked at build time so precipitation reads exactly the field the deck drew with. mNoiseTileM is metres per tile after the Noise Scale slider (zero when there is no map); mNoiseHole is how hard the map's low end cuts holes once moisture has lifted the floor and convection has kept the storm gaps open. mNoiseTowerLo/Hi are the tower ramp's window - widened as the weather consolidates into a storm, so the carving calms into large solid cells instead of shredding the deck - and the shader's own carving reads the same window back.
         F32 mNoiseTileM = 0.f;
         F32 mNoiseHole = 0.f;
         F32 mNoiseTowerLo = 0.42f;
         F32 mNoiseTowerHi = 0.78f;
 
-        // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the
-        // puffs so the field reads with its gaps filled instead of as balls over empty sky. Same
-        // texture as the puffs, sampled aperiodically in the shader; the colour here is the shade
-        // a puff at the deck's floor would wear - the same formulas - so sheet and lowest puffs
-        // share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
+        // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the puffs so the field reads with its gaps filled instead of as balls over empty sky. Same texture as the puffs, sampled aperiodically in the shader; the colour here is the shade a puff at the deck's floor would wear - the same formulas - so sheet and lowest puffs share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
         LLColor3 mSheetColor;
         F32 mSheetZ = 0.f;
         F32 mSheetAlpha = 0.f;
@@ -237,10 +180,7 @@ private:
     void buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt);
     bool fetchDeckTextures(Deck& deck);
 
-    // <SS:Nexii> The noise map's two answers for one point of a deck's field, in the AIR frame
-    // (drift already subtracted): presence after the moisture floor and convection's say, and
-    // the tower weight the gradient ramp hands back. Shared by the deck builder and the
-    // precipitation gate so both always agree about where the holes are.
+    // <SS:Nexii> The noise map's two answers for one point of a deck's field, in the AIR frame (drift already subtracted): presence after the moisture floor and convection's say, and the tower weight the gradient ramp hands back. Shared by the deck builder and the precipitation gate so both always agree about where the holes are.
     void noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower) const;
 
     // Wrapped bilinear sample of the cached grid, or -1 when the deck has no map cached yet.

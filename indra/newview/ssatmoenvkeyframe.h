@@ -79,10 +79,7 @@ inline std::string ss_atmoenv_lerp<std::string>(const std::string& a, const std:
     return a;
 }
 
-// <SS:Nexii> A flag steps at the segment midpoint rather than inheriting the numeric lerp,
-// whose bool cast is asymmetric - a false->true segment reads true for all but the first
-// instant, a true->false one stays true to the very end. Halfway is the answer that agrees
-// with the scrubber: the eased weight crosses 0.5 exactly when the animation looks switched.
+// <SS:Nexii> A flag steps at the segment midpoint rather than the numeric lerp's asymmetric bool cast - a false->true segment reads true for all but the first instant, a true->false one stays true to the end. Halfway agrees with the scrubber: the eased weight crosses 0.5 exactly when the animation looks switched.
 template <>
 inline bool ss_atmoenv_lerp<bool>(const bool& a, const bool& b, F32 t)
 {
@@ -101,12 +98,7 @@ inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 
     return a;
 }
 
-// <SS:Nexii> Texture tracks keyframe at EASE, not HOLD. ss_atmoenv_lerp never interpolates a
-// UUID - valueAt holds the earlier map, which is exactly the crossfade's FROM keyframe - so the
-// curve's only render role is the weight blendAt() hands the renderer, and HOLD weighed that to
-// 0 on every segment: the editor has no curve control on a texture row, so the crossfade could
-// never engage and every cloud image change snapped. HOLD stays expressible for an authored
-// hard cut (setCurveAt, or a saved asset carrying "hold").
+// <SS:Nexii> Texture tracks keyframe at EASE, not HOLD. ss_atmoenv_lerp never interpolates a UUID - valueAt holds the earlier map, the crossfade's FROM keyframe - so the curve's only render role is the weight blendAt() hands the renderer, and HOLD weighed that to 0 on every segment: no curve control on a texture row meant the crossfade never engaged and every cloud image change snapped. HOLD stays expressible for an authored hard cut (setCurveAt, or an asset carrying "hold").
 template <>
 inline SSAtmoEnvCurve ss_atmoenv_default_curve<LLUUID>() { return SSAtmoEnvCurve::EASE; }
 
@@ -220,13 +212,7 @@ public:
         return ss_atmoenv_lerp(a->mValue, b->mValue, t);
     }
 
-    // <SS:Nexii> The crossfade valueAt() cannot express. Discrete values hold between keyframes -
-    // ss_atmoenv_lerp keeps the earlier one - so a field travelling between two textures CUTS when
-    // the day cycle plays through it. The render side can do better: blendAt() hands back the pair
-    // the phase sits between and the same eased weight valueAt used to pick the survivor, so a
-    // moving cycle fades between the two maps instead of snapping. False when there is nothing to
-    // fade - a plain or single-keyframe value, a HOLD on the segment, an equal pair, or a weight
-    // already at either rail.
+    // <SS:Nexii> The crossfade valueAt() cannot express. Discrete values hold between keyframes (ss_atmoenv_lerp keeps the earlier one), so a field travelling between two textures CUTS when the day cycle plays through. blendAt() hands back the pair the phase sits between and the eased weight valueAt used to pick the survivor, so a moving cycle fades instead of snapping. False when there is nothing to fade - a plain or single-keyframe value, a HOLD, an equal pair, or a weight already at a rail.
     bool blendAt(F64 phase, T& out_from, T& out_to, F32& out_blend) const
     {
         if (mKeyframes.size() < 2) return false;
@@ -251,9 +237,7 @@ public:
         return findAt(wrapPhase(phase), epsilon) >= 0;
     }
 
-    // <SS:Nexii> Follows a rename through the whole field - the plain value and every keyframe.
-    // Only meaningful for the string fields that name something by key (a precipitation type), and
-    // only instantiated where it is called, so the numeric fields never see it.
+    // <SS:Nexii> Follows a rename through the whole field - the plain value and every keyframe. Only meaningful for the string fields that name something by key (a precipitation type), and only instantiated where called, so the numeric fields never see it.
     void renameValue(const T& from, const T& to)
     {
         if (mPlainValue == from) mPlainValue = to;
@@ -393,11 +377,7 @@ private:
         return phase;
     }
 
-    // The keyframe pair phase sits between, and the eased 0..1 weight through the pair. A HOLD
-    // curve weighs everything onto the pair's earlier keyframe (t 0) - exactly the answer the old
-    // hold branches returned - so valueAt is this plus one lerp. Always produces a pair for a
-    // multi-keyframe field: the wrap segment (last back around to first) covers the phase outside
-    // [first, last], and the sorted keys guarantee a match inside it.
+    // The keyframe pair phase sits between and the eased 0..1 weight through it. A HOLD curve weighs everything onto the earlier keyframe (t 0) - the old hold branches' answer - so valueAt is this plus one lerp. Always produces a pair for a multi-keyframe field: the wrap segment (last back to first) covers the phase outside [first, last], and the sorted keys guarantee a match inside it.
     void segmentAt(F64 phase, const SSAtmoEnvKeyframe<T>*& a, const SSAtmoEnvKeyframe<T>*& b, F32& t) const
     {
         phase = wrapPhase(phase);

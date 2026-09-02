@@ -56,11 +56,7 @@ private:
 
     void refreshTitle();
 
-    // <SS:Nexii> The editor runs in two scopes over the same widgets. Viewer scope is the tool we
-    // ship defaults with: presets live on disk and the viewer's active one follows the selection.
-    // Environment scope edits the types the loaded Atmo environment carries, so save writes into
-    // the asset and the viewer's own precipitation is left alone. One editor rather than two so
-    // the tiers cannot drift apart field by field. See doc/atmo_magic_env_ui.md.
+    // <SS:Nexii> One editor, two scopes over the same widgets. Viewer scope is the shipped-defaults tool: presets live on disk and the viewer's active one follows the selection. Environment scope edits the loaded Atmo environment's types, so save writes into the asset and the viewer's own precipitation is left alone. Two editors would let the tiers drift apart field by field. See doc/atmo_magic_env_ui.md.
     bool environmentScope() const { return mEnvironmentScope; }
     bool saveToEnvironment();
     bool removeFromEnvironment(const std::string& name);

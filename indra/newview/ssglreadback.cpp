@@ -35,15 +35,7 @@
 #include <thread>
 #include <vector>
 
-// <SS:Nexii> The thread behind SSGLReadback: a single worker carrying its own
-// GL context shared with the viewer's, whose lifecycle mirrors LLImageGLThread
-// and SSWindFlowMap's SSWindFlowGLWorker (createSharedContext ->
-// makeContextCurrent -> gGL.init -> service queue -> gGL.shutdown ->
-// destroySharedContext). The worker body below only ever uses raw GL - never
-// gGL, LLVertexBuffer or the bound-shader statics - so it cannot disturb the
-// main thread's GL state machine. mStarted flips the instant the thread is
-// actually servicing its queue; createWorker waits for it so a worker whose GL
-// setup failed is caught immediately and never trusted with jobs.
+// <SS:Nexii> The thread behind SSGLReadback: one worker with its own GL context shared with the viewer's, lifecycle mirroring LLImageGLThread and SSWindFlowMap's SSWindFlowGLWorker (createSharedContext -> makeContextCurrent -> gGL.init -> service queue -> gGL.shutdown -> destroySharedContext). The body uses only raw GL - never gGL, LLVertexBuffer or the bound-shader statics - so it cannot disturb the main thread's GL state. mStarted flips the instant the thread services its queue; createWorker waits on it so a worker whose GL setup failed is caught immediately and never trusted with jobs.
 class SSGLReadback::Worker : public LL::ThreadPool
 {
 public:
@@ -83,7 +75,6 @@ private:
     void* mContext;
     std::atomic<bool>* mStarted;
 };
-// </SS:Nexii>
 
 SSGLReadback::SSGLReadback()
 {
@@ -101,12 +92,7 @@ void SSGLReadback::shutdown()
     mAvailable = false;
 }
 
-// <SS:Nexii> Lazily creates the worker the first time a job submits. Only a
-// platform that can hand over a context shared with the viewer's counts
-// (Windows/SDL shared contexts; not headless); without one every read stays on
-// the calling thread, which is exactly today's behaviour. Waits a short while
-// for the thread to reach its queue (see Worker::run) so a context that fails
-// to come up is detected at creation time, not by a stranded job.
+// <SS:Nexii> Lazily creates the worker on first submit. Only a platform that can hand over a context shared with the viewer's counts (Windows/SDL shared contexts; not headless); without one every read stays on the calling thread - exactly today's behaviour. Waits briefly for the thread to reach its queue (see Worker::run) so a failing context is caught at creation, not by a stranded job.
 bool SSGLReadback::createWorker()
 {
     static LLCachedControl<bool> worker_setting(gSavedSettings, "SSGLReadbackWorker", true);
@@ -131,7 +117,7 @@ bool SSGLReadback::createWorker()
     mWorker = std::make_unique<Worker>("SSGLReadback", window, context, &mStarted);
     mWorker->start();
 
-    // The one-time spin-up payoff: if the worker cannot get a working GL
+    // One-time spin-up payoff: if the worker cannot get a working GL
     // context on this machine, find out now (a few ms) instead of after a
     // round of silently unanswered jobs.
     for (int i = 0; i < 50 && !mStarted.load(std::memory_order_acquire); ++i)
@@ -154,7 +140,6 @@ bool SSGLReadback::createWorker()
                              "dedicated GL worker thread behind the frame loop" << LL_ENDL;
     return true;
 }
-// </SS:Nexii>
 
 bool SSGLReadback::available()
 {
@@ -212,16 +197,7 @@ S32 SSGLReadback::components(GLenum format, GLenum type)
     return channels * bytes;
 }
 
-// <SS:Nexii> The actual read. glGetTexImage takes its texels from whatever is
-// bound to the target on the active texture unit - the texture name is not a
-// parameter - so the job's texture has to be bound around the call. Missing
-// that bind is silent: the call raises GL_INVALID_OPERATION, writes nothing,
-// and leaves the caller holding the zero-filled buffer it allocated, which a
-// depth consumer reads as "every column hit at the near plane".
-//
-// The previous binding is put back because this also runs inline on the main
-// thread, where LLTexUnit is caching what it thinks is bound; leaving our
-// texture there would desync that cache for whoever draws next.
+// <SS:Nexii> The actual read. glGetTexImage reads from whatever is bound to the target on the active texture unit - the texture name is not a parameter - so the job's texture must be bound around the call. Missing that bind is silent: GL_INVALID_OPERATION, nothing written, and the caller is left holding the zero-filled buffer it allocated, which a depth consumer reads as "every column hit at the near plane". The previous binding is restored because this also runs inline on the main thread, where LLTexUnit caches what it thinks is bound; leaving ours there would desync that cache for whoever draws next.
 void SSGLReadback::readTexture(const Job& job, U8* dest)
 {
     const GLenum binding = (job.mTarget == GL_TEXTURE_3D) ? GL_TEXTURE_BINDING_3D
@@ -242,7 +218,6 @@ void SSGLReadback::readTexture(const Job& job, U8* dest)
     glPixelStorei(GL_PACK_ALIGNMENT, old_pack);
     glBindTexture(job.mTarget, (GLuint)old_texture);
 }
-// </SS:Nexii>
 
 // Synchronous fallback: same read on the calling thread. Rows are tightly
 // packed so the layout matches what the worker produces.
@@ -328,11 +303,10 @@ bool SSGLReadback::submit(const Job& job)
 }
 
 // Main thread, once a frame. Drains worker-completed jobs whose mainloop
-// delivery raced ahead of us, and - after a generous holdout - reads a job the
-// worker never serviced back inline and disarms the worker so nothing stays
-// stranded. The inline read here races a hypothetical mid-read worker, but the
-// holdout only ever trips when the worker is dead or hung, and the read is the
-// same texture into the same layout.
+// delivery raced ahead of us, and - after a generous holdout - reads unserviced
+// jobs inline and disarms the worker so nothing stays stranded. The inline
+// read races a hypothetical mid-read worker, but the holdout only trips when
+// the worker is dead or hung, and the read is the same texture, same layout.
 void SSGLReadback::poll()
 {
     static const std::chrono::milliseconds HOLDOUT(1000);

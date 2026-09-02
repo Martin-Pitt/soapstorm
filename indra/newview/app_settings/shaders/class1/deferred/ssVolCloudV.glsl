@@ -25,8 +25,8 @@
 
 uniform mat4 modelview_projection_matrix;
 
-// The far-field squash: x knee, y cap (just inside the far plane), z virtual field radius. Vertices beyond the knee are pulled radially toward the camera - each keeps its exact ray, so the
-// projected image is identical to the true positions and only the depth compresses. This is what lets the field read out to 5km through a 2km far plane. vary_world stays the TRUE position: the
+// The far-field squash: x knee, y cap (just inside the far plane), z virtual field radius. Beyond the knee, vertices pull radially toward the camera - each keeps its exact ray, so the
+// projected image is identical to the true positions and only the depth compresses - what lets the field read out to 5km through a 2km far plane. vary_world stays the TRUE position: the
 // fragment shader samples noise and measures distances in the real world, never the compressed one.
 uniform vec3 ss_squash;
 uniform vec3 ss_cam_pos;
@@ -38,12 +38,12 @@ in vec4 diffuse_color;
 out vec2 vary_texcoord0;
 out vec4 vary_color;
 
-// Where this fragment is in the world, for the noise lookup. The map is a field the whole sky is carved out of, not a picture of one puff, so it has to be sampled by position - see ssVolCloudF.glsl.
+// Where this fragment sits in the world, for the noise lookup. The map is a field the whole sky is carved out of, not a picture of one puff, so it samples by position - see ssVolCloudF.glsl.
 out vec3 vary_world;
 
 void main()
 {
-    // The quads arrive already built in world space - the puff field turns its own positions camera-facing on the CPU, where it is also sorting them back to front, so there is nothing left to orient
+    // The quads arrive pre-built in world space - the puff field turns its positions camera-facing on the CPU, where it also sorts them back to front, so nothing is left to orient
     // here.
     vec3 rel = position.xyz - ss_cam_pos;
     float d = length(rel);
@@ -59,9 +59,8 @@ void main()
     vary_texcoord0 = texcoord0;
     vary_color = diffuse_color;
 
-    // The DRAWN position, deliberately: the fragment shader inverts the squash per fragment to recover the true one. Interpolating the true position directly as a varying warped it mid-quad -
+    // The DRAWN position, deliberately: the fragment shader inverts the squash per fragment to recover the true one. Interpolating the true position as a varying warped it mid-quad -
     // perspective correction follows the drawn geometry, not the true one - which showed as noise swimming on the far rim.
     vary_world = drawn_pos;
 }
 
-// </SS:Nexii>

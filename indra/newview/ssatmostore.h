@@ -30,8 +30,7 @@
 
 #include <string>
 
-// Fixed slot names. The twelve footstep slots are generated from the shared
-// spellings by SSFootstepSounds::globalSettingName(); these six are written here.
+// Fixed slot names. The twelve footstep slots are generated from the shared spellings by SSFootstepSounds::globalSettingName(); these six are written here.
 namespace SSAtmoStoreKey
 {
     extern const std::string THUNDER_CRACK;
@@ -42,11 +41,7 @@ namespace SSAtmoStoreKey
     extern const std::string PRESET;
 }
 
-// Key-value store for Atmo Magic state that is user data rather than a tunable:
-// comma-separated sound UUID lists, the packed wind track configuration and the
-// active preset name. Persisted to user_settings/ss_weather/atmo_state.xml.
-// The first launch imports whatever the old debug settings held and blanks them,
-// so nothing is lost and the slots stop appearing in the debug settings.
+// Key-value store for Atmo Magic state that is user data rather than a tunable: comma-separated sound UUID lists, the packed wind track configuration and the active preset name. Persisted to user_settings/ss_weather/atmo_state.xml. The first launch imports whatever the old debug settings held and blanks them, so nothing is lost and the slots stop appearing in the debug settings.
 class SSAtmoStore
 {
 public:

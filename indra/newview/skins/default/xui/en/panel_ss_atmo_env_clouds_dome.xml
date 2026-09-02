@@ -9,24 +9,9 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Clouds > Sky Dome sub-tab - the legacy
-         Windlight/EEP cloud layer's full parameter set (see
-         SSAtmoEnvCloudDome), every field keyframable. Names, ranges and
-         increments mirror EEP's own Clouds panel
-         (panel_settings_sky_clouds.xml) one-for-one; "Coverage" really
-         drives cloud_shadow, exactly as EEP's slider does.
+    <!-- <SS:Nexii> Atmo Magic: Clouds > Sky Dome sub-tab - the legacy Windlight/EEP cloud layer's full parameter set (see SSAtmoEnvCloudDome), every field keyframable. Names, ranges and increments mirror EEP's own Clouds panel (panel_settings_sky_clouds.xml) one-for-one; "Coverage" really drives cloud_shadow, exactly as EEP's slider does. Same row grid as the Water and Atmosphere tabs: the colour swatch and texture picker keep their usual proportions with their keyframe cluster at the shared right edge, and the scroll vector takes two rows on the Water tab's wave-row pattern. -->
 
-         Same row grid as the Water and Atmosphere tabs: the colour swatch
-         and texture picker keep their usual proportions with their
-         keyframe cluster at the shared right edge, and the scroll vector
-         takes two rows on the Water tab's wave-row pattern. -->
-
-    <!-- <SS:Nexii> The dome's own altitude - the parallax rate, not a
-         position: the band is drawn on a fixed dome radius either way, and
-         this is how far away the layer BEHAVES, so a metre of camera travel
-         slides the pattern by the right amount (doc/atmo_magic_cloud_parallax.md).
-         First row on the tab because everything below it is pattern, and
-         this is where the pattern lives. -->
+    <!-- <SS:Nexii> The dome's own altitude - the parallax rate, not a position: the band is drawn on a fixed dome radius either way, and this is how far away the layer BEHAVES, so a metre of camera travel slides the pattern by the right amount (doc/atmo_magic_cloud_parallax.md). First row on the tab because everything below it is pattern, and this is where the pattern lives. -->
     <check_box
      follows="left|top"
      layout="topleft"
@@ -1011,18 +996,7 @@
      label="" />
 
 
-    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
-         sections grouped by the tab each mapping reaches) - the tuning
-         surface for how far this track's weather may bend the values on
-         this tab.
-
-         Positioned by an absolute top against the panel's own height rather
-         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
-         measured downward from the panel's top edge, so that put the button
-         at the very top of the panel, overlapping the rows there and
-         reading as a stray control floating above the tab. Only a negative
-         value would have meant "up from the bottom", and an absolute top is
-         plainer than relying on either reading. -->
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater, sections grouped by the tab each mapping reaches) - the tuning surface for how far this track's weather may bend the values on this tab. Positioned by an absolute top against the panel's own height rather than by bottom="8". Under layout="topleft" a POSITIVE bottom is measured downward from the panel's top edge, so that put the button at the very top of the panel, overlapping the rows there and reading as a stray control floating above the tab. Only a negative value would have meant "up from the bottom", and an absolute top is plainer than relying on either reading. -->
     <button
      follows="left|bottom"
      layout="topleft"

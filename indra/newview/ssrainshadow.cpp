@@ -247,12 +247,7 @@ bool SSRainShadowMap::captureTile(Tile& tile)
     tile.mCaptureTime = SSAtmoMagic::getInstance()->sharedTime();
     tile.mDirty = false;
 
-    // <SS:Nexii> The depth readback rides the shared SSGLReadback worker: the
-    // synchronous glReadPixels that used to stall the frame loop here is now a
-    // glGetTexImage on a dedicated GL thread. mValid stays false until the
-    // texels land back on the main thread, so every consumer (surface grid,
-    // resolveColumn, the debug mesh) keeps reading only complete tiles, and
-    // capture() won't re-render the shared target while the read is in flight.
+    // <SS:Nexii> The depth readback rides the shared SSGLReadback worker: the synchronous glReadPixels that used to stall the frame loop is now a glGetTexImage on a dedicated GL thread. mValid stays false until the texels land back on the main thread, so every consumer (surface grid, resolveColumn, the debug mesh) reads only complete tiles, and capture() won't re-render the shared target while the read is in flight.
     tile.mValid = false;
     tile.mDepth.assign((size_t)res * res, 0.f);
 
@@ -354,7 +349,7 @@ void SSRainShadowMap::capture()
     }
 
     // The shared capture target must not be rendered into again until the
-    // outstanding readback has copied its contents off; capture() waits for it
+    // readback has copied its contents off; capture() waits for it
     // rather than racing the worker.
     if (mReadbackPending)
     {
@@ -434,21 +429,21 @@ F64 SSRainShadowMap::lastCaptureAge() const
 
 // Debug view: the drawn footprint of one texel shrinks a touch so neighbours read as separate cells rather than a sealed sheet.
 static const F32 DEBUG_QUAD_FILL   = 0.92f;
-// Above this many world metres of hit drift across one texel the surface is near-parallel to the fall - the map is smearing a vertical face across the column, and every shelter answer taken from it is a guess.
+// Above this many world metres of hit drift across one texel the surface is near-parallel to the fall - the map smears a vertical face across the column, and every shelter answer taken from it is a guess.
 static const F32 DEBUG_GRAZE_RATIO = 3.f;
 // Height above the ground at which a hit is unambiguously sheltering geometry rather than the terrain the map was aimed at.
 static const F32 DEBUG_SHELTER_TOP = 12.f;
-// Lift along the fall direction, so a quad floats just clear of the surface it saw instead of z-fighting it. Along -dir rather than +Z because that is the axis the map looked down, so the quad is always in front of its own texel.
+// Lift along the fall direction, so a quad floats just clear of the surface it saw instead of z-fighting it. Along -dir rather than +Z because that is the axis the map looked down, keeping the quad in front of its own texel.
 static const F32 DEBUG_LIFT        = 0.08f;
 // How far from the camera the world views draw. Fixed rather than a dial: the cloud is a point per texel, so the honest range is whatever the frame can carry at full map resolution, and that does not vary by taste.
 static const F32 DEBUG_RANGE       = 96.f;
-// Sample spacing in texels. Below 1 there are no more texels to show, so the cloud interpolates between them the way resolveColumn does when it reads the map - a smoother surface, not more information.
+// Sample spacing in texels. Below 1 there are no more texels to show, so the cloud interpolates between them as resolveColumn does when reading the map - a smoother surface, not more information.
 static const F32 DEBUG_STRIDE_MIN  = 0.25f;
 static const F32 DEBUG_STRIDE_MAX  = 32.f;
-// Hard ceiling on baked points per tile - the stride is doubled until the cloud fits, so a fine stride on a large map degrades to a coarser one instead of eating a gigabyte.
+// Hard ceiling on baked points per tile - the stride doubles until the cloud fits, so a fine stride on a large map degrades to a coarser one instead of eating a gigabyte.
 static const size_t DEBUG_MAX_POINTS = 1500000;
 
-// The stride actually used: the requested one, doubled until a map of this resolution bakes within the point ceiling. A sub-texel stride therefore only survives on maps coarse enough to have room for it, which is where it was wanted anyway.
+// The stride actually used: the requested one, doubled until a map of this resolution bakes within the point ceiling. A sub-texel stride thus only survives on maps coarse enough to have room for it, which is where it was wanted anyway.
 static F32 fittedStride(U32 res, F32 stride)
 {
     stride = llclamp(stride, DEBUG_STRIDE_MIN, DEBUG_STRIDE_MAX);
@@ -494,14 +489,14 @@ static LLColor4U shadowTexelColor(F32 above_ground, bool graze, bool off_region,
         r = lerp(r, 1.f, 0.75f); g = lerp(g, 0.15f, 0.75f); b = lerp(b, 0.95f, 0.75f); a *= 0.8f;
     }
 
-    // The capture frustum is wider than the region so a tilted fall still covers it - those texels landed on a neighbour or the void, and are dimmed rather than dropped so the overscan itself stays legible.
+    // The capture frustum is wider than the region so a tilted fall still covers it - those texels landed on a neighbour or the void, and are dimmed rather than dropped so the overscan stays legible.
     if (off_region) a *= 0.3f;
 
     return LLColor4U((U8)(llclamp(r, 0.f, 1.f) * 255.f), (U8)(llclamp(g, 0.f, 1.f) * 255.f),
                      (U8)(llclamp(b, 0.f, 1.f) * 255.f), (U8)(llclamp(a, 0.f, 1.f) * 255.f));
 }
 
-// Bakes a tile's depth texels into world points. This is a straight unprojection - the same arithmetic buildSurfaceGrid uses - so what the cloud shows is exactly what every consumer of the map reads, with no second trace to disagree with it.
+// Bakes a tile's depth texels into world points. A straight unprojection - the same arithmetic buildSurfaceGrid uses - so the cloud shows exactly what every consumer reads, with no second trace to disagree with it.
 void SSRainShadowMap::buildDebugCloud(const Tile& tile, DebugCloud& cloud)
 {
     cloud.mPos.clear();
@@ -537,7 +532,7 @@ void SSRainShadowMap::buildDebugCloud(const Tile& tile, DebugCloud& cloud)
         + tile.mUp * (-tile.mHalfH + 0.5f * sv)
         + tile.mDir * tile.mNear;
 
-    // The graze test always steps whole texels - it is asking what the stored surface does between neighbouring samples of the map, which is not a question a sub-texel stride changes.
+    // The graze test always steps whole texels - it asks what the stored surface does between neighbouring map samples, a question a sub-texel stride doesn't change.
     const S32 istep = llmax(1, (S32)(stride + 0.5f));
     const F32 graze_limit = su * (F32)istep * DEBUG_GRAZE_RATIO;
 
@@ -567,7 +562,7 @@ void SSRainShadowMap::buildDebugCloud(const Tile& tile, DebugCloud& cloud)
             F32 d;
             if (stride < 1.f)
             {
-                // Asking for more samples than the map has texels, so read it the way resolveColumn does - bilinear between the four around this point. A miss in any corner leaves the whole sample a miss, so holes stay the shape they really are instead of being feathered away.
+                // More samples requested than the map has texels, so read it as resolveColumn does - bilinear between the four around this point. A miss in any corner makes the whole sample a miss, so holes keep their real shape instead of being feathered away.
                 const F32 gx = fx - 0.5f;
                 const F32 gy = fy - 0.5f;
                 const S32 x0 = (S32)floorf(gx);
@@ -607,7 +602,7 @@ void SSRainShadowMap::buildDebugCloud(const Tile& tile, DebugCloud& cloud)
                 ground = llmax(land.resolveHeightRegion(lx, ly), water_z);
             }
 
-            // Neighbouring texels along both map axes - a large swing means the column walked down a wall between one texel and the next.
+            // Neighbouring texels along both map axes - a large swing means the column walked down a wall between texels.
             auto tap = [&](S32 ax, S32 ay) -> F32
             {
                 const F32 v = texel(ax, ay);
@@ -635,12 +630,12 @@ void SSRainShadowMap::buildDebugCloud(const Tile& tile, DebugCloud& cloud)
     cloud.mBuiltSky    = sky;
 }
 
-// The landing grid the surface field and the drainage trace resample the capture into - same figure, so this view and theirs cannot disagree.
+// The landing grid the surface field and drainage trace resample the capture into - same figure, so this view and theirs cannot disagree.
 static const S32 DEBUG_GRID_RES = 128;
 // A landing this far above the terrain under it is sheltered by something rather than sitting on the ground.
 static const F32 DEBUG_SHELTER_MIN = 0.5f;
 
-// Bakes the resampled landing grid and its colours. What this view says that the texel cloud cannot: which cells the capture never reached at all, because those fall back to the bare heightmap and every consumer takes that fallback without knowing.
+// Bakes the resampled landing grid and its colours. What this view says the texel cloud cannot: which cells the capture never reached, because they fall back to the bare heightmap and every consumer takes that fallback without knowing.
 void SSRainShadowMap::buildDebugGrid(const Tile& tile, DebugGrid& grid)
 {
     grid.mColor.clear();
@@ -679,7 +674,7 @@ void SSRainShadowMap::buildDebugGrid(const Tile& tile, DebugGrid& grid)
 
             if (flags & SURF_FALLBACK)
             {
-                // The loud one on purpose: the capture told this cell nothing, so its landing came off the heightmap and no roof over it is being felt at all.
+                // The loud one on purpose: the capture told this cell nothing, so its landing came off the heightmap and no roof over it is felt at all.
                 r = 1.f; g = 0.25f; b = 0.1f; a = 0.6f;
             }
             else
@@ -750,7 +745,7 @@ void SSRainShadowMap::drawTexelCloud()
         if (!regionp) continue;
 
         const LLVector3 base = regionp->getOriginAgent();
-        // Each quad is the texel's own footprint, laid in the map plane rather than flat - so a face the fall grazes shows up edge-on and stretched, exactly as the map stores it.
+        // Each quad is the texel's own footprint, laid in the map plane rather than flat - so a face the fall grazes shows edge-on and stretched, exactly as the map stores it.
         const LLVector3 ru = cloud.mRight * cloud.mHalf;
         const LLVector3 uu = cloud.mUp * cloud.mHalf;
 
@@ -831,7 +826,7 @@ void SSRainShadowMap::drawShelterGrid()
     }
 }
 
-// View 2: the capture as captured, on screen. Nothing is unprojected or resampled here, so this is the one view that can be read against SSAtmoShadowRes: holes are black, and if detail is missing at this size it was never in the map to begin with.
+// View 2: the capture as captured, on screen. Nothing is unprojected or resampled here, so this is the one view to read against SSAtmoShadowRes: holes are black, and detail missing at this size was never in the map.
 void SSRainShadowMap::drawDepthMap()
 {
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
@@ -866,7 +861,7 @@ void SSRainShadowMap::drawDepthMap()
 
     if (mDebugMapFrom != tile->mCaptureTime || mDebugMapRegion != handle || mDebugMapRes != res)
     {
-        // Stretched between the nearest and furthest thing the capture actually saw - the raw range is a thin slice of the far plane, and unstretched it reads as one flat grey.
+        // Stretched between the nearest and furthest thing the capture saw - the raw range is a thin slice of the far plane, and unstretched it reads as one flat grey.
         F32 lo = 1.f, hi = 0.f;
         for (F32 d : tile->mDepth)
         {
@@ -933,7 +928,7 @@ void SSRainShadowMap::drawDepthMap()
         gGL.getTexUnit(0)->bindManual(LLTexUnit::TT_TEXTURE, mDebugMapTex);
         gGL.color4f(1.f, 1.f, 1.f, 1.f);
         gGL.begin(LLRender::TRIANGLES);
-        // Flipped in v: the capture's first row is the bottom of the map plane, and ortho here puts y=0 at the bottom of the screen, so an unflipped draw would show it upside down against the world.
+        // Flipped in v: the capture's first row is the bottom of the map plane, and ortho here puts y=0 at the screen's bottom, so an unflipped draw would show it upside down against the world.
         gGL.texCoord2f(0.f, 1.f); gGL.vertex3f(x0, y0, 0.f);
         gGL.texCoord2f(1.f, 1.f); gGL.vertex3f(x1, y0, 0.f);
         gGL.texCoord2f(1.f, 0.f); gGL.vertex3f(x1, y1, 0.f);
@@ -959,7 +954,7 @@ void SSRainShadowMap::drawDepthMap()
     gGLLastMatrix = nullptr;
 }
 
-// View 3: the frame each capture was taken in - the ortho box, the band it spans, and what state the tile is in. The view for "why did this region never get a usable map", which none of the others can answer because they only draw captures that worked.
+// View 3: the frame each capture was taken in - the ortho box, the band it spans, the tile's state. The view for "why did this region never get a usable map", which the others can't answer because they only draw captures that worked.
 void SSRainShadowMap::drawCaptureVolume()
 {
     beginWorldDebug();
@@ -1044,7 +1039,7 @@ void SSRainShadowMap::drawCaptureVolume()
     }
 }
 
-// Draws the captured depth maps, in whichever of the four views SSAtmoShadowDebugView picks. Only the active view's cache is baked, and the others are dropped, so switching views does not leave the one you are not looking at costing memory.
+// Draws the captured depth maps in whichever of the four views SSAtmoShadowDebugView picks. Only the active view's cache is baked; the others are dropped, so switching views doesn't leave the one you're not looking at costing memory.
 void SSRainShadowMap::renderDebug()
 {
     if (mTiles.empty())
@@ -1076,7 +1071,7 @@ void SSRainShadowMap::renderDebug()
         it = (mTiles.count(it->first) == 0) ? mDebugGrid.erase(it) : std::next(it);
     }
 
-    // Both bakes are copies of a capture, so they only go stale when the capture is replaced or when what they are measured against moves - a shifting fall direction needs no rebake, because the texels already fell the way they fell.
+    // Both bakes are copies of a capture, so they only go stale when the capture is replaced or what they're measured against moves - a shifting fall direction needs no rebake, because the texels already fell their way.
     if (view == DEBUG_CLOUD || view == DEBUG_SHELTER)
     {
         for (const auto& entry : mTiles)
@@ -1122,7 +1117,7 @@ void SSRainShadowMap::renderDebug()
         default:            drawTexelCloud();    break;
     }
 
-    // The fall direction, drawn from the camera's own column down to where that column lands, so every world view can be read against the direction that produced it. Skipped for the on-screen map, which has no world to draw it in.
+    // The fall direction, drawn from the camera's own column down to where it lands, so every world view can be read against the direction that produced it. Skipped for the on-screen map, which has no world to draw it in.
     if (view != DEBUG_MAP)
     {
         const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
@@ -1254,7 +1249,7 @@ bool SSRainShadowMap::buildSurfaceGrid(U64 region_handle, S32 n, SurfaceGrid& ou
                     // debug cloud's colour ramp, kept as data. The reference is
                     // the terrain-or-water the fallback path would have used;
                     // in a skybox it is the track floor, so a platform's decks
-                    // read as the structure they are rather than as terrain
+                    // read as the structure they are, not terrain
                     // four thousand metres below them.
                     F32 ground;
                     if (sky)

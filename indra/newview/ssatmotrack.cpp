@@ -94,7 +94,7 @@ void SSAtmoTrackConfig::setHeadingElevation(F32 heading_deg, F32 elevation_deg)
     mWindRot.shortestArc(LLVector3(0.f, 1.f, 0.f), dir);
 }
 
-// Serialised as heading/elevation rather than a raw quaternion - what a notecard author can write.
+// Serialised as heading/elevation, not a raw quaternion - the angles a notecard author can write.
 LLSD SSAtmoTrackConfig::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
@@ -116,7 +116,7 @@ LLSD SSAtmoTrackConfig::asLLSD() const
     return sd;
 }
 
-// Reads a track's fields tolerantly; a track present with no 'enabled' key still means weather here.
+// Reads a track's fields tolerantly; a track present with no 'enabled' key still counts as weather.
 void SSAtmoTrackConfig::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return;
@@ -184,7 +184,7 @@ SSAtmoTrackManager::~SSAtmoTrackManager()
     }
 }
 
-// Which sky track the CAMERA's altitude is in - weather is a thing you look at.
+// Which sky track the CAMERA's altitude is in - weather is what you look at.
 S32 SSAtmoTrackManager::currentTrack() const
 {
     const F32 z = LLViewerCamera::getInstance()->getOrigin().mV[VZ];
@@ -346,12 +346,7 @@ void SSAtmoTrackManager::applyNotecardText(const std::string& text)
 {
     LLSD sd;
 
-    // <SS:Nexii> Notecard saving and drag-and-drop write the environment in the compressed v3
-    // format now - an SS-ATMO-ENV-COMPRESSED magic header around deflate+base64 binary LLSD -
-    // and a parcel can advertise exactly such a card. That reader is shared (see
-    // ssatmoenvmanager.h), so decode through it and keep the XML/notation path below for
-    // hand-authored cards. A decoded v3 environment is not a legacy track set - the environment
-    // discovery system applies it - so stand aside rather than rejecting a binary payload. </SS:Nexii>
+    // <SS:Nexii> Notecard saving and drag-and-drop now write the environment in the compressed v3 format - an SS-ATMO-ENV-COMPRESSED magic header around deflate+base64 binary LLSD - and a parcel can advertise exactly such a card. That reader is shared (ssatmoenvmanager.h), so decode through it, keeping the XML/notation path below for hand-authored cards. A decoded v3 environment is not a legacy track set - the environment discovery system applies it - so stand aside, don't reject the binary payload.
     if (ss_atmo_env_payload_is_compressed(text))
     {
         std::string error;
@@ -389,9 +384,7 @@ void SSAtmoTrackManager::applyNotecardText(const std::string& text)
     ss_track_set_t set;
     if (!fromLLSD(sd, set))
     {
-        // <SS:Nexii> The document may be a clean v3 environment card rather than garbage: its
-        // tracks are an array, not the legacy track map this reader expects. The environment
-        // system owns applying it, so name that instead of a generic "no tracks". </SS:Nexii>
+        // <SS:Nexii> The document may be a clean v3 environment card, not garbage: its tracks are an array, not the legacy track map this reader expects. The environment system owns applying it, so name that rather than a generic "no tracks".
         if (sd.isMap() && sd.has("tracks") && sd["tracks"].isArray())
         {
             mStatus = "notecard is a v3 environment; the environment system applies it";

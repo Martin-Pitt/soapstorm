@@ -249,7 +249,6 @@ void LLMultiSliderCtrl::reshape(S32 width, S32 height, bool called_from_parent)
         }
     }
 }
-// </SS:Nexii>
 
 void LLMultiSliderCtrl::setValue(const LLSD& value)
 {

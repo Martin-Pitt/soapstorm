@@ -217,4 +217,3 @@ void main()
     frag_color = encodeNormal(flat_view, env, flag);
 }
 
-// </SS:Nexii>

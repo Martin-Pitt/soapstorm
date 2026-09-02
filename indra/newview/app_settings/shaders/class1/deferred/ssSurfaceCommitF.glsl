@@ -31,8 +31,8 @@
 
 // <SS:Nexii> Atmo Magic surface field
 
-// Four outputs so the locations the linker hands out line up with the gbuffer's attachments. Only the second is written; the rest are masked off with glDrawBuffers at the call site, and writes to a
-// buffer set to GL_NONE go nowhere, so the diffuse, normal and emissive attachments are not so much as touched.
+// Four outputs so the linker's locations line up with the gbuffer's attachments. Only the second is written; the rest are masked off with glDrawBuffers at the call site, and writes to a
+// buffer set to GL_NONE go nowhere, so the diffuse, normal and emissive attachments are untouched.
 out vec4 frag_data[4];
 
 in vec2 vary_fragcoord;
@@ -45,9 +45,9 @@ uniform sampler2D ssCommitSource;
 // every other output stays masked to GL_NONE.
 uniform float ssCommitTarget;
 
-// Diagnostic. Above zero, the diffuse attachment is painted a flat magenta as well as the specular being written. Albedo multiplies straight into the final colour on every path there is, so this
-// cannot be mistaken for a subtle lighting change, cannot be swallowed by an overcast sky, and cannot be argued with. It separates "nothing this pass writes lands anywhere" from "the specular buffer
-// lands and the lighting does nothing with it", which are the only two possibilities left and want opposite fixes.
+// Diagnostic. Above zero, paints the diffuse attachment flat magenta as well as writing the specular. Albedo multiplies straight into the final colour on every path, so this
+// cannot be mistaken for a subtle lighting change, swallowed by an overcast sky, or argued with. It separates "nothing this pass writes lands anywhere" from "the specular buffer
+// lands and the lighting does nothing with it", the only two possibilities left, wanting opposite fixes.
 uniform float ssCommitDebugPaint;
 
 void main()
@@ -59,7 +59,7 @@ void main()
     // once - the normal commit only filled frag_data[2] while the mask routed the untouched
     // frag_data[1] into the normal attachment, so the first frame the flatten pass had real
     // work to do, the gbuffer normals became whatever the undefined output held. Black world.
-    // The mask is what steers these; this only guarantees nothing is undefined.
+    // The mask steers these; this only guarantees nothing is undefined.
     frag_data[0] = src;
     frag_data[1] = src;
     frag_data[2] = src;
@@ -74,11 +74,10 @@ void main()
     {
         frag_data[0] = vec4(1.0, 0.0, 1.0, 0.0);
 
-        // The diffuse paint above is already proven to reach the screen (the freeze-frame test). This is the same proof for the OTHER channel this pass writes - the one the wetness effect actually
-        // uses - which has never independently been checked. ORM = (0 occlusion, 0 roughness, 1 metal): every PBR surface should go a hard mirror, and every legacy surface should carry a strange
+        // The diffuse paint above is already proven to reach the screen (the freeze-frame test). Same proof for the OTHER channel this pass writes - the one the wetness effect actually
+        // uses - never independently checked. ORM = (0 occlusion, 0 roughness, 1 metal): PBR surfaces should go a hard mirror, legacy surfaces a strange
         // blue-tinted specular. If this channel reaches the screen the same way diffuse did, this is unmistakable regardless of lighting or haze.
         frag_data[1] = vec4(0.0, 0.0, 1.0, 0.0);
     }
 }
 
-// </SS:Nexii>

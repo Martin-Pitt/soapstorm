@@ -256,7 +256,6 @@
 // <SS:Nexii> Atmo Magic wind flowmap
 #include "ssatmomagic.h"
 #include "sswindflow.h"
-// </SS:Nexii>
 #include "llvlcomposition.h"
 #include "llvlmanager.h"
 #include "llviewercamera.h"
@@ -1344,12 +1343,9 @@ bool LLAppViewer::init()
     gSimLastTime = gRenderStartTime.getElapsedTimeF32();
     gSimFrames = (F32)gFrameCount;
 
-    // <SS:Nexii> Also init when a device was pinned but the enable got cleared, so a config already latched off by an older build recovers
-    // by itself instead of needing the floater opened and the device picked again. String id on Windows, map on macOS.
-    //if (gSavedSettings.getBOOL("JoystickEnabled"))
+    // <SS:Nexii> Also init when a device was pinned but the enable got cleared, so a config already latched off by an older build recovers by itself instead of needing the floater opened and the device picked again. String id on Windows, map on macOS. if (gSavedSettings.getBOOL("JoystickEnabled"))
     const LLSD joystick_id = gSavedSettings.getLLSD("JoystickDeviceUUID");
     if (gSavedSettings.getBOOL("JoystickEnabled") || joystick_id.isMap() || !joystick_id.asString().empty())
-    // </SS:Nexii>
     {
         LLViewerJoystick::getInstance()->init(false);
     }
@@ -6284,12 +6280,7 @@ void LLAppViewer::idle()
     regionp = LLWorld::getInstance()->resolveRegionGlobal(wind_position_region, gAgent.getPositionGlobal());    // puts agent's local coords into wind_position
     if (regionp)
     {
-        // <SS:Nexii> Atmo Magic wind flowmap: while it is solved it is the
-        // wind, so the wind heard in the headphones is the one blowing down
-        // the alley the avatar is standing in rather than a region-wide
-        // average of it. The water still moves on the undisturbed weather
-        // wind: it is a region-scale surface and the local field around one
-        // build says nothing about how the sea beyond it should run.
+        // <SS:Nexii> Atmo Magic wind flowmap: while it is solved it is the wind, so the wind heard in the headphones is the one blowing down the alley the avatar is standing in rather than a region-wide average of it. The water still moves on the undisturbed weather wind: it is a region-scale surface and the local field around one build says nothing about how the sea beyond it should run.
         static LLCachedControl<bool> ss_flow_wind(gSavedSettings, "SSAtmoWindFlowViewerWind", true);
         if (ss_flow_wind && SSWindFlowMap::drivesWind())
         {
@@ -6304,7 +6295,6 @@ void LLAppViewer::idle()
 
             average_wind = regionp->mWind.getAverage();
         }
-        // </SS:Nexii>
         gSky.setWind(average_wind);
         //LLVOWater::setWind(average_wind);
     }

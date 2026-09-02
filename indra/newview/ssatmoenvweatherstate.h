@@ -95,11 +95,7 @@ public:
 
     static std::string intensityLabel(const std::string& type, SSAtmoEnvPrecipIntensity band);
 
-    // <SS:Nexii> Temperature's grip on lightning frequency: the same season rack the cloud
-    // altitudes use - full frequency in the summer heatwave (+35C), throttled down to a
-    // twentieth by deep winter (-15C, never zero - the winter storm still owns a few anvil
-    // bolts). Off with SSAtmoLightningPolarity, the answer is 1 and the old convection-only
-    // intervals stand. </SS:Nexii>
+    // <SS:Nexii> Temperature's grip on lightning frequency: the same season rack the cloud altitudes use - full frequency in the summer heatwave (+35C), throttled to a twentieth by deep winter (-15C, never zero - the winter storm still owns a few anvil bolts). Off with SSAtmoLightningPolarity, the answer is 1 and the old convection-only intervals stand.
     static F32 lightningTemperatureScale(F32 temperature_c);
 
 private:

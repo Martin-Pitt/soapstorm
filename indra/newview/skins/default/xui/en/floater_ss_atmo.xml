@@ -10,19 +10,7 @@
  single_instance="true"
  title="Atmo Magic Settings"
  width="360">
-    <!-- <SS:Nexii> Legacy Atmo Magic weather floater - deprecated in favour
-         of the Atmo Magic environment floater (ss_atmo_env), which covers
-         per-track weather authoring with its own asset and its own notion
-         of "track" instead of riding EEP's four sky tracks the way this
-         does. Trimmed down to what's still useful standalone: the shared
-         master switch and impact-effect toggles the renderer itself reads
-         regardless of which config source is driving it, the precipitation
-         preset picker/editor (kept as the reference point for comparing
-         Atmo Magic's own weather editor against, and there is no other way
-         to reach the preset editor), and the sub-floater launchers. The
-         per-track weather editing UI, and its own notecard load/save/
-         revert/defaults/reload-parcel-config, are gone - see
-         doc/archive/atmo_magic_environment.md's "Relationship to what exists". -->
+    <!-- <SS:Nexii> Legacy Atmo Magic weather floater - deprecated in favour of the Atmo Magic environment floater (ss_atmo_env), which covers per-track weather authoring with its own asset and its own notion of "track" instead of riding EEP's four sky tracks the way this does. Trimmed down to what's still useful standalone: the shared master switch and impact-effect toggles the renderer itself reads regardless of which config source is driving it, the precipitation preset picker/editor (kept as the reference point for comparing Atmo Magic's own weather editor against, and there is no other way to reach the preset editor), and the sub-floater launchers. The per-track weather editing UI, and its own notecard load/save/ revert/defaults/reload-parcel-config, are gone - see doc/archive/atmo_magic_environment.md's "Relationship to what exists". -->
     <check_box
      control_name="SSAtmoEnabled"
      follows="left|top"

@@ -50,16 +50,10 @@ public:
     static bool resolveActiveTrack(F32 world_z, F32 prev_world_z, bool teleported,
                                    SSAtmoTrackConfig& out_cfg, bool& out_is_ground_track);
 
-    // <SS:Nexii> Public because the environment editor derives a new precipitation type from
-    // whatever the combo has selected, and the combo holds derivation vocabulary rather than
-    // preset names - it needs the same mapping the renderer uses, not a second copy of it.
+    // <SS:Nexii> Public because the environment editor derives a new precipitation type from whatever the combo has selected, and the combo holds derivation vocabulary rather than preset names - it needs the same mapping the renderer uses, not a second copy of it.
     static std::string presetNameForType(const std::string& v3_type);
 
-    // <SS:Nexii> The bolt-from-the-blue look-ahead: with the weather cube's keyframes as a
-    // forecast, reports how imminent an oncoming thunderstorm is (0..1) and the heading,
-    // degrees, it is coming FROM - the upwind of the current wind. The convection field's NEXT
-    // keyframe is the storm's arrival: stormier than now, gated by how far the day phase has
-    // progressed toward it. out_heading_deg is -1 when no storm is approaching. </SS:Nexii>
+    // <SS:Nexii> The bolt-from-the-blue look-ahead: with the weather cube's keyframes as a forecast, reports how imminent an oncoming thunderstorm is (0..1) and the heading, degrees, it is coming FROM - the upwind of the current wind. The convection field's NEXT keyframe is the storm's arrival: stormier than now, gated by how far the day phase has progressed toward it. out_heading_deg is -1 when no storm is approaching.
     static F32 stormApproach(F32 world_z, F32 prev_world_z, bool teleported,
                              F32& out_heading_deg);
 };

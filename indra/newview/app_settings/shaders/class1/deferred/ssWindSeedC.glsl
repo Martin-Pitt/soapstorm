@@ -51,4 +51,3 @@ void main()
     imageStore(uVel, c, vec4(uAmbient[c.z] * (1.0 - solid), 0.0));
 }
 
-// </SS:Nexii>

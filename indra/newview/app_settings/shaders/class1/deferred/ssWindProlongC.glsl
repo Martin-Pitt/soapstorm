@@ -35,8 +35,8 @@ bool inBounds(ivec3 c)
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 
-// uRes is the fine resolution here; the coarse grid is half of it. Bilinear rather than nearest: a blocky starting guess carries steps the fine level then has to spend its whole iteration budget
-// smoothing out, which is the budget the pyramid exists to save.
+// uRes is the fine resolution here; the coarse grid is half of it. Bilinear, not nearest: a blocky starting guess carries steps the fine level then spends its whole iteration budget
+// smoothing out - the budget the pyramid exists to save.
 layout(r32f, binding = 6) uniform readonly  image3D uCoarse;
 layout(r32f, binding = 7) uniform writeonly image3D uFine;
 
@@ -65,4 +65,3 @@ void main()
     imageStore(uFine, c, vec4(p, 0.0, 0.0, 0.0));
 }
 
-// </SS:Nexii>

@@ -67,8 +67,8 @@ class SSWorldField : public LLSingleton<SSWorldField>
 
 public:
     // What a consumer wants out of the store. The capture's band depth and
-    // later its probe passes are the union of what every currently claimed
-    // channel needs; today that is SURFACE_TOP alone.
+    // later its probe passes are the union of every currently claimed
+    // channel's needs; today that is SURFACE_TOP alone.
     enum class EChannel
     {
         SURFACE_TOP = 0,
@@ -80,7 +80,7 @@ public:
     };
 
     // A consumer's stake in a channel. Ref-counted per (region, channel);
-    // dropping the last handle lets the region stop paying for the channel.
+    // dropping the last handle stops the region paying for the channel.
     // Deliberately a handle rather than a bool: a prototype that wants a
     // channel for a minute of testing drops it and the field notices.
     class Interest
@@ -113,15 +113,7 @@ public:
     // gate). Consumers switch sources without changing anything else.
     bool buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::SurfaceGrid& out);
 
-    // <SS:Nexii> The TRUE-GROUND reference for the wind profile: per column, the real ground the
-    // boundary layer is measured from - the topmost real surface (olivine/green-blue ground
-    // tiles), with columns whose topmost surface is a TALL STRUCTURE (purple tiles - a building
-    // or skybox reaching far above the surrounding ground) voided and gap-filled from the
-    // surrounding true ground, and water columns held at the sea plane. Unlike the ancient Linden
-    // terrain heightmap (resolveHeightRegion), this reads the worldfield's real-geometry captures,
-    // so streets, mesh terrain and prim ground built ON TOP of the old heightmap become the
-    // ground. n is the output resolution (region-anchored like buildSurfaceGrid). Returns false
-    // when the region's tile is not yet valid. </SS:Nexii>
+    // <SS:Nexii> The TRUE-GROUND reference for the wind profile: per column, the real ground the boundary layer is measured from - the topmost real surface (olivine/green-blue ground tiles), with TALL-STRUCTURE columns (purple tiles: a building or skybox far above the surrounding ground) voided and gap-filled from the surrounding true ground; water columns hold the sea plane. Unlike the ancient Linden terrain heightmap (resolveHeightRegion), this reads the worldfield's real-geometry captures, so streets, mesh terrain and prim ground built ON TOP of the old heightmap become the ground. n is the output resolution (region-anchored like buildSurfaceGrid); false when the tile is not yet valid.
     bool buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& out);
 
     void validTiles(std::vector<std::pair<U64, U32> >& out) const;
@@ -136,27 +128,16 @@ public:
     bool coverageAt(const LLVector3& pos_agent, bool& outdoor, F32& buried_depth) const;
 
     // The richer form the soundscape's probe cycle wants: whether anything
-    // stands over the point at all, the altitude of the nearest such surface
-    // (the ceiling of the space the point is in, to band precision), and the
-    // altitude of the column's sky-open top. Burial - the build stacked
-    // between the ceiling and the sky - is their difference, floor-count
-    // aware where the single column-top subtraction never was. False when no
-    // valid tile covers the point; the caller keeps its raycasts for that.
+    // stands over the point at all, the nearest such surface's altitude (the
+    // space's ceiling, to band precision), and the column's sky-open top.
+    // Burial (the build stacked between ceiling and sky) is their difference,
+    // floor-count aware where the single column-top subtraction never was.
+    // False when no valid tile covers the point; the caller keeps its
+    // raycasts for that.
     bool coverageDetail(const LLVector3& pos_agent, bool& covered,
                         F32& ceiling_z, F32& column_top_z) const;
 
-    // <SS:Nexii> Air connectivity, the flood-fill pass of the worldfield
-    // design: every air cell of a tile's band stack is labelled by whether it
-    // can actually be reached from the sky or the tile's horizontal borders.
-    // A courtyard, an underpass and the gap under a skyway are OUTSIDE - the
-    // flood walks in; a sealed room is INTERIOR. Solved on the general worker
-    // queue from a snapshot of the band stack, so a build committing on the
-    // main thread never races the walk, and stored against the tile's
-    // geometry serial so a stale answer is never served after an edit. The
-    // same job carries the occlusion depth: each outside-connected air cell's
-    // graph distance to the frontier, for the "how enclosed is this point"
-    // consumers (the design's sparse-air-solve and acoustic occlusion
-    // figures).
+    // <SS:Nexii> Air connectivity, the flood-fill pass of the worldfield design: every air cell of a tile's band stack is labelled by whether it can actually be reached from the sky or the tile's horizontal borders. A courtyard, an underpass and the gap under a skyway are OUTSIDE - the flood walks in; a sealed room is INTERIOR. Solved on the general worker queue from a snapshot of the band stack, so a build committing on the main thread never races the walk; stored against the tile's geometry serial so a stale answer is never served after an edit. The same job carries the occlusion depth: each outside-connected air cell's graph distance to the frontier, for the "how enclosed is this point" consumers (the sparse-air-solve and acoustic occlusion figures).
     enum EAirLabel : U8
     {
         AIR_SOLID = 0,      // a surface occupies the band here
@@ -169,8 +150,8 @@ public:
     // The occlusion depth behind airLabelAt: graph distance in cells from the
     // point's air band-cell to the nearest AIR_OUTSIDE cell (0 when the point
     // itself is outside-connected air), or AIR_DEPTH_UNREACHED when the cell
-    // is interior, off-tile, or the labels are not current. Band steps count
-    // one cell and horizontal steps one cell, so the figure is a graph hop
+    // is interior, off-tile, or the labels are not current. Band and
+    // horizontal steps count one cell each, so the figure is a graph hop
     // count over the store's own grid, not metres.
     static constexpr U32 AIR_DEPTH_UNREACHED = 0xFFFFu;
     U32 airDepthAt(const LLVector3& pos_agent) const;
@@ -178,19 +159,8 @@ public:
     // The share of a tile's air cells the flood actually labelled - 1.0 once
     // the labels are current, less before the first flood or after an edit.
     F32 airCoverage(U64 region_handle) const;
-    // </SS:Nexii>
 
-    // <SS:Nexii> Drainage topology over one landing-surface grid - the
-    // DRAINAGE_NETWORK channel core, materialised synchronously over whatever
-    // SurfaceGrid the caller already holds (the surface field's geometry, at
-    // its own n). A Barnes priority flood fills every depression to its spill
-    // elevation; a cell sitting below that level is a pool member (standing
-    // water, the figure that retires the surface field's local dips check);
-    // flow directions are D8 down the *filled* surface, so a pool's water
-    // drains toward its spill outlet rather than into its own floor. Nothing
-    // is cached here: the grid carries the geometry serial and the caller
-    // gates retraces on it already. Per-span levels wait on the multi-peel
-    // store; this is the landing-surface level the design ships first.
+    // <SS:Nexii> Drainage topology over one landing-surface grid - the DRAINAGE_NETWORK channel core, materialised synchronously over whatever SurfaceGrid the caller already holds (the surface field's geometry, at its own n). A Barnes priority flood fills every depression to its spill elevation; a cell below that level is a pool member (standing water, the figure that retires the surface field's local dips check); flow directions are D8 down the *filled* surface, so a pool's water drains toward its spill outlet rather than into its own floor. Nothing is cached here: the grid carries the geometry serial and the caller already gates retraces on it. Per-span levels wait on the multi-peel store; this is the landing-surface level the design ships first.
     struct Drainage
     {
         std::vector<F32> mSpill;      // fill elevation per cell, NODATA where unmapped
@@ -199,7 +169,6 @@ public:
                                       // ((dy+1)*3 + (dx+1)); 4 = no outflow (sink or drain edge)
     };
     bool buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out) const;
-    // </SS:Nexii>
 
     bool tileValid(U64 region_handle) const;
     U32 geometrySerial(U64 region_handle) const;
@@ -215,22 +184,19 @@ public:
     F64 tileAge(const LLVector3& pos_agent) const;
     S32 effectiveBands(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The world field's own overlay: what the capture saw, what the
-    // air flood decided, and what the drainage pass reads - view picked by
-    // SSWorldFieldDebugView, distance-thinned like the wind flowmap's overlay.
+    // <SS:Nexii> The world field's own overlay: what the capture saw, what the air flood decided, and what the drainage pass reads - view picked by SSWorldFieldDebugView, distance-thinned like the wind flowmap's overlay.
     void renderDebug();
-    // </SS:Nexii>
 
 private:
     static constexpr S32 MAX_BANDS = 24;
     static constexpr U32 MAX_TILES = 4;
     static constexpr F64 DIRTY_MIN_INTERVAL = 2.0;
     static constexpr F64 BAND_MIN_INTERVAL = 0.05;
-    // This many consecutive bands with nothing in them end a full build:
-    // bands are swept bottom-up, so empty runs only occur above all content
-    // that the ceiling setting covers. Skyboxes above the resulting ceiling
-    // are invisible to the field until SSWorldFieldCeiling is raised - the
-    // same practical shape as the wind map's band.
+    // This many consecutive empty bands end a full build: bands are swept
+    // bottom-up, so empty runs only occur above all content the ceiling
+    // setting covers. Skyboxes above the resulting ceiling are invisible to
+    // the field until SSWorldFieldCeiling is raised - the same practical
+    // shape as the wind map's band.
     static constexpr S32 EMPTY_BANDS_TO_STOP = 3;
 
     struct Tile
@@ -254,11 +220,11 @@ private:
 
         // Air connectivity labels, EAirLabel per band-cell, same layout as
         // mBandTop. Valid only while mAirSerial matches mGeomSerial - an edit
-        // invalidates them until the flood re-runs behind the next commit.
+        // invalidates them until the flood re-runs on the next commit.
         std::vector<U8> mAirLabel;
 
         // Air-connectivity occlusion depth, same layout and validity gate as
-        // mAirLabel: for every air band-cell the shortest 6-connected distance
+        // mAirLabel: per air band-cell the shortest 6-connected distance in
         // in cells to an AIR_OUTSIDE cell (0 on the frontier itself). Interior
         // cells never reach the outside through air, so they keep
         // AIR_DEPTH_UNREACHED - "maximally enclosed" is exactly the number the
@@ -319,18 +285,15 @@ private:
     Build mBuild;
 
     // Registered when the surface-field source switch is on; the field reads
-    // the setting rather than holding a handle for it, so the switch is one
-    // settings entry and the wet field's plumbing stays untouched. The
-    // interest refcounts live in file statics so a handle's deleter is valid
-    // for the life of the process regardless of singleton teardown order.
+    // the setting rather than holding a handle, so the switch is one settings
+    // entry and the wet field's plumbing stays untouched. The interest
+    // refcounts live in file statics so a handle's deleter stays valid for
+    // the process's life regardless of singleton teardown order.
     bool surfaceTopDemanded() const;
 
     LLRenderTarget mTarget;
 
-    // <SS:Nexii> One band readback in flight, served by SSGLReadback. mTarget
-    // must not be re-rendered (or torn down) until the outstanding read lands:
-    // mReadbackPending gated by advanceBuild()/capture, and a clear requested
-    // mid-read is deferred to the read's completion.
+    // <SS:Nexii> One band readback in flight, served by SSGLReadback. mTarget must not be re-rendered (or torn down) until the outstanding read lands: advanceBuild()/capture gate on mReadbackPending, and a clear requested mid-read defers to the read's completion.
     bool mReadbackPending = false;
     bool mClearPending = false;
 
@@ -340,7 +303,6 @@ private:
     // both move it.
     bool mFloodBusy = false;
     U32 mFloodGeneration = 0;
-    // </SS:Nexii>
 
     F64 mNow = 0.0;
     F64 mLastBandAt = 0.0;

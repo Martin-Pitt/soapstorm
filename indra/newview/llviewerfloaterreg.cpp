@@ -698,10 +698,8 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
     LLFloaterReg::add("ss_atmo_audio", "floater_ss_atmo_audio.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("ss_atmo_sim", "floater_ss_atmo_sim.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSimulation>);
-    // </SS:Nexii>
     // <SS:Nexii> Atmo Magic world field settings
     LLFloaterReg::add("ss_atmo_worldfield", "floater_ss_atmo_worldfield.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterWorldField>);
-    // </SS:Nexii>
     // <SS:Nexii> Atmo Magic unified environment (independent of v2 weather above)
     LLFloaterReg::add("ss_atmo_env", "floater_ss_atmo_env.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnv>);
     LLFloaterReg::add("ss_atmo_planetary", "floater_ss_atmo_planetary.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoPlanetary>);
@@ -709,7 +707,6 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_sky_import", "floater_ss_atmo_sky_import.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoSkyImport>); // <SS:Nexii> Atmo Magic EEP sky import
     LLFloaterReg::add("ss_sound_list", "floater_ss_sound_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSoundList>);
     LLFloaterReg::add("ss_texture_list", "floater_ss_texture_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterTextureList>);
-    // </SS:Nexii>
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).
 	// LLFloaterReg::add(PHOTOTOOLS_FLOATER, "floater_phototools.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FloaterQuickPrefs>); // Original line with likely typo

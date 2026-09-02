@@ -134,8 +134,7 @@ bool SSFloaterPreset::postBuild()
 // Opens on the named preset (or the active one).
 void SSFloaterPreset::onOpen(const LLSD& key)
 {
-    // <SS:Nexii> A map key carries the scope; a bare string is the viewer-scope call this floater
-    // has always taken, so existing callers are unchanged.
+    // <SS:Nexii> A map key carries the scope; a bare string is the viewer-scope call this floater has always taken, so existing callers are unchanged.
     std::string want;
     if (key.isMap())
     {
@@ -170,7 +169,7 @@ void SSFloaterPreset::onOpen(const LLSD& key)
     refreshTitle();
 }
 
-// The environment's type names, from the asset rather than from the staged list, so a type staged
+// The environment's type names, from the asset rather than the staged list, so a type staged
 // by something else cannot masquerade as one this environment owns.
 std::vector<std::string> SSFloaterPreset::environmentTypeNames() const
 {
@@ -515,8 +514,8 @@ void SSFloaterPreset::onClickNew()
 
     mEdited.mName = name;
     mEdited.mBuiltIn = false;
-    // Deriving carries a full copy rather than a reference to the parent, so a viewer update that
-    // retunes the shipped type it came from cannot silently change a region that ships this one.
+    // Deriving carries a full copy, not a reference to the parent, so a viewer update that
+    // retunes the shipped type it came from cannot silently change a region shipping this one.
     mEdited.mFromEnvironment = mEnvironmentScope;
     if (mEnvironmentScope) saveToEnvironment();
     applyLive();
@@ -573,7 +572,7 @@ void SSFloaterPreset::onClickRename()
     if (mEnvironmentScope)
     {
         // Rekey the asset, then follow the reference through every keyframe that named the old
-        // type - otherwise the rename would leave those keyframes pointing at nothing.
+        // type - otherwise the rename leaves those keyframes pointing at nothing.
         SSAtmoEnvManager* env = SSAtmoEnvManager::getInstance();
         if (env->hasAsset())
         {

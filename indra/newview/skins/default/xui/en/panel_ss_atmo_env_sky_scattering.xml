@@ -9,17 +9,7 @@
  top="0"
  width="580"
  height="540">
-    <!-- <SS:Nexii> Atmo Magic: Atmosphere > Atmosphere sub-tab. The
-         parameter set, row order and grouping mirror EEP's own Atmosphere
-         panel (panel_settings_sky_atmos.xml) - colours, then the
-         haze/density block read left column first - ranges included, the
-         difference being that every one of them is keyframable. The
-         PBR-era dials (sky moisture, droplet radius, ice, probe
-         ambiance) are here in EEP's own positions. Sun/moon azimuth and
-         elevation are deliberately absent from this tab family: position
-         is the Planetary tab job, computed from the home body, so these
-         panels only ever say what the light looks like, never where it
-         comes from. -->
+    <!-- <SS:Nexii> Atmo Magic: Atmosphere > Atmosphere sub-tab. The parameter set, row order and grouping mirror EEP's own Atmosphere panel (panel_settings_sky_atmos.xml) - colours, then the haze/density block read left column first - ranges included, the difference being that every one of them is keyframable. The PBR-era dials (sky moisture, droplet radius, ice, probe ambiance) are here in EEP's own positions. Sun/moon azimuth and elevation are deliberately absent from this tab family: position is the Planetary tab job, computed from the home body, so these panels only ever say what the light looks like, never where it comes from. -->
 
     <text
      follows="left|top"
@@ -626,12 +616,7 @@
      image_unselected="PushButton_Off"
      hover_glow_amount="0.15"
      label="" />
-    <!-- <SS:Nexii> Atmo Magic: the optics group. These three are not scattering dials
-         despite EEP filing them beside them: skyF.glsl multiplies the rainbow map lookup by
-         moisture_level and the 22 degree halo lookup by ice_level, with droplet radius
-         setting the arc geometry between them. Labelled for what they draw. The UI prefix is
-         atmo_rainbow while the asset field stays mSkyMoistureLevel and the LLSD key stays
-         moisture_level - the serialised form is EEP's and must not drift. -->
+    <!-- <SS:Nexii> Atmo Magic: the optics group. These three are not scattering dials despite EEP filing them beside them: skyF.glsl multiplies the rainbow map lookup by moisture_level and the 22 degree halo lookup by ice_level, with droplet radius setting the arc geometry between them. Labelled for what they draw. The UI prefix is atmo_rainbow while the asset field stays mSkyMoistureLevel and the LLSD key stays moisture_level - the serialised form is EEP's and must not drift. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -881,18 +866,7 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
-         sections grouped by the tab each mapping reaches) - the tuning
-         surface for how far this track's weather may bend the values on
-         this tab.
-
-         Positioned by an absolute top against the panel's own height rather
-         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
-         measured downward from the panel's top edge, so that put the button
-         at the very top of the panel, overlapping the rows there and
-         reading as a stray control floating above the tab. Only a negative
-         value would have meant "up from the bottom", and an absolute top is
-         plainer than relying on either reading. -->
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater, sections grouped by the tab each mapping reaches) - the tuning surface for how far this track's weather may bend the values on this tab. Positioned by an absolute top against the panel's own height rather than by bottom="8". Under layout="topleft" a POSITIVE bottom is measured downward from the panel's top edge, so that put the button at the very top of the panel, overlapping the rows there and reading as a stray control floating above the tab. Only a negative value would have meant "up from the bottom", and an absolute top is plainer than relying on either reading. -->
     <button
      follows="left|bottom"
      layout="topleft"

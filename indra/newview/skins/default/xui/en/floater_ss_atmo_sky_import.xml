@@ -10,19 +10,7 @@
  single_instance="true"
  title="Import EEP Sky"
  width="440">
-    <!-- <SS:Nexii> Atmo Magic: a dropped EEP sky arrives as one asset, but its values read as
-         separate looks - the haze is not the cloud layer is not the light. This floater asks
-         which groupings to stamp into the track before anything happens; the fetch and the
-         full-perm gate have already run by the time it opens, so every group listed here is
-         real, imported data waiting for a yes.
-
-         Groupings deliberately mirror what a sky actually populates (the Atmosphere & Lighting
-         and Sky Dome tabs) rather than the editor's whole tab set - a sky cannot bring water,
-         weather or planets with it. The Sun and Moon rows are conditional: they appear only
-         when the target track still carries the STANDARD sun/moon bodies, because a sky states
-         what its discs draw like (angular scale, texture) while a body stores what it is, and
-         the import translates one into the other rather than stamping keyframes - something it
-         may only do to a body the author has not redesigned. -->
+    <!-- <SS:Nexii> Atmo Magic: a dropped EEP sky arrives as one asset, but its values read as separate looks - the haze is not the cloud layer is not the light. This floater asks which groupings to stamp into the track before anything happens; the fetch and the full-perm gate have already run by the time it opens, so every group listed here is real, imported data waiting for a yes. Groupings deliberately mirror what a sky actually populates (the Atmosphere & Lighting and Sky Dome tabs) rather than the editor's whole tab set - a sky cannot bring water, weather or planets with it. The Sun and Moon rows are conditional: they appear only when the target track still carries the STANDARD sun/moon bodies, because a sky states what its discs draw like (angular scale, texture) while a body stores what it is, and the import translates one into the other rather than stamping keyframes - something it may only do to a body the author has not redesigned. -->
 
     <text
      follows="left|top"

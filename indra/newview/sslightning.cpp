@@ -56,8 +56,7 @@ namespace
     const F32 LEADER_MAX_S = 1.2f;
     const F32 LEADER_GLOW = 0.12f;
 
-    // <SS:Nexii> The visible speed the leader front crawls the channel at, in metres per
-    // second. Long bolts visibly take time to travel; short ones still snap. </SS:Nexii>
+    // <SS:Nexii> Visible speed the leader front crawls the channel at, m/s. Long bolts visibly take time to travel; short ones still snap.
     const F32 LEADER_SPEED_M_S = 2800.f;
 
     const F32 THUNDER_SHADOW_ZONE_M = 20000.f;
@@ -72,8 +71,8 @@ namespace
 
     const S32 MAX_CHANNEL_NODES = 1000;
 
-    // Ground-strike branch exclusion: a cone about the main line's foot - apex held over
-    // the attachment, half-angle rolled per strike - and a floor above the ground.
+    // Ground-strike branch exclusion: a cone about the main line's foot - apex held over the
+    // attachment, half-angle rolled per strike - and a floor above ground.
     const F32 BRANCH_CONE_APEX_M = 80.f;
     const F32 BRANCH_CONE_HALF_ANGLE_MIN_DEG = 20.f;
     const F32 BRANCH_CONE_HALF_ANGLE_MAX_DEG = 40.f;
@@ -84,24 +83,14 @@ namespace
 
     const F32 PREPARE_LEAD_S = 10.f;
 
-    // <SS:Nexii> The temperature mix of the charge network, spanning the SAME season rack as the
-    // cloud altitudes: +35C and warmer is all negative cloud-base discharges (the summer
-    // heatwave norm), the mix slides through spring and autumn, and -15C and colder is all
-    // positive anvil bolts (deep winter), with the summer's own few positive strikes growing
-    // out of that slide as the ridges offer them up. </SS:Nexii>
+    // <SS:Nexii> Charge network's temperature mix, spanning the SAME season rack as cloud altitudes: +35C and warmer is all negative cloud-base discharges (summer heatwave norm), sliding through spring and autumn, -15C and colder all positive anvil bolts (deep winter), the summer's few positive strikes growing out of that slide where the ridges offer them.
     const F32 POSITIVE_WARM_C = 35.f;
     const F32 POSITIVE_COLD_C = -15.f;
 
-    // <SS:Nexii> How many positive discharges become bolts from the blue - the long near-
-    // horizontal trunk out of the anvil, striking ground miles from the storm. The rest of the
-    // positive strikes still come off the top of the cloud, just closer to the deck they came
-    // from. </SS:Nexii>
+    // <SS:Nexii> How many positive discharges become bolts from the blue - the long near-horizontal trunk out of the anvil striking ground miles from the storm. The rest still come off the cloud top, just closer to their deck.
     const F32 BLUE_ODDS_POSITIVE = 0.30f;
 
-    // <SS:Nexii> A bolt from the blue's geometry, tuned for the 4km region the weather lives in
-    // and the 2km draw distance: the origin is the storm itself, miles off at the anvil crown
-    // (beyond the far clip, exactly where the storm appears to be), and the ground strike lands
-    // within view - the visible centre of its own far-flung trunk. </SS:Nexii>
+    // <SS:Nexii> Bolt-from-the-blue geometry, tuned for the 4km weather region and 2km draw: the origin is the storm itself, miles off at the anvil crown (beyond the far clip, exactly where the storm appears to be), the ground strike landing within view - the visible centre of its own far-flung trunk.
     const F32 BLUE_ORIGIN_MIN_M = 5000.f;
     const F32 BLUE_ORIGIN_MAX_M = 14000.f;
     const F32 BLUE_GROUND_MIN_M = 400.f;
@@ -113,9 +102,9 @@ namespace
         return gSavedSettings.controlExists(name) ? (F32)gSavedSettings.getF32(name) : fallback;
     }
 
-    // Debug strikes spawn as far ahead as the anticipation effect needs, so the slider's
-    // charge window fits inside a button-triggered strike the way it does a scheduled one.
-    // The floor keeps the buttons feeling deliberate when anticipation is low or zero.
+    // Debug strikes spawn as far ahead as the anticipation effect needs, so the slider's charge
+    // window fits inside a button-triggered strike as it does a scheduled one. The floor keeps
+    // the buttons feeling deliberate when anticipation is low or zero.
     F32 debugStrikeLeadS()
     {
         const F32 anticipation = llclamp(settingF("SSAtmoLightningAnticipation", ANTICIPATION_DEFAULT_S), 0.f, ANTICIPATION_MAX_S);
@@ -135,7 +124,7 @@ const char* SSLightning::kindName(SSStrikeKind k)
     }
 }
 
-// Debug overlay colour per strike kind - the markers and the countdown labels share it, so a glance tells the kinds apart.
+// Debug overlay colour per strike kind - shared by markers and countdown labels so a glance tells the kinds apart.
 const LLColor4& SSLightning::kindDebugColor(SSStrikeKind k)
 {
     static const LLColor4 sheet(0.2f, 0.9f, 1.f, 0.75f);
@@ -149,17 +138,14 @@ const LLColor4& SSLightning::kindDebugColor(SSStrikeKind k)
     }
 }
 
-// <SS:Nexii> The charge network's temperature mix: +35C and above is the summer all-negative
-// world, the mix slides across the whole season range, and -15C and below is the winter
-// all-positive one. Spawn rolls each strike against this; the overlay reads it to label the
-// mood. </SS:Nexii>
+// <SS:Nexii> Charge network's temperature mix: +35C and above is summer's all-negative world, sliding across the whole season range, -15C and below winter's all-positive one. Spawn rolls each strike against this; the overlay reads it to label the mood.
 F32 SSLightning::positiveSkew(F32 temperature_c)
 {
     return llclamp((POSITIVE_WARM_C - temperature_c)
                    / (POSITIVE_WARM_C - POSITIVE_COLD_C), 0.f, 1.f);
 }
 
-// Exports the brightest live strikes as deferred point lights, positioned at each channel's node nearest the camera.
+// Exports the brightest live strikes as deferred point lights, one per channel at the node nearest the camera.
 S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
                              std::vector<LLColor3>& out_color, S32 max_count) const
 {
@@ -190,8 +176,7 @@ S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
             if (d2 < best_d2) { best_d2 = d2; best = node.mPos; }
         }
 
-        // <SS:Nexii> A positive bolt's power throws its light further - the anvil strike is the
-        // storm's heavy hitter, ten times the current of a negative discharge. </SS:Nexii>
+        // <SS:Nexii> A positive bolt's power throws its light further - the anvil strike is the storm's heavy hitter, ten times a negative discharge's current.
         const F32 radius = llclamp(sqrtf(best_d2) * 0.6f * llmax(strike.mPower, 1.f), 60.f, 1500.f);
 
         if (sqrtf(best_d2) - radius > MAX_FAR_CLIP) continue;
@@ -213,10 +198,10 @@ static void ss_kill_strike_text(SSStrike& strike)
     }
 }
 
-// True when a point falls inside a ground strike's branch exclusion: below the floor held
-// over the attachment, or down in the cone about the main line's descent - apex 80m over
-// the ground with a half-angle rolled 20-40deg. Branches off the trunk are what this keeps
-// away from the strike point; the trunk itself never asks.
+// True when a point falls inside a ground strike's branch exclusion: below the floor held over
+// the attachment, or inside the cone about the main line's descent - apex 80m over the ground,
+// half-angle rolled 20-40deg. Keeps trunk branches away from the strike point; the trunk itself
+// never asks.
 static bool ss_branch_forbidden(const SSStrike& strike, const LLVector3& pos)
 {
     if (!strike.mBranchLimits) return false;
@@ -251,7 +236,7 @@ F64 SSLightning::nextStrikeIn() const
     return llmax(0.0, mNextStrikeAt - SSAtmoMagic::getInstance()->sharedTime());
 }
 
-// Per-frame drive: schedules strikes from convection (or the track's intervals), prepares each a lead early, advances the live ones and gathers the frame's flash.
+// Per-frame drive: schedules strikes from convection (or the track's intervals), prepares each a lead early, advances the live ones, gathers the frame's flash.
 void SSLightning::idle(F32 dt)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
@@ -267,11 +252,7 @@ void SSLightning::idle(F32 dt)
 
     const F32 convection = atmo->turbulence();
 
-    // <SS:Nexii> Cold stretches the intervals: the same convection that rattles a summer sky
-    // every few seconds is the rare winter storm when the temperature is against it. The
-    // resolver bakes the same scale into its own interval answers; this is the no-interval
-    // fallback's twin, so track-weather and cube-weather never disagree about the season.
-    // </SS:Nexii>
+    // <SS:Nexii> Cold stretches the intervals: the convection that rattles a summer sky every few seconds is the rare winter storm when temperature is against it. The resolver bakes the same scale into its own answers; this is the no-interval fallback's twin, so track-weather and cube-weather never disagree about the season.
     const F32 season = llmax(
         SSAtmoEnvWeatherResolver::lightningTemperatureScale(atmo->temperatureC()), 0.02f);
 
@@ -315,12 +296,7 @@ void SSLightning::idle(F32 dt)
         }
     }
 
-    // <SS:Nexii> The bolt from the blue: while a storm is on its way (the weather cube's next
-    // keyframe stormier than now, the storm approaching from upwind), lightning reaches ahead
-    // of it - rare positive anvil bolts out of the upwind, each striking the ground miles from
-    // its cloud, their rumble trailing in over the speed of sound. This scheduler is its OWN
-    // clock: it wants strikes before the current weather has turned thundery at all, so it
-    // ignores the ordinary interval and only needs the weather to be live.
+    // <SS:Nexii> The bolt from the blue: while a storm approaches (the cube's next keyframe stormier than now, upwind), lightning reaches ahead - rare positive anvil bolts out of the upwind, striking ground miles from their cloud, rumble trailing in over the speed of sound. This scheduler is its OWN clock: it wants strikes before the weather has turned thundery, so it ignores the ordinary interval and only needs the weather live.
     static LLCachedControl<bool> blue_setting(gSavedSettings, "SSAtmoLightningBlue", true);
     const F32 approach = atmo->stormApproach();
     if (!blue_setting || approach <= 0.02f || !atmo->isEnabled() || !enabled || !atmo->lightningOn())
@@ -377,7 +353,7 @@ void SSLightning::idle(F32 dt)
                    mStrikes.end());
 }
 
-// Debug button: a strike in front of the camera with a short lead, so it still sounds like a scheduled one.
+// Debug button: a strike ahead of the camera with a short lead, still sounding scheduled.
 void SSLightning::triggerNow()
 {
     const LLVector3 at = LLViewerCamera::getInstance()->getAtAxis();
@@ -394,7 +370,7 @@ void SSLightning::triggerNow()
     mPrepared = false;
 }
 
-// Debug button: a ground strike where the camera ray through the lower third of the view meets land or a build, so the mark lands where you are looking rather than wherever the roll put it.
+// Debug button: a ground strike where the camera ray through the view's lower third meets land or a build - the mark lands where you look, not wherever the roll put it.
 void SSLightning::triggerGroundNow()
 {
     if (!gViewerWindow) return;
@@ -419,7 +395,7 @@ void SSLightning::triggerGroundNow()
     }
     else if (dir.mV[VZ] < -0.01f)
     {
-        // Open sky along the whole ray (the surface is past the far clip): walk it down to where it dips under the terrain.
+        // Open sky along the whole ray (surface past the far clip): walk it down to where it dips under terrain.
         for (F32 d = 50.f; d < MAX_FAR_CLIP; d += 32.f)
         {
             const LLVector3 p = cam + dir * d;
@@ -438,7 +414,7 @@ void SSLightning::triggerGroundNow()
     mPrepared = false;
 }
 
-// Builds a full strike for a future fire time: kind, polarity, placement, attachment, channel, and thunder handed to the soundscape with its lead. A forced kind or ground point (debug buttons) skips the rolls for that part; a forced blue (the storm-approach anticipation) is always a positive bolt from the blue.
+// Builds a full strike for a future fire time: kind, polarity, placement, attachment, channel, thunder to the soundscape with its lead. A forced kind or ground point (debug buttons) skips that part's rolls; a forced blue (storm-approach anticipation) is always a positive bolt from the blue.
 void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force_dist,
                         SSStrikeKind force_kind, const LLVector3* force_ground,
                         bool force_blue)
@@ -453,9 +429,9 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     strike.mFireAt = fire_at;
     strike.mIntensity = llclamp(intensity, 0.f, 1.f);
 
-    // Debug buttons force their kind and/or attachment; those strikes are deliberately aimed,
-    // so they are exempt from the under deck's re-route to cloud-to-cloud. Same for the
-    // bolt-from-the-blue: it is aimed at the storm it reaches ahead of.
+    // Debug buttons force their kind and/or attachment; deliberately aimed, they are exempt from
+    // the under deck's re-route to cloud-to-cloud. Same for the bolt from the blue: it aims at
+    // the storm it reaches ahead of.
     strike.mForced = (force_kind < STRIKE_KIND_COUNT) || (force_ground != nullptr) || force_blue;
 
     if (force_kind < STRIKE_KIND_COUNT)
@@ -481,11 +457,7 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         }
     }
 
-    // <SS:Nexii> Polarity by temperature: the summer network runs negative off the cloud base,
-    // the winter storm is the positive anvil's world, the mix sliding between. A bolt from the
-    // blue is always positive - it IS an anvil discharge, just one that travelled. Rolled from
-    // the same deterministic stream as everything else, so every client agrees on the charge.
-    // </SS:Nexii>
+    // <SS:Nexii> Polarity by temperature: summer runs negative off the cloud base, winter's storm is the positive anvil's world, sliding between. A bolt from the blue is always positive - it IS an anvil discharge, just one that travelled. Rolled from the same deterministic stream as everything else, so every client agrees on the charge.
     if (!force_blue)
     {
         static LLCachedControl<bool> polarity_setting(gSavedSettings, "SSAtmoLightningPolarity", true);
@@ -499,18 +471,14 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         strike.mPositive = true;
     }
 
-    // <SS:Nexii> Some positive discharges are bolts from the blue: out of the anvil at the
-    // storm's edge, running the gap sideways for miles before they fall on ground far away. The
-    // rest of the positive strikes still come off the top of the cloud, closer to home. </SS:Nexii>
+    // <SS:Nexii> Some positive discharges are bolts from the blue: out of the anvil at the storm's edge, running the gap sideways for miles before falling far away. The rest of the positive strikes come off the cloud top, closer to home.
     strike.mBlue = force_blue || (strike.mPositive && rng.frand() < BLUE_ODDS_POSITIVE);
     if (strike.mBlue)
     {
         strike.mKind = STRIKE_GROUND;
     }
 
-    // <SS:Nexii> The positive stroke's character: a rapid series of quick pulses that hold the
-    // glow longer - the winter storm's heavy hitter, ten times the current of a negative
-    // discharge, throwing its light further. Negative bolts keep the sharp single snap. </SS:Nexii>
+    // <SS:Nexii> The positive stroke's character: a rapid series of quick pulses holding the glow longer - the winter storm's heavy hitter, ten times a negative discharge's current, throwing its light further. Negative bolts keep the sharp single snap.
     if (strike.mPositive)
     {
         strike.mStrokesMin = 4;
@@ -532,10 +500,7 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         band_hi = llmax(field->cloudTopZ(), band_lo + 50.f);
     }
 
-    // <SS:Nexii> Where on the cloud the bolt comes from, by polarity: negative charges sit low
-    // in the deck (a summer storm's base is where the charge concentrates), positive bolts are
-    // anvil discharges - out of the TOP of the cloud, up to and above its lid. A bolt from the
-    // blue sits above the deck entirely, at the anvil crown. </SS:Nexii>
+    // <SS:Nexii> Where the bolt comes from, by polarity: negative charges sit low in the deck (a summer storm's base concentrates the charge), positive bolts are anvil discharges - out of the cloud's TOP, up to and above its lid. A bolt from the blue sits above the deck entirely, at the anvil crown.
     F32 origin_lo = band_lo;
     F32 origin_hi = band_hi;
     if (!strike.mBlue)
@@ -553,7 +518,7 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         }
     }
 
-    // Resolves the land height at a point, then - for ground strikes - lets the tall-structure
+    // Resolves land height at a point, then - for ground strikes - lets the tall-structure
     // capture pull the attachment toward anything worth hitting nearby.
     auto resolve_ground = [&](const LLVector3& at) -> LLVector3
     {
@@ -599,20 +564,15 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
 
     if (force_ground)
     {
-        // Debug placement: the bolt anchors at the given point exactly - no terrain resolve, no attach-bias
-        // search - with the cloud origin straight above it.
+        // Debug placement: the bolt anchors at the given point exactly - no terrain resolve, no
+        // attach-bias search - with the cloud origin straight above it.
         strike.mGround = *force_ground;
         strike.mOrigin.set(strike.mGround.mV[VX], strike.mGround.mV[VY],
                            origin_lo + rng.frand() * (origin_hi - origin_lo));
     }
     else if (strike.mBlue)
     {
-        // <SS:Nexii> The bolt from the blue's geometry: the origin IS the storm - up at the
-        // anvil crown, miles off, far past the draw distance where the approaching storm sits -
-        // and the ground strike lands within view. The trunk runs the whole gap: the long
-        // near-horizontal travel of a positive discharge, arriving at the far clip and striking
-        // the ground. The forced bearing (the storm-approach scheduler's upwind) aims the whole
-        // bolt; otherwise it rolls like any other.
+        // <SS:Nexii> Bolt-from-the-blue geometry: the origin IS the storm - the anvil crown, miles off, far past the draw distance where the approaching storm sits - the ground strike landing within view. The trunk runs the whole gap: a positive discharge's long near-horizontal travel, arriving at the far clip and striking ground. The forced bearing (the storm-approach scheduler's upwind) aims the whole bolt; otherwise it rolls like any other.
         const F32 bearing = (force_bearing > -10.f) ? force_bearing
             : rng.frand(0.f, F_TWO_PI);
         const F32 origin_d = rng.frand(BLUE_ORIGIN_MIN_M, BLUE_ORIGIN_MAX_M);
@@ -639,7 +599,7 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         strike.mGround = resolve_ground(strike.mOrigin);
     }
 
-    // The falloff distance: a blue bolt's visible moment is its ground strike, not its far anvil
+    // Falloff distance: a blue bolt's visible moment is its ground strike, not its far anvil
     // origin - the flash reads by the part the light actually reaches.
     strike.mDistanceM = (strike.mBlue)
         ? (strike.mGround - cam).magVec()
@@ -649,8 +609,7 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     {
         buildChannel(strike, strike.mIntensity);
 
-        // <SS:Nexii> The positive bolt's heavier current: the same channel, a thicker bolt.
-        // </SS:Nexii>
+        // <SS:Nexii> Positive bolt's heavier current: the same channel, a thicker bolt.
         if (strike.mPositive)
         {
             for (SSStrikeNode& node : strike.mChannel) node.mWidth *= 1.35f;
@@ -687,8 +646,8 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     mStrikes.push_back(strike);
 }
 
-// One midpoint-displaced run of channel between two points - the self-similar kinked geometry everything else hangs off. With sag, an in-cloud run also settles below its own endpoints in
-// a smooth arc: the dip that takes a horizontally-travelling bolt under the deck and back up. Trunks to the ground and branches never ask.
+// One midpoint-displaced run of channel between two points - the self-similar kinked geometry everything hangs off. With sag, an in-cloud run settles below its endpoints in
+// a smooth arc: the dip taking a horizontally-travelling bolt under the deck and back up. Ground trunks and branches never ask.
 void SSLightning::growPath(SSStrike& strike, S32 parent,
                            const LLVector3& from, const LLVector3& to,
                            S32 levels, F32 width_start, F32 width_end,
@@ -741,8 +700,8 @@ void SSLightning::growPath(SSStrike& strike, S32 parent,
     }
 
     // The in-cloud dip: a smooth sag between the run's endpoints, deepest mid-run, so the bolt
-    // reads as diving under its own chord (and under the deck) and climbing back rather than
-    // drifting flat. Capped so a short run never folds in on itself.
+    // reads as diving under its own chord (and the deck) and climbing back rather than drifting
+    // flat. Capped so a short run never folds in on itself.
     if (sag && strike.mCloudDipM > 1.f)
     {
         const F32 dip = llmin(strike.mCloudDipM, len * 0.30f);
@@ -777,7 +736,7 @@ void SSLightning::growPath(SSStrike& strike, S32 parent,
     }
 }
 
-// Recursive branches off a run: count and reach proportional to the run, deviated from the local travel direction.
+// Recursive branches off a run: count and reach proportional to the run, deviated from local travel direction.
 void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
                                S32 depth, S32 levels, F32 intensity,
                                SSRandStream& rng, F32 fecundity)
@@ -831,8 +790,8 @@ void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
                      from_node.mWidth * 0.55f, from_node.mWidth * 0.2f,
                      t0, t1, false, rng, sub);
 
-            // The midpoint wander can still carry the run into the cone or under the floor:
-            // roll the grown nodes back and try somewhere else.
+            // Midpoint wander can still carry the run into the cone or under the floor:
+            // roll the grown nodes back and try elsewhere.
             bool rejected = false;
             for (const S32 idx : sub)
             {
@@ -862,11 +821,7 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     const bool to_ground = (strike.mKind == STRIKE_GROUND);
 
-    // <SS:Nexii> Under-deck re-route: with an under deck between origin and ground, most ground
-    // strikes - especially the ones over the void or falling through the gaps of a floating
-    // build - stop being bolts to nowhere and become cloud-to-cloud forks with branching ends
-    // inside that deck. Forced debug strikes keep their kind.
-    // [interaction: SSVolCloud under deck] </SS:Nexii>
+    // <SS:Nexii> Under-deck re-route: with the under deck between origin and ground, most ground strikes - especially those over the void or falling through a floating build's gaps - stop being bolts to nowhere and become cloud-to-cloud forks with branching ends inside that deck. Forced debug strikes keep their kind. [interaction: SSVolCloud under deck]
     if (to_ground && underDeckDivert(strike, rng))
     {
         finishChannel(strike);
@@ -875,15 +830,15 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     if (!to_ground)
     {
-        // The in-cloud dip: how far the channel's runs settle below their own chord as they
-        // travel, taking the bolt under the deck's base and back up. Ground trunks stay straight.
+        // The in-cloud dip: how far the channel's runs settle below their chord as they travel,
+        // taking the bolt under the deck's base and back up. Ground trunks stay straight.
         const F32 dip_scale = llclamp(settingF("SSAtmoLightningDip", 1.f), 0.f, 2.f);
         strike.mCloudDipM = rng.frand(70.f, 240.f) * (0.6f + intensity * 0.8f) * dip_scale;
     }
 
     if (to_ground)
     {
-        // Hold forked channels off the strike point: a cone about the main line's descent,
+        // Keeps forked channels off the strike point: a cone about the main line's descent,
         // apex 80m over the attachment with a 20-40deg half-angle, and a floor 20-40m over it.
         LLVector3 axis = strike.mGround - strike.mOrigin;
         if (axis.normalize() <= 0.f) axis.set(0.f, 0.f, -1.f);
@@ -906,8 +861,8 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     if (rng.frand() < (to_ground ? 0.25f : 0.35f))
     {
-        // All primary geometry grows before any branches - the horizontal spread must not
-        // be left to fight the trunk's forks for the last channel nodes.
+        // All primary geometry grows before any branches - the horizontal spread must not fight
+        // the trunk's forks for the last channel nodes.
         std::vector<S32> trunk;
         if (to_ground)
         {
@@ -946,7 +901,7 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
     {
         // Bidirectional crawler: two runs out of the origin in roughly opposite directions,
         // forked along their length, so both ends carry the branching forks real in-cloud
-        // discharges show. The runs sag, so the bolt dives under the deck and climbs back.
+        // discharges show. The runs sag: the bolt dives under the deck and climbs back.
         const F32 bearing = rng.frand(0.f, F_TWO_PI);
 
         std::vector<S32> run_a, run_b;
@@ -982,9 +937,9 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     if (to_ground)
     {
-        // Horizontal spread off the top, fork-style: a run out of the origin in each
-        // direction, so a ground bolt carries the cloud-level channel a fork does instead
-        // of standing as a bare vertical line.
+        // Horizontal spread off the top, fork-style: a run out of the origin in each direction,
+        // so a ground bolt carries the cloud-level channel a fork does instead of standing as a
+        // bare vertical line.
         const S32 arm_levels = llmax(levels - 2, 3);
         const F32 base_bearing = rng.frand(0.f, F_TWO_PI);
 
@@ -1011,7 +966,7 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
 // After every run, branch and re-route is grown: the leader front sweeps the whole bolt as one
 // continuous crawl, so each node's reach becomes its path distance from the root (normalized to
-// the leader's progress), not a per-run clock - a long channel visibly takes time to travel, and
+// the leader's progress), not a per-run clock - a long channel takes visible time to travel, and
 // a side branch is reached when the front gets there, not when its own run would have finished.
 void SSLightning::finishChannel(SSStrike& strike)
 {
@@ -1039,14 +994,14 @@ void SSLightning::finishChannel(SSStrike& strike)
     }
 }
 
-// The under-deck re-route for ground strikes: with the under deck (the cloud band hung below a
-// floating build) standing between the cloud origin and the ground, the bolt would fall through
-// the void or a gap to nothing. Most such strikes become a cloud-to-cloud crawler inside that
-// deck instead, branching at both ends like the in-cloud discharge it now is. The trunk must
-// actually cross the deck band for the re-route to apply, and the roll scales with how solid
-// the deck is right there - a bolt diving through a hole still re-routes, just a little less
-// certainly than one swallowed by solid cloud. Grows the channel; true when re-routed, so the
-// caller skips all the ground morphologies.
+// The under-deck re-route for ground strikes: with the under deck (the cloud band below a
+// floating build) between origin and ground, the bolt would fall through the void or a gap to
+// nothing. Most such strikes become a cloud-to-cloud crawler inside that deck instead, branching
+// at both ends like the in-cloud discharge it now is. The trunk must actually cross the deck
+// band for the re-route to apply, and the roll scales with how solid the deck is right there -
+// a bolt diving through a hole still re-routes, just a little less certainly than one swallowed
+// by solid cloud. Grows the channel; true when re-routed, so the caller skips all the ground
+// morphologies.
 bool SSLightning::underDeckDivert(SSStrike& strike, SSRandStream& rng)
 {
     if (strike.mForced) return false;
@@ -1073,8 +1028,8 @@ bool SSLightning::underDeckDivert(SSStrike& strike, SSRandStream& rng)
     const S32 depth = llclamp((S32)depth_setting, 0, 5);
 
     // The re-route's root: where the old trunk would have crossed the deck band's middle,
-    // jittered, and the strike is re-held as a fork - stroke physics, sparks and markers all
-    // read cloud-to-cloud from here on.
+    // jittered, the strike re-held as a fork - stroke physics, sparks and markers all read
+    // cloud-to-cloud from here on.
     const F32 band_mid = (deck_lo + deck_hi) * 0.5f;
     const F32 dz = strike.mGround.mV[VZ] - strike.mOrigin.mV[VZ];
     F32 t = (dz != 0.f) ? (band_mid - strike.mOrigin.mV[VZ]) / dz : 0.5f;
@@ -1099,7 +1054,7 @@ bool SSLightning::underDeckDivert(SSStrike& strike, SSRandStream& rng)
     strike.mChannel.reserve(256);
 
     // A bidirectional crawler inside the deck band, forked along both runs - the "branching
-    // forks at either end" the re-routed bolt grows into.
+    // forks at either end" the re-route grows into.
     const F32 bearing = rng.frand(0.f, F_TWO_PI);
     std::vector<S32> run_a, run_b;
     {
@@ -1129,9 +1084,9 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
 
     SSRandStream rng((U32)(strike.mFireAt * 3571.0) ^ 0x11feu);
 
-    // The leader's duration is the channel's own: total path length at a visible crawl speed,
-    // so a bolt spanning kilometres takes clear time to trace out while a nearby short one
-    // snaps in. Sheet strikes have no channel and keep the plain roll.
+    // The leader's duration is the channel's own: total path length at a visible crawl speed, so
+    // a kilometre-spanning bolt takes clear time to trace while a nearby short one snaps. Sheet
+    // strikes have no channel and keep the plain roll.
     const F32 leader_s = (strike.mChannelLenM > 1.f)
         ? llclamp(strike.mChannelLenM
                   / llmax(settingF("SSAtmoLightningLeaderSpeed", LEADER_SPEED_M_S), 100.f)
@@ -1139,9 +1094,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
                   LEADER_MIN_S, LEADER_MAX_S)
         : rng.frand(LEADER_MIN_S, LEADER_MAX_S);
 
-    // <SS:Nexii> The stroke count and timing rolled at spawn: negative bolts keep the sharp
-    // single snap, positive anvil bolts fire their rapid series of quick pulses. The same
-    // strike reads the same every frame - the stream is seeded by the fire time. </SS:Nexii>
+    // <SS:Nexii> Stroke count and timing rolled at spawn: negative bolts keep the sharp single snap, positive anvil bolts fire their rapid series of quick pulses. Each strike reads identically every frame - the stream is seeded by the fire time.
     const S32 strokes = strike.mStrokesMin
         + rng.rand(strike.mStrokesMax - strike.mStrokesMin + 1);
 
@@ -1211,7 +1164,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
         // The stroke's honest exponential decay is only half the story: the tail after it is
         // the dissolve-to-sparks, where the beam breaks apart into individually extinguished
         // segments and dying sparks. The strike lives through that theatre - last pop, ember
-        // linger and margin - before retiring. Slower dissolve settings stretch the window.
+        // linger, margin - before retiring. Slower dissolve settings stretch the window.
         {
             const F32 dissolve = llclamp(settingF("SSAtmoLightningDissolve", 1.f), 0.f, 2.f);
             const F32 tail_s = (dissolve > 0.f)
@@ -1225,9 +1178,9 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
         }
     }
 
-    // During the dissolve tail the real channel is dark, but it keeps a whisper of presence so
-    // the renderer stays live long enough for the dying sparks - the beam is already gone, only
-    // its embers are left, and they need the channel pass running to draw.
+    // During the dissolve tail the real channel is dark but keeps a whisper of presence so the
+    // renderer stays live for the dying sparks - the beam is gone, only its embers remain, and
+    // they need the channel pass running to draw.
     F32 channel_brightness = llclamp(brightness, 0.f, 1.f);
     if (channel_brightness <= 0.001f && !strike.mChannel.empty()
         && strike.mT >= 0.f && !strike.mDone)
@@ -1251,7 +1204,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
         }
         if (strike.mDebugText)
         {
-            // Ground strikes are labelled at the attachment; sheet and fork live in the sky, so float the countdown at their centre instead - sheet at the flash origin, fork at the channel's centroid.
+            // Ground strikes label at the attachment; sheet and fork live in the sky, so float the countdown at their centre - sheet at the flash origin, fork at the channel's centroid.
             LLVector3 label_pos = strike.mGround + LLVector3(0.f, 0.f, 4.f);
             if (strike.mKind == STRIKE_SHEET)
             {

@@ -9,14 +9,7 @@
  top="0"
  width="580"
  height="1180">
-    <!-- <SS:Nexii> Atmo Magic: Clouds > Volumetric Field sub-tab - the
-         storm layer's artist baseline. Live coverage/density derive from
-         these plus the weather cube's moisture/convection (see
-         ssatmoenvcloudfieldstate); the legacy Windlight cloud plane
-         (cirrus) is the Sky Dome sub-tab's, untouched by anything here.
-
-         Units live in the parameter label rather than glued to the number,
-         same as every other tab - one shared right-aligned spinner column. -->
+    <!-- <SS:Nexii> Atmo Magic: Clouds > Volumetric Field sub-tab - the storm layer's artist baseline. Live coverage/density derive from these plus the weather cube's moisture/convection (see ssatmoenvcloudfieldstate); the legacy Windlight cloud plane (cirrus) is the Sky Dome sub-tab's, untouched by anything here. Units live in the parameter label rather than glued to the number, same as every other tab - one shared right-aligned spinner column. -->
 
     <check_box
      follows="left|top"

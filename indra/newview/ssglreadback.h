@@ -35,31 +35,13 @@
 #include <memory>
 #include <vector>
 
-// <SS:Nexii> A generic texture->CPU readback worker. One dedicated thread with
-// its own GL context shared with the viewer's (createSharedContext ->
-// makeContextCurrent -> gGL.init, the LLImageGLThread lifecycle), so a GL
-// readback that would otherwise stall the frame loop - glGetTexImage copies of
-// depth maps, volume data, baked textures - runs behind it. The caller renders
-// into the source texture on the main thread, submits a Job, and the worker
-// waits on a fence (so it never reads a half-written texture), copies the
-// texels into a buffer, and posts the result back to the mainloop queue. No
-// viewer GL state is touched on the worker: the read uses raw GL only, so the
-// worker cannot mutate the main thread's GL state machine (gGL,
-// LLVertexBuffer, the bound-shader statics). This is the generic form of the
-// pattern SSWindFlowMap's SSWindFlowGLWorker proved out, so the atmo systems
-// that read textures (rain shadow, world field bands, wind flow) share one
-// worker instead of each building one.
-//
-// Contract: the source texture must stay allocated, and must not be re-rendered
-// or reallocated, until the Job's completion callback runs. Capture pipelines
-// that reuse one render target (rain shadows, world field bands) serialize by
-// not starting the next render while a readback is outstanding.
+// <SS:Nexii> A generic texture->CPU readback worker. One dedicated thread with its own GL context shared with the viewer's (createSharedContext -> makeContextCurrent -> gGL.init, the LLImageGLThread lifecycle), so readbacks that would otherwise stall the frame loop - glGetTexImage of depth maps, volume data, baked textures - run behind it. The caller renders into the source texture on the main thread and submits a Job; the worker waits on a fence (never reading a half-written texture), copies the texels into a buffer, and posts the result back to the mainloop queue. The worker touches no viewer GL state: the read uses raw GL only, so it cannot mutate the main thread's GL state machine (gGL, LLVertexBuffer, the bound-shader statics). The generic form of the pattern SSWindFlowMap's SSWindFlowGLWorker proved out, so the atmo systems that read textures (rain shadow, world field bands, wind flow) share one worker instead of each building one. Contract: the source texture must stay allocated and unre-rendered, unreallocated until the Job's completion callback runs. Capture pipelines that reuse one render target (rain shadows, world field bands) serialize by not starting the next render while a readback is outstanding.
 class SSGLReadback : public LLSingleton<SSGLReadback>
 {
-    // Both the ctor and dtor are defined out of line, in the .cpp: mWorker is a
-    // unique_ptr to the forward-declared Worker, and an inline ctor would make
-    // every translation unit that includes this header instantiate the
-    // unique_ptr destructor against an incomplete type.
+    // Ctor and dtor are out of line, in the .cpp: mWorker is a unique_ptr to the
+    // forward-declared Worker, and an inline ctor would make every translation
+    // unit including this header instantiate the unique_ptr destructor against
+    // an incomplete type.
     LLSINGLETON(SSGLReadback);
     ~SSGLReadback() override;
 
@@ -75,8 +57,8 @@ public:
         GLenum mFormat = GL_RGBA;
         GLenum mType = GL_UNSIGNED_BYTE;
 
-        // Runs on the readback worker, after the read, with the tightly packed
-        // texels - for CPU transforms that should not run on the main thread.
+        // Runs on the readback worker after the read, with the tightly packed
+        // texels - CPU transforms that should not run on the main thread.
         // Optional.
         std::function<void(const U8* data, size_t bytes)> mConvert;
         // Runs on the main thread with the packed texels once the read (and
@@ -86,21 +68,20 @@ public:
         std::function<void(const U8* data, size_t bytes)> mDone;
     };
 
-    // Submit a texture readback. The read runs on the dedicated worker when one
-    // can be had (SSGLReadbackWorker setting, shared context available) and
-    // synchronously on the calling thread otherwise; either way mDone fires
-    // exactly once. A job whose worker never completes it is finished inline
-    // after a short holdout by poll() (see below), so a dead worker can never
-    // strand a capture.
+    // Submit a texture readback. Runs on the dedicated worker when one can be
+    // had (SSGLReadbackWorker setting, shared context available), synchronously
+    // on the calling thread otherwise; either way mDone fires exactly once. A
+    // job the worker never completes is finished inline after a short holdout
+    // by poll() (see below), so a dead worker can never strand a capture.
     bool submit(const Job& job);
 
     // True when a shared-context worker is (or can be) running.
     bool available();
 
     // Main thread, once a frame: completes jobs the worker has finished (the
-    // low-latency path posts to the mainloop queue) and, if a worker job has
-    // gone unserviced too long, reads it inline and disarms the worker so
-    // every later job stays on the calling thread.
+    // low-latency path posts to the mainloop queue) and, if a job has gone
+    // unserviced too long, reads it inline and disarms the worker so every
+    // later job stays on the calling thread.
     void poll();
 
     // Bytes per texel for the format/type pair - the size submit() reads.
@@ -140,6 +121,5 @@ private:
     bool mDisarmed = false;
 };
 
-// </SS:Nexii>
 
 #endif

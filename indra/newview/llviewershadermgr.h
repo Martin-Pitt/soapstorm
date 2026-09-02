@@ -292,7 +292,6 @@ extern LLGLSLShader         gSSWindProjectProgram;
 extern LLGLSLShader         gSSWindSeedProgram;
 extern LLGLSLShader         gSSWindRestrictProgram;
 extern LLGLSLShader         gSSWindProlongProgram;
-// </SS:Nexii>
 extern LLGLSLShader         gHUDFullbrightProgram;
 extern LLGLSLShader         gDeferredFullbrightAlphaMaskProgram;
 extern LLGLSLShader         gHUDFullbrightAlphaMaskProgram;

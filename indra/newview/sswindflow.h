@@ -85,28 +85,14 @@ public:
 
     LLVector3 sample(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> Granular transport reads. The solved field without the gust layer - gusts are a
-    // scalar every consumer applies once per tick, never per cell, which is what keeps the
-    // erosion tick and the spawn walk linear. There is no "ground slab": terrain and builds
-    // slope across many slabs, so the read picks, per column, the first slab whose ceiling
-    // clears the column's own surface height. pos_agent.z IS that surface - callers pass the
-    // field cell's stored height, or the camera's. The grid variant bulk-samples one region's
-    // field lattice for SSGranular::step(); surface_z is the field's n*n height array; cells
-    // outside the tile answer with the ambient wind at full exposure.
+    // <SS:Nexii> Granular transport reads: the solved field minus the gust layer - gusts are a scalar applied once per tick by every consumer, never per cell, which keeps the erosion tick and spawn walk linear. No "ground slab": the read picks, per column, the first slab whose ceiling clears that column's own surface height, as terrain and builds slope across slabs. pos_agent.z IS that surface - callers pass the cell's stored height or the camera's. The grid variant bulk-samples the region's lattice for SSGranular::step(); surface_z is the field's n*n height array; cells outside the tile answer with the ambient wind at full exposure.
     LLVector3 sampleGround(const LLVector3& pos_agent) const;
     bool sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell, const F32* surface_z,
                           std::vector<LLVector4>& out) const;
 
     F32 exposure(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The boundary-layer wind gradient, for anything that must scale the authored
-    // 10m wind to another altitude (the cirrus cloud band). windAlpha() is the roughness-derived
-    // shear exponent of the current camera region; windGradientScale(z_agl) is the power-law
-    // factor v(z)/v_ref = (z/z_ref)^alpha, held constant above the boundary-layer top (~1.5km)
-    // where the air is the free atmosphere. groundRefZ() is the reference ground the gradient
-    // measures z_agl from - the water plane when the region is water, otherwise the region's
-    // true ground. All fall back to the SSAtmoWindFlowGradient setting until a flowmap tile is
-    // solved.
+    // <SS:Nexii> The boundary-layer wind gradient, for anything scaling the authored 10m wind to another altitude (the cirrus cloud band). windAlpha() is the roughness-derived shear exponent of the current camera region; windGradientScale(z_agl) is the power-law factor v(z)/v_ref = (z/z_ref)^alpha, held constant above the boundary-layer top (~1.5km), the free atmosphere. groundRefZ() is the reference ground z_agl measures from - the water plane on water regions, else the region's true ground. All fall back to the SSAtmoWindFlowGradient setting until a flowmap tile is solved.
     F32 windAlpha() const;
     F32 windGradientScale(F32 z_agl) const;
     F32 groundRefZ() const;
@@ -118,9 +104,7 @@ public:
 
     U64 capturedRegion() const { return mCaptureRegion; }
 
-    // <SS:Nexii> A claim on the worldfield's real-geometry capture for the flowmap's region, so
-    // the true-ground read (buildTrueGround) has a valid tile to read. Refreshed when the camera
-    // region changes; released on clear().
+    // <SS:Nexii> A claim on the worldfield's real-geometry capture for the map's region, so the true-ground read (buildTrueGround) has a valid tile. Refreshed when the camera region changes; released on clear().
     void refreshTrueGroundClaim(U64 region_handle);
 
     S32 sliceCount() const;
@@ -141,10 +125,7 @@ public:
     S32 tileCount() const { return (S32)mTiles.size(); }
     bool lastBuildPartial() const { return mLastBuildPartial; }
 
-    // <SS:Nexii> Rebuild telemetry for the info overlay: whether the solve
-    // rides the GL worker thread, the full/partial split, the average partial
-    // box as a share of the tile, how long the last solver block actually took
-    // (even off-main), and the estimated VRAM the solver textures hold.
+    // <SS:Nexii> Rebuild telemetry for the info overlay: whether the solve rode the GL worker thread, the full/partial split, the average partial box as a share of the tile, the last solver block's wall time, and the estimated VRAM the solver textures hold.
     bool workerActive() const { return mWorkerReady; }
     bool lastSolveOnWorker() const { return mLastSolveWorker; }
     S32 partialBuildCount() const { return mPartialBuilds; }
@@ -152,7 +133,6 @@ public:
     F32 partialBoxShare() const;
     F32 workerSolveMS() const { return mSolveBlockMS; }
     F32 vramMB() const;
-    // </SS:Nexii>
 
 private:
     struct Tile
@@ -168,10 +148,7 @@ private:
         F32 mSliceZ[SS_WIND_MAX_SLICES + 1] = { 0.f };
         LLVector3 mAmbient[SS_WIND_MAX_SLICES];
 
-        // <SS:Nexii> The wind-shear exponent of the boundary-layer power law, derived from how
-        // tall and how open the region's surface is (see deriveWindAlpha in sswindflow.cpp). The
-        // reference wind is authored at 10m above open level ground; this alpha scales it upward
-        // through the layer and is also the number cloud drift uses to reach the cirrus altitude.
+        // <SS:Nexii> The wind-shear exponent of the boundary-layer power law, derived from how tall and how open the region's surface is (deriveWindAlpha in sswindflow.cpp). The reference wind is authored at 10m above open level ground; this alpha scales it upward through the layer and is the number cloud drift uses to reach the cirrus altitude.
         F32 mAlpha = 0.16f;
 
         F32 mGroundRef = 0.f;
@@ -183,22 +160,12 @@ private:
 
         std::vector<U8> mSolid;
 
-        // <SS:Nexii> Partial rebuilds: the pressure field from the last solve,
-        // kept so an edit rebuild can warm-start the Poisson relaxation from
-        // the previous answer instead of from zero - the whole reason a local
-        // change can be re-solved in a box against the old field. Fine level
-        // only; the pyramid levels are rebuilt from scratch every time.
+        // <SS:Nexii> Partial rebuilds: the last solve's pressure field, kept so an edit rebuild warm-starts the Poisson relaxation from the previous answer instead of from zero - the whole point of re-solving a local change in a box against the old field. Fine level only; the pyramid levels are rebuilt from scratch every time.
         std::vector<F32> mPressure;
 
         std::vector<F32> mSurfaceTop;
 
-        // <SS:Nexii> The TRUE-GROUND reference per column: the region terrain heightmap,
-        // downsampled to tile resolution and floored by the water plane where it is set. Unlike
-        // the captured mSurfaceTop - which is the topmost solid, a rooftop over a column - this
-        // is the ground the wind profile starts from, so the boundary layer is measured against
-        // the actual terrain. The terrain grid is always complete (objects never occlude it), so
-        // there is no gap fill; a low-resolution read keeps it cheap and smooth. Null while the
-        // tile has not been full-built. </SS:Nexii>
+        // <SS:Nexii> The TRUE-GROUND reference per column: the region terrain heightmap, downsampled to tile resolution and floored by the water plane where set. Unlike the captured mSurfaceTop - the topmost solid, a rooftop over a column - this is the ground the wind profile starts from, so the boundary layer is measured against actual terrain. The terrain grid is always complete (objects never occlude it), so no gap fill; a low-resolution read keeps it cheap and smooth. Null until the tile is full-built.
         std::vector<F32> mGroundZ;
 
         F32 mCarved = 0.f;
@@ -296,12 +263,7 @@ private:
     void bridgePassages(const Tile& tile);
     void uploadBridgedMask(const Tile& tile);
 
-    // <SS:Nexii> Partial rebuild support. hasPendingEdits() is the box-empty
-    // test; partialBoxes() turns a tile's pending edit box into the mask box
-    // (where the solid mask can change), the capture footprint around it, and
-    // the solve box (mask box + a little headwind + everything downwind);
-    // restoreConsumedDirty() returns an abandoned partial build's edits to the
-    // tile so they are not lost.
+    // <SS:Nexii> Partial rebuild support. hasPendingEdits() is the box-empty test; partialBoxes() turns a tile's pending edit box into the mask box (where the solid mask can change), the capture footprint around it, and the solve box (mask box + a little headwind + everything downwind); restoreConsumedDirty() returns an abandoned partial build's edits to the tile so they are not lost.
     static bool hasPendingEdits(const Tile& tile)
     {
         return tile.mDirty && tile.mDirtyC0[0] >= 0 && tile.mDirtyC0[1] >= 0;
@@ -405,13 +367,11 @@ private:
     F64 mPartialAreaSum = 0.0;           // box-area/tile-area, for the average
     U32 mPartialCount = 0;
     std::atomic<F32> mSolveBlockMS{ 0.f }; // solve+readback+convert wall time (worker writes)
-    // </SS:Nexii>
 
     std::string mLastRebuildReason;    // the last logged rebuild driver (throttle)
     F64 mLastRebuildLog = 0.0;
 
-    // <SS:Nexii> The worldfield interest held while this map has a region, so the worldfield
-    // builds its real-geometry tile there for buildTrueGround. Re-claimed on region change.
+    // <SS:Nexii> The worldfield interest held while this map has a region, so the worldfield builds its real-geometry tile there for buildTrueGround. Re-claimed on region change.
     SSWorldField::Interest mTrueGroundClaim;
     U64 mTrueGroundRegion = 0;
 

@@ -158,4 +158,3 @@ vec4 ssFieldAt(vec3 p_agent, vec3 n_agent)
     return vec4(here.y, snow_out, puddle_out, exposure);
 }
 
-// </SS:Nexii>

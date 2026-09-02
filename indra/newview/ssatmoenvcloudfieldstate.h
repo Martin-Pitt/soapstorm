@@ -30,10 +30,7 @@ struct SSAtmoEnvCloudFieldState
 {
     F32 mCoverage = 0.f;
 
-    // <SS:Nexii> The deck's base in WORLD metres: the authored offset above the track floor
-    // (negative below it) with the floor already added. Everything downstream - puff placement,
-    // the dome altitude merge, precipitation's tilt maths - is world-frame and reads this.
-    // </SS:Nexii>
+    // <SS:Nexii> The deck's base in WORLD metres: the authored offset above the track floor (negative below it) with the floor already added. Everything downstream - puff placement, the dome altitude merge, precipitation's tilt maths - is world-frame and reads this.
     F32 mBaseHeightM = 800.f;
     F32 mThicknessM = 0.f;
 
@@ -46,19 +43,13 @@ struct SSAtmoEnvCloudFieldState
     LLUUID mBaseTexture;
     LLUUID mDetailTexture;
 
-    // <SS:Nexii> The base and detail maps' crossfade partners, filled when the day cycle is
-    // mid-fade between two keyframed textures (blend is the eased 0..1 weight; 0 means "no fade,
-    // the partner is unused"). The noise and profile maps deliberately do NOT fade: the CPU field
-    // - puff placement, the convection grid - belongs to exactly one map, so their cut keeps the
-    // geometry and the carving in agreement.
+    // <SS:Nexii> The base and detail maps' crossfade partners, filled when the day cycle is mid-fade between two keyframed textures (blend is the eased 0..1 weight; 0 means "no fade, the partner is unused"). The noise and profile maps deliberately do NOT fade: the CPU field - puff placement, the convection grid - belongs to exactly one map, so their cut keeps the geometry and the carving in agreement.
     LLUUID mBaseTextureNext;
     F32 mBaseTextureBlend = 0.f;
     LLUUID mDetailTextureNext;
     F32 mDetailTextureBlend = 0.f;
 
-    // <SS:Nexii> The convection noise map and its metres-per-tile multiplier, straight off the
-    // authored keyframes - the deck does its own shaping (see ssvolcloud). mProfileTexture is the
-    // vertical profile ramp: none runs the built-in vertical curves.
+    // <SS:Nexii> The convection noise map and its metres-per-tile multiplier, straight off the authored keyframes - the deck does its own shaping (see ssvolcloud). mProfileTexture is the vertical profile ramp: none runs the built-in vertical curves.
     LLUUID mNoiseTexture;
     F32 mNoiseScale = 1.f;
     LLUUID mProfileTexture;
@@ -74,11 +65,7 @@ struct SSAtmoEnvCloudFieldState
 class SSAtmoEnvCloudFieldResolver
 {
 public:
-    // <SS:Nexii> track_floor_z is the owning track's vertical position (SSAtmoEnvTrack::mFloorZ):
-    // the authored base height - and the auto derivation's answer - are offsets above it, so the
-    // whole deck rides the track. The ground track sits at 0, where nothing changes numerically.
-    // temperature_c drives the seasonal altitude: winter air squashes the atmosphere down, so the
-    // deck rides low; summer heat lifts it (SSAtmoCloudSeason). </SS:Nexii>
+    // <SS:Nexii> track_floor_z is the owning track's vertical position (SSAtmoEnvTrack::mFloorZ): the authored base height - and the auto derivation's answer - are offsets above it, so the whole deck rides the track. The ground track sits at 0, where nothing changes numerically. temperature_c drives the seasonal altitude: winter air squashes the atmosphere down, so the deck rides low; summer heat lifts it (SSAtmoCloudSeason).
     static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field, F32 moisture,
                                             F32 convection, F32 temperature_c, F64 phase,
                                             F32 track_floor_z);

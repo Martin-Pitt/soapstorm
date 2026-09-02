@@ -34,8 +34,7 @@
         <menu_item_call.on_enable
                 function="MyEnvironments.EnvironmentEnabled" />
     </menu_item_call>
-    <!-- <SS:Nexii> Atmo Magic: same "atmoenv" creation branch as
-         menu_inventory_add.xml's New Settings submenu -->
+    <!-- <SS:Nexii> Atmo Magic: same "atmoenv" creation branch as menu_inventory_add.xml's New Settings submenu -->
     <menu_item_call
             label="New Atmo Magic"
             layout="topleft"
@@ -44,5 +43,4 @@
                 function="MyEnvironments.DoCreate"
                 parameter="atmoenv"/>
     </menu_item_call>
-    <!-- </SS:Nexii> -->
 </toggleable_menu>

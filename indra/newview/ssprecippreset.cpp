@@ -381,9 +381,9 @@ void SSPrecipPresetManager::stage(const SSPrecipPreset& preset)
 }
 
 // The on-disk version of a preset, ignoring staged edits.
-// Swaps the environment tier out wholesale. Shipped types of the same name are shadowed rather than
-// overwritten: the environment's copy travels with the region, so it is the one that should win
-// while that region's environment is loaded, and refresh() puts the shipped one back afterwards.
+// Swaps the environment tier out wholesale. Same-named shipped types are shadowed rather than
+// overwritten: the environment's copy travels with the region, so it wins
+// while that environment is loaded, and refresh() restores the shipped one after.
 void SSPrecipPresetManager::setEnvironmentPresets(const std::vector<SSPrecipPreset>& presets)
 {
     clearEnvironmentPresets();
@@ -614,8 +614,7 @@ void SSPrecipPresetManager::buildDefaults()
         p.mSnowRate = 0.00004f; p.mSnowMelt = 0.0000045f;
         p.mSnowDepth = 0.09f;   p.mSnowRepose = 46.f;
 
-        // <SS:Nexii> Granular transport: light saltation in a breeze, gentle lee banking,
-        // a little creep moving the drift sheets. The cascade look shares the creep dial.
+        // <SS:Nexii> Granular transport: light saltation in a breeze, gentle lee banking, a little creep moving the drift sheets. The cascade look shares the creep dial.
         p.mSnowLiftRate = 0.002f;   p.mSnowDepositRate = 0.0008f;
         p.mSnowCreepRate = 0.4f;    p.mSnowDriftAge = 2.5f;
 
@@ -641,11 +640,7 @@ void SSPrecipPresetManager::buildDefaults()
         p.mSnowRate = 0.00013f; p.mSnowMelt = 0.0000035f;
         p.mSnowDepth = 0.22f;   p.mSnowRepose = 52.f;
 
-        // <SS:Nexii> Ground-blizzard rates: sustained wind scours the open ground and banks it
-        // in every lee. Erosion must comfortably beat settle (mSnowRate) or the storm never
-        // strips a cell; deposit runs about a fifth of lift, and creep feeds the drift sheets
-        // and the eave spill. The falling-rate figure is rain's - a blizzard dumps as hard as
-        // rain does, and the old 0.15 was why snow skies read empty next to a rain preset.
+        // <SS:Nexii> Ground-blizzard rates: sustained wind scours the open ground and banks it in every lee. Erosion must comfortably beat settle (mSnowRate) or the storm never strips a cell; deposit runs about a fifth of lift, creep feeding the drift sheets and eave spill. The falling rate is rain's - a blizzard dumps as hard as rain does, and the old 0.15 was why snow skies read empty beside a rain preset.
         p.mRate = 0.55f;
         p.mSnowLiftRate = 0.010f;   p.mSnowDepositRate = 0.0015f;
         p.mSnowCreepRate = 1.0f;    p.mSnowDriftAge = 3.5f;
@@ -732,11 +727,7 @@ void SSPrecipPresetManager::buildDefaults()
         mPresets.push_back(p);
     }
 
-    // <SS:Nexii> The sand skin. The granular stack is material-generic: this is
-    // the snow system wearing desert - repose lower (sand slips at 34 degrees),
-    // no melt (wind ablation is the only loss), a tan tint, and the same
-    // transport rates the blizzard carries. A dust veil is the whiteout pass
-    // recoloured by this tint; dune slip faces are the repose-shed cascade.
+    // <SS:Nexii> The sand skin. The granular stack is material-generic: the snow system wearing desert - repose lower (sand slips at 34 degrees), no melt (wind ablation is the only loss), a tan tint, and the blizzard's transport rates. A dust veil is the whiteout pass recoloured by this tint; dune slip faces are the repose-shed cascade.
     {
         SSPrecipPreset p;
         p.mName = "Sand";

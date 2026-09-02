@@ -9,15 +9,7 @@
  top="0"
  width="580"
  height="1180">
-    <!-- <SS:Nexii> Atmo Magic: Clouds > Under Layer sub-tab - a second
-         volumetric field at the bottom of a sky-themed build, so a
-         platform floating above the world can wear its own cloud deck
-         underneath it (with the ocean dialled far below on the Water
-         tab). The rows mirror the Volumetric Field sub-tab one for one
-         and drive the same resolver; the layer starts off and manual.
-
-         Units live in the parameter label rather than glued to the number,
-         same as every other tab - one shared right-aligned spinner column. -->
+    <!-- <SS:Nexii> Atmo Magic: Clouds > Under Layer sub-tab - a second volumetric field at the bottom of a sky-themed build, so a platform floating above the world can wear its own cloud deck underneath it (with the ocean dialled far below on the Water tab). The rows mirror the Volumetric Field sub-tab one for one and drive the same resolver; the layer starts off and manual. Units live in the parameter label rather than glued to the number, same as every other tab - one shared right-aligned spinner column. -->
 
     <check_box
      follows="left|top"

@@ -84,10 +84,7 @@ namespace
 
     const F32 UPDATE_MIN_DELTA_THRESHOLD = 0.0005f;
 
-    // <SS:Nexii> True while any part of a celestial body's quad still clears the horizon. The quad hangs its centre on the body's direction at HEAVENLY_BODY_DIST and reaches vert_enlargement *
-    // scale * HEAVENLY_BODY_FACTOR * disk_radius of that distance above centre (updateHeavenlyBodyGeometry's layout chain, divided back out by the shell distance), swung up along the
-    // horizon-aligned up axis - so the cleared elevation is the centre's plus that reach. An authored disc can span tens of degrees, which a fixed centre-z grace band cannot express: the band has
-    // to grow with the quad, or a gigantic disc pops out of existence while still half risen.
+    // <SS:Nexii> True while any part of a celestial body's quad still clears the horizon. The quad hangs its centre on the body's direction at HEAVENLY_BODY_DIST and reaches vert_enlargement * scale * HEAVENLY_BODY_FACTOR * disk_radius of that distance above centre (updateHeavenlyBodyGeometry's layout chain, divided back out by the shell distance), swung up along the horizon-aligned up axis - so the cleared elevation is the centre's plus that reach. An authored disc can span tens of degrees, which a fixed centre-z grace band cannot express: the band has to grow with the quad, or a gigantic disc pops out of existence while still half risen.
     bool ssQuadClearsHorizon(F32 scale, F32 disk_radius, const LLVector3& dir)
     {
         const F32 z = llclamp(dir.mV[VZ], -1.f, 1.f);
@@ -1086,11 +1083,7 @@ bool LLVOSky::updateGeometry(LLDrawable *drawable)
     // <FS:Ansariel> Factor out instance() calls
     LLEnvironment& environment = LLEnvironment::instance();
 
-    // <SS:Nexii> Stock kills the whole disc the instant the body's CENTRE crosses the horizon (getIsSunUp flips on direction z), which reads as the sun popping out of existence half-set. Under the
-    // horizon clip of an ACTIVE Atmo environment the lower dome's depth hides the sunken part instead, so the disc keeps drawing until it is ENTIRELY below the horizon - a cull that has to scale
-    // with the quad, since a gigantic authored disc is still half risen at centre-set (and far past the fixed ~5.7 degree band a centre-z threshold can express; see ssQuadClearsHorizon). With the
-    // clip off nothing hides the sunken part, so no below-horizon culling applies at all: the unclipped look keeps its body the whole way down. And with no active environment a plain EEP sky keeps
-    // stock's exact disc lifetime.
+    // <SS:Nexii> Stock kills the whole disc the instant the body's CENTRE crosses the horizon (getIsSunUp flips on direction z), which reads as the sun popping out of existence half-set. Under the horizon clip of an ACTIVE Atmo environment the lower dome's depth hides the sunken part instead, so the disc keeps drawing until it is ENTIRELY below the horizon - a cull that has to scale with the quad, since a gigantic authored disc is still half risen at centre-set (and far past the fixed ~5.7 degree band a centre-z threshold can express; see ssQuadClearsHorizon). With the clip off nothing hides the sunken part, so no below-horizon culling applies at all: the unclipped look keeps its body the whole way down. And with no active environment a plain EEP sky keeps stock's exact disc lifetime.
     static LLCachedControl<bool> ss_atmo(gSavedSettings, "SSAtmoEnabled", false);
     SSAtmoEnvApplier& ss_applier = SSAtmoEnvApplier::instance();
     const bool ss_grace_band = ss_atmo && ss_applier.isActive() && ss_applier.horizonClip();

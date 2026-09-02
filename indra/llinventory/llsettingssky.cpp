@@ -772,9 +772,7 @@ LLSettingsSky::validation_list_t LLSettingsSky::validationList()
         validation.push_back(Validator(SETTING_MAX_Y,               true,  LLSD::TypeReal,
             boost::bind(&Validator::verifyFloatRange, _1, _2, llsd::array(0.0f, 10000.0f))));
         validation.push_back(Validator(SETTING_MOON_ROTATION,       true,  LLSD::TypeArray, &Validator::verifyQuaternionNormal));
-        // <SS:Nexii> The floor drops below stock's 0.25: Atmo Magic drives these with the
-        // celestial quad's true angles (ss_atmoenv_quad_deg), under which the real Sun maps to
-        // scale ~0.093 - stock's floor would clamp it away the next time a saved sky loads.
+        // <SS:Nexii> The floor drops below stock's 0.25: Atmo Magic drives these with the celestial quad's true angles (ss_atmoenv_quad_deg), under which the real Sun maps to scale ~0.093 - stock's floor would clamp it away the next time a saved sky loads.
         validation.push_back(Validator(SETTING_MOON_SCALE,          false, LLSD::TypeReal,
                 boost::bind(&Validator::verifyFloatRange, _1, _2, llsd::array(0.005f, 20.0f)), LLSD::Real(1.0)));
         validation.push_back(Validator(SETTING_MOON_TEXTUREID,      false, LLSD::TypeUUID));

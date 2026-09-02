@@ -51,11 +51,7 @@ uniform float ice_level;
 #ifdef SS_ATMO
 in vec3 vary_ss_view_dir;
 
-// <SS:Nexii> Weather-driven optics (ss_optics below), bound from the sky pool's active Atmo
-// applier. ss_optic_light is the light direction in the dome's own frame (the same permuted
-// frame lightnorm lives in, with +Y up) and the amplitudes are the weather's corona / crystal
-// drives. ss_optic_gate is 0 unless an ACTIVE Atmo environment is pushing at least one of them,
-// so an idle viewer keeps stock halo_map exactly.
+// <SS:Nexii> Weather-driven optics (ss_optics below), bound from the sky pool's active Atmo applier. ss_optic_light is the light direction in the dome's own frame (the same permuted frame lightnorm lives in, with +Y up) and the amplitudes are the weather's corona / crystal drives. ss_optic_gate is 0 unless an ACTIVE Atmo environment is pushing at least one of them, so an idle viewer keeps stock halo_map exactly.
 uniform vec3  ss_optic_light;
 uniform float ss_optic_gate;
 uniform float ss_optic_active;
@@ -64,33 +60,16 @@ uniform float ss_optic_halo22;
 uniform float ss_optic_halo46;
 uniform float ss_optic_align;
 
-// <SS:Nexii> The optics' light colour, from the SUN only (for now): vary_ss_optic_sun_col is the
-// sun's own light as the DOME renders it, computed in the vertex shader (skyV.glsl) as the
-// capped-glow light the sunset band actually burns with, evaluated along the light's ray - so the
-// halos, arcs and sundogs keep their sunrise/sunset hue down through the horizon band and below
-// it, where the old CPU-bound replica of the uncapped beam underflowed and snapped to the raw
-// near-white authored colour. Ice-crystal optics scatter the SUN's light - a sundog is a mock sun
-// - so while the sun is physically up the phenomena wear this tint whatever the scene-light
-// handover says. Moonlight optics are not wired up yet; while no sun band is live the shader keeps
-// the bound faint-white tint. The stock sunlight_color uniform is the raw authored colour,
-// near-white even when everything red, so this explicit varying is the honest one. </SS:Nexii>
+// <SS:Nexii> The optics' light colour, from the SUN only (for now): vary_ss_optic_sun_col is the sun's own light as the DOME renders it, computed in the vertex shader (skyV.glsl) as the capped-glow light the sunset band actually burns with, evaluated along the light's ray - so the halos, arcs and sundogs keep their sunrise/sunset hue down through the horizon band and below it, where the old CPU-bound replica of the uncapped beam underflowed and snapped to the raw near-white authored colour. Ice-crystal optics scatter the SUN's light - a sundog is a mock sun - so while the sun is physically up the phenomena wear this tint whatever the scene-light handover says. Moonlight optics are not wired up yet; while no sun band is live the shader keeps the bound faint-white tint. The stock sunlight_color uniform is the raw authored colour, near-white even when everything red, so this explicit varying is the honest one.
 in vec3 vary_ss_optic_sun_col;
 
-// <SS:Nexii> The sun slot disc's half-angle as a direction-z sine (SSAtmoEnvApplier::
-// sunSlotRadius) - the same value skyV holds its airmass with. The corona scales its every
-// angle by this relative to the stock quad's 0.05, so it stays a rim around WHATEVER disc is
-// drawn rather than the fixed-angle aureole tuned for the old 10x quad.
+// <SS:Nexii> The sun slot disc's half-angle as a direction-z sine (SSAtmoEnvApplier:: sunSlotRadius) - the same value skyV holds its airmass with. The corona scales its every angle by this relative to the stock quad's 0.05, so it stays a rim around WHATEVER disc is drawn rather than the fixed-angle aureole tuned for the old 10x quad.
 uniform float ss_sun_radius;
 
-// <SS:Nexii> The physical rainbow's gate (SSAtmoRainbow, lldrawpoolwlsky.cpp): 1 lets
-// ss_rainbow below take the stock strip's place, 0 keeps the stock single bow bit for bit.
+// <SS:Nexii> The physical rainbow's gate (SSAtmoRainbow, lldrawpoolwlsky.cpp): 1 lets ss_rainbow below take the stock strip's place, 0 keeps the stock single bow bit for bit.
 uniform float ss_rainbow_gate;
 
-// <SS:Nexii> The rainbow grades itself by its light, both already uploaded to this program:
-// lightnorm is the active light's direction in the dome's own frame (+Y up, so lightnorm.y is
-// its elevation sine) and sun_up_factor says whether that light is the sun. A sun within a few
-// degrees of the horizon has the short wavelengths scattered out of its long light path - the
-// monochrome red rainbow - and moonlight is too dim for the cones - the white moonbow.
+// <SS:Nexii> The rainbow grades itself by its light, both already uploaded to this program: lightnorm is the active light's direction in the dome's own frame (+Y up, so lightnorm.y is its elevation sine) and sun_up_factor says whether that light is the sun. A sun within a few degrees of the horizon has the short wavelengths scattered out of its long light path - the monochrome red rainbow - and moonlight is too dim for the cones - the white moonbow.
 uniform vec3 lightnorm;
 uniform int  sun_up_factor;
 #endif
@@ -127,26 +106,7 @@ vec3 rainbow(float d)
 }
 
 #ifdef SS_ATMO
-// <SS:Nexii> The physical rainbow, painted from the same strip texture the stock lookup reads.
-// Stock sweeps one texcoord across the whole strip and adds whatever is there at one strength -
-// the bow band and the bright interior stretch together - which is why the interior arrives as
-// the blinding wash below the arc. The three phenomena the strip (and physics) carry are read
-// separately here, each at its own strength:
-//
-//   * the PRIMARY bow, the colour band at 34.4..41.4 deg off the antisolar point (red outer,
-//     violet inner), at ~30% - a real bow is a faint thing against the storm light behind it;
-//   * the INTERIOR brightening - light re-scattered inside the bow - on the stock stretch above
-//     the band, at ~8%: real photos show it, never as a wash;
-//   * the SECONDARY bow at ~49..55 deg, the same colour band read REVERSED (red inner, violet
-//     outer) at ~a third of the primary. Every rainbow is a double: the second bow rides two
-//     internal reflections instead of one and arrives faint. The gap between the bows is
-//     Alexander's band and renders as exactly nothing - darker than either bow in every photo.
-//
-// The light's own state then grades the result: a sun within a few degrees of the horizon has
-// blue and green scattered away before the drops ever see it (the monochrome red rainbow), and
-// a moonbow is too dim for the cones - the full spectrum is present but the eye reads white,
-// at a fraction of the strength. The gate (ss_rainbow_gate) leaves the stock strip above
-// untouched when the debug setting is down.
+// <SS:Nexii> The physical rainbow, painted from the same strip texture the stock lookup reads. Stock sweeps one texcoord across the whole strip and adds whatever is there at one strength - the bow band and the bright interior stretch together - which is why the interior arrives as the blinding wash below the arc. The three phenomena the strip (and physics) carry are read separately here, each at its own strength: * the PRIMARY bow, the colour band at 34.4..41.4 deg off the antisolar point (red outer, violet inner), at ~30% - a real bow is a faint thing against the storm light behind it; * the INTERIOR brightening - light re-scattered inside the bow - on the stock stretch above the band, at ~8%: real photos show it, never as a wash; * the SECONDARY bow at ~49..55 deg, the same colour band read REVERSED (red inner, violet outer) at ~a third of the primary. Every rainbow is a double: the second bow rides two internal reflections instead of one and arrives faint. The gap between the bows is Alexander's band and renders as exactly nothing - darker than either bow in every photo. The light's own state then grades the result: a sun within a few degrees of the horizon has blue and green scattered away before the drops ever see it (the monochrome red rainbow), and a moonbow is too dim for the cones - the full spectrum is present but the eye reads white, at a fraction of the strength. The gate (ss_rainbow_gate) leaves the stock strip above untouched when the debug setting is down.
 vec3 ss_rainbow(float d)
 {
     if (moisture_level <= 0.0)
@@ -222,10 +182,7 @@ vec3 ss_optic_color(float rho, float ring, float width)
     return c;
 }
 
-// <SS:Nexii> A spectral gradient across a phenomenon's angular width - the prismatic
-// colouring of the circumzenithal arc and (more vividly) the parhelic circle: red on the
-// INNER edge through orange/yellow to blue-violet on the OUTER, the classic crystal-optics
-// dispersion. off spans the width of the phenomenon (-.. + .. about the ring). </SS:Nexii>
+// <SS:Nexii> A spectral gradient across a phenomenon's angular width - the prismatic colouring of the circumzenithal arc and (more vividly) the parhelic circle: red on the INNER edge through orange/yellow to blue-violet on the OUTER, the classic crystal-optics dispersion. off spans the width of the phenomenon (-.. + .. about the ring).
 vec3 ss_prismatic(float off)
 {
     vec3 red    = vec3(1.0, 0.35, 0.15);
@@ -274,16 +231,10 @@ vec3 ss_optics(vec3 view)
     }
     float psid = degrees(acos(clamp(dot(view, vertical), -1.0, 1.0)));
 
-    // <SS:Nexii> The horizon-clip state as a mask: 1 everywhere the dome may draw - clip off,
-    // or this fragment above the horizon - and 0 under the clip. Every phenomenon except the
-    // sundogs multiplies by (1.0 - ss_below), so halos and arcs never paint below the horizon.
-    // The dogs alone reach a little UNDER it (their own block re-carves the margin), because
-    // the top of the light is still visible when its centre is just below the horizon. </SS:Nexii>
+    // <SS:Nexii> The horizon-clip state as a mask: 1 everywhere the dome may draw - clip off, or this fragment above the horizon - and 0 under the clip. Every phenomenon except the sundogs multiplies by (1.0 - ss_below), so halos and arcs never paint below the horizon. The dogs alone reach a little UNDER it (their own block re-carves the margin), because the top of the light is still visible when its centre is just below the horizon.
     float ss_below = (ss_horizon_clip > 0.001 && vary_ss_below_horizon < 0.0) ? 1.0 : 0.0;
 
-    // <SS:Nexii> The 22 deg ring falls away as the light sinks toward the horizon: by ~14 deg of
-    // light elevation the ring has faded, leaving only the mock-sun sundogs flanking the light -
-    // the look of a low winter sun. </SS:Nexii>
+    // <SS:Nexii> The 22 deg ring falls away as the light sinks toward the horizon: by ~14 deg of light elevation the ring has faded, leaving only the mock-sun sundogs flanking the light - the look of a low winter sun.
     float ring_elev = smoothstep(-1.0, 1.0, elev);
 
     vec3 col = vec3(0.0);
@@ -336,16 +287,7 @@ vec3 ss_optics(vec3 view)
     // Aligned-plate phenomena: need the plates to settle, not just plenty of crystals.
     if (ss_optic_align > 0.001)
     {
-        // <SS:Nexii> The parhelic circle WITH its sundogs embedded - one construct, not two. The
-        // band is the locus of points at the SAME elevation as the light (ep = e), which as the
-        // light climbs bulges from a near-horizontal line into a small circle (more "circle"-like
-        // at high sun). It fades with distance from the light (rho / 55) - never a full closed
-        // ring. The SUNDOGS are bright COMPACT peaks embedded in the band where the 22 deg halo
-        // circle crosses it: at az = asin( sin(22) / cos(e) ) from the sun - ~22 deg at the
-        // horizon, spreading outward as the sun climbs (26 at e=30, 31 at e=40), and shrinking as
-        // they spread. Each dog is kept SMALL and tight - the line stays thin and clean around
-        // it, so the dog reads as a distinct bright spot ON a fine line, not a comet. The dogs
-        // can never drift off the line, because the line IS where they live. </SS:Nexii>
+        // <SS:Nexii> The parhelic circle WITH its sundogs embedded - one construct, not two. The band is the locus of points at the SAME elevation as the light (ep = e), which as the light climbs bulges from a near-horizontal line into a small circle (more "circle"-like at high sun). It fades with distance from the light (rho / 55) - never a full closed ring. The SUNDOGS are bright COMPACT peaks embedded in the band where the 22 deg halo circle crosses it: at az = asin( sin(22) / cos(e) ) from the sun - ~22 deg at the horizon, spreading outward as the sun climbs (26 at e=30, 31 at e=40), and shrinking as they spread. Each dog is kept SMALL and tight - the line stays thin and clean around it, so the dog reads as a distinct bright spot ON a fine line, not a comet. The dogs can never drift off the line, because the line IS where they live.
         {
             // Polar coordinates
             float e  = asin(clamp(light.y, -1.0, 1.0)) * 57.2958;
@@ -407,14 +349,7 @@ vec3 ss_optics(vec3 view)
             col += ss_optic_align * pc_col * pc * dog_elev * 0.12;
         }
 
-    // <SS:Nexii> The circumzenithal arc's REAL geometry and visibility. The arc is a small circle
-        // centered on the ZENITH, passing through a point about 47 deg ABOVE the sun in the
-        // sun's meridian - its zenith-angle radius is 43 deg minus the sun's elevation, so its
-        // summit sits e+47 deg above the horizon. At a low sun (5-15 deg) that circle is wide
-        // and low, faint and spread; as the sun climbs toward ~22 deg it tightens and brightens
-        // toward its best; past ~32 deg the plate-ray geometry fails and it is gone entirely.
-        // The envelope is a triangle peaking at 22 deg, zero at 5 and 32.2. Prismatic: red on
-        // the arc's inner (zenith-side) edge, blue-violet outward. </SS:Nexii>
+    // <SS:Nexii> The circumzenithal arc's REAL geometry and visibility. The arc is a small circle centered on the ZENITH, passing through a point about 47 deg ABOVE the sun in the sun's meridian - its zenith-angle radius is 43 deg minus the sun's elevation, so its summit sits e+47 deg above the horizon. At a low sun (5-15 deg) that circle is wide and low, faint and spread; as the sun climbs toward ~22 deg it tightens and brightens toward its best; past ~32 deg the plate-ray geometry fails and it is gone entirely. The envelope is a triangle peaking at 22 deg, zero at 5 and 32.2. Prismatic: red on the arc's inner (zenith-side) edge, blue-violet outward.
     {
         float cza_env = smoothstep(5.0, 22.0, elev) * (1.0 - smoothstep(22.0, 32.2, elev));
         if (cza_env > 0.002)
@@ -426,9 +361,7 @@ vec3 ss_optics(vec3 view)
             float rcz = 43.0 - elev;                 // the arc's zenith-angle radius (43 - e)
             float cza = exp(-pow((zd - rcz) / 2.2, 2.0))
                       * exp(-pow(az / 40.0, 2.0));
-            // <SS:Nexii> The CZA is genuinely PRISMATIC - red toward the arc's inner
-            // (zenith-side) edge, blue-violet away - the strongest colouring of the crystal
-            // halos. The old monotone red-in/blue-out fringe read as a white streak. </SS:Nexii>
+            // <SS:Nexii> The CZA is genuinely PRISMATIC - red toward the arc's inner (zenith-side) edge, blue-violet away - the strongest colouring of the crystal halos. The old monotone red-in/blue-out fringe read as a white streak.
             col += ss_optic_align * cza_env * cza
                  * ss_prismatic((zd - rcz) / 2.2)
                  * 0.4 * (1.0 - ss_below);
@@ -492,19 +425,12 @@ void main()
         const bool ss_clipped_below = (ss_horizon_clip > 0.0) && (vary_ss_below_horizon < 0.0);
         if (!ss_clipped_below)
         {
-            // <SS:Nexii> The physical rainbow (ss_rainbow above) takes the stock strip's place
-            // while the SSAtmoRainbow gate is up; gate down keeps the stock single bow bit for
-            // bit. </SS:Nexii>
+            // <SS:Nexii> The physical rainbow (ss_rainbow above) takes the stock strip's place while the SSAtmoRainbow gate is up; gate down keeps the stock single bow bit for bit.
             color.rgb += (ss_rainbow_gate > 0.0) ? ss_rainbow(optic_d) : rainbow(optic_d);
         }
         if (ss_optic_active > 0.001)
         {
-            // <SS:Nexii> Weather-driven optics take over while an active Atmo environment drives the
-            // sky (ss_optic_gate): the corona, the 22/46 deg halos, sundogs and the aligned-plate arcs
-            // each render at their true angular positions instead of one merged texture strip. When
-            // the halo step is switched off the strip is skipped too - an active Atmo sky never draws
-            // the old corona-plus-wide-ring halo_map. An IDLE Atmo viewer (boosted master switch, no
-            // environment) keeps the stock strip below, so it stays bit-for-bit. </SS:Nexii>
+            // <SS:Nexii> Weather-driven optics take over while an active Atmo environment drives the sky (ss_optic_gate): the corona, the 22/46 deg halos, sundogs and the aligned-plate arcs each render at their true angular positions instead of one merged texture strip. When the halo step is switched off the strip is skipped too - an active Atmo sky never draws the old corona-plus-wide-ring halo_map. An IDLE Atmo viewer (boosted master switch, no environment) keeps the stock strip below, so it stays bit-for-bit.
             if (ss_optic_gate > 0.001 && !ss_clipped_below)
             {
                 color.rgb += ss_optics(normalize(vary_ss_view_dir));
@@ -519,11 +445,7 @@ void main()
         color.rgb += halo22(optic_d);
 #endif
         color.rgb *= 2.;
-        // <SS:Nexii> Cap the sky's LUMINANCE, not its channels: a per-channel clamp saturates
-        // anything past 5 to white, and the halos/sundogs added just above sit on a bright haze
-        // near the sun that easily crosses it - so the light's own red came out white. Scaling
-        // the whole colour down to a 5-luminance cap keeps the peak bright for bloom while the
-        // sun's tint survives. </SS:Nexii>
+        // <SS:Nexii> Cap the sky's LUMINANCE, not its channels: a per-channel clamp saturates anything past 5 to white, and the halos/sundogs added just above sit on a bright haze near the sun that easily crosses it - so the light's own red came out white. Scaling the whole colour down to a 5-luminance cap keeps the peak bright for bloom while the sun's tint survives.
         float ss_sky_cmax = max(color.r, max(color.g, color.b));
         if (ss_sky_cmax > 5.0)
         {

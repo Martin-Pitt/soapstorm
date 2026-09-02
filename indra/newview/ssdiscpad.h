@@ -28,10 +28,7 @@
 
 class LLUUID;
 
-// <SS:Nexii> The outcome of a disc-padding analysis. OK and FAILED are both final - the
-// caller's texture pixels were read - and FAILED means the lines could not agree where the
-// disc is, which errors out to the 0 full-bleed padding. LOADING means the texture's decoded
-// data has not arrived yet; the request is re-checked by ssDiscPadPoll().
+// <SS:Nexii> The outcome of a disc-padding analysis. OK and FAILED are both final - the caller's texture pixels were read - and FAILED means the lines could not agree where the disc is, erroring out to the 0 full-bleed padding. LOADING means the texture's decoded data has not arrived yet; the request is re-checked by ssDiscPadPoll().
 enum class SSDiscPadStatus
 {
     OK,
@@ -39,25 +36,13 @@ enum class SSDiscPadStatus
     FAILED
 };
 
-// Single-shot analysis of a disc texture's alpha, without touching the asset: reads the
-// texture's decoded pixels (kick-starting the raw-image readback the way the cloud deck does)
-// and walks slightly rotated cardinal and diagonal lines out from the centre until each line
-// leaves the disc, taking the disc fraction the majority of the sixteen radial samples agree
-// on. out_padding receives each side's transparent margin as a fraction of the texture width.
-// Returns LOADING when the pixels are not decoded yet - out_padding is left untouched then.
+// Single-shot analysis of a disc texture's alpha, without touching the asset: reads the texture's decoded pixels (kick-starting the raw-image readback like the cloud deck does) and walks slightly rotated cardinal and diagonal lines out from the centre until each leaves the disc, taking the disc fraction the majority of the sixteen radial samples agree on. out_padding receives each side's transparent margin as a fraction of the texture width; returns LOADING when the pixels are not decoded yet - out_padding is left untouched then.
 SSDiscPadStatus ssDiscPadAnalyze(const LLUUID& texture_id, F32& out_padding);
 
-// Derives and APPLIES the disc padding of a live asset body whose disc texture just changed
-// (a texture pick or a sky import) - the padding is the auto part; the asset carries on
-// authoring it. Writes the derived padding to the body, or 0 when the lines cannot agree
-// (the error-out), and remembers any still-loading derivations so ssDiscPadPoll() can retry
-// them. Gated on SSAtmoDiscPadAuto: off, nothing is touched.
+// Derives and APPLIES the disc padding of a live asset body whose disc texture just changed (a texture pick or a sky import) - the padding is the auto part; the asset carries on authoring it. Writes the derived padding to the body, or 0 when the lines cannot agree (the error-out), and remembers any still-loading derivations so ssDiscPadPoll() can retry them. Gated on SSAtmoDiscPadAuto: off, nothing is touched.
 void ssDiscPadAutoDerive(S32 track_index, S32 body_index, const LLUUID& texture_id);
 
-// Retries the still-loading derivations against the live asset. Tick from any UI poll at a
-// sub-second cadence while the environment UI is up (the environment and planetary floaters
-// both do). A derivation whose body is gone, whose texture was changed again, or whose
-// texture never arrives times out and errors out to 0 padding.
+// Retries the still-loading derivations against the live asset. Tick from any UI poll at a sub-second cadence while the environment UI is up (the environment and planetary floaters both do). A derivation whose body is gone, whose texture was changed again, or whose texture never arrives times out and errors out to 0 padding.
 void ssDiscPadPoll();
 
 #endif

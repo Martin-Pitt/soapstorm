@@ -12,21 +12,7 @@
  single_instance="true"
  title="Planetary System"
  width="900">
-    <!-- <SS:Nexii> Atmo Magic planetary system designer. Opened from the
-         main floater's Planetary tab with the track index as its key; the
-         title names the track being edited. Left: the scene-graph body
-         list (children indented under their parent, siblings in orbital-
-         radius order, header sorting off - the code owns the order) with
-         the selected body's fields under it. Parenting and sun topology
-         are fully automatic (see SSAtmoEnvPlanetary::normalizeSunTopology
-         and addBody), so there are no parent/partner dropdowns - suns
-         follow the canonical pair topology, planets orbit the sun anchor,
-         moons the selected planet. Right: the orbit canvas (ss_orbit_view,
-         see ssfloateratmoplanetary.cpp), an angled top-down map of the
-         system - click a body (or its ring) to select it, drag a body
-         along its ring to set its orbital phase, mousewheel or the corner
-         buttons to zoom (the middle corner button resets to fit). The two
-         per-track distance-scale dials stayed behind on the tab. -->
+    <!-- <SS:Nexii> Atmo Magic planetary system designer. Opened from the main floater's Planetary tab with the track index as its key; the title names the track being edited. Left: the scene-graph body list (children indented under their parent, siblings in orbital- radius order, header sorting off - the code owns the order) with the selected body's fields under it. Parenting and sun topology are fully automatic (see SSAtmoEnvPlanetary::normalizeSunTopology and addBody), so there are no parent/partner dropdowns - suns follow the canonical pair topology, planets orbit the sun anchor, moons the selected planet. Right: the orbit canvas (ss_orbit_view, see ssfloateratmoplanetary.cpp), an angled top-down map of the system - click a body (or its ring) to select it, drag a body along its ring to set its orbital phase, mousewheel or the corner buttons to zoom (the middle corner button resets to fit). The two per-track distance-scale dials stayed behind on the tab. -->
 
     <!-- Shown instead of the editing chrome whenever the track index has
          gone stale (track removed, asset reloaded, nothing loaded at all)
@@ -55,15 +41,7 @@
      name="designer_left_panel"
      border="false"
      background_visible="false">
-        <!-- <SS:Nexii> Where the bodies actually are, drawn in the world: a
-             ray from the camera toward each one with its name, altitude,
-             azimuth, apparent size and how lit it is. This is the answer to
-             "the designer says the moon is there, so why is it drawn here" -
-             it reports what the renderer used, not a second opinion.
-
-             Inside the left panel, above the list: it is a view control for
-             the designer as a whole, and a floater-level child sat outside
-             every panel in it. -->
+        <!-- <SS:Nexii> Where the bodies actually are, drawn in the world: a ray from the camera toward each one with its name, altitude, azimuth, apparent size and how lit it is. This is the answer to "the designer says the moon is there, so why is it drawn here" - it reports what the renderer used, not a second opinion. Inside the left panel, above the list: it is a view control for the designer as a whole, and a floater-level child sat outside every panel in it. -->
         <check_box
          follows="left|top"
          layout="topleft"
@@ -434,10 +412,7 @@
          show_caption="false"
          name="body_custom_texture"
          tool_tip="Custom texture for this body - blank uses the stock disc" />
-        <!-- <SS:Nexii> The body's disc padding, as its own row so it lines up
-              with the other spinners. Hover the spinner and the guide circle
-              on the Texture swatch shows where the renderer will draw the
-              disc inside the texture. -->
+        <!-- <SS:Nexii> The body's disc padding, as its own row so it lines up with the other spinners. Hover the spinner and the guide circle on the Texture swatch shows where the renderer will draw the disc inside the texture. -->
         <text
          follows="left|top"
          layout="topleft"
@@ -566,11 +541,7 @@
          label="Light emitter"
          tool_tip="This body lights the scene. At most two - the renderer has exactly a sun and a moon light slot - and never the home body" />
 
-        <!-- <SS:Nexii> How the disc itself is drawn, as opposed to what it
-             does to the scene. Both default from the body kind when it is
-             created and are authored from there: a sun lights itself, and
-             everything else is lit by one, but a glowing artificial moon is
-             a thing a world might want. -->
+        <!-- <SS:Nexii> How the disc itself is drawn, as opposed to what it does to the scene. Both default from the body kind when it is created and are authored from there: a sun lights itself, and everything else is lit by one, but a glowing artificial moon is a thing a world might want. -->
         <check_box
          follows="left|top"
          layout="topleft"

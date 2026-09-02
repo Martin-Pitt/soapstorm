@@ -95,7 +95,6 @@
 #include "sswindflow.h"
 #include "ssglreadback.h"
 #include "ssworldfield.h"
-// </SS:Nexii>
 
 #include <boost/json.hpp>
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
@@ -801,11 +800,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
     if (LLViewerCamera::instanceExists())
     {
         LLViewerCamera::getInstance()->setZoomParameters(zoom_factor, subfield);
-        // <SS:Nexii> Near clip drives depth precision: smallest resolvable depth difference is ~d^2 / (near * 2^24) on the 24 bit buffer, so
-        // it scales inversely with this and barely at all with the far plane. Pinning it to MIN_NEAR_PLANE (0.1m) cost a factor of three
-        // against 0.3m, which tells once the draw distance runs to thousands of metres. Bounded above by the OTS collision margin in
-        // LLAgentCamera::updateCamera, which tracks this so walls cannot go see-through when the camera is pulled in against them.
-        //LLViewerCamera::getInstance()->setNear(MIN_NEAR_PLANE);
+        // <SS:Nexii> Near clip drives depth precision: smallest resolvable depth difference is ~d^2 / (near * 2^24) on the 24 bit buffer, so it scales inversely with this and barely at all with the far plane. Pinning it to MIN_NEAR_PLANE (0.1m) cost a factor of three against 0.3m, which tells once the draw distance runs to thousands of metres. Bounded above by the OTS collision margin in LLAgentCamera::updateCamera, which tracks this so walls cannot go see-through when the camera is pulled in against them. LLViewerCamera::getInstance()->setNear(MIN_NEAR_PLANE);
         static LLCachedControl<F32> near_clip(gSavedSettings, "FSRenderNearClip", 0.25f);
         F32 near_plane = llclamp((F32)near_clip, MIN_NEAR_PLANE, 1.f);
 
@@ -826,7 +821,6 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
         }
 
         LLViewerCamera::getInstance()->setNear(near_plane);
-        // </SS:Nexii>
     }
 
     //////////////////////////
@@ -984,9 +978,7 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                   //try to generate a shadow before the first frame is through
                     gPipeline.generateSunShadow(*LLViewerCamera::getInstance());
 
-                    // <SS:Nexii> Atmo Magic: parameters/impacts tick, then at
-                    // most one rain shadow tile capture, here where the
-                    // pipeline is in the same state the sun shadows render in
+                    // <SS:Nexii> Atmo Magic: parameters/impacts tick, then at most one rain shadow tile capture, here where the pipeline is in the same state the sun shadows render in
                     SSAtmoMagic::getInstance()->idle();
 
                     // Atmo Magic: the environment applier drives EEP's
@@ -1018,7 +1010,6 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     // observer registration - into existence on the first
                     // frame the pipeline runs, rather than never at all.
                     SSAtmoEnvDiscoveryManager::getInstance();
-                    // </SS:Nexii>
                 }
 
                 LLVertexBuffer::unbind();

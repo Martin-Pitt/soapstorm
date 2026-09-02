@@ -35,10 +35,7 @@
 class SSRandStream;
 class LLHUDText;
 
-// <SS:Nexii> The dissolve-to-sparks decay timing, shared by the model and the renderer so the
-// strike's lifetime always covers the beam breaking apart plus its dying sparks: after a return
-// stroke each segment's alpha mask turns up at its own random moment inside the window, and the
-// ember left behind burns EMBER_S more. </SS:Nexii>
+// <SS:Nexii> Dissolve-to-sparks decay timing, shared by the model and the renderer so the strike's lifetime always covers the beam breaking apart plus its dying sparks: after a return stroke each segment's alpha mask turns up at its own random moment in the window, the ember left burning EMBER_S more.
 namespace SSDissolve
 {
     constexpr F32 LAG_S = 0.05f;
@@ -88,46 +85,30 @@ struct SSStrike
 
     F32 mChannelBrightness = 0.f;
 
-    // Branch exclusion for ground strikes, filled in by buildChannel: a cone about the
-    // main line's foot and a floor over the attachment that forked channels must stay out of.
+    // Branch exclusion for ground strikes, filled by buildChannel: a cone about the main line's
+    // foot and a floor over the attachment that forked channels must stay out of.
     bool mBranchLimits = false;
     LLVector3 mBranchConeApex;
     LLVector3 mBranchConeAxis;
     F32 mBranchConeDot = 0.f;
     F32 mBranchFloorZ = 0.f;
 
-    // <SS:Nexii> How far an in-cloud channel's runs sag below their own endpoints as they
-    // travel horizontally - the dip that takes an intra-cloud bolt under the deck's base and
-    // back up. Zero for the straight-down trunk of a ground strike. Filled by buildChannel.
-    // </SS:Nexii>
+    // <SS:Nexii> How far an in-cloud channel's runs sag below their endpoints as they travel horizontally - the dip taking an intra-cloud bolt under the deck's base and back up. Zero for a ground strike's straight-down trunk. Filled by buildChannel.
     F32 mCloudDipM = 0.f;
 
-    // <SS:Nexii> The channel's total path length from its root, derived after build. Every
-    // node's reach is its path distance from the root (see buildChannel), so the leader sweeps
-    // the whole bolt at one continuous crawl, and its duration is the distance divided by the
-    // visible leader speed - long bolts take time to travel. </SS:Nexii>
+    // <SS:Nexii> Total channel path length from its root, derived after build. Every node's reach is its path distance from the root (see buildChannel), so the leader sweeps the whole bolt at one continuous crawl, its duration the distance divided by the visible leader speed - long bolts take time to travel.
     F32 mChannelLenM = 0.f;
 
-    // <SS:Nexii> Debug-forced placements (the Strike Now / Ground Strike buttons) keep their
-    // kind: an explicitly aimed ground strike is not re-routed by the under deck. </SS:Nexii>
+    // <SS:Nexii> Debug-forced placements (Strike Now / Ground Strike buttons) keep their kind: an explicitly aimed ground strike is not re-routed by the under deck.
     bool mForced = false;
 
-    // <SS:Nexii> Polarity. Negative bolts - the summer norm - come off the BOTTOM of the cloud,
-    // close to the ground, sharp and quick. Positive bolts - the winter storm's network - are
-    // launched from the top of the cloud (the anvil), are far more powerful, and fire as a rapid
-    // series of quick pulses. Rolled at spawn from the temperature, deterministic per strike.
-    // </SS:Nexii>
+    // <SS:Nexii> Polarity. Negative bolts - the summer norm - come off the cloud's BOTTOM, close to the ground, sharp and quick. Positive bolts - the winter storm's network - launch from the cloud top (the anvil), far more powerful, firing a rapid series of quick pulses. Rolled at spawn from the temperature, deterministic per strike.
     bool mPositive = false;
 
-    // <SS:Nexii> Bolt from the blue: a positive anvil discharge that travels huge horizontal
-    // distance before falling on ground miles from its cloud. The origin sits at the anvil
-    // crown, far off - the storm's own position - and the trunk runs the whole gap, arriving at
-    // the far clip and striking ground within view. </SS:Nexii>
+    // <SS:Nexii> Bolt from the blue: a positive anvil discharge travelling huge horizontal distance before falling miles from its cloud. The origin sits at the anvil crown, far off - the storm's own position - the trunk running the whole gap to the far clip and striking ground within view.
     bool mBlue = false;
 
-    // <SS:Nexii> The polarity's stroke timing and power, rolled at spawn: positive bolts fire
-    // more return strokes in a quicker series and hold the glow longer, and throw light further.
-    // </SS:Nexii>
+    // <SS:Nexii> The polarity's stroke timing and power, rolled at spawn: positive bolts fire more return strokes in a quicker series, hold the glow longer, and throw light further.
     S32 mStrokesMin = 1;
     S32 mStrokesMax = 4;
     F32 mRestrikeMinS = 0.03f;
@@ -184,13 +165,11 @@ public:
     static const char* kindName(SSStrikeKind k);
     static const LLColor4& kindDebugColor(SSStrikeKind k);
 
-    // <SS:Nexii> How likely a strike is to be a positive anvil discharge at a temperature -
-    // the summer network runs negative, deep winter is all positive. The overlay reads it to
-    // label the mood. </SS:Nexii>
+    // <SS:Nexii> How likely a strike is a positive anvil discharge at a temperature - summer's network runs negative, deep winter all positive. The overlay reads it to label the mood.
     static F32 positiveSkew(F32 temperature_c);
 
-    // The pending-strike debug overlay (markers and countdown label) hides this long before
-    // impact, so the preview does not sit on top of the strike it announced.
+    // The pending-strike debug overlay (markers, countdown label) hides this long before impact
+    // so the preview does not sit on top of the strike it announced.
     static constexpr F32 MARKER_HIDE_S = 0.5f;
 
 private:
@@ -210,14 +189,11 @@ private:
                       S32 depth, S32 levels, F32 intensity, SSRandStream& rng,
                       F32 fecundity = 1.f);
 
-    // <SS:Nexii> Re-routes a ground strike whose channel would cross the under deck into a
-    // cloud-to-cloud crawler with branching ends inside that deck - the bolt to nowhere below a
-    // floating build becomes a fork instead. Grows the channel itself; true when re-routed.
-    // </SS:Nexii>
+    // <SS:Nexii> Re-routes a ground strike whose channel would cross the under deck into a cloud-to-cloud crawler with branching ends inside that deck - the bolt to nowhere below a floating build becomes a fork instead. Grows the channel itself; true when re-routed.
     bool underDeckDivert(SSStrike& strike, SSRandStream& rng);
 
     // After all geometry is grown: every node's reach becomes its path distance from the root
-    // (normalized to progress), and the total length is stored for the leader's travel time.
+    // (normalized to progress); total length stored for the leader's travel time.
     void finishChannel(SSStrike& strike);
 
     void advance(SSStrike& strike, F32 dt);
@@ -227,9 +203,7 @@ private:
     F64 mNextStrikeAt = -1.0;
     bool mPrepared = false;
 
-    // <SS:Nexii> The bolt-from-the-blue scheduler: its own next-fire clock, independent of the
-    // ordinary strike interval, so lightning reaches ahead of an approaching storm even before
-    // the current weather is thundery. Cleared when the storm approach dies. </SS:Nexii>
+    // <SS:Nexii> The bolt-from-the-blue scheduler: its own next-fire clock, independent of the ordinary strike interval, so lightning reaches ahead of an approaching storm before the current weather is thundery. Cleared when the storm approach dies.
     F64 mNextBlueAt = -1.0;
     bool mBluePrepared = false;
 

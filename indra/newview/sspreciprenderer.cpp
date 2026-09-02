@@ -81,12 +81,7 @@ static F32 ageFade(const SSPrecipParticle& p)
     return llmin(1.f, p.mAge / t_in) * llclamp((p.mMaxAge - p.mAge) / t_out, 0.f, 1.f);
 }
 
-// <SS:Nexii> Fade in over the top of a falling run: a drop materializes across the first stretch
-// of its fall rather than popping in, and is fully visible once past it. The band is capped at
-// SS_PRECIP_TOP_FADE and scaled with the run so a short near drop finishes fading half-way down
-// (staying dense at the ground) while the deck-spawned curtains keep the full band off the deck.
-// Nothing that doesn't fall from a top (risers, ripples, streams, drift) carries a mFallTop and is
-// left at full alpha. </SS:Nexii>
+// <SS:Nexii> Fade in over the top of a falling run: a drop materializes across the first stretch of its fall rather than popping in, fully visible once past it. The band caps at SS_PRECIP_TOP_FADE and scales with the run, so a short near drop finishes fading half-way down (staying dense at the ground) while deck-spawned curtains keep the full band off the deck. Nothing that doesn't fall from a top (risers, ripples, streams, drift) carries a mFallTop and stays at full alpha.
 static F32 topFade(const SSPrecipParticle& p)
 {
     if (p.mFallTop <= 0.f) return 1.f;
@@ -326,11 +321,7 @@ void SSPrecipRenderer::render()
         mBuckets[p.mMaterial % MAT_COUNT][p.mTex % SS_PRECIP_MAX_TEXTURES].push_back({ &p, llmin(alpha, 1.f) });
     }
 
-    // <SS:Nexii> Blowing snow: the ground pool fades by its OWN cull radius -
-    // the falling tiers' bands start metres out and would blank drift exactly
-    // where it matters: right under the camera, overhead views, the near field.
-    // Full alpha at zero distance, easing out across the outer half of the
-    // footprint.
+    // <SS:Nexii> Blowing snow: the ground pool fades by its OWN cull radius - the falling tiers' bands start metres out and would blank drift exactly where it matters: under the camera, overhead views, the near field. Full alpha at zero distance, easing out across the outer half of the footprint.
     const F32 cull_r = SSPrecipSim::driftCullRadius();
     const F32 fade_start = cull_r * 0.55f;
     const F32 fade_span = llmax(cull_r - fade_start, 1.f);

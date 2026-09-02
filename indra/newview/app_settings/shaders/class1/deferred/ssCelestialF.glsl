@@ -186,4 +186,3 @@ void main()
     // c.a stays as the art's own: the blend multiplies the contribution by it, so a soft disc edge fades into the sky instead of ending on one.
 }
 
-// </SS:Nexii>

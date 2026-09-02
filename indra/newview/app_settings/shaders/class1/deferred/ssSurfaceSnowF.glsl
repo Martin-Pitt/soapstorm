@@ -31,7 +31,7 @@ out vec4 frag_color;
 
 in vec2 vary_fragcoord;
 
-// The albedo attachment, declared here the way the wetness pass declares the specular one -
+// The albedo attachment, declared here as the wetness pass declares the specular one -
 // gbufferUtil is not attached to this program family, so the sampler is ours to name.
 uniform sampler2D diffuseRect;
 
@@ -72,7 +72,7 @@ void main()
     float flag = raw.w;
     vec4 norm = decodeNormal(raw);
 
-    // Sky, stars, the sun disc, HDRI - none of them are surfaces and none of them hold snow
+    // Sky, stars, the sun disc, HDRI - none are surfaces, none hold snow
     if (GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_HAS_HDRI) ||
         GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_SKIP_ATMOS))
     {
@@ -104,7 +104,7 @@ void main()
 
     // The stable glint. A hash in agent space, not screen space, so the pattern does not swim as
     // the camera moves - the same world-anchored trick the puddle mask uses. Thresholded hard,
-    // so a few cells of every metre glint and the rest do not: that discontinuity is what reads
+    // so a few cells per metre glint and the rest do not: that discontinuity is what reads
     // as grains rather than as a brightness ramp. Sun-facing bias comes from the shading normal's
     // upward component - fresh snow glints most when you look across it toward the light, and
     // vertical faces hold none of it.
@@ -120,12 +120,11 @@ void main()
 
     vec3 out_col = mix(col.rgb, snow_col, pow(coverage, 1.25));
 
-    // The glints ride ON TOP of the mix rather than inside it - at a dusting the mix is nearly
+    // The glints ride ON TOP of the mix, not inside it - at a dusting the mix is nearly
     // the untouched albedo and glints folded into snow_col would be invisible exactly when the
-    // first snow starts catching light. A dusting sparkles; a full cover sparkles over white.
+    // first snow starts catching light. A dusting sparkles; full cover sparkles over white.
     out_col += vec3(glint * 0.30) * smoothstep(0.02, 0.25, coverage);
 
     frag_color = vec4(out_col, col.a);
 }
 
-// </SS:Nexii>

@@ -198,7 +198,6 @@ void LLViewerObjectList::idleUpdateGhostProjectiles(const F64& frame_time)
         }
     }
 }
-// </SS:Nexii>
 
 
 void LLViewerObjectList::getUUIDFromLocal(LLUUID &id,
@@ -331,14 +330,8 @@ void LLViewerObjectList::processUpdateCore(LLViewerObject* objectp,
 
     updateActive(objectp);
 
-    // <SS:Nexii> Prim changes queue a lazy recapture of the rain shadow map and
-    // a resolve of the wind flowmap. The callee filters out avatars,
-    // attachments, tiny objects and anything still moving, and holds the rest
-    // for a few seconds before either map hears about it - a prim thrower or a
-    // combat rez would otherwise have both rebuilding continuously for
-    // geometry that is gone before the rebuild finishes.
+    // <SS:Nexii> Prim changes queue a lazy recapture of the rain shadow map and a resolve of the wind flowmap. The callee filters out avatars, attachments, tiny objects and anything still moving, and holds the rest for a few seconds before either map hears about it - a prim thrower or a combat rez would otherwise have both rebuilding continuously for geometry that is gone before the rebuild finishes.
     SSAtmoMagic::onObjectUpdate(objectp);
-    // </SS:Nexii>
 
     if (just_created)
     {
@@ -1124,7 +1117,6 @@ void LLViewerObjectList::update(LLAgent &agent)
 
         // <SS:Nexii> Probe ghost projectiles that went static and dropped off the active list
         idleUpdateGhostProjectiles(frame_time);
-        // </SS:Nexii>
 
         //update flexible objects
         LLVolumeImplFlexible::updateClass();
@@ -1535,7 +1527,6 @@ void LLViewerObjectList::cleanupReferences(LLViewerObject *objectp)
     }
     updateProjectileObjectTracking(objectp->isLikelyProjectileBullet(), false);
     removeFromGhostProjectileWatch(objectp);
-    // </SS:Nexii>
 
     // <FS:Beq> FIRE-30694 DeadObject Spam - handle new_dead_object properly and closer to source
     // bool new_dead_object = true;
@@ -2258,7 +2249,6 @@ LLViewerObject *LLViewerObjectList::adoptViewerObject(LLViewerObject *objectp)
 
     return objectp;
 }
-// </SS:Nexii>
 
 LLViewerObject *LLViewerObjectList::createObjectFromCache(const LLPCode pcode, LLViewerRegion *regionp, const LLUUID &uuid, const U32 local_id)
 {

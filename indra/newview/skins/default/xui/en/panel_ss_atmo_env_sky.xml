@@ -9,18 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Sky tab - a thin container for two sub-tabs.
-         Scattering is what the air is made of and what light does in it
-         (EEP's atmosphere parameter set, PBR dials included, plus the
-         rainbow and halo optics EEP files beside them); Light & Glow is
-         what the sun and moon contribute to it. Deliberately NOT called
-         Atmosphere: the old tab held a sub-tab of the same name, which
-         made the two impossible to tell apart in speech or bug reports.
-         Scene gamma, probe ambiance and the horizon clip left for Look -
-         those describe the renderer, not the sky. Star brightness left
-         for Space, with the bodies it belongs to. Both sub-tabs load by
-         filename exactly like the main tab_container's panels. See
-         doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> Atmo Magic: Sky tab - a thin container for two sub-tabs. Scattering is what the air is made of and what light does in it (EEP's atmosphere parameter set, PBR dials included, plus the rainbow and halo optics EEP files beside them); Light & Glow is what the sun and moon contribute to it. Deliberately NOT called Atmosphere: the old tab held a sub-tab of the same name, which made the two impossible to tell apart in speech or bug reports. Scene gamma, probe ambiance and the horizon clip left for Look - those describe the renderer, not the sky. Star brightness left for Space, with the bodies it belongs to. Both sub-tabs load by filename exactly like the main tab_container's panels. See doc/atmo_magic_env_ui.md. -->
     <tab_container
      follows="all"
      layout="topleft"

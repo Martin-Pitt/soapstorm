@@ -60,18 +60,11 @@ vec4 cloudNoise(vec2 uv)
 }
 
 #ifdef SS_ATMO
-// <SS:Nexii> The dome's authored LARGE-SCALE map, when one is set (lldrawpoolwlsky binds it and
-// raises the gate): the broad octave and its self-shadow read it, while the fine octave keeps
-// the cloud noise. The cloud noise's own blob scale is tuned for the fine octave, so a broad
-// composition art-directed on it comes out samey - one map for every octave means the broad sky
-// is the fine map stretched. Gate 0 leaves every octave on the cloud noise, exactly as before
-// this existed.
+// <SS:Nexii> The dome's authored LARGE-SCALE map, when one is set (lldrawpoolwlsky binds it and raises the gate): the broad octave and its self-shadow read it, while the fine octave keeps the cloud noise. The cloud noise's own blob scale is tuned for the fine octave, so a broad composition art-directed on it comes out samey - one map for every octave means the broad sky is the fine map stretched. Gate 0 leaves every octave on the cloud noise, exactly as before this existed.
 uniform sampler2D ss_noise_large;
 uniform float ss_noise_large_on;
 
-// <SS:Nexii> The large map's crossfade partner and weight, live while the day cycle fades the
-// broad octave between two authored maps. The pool pins the partner on the same map with weight
-// 0 whenever no fade runs, so the inner mix below is a no-op then.
+// <SS:Nexii> The large map's crossfade partner and weight, live while the day cycle fades the broad octave between two authored maps. The pool pins the partner on the same map with weight 0 whenever no fade runs, so the inner mix below is a no-op then.
 uniform sampler2D ss_noise_large_next;
 uniform float ss_noise_large_blend;
 
@@ -85,32 +78,20 @@ vec4 cloudNoiseLarge(vec2 uv)
     return mix(cloudNoise(uv), large, ss_noise_large_on);
 }
 #else
-// <SS:Nexii> The broad octave's calls in the opacity lines below are ungated so both variants
-// share one body; in the stock build the large map does not exist, so the name resolves to the
-// plain cloud noise and stock renders exactly what it always did.
+// <SS:Nexii> The broad octave's calls in the opacity lines below are ungated so both variants share one body; in the stock build the large map does not exist, so the name resolves to the plain cloud noise and stock renders exactly what it always did.
 vec4 cloudNoiseLarge(vec2 uv)
 {
     return cloudNoise(uv);
 }
 #endif
 
-// <SS:Nexii> One endpoint-scale plate of the cloud layer: uv1..uv4 at THAT scale through the whole
-// density chain - the wind variance disturbances (scale-amplitude gated by the SAME authored scale
-// so each plate's turbulence matches its own tile), the density-variance erosion of cloudDensity,
-// and the two opacities. Everything here is a function of the UVs, so the Scale crossfade is two
-// calls and an output mix - one plate per endpoint scale - while the vary_* cloud colours and the
-// per-fragment fades (altitude, deck edge, plane) are UV-independent and stay single. `authored_scale`
-// is the plate's raw Scale-dial value: the divisor behind the UVs worked from it (ss_plane_base),
-// and the (1 - scale*0.25) variance factor keeps the pre-dial behaviour where the live sky's scale
-// uniform gated the turbulence one-to-one. Both SS_ATMO variants and the stock (non-Atmo) build
-// share this body so one source of truth drives every path.
+// <SS:Nexii> One endpoint-scale plate of the cloud layer: uv1..uv4 at THAT scale through the whole density chain - the wind variance disturbances (scale-amplitude gated by the SAME authored scale so each plate's turbulence matches its own tile), the density-variance erosion of cloudDensity, and the two opacities. Everything here is a function of the UVs, so the Scale crossfade is two calls and an output mix - one plate per endpoint scale - while the vary_* cloud colours and the per-fragment fades (altitude, deck edge, plane) are UV-independent and stay single. `authored_scale` is the plate's raw Scale-dial value: the divisor behind the UVs worked from it (ss_plane_base), and the (1 - scale*0.25) variance factor keeps the pre-dial behaviour where the live sky's scale uniform gated the turbulence one-to-one. Both SS_ATMO variants and the stock (non-Atmo) build share this body so one source of truth drives every path.
 void ss_cloud_branch(vec2 uv1, vec2 uv2, vec2 uv3, vec2 uv4, float authored_scale,
                      float cloud_density_in, float detail_fade,
                      out float out_alpha1, out float out_alpha2)
 {
     vec2 disturbance  = vec2(cloudNoise(uv1 / 8.0f).x, cloudNoise((uv3 + uv1) / 16.0f).x) * cloud_variance * (1.0f - authored_scale * 0.25f);
-    // <SS:Nexii> The fine-sourced disturbance rides the same distance fade as the fine layer
-    // itself - past it the far deck's variance comes from the broad octaves alone.
+    // <SS:Nexii> The fine-sourced disturbance rides the same distance fade as the fine layer itself - past it the far deck's variance comes from the broad octaves alone.
     vec2 disturbance2 = vec2(cloudNoise((uv1 + uv3) / 4.0f).x, cloudNoise((uv4 + uv2) / 8.0f).x) * cloud_variance * (1.0f - authored_scale * 0.25f) * detail_fade;
 
     // Offset texture coords
@@ -124,10 +105,7 @@ void ss_cloud_branch(vec2 uv1, vec2 uv2, vec2 uv3, vec2 uv4, float authored_scal
     cloud_density_in *= 1.0 - (density_variance * density_variance);
 
     // Compute alpha1, the main cloud opacity
-    // <SS:Nexii> The fine octave's weight rides detail_fade: past the fade's range the fine
-    // tiling compresses into sub-degree rows that read as striping, so its voice in the opacity
-    // fades with its angular size and the broad layer carries the far deck alone. The term is
-    // zero-mean, so the fade changes the far field's TEXTURE, not its coverage.
+    // <SS:Nexii> The fine octave's weight rides detail_fade: past the fade's range the fine tiling compresses into sub-degree rows that read as striping, so its voice in the opacity fades with its angular size and the broad layer carries the far deck alone. The term is zero-mean, so the fade changes the far field's TEXTURE, not its coverage.
     float alpha1 = (cloudNoiseLarge(uv1).x - 0.5) + (cloudNoise(uv3).x - 0.5) * cloud_pos_density2.z * detail_fade;
     alpha1 = min(max(alpha1 + cloud_density_in, 0.) * 10 * cloud_pos_density1.z, 1.);
 
@@ -149,12 +127,7 @@ void ss_cloud_branch(vec2 uv1, vec2 uv2, vec2 uv3, vec2 uv4, float authored_scal
 }
 
 #ifdef SS_ATMO
-// <SS:Nexii> The deck mapping (doc/atmo_magic_cloud_parallax.md). Each dome band's UVs are
-// derived HERE, per fragment, from the true view ray cloudsV hands down - not from the dome mesh's
-// own texcoords plus a patch. Two things that buys: the parallax rate is per-band and exact in the
-// anchored terms, and the sky curvature is the deck's own rather than whatever rate the dome mesh
-// happens to distribute its vertices at. Per-fragment costs one normalize already paid in the
-// vertex stage and a divide.
+// <SS:Nexii> The deck mapping (doc/atmo_magic_cloud_parallax.md). Each dome band's UVs are derived HERE, per fragment, from the true view ray cloudsV hands down - not from the dome mesh's own texcoords plus a patch. Two things that buys: the parallax rate is per-band and exact in the anchored terms, and the sky curvature is the deck's own rather than whatever rate the dome mesh happens to distribute its vertices at. Per-fragment costs one normalize already paid in the vertex stage and a divide.
 uniform vec2 region_offset;    // camera pos - region centre, metres, world X/Y
 uniform vec2 ss_cloud_drift;   // metres the band has travelled on the wind, east and north
 uniform float ss_cloud_alt_m;  // the BAND'S OWN height above the CAMERA, metres (world deck height minus camera)
@@ -164,14 +137,7 @@ uniform float ss_deck_edge_sin; // the volumetric deck's perceived edge, as an e
 uniform vec3 lightnorm;        // the self-shadow offset's direction - stock derived texcoord1 from it per-vertex
 in vec3 vary_ray_dir;
 
-// <SS:Nexii> The dome band's Scale crossfade (SSAtmoEnvApplier::cloudScaleTo/cloudScaleBlend,
-// samplings of the Sky Dome tab's keyframed Scale dial). The sky's own cloud_scale uniform keeps
-// holding the fade's FROM endpoint; these carry the TO endpoint's authored scale and the eased
-// weight. main() samples the band at BOTH scales and mixes the two resulting opacities by the
-// weight - the pattern never has its divisor interpolated, the two endpoint-scale renderings
-// crossfade, so a keyframed Scale change between two authored patterns slides between them
-// instead of zooming continuously (the interpolation was the erratic-motion bug: an interpolated
-// divisor drags every feature sideways as the tile zooms). 0 blend is the single-sample rail.
+// <SS:Nexii> The dome band's Scale crossfade (SSAtmoEnvApplier::cloudScaleTo/cloudScaleBlend, samplings of the Sky Dome tab's keyframed Scale dial). The sky's own cloud_scale uniform keeps holding the fade's FROM endpoint; these carry the TO endpoint's authored scale and the eased weight. main() samples the band at BOTH scales and mixes the two resulting opacities by the weight - the pattern never has its divisor interpolated, the two endpoint-scale renderings crossfade, so a keyframed Scale change between two authored patterns slides between them instead of zooming continuously (the interpolation was the erratic-motion bug: an interpolated divisor drags every feature sideways as the tile zooms). 0 blend is the single-sample rail.
 uniform float ss_cloud_scale_to;
 uniform float ss_cloud_scale_blend;
 
@@ -310,13 +276,7 @@ vec2 ss_plane_base(float alt, float scale, out float plane_fade, out float detai
 // approach: alpha zero at the rim, full a fraction of the rim's elevation above it. The edge
 // reads as a curved cloud horizon melting into the atmosphere rather than a smeared seam.
 //
-// <SS:Nexii> The melt's TOP follows the volumetric deck's perceived edge (ss_deck_edge_sin) when
-// one stands over the camera. The deck's own field ends at ~4.9 km horizontal - several degrees
-// UP the sky from the band's rim - and past that edge the band has no cloud in front of it, so
-// letting it run saturated to the waterline painted a flat grey plane across the whole span
-// between the deck's edge and the horizon. The melt now spends that span: full at the deck's
-// edge, gone at the rim. No deck, or the camera up near the deck's top (its edge sine below the
-// old window's top), keeps the old narrow melt. </SS:Nexii>
+// <SS:Nexii> The melt's TOP follows the volumetric deck's perceived edge (ss_deck_edge_sin) when one stands over the camera. The deck's own field ends at ~4.9 km horizontal - several degrees UP the sky from the band's rim - and past that edge the band has no cloud in front of it, so letting it run saturated to the waterline painted a flat grey plane across the whole span between the deck's edge and the horizon. The melt now spends that span: full at the deck's edge, gone at the rim. No deck, or the camera up near the deck's top (its edge sine below the old window's top), keeps the old narrow melt.
 float ss_deck_edge_fade(float alt)
 {
     if (ss_planet_orbit_m <= 0.0 || alt < 0.0) return 1.0;
@@ -359,21 +319,7 @@ void main()
 #ifdef SS_ATMO
     if (ss_cloud_plane > 0.0)
     {
-        // <SS:Nexii> The Scale crossfade (the Sky Dome tab's Scale dial, keyframed across the day
-        // cycle). The sky's own cloud_scale uniform holds the fade's FROM endpoint - the applier
-        // keeps valueAt there (blendAt's from is the same keyframe) - and ss_cloud_scale_to names
-        // the TO endpoint with the eased weight. Both endpoints run the whole density chain at
-        // THEIR tile (SS_SCALE_ANCHOR makes an authored 0.25 the pre-dial anchor pin), and the two
-        // resulting opacities are mixed by the weight: the two endpoint-scale renderings
-        // crossfade, the divisor between them is never interpolated. An interpolated divisor is
-        // the erratic motion this replaces - zooming the tile mid-fade drags every feature
-        // sideways as the pivot point moves, reading as the clouds creeping when they should
-        // stand still. The TO plate is the FROM base scaled by from/to: the plane base is a pure
-        // metres/divisor quotient, so the partner is the same ray, the same fades and the same
-        // anchor - one geometric intersection, no recompute. A live Cloud Image crossfade
-        // composes exactly: its two maps are mixed inside cloudNoise(), which both plates call
-        // after their own UVs, so the two dials fade on their own axes regardless of where each
-        // set its keyframes.
+        // <SS:Nexii> The Scale crossfade (the Sky Dome tab's Scale dial, keyframed across the day cycle). The sky's own cloud_scale uniform holds the fade's FROM endpoint - the applier keeps valueAt there (blendAt's from is the same keyframe) - and ss_cloud_scale_to names the TO endpoint with the eased weight. Both endpoints run the whole density chain at THEIR tile (SS_SCALE_ANCHOR makes an authored 0.25 the pre-dial anchor pin), and the two resulting opacities are mixed by the weight: the two endpoint-scale renderings crossfade, the divisor between them is never interpolated. An interpolated divisor is the erratic motion this replaces - zooming the tile mid-fade drags every feature sideways as the pivot point moves, reading as the clouds creeping when they should stand still. The TO plate is the FROM base scaled by from/to: the plane base is a pure metres/divisor quotient, so the partner is the same ray, the same fades and the same anchor - one geometric intersection, no recompute. A live Cloud Image crossfade composes exactly: its two maps are mixed inside cloudNoise(), which both plates call after their own UVs, so the two dials fade on their own axes regardless of where each set its keyframes.
         float scale_from = cloud_scale;
         float scale_to   = ss_cloud_scale_to;
         float scale_blend = (scale_from > 0.001 && scale_to > 0.001) ? ss_cloud_scale_blend : 0.0;
@@ -422,9 +368,7 @@ void main()
     // Combine
     vec3 color;
 #ifdef SS_ATMO
-    // <SS:Nexii> The glow reaches a fragment only through its THINNESS: the forward-scatter fire belongs to the airlight behind the cloud, so a dense core stays a dark silhouette right up to the
-    // disc's edge (it gets only the anti-solar base the stock far-field carries) while the ragged fringes transmit the full glow and catch fire - which is what every backlit-cloud photograph
-    // shows and the baked-in glow never could. Far from the sun haze_glow sits near its 0.25 floor, below the base cap, so open-sky cloud shading is unchanged.
+    // <SS:Nexii> The glow reaches a fragment only through its THINNESS: the forward-scatter fire belongs to the airlight behind the cloud, so a dense core stays a dark silhouette right up to the disc's edge (it gets only the anti-solar base the stock far-field carries) while the ragged fringes transmit the full glow and catch fire - which is what every backlit-cloud photograph shows and the baked-in glow never could. Far from the sun haze_glow sits near its 0.25 floor, below the base cap, so open-sky cloud shading is unchanged.
     float glow_thin = (1.0 - alpha1) * (1.0 - alpha1);
     float glow_gate = mix(min(vary_CloudGlow, 0.35), vary_CloudGlow, glow_thin);
     color = (cloudColorSun*(1.-alpha2)*glow_gate + cloudColorAmbient);

@@ -25,8 +25,8 @@
 
 uniform mat4 modelview_projection_matrix;
 
-// The same far-field squash the puff field's vertex shader applies, from the same ss_squash uniform - one mapping, so a bolt inside a far cloud stays inside it in drawn depth too. Per vertex,
-// each keeping its exact ray from the camera, which is what replaced the old CPU per-strike scale (that one collapsed everything beyond a limit onto one shell; this compresses progressively and
+// The same far-field squash and ss_squash uniform the puff field's vertex shader applies - one mapping, so a bolt inside a far cloud stays inside it in drawn depth too. Per vertex,
+// each keeps its exact ray from the camera, replacing the old CPU per-strike scale (which collapsed everything beyond a limit onto one shell; this compresses progressively and
 // a 5km crawler spanning the knee bends correctly through it).
 uniform vec3 ss_squash;
 uniform vec3 ss_cam_pos;
@@ -40,7 +40,7 @@ out vec4 vary_color;
 
 void main()
 {
-    // Ribbons arrive already built in world space, camera-faced on the CPU alongside everything else about them - same arrangement as the puff field, and for the same reason: the geometry is a
+    // Ribbons arrive pre-built in world space, camera-faced on the CPU with everything else about them - the puff field's arrangement, and for the same reason: the geometry is a
     // handful of quads a few times a minute, not something worth a geometry stage.
     vec3 rel = position.xyz - ss_cam_pos;
     float d = length(rel);
@@ -57,4 +57,3 @@ void main()
     vary_color = diffuse_color;
 }
 
-// </SS:Nexii>

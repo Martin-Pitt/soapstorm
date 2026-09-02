@@ -60,17 +60,12 @@ static LLStaticHashedString sCustomAlpha("custom_alpha");
 static LLStaticHashedString sRegionOffset("region_offset"); // <SS:Nexii> cloud parallax
 static LLStaticHashedString sCloudDrift("ss_cloud_drift"); // <SS:Nexii> wind-driven cloud travel
 
-// <SS:Nexii> The dome band's Scale crossfade pair (cloudsF.glsl, SSAtmoEnvApplier::cloudScaleTo /
-// cloudScaleBlend): the ground mapping tiles the band by the sky's own cloud_scale AND by this
-// partner, and mixes the two endpoint-scale renderings by the eased weight - the pattern is never
-// zoomed, which is what made the old interpolated Scale read as erratic cloud motion. Zero unless
-// the day cycle sits between two Scale keyframes.
+// <SS:Nexii> The dome band's Scale crossfade pair (cloudsF.glsl, SSAtmoEnvApplier::cloudScaleTo / cloudScaleBlend): the ground mapping tiles the band by the sky's own cloud_scale AND by this partner, and mixes the two endpoint-scale renderings by the eased weight - the pattern is never zoomed, which is what made the old interpolated Scale read as erratic cloud motion. Zero unless the day cycle sits between two Scale keyframes.
 static LLStaticHashedString sCloudScaleTo("ss_cloud_scale_to");
 static LLStaticHashedString sCloudScaleBlend("ss_cloud_scale_blend");
 
 
-// <SS:Nexii> Atmo Magic celestial discs - see ssCelestialF.glsl. Every look
-// constant lives in the shader; these are the per-body handles.
+// <SS:Nexii> Atmo Magic celestial discs - see ssCelestialF.glsl. Every look constant lives in the shader; these are the per-body handles.
 static LLStaticHashedString sDiscColor("ss_disc_color");
 static LLStaticHashedString sBodyDir("ss_body_dir");
 static LLStaticHashedString sSunDir("ss_sun_dir");
@@ -83,55 +78,25 @@ static LLStaticHashedString sDaylight("ss_daylight");
 static LLStaticHashedString sFaceRot("ss_face_rot");
 static LLStaticHashedString sDiscFraction("ss_disc_fraction");
 
-// <SS:Nexii> The dome band's virtual ALTITUDE above the CAMERA, metres - the deck-tracking merge
-// (SSAtmoEnvApplier::cloudDomeAltitudeMetres) read against the camera's own height, so the shell
-// the shader intersects stays put while the camera climbs. Both the curved-deck UVs (cloudsF) and
-// the disc occlusion (ssCelestialF, by depth) derive from it - one authority, which is why it is
-// resolved in the applier and only read here.
+// <SS:Nexii> The dome band's virtual ALTITUDE above the CAMERA, metres - the deck-tracking merge (SSAtmoEnvApplier::cloudDomeAltitudeMetres) read against the camera's own height, so the shell the shader intersects stays put while the camera climbs. Both the curved-deck UVs (cloudsF) and the disc occlusion (ssCelestialF, by depth) derive from it - one authority, which is why it is resolved in the applier and only read here.
 static LLStaticHashedString sCloudAltM("ss_cloud_alt_m");
 
-// <SS:Nexii> The camera's distance from the home planet's CENTRE, metres (home radius + camera
-// height) - the curvature term for the dome cloud's deck mapping (cloudsF.glsl): the deck is a
-// spherical shell, terminates at its own curved horizon and fades there. Zero falls back to the
-// flat-deck mapping.
+// <SS:Nexii> The camera's distance from the home planet's CENTRE, metres (home radius + camera height) - the curvature term for the dome cloud's deck mapping (cloudsF.glsl): the deck is a spherical shell, terminates at its own curved horizon and fades there. Zero falls back to the flat-deck mapping.
 static LLStaticHashedString sPlanetOrbit("ss_planet_orbit_m");
 
-// <SS:Nexii> The horizon clip's uniform (SSAtmoEnvAtmosphere::mHorizonClip) - the on/off gate the
-// dome fragment shader tests before it writes the lower half of the dome into its own depth slot
-// (LL_SHADER_CONST_HORIZON_DEPTH, a shader const on both sky programs; see skyF.glsl). The sky's
-// layer stack reads 1.0 stars, 0.999999 stock sun, 0.999991 stock moon, 0.99999 haze dome and Atmo
-// discs, 0.99998 cloud layer - and the clip slot, one step nearer than the clouds, is what the
-// below-horizon half of the dome takes: the discs, the stars, the stock sun and moon and the clouds
-// are all deeper than it, so they fail LEQUAL behind it and the horizon line hides whatever has
-// set. The VALUE lives in the shader const table (gShaderConstsVal in llglslshader.cpp) rather than
-// here, so there is one number to keep honest; this side only ever passes the gate.
+// <SS:Nexii> The horizon clip's uniform (SSAtmoEnvAtmosphere::mHorizonClip) - the on/off gate the dome fragment shader tests before it writes the lower half of the dome into its own depth slot (LL_SHADER_CONST_HORIZON_DEPTH, a shader const on both sky programs; see skyF.glsl). The sky's layer stack reads 1.0 stars, 0.999999 stock sun, 0.999991 stock moon, 0.99999 haze dome and Atmo discs, 0.99998 cloud layer - and the clip slot, one step nearer than the clouds, is what the below-horizon half of the dome takes: the discs, the stars, the stock sun and moon and the clouds are all deeper than it, so they fail LEQUAL behind it and the horizon line hides whatever has set. The VALUE lives in the shader const table (gShaderConstsVal in llglslshader.cpp) rather than here, so there is one number to keep honest; this side only ever passes the gate.
 static LLStaticHashedString sHorizonClip("ss_horizon_clip");
 
-// <SS:Nexii> The sky dome's below-horizon ray treatment (skyV.glsl): 1 mirrors
-// below-horizon rays instead of stock's -32000 collapse, 0 is exactly stock.
-// Zero unless an ACTIVE Atmo environment is driving the sky, so an enabled-but-
-// idle viewer's plain EEP sky shades below the horizon the way stock always has.
+// <SS:Nexii> The sky dome's below-horizon ray treatment (skyV.glsl): 1 mirrors below-horizon rays instead of stock's -32000 collapse, 0 is exactly stock. Zero unless an ACTIVE Atmo environment is driving the sky, so an enabled-but- idle viewer's plain EEP sky shades below the horizon the way stock always has.
 static LLStaticHashedString sHorizonMirror("ss_horizon_mirror");
 
-// <SS:Nexii> The dome cloud band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo
-// environment is driving the sky - the slot orders the band against the Atmo discs - and 0 for
-// stock's untouched projection squash.
+// <SS:Nexii> The dome cloud band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo environment is driving the sky - the slot orders the band against the Atmo discs - and 0 for stock's untouched projection squash.
 static LLStaticHashedString sCloudDepth("ss_cloud_depth");
 
-// <SS:Nexii> The stock atmosphere ray lift (skyV.glsl, cloudsV.glsl): 1 computes the
-// haze ray 50 m above the geometry - stock's legacy fudge, which once paired with the
-// stock sun disc's own legacy 50 m drop (sunDiscV.glsl), glow hotspot and drawn disc
-// wrong together - and 0 computes it at the true direction the Atmo discs draw at
-// (ssCelestialV.glsl carries no offset). 1 unless the Atmo discs own the sky, so the
-// glow lands on the disc exactly when there is an unfudged disc to land on: with the
-// stock discs drawing, the dome keeps the stock pairing.
+// <SS:Nexii> The stock atmosphere ray lift (skyV.glsl, cloudsV.glsl): 1 computes the haze ray 50 m above the geometry - stock's legacy fudge, which once paired with the stock sun disc's own legacy 50 m drop (sunDiscV.glsl), glow hotspot and drawn disc wrong together - and 0 computes it at the true direction the Atmo discs draw at (ssCelestialV.glsl carries no offset). 1 unless the Atmo discs own the sky, so the glow lands on the disc exactly when there is an unfudged disc to land on: with the stock discs drawing, the dome keeps the stock pairing.
 static LLStaticHashedString sRayLift("ss_ray_lift");
 
-// <SS:Nexii> Weather-driven optics (ssOptics in skyF.glsl): the corona, the 22/46 deg halos and
-// the aligned-plate arcs, all rendered at true angular positions from the light direction and the
-// weather's drive amplitudes. ss_optic_gate is the on/off: 0 unless an ACTIVE Atmo environment is
-// pushing at least one drive, which is what keeps the stock halo_map strip pristine for idle
-// viewers.
+// <SS:Nexii> Weather-driven optics (ssOptics in skyF.glsl): the corona, the 22/46 deg halos and the aligned-plate arcs, all rendered at true angular positions from the light direction and the weather's drive amplitudes. ss_optic_gate is the on/off: 0 unless an ACTIVE Atmo environment is pushing at least one drive, which is what keeps the stock halo_map strip pristine for idle viewers.
 static LLStaticHashedString sOpticGate("ss_optic_gate");
 static LLStaticHashedString sOpticActive("ss_optic_active");
 static LLStaticHashedString sOpticLight("ss_optic_light");
@@ -143,7 +108,6 @@ static LLStaticHashedString sOpticSunCol("ss_optic_sun_col");
 
 // <SS:Nexii> The physical rainbow's gate (SSAtmoRainbow, ss_rainbow in skyF.glsl).
 static LLStaticHashedString sRainbowGate("ss_rainbow_gate");
-// </SS:Nexii>
 
 // Whether Atmo Magic should draw the discs at all. Its own shader replaces
 // the stock sun and moon ones only while an Atmo environment owns the sky -
@@ -412,10 +376,7 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         sky_shader->uniform1f(LLShaderMgr::DROPLET_RADIUS, droplet_radius);
         sky_shader->uniform1f(LLShaderMgr::ICE_LEVEL, ice_level);
 
-        // <SS:Nexii> The physical rainbow's gate (ss_rainbow in skyF.glsl): the double-bow look
-        // with the interior wash cut, the reversed secondary, the red low-sun grade and the white
-        // moonbow - versus the stock single strip. A plain bool, not weather-driven: the look is
-        // the same correction at every sky. </SS:Nexii>
+        // <SS:Nexii> The physical rainbow's gate (ss_rainbow in skyF.glsl): the double-bow look with the interior wash cut, the reversed secondary, the red low-sun grade and the white moonbow - versus the stock single strip. A plain bool, not weather-driven: the look is the same correction at every sky.
         static LLCachedControl<bool> s_rainbow_phys(gSavedSettings, "SSAtmoRainbow", true);
         sky_shader->uniform1f(sRainbowGate, s_rainbow_phys ? 1.f : 0.f);
 
@@ -423,40 +384,24 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
 
         sky_shader->uniform1i(LLShaderMgr::SUN_UP_FACTOR, psky->getIsSunUp() ? 1 : 0);
 
-        // <SS:Nexii> The horizon clip: when an active Atmo environment asks for it, the dome
-        // fragment stage writes the lower half of the dome into the clip's depth slot (see
-        // sHorizonClip above and skyF.glsl) and drawDome is asked to let it - the only draw in
-        // this pool that writes depth, because it is the only one that has anything to hide. The
-        // uniform is the gate only: 0 leaves the fragment stage's write on the harmless 1.0 path
-        // and drawDome keeps the depth mask off, exactly as stock.
+        // <SS:Nexii> The horizon clip: when an active Atmo environment asks for it, the dome fragment stage writes the lower half of the dome into the clip's depth slot (see sHorizonClip above and skyF.glsl) and drawDome is asked to let it - the only draw in this pool that writes depth, because it is the only one that has anything to hide. The uniform is the gate only: 0 leaves the fragment stage's write on the harmless 1.0 path and drawDome keeps the depth mask off, exactly as stock.
         const SSAtmoEnvApplier& atmo_applier = SSAtmoEnvApplier::instance();
         const bool horizon_clip = atmo_applier.isActive() && atmo_applier.horizonClip();
         sky_shader->uniform1f(sHorizonClip, horizon_clip ? 1.f : 0.f);
 
-        // <SS:Nexii> The below-horizon ray mirror rides the same gate: only an
-        // active Atmo environment may depart from stock's -32000 collapse.
+        // <SS:Nexii> The below-horizon ray mirror rides the same gate: only an active Atmo environment may depart from stock's -32000 collapse.
         sky_shader->uniform1f(sHorizonMirror, atmo_applier.isActive() ? 1.f : 0.f);
 
         // ...and the ray lift drops only when the Atmo discs own the sky, taking the
         // glow's hotspot with it onto the disc - see sRayLift above.
         sky_shader->uniform1f(sRayLift, ss_atmo_discs_active() ? 0.f : 1.f);
 
-        // <SS:Nexii> Weather-driven optics (ssOptics in skyF.glsl). The halo grows with the DISC,
-        // not the disc's centre: while the sun's rise band is live - full strength while the
-        // disc is up, easing out through the dusk below the horizon - the optics ramp on the
-        // SAME horizon-band share the glow ramps on (ss_sun_rise,
-        // SSAtmoEnvApplier::sunRiseFraction) and aim at the sun's true direction, so a low sun's
-        // halos burn in from the first sliver above the horizon and fade out through the twilight
-        // after it sets, never popping the moment the centre crosses. SUN ONLY for now - the
-        // optics are the sun's own, and moonlight optics are not wired up yet, so once the band is
-        // spent there are none. The gate is active-env AND the sun's rise band live AND at least
-        // one drive speaking: leave it all absent and the stock halo_map strip renders as always.
+        // <SS:Nexii> Weather-driven optics (ssOptics in skyF.glsl). The halo grows with the DISC, not the disc's centre: while the sun's rise band is live - full strength while the disc is up, easing out through the dusk below the horizon - the optics ramp on the SAME horizon-band share the glow ramps on (ss_sun_rise, SSAtmoEnvApplier::sunRiseFraction) and aim at the sun's true direction, so a low sun's halos burn in from the first sliver above the horizon and fade out through the twilight after it sets, never popping the moment the centre crosses. SUN ONLY for now - the optics are the sun's own, and moonlight optics are not wired up yet, so once the band is spent there are none. The gate is active-env AND the sun's rise band live AND at least one drive speaking: leave it all absent and the stock halo_map strip renders as always.
         const SSAtmoEnvSkyModulation& ssm = atmo_applier.lastModulation();
 
         float optic_gate = 0.f;
         LLVector3 optic_dir(0.f, 1.f, 0.f);
-        // <SS:Nexii> Hoisted out of the active-env block below: the same horizon-band share gates
-        // the optics, and it was out of scope there.
+        // <SS:Nexii> Hoisted out of the active-env block below: the same horizon-band share gates the optics, and it was out of scope there.
         float sun_rise = 0.f;
         if (atmo_applier.isActive())
         {
@@ -486,15 +431,7 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         sky_shader->uniform1f(sOpticHalo46, ssm.mIceHalo46);
         sky_shader->uniform1f(sOpticAlign, ssm.mCrystalAlign);
 
-        // <SS:Nexii> The optics' light colour is produced IN the vertex shader now (skyV.glsl:
-        // vary_ss_optic_sun_col) - the dome's own capped-glow sun light along the light's ray, the
-        // light the sunset band actually renders with - so the halos, arcs and sundogs keep their
-        // sunrise/sunset hue down through the horizon band and below it. The old CPU replica of the
-        // uncapped beam (sunSlotLight's 1/max(1e-6, sin(elev)) cosecant) underflowed to zero within
-        // a degree of the horizon and fell back to the raw near-white authored sun colour - the
-        // white snap. This bind is the vertex shader's MOONLIGHT fallback only (no sun band live):
-        // moonlight optics are not wired to their own light yet, so they keep a faint cool-white
-        // tint rather than borrowing the sun's (or dumping the moon into it). </SS:Nexii>
+        // <SS:Nexii> The optics' light colour is produced IN the vertex shader now (skyV.glsl: vary_ss_optic_sun_col) - the dome's own capped-glow sun light along the light's ray, the light the sunset band actually renders with - so the halos, arcs and sundogs keep their sunrise/sunset hue down through the horizon band and below it. The old CPU replica of the uncapped beam (sunSlotLight's 1/max(1e-6, sin(elev)) cosecant) underflowed to zero within a degree of the horizon and fell back to the raw near-white authored sun colour - the white snap. This bind is the vertex shader's MOONLIGHT fallback only (no sun band live): moonlight optics are not wired to their own light yet, so they keep a faint cool-white tint rather than borrowing the sun's (or dumping the moon into it).
         sky_shader->uniform3fv(sOpticSunCol, 1, LLColor3(1.f, 1.f, 1.f).mV);
 
         /// Render the skydome
@@ -599,8 +536,7 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         F32 cloud_variance = psky ? (F32)psky->getCloudVariance() : 0.0f;
         F32 blend_factor   = psky ? (F32)psky->getBlendFactor() : 0.0f;
 
-        // <SS:Nexii> Hoisted above the noise bindings: the Atmo crossfade below needs the gate
-        // before the stock pair logic runs. (Was declared with the parallax uniforms further down.)
+        // <SS:Nexii> Hoisted above the noise bindings: the Atmo crossfade below needs the gate before the stock pair logic runs. (Was declared with the parallax uniforms further down.)
         const bool atmo_env_active = SSAtmoEnvApplier::instance().isActive();
 
         if (psky->getCloudScrollRate().isExactlyZero())
@@ -629,12 +565,7 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             }
         }
 
-        // <SS:Nexii> Atmo Magic's dome-noise crossfade. The environment's keyframes name the maps,
-        // and mid-fade the applier hands over the pair - the sky's own noise id keeps holding the
-        // fade's FROM map, so rebind both channels here and put the eased weight into the stock
-        // blend factor. This also survives the stock zero-scroll kill above: Atmo's dome drift is
-        // its own uniform, so the coupling that silences a static stock sky's blend says nothing
-        // about a fading Atmo pair. Fetches on change and caches, like the large map below.
+        // <SS:Nexii> Atmo Magic's dome-noise crossfade. The environment's keyframes name the maps, and mid-fade the applier hands over the pair - the sky's own noise id keeps holding the fade's FROM map, so rebind both channels here and put the eased weight into the stock blend factor. This also survives the stock zero-scroll kill above: Atmo's dome drift is its own uniform, so the coupling that silences a static stock sky's blend says nothing about a fading Atmo pair. Fetches on change and caches, like the large map below.
         if (atmo_env_active)
         {
             LLUUID noise_from, noise_to;
@@ -664,15 +595,12 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
                 blend_factor = noise_blend;
             }
         }
-        // </SS:Nexii>
 
         cloudshader->uniform1f(LLShaderMgr::BLEND_FACTOR, blend_factor);
         cloudshader->uniform1f(LLShaderMgr::CLOUD_VARIANCE, cloud_variance);
         cloudshader->uniform1f(LLShaderMgr::SUN_MOON_GLOW_FACTOR, psky->getSunMoonGlowFactor());
 
-        // <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md). Gated on an ACTIVE Atmo environment, not just the compiled-in SS_ATMO define: the master toggle bakes the
-        // shader variant, but an enabled-yet-idle viewer falling back to a plain EEP sky must leave it pixel-stock - zeros make both additive terms vanish. (The drift below already self-gates:
-        // it is zero unless an Atmo environment is driving the sky.)
+        // <SS:Nexii> Region-relative cloud parallax (doc/atmo_magic_cloud_parallax.md). Gated on an ACTIVE Atmo environment, not just the compiled-in SS_ATMO define: the master toggle bakes the shader variant, but an enabled-yet-idle viewer falling back to a plain EEP sky must leave it pixel-stock - zeros make both additive terms vanish. (The drift below already self-gates: it is zero unless an Atmo environment is driving the sky.)
         LLViewerRegion* region       = gAgent.getRegion();
         F32             region_width = region ? region->getWidth() : REGION_WIDTH_METERS;
         F32             region_off_x = atmo_env_active ? (camPosLocal.mV[VX] - region_width * 0.5f) : 0.f;
@@ -685,22 +613,14 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
         cloudshader->uniform2f(sCloudDrift, drift.mV[0], drift.mV[1]);
 
-        // <SS:Nexii> The band's Scale crossfade (SSAtmoEnvApplier::cloudScaleTo/cloudScaleBlend):
-        // the fragment ground mapping samples the band at both endpoint scales and blends the two
-        // renderings by the eased weight - the sky's own cloud_scale uniform keeps the FROM
-        // endpoint. Zero when no Atmo environment drives the sky, or between equal keyframes,
-        // which leaves the shader on its single-sample branch - idle EEP skies are untouched.
+        // <SS:Nexii> The band's Scale crossfade (SSAtmoEnvApplier::cloudScaleTo/cloudScaleBlend): the fragment ground mapping samples the band at both endpoint scales and blends the two renderings by the eased weight - the sky's own cloud_scale uniform keeps the FROM endpoint. Zero when no Atmo environment drives the sky, or between equal keyframes, which leaves the shader on its single-sample branch - idle EEP skies are untouched.
         cloudshader->uniform1f(sCloudScaleTo, SSAtmoEnvApplier::instance().cloudScaleTo());
         cloudshader->uniform1f(sCloudScaleBlend, SSAtmoEnvApplier::instance().cloudScaleBlend());
 
-        // <SS:Nexii> The dome band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo
-        // environment is driving the sky - it orders the band against the Atmo discs - and 0 for
-        // stock's untouched projection squash (the file-scope sCloudDepth).
+        // <SS:Nexii> The dome band's own depth slot (cloudsV.glsl): 0.99998 when an ACTIVE Atmo environment is driving the sky - it orders the band against the Atmo discs - and 0 for stock's untouched projection squash (the file-scope sCloudDepth).
         static const F32 SS_BAND_DEPTH    = 0.99998f;
 
-        // <SS:Nexii> The deck-mapping gate (cloudsF.glsl): 1 computes the dome cloud UVs from the
-        // true view ray's intersection with the band's curved deck - per-band parallax, the deck's
-        // own horizon curvature and fade - and 0 keeps the stock dome-mesh texcoords.
+        // <SS:Nexii> The deck-mapping gate (cloudsF.glsl): 1 computes the dome cloud UVs from the true view ray's intersection with the band's curved deck - per-band parallax, the deck's own horizon curvature and fade - and 0 keeps the stock dome-mesh texcoords.
         static LLStaticHashedString sCloudPlane("ss_cloud_plane");
 
         // The stock ray lift, riding the same gate as the discs: the deck's glow
@@ -712,11 +632,7 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         // The deck-mapping gate.
         cloudshader->uniform1f(sCloudPlane, atmo_env_active ? 1.f : 0.f);
 
-        // <SS:Nexii> The dome band's authored large-scale noise map, when one is set: the broad
-        // composition (warp fields, base octave, self-shadow) reads it, the fine octave keeps the
-        // cloud noise. Fetched on change and cached - the applier hands over the id, the pool owns
-        // the binding. Gate 0 (idle sky, or no map authored) leaves every octave on the cloud
-        // noise, exactly as stock.
+        // <SS:Nexii> The dome band's authored large-scale noise map, when one is set: the broad composition (warp fields, base octave, self-shadow) reads it, the fine octave keeps the cloud noise. Fetched on change and cached - the applier hands over the id, the pool owns the binding. Gate 0 (idle sky, or no map authored) leaves every octave on the cloud noise, exactly as stock.
         static LLStaticHashedString sNoiseLargeOn("ss_noise_large_on");
         static LLUUID s_large_noise_id;
         static LLPointer<LLViewerFetchedTexture> s_large_noise_tex;
@@ -734,11 +650,7 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             cloudshader->bindTexture(LLShaderMgr::SS_NOISE_LARGE_MAP, s_large_noise_tex, LLTexUnit::TT_TEXTURE);
             large_noise_on = true;
 
-            // <SS:Nexii> The large map's own crossfade: mid-fade the applier names a second
-            // authored map and the eased weight, bound on the partner channel (reserved name -
-            // see llshadermgr). No fade running, the partner sits on the SAME map with weight 0,
-            // so the shader's mix is a no-op; and the sky's stock blend factor never reaches this
-            // uniform - the pair carries its own weight.
+            // <SS:Nexii> The large map's own crossfade: mid-fade the applier names a second authored map and the eased weight, bound on the partner channel (reserved name - see llshadermgr). No fade running, the partner sits on the SAME map with weight 0, so the shader's mix is a no-op; and the sky's stock blend factor never reaches this uniform - the pair carries its own weight.
             static LLStaticHashedString sNoiseLargeBlend("ss_noise_large_blend");
             const LLUUID& large_noise_next_id = SSAtmoEnvApplier::instance().cloudLargeNoiseNextId();
             const F32 large_noise_blend = SSAtmoEnvApplier::instance().cloudLargeNoiseBlend();
@@ -764,17 +676,11 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             }
         }
         cloudshader->uniform1f(sNoiseLargeOn, large_noise_on ? 1.f : 0.f);
-        // </SS:Nexii>
 
-        // <SS:Nexii> The scale the dome mesh draws at: 0.3325 of the dome radius when Atmo owns the
-        // sky, the stock 0.333 when not - twelve metres of headroom over the haze backdrop, see the
-        // note at the old single-pass draw.
+        // <SS:Nexii> The scale the dome mesh draws at: 0.3325 of the dome radius when Atmo owns the sky, the stock 0.333 when not - twelve metres of headroom over the haze backdrop, see the note at the old single-pass draw.
         const F32 dome_scale = atmo_env_active ? 0.3325f : 0.333f;
 
-        // <SS:Nexii> The planet the deck curves around: the home body's radius plus the camera's
-        // height above the region floor - the camera's orbit. A track with no home body falls back
-        // to an Earth-sized default (see the applier), so the deck always curves and terminates at
-        // its own rim rather than running flat into the world's horizon line.
+        // <SS:Nexii> The planet the deck curves around: the home body's radius plus the camera's height above the region floor - the camera's orbit. A track with no home body falls back to an Earth-sized default (see the applier), so the deck always curves and terminates at its own rim rather than running flat into the world's horizon line.
         const F32 planet_orbit_m = atmo_env_active
             ? SSAtmoEnvApplier::instance().homePlanetRadiusM() + llmax(camPosLocal.mV[VZ], 0.f)
             : 0.f;
@@ -790,26 +696,13 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
         }
         else
         {
-            // <SS:Nexii> ONE dome band. Two bands over one noise texture with per-band parallax
-            // rates ghost apart the moment the camera moves - the same pattern twice, shifted, a
-            // second ghost layer. The band IS the cirrus layer: the Sky Dome's animatable height
-            // param, floor-relative, brought down only by convection's anvil ramp
-            // (cloudDomeAltitudeMetres) - moisture never moves it. Its density is the live sky's
-            // cloud shadow - the dome's authored coverage, its own layer after the deck-coverage
-            // lift was removed (no moisture term reaches the dome band) - which also dims the
-            // world, so band and world light overcast together.
-            // </SS:Nexii>
+            // <SS:Nexii> ONE dome band. Two bands over one noise texture with per-band parallax rates ghost apart the moment the camera moves - the same pattern twice, shifted, a second ghost layer. The band IS the cirrus layer: the Sky Dome's animatable height param, floor-relative, brought down only by convection's anvil ramp (cloudDomeAltitudeMetres) - moisture never moves it. Its density is the live sky's cloud shadow - the dome's authored coverage, its own layer after the deck-coverage lift was removed (no moisture term reaches the dome band) - which also dims the world, so band and world light overcast together.
             SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
 
             const F32 band_world_height_m = applier.cloudDomeAltitudeMetres();
             cloudshader->uniform1f(sCloudAltM, band_world_height_m - camPosLocal.mV[VZ]);
 
-            // <SS:Nexii> The volumetric deck's perceived edge, as an elevation sine over the
-            // camera: the deck's top slab seen at the field's own edge distance - the 4900 m the
-            // deck's puffs and base veil dissolve by (ssVolCloudF.glsl). The dome band's horizon
-            // melt runs up to this line: past the deck's edge the band has no cloud in front of
-            // it, so it fades toward the horizon instead of running the overcast sheet flat into
-            // it. Zero - no deck, or the camera at/over its top - leaves the old narrow rim melt.
+            // <SS:Nexii> The volumetric deck's perceived edge, as an elevation sine over the camera: the deck's top slab seen at the field's own edge distance - the 4900 m the deck's puffs and base veil dissolve by (ssVolCloudF.glsl). The dome band's horizon melt runs up to this line: past the deck's edge the band has no cloud in front of it, so it fades toward the horizon instead of running the overcast sheet flat into it. Zero - no deck, or the camera at/over its top - leaves the old narrow rim melt.
             static LLStaticHashedString sDeckEdgeSin("ss_deck_edge_sin");
             F32 deck_edge_sin = 0.f;
             SSVolCloud* vol = SSVolCloud::getInstance();
@@ -828,16 +721,10 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             cloudshader->uniform1f(sCloudDepth, SS_BAND_DEPTH);
             renderDome(camPosLocal, camHeightLocal, cloudshader, dome_scale);
         }
-        // </SS:Nexii>
 
         cloudshader->unbind();
 
-        // <SS:Nexii> The volumetric layer used to be drawn here, on top of
-        // the dome. It is now a late translucent pass instead - see
-        // LLPipeline::renderGeomPostDeferred. Drawn in the sky pass it could
-        // only ever be part of the backdrop: everything rendered afterwards,
-        // water included, painted straight over it, and it had no scene
-        // depth to soften itself against.
+        // <SS:Nexii> The volumetric layer used to be drawn here, on top of the dome. It is now a late translucent pass instead - see LLPipeline::renderGeomPostDeferred. Drawn in the sky pass it could only ever be part of the backdrop: everything rendered afterwards, water included, painted straight over it, and it had no scene depth to soften itself against.
 
         gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
         gGL.getTexUnit(1)->unbind(LLTexUnit::TT_TEXTURE);
@@ -850,13 +737,7 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
 
     LLGLSPipelineBlendSkyBox gls_skybox(true, true); // SL-14113 we need moon to write to depth to clip stars behind
 
-    // <SS:Nexii> Atmo Magic's discs are ADDED to the sky rather than
-    // composited over it - the whole atmosphere is in front of a celestial
-    // body, so the sky already drawn at those pixels is exactly the airlight
-    // over the disc. See the note in ssCelestialF.glsl.
-    //
-    // Only when Atmo Magic owns the sky: the stock discs are built to be
-    // composited and would come out as bright smears added to it.
+    // <SS:Nexii> Atmo Magic's discs are ADDED to the sky rather than composited over it - the whole atmosphere is in front of a celestial body, so the sky already drawn at those pixels is exactly the airlight over the disc. See the note in ssCelestialF.glsl. Only when Atmo Magic owns the sky: the stock discs are built to be composited and would come out as bright smears added to it.
     const bool ss_additive_discs = ss_atmo_discs_active();
     if (ss_additive_discs)
     {
@@ -865,31 +746,10 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
 
     LLVector3 const & origin = LLViewerCamera::getInstance()->getOrigin();
 
-    // <SS:Nexii> Celestial quads onto a true camera-centred shell.
-    //
-    // LLVOSky::updateHeavenlyBodyGeometry bakes mCameraPosAgent (the sky
-    // drawable's position, i.e. the camera) into the sun and moon face
-    // vertices, and this pass then translated by the camera origin as
-    // well - so every celestial quad sat at
-    //     camera + cameraPosAgent + dir * HEAVENLY_BODY_DIST
-    // instead of camera + dir * HEAVENLY_BODY_DIST. On the ground the
-    // extra term is small enough to pass for correct; at altitude it is
-    // not. In a 3000m skybox it threw the moon roughly 3000m out along
-    // the camera vector, putting the quad within a few hundred metres of
-    // the cloud dome (dome radius 15000 scaled by 0.333 in renderDome,
-    // so ~5000m out) - two surfaces at nearly the same depth, which is
-    // exactly the moon/cloud z-fighting this fixes.
-    //
-    // Subtracting the baked offset here rather than removing it from
-    // LLVOSky keeps the fix to the draw site: the faces' own vertex data
-    // is shared with the reflection and glow paths, which expect it in
-    // agent space. Our own billboards below add the same term for the
-    // same reason, so all three land on one shell.
-    // (gSky.mVOSkyp is non-null here - this function returns early above.)
+    // <SS:Nexii> Celestial quads onto a true camera-centred shell. LLVOSky::updateHeavenlyBodyGeometry bakes mCameraPosAgent (the sky drawable's position, i.e. the camera) into the sun and moon face vertices, and this pass then translated by the camera origin as well - so every celestial quad sat at camera + cameraPosAgent + dir * HEAVENLY_BODY_DIST instead of camera + dir * HEAVENLY_BODY_DIST. On the ground the extra term is small enough to pass for correct; at altitude it is not. In a 3000m skybox it threw the moon roughly 3000m out along the camera vector, putting the quad within a few hundred metres of the cloud dome (dome radius 15000 scaled by 0.333 in renderDome, so ~5000m out) - two surfaces at nearly the same depth, which is exactly the moon/cloud z-fighting this fixes. Subtracting the baked offset here rather than removing it from LLVOSky keeps the fix to the draw site: the faces' own vertex data is shared with the reflection and glow paths, which expect it in agent space. Our own billboards below add the same term for the same reason, so all three land on one shell. (gSky.mVOSkyp is non-null here - this function returns early above.)
     const LLVector3 shell_origin = origin - gSky.mVOSkyp->getCameraPosAgent();
     gGL.pushMatrix();
     gGL.translatef(shell_origin.mV[0], shell_origin.mV[1], shell_origin.mV[2]);
-    // </SS:Nexii>
 
     LLFace * face = gSky.mVOSkyp->mFace[LLVOSky::FACE_SUN];
 
@@ -909,9 +769,7 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
         // if we even have sun disc textures to work with...
         if (tex_a || tex_b)
         {
-            // <SS:Nexii> Atmo Magic draws its own discs - see
-            // ss_atmo_discs_active - so a stock environment goes through the
-            // untouched path below and this one never runs for it.
+            // <SS:Nexii> Atmo Magic draws its own discs - see ss_atmo_discs_active - so a stock environment goes through the untouched path below and this one never runs for it.
             if (ss_atmo_discs_active())
             {
                 SSAtmoEnvApplier& atmo = SSAtmoEnvApplier::instance();
@@ -1029,7 +887,6 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
                 gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
                 gSSCelestialProgram.unbind();
             }
-            // </SS:Nexii>
             else
             {
             moon_shader->bind();
@@ -1071,19 +928,7 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
         }
     }
 
-    // <SS:Nexii> Atmo Magic: the active track's non-emitter celestial
-    // bodies as camera-facing textured quads - the design doc Planetary
-    // section's "quad/billboard only for v1". The applier publishes an
-    // empty vector whenever it is inactive, so this whole block costs one
-    // emptiness check when Atmo Magic is off. Drawn after the sun and moon
-    // so their quads (and the moon's star-clipping depth write, SL-14113)
-    // always land first. The moon shader is reused wholesale: it is the
-    // one shader in this pass whose every uniform is per-body suppliable
-    // (moon_dir is just the body's direction), and it buys the same
-    // horizon fade, moon-brightness scaling, transparent-texel discard
-    // and star-clipping depth layer the moon itself gets - a sun-shader
-    // body would sit on the stars' depth layer instead and have them
-    // poke through it.
+    // <SS:Nexii> Atmo Magic: the active track's non-emitter celestial bodies as camera-facing textured quads - the design doc Planetary section's "quad/billboard only for v1". The applier publishes an empty vector whenever it is inactive, so this whole block costs one emptiness check when Atmo Magic is off. Drawn after the sun and moon so their quads (and the moon's star-clipping depth write, SL-14113) always land first. The moon shader is reused wholesale: it is the one shader in this pass whose every uniform is per-body suppliable (moon_dir is just the body's direction), and it buys the same horizon fade, moon-brightness scaling, transparent-texel discard and star-clipping depth layer the moon itself gets - a sun-shader body would sit on the stars' depth layer instead and have them poke through it.
     const std::vector<SSAtmoEnvBillboard>& billboards =
         SSAtmoEnvApplier::instance().celestialBillboards();
     if (!billboards.empty() && moon_shader
@@ -1207,7 +1052,6 @@ void LLDrawPoolWLSky::renderHeavenlyBodies()
         gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
         gSSCelestialProgram.unbind();
     }
-    // </SS:Nexii>
 
     // <SS:Nexii> Back to ordinary compositing for whatever draws next.
     if (ss_additive_discs)

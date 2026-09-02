@@ -201,11 +201,7 @@ public:
     void            setImageAssetID(const LLUUID &image_asset_id);
     const LLUUID&   getImageAssetID() const                     { return mImageAssetID; }
 
-    // <SS:Nexii> Placeholder preview: a generated (non-asset) texture the control previews
-    // while its own value stays null - the "what is actually in use" stand-in for fields backed
-    // by procedural content. Display only: the value, its commits, and the picker floater (which
-    // opens on None, and whose Default button hands back to the placeholder) all still behave
-    // exactly as the un-set selection they are.
+    // <SS:Nexii> Placeholder preview: a generated (non-asset) texture the control previews while its own value stays null - the "what is actually in use" stand-in for fields backed by procedural content. Display only: the value, its commits, and the picker floater (which opens on None, and whose Default button hands back to the placeholder) all still behave exactly as the un-set selection they are.
     void            setPlaceholderImage(LLViewerTexture* texturep)  { mPlaceholderImagep = texturep; }
     LLViewerTexture* getPlaceholderImage() const                    { return mPlaceholderImagep; }
 
@@ -432,8 +428,7 @@ public:
     void setInventoryPickType(EPickInventoryType type);
     void setImmediateFilterPermMask(PermissionMask mask);
 
-    // <SS:Nexii> The owner control's generated stand-in: previewed while the selection is null,
-    // and what the Default button hands back to when one is set.
+    // <SS:Nexii> The owner control's generated stand-in: previewed while the selection is null, and what the Default button hands back to when one is set.
     void setPlaceholderImage(LLViewerTexture* texturep) { mPlaceholderImagep = texturep; }
 
     static void     onPickerCallback(const std::vector<std::string>& filenames, LLHandle<LLFloater> handle);

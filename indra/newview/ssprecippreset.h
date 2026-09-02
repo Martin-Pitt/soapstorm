@@ -140,9 +140,7 @@ struct SSPrecipPreset
     std::string mName;
     bool mBuiltIn = false;
 
-    // <SS:Nexii> Set when the type came from the loaded Atmo environment rather than from disk.
-    // Not serialised: it describes where this copy arrived from, not what the type is, and the
-    // same definition stored in an environment and saved to disk is the same type either way.
+    // <SS:Nexii> Set when the type came from the loaded Atmo environment rather than disk. Not serialised: it records where this copy arrived from, not what the type is, and the same definition in an environment and on disk is the same type either way.
     bool mFromEnvironment = false;
 
     SSPrecipArchetype mArchetype = SSPrecipArchetype::LIQUID;
@@ -197,9 +195,7 @@ struct SSPrecipPreset
     F32 mSnowDepth = 0.f;
     F32 mSnowRepose = 45.f;
 
-    // <SS:Nexii> Granular transport: what the wind does to the settled snow this type leaves.
-    // The threshold band is global settings (physics, not art); these are the per-type rates.
-    // mSnowCreepRate 0 leaves the cascades off - the shed store only fills from creep spill.
+    // <SS:Nexii> Granular transport: what the wind does to the settled snow this type leaves. The threshold band is global settings (physics, not art); these are the per-type rates. mSnowCreepRate 0 leaves cascades off - the shed store fills only from creep spill.
     F32 mSnowLiftRate = 0.f;     // metres of depth per second eroded at full lift; 0 = never blows
     F32 mSnowDepositRate = 0.f;  // metres of depth per second banking in a lee
     F32 mSnowCreepRate = 0.f;    // creep advection strength feeding drifts and eave spill
@@ -220,9 +216,7 @@ struct SSPrecipPreset
     void fromLLSD(const LLSD& sd);
 
     bool risesFromGround() const { return mArchetype == SSPrecipArchetype::RISER; }
-    // <SS:Nexii> FLAKE and SOLID are granular - the settled field is a drift surface the wind
-    // works on, and the runoff cascades are dithered grains rather than water sheets. LIQUID and
-    // RISER are not. The code keeps its mSnow* names; the channel is the granular channel.
+    // <SS:Nexii> FLAKE and SOLID are granular - the settled field is a drift surface the wind works on, runoff cascades dithered grains rather than water sheets. LIQUID and RISER are not. The code keeps its mSnow* names; the channel is the granular channel.
     bool isGranular() const
     {
         return mArchetype == SSPrecipArchetype::FLAKE || mArchetype == SSPrecipArchetype::SOLID;
@@ -259,10 +253,7 @@ public:
 
     void stage(const SSPrecipPreset& preset);
 
-    // <SS:Nexii> The environment tier. Types authored into an Atmo environment are staged into the
-    // live list so everything that resolves a precipitation by name finds them without knowing the
-    // difference, and dropped again when the environment unloads. Replacing the whole set at once
-    // rather than adding one at a time is what makes a rename or a deletion in the editor take.
+    // <SS:Nexii> The environment tier. Types authored into an Atmo environment are staged into the live list so everything resolving a precipitation by name finds them unchanged, and dropped again when the environment unloads. Replacing the whole set at once is what makes an editor rename or deletion take.
     void setEnvironmentPresets(const std::vector<SSPrecipPreset>& presets);
     void clearEnvironmentPresets();
 

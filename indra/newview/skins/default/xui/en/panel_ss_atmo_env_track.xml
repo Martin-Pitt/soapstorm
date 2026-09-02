@@ -9,18 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: per-track, non-weather settings for whichever
-         track is selected on the altitude rail (see
-         SSFloaterAtmoEnv::mSelectedTrackIndex).
-
-         Altitude isn't here at all: a track's floor is set by dragging its
-         marker on the rail, and the band that implies - up to the next
-         track, or the region ceiling if nothing is above it, see
-         SSAtmoEnvAsset::trackCeilingZ() - is what the rail already draws.
-         A numeric readout of either would only be a second, worse view of
-         something already on screen.
-
-         Water moved to its own tab once it grew past two fields. -->
+    <!-- <SS:Nexii> Atmo Magic: per-track, non-weather settings for whichever track is selected on the altitude rail (see SSFloaterAtmoEnv::mSelectedTrackIndex). Altitude isn't here at all: a track's floor is set by dragging its marker on the rail, and the band that implies - up to the next track, or the region ceiling if nothing is above it, see SSAtmoEnvAsset::trackCeilingZ() - is what the rail already draws. A numeric readout of either would only be a second, worse view of something already on screen. Water moved to its own tab once it grew past two fields. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -43,19 +32,7 @@
      max_length_chars="32"
      tool_tip="What this track is called. Yours to set - a track keeps its name when you move it, so it can describe what the place actually is rather than where it currently sits" />
 
-    <!-- <SS:Nexii> World templates. An author arrives with a theme, not a
-         parameter category, and a theme is never one setting: a sky world
-         is water kilometres down AND a deck below the landmass AND another
-         above it. Seeding all of that together is the only way the first
-         screen is useful to someone who came here to build Arcadia rather
-         than to tune haze.
-
-         A dropdown on Track rather than a tab of its own: it acts on the
-         selected track, and one combo does not earn top-level rank. Seeding
-         is one-shot and destructive to the selected track, hence the
-         confirmation - there is no live link back to the template, so
-         nothing drifts and nothing needs reconciling later. See
-         doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> World templates. An author arrives with a theme, not a parameter category, and a theme is never one setting: a sky world is water kilometres down AND a deck below the landmass AND another above it. Seeding all of that together is the only way the first screen is useful to someone who came here to build Arcadia rather than to tune haze. A dropdown on Track rather than a tab of its own: it acts on the selected track, and one combo does not earn top-level rank. Seeding is one-shot and destructive to the selected track, hence the confirmation - there is no live link back to the template, so nothing drifts and nothing needs reconciling later. See doc/atmo_magic_env_ui.md. -->
     <text
      follows="left|top"
      layout="topleft"

@@ -560,11 +560,7 @@ void SSOrbitViewCtrl::draw()
             fill.mV[2] = llmin(fill.mV[2] * 1.25f, 1.f);
         }
 
-        // <SS:Nexii> A body carrying a custom texture draws as a quad with that art
-        // - the same billboard the world renderer shows - instead of the flat
-        // kind-coloured disc. The texture is fetched the way the renderer fetches
-        // its billboards (see lldrawpoolwlsky.cpp), so the designer previews the
-        // exact disc a resident will see. Bodies without a texture keep the disc.
+        // <SS:Nexii> A custom-textured body draws as a quad with that art - the same billboard the world renderer shows - instead of the flat kind-coloured disc, fetched like the renderer's billboards (lldrawpoolwlsky.cpp) so the designer previews the exact disc a resident sees. Untextured bodies keep the disc.
         if (body.mCustomTexture.notNull())
         {
             LLViewerFetchedTexture* tex = LLViewerTextureManager::getFetchedTexture(
@@ -1130,9 +1126,9 @@ void SSFloaterAtmoPlanetary::draw()
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
         {
-            // A disc texture that was still decoding when the auto-derive ran may be decoded by
-            // now - land its padding, and refreshAll shows what landed. Skipped while the
-            // user captures the mouse on a control, which is mid-edit and must not be fought.
+            // A disc texture still decoding when the auto-derive ran may be decoded by
+            // now - land its padding, refreshAll shows it. Skipped while the
+            // user captures the mouse mid-edit, which must not be fought.
             ssDiscPadPoll();
             refreshAll();
         }
@@ -1144,11 +1140,7 @@ void SSFloaterAtmoPlanetary::draw()
 
     LLFloater::draw();
 
-    // <SS:Nexii> The disc-padding guide. While the padding spinner is hovered - or held, mid
-    // drag, with the cursor gone wandering off it - draw the disc the renderer will actually
-    // use onto the Texture swatch: the central 1 - 2*padding circle, the same fraction the
-    // celestial chain treats as the body (ss_disc_fraction in ssatmoenvapplier.cpp). Pure UI
-    // feedback; the value read here is the spinner's live one, so the circle tracks the drag.
+    // <SS:Nexii> The disc-padding guide. While the padding spinner is hovered - or held mid-drag with the cursor off it - draw the disc the renderer will use onto the Texture swatch: the central 1 - 2*padding circle, the fraction the celestial chain treats as the body (ss_disc_fraction, ssatmoenvapplier.cpp). Pure UI feedback; reads the spinner's live value, so the circle tracks the drag.
     LLView* padding_spinner = getChildView("body_disc_padding_spinner");
     S32 mouse_x, mouse_y;
     LLUI::getInstance()->getMousePositionLocal(padding_spinner, &mouse_x, &mouse_y);
@@ -1213,7 +1205,7 @@ SSAtmoEnvCelestialBody* SSFloaterAtmoPlanetary::selectedBody()
     return &p->mBodies[mSelectedBodyIndex];
 }
 
-// Commits whichever property field still holds focus before selection changes, so typed values are not lost.
+// Commits the property field still holding focus before selection changes so typed values are not lost.
 void SSFloaterAtmoPlanetary::flushFocusedPropertyField()
 {
     LLView* focused = dynamic_cast<LLView*>(gFocusMgr.getKeyboardFocus());
@@ -1771,7 +1763,7 @@ void SSFloaterAtmoPlanetary::onCommitBodyRing()
     refreshAll();
 }
 
-// Texture pick into the body. A newly picked texture also gets its disc padding auto-derived
+// Texture pick into the body. A newly picked texture gets its disc padding auto-derived
 // from the alpha (ssDiscPadAutoDerive; gated on SSAtmoDiscPadAuto) - the derivation writes
 // the body's padding and the spinner refresh below shows it, leaving the spinner the
 // authority for whatever the author dials after.

@@ -110,23 +110,16 @@ public:
 
     F32 temperatureC() const { return mTemperatureC; }
 
-    // <SS:Nexii> Storm-approach look-ahead: how imminent an approaching thunderstorm is (0..1),
-    // read off the weather cube's next keyframe (SSAtmoEnvBridge::stormApproach), and the
-    // heading, degrees, it comes FROM (upwind) - negative when no storm approaches. The
-    // bolt-from-the-blue anticipation in SSLightning reads these every frame. </SS:Nexii>
+    // <SS:Nexii> Storm-approach look-ahead: how imminent an approaching thunderstorm is (0..1) from the weather cube's next keyframe (SSAtmoEnvBridge::stormApproach), plus the upwind heading in degrees it comes FROM - negative when none approaches. SSLightning's bolt-from-the-blue anticipation reads these every frame.
     F32 stormApproach() const { return mStormApproach; }
     F32 stormApproachHeadingDeg() const { return mStormApproachHeading; }
 
-    // <SS:Nexii> Granular weather: the single lift authority and the regime machine. liftAt()
-    // answers "is snow lifting here and how hard" (0-1, physical, no preset rate, no gust - the
-    // caller applies those); the regimes derived from the same env params the resolver already
-    // produces direct the presentation only. doc/atmo_magic_snow.md sections 1 and 14.
+    // <SS:Nexii> Granular weather: the single lift authority and the regime machine. liftAt() answers "is snow lifting here and how hard" (0-1, physical, no preset rate, no gust - the caller applies those); the regimes derived from the same env params the resolver already produces direct presentation only. doc/atmo_magic_snow.md sections 1 and 14.
     F32 liftAt(const LLVector3& pos_agent) const;
     bool granularWeather() const;
     F32 squallFactor() const { return mSquallFactor; }
 
-    // The transport's parameter bundle for this tick - plain floats, assembled from settings,
-    // preset, regime and the gust envelope. Defined in ssgranular.h; consumers include that.
+    // The transport's parameter bundle for this tick - plain floats from settings, preset, regime and the gust envelope. Defined in ssgranular.h; consumers include that.
     void fillTransportParams(SSGranularParams& params) const;
 
     enum class ERegime : U8
@@ -141,8 +134,7 @@ public:
     ERegime regime() const { return mRegime; }
     static const char* regimeName(ERegime r);
 
-    // Bounded by design: soundscape bed crossfade, floater stats, whiteout ramp. A second event
-    // type gets promoted to a real pump consciously, never by accretion.
+    // Bounded by design: soundscape bed crossfade, floater stats, whiteout ramp. A second event type gets promoted to a real pump consciously, never by accretion.
     typedef boost::signals2::signal<void(ERegime, ERegime)> RegimeSignal;
     RegimeSignal& regimeSignal() { return mRegimeSignal; }
 
@@ -244,8 +236,7 @@ private:
 
     F32 mTemperatureC = 15.f;
 
-    // <SS:Nexii> The bolt-from-the-blue storm look-ahead, recomputed every refresh. See the
-    // getters. </SS:Nexii>
+    // <SS:Nexii> The bolt-from-the-blue storm look-ahead, recomputed every refresh. See the getters.
     F32 mStormApproach = 0.f;
     F32 mStormApproachHeading = -1.f;
 
@@ -273,8 +264,7 @@ private:
     SSPrecipPreset mPreset;
     bool mHasWeather = false;
 
-    // <SS:Nexii> Regime state. The dwell timer is the hysteresis in both directions; the
-    // initial regime is derived, so a viewer joining mid-storm starts right without history.
+    // <SS:Nexii> Regime state. The dwell timer is the hysteresis in both directions; the initial regime is derived, so a viewer joining mid-storm starts right without history.
     ERegime mRegime = ERegime::CALM;
     F32 mRegimeCandidateTime = 0.f;
     bool mRegimeReady = false;

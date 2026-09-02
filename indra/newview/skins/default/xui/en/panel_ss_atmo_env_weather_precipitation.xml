@@ -9,12 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Weather > Precipitation - what falls, and which
-         deck it falls from. The type combo is keyframed: which precipitation is
-         running is a property of the moment. The source is not: it is a property
-         of the track, so it carries no keyframe buttons. It sits above the type
-         because it answers "where does this originate" before "what is it".
-         See doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> Atmo Magic: Weather > Precipitation - what falls, and which deck it falls from. The type combo is keyframed: which precipitation is running is a property of the moment. The source is not: it is a property of the track, so it carries no keyframe buttons. It sits above the type because it answers "where does this originate" before "what is it". See doc/atmo_magic_env_ui.md. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -114,12 +109,7 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- <SS:Nexii> The environment's own tier of precipitation types. The shipped set is ours to
-         tune and lives in the viewer; these are the author's, derived from a shipped type and
-         saved into this environment so they travel with the region. Deriving copies the parent
-         wholesale rather than referencing it, so a viewer update that retunes stock rain cannot
-         change a region that shipped a type built from it. Both buttons open the same editor the
-         shipped set uses, in environment scope. See doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> The environment's own tier of precipitation types. The shipped set is ours to tune and lives in the viewer; these are the author's, derived from a shipped type and saved into this environment so they travel with the region. Deriving copies the parent wholesale rather than referencing it, so a viewer update that retunes stock rain cannot change a region that shipped a type built from it. Both buttons open the same editor the shipped set uses, in environment scope. See doc/atmo_magic_env_ui.md. -->
     <button
      follows="left|top"
      layout="topleft"

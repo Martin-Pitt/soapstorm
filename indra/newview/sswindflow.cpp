@@ -69,16 +69,7 @@ static const F32 HIDDEN_CLEARANCE     = 1.5f;
 
 static const F32 PROBE_MAX_MISS       = 0.98f;
 
-// <SS:Nexii> The boundary-layer wind gradient (doc: wind gradient). The authored wind is a single
-// value at a fixed height - 10m above open level ground - and the power law
-//   v(z) = v_ref * (z / 10m)^alpha
-// extrapolates it upward through the boundary layer. The single free parameter is the shear
-// exponent alpha, which the power law simplifies terrain roughness into; it is DERIVED from the
-// region heightmap (how tall and how open the surface is) rather than authored. Above the
-// boundary-layer top the air is the free atmosphere: the wind no longer changes with height, so
-// the gradient stops growing there and the cirrus layer rides that plateau. The user's own sanity
-// check - a gentle breeze of 9m/s at 10m rising to 10.5m/s at 30m - is exactly alpha ~ 0.14 (open
-// level ground).
+// <SS:Nexii> The boundary-layer wind gradient (doc: wind gradient). The authored wind is one value at a fixed height - 10m above open level ground - and the power law v(z) = v_ref * (z / 10m)^alpha extrapolates it upward through the boundary layer. The single free parameter, the shear exponent alpha, folds terrain roughness into one number; it is DERIVED from the region heightmap (how tall and how open the surface is), not authored. Above the layer top the free atmosphere stops changing with height, so the gradient plateaus and the cirrus layer rides that plateau. The sanity check - 9m/s at 10m rising to 10.5m/s at 30m - is exactly alpha ~ 0.14 (open level ground).
 static const F32 SS_WIND_GRADIENT_CEIL_M = 1500.f;   // boundary-layer top; wind plateaus above
 static const F32 SS_WIND_REF_M           = 10.f;     // the height the wind is authored at (AGL)
 static const F32 SS_WIND_ALPHA_LO        = 0.10f;    // open flat ground
@@ -88,10 +79,10 @@ static const F32 SS_WIND_ROUGH_SCALE     = 0.03f;    // roughness length as a sh
 
 // The power-law shear exponent from the region's surface heights. Roughness length z0 scales with
 // the vertical spread of the surface (its standard deviation above the region's lowest point -
-// how TALL the terrain/build is); the exponent is the log-law relation alpha = 1 / ln(z_ref / z0)
-// at the 10m reference, so open flat ground comes out ~0.14, a treed or suburban field ~0.25 and a
-// mountainous or built-up region ~0.4. The OPEN-ness is folded in the same number: the more the
-// surface stays near its floor (a plain), the smaller the spread and the lower the exponent.
+// how TALL the terrain/build is); the exponent is the log-law alpha = 1 / ln(z_ref / z0)
+// at the 10m reference, so open flat ground ~0.14, treed or suburban ~0.25 and
+// mountainous or built-up ~0.4. The OPEN-ness folds into the same number: the more the
+// surface stays near its floor (a plain), the smaller the spread, the lower the exponent.
 static F32 deriveWindAlpha(const std::vector<F32>& top, F32 lo)
 {
     F64 sum = 0.0, sum2 = 0.0;
@@ -114,21 +105,14 @@ static F32 deriveWindAlpha(const std::vector<F32>& top, F32 lo)
     const F32 alpha = 1.f / llmax(0.5f, logf(llmax(1.5f, SS_WIND_REF_M / z0)));
     return llclamp(alpha, SS_WIND_ALPHA_LO, SS_WIND_ALPHA_HI);
 }
-// </SS:Nexii>
 
-// <SS:Nexii> Partial rebuild geometry. A settled geometry edit only changes the
-// flow it can physically change: a little upwind of the edit (the stagnation
-// pocket in front of a new wall) and everything downwind (the wake, the alleys
-// it now deflects air down). These are the margins in cells that grid the
-// edit box into a solve box, and the slack around it that the capture and mask
-// rebuild cover so a door or roof edge sitting on the box boundary is caught.
+// <SS:Nexii> Partial rebuild geometry. A settled geometry edit only changes the flow it can physically change: a little upwind (the stagnation pocket in front of a new wall) and everything downwind (the wake, the alleys it now deflects air down). These are the margins in cells that grid the edit box into a solve box, and the slack that the capture and mask rebuild cover, catching a door or roof edge sitting on the box boundary.
 static const S32 PARTIAL_UPWIND_CELLS   = 3;
 static const S32 PARTIAL_LATERAL_CELLS   = 3;
 static const S32 PARTIAL_CAPTURE_CELLS   = 2;
 // Above this share of the tile the box solve is the whole solve plus
-// bookkeeping, so just run the full one.
+// bookkeeping, so run the full one.
 static const F32 PARTIAL_FRACTION_CAP   = 0.8f;
-// </SS:Nexii>
 
 static const S32 SS_WIND_LINE_WIDTHS = 4;
 
@@ -145,11 +129,7 @@ enum SSCarveFlag : U8
 static const F32 PROBE_SCALE          = 4.f;
 static const F32 PROBE_PERCENTILE     = 0.995f;
 
-// <SS:Nexii> One handle per GL stage, all nested under the umbrella in advanceBuild(). A single
-// shared handle got promoted to the profile root: LLTrace infers the timer tree from the call
-// stack, and a handle entered from five different stages has no stable parent, so
-// incrementalUpdateTimerTree() bubbles it up until it lands somewhere that is an ancestor of all
-// of them. The readback's GPU stall was invisible inside that one summed bar. </SS:Nexii>
+// <SS:Nexii> One handle per GL stage, all nested under the umbrella in advanceBuild(). A single shared handle got promoted to the profile root: LLTrace infers the timer tree from the call stack, so a handle entered from five stages has no stable parent and incrementalUpdateTimerTree() bubbles it up to a common ancestor. The readback's GPU stall was invisible inside that one summed bar.
 static LLTrace::BlockTimerStatHandle FTM_SS_WINDFLOW("Atmo Magic Wind Flow");
 static LLTrace::BlockTimerStatHandle FTM_SS_WIND_CAPTURE_TOP("Wind Capture Top");
 static LLTrace::BlockTimerStatHandle FTM_SS_WIND_CAPTURE_PROBE("Wind Capture Probe");
@@ -166,11 +146,7 @@ static void bindProgramRaw(const LLGLSLShader& shader)
     glUseProgram(shader.mProgramObject);
 }
 
-// <SS:Nexii> A single worker thread carrying its own GL context, shared with
-// the viewer's. The wind flow solve is a long GPU task plus a synchronous
-// glGetTexImage readback; running that block on this thread keeps the 50-400ms
-// rebuild spike out of the frame loop entirely. Mirrors LLImageGLThread's
-// context lifecycle (createSharedContext -> makeContextCurrent -> gGL.init).
+// <SS:Nexii> A single worker thread with its own GL context, shared with the viewer's. The solve is a long GPU task plus a synchronous glGetTexImage readback; running it on this thread keeps the 50-400ms rebuild spike out of the frame loop entirely. Mirrors LLImageGLThread's context lifecycle (createSharedContext -> makeContextCurrent -> gGL.init).
 struct SSWindFlowMap::SSWindFlowGLWorker
 {
     class Pool : public LL::ThreadPool
@@ -219,13 +195,12 @@ struct SSWindFlowMap::SSWindFlowGLWorker
     void* mContext = nullptr;
     std::unique_ptr<Pool> mPool;
 };
-// </SS:Nexii>
 
 SSWindFlowMap::~SSWindFlowMap()
 {
     // mGLWorker owns a GL context bound to the viewer's window; dropping it
-    // here (where SSWindFlowGLWorker is complete) stops its pool, which closes
-    // the thread, before the window tears down.
+    // here (where SSWindFlowGLWorker is complete) stops its pool, closing the
+    // thread, before the window tears down.
     delete mGLWorker;
     mGLWorker = nullptr;
 }
@@ -342,8 +317,8 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
     // mProbeTake (never just mProbeRes): a full solve uploads the whole probe
     // image, a partial one a sub-rect of it, and mProbeTake/mProbeRes are
     // recomputed per build while the GPU object persists across builds. If the
-    // pending upload outgrows the current allocation the texture is recreated,
-    // otherwise the glTexSubImage3D in solveInit would write past the end of a
+    // pending upload outgrows the allocation the texture is recreated, or the
+    // glTexSubImage3D in solveInit would write past the end of a
     // GL_TEXTURE_2D_ARRAY layer and fault the driver.
     if (mTexRes == res && mTexSlices == slices && mHeightTex != 0
         && (S32)mProbeTexRes >= mProbeRes && (S32)mProbeTexRes >= mProbeTake) return true;
@@ -449,7 +424,7 @@ void SSWindFlowMap::clear()
 }
 
 // Claims the worldfield's real-geometry tile for the flowmap's region, so buildTrueGround has a
-// valid capture to read. Re-claims when the camera region changes; a stale claim is dropped so
+// valid capture to read. Re-claims on a camera region change; a stale claim drops, so
 // the old region stops paying for its worldfield build.
 void SSWindFlowMap::refreshTrueGroundClaim(U64 region_handle)
 {
@@ -534,7 +509,7 @@ bool SSWindFlowMap::isValid() const
 }
 
 // The current region's roughness-derived shear exponent; falls back to the tuning setting until a
-// flowmap tile is solved (the build is async and takes a beat after the camera enters a region).
+// flowmap tile is solved (the build is async, a beat behind the camera entering a region).
 F32 SSWindFlowMap::windAlpha() const
 {
     const Tile* tile = cameraTile();
@@ -544,8 +519,8 @@ F32 SSWindFlowMap::windAlpha() const
 }
 
 // The power-law wind factor at z metres above the surface, relative to the authored 10m wind:
-// (z/10)^alpha, held constant above the boundary-layer top (~1.5km) where the free atmosphere no
-// longer changes with height. Used to scale the cirrus band's drift to its own altitude.
+// (z/10)^alpha, constant above the boundary-layer top (~1.5km) where the free atmosphere
+// no longer changes with height. Used to scale the cirrus band's drift to its altitude.
 F32 SSWindFlowMap::windGradientScale(F32 z_agl) const
 {
     const F32 alpha = windAlpha();
@@ -555,7 +530,7 @@ F32 SSWindFlowMap::windGradientScale(F32 z_agl) const
 }
 
 // The reference ground the wind profile measures height from: the true-ground terrain (water-
-// floored) at the camera's own column when the tile has one, else the tile's representative
+// floored) at the camera's column when the tile has one, else the tile's representative
 // ground, else the region water plane / terrain minimum.
 F32 SSWindFlowMap::groundRefZ() const
 {
@@ -598,9 +573,9 @@ bool SSWindFlowMap::drivesWind()
 }
 
 // Settled geometry changed - the covering tile re-solves. Edits accumulate as a
-// unioned box of cells rather than a single flag, so a handful of objects
-// settling close together all ride the same rebuild, and the rebuild only has
-// to cover the flow that box can change.
+// unioned box of cells rather than a flag, so a handful of objects settling
+// close together ride the same rebuild, and the rebuild only covers the flow
+// that box can change.
 void SSWindFlowMap::markDirty(const LLVector3& pos, F32 radius)
 {
     SSWindFlowMap* self = getInstance();
@@ -656,9 +631,9 @@ void SSWindFlowMap::markDirty(const LLVector3& pos, F32 radius)
     }
 }
 
-// Whether a tile's solve is stale, and if so, why - the reason is logged at
+// Whether a tile's solve is stale, and if so why - the reason is logged at
 // build start, so a tile churning through rebuilds names its own driver.
-// Returns an empty string when the solve is current.
+// Empty string when the solve is current.
 std::string SSWindFlowMap::solveStaleReason(const Tile& tile) const
 {
     if (!tile.mValid) return "invalid";
@@ -799,10 +774,10 @@ bool SSWindFlowMap::captureAlong(LLRenderTarget& target, S32 res, const Tile& ti
     return true;
 }
 
-// The top-down height capture the voxelisation starts from. For a partial build
-// it is taken over only the capture footprint (the edit box plus margins) and
-// merged into the previous heights, so every column outside the edit keeps its
-// old answer and only the changed columns re-solidify.
+// The top-down height capture the voxelisation starts from. A partial build
+// takes it over only the capture footprint (the edit box plus margins) and
+// merges it into the previous heights, so every column outside the edit keeps
+// its old answer and only the changed columns re-solidify.
 bool SSWindFlowMap::captureHeights(Tile& tile)
 {
     const F32 nominal = tile.mBandTop - tile.mBandBottom;
@@ -882,14 +857,7 @@ bool SSWindFlowMap::captureHeights(Tile& tile)
         if (h > NO_SURFACE * 0.5f) h = llmin(h, tile.mBandTop);
     }
 
-    // <SS:Nexii> The TRUE-GROUND reference, built only on a full build (partial rebuilds keep the
-    // old layout, exactly as the slices do). Read from the WORLD FIELD's real-geometry capture
-    // (buildTrueGround) - the topmost ground surfaces of the texel cloud, with tall-structure
-    // columns voided and filled from their neighbours and water held at the sea plane - so streets,
-    // mesh terrain and prim ground built on top of the ancient Linden heightmap become the ground
-    // the boundary layer is measured from. Resampled to the flowmap's own grid (which may carry a
-    // margin, so cells outside the region clamp). Falls back to the region terrain heightmap while
-    // the worldfield's tile is not yet valid (it builds async, a beat behind this map). </SS:Nexii>
+    // <SS:Nexii> The TRUE-GROUND reference, built only on a full build (partial rebuilds keep the old layout, exactly as the slices do). Read from the WORLD FIELD's real-geometry capture (buildTrueGround) - topmost ground surfaces of the texel cloud, tall-structure columns voided and filled from neighbours, water at the sea plane - so streets, mesh terrain and prim ground over the old Linden heightmap become the ground the boundary layer is measured from. Resampled to the flowmap's grid (which may carry a margin, so cells outside the region clamp). Falls back to the region terrain heightmap until the worldfield's tile is valid (it builds async, a beat behind this map).
     if (!mPartial)
     {
         const F32 cell = tile.mExtent / (F32)tile.mRes;
@@ -1006,7 +974,7 @@ void SSWindFlowMap::auditProbes(const Tile& tile) const
 // Sets up the horizontal probe captures. The probe *image* always maps the
 // capture footprint this build solved - the whole tile for a full solve, the
 // edit box plus margins for a partial one - at a texel density graded up from
-// the mask cells, and is uploaded from the corner of the probe array each build.
+// the mask cells, uploaded from the corner of the probe array each build.
 void SSWindFlowMap::beginProbes(Tile& tile)
 {
     static LLCachedControl<U32> probe_mult(gSavedSettings, "SSAtmoWindFlowProbeRes", 3);
@@ -1031,8 +999,8 @@ void SSWindFlowMap::beginProbes(Tile& tile)
 }
 
 // One horizontal probe capture - sees under overhangs the top-down capture cannot.
-// The probes are centred on this build's capture footprint, so a partial rebuild
-// only renders the handful of texels around the edit it is solving.
+// Probes centre on this build's capture footprint, so a partial rebuild only
+// renders the handful of texels around the edit it is solving.
 bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
 {
     static LLCachedControl<F32> elevation(gSavedSettings, "SSAtmoWindFlowProbeAngle", 30.f);
@@ -1111,7 +1079,7 @@ bool SSWindFlowMap::captureProbe(Tile& tile, S32 i)
 }
 
 // Combines the probes to carve out space the height capture wrongly filled.
-// For a partial build the probes only cover the edit footprint, so the hits
+// In a partial build the probes only cover the edit footprint, so the hits
 // land back onto the tile grid through the capture offset instead of from the
 // tile origin.
 void SSWindFlowMap::reconstructHidden(Tile& tile)
@@ -1402,10 +1370,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
         tile.mSliceZ[i] = final_bounds[llmin((size_t)i, final_bounds.size() - 1)];
     }
 
-    // <SS:Nexii> The wind profile's reference ground. Prefer the TRUE-GROUND map (terrain,
-    // water-floored) sampled at the region's median - so the boundary layer is measured against
-    // the actual ground the wind blows over, not the lowest captured surface which a deep gully
-    // or a hollow drags down. Falls back to the lowest surface when the map is absent.
+    // <SS:Nexii> The wind profile's reference ground. Prefer the TRUE-GROUND map (terrain, water-floored) sampled at the region's median - so the boundary layer is measured against the actual ground the wind blows over, not the lowest captured surface a deep gully or hollow drags down. Falls back to the lowest surface when the map is absent.
     if (!tile.mGroundZ.empty())
     {
         std::vector<F32> g = tile.mGroundZ;
@@ -1417,10 +1382,7 @@ void SSWindFlowMap::placeSlices(Tile& tile)
         tile.mGroundRef = lo;
     }
 
-    // <SS:Nexii> The shear exponent derived from the region's own surface, not a constant: a
-    // rough, tall region drags the low air and steepens the gradient, an open flat one lets the
-    // wind ride. Shared with the cloud-drift path (windAlpha) so the flow solver and the cirrus
-    // band scale the same wind the same way. </SS:Nexii>
+    // <SS:Nexii> The shear exponent derived from the region's own surface, not a constant: a rough, tall region drags the low air and steepens the gradient, an open flat one lets the wind ride. Shared with cloud drift (windAlpha) so the solver and the cirrus band scale the same wind the same way.
     tile.mAlpha = deriveWindAlpha(mTop, lo);
     const F32 alpha = tile.mAlpha;
 
@@ -1487,8 +1449,8 @@ void SSWindFlowMap::uploadBridgedMask(const Tile& tile)
 
 // Opens one-cell passages the voxelisation pinched shut, so wind can thread doorways and arches.
 // A partial build only re-examines the box it re-masked - the preserved mask
-// outside it is already bridged, so rescanning it would be wasted work and the
-// box is grown by the bridge reach so a passage crossing its edge is caught.
+// outside it is already bridged, so rescanning is wasted work; the box grows
+// by the bridge reach so a passage crossing its edge is caught.
 void SSWindFlowMap::bridgePassages(const Tile& tile)
 {
     static LLCachedControl<U32> gap(gSavedSettings, "SSAtmoWindFlowPassageGap", 4);
@@ -1643,8 +1605,8 @@ static void setAmbient(LLGLSLShader& shader, const LLVector3* ambient, S32 slice
 }
 
 // Seeds the velocity volume with ambient wind and the solid mask. A partial
-// build first restores the previous mask everywhere so the init pass only has
-// to overwrite the box it re-captured, and the dispatch (and the mask) are
+// build first restores the previous mask everywhere so the init pass only
+// overwrites the box it re-captured, and the dispatch and the mask are
 // confined to that box.
 bool SSWindFlowMap::solveInit(const Tile& tile)
 {
@@ -1676,8 +1638,8 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
         // Restore the previous velocity outside the mask box while the init
         // pass re-seeds the box itself: the divergence pass reads that old,
         // already-converged field everywhere outside the box, and its ~zero
-        // divergence is what lets the projection carry the box's change
-        // downwind through the old field.
+        // divergence lets the projection carry the box's change downwind
+        // through the old field.
         if (tile.mFlow.size() >= active)
         {
             glBindTexture(GL_TEXTURE_3D, mVelTex[0]);
@@ -1783,8 +1745,8 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
 }
 
 // The iterative compute solve: pressure projection around the solids until the field is divergence-free enough.
-// A partial build skips the pyramid, restores the solved field every, and lets
-// the pressure keep its previous values: the relaxation then only has to absorb
+// A partial build skips the pyramid, restores the solved field, and lets the
+// pressure keep its previous values: the relaxation then only absorbs
 // the box's change instead of re-establishing the whole field from zero.
 bool SSWindFlowMap::solveRun(const Tile& tile)
 {
@@ -1806,8 +1768,8 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
 
     // The Jacobi relaxation alternates two pressure buffers, so the cells it
     // reads for the box's edge must stay valid in BOTH of them. The solve box is
-    // grown by one cell and the ring around it copies its previous value through
-    // each pass instead of relaxing, keeping both buffers honest outside the box.
+    // grown by one cell and its ring copies the previous value through each
+    // pass instead of relaxing, keeping both buffers honest outside the box.
     const GLuint jgx = mPartial ? groupsFor(llmin(mBoxC1[0] + 1, res - 1)
                                              - llmax(mBoxC0[0] - 1, 0) + 1) : 0u;
     const GLuint jgy = mPartial ? groupsFor(llmin(mBoxC1[1] + 1, res - 1)
@@ -1947,11 +1909,7 @@ bool SSWindFlowMap::solveRun(const Tile& tile)
     return glGetError() == GL_NO_ERROR;
 }
 
-// <SS:Nexii> The same solve, submitted with raw GL on the worker thread's own
-// shared context. It deliberately does not call LLGLSLShader::bind() or touch
-// gGL: those are the main thread's state machine, and racing on them from a
-// second context is exactly the crash the worker exists to avoid. Program
-// binding and the uniform writes are context-local and safe.
+// <SS:Nexii> The same solve, submitted with raw GL on the worker thread's own shared context. It deliberately does not call LLGLSLShader::bind() or touch gGL: those are the main thread's state machine, and racing on them from a second context is exactly the crash the worker exists to avoid. Program binding and uniform writes are context-local and safe.
 bool SSWindFlowMap::solveRunWorker(const Tile& tile)
 {
     drainGLErrors();
@@ -2100,7 +2058,6 @@ bool SSWindFlowMap::solveRunWorker(const Tile& tile)
 
     return glGetError() == GL_NO_ERROR;
 }
-// </SS:Nexii>
 
 // Copies the solved volume off the GPU. The pressure comes back too - it is a
 // per-tile thing a later partial rebuild warm-starts from.
@@ -2267,10 +2224,7 @@ void SSWindFlowMap::postWorker(std::function<void()> work, EStage next)
         });
 }
 
-// <SS:Nexii> The GL worker backing the solve thread, created lazily on the
-// first rebuild that wants it. Only a platform that can hand over a context
-// shared with the viewer's (Windows/SDL shared contexts, not headless) counts;
-// on anything else the rebuild falls back to the main-thread path unchanged.
+// <SS:Nexii> The GL worker backing the solve thread, created lazily on the first rebuild that wants it. Only a platform that can hand over a context shared with the viewer's (Windows/SDL shared contexts, not headless) counts; anything else falls back to the main-thread path unchanged.
 bool SSWindFlowMap::glWorker()
 {
     static LLCachedControl<bool> worker_setting(gSavedSettings, "SSAtmoWindFlowWorkerGL", true);
@@ -2332,10 +2286,10 @@ void SSWindFlowMap::glSolveDone(U32 generation)
 
 // Posts the whole solve+readback+convert to the GL worker. The blocking
 // glGetTexImage - the rebuild's single biggest cost - runs on that worker
-// thread behind the frame loop, and the CPU halves (unpack, carve flags) ride
-// along so the main thread only has to COMMIT when it reports back. The build
-// tile (mBuild) is fully populated by the time this is called, and only this
-// worker (or the main thread) touches it until COMMIT, so it needs no locking.
+// behind the frame loop, and the CPU halves (unpack, carve flags) ride along,
+// so the main thread only COMMITs when it reports back. The build tile (mBuild)
+// is fully populated by the time this is called, and only this worker (or the
+// main thread) touches it until COMMIT, so it needs no locking.
 void SSWindFlowMap::postSolveGL(const Tile&)
 {
     if (!glWorker()) return;
@@ -2381,18 +2335,17 @@ void SSWindFlowMap::postSolveGL(const Tile&)
         }
     });
 }
-// </SS:Nexii>
 
 // Turns a tile's pending edit box into the three regions a partial rebuild
 // needs. The mask box is where the solid mask can change - the edits plus a
-// cell of slack, so a wall flush with the edge of the box is caught and not
-// left frozen on the old side of the line. The capture footprint wraps the mask
-// box a little more, so the height capture and the probes have geometry on
-// every side to carve and measure against. The solve box keeps all of that and
-// runs downwind to the tile edge: a change is only felt downwind of itself,
-// plus the stagnation pocket immediately upwind. Returns false when the box has
-// grown to most of the tile - then the full solve it would reduce to is cheaper
-// than solving it with a box, so the caller does the full thing.
+// cell of slack, so a wall flush with the box edge is caught and not left
+// frozen on the old side of the line. The capture footprint wraps the mask box
+// a little more, so the height capture and the probes have geometry on every
+// side to carve and measure against. The solve box keeps all of that and runs
+// downwind to the tile edge: a change is only felt downwind of itself, plus
+// the stagnation pocket immediately upwind. Returns false when the box has
+// grown to most of the tile - then the full solve it would reduce to is
+// cheaper than solving it with a box, so the caller does the full thing.
 //
 // All boxes are inclusive tile-local cell ranges, and the wind's horizontal
 // projection picks the downwind sides.
@@ -2468,7 +2421,7 @@ bool SSWindFlowMap::partialBoxes(const Tile& tile, const LLVector3& wind_h)
 
 // Returns an abandoned partial build's edits to the tile that owned them. A
 // consumed box is held in mConsumedDirty throughout the build, so a failed
-// capture or solve does not permanently smuggle the edit it was reacting to.
+// capture or solve does not permanently swallow the edit it was reacting to.
 void SSWindFlowMap::restoreConsumedDirty()
 {
     const S32 x0 = mConsumedDirty[0];
@@ -2524,9 +2477,9 @@ bool SSWindFlowMap::beginBuild(Tile& tile)
         mPartial = partialBoxes(tile, wind_now);
     }
 
-    // Name the driver: one line per rebuild, throttled to reason changes (a
-    // tile churning through rebuilds logs the same cause once, then again only
-    // when the cause itself changes or thirty seconds have passed).
+    // Name the driver: one line per rebuild, throttled to reason changes (a tile
+    // churning through rebuilds logs the same cause once, then again only when
+    // the cause itself changes or thirty seconds pass).
     const std::string reason = solveStaleReason(tile);
     if (reason != mLastRebuildReason || SSAtmoMagic::getInstance()->sharedTime() - mLastRebuildLog > 30.0)
     {
@@ -2542,7 +2495,7 @@ bool SSWindFlowMap::beginBuild(Tile& tile)
 
     // The build rides on a copy of the live tile. A partial one needs the old
     // field to merge the solve box into; a full one replaces it wholesale. The
-    // build never runs against a region origin shift in mid-flight either way.
+    // build never runs against a region origin shift mid-flight either way.
     mBuild = tile;
 
     if (!mPartial)
@@ -2701,8 +2654,7 @@ void SSWindFlowMap::stageCommit(Tile& live)
     mSolveMS = (F32)((LLTimer::getElapsedSeconds() - mBuildStart) * 1000.0);
     mLastBuildPartial = mPartial;
 
-    // <SS:Nexii> Telemetry: the full/partial split and the box's share of the
-    // tile feed the info overlay's "how well the rebuilds are doing".
+    // <SS:Nexii> Telemetry: the full/partial split and the box's share of the tile feed the info overlay's "how well the rebuilds are doing".
     if (mPartial)
     {
         ++mPartialBuilds;
@@ -2718,7 +2670,6 @@ void SSWindFlowMap::stageCommit(Tile& live)
     {
         ++mFullBuilds;
     }
-    // </SS:Nexii>
 
     if (!mPartial) auditProbes(tile);
 
@@ -2946,9 +2897,7 @@ F64 SSWindFlowMap::age() const
     return SSAtmoMagic::getInstance()->sharedTime() - tile->mBuildTime;
 }
 
-// <SS:Nexii> Average partial rebuild box, as a share of the whole tile. A
-// value well under 1 means edits are settling cheaply; creeping toward 1 means
-// the union box grows (a big rez-in, or edits scattered across the region).
+// <SS:Nexii> Average partial rebuild box, as a share of the whole tile. A value well under 1 means edits are settling cheaply; creeping toward 1 means the union box grows (a big rez-in, or edits scattered across the region).
 F32 SSWindFlowMap::partialBoxShare() const
 {
     return (mPartialCount > 0) ? (F32)(mPartialAreaSum / (F64)mPartialCount) : 0.f;
@@ -2974,7 +2923,6 @@ F32 SSWindFlowMap::vramMB() const
     }
     return (F32)(bytes / (1024.0 * 1024.0));
 }
-// </SS:Nexii>
 
 // Live slice count.
 S32 SSWindFlowMap::sliceCount() const
@@ -3266,9 +3214,7 @@ F32 SSWindFlowMap::exposure(const LLVector3& pos_agent) const
     return a * (1.f - tz) + b * tz;
 }
 
-// <SS:Nexii> Granular reads: the bottom slab of the solved field, gust layer excluded. The
-// transport and the erosion tick run this per cell, so it must stay a cheap bilinear with no
-// fbm anywhere in the call path - the gust envelope is a scalar the caller applies once per tick.
+// <SS:Nexii> Granular reads: the bottom slab of the solved field, gust layer excluded. The transport and erosion tick run this per cell, so it must stay a cheap bilinear with no fbm anywhere in the call path - the gust envelope is a scalar the caller applies once per tick.
 LLVector4 SSWindFlowMap::groundCell(const Tile& tile, const LLVector3& tile_origin_agent, F32 cell,
                                     const LLVector3& pos_agent) const
 {
@@ -3332,9 +3278,9 @@ LLVector3 SSWindFlowMap::sampleGround(const LLVector3& pos_agent) const
 // Bulk-samples one region's field lattice: the SSGranular step's per-cell wind, read straight out
 // of the CPU-resident tiles. Each column picks the first slab clearing ITS OWN surface height
 // (surface_z, the field's height array - there is no region-wide ground slab); cells outside the
-// tile answer with the ambient wind at full exposure, and with no solved tile at all the whole
-// grid answers ambient, so the transport degrades to an ambient-driven uniform instead of
-// stalling (the same fallback sample() takes).
+// tile answer with the ambient wind at full exposure, and with no solved tile the whole grid
+// answers ambient, so transport degrades to an ambient-driven uniform instead of stalling
+// (the same fallback sample() takes).
 bool SSWindFlowMap::sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell, const F32* surface_z,
                                      std::vector<LLVector4>& out) const
 {
@@ -3368,7 +3314,6 @@ bool SSWindFlowMap::sampleGroundGrid(LLViewerRegion* regionp, S32 n, F32 cell, c
     }
     return true;
 }
-// </SS:Nexii>
 
 // Debug colour for a flow vector.
 static LLColor4 flowColor(const LLVector3& v, F32 exposure, F32 alpha)
@@ -3427,7 +3372,7 @@ void SSWindFlowMap::renderDebugCapture(S32 which)
     };
 
     // The captures store into the full-res arrays at the footprint offset, so
-    // every read here has to add it back on.
+    // every read here adds it back on.
     auto topAt = [&](S32 x, S32 y) -> F32
     {
         if (!tile || x < 0 || y < 0) return NO_SURFACE;

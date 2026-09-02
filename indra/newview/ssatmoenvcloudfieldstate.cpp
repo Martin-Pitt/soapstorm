@@ -29,17 +29,7 @@
 
 namespace
 {
-    // <SS:Nexii> The seasonal rack: -15C is deep winter, +35C a summer heatwave - the storm
-    // deck's base rides between the two rails, and no deck ever grows past a kilometre of
-    // thickness. Winter air is dense and squashes the atmosphere down (a winter storm's base
-    // hangs low over the ground); summer heat lifts the whole sky.
-    //
-    // The base follows the temperature NONLINEARLY - a cubic centred on the neutral
-    // 10C midpoint that is FLAT in the middle and steepest at the rails: through ordinary
-    // spring/autumn weather (and a day's worth of temperature drift) the deck parks near its
-    // mid altitude, and only climbs to the summer high or sinks to the winter low as the
-    // temperature approaches the season's extremes. The extremes set the rack; the curve
-    // keeps everyday weather from dragging the deck around.
+    // <SS:Nexii> The seasonal rack: -15C is deep winter, +35C a summer heatwave - the storm deck's base rides between the two rails, and no deck ever grows past a kilometre of thickness. Winter air is dense and squashes the atmosphere down (a winter storm's base hangs low over the ground); summer heat lifts the whole sky. The base follows the temperature NONLINEARLY - a cubic centred on the neutral 10C midpoint that is FLAT in the middle and steepest at the rails: through ordinary spring/autumn weather (and a day's worth of temperature drift) the deck parks near its mid altitude, and only climbs to the summer high or sinks to the winter low as the temperature approaches the season's extremes. The extremes set the rack; the curve keeps everyday weather from dragging the deck around.
     const F32 DECK_BASE_MIN_C = -15.f;
     const F32 DECK_BASE_MAX_C = 35.f;
     const F32 DECK_BASE_WINTER_M = 400.f;
@@ -59,10 +49,7 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
 {
     SSAtmoEnvCloudFieldState state;
 
-    // <SS:Nexii> The seasonal altitude switch: on, the deck's base is temperature-driven - the
-    // summer/winter atmosphere rack - and the whole deck is capped at a kilometre of thickness.
-    // Off, the old moisture-and-convection base chain stands untouched. One read, shared by the
-    // derivation and the cap. </SS:Nexii>
+    // <SS:Nexii> The seasonal altitude switch: on, the deck's base is temperature-driven - the summer/winter atmosphere rack - and the whole deck is capped at a kilometre of thickness. Off, the old moisture-and-convection base chain stands untouched. One read, shared by the derivation and the cap.
     static LLCachedControl<bool> season(gSavedSettings, "SSAtmoCloudSeason", true);
     const bool seasonal = season;
 
@@ -88,9 +75,7 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     state.mBaseHeightM = track_floor_z + base_height;
     state.mThicknessM = llmax(0.f, thickness) * height_factor;
 
-    // <SS:Nexii> The storm lid: however fierce the convection, the deck is a 4km-region sky -
-    // a kilometre up is a towering cumulonimbus, and nothing grows past it. Applies to authored
-    // decks too: the cap is a property of this sky's size, not of one deck's tuning. </SS:Nexii>
+    // <SS:Nexii> The storm lid: however fierce the convection, the deck is a 4km-region sky - a kilometre up is a towering cumulonimbus, and nothing grows past it. Applies to authored decks too: the cap is a property of this sky's size, not of one deck's tuning.
     if (seasonal)
     {
         state.mThicknessM = llmin(state.mThicknessM, DECK_LID_M);
@@ -101,9 +86,7 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     state.mNoiseTexture = field.mNoiseTexture.valueAt(phase);
     state.mProfileTexture = field.mProfileTexture.valueAt(phase);
 
-    // <SS:Nexii> Mid-fade the pair rides along; the partner starts parked on the current map so
-    // the renderer can bind it unconditionally. blendAt rewrites the current id with the fade's
-    // FROM keyframe - the same answer valueAt held.
+    // <SS:Nexii> Mid-fade the pair rides along; the partner starts parked on the current map so the renderer can bind it unconditionally. blendAt rewrites the current id with the fade's FROM keyframe - the same answer valueAt held.
     state.mBaseTextureNext = state.mBaseTexture;
     state.mBaseTextureBlend = 0.f;
     field.mBaseTexture.blendAt(phase, state.mBaseTexture, state.mBaseTextureNext, state.mBaseTextureBlend);

@@ -90,9 +90,7 @@ SSFloaterAtmoEnv::SSFloaterAtmoEnv(const LLSD& key) :
 {
 }
 
-// <SS:Nexii> A tab_container matches on the panel's own name, which is either the name given in the
-// tab entry or the one inside the loaded panel file depending on which params win. Both are tried
-// so a rename in one place cannot silently stop the rail selecting tabs.
+// <SS:Nexii> A tab_container matches on the panel's own name - the tab entry's or the loaded panel's, whichever wins - so both are tried lest a rename in one place silently stop the rail selecting tabs.
 static bool ss_select_tab(LLTabContainer* tabs, const char* entry_name, const char* panel_name)
 {
     if (!tabs) return false;
@@ -171,8 +169,7 @@ bool SSFloaterAtmoEnv::postBuild()
     getChild<LLUICtrl>("track_name_editor")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitTrackName(); });
 
-    // <SS:Nexii> World templates. Built from the table rather than listed in the XUI so the two
-    // cannot drift: adding an archetype is one row in ssAtmoEnvTemplates() and nothing else.
+    // <SS:Nexii> World templates. Built from the table rather than the XUI so the two cannot drift: adding an archetype is one row in ssAtmoEnvTemplates() and nothing else.
     LLComboBox* template_combo = getChild<LLComboBox>("track_template_combo");
     template_combo->clearRows();
     for (const SSAtmoEnvTemplate& tmpl : ssAtmoEnvTemplates())
@@ -197,8 +194,7 @@ bool SSFloaterAtmoEnv::postBuild()
         getChild<LLUICtrl>(name)->setCommitCallback(
             [this](LLUICtrl*, const LLSD&) { onCommitPlanetaryScales(); });
     }
-    // <SS:Nexii> The Space tab's Disc Perception radios - a preset front-end on the two
-    // distance dials (the dials ARE the perception control): picking one writes both to 1/N.
+    // <SS:Nexii> Space tab's Disc Perception radios - presets over the two distance dials (the dials ARE the perception): picking one writes both to 1/N.
     getChild<LLUICtrl>("celestial_perception_radio")->setCommitCallback(
         [this](LLUICtrl* src, const LLSD&) { onCommitCelestialPerception(src); });
     getChild<LLButton>("open_planetary_designer_button")->setClickedCallback(
@@ -338,18 +334,13 @@ bool SSFloaterAtmoEnv::postBuild()
         bindKeyframeButtons<F32>(row.mPrefix, row.mField);
     }
 
-    // <SS:Nexii> The height is authored relative to the track's floor. The slider keeps its
-    // honest near-floor dial (SS_ATMOENV_WATER_FLOOR..CEILING); the spinner takes the whole
-    // authored range by hand, so a sky-themed build can put its ocean kilometres below the
-    // track it rides. Values past the slider's ends read there pinned at the rail. </SS:Nexii>
+    // <SS:Nexii> Height is authored relative to the track's floor. The slider keeps an honest near-floor dial (SS_ATMOENV_WATER_FLOOR..CEILING); the spinner takes the whole authored range, so a sky build can put its ocean kilometres below the track it rides. Values past the slider's ends read pinned at the rail.
     getChild<LLSliderCtrl>("water_height_slider")->setMinValue(SS_ATMOENV_WATER_FLOOR);
     getChild<LLSliderCtrl>("water_height_slider")->setMaxValue(SS_ATMOENV_WATER_CEILING);
     getChild<LLSpinCtrl>("water_height_value_spinner")->setMinValue(SS_ATMOENV_WATER_MIN);
     getChild<LLSpinCtrl>("water_height_value_spinner")->setMaxValue(SS_ATMOENV_WATER_MAX);
 
-    // <SS:Nexii> The under deck hangs below its track the same way: the slider reaches down
-    // into hang-below-the-floor territory while the spinner takes the water plane's whole
-    // hand-typed range. </SS:Nexii>
+    // <SS:Nexii> The under deck hangs below its track the same way: the slider reaches below floor, the spinner takes the whole hand-typed range.
     getChild<LLSliderCtrl>("ucloud_base_height_slider")->setMinValue(SS_ATMOENV_UDECK_BASE_FLOOR);
     getChild<LLSliderCtrl>("ucloud_base_height_slider")->setMaxValue(SS_ATMOENV_REGION_CEILING);
     getChild<LLSpinCtrl>("ucloud_base_height_value_spinner")->setMinValue(SS_ATMOENV_UDECK_BASE_MIN);
@@ -414,8 +405,7 @@ bool SSFloaterAtmoEnv::postBuild()
     dome_image->setDefaultImageAssetID(LLSettingsSky::GetDefaultCloudNoiseTextureId());
     dome_image->setAllowNoTexture(true);
 
-    // <SS:Nexii> The large-scale noise's picker has no stock default to preview: None (null) IS
-    // its off state - every octave reads the cloud noise until a large map is authored.
+    // <SS:Nexii> The large-scale noise picker has no stock default to preview: None (null) IS its off state - octaves read the cloud noise until a large map is authored.
     LLTextureCtrl* dome_large_image = getChild<LLTextureCtrl>("dome_large_image");
     dome_large_image->setAllowNoTexture(true);
 
@@ -439,18 +429,14 @@ bool SSFloaterAtmoEnv::postBuild()
         bindKeyframeButtons<bool>(row.mPrefix, row.mField);
     }
 
-    // <SS:Nexii> The rail's mode follows the selected tab and nothing else, so the tab container is
-    // the only thing that drives it - no separate zoom control to keep in step with the selection.
-    // The sync first, though: the rail's markers select tabs, so a tab clicked directly has to
-    // select or clear its marker the same way, or a pressed marker survives a tab click that
-    // moved elsewhere and a direct click never shows what it linked to.
+    // <SS:Nexii> The rail's mode follows the selected tab alone - no separate zoom control to keep in step. Sync first, though: the rail's markers select tabs, so a directly clicked tab must select or clear its marker the same way, or a pressed marker survives a tab click and a direct click never shows what it linked to.
     getChild<LLTabContainer>("atmo_tabs")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&)
         {
             syncSelectionToTab();
             refreshRailMode();
         });
-    // The Clouds sub-tabs are part of the same bargain: Main/Under press their deck marker,
+    // The Clouds sub-tabs share the bargain: Main/Under press their deck marker,
     // Dome - like Space, a pinned anchor rather than a layer - clears it.
     getChild<LLTabContainer>("clouds_sub_tabs")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&)
@@ -567,9 +553,7 @@ void SSFloaterAtmoEnv::draw()
 
     const F64 now = LLTimer::getElapsedSeconds();
 
-    // <SS:Nexii> The rail's zoom between the region scale and the selected track's own contents.
-    // Smoothstepped so it reads as diving into the track rather than as the widget cutting to a
-    // different set of numbers; markers glide while it runs and the thumbs land at the end.
+    // <SS:Nexii> The rail's zoom between the region scale and the selected track's contents. Smoothstepped so it reads as diving into the track rather than cutting to new numbers; markers glide while it runs, thumbs land at the end.
     if (mRailZooming)
     {
         static const F64 RAIL_ZOOM_SECONDS = 0.2;
@@ -599,10 +583,7 @@ void SSFloaterAtmoEnv::draw()
     if (now - mLastPoll > STATUS_POLL_INTERVAL)
     {
         mLastPoll = now;
-        // <SS:Nexii> A body disc texture that was still decoding when its padding auto-derive
-        // ran (a texture pick or a sky import) may be decoded by now - land the padding. Runs
-        // in the same poll that keeps the status fresh, so a just-imported sky's adopted disc
-        // textures settle their padding without the user having to re-touch anything.
+        // <SS:Nexii> A body disc texture still decoding when its padding auto-derive ran (a texture pick or sky import) may be decoded by now - land the padding. Runs in the status poll, so a just-imported sky's disc textures settle their padding without a re-touch.
         ssDiscPadPoll();
         refreshStatus();
         refreshVisibility();
@@ -624,18 +605,17 @@ void SSFloaterAtmoEnv::draw()
     drawSliderValueGhosts();
 }
 
-// Accepts EEP settings and notecard drops onto the floater. A settings drop is classified by what
-// the INVENTORY ITEM claims (sky / day cycle / water preset - no asset fetch is needed to decide
-// acceptance) and buffered to the end of the drag, because a multi-item drag only exposes its whole
-// contents in the final drop pass. An all-skies batch acts as the day-cycle story: it seeds a new
-// environment when none is loaded, or stamps a day cycle across the selected track when one is.
-// A LONE day cycle or water preset seeds a new environment. Mixed batches are refused at hover.
+// Accepts EEP settings and notecard drops. A settings drop is classified by what
+// the INVENTORY ITEM claims (sky / day cycle / water preset - no asset fetch needed to decide
+// acceptance) and buffered to the drag's end, since a multi-item drag exposes its whole
+// contents only in the final pass. An all-skies batch is the day-cycle story: it seeds a new
+// environment when none is loaded, or stamps a day cycle on the selected track when one is.
+// A lone day cycle or water preset seeds a new environment. Mixed batches refused at hover.
 bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                         EDragAndDropType cargo_type, void* cargo_data,
                                         EAcceptance* accept, std::string& tooltip_msg)
 {
-    // <SS:Nexii> The transitionary state: an async fetch-and-seed has the floater stood down, so
-    // no drop can land poking at a half-built environment.
+    // <SS:Nexii> The transitionary state: async fetch-and-seed stands the floater down, so no drop lands poking at a half-built environment.
     if (mBusyOps > 0)
     {
         *accept = ACCEPT_NO;
@@ -656,8 +636,8 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         {
             dropBufferSettings(item);
 
-            // The whole batch is in once the drag reaches its last cargo item - act on it then,
-            // and only then, so the group of skies lands as one cycle rather than N creations.
+            // The whole batch is in once the drag reaches its last cargo item - act then,
+            // and only then, so a group of skies lands as one cycle rather than N creations.
             LLToolDragAndDrop* tool = LLToolDragAndDrop::getInstance();
             const S32 cargo_count = tool ? tool->getCargoCount() : 0;
             const S32 cargo_index = tool ? tool->getCargoIndex() : 0;
@@ -675,7 +655,7 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         if (ok)
         {
             // Skies accept a whole batch; a lone day cycle or water preset is single-cargo only
-            // (dragOrDrop refuses a multi-cargo single acceptor on its own).
+            // (dragOrDrop refuses a multi-cargo single acceptor itself).
             if (tooltip_msg.empty())
             {
                 tooltip_msg = item->getName();
@@ -732,10 +712,10 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     return true;
 }
 
-// Classifies one dropped settings item against the editor's rules, shared by the hover and drop
-// passes so the two can never disagree about what a settings type is allowed to do. ok=false
+// Classifies one dropped settings item against the editor's rules, shared by hover and drop
+// passes so they can never disagree about what a settings type may do. ok=false
 // carries the refusal reason in tooltip_msg. Permission is checked here too, so a group with one
-// not-full-perm member is refused as a whole rather than silently dropping the usable rest.
+// non-full-perm member is refused whole rather than silently dropping the usable rest.
 SSFloaterAtmoEnv::EDropKind SSFloaterAtmoEnv::classifySettingsDrop(const LLViewerInventoryItem* item,
                                                                    bool& ok, std::string& tooltip_msg) const
 {
@@ -763,7 +743,7 @@ SSFloaterAtmoEnv::EDropKind SSFloaterAtmoEnv::classifySettingsDrop(const LLViewe
             return EDropKind::SINGLE_WATER;
 
         case LLSettingsType::ST_DAYCYCLE:
-            // A day cycle with an environment loaded would have to replace it - refused, since
+            // A day cycle with an environment loaded would replace it - refused, since
             // that throws away unsaved work. Drop skies instead to stamp a cycle into the track.
             if (SSAtmoEnvManager::getInstance()->hasAsset())
             {
@@ -779,10 +759,10 @@ SSFloaterAtmoEnv::EDropKind SSFloaterAtmoEnv::classifySettingsDrop(const LLViewe
     }
 }
 
-// The hover pass: runs once per cargo item of the drag, reset at its first. The session kind is
-// remembered across the items so a batch mixing skies with a day cycle or water preset reads as
-// refused (ACCEPT_NO wins the min inside dragOrDrop, so the whole drag is refused before any
-// drop ever happens).
+// The hover pass: once per cargo item, reset at the first. The session kind is
+// remembered across items, so a batch mixing skies with a day cycle or water preset reads as
+// refused (ACCEPT_NO wins the min inside dragOrDrop, refusing the whole drag before any
+// drop happens).
 void SSFloaterAtmoEnv::hoverAcceptSettings(const LLViewerInventoryItem* item, bool& ok, std::string& tooltip_msg)
 {
     LLToolDragAndDrop* tool = LLToolDragAndDrop::getInstance();
@@ -810,8 +790,8 @@ void SSFloaterAtmoEnv::hoverAcceptSettings(const LLViewerInventoryItem* item, bo
     }
 }
 
-// The drop pass: buffers each dropped settings item until the whole batch has arrived, then
-// flushDropSession acts on it once.
+// The drop pass: buffers each settings item until the whole batch has arrived,
+// then flushDropSession acts on it once.
 void SSFloaterAtmoEnv::dropBufferSettings(const LLViewerInventoryItem* item)
 {
     LLToolDragAndDrop* tool = LLToolDragAndDrop::getInstance();
@@ -851,8 +831,8 @@ void SSFloaterAtmoEnv::dropBufferSettings(const LLViewerInventoryItem* item)
     }
 }
 
-// Acts on the buffered batch the way its kind dictates. Runs exactly once per drop, when the last
-// cargo item lands. All seeds share the same adoption shape, and every async path is wrapped in
+// Acts on the buffered batch by its kind. Runs exactly once per drop, when the last
+// cargo item lands. All seeds share an adoption shape; every async path is wrapped in
 // the busy/transitionary state so the author cannot poke things mid-build.
 void SSFloaterAtmoEnv::flushDropSession()
 {
@@ -866,8 +846,8 @@ void SSFloaterAtmoEnv::flushDropSession()
     const bool has_asset = SSAtmoEnvManager::getInstance()->hasAsset();
     LLHandle<LLFloater> handle = getHandle();
 
-    // The adoption shape every seed shares: the written notecard becomes the live asset, the busy
-    // state drops, and the whole editor refreshes now rather than waiting on the status poll.
+    // Every seed's shared adoption shape: the written notecard becomes the live asset,
+    // busy state drops, and the editor refreshes now rather than waiting on the status poll.
     auto on_created = [handle](const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
     {
         SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
@@ -919,8 +899,8 @@ void SSFloaterAtmoEnv::flushDropSession()
                 break;
             }
 
-            // A lone sky keeps the grouping-choice import dialog (the single-point stamp); a
-            // drop of several skies means the author wants the track re-skinned as a cycle, so
+            // A lone sky gets the grouping-choice import dialog (single-point stamp); a
+            // drop of several skies means a cycle re-skin, so
             // it is stamped whole and directly - no dialog, no click.
             if (ids.size() == 1 && items.front().mType == LLSettingsType::ST_SKY)
             {
@@ -978,8 +958,8 @@ void SSFloaterAtmoEnv::flushDropSession()
     }
 }
 
-// A dropped EEP sky/water is fetched, sky-checked, then offered to the import dialog - the
-// author picks which groupings of it to take before anything is stamped into the track.
+// A dropped EEP sky/water is fetched, sky-checked, then offered to the import dialog -
+// which groupings to take are chosen before anything is stamped.
 void SSFloaterAtmoEnv::handleSettingsDrop(const LLInventoryItem* drop_item)
 {
     const LLViewerInventoryItem* item =
@@ -1028,16 +1008,16 @@ void SSFloaterAtmoEnv::handleSettingsDrop(const LLInventoryItem* drop_item)
                 return;
             }
 
-            // The fetched sky carries no home of its own - hand it to the import dialog, which
-            // asks which groupings to take before anything is stamped. The dialog re-resolves
+            // The fetched sky has no home of its own - hand it to the import dialog, which
+            // asks which groupings to take before anything is stamped. It re-resolves
             // the track at OK time, so the checks above are only an early out for the common case.
             SSFloaterAtmoSkyImport::show(sky, track_index, phase, item_name, handle);
         });
 }
 
 // A dropped water preset onto a LOADED environment: fetched, then the selected track's water
-// block takes the whole preset. No grouping dialog - a water block has no sub-groupings to offer
-// a choice over, and the plane enables so the stamped look is the one the author sees.
+// block takes the whole preset. No grouping dialog - a water block has no sub-groupings;
+// and the plane enables so the stamped look is the one the author sees.
 void SSFloaterAtmoEnv::handleWaterStamp(const DropItem& item)
 {
     const LLViewerInventoryItem* vitem = gInventory.getItem(item.mItemId);
@@ -1096,8 +1076,8 @@ void SSFloaterAtmoEnv::handleWaterStamp(const DropItem& item)
         });
 }
 
-// The transitionary state: stood up before any async fetch-and-seed, taken down when it settles.
-// Counted so a racing pair of completions cannot clear it while its sibling is still working.
+// The transitionary state: stood up before any async fetch-and-seed, down when it settles.
+// Counted so racing completions cannot clear it while a sibling is still working.
 void SSFloaterAtmoEnv::setBusy(const std::string& label)
 {
     mBusyLabel = label;
@@ -1124,9 +1104,9 @@ void SSFloaterAtmoEnv::refreshBusy()
     getChild<LLUICtrl>("create_stock_button")->setEnabled(!busy);
 }
 
-// Preps the landing state's bullet rows: the prose lives in the XUI (so the copy stays in one
-// place), and this only hangs the bullet glyph on the front - once, so reopening cannot
-// double-prefix. The en skin is ASCII-only, so the marker rides in from here rather than as a
+// Preps the landing bullet rows: the prose lives in the XUI (copy stays in one
+// place); this hangs the bullet glyph on the front once, so reopening cannot
+// double-prefix. The en skin is ASCII-only, so the marker rides in from here, not as a
 // raw UTF-8 byte in the XML.
 void SSFloaterAtmoEnv::refreshLandingBullets()
 {
@@ -1184,9 +1164,7 @@ void SSFloaterAtmoEnv::refreshTrackRail()
         mSelectedTrackIndex = 0;
     }
 
-    // <SS:Nexii> Called from a dozen places that just want the rail brought up to date. In layer
-    // mode the markers belong to refreshLayerRail(); the asset-level chrome below is shared, so
-    // only the track markers themselves are conditional.
+    // <SS:Nexii> Called from a dozen places that just want the rail current. In layer mode the markers belong to refreshLayerRail(); the asset-level chrome below is shared, so only the track markers are conditional.
     if (mRailMode == ERailMode::LAYER)
     {
         refreshLayerRail();
@@ -1202,8 +1180,8 @@ void SSFloaterAtmoEnv::refreshTrackRail()
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
     slider->clear();
 
-    // Layer mode retunes the rail to whatever the selected track spans, so track mode puts the
-    // authored region scale back rather than assuming it survived.
+    // Layer mode retunes the rail to the selected track's span, so track mode restores the
+    // authored region scale rather than assuming it survived.
     slider->setMinValue(0.f);
     slider->setMaxValue(SS_ATMOENV_REGION_CEILING);
     slider->setIncrement(64.f);
@@ -1281,8 +1259,8 @@ void SSFloaterAtmoEnv::repositionRailMarkers()
     }
 }
 
-// Altitude to rail pixel. Maps through mRailMin/mRailMax rather than the slider's own range: the
-// two agree except mid-zoom, when the markers glide and the slider carries no thumbs at all.
+// Altitude to rail pixel. Maps through mRailMin/mRailMax, not the slider's range: the
+// two agree except mid-zoom, when the markers glide and the slider carries no thumbs.
 S32 SSFloaterAtmoEnv::railCentreForValue(F32 value) const
 {
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
@@ -1309,11 +1287,11 @@ S32 SSFloaterAtmoEnv::railCentreForValue(F32 value) const
     return sld_rect.mBottom + bottom_edge + (S32)(t * (F32)(top_edge - bottom_edge));
 }
 
-// What a deck actually resolves to at the preview phase: the auto derivation off the track's
+// What a deck resolves to at the preview phase: the auto derivation off the track's
 // weather when the field owns its numbers, else the authored keyframes. The rail reads this
-// rather than the raw keyframes so its markers and fit follow the deck the renderer draws - an
-// auto deck's height wanders with moisture and convection, and the row it greys out does not.
-// Metres are the rail's own floor-relative frame: above the track's floor, negative below it.
+// rather than the raw keyframes so its markers and fit follow the rendered deck - an
+// auto deck's height wanders with moisture and convection, while the row it greys out does not.
+// Metres are the rail's floor-relative frame: above the track's floor, negative below it.
 void SSFloaterAtmoEnv::effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under_deck,
                                          F32& out_base, F32& out_thickness) const
 {
@@ -1337,11 +1315,11 @@ void SSFloaterAtmoEnv::effectiveDeckSpan(const SSAtmoEnvTrack& track, bool under
     out_thickness = field.mBaseThicknessM.valueAt(mPreviewPhase);
 }
 
-// The altitude band the rail covers in layer mode: everything placed inside the selected track,
+// The altitude band the rail covers in layer mode: everything in the selected track,
 // padded, with a floor on the span so a flat stack does not collapse to a point. The rail runs in
-// the track's own frame - metres above its floor, negative below, with zero the floor itself -
+// the track's own frame - metres above its floor, negative below, zero the floor itself -
 // because the water plane and both decks are authored against that floor and ride it wherever the
-// track sits. The dome is excluded deliberately - it is a backdrop pinned above the scale, and a
+// track sits. The dome is excluded deliberately - a backdrop pinned above the scale; a
 // cirrus dome at 6km would otherwise squash the decks being edited into the bottom eighth of the
 // rail.
 void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
@@ -1398,8 +1376,8 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
     out_max = hi + pad;
 
     // Quantise the fit to 256m blocks. The fit re-runs on every poll, and an auto deck's height
-    // wanders with moisture and convection, so an exact fit glides the whole scale under even a
-    // small drift; rounding keeps it still until the content actually crosses a block boundary.
+    // wanders with moisture and convection, so an exact fit glides the scale under even a
+    // small drift; rounding keeps it still until content crosses a block boundary.
     // Rounding can land both bounds of a near-minimum span on one block, so spread a collapsed
     // fit back out symmetrically.
     static const F32 FIT_BLOCK = 256.f;
@@ -1413,7 +1391,7 @@ void SSFloaterAtmoEnv::railRangeForTrack(F32& out_min, F32& out_max) const
 }
 
 // The surface precipitation is measured against, in the track's floor-relative frame: the floor
-// itself (zero) unless the track's own water plane sits above it.
+// itself (zero) unless the track's water plane sits above it.
 F32 SSFloaterAtmoEnv::weatherReferenceSurface() const
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1432,8 +1410,8 @@ F32 SSFloaterAtmoEnv::weatherReferenceSurface() const
 }
 
 // The deck precipitation falls from. Derived by default as the lowest enabled deck above the
-// reference surface, which resolves to the main deck for a sky build because the under deck hangs
-// below the platform floor. An authored override that names a deck which has since been disabled
+// reference surface - the main deck for a sky build, because the under deck hangs
+// below the platform floor. An override naming a now-disabled deck
 // falls back to derivation rather than leaving weather with no source.
 S32 SSFloaterAtmoEnv::weatherDeliveringDeck() const
 {
@@ -1506,12 +1484,12 @@ bool SSFloaterAtmoEnv::layerPresent(S32 layer) const
     }
 }
 
-// Which mode the rail should be in, driven entirely by the selected tab, and the widget swap that
-// goes with it. The author never asks for a zoom level: Track shows the region, everything else
+// Which mode the rail should be in, driven entirely by the selected tab, plus the widget swap that
+// goes with it. The author never asks for a zoom level: Track shows the region, all else
 // shows the track you are inside.
-// Tab to rail, the reverse half of selectTrack/selectLayer. A tab clicked directly resolves the
+// Tab to rail, the reverse half of selectTrack/selectLayer. A directly clicked tab resolves the
 // marker it is linked to: Water presses the water marker, Clouds presses whichever deck its
-// sub-tabs are showing, and tabs with nothing on the rail - Weather, Sky, Space, Look, and Dome
+// sub-tabs show, and tabs with nothing on the rail - Weather, Sky, Space, Look, and Dome
 // inside Clouds, a pinned anchor rather than a layer - clear the pressed one. Track reselects the
 // selected track's own marker, which refreshTrackRail re-applies from mSelectedTrackIndex. Runs
 // ahead of refreshRailMode, which re-applies the toggle states from the resolved selection.
@@ -1532,7 +1510,7 @@ void SSFloaterAtmoEnv::syncSelectionToTab()
         if (ss_tab_is(sub, "clouds_under_tab", "panel_ss_atmo_env_clouds_under"))
         {
             // The main deck is always present, so a stale Under selection on a track whose
-            // second deck went away still has something legitimate to fall back to.
+            // second deck disappeared still has something legitimate to fall back to.
             mSelectedLayer = layerPresent(LAYER_UNDER) ? LAYER_UNDER : LAYER_MAIN;
         }
         else if (ss_tab_is(sub, "clouds_main_tab", "panel_ss_atmo_env_clouds_main"))
@@ -1629,8 +1607,8 @@ void SSFloaterAtmoEnv::refreshRailMode()
 }
 
 // Populates the rail with the selected track's contents. Thumbs are only added once the zoom has
-// settled: the slider clamps values to its own range, so adding them mid-flight would snap a deck
-// sitting outside the interpolated window onto its edge and then write that back.
+// settled: the slider clamps to its own range, so mid-flight additions would snap a deck
+// outside the interpolated window onto its edge and write that back.
 void SSFloaterAtmoEnv::refreshLayerRail()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1641,9 +1619,9 @@ void SSFloaterAtmoEnv::refreshLayerRail()
     const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
 
     LLMultiSliderCtrl* slider = getChild<LLMultiSliderCtrl>("track_altitude_slider");
-    // A refresh runs mid-drag (the live commit re-runs it on every move), and addSlider hands
-    // "current" to each thumb it adds - without saving it here the last rebuilt thumb would steal
-    // the drag off the one under the cursor, so a water drag would end up dragging the main deck.
+    // A refresh runs mid-drag (the live commit re-runs on every move), and addSlider hands
+    // "current" to each thumb it adds - without saving it, the last rebuilt thumb would steal
+    // the drag off the one under the cursor, so a water drag would drag the main deck instead.
     const std::string drag_slider = slider->getCurSlider();
     slider->clear();
 
@@ -1652,7 +1630,7 @@ void SSFloaterAtmoEnv::refreshLayerRail()
     slider->setMaxValue(mRailMax);
     slider->setIncrement(llmax(1.f, range / 256.f));
     // The authored 304m gap is sized for the 0-4096m scale and would reject every marker on a
-    // fitted one, so it scales with the window too.
+    // fitted scale, so it scales with the window too.
     slider->setOverlapThreshold(range / 24.f);
 
     static const char* const LAYER_LABELS[LAYER_COUNT] = { "Water", "Main Deck", "Under Deck" };
@@ -1684,7 +1662,7 @@ void SSFloaterAtmoEnv::refreshLayerRail()
     }
 
     // Put the drag (or last-touched thumb) back: setCurSlider no-ops when the name did not
-    // survive the rebuild, so a zoom that drops thumbs mid-flight lands here harmless.
+    // survive the rebuild, so a zoom dropping thumbs mid-flight lands here harmless.
     if (!drag_slider.empty() && slider->getCurSlider() != drag_slider)
     {
         slider->setCurSlider(drag_slider);
@@ -1710,8 +1688,8 @@ void SSFloaterAtmoEnv::refreshLayerRail()
     getChild<LLUICtrl>("remove_deck_button")->setEnabled(track.mUnderField.mEnabled);
 }
 
-// Rail marker to tab. The markers are the tab selector in layer mode exactly as the track buttons
-// are in track mode, which is the whole reason the two share one widget.
+// Rail marker to tab. The markers select tabs in layer mode exactly as the track buttons
+// do in track mode, which is why the two share one widget.
 void SSFloaterAtmoEnv::selectLayer(S32 layer)
 {
     mSelectedLayer = layer;
@@ -1752,7 +1730,7 @@ void SSFloaterAtmoEnv::onClickLayerMarker(S32 layer)
     selectLayer(layer);
 }
 
-// Add Deck reads generically but bottoms out on the under deck's enable flag: the model carries two
+// Add Deck reads generically but lands on the under deck's enable flag: the model carries two
 // named decks with distinct semantics rather than a vector. If a third is ever wanted the rail does
 // not change - only the asset and the deck panels do. See doc/atmo_magic_env_ui.md.
 void SSFloaterAtmoEnv::onClickAddDeck()
@@ -1815,9 +1793,7 @@ void SSFloaterAtmoEnv::onCommitWeatherSource()
     refreshPreview();
 }
 
-// <SS:Nexii> Rebuilds the type combo from both tiers. The shipped vocabulary is captured from the
-// XUI on the first pass rather than duplicated in code, so the panel stays the one place the
-// derivation names are written down; the environment's own types are appended after a separator.
+// <SS:Nexii> Rebuilds the type combo from both tiers. The shipped vocabulary is captured from the XUI on the first pass rather than duplicated in code, so the panel stays the one place derivation names are written; the environment's own types append after a separator.
 void SSFloaterAtmoEnv::refreshPrecipitationTypes()
 {
     LLComboBox* combo = getChild<LLComboBox>("precipitation_combo");
@@ -1825,7 +1801,7 @@ void SSFloaterAtmoEnv::refreshPrecipitationTypes()
     if (mBuiltinPrecipItems.empty())
     {
         // LLComboBox exposes its rows only through the selection, so walk it once and put the
-        // selection back. Once is all it takes - the shipped vocabulary is fixed at build time.
+        // selection back. Once suffices - the shipped vocabulary is fixed at build time.
         const S32 was = combo->getCurrentIndex();
         for (S32 i = 0; i < combo->getItemCount(); ++i)
         {
@@ -1849,7 +1825,7 @@ void SSFloaterAtmoEnv::refreshPrecipitationTypes()
     {
         for (const auto& entry : mgr->asset().mPrecipitationTypes)
         {
-            // Marked so an author can tell at a glance which types travel with this environment.
+            // Marked so an author can tell which types travel with this environment.
             combo->add(entry.first + "  (this environment)", LLSD(entry.first));
         }
     }
@@ -1998,7 +1974,7 @@ void SSFloaterAtmoEnv::onCommitAltitudeSlider()
 
     // Layer mode drags a placed layer, not a track floor. Writing straight to the field's plain
     // value is deliberate: a deck's altitude can be keyframed, but dragging it on the rail is a
-    // structural placement, so it sets the value the track holds rather than stamping a keyframe.
+    // structural placement, so it sets the track's value rather than stamping a keyframe.
     if (mRailMode == ERailMode::LAYER)
     {
         if (cur.rfind("layer", 0) != 0) return;
@@ -2158,9 +2134,7 @@ void SSFloaterAtmoEnv::refreshStatus()
 
     setTitle(std::string("Edit Atmo Magic Environment") + (modified ? " - Unsaved changes*" : ""));
 
-    // <SS:Nexii> Load From Parcel is only meaningful when the parcel advertises an
-    // environment at all. Polled from draw(), so crossing a parcel boundary while the
-    // floater is open moves the button with it rather than leaving a stale verdict.
+    // <SS:Nexii> Load From Parcel is only meaningful when the parcel advertises an environment. Polled from draw(), so crossing a boundary while the floater is open moves the button with it rather than leaving a stale verdict.
     getChild<LLUICtrl>("load_from_parcel_button")->setEnabled(
         SSAtmoEnvDiscoveryManager::parcelAssetId().notNull());
 
@@ -2169,8 +2143,8 @@ void SSFloaterAtmoEnv::refreshStatus()
 }
 
 // The landing state's one-click seeds, both acting immediately rather than opening a chooser.
-// They share the drop seeds' adoption shape, so a freshly written notecard becomes the live
-// environment and the whole editor refreshes under the busy state.
+// They share the drop seeds' adoption shape - the fresh notecard becomes the live
+// environment and the editor refreshes under the busy state.
 void SSFloaterAtmoEnv::onClickCreateEmpty()
 {
     setBusy("Creating an empty environment...");
@@ -2275,7 +2249,7 @@ void SSFloaterAtmoEnv::onClickRevert()
 {
     SSAtmoEnvManager::getInstance()->revertToBaseline();
     mSelectedTrackIndex = 0;
-    // Reverting restores the baseline's precipitation types too, so they have to be restaged and
+    // Reverting restores the baseline's precipitation types too, so they must be restaged and
     // relisted - otherwise a type added since the load would linger in the combo and in the
     // resolver's live set.
     ssAtmoEnvStagePrecipTypes(SSAtmoEnvManager::getInstance()->asset());
@@ -2320,10 +2294,7 @@ void SSFloaterAtmoEnv::onClickRemoveTrack()
     refreshPreview();
 }
 
-// <SS:Nexii> Seeds the selected track from a world archetype. Confirmed first because it overwrites
-// the track wholesale, keyframes included - there is no partial apply and no undo beyond Revert.
-// The sky arrives as the stock four-sky day cycle tinted by the template's atmosphere, so the
-// seeding fetches assets and completes asynchronously.
+// <SS:Nexii> Seeds the selected track from a world archetype. Confirmed first because it overwrites the track wholesale, keyframes included - no partial apply, no undo beyond Revert. The sky arrives as the stock four-sky day cycle tinted by the template's atmosphere, so the seed fetches assets and completes asynchronously.
 void SSFloaterAtmoEnv::onClickApplyTemplate()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -2337,9 +2308,9 @@ void SSFloaterAtmoEnv::onClickApplyTemplate()
     args["MESSAGE"] = "Seed \"" + combo->getSelectedItemLabel() + "\" onto this track? Its water, "
                       "cloud decks and weather are replaced, and its sky reseeds as the stock day "
                       "cycle tinted by the template - keyframes included.";
-    // The floater can be closed while the confirmation is up, so the callback goes through a
+    // The floater can close while the confirmation is up, so the callback goes through a
     // handle rather than capturing this - same pattern as the dropped-settings load above. The
-    // seed itself completes after an asset fetch, so the refresh rides a second handle resolve.
+    // seed completes after an asset fetch, so the refresh rides a second handle resolve.
     LLHandle<LLFloater> handle = getHandle();
     LLNotificationsUtil::add("GenericAlertYesCancel", args, LLSD(),
         [handle, key](const LLSD& notification, const LLSD& response)
@@ -2700,7 +2671,7 @@ bool SSFloaterAtmoEnv::waterRowsInactive() const
 }
 
 // Rewrites the Water tab rows, and gates the Under Layer tab's rows on its enable flag (the
-// auto derivation's own grey-out from refreshAutoRows composes with this: a row is live only
+// auto grey-out from refreshAutoRows composes with this: a row is live only
 // when its field is on and not auto-owned).
 void SSFloaterAtmoEnv::refreshWaterRows()
 {
@@ -2830,9 +2801,7 @@ void SSFloaterAtmoEnv::refreshPlanetaryScales()
         getChild<LLUICtrl>("planet_moon_scale_spinner")->setValue(planetary.mPlanetMoonScale);
     }
 
-    // <SS:Nexii> The radio selection is DERIVED from the dials - the dials ARE the perception:
-    // a preset owns the radio only while BOTH dials sit on its 1/N, and any hand-moved value
-    // deselects the radios (allow_deselect clears it).
+    // <SS:Nexii> The radio selection is DERIVED from the dials - the dials ARE the perception: a preset owns the radio only while BOTH dials sit on its 1/N; any hand-moved value deselects the radios (allow_deselect clears it).
     auto at_preset = [](F32 dial, F32 n) { return llabs(dial - 1.f / n) < 0.001f; };
     const F32 sun  = planetary.mSunPlanetScale;
     const F32 moon = planetary.mPlanetMoonScale;
@@ -2867,11 +2836,7 @@ void SSFloaterAtmoEnv::onCommitPlanetaryScales()
     refreshStatus();
 }
 
-// <SS:Nexii> The Space tab's Disc Perception radios: a preset front-end on the two distance
-// dials, which are the perception control itself. Picking N writes BOTH dials to 1/N - the sun
-// and moons loom N times through the dials' own mechanism - and the shared refresh moves the
-// sliders to match. Hand-moving a slider stays the custom path (the commit below re-derives
-// the radio selection and deselects when no preset matches).
+// <SS:Nexii> The Space tab's Disc Perception radios: a preset front-end on the two distance dials, which ARE the perception control. Picking N writes BOTH dials to 1/N - the sun and moons loom N times through the dials' own mechanism - and the shared refresh moves the sliders to match. Hand-moving a slider stays the custom path (the commit below re-derives the radio selection and deselects when no preset matches).
 void SSFloaterAtmoEnv::onCommitCelestialPerception(LLUICtrl* src)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -3073,12 +3038,7 @@ void SSFloaterAtmoEnv::refreshTextureRow(const KeyRow<LLUUID>& row, F64 phase)
     const SSAtmoEnvKeyframed<LLUUID>& field = row.mField();
     getChild<LLTextureCtrl>(row.mPrefix)->setValue(field.valueAt(phase));
 
-    // <SS:Nexii> The deck's generated stand-ins preview on their pickers while the authored
-    // field is None - the procedural noise map and the built-in profile strip, dimmed, exactly
-    // what the deck is running. An authored value clears the placeholder and the picker
-    // previews the real asset as texture pickers always have. Live previews of the BUILT decks
-    // (main or under by row), not of the edited asset - a different track's decks are whatever
-    // the camera is standing under. [interaction: SSVolCloud]
+    // <SS:Nexii> The deck's generated stand-ins preview on their pickers while the authored field is None - the procedural noise map and built-in profile strip, dimmed, exactly what the deck is running. An authored value clears the placeholder and the picker previews the real asset as pickers always have. Live previews of the BUILT decks (main or under by row), not the edited asset - a different track's decks are whatever the camera stands under. [interaction: SSVolCloud]
     LLTextureCtrl* picker = getChild<LLTextureCtrl>(row.mPrefix);
     if (row.mPrefix == "cloud_noise_image")
     {
@@ -3406,10 +3366,10 @@ bool SSFloaterAtmoEnv::scrubberGeometry(LLRect& out_rect, S32& out_left_edge, S3
     return out_travel > 0;
 }
 
-// The weather bracket: precipitation occupies a span rather than a height, so it draws as an extent
+// The weather bracket: precipitation occupies a span, not a height, so it draws as an extent
 // from the reference surface up to the delivering deck rather than as another thumb. Rail
 // geometry is panel-local, and this runs after LLFloater::draw() in floater space, so the track
-// panel's own origin has to be added back on.
+// panel's own origin must be added back on.
 void SSFloaterAtmoEnv::drawWeatherBracket()
 {
     if (mRailMode != ERailMode::LAYER) return;

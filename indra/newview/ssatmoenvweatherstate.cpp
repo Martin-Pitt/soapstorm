@@ -31,10 +31,7 @@ namespace
 {
     const F32 CLEAR_MOISTURE_THRESHOLD = 0.02f;
 
-    // <SS:Nexii> The temperature band the lightning season fades over: the SAME season rack the
-    // cloud altitudes use (-15C is deep winter, +35C a summer heatwave). Full frequency only in
-    // the real heat - the summer network discharges freely - throttling down to a twentieth by
-    // deep winter, when the rare storm still owns its few anvil bolts. </SS:Nexii>
+    // <SS:Nexii> The temperature band the lightning season fades over: the SAME season rack the cloud altitudes use (-15C deep winter, +35C summer heatwave). Full frequency only in the real heat - summer discharges freely - throttling to a twentieth by deep winter, when the rare storm still owns its few anvil bolts.
     const F32 LIGHTNING_WARM_C = 35.f;
     const F32 LIGHTNING_COLD_C = -15.f;
     const F32 LIGHTNING_FLOOR  = 0.05f;
@@ -100,12 +97,7 @@ std::string SSAtmoEnvWeatherResolver::derivePrecipitationType(F32 convection, F3
     return (convection > 0.95f) ? "hail" : "rain";
 }
 
-// <SS:Nexii> Temperature's grip on lightning frequency. Summer heat lets convection discharge
-// freely; the cold of winter throttles the network down to the rare storm - "thundersnow" is a
-// headline, not a Tuesday, and the few strikes it does own are the powerful positive anvil
-// bolts the lightning model favours at those temperatures. The floor keeps that rare winter
-// storm alive, never zero. With the polarity model switched off the answer is 1, so the old
-// convection-only intervals stand untouched. </SS:Nexii>
+// <SS:Nexii> Temperature's grip on lightning frequency. Summer heat lets convection discharge freely; winter cold throttles the network to the rare storm - "thundersnow" is a headline, not a Tuesday, and its few strikes are the powerful positive anvil bolts the lightning model favours there. The floor keeps that rare winter storm alive, never zero. With the polarity model off the answer is 1, so the old convection-only intervals stand untouched.
 F32 SSAtmoEnvWeatherResolver::lightningTemperatureScale(F32 temperature_c)
 {
     static LLCachedControl<bool> polarity(gSavedSettings, "SSAtmoLightningPolarity", true);
@@ -317,11 +309,7 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
     state.mLightningCharge  = weather.mLightningCharge;
     state.mLightningSparks  = weather.mLightningSparks;
 
-    // <SS:Nexii> Cold stretches the intervals: summer convection discharges every few seconds,
-    // the same convection under a winter sky rattles off a strike a minute at most. The scale is
-    // divided into the base intervals so "rare in winter, common in summer" holds at every
-    // convection, and the winter storm's own rare strikes are the powerful positive anvil bolts
-    // the lightning model favours at those temperatures. </SS:Nexii>
+    // <SS:Nexii> Cold stretches the intervals: summer convection discharges every few seconds, the same convection under a winter sky a strike a minute at most. The scale divides into the base intervals so "rare in winter, common in summer" holds at every convection; the winter storm's own rare strikes are the powerful positive anvil bolts the model favours there.
     const F32 season = llmax(lightningTemperatureScale(temperature), 0.02f);
 
     if (weather.mLightningAuto)

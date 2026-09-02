@@ -39,12 +39,12 @@ SSFloaterWorldField::SSFloaterWorldField(const LLSD& key) :
 {
 }
 
-// Wires the overlay toggle, the recapture button and the tuning watchers. A
-// cell/band/ceiling change has to rebuild the cached tiles to take effect -
-// the field's staleness checks compare cell and band against the live
-// settings, but no tile already recent is forced to retouch, so the watchers
-// drop them. MaxAge is deliberately not watched: it is consumed live by every
-// needsBuild check, and clearing on a timing tweak would force an immediate
+// Wires the overlay toggle, recapture button and tuning watchers. A
+// cell/band/ceiling change must rebuild the cached tiles to take effect -
+// staleness checks compare cell and band against the live
+// settings, but no recent tile is forced to retouch, so the watchers
+// drop them. MaxAge is deliberately unwatched: consumed live by every
+// needsBuild check; a clear on a timing tweak would force an immediate
 // full recapture the new age would have waited out on its own.
 bool SSFloaterWorldField::postBuild()
 {
@@ -89,8 +89,8 @@ void SSFloaterWorldField::syncOverlayCheck()
 
 // A tuning change drops the cached tiles so the field rebuilds under the new
 // geometry; without this a cell/band/ceiling change would never be picked up
-// downstream, because the field's staleness checks compare against the live
-// settings but nothing forces a tile that is already recent to retouch.
+// downstream - staleness checks compare against the live
+// settings but nothing forces an already-recent tile to retouch.
 void SSFloaterWorldField::watch(const std::string& control)
 {
     LLControlVariable* var = gSavedSettings.getControl(control);

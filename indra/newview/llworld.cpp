@@ -136,7 +136,6 @@ void LLWorld::resetClass()
     mHoleWaterObjects.clear();
     // <SS:Nexii> Kill the Atmo water plane set before the object list dies so no LLPointer outlives teardown holding a dead drawable.
     SSWaterWorld::getInstance()->clearWaterObjects();
-    // </SS:Nexii>
     gObjectList.destroy();
     gSky.cleanup(); // references an object
     for(region_list_t::iterator region_it = mRegionList.begin(); region_it != mRegionList.end(); )
@@ -1386,10 +1385,8 @@ void LLWorld::updateWaterObjects()
 // </FS:CR> Aurora Sim
 
     // We only want to fill in water for stuff that's near us, say, within 256 or 512m
-    // <SS:Nexii> Fixed 256 (was 512, flipping on draw distance): keeps the footprint static and its far corner inside MAX_FAR_CLIP, the constant projection far plane, leaving the skirt below as
-    // much room as possible; the ring the tiles no longer cover is where the edge patches lie anyway.
+    // <SS:Nexii> Fixed 256 (was 512, flipping on draw distance): keeps the footprint static and its far corner inside MAX_FAR_CLIP, the constant projection far plane, leaving the skirt below as much room as possible; the ring the tiles no longer cover is where the edge patches lie anyway.
     S32 range = 256;
-    // </SS:Nexii>
 
     LLViewerRegion* regionp = gAgent.getRegion();
     from_region_handle(regionp->getHandle(), &region_x, &region_y);
@@ -1474,12 +1471,9 @@ void LLWorld::updateWaterObjects()
         (S32)(512 - (region_y - min_y)) };
 // </FS:CR> Fix water height on regions larger than 2048x2048
 
-    // <SS:Nexii> Void water skirt past the hole box: as far out as fits, capped so the ring's far corner at sqrt(2) stays inside MAX_FAR_CLIP from a camera anywhere in the box (0.7 ~ 1/sqrt(2)
-    // with rounding margin) - triangles the projection slices through rasterise black along the horizon. Floor 256 because under ~128m LLVOWater::updateGeometry rounds a patch to zero quads
-    // (crash). Even metres so tile edges round together. Rationale in doc/archive/atmo_magic_interactions.md.
+    // <SS:Nexii> Void water skirt past the hole box: as far out as fits, capped so the ring's far corner at sqrt(2) stays inside MAX_FAR_CLIP from a camera anywhere in the box (0.7 ~ 1/sqrt(2) with rounding margin) - triangles the projection slices through rasterise black along the horizon. Floor 256 because under ~128m LLVOWater::updateGeometry rounds a patch to zero quads (crash). Even metres so tile edges round together. Rationale in doc/archive/atmo_magic_interactions.md.
     const F32 corner_room = MAX_FAR_CLIP * 0.7f - (F32)llmax(wx, wy);
     const F32 water_stretch = (F32)(2 * ll_round(llclamp(corner_room, 256.f, 1024.f) * 0.5f));
-    // </SS:Nexii>
 
     S32 dir;
     for (dir = 0; dir < EDGE_WATER_OBJECTS_COUNT; dir++)
@@ -1525,7 +1519,6 @@ void LLWorld::updateWaterObjects()
 
         water_pos.mdV[0] += (water_stretch * 0.5f) * gDirAxes[dir][0];
         water_pos.mdV[1] += (water_stretch * 0.5f) * gDirAxes[dir][1];
-        // </SS:Nexii>
 
         waterp->setPositionGlobal(water_pos);
         waterp->setScale(water_scale);
@@ -1546,11 +1539,8 @@ void LLWorld::shiftRegions(const LLVector3& offset)
 
     LLViewerPartSim::getInstance()->shift(offset);
 
-    // <SS:Nexii> Atmo Magic particles and pending impacts live in agent space too.
-    // The wind flowmap does not need shifting: its tiles are stored in
-    // region-local coordinates precisely so a crossing cannot move them.
+    // <SS:Nexii> Atmo Magic particles and pending impacts live in agent space too. The wind flowmap does not need shifting: its tiles are stored in region-local coordinates precisely so a crossing cannot move them.
     SSAtmoMagic::getInstance()->shift(offset);
-    // </SS:Nexii>
 }
 
 LLViewerTexture* LLWorld::getDefaultWaterTexture()

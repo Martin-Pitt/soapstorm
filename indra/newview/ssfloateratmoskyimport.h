@@ -31,11 +31,7 @@
 
 #include <string>
 
-// <SS:Nexii> Atmo Magic: pops when an EEP sky is dropped onto the environment editor, asking
-// which groupings of the sky to import - atmosphere, lighting, celestial, cloud dome - before
-// anything is stamped. SSFloaterAtmoEnv::handleSettingsDrop fetches the asset (the item alone
-// cannot say sky vs water vs day cycle), then hands the fetched sky here together with the
-// track and preview phase the author dropped onto.
+// <SS:Nexii> Atmo Magic: pops on an EEP sky drop onto the environment editor, asking which groupings to import - atmosphere, lighting, celestial, cloud dome - before anything is stamped. SSFloaterAtmoEnv::handleSettingsDrop fetches the asset (the item alone cannot say sky vs water vs day cycle), then hands the sky here together with the track and preview phase the author dropped onto.
 class SSFloaterAtmoSkyImport : public LLFloater
 {
 public:

@@ -865,11 +865,7 @@ void LLSettingsVOSky::applySpecial(void *ptarget, bool force)
     shader->uniform1i(LLShaderMgr::SUN_UP_FACTOR, getIsSunUp() ? 1 : 0);
     shader->uniform1f(LLShaderMgr::SUN_MOON_GLOW_FACTOR, getSunMoonGlowFactor());
 
-    // <SS:Nexii> Atmo Magic: the sun's horizon-band share - 1 while the disc's centre is up,
-    // easing out across the twilight below the horizon - for the sunrise/sunset glow ramp in
-    // the sky dome, the dome clouds and the atmospheric module (skyV.glsl, cloudsV.glsl,
-    // atmosphericsFuncs.glsl). Zero unless an active Atmo environment is driving the sky - see
-    // SSAtmoEnvApplier::sunRiseFraction - so every stock sky keeps stock's centre-rise step.
+    // <SS:Nexii> Atmo Magic: the sun's horizon-band share - 1 while the disc's centre is up, easing out across the twilight below the horizon - for the sunrise/sunset glow ramp in the sky dome, the dome clouds and the atmospheric module (skyV.glsl, cloudsV.glsl, atmosphericsFuncs.glsl). Zero unless an active Atmo environment is driving the sky - see SSAtmoEnvApplier::sunRiseFraction - so every stock sky keeps stock's centre-rise step.
     shader->uniform1f(LLShaderMgr::SS_SUN_RISE, SSAtmoEnvApplier::instance().sunRiseFraction());
 
     // ...and the sun's true direction for the same shaders: while the rise band is live - now
@@ -884,13 +880,7 @@ void LLSettingsVOSky::applySpecial(void *ptarget, bool force)
     // the sky.
     shader->uniform1f(LLShaderMgr::SS_SUN_RADIUS, SSAtmoEnvApplier::instance().sunSlotRadius());
 
-    // <SS:Nexii> Atmo Magic: the two light slots' scene-light contributions after their OWN
-    // atmospheric attenuation, for the dominant-light handover in atmosphericsFuncs.glsl - the
-    // scene light is their per-channel max, so the moon hands over to the rising sun exactly
-    // where their light crosses instead of lightnorm's flip at centre-rise dropping everything
-    // to near-black. ss_light_max gates it: 1 while an Atmo environment with light-emitting
-    // bodies drives the sky, 0 otherwise, so stock keeps its single-lightnorm switch. Zero
-    // contribution uniforms while the gate is off.
+    // <SS:Nexii> Atmo Magic: the two light slots' scene-light contributions after their OWN atmospheric attenuation, for the dominant-light handover in atmosphericsFuncs.glsl - the scene light is their per-channel max, so the moon hands over to the rising sun exactly where their light crosses instead of lightnorm's flip at centre-rise dropping everything to near-black. ss_light_max gates it: 1 while an Atmo environment with light-emitting bodies drives the sky, 0 otherwise, so stock keeps its single-lightnorm switch. Zero contribution uniforms while the gate is off.
     shader->uniform1f(LLShaderMgr::SS_LIGHT_MAX,
                       SSAtmoEnvApplier::instance().lightSlotsValid() ? 1.f : 0.f);
     shader->uniform3fv(LLShaderMgr::SS_SUN_LIGHT, SSAtmoEnvApplier::instance().sunSlotLight().mV);

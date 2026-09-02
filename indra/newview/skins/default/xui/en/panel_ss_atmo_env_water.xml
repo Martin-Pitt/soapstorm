@@ -9,18 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: this track water plane. The parameter set
-         mirrors EEP own Water panel (panel_settings_water.xml) one-for-one,
-         the difference being that every one of them is keyframable.
-
-         Same row grid as the Weather tab. The colour swatch and texture
-         picker keep their usual proportions rather than being stretched to
-         slider width - they are pickers, not scales, and a 280px swatch
-         says nothing a 60px one does not. The wave vectors take two rows
-         each: the graphic needs squarish proportions to be usable, so it
-         sits on the right spanning both rows while X and Y sit on the left
-         in the same spinner column as every other row. Their own built-in
-         entry bar is collapsed (edit_bar_height 0) for that reason. -->
+    <!-- <SS:Nexii> Atmo Magic: this track water plane. The parameter set mirrors EEP own Water panel (panel_settings_water.xml) one-for-one, the difference being that every one of them is keyframable. Same row grid as the Weather tab. The colour swatch and texture picker keep their usual proportions rather than being stretched to slider width - they are pickers, not scales, and a 280px swatch says nothing a 60px one does not. The wave vectors take two rows each: the graphic needs squarish proportions to be usable, so it sits on the right spanning both rows while X and Y sit on the left in the same spinner column as every other row. Their own built-in entry bar is collapsed (edit_bar_height 0) for that reason. -->
     <check_box
      follows="left|top"
      layout="topleft"
@@ -956,10 +945,7 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- <SS:Nexii> The fog's light switch. Off (the unset default) the applied fog colour is
-         lit - scaled by whatever light the sky actually has, going black on a moonless night.
-         On, the colour is emissive: applied exactly as authored, fullbright, for a glowing
-         sea. Animatable like every row here. -->
+    <!-- <SS:Nexii> The fog's light switch. Off (the unset default) the applied fog colour is lit - scaled by whatever light the sky actually has, going black on a moonless night. On, the colour is emissive: applied exactly as authored, fullbright, for a glowing sea. Animatable like every row here. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -1286,18 +1272,7 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater,
-         sections grouped by the tab each mapping reaches) - the tuning
-         surface for how far this track's weather may bend the values on
-         this tab.
-
-         Positioned by an absolute top against the panel's own height rather
-         than by bottom="8". Under layout="topleft" a POSITIVE bottom is
-         measured downward from the panel's top edge, so that put the button
-         at the very top of the panel, overlapping the rows there and
-         reading as a stray control floating above the tab. Only a negative
-         value would have meant "up from the bottom", and an absolute top is
-         plainer than relying on either reading. -->
+    <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater, sections grouped by the tab each mapping reaches) - the tuning surface for how far this track's weather may bend the values on this tab. Positioned by an absolute top against the panel's own height rather than by bottom="8". Under layout="topleft" a POSITIVE bottom is measured downward from the panel's top edge, so that put the button at the very top of the panel, overlapping the rows there and reading as a stray control floating above the tab. Only a negative value would have meant "up from the bottom", and an absolute top is plainer than relying on either reading. -->
     <button
      follows="left|bottom"
      layout="topleft"

@@ -74,11 +74,7 @@ struct SSAtmoEnvSkyModulation
     F32 mCold = 0.f;
     F32 mRainbow = 0.f;
 
-    // <SS:Nexii> Split optical phenomena, each gateable on its own and each rendered at its true
-    // angular position by ssOptics in skyF.glsl. mIceHalo is the small-crystal 22° family (the
-    // brow's readout), mIceHalo46 the deep-cold large-crystal family, mCrystalAlign the still-air
-    // plate alignment that sundogs and the circumzenithal arc need. All three ride the same
-    // influence row; only mCorona (water drops) has its own. </SS:Nexii>
+    // <SS:Nexii> Split optical phenomena, each independently gateable and each rendered at its true angular position by ssOptics in skyF.glsl. mIceHalo is the small-crystal 22° family (the brow's readout), mIceHalo46 the deep-cold large-crystal family, mCrystalAlign the still-air plate alignment sundogs and the circumzenithal arc need. All three ride the same influence row; only mCorona (water drops) has its own.
     F32 mCorona = 0.f;
     F32 mIceHalo = 0.f;
     F32 mIceHalo46 = 0.f;

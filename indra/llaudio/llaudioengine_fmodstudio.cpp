@@ -776,11 +776,9 @@ void LLAudioChannelFMODSTUDIO::update3DPosition()
         FMOD_RESULT result = mChannelp->set3DAttributes((FMOD_VECTOR*)float_pos.mV, (FMOD_VECTOR*)mCurrentSourcep->getVelocity().mV);
         Check_FMOD_Error(result, "FMOD::Channel::set3DAttributes");
 
-        // <SS:Nexii> The occlusion lowpass - see LLAudioSource::setOcclusion. Applied every update (channels are reused, a stale filter must not leak between sounds), squared so light cover
-        // barely touches the timbre and full burial leaves mostly bass, which is what a roof between you and a sound actually does.
+        // <SS:Nexii> The occlusion lowpass - see LLAudioSource::setOcclusion. Applied every update (channels are reused, a stale filter must not leak between sounds), squared so light cover barely touches the timbre and full burial leaves mostly bass, which is what a roof between you and a sound actually does.
         const F32 occ = mCurrentSourcep->getOcclusion();
         Check_FMOD_Error(mChannelp->setLowPassGain(1.f - occ * occ * 0.92f), "FMOD::Channel::setLowPassGain");
-        // </SS:Nexii>
     }
 }
 
@@ -838,7 +836,6 @@ void LLAudioChannelFMODSTUDIO::play()
     {
         Check_FMOD_Error(mChannelp->setPosition(getSource()->getStartOffsetMS(), FMOD_TIMEUNIT_MS), "FMOD::Channel::setPosition");
     }
-    // </SS:Nexii>
 
     Check_FMOD_Error(mChannelp->setPaused(false), "FMOD::Channel::setPaused");
 
@@ -986,23 +983,7 @@ U32 LLAudioBufferFMODSTUDIO::getLengthMS()
 }
 
 
-// <SS:Nexii> Onset detection
-//
-// A short-window RMS envelope, the loudest window found, then a walk BACK
-// from it to where the envelope first rose past a fraction of that peak.
-//
-// Deliberately not the largest single sample. One sample is not a sound: a
-// stray click, a DC glitch or a single clipped peak in an otherwise quiet
-// passage would all win outright, and every one of them is somewhere the
-// listener hears nothing happening. Energy over a window is what perception
-// tracks, which is why the envelope is the thing being searched.
-//
-// And deliberately the RISE rather than the maximum. The loudest instant of
-// a thunder clap is some way inside it - the crack has already begun by the
-// time the peak arrives, and aligning to the peak lands the whole event
-// audibly late. The moment a listener would say it happened is where the
-// level first climbs, so that is what this returns.
-// Lock, memcpy, unlock - main thread only, like every FMOD call here. The copy is what makes the worker-side analysis safe: the workers never see an FMOD object.
+// <SS:Nexii> Onset detection A short-window RMS envelope, the loudest window found, then a walk BACK from it to where the envelope first rose past a fraction of that peak. Deliberately not the largest single sample. One sample is not a sound: a stray click, a DC glitch or a single clipped peak in an otherwise quiet passage would all win outright, and every one of them is somewhere the listener hears nothing happening. Energy over a window is what perception tracks, which is why the envelope is the thing being searched. And deliberately the RISE rather than the maximum. The loudest instant of a thunder clap is some way inside it - the crack has already begun by the time the peak arrives, and aligning to the peak lands the whole event audibly late. The moment a listener would say it happened is where the level first climbs, so that is what this returns. Lock, memcpy, unlock - main thread only, like every FMOD call here. The copy is what makes the worker-side analysis safe: the workers never see an FMOD object.
 bool LLAudioBufferFMODSTUDIO::getPCMCopy(std::vector<S16>& out, S32& out_channels, F32& out_rate)
 {
     if (!mSoundp) return false;
@@ -1154,7 +1135,6 @@ U32 LLAudioBufferFMODSTUDIO::getOnsetMS()
     Check_FMOD_Error(mSoundp->unlock(ptr1, ptr2, len1, len2), "FMOD::Sound::unlock");
     return (U32)mOnsetMS;
 }
-// </SS:Nexii>
 
 
 void LLAudioChannelFMODSTUDIO::set3DMode(bool use3d)

@@ -37,9 +37,7 @@
        height="1330"
        background_visible="false">
 
-    <!-- <SS:Nexii> Debug views first.
-         Everything below this is a dial, and a dial is only worth turning
-         once you can see what it did - these are the overlays that show it. -->
+    <!-- <SS:Nexii> Debug views first. Everything below this is a dial, and a dial is only worth turning once you can see what it did - these are the overlays that show it. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -94,7 +92,6 @@
         <combo_box.item label="Drainage" value="3" name="field_view_drain" />
         <combo_box.item label="True ground" value="4" name="field_view_ground" />
     </combo_box>
-    <!-- </SS:Nexii> -->
 
     <text
      follows="left|top"

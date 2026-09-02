@@ -107,11 +107,8 @@ public:
     };
     bool isCovered() const { return mCovered; }
     F32 coverage() const { return mCoverage; }
-    // <SS:Nexii> Whether the air flood considers the listener's cell sealed -
-    // interior air the connectivity walk could not reach from sky or border.
-    // Reads true only on the field coverage path.
+    // <SS:Nexii> Whether the air flood considers the listener's cell sealed - interior air the connectivity walk could not reach from sky or border. Reads true only on the field coverage path.
     bool isInterior() const { return mInterior; }
-    // </SS:Nexii>
     ESpace space() const { return mSpace; }
 
     static const char* spaceName(ESpace space);
@@ -266,13 +263,9 @@ private:
 
     Loop mLoops[LOOP_COUNT];
 
-    // <SS:Nexii> The COVERAGE stake in the shared world field, held for the
-    // camera's region while SSWorldFieldCoverage routes the cover and burial
-    // questions through the field's band stack instead of the up-raycasts.
-    // Holding the handle is what makes the field build tiles here at all.
+    // <SS:Nexii> The COVERAGE stake in the shared world field, held for the camera's region while SSWorldFieldCoverage routes the cover and burial questions through the field's band stack instead of the up-raycasts. Holding the handle is what makes the field build tiles here at all.
     SSWorldField::Interest mCoverageClaim;
     U64 mCoverageRegion = 0;
-    // </SS:Nexii>
 
     LLVector3 mProbeAnchor;
     F64 mLastCycleDone = -1000.0;
@@ -282,10 +275,8 @@ private:
     F32 mWallAvg = 0.f;
     F32 mCoverage = 0.f;
     bool mCovered = false;
-    // <SS:Nexii> Sealed-room verdict from the world field's air flood, set on
-    // the field coverage path and cleared everywhere else.
+    // <SS:Nexii> Sealed-room verdict from the world field's air flood, set on the field coverage path and cleared everywhere else.
     bool mInterior = false;
-    // </SS:Nexii>
     ESpace mSpace = SPACE_OUTDOOR;
     ESize mOutdoorSize = SIZE_LARGE;
     LLVector3 mProbeOrigin;

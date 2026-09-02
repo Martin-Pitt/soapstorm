@@ -37,12 +37,7 @@
        height="1426"
        background_visible="false">
 
-    <!-- <SS:Nexii> Debug views first.
-         Everything below this is a dial, and a dial is only worth turning
-         once you can see what it did - these are the overlays that show it.
-         They were at the bottom of a panel long enough to need scrolling,
-         which put the thing you reach for most behind the things you reach
-         for least. -->
+    <!-- <SS:Nexii> Debug views first. Everything below this is a dial, and a dial is only worth turning once you can see what it did - these are the overlays that show it. They were at the bottom of a panel long enough to need scrolling, which put the thing you reach for most behind the things you reach for least. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -253,8 +248,7 @@
         <button.commit_callback function="ResetControl" parameter="SSAtmoShadowDebugStride" />
     </button>
 
-    <!-- <SS:Nexii> Snow: the drift and whiteout debug views, plus the layer
-         enable and master dial for quick toggling while tuning. -->
+    <!-- <SS:Nexii> Snow: the drift and whiteout debug views, plus the layer enable and master dial for quick toggling while tuning. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -357,7 +351,6 @@
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoWhiteoutStrength" />
     </button>
-    <!-- </SS:Nexii> -->
 
 
     <text

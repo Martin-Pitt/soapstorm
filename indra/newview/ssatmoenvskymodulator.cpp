@@ -53,9 +53,7 @@ namespace
     const F32 RAINBOW_SUN_FULL_DEG = 42.f;
     const F32 RAINBOW_SUN_GONE_DEG = 60.f;
 
-    // <SS:Nexii> Water-drop optics (corona). Liquid droplets must be in the air along the sight
-    // line - mist, or droplets lingering in the rain's wake, or light drizzle - and they freeze
-    // out below about -4C. Heavy precipitation hides the disc itself, so it suppresses the ring.
+    // <SS:Nexii> Water-drop optics (corona). Liquid droplets must hang in the air along the sight line - mist, droplets lingering in the rain's wake, or light drizzle - and they freeze out below about -4C. Heavy precipitation hides the disc itself, so it suppresses the ring.
     const F32 CORONA_MIST_MIN       = 0.30f;
     const F32 CORONA_MIST_FULL      = 0.75f;
     const F32 CORONA_AFTER_RAIN_S   = 240.f;
@@ -64,11 +62,7 @@ namespace
     const F32 CORONA_FREEZE_C       = -4.f;
     const F32 CORONA_MELT_C         = 1.f;
 
-    // <SS:Nexii> Ice-crystal optics (halos). Crystals need BOTH sub-zero air and moisture - there
-    // is nothing to freeze in a dry -30C sky, so that case drives NO ice. Small platelets form a
-    // thin cirrus veil (22° family); deep cold plus a little convection lofts large plates and
-    // columns (46° family); still air lets the plates settle horizontal, which is what makes
-    // sundogs and the circumzenithal arc sharp instead of smeared.
+    // <SS:Nexii> Ice-crystal optics (halos). Crystals need BOTH sub-zero air and moisture - nothing to freeze in a dry -30C sky drives NO ice. Small platelets form a thin cirrus veil (22° family); deep cold plus a little convection lofts large plates and columns (46° family); still air lets plates settle horizontal, making sundogs and the circumzenithal arc sharp instead of smeared.
     const F32 ICE_MOIST_MIN         = 0.05f;
     const F32 ICE_MOIST_FULL        = 0.45f;
     const F32 ICE_FROST_FIRST_C     = 0.f;
@@ -102,15 +96,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     SSAtmoEnvSkyModulation mod;
     if (!influence.mEnabled) return mod;
 
-    // <SS:Nexii> The dome's overcast band is its own layer again. It used to track the main deck's
-    // live coverage - the same number the puffs render with, one coverage, two layers - but that
-    // wired moisture into the sky dome: whatever lifted the deck's coverage (its moisture floor,
-    // its convection consolidation) lifted the dome's overcast with it, and the band no longer sat
-    // separately with the deck the author built. The tracking is removed for now - the dome draws
-    // at its authored coverage alone, and the two layers only ever match when the author says so.
-    // mCoverTarget/mCoverBlend stay on the modulation struct (frozen at 0) so cloudCoverage is
-    // identity until the coupling is reworked around the horizon and colour issues that drove it
-    // off. </SS:Nexii>
+    // <SS:Nexii> The dome's overcast band is its own layer again. It used to track the main deck's live coverage (the same number the puffs render with - one coverage, two layers), but that wired moisture into the sky dome: whatever lifted the deck's coverage (its moisture floor, its convection consolidation) lifted the dome's overcast with it, and the band no longer sat separately with the authored deck. Tracking is removed for now - the dome draws at its authored coverage alone, and the two layers only match when the author says so. mCoverTarget/mCoverBlend stay on the modulation struct (frozen at 0) so cloudCoverage is identity until the coupling is reworked around the horizon and colour issues that drove it off.
     mod.mCoverTarget = 0.f;
     mod.mCoverBlend = 0.f;
 
@@ -126,13 +112,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
             * (in.mWindSpeedMS * blend);
     }
 
-    // <SS:Nexii> Precipitation -> water fog. The one atmosphere-adjacent mapping left, and it
-    // reaches the Water tab's fog, not the sky: moisture's haze mapping (haze density up,
-    // distance multiplier down) is retired - moisture's +1.5 haze drove the fog term's airlight
-    // past what custom skies with heavy haze_horizon/glow could hold, blowing the whole scene
-    // out under dynamic exposure, and muggy-by-numbers was never worth that. The authored haze
-    // density and distance multiplier now render exactly as keyframed; rain still thickens the
-    // underwater fog on its own toggle. </SS:Nexii>
+    // <SS:Nexii> Precipitation -> water fog. The one atmosphere-adjacent mapping left, and it reaches the Water tab's fog, not the sky: moisture's haze mapping (haze density up, distance multiplier down) is retired - moisture's +1.5 haze drove the fog term's airlight past what custom skies with heavy haze_horizon/glow could hold, blowing the scene out under dynamic exposure, and muggy-by-numbers was never worth that. The authored haze density and distance multiplier now render exactly as keyframed; rain still thickens the underwater fog on its own toggle.
     mod.mPrecip = ss_effect(in.mPrecipitationIntensity, influence.mWaterFogEnabled, influence.mWaterFogStrength);
 
     mod.mDarkening = ss_effect(ss_ramp(in.mConvection, DARKENING_ONSET, 1.f),
@@ -151,11 +131,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
         mod.mCold = ss_effect(cold * clear, influence.mColdSkyEnabled, influence.mColdSkyStrength);
     }
 
-    // <SS:Nexii> Corona: diffraction rings around the light from liquid water drops in the air.
-    // Mist (moisture) is the steady source; droplets lingering in the rain's wake give the same
-    // ring for a few minutes, and light drizzle works too. Heavy fall still washes the disc out
-    // behind the drops, and sub-freezing air freezes the droplets out of the corona entirely -
-    // what forms the crystal halos below is NOT what forms this.
+    // <SS:Nexii> Corona: diffraction rings around the light from liquid water drops in the air. Mist (moisture) is the steady source; droplets lingering in the rain's wake give the same ring for a few minutes, and light drizzle works too. Heavy fall washes the disc out behind the drops, and sub-freezing air freezes the droplets out entirely - what forms the crystal halos below is NOT what forms this.
     {
         const F32 mist       = ss_ramp(in.mMoisture, CORONA_MIST_MIN, CORONA_MIST_FULL);
         F32 lingering        = 0.f;
@@ -173,12 +149,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
         mod.mCorona = ss_effect(drops, influence.mCoronaEnabled, influence.mCoronaStrength);
     }
 
-    // <SS:Nexii> Ice-crystal optics. The base veil of small platelets (22° halo family) wants
-    // cold AND moisture - frost ramps in from freezing down to -20C, with nothing at all above
-    // freezing - and the deep-cold 46° family additionally wants a trace of convection to loft
-    // big plates/columns; plate ALIGNMENT for sundogs and the circumzenithal arc wants the still,
-    // settling air the wind row churns away. All three sub-channels ride the single ice halo
-    // influence so authors flip "halos on" as one decision. </SS:Nexii>
+    // <SS:Nexii> Ice-crystal optics. The base veil of small platelets (22° halo family) wants cold AND moisture - frost ramps from freezing down to -20C, nothing above freezing - and the deep-cold 46° family additionally wants a trace of convection to loft big plates/columns; plate ALIGNMENT for sundogs and the circumzenithal arc wants the still, settling air the wind row churns away. All three sub-channels ride the single ice halo influence so authors flip "halos on" as one decision.
     {
         const F32 frost    = ss_ramp(-in.mTemperatureC, -ICE_FROST_FIRST_C, -ICE_FROST_FULL_C);
         const F32 vapour   = ss_ramp(in.mMoisture, ICE_MOIST_MIN, ICE_MOIST_FULL);
@@ -210,11 +181,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     return mod;
 }
 
-// Blends authored coverage toward the modulation's target. The target is frozen at 0 while the
-// dome band sits apart from the deck again (see compute), so this passes the authored coverage
-// through untouched - the dome draws exactly as authored. When the coupling is reworked, the old
-// "weather can pile cloud on, but an authored overcast stays overcast" lift is the shape to bring
-// back.
+// Blends authored coverage toward the modulation's target. Frozen at 0 while the dome band sits apart from the deck again (see compute), so this passes authored coverage through untouched - the dome draws exactly as authored. When the coupling is reworked, the old "weather can pile cloud on, but an authored overcast stays overcast" lift is the shape to bring back.
 F32 SSAtmoEnvSkyModulation::cloudCoverage(F32 base) const
 {
     return base + (llmax(base, mCoverTarget) - base) * mCoverBlend;
@@ -255,9 +222,7 @@ LLColor3 SSAtmoEnvSkyModulation::blueDensity(const LLColor3& base) const
     return out;
 }
 
-// <SS:Nexii> Sky ice mirrors the moisture-gated crystal drive - it comes from the ice halo
-// mapping, never from cold alone. A clear dry -30C sky has no crystals to form, so it renders
-// exactly as authored instead of frosting over.
+// <SS:Nexii> Sky ice mirrors the moisture-gated crystal drive - from the ice halo mapping, never cold alone. A clear dry -30C sky has no crystals to form, so it renders exactly as authored instead of frosting over.
 F32 SSAtmoEnvSkyModulation::skyIceLevel(F32 base) const
 {
     return llclamp(base + mIceHalo * ICE_LEVEL_FULL_ADD, 0.f, 1.f);

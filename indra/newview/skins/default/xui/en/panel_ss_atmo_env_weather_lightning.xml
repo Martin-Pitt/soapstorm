@@ -9,10 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Weather > Lightning - the discharge set. Split off
-         Conditions because it is an output of the storm rather than a driver of
-         it, and it carries enough flags of its own to crowd the drivers out.
-         See doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> Atmo Magic: Weather > Lightning - the discharge set. Split off Conditions because it is an output of the storm rather than a driver of it, and it carries enough flags of its own to crowd the drivers out. See doc/atmo_magic_env_ui.md. -->
 
     <check_box
      follows="left|top"

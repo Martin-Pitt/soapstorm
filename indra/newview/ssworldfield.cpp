@@ -55,16 +55,11 @@ static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD("Atmo Magic World Field")
 static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD_GRID("Atmo Magic World Field Grid");
 
 // Channel interest refcounts. File statics so an Interest handle's deleter
-// stays valid for the life of the process regardless of singleton teardown
-// order - a destroyed handle must always be able to release its count.
+// stays valid for the process's life regardless of singleton teardown
+// order - a destroyed handle must always release its count.
 static std::map<std::pair<U64, S32>, S32> sInterests;
 
-// <SS:Nexii> The debug overlay's materialised drainage view, cached per region
-// and rebuilt only when the tile's geometry serial moves - the same
-// drop-on-serial-change discipline the real channels will follow, so the
-// overlay never pays a per-frame priority flood just to be drawn. Declared
-// here with the other file statics because evict() drops it alongside the
-// tiles it belongs to.
+// <SS:Nexii> The debug overlay's materialised drainage view, cached per region and rebuilt only when the tile's geometry serial moves - the same drop-on-serial-change discipline the real channels will follow, so the overlay never pays a per-frame priority flood just to draw. Declared with the other file statics because evict() drops it alongside the tiles it belongs to.
 struct SS_WF_DrainDebug
 {
     SSRainShadowMap::SurfaceGrid mGrid;
@@ -73,7 +68,6 @@ struct SS_WF_DrainDebug
     U32 mSerial = 0;
 };
 static std::map<U64, SS_WF_DrainDebug> sDrainDebug;
-// </SS:Nexii>
 
 static S32 ss_wf_interest_count(U64 region_handle, S32 channel)
 {
@@ -105,9 +99,9 @@ SSWorldField::Interest SSWorldField::claim(U64 region_handle, EChannel channel)
     }));
 }
 
-// The wet field's source switch - while it is on, SURFACE_TOP counts as
-// claimed for the camera region and its neighbours, the same reach the rain
-// shadow capture serves today.
+// The wet field's source switch - while on, SURFACE_TOP counts as claimed
+// for the camera region and its neighbours, the same reach the rain shadow
+// capture serves today.
 bool SSWorldField::surfaceTopDemanded() const
 {
     static LLCachedControl<bool> demanded(gSavedSettings, "SSWorldFieldSurfaceTop", false);
@@ -155,9 +149,9 @@ void SSWorldField::markDirty(const LLVector3& pos_agent, F32 radius)
         tile.mDirty = true;
     }
 
-    // Bands the edit's own altitude could touch. A removed roof drops its
-    // whole column, so a rect re-peel sweeps from the band floor up to just
-    // past the edit rather than only the bands the edit's box overlaps.
+// Bands the edit's own altitude could touch. A removed roof drops its whole
+    // column, so a rect re-peel sweeps from the band floor up to just past the
+    // edit, not only the bands the edit's box overlaps.
     const S32 band = llclamp((S32)((pos_agent.mV[VZ] + r) / tile.mBandHeight), 0, SSWorldField::MAX_BANDS - 1);
     tile.mBandTarget = llmax(tile.mBandTarget, band + 1);
 }
@@ -276,8 +270,8 @@ bool SSWorldField::needsBuild(const Tile& tile) const
 }
 
 // Most deserving tile first: the camera's region, then any region within
-// neighbour reach that either has a claimed channel or is serving the
-// demanded surface top. Nothing builds at all while nothing demands anything.
+// neighbour reach that has a claimed channel or serves the demanded surface
+// top. Nothing builds while nothing demands anything.
 SSWorldField::Tile* SSWorldField::pickBuildTarget()
 {
     if (!surfaceTopDemanded() && sInterests.empty()) return nullptr;
@@ -328,10 +322,10 @@ void SSWorldField::update()
 
     evict();
 
-    // Catch-up for the connectivity labels: a tile that committed while a
-    // flood was already in flight was skipped rather than queued, and this
-    // is where it gets its turn - one tile per call, oldest debt first being
-    // unnecessary at this scale (four tiles).
+// Catch-up for the connectivity labels: a tile that committed while a flood
+    // was in flight was skipped rather than queued; this is where it gets its
+    // turn - one tile per call. Oldest-first is unnecessary at this scale
+    // (four tiles).
     if (!mFloodBusy)
     {
         for (auto& entry : mTiles)
@@ -359,10 +353,10 @@ void SSWorldField::update()
     Tile* target = pickBuildTarget();
     if (!target) return;
 
-    // Begin a build. A dirty tile re-peels only its dirty rectangle's
-    // frustum, but still sweeps every band from the floor up to the highest
-    // band the edits could touch - a removed roof drops its whole column, so
-    // band scoping below the edit is not safe.
+// Begin a build. A dirty tile re-peels only its dirty rectangle's frustum,
+    // but still sweeps every band from the floor to the highest band the edits
+    // could touch - a removed roof drops its whole column, so band scoping below
+    // the edit is not safe.
     mBuild.mActive = true;
     mBuild.mRegionHandle = target->mRegionHandle;
     mBuild.mBand = 0;
@@ -384,9 +378,9 @@ void SSWorldField::update()
                                   origin.mV[VY] + 0.5f * (F32)(mBuild.mRectY0 + mBuild.mRectY1) * target->mCell,
                                   0.f);
 
-        // Rect capture resources: a square frustum covering the rect's wider
-        // axis, with the short side's extra texels spilling outside the rect
-        // and being skipped at splice time.
+// Rect capture resources: a square frustum covering the rect's wider axis,
+        // with the short side's extra texels spilling outside the rect and skipped
+        // at splice time.
         const S32 rw = mBuild.mRectX1 - mBuild.mRectX0;
         const S32 rh = mBuild.mRectY1 - mBuild.mRectY0;
         mBuild.mRectRes = llclamp(llmax(rw, rh), 4, target->mRes);
@@ -407,8 +401,8 @@ void SSWorldField::update()
 // Drops tiles for departed regions, then the least recently used beyond the
 // cache cap. Erasing a tile also moves the flood generation - a walk in
 // flight for the departed tile must not land on a fresh tile the same region
-// handle re-created (which also restarts at geometry serial 1, so the serial
-// gate alone would not stop it) - and drops its cached debug views.
+// handle re-created (restarted at geometry serial 1, so the serial gate alone
+// would not stop it) - and drops its cached debug views.
 void SSWorldField::evict()
 {
     bool erased = false;
@@ -439,10 +433,10 @@ void SSWorldField::evict()
     if (erased) ++mFloodGeneration;
 }
 
-// One band step: capture, splice, then either move to the next band, stop
-// early on empty sky, or commit. The depth readback is async (SSGLReadback):
-// capture renders and submits, applyBand runs on the step after the texels
-// land, and the whole build waits a step while one is in flight.
+// One band step: capture, splice, then advance, stop early on empty sky, or
+// commit. The depth readback is async (SSGLReadback): capture renders and
+// submits, applyBand runs a step after the texels land, and the build waits a
+// step while one is in flight.
 bool SSWorldField::advanceBuild()
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(mBuild.mRegionHandle);
@@ -465,9 +459,9 @@ bool SSWorldField::advanceBuild()
         applyBand(*tile);
         ++mBuild.mBand;
 
-        // Full builds stop early once the sky has been genuinely empty for a
-        // few consecutive bands; rect builds run to their target so the
-        // spliced columns stay consistent with the neighbours around them.
+// Full builds stop early once the sky has been genuinely empty for a few
+        // consecutive bands; rect builds run to their target so the spliced columns
+        // stay consistent with their neighbours.
         if (!mBuild.mRectOnly && mBuild.mEmptyRun >= EMPTY_BANDS_TO_STOP)
         {
             commitBuild(*tile);
@@ -593,12 +587,7 @@ bool SSWorldField::captureBand(Tile& tile)
 
         mTarget.flush();
 
-        // <SS:Nexii> The band's depth lands via the shared SSGLReadback worker:
-        // the synchronous glReadPixels that used to block here becomes a
-        // glGetTexImage on a dedicated GL thread, and applyBand() runs on the
-        // step after the texels come back (see mJustCaptured). The worker
-        // writes only its own buffer; mDone copies into mBuild.mDepth on the
-        // main thread, so the Build never sees a partial read.
+        // <SS:Nexii> The band's depth lands via the shared SSGLReadback worker: the synchronous glReadPixels that used to block becomes a glGetTexImage on a dedicated GL thread, and applyBand() runs the step after the texels come back (see mJustCaptured). The worker writes only its own buffer; mDone copies into mBuild.mDepth on the main thread, so the Build never sees a partial read.
         mBuild.mDepth.assign((size_t)res * res, 0.f);
         mReadbackPending = true;
         const U32 tres = (U32)res;
@@ -633,7 +622,6 @@ bool SSWorldField::captureBand(Tile& tile)
             mBuild.mJustCaptured = false;
             ok = false;
         }
-        // </SS:Nexii>
     }
 
     set_current_modelview(saved_view);
@@ -645,7 +633,7 @@ bool SSWorldField::captureBand(Tile& tile)
 
 // Splices the captured band into the tile: per column, the highest surface
 // inside the band, projected out of the depth readback. Full builds write
-// every column; rect builds write only the dirty rectangle's columns.
+// every column; rect builds only the dirty rectangle's columns.
 void SSWorldField::applyBand(Tile& tile)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_WORLDFIELD_GRID);
@@ -805,10 +793,10 @@ void SSWorldField::commitBuild(Tile& tile)
     tile.mLastTouched = mNow;
     mBuild.mActive = false;
 
-    // The connectivity labels follow every commit rather than only the ones
-    // that changed something: they are also serving their first fill, and a
-    // commit that changed nothing left mAirSerial already matching, in which
-    // case scheduleFlood's serial check makes the walk a no-op store.
+// The connectivity labels follow every commit, not only the ones that changed
+    // something: they also serve their first fill, and a commit that changed
+    // nothing left mAirSerial already matching, so scheduleFlood's serial check
+    // makes the walk a no-op store.
     if (tile.mAirSerial != tile.mGeomSerial)
     {
         scheduleFlood(tile);
@@ -816,9 +804,9 @@ void SSWorldField::commitBuild(Tile& tile)
 }
 
 // Resolves the landing-surface grid for a region - SSRainShadowMap's exact
-// contract, sourced from the band stack instead of a private capture. The
-// first thing a falling drop meets is the highest surface in the column, so
-// the bands are scanned top-down and the first hit wins.
+// contract, sourced from the band stack, not a private capture. The first
+// thing a falling drop meets is the column's highest surface, so bands are
+// scanned top-down and the first hit wins.
 bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::SurfaceGrid& out)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_WORLDFIELD_GRID);
@@ -882,11 +870,11 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
                     out.mZ[oidx] = z;
                     out.mFlags[oidx] = flags | SSRainShadowMap::SURF_MAPPED;
 
-                    // Same figure the rain shadow builder derives: metres over
-                    // the terrain-or-water reference (the sky track floor in a
-                    // skybox), so the two sources hand consumers identical
-                    // ground-vs-structure data and the SSWorldFieldSurfaceTop
-                    // switch stays behaviour-neutral.
+// Same figure the rain shadow builder derives: metres over the
+                    // terrain-or-water reference (the sky track floor in a skybox),
+                    // so both sources hand consumers identical ground-vs-structure
+                    // data and the SSWorldFieldSurfaceTop switch stays behaviour-
+                    // neutral.
                     F32 ground;
                     if (sky)
                     {
@@ -923,12 +911,12 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
 }
 
 // The TRUE-GROUND reference for the wind profile: per column, the topmost real surface from
-// buildSurfaceGrid (the olivine/green-blue ground tiles), except that columns whose topmost
-// surface is a tall structure (a building or skybox reaching far above the surrounding ground)
-// are voided and gap-filled from the surrounding true ground. Water columns hold the sea plane.
-// The captured ground is the real geometry (streets, mesh terrain, prim ground) - not the ancient
-// Linden heightmap resolveHeightRegion reads - so prim-based terrain built on top of the old
-// terrain becomes the ground the wind boundary layer is measured from.
+// buildSurfaceGrid (olivine/green-blue ground tiles), except tall-structure columns (a building
+// or skybox far above the surrounding ground) are voided and gap-filled from the surrounding
+// true ground; water columns hold the sea plane. Captured from the real geometry (streets, mesh
+// terrain, prim ground) - not the ancient Linden heightmap resolveHeightRegion reads - so prim
+// terrain built on the old terrain becomes the ground from which the wind boundary layer is
+// measured.
 bool SSWorldField::buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& out)
 {
     SSRainShadowMap::SurfaceGrid grid;
@@ -940,7 +928,7 @@ bool SSWorldField::buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& o
 
     // Columns that are real ground: not a tall structure. Water is ground (the sea plane). A
     // column whose topmost captured surface stands well above the local surrounding ground is a
-    // tall structure - voided, to be filled from its neighbours below. A generous threshold keeps
+    // tall structure - voided, filled from its neighbours below. A generous threshold keeps
     // genuine raised mesh/prim ground (a street deck a couple of metres up) as ground while
     // catching buildings and skyboxes.
     static const F32 SS_TALL_STRUCTURE_M = 12.f;
@@ -969,9 +957,9 @@ bool SSWorldField::buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& o
         }
     }
 
-    // Gap-fill the voided (tall-structure) columns from the surrounding true ground, in rings
-    // outward, so a building column reads the street/mesh ground of its neighbours. Each pass
-    // fills every still-void column that has a valid neighbour, taking that neighbour's ground.
+// Gap-fill the voided (tall-structure) columns from the surrounding true ground, in rings
+    // outward, so a building column reads its neighbours' street/mesh ground. Each pass fills
+    // every still-void column that has a valid neighbour, taking that neighbour's ground.
     bool progressed = true;
     while (progressed)
     {
@@ -1010,7 +998,7 @@ bool SSWorldField::buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& o
         }
     }
 
-    // Any column with no valid neighbour anywhere (fully enclosed, or a field of unmapped) keeps
+// A column with no valid neighbour anywhere (fully enclosed, or a field of unmapped) keeps
     // its buildSurfaceGrid value - the heightmap/water fallback it already carries.
     for (size_t i = 0; i < cells; ++i)
     {
@@ -1119,9 +1107,7 @@ bool SSWorldField::coverageDetail(const LLVector3& pos_agent, bool& covered,
     return any;
 }
 
-// <SS:Nexii> Air connectivity lookup: the band the point stands in, read from
-// the labels the flood stored, or AIR_UNKNOWN when there is nothing current
-// to read - after an edit, before the first flood, or off-tile entirely.
+// <SS:Nexii> Air connectivity lookup: the band the point stands in, read from the labels the flood stored, or AIR_UNKNOWN when nothing is current - after an edit, before the first flood, or off-tile.
 U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
@@ -1139,8 +1125,8 @@ U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
     return (bi < tile->mAirLabel.size()) ? tile->mAirLabel[bi] : (U8)AIR_UNKNOWN;
 }
 
-// Occlusion depth behind airLabelAt: the distance walk the flood ran, per
-// band-cell, gated by the same serial check so a stale walk is never served.
+// Occlusion depth behind airLabelAt: the flood's distance walk per band-cell,
+// gated by the same serial check so a stale walk is never served.
 U32 SSWorldField::airDepthAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
@@ -1183,9 +1169,9 @@ F32 SSWorldField::airCoverage(U64 region_handle) const
 }
 
 // The DRAINAGE_NETWORK core over one landing surface. Barnes' priority flood
-// is the O(n log n) way to fill every depression to its spill elevation: drains
-// (the grid border, water, and unmapped sky) seed the heap at their own
-// height, each cell pops once at the lowest spill that reaches it, and a cell
+// is the O(n log n) way to fill every depression to its spill elevation:
+// drains (the grid border, water, unmapped sky) seed the heap at their own
+// height, each cell pops once at the lowest spill reaching it, and a cell
 // whose spill stands meaningfully above its own surface is standing water.
 // Flow directions then run down the FILLED surface, so a pool's water heads
 // for its outlet instead of into its own floor.
@@ -1293,10 +1279,10 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
         }
     }
 
-    // Pool membership: the fill is standing water where it rises clear of the
-    // surface - the depression's depth, not a sampled dip. Five centimetres is
+// Pool membership: the fill is standing water where it rises clear of the
+    // surface - the depression's depth, not a sampled dip. Five centimetres sits
     // below the puddle thresholds that consume the mask, so this only gates
-    // genuine standing water and never a capture texel's jitter.
+    // genuine standing water, never a capture texel's jitter.
     static const F32 POOL_FILL_EPS = 0.05f;
 
     // Flow: D8 down the filled surface, 3x3-indexed ((dy+1)*3 + (dx+1)), 4 when
@@ -1345,14 +1331,14 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
 // band-cell is solid where the capture found a surface in that band; air
 // otherwise. Every air cell in the top band, and every air cell on the
 // horizontal border, starts OUTSIDE; the flood walks 6-connected through air.
-// Whatever air is left is INTERIOR - a room, a sealed box - which is exactly
-// what the wind solve wants to skip and the soundscape wants to know it is
-// standing in. Evidence-only in the same spirit as the probe carve: a passage
-// narrower than a cell stays uncounted rather than invented. The second walk
-// measures occlusion: every outside-connected air cell's graph distance in
-// cells to the nearest frontier cell, the "how enclosed is this air" figure
-// the acoustic channel's travel times and the sparse air solve both read.
-// Interior cells never reach the frontier through air, so they keep
+// Whatever air is left is INTERIOR - a room, a sealed box - exactly what the
+// wind solve wants to skip and the soundscape wants to know it is standing in.
+// Evidence-only in the same spirit as the probe carve: a passage narrower
+// than a cell stays uncounted rather than invented. The second walk measures
+// occlusion: every outside-connected air cell's graph distance in cells to
+// the nearest frontier cell, the "how enclosed is this air" figure the
+// acoustic channel's travel times and sparse air solve both read. Interior
+// cells never reach the frontier through air, so they keep
 // AIR_DEPTH_UNREACHED - sealed is maximally enclosed by construction.
 static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
                         std::vector<U8>& label, std::vector<U16>& depth)
@@ -1412,9 +1398,9 @@ static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
     // Occlusion depth, one BFS from the whole outside frontier over air. The
     // outside set was found by walking 6-connected air from that same frontier,
     // so this reaches exactly it; interior air is unreachable and stays marked.
-    // Distances saturate at AIR_DEPTH_UNREACHED - 1: the sentinel itself must
-    // stay exclusive to "unvisited", or a cell whose true distance hit 0xFFFF
-    // would read as never visited and the walk would loop on it forever.
+// Distances saturate at AIR_DEPTH_UNREACHED - 1: the sentinel must stay
+// exclusive to "unvisited", or a cell whose true distance hit 0xFFFF would
+// read as never visited and the walk would loop on it forever.
     {
         std::vector<S32> depth_q;
         depth_q.reserve(queue.size());
@@ -1497,11 +1483,10 @@ void SSWorldField::scheduleFlood(Tile& tile)
             it->second.mAirSerial = serial;
         });
 }
-// </SS:Nexii>
 
-// A band's surface hue for the overlay: the store's vertical
-// resolution reads as colour, blue at the floor through green to ember red at
-// the ceiling.
+// A band's surface hue for the overlay: the store's vertical resolution
+// reads as colour - blue at the floor through green to ember red at the
+// ceiling.
 static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
 {
     t = llclamp(t, 0.f, 1.f);
@@ -1584,9 +1569,9 @@ void SSWorldField::renderDebug()
 
         if (which == 1)
         {
-            // Every band the capture gave a surface, standing at the altitude
-            // the store holds it at, hue by band so stacked storeys read
-            // separately instead of fusing into one roof.
+// Every band the capture gave a surface, standing at the altitude the store
+            // holds it at, hue by band so stacked storeys read separately instead of
+            // fusing into one roof.
             const S32 b_last = llmax(tile.mBandCount - 1, 1);
             for (S32 y = 0; y < tile.mRes; ++y)
             {
@@ -1649,9 +1634,9 @@ void SSWorldField::renderDebug()
         }
         else if (which == 4)
         {
-            // TRUE GROUND: the wind profile's reference ground per column - the topmost real
-            // surface (olivine/green-blue ground tiles), with tall-structure columns voided and
-            // filled from their neighbours and water held at the sea plane. Hue rises with the
+// TRUE GROUND: the wind profile's reference ground per column - the topmost real
+            // surface (olivine/green-blue ground tiles), tall-structure columns voided and
+            // filled from their neighbours, water held at the sea plane. Hue rises with the
             // ground's height, so a raised mesh/prim street deck reads distinct from the plain.
             std::vector<F32> ground;
             if (!buildTrueGround(tile.mRegionHandle, tile.mRes, ground)) continue;
@@ -1744,5 +1729,4 @@ void SSWorldField::renderDebug()
         it = mTiles.count(it->first) ? std::next(it) : sDrainDebug.erase(it);
     }
 }
-// </SS:Nexii>
 

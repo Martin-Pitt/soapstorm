@@ -69,8 +69,7 @@ std::string SSAtmoStore::filePath()
     return gDirUtilp->getExpandedFilename(LL_PATH_USER_SETTINGS, "ss_weather", "atmo_state.xml");
 }
 
-// Reads the state file; where it is missing or unusable, imports whatever the
-// old debug settings held (one-time migration) and stops persisting them.
+// Reads the state file; where it is missing or unusable, imports whatever the old debug settings held (one-time migration) and stops persisting them.
 void SSAtmoStore::load()
 {
     std::vector<std::string> keys;
@@ -109,8 +108,7 @@ void SSAtmoStore::load()
         }
     }
 
-    // Materialise every slot so reads never miss, importing any value the
-    // file lacks but the old debug settings still hold.
+    // Materialise every slot so reads never miss, importing any value the file lacks but the old debug settings still hold.
     for (const std::string& key : keys)
     {
         if (mState.has(key) && mState[key].isString()) continue;

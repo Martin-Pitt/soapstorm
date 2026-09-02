@@ -144,9 +144,9 @@ void SSFloaterSimulation::onClickRebuildFlow()
     SSWindFlowMap::getInstance()->rebuildAll();
 }
 
-// Mirrors the debug-view masks into the overlay checkboxes. The live status of
-// every map lives in the Atmo Magic info overlay; this floater only carries the
-// toggles and the dials, so it just reflects what the debug masks say.
+// Mirrors the debug-view masks into the overlay checkboxes. Live map status lives
+// in the Atmo Magic info overlay; this floater carries only toggles and dials,
+// so it just reflects what the debug masks say.
 void SSFloaterSimulation::syncOverlayChecks()
 {
     getChild<LLCheckBoxCtrl>("flow_overlay_check")->set(

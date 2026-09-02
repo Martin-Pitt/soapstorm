@@ -10,23 +10,7 @@
  single_instance="true"
  title="Weather Influence"
  width="520">
-    <!-- <SS:Nexii> Atmo Magic: how far the weather cube may bend the
-         authored sky. One floater rather than a section per tab, opened
-         from a button on each tab it affects: the mappings have to be
-         compared against each other to be tuned sensibly ("is my storm
-         darkening fighting my rainbow window?"), which splitting them across
-         four tabs would prevent.
-
-         Sections are grouped by the tab whose parameters each mapping
-         reaches, so a row is findable from wherever the author noticed
-         the effect. Nothing here is keyframable - see
-         SSAtmoEnvWeatherInfluence on why - so there are no keyframe
-         diamonds or chevrons anywhere in this floater.
-
-         Every row is checkbox + strength + a live readout of what that
-         mapping is doing RIGHT NOW at the preview head, the same
-         "computed values in a disabled control" idiom the Auto weather
-         fields use. -->
+    <!-- <SS:Nexii> Atmo Magic: how far the weather cube may bend the authored sky. One floater rather than a section per tab, opened from a button on each tab it affects: the mappings have to be compared against each other to be tuned sensibly ("is my storm darkening fighting my rainbow window?"), which splitting them across four tabs would prevent. Sections are grouped by the tab whose parameters each mapping reaches, so a row is findable from wherever the author noticed the effect. Nothing here is keyframable - see SSAtmoEnvWeatherInfluence on why - so there are no keyframe diamonds or chevrons anywhere in this floater. Every row is checkbox + strength + a live readout of what that mapping is doing RIGHT NOW at the preview head, the same "computed values in a disabled control" idiom the Auto weather fields use. -->
 
     <text
      follows="left|top"

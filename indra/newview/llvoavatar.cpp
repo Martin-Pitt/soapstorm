@@ -102,7 +102,6 @@
 // <SS:Nexii> Atmo Magic surface-aware footstep sounds
 #include "ssprecippreset.h"
 #include "sssoundscape.h"
-// </SS:Nexii>
 #include "llviewershadermgr.h"
 #include "llsky.h"
 #include "llanimstatelabels.h"
@@ -5326,10 +5325,7 @@ void LLVOAvatar::updateFootstepSounds()
         }
     }
 
-    // <SS:Nexii> Jump takeoff. Edge detected off PRE_JUMP/JUMP the same way
-    // ground contact is edge detected below, so holding the jump key does
-    // not retrigger it every frame; fires from wherever the feet currently
-    // are since there is no ground contact to anchor it to.
+    // <SS:Nexii> Jump takeoff. Edge detected off PRE_JUMP/JUMP the same way ground contact is edge detected below, so holding the jump key does not retrigger it every frame; fires from wherever the feet currently are since there is no ground contact to anchor it to.
     static LLCachedControl<bool> PlayModeUISndFootstepsJump(gSavedSettings, "PlayModeUISndFootsteps");
     const LLUUID AGENT_JUMP_ANIMS[] = {ANIM_AGENT_PRE_JUMP, ANIM_AGENT_JUMP};
     const bool jumping = isAnyAnimationSignaled(AGENT_JUMP_ANIMS, LL_ARRAY_SIZE(AGENT_JUMP_ANIMS));
@@ -5340,14 +5336,11 @@ void LLVOAvatar::updateFootstepSounds()
         SSSoundscape::getInstance()->footstepEvent(getID(), jump_foot, mStepOnLand, STEP_JUMP, isSelf());
     }
     mWasJumping = jumping;
-    // </SS:Nexii>
 
     const LLUUID AGENT_FOOTSTEP_ANIMS[] = {ANIM_AGENT_WALK, ANIM_AGENT_RUN, ANIM_AGENT_LAND};
     const S32 NUM_AGENT_FOOTSTEP_ANIMS = LL_ARRAY_SIZE(AGENT_FOOTSTEP_ANIMS);
 
-    // <SS:Nexii> State-driven footstep loops. Walk and run sounds are LOOP recordings attached to the avatar - per-footfall triggering spammed a fresh copy of a long loop on every step,
-    // overlapping and never stopping. So the model is: report the locomotion STATE every frame (speed-based, so AOs are irrelevant), and the soundscape starts/stops/switches/follows one managed
-    // loop per avatar. Landing is the one per-event sound left: a detached one-shot at the touchdown, fired on the airborne->grounded edge - which needs no anims and no ankle thresholds either.
+    // <SS:Nexii> State-driven footstep loops. Walk and run sounds are LOOP recordings attached to the avatar - per-footfall triggering spammed a fresh copy of a long loop on every step, overlapping and never stopping. So the model is: report the locomotion STATE every frame (speed-based, so AOs are irrelevant), and the soundscape starts/stops/switches/follows one managed loop per avatar. Landing is the one per-event sound left: a detached one-shot at the touchdown, fired on the airborne->grounded edge - which needs no anims and no ankle thresholds either.
     const LLVector3 vel_xy(getVelocity().mV[VX], getVelocity().mV[VY], 0.f);
     const F32 ground_speed = vel_xy.magVec();
 
@@ -5431,15 +5424,9 @@ void LLVOAvatar::updateFootstepSounds()
         }
         mSSWasInAir = mInAir;
     }
-    // </SS:Nexii>
 }
 
-// <SS:Nexii> Atmo Magic surface-aware footstep sounds
-//-----------------------------------------------------------------------------
-// playFootstepSound()
-// Volume/mute/parcel gating factored out of updateFootstepSounds() so the
-// jump trigger and the walk/run/land trigger can share it.
-//-----------------------------------------------------------------------------
+// <SS:Nexii> Atmo Magic surface-aware footstep sounds ----------------------------------------------------------------------------- playFootstepSound() Volume/mute/parcel gating factored out of updateFootstepSounds() so the jump trigger and the walk/run/land trigger can share it. -----------------------------------------------------------------------------
 void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
 {
     // Was a hardcoded 0.1 (stock's own figure), which is near-inaudible against the Atmo beds; debug-tweakable so the trigger path can be balanced by ear against the loop/segment path's SSAtmoVolumeFootsteps.
@@ -5462,7 +5449,6 @@ void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
     }
 }
 
-// </SS:Nexii>
 
 //------------------------------------------------------------------------
 // computeUpdatePeriod()

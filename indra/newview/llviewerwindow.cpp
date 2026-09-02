@@ -806,7 +806,6 @@ public:
             addText(xpos, ypos, llformat("Ghost projectiles watched: %d", gObjectList.getNumGhostProjectileObjectsWatched()));
             ypos += y_inc;
         }
-        // </SS:Nexii>
 
         static LLCachedControl<bool> debug_show_avatar_render_info(gSavedSettings, "DebugShowAvatarRenderInfo", false);
         if (debug_show_avatar_render_info())
@@ -3090,11 +3089,9 @@ void LLViewerWindow::draw()
 
         // <SS:Nexii> Rez queue warning above the crosshair
         FSRezQueue::draw();
-        // </SS:Nexii>
 
         // <SS:Nexii> Atmo Magic diagnostic readout
         SSAtmoMagic::drawInfo();
-        // </SS:Nexii>
 
         if (inMouselook && fsMouselookCombatFeatures)
         {
@@ -7025,7 +7022,7 @@ void LLViewerWindow::setup2DViewport(S32 x_offset, S32 y_offset)
 void LLViewerWindow::setup3DRender()
 {
     // setup perspective camera
-    // <SS:Nexii> MAX_FAR_CLIP is the projection far plane itself now (2048, constant - see llcamera.h); the interim getRenderFarPlane() that chased the draw distance is gone. </SS:Nexii>
+    // <SS:Nexii> MAX_FAR_CLIP is the projection far plane itself now (2048, constant - see llcamera.h); the interim getRenderFarPlane() that chased the draw distance is gone.
     LLViewerCamera::getInstance()->setPerspective(NOT_FOR_SELECTION, mWorldViewRectRaw.mLeft, mWorldViewRectRaw.mBottom,  mWorldViewRectRaw.getWidth(), mWorldViewRectRaw.getHeight(), false, LLViewerCamera::getInstance()->getNear(), MAX_FAR_CLIP);
     setup3DViewport();
 }

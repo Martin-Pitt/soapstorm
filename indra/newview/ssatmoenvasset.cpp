@@ -37,9 +37,7 @@
 #include <cmath>
 #include <ctime>
 
-// <SS:Nexii> The stock bodies the standard setup seeds. makeDefault() plants them, and the sky
-// import's body groups check against them: a dropped sky may only rewrite a body the author has
-// not already redesigned into something of their own.
+// <SS:Nexii> The stock bodies the standard setup seeds. makeDefault() plants them, and the sky import's body groups check against them: a dropped sky may only rewrite a body the author has not already redesigned into something of their own.
 namespace
 {
     // How far a body's diameter may sit from the stock value and still count as standard. The
@@ -197,8 +195,7 @@ LLSD SSAtmoEnvWater::asLLSD() const
     sd["fog_density"]         = mFogDensity.asLLSD();
     sd["underwater_modifier"] = mUnderwaterModifier.asLLSD();
 
-    // <SS:Nexii> Written only when authored: false with no keyframes is the unset default
-    // (lit fog), and an asset that never mentions the flag keeps its document clean. </SS:Nexii>
+    // <SS:Nexii> Written only when authored: false with no keyframes is the unset default (lit fog), and an asset that never mentions the flag keeps its document clean.
     if (mFogEmissive.hasKeyframes() || mFogEmissive.valueAt(0.0))
     {
         sd["fog_emissive"] = mFogEmissive.asLLSD();
@@ -840,11 +837,7 @@ void SSAtmoEnvPlanetary::translateSettingsSky(const LLSettingsSky& sky, U32 grou
             mBodies[(size_t)body_index].mDiameterM = llmax(radius * 2.f, 0.f);
         }
 
-        // <SS:Nexii> EEP authored disc_scale against the QUAD - a sun with a huge embedded glow
-        // is giant because the glow fills the quad, not because the sun is. The body diameter
-        // holds the VISIBLE disc's physics, so a freshly-translated QUAD diameter is marked for
-        // the first disc-padding derive to shrink (it knows the solid fraction once the pixels
-        // land). The author's later spinner/texture-pick edits carry no mark and never rescale.
+        // <SS:Nexii> EEP authored disc_scale against the QUAD - a sun with a huge embedded glow is giant because the glow fills the quad, not because the sun is. The body diameter holds the VISIBLE disc's physics, so a freshly-translated QUAD diameter is marked for the first disc-padding derive to shrink (it knows the solid fraction once the pixels land). The author's later spinner/texture-pick edits carry no mark and never rescale.
         if (disc_texture != stock_texture && !disc_texture.isNull())
         {
             mBodies[(size_t)body_index].mPadPendingTranslation = true;
@@ -978,9 +971,7 @@ LLSD SSAtmoEnvCloudField::asLLSD() const
 bool SSAtmoEnvCloudField::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
-    // <SS:Nexii> Only overwrite what the document carries: the seed an empty block leaves in
-    // place decides enabled and auto (the primary deck always on and auto, the under deck off
-    // and manual), so an old document without the keys keeps whichever field is being parsed.
+    // <SS:Nexii> Only overwrite what the document carries: the seed an empty block leaves in place decides enabled and auto (the primary deck always on and auto, the under deck off and manual), so an old document without the keys keeps whichever field is being parsed.
     if (sd.has("enabled")) mEnabled = sd["enabled"].asBoolean();
     if (sd.has("auto")) mAuto = sd["auto"].asBoolean();
     if (sd.has("base_height_m")) mBaseHeightM.fromLLSD(sd["base_height_m"], 800.f);
@@ -1127,8 +1118,7 @@ bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
 
     const SSAtmoEnvCloudDome def;
 
-    // <SS:Nexii> A document written before the dome had a height of its own gets the authored default, not auto: 6000m is the altitude that derivation returned in clear air anyway, so a sky with
-    // no volumetric field renders identically and only one with a built-up deck notices the difference - and that one can tick Auto back on.
+    // <SS:Nexii> A document written before the dome had a height of its own gets the authored default, not auto: 6000m is the altitude that derivation returned in clear air anyway, so a sky with no volumetric field renders identically and only one with a built-up deck notices the difference - and that one can tick Auto back on.
     mAuto = sd.has("auto") ? sd["auto"].asBoolean() : def.mAuto;
     if (sd.has("height")) mHeightM.fromLLSD(sd["height"], def.mHeightM.valueAt(0.0));
 
@@ -1347,11 +1337,7 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     strength("cloud_cover_strength", mCloudCoverStrength);
     flag("wind_scroll_enabled", mWindScrollEnabled);
     strength("wind_scroll_strength", mWindScrollStrength);
-    // <SS:Nexii> water_fog_* used to be written as haze_*: the pair gated the moisture -> haze
-    // mapping as well as precipitation -> water fog, and the haze mapping is retired. A document
-    // from before the rename still reads, because an author who switched "haze" off did so
-    // because the weather was wrecking their atmosphere - exactly the intent this gate now
-    // carries on its own. </SS:Nexii>
+    // <SS:Nexii> water_fog_* used to be written as haze_*: the pair gated the moisture -> haze mapping as well as precipitation -> water fog, and the haze mapping is retired. A document from before the rename still reads, because an author who switched "haze" off did so because the weather was wrecking their atmosphere - exactly the intent this gate now carries on its own.
     if (sd.has("water_fog_enabled") || sd.has("water_fog_strength"))
     {
         flag("water_fog_enabled", mWaterFogEnabled);
@@ -1375,10 +1361,7 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     return true;
 }
 
-// <SS:Nexii> The world template table. Ordered roughly by how far each sits from a stock region, so
-// the combo reads as a walk outwards from the familiar rather than an alphabetised list. Water and
-// deck heights are offsets from the track floor (see SSAtmoEnvTemplate), so the sky archipelago's
-// -2000 m ocean hangs two kilometres below whatever platform the track carries.
+// <SS:Nexii> The world template table. Ordered roughly by how far each sits from a stock region, so the combo reads as a walk outwards from the familiar rather than an alphabetised list. Water and deck heights are offsets from the track floor (see SSAtmoEnvTemplate), so the sky archipelago's -2000 m ocean hangs two kilometres below whatever platform the track carries.
 const std::vector<SSAtmoEnvTemplate>& ssAtmoEnvTemplates()
 {
     static const std::vector<SSAtmoEnvTemplate> templates = {

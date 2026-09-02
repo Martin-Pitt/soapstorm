@@ -43,13 +43,7 @@
 
 // <SS:Nexii> Atmo Magic whiteout
 
-// <SS:Nexii> The ray march's fixed step count. The product of the steps is
-// exact in the limit (exp(-s*dx) raised to N rhs is exp(-s*N*dx), the same
-// extinction whatever N), so the count only prices how faithfully the steps
-// catch the density's variation along the ray - the vertical falloff and the
-// covered/outdoors flips. 32 samples a depth range up to the far clip well
-// and stays cheap as a full-screen pass. Kept a shader-side constant: there
-// is no dial's worth of tuning in it. </SS:Nexii>
+// <SS:Nexii> The ray march's fixed step count. The product of the steps is exact in the limit (exp(-s*dx) raised to N rhs is exp(-s*N*dx), the same extinction whatever N), so the count only prices how faithfully the steps catch the density's variation along the ray - the vertical falloff and the covered/outdoors flips. 32 samples a depth range up to the far clip well and stays cheap as a full-screen pass. Kept a shader-side constant: there is no dial's worth of tuning in it.
 const int SS_WHITEOUT_STEPS = 32;
 
 out vec4 frag_color;
@@ -208,4 +202,3 @@ void main()
     frag_color = vec4(ssWhiteoutColor * fog, transmittance);
 }
 
-// </SS:Nexii>

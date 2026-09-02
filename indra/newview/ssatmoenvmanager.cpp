@@ -186,16 +186,9 @@ namespace
         inflateEnd(&strm);
         return ok;
     }
-} // <SS:Nexii> SSAtmoEnv compressed notecard codec internals. The reader entry points
-  // immediately below are shared with the legacy per-track layer
-  // (SSAtmoTrackManager::applyNotecardText) so the magic-header deflate+base64 format lives in
-  // exactly one place. </SS:Nexii>
+} // <SS:Nexii> Compressed notecard codec internals. The reader entry points below are shared with the legacy per-track layer (SSAtmoTrackManager::applyNotecardText), so the magic-header deflate+base64 format lives in exactly one place.
 
-    // <SS:Nexii> The compressed notecard text codec, shared with the legacy per-track layer: a
-    // parcel can reference a notecard written by this environment's own save / drag-and-drop
-    // path, whose SS-ATMO-ENV-COMPRESSED deflate+base64 payload only this reader understands.
-    // The environment manager and the legacy layer both route notecard text through
-    // ss_atmo_env_from_notecard_text, so saving compressed and loading anywhere agree. </SS:Nexii>
+    // <SS:Nexii> The compressed notecard text codec, shared with the legacy per-track layer: a parcel can reference a card written by this environment's own save / drag-and-drop path, whose SS-ATMO-ENV-COMPRESSED deflate+base64 payload only this reader understands. Both layers route notecard text through ss_atmo_env_from_notecard_text, so saving compressed and loading anywhere agree.
     bool ss_atmo_env_payload_is_compressed(const std::string& text)
     {
         const size_t magic_len = strlen(SS_ATMO_ENV_MAGIC);
@@ -277,11 +270,7 @@ namespace
 
     namespace
     {
-    // <SS:Nexii> Debug cache: every save drops the environment's FULL asset LLSD into
-    // UserSettings/ss_weather/env_cache as timestamped pretty XML, and rewrites last.xml to name
-    // the current one (plus the inventory asset id once the upload lands). The notecard payload
-    // is deflate+base64 and useless in a text editor; these files are the same settings
-    // reviewable while debugging, and the history shows exactly what a session changed.
+    // <SS:Nexii> Debug cache: every save drops the environment's FULL asset LLSD into UserSettings/ss_weather/env_cache as timestamped pretty XML and rewrites last.xml naming the current one (plus the inventory asset id once the upload lands). The notecard payload is deflate+base64 and useless in a text editor; these files are reviewable while debugging and the history shows exactly what a session changed.
     const size_t SS_ATMO_ENV_CACHE_KEEP = 24;
 
     std::string ss_atmo_env_cache_dir()
@@ -363,8 +352,7 @@ namespace
         return file;
     }
 
-    // The last.xml pointer: which dump is current, when it was written, and (after the upload
-    // completes) which inventory asset carries it. asset_id empty means "still uploading".
+    // The last.xml pointer: which dump is current, when written, and (after the upload completes) which inventory asset carries it. Empty asset_id means "still uploading".
     void ss_atmo_env_cache_last(const std::string& name, const std::string& dump_file,
                                 const LLUUID& asset_id)
     {
@@ -437,8 +425,7 @@ namespace
                                const LLUUID& parent_id_in,
                                std::function<void(const LLUUID& item_id, const LLUUID& asset_id)> on_created)
     {
-        // <SS:Nexii> The debug cache is written FIRST - even a serialization failure below is
-        // exactly what the dump is for.
+        // <SS:Nexii> Debug cache written FIRST - a serialization failure below is exactly what the dump is for.
         const std::string dump_file = ss_atmo_env_cache_dump(asset, name);
         ss_atmo_env_cache_last(name, dump_file, LLUUID::null);
 
@@ -529,14 +516,7 @@ void SSAtmoEnvManager::atmoFolderId(std::function<void(const LLUUID&)> on_ready)
 
 namespace
 {
-    // <SS:Nexii> Deep-copy guard. The create path copies the asset into its async callbacks, and
-    // two sessions in a row that copy died in std::vector::_Xlength - a wrecked container header
-    // somewhere inside the object, hit while the memory around it still reads as ordinary C++.
-    // Copying once here, under a guard, does three things: the insane-count case (the outer
-    // mTracks header) logs the raw numbers, the sane-count case still gets the deep copy's throw
-    // turned into a log line, and everything downstream - captures, notecard, adoptCreated -
-    // copies a known-good object instead of the tainted one. The fallback is the clean seed, so
-    // a creation attempt still completes; the log line is the diagnosis.
+    // <SS:Nexii> Deep-copy guard. The create path copies the asset into its async callbacks, and two sessions in a row that copy died in std::vector::_Xlength - a wrecked container header inside the object, hit while the memory around it still reads as ordinary C++. Copying once here under a guard does three things: the insane-count case (the outer mTracks header) logs the raw numbers, the sane-count case gets the deep copy's throw logged, and everything downstream (captures, notecard, adoptCreated) copies a known-good object, not the tainted one. The fallback is the clean seed, so creation still completes; the log line is the diagnosis.
     SSAtmoEnvAsset ss_atmo_env_sanitize(const SSAtmoEnvAsset& def)
     {
         if (def.mTracks.size() > (size_t)SS_ATMOENV_MAX_TRACKS)
@@ -618,8 +598,7 @@ namespace
         return llformat("sky %d", (S32)slot);
     }
 
-    // Fetches a list of skies by asset id and calls on_done once every fetch has settled. A failed
-    // fetch logs and leaves a null slot; the seed builder decides what a hole means.
+    // Fetches skies by asset id and calls on_done once every fetch has settled. A failed fetch logs and leaves a null slot; the seed builder decides what a hole means.
     void fetchSeedSkies(const std::vector<LLUUID>& asset_ids,
                         const std::vector<std::string>& names,
                         std::function<void(const SeedSkyCollector&)> on_done)
@@ -665,21 +644,13 @@ namespace
         }
     }
 
-    // Even-spread fallback placement when no sun exists to measure the seed skies against:
-    // one sky per equal slice of the arrived set.
+    // Even-spread fallback placement when no sun exists to measure against: one sky per equal slice of the arrived set.
     F64 seedSkyEvenPhase(size_t slot, size_t count)
     {
         return count > 0 ? ss_atmoenv_snap_phase((F64)slot / (F64)count) : 0.0;
     }
 
-    // <SS:Nexii> What a sky's NAME says about its placement. The placement itself comes from the
-    // sky's measured dominant-body ELEVATION (see seedSkyMeasureBody) - order by height, not by a
-    // fixed clock - and the name only sorts it to the right side of noon: Morning/Dawn/Sunrise
-    // claim the rising side, Evening/Dusk/Sunset/Night the setting side, and Noon/Midnight name
-    // the two extreme anchors. Sunrise and Sunset are the most specific side claims - a sky
-    // parked right at the horizon IS exactly those - so they are checked before the qualifier
-    // words; "Afternoon" is not a "Noon" claim. 256 steps clock midnight at 0.0, sunrise at
-    // 0.25, noon at 0.5, sunset at 0.75 and midnight again at 1.0.
+    // <SS:Nexii> What a sky's NAME says about its placement. Placement comes from the sky's measured dominant-body ELEVATION (see seedSkyMeasureBody) - order by height, not a fixed clock - and the name only sorts it to the right side of noon: Morning/Dawn/Sunrise claim the rising side, Evening/Dusk/Sunset/Night the setting side, Noon/Midnight the two extreme anchors. Sunrise/Sunset are the most specific side claims - a sky parked at the horizon IS exactly those - so they are checked before the qualifier words; "Afternoon" is not a "Noon" claim. 256 steps clock midnight 0.0, sunrise 0.25, noon 0.5, sunset 0.75, midnight 1.0.
     enum class SeedSkySide
     {
         NONE,
@@ -692,9 +663,7 @@ namespace
         SeedSkySide mSide = SeedSkySide::NONE;
         bool mMidnight = false;
         bool mNoon = false;
-        // The day phase a name pins outright - 0.0 (midnight), 0.25 (sunrise), 0.5 (noon) or
-        // 0.75 (sunset) - or -1 when the name only claims a side. The pinned skies double as
-        // the fit data seedSkyFitSunArc sketches the pack's sun path from.
+        // The day phase a name pins outright - 0.0 (midnight), 0.25 (sunrise), 0.5 (noon) or 0.75 (sunset) - or -1 when the name only claims a side. The pinned skies double as the fit data seedSkyFitSunArc sketches the pack's sun path from.
         F64 mAnchorPhase = -1.0;
     };
 
@@ -733,8 +702,7 @@ namespace
         }
         else if (lower.find("night") != std::string::npos)
         {
-            // "Night" alone states the midnight side of the day - even when the sky has no
-            // moon to measure, it must never land in daylight.
+            // "Night" alone states the midnight side - even without a moon to measure, it must never land in daylight.
             hint.mMidnight = true;
             hint.mAnchorPhase = 0.0;
         }
@@ -751,30 +719,20 @@ namespace
         return hint;
     }
 
-    // <SS:Nexii> Whether a sky's name makes a side or anchor claim at all - the skies that must
-    // not be re-sorted by the same-height squash below.
+    // <SS:Nexii> Whether a sky's name makes a side or anchor claim at all - the skies the same-height squash below must not re-sort.
     bool seedSkyHasNameHint(const SeedSkyNameHint& hint)
     {
         return hint.mSide != SeedSkySide::NONE || hint.mMidnight || hint.mNoon;
     }
 
-    // <SS:Nexii> An anchored sky: the day phase its name pins (one of the four) and the height
-    // its sun was actually drawn at. Enough of these sketch the pack's authored sun path - see
-    // seedSkyFitSunArc - which is what every other sky places itself against.
+    // <SS:Nexii> An anchored sky: the phase its name pins (one of the four) and the height its sun was actually drawn at. Enough of these sketch the pack's authored sun path (see seedSkyFitSunArc) that every other sky places itself against.
     struct SeedSkySunAnchor
     {
         F64 mPhase;
         F32 mSinElevation;
     };
 
-    // The daily elevation of a body follows a sine about the noon/midnight extremes:
-    // sin(alt) = a - b*cos(2PI*phase). Sunrise (0.25) and sunset (0.75) sit on the cosine's
-    // zero-crossings, so the anchored horizon skies give the curve's midpoint a directly;
-    // noon (0.5) and midnight (0.0) give the half-day swing b. With those two the anchored
-    // pack's own path is recovered without ever solving the tilt or latitude - the phases in
-    // the planetary system are then just the roots of this curve. Returns false (the default
-    // arc stands in) when there aren't enough anchors, or when they disagree - a "sunrise"
-    // sky that drew its sun far from the fitted midpoint is not part of one consistent path.
+    // The daily elevation of a body follows a sine about the noon/midnight extremes: sin(alt) = a - b*cos(2PI*phase). Sunrise (0.25) / sunset (0.75) sit on the cosine's zero-crossings, so anchored horizon skies give the midpoint a directly; noon (0.5) / midnight (0.0) give the half-day swing b - the anchored pack's path is recovered without solving tilt or latitude; the phases are then just the roots of this curve. Returns false (the default arc stands in) when there aren't enough anchors, or when they disagree - a "sunrise" sky whose sun sits far from the fitted midpoint is not part of one path.
     bool seedSkyFitSunArc(const std::vector<SeedSkySunAnchor>& anchors,
                           const SSAtmoEnvDiurnalArc& default_arc,
                           F32& out_a, F32& out_b)
@@ -854,8 +812,7 @@ namespace
         return true;
     }
 
-    // The phase on an elevation curve (a, b) at a given height, on the rising or setting side:
-    // root of a - b*cos(2PI p) = el, one p in [0, 0.5], mirrored to 1-p for the setting side.
+    // The phase on an elevation curve (a, b) at a given height, rising or setting side: root of a - b*cos(2PI p) = el, one p in [0, 0.5], mirrored to 1-p for the setting side.
     F64 seedSkySunCurvePhase(F32 sin_elevation, bool rising, F32 a, F32 b)
     {
         const double x = llclamp((double)(a - sin_elevation) / (double)b, -1.0, 1.0);
@@ -872,12 +829,7 @@ namespace
         return dir;
     }
 
-    // <SS:Nexii> The reference a sky is measured against when no name pins it. The DOMINANT body
-    // in the sky wins - the HIGHER of the two: its sun when the sun stands higher (a pointed-at
-    // sun is a pointed-at time, and a pre-dawn/dusk sun just under the horizon still rules the
-    // light), and its moon when the moon stands higher - the night skies whose sun is parked
-    // deep below the horizon out of sight while the moon does the moving. A sky with no moon
-    // role falls back to the sun, the pre-dominant-body behaviour.
+    // <SS:Nexii> The reference a sky is measured against when no name pins it: the DOMINANT body wins - the HIGHER of the two. Sun when it stands higher (a pointed-at sun is a pointed-at time; a pre-dawn/dusk sun just under the horizon still rules the light), moon when the moon stands higher - night skies whose sun sits deep below the horizon while the moon does the moving. No moon role falls back to the sun, the pre-dominant-body behaviour.
     struct SeedSkyMeasure
     {
         LLVector3 mEcliptic;      // the track's reference body (sun or moon) in ecliptic space
@@ -936,9 +888,7 @@ namespace
         const SSAtmoEnvDiurnalArc sun_arc =
             SSAtmoEnvPlanetaryResolver::diurnalArc(sun.mDirection, tilt, lat);
 
-        // <SS:Nexii> The confident anchors first: the sunrise/sunset/noon/midnight-named skies
-        // pin BOTH a phase and the height their sun was drawn at, so they sketch the pack's
-        // authored sun path. The fit is what every other sun-elevated sky places itself on.
+        // <SS:Nexii> The confident anchors first: sunrise/sunset/noon/midnight-named skies pin BOTH a phase and the height their sun was drawn at, sketching the pack's authored sun path; the fit is what every other sun-elevated sky places itself on.
         std::vector<SeedSkySunAnchor> sun_anchors;
         for (size_t slot = 0; slot < count; ++slot)
         {
@@ -960,12 +910,7 @@ namespace
 
         std::vector<SeedSkyMeasure> measures(count);
         std::vector<F64> measured(count);
-        // <SS:Nexii> Placement by ELEVATION: an anchored sky is pinned at its named phase, and
-        // every other sky lands where its reference body reaches the height the sky drew it.
-        // A sun-side sky uses the fitted (or default) sun path, so the order of the day falls
-        // out of the heights - a "Morning Umbra" with its sun below the horizon lands in the
-        // pre-dawn hours, not in daylight. A moon-side sky uses its own arc's crossing; an
-        // unnamed sky keeps the unique azimuth-derived phase.
+        // <SS:Nexii> Placement by ELEVATION: an anchored sky pins its named phase, every other sky lands where its reference body reaches the height the sky drew it. A sun-side sky uses the fitted (or default) sun path, so the day's order falls out of the heights - a "Morning Umbra" with its sun below the horizon lands pre-dawn, not in daylight. A moon-side sky uses its own arc's crossing; an unnamed sky keeps the azimuth-derived phase.
         for (size_t slot = 0; slot < count; ++slot)
         {
             measured[slot] = out_phase[slot];
@@ -1013,10 +958,7 @@ namespace
 
         {
             const F32 LOW_BODY_SIN = 0.25f;
-            // <SS:Nexii> A named sky stays where its side put it - a same-height squash would
-            // reassign it to the opposite side of noon. If BOTH skies are unnamed (azimuth-
-            // measured), a rising/setting squash only happens when the reference body cannot
-            // rotate them apart.
+            // <SS:Nexii> A named sky stays where its side put it - a same-height squash would move it to the opposite side of noon. If BOTH skies are unnamed (azimuth-measured), a rising/setting squash only happens when the reference body cannot rotate them apart.
             auto measured_by_rule = [&skies](size_t slot)
             {
                 return seedSkyHasNameHint(seedSkyNameHint(seedSkyLabel(skies, slot)));
@@ -1068,9 +1010,7 @@ namespace
             const size_t here = order[k];
             const F64 gap = measured[here] - measured[prev];
             if (gap >= SEED_PHASE_MIN_GAP) continue;
-            // <SS:Nexii> Never move an anchored sky off its pinned phase for another sky's
-            // sake; a side-named sky may be nudged off a tie, its height claim is the natural
-            // order anyway.
+            // <SS:Nexii> Never move an anchored sky off its pinned phase for another's sake; a side-named sky may be nudged off a tie - its height claim is the natural order anyway.
             const SeedSkyNameHint hint_here = seedSkyNameHint(seedSkyLabel(skies, here));
             if (hint_here.mAnchorPhase >= 0.0) continue;
 
@@ -1085,8 +1025,7 @@ namespace
         if (!order.empty())
         {
             const size_t last = order.back();
-            // <SS:Nexii> And an anchored sky stays on its pinned phase, not squeezed onto the
-            // far side of the day to make room for a later dusk.
+            // <SS:Nexii> An anchored sky stays on its pinned phase, not squeezed to the far side of the day to make room for a later dusk.
             const SeedSkyNameHint hint_last = seedSkyNameHint(seedSkyLabel(skies, last));
             if (hint_last.mAnchorPhase < 0.0)
             {
@@ -1098,15 +1037,7 @@ namespace
         out_phase = measured;
     }
 
-    // <SS:Nexii> The disc faces the seeded cycle carries. A day cycle has ONE sun and ONE moon
-    // body, and a body's texture and scale are not keyframes - so the bodies are translated from
-    // the skies where each body stands highest: the day sky for the sun (the fully-lit sun is
-    // the cycle's face), the night sky for the moon (where the moon is the visible body art).
-    // translateSettingsSky itself skips a sky whose disc equals EEP's stock value, leaving the
-    // standard body texture. Any body whose texture was actually adopted is reported into
-    // out_pads as (standard body index, texture) so the CALLER can derive its disc padding -
-    // the live-editor polling path does not exist during a create, the wrote notecard must carry
-    // the padding itself (see writeSeededDefaultWithPads).
+    // <SS:Nexii> The disc faces the seeded cycle carries. A day cycle has ONE sun and ONE moon body, and a body's texture/scale are not keyframes - so the bodies translate from the skies where each stands highest: the day sky for the sun (the fully-lit sun is the cycle's face), the night sky for the moon (the visible body art). translateSettingsSky skips a sky whose disc equals EEP's stock value, leaving the standard body texture. Any adopted texture is reported into out_pads as (standard body index, texture) so the CALLER can derive its disc padding - there is no live-editor polling during a create, the wrote notecard must carry the padding (see writeSeededDefaultWithPads).
     void seedSkyDiscs(SSAtmoEnvTrack& track, const SeedSkyCollector& skies,
                       std::vector<std::pair<S32, LLUUID>>& out_pads)
     {
@@ -1189,8 +1120,7 @@ namespace
         }
 
         std::vector<F64> phase;
-        // <SS:Nexii> Multi-sky seed: every supplied sky is stamped at its elevation-derived
-        // place in the cycle (see seedSkyPhases).
+        // <SS:Nexii> Multi-sky seed: every supplied sky is stamped at its elevation-derived place in the cycle (see seedSkyPhases).
         seedSkyPhases(ground, skies, phase);
 
         for (size_t slot : arrived)
@@ -1202,8 +1132,7 @@ namespace
         ground.mCloudDome.mNoiseTexture =
             SSAtmoEnvKeyframed<LLUUID>(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED));
 
-        // <SS:Nexii> The day and night faces: the sun body translates from the sky where the
-        // sun stands highest, the moon body from the sky where the moon stands highest.
+        // <SS:Nexii> The day and night faces: the sun body translates from the sky where the sun stands highest, the moon body likewise.
         seedSkyDiscs(ground, skies, out_pads);
 
         ground.mAtmosphere.collapseConstantKeyframes();
@@ -1211,13 +1140,7 @@ namespace
         return def;
     }
 
-    // <SS:Nexii> Writes the seeded asset as a notecard AFTER its disc-padding derivations have
-    // landed. A create has no live editor to poll into - the notecard must carry the padding
-    // itself, or a glow-boarded EEP sun (authored huge to compensate for the embedded glow)
-    // is written full-bleed and looks wrong until manually re-derived. Cached textures resolve
-    // synchronously on the first attempt; a texture still decoding is re-checked on a short
-    // one-shot timer (0.1s cadence, ~3s patience) before the write, and any that never land
-    // are written at 0 padding (full-bleed) rather than holding the create hostage.
+    // <SS:Nexii> Writes the seeded asset as a notecard AFTER its disc-padding derivations land. A create has no live editor to poll into - the notecard must carry the padding itself, or a glow-boarded EEP sun (authored huge to compensate for the embedded glow) is written full-bleed and looks wrong until manually re-derived. Cached textures resolve synchronously on the first attempt; one still decoding is re-checked on a short one-shot timer (0.1s cadence, ~3s patience) before the write, and any that never land are written at 0 padding (full-bleed) rather than holding the create hostage.
     using SeedWriteCallback = std::function<void(const LLUUID&, const LLUUID&, const SSAtmoEnvAsset&)>;
 
     void writeSeededDefaultWithPads(SSAtmoEnvAsset def,
@@ -1236,9 +1159,7 @@ namespace
             if (body_index < 0 || def.mTracks.empty()
                 || body_index >= (S32)def.mTracks[0].mPlanetary.mBodies.size()) return;
             SSAtmoEnvCelestialBody& body = def.mTracks[0].mPlanetary.mBodies[(size_t)body_index];
-            // The seeded track's discs are freshly translated - the diameter is still the EEP
-            // QUAD size (glow-inclusive); shrink it to the solid visible disc exactly once, the
-            // same first-derive rule the live editor follows (see ssdiscpad.cpp).
+            // The seeded track's discs are freshly translated - the diameter is still the EEP QUAD size (glow-inclusive); shrink it to the solid visible disc exactly once, the same first-derive rule the live editor follows (see ssdiscpad.cpp).
             if (body.mPadPendingTranslation)
             {
                 body.mDiameterM *= llmax(1.f - 2.f * padding, 0.1f);
@@ -1269,10 +1190,7 @@ namespace
 
         const S32 MAX_PAD_WRITE_ATTEMPTS = 30;
 
-        // One-shot timer chain: each shot tries to settle; success or patience exhausted writes.
-        // The chain references itself through a shared std::function so the lambda stays valid
-        // past this function's return; the chain CLEARS that shared slot the moment it writes,
-        // breaking the reference cycle so everything frees once the last timer is deleted.
+        // One-shot timer chain: each shot tries to settle; success or exhausted patience writes. The chain self-references through a shared std::function so the lambda stays valid past return; it CLEARS that shared slot the moment it writes, breaking the reference cycle so everything frees once the last timer is deleted.
         auto step_sp = std::make_shared<std::function<void()>>();
         *step_sp = [step_sp, def_sp, requests_sp, attempts_sp, done_sp, settle, apply,
                     parent_id, on_created]()
@@ -1281,8 +1199,7 @@ namespace
 
             if (settle() || ++(*attempts_sp) >= MAX_PAD_WRITE_ATTEMPTS)
             {
-                // The chain is finishing: release the shared self-reference so the timers can
-                // free entirely once this one-shot is deleted.
+                // Finishing: release the shared self-reference so the timers free entirely once this one-shot is deleted.
                 *step_sp = std::function<void()>();
 
                 const size_t still_pending = requests_sp->size();
@@ -1316,11 +1233,7 @@ namespace
         }
     }
 
-    // <SS:Nexii> The template's atmosphere columns as a TINT over the seeded cycle: each column
-    // divides its value out of the reference sky (Daylight - the "no mood" anchor the dial was
-    // tuned against), and the factor multiplies every stamped keyframe, so the archetype's mood
-    // rides the whole day - Alien World stays alien at dawn and dusk - instead of flattening the
-    // cycle back to a constant.
+    // <SS:Nexii> The template's atmosphere columns as a TINT over the seeded cycle: each column divides its value out of the reference sky (Daylight - the "no mood" anchor the dial was tuned against) and the factor multiplies every stamped keyframe, so the archetype's mood rides the whole day - Alien World stays alien at dawn and dusk - instead of flattening the cycle to a constant.
     void tintSeededCycle(SSAtmoEnvTrack& track, const SSAtmoEnvTemplate& tmpl, const LLSettingsSky& reference)
     {
         const LLColor3 ref_horizon = reference.getBlueHorizon();
@@ -1369,8 +1282,7 @@ void SSAtmoEnvManager::createEmptyNotecard(const LLUUID& parent_id,
     writeDefaultNotecard(SSAtmoEnvAsset::makeDefault(), parent_id, on_created);
 }
 
-// Seeds a day cycle from a list of the author's own skies, the same measure-and-stamp algorithm
-// the stock seed uses. An empty list makes the empty environment.
+// Seeds a day cycle from a list of the author's own skies, the same measure-and-stamp algorithm the stock seed uses. An empty list makes the empty environment.
 void SSAtmoEnvManager::createFromSkies(const std::vector<LLUUID>& sky_asset_ids,
                                        const std::vector<std::string>& sky_names,
                                        const LLUUID& parent_id,
@@ -1428,9 +1340,7 @@ void SSAtmoEnvManager::createDefaultNotecard(const LLUUID& parent_id,
         });
 }
 
-// The template seed: the template's world settings overwrite wholesale, and the track's sky
-// reseeds as the stock four-sky day cycle with the template's atmosphere columns tinted over it -
-// see the header note. Falls back to the plain constant template when the skies cannot be fetched.
+// The template seed: the template's world settings overwrite wholesale, and the track's sky reseeds as the stock four-sky day cycle with the template's atmosphere columns tinted over it (see the header note). Falls back to the plain constant template when the skies cannot be fetched.
 void SSAtmoEnvManager::applyTemplateToTrack(SSAtmoEnvAsset& asset, S32 track_index, const std::string& key,
                                             std::function<void(bool success)> on_done)
 {
@@ -1501,9 +1411,7 @@ void SSAtmoEnvManager::applyTemplateToTrack(SSAtmoEnvAsset& asset, S32 track_ind
             // The day and night faces, from the stock seed skies (see seedSkyDiscs).
             std::vector<std::pair<S32, LLUUID>> pads;
             seedSkyDiscs(track, skies, pads);
-            // <SS:Nexii> The template edits a LIVE asset, so the disc-padding derivations run
-            // through the editor's own poll (ssDiscPadPoll) - the standard-body ids only map to
-            // this one track, and the writes stay gated by the ssDiscPadAuto setting.
+            // <SS:Nexii> The template edits a LIVE asset, so disc-padding derivations run through the editor's own poll (ssDiscPadPoll) - the standard-body ids only map to this one track, and the writes stay gated by the ssDiscPadAuto setting.
             for (const auto& pad : pads)
             {
                 ssDiscPadAutoDerive(track_index, pad.first, pad.second);
@@ -1516,10 +1424,7 @@ void SSAtmoEnvManager::applyTemplateToTrack(SSAtmoEnvAsset& asset, S32 track_ind
         });
 }
 
-// Maps an EEP day cycle over: every sky keyframe on its ground-level track is stamped into the
-// ground track at the day cycle's own keyframe time, so the authored timings carry across. The
-// skies' own noise textures are kept (no layered-noise override) - this is an authored asset, not
-// a seed.
+// Maps an EEP day cycle over: every sky keyframe on its ground-level track stamps into the ground track at the day cycle's own keyframe time, so the authored timings carry across. The skies' noise textures are kept (no layered-noise override) - an authored asset, not a seed.
 void SSAtmoEnvManager::createFromDayCycle(const LLUUID& day_cycle_asset_id,
                                           const LLUUID& parent_id,
                                           std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
@@ -1588,10 +1493,7 @@ void SSAtmoEnvManager::createFromDayCycle(const LLUUID& day_cycle_asset_id,
                 }
             }
 
-            // <SS:Nexii> The day cycle's sun and moon faces: the highest sun across the cycle
-            // seeds the sun body's texture and the highest moon the moon body's; the adopted
-            // textures feed the same disc-padding derivation and deferred notecard write as
-            // the sky-seeded create (see writeSeededDefaultWithPads).
+            // <SS:Nexii> The day cycle's sun and moon faces: the highest sun across the cycle seeds the sun body's texture, the highest moon the moon body's; the adopted textures feed the same disc-padding derivation and deferred notecard write as the sky-seeded create (see writeSeededDefaultWithPads).
             std::vector<std::pair<S32, LLUUID>> pads;
 
             const LLSettingsSky* day_sun_sky = nullptr;
@@ -1642,9 +1544,7 @@ void SSAtmoEnvManager::createFromDayCycle(const LLUUID& day_cycle_asset_id,
         });
 }
 
-// An EEP water preset onto the ground track of the empty environment: midday defaults plus the
-// preset's water block. Fetched, classified, then stamped synchronously - only the block's own
-// fields move, so the defaults' plane stays enabled at its default height.
+// An EEP water preset onto the ground track of the empty environment: midday defaults plus the preset's water block. Fetched, classified, stamped synchronously - only the block's own fields move, so the defaults' plane stays enabled at its default height.
 void SSAtmoEnvManager::createFromWater(const LLUUID& water_asset_id,
                                        const LLUUID& parent_id,
                                        std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
@@ -1688,10 +1588,7 @@ void SSAtmoEnvManager::createFromWater(const LLUUID& water_asset_id,
         });
 }
 
-// The loaded-environment multi-sky stamp: every dropped sky lands at the same measured phase the
-// seeding derives (see seedSkyPhases) and stamps the whole field grouping, so the drop becomes a
-// day cycle on the selected track rather than a one-point import. Mirrors applyTemplateToTrack's
-// shape - fetch the skies, measure, stamp, then derive the adopted discs' padding.
+// The loaded-environment multi-sky stamp: every dropped sky lands at the measured phase the seeding derives (see seedSkyPhases) and stamps the whole field grouping, so the drop becomes a day cycle on the selected track, not a one-point import. Mirrors applyTemplateToTrack - fetch, measure, stamp, then derive the adopted discs' padding.
 void SSAtmoEnvManager::stampSkiesOnTrack(SSAtmoEnvAsset& asset, S32 track_index,
                                          const std::vector<LLUUID>& sky_asset_ids,
                                          const std::vector<std::string>& sky_names,

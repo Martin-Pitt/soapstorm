@@ -41,14 +41,7 @@ namespace
     // The tile grid's unit - a stock region, matching the 256m global grid every region origin sits on.
     constexpr F32 SS_WATER_TILE_M = 256.f;
 
-    // <SS:Nexii> The water height the SS family mirrors: the environment's own, the lowest enabled
-    // track water, so the authored tide - or a sky build's ocean dialled kilometres below its
-    // platform - is what actually renders. Each track's tide is authored relative to that track's
-    // floor and visibleWaterHeight() lifts it back to world metres; with no track carrying a water
-    // plane the region height stands in, the applier derendering water outright in that state
-    // anyway. update() drives this same height into the region water height store (the hijack
-    // below), so underwater detection, fog flips, the water clip plane, precipitation landing and
-    // every other getWaterHeight() consumer follow the Atmo plane wholesale. </SS:Nexii>
+    // <SS:Nexii> The water height the SS family mirrors: the environment's own, the lowest enabled track water, so the authored tide - or a sky build's ocean dialled kilometres below its platform - is what actually renders. Each track's tide is authored relative to that track's floor and visibleWaterHeight() lifts it back to world metres; with no track carrying a water plane the region height stands in, the applier derendering water outright in that state anyway. update() drives this same height into the region water height store (the hijack below), so underwater detection, fog flips, the water clip plane, precipitation landing and every other getWaterHeight() consumer follow the Atmo plane wholesale.
     F32 ss_atmo_water_height(bool& out_valid)
     {
         out_valid = false;
@@ -131,9 +124,7 @@ void SSWaterWorld::update()
         atmo_height = ss_atmo_water_height(atmo_height_valid);
     }
 
-    // <SS:Nexii> The height hijack runs before the signature is read: the State's region-height
-    // fields then already hold the environment's plane, so an authored height change costs one
-    // rebuild instead of two. </SS:Nexii>
+    // <SS:Nexii> The height hijack runs before the signature is read: the State's region-height fields then already hold the environment's plane, so an authored height change costs one rebuild instead of two.
     if (active && atmo_height_valid)
     {
         hijackRegionHeights(atmo_height);
@@ -166,12 +157,9 @@ void SSWaterWorld::update()
 
     if (dirty)
     {
-        // <SS:Nexii> Signature is stamped after the rebuild, not before: rebuild's first act is clearWaterObjects, which resets mState so the teardown path (LLWorld::resetClass) leaves nothing
-        // stale behind. Stamping first meant the reset wiped the new signature, every frame came out dirty, and the set was killed and recreated before any object survived to the next frame's
-        // updateGeom - so no SS plane was ever built and, with stock water suppressed, no water rendered at all.
+        // <SS:Nexii> Signature is stamped after the rebuild, not before: rebuild's first act is clearWaterObjects, which resets mState so the teardown path (LLWorld::resetClass) leaves nothing stale behind. Stamping first meant the reset wiped the new signature, every frame came out dirty, and the set was killed and recreated before any object survived to the next frame's updateGeom - so no SS plane was ever built and, with stock water suppressed, no water rendered at all.
         rebuild(active);
         mState = state;
-        // </SS:Nexii>
     }
 }
 
@@ -325,18 +313,12 @@ void SSWaterWorld::rebuild(bool active)
         mRegionWater.push_back(waterp);
     }
 
-    // <SS:Nexii> The tile ring covers the whole far disc: out past the squash cap so every
-    // direction's outermost tiles fold onto the cap edge (see SS_WATER_SQUASH_CAP_FRAC). The old
-    // reach stopped short of MAX_FAR_CLIP because a triangle the projection slices through
-    // rasterises black - the squash now folds every vertex back inside before that can happen, so
-    // the ring may extend freely and the ocean reads to the horizon. Floor keeps a sane ring on
-    // huge var regions.
+    // <SS:Nexii> The tile ring covers the whole far disc: out past the squash cap so every direction's outermost tiles fold onto the cap edge (see SS_WATER_SQUASH_CAP_FRAC). The old reach stopped short of MAX_FAR_CLIP because a triangle the projection slices through rasterises black - the squash now folds every vertex back inside before that can happen, so the ring may extend freely and the ocean reads to the horizon. Floor keeps a sane ring on huge var regions.
     const F32 rwidth = agent_region->getWidth();
     mSquashCap = MAX_FAR_CLIP * SS_WATER_SQUASH_CAP_FRAC;
     mSquashKnee = mSquashCap * 0.8f;
     const F32 ring_reach = mSquashCap + rwidth * 0.5f + SS_WATER_TILE_M;
     mSquashReach = ring_reach;
-    // </SS:Nexii>
 
     const F32 water_height = atmo_height;
     const LLVector3d& agent_origin = agent_region->getOriginGlobal();

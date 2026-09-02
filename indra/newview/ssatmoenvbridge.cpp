@@ -32,10 +32,7 @@
 
 #include "llviewercontrol.h"
 
-// <SS:Nexii> The storm-approach window: a storm barely registers against the next keyframe
-// until the day phase has run most of the way toward it, and a keyframe level (or a drop) is
-// not a storm on the way at all - only a rise counts. The rising margin guards against noise.
-// </SS:Nexii>
+// <SS:Nexii> The storm-approach window: a storm barely registers against the next keyframe until the day phase has run most of the way toward it, and a keyframe level (or a drop) is not a storm on the way at all - only a rise counts. The rising margin guards against noise.
 namespace
 {
     const F64 APPROACH_RAMP_FROM = 0.55;
@@ -57,11 +54,7 @@ std::string SSAtmoEnvBridge::presetNameForType(const std::string& v3_type)
     if (v3_type == "freezing_rain") return "Freezing Rain";
     if (v3_type == "slush_mix")   return "Wintry Mix";
 
-    // <SS:Nexii> Anything else is a type the environment carries under its own authored name - the
-    // derivation vocabulary above is only the shipped set. Handing the name straight through lets
-    // SSPrecipPresetManager::find() decide: it resolves an environment type staged by
-    // ssAtmoEnvStagePrecipTypes(), and a name that resolves to nothing falls back to the active
-    // preset exactly as an empty string used to. See doc/atmo_magic_env_ui.md.
+    // <SS:Nexii> Anything else is a type the environment carries under its own authored name - the derivation vocabulary above is only the shipped set. Handing the name straight through lets SSPrecipPresetManager::find() decide: it resolves an environment type staged by ssAtmoEnvStagePrecipTypes(), and a name that resolves to nothing falls back to the active preset exactly as an empty string used to. See doc/atmo_magic_env_ui.md.
     return v3_type;
 }
 
@@ -70,8 +63,7 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
                                                SSAtmoTrackConfig& out_cfg, bool& out_is_ground_track)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
-    // <SS:Nexii> An asset with no tracks is no environment: the applier's want_active refuses it
-    // and so does this resolver, rather than indexing an empty track vector below.
+    // <SS:Nexii> An asset with no tracks is no environment: the applier's want_active refuses it and so does this resolver, rather than indexing an empty track vector below.
     if (!mgr->hasAsset() || mgr->asset().mTracks.empty()) return false;
 
     const SSAtmoEnvAsset& asset = mgr->asset();
@@ -122,13 +114,7 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
     return true;
 }
 
-// <SS:Nexii> The bolt-from-the-blue storm look-ahead. The weather cube is a forecast: its next
-// convection keyframe is where the sky is heading, and when that is stormier than now - and the
-// day phase has run most of the way toward it - a thunderstorm is on its way. How imminent (the
-// approach, 0..1) scales how early and how often the lightning ahead of it arrives, and the
-// storm comes FROM upwind: the weather travels with the wind, so its source is on the far side
-// of where the wind is blowing. Moisture is the second opinion: a dry high-convection sky is
-// turbulence, not a storm. </SS:Nexii>
+// <SS:Nexii> The bolt-from-the-blue storm look-ahead. The weather cube is a forecast: its next convection keyframe is where the sky is heading, and when that is stormier than now - and the day phase has run most of the way toward it - a thunderstorm is on its way. How imminent (the approach, 0..1) scales how early and how often the lightning ahead of it arrives, and the storm comes FROM upwind: the weather travels with the wind, so its source is on the far side of where the wind is blowing. Moisture is the second opinion: a dry high-convection sky is turbulence, not a storm.
 F32 SSAtmoEnvBridge::stormApproach(F32 world_z, F32 prev_world_z, bool teleported,
                                    F32& out_heading_deg)
 {

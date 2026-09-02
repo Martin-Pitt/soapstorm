@@ -12,22 +12,9 @@
  single_instance="true"
  title="Edit Atmo Magic Environment"
  width="985">
-    <!-- <SS:Nexii> Atmo Magic floater. Laid out to echo
-         floater_edit_ext_day_cycle.xml where the two overlap - same
-         vertical position for the name row, Load/Save/Revert docked at the
-         bottom the same way Save/Cancel are there, the same
-         SkipBackward_Off/SkipForward_Off step icons - since anyone who
-         already knows EEP's editor should feel at home here, not have to
-         relearn a different convention for the same kind of job. Where v3
-         actually differs (isolated per-track weather cubes, no shared
-         keyframe timeline) the layout differs too rather than forcing a
-         false parallel. -->
+    <!-- <SS:Nexii> Atmo Magic floater. Laid out to echo floater_edit_ext_day_cycle.xml where the two overlap - same vertical position for the name row, Load/Save/Revert docked at the bottom the same way Save/Cancel are there, the same SkipBackward_Off/SkipForward_Off step icons - since anyone who already knows EEP's editor should feel at home here, not have to relearn a different convention for the same kind of job. Where v3 actually differs (isolated per-track weather cubes, no shared keyframe timeline) the layout differs too rather than forcing a false parallel. -->
 
-    <!-- <SS:Nexii> Shown only while nothing is loaded - the landing state. There is no implicit
-         default this floater falls back to, so this is where an environment comes from: two
-         one-click seeds, or a direct drag of the assets below (a drop acts immediately - no
-         chooser, no click-through). Only full-permission settings are taken, the same rule every
-         drop path here obeys. -->
+    <!-- <SS:Nexii> Shown only while nothing is loaded - the landing state. There is no implicit default this floater falls back to, so this is where an environment comes from: two one-click seeds, or a direct drag of the assets below (a drop acts immediately - no chooser, no click-through). Only full-permission settings are taken, the same rule every drop path here obeys. -->
     <panel
      name="landing_panel"
      follows="left|top"
@@ -579,23 +566,7 @@
          tool_tip="Select a track above first; the ground track cannot be removed"
          label="Remove Track" />
 
-        <!-- <SS:Nexii> Layer mode. Selecting any tab other than Track swaps the
-             rail from showing every track on the region scale to showing what is
-             stacked inside the selected track, fitted to its own contents - see
-             SSFloaterAtmoEnv::refreshRailMode(). One rail with two modes rather
-             than two rails: the track markers already carry both altitude and
-             selection, and hanging a third kind of object off them would overload
-             the same widget again.
-
-             Space and Dome are fixed anchors at the top, excluded from the fit.
-             Space is not an altitude at all, and the dome is a backdrop whose
-             height is often auto-derived - a cirrus dome at 6km would otherwise
-             squash the decks being edited into the bottom eighth of the rail.
-
-             Three marker pairs is what the model can currently place: the water
-             plane, the main deck and the optional under deck. Same widgets and
-             same C++ repositioning as the track markers above.
-             See doc/atmo_magic_env_ui.md. -->
+        <!-- <SS:Nexii> Layer mode. Selecting any tab other than Track swaps the rail from showing every track on the region scale to showing what is stacked inside the selected track, fitted to its own contents - see SSFloaterAtmoEnv::refreshRailMode(). One rail with two modes rather than two rails: the track markers already carry both altitude and selection, and hanging a third kind of object off them would overload the same widget again. Space and Dome are fixed anchors at the top, excluded from the fit. Space is not an altitude at all, and the dome is a backdrop whose height is often auto-derived - a cirrus dome at 6km would otherwise squash the decks being edited into the bottom eighth of the rail. Three marker pairs is what the model can currently place: the water plane, the main deck and the optional under deck. Same widgets and same C++ repositioning as the track markers above. See doc/atmo_magic_env_ui.md. -->
         <button
          follows="left|top"
          layout="topleft"
@@ -861,10 +832,7 @@
      tool_tip="Discards edits, back to whatever was last loaded or saved"
      label="Revert" />
 
-    <!-- <SS:Nexii> Unload, beside Revert and deliberately distinct from it:
-         Revert restores the last saved state of THIS environment, Unload
-         leaves nothing loaded at all, so the world falls back to whatever
-         EEP's parcel or region setting publishes. -->
+    <!-- <SS:Nexii> Unload, beside Revert and deliberately distinct from it: Revert restores the last saved state of THIS environment, Unload leaves nothing loaded at all, so the world falls back to whatever EEP's parcel or region setting publishes. -->
     <button
      follows="left|bottom"
      layout="topleft"
@@ -876,10 +844,7 @@
      tool_tip="Drop this environment and fall back to the parcel or region EEP setting. Does not delete the notecard"
      label="Unload" />
 
-    <!-- <SS:Nexii> The way into the settings that are not part of an
-         environment - presets, global assets, the older weather controls.
-         Anchored bottom RIGHT, away from Save/Revert/Unload: those three act
-         on the document in front of you, and this one leaves it entirely. -->
+    <!-- <SS:Nexii> The way into the settings that are not part of an environment - presets, global assets, the older weather controls. Anchored bottom RIGHT, away from Save/Revert/Unload: those three act on the document in front of you, and this one leaves it entirely. -->
     <button
      follows="right|bottom"
      layout="topleft"
@@ -891,11 +856,7 @@
      tool_tip="Precipitation presets, global assets and the rest of Atmo Magic's settings"
      label="Settings..." />
 
-    <!-- <SS:Nexii> The transitionary state: a drop or a create button has kicked off an async
-         fetch-and-seed (skies are fetched from the asset system, the notecard is written, the day
-         cycle is mapped), and the whole floater stands down until it settles so the author cannot
-         poke a half-loaded environment. Drawn last so it covers everything; the label is set from
-         code (see SSFloaterAtmoEnv::setBusy). -->
+    <!-- <SS:Nexii> The transitionary state: a drop or a create button has kicked off an async fetch-and-seed (skies are fetched from the asset system, the notecard is written, the day cycle is mapped), and the whole floater stands down until it settles so the author cannot poke a half-loaded environment. Drawn last so it covers everything; the label is set from code (see SSFloaterAtmoEnv::setBusy). -->
     <panel
      follows="all"
      name="busy_panel"
