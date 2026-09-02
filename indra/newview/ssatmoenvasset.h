@@ -37,6 +37,7 @@
 #include "ssatmoenvkeyframe.h"
 
 class LLSettingsSky;
+class LLSettingsWater;
 
 const S32 SS_ATMOENV_VERSION = 1;
 
@@ -173,6 +174,13 @@ struct SSAtmoEnvWater
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
+
+    // <SS:Nexii> Adopts an EEP water preset wholesale onto this block (the reverse of the
+    // applier's live v3->EEP mapping): colour and density, fog modifiers, fresnel, the normal
+    // map and its scale, the refraction scales and blur, and both wave directions. Only the
+    // block's own fields are written - height and emissive stay as authored, and the caller
+    // decides whether to enable the plane.
+    void fromSettingsWater(const LLSettingsWater& settings);
 };
 
 const S32 SS_ATMOENV_MAX_SUNS = 4;

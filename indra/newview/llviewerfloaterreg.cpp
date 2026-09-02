@@ -245,7 +245,6 @@
 #include "ssfloateratmoplanetary.h"
 #include "ssfloateratmoinfluence.h"
 #include "ssfloateratmoskyimport.h" // <SS:Nexii> Atmo Magic EEP sky import
-#include "ssfloateratmoenvcreate.h" // <SS:Nexii> Atmo Magic create chooser
 #include "ssfloatersoundlist.h" // <SS:Nexii> Atmo Magic sound sequences
 #include "ssfloatertexturelist.h" // <SS:Nexii> Atmo Magic texture lists
 #include "ssfloaterassets.h" // <SS:Nexii> Atmo Magic global assets
@@ -708,7 +707,6 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_planetary", "floater_ss_atmo_planetary.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoPlanetary>);
     LLFloaterReg::add("ss_atmo_influence", "floater_ss_atmo_weather_influence.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoInfluence>);
     LLFloaterReg::add("ss_atmo_sky_import", "floater_ss_atmo_sky_import.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoSkyImport>); // <SS:Nexii> Atmo Magic EEP sky import
-    LLFloaterReg::add("ss_atmo_env_create", "floater_ss_atmo_env_create.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnvCreate>); // <SS:Nexii> Atmo Magic create chooser
     LLFloaterReg::add("ss_sound_list", "floater_ss_sound_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSoundList>);
     LLFloaterReg::add("ss_texture_list", "floater_ss_texture_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterTextureList>);
     // </SS:Nexii>

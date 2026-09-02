@@ -23,30 +23,85 @@
          keyframe timeline) the layout differs too rather than forcing a
          false parallel. -->
 
-    <!-- Shown only while nothing is loaded - the one-time bootstrap
-         affordance; there is no implicit default this floater falls back
-         to otherwise. -->
-    <text
+    <!-- <SS:Nexii> Shown only while nothing is loaded - the landing state. There is no implicit
+         default this floater falls back to, so this is where an environment comes from: two
+         one-click seeds, or a direct drag of the assets below (a drop acts immediately - no
+         chooser, no click-through). Only full-permission settings are taken, the same rule every
+         drop path here obeys. -->
+    <panel
+     name="landing_panel"
      follows="left|top"
      layout="topleft"
      left="15"
      top="30"
-     height="32"
      width="740"
-     name="no_asset_text"
-     wrap="true">
-        Nothing is loaded yet. Create a new environment, or drag a notecard
-        onto this floater to load one.
-    </text>
-    <button
-     follows="left|top"
-     layout="topleft"
-     left="15"
-     top_pad="6"
-     height="23"
-     width="200"
-     name="create_new_button"
-     label="Create New Environment" />
+     height="330"
+     background_visible="false"
+     border="false">
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="0"
+         height="18"
+         width="740"
+         name="landing_header"
+         font="SansSerifSmallBold"
+         wrap="true">
+            Nothing is loaded yet. Drag an asset from Inventory onto this floater to use it right away, or create from the seeds below:
+        </text>
+
+        <!-- What drops become, as tappable copy rather than a hidden conversion rule. -->
+        <scroll_list
+         follows="left|top"
+         layout="topleft"
+         left="8"
+         top_pad="10"
+         height="190"
+         width="724"
+         name="landing_bullets">
+            <scroll_list.columns
+             name="bullet"
+             width="26" />
+            <scroll_list.columns
+             name="body"
+             relative_width="1" />
+        </scroll_list>
+
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="8"
+         height="34"
+         width="740"
+         name="landing_permission_note"
+         font="SansSerifSmall"
+         wrap="true">
+            Only full-permission settings are accepted. Environments from other players are translated, and may not fully reflect the original authored experience.
+        </text>
+
+        <button
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="8"
+         height="23"
+         width="260"
+         name="create_empty_button"
+         tool_tip="Seeds an environment from the midday defaults - nothing is fetched, ready immediately"
+         label="Create Empty Environment" />
+        <button
+         follows="left|top"
+         layout="topleft"
+         left_pad="10"
+         top_delta="0"
+         height="23"
+         width="260"
+         name="create_stock_button"
+         tool_tip="Seeds a day/night cycle from the four shipped skies (Daylight, Night, Sunrise, Sunset), timed by measuring each sky's own sun"
+         label="Create Stock Day Cycle" />
+    </panel>
 
     <!-- Editing chrome - hidden until hasAsset() is true -->
 
@@ -800,4 +855,49 @@
      name="settings_button"
      tool_tip="Precipitation presets, global assets and the rest of Atmo Magic's settings"
      label="Settings..." />
+
+    <!-- <SS:Nexii> The transitionary state: a drop or a create button has kicked off an async
+         fetch-and-seed (skies are fetched from the asset system, the notecard is written, the day
+         cycle is mapped), and the whole floater stands down until it settles so the author cannot
+         poke a half-loaded environment. Drawn last so it covers everything; the label is set from
+         code (see SSFloaterAtmoEnv::setBusy). -->
+    <panel
+     follows="all"
+     name="busy_panel"
+     layout="topleft"
+     left="0"
+     top="0"
+     right="0"
+     bottom="0"
+     bg_alpha_color="DkGray2"
+     bg_visible="true"
+     border="true"
+     mouse_opaque="true"
+     visible="false">
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top="8"
+         height="18"
+         width="985"
+         halign="center"
+         name="busy_caption"
+         font="SansSerifSmallBold">
+            Working -
+        </text>
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="0"
+         top_pad="24"
+         height="60"
+         width="985"
+         halign="center"
+         name="busy_label"
+         font="SansSerifSmall"
+         wrap="true">
+            -
+        </text>
+    </panel>
 </floater>

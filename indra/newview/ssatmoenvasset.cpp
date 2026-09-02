@@ -30,6 +30,7 @@
 
 #include "llagent.h"
 #include "llsettingssky.h"
+#include "llsettingswater.h"
 #include "llviewerregion.h"
 
 #include <algorithm>
@@ -251,6 +252,34 @@ bool SSAtmoEnvWater::fromLLSD(const LLSD& sd)
     if (sd.has("refraction_scale_below")) mRefractionScaleBelow.fromLLSD(sd["refraction_scale_below"], def.mRefractionScaleBelow.valueAt(0.0));
     if (sd.has("blur_multiplier"))        mBlurMultiplier.fromLLSD(sd["blur_multiplier"], def.mBlurMultiplier.valueAt(0.0));
     return true;
+}
+
+// The EEP water preset onto this block, field by field - the reverse of the applier's live
+// mapping (ssatmoenvapplier.cpp). The block's own numbers are keyframed so values land as
+// constants; nothing here touches height or emissive, and the caller owns the plane's enabled
+// state.
+void SSAtmoEnvWater::fromSettingsWater(const LLSettingsWater& settings)
+{
+    mFogColor           = SSAtmoEnvKeyframed<LLColor3>(settings.getWaterFogColor());
+    mFogDensity         = SSAtmoEnvKeyframed<F32>(settings.getWaterFogDensity());
+    mUnderwaterModifier = SSAtmoEnvKeyframed<F32>(settings.getFogMod());
+
+    mFresnelScale  = SSAtmoEnvKeyframed<F32>(settings.getFresnelScale());
+    mFresnelOffset = SSAtmoEnvKeyframed<F32>(settings.getFresnelOffset());
+
+    mNormalMap = SSAtmoEnvKeyframed<LLUUID>(settings.getNormalMapID());
+
+    const LLVector3 normal_scale = settings.getNormalScale();
+    mNormalScaleX = SSAtmoEnvKeyframed<F32>(normal_scale.mV[VX]);
+    mNormalScaleY = SSAtmoEnvKeyframed<F32>(normal_scale.mV[VY]);
+    mNormalScaleZ = SSAtmoEnvKeyframed<F32>(normal_scale.mV[VZ]);
+
+    mRefractionScaleAbove = SSAtmoEnvKeyframed<F32>(settings.getScaleAbove());
+    mRefractionScaleBelow = SSAtmoEnvKeyframed<F32>(settings.getScaleBelow());
+    mBlurMultiplier       = SSAtmoEnvKeyframed<F32>(settings.getBlurMultiplier());
+
+    mLargeWaveSpeed = SSAtmoEnvKeyframed<LLVector2>(settings.getWave1Dir());
+    mSmallWaveSpeed = SSAtmoEnvKeyframed<LLVector2>(settings.getWave2Dir());
 }
 
 // One celestial body out to its notecard document.

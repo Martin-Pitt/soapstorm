@@ -64,6 +64,12 @@ uniform float ss_optic_halo22;
 uniform float ss_optic_halo46;
 uniform float ss_optic_align;
 
+// <SS:Nexii> The ice-crystal optics wear the sky's own SUNLIGHT colour - the stock engine
+// uniform the dome already shades with (LLShaderMgr::SUNLIGHT_COLOR, bound for the same
+// program), so a red sunrise's halos, arcs and mock suns are red too. No new uniform: the
+// vertex stage of this very program reads it already. </SS:Nexii>
+uniform vec3 sunlight_color;
+
 // <SS:Nexii> The sun slot disc's half-angle as a direction-z sine (SSAtmoEnvApplier::
 // sunSlotRadius) - the same value skyV holds its airmass with. The corona scales its every
 // angle by this relative to the stock quad's 0.05, so it stays a rim around WHATEVER disc is
@@ -239,6 +245,18 @@ vec3 ss_optics(vec3 view)
     }
     float psid = degrees(acos(clamp(dot(view, vertical), -1.0, 1.0)));
 
+    // <SS:Nexii> The horizon-clip state as a mask: 1 everywhere the dome may draw - clip off,
+    // or this fragment above the horizon - and 0 under the clip. Every phenomenon except the
+    // sundogs multiplies by (1.0 - ss_below), so halos and arcs never paint below the horizon.
+    // The dogs alone reach a little UNDER it (their own block re-carves the margin), because
+    // the top of the light is still visible when its centre is just below the horizon. </SS:Nexii>
+    float ss_below = (ss_horizon_clip > 0.001 && vary_ss_below_horizon < 0.0) ? 1.0 : 0.0;
+
+    // <SS:Nexii> The 22 deg ring falls away as the light sinks toward the horizon: by ~14 deg of
+    // light elevation the ring has faded, leaving only the mock-sun sundogs flanking the light -
+    // the look of a low winter sun. </SS:Nexii>
+    float ring_elev = smoothstep(14.0, 20.0, elev);
+
     vec3 col = vec3(0.0);
 
     // Corona: a thin bluish-white aureole hugging the light plus two faint diffraction rings
@@ -262,7 +280,7 @@ vec3 ss_optics(vec3 view)
         vec3 ccol = vec3(0.42, 0.44, 0.48) * aureole
                   + vec3(0.12, 0.07, 0.04) * ringA
                   + vec3(0.04, 0.07, 0.12) * ringB;
-        col += ccol * ss_optic_corona * 0.5;
+        col += ccol * ss_optic_corona * 0.5 * (1.0 - ss_below);
     }
 
     // 22 deg halo: the everywhere veil of small platelets. Real halos are faint - a soft ring a
@@ -272,10 +290,13 @@ vec3 ss_optics(vec3 view)
     {
         float w = 1.9;
         // <SS:Nexii> The veil rides a deliberately stingy cold drive (SSAtmoEnvSkyWeatherModulator's
-        // ice block), so the shader scale stays well below stock's 0.18 - the drive is what keeps
-        // the halo an event, not the multiplier. </SS:Nexii>
+        // ice block), so its shader scale stays well below stock's 0.18 - the drive is what keeps
+        // the halo an event, not the multiplier. The ring wears the light's own sunlight colour
+        // with just a trace of the red-inward/blue-outward fringe, fades out as the light sinks
+        // below ~20 deg (ring_elev), and never paints below the horizon. </SS:Nexii>
         col += ss_optic_halo22 * exp(-pow((rho - 22.0) / w, 2.0))
-             * ss_optic_color(rho, 22.0, w) * 0.048;
+             * (sunlight_color.rgb * 0.8 + ss_optic_color(rho, 22.0, w) * 0.2)
+             * 0.048 * (1.0 - ss_below) * ring_elev;
     }
 
     // 46 deg halo family (large plates/columns) - wider and fainter still.
@@ -283,7 +304,8 @@ vec3 ss_optics(vec3 view)
     {
         float w = 2.3;
         col += ss_optic_halo46 * exp(-pow((rho - 46.0) / w, 2.0))
-             * ss_optic_color(rho, 46.0, w) * 0.048;
+             * (sunlight_color.rgb * 0.8 + ss_optic_color(rho, 46.0, w) * 0.2)
+             * 0.048 * (1.0 - ss_below);
     }
 
     // Aligned-plate phenomena: need the plates to settle, not just plenty of crystals.
@@ -292,25 +314,27 @@ vec3 ss_optics(vec3 view)
         // <SS:Nexii> Sundogs - the mock suns. The old spot was a bare brightening of the ring,
         // which read as "a slightly stronger halo on the sides". A real sundog is a SECOND SUN:
         // a bright disc with the sun's own glow character, seated on the 22 deg parhelic circle
-        // at the light's altitude, strongest when the light rides LOW. The glow is a modified
-        // copy of the sun's - a hot core with a soft falloff - soft-masked by the halo's INNER
-        // circle (cut inside ~19 deg), so each dog reads as a half-sun sliced by the ring; and
-        // when the light sits on the horizon the ring falls below the clip while the two dogs
-        // stay, flanking the light as two warm half-suns. The disc wears the halo's own
-        // red-inward / blue-outward fringe. </SS:Nexii>
+        // at the light's altitude, strongest when the light rides LOW. The dog wears the light's
+        // OWN sunlight colour - it is a sun, not a white spot - and its disc is compact (a small
+        // tweak below the sun's own angular scale, so it reads as a defined mock sun rather than
+        // a soft blur). The soft inner-circle mask slices it on the halo's inner edge, so each
+        // dog reads as a half-sun cut by the ring; and because the top of the light is still
+        // visible when its centre is just below the horizon, the dogs' elevation gate reaches a
+        // little UNDER it - but only in the dome's reachable band: main() gates ss_optics on
+        // the clip, so the under-horizon part only ever counts where the clip is off. </SS:Nexii>
         {
-            float dog_elev = smoothstep(0.2, 2.5, elev)
+            float dog_elev = smoothstep(-1.0, 1.0, elev)
                            * (1.0 - smoothstep(45.0, 58.0, elev));
             if (dog_elev > 0.001)
             {
-                float core = exp(-pow((rho - 22.0) / 1.2, 2.0))
-                           * exp(-pow((psid - 90.0) / 5.0, 2.0));
-                float glow = exp(-pow((rho - 23.5) / 3.5, 2.0))
-                           * exp(-pow((psid - 90.0) / 9.0, 2.0));
+                float core = exp(-pow((rho - 22.0) / 0.9, 2.0))
+                           * exp(-pow((psid - 90.0) / 3.2, 2.0));
+                float glow = exp(-pow((rho - 23.0) / 2.8, 2.0))
+                           * exp(-pow((psid - 90.0) / 6.0, 2.0));
                 float inner = smoothstep(18.5, 21.0, rho);
-                float dog = (core + 0.55 * glow) * inner * dog_elev;
-                vec3 dog_col = mix(vec3(1.0, 0.97, 0.92),
-                                   ss_optic_color(rho, 22.0, 3.0), 0.45);
+                float dog = (core + 0.4 * glow) * inner * dog_elev * 0.6;
+                vec3 dog_col = mix(sunlight_color.rgb,
+                                   ss_optic_color(rho, 22.0, 3.0), 0.15);
                 col += ss_optic_align * dog_col * dog;
             }
         }
@@ -325,7 +349,8 @@ vec3 ss_optics(vec3 view)
             float cza = exp(-pow((zd - (90.0 - elev)) / 1.6, 2.0))
                       * exp(-pow(az / 20.0, 2.0));
             col += ss_optic_align * arc_ok * cza
-                 * ss_optic_color(zd, 90.0 - elev, 1.6) * 0.4;
+                 * (sunlight_color.rgb * 0.8 + ss_optic_color(zd, 90.0 - elev, 1.6) * 0.2)
+                 * 0.4 * (1.0 - ss_below);
         }
     }
 
@@ -338,7 +363,9 @@ vec3 ss_optics(vec3 view)
             float w = 2.3;
             float lateral = exp(-pow((rho - 46.0) / w, 2.0))
                           * exp(-pow(psid / 34.0, 2.0)) * low;
-            col += ss_optic_halo46 * lateral * ss_optic_color(rho, 46.0, w) * 0.16;
+            col += ss_optic_halo46 * lateral
+             * (sunlight_color.rgb * 0.8 + ss_optic_color(rho, 46.0, w) * 0.2)
+             * 0.16 * (1.0 - ss_below);
         }
     }
 

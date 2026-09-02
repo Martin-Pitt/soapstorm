@@ -34,7 +34,6 @@
 #include "ssfloateratmoplanetary.h"
 #include "ssfloateratmoinfluence.h"
 #include "ssfloateratmoskyimport.h"
-#include "ssfloateratmoenvcreate.h"
 #include "ssprecippreset.h"
 #include "ssatmoenvbridge.h"
 #include "ssvolcloud.h" // <SS:Nexii> the deck's generated stand-ins for the texture pickers
@@ -61,6 +60,7 @@
 #include "llradiogroup.h"
 #include "lltabcontainer.h"
 #include "lltexturectrl.h"
+#include "lltooldraganddrop.h" // <SS:Nexii> the cargo index used to tell when a multi-drop settles
 #include "lltextbox.h"
 #include "llui.h"
 #include "llviewercontrol.h"
@@ -110,8 +110,10 @@ static bool ss_tab_is(const LLPanel* panel, const char* entry_name, const char* 
 // Wires the whole editor: toolbar, altitude rail, every tab's rows, keyframe buttons, preview scrubber.
 bool SSFloaterAtmoEnv::postBuild()
 {
-    getChild<LLButton>("create_new_button")->setClickedCallback(
-        [this](LLUICtrl*, const LLSD&) { onClickCreateNew(); });
+    getChild<LLButton>("create_empty_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickCreateEmpty(); });
+    getChild<LLButton>("create_stock_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickCreateStock(); });
     getChild<LLButton>("load_from_parcel_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickLoadFromParcel(); });
     getChild<LLButton>("save_button")->setClickedCallback(
@@ -504,6 +506,7 @@ bool SSFloaterAtmoEnv::postBuild()
         [this](LLUICtrl*, const LLSD&) { onClickEditPrecipTypes(); });
 
     refreshVisibility();
+    refreshLandingBullets();
     refreshWeatherSource();
     refreshPrecipitationTypes();
     refreshRailMode();
@@ -518,6 +521,7 @@ bool SSFloaterAtmoEnv::postBuild()
 void SSFloaterAtmoEnv::onOpen(const LLSD& key)
 {
     refreshVisibility();
+    refreshLandingBullets();
     refreshWeatherSource();
     refreshPrecipitationTypes();
     refreshRailMode();
@@ -621,26 +625,67 @@ void SSFloaterAtmoEnv::draw()
     drawSliderValueGhosts();
 }
 
-// Accepts EEP settings and notecard drops onto the floater. With an environment loaded a
-// settings drop stamps into it; with nothing loaded a settings drop becomes a SEED for a new
-// environment, the same choices the Create button's chooser offers.
+// Accepts EEP settings and notecard drops onto the floater. A settings drop is classified by what
+// the INVENTORY ITEM claims (sky / day cycle / water preset - no asset fetch is needed to decide
+// acceptance) and buffered to the end of the drag, because a multi-item drag only exposes its whole
+// contents in the final drop pass. An all-skies batch acts as the day-cycle story: it seeds a new
+// environment when none is loaded, or stamps a day cycle across the selected track when one is.
+// A LONE day cycle or water preset seeds a new environment. Mixed batches are refused at hover.
 bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                                         EDragAndDropType cargo_type, void* cargo_data,
                                         EAcceptance* accept, std::string& tooltip_msg)
 {
+    // <SS:Nexii> The transitionary state: an async fetch-and-seed has the floater stood down, so
+    // no drop can land poking at a half-built environment.
+    if (mBusyOps > 0)
+    {
+        *accept = ACCEPT_NO;
+        return true;
+    }
+
     if (cargo_type == DAD_SETTINGS)
     {
-        *accept = ACCEPT_YES_SINGLE;
+        const LLViewerInventoryItem* item =
+            cargo_data ? gInventory.getItem(((const LLInventoryItem*)cargo_data)->getUUID()) : nullptr;
+        if (!item || item->getAssetUUID().isNull())
+        {
+            *accept = ACCEPT_NO;
+            return true;
+        }
+
         if (drop)
         {
-            if (!SSAtmoEnvManager::getInstance()->hasAsset())
+            dropBufferSettings(item);
+
+            // The whole batch is in once the drag reaches its last cargo item - act on it then,
+            // and only then, so the group of skies lands as one cycle rather than N creations.
+            LLToolDragAndDrop* tool = LLToolDragAndDrop::getInstance();
+            const S32 cargo_count = tool ? tool->getCargoCount() : 0;
+            const S32 cargo_index = tool ? tool->getCargoIndex() : 0;
+            if (cargo_count > 0 && cargo_index >= cargo_count - 1)
             {
-                handleCreateDrop((const LLInventoryItem*)cargo_data);
+                flushDropSession();
             }
-            else
+
+            *accept = ACCEPT_YES_MULTI;
+            return true;
+        }
+
+        bool ok = false;
+        hoverAcceptSettings(item, ok, tooltip_msg);
+        if (ok)
+        {
+            // Skies accept a whole batch; a lone day cycle or water preset is single-cargo only
+            // (dragOrDrop refuses a multi-cargo single acceptor on its own).
+            if (tooltip_msg.empty())
             {
-                handleSettingsDrop((const LLInventoryItem*)cargo_data);
+                tooltip_msg = item->getName();
             }
+            *accept = (mHoverKind == EDropKind::SKIES) ? ACCEPT_YES_MULTI : ACCEPT_YES_SINGLE;
+        }
+        else
+        {
+            *accept = ACCEPT_NO;
         }
         return true;
     }
@@ -656,6 +701,7 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
     if (drop)
     {
         const LLInventoryItem* item = (const LLInventoryItem*)cargo_data;
+        setBusy("Loading environment...");
         const bool started = SSAtmoEnvManager::getInstance()->loadFromInventory(item,
             [this](bool success)
             {
@@ -664,26 +710,273 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
                     LLNotificationsUtil::add("GenericAlert", LLSD().with(
                         "MESSAGE", "That notecard could not be loaded as an Atmo Magic environment."));
                 }
+                else
+                {
+                    mSelectedTrackIndex = 0;
+                }
+                clearBusy();
                 refreshVisibility();
                 refreshPrecipitationTypes();
-                mSelectedTrackIndex = 0;
                 refreshTrackRail();
                 refreshTrackTab();
                 refreshPlanetaryScales();
                 refreshPreview();
             });
-        if (started)
+        if (!started)
         {
-            refreshStatus();
-        }
-        else
-        {
+            clearBusy();
             LLNotificationsUtil::add("GenericAlert", LLSD().with(
                 "MESSAGE", "You don't have permission to read that notecard."));
         }
     }
 
     return true;
+}
+
+// Classifies one dropped settings item against the editor's rules, shared by the hover and drop
+// passes so the two can never disagree about what a settings type is allowed to do. ok=false
+// carries the refusal reason in tooltip_msg. Permission is checked here too, so a group with one
+// not-full-perm member is refused as a whole rather than silently dropping the usable rest.
+SSFloaterAtmoEnv::EDropKind SSFloaterAtmoEnv::classifySettingsDrop(const LLViewerInventoryItem* item,
+                                                                   bool& ok, std::string& tooltip_msg) const
+{
+    ok = false;
+    if (!item)
+    {
+        tooltip_msg = "That inventory item is gone.";
+        return EDropKind::NONE;
+    }
+
+    if (!item->checkPermissionsSet(PERM_ITEM_UNRESTRICTED))
+    {
+        tooltip_msg = "Only full-permission settings can be used.";
+        return EDropKind::NONE;
+    }
+
+    switch (item->getSettingsType())
+    {
+        case LLSettingsType::ST_SKY:
+            ok = true;
+            return EDropKind::SKIES;
+
+        case LLSettingsType::ST_WATER:
+            ok = true;
+            return EDropKind::SINGLE_WATER;
+
+        case LLSettingsType::ST_DAYCYCLE:
+            // A day cycle with an environment loaded would have to replace it - refused, since
+            // that throws away unsaved work. Drop skies instead to stamp a cycle into the track.
+            if (SSAtmoEnvManager::getInstance()->hasAsset())
+            {
+                tooltip_msg = "A day cycle can't be imported into a loaded environment - drop it with nothing loaded to start over, or drop skies to stamp a day cycle across the selected track.";
+                return EDropKind::NONE;
+            }
+            ok = true;
+            return EDropKind::SINGLE_DAY;
+
+        default:
+            tooltip_msg = "That setting isn't a sky, a day cycle or a water preset.";
+            return EDropKind::NONE;
+    }
+}
+
+// The hover pass: runs once per cargo item of the drag, reset at its first. The session kind is
+// remembered across the items so a batch mixing skies with a day cycle or water preset reads as
+// refused (ACCEPT_NO wins the min inside dragOrDrop, so the whole drag is refused before any
+// drop ever happens).
+void SSFloaterAtmoEnv::hoverAcceptSettings(const LLViewerInventoryItem* item, bool& ok, std::string& tooltip_msg)
+{
+    LLToolDragAndDrop* tool = LLToolDragAndDrop::getInstance();
+    if (tool && tool->getCargoIndex() == 0)
+    {
+        mHoverKind = EDropKind::NONE;
+    }
+
+    const EDropKind kind = classifySettingsDrop(item, ok, tooltip_msg);
+    if (!ok)
+    {
+        mHoverKind = EDropKind::MIXED;
+        return;
+    }
+
+    if (mHoverKind == EDropKind::NONE)
+    {
+        mHoverKind = kind;
+    }
+    else if (mHoverKind != kind)
+    {
+        ok = false;
+        mHoverKind = EDropKind::MIXED;
+        tooltip_msg = "Mixed drops aren't accepted - drop skies together (they become a day cycle) or a single day cycle / water preset on its own.";
+    }
+}
+
+// The drop pass: buffers each dropped settings item until the whole batch has arrived, then
+// flushDropSession acts on it once.
+void SSFloaterAtmoEnv::dropBufferSettings(const LLViewerInventoryItem* item)
+{
+    LLToolDragAndDrop* tool = LLToolDragAndDrop::getInstance();
+    if (tool && tool->getCargoIndex() == 0)
+    {
+        mDropItems.clear();
+        mDropKind = EDropKind::NONE;
+    }
+
+    bool ok = false;
+    std::string tooltip_msg;
+    const EDropKind kind = classifySettingsDrop(item, ok, tooltip_msg);
+    if (!ok)
+    {
+        mDropKind = EDropKind::MIXED;
+        return;
+    }
+
+    if (mDropKind == EDropKind::NONE)
+    {
+        mDropKind = kind;
+    }
+    else if (mDropKind != kind)
+    {
+        mDropKind = EDropKind::MIXED;
+        return;
+    }
+
+    // Skies accumulate; a single day cycle or water preset is one item by definition.
+    if (kind == EDropKind::SKIES || mDropItems.empty())
+    {
+        DropItem di;
+        di.mItemId = item->getUUID();
+        di.mName = item->getName();
+        di.mType = item->getSettingsType();
+        mDropItems.push_back(di);
+    }
+}
+
+// Acts on the buffered batch the way its kind dictates. Runs exactly once per drop, when the last
+// cargo item lands. All seeds share the same adoption shape, and every async path is wrapped in
+// the busy/transitionary state so the author cannot poke things mid-build.
+void SSFloaterAtmoEnv::flushDropSession()
+{
+    const EDropKind kind = mDropKind;
+    const std::vector<DropItem> items = mDropItems;
+    mDropItems.clear();
+    mDropKind = EDropKind::NONE;
+
+    if (kind == EDropKind::NONE || kind == EDropKind::MIXED || items.empty()) return;
+
+    const bool has_asset = SSAtmoEnvManager::getInstance()->hasAsset();
+    LLHandle<LLFloater> handle = getHandle();
+
+    // The adoption shape every seed shares: the written notecard becomes the live asset, the busy
+    // state drops, and the whole editor refreshes now rather than waiting on the status poll.
+    auto on_created = [handle](const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
+    {
+        SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+
+        if (item_id.isNull() || asset_id.isNull())
+        {
+            if (self) self->clearBusy();
+            LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                "MESSAGE", "The new environment could not be written to a notecard."));
+            return;
+        }
+
+        SSAtmoEnvManager::getInstance()->adoptCreated(item_id, asset_id, asset);
+
+        if (self)
+        {
+            self->clearBusy();
+            self->mSelectedTrackIndex = 0;
+            self->refreshVisibility();
+            self->refreshPrecipitationTypes();
+            self->refreshTrackRail();
+            self->refreshTrackTab();
+            self->refreshPlanetaryScales();
+            self->refreshStatus();
+            self->refreshPreview();
+        }
+    };
+
+    switch (kind)
+    {
+        case EDropKind::SKIES:
+        {
+            std::vector<LLUUID> ids;
+            std::vector<std::string> names;
+            ids.reserve(items.size());
+            names.reserve(items.size());
+            for (const DropItem& di : items)
+            {
+                ids.push_back(di.mItemId);
+                names.push_back(di.mName);
+            }
+
+            if (!has_asset)
+            {
+                setBusy(ids.size() > 1
+                    ? llformat("Building a day cycle from %d skies...", (S32)ids.size())
+                    : "Building an environment from the sky...");
+                SSAtmoEnvManager::createFromSkies(ids, names, LLUUID::null, on_created);
+                break;
+            }
+
+            // A lone sky keeps the grouping-choice import dialog (the single-point stamp); a
+            // drop of several skies means the author wants the track re-skinned as a cycle, so
+            // it is stamped whole and directly - no dialog, no click.
+            if (ids.size() == 1 && items.front().mType == LLSettingsType::ST_SKY)
+            {
+                const LLViewerInventoryItem* item = gInventory.getItem(items.front().mItemId);
+                if (item)
+                {
+                    handleSettingsDrop(item);
+                }
+                break;
+            }
+
+            SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+            setBusy(llformat("Stamping %d skies across the selected track...", (S32)ids.size()));
+            mgr->stampSkiesOnTrack(mgr->editable(), mSelectedTrackIndex, ids, names,
+                [handle](bool success)
+                {
+                    SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+                    if (self) self->clearBusy();
+                    if (!success)
+                    {
+                        LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                            "MESSAGE", "None of the dropped skies could be fetched - nothing was stamped."));
+                        return;
+                    }
+                    if (self)
+                    {
+                        self->refreshTrackTab();
+                        self->refreshPlanetaryScales();
+                        self->refreshPreview();
+                        self->refreshStatus();
+                    }
+                });
+            break;
+        }
+
+        case EDropKind::SINGLE_DAY:
+            setBusy("Translating the day cycle into an environment...");
+            SSAtmoEnvManager::createFromDayCycle(items.front().mItemId, LLUUID::null, on_created);
+            break;
+
+        case EDropKind::SINGLE_WATER:
+            if (!has_asset)
+            {
+                setBusy("Creating an environment from the water preset...");
+                SSAtmoEnvManager::createFromWater(items.front().mItemId, LLUUID::null, on_created);
+            }
+            else
+            {
+                handleWaterStamp(items.front());
+            }
+            break;
+
+        default:
+            break;
+    }
 }
 
 // A dropped EEP sky/water is fetched, sky-checked, then offered to the import dialog - the
@@ -743,77 +1036,129 @@ void SSFloaterAtmoEnv::handleSettingsDrop(const LLInventoryItem* drop_item)
         });
 }
 
-// A settings drop with nothing loaded: the dropped setting seeds a NEW environment. The asset is
-// fetched first and classified by what it actually is - an item alone cannot be trusted to say
-// sky vs day cycle - then handed to the matching seed. Water presets are refused: they have no
-// seed that makes sense yet.
-void SSFloaterAtmoEnv::handleCreateDrop(const LLInventoryItem* drop_item)
+// A dropped water preset onto a LOADED environment: fetched, then the selected track's water
+// block takes the whole preset. No grouping dialog - a water block has no sub-groupings to offer
+// a choice over, and the plane enables so the stamped look is the one the author sees.
+void SSFloaterAtmoEnv::handleWaterStamp(const DropItem& item)
 {
-    const LLViewerInventoryItem* item =
-        drop_item ? gInventory.getItem(drop_item->getUUID()) : nullptr;
-    if (!item || item->getAssetUUID().isNull()) return;
+    const LLViewerInventoryItem* vitem = gInventory.getItem(item.mItemId);
+    if (!vitem || vitem->getAssetUUID().isNull()) return;
 
-    if (!item->checkPermissionsSet(PERM_ITEM_UNRESTRICTED))
-    {
-        LLNotificationsUtil::add("GenericAlert", LLSD().with(
-            "MESSAGE", "That setting isn't full permission - only full-perm settings can be used to create an environment."));
-        return;
-    }
-
-    const std::string item_name = item->getName();
+    const S32 track_index = mSelectedTrackIndex;
     LLHandle<LLFloater> handle = getHandle();
+    setBusy("Importing water...");
 
-    // The same adoption shape the chooser and the old create button use: take the written
-    // notecard in as the live asset and refresh every panel that reads it.
-    auto on_created = [handle](const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
-    {
-        if (item_id.isNull() || asset_id.isNull()) return;
-        SSAtmoEnvManager::getInstance()->adoptCreated(item_id, asset_id, asset);
-
-        SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
-        if (self)
-        {
-            self->mSelectedTrackIndex = 0;
-            self->refreshVisibility();
-            self->refreshPrecipitationTypes();
-            self->refreshTrackRail();
-            self->refreshTrackTab();
-            self->refreshPlanetaryScales();
-            self->refreshStatus();
-            self->refreshPreview();
-        }
-    };
-
-    LLSettingsVOBase::getSettingsAsset(item->getAssetUUID(),
-        [handle, item_name, on_created](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+    LLSettingsVOBase::getSettingsAsset(vitem->getAssetUUID(),
+        [handle, track_index](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
         {
             SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
-            if (!self) return;
+            if (self) self->clearBusy();
 
             if (status || !settings)
             {
-                LL_WARNS("AtmoMagicEnv") << "Dropped settings asset " << asset_id
+                LL_WARNS("AtmoMagicEnv") << "Dropped water asset " << asset_id
                                          << " failed to load, status " << status << LL_ENDL;
-                LLNotificationsUtil::add("GenericAlert", LLSD().with(
-                    "MESSAGE", "That setting could not be loaded."));
+                if (self)
+                {
+                    LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                        "MESSAGE", "That setting could not be loaded."));
+                }
                 return;
             }
 
-            if (std::dynamic_pointer_cast<LLSettingsDay>(settings))
+            LLSettingsWater::ptr_t water = std::dynamic_pointer_cast<LLSettingsWater>(settings);
+            if (!water)
             {
-                SSAtmoEnvManager::createFromDayCycle(asset_id, LLUUID::null, on_created);
+                if (self)
+                {
+                    LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                        "MESSAGE", "Only water presets can be stamped into a loaded environment."));
+                }
                 return;
             }
 
-            if (std::dynamic_pointer_cast<LLSettingsSky>(settings))
+            SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+            if (!mgr->hasAsset()
+                || track_index < 0 || track_index >= (S32)mgr->editable().mTracks.size())
             {
-                SSAtmoEnvManager::createFromSkies({ asset_id }, { item_name }, LLUUID::null, on_created);
                 return;
             }
 
-            LLNotificationsUtil::add("GenericAlert", LLSD().with(
-                "MESSAGE", "Only sky settings and day cycles can seed a new environment."));
+            SSAtmoEnvTrack& track = mgr->editable().mTracks[(size_t)track_index];
+            track.mWater.mEnabled = true;
+            track.mWater.fromSettingsWater(*water);
+
+            if (self)
+            {
+                self->refreshWaterRows();
+                self->refreshPreview();
+                self->refreshStatus();
+            }
         });
+}
+
+// The transitionary state: stood up before any async fetch-and-seed, taken down when it settles.
+// Counted so a racing pair of completions cannot clear it while its sibling is still working.
+void SSFloaterAtmoEnv::setBusy(const std::string& label)
+{
+    mBusyLabel = label;
+    ++mBusyOps;
+    refreshBusy();
+}
+
+void SSFloaterAtmoEnv::clearBusy()
+{
+    if (mBusyOps > 0) --mBusyOps;
+    if (mBusyOps == 0)
+    {
+        refreshBusy();
+    }
+}
+
+void SSFloaterAtmoEnv::refreshBusy()
+{
+    const bool busy = mBusyOps > 0;
+
+    getChild<LLUICtrl>("busy_panel")->setVisible(busy);
+    getChild<LLTextBox>("busy_label")->setText(busy ? mBusyLabel : std::string());
+    getChild<LLUICtrl>("create_empty_button")->setEnabled(!busy);
+    getChild<LLUICtrl>("create_stock_button")->setEnabled(!busy);
+}
+
+// Populates the landing state's drop-list copy once; the bullets are static so a re-add could
+// only duplicate them.
+void SSFloaterAtmoEnv::refreshLandingBullets()
+{
+    LLScrollListCtrl* list = getChild<LLScrollListCtrl>("landing_bullets");
+    if (list->getItemCount() > 0) return;
+
+    static const char* const BULLET = "\xE2\x80\xA2"; // U+2022
+
+    struct Bullet
+    {
+        const char* mBody;
+    };
+    static const Bullet rows[] =
+    {
+        { "Atmo Magic environment notecard - loads it as the environment you edit." },
+        { "EEP day cycle - translated into an environment. It will be close, but may not fully reflect the original authored experience." },
+        { "One or more EEP skies - dropped together they become a day cycle. Skies named Midnight, Sunrise, Noon or Sunset pin those phases and trace the path the sun and moon travel; any additional skies are placed between them on the timeline by their own sun and moon elevation." },
+        { "EEP water preset - an empty environment is created with its water block." },
+    };
+
+    for (const Bullet& row : rows)
+    {
+        LLScrollListCell::Params bullet_cell;
+        bullet_cell.column("bullet").value(BULLET);
+
+        LLScrollListCell::Params body_cell;
+        body_cell.column("body").value(row.mBody);
+        body_cell.font(LLFontGL::getFontSansSerifSmall());
+
+        LLScrollListItem::Params item;
+        item.columns.add(bullet_cell).add(body_cell);
+        list->addRow(item, ADD_BOTTOM);
+    }
 }
 
 // Shows the editor or the no-asset landing state.
@@ -821,8 +1166,7 @@ void SSFloaterAtmoEnv::refreshVisibility()
 {
     const bool has_asset = SSAtmoEnvManager::getInstance()->hasAsset();
 
-    getChild<LLUICtrl>("create_new_button")->setVisible(!has_asset);
-    getChild<LLUICtrl>("no_asset_text")->setVisible(!has_asset);
+    getChild<LLUICtrl>("landing_panel")->setVisible(!has_asset);
 
     const char* editing_widgets[] = {
         "name_editor", "save_button", "revert_button", "unload_button",
@@ -835,6 +1179,8 @@ void SSFloaterAtmoEnv::refreshVisibility()
     {
         getChild<LLUICtrl>(name)->setVisible(has_asset);
     }
+
+    refreshBusy();
 }
 
 // Rebuilds the vertical altitude rail: one row per track at its scaled height.
@@ -1834,11 +2180,67 @@ void SSFloaterAtmoEnv::refreshStatus()
     getChild<LLUICtrl>("save_button")->setEnabled(mgr->hasAsset());
 }
 
-// Opens the create chooser: empty defaults, the stock day cycle, a list of skies, or an EEP day
-// cycle. What "new" means is a choice, so the button no longer seeds immediately.
-void SSFloaterAtmoEnv::onClickCreateNew()
+// The landing state's one-click seeds, both acting immediately rather than opening a chooser.
+// They share the drop seeds' adoption shape, so a freshly written notecard becomes the live
+// environment and the whole editor refreshes under the busy state.
+void SSFloaterAtmoEnv::onClickCreateEmpty()
 {
-    SSFloaterAtmoEnvCreate::show();
+    setBusy("Creating an empty environment...");
+
+    LLHandle<LLFloater> handle = getHandle();
+    SSAtmoEnvManager::createEmptyNotecard(LLUUID::null,
+        [handle](const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
+        {
+            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+            if (self) self->clearBusy();
+            if (item_id.isNull() || asset_id.isNull())
+            {
+                LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                    "MESSAGE", "The new environment could not be written to a notecard."));
+                return;
+            }
+            SSAtmoEnvManager::getInstance()->adoptCreated(item_id, asset_id, asset);
+            if (!self) return;
+
+            self->mSelectedTrackIndex = 0;
+            self->refreshVisibility();
+            self->refreshPrecipitationTypes();
+            self->refreshTrackRail();
+            self->refreshTrackTab();
+            self->refreshPlanetaryScales();
+            self->refreshStatus();
+            self->refreshPreview();
+        });
+}
+
+void SSFloaterAtmoEnv::onClickCreateStock()
+{
+    setBusy("Building the stock day cycle...");
+
+    LLHandle<LLFloater> handle = getHandle();
+    SSAtmoEnvManager::createDefaultNotecard(LLUUID::null,
+        [handle](const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)
+        {
+            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+            if (self) self->clearBusy();
+            if (item_id.isNull() || asset_id.isNull())
+            {
+                LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                    "MESSAGE", "The new environment could not be written to a notecard."));
+                return;
+            }
+            SSAtmoEnvManager::getInstance()->adoptCreated(item_id, asset_id, asset);
+            if (!self) return;
+
+            self->mSelectedTrackIndex = 0;
+            self->refreshVisibility();
+            self->refreshPrecipitationTypes();
+            self->refreshTrackRail();
+            self->refreshTrackTab();
+            self->refreshPlanetaryScales();
+            self->refreshStatus();
+            self->refreshPreview();
+        });
 }
 
 // Loads the environment the agent's parcel advertises in its description. The button is

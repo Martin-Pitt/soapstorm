@@ -126,11 +126,19 @@ environment system that carries the Atmo Magic branding forward as a
      Settings-asset-creation path. Kept because it's the discoverable,
      inventory-native way to start one — important on its own UX merits, not
      just as a fallback.
-  2. **Floater's own one-time create button.** When the floater has nothing
-     loaded, it shows a single "Create New Environment"-style button in
-     place of the normal editing UI, calling the exact same
-     creation-and-write path as New Atmo Magic above, then immediately
-     loading the result. This exists purely so opening the floater with
+  2. **Floater's own landing state.** When the floater has nothing loaded,
+     it shows a landing panel in place of the normal editing UI, with copy
+     describing the drops it takes plus two one-click seeds: **Create Empty
+     Environment** (the midday defaults, written straight away) and **Create
+     Stock Day Cycle** (the shipped Daylight/Night/Sunrise/Sunset four-sky
+     cycle). The one-time chooser that used to sit between the button and
+     the seed is gone - every path acts immediately. A **drag directly on the
+     floater** is the primary way in, and a drop does the whole job on its
+     own: a notecard loads, a lone EEP day cycle or water preset seeds a
+     new environment, and a group of EEP skies becomes a day cycle. All of
+     the async fetch-and-seed paths run under a busy state that stands the
+     floater down until the environment is ready, so nothing can be poked
+     while it is half-built. This exists purely so opening the floater with
      nothing active doesn't dead-end into an empty panel with no visible way
      forward — it's a bootstrap affordance, not an ongoing control, and it
      disappears once something is loaded (at that point Save/Save As/Load/
@@ -151,11 +159,20 @@ environment system that carries the Atmo Magic branding forward as a
   environment is loaded) stamps that sky's look as keyframes at the current
   preview head into the selected track: scrub to a time, drop a sky, that
   instant now looks like that sky — repeat at other phases to build a day
-  from existing EEP presets. Non-full-perm items and water/day-cycle
-  settings are refused with an alert (water import is a trivial follow-up;
-  day cycles a bigger one).
-- **Creation's "From skies I choose" mode accepts multiple sky drops at once**
-  (a whole inventory selection in one gesture) and places each supplied sky
+  from existing EEP presets. Non-full-perm items are refused with an alert.
+  A **water preset** dropped while an environment is loaded stamps the
+  whole water block onto the selected track directly (and enables its
+  plane); dropped with nothing loaded, it seeds the empty environment with
+  that block. A lone **day cycle** dropped while an environment is loaded is
+  refused — it would have to replace the loaded work — but with nothing
+  loaded it translates into a new environment at its authored keyframe
+  times. A **drop of several skies at once** while an environment is loaded
+  stamps a day cycle across the selected track: measured phases, whole
+  sky, no grouping dialog, the loaded counterpart of creating from skies.
+- **Creation from skies drops directly** - what the chooser's "From skies I
+  choose" mode used to gate behind a Create click is now just the drop. It
+  accepts multiple sky drops at once (a whole inventory selection in one
+  gesture) and places each supplied sky
   by the **actual elevation** of its dominant body: the phase where the
   track's reference body (sun or moon) reaches the height the sky drew it.
   The sky's **inventory name** sorts the placement to the right side of

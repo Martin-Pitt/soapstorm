@@ -25,6 +25,7 @@
 
 #include "ssatmotrack.h"
 
+#include "ssatmoenvmanager.h"
 #include "ssatmostore.h"
 
 #include <sstream>
@@ -344,30 +345,61 @@ bool SSAtmoTrackManager::fromLLSD(const LLSD& sd, ss_track_set_t& out) const
 void SSAtmoTrackManager::applyNotecardText(const std::string& text)
 {
     LLSD sd;
-    std::istringstream stream(text);
 
-    bool parsed = false;
-    if (text.find("<llsd") != std::string::npos)
+    // <SS:Nexii> Notecard saving and drag-and-drop write the environment in the compressed v3
+    // format now - an SS-ATMO-ENV-COMPRESSED magic header around deflate+base64 binary LLSD -
+    // and a parcel can advertise exactly such a card. That reader is shared (see
+    // ssatmoenvmanager.h), so decode through it and keep the XML/notation path below for
+    // hand-authored cards. A decoded v3 environment is not a legacy track set - the environment
+    // discovery system applies it - so stand aside rather than rejecting a binary payload. </SS:Nexii>
+    if (ss_atmo_env_payload_is_compressed(text))
     {
-        parsed = (LLSDSerialize::fromXML(sd, stream) != LLSDParser::PARSE_FAILURE);
+        std::string error;
+        if (!ss_atmo_env_from_notecard_text(text, sd, error))
+        {
+            LL_WARNS("AtmoMagic") << "Atmo config notecard is a compressed payload but unreadable: "
+                                  << error << LL_ENDL;
+            mStatus = "notecard is not valid LLSD";
+            return;
+        }
     }
-    if (!parsed)
+    else
     {
-        std::istringstream retry(text);
-        parsed = (LLSDSerialize::fromNotation(sd, retry, (S32)text.size()) != LLSDParser::PARSE_FAILURE);
-    }
+        std::istringstream stream(text);
 
-    if (!parsed)
-    {
-        LL_WARNS("AtmoMagic") << "Atmo config notecard is not valid LLSD" << LL_ENDL;
-        mStatus = "notecard is not valid LLSD";
-        return;
+        bool parsed = false;
+        if (text.find("<llsd") != std::string::npos)
+        {
+            parsed = (LLSDSerialize::fromXML(sd, stream) != LLSDParser::PARSE_FAILURE);
+        }
+        if (!parsed)
+        {
+            std::istringstream retry(text);
+            parsed = (LLSDSerialize::fromNotation(sd, retry, (S32)text.size()) != LLSDParser::PARSE_FAILURE);
+        }
+
+        if (!parsed)
+        {
+            LL_WARNS("AtmoMagic") << "Atmo config notecard is not valid LLSD" << LL_ENDL;
+            mStatus = "notecard is not valid LLSD";
+            return;
+        }
     }
 
     ss_track_set_t set;
     if (!fromLLSD(sd, set))
     {
-        mStatus = "notecard defined no tracks";
+        // <SS:Nexii> The document may be a clean v3 environment card rather than garbage: its
+        // tracks are an array, not the legacy track map this reader expects. The environment
+        // system owns applying it, so name that instead of a generic "no tracks". </SS:Nexii>
+        if (sd.isMap() && sd.has("tracks") && sd["tracks"].isArray())
+        {
+            mStatus = "notecard is a v3 environment; the environment system applies it";
+        }
+        else
+        {
+            mStatus = "notecard defined no tracks";
+        }
         return;
     }
 

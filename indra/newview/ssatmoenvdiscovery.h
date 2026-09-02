@@ -9,10 +9,11 @@
  *        synchronously (llGetNotecardLineSync, no object-inventory step
  *        needed) and replies over llHTTPResponse with the notecard body,
  *        passed straight through as the response's own LLSD document when
- *        it already starts with "<llsd>" (true for every v3 asset, since
- *        that's exactly what LLSDSerialize::toPrettyXML emits) - which
- *        means the viewer-side callback below gets the asset's LLSD map
- *        directly, no text reassembly step of any kind.
+ *        it already starts with "<llsd>" (a hand-authored card), and
+ *        otherwise wrapped in an LLSD string - so a card saved in the
+ *        compressed SS-ATMO-ENV-COMPRESSED format arrives as plain text
+ *        and is decoded by the shared ss_atmo_env_from_notecard_text
+ *        reader, no text reassembly step of any kind.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code

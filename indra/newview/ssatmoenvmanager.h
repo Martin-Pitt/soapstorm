@@ -37,6 +37,16 @@
 
 class LLInventoryItem;
 
+// <SS:Nexii> The notecard text codec behind every Atmo Magic read path. A saved environment is
+// deflate+base64 in an SS-ATMO-ENV-COMPRESSED magic-header wrapper, not readable LLSD;
+// ss_atmo_env_payload_is_compressed() asks whether a body is that wrapper, and
+// ss_atmo_env_from_notecard_text() decodes either it or a plain XML/notation document into LLSD.
+// The environment manager uses these directly; the legacy per-track layer routes parcel notecards
+// through them too, so a parcel card written by this save path does not read as "not valid LLSD".
+// </SS:Nexii>
+bool ss_atmo_env_payload_is_compressed(const std::string& text);
+bool ss_atmo_env_from_notecard_text(const std::string& text, LLSD& out_sd, std::string& out_error);
+
 class SSAtmoEnvManager : public LLSingleton<SSAtmoEnvManager>
 {
     LLSINGLETON(SSAtmoEnvManager);
@@ -93,6 +103,26 @@ public:
     static void createFromDayCycle(const LLUUID& day_cycle_asset_id,
                                    const LLUUID& parent_id,
                                    std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
+
+    // An EEP water preset: the empty (midday defaults) environment with the ground track's water
+    // block stamped from the preset. The block's own height and emissive stay at the defaults, and
+    // no sky work is fetched - the water maps synchronously after the asset arrives.
+    static void createFromWater(const LLUUID& water_asset_id,
+                                const LLUUID& parent_id,
+                                std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created);
+
+    // <SS:Nexii> Stamps a group of dropped EEP skies ACROSS one track of a LIVE asset as a day
+    // cycle - the loaded-environment counterpart to createFromSkies. Each sky lands at the same
+    // measured phase the seeding uses (name-pinned anchors sketch the sun path, the other skies
+    // sit on it by their dominant body's height), and every field grouping is taken - this is a
+    // holistic re-skin of the track, not the single-point, grouping-choice import the one-sky
+    // drop offers. on_done(false) only for a bad track index or when no sky could be fetched.
+    // The asset is mutated via the live mWorking reference; the caller keeps it stable (the
+    // floater holds its busy state across the fetch).
+    static void stampSkiesOnTrack(SSAtmoEnvAsset& asset, S32 track_index,
+                                  const std::vector<LLUUID>& sky_asset_ids,
+                                  const std::vector<std::string>& sky_names,
+                                  std::function<void(bool success)> on_done);
 
     // <SS:Nexii> Seeds a world template onto ONE track of an existing asset. The template's world
     // settings overwrite wholesale, and the track's sky reseeds as the stock four-sky day cycle -

@@ -186,12 +186,26 @@ namespace
         inflateEnd(&strm);
         return ok;
     }
+} // <SS:Nexii> SSAtmoEnv compressed notecard codec internals. The reader entry points
+  // immediately below are shared with the legacy per-track layer
+  // (SSAtmoTrackManager::applyNotecardText) so the magic-header deflate+base64 format lives in
+  // exactly one place. </SS:Nexii>
+
+    // <SS:Nexii> The compressed notecard text codec, shared with the legacy per-track layer: a
+    // parcel can reference a notecard written by this environment's own save / drag-and-drop
+    // path, whose SS-ATMO-ENV-COMPRESSED deflate+base64 payload only this reader understands.
+    // The environment manager and the legacy layer both route notecard text through
+    // ss_atmo_env_from_notecard_text, so saving compressed and loading anywhere agree. </SS:Nexii>
+    bool ss_atmo_env_payload_is_compressed(const std::string& text)
+    {
+        const size_t magic_len = strlen(SS_ATMO_ENV_MAGIC);
+        return text.size() >= magic_len && text.compare(0, magic_len, SS_ATMO_ENV_MAGIC) == 0;
+    }
 
     bool ss_atmo_env_from_notecard_text(const std::string& text, LLSD& out_sd, std::string& out_error)
     {
         const size_t magic_len = strlen(SS_ATMO_ENV_MAGIC);
-        const bool compressed = text.size() >= magic_len
-                                && text.compare(0, magic_len, SS_ATMO_ENV_MAGIC) == 0;
+        const bool compressed = ss_atmo_env_payload_is_compressed(text);
 
         if (compressed)
         {
@@ -261,6 +275,8 @@ namespace
         return parsed;
     }
 
+    namespace
+    {
     // <SS:Nexii> Debug cache: every save drops the environment's FULL asset LLSD into
     // UserSettings/ss_weather/env_cache as timestamped pretty XML, and rewrites last.xml to name
     // the current one (plus the inventory asset id once the upload lands). The notecard payload
@@ -1623,6 +1639,117 @@ void SSAtmoEnvManager::createFromDayCycle(const LLUUID& day_cycle_asset_id,
             ground.mCloudDome.collapseConstantKeyframes();
 
             writeSeededDefaultWithPads(std::move(def), std::move(pads), parent_id, on_created);
+        });
+}
+
+// An EEP water preset onto the ground track of the empty environment: midday defaults plus the
+// preset's water block. Fetched, classified, then stamped synchronously - only the block's own
+// fields move, so the defaults' plane stays enabled at its default height.
+void SSAtmoEnvManager::createFromWater(const LLUUID& water_asset_id,
+                                       const LLUUID& parent_id,
+                                       std::function<void(const LLUUID& item_id, const LLUUID& asset_id, const SSAtmoEnvAsset& asset)> on_created)
+{
+    if (!gAssetStorage || water_asset_id.isNull())
+    {
+        LL_WARNS("AtmoMagicEnv") << "Asset system unavailable or no water preset given; creating the plain Atmo v3 defaults" << LL_ENDL;
+        createEmptyNotecard(parent_id, on_created);
+        return;
+    }
+
+    LLSettingsVOBase::getSettingsAsset(water_asset_id,
+        [parent_id, on_created](LLUUID asset_id, LLSettingsBase::ptr_t settings, S32 status, LLExtStat)
+        {
+            LLSettingsWater::ptr_t water;
+            if (!status && settings)
+            {
+                water = std::dynamic_pointer_cast<LLSettingsWater>(settings);
+            }
+            if (!water)
+            {
+                LL_WARNS("AtmoMagicEnv") << "Could not fetch water preset " << asset_id
+                                         << " (status " << status
+                                         << "); creating the plain Atmo v3 defaults instead" << LL_ENDL;
+                writeDefaultNotecard(SSAtmoEnvAsset::makeDefault(), parent_id, on_created);
+                return;
+            }
+
+            SSAtmoEnvAsset def = SSAtmoEnvAsset::makeDefault();
+            if (def.mTracks.empty())
+            {
+                writeDefaultNotecard(def, parent_id, on_created);
+                return;
+            }
+
+            SSAtmoEnvTrack& ground = def.mTracks[0];
+            ground.mWater.mEnabled = true;
+            ground.mWater.fromSettingsWater(*water);
+
+            writeDefaultNotecard(def, parent_id, on_created);
+        });
+}
+
+// The loaded-environment multi-sky stamp: every dropped sky lands at the same measured phase the
+// seeding derives (see seedSkyPhases) and stamps the whole field grouping, so the drop becomes a
+// day cycle on the selected track rather than a one-point import. Mirrors applyTemplateToTrack's
+// shape - fetch the skies, measure, stamp, then derive the adopted discs' padding.
+void SSAtmoEnvManager::stampSkiesOnTrack(SSAtmoEnvAsset& asset, S32 track_index,
+                                         const std::vector<LLUUID>& sky_asset_ids,
+                                         const std::vector<std::string>& sky_names,
+                                         std::function<void(bool success)> on_done)
+{
+    if (sky_asset_ids.empty()
+        || track_index < 0 || track_index >= static_cast<S32>(asset.mTracks.size()))
+    {
+        if (on_done) on_done(false);
+        return;
+    }
+
+    if (!gAssetStorage)
+    {
+        LL_WARNS("AtmoMagicEnv") << "Asset system unavailable; could not stamp dropped skies onto the track" << LL_ENDL;
+        if (on_done) on_done(false);
+        return;
+    }
+
+    SSAtmoEnvTrack& track = asset.mTracks[static_cast<size_t>(track_index)];
+
+    fetchSeedSkies(sky_asset_ids, sky_names,
+        [&track, track_index, on_done](const SeedSkyCollector& skies)
+        {
+            std::vector<size_t> arrived;
+            for (size_t slot = 0; slot < skies.mSkies.size(); ++slot)
+            {
+                if (skies.mSkies[slot]) arrived.push_back(slot);
+            }
+
+            if (arrived.empty())
+            {
+                LL_WARNS("AtmoMagicEnv") << "None of the dropped skies could be fetched; nothing was stamped" << LL_ENDL;
+                if (on_done) on_done(false);
+                return;
+            }
+
+            std::vector<F64> phase;
+            seedSkyPhases(track, skies, phase);
+
+            for (size_t slot : arrived)
+            {
+                track.mAtmosphere.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
+                track.mCloudDome.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
+                track.mPlanetary.translateSettingsSky(*skies.mSkies[slot], SS_SKY_IMPORT_ALL);
+            }
+
+            std::vector<std::pair<S32, LLUUID>> pads;
+            seedSkyDiscs(track, skies, pads);
+            for (const auto& pad : pads)
+            {
+                ssDiscPadAutoDerive(track_index, pad.first, pad.second);
+            }
+
+            track.mAtmosphere.collapseConstantKeyframes();
+            track.mCloudDome.collapseConstantKeyframes();
+
+            if (on_done) on_done(true);
         });
 }
 

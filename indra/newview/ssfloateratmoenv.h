@@ -25,6 +25,7 @@
 #define SS_FLOATERATMOENV_H
 
 #include "llfloater.h"
+#include "llinventorysettings.h" // <SS:Nexii> LLSettingsType, for classifying dropped settings
 #include "ssatmoenvasset.h" // <SS:Nexii> SS_ATMOENV_REGION_CEILING, for the rail's track-mode range
 #include "ssatmoenvkeyframe.h"
 
@@ -34,6 +35,7 @@
 #include <vector>
 
 class LLInventoryItem;
+class LLViewerInventoryItem;
 
 class SSFloaterAtmoEnv : public LLFloater
 {
@@ -59,14 +61,63 @@ public:
 
 private:
     void handleSettingsDrop(const LLInventoryItem* item);
-    // <SS:Nexii> A settings drop with nothing loaded: the drop seeds a new environment instead of
-    // stamping into one, mirroring the Create button's chooser.
-    void handleCreateDrop(const LLInventoryItem* item);
+
+    // <SS:Nexii> The drop session: a single drag-and-drop can carry many cargo items, and the
+    // editor only acts once the whole batch is known. Only two shapes are accepted - an all-skies
+    // drop (any number, which seeds a new environment when none is loaded and stamps a day cycle
+    // across the selected track when one is) and a SINGLE day cycle or water preset. Mixed drops
+    // are refused at the hover pass, so they never reach the drop pass at all.
+    enum class EDropKind
+    {
+        NONE,
+        SKIES,        // one or more skies dropped together
+        SINGLE_WATER, // a lone water preset
+        SINGLE_DAY,   // a lone EEP day cycle
+        MIXED         // the drag mixed kinds the editor refuses
+    };
+
+    struct DropItem
+    {
+        LLUUID mItemId;
+        std::string mName;
+        LLSettingsType::type_e mType = LLSettingsType::ST_NONE;
+    };
+
+    // Classifies one dropped settings item against the editor's rules; ok=false carries a
+    // tooltip message (the reason) in tooltip_msg.
+    EDropKind classifySettingsDrop(const LLViewerInventoryItem* item, bool& ok, std::string& tooltip_msg) const;
+    // Acceptance + tooltip for the hover pass; accumulates the per-drag kind so a mixed batch
+    // reads as refused. Runs once per cargo item, reset at cargo index 0.
+    void hoverAcceptSettings(const LLViewerInventoryItem* item, bool& ok, std::string& tooltip_msg);
+    // The drop pass: buffers each dropped settings item and, on the last cargo item of the
+    // batch, runs the whole session's chosen action.
+    void dropBufferSettings(const LLViewerInventoryItem* item);
+    void flushDropSession();
+    void handleWaterStamp(const DropItem& item);
+
+    // The settings drop acted on only once the whole drag has settled.
+    std::vector<DropItem> mDropItems;
+    EDropKind mDropKind = EDropKind::NONE;
+    // The hover pass's accumulating kind for the current drag - it decides whether a mixed
+    // batch is refused and whether the batch is a group or a single item.
+    EDropKind mHoverKind = EDropKind::NONE;
+
+    // <SS:Nexii> The transitionary state: an async fetch-and-seed (or notecard load) is in
+    // flight, so the floater refuses further input until it settles. Counted so nested and
+    // racing completions cannot clear a busy state a sibling is still using.
+    void setBusy(const std::string& label);
+    void clearBusy();
+    void refreshBusy();
+    void refreshLandingBullets();
+    S32 mBusyOps = 0;
+    std::string mBusyLabel;
+
     void refreshVisibility();
 
     void refreshStatus();
 
-    void onClickCreateNew();
+    void onClickCreateEmpty();
+    void onClickCreateStock();
     void onClickLoadFromParcel();
     void onClickSave();
     void onClickRevert();

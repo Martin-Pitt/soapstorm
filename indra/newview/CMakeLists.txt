@@ -205,7 +205,6 @@ set(viewer_SOURCE_FILES
     ssatmoenvweatherstate.cpp
     ssfloateratmo.cpp
     ssfloateratmoenv.cpp
-    ssfloateratmoenvcreate.cpp
     ssfloateratmoinfluence.cpp
     ssfloateratmoskyimport.cpp
     ssassetlist.cpp
@@ -1124,7 +1123,6 @@ set(viewer_HEADER_FILES
     ssatmoenvweatherstate.h
     ssfloateratmo.h
     ssfloateratmoenv.h
-    ssfloateratmoenvcreate.h
     ssfloateratmoinfluence.h
     ssfloateratmoskyimport.h
     ssassetlist.h
