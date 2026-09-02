@@ -72,7 +72,10 @@ private:
 
     struct DropItem
     {
+        // <SS:Nexii> The item id is the inventory handle (re-looked-up on action); the asset id is
+        // what the fetch-and-seed paths actually download, so both travel with the drop.
         LLUUID mItemId;
+        LLUUID mAssetId;
         std::string mName;
         LLSettingsType::type_e mType = LLSettingsType::ST_NONE;
     };

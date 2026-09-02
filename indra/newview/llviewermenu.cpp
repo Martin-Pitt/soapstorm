@@ -1392,6 +1392,11 @@ U64 info_display_from_string(std::string_view info_display)
     {
         return LLPipeline::RENDER_DEBUG_WORLD_FIELD;
     }
+    // <SS:Nexii> Atmo Magic volumetric cloud field
+    else if ("cloud field" == info_display)
+    {
+        return LLPipeline::RENDER_DEBUG_CLOUD_FIELD;
+    }
     else if ("texel density" == info_display)
     {
         return LLPipeline::RENDER_DEBUG_TEXEL_DENSITY;

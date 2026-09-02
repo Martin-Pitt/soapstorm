@@ -27496,6 +27496,83 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <integer>1</integer>
   </map>
+  <key>SSAtmoVolumetricClouds</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: draw the volumetric cloud puff field. Off leaves the sky to the dome alone - no puffs, no under deck, and nothing for lightning to hide behind or precipitation to fall out of.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoCloudPuffsPerCell</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how many puffs the volumetric cloud field places in each 260m cell it keeps - the field's density. Lower thins the field toward one body per cell without opening holes in it (holes are the coverage gate's job); higher fills the same cells more thickly. Only the near field is affected: past the squash knee the field already collapses to one puff per cell.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>3</integer>
+  </map>
+  <key>SSAtmoCloudPuffBudget</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: most puffs the volumetric cloud field may draw per deck at once. A ceiling, not a target: only a wide overcast deck reaches it. Over budget the field keeps the nearest puffs and drops the farthest, so lowering this pulls the deck's far edge in rather than thinning the sky overhead.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>1260</integer>
+  </map>
+  <key>SSAtmoCloudProceduralNoise</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: grow a convection noise map from the weather seed when the sky authors none, so holes, towers and the anvil carving still happen on a plain sky. Off leaves an unauthored deck evenly covered.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoCloudGroundShadow</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how strongly the volumetric cloud deck shadows the ground's direct sunlight, 0 (off) to 1 (a storm deck's full shade). The shadows are cast by the deck's own field, slide with the wind drift and lengthen with a low sun, and fade out below roughly ten degrees of sun elevation where real cloud shadow dissolves into the general dusk.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.7</real>
+  </map>
+  <key>SSAtmoCloudDebugView</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: which view the cloud field debug overlay draws (1 cell gate and tower map, 2 column profiles). The overlay itself is the Cloud Field render-metadata mask; this only picks what it shows.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>U32</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
+  <key>SSAtmoCloudTessellation</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: draw each cloud puff as a 4x4 grid of sub-quads the renderer can shear and curl per row, instead of one camera-facing quad. An experiment in how much of the anvil skirt the geometry adds over the fragment carving, which runs either way. Costs geometry.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>0</integer>
+  </map>
     <key>FSKillFeedEnabled</key>
       <map>
       <key>Comment</key>

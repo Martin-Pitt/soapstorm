@@ -5711,6 +5711,14 @@ void LLPipeline::renderDebug()
         SSWorldField::getInstance()->renderDebug();
     }
 
+    // Atmo Magic volumetric cloud field: the puffs as geometry, their anvil and
+    // form shaping, the cell gate and tower map on the builder's own grid, or
+    // the vertical profile ramp - view chosen in the Effects & LOD floater
+    if (mRenderDebugMask & RENDER_DEBUG_CLOUD_FIELD)
+    {
+        SSVolCloud::getInstance()->renderDebug();
+    }
+
     // Atmo Magic roof runoff: the eaves, the water they hold, the gates that
     // quiet them, or what they shed - view chosen in the Simulation floater
     if (mRenderDebugMask & RENDER_DEBUG_ROOF_RUNOFF)
@@ -9803,6 +9811,9 @@ void LLPipeline::renderDeferredLighting()
             soften_shader.uniform3fv(LLShaderMgr::LIGHTNORM, 1, environment.getClampedLightNorm().mV);
 
             soften_shader.uniform4fv(LLShaderMgr::WATER_WATERPLANE, 1, LLDrawPoolAlpha::sWaterPlane.mV);
+
+            // <SS:Nexii> Atmo Magic: the volumetric deck's ground shadow - the baked transmittance map and its projection uniforms, gated to zero whenever there is nothing to cast. [interaction: SSVolCloud]
+            SSVolCloud::getInstance()->bindGroundShadow(soften_shader);
 
             {
                 LLGLDepthTest depth(GL_FALSE);

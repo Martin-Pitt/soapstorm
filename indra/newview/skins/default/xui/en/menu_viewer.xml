@@ -4811,6 +4811,16 @@
            parameter="world field" />
         </menu_item_check>
         <menu_item_check
+         label="Cloud Field (Atmo Magic)"
+         name="Cloud Field">
+          <menu_item_check.on_check
+           function="Advanced.CheckInfoDisplay"
+           parameter="cloud field" />
+          <menu_item_check.on_click
+           function="Advanced.ToggleInfoDisplay"
+           parameter="cloud field" />
+        </menu_item_check>
+        <menu_item_check
          label="Geometry Settling (Atmo Magic)"
          name="Geometry Settling">
           <menu_item_check.on_check

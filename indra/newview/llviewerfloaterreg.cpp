@@ -249,6 +249,7 @@
 #include "ssfloatertexturelist.h" // <SS:Nexii> Atmo Magic texture lists
 #include "ssfloaterassets.h" // <SS:Nexii> Atmo Magic global assets
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
+#include "ssfloaterfx.h" // <SS:Nexii> Atmo Magic effects and LOD
 #include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
 #include "ssfloaterworldfield.h" // <SS:Nexii> Atmo Magic world field settings
 #include "quickprefs.h"
@@ -692,7 +693,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("particle_editor","floater_particle_editor.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ParticleEditor>);
     // <SS:Nexii> Atmo Magic weather
     LLFloaterReg::add("ss_atmo", "floater_ss_atmo.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoMagic>);
-    LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
+    LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterEffects>);
     LLFloaterReg::add("ss_sound_analysis", "floater_ss_sound_analysis.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSoundAnalysis>);
     LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAssets>);
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);

@@ -59,7 +59,9 @@ namespace
     const F32 FIELD_DRAW_M = 5000.f;
     const F32 FIELD_FADE_START_M = 4000.f;
 
-    const S32 MAX_PUFFS = 1260;
+    // <SS:Nexii> The bounds the puff budget dial (SSAtmoCloudPuffBudget) is held inside. The floor is low enough to be a real emergency setting and high enough that a deck still reads as a deck rather than a scatter of stray quads; the ceiling is well past what any sky asks for, and exists so a typo in the spinner cannot hand the sort loop a number that costs a frame.
+    const S32 MIN_PUFF_BUDGET = 64;
+    const S32 MAX_PUFF_BUDGET = 8000;
 
     const F32 PUFF_CELL_FRACTION = 0.85f;
 
@@ -69,7 +71,10 @@ namespace
     const F32 PUFF_ROUND_LO = 0.15f;
     const F32 PUFF_ROUND_HI = 0.70f;
 
+    // <SS:Nexii> How many puffs a 260m cell is filled with, and the bounds the viewer's field density dial (SSAtmoCloudPuffsPerCell) may move it between. This is the field's DENSITY - the cell grid stays where it is and gets more or fewer bodies in it - and it is deliberately the only count the viewer may touch: CELL_M itself is replicated verbatim by the fragment stage's gate (SS_CELL_M in ssVolCloudF.glsl), so moving the grid would desync the carving from the geometry it carves, while the sub-count is the builder's alone and nothing downstream replicates it.
     const S32 PUFFS_PER_CELL = 3;
+    const S32 MIN_PUFFS_PER_CELL = 1;
+    const S32 MAX_PUFFS_PER_CELL = 8;
 
     const F32 PUFF_THICKNESS_GAIN = 0.35f;
 
@@ -314,16 +319,13 @@ void SSVolCloud::update(F32 dt)
 
     LLSettingsSky::ptr_t sky = LLEnvironment::instance().getCurrentSky();
     const F32 sun_alt = sky ? sky->getSunDirection().mV[VZ] : 0.f;
-    const F32 twilight = llclamp((sun_alt + 0.1f) / 0.25f, 0.f, 1.f);
-    const F32 daylight = cubic_step(twilight);
 
     const LLVector3 light_dir = LLEnvironment::instance().getLightDirection();
 
+    // <SS:Nexii> The deck's COLOUR no longer comes from here: it lived on this class as a CPU replica of the dome band's beam extinction (the 1/(2 elevation) cosecant), and that replica is the family of failed tinting attempts - it underflowed to grey at every low sun (the same white-snap failure skyV.glsl's optics tint was rescued from), and the cloud-colour normalisation stacked on top of it (clamp(cc/0.41)) was a hack against a hack. The light is computed in the VERTEX SHADER now (ssVolCloudV.glsl), from the dome's own uniforms with skyV's capped-glow extinction, so the deck wears the same sunset the dome does by construction. What survives here is the BEAM gate alone - how much direct celestial light exists - which the same crude extinction is a perfectly good heuristic for, because all it feeds is a 0..1 flattening of the structural shading, never a colour anyone sees.
     LLColor3 sunlit(1.f, 1.f, 1.f);
-    LLColor3 ambient(0.4f, 0.4f, 0.5f);
     if (sky)
     {
-        // <SS:Nexii> Lit from the SAME light the dome band paints its clouds with (cloudsV.glsl), not the raw authored preset values - which stay near-white whatever the sun is up to, so the deck sat flat grey-white while the dome beside it tinted and glowed. The sun colour is run through EEP's atmosphere extinction along the sun ray (off_axis, the term that reddens a low sun and dims it toward the horizon), and it keeps that reddened HUE through the whole visible sunset - the extinction itself is what dims it as it sets, so the deck stays tinted like the band instead of flattening to grey the moment twilight begins. It hands off to the moon only once the sun is actually down, where the same extinction has already taken the sun colour to nothing. The ambient is lifted toward daylight by overcast (cloudsV's tmpAmbient) and dimmed at night.
         const F32 sun_elev = llmax(sun_alt, 0.0001f);
         const F32 off_axis = 1.f / (sun_elev * 2.f);
         const LLColor3 light_atten = (LLColor3(sky->getBlueDensity())
@@ -332,28 +334,12 @@ void SSVolCloud::update(F32 dt)
         LLColor3 sun_col(sky->getSunlightColor());
         componentMultBy(sun_col, componentExp(light_atten * -off_axis));
 
-        // How far the sun is still "up", easing out across the horizon as it sets. Steeper than
-        // the twilight band used before: the reddened sun must carry the deck through dusk, and
-        // hand over to the moon only below the horizon where sun_col is already extinguished.
+        // How far the sun is still "up", easing out across the horizon as it sets; below it the
+        // moon's faint share keeps the beam from reading as fully dead on a bright-moon night.
         const F32 sun_up = ss_smoothstep(-0.10f, 0.05f, sun_alt);
 
         const LLColor3 moon_col = LLColor3(sky->getMoonlightColor()) * 0.16f;
         sunlit = sun_col + moon_col * (1.f - sun_up);
-
-        const LLColor3 amb_col(sky->getAmbientColor());
-        const LLColor3 amb_lift = amb_col + (LLColor3(1.f, 1.f, 1.f) - amb_col)
-                                          * (sky->getCloudShadow() * 0.5f);
-        ambient = amb_lift * (0.05f + 0.95f * daylight);
-
-        {
-            const LLColor3 cc(sky->getCloudColor());
-            for (S32 c = 0; c < 3; ++c)
-            {
-                const F32 tint = llclamp(cc.mV[c] / 0.41f, 0.f, 2.5f);
-                sunlit.mV[c] *= tint;
-                ambient.mV[c] *= tint;
-            }
-        }
     }
 
     {
@@ -362,9 +348,7 @@ void SSVolCloud::update(F32 dt)
         mBeam = cubic_step(t);
     }
 
-    mAmbient = ambient;
     mLightDir = light_dir;
-    mSunColor = sunlit;
 
     mEffRadius = FIELD_RADIUS_M;
     // Cap and knee: see SS_SQUASH_CAP_FRAC in ssvolcloud.h. The knee is a plain 0.8 of the cap, so the field from there outward folds into the last fifth of drawn depth.
@@ -394,6 +378,19 @@ void SSVolCloud::update(F32 dt)
         {
             buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT);
         }
+    }
+
+    // <SS:Nexii> The ground shadow bakes from the PRIMARY deck alone - it is the weather's deck at storm altitude, the one standing between the sun and the ground. The under deck hangs below a sky build's platform and shadows nothing anyone stands on. Keyed inside, so this is a no-op almost every frame.
+    if (!mPrimary.mPuffs.empty())
+    {
+        const LLVector3 shadow_cam = LLViewerCamera::getInstance()->getOrigin();
+        const LLVector2 shadow_drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+        bakeGroundShadow(mPrimary, shadow_cam.mV[VX] - shadow_drift.mV[0],
+                         shadow_cam.mV[VY] - shadow_drift.mV[1]);
+    }
+    else
+    {
+        mShadowValid = false;
     }
 
     mStrikeLights.clear();
@@ -462,6 +459,18 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mCoverage = field.mCoverage;
     deck.mSalt = salt;
 
+    // The weather the deck was built under, kept so the debug overlay can replay the
+    // builder's own column shaping instead of approximating it.
+    deck.mConvection = convection;
+    deck.mMoisture = moisture;
+
+    // <SS:Nexii> The field density dial. Sub-puff index 0 is always placed, so lowering this thins the field toward one body per cell rather than opening holes in it - the holes are the gate's job, and the two must not be confused. Raising it fills the SAME cells more thickly, which is what "denser cloud" means when the grid is fixed. The far field is unaffected either way: past the squash knee the loop already collapses to one puff per cell, so this is a near-field cost that pays for near-field body. [interaction: SSAtmoCloudPuffBudget, which caps the result]
+    static LLCachedControl<U32> per_cell_setting(gSavedSettings, "SSAtmoCloudPuffsPerCell", (U32)PUFFS_PER_CELL);
+    const S32 puffs_per_cell = llclamp((S32)per_cell_setting, MIN_PUFFS_PER_CELL, MAX_PUFFS_PER_CELL);
+
+    // The storm gloom rides the deck for the render pass's ss_gloom uniform - it used to be multiplied into every baked vertex colour, and it is one number per deck.
+    deck.mGloom = field.mGloom;
+
     // <SS:Nexii> The noise map's resolved shaping, baked once per build so every consumer of the field - this builder, and the precipitation gate reading the deck from outside - runs the same numbers. The tile scales off the authored Noise Scale slider; the hole weight is what survives of the map's low end once moisture has lifted the floor over it and convection has kept the storm gaps open in what is left. The procedural fallback counts as a map here the same as an authored one.
     deck.mNoiseTileM = (field.mNoiseTexture.notNull() || deck.mNoiseProcRaw.notNull())
         ? SS_NOISE_TILE_M * llmax(0.05f, field.mNoiseScale)
@@ -488,11 +497,10 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     const F32 base_radius = CELL_M * PUFF_CELL_FRACTION * 0.5f;
     const F32 size_gain = 1.f + PUFF_THICKNESS_GAIN * (field.mThicknessM / 500.f);
 
-    const F32 gloom = field.mGloom;
     const LLVector3 light_dir = mLightDir;
     const F32 beam = mBeam;
 
-    // <SS:Nexii> The base veil's lighting, resolved here rather than per fragment: the shade a puff at the deck's floor would wear, run through the same formulas the puff loop below uses - the facing term at a representative low up, the exponential shade through the layer from that height, the beam gate, the gloom. The sheet is a fragment of the same body of cloud as the puffs, so it wears the same colour a puff in its place would, and the blend at the boundary is a lighting match rather than a hope.
+    // <SS:Nexii> The base veil's structural shading, resolved here rather than per fragment: the shade a puff at the deck's floor would wear, run through the same formulas the puff loop below uses - the facing term at a representative low up, the exponential shade through the layer from that height, the beam gate. The sheet is a fragment of the same body of cloud as the puffs, so it wears the same form a puff in its place would (the light itself is the vertex stage's, shared by construction), and the blend at the boundary is a lighting match rather than a hope.
     {
         const F32 sun_z = llclamp(light_dir.mV[VZ], -1.f, 1.f);
         const F32 th = (0.5f + llclamp(field.mThicknessM / 500.f, 0.f, 1.f))
@@ -510,7 +518,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         const F32 facing = 0.5f + 0.2f * light_dir.mV[VZ] * (0.15f - 0.5f) * 2.f;
         const F32 form = lerp(0.65f, facing, beam) * lerp(1.f, shade, beam);
 
-        deck.mSheetColor = (mAmbient + mSunColor * form) * gloom;
+        deck.mSheetForm = form;
         // The inset: just off the deck's floor, deep enough to sit inside the puffs' base fade,
         // shallow enough that the sheet reads as the deck's underside and not as a second layer.
         deck.mSheetZ = field.mBaseHeightM + llclamp(field.mThicknessM * 0.08f, 30.f, 90.f);
@@ -554,7 +562,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             const F32 cell_anvil = llmax(field.mAnvil,
                                          ss_smoothstep(0.40f, 0.70f, convection) * tower);
 
-            for (S32 sub = 0; sub < PUFFS_PER_CELL; ++sub)
+            for (S32 sub = 0; sub < puffs_per_cell; ++sub)
             {
                 const U32 sub_salt = salt + (U32)sub * 8u;
 
@@ -625,7 +633,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
 
                 const F32 form = lerp(0.65f, lerp(facing, 0.65f, rim), beam)
                                * lerp(1.f, shade, beam);
-                puff.mColor = (mAmbient + mSunColor * form) * gloom;
+                puff.mForm = form;
 
                 dist_sum += dist_sq;
                 deck.mPuffs.push_back(puff);
@@ -640,9 +648,12 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         std::sort(deck.mPuffs.begin(), deck.mPuffs.end(),
                   [](const Puff& a, const Puff& b) { return a.mCamDistSq > b.mCamDistSq; });
 
-        if ((S32)deck.mPuffs.size() > MAX_PUFFS)
+        // <SS:Nexii> The puff ceiling is a viewer dial rather than a build constant, because it is this field's whole LOD axis and the machine drawing the sky is the only thing that knows what it can afford. Applied per deck, after the depth sort: the farthest puffs are at the front of the vector, so the erase takes the field's far edge and leaves the sky directly overhead whole - the same way the tier distances trim precipitation.
+        static LLCachedControl<U32> budget_setting(gSavedSettings, "SSAtmoCloudPuffBudget", 1260);
+        const S32 max_puffs = llclamp((S32)budget_setting, MIN_PUFF_BUDGET, MAX_PUFF_BUDGET);
+        if ((S32)deck.mPuffs.size() > max_puffs)
         {
-            deck.mPuffs.erase(deck.mPuffs.begin(), deck.mPuffs.end() - MAX_PUFFS);
+            deck.mPuffs.erase(deck.mPuffs.begin(), deck.mPuffs.end() - max_puffs);
         }
     }
 }
@@ -655,6 +666,178 @@ F32 SSVolCloud::squashScale(F32 true_dist) const
     const F32 drawn = llmin(mSquashKnee + (true_dist - mSquashKnee) * (mSquashCap - mSquashKnee) / span,
                             mSquashCap * 0.999f);
     return drawn / true_dist;
+}
+
+// <SS:Nexii> The ground shadow bake: one small transmittance map over the field's whole extent - how much direct sun survives a straight fall through the deck at each point of the air frame. Built from the builder's own answers (the cell gate that decides which cells hold puffs, the noise map's presence cut, and the map's mottle for texture inside occupied regions), so the shadow on the ground is the deck in the sky, never a second opinion of it. The vertical-column approximation is deliberate: the deck is thin against the map's footprint, and the SUN'S ANGLE enters at sample time in the soften shader, which projects each ground point up along the live sun direction to the casting plane - so the shadows lie, stretch and crawl correctly while the bake stays angle-free and therefore reusable across the whole day. Keyed on everything it reads; update() calls this every frame and the key makes that free.
+void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
+{
+    const S32 N = 128;
+    const F32 span = FIELD_DRAW_M * 2.f;
+
+    // The key: the camera's air CELL (which also fixes the grid origin, so equal key means equal frame), and every dial the texels read. Quantised where the source eases continuously, so a slowly-consolidating storm rebakes every few steps of the dial rather than every frame of the easing.
+    U64 key = 1469598103934665603ULL;
+    const auto fold = [&key](U64 v) { key ^= v + 0x9e3779b97f4a7c15ULL; key *= 1099511628211ULL; };
+    const S32 cam_cx = llfloor(air_x / CELL_M);
+    const S32 cam_cy = llfloor(air_y / CELL_M);
+    fold((U64)(U32)cam_cx);
+    fold((U64)(U32)cam_cy);
+    fold((U64)llround(deck.mCoverage * 64.f));
+    fold((U64)llround(deck.mNoiseHole * 64.f));
+    fold((U64)llround(deck.mNoiseTowerLo * 64.f));
+    fold((U64)llround(deck.mNoiseTowerHi * 64.f));
+    fold((U64)llround(deck.mThicknessM / 25.f));
+    fold((U64)llround(llclamp(deck.mPuffDensity, 0.f, 1.f) * 32.f));
+    fold((U64)llround(deck.mNoiseTileM));
+    fold((U64)deck.mSalt);
+    fold((U64)(U32)deck.mNoiseW);   // the readback generation: the presence cut sharpens when the map lands
+    if (key == mShadowKey && mShadowRef.notNull())
+    {
+        return;
+    }
+
+    const F32 ox = ((F32)cam_cx + 0.5f) * CELL_M - span * 0.5f;
+    const F32 oy = ((F32)cam_cy + 0.5f) * CELL_M - span * 0.5f;
+
+    // The builder's cell gate, cached per cell over the covered range - the same lines buildDeck runs at its coverage check, and the same maths the base veil re-runs per fragment in GLSL. [interaction: buildDeck's gate, ssVolCloudF.glsl's ss_cell_occupied - three implementations, one field]
+    const S32 c0x = llfloor(ox / CELL_M) - 1;
+    const S32 c0y = llfloor(oy / CELL_M) - 1;
+    const S32 cn = (S32)(span / CELL_M) + 3;
+    std::vector<F32> cell_occ((size_t)cn * (size_t)cn);
+    for (S32 gy = 0; gy < cn; ++gy)
+    {
+        for (S32 gx = 0; gx < cn; ++gx)
+        {
+            const S32 cx = c0x + gx;
+            const S32 cy = c0y + gy;
+            const F32 gate_raw = clusterUnit(cx, cy, deck.mSalt) * CLUSTER_WEIGHT
+                               + hashUnit(cx, cy, 1u + deck.mSalt) * (1.f - CLUSTER_WEIGHT);
+            F32 presence = 1.f;
+            F32 tower = 0.f;
+            noiseFieldAt(deck, ((F32)cx + 0.5f) * CELL_M, ((F32)cy + 0.5f) * CELL_M, presence, tower);
+            const F32 gate = gate_raw + (1.f - gate_raw) * (1.f - presence);
+            cell_occ[(size_t)gy * cn + gx] = (gate <= deck.mCoverage) ? 1.f : 0.f;
+        }
+    }
+
+    LLPointer<LLImageRaw> raw = new LLImageRaw(N, N, 3);
+    if (raw.isNull() || !raw->getData())
+    {
+        return;
+    }
+    U8* data = raw->getData();
+
+    // The optical depth a fully-occupied column costs: deeper decks and denser puff dials cast harder. 2.6 full depths on a thick storm deck leaves ~7% of the beam - a real cumulonimbus shadow - easing toward translucent for thin high fields.
+    const F32 tau_scale = 2.6f * (0.5f + 0.5f * llmin(deck.mThicknessM / 500.f, 1.f))
+                        * (0.4f + 0.6f * llclamp(deck.mPuffDensity, 0.f, 1.f));
+
+    const F32 texel = span / (F32)N;
+    for (S32 ty = 0; ty < N; ++ty)
+    {
+        for (S32 tx = 0; tx < N; ++tx)
+        {
+            const F32 ax = ox + ((F32)tx + 0.5f) * texel;
+            const F32 ay = oy + ((F32)ty + 0.5f) * texel;
+
+            // The four nearest cells' verdicts, cubic-eased over one cell - the veil's own softening, so the shadow's edges fall where the outermost puffs of an occupied cell reach.
+            const F32 qx = ax / CELL_M - 0.5f;
+            const F32 qy = ay / CELL_M - 0.5f;
+            const S32 bx = llfloor(qx);
+            const S32 by = llfloor(qy);
+            const F32 sx = cubic_step(qx - (F32)bx);
+            const F32 sy = cubic_step(qy - (F32)by);
+            const S32 ix = llclamp(bx - c0x, 0, cn - 2);
+            const S32 iy = llclamp(by - c0y, 0, cn - 2);
+            const F32 o00 = cell_occ[(size_t)iy * cn + ix];
+            const F32 o10 = cell_occ[(size_t)iy * cn + ix + 1];
+            const F32 o01 = cell_occ[(size_t)(iy + 1) * cn + ix];
+            const F32 o11 = cell_occ[(size_t)(iy + 1) * cn + ix + 1];
+            const F32 occ = lerp(lerp(o00, o10, sx), lerp(o01, o11, sx), sy);
+
+            F32 presence = 1.f;
+            F32 tower = 0.f;
+            noiseFieldAt(deck, ax, ay, presence, tower);
+
+            // The map's own mottle inside occupied regions, so a shadow is the cloud's shape and not its cell's. Neutral mid-grey while no map has read back.
+            F32 n = noiseSample(deck, ax, ay);
+            if (n < 0.f) n = 0.55f;
+
+            const F32 dens = occ * presence * llclamp(0.25f + 1.1f * n, 0.f, 1.f);
+            const U8 b = (U8)llround(llclamp(expf(-dens * tau_scale), 0.f, 1.f) * 255.f);
+
+            const size_t idx = ((size_t)ty * N + tx) * 3;
+            data[idx + 0] = b;
+            data[idx + 1] = b;
+            data[idx + 2] = b;
+        }
+    }
+
+    mShadowRef = LLViewerTextureManager::getLocalTexture(raw.get(), true);
+    if (mShadowRef.notNull() && mShadowRef->getGLTexture())
+    {
+        // Clamped, not wrapped: beyond the grid there is no verdict, and the soften shader's edge fade must meet a stable border texel, never the far side of the map.
+        mShadowRef->getGLTexture()->setAddressMode(LLTexUnit::TAM_CLAMP);
+    }
+    mShadowOriginX = ox;
+    mShadowOriginY = oy;
+    mShadowSpanM = span;
+    mShadowKey = key;
+    mShadowValid = mShadowRef.notNull();
+}
+
+// <SS:Nexii> The ground shadow's per-frame bind - see the header note. The grid uniform carries the WORLD frame (air origin plus live drift, folded here so the shader never knows the air frame exists), and the gate multiplies together every reason not to draw: the dial, the beam (no direct light, no shadow to cast), and the graze fade - below ~10 degrees the projection stretches toward infinity and real cloud shadow dissolves into the general dusk anyway, so it eases out rather than smearing one texel across a region.
+void SSVolCloud::bindGroundShadow(LLGLSLShader& shader)
+{
+    static LLStaticHashedString s_cshadow_grid("ss_cshadow_grid");
+    static LLStaticHashedString s_cshadow_sun("ss_cshadow_sun");
+    static LLCachedControl<F32> strength_setting(gSavedSettings, "SSAtmoCloudGroundShadow", 0.7f);
+
+    // The light's true WORLD direction: the sun through the whole rise band (lightnorm hands the direction to the moon at centre-set - see skyV.glsl's ss_sun_dir note), the shared light otherwise - so a moon-lit night projects along the moon. The beam gate below keeps night shadows faint in practice: mBeam tracks the direct light's strength, and a shadow is only as strong as the light it interrupts.
+    const SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
+    LLVector3 sun_w = mLightDir;
+    if (applier.isActive() && applier.sunRiseFraction() > 0.001f)
+    {
+        sun_w = applier.sunSlotDirection();
+    }
+
+    F32 gate = 0.f;
+    const F32 strength = llclamp((F32)strength_setting, 0.f, 1.f);
+    if (mShadowValid && mShadowRef.notNull() && strength > 0.f && !mPrimary.mPuffs.empty()
+        && mShadowSpanM > 1.f)
+    {
+        const F32 graze = ss_smoothstep(0.06f, 0.18f, sun_w.mV[VZ]);
+        gate = strength * graze * mBeam;
+    }
+
+    if (gate > 0.001f)
+    {
+        if (shader.bindTexture(LLShaderMgr::ALTERNATE_DIFFUSE_MAP, mShadowRef, LLTexUnit::TT_TEXTURE) < 0)
+        {
+            gate = 0.f;
+        }
+    }
+
+    const LLVector2 drift = applier.cloudDriftMetres();
+    shader.uniform4f(s_cshadow_grid,
+                     mShadowOriginX + drift.mV[0],
+                     mShadowOriginY + drift.mV[1],
+                     (mShadowSpanM > 1.f) ? 1.f / mShadowSpanM : 0.f,
+                     gate);
+    shader.uniform4f(s_cshadow_sun,
+                     sun_w.mV[VX], sun_w.mV[VY], llmax(sun_w.mV[VZ], 0.05f),
+                     mPrimary.mBaseZ + mPrimary.mThicknessM * 0.35f);
+
+    // The camera's world frame for the shader's view-to-world step, under custom names because the reserved inv_modelview is re-synced from the LIVE matrix stack at draw time - which a full-screen pass may have loaded with identity. Axes in xyz, origin spread across the w channels.
+    static LLStaticHashedString s_cshadow_r("ss_cshadow_r");
+    static LLStaticHashedString s_cshadow_u("ss_cshadow_u");
+    static LLStaticHashedString s_cshadow_f("ss_cshadow_f");
+    const LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector3 cam_origin = camera->getOrigin();
+    const LLVector3 cam_right = camera->getLeftAxis() * -1.f;
+    const LLVector3 cam_up = camera->getUpAxis();
+    const LLVector3 cam_fwd = camera->getAtAxis();
+    shader.uniform4f(s_cshadow_r, cam_right.mV[VX], cam_right.mV[VY], cam_right.mV[VZ], cam_origin.mV[VX]);
+    shader.uniform4f(s_cshadow_u, cam_up.mV[VX], cam_up.mV[VY], cam_up.mV[VZ], cam_origin.mV[VY]);
+    shader.uniform4f(s_cshadow_f, cam_fwd.mV[VX], cam_fwd.mV[VY], cam_fwd.mV[VZ], cam_origin.mV[VZ]);
 }
 
 // How much light survives from A to B through the primary deck's puffs - grid-accelerated, drives lightning occlusion. The under deck sits below the weather and is nobody's occluder.
@@ -841,7 +1024,7 @@ void SSVolCloud::render()
     static LLStaticHashedString s_strike_color("ss_strike_color");
     static LLStaticHashedString s_strike_occ("ss_strike_occ");
     static LLStaticHashedString s_light_dir("ss_light_dir");
-    static LLStaticHashedString s_sun_color("ss_sun_color");
+    static LLStaticHashedString s_gloom("ss_gloom");
     static LLStaticHashedString s_cam_pos("ss_cam_pos");
     static LLStaticHashedString s_beam("ss_beam");
     static LLStaticHashedString s_rim("ss_rim");
@@ -882,7 +1065,6 @@ void SSVolCloud::render()
     if (light.normalize() < 0.001f) light = LLVector3::z_axis;
 
     gSSVolCloudProgram.uniform3fv(s_light_dir, 1, light.mV);
-    gSSVolCloudProgram.uniform3fv(s_sun_color, 1, mSunColor.mV);
     gSSVolCloudProgram.uniform3fv(s_cam_pos, 1, camera->getOrigin().mV);
 
     gSSVolCloudProgram.uniform1f(s_beam, mBeam);
@@ -979,6 +1161,9 @@ void SSVolCloud::render()
         gSSVolCloudProgram.uniform1f(s_detail_scale, deck.mDetailScale);
         gSSVolCloudProgram.uniform1f(s_drift_rate, deck.mDriftRate);
 
+        // The deck's storm gloom, once baked into every vertex colour - one number per deck, so a uniform.
+        gSSVolCloudProgram.uniform1f(s_gloom, deck.mGloom);
+
         // <SS:Nexii> The base veil: one horizontal sheet inset into the deck's floor, camera- centred and drawn BEFORE the deck's puffs, so the field's gaps read filled - the puffs pile up over their own floor and the spaces between them show it. The sheet is the deck's underside, so it is wound to face DOWN (the camera sees its front from below); from above the deck it is a backface and rightly culls - the gaps over a deck open on what is behind the deck, not on its floor. It rides the same shader as the puffs with ss_sheet switched on: same texture, aperiodically read, same lighting vocabulary, the same fog and dome handoff - which is the whole point of it blending rather than sitting under the deck as a second material.
         gSSVolCloudProgram.uniform1f(s_sheet, 1.f);
         {
@@ -994,8 +1179,8 @@ void SSVolCloud::render()
             const S32 scy0 = llfloor((cam_pos.mV[VY] - drift.mV[1]) / CELL_M);
 
             gGL.begin(LLRender::TRIANGLES);
-            gGL.color4f(deck.mSheetColor.mV[0], deck.mSheetColor.mV[1],
-                        deck.mSheetColor.mV[2], deck.mSheetAlpha);
+            // r the structural form, a the alpha ceiling - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); g and b spare.
+            gGL.color4f(deck.mSheetForm, 0.f, 0.f, deck.mSheetAlpha);
             for (S32 ty = -sheet_radius; ty <= sheet_radius; ++ty)
             {
                 for (S32 tx = -sheet_radius; tx <= sheet_radius; ++tx)
@@ -1082,7 +1267,8 @@ void SSVolCloud::render()
 
                 const F32 alpha = puff.mAlpha * (1.f - 0.35f * skirt);
 
-                gGL.color4f(puff.mColor.mV[0], puff.mColor.mV[1], puff.mColor.mV[2], alpha);
+                // r the structural form, a the edge fade - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); g and b spare.
+                gGL.color4f(puff.mForm, 0.f, 0.f, alpha);
                 gGL.texCoord2f(u, v);
                 gGL.vertex3fv(pos.mV);
             };
@@ -1446,7 +1632,9 @@ F32 SSVolCloud::profileSample(const Deck& deck, F32 v, S32 channel) const
     const F32 fv = llclamp(v, 0.f, 1.f) * (F32)(n - 1);
     const S32 i0 = llfloor(fv);
     const S32 i1 = llmin(i0 + 1, n - 1);
-    const F32 t = llclamp(v, 0.f, 1.f) - (F32)i0;
+    // The fraction WITHIN the cell, off the scaled coordinate - not off v, which is the whole
+    // curve's 0-1 and only happens to be the right answer in the first cell.
+    const F32 t = fv - (F32)i0;
 
     const F32 a = deck.mProfileCurve[(size_t)i0 * 4 + channel];
     const F32 b = deck.mProfileCurve[(size_t)i1 * 4 + channel];
@@ -1581,4 +1769,239 @@ LLViewerTexture* SSVolCloud::profilePreviewTexture(bool under_deck) const
     const Deck& deck = under_deck ? mUnder : mPrimary;
     if (deck.mProfile.notNull()) return nullptr;
     return deck.mProfileProcRef;
+}
+
+// <SS:Nexii> The field's own overlay: four views over one build, picked by SSAtmoCloudDebugView, each answering a different question about a sky that is otherwise only inspectable by looking at it. Every mark goes through the SAME far-field squash the vertex stage applies - squashScale, pulled radially toward the eye - because without it the marks land kilometres behind the cloud they describe and the far half of a 5km field never survives a 2km far plane to be drawn at all. Lines are subdivided BEFORE they are squashed: the squash is not linear along a segment, and the band rings span kilometres.
+void SSVolCloud::renderDebug()
+{
+    static LLCachedControl<U32> view_setting(gSavedSettings, "SSAtmoCloudDebugView", 1);
+    const S32 which = llclamp((S32)view_setting, 1, 2);
+
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    if (!camera) return;
+
+    if (mPrimary.mPuffs.empty() && mUnder.mPuffs.empty()) return;
+
+    const LLVector3 cam = camera->getOrigin();
+    const LLVector3 cam_right = camera->getLeftAxis() * -1.f;
+
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    auto drawn = [&](const LLVector3& p) -> LLVector3
+    {
+        const LLVector3 rel = p - cam;
+        const F32 d = rel.magVec();
+        if (d <= 1.0e-4f) return p;
+        return cam + rel * squashScale(d);
+    };
+
+    auto line = [&](const LLVector3& a, const LLVector3& b)
+    {
+        const LLVector3 span = b - a;
+        const S32 segs = llclamp((S32)(span.magVec() / 200.f), 1, 24);
+        LLVector3 prev = drawn(a);
+        for (S32 i = 1; i <= segs; ++i)
+        {
+            const LLVector3 next = drawn(a + span * ((F32)i / (F32)segs));
+            gGL.vertex3fv(prev.mV);
+            gGL.vertex3fv(next.mV);
+            prev = next;
+        }
+    };
+
+    gGL.begin(LLRender::LINES);
+
+    // The two decks' bands - the floor and lid each field was built between, as a ring at the field's fade radius with posts at its corners. Drawn under every view, because none of the other marks mean much except against the band they belong to.
+    auto band = [&](const Deck& deck, const LLColor4& c)
+    {
+        if (deck.mPuffs.empty()) return;
+
+        const F32 r = FIELD_FADE_START_M;
+        const F32 z0 = deck.mBaseZ;
+        const F32 z1 = deck.mBaseZ + deck.mThicknessM;
+        const F32 bx[4] = { cam.mV[VX] - r, cam.mV[VX] + r, cam.mV[VX] + r, cam.mV[VX] - r };
+        const F32 by[4] = { cam.mV[VY] - r, cam.mV[VY] - r, cam.mV[VY] + r, cam.mV[VY] + r };
+
+        gGL.color4fv(c.mV);
+        for (S32 i = 0; i < 4; ++i)
+        {
+            const S32 j = (i + 1) % 4;
+            line(LLVector3(bx[i], by[i], z0), LLVector3(bx[j], by[j], z0));
+            line(LLVector3(bx[i], by[i], z1), LLVector3(bx[j], by[j], z1));
+            line(LLVector3(bx[i], by[i], z0), LLVector3(bx[i], by[i], z1));
+        }
+    };
+    band(mPrimary, LLColor4(0.45f, 0.70f, 1.00f, 0.30f));
+    band(mUnder,   LLColor4(1.00f, 0.72f, 0.35f, 0.30f));
+
+    // <SS:Nexii> The builder's cell gate, as one call both views can share: the cluster lattice and the per-cell hash mixed by CLUSTER_WEIGHT, then pushed toward a certain skip wherever the noise map's presence runs low. A cell holds cloud when this comes back at or under the deck's coverage. Kept in step with buildDeck by hand - the fragment stage replicates the same lines a third time (ssVolCloudF.glsl), and all three must move together.
+    auto cellGate = [&](const Deck& deck, S32 cx, S32 cy, F32& presence, F32& tower) -> F32
+    {
+        const F32 gate_raw = clusterUnit(cx, cy, deck.mSalt) * CLUSTER_WEIGHT
+                           + hashUnit(cx, cy, 1u + deck.mSalt) * (1.f - CLUSTER_WEIGHT);
+
+        presence = 1.f;
+        tower = 0.f;
+        noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower);
+
+        return gate_raw + (1.f - gate_raw) * (1.f - presence);
+    };
+
+    if (which == 1)
+    {
+        // <SS:Nexii> The cell gate, replayed on the same 260m air-frame grid the builder walks: green where the gate passed and cloud was placed, red where it did not and the sky is open. A kept cell also grows a stalk as tall as the noise map's TOWER weight wants that column to climb, so the map's convection geography - the thing that decides which cells stand up as cumulonimbus and which stay pockets - is visible as terrain rather than inferred from the cloud it produced. Drift is added back on the way out, so the grid rides with the field instead of standing still under it.
+        const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+
+        const S32 span = 14;
+        for (S32 d = 0; d < 2; ++d)
+        {
+            const Deck& deck = d ? mUnder : mPrimary;
+            if (deck.mPuffs.empty()) continue;
+
+            const S32 cx0 = llfloor((cam.mV[VX] - drift.mV[0]) / CELL_M);
+            const S32 cy0 = llfloor((cam.mV[VY] - drift.mV[1]) / CELL_M);
+
+            for (S32 dy = -span; dy <= span; ++dy)
+            {
+                for (S32 dx = -span; dx <= span; ++dx)
+                {
+                    const S32 cx = cx0 + dx;
+                    const S32 cy = cy0 + dy;
+
+                    F32 presence = 1.f;
+                    F32 tower = 0.f;
+                    const F32 gate = cellGate(deck, cx, cy, presence, tower);
+                    const bool kept = gate <= deck.mCoverage;
+
+                    const LLVector3 at((F32)cx * CELL_M + CELL_M * 0.5f + drift.mV[0],
+                                       (F32)cy * CELL_M + CELL_M * 0.5f + drift.mV[1],
+                                       deck.mBaseZ);
+
+                    const F32 half = CELL_M * 0.42f;
+                    gGL.color4f(kept ? 0.30f : 0.95f, kept ? 0.90f : 0.25f, 0.35f,
+                                kept ? 0.55f : 0.30f);
+                    line(at - cam_right * half, at + cam_right * half);
+                    line(LLVector3(at.mV[VX], at.mV[VY] - half, at.mV[VZ]),
+                         LLVector3(at.mV[VX], at.mV[VY] + half, at.mV[VZ]));
+
+                    if (kept && tower > 0.01f)
+                    {
+                        const F32 t = llclamp(tower, 0.f, 1.f);
+                        gGL.color4f(0.40f + 0.60f * t, 0.55f + 0.45f * t, 1.00f, 0.20f + 0.45f * t);
+                        line(at, at + LLVector3(0.f, 0.f, t * deck.mThicknessM));
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        // <SS:Nexii> The profile ramp, drawn as the thing it actually produces. A chart of the curve tells you what the numbers are and nothing about what they do to a sky, so this stands the curve up IN THE WORLD instead: for every cell near the camera that the gate kept, the column that cell would grow is outlined at its true position and altitude, its half-width at each height being exactly the width the builder gives a puff there - waist, flare, the profile ramp's own anvil term and the deck-wide one, all replayed off the deck rather than approximated. Where a column flares near its lid, that IS the ramp's upper end; where a stack of them stays a cylinder, the ramp is doing nothing up there. The outlines hang beside the cloud they shaped, so the two can be read against each other.
+        const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+
+        // Deliberately a small neighbourhood. A column outline is a legible thing and a
+        // thousand of them are not: this is the near field, where the shapes can be told
+        // apart, and the tower view above is where whole-field geography belongs.
+        const S32 span = 5;
+        const S32 steps = 14;
+
+        for (S32 d = 0; d < 2; ++d)
+        {
+            const Deck& deck = d ? mUnder : mPrimary;
+            if (deck.mPuffs.empty()) continue;
+
+            const F32 base_radius = CELL_M * PUFF_CELL_FRACTION * 0.5f;
+            const F32 size_gain = 1.f + PUFF_THICKNESS_GAIN * (deck.mThicknessM / 500.f);
+
+            // The builder's own gains, off the weather the deck was built under.
+            const F32 storm = ss_smoothstep(0.55f, 0.85f, deck.mMoisture)
+                            * ss_smoothstep(0.45f, 0.75f, deck.mConvection);
+            const F32 conv_gain = ss_smoothstep(0.12f, 0.55f, deck.mConvection) * (1.f - storm);
+            const F32 anvil_gate = ss_smoothstep(0.40f, 0.60f, deck.mConvection);
+            const F32 early_anvil = ss_smoothstep(0.40f, 0.70f, deck.mConvection);
+
+            const S32 cx0 = llfloor((cam.mV[VX] - drift.mV[0]) / CELL_M);
+            const S32 cy0 = llfloor((cam.mV[VY] - drift.mV[1]) / CELL_M);
+
+            for (S32 dy = -span; dy <= span; ++dy)
+            {
+                for (S32 dx = -span; dx <= span; ++dx)
+                {
+                    const S32 cx = cx0 + dx;
+                    const S32 cy = cy0 + dy;
+
+                    F32 presence = 1.f;
+                    F32 tower = 0.f;
+                    const F32 gate = cellGate(deck, cx, cy, presence, tower);
+                    if (gate > deck.mCoverage) continue;
+
+                    const F32 coreness = llclamp(
+                        (deck.mCoverage - gate) / llmax(deck.mCoverage, 0.01f), 0.f, 1.f);
+                    const F32 height_shape =
+                        lerp(1.f, SS_POCKET_H + (1.f - SS_POCKET_H) * tower, conv_gain);
+                    const F32 cell_height =
+                        (CLUSTER_EDGE_HEIGHT + (1.f - CLUSTER_EDGE_HEIGHT) * coreness) * height_shape;
+                    const F32 cell_anvil = llmax(deck.mAnvil, early_anvil * tower);
+
+                    const F32 wx = (F32)cx * CELL_M + CELL_M * 0.5f + drift.mV[0];
+                    const F32 wy = (F32)cy * CELL_M + CELL_M * 0.5f + drift.mV[1];
+
+                    // The two sides of the silhouette, walked together so the outline closes
+                    // at both ends and the flare reads as one shape rather than two curves.
+                    LLVector3 prev_l;
+                    LLVector3 prev_r;
+                    for (S32 i = 0; i <= steps; ++i)
+                    {
+                        const F32 up_cell = (F32)i / (F32)steps;
+                        const F32 up = up_cell * cell_height;
+
+                        const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
+                        const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
+
+                        const F32 ramp_v = (deck.mProfileN > 0)
+                            ? profileSample(deck, up, 0)
+                            : ss_smoothstep(0.55f, 0.85f, up);
+                        const F32 puff_anvil = llmax(cell_anvil, ramp_v * anvil_gate);
+
+                        const F32 flat = 1.f + puff_anvil * coreness * (waist + flare - 1.f);
+
+                        const F32 round = llclamp(
+                            (up - PUFF_ROUND_LO) / (PUFF_ROUND_HI - PUFF_ROUND_LO), 0.f, 1.f);
+                        const F32 wide = PUFF_WIDE + (1.f - PUFF_WIDE) * round;
+
+                        const F32 half_w = base_radius * size_gain * flat * wide;
+                        const LLVector3 at(wx, wy, deck.mBaseZ + up * deck.mThicknessM);
+                        const LLVector3 l = at - cam_right * half_w;
+                        const LLVector3 r = at + cam_right * half_w;
+
+                        // Hue is the anvil figure in force at THIS height - blue where the
+                        // column is still a rounded body, orange where the ramp has opened it
+                        // out - so the height the profile takes over at is visible as the
+                        // colour changing partway up the outline.
+                        const F32 a = llclamp(puff_anvil, 0.f, 1.f);
+                        gGL.color4f(0.25f + 0.75f * a, 0.50f + 0.20f * a, 1.00f - 0.70f * a,
+                                    0.30f + 0.45f * coreness);
+
+                        if (i == 0 || i == steps)
+                        {
+                            line(l, r);
+                        }
+                        if (i > 0)
+                        {
+                            line(prev_l, l);
+                            line(prev_r, r);
+                        }
+                        prev_l = l;
+                        prev_r = r;
+                    }
+                }
+            }
+        }
+    }
+
+    gGL.end();
+    gGL.flush();
 }

@@ -66,6 +66,7 @@
 #include "llviewerassetupload.h"
 #include "llviewerinventory.h"
 #include "llviewerregion.h"
+#include "llviewercontrol.h" // <SS:Nexii> SSAtmoDiscPadAuto - the seeded write obeys the same pad gate as the live editor
 #include "apr_base64.h"
 #include "roles_constants.h"
 
@@ -1150,6 +1151,18 @@ namespace
     {
         auto def_sp = std::make_shared<SSAtmoEnvAsset>(std::move(def));
         auto requests_sp = std::make_shared<std::vector<std::pair<S32, LLUUID>>>(std::move(pad_requests));
+
+        // <SS:Nexii> The same SSAtmoDiscPadAuto gate every live-asset derivation obeys: off, the
+        // seeded write skips the texture wait entirely and carries the translated (glow-inclusive)
+        // diameter with 0 padding - a create must not analyse what the editor is set to leave alone.
+        static LLCachedControl<bool> auto_pad(gSavedSettings, "SSAtmoDiscPadAuto", true);
+        if (!auto_pad)
+        {
+            requests_sp->clear();
+            writeDefaultNotecard(*def_sp, parent_id, on_created);
+            return;
+        }
+
         auto attempts_sp = std::make_shared<S32>(0);
         auto done_sp = std::make_shared<bool>(false);
 

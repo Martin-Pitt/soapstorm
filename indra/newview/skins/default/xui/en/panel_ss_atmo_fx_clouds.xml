@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- <SS:Nexii> The Effects & LOD floater's volumetric cloud tab. The three switches at the
+     top existed in the code but nowhere else: they were declared lazily by LLCachedControl
+     inside ssvolcloud, so they never persisted across a restart and did not even appear in
+     Debug Settings until the cloud renderer had drawn a frame. They are real settings now,
+     and this is where they live. The field's own dials - how densely its cells are filled,
+     and how many puffs a deck may draw - are LOD decisions and live on the LOD tab with the
+     rest of them. Per-puff opacity is deliberately NOT here: that is the sky's own authored
+     figure, it belongs to the environment editor, and a viewer-side multiplier on top of it
+     would just be a second place to set the same thing.
+     See doc/atmo_magic_fx_ui.md. -->
+<panel
+ name="fx_clouds_panel"
+ follows="all"
+ layout="topleft"
+ background_visible="false"
+ border="false"
+ top="0"
+ left="0"
+ height="400"
+ width="412">
+    <scroll_container
+     name="clouds_scroll"
+     follows="all"
+     layout="topleft"
+     left="0"
+     top="0"
+     height="400"
+     width="404"
+     opaque="false"
+     reserve_scroll_corner="false">
+    <panel
+     name="clouds_content"
+     follows="left|top"
+     layout="topleft"
+     background_visible="false"
+     border="false"
+     top="0"
+     left="0"
+     min_height="120"
+     min_width="300"
+     height="210"
+     width="384">
+    <text
+     follows="left|top" layout="topleft" left="12" top="8"
+     height="14" width="356" name="volumetric_label" font="SansSerifSmallBold">
+        Volumetric Cloud Field
+    </text>
+    <check_box
+     control_name="SSAtmoVolumetricClouds"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="volumetric_check"
+     label="Draw the volumetric cloud field"
+     tool_tip="Off leaves the sky to the dome alone - no puffs and no under deck, and so nothing for lightning to hide behind or for precipitation to fall out of" />
+    <check_box
+     control_name="SSAtmoCloudProceduralNoise"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="procedural_noise_check"
+     label="Grow a noise map when the sky authors none"
+     tool_tip="Holes, towers and the anvil carving still happen on a plain sky: the map is grown from the weather seed, so every client sharing the environment gets the same geography without anyone uploading a texture. Off leaves an unauthored deck evenly covered" />
+    <check_box
+     control_name="SSAtmoCloudTessellation"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="tessellation_check"
+     label="Tessellate puffs (anvil skirt)"
+     tool_tip="Each puff becomes a 4x4 grid of sub-quads instead of one flat card, so the top rows can shear along the wind, curl down and dissolve - the anvil skirt, which no amount of fragment noise can fake on geometry that is not there. The skirt itself only appears on puffs the deck gave an anvil to, but the finer grid also samples the sky lighting and aerial perspective per sub-quad rather than per corner. Costs sixteen times the vertices" />
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="356" name="cloud_debug_label" font="SansSerifSmallBold">
+        Debug Overlay
+    </text>
+    <check_box
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="cloud_overlay_check"
+     label="Draw the cloud field"
+     tool_tip="The field's view, picked below. Same overlay as Develop &gt; Render Metadata &gt; Cloud Field" />
+    <combo_box
+      control_name="SSAtmoCloudDebugView" name="C_cloud_view"
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="20" width="250"
+      tool_tip="Cell gate and towers: the builder's 260m grid replayed across the field, green where cloud was placed and red where the sky was left open, with a stalk as tall as the noise map wants that column to climb. Column profiles: for nearby cells, the column that cell grows outlined at its true position and altitude, its width at each height exactly what the profile ramp and the anvil give a puff there - the curve as a shape, standing beside the cloud it made">
+        <combo_box.item label="Cell gate and towers" value="1" name="cloud_view_gate" />
+        <combo_box.item label="Column profiles" value="2" name="cloud_view_profile" />
+    </combo_box>
+    </panel>
+    </scroll_container>
+</panel>

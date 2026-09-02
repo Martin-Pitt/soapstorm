@@ -825,6 +825,7 @@ void SSFloaterAtmoEnv::dropBufferSettings(const LLViewerInventoryItem* item)
     {
         DropItem di;
         di.mItemId = item->getUUID();
+        di.mAssetId = item->getAssetUUID();
         di.mName = item->getName();
         di.mType = item->getSettingsType();
         mDropItems.push_back(di);
@@ -886,7 +887,7 @@ void SSFloaterAtmoEnv::flushDropSession()
             names.reserve(items.size());
             for (const DropItem& di : items)
             {
-                ids.push_back(di.mItemId);
+                ids.push_back(di.mAssetId);
                 names.push_back(di.mName);
             }
 
@@ -938,14 +939,14 @@ void SSFloaterAtmoEnv::flushDropSession()
 
         case EDropKind::SINGLE_DAY:
             setBusy("Translating the day cycle into an environment...");
-            SSAtmoEnvManager::createFromDayCycle(items.front().mItemId, LLUUID::null, on_created);
+            SSAtmoEnvManager::createFromDayCycle(items.front().mAssetId, LLUUID::null, on_created);
             break;
 
         case EDropKind::SINGLE_WATER:
             if (!has_asset)
             {
                 setBusy("Creating an environment from the water preset...");
-                SSAtmoEnvManager::createFromWater(items.front().mItemId, LLUUID::null, on_created);
+                SSAtmoEnvManager::createFromWater(items.front().mAssetId, LLUUID::null, on_created);
             }
             else
             {

@@ -39,6 +39,7 @@
 #include <unordered_map>
 
 struct SSAtmoEnvCloudFieldState;
+class LLGLSLShader;
 
 static const S32 SS_MAX_STRIKE_LIGHTS = 4;
 
@@ -53,6 +54,9 @@ public:
     void update(F32 dt);
 
     void render();
+
+    // <SS:Nexii> The field's debug overlay, driven by RENDER_DEBUG_CLOUD_FIELD with the view picked by SSAtmoCloudDebugView: the puffs as geometry, their anvil and form shaping, the cell gate and tower map replayed on the builder's own grid, or the vertical profile ramp as a chart. Everything it draws is squash-corrected, so it lands on the cloud rather than behind it. [interaction: pipeline debug masks]
+    void renderDebug();
 
     void clear();
 
@@ -92,13 +96,18 @@ public:
     LLViewerTexture* noisePreviewTexture(bool under_deck) const;
     LLViewerTexture* profilePreviewTexture(bool under_deck) const;
 
+    // <SS:Nexii> The deck's GROUND SHADOW, bound into the deferred sun pass (pipeline.cpp's soften block): the baked transmittance map plus the projection uniforms (grid frame, world sun direction, casting plane), gated to zero whenever there is no deck, no direct light, a grazing sun, or the SSAtmoCloudGroundShadow dial at 0 - an unbound gate reads 0 in GLSL, so the soften shader is safe even if this is never called. [interaction: deferred sun lighting]
+    void bindGroundShadow(LLGLSLShader& shader);
+
 private:
     struct Puff
     {
         LLVector3 mPosAgent;
         F32 mRadius = 0.f;
         F32 mAlpha = 0.f;
-        LLColor3 mColor;
+
+        // <SS:Nexii> The puff's structural form term - facing toward the light and the exponential shade down through the deck, beam-flattened. This used to be a baked LLColor3: (ambient + sun * form) with the sun from a CPU replica of the beam extinction that crushed to grey at every low sun. The LIGHT half of that product now comes from the dome's own uniforms in the vertex shader (ssVolCloudV.glsl) so the deck takes the sunset the dome band does; only the structure - which the builder walks the deck's geometry to know - still rides the puff.
+        F32 mForm = 1.f;
         F32 mCamDistSq = 0.f;
 
         // <SS:Nexii> This puff's anvil figure - the deck's own anvil raised by the noise map's tower ramp where the column is one of the strong ones, and by the height ramp wherever the puff climbs the deck's upper stretch toward the cirrus band. Rides on the puff so the renderer can shear its top into a skirt without re-deriving anything.
@@ -160,6 +169,12 @@ private:
         F32 mChurn = 0.f;
         F32 mCoverage = 0.f;
 
+        // The weather this deck was built under, kept only so the debug overlay can replay the
+        // builder's own column shaping - the anvil gate and the tower height ramp both read
+        // these - rather than eyeball an approximation of it.
+        F32 mConvection = 0.f;
+        F32 mMoisture = 0.f;
+
         // The deck's cell-hash salt (0 primary, SS_UNDER_DECK_SALT under), kept so the render pass can hand the base veil's shader the same salt the builder gated cells with - the veil re-runs the gate per fragment to open its own gaps exactly where the builder skipped cells.
         U32 mSalt = 0;
 
@@ -169,10 +184,13 @@ private:
         F32 mNoiseTowerLo = 0.42f;
         F32 mNoiseTowerHi = 0.78f;
 
-        // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the puffs so the field reads with its gaps filled instead of as balls over empty sky. Same texture as the puffs, sampled aperiodically in the shader; the colour here is the shade a puff at the deck's floor would wear - the same formulas - so sheet and lowest puffs share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
-        LLColor3 mSheetColor;
+        // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the puffs so the field reads with its gaps filled instead of as balls over empty sky. Same texture as the puffs, sampled aperiodically in the shader; the form here is the shade a puff at the deck's floor would wear - the same formulas as the puff loop, lit by the same vertex-stage sky light - so sheet and lowest puffs share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
+        F32 mSheetForm = 1.f;
         F32 mSheetZ = 0.f;
         F32 mSheetAlpha = 0.f;
+
+        // The deck's storm gloom, kept for the render pass's ss_gloom uniform - per deck, not per puff, so it never belonged in the vertex colour.
+        F32 mGloom = 1.f;
 
         F32 mMeanDistSq = 0.f;
     };
@@ -211,12 +229,19 @@ private:
 
     F32 mLastBuildMS = 0.f;
 
-    LLColor3 mAmbient;
-
     LLVector3 mLightDir;
-    LLColor3 mSunColor;
 
     F32 mBeam = 1.f;
+
+    // <SS:Nexii> The ground shadow's baked transmittance map: how much direct sun survives a straight fall through the primary deck, per point of the field, baked from the SAME cell gate, presence cut and noise mottle the builder places puffs by - so the shadows on the ground are cast by exactly the clouds in the sky. Air-frame anchored (origin/span in air metres, cell-quantised so the key below is honest); the bind translates by the live drift each frame, which is what makes the shadows crawl with the deck for free. Rebaked only when mShadowKey changes - update() rebuilds the FIELD every frame, and a per-frame texture upload is exactly the cost the key exists to refuse.
+    void bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y);
+
+    LLPointer<LLViewerTexture> mShadowRef;
+    F32 mShadowOriginX = 0.f;
+    F32 mShadowOriginY = 0.f;
+    F32 mShadowSpanM = 0.f;
+    U64 mShadowKey = 0;
+    bool mShadowValid = false;
 
     F32 mEffRadius = 5000.f;
     F32 mSquashKnee = 1600.f;
