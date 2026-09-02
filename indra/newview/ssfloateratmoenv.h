@@ -111,6 +111,9 @@ private:
     void refreshLandingBullets();
     S32 mBusyOps = 0;
     std::string mBusyLabel;
+    // <SS:Nexii> The landing rows' bullet glyphs are hung from code once so the en skin stays
+    // ASCII-only; guards against double-prefixing when the panel is shown again.
+    bool mLandingBulletsPrepared = false;
 
     void refreshVisibility();
 

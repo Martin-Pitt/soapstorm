@@ -51,22 +51,57 @@
             Nothing is loaded yet. Drag an asset from Inventory onto this floater to use it right away, or create from the seeds below:
         </text>
 
-        <!-- What drops become, as tappable copy rather than a hidden conversion rule. -->
-        <scroll_list
+        <!-- What drops become, as tappable copy rather than a hidden conversion rule.
+             Plain wrapped text rows, not a list widget - a scroll_list draws selection chrome and
+             row lines, which reads as a data table, not a bulleted block of prose. -->
+        <text
          follows="left|top"
          layout="topleft"
-         left="8"
+         left="6"
          top_pad="10"
-         height="190"
-         width="724"
-         name="landing_bullets">
-            <scroll_list.columns
-             name="bullet"
-             width="26" />
-            <scroll_list.columns
-             name="body"
-             relative_width="1" />
-        </scroll_list>
+         height="18"
+         width="734"
+         name="landing_bullet_1"
+         font="SansSerifSmall"
+         wrap="true">
+            Atmo Magic environment notecard - loads it as the environment you edit.
+        </text>
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="6"
+         top_pad="6"
+         height="34"
+         width="734"
+         name="landing_bullet_2"
+         font="SansSerifSmall"
+         wrap="true">
+            EEP day cycle - translated into an environment. It will be close, but may not fully reflect the original authored experience.
+        </text>
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="6"
+         top_pad="6"
+         height="66"
+         width="734"
+         name="landing_bullet_3"
+         font="SansSerifSmall"
+         wrap="true">
+            One or more EEP skies - dropped together they become a day cycle. Skies named Midnight, Sunrise, Noon or Sunset pin those phases and trace the path the sun and moon travel; any additional skies are placed between them on the timeline by their own sun and moon elevation.
+        </text>
+        <text
+         follows="left|top"
+         layout="topleft"
+         left="6"
+         top_pad="6"
+         height="34"
+         width="734"
+         name="landing_bullet_4"
+         font="SansSerifSmall"
+         wrap="true">
+            EEP water preset - an empty environment is created with its water block.
+        </text>
 
         <text
          follows="left|top"

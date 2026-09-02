@@ -411,7 +411,9 @@ struct SSAtmoEnvCloudDome
     SSAtmoEnvKeyframed<F32> mScale{0.4199f};
     SSAtmoEnvKeyframed<F32> mVariance{0.f};
 
-    SSAtmoEnvKeyframed<LLVector2> mScrollRate{LLVector2(0.2f, 0.01f)};
+    // <SS:Nexii> No authored Scroll Rate: the dome band (cirrus) moves with the WIND, scaled to
+    // its own altitude by the boundary-layer wind gradient (SSWindFlowMap::windGradientScale),
+    // so there is no dial to keyframe. See the applier. </SS:Nexii>
 
     SSAtmoEnvKeyframed<F32> mDensityX{1.f};
     SSAtmoEnvKeyframed<F32> mDensityY{0.526f};

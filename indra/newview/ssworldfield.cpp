@@ -922,6 +922,103 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
     return true;
 }
 
+// The TRUE-GROUND reference for the wind profile: per column, the topmost real surface from
+// buildSurfaceGrid (the olivine/green-blue ground tiles), except that columns whose topmost
+// surface is a tall structure (a building or skybox reaching far above the surrounding ground)
+// are voided and gap-filled from the surrounding true ground. Water columns hold the sea plane.
+// The captured ground is the real geometry (streets, mesh terrain, prim ground) - not the ancient
+// Linden heightmap resolveHeightRegion reads - so prim-based terrain built on top of the old
+// terrain becomes the ground the wind boundary layer is measured from.
+bool SSWorldField::buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& out)
+{
+    SSRainShadowMap::SurfaceGrid grid;
+    if (!buildSurfaceGrid(region_handle, n, grid)) return false;
+
+    n = grid.mN;
+    const size_t cells = (size_t)n * n;
+    out.assign(cells, 0.f);
+
+    // Columns that are real ground: not a tall structure. Water is ground (the sea plane). A
+    // column whose topmost captured surface stands well above the local surrounding ground is a
+    // tall structure - voided, to be filled from its neighbours below. A generous threshold keeps
+    // genuine raised mesh/prim ground (a street deck a couple of metres up) as ground while
+    // catching buildings and skyboxes.
+    static const F32 SS_TALL_STRUCTURE_M = 12.f;
+    std::vector<U8> valid(cells, 0);
+
+    for (S32 gy = 0; gy < n; ++gy)
+    {
+        for (S32 gx = 0; gx < n; ++gx)
+        {
+            const size_t i = (size_t)gy * n + gx;
+            const F32 z = grid.mZ[i];
+            const U8 f = grid.mFlags[i];
+            if (f == 0) continue;                 // unmapped - leave for gap fill
+            if (f & SSRainShadowMap::SURF_WATER)  // the sea plane is ground
+            {
+                out[i] = z;
+                valid[i] = 1;
+                continue;
+            }
+            if (grid.above(i) <= SS_TALL_STRUCTURE_M)  // at or near the local ground
+            {
+                out[i] = z;
+                valid[i] = 1;
+            }
+            // else: tall structure - voided, filled below
+        }
+    }
+
+    // Gap-fill the voided (tall-structure) columns from the surrounding true ground, in rings
+    // outward, so a building column reads the street/mesh ground of its neighbours. Each pass
+    // fills every still-void column that has a valid neighbour, taking that neighbour's ground.
+    bool progressed = true;
+    while (progressed)
+    {
+        progressed = false;
+        for (S32 gy = 0; gy < n; ++gy)
+        {
+            for (S32 gx = 0; gx < n; ++gx)
+            {
+                const size_t i = (size_t)gy * n + gx;
+                if (valid[i]) continue;
+
+                F32 sum = 0.f;
+                S32 cnt = 0;
+                for (S32 dy = -1; dy <= 1; ++dy)
+                {
+                    for (S32 dx = -1; dx <= 1; ++dx)
+                    {
+                        if (dx == 0 && dy == 0) continue;
+                        const S32 nx = gx + dx, ny = gy + dy;
+                        if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+                        const size_t ni = (size_t)ny * n + nx;
+                        if (valid[ni])
+                        {
+                            sum += out[ni];
+                            ++cnt;
+                        }
+                    }
+                }
+                if (cnt > 0)
+                {
+                    out[i] = sum / (F32)cnt;
+                    valid[i] = 1;
+                    progressed = true;
+                }
+            }
+        }
+    }
+
+    // Any column with no valid neighbour anywhere (fully enclosed, or a field of unmapped) keeps
+    // its buildSurfaceGrid value - the heightmap/water fallback it already carries.
+    for (size_t i = 0; i < cells; ++i)
+    {
+        if (!valid[i]) out[i] = grid.mZ[i];
+    }
+    return true;
+}
+
 void SSWorldField::validTiles(std::vector<std::pair<U64, U32> >& out) const
 {
     out.clear();
@@ -1424,8 +1521,8 @@ static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
 void SSWorldField::renderDebug()
 {
     static LLCachedControl<U32> view(gSavedSettings, "SSWorldFieldDebugView", 1);
-    const S32 which = llclamp((S32)view, 0, 3);
-    if (which == 0 || mTiles.empty()) return;
+    const S32 which = llclamp((S32)view, 1, 4);
+    if (mTiles.empty()) return;
 
     static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
     const F32 full = llclamp((F32)range_setting, 16.f, 4096.f);
@@ -1550,6 +1647,39 @@ void SSWorldField::renderDebug()
                 }
             }
         }
+        else if (which == 4)
+        {
+            // TRUE GROUND: the wind profile's reference ground per column - the topmost real
+            // surface (olivine/green-blue ground tiles), with tall-structure columns voided and
+            // filled from their neighbours and water held at the sea plane. Hue rises with the
+            // ground's height, so a raised mesh/prim street deck reads distinct from the plain.
+            std::vector<F32> ground;
+            if (!buildTrueGround(tile.mRegionHandle, tile.mRes, ground)) continue;
+
+            F32 g_lo = ground[0], g_hi = ground[0];
+            for (F32 g : ground)
+            {
+                g_lo = llmin(g_lo, g);
+                g_hi = llmax(g_hi, g);
+            }
+            const F32 g_span = llmax(g_hi - g_lo, 1.f);
+
+            for (S32 y = 0; y < tile.mRes; ++y)
+            {
+                const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
+                for (S32 x = 0; x < tile.mRes; ++x)
+                {
+                    const F32 wx = origin.mV[VX] + ((F32)x + 0.5f) * cell;
+                    const S32 step = strideFor(wx, wy);
+                    if ((x % step) || (y % step)) continue;
+
+                    const size_t i = (size_t)y * tile.mRes + x;
+                    const F32 z = ground[i];
+                    mark(LLVector3(wx, wy, z),
+                         ss_wf_band_hue((z - g_lo) / g_span, 0.9f), cell * 0.5f);
+                }
+            }
+        }
         else if (which == 3)
         {
             // Drainage topology at the tile's own resolution: standing water
@@ -1602,10 +1732,6 @@ void SSWorldField::renderDebug()
                     }
                 }
             }
-        }
-        else
-        {
-            // No view selected: the box alone, so the capture presence reads.
         }
     }
 

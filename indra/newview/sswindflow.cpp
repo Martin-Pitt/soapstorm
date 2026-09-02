@@ -69,6 +69,53 @@ static const F32 HIDDEN_CLEARANCE     = 1.5f;
 
 static const F32 PROBE_MAX_MISS       = 0.98f;
 
+// <SS:Nexii> The boundary-layer wind gradient (doc: wind gradient). The authored wind is a single
+// value at a fixed height - 10m above open level ground - and the power law
+//   v(z) = v_ref * (z / 10m)^alpha
+// extrapolates it upward through the boundary layer. The single free parameter is the shear
+// exponent alpha, which the power law simplifies terrain roughness into; it is DERIVED from the
+// region heightmap (how tall and how open the surface is) rather than authored. Above the
+// boundary-layer top the air is the free atmosphere: the wind no longer changes with height, so
+// the gradient stops growing there and the cirrus layer rides that plateau. The user's own sanity
+// check - a gentle breeze of 9m/s at 10m rising to 10.5m/s at 30m - is exactly alpha ~ 0.14 (open
+// level ground).
+static const F32 SS_WIND_GRADIENT_CEIL_M = 1500.f;   // boundary-layer top; wind plateaus above
+static const F32 SS_WIND_REF_M           = 10.f;     // the height the wind is authored at (AGL)
+static const F32 SS_WIND_ALPHA_LO        = 0.10f;    // open flat ground
+static const F32 SS_WIND_ALPHA_HI        = 0.45f;    // mountainous / dense city
+static const F32 SS_WIND_ALPHA_FALLBACK  = 0.16f;    // used before a flowmap tile is solved
+static const F32 SS_WIND_ROUGH_SCALE     = 0.03f;    // roughness length as a share of the height spread
+
+// The power-law shear exponent from the region's surface heights. Roughness length z0 scales with
+// the vertical spread of the surface (its standard deviation above the region's lowest point -
+// how TALL the terrain/build is); the exponent is the log-law relation alpha = 1 / ln(z_ref / z0)
+// at the 10m reference, so open flat ground comes out ~0.14, a treed or suburban field ~0.25 and a
+// mountainous or built-up region ~0.4. The OPEN-ness is folded in the same number: the more the
+// surface stays near its floor (a plain), the smaller the spread and the lower the exponent.
+static F32 deriveWindAlpha(const std::vector<F32>& top, F32 lo)
+{
+    F64 sum = 0.0, sum2 = 0.0;
+    S32 n = 0;
+    for (F32 h : top)
+    {
+        if (h <= NO_SURFACE * 0.5f) continue;
+        const F32 dh = h - lo;
+        sum += dh;
+        sum2 += (F64)dh * (F64)dh;
+        ++n;
+    }
+    if (n < 8) return SS_WIND_ALPHA_FALLBACK;   // too little surface - assume open flat
+
+    const F64 mean = sum / (F64)n;
+    const F64 var  = llmax(0.0, sum2 / (F64)n - mean * mean);
+    const F32 sigma = sqrtf((F32)var);
+
+    const F32 z0 = llmax(0.001f, SS_WIND_ROUGH_SCALE * sigma);
+    const F32 alpha = 1.f / llmax(0.5f, logf(llmax(1.5f, SS_WIND_REF_M / z0)));
+    return llclamp(alpha, SS_WIND_ALPHA_LO, SS_WIND_ALPHA_HI);
+}
+// </SS:Nexii>
+
 // <SS:Nexii> Partial rebuild geometry. A settled geometry edit only changes the
 // flow it can physically change: a little upwind of the edit (the stagnation
 // pocket in front of a new wall) and everything downwind (the wake, the alleys
@@ -291,8 +338,15 @@ static U32 createVolume(S32 res, S32 slices, GLenum format)
 // Allocates (or re-allocates on size change) every GPU object the solve needs.
 bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
 {
+    // The probe texture is sized for the upload this build will make, which is
+    // mProbeTake (never just mProbeRes): a full solve uploads the whole probe
+    // image, a partial one a sub-rect of it, and mProbeTake/mProbeRes are
+    // recomputed per build while the GPU object persists across builds. If the
+    // pending upload outgrows the current allocation the texture is recreated,
+    // otherwise the glTexSubImage3D in solveInit would write past the end of a
+    // GL_TEXTURE_2D_ARRAY layer and fault the driver.
     if (mTexRes == res && mTexSlices == slices && mHeightTex != 0
-        && (S32)mProbeTexRes >= mProbeRes) return true;
+        && (S32)mProbeTexRes >= mProbeRes && (S32)mProbeTexRes >= mProbeTake) return true;
 
     releaseResources();
 
@@ -316,7 +370,7 @@ bool SSWindFlowMap::ensureResources(S32 res, S32 slices)
     glBindTexture(GL_TEXTURE_2D_ARRAY, mProbeTex);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    const S32 probe_res = llmax(mProbeRes, res);
+    const S32 probe_res = llmax(llmax(mProbeRes, res), mProbeTake);
     glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_R32F,
                    probe_res, probe_res, SS_WIND_PROBES);
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
@@ -390,6 +444,21 @@ void SSWindFlowMap::clear()
     mHidden.clear();
     for (S32 i = 0; i < SS_WIND_PROBES; ++i) mProbeDepth[i].clear();
     releaseResources();
+    mTrueGroundClaim = SSWorldField::Interest();
+    mTrueGroundRegion = 0;
+}
+
+// Claims the worldfield's real-geometry tile for the flowmap's region, so buildTrueGround has a
+// valid capture to read. Re-claims when the camera region changes; a stale claim is dropped so
+// the old region stops paying for its worldfield build.
+void SSWindFlowMap::refreshTrueGroundClaim(U64 region_handle)
+{
+    if (region_handle == mTrueGroundRegion && mTrueGroundClaim) return;
+    mTrueGroundClaim = SSWorldField::Interest();
+    mTrueGroundRegion = 0;
+    if (region_handle == 0) return;
+    mTrueGroundClaim = SSWorldField::getInstance()->claim(region_handle, SSWorldField::EChannel::SURFACE_TOP);
+    mTrueGroundRegion = region_handle;
 }
 
 // Marks everything stale - full re-solve.
@@ -462,6 +531,61 @@ const SSWindFlowMap::Tile* SSWindFlowMap::cameraTile() const
 bool SSWindFlowMap::isValid() const
 {
     return cameraTile() != nullptr;
+}
+
+// The current region's roughness-derived shear exponent; falls back to the tuning setting until a
+// flowmap tile is solved (the build is async and takes a beat after the camera enters a region).
+F32 SSWindFlowMap::windAlpha() const
+{
+    const Tile* tile = cameraTile();
+    if (tile && tile->mValid) return tile->mAlpha;
+    static LLCachedControl<F32> gradient(gSavedSettings, "SSAtmoWindFlowGradient", 0.16f);
+    return llclamp((F32)gradient, 0.f, 0.6f);
+}
+
+// The power-law wind factor at z metres above the surface, relative to the authored 10m wind:
+// (z/10)^alpha, held constant above the boundary-layer top (~1.5km) where the free atmosphere no
+// longer changes with height. Used to scale the cirrus band's drift to its own altitude.
+F32 SSWindFlowMap::windGradientScale(F32 z_agl) const
+{
+    const F32 alpha = windAlpha();
+    if (alpha <= 0.f) return 1.f;
+    const F32 h = llclamp(z_agl, 0.5f, SS_WIND_GRADIENT_CEIL_M);
+    return llclamp(powf(h / SS_WIND_REF_M, alpha), 0.35f, 3.f);
+}
+
+// The reference ground the wind profile measures height from: the true-ground terrain (water-
+// floored) at the camera's own column when the tile has one, else the tile's representative
+// ground, else the region water plane / terrain minimum.
+F32 SSWindFlowMap::groundRefZ() const
+{
+    const Tile* tile = cameraTile();
+    if (tile && tile->mValid)
+    {
+        if (!tile->mGroundZ.empty() && tile->mRes > 0)
+        {
+            const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+            LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile->mRegionHandle);
+            if (regionp)
+            {
+                const LLVector3 origin = regionp->getOriginAgent() + tile->mOriginRegion;
+                const F32 cell = tile->mExtent / (F32)tile->mRes;
+                const S32 gx = llclamp((S32)((cam.mV[VX] - origin.mV[VX]) / cell), 0, tile->mRes - 1);
+                const S32 gy = llclamp((S32)((cam.mV[VY] - origin.mV[VY]) / cell), 0, tile->mRes - 1);
+                return tile->mGroundZ[(size_t)gy * tile->mRes + gx];
+            }
+        }
+        return tile->mGroundRef;
+    }
+
+    LLViewerRegion* regionp = gAgent.getRegion();
+    if (regionp)
+    {
+        const F32 water = regionp->getWaterHeight();
+        const F32 terrain = regionp->getLand().getMinZ();
+        return llmin(water, terrain);
+    }
+    return 0.f;
 }
 
 // Whether the flowmap is enabled and allowed to drive the wind.
@@ -756,6 +880,52 @@ bool SSWindFlowMap::captureHeights(Tile& tile)
     for (F32& h : mTop)
     {
         if (h > NO_SURFACE * 0.5f) h = llmin(h, tile.mBandTop);
+    }
+
+    // <SS:Nexii> The TRUE-GROUND reference, built only on a full build (partial rebuilds keep the
+    // old layout, exactly as the slices do). Read from the WORLD FIELD's real-geometry capture
+    // (buildTrueGround) - the topmost ground surfaces of the texel cloud, with tall-structure
+    // columns voided and filled from their neighbours and water held at the sea plane - so streets,
+    // mesh terrain and prim ground built on top of the ancient Linden heightmap become the ground
+    // the boundary layer is measured from. Resampled to the flowmap's own grid (which may carry a
+    // margin, so cells outside the region clamp). Falls back to the region terrain heightmap while
+    // the worldfield's tile is not yet valid (it builds async, a beat behind this map). </SS:Nexii>
+    if (!mPartial)
+    {
+        const F32 cell = tile.mExtent / (F32)tile.mRes;
+        const LLVector3 grid_origin = regionp->getOriginAgent() + tile.mOriginRegion;
+        const F32 water = regionp->getWaterHeight();
+
+        std::vector<F32> wf_ground;
+        const bool wf_ok = SSWorldField::getInstance()
+            && SSWorldField::getInstance()->buildTrueGround(regionp->getHandle(), tile.mRes, wf_ground);
+
+        const F32 wf_cell = wf_ok ? (regionp->getWidth() / (F32)tile.mRes) : 0.f;
+        const LLVector3 wf_origin = regionp->getOriginAgent();
+
+        mBuild.mGroundZ.assign((size_t)tile.mRes * tile.mRes, 0.f);
+        for (S32 gy = 0; gy < tile.mRes; ++gy)
+        {
+            for (S32 gx = 0; gx < tile.mRes; ++gx)
+            {
+                const F32 wx = grid_origin.mV[VX] + ((F32)gx + 0.5f) * cell;
+                const F32 wy = grid_origin.mV[VY] + ((F32)gy + 0.5f) * cell;
+
+                F32 ground;
+                if (wf_ok)
+                {
+                    const S32 wf_x = llclamp((S32)((wx - wf_origin.mV[VX]) / wf_cell), 0, tile.mRes - 1);
+                    const S32 wf_y = llclamp((S32)((wy - wf_origin.mV[VY]) / wf_cell), 0, tile.mRes - 1);
+                    ground = wf_ground[(size_t)wf_y * tile.mRes + wf_x];
+                }
+                else
+                {
+                    const F32 terrain = regionp->getLand().resolveHeightRegion(wx, wy);
+                    ground = llmax(terrain, water);
+                }
+                mBuild.mGroundZ[(size_t)gy * tile.mRes + gx] = ground;
+            }
+        }
     }
 
     beginProbes(tile);
@@ -1232,10 +1402,27 @@ void SSWindFlowMap::placeSlices(Tile& tile)
         tile.mSliceZ[i] = final_bounds[llmin((size_t)i, final_bounds.size() - 1)];
     }
 
-    tile.mGroundRef = lo;
+    // <SS:Nexii> The wind profile's reference ground. Prefer the TRUE-GROUND map (terrain,
+    // water-floored) sampled at the region's median - so the boundary layer is measured against
+    // the actual ground the wind blows over, not the lowest captured surface which a deep gully
+    // or a hollow drags down. Falls back to the lowest surface when the map is absent.
+    if (!tile.mGroundZ.empty())
+    {
+        std::vector<F32> g = tile.mGroundZ;
+        std::nth_element(g.begin(), g.begin() + g.size() / 2, g.end());
+        tile.mGroundRef = g[g.size() / 2];
+    }
+    else
+    {
+        tile.mGroundRef = lo;
+    }
 
-    static LLCachedControl<F32> gradient(gSavedSettings, "SSAtmoWindFlowGradient", 0.25f);
-    const F32 alpha = llclamp((F32)gradient, 0.f, 0.6f);
+    // <SS:Nexii> The shear exponent derived from the region's own surface, not a constant: a
+    // rough, tall region drags the low air and steepens the gradient, an open flat one lets the
+    // wind ride. Shared with the cloud-drift path (windAlpha) so the flow solver and the cirrus
+    // band scale the same wind the same way. </SS:Nexii>
+    tile.mAlpha = deriveWindAlpha(mTop, lo);
+    const F32 alpha = tile.mAlpha;
 
     for (S32 k = 0; k < tile.mSlices; ++k)
     {
@@ -1516,10 +1703,13 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     }
 
     glBindTexture(GL_TEXTURE_2D_ARRAY, mProbeTex);
+    // The texture is sized for mProbeTake in ensureResources, but clamp anyway
+    // so a stale mProbeTake can never write past the end of a layer.
+    const S32 take = llmin(mProbeTake, mProbeTexRes);
     for (S32 i = 0; i < SS_WIND_PROBES; ++i)
     {
-        if ((S32)mProbeDepth[i].size() < mProbeTake * mProbeTake) continue;
-        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, mProbeTake, mProbeTake, 1,
+        if ((S32)mProbeDepth[i].size() < take * take) continue;
+        glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, take, take, 1,
                         GL_RED, GL_FLOAT, mProbeDepth[i].data());
     }
     glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
@@ -2707,6 +2897,7 @@ void SSWindFlowMap::update()
     };
 
     LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
+    refreshTrueGroundClaim(cam_region ? cam_region->getHandle() : 0);
     Tile* best = nullptr;
 
     if (cam_region)

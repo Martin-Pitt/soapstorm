@@ -36,6 +36,7 @@
 #include "llglslshader.h"
 #include "llimage.h"
 #include "llrender.h"
+#include "v3colorutil.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewershadermgr.h"
@@ -335,14 +336,42 @@ void SSVolCloud::update(F32 dt)
     const F32 twilight = llclamp((sun_alt + 0.1f) / 0.25f, 0.f, 1.f);
     const F32 daylight = cubic_step(twilight);
 
+    const LLVector3 light_dir = LLEnvironment::instance().getLightDirection();
+
     LLColor3 sunlit(1.f, 1.f, 1.f);
     LLColor3 ambient(0.4f, 0.4f, 0.5f);
     if (sky)
     {
-        const LLColor3 sun_col(sky->getSunlightColor());
+        // <SS:Nexii> Lit from the SAME light the dome band paints its clouds with (cloudsV.glsl),
+        // not the raw authored preset values - which stay near-white whatever the sun is up to,
+        // so the deck sat flat grey-white while the dome beside it tinted and glowed. The sun
+        // colour is run through EEP's atmosphere extinction along the sun ray (off_axis, the term
+        // that reddens a low sun and dims it toward the horizon), and it keeps that reddened HUE
+        // through the whole visible sunset - the extinction itself is what dims it as it sets, so
+        // the deck stays tinted like the band instead of flattening to grey the moment twilight
+        // begins. It hands off to the moon only once the sun is actually down, where the same
+        // extinction has already taken the sun colour to nothing. The ambient is lifted toward
+        // daylight by overcast (cloudsV's tmpAmbient) and dimmed at night.
+        const F32 sun_elev = llmax(sun_alt, 0.0001f);
+        const F32 off_axis = 1.f / (sun_elev * 2.f);
+        const LLColor3 light_atten = (LLColor3(sky->getBlueDensity())
+                                    + LLColor3(sky->getHazeDensity() * 0.25f))
+                                    * (sky->getDensityMultiplier() * sky->getMaxY());
+        LLColor3 sun_col(sky->getSunlightColor());
+        componentMultBy(sun_col, componentExp(light_atten * -off_axis));
+
+        // How far the sun is still "up", easing out across the horizon as it sets. Steeper than
+        // the twilight band used before: the reddened sun must carry the deck through dusk, and
+        // hand over to the moon only below the horizon where sun_col is already extinguished.
+        const F32 sun_up = ss_smoothstep(-0.10f, 0.05f, sun_alt);
+
         const LLColor3 moon_col = LLColor3(sky->getMoonlightColor()) * 0.16f;
-        sunlit = sun_col * daylight + moon_col * (1.f - daylight);
-        ambient = LLColor3(sky->getAmbientColor()) * (0.05f + 0.95f * daylight);
+        sunlit = sun_col + moon_col * (1.f - sun_up);
+
+        const LLColor3 amb_col(sky->getAmbientColor());
+        const LLColor3 amb_lift = amb_col + (LLColor3(1.f, 1.f, 1.f) - amb_col)
+                                          * (sky->getCloudShadow() * 0.5f);
+        ambient = amb_lift * (0.05f + 0.95f * daylight);
 
         {
             const LLColor3 cc(sky->getCloudColor());
@@ -353,9 +382,7 @@ void SSVolCloud::update(F32 dt)
                 ambient.mV[c] *= tint;
             }
         }
-
     }
-    const LLVector3 light_dir = LLEnvironment::instance().getLightDirection();
 
     {
         const F32 sun_lum = (sunlit.mV[0] + sunlit.mV[1] + sunlit.mV[2]) / 3.f;

@@ -1024,8 +1024,6 @@ void SSAtmoEnvCloudDome::fromSettingsSky(const LLSettingsSky& sky)
     mScale    = SSAtmoEnvKeyframed<F32>(sky.getCloudScale());
     mVariance = SSAtmoEnvKeyframed<F32>(sky.getCloudVariance());
 
-    mScrollRate = SSAtmoEnvKeyframed<LLVector2>(sky.getCloudScrollRate());
-
     const LLColor3 density = sky.getCloudPosDensity1();
     mDensityX = SSAtmoEnvKeyframed<F32>(density.mV[0]);
     mDensityY = SSAtmoEnvKeyframed<F32>(density.mV[1]);
@@ -1052,8 +1050,6 @@ void SSAtmoEnvCloudDome::addKeyframesFromSky(const LLSettingsSky& sky, F64 phase
     stampKeyframe(mScale,    phase, sky.getCloudScale());
     stampKeyframe(mVariance, phase, sky.getCloudVariance());
 
-    stampKeyframe(mScrollRate, phase, sky.getCloudScrollRate());
-
     const LLColor3 density = sky.getCloudPosDensity1();
     stampKeyframe(mDensityX, phase, density.mV[0]);
     stampKeyframe(mDensityY, phase, density.mV[1]);
@@ -1077,8 +1073,6 @@ void SSAtmoEnvCloudDome::collapseConstantKeyframes()
     mCoverage.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mScale.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mVariance.collapseIfConstant(SEED_COLLAPSE_EPSILON);
-
-    mScrollRate.collapseIfConstant(SEED_COLLAPSE_EPSILON);
 
     mDensityX.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mDensityY.collapseIfConstant(SEED_COLLAPSE_EPSILON);
@@ -1114,8 +1108,6 @@ LLSD SSAtmoEnvCloudDome::asLLSD() const
     sd["scale"]    = mScale.asLLSD();
     sd["variance"] = mVariance.asLLSD();
 
-    sd["scroll_rate"] = mScrollRate.asLLSD();
-
     sd["density_x"] = mDensityX.asLLSD();
     sd["density_y"] = mDensityY.asLLSD();
     sd["density_d"] = mDensityD.asLLSD();
@@ -1145,8 +1137,8 @@ bool SSAtmoEnvCloudDome::fromLLSD(const LLSD& sd)
     if (sd.has("scale"))    mScale.fromLLSD(sd["scale"], def.mScale.valueAt(0.0));
     if (sd.has("variance")) mVariance.fromLLSD(sd["variance"], def.mVariance.valueAt(0.0));
 
-    if (sd.has("scroll_rate")) mScrollRate.fromLLSD(sd["scroll_rate"], def.mScrollRate.valueAt(0.0));
-
+    // Note: documents written before Scroll Rate was removed carry a "scroll_rate" key; it is
+    // intentionally ignored here (the band now moves with the wind).
     if (sd.has("density_x")) mDensityX.fromLLSD(sd["density_x"], def.mDensityX.valueAt(0.0));
     if (sd.has("density_y")) mDensityY.fromLLSD(sd["density_y"], def.mDensityY.valueAt(0.0));
     if (sd.has("density_d")) mDensityD.fromLLSD(sd["density_d"], def.mDensityD.valueAt(0.0));

@@ -139,6 +139,7 @@ static LLStaticHashedString sOpticCorona("ss_optic_corona");
 static LLStaticHashedString sOpticHalo22("ss_optic_halo22");
 static LLStaticHashedString sOpticHalo46("ss_optic_halo46");
 static LLStaticHashedString sOpticAlign("ss_optic_align");
+static LLStaticHashedString sOpticSunCol("ss_optic_sun_col");
 
 // <SS:Nexii> The physical rainbow's gate (SSAtmoRainbow, ss_rainbow in skyF.glsl).
 static LLStaticHashedString sRainbowGate("ss_rainbow_gate");
@@ -446,17 +447,20 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         // SAME horizon-band share the glow ramps on (ss_sun_rise,
         // SSAtmoEnvApplier::sunRiseFraction) and aim at the sun's true direction, so a low sun's
         // halos burn in from the first sliver above the horizon and fade out through the twilight
-        // after it sets, never popping the moment the centre crosses. Moonlight halos are fainter
-        // and switch on the moon's whole disc. The gate is active-env AND a light being up (in
-        // whatever share) AND at least one drive speaking: leave it all absent and the stock
-        // halo_map strip renders as always.
+        // after it sets, never popping the moment the centre crosses. SUN ONLY for now - the
+        // optics are the sun's own, and moonlight optics are not wired up yet, so once the band is
+        // spent there are none. The gate is active-env AND the sun's rise band live AND at least
+        // one drive speaking: leave it all absent and the stock halo_map strip renders as always.
         const SSAtmoEnvSkyModulation& ssm = atmo_applier.lastModulation();
 
         float optic_gate = 0.f;
         LLVector3 optic_dir(0.f, 1.f, 0.f);
+        // <SS:Nexii> Hoisted out of the active-env block below: the same horizon-band share gates
+        // the optics, and it was out of scope there.
+        float sun_rise = 0.f;
         if (atmo_applier.isActive())
         {
-            const F32 sun_rise = atmo_applier.sunRiseFraction();
+            sun_rise = atmo_applier.sunRiseFraction();
             if (sun_rise > 0.001f)
             {
                 optic_gate = sun_rise;
@@ -465,12 +469,6 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
                 // is the sun's TRUE direction from the applier, valid through the whole rise band.
                 const LLVector3& sun_dir = atmo_applier.sunSlotDirection();
                 optic_dir.set(sun_dir.mV[1], sun_dir.mV[2], sun_dir.mV[0]);
-            }
-            else if (psky->getIsMoonUp())
-            {
-                optic_gate = 0.35f;               // moonlight halos exist, but faint
-                const LLVector3& world_dir = psky->getMoonDirection();
-                optic_dir.set(world_dir.mV[1], world_dir.mV[2], world_dir.mV[0]);
             }
         }
         if (optic_gate > 0.001f)
@@ -487,7 +485,17 @@ void LLDrawPoolWLSky::renderSkyHazeDeferred(const LLVector3& camPosLocal, F32 ca
         sky_shader->uniform1f(sOpticHalo22, ssm.mIceHalo);
         sky_shader->uniform1f(sOpticHalo46, ssm.mIceHalo46);
         sky_shader->uniform1f(sOpticAlign, ssm.mCrystalAlign);
-        // </SS:Nexii>
+
+        // <SS:Nexii> The optics' light colour is produced IN the vertex shader now (skyV.glsl:
+        // vary_ss_optic_sun_col) - the dome's own capped-glow sun light along the light's ray, the
+        // light the sunset band actually renders with - so the halos, arcs and sundogs keep their
+        // sunrise/sunset hue down through the horizon band and below it. The old CPU replica of the
+        // uncapped beam (sunSlotLight's 1/max(1e-6, sin(elev)) cosecant) underflowed to zero within
+        // a degree of the horizon and fell back to the raw near-white authored sun colour - the
+        // white snap. This bind is the vertex shader's MOONLIGHT fallback only (no sun band live):
+        // moonlight optics are not wired to their own light yet, so they keep a faint cool-white
+        // tint rather than borrowing the sun's (or dumping the moon into it). </SS:Nexii>
+        sky_shader->uniform3fv(sOpticSunCol, 1, LLColor3(1.f, 1.f, 1.f).mV);
 
         /// Render the skydome
         renderDome(origin, camHeightLocal, sky_shader, 0.333f, horizon_clip);

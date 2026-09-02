@@ -38,6 +38,16 @@ out float vary_LightNormPosDot;
 #ifdef SS_ATMO
 out float vary_ss_below_horizon;
 out vec3 vary_ss_view_dir;
+
+// <SS:Nexii> The dome's FINAL sun light, for the weather optics' tint (skyF.glsl's ss_optics).
+// Computed below as the same capped-glow light the sunset band renders with, evaluated along the
+// sun's own path - a per-frame constant the halo family wears uniformly. The optics' old tint was
+// bound CPU-side from an uncapped beam replication that underflowed to zero within a degree of
+// the horizon and snapped to the raw near-white authored sun colour; this is the light the eye
+// actually sees, so the halos keep their sunrise/sunset colour down through the horizon band and
+// below it. Degenerate only when the base light itself is - an active env with no sun up and no
+// moon colour, where the optics are gated off anyway.
+out vec3 vary_ss_optic_sun_col;
 #endif
 
 #ifdef HAS_HDRI
@@ -99,6 +109,12 @@ uniform vec3 ss_sun_dir;
 // afterglow keeps the just-cleared light path while the band's share fades it out. Zero while no
 // Atmo environment drives the sky.
 uniform float ss_sun_radius;
+
+// <SS:Nexii> The optics' light colour's MOONLIGHT fallback, bound by the sky pool: while no sun
+// band is live the optics are the moonlight family, which deliberately keeps its faint white tint
+// (moonlight optics are not wired to their own light yet). The sun-band case is computed here in
+// the vertex shader (vary_ss_optic_sun_col above); this uniform only stands in below the band.
+uniform vec3 ss_optic_sun_col;
 
 // <SS:Nexii> The stock ray lift. The atmosphere ray below is computed 50 m above the geometry it
 // belongs to (the + vec3(0, 50, 0) in rel_pos), a legacy fudge that once rode along with the stock
@@ -402,6 +418,30 @@ void main()
         float ss_glow_airmass = min(off_axis, SS_SUN_GLOW_DEPTH / max(ss_max_atten, 1e-6));
         ss_glow_light = ss_raw_light * exp(-light_atten * ss_glow_airmass);
     }
+#endif
+
+#ifdef SS_ATMO
+    // <SS:Nexii> The weather optics' final light colour (vary_ss_optic_sun_col above) - the light
+    // the dome ACTUALLY renders with, evaluated along the light's OWN ray, so it is a per-frame
+    // constant the whole halo family wears uniformly. The old tint was bound CPU-side from an
+    // uncapped beam replication whose cosecant (1/max(1e-6, sin(elev))) underflowed to zero within
+    // a degree of the horizon and fell back to the raw near-white authored sun colour - the white
+    // snap. This is the hue the eye actually sees: full warm sun through the rise band, eased
+    // toward the night value as the band fades, never white. The airmass cap is the glow's own
+    // (SS_SUN_GLOW_DEPTH), so the tint deepens TO the sunset colour instead of through it. During
+    // the band the active light for the optics is always the SUN (skyF gates on that band),
+    // whatever lightnorm handed to the moon at centre-set, so the sun path uses the sun's TRUE
+    // elevation, floored at the disc - the glow's own just-cleared path for a sun below the
+    // horizon, which is the whole point: the red rides down past the line while the band fades.
+    // While no band is live the optics are the moonlight family and keep their bound faint-white
+    // tint (ss_optic_sun_col below) bit for bit. Constant across the dome - it proceeds from
+    // uniforms alone - so per-vertex interpolation is a no-op.
+    vary_ss_optic_sun_col = (ss_sun_rise > 0.0)
+        ? (ss_raw_light * exp(-light_atten
+            * min(1.0 / max(1e-6, max(ss_sun_dir.z, 0.0) + max(ss_sun_dir.z, ss_sun_radius)),
+                  SS_SUN_GLOW_DEPTH
+                  / max(max(light_atten.r, max(light_atten.g, light_atten.b)), 1e-6))))
+        : ss_optic_sun_col;
 #endif
 
     // Haze color above cloud

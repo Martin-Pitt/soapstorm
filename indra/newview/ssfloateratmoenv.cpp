@@ -377,7 +377,6 @@ bool SSFloaterAtmoEnv::postBuild()
     mVectorRows = {
         { "water_large_wave", [water]() -> SSAtmoEnvKeyframed<LLVector2>& { return water().mLargeWaveSpeed; } },
         { "water_small_wave", [water]() -> SSAtmoEnvKeyframed<LLVector2>& { return water().mSmallWaveSpeed; } },
-        { "dome_scroll",      [dome]() -> SSAtmoEnvKeyframed<LLVector2>& { return dome().mScrollRate; } },
     };
     for (const KeyRow<LLVector2>& row : mVectorRows)
     {
@@ -1125,39 +1124,28 @@ void SSFloaterAtmoEnv::refreshBusy()
     getChild<LLUICtrl>("create_stock_button")->setEnabled(!busy);
 }
 
-// Populates the landing state's drop-list copy once; the bullets are static so a re-add could
-// only duplicate them.
+// Preps the landing state's bullet rows: the prose lives in the XUI (so the copy stays in one
+// place), and this only hangs the bullet glyph on the front - once, so reopening cannot
+// double-prefix. The en skin is ASCII-only, so the marker rides in from here rather than as a
+// raw UTF-8 byte in the XML.
 void SSFloaterAtmoEnv::refreshLandingBullets()
 {
-    LLScrollListCtrl* list = getChild<LLScrollListCtrl>("landing_bullets");
-    if (list->getItemCount() > 0) return;
+    if (mLandingBulletsPrepared) return;
+    mLandingBulletsPrepared = true;
 
     static const char* const BULLET = "\xE2\x80\xA2"; // U+2022
-
-    struct Bullet
-    {
-        const char* mBody;
+    static const char* const ROWS[] = {
+        "landing_bullet_1", "landing_bullet_2", "landing_bullet_3", "landing_bullet_4"
     };
-    static const Bullet rows[] =
+    for (const char* name : ROWS)
     {
-        { "Atmo Magic environment notecard - loads it as the environment you edit." },
-        { "EEP day cycle - translated into an environment. It will be close, but may not fully reflect the original authored experience." },
-        { "One or more EEP skies - dropped together they become a day cycle. Skies named Midnight, Sunrise, Noon or Sunset pin those phases and trace the path the sun and moon travel; any additional skies are placed between them on the timeline by their own sun and moon elevation." },
-        { "EEP water preset - an empty environment is created with its water block." },
-    };
-
-    for (const Bullet& row : rows)
-    {
-        LLScrollListCell::Params bullet_cell;
-        bullet_cell.column("bullet").value(BULLET);
-
-        LLScrollListCell::Params body_cell;
-        body_cell.column("body").value(row.mBody);
-        body_cell.font(LLFontGL::getFontSansSerifSmall());
-
-        LLScrollListItem::Params item;
-        item.columns.add(bullet_cell).add(body_cell);
-        list->addRow(item, ADD_BOTTOM);
+        LLTextBox* row = findChild<LLTextBox>(name);
+        if (!row) continue;
+        std::string text = row->getText();
+        if (text.compare(0, 3, BULLET) != 0)
+        {
+            row->setText(std::string(BULLET) + "  " + text);
+        }
     }
 }
 

@@ -64,11 +64,17 @@ uniform float ss_optic_halo22;
 uniform float ss_optic_halo46;
 uniform float ss_optic_align;
 
-// <SS:Nexii> The ice-crystal optics wear the sky's own SUNLIGHT colour - the stock engine
-// uniform the dome already shades with (LLShaderMgr::SUNLIGHT_COLOR, bound for the same
-// program), so a red sunrise's halos, arcs and mock suns are red too. No new uniform: the
-// vertex stage of this very program reads it already. </SS:Nexii>
-uniform vec3 sunlight_color;
+// <SS:Nexii> The optics' light colour, from the SUN only (for now): vary_ss_optic_sun_col is the
+// sun's own light as the DOME renders it, computed in the vertex shader (skyV.glsl) as the
+// capped-glow light the sunset band actually burns with, evaluated along the light's ray - so the
+// halos, arcs and sundogs keep their sunrise/sunset hue down through the horizon band and below
+// it, where the old CPU-bound replica of the uncapped beam underflowed and snapped to the raw
+// near-white authored colour. Ice-crystal optics scatter the SUN's light - a sundog is a mock sun
+// - so while the sun is physically up the phenomena wear this tint whatever the scene-light
+// handover says. Moonlight optics are not wired up yet; while no sun band is live the shader keeps
+// the bound faint-white tint. The stock sunlight_color uniform is the raw authored colour,
+// near-white even when everything red, so this explicit varying is the honest one. </SS:Nexii>
+in vec3 vary_ss_optic_sun_col;
 
 // <SS:Nexii> The sun slot disc's half-angle as a direction-z sine (SSAtmoEnvApplier::
 // sunSlotRadius) - the same value skyV holds its airmass with. The corona scales its every
@@ -216,13 +222,36 @@ vec3 ss_optic_color(float rho, float ring, float width)
     return c;
 }
 
+// <SS:Nexii> A spectral gradient across a phenomenon's angular width - the prismatic
+// colouring of the circumzenithal arc and (more vividly) the parhelic circle: red on the
+// INNER edge through orange/yellow to blue-violet on the OUTER, the classic crystal-optics
+// dispersion. off spans the width of the phenomenon (-.. + .. about the ring). </SS:Nexii>
+vec3 ss_prismatic(float off)
+{
+    vec3 red    = vec3(1.0, 0.35, 0.15);
+    vec3 orange = vec3(1.0, 0.62, 0.20);
+    vec3 yellow = vec3(1.0, 0.92, 0.45);
+    vec3 green  = vec3(0.55, 0.92, 0.55);
+    vec3 cyan   = vec3(0.4, 0.75, 1.0);
+    vec3 blue   = vec3(0.35, 0.45, 1.0);
+    float t = clamp(off * 0.5 + 0.5, 0.0, 1.0);   // -1 (inner,red) -> +1 (outer,blue)
+    t = t * t * (3.0 - 2.0 * t);
+    if (t < 0.25) return mix(red, orange, t * 4.0);
+    if (t < 0.42) return mix(orange, yellow, (t - 0.25) * 5.88);
+    if (t < 0.6)  return mix(yellow, green, (t - 0.42) * 5.56);
+    if (t < 0.78) return mix(green, cyan, (t - 0.6) * 5.56);
+    return mix(cyan, blue, (t - 0.78) * 4.55);
+}
+
 // Weather-driven split optics. The view ray and light direction share the sky dome's frame (+Y up,
 // light permuted like lightnorm), so each phenomenon lands at its true angular position: the corona
 // hugs the light, the 22 deg and 46 deg halos are rings at those radii, sundogs sit where the
-// 22 deg small circle crosses the light's altitude plane, the circumzenithal arc arches over the
-// zenith at the light's zenith distance, and the supralateral arc crowns the 46 deg ring while the
-// light rides low. The amplitudes and the elevation gates come from the weather uniforms - a given
-// sky may simply not be asking for a phenomenon.
+// 22 deg small circle crosses the light's altitude plane, the parhelic circle is the THIN
+// horizontal arc at the light's own altitude (the line the dogs ride on), the circumzenithal arc
+// is a small circle around the zenith passing ~47 deg above the light (brightest with the light
+// at 15-25 deg elevation, gone past ~32 deg), and the supralateral arc crowns the 46 deg ring
+// while the light rides low. The amplitudes and the elevation gates come from the weather
+// uniforms - a given sky may simply not be asking for a phenomenon.
 vec3 ss_optics(vec3 view)
 {
     if (ss_optic_corona <= 0.001 && ss_optic_halo22 <= 0.001
@@ -255,7 +284,7 @@ vec3 ss_optics(vec3 view)
     // <SS:Nexii> The 22 deg ring falls away as the light sinks toward the horizon: by ~14 deg of
     // light elevation the ring has faded, leaving only the mock-sun sundogs flanking the light -
     // the look of a low winter sun. </SS:Nexii>
-    float ring_elev = smoothstep(14.0, 20.0, elev);
+    float ring_elev = smoothstep(-1.0, 1.0, elev);
 
     vec3 col = vec3(0.0);
 
@@ -289,14 +318,10 @@ vec3 ss_optics(vec3 view)
     if (ss_optic_halo22 > 0.001)
     {
         float w = 1.9;
-        // <SS:Nexii> The veil rides a deliberately stingy cold drive (SSAtmoEnvSkyWeatherModulator's
-        // ice block), so its shader scale stays well below stock's 0.18 - the drive is what keeps
-        // the halo an event, not the multiplier. The ring wears the light's own sunlight colour
-        // with just a trace of the red-inward/blue-outward fringe, fades out as the light sinks
-        // below ~20 deg (ring_elev), and never paints below the horizon. </SS:Nexii>
         col += ss_optic_halo22 * exp(-pow((rho - 22.0) / w, 2.0))
-             * (sunlight_color.rgb * 0.8 + ss_optic_color(rho, 22.0, w) * 0.2)
-             * 0.048 * (1.0 - ss_below) * ring_elev;
+             * (normalize(vary_ss_optic_sun_col) * 0.8 + ss_optic_color(rho, 22.0, w) * 0.2)
+             * 0.048 * (1.0 - ss_below) * ring_elev
+             * smoothstep(21.3, 22.0, rho);
     }
 
     // 46 deg halo family (large plates/columns) - wider and fainter still.
@@ -304,54 +329,111 @@ vec3 ss_optics(vec3 view)
     {
         float w = 2.3;
         col += ss_optic_halo46 * exp(-pow((rho - 46.0) / w, 2.0))
-             * (sunlight_color.rgb * 0.8 + ss_optic_color(rho, 46.0, w) * 0.2)
+             * (normalize(vary_ss_optic_sun_col) * 0.8 + ss_optic_color(rho, 46.0, w) * 0.2)
              * 0.048 * (1.0 - ss_below);
     }
 
     // Aligned-plate phenomena: need the plates to settle, not just plenty of crystals.
     if (ss_optic_align > 0.001)
     {
-        // <SS:Nexii> Sundogs - the mock suns. The old spot was a bare brightening of the ring,
-        // which read as "a slightly stronger halo on the sides". A real sundog is a SECOND SUN:
-        // a bright disc with the sun's own glow character, seated on the 22 deg parhelic circle
-        // at the light's altitude, strongest when the light rides LOW. The dog wears the light's
-        // OWN sunlight colour - it is a sun, not a white spot - and its disc is compact (a small
-        // tweak below the sun's own angular scale, so it reads as a defined mock sun rather than
-        // a soft blur). The soft inner-circle mask slices it on the halo's inner edge, so each
-        // dog reads as a half-sun cut by the ring; and because the top of the light is still
-        // visible when its centre is just below the horizon, the dogs' elevation gate reaches a
-        // little UNDER it - but only in the dome's reachable band: main() gates ss_optics on
-        // the clip, so the under-horizon part only ever counts where the clip is off. </SS:Nexii>
+        // <SS:Nexii> The parhelic circle WITH its sundogs embedded - one construct, not two. The
+        // band is the locus of points at the SAME elevation as the light (ep = e), which as the
+        // light climbs bulges from a near-horizontal line into a small circle (more "circle"-like
+        // at high sun). It fades with distance from the light (rho / 55) - never a full closed
+        // ring. The SUNDOGS are bright COMPACT peaks embedded in the band where the 22 deg halo
+        // circle crosses it: at az = asin( sin(22) / cos(e) ) from the sun - ~22 deg at the
+        // horizon, spreading outward as the sun climbs (26 at e=30, 31 at e=40), and shrinking as
+        // they spread. Each dog is kept SMALL and tight - the line stays thin and clean around
+        // it, so the dog reads as a distinct bright spot ON a fine line, not a comet. The dogs
+        // can never drift off the line, because the line IS where they live. </SS:Nexii>
         {
-            float dog_elev = smoothstep(-1.0, 1.0, elev)
-                           * (1.0 - smoothstep(45.0, 58.0, elev));
-            if (dog_elev > 0.001)
-            {
-                float core = exp(-pow((rho - 22.0) / 0.9, 2.0))
-                           * exp(-pow((psid - 90.0) / 3.2, 2.0));
-                float glow = exp(-pow((rho - 23.0) / 2.8, 2.0))
-                           * exp(-pow((psid - 90.0) / 6.0, 2.0));
-                float inner = smoothstep(18.5, 21.0, rho);
-                float dog = (core + 0.4 * glow) * inner * dog_elev * 0.6;
-                vec3 dog_col = mix(sunlight_color.rgb,
-                                   ss_optic_color(rho, 22.0, 3.0), 0.15);
-                col += ss_optic_align * dog_col * dog;
-            }
+            // Polar coordinates
+            float e  = asin(clamp(light.y, -1.0, 1.0)) * 57.2958;
+            float ep = asin(clamp(view.y,  -1.0, 1.0)) * 57.2958;
+            float dog_elev = smoothstep(-1.0, 3.0, elev)
+                           * (1.0 - smoothstep(45.0, 60.0, elev));
+
+            // Azimuth of the sundogs, which spread out from the 22 halo as sun climbs
+            float az = asin(clamp(sin(22.0 * 0.0174533) / max(cos(elev * 0.0174533), 1e-4), -1.0, 1.0));
+            az *= 57.2958;   // to degrees
+            float spread = clamp(az / 22.0, 1.0, 3.5);
+            
+            float x_l = rho - az; 
+            float x_r = -rho - az;
+            float x = max(x_l, x_r); // Horizontal distance from the sundogs
+            float y = ep - e;        // Vertical distance from parhelic circle line
+            
+            // Scaling brightness based on sun elevation
+            float brightness = smoothstep(61.0, 5.0, elev);
+            
+            // Tail length stretches aggressively out as spread increases
+            float tail_length = 14.0 * pow(spread, 1.7);
+            
+            // Vertical scale profiles (Varies dramatically based on sun elevation)
+            // Low sun = thick vertical pillars; High sun = narrow daggers
+            float core_vertical_width = mix(2.8, 0.9, smoothstep(0.0, 35.0, elev)) * spread;
+            float tail_vertical_width = mix(1.2, 0.4, smoothstep(0.0, 35.0, elev)) * spread;
+
+            // Glow profile
+            float inner_wall = smoothstep(-0.8, 0.4, x);
+            float tail_window = max(1.0 - (x / tail_length), 0.0);
+            
+            // Exponential horizontal sweep that fuels both the core and the tail smoothly
+            float horizontal_glow = pow(tail_window, 2.5) * inner_wall;
+
+            // Parhelic Band
+            float base_line_width = 0.5 * clamp(spread * 0.5, 1.0, 2.0);
+            float band_thickness = base_line_width + (5.0 / spread) * pow(tail_window, 4.0) * inner_wall;
+            
+            float band = exp(-pow(y / band_thickness, 2.0))
+                       * exp(-pow(rho / 55.0, 2.0));
+
+            // Blanket core streak
+            float local_thickness = mix(tail_vertical_width, core_vertical_width, pow(tail_window, 3.0));
+            
+            // Glowing mass of the dogs
+            float dog_intensity = (4.0 / spread) * brightness;
+            float dogs = horizontal_glow * exp(-pow(y / local_thickness, 2.0)) * dog_intensity;
+
+            // Prismatic gradient tweaks
+            vec3 pc_col = normalize(vary_ss_optic_sun_col) * 0.40
+                        + ss_prismatic((x - 0.2) / (7.0 * spread)) * 0.60;
+
+            // Compositing
+            band *= 0.6 * (0.5 + inner_wall * 0.5);
+            dogs *= 1.8;
+            
+            float pc = band + dogs;
+            col += ss_optic_align * pc_col * pc * dog_elev * 0.12;
         }
 
-        float arc_ok = smoothstep(3.0, 9.0, elev) * (1.0 - smoothstep(30.0, 34.0, elev));
-        if (arc_ok > 0.001)              // circumzenithal arc: arched over the zenith from the light's meridian
+    // <SS:Nexii> The circumzenithal arc's REAL geometry and visibility. The arc is a small circle
+        // centered on the ZENITH, passing through a point about 47 deg ABOVE the sun in the
+        // sun's meridian - its zenith-angle radius is 43 deg minus the sun's elevation, so its
+        // summit sits e+47 deg above the horizon. At a low sun (5-15 deg) that circle is wide
+        // and low, faint and spread; as the sun climbs toward ~22 deg it tightens and brightens
+        // toward its best; past ~32 deg the plate-ray geometry fails and it is gone entirely.
+        // The envelope is a triangle peaking at 22 deg, zero at 5 and 32.2. Prismatic: red on
+        // the arc's inner (zenith-side) edge, blue-violet outward. </SS:Nexii>
+    {
+        float cza_env = smoothstep(5.0, 22.0, elev) * (1.0 - smoothstep(22.0, 32.2, elev));
+        if (cza_env > 0.002)
         {
             vec3 h_light = normalize(light - up * dot(light, up) + vec3(1e-5));
             vec3 h_view  = normalize(view  - up * dot(view, up)  + vec3(1e-5));
             float az = degrees(acos(clamp(dot(h_light, h_view), -1.0, 1.0)));
             float zd = degrees(acos(clamp(dot(view, up), -1.0, 1.0)));
-            float cza = exp(-pow((zd - (90.0 - elev)) / 1.6, 2.0))
-                      * exp(-pow(az / 20.0, 2.0));
-            col += ss_optic_align * arc_ok * cza
-                 * (sunlight_color.rgb * 0.8 + ss_optic_color(zd, 90.0 - elev, 1.6) * 0.2)
+            float rcz = 43.0 - elev;                 // the arc's zenith-angle radius (43 - e)
+            float cza = exp(-pow((zd - rcz) / 2.2, 2.0))
+                      * exp(-pow(az / 40.0, 2.0));
+            // <SS:Nexii> The CZA is genuinely PRISMATIC - red toward the arc's inner
+            // (zenith-side) edge, blue-violet away - the strongest colouring of the crystal
+            // halos. The old monotone red-in/blue-out fringe read as a white streak. </SS:Nexii>
+            col += ss_optic_align * cza_env * cza
+                 * ss_prismatic((zd - rcz) / 2.2)
                  * 0.4 * (1.0 - ss_below);
         }
+    }
     }
 
     // Supralateral arc: the 46 deg ring's tangent arc crowning the light, seen while the light is low.
@@ -364,7 +446,7 @@ vec3 ss_optics(vec3 view)
             float lateral = exp(-pow((rho - 46.0) / w, 2.0))
                           * exp(-pow(psid / 34.0, 2.0)) * low;
             col += ss_optic_halo46 * lateral
-             * (sunlight_color.rgb * 0.8 + ss_optic_color(rho, 46.0, w) * 0.2)
+             * (normalize(vary_ss_optic_sun_col) * 0.8 + ss_optic_color(rho, 46.0, w) * 0.2)
              * 0.16 * (1.0 - ss_below);
         }
     }
@@ -376,11 +458,7 @@ vec3 ss_optics(vec3 view)
 void main()
 {
 #ifdef SS_ATMO
-    // <SS:Nexii> Horizon clip's depth write (SSAtmoEnvAtmosphere::mHorizonClip). The uniform is the
-    // on/off gate; the depth itself is the shader const - one step nearer than the clouds (0.99998)
-    // and the discs (0.99999), so both fail LEQUAL behind it below the horizon. Above it - and when
-    // the gate is off - this writes 1.0, bit-identical to the cleared buffer; and the depth mask is
-    // off unless the pool asks for the clip (drawDome), so the off path stores nothing at all.
+    // <SS:Nexii> Horizon clip's depth write (SSAtmoEnvAtmosphere::mHorizonClip)
     gl_FragDepth = (ss_horizon_clip > 0.0 && vary_ss_below_horizon < 0.0) ? LL_SHADER_CONST_HORIZON_DEPTH : 1.0;
 #endif
 
@@ -410,13 +488,7 @@ void main()
         float  rel_pos_lightnorm = vary_LightNormPosDot;
         float optic_d = rel_pos_lightnorm;
 #ifdef SS_ATMO
-        // <SS:Nexii> The horizon clip cuts the lower dome at eye level - and the sun with it, since
-        // under the clip's grace band the disc keeps drawing until it is ENTIRELY below the horizon.
-        // No optical effect may trace an arc below that cut: without this the rainbow and the halo
-        // strip carry on down off the anti-solar point and the weather optics continue under the
-        // horizon, painting the half the clip exists to deny. Each fragment reads its own side of
-        // the cut via vary_ss_below_horizon; with the clip off nothing is removed, so the phenomena
-        // keep their natural continuation across the line as before. </SS:Nexii>
+        // <SS:Nexii> The horizon clip cuts the lower dome at eye level - and the sun with it
         const bool ss_clipped_below = (ss_horizon_clip > 0.0) && (vary_ss_below_horizon < 0.0);
         if (!ss_clipped_below)
         {
@@ -447,7 +519,16 @@ void main()
         color.rgb += halo22(optic_d);
 #endif
         color.rgb *= 2.;
-        color.rgb = clamp(color.rgb, vec3(0), vec3(5));
+        // <SS:Nexii> Cap the sky's LUMINANCE, not its channels: a per-channel clamp saturates
+        // anything past 5 to white, and the halos/sundogs added just above sit on a bright haze
+        // near the sun that easily crosses it - so the light's own red came out white. Scaling
+        // the whole colour down to a 5-luminance cap keeps the peak bright for bloom while the
+        // sun's tint survives. </SS:Nexii>
+        float ss_sky_cmax = max(color.r, max(color.g, color.b));
+        if (ss_sky_cmax > 5.0)
+        {
+            color.rgb *= 5.0 / ss_sky_cmax;
+        }
 
         frag_data[2] = vec4(0.0,0.0,0.0,GBUFFER_FLAG_SKIP_ATMOS);
     }
