@@ -27543,18 +27543,18 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoCloudGroundShadow</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: how strongly the volumetric cloud deck shadows the ground's direct sunlight, 0 (off) to 1 (a storm deck's full shade). The shadows are cast by the deck's own field, slide with the wind drift and lengthen with a low sun, and fade out below roughly ten degrees of sun elevation where real cloud shadow dissolves into the general dusk.</string>
+    <string>Atmo Magic: how strongly the volumetric cloud deck shadows the ground's direct sunlight, 0 (off) to 1 (full). At full strength the shade is carried by the weather itself - a thin sheet barely dims, a kilometre-deep storm column goes near-black - so this dial exists to take the effect away, not to tune it. The shadows are cast by the deck's own field, slide with the wind drift and lengthen with a low sun, and fade out below roughly ten degrees of sun elevation where real cloud shadow dissolves into the general dusk.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
     <string>F32</string>
     <key>Value</key>
-    <real>0.7</real>
+    <real>1.0</real>
   </map>
   <key>SSAtmoCloudDebugView</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: which view the cloud field debug overlay draws (1 cell gate and tower map, 2 column profiles). The overlay itself is the Cloud Field render-metadata mask; this only picks what it shows.</string>
+    <string>Atmo Magic: which view the cloud field debug overlay draws (1 cell gate and tower map, 2 column profiles, 3 ground shadow map projected to where the sun lands it). The overlay itself is the Cloud Field render-metadata mask; this only picks what it shows.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
@@ -27562,10 +27562,21 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <integer>1</integer>
   </map>
+  <key>SSAtmoCloudEdgeBreakup</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how far a tessellated cloud puff's rim vertices may wander, as a fraction of the puff's radius. The fragment carve is a function of world position, so moving the rim moves which piece of the cloud field the card covers and the carved outline follows - the silhouette stops being four straight edges cutting the cloud off where it wanted to continue. The interior barely moves. 0 is off; needs SSAtmoCloudTessellation, since a card with only four corners has no rim to break up.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.25</real>
+  </map>
   <key>SSAtmoCloudTessellation</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: draw each cloud puff as a 4x4 grid of sub-quads the renderer can shear and curl per row, instead of one camera-facing quad. An experiment in how much of the anvil skirt the geometry adds over the fragment carving, which runs either way. Costs geometry.</string>
+    <string>Atmo Magic: subdivide each cloud puff by the size it covers on screen, instead of drawing it as one camera-facing card. A near puff becomes a grid the renderer can shear into an anvil skirt and break up along its rim; a distant one stays the single card it always was. The fragment carving runs either way - this is for the shaping a card cannot carry, since alpha can cut any outline out of a quad but cannot bend one.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>

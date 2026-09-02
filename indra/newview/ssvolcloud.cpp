@@ -78,6 +78,10 @@ namespace
 
     const F32 PUFF_THICKNESS_GAIN = 0.35f;
 
+    // <SS:Nexii> The tessellation grid's pixel budget: one row of sub-quads per this many pixels of a puff's on-screen diameter, and the most rows any one puff may have. 96 puts a near puff at the old fixed 4x4 at roughly a third of the screen and walks it down to a single card by the time it is a couple of hundred pixels across, which is where the sub-quads stop being distinguishable anyway. The cap matters because a puff can fill the view: uncapped, one overhead cell would cost more vertices than the rest of the field together.
+    const F32 SS_TESS_PIXELS = 96.f;
+    const S32 SS_TESS_MAX_SEGS = 6;
+
     const F32 COVERAGE_FLOOR = 0.04f;
 
     // Deterministic cell hash - the whole field derives from position, so every client sees the same clouds.
@@ -726,8 +730,8 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
     }
     U8* data = raw->getData();
 
-    // The optical depth a fully-occupied column costs: deeper decks and denser puff dials cast harder. 2.6 full depths on a thick storm deck leaves ~7% of the beam - a real cumulonimbus shadow - easing toward translucent for thin high fields.
-    const F32 tau_scale = 2.6f * (0.5f + 0.5f * llmin(deck.mThicknessM / 500.f, 1.f))
+    // <SS:Nexii> The optical depth a fully-occupied column costs, and THICKNESS is its primary driver - linear in the deck's depth, which is what an extinction through a slab actually is. A 100m fair-weather sheet barely shades (about half a depth, ~60% of the beam through), a 500m deck reads as honest cloud shade (~8%), and a 1200m storm column goes functionally black (~0.1%) - so the difference between skies is carried by the weather's own thickness rather than by the user's strength dial, which now defaults to full and only exists to take the effect away. The puff-density dial still modulates: a deck drawn wispy casts wispy.
+    const F32 tau_scale = 5.0f * llclamp(deck.mThicknessM / 1000.f, 0.08f, 1.4f)
                         * (0.4f + 0.6f * llclamp(deck.mPuffDensity, 0.f, 1.f));
 
     const F32 texel = span / (F32)N;
@@ -777,6 +781,7 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
         // Clamped, not wrapped: beyond the grid there is no verdict, and the soften shader's edge fade must meet a stable border texel, never the far side of the map.
         mShadowRef->getGLTexture()->setAddressMode(LLTexUnit::TAM_CLAMP);
     }
+    mShadowRaw = raw;
     mShadowOriginX = ox;
     mShadowOriginY = oy;
     mShadowSpanM = span;
@@ -1088,9 +1093,19 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
-    // <SS:Nexii> The puff tessellation toggle. Off (the default), every puff is the single camera-facing quad it has always been. On, each becomes a 4x4 grid of sub-quads the renderer can shear, curl and dissolve per row - the anvil skirt. It exists as a toggle because it is an experiment in shaping: the fragment carving works either way, and the grid is there to see how much of the anvil the GEOMETRY carrying it adds over the fragment work alone.
+    // <SS:Nexii> The puff tessellation toggle. Off, every puff is the single camera-facing card it has always been. On, each is subdivided by the size it covers ON SCREEN - a near puff into a grid the renderer can shear, curl, dissolve and break up along its rim, a distant one back into the same single card, because a grid finer than the pixels it lands on is vertices spent on nothing. This is what a puff needs geometry for at all: the fragment stage can carve any shape it likes out of a card but cannot BEND one, so the anvil skirt and the wandering rim both live here.
     static LLCachedControl<bool> tessellate_setting(gSavedSettings, "SSAtmoCloudTessellation", false);
     const bool tessellate = tessellate_setting;
+
+    // How much a subdivided puff's rim may wander, as a fraction of its radius. Only read
+    // where the grid exists to carry it; see the edge breakup note in the emit lambda.
+    static LLCachedControl<F32> breakup_setting(gSavedSettings, "SSAtmoCloudEdgeBreakup", 0.25f);
+    const F32 edge_breakup = llclamp((F32)breakup_setting, 0.f, 1.f);
+
+    // Pixels per radian down the view, so a puff's diameter over its distance turns into the
+    // pixels it covers. Once per frame, not once per puff.
+    const F32 px_per_rad = (F32)camera->getViewHeightInPixels()
+                         / llmax(camera->getView(), 0.01f);
 
     // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and the shared uniforms above survive across both.
     const bool under_on_top = mUnder.mMeanDistSq < mPrimary.mMeanDistSq;
@@ -1252,7 +1267,18 @@ void SSVolCloud::render()
             const LLVector3 right = base_right * (puff.mRadius * wide);
             const LLVector3 up = base_up * (puff.mRadius * tall);
 
-            // <SS:Nexii> One corner of the puff's quad, parameterised over the billboard: (0,0) is the bottom left, (1,1) the top right, exactly the corners the single quad used. With tessellation on (SSAtmoCloudTessellation) the quad becomes a 4x4 grid of sub-quads, and the top rows shear out along the wind, widen, curl down and dissolve - the anvil skirt. A shear is linear and one quad could carry it; the CURL is not, and the alpha dissolve wants rows to pull apart. That is the whole reason the toggle exists: puffs are a single flat quad each, and no amount of fragment noise can bend what the geometry does not have. Off, the corner maths collapses to exactly the quad that was always drawn.
+            // <SS:Nexii> How finely THIS puff is subdivided, from the size it actually covers on screen. It used to be a flat 4 for every puff at every range, which is the half of tessellation that was never written: a puff two hundred metres off and one four kilometres away got the same sixteen sub-quads, so the toggle cost 16x the vertices everywhere and bought detail only where a person could see it. Measured in pixels rather than metres because that is what "can it be seen" means, and off the TRUE distance: the far-field squash moves every vertex along its own ray, so the projected image - and so the pixel size - is the true one. One sub-quad per SS_TESS_PIXELS of diameter, floored at 1 (the single quad that was always drawn) and capped so a puff filling the view cannot run away with the vertex budget.
+            const S32 segs = tessellate
+                ? llclamp((S32)((2.f * puff.mRadius * wide) * px_per_rad
+                                / llmax(sqrtf(puff.mCamDistSq), 1.f) / SS_TESS_PIXELS),
+                          1, SS_TESS_MAX_SEGS)
+                : 1;
+
+            // <SS:Nexii> The puff's own displacement seed, quantised off its position so it is stable frame to frame and differs between neighbours.
+            const S32 seed_x = (S32)llfloor(puff.mPosAgent.mV[VX]);
+            const S32 seed_y = (S32)llfloor(puff.mPosAgent.mV[VY]);
+
+            // <SS:Nexii> One corner of the puff's quad, parameterised over the billboard: (0,0) is the bottom left, (1,1) the top right, exactly the corners the single quad used. With tessellation on (SSAtmoCloudTessellation) the quad becomes a grid of sub-quads, and the top rows shear out along the wind, widen, curl down and dissolve - the anvil skirt. A shear is linear and one quad could carry it; the CURL is not, and the alpha dissolve wants rows to pull apart: puffs are a single flat card each, and no amount of fragment noise can bend what the geometry does not have. Off, the corner maths collapses to exactly the quad that was always drawn.
             const LLVector3 wind3(wind.mV[VX], wind.mV[VY], 0.f);
             auto emit_corner = [&](F32 u, F32 v)
             {
@@ -1265,6 +1291,20 @@ void SSVolCloud::render()
                 pos.mV[VZ] -= puff.mRadius * 0.22f * skirt
                             * (0.5f + 0.5f * fabsf(u * 2.f - 1.f));
 
+                // <SS:Nexii> The edge breakup, and the reason subdividing is worth anything on an ordinary puff. What a person SEES of a puff is not this quad - the fragment stage carves the cloud out of it with alpha and discards the rest - but the carve is a function of vary_world, the interpolated WORLD position, so moving a vertex moves which piece of the cloud field the quad covers and the carved outline moves with it. A rectangle of vertices therefore reads as a rectangle's worth of cloud, cut off wherever the field wanted to continue past the border; pushing the border vertices around in the billboard plane lets the same carve wander instead of clipping, and the silhouette stops being four straight edges. Ramped by the squared distance from the quad's centre so the interior - where the texture content lives - barely moves and only the rim is disturbed, and keyed on the SHARED grid vertex so neighbouring sub-quads displace identically and the mesh cannot tear. In-plane only: displacing along the view normal would move the puff in depth, past the sort that put it where it is.
+                if (segs > 1 && edge_breakup > 0.f)
+                {
+                    const S32 gx = ll_round(u * (F32)segs);
+                    const S32 gy = ll_round(v * (F32)segs);
+                    const U32 gsalt = (U32)(gx * 73 + gy * 19) + deck.mSalt;
+
+                    const F32 edge = llmax(fabsf(u * 2.f - 1.f), fabsf(v * 2.f - 1.f));
+                    const F32 amp = edge_breakup * edge * edge * puff.mRadius;
+
+                    pos += base_right * ((hashUnit(seed_x, seed_y, gsalt) - 0.5f) * amp)
+                         + base_up * ((hashUnit(seed_x, seed_y, gsalt + 977u) - 0.5f) * amp);
+                }
+
                 const F32 alpha = puff.mAlpha * (1.f - 0.35f * skirt);
 
                 // r the structural form, a the edge fade - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); g and b spare.
@@ -1273,7 +1313,6 @@ void SSVolCloud::render()
                 gGL.vertex3fv(pos.mV);
             };
 
-            const S32 segs = tessellate ? 4 : 1;
             for (S32 iy = 0; iy < segs; ++iy)
             {
                 for (S32 ix = 0; ix < segs; ++ix)
@@ -1775,7 +1814,7 @@ LLViewerTexture* SSVolCloud::profilePreviewTexture(bool under_deck) const
 void SSVolCloud::renderDebug()
 {
     static LLCachedControl<U32> view_setting(gSavedSettings, "SSAtmoCloudDebugView", 1);
-    const S32 which = llclamp((S32)view_setting, 1, 2);
+    const S32 which = llclamp((S32)view_setting, 1, 3);
 
     LLViewerCamera* camera = LLViewerCamera::getInstance();
     if (!camera) return;
@@ -1897,7 +1936,7 @@ void SSVolCloud::renderDebug()
             }
         }
     }
-    else
+    else if (which == 2)
     {
         // <SS:Nexii> The profile ramp, drawn as the thing it actually produces. A chart of the curve tells you what the numbers are and nothing about what they do to a sky, so this stands the curve up IN THE WORLD instead: for every cell near the camera that the gate kept, the column that cell would grow is outlined at its true position and altitude, its half-width at each height being exactly the width the builder gives a puff there - waist, flare, the profile ramp's own anvil term and the deck-wide one, all replayed off the deck rather than approximated. Where a column flares near its lid, that IS the ramp's upper end; where a stack of them stays a cylinder, the ramp is doing nothing up there. The outlines hang beside the cloud they shaped, so the two can be read against each other.
         const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
@@ -2003,5 +2042,58 @@ void SSVolCloud::renderDebug()
     }
 
     gGL.end();
+
+    // <SS:Nexii> The GROUND SHADOW view: the baked transmittance map's own texels, drawn as dark blots ON THE GROUND at the exact spot the soften shader lands each one - the same casting plane, the same live sun direction, the same drift - so the overlay and the rendered shadow must lie on top of each other, and any daylight between them is a projection bug wearing its address. Darkness is the texel's occlusion, so the thickness driver can be read directly: a deep storm deck's blots go near-black, a thin sheet's barely register. Filled triangles rather than lines, hence its own pass after the shared line batch.
+    if (which == 3 && mShadowValid && mShadowRaw.notNull() && mShadowRaw->getData()
+        && mShadowSpanM > 1.f && !mPrimary.mPuffs.empty())
+    {
+        const SSAtmoEnvApplier& applier = SSAtmoEnvApplier::instance();
+        LLVector3 sun_w = mLightDir;
+        if (applier.isActive() && applier.sunRiseFraction() > 0.001f)
+        {
+            sun_w = applier.sunSlotDirection();
+        }
+        const F32 sz = llmax(sun_w.mV[VZ], 0.05f);
+
+        // The camera's own feet stand in for the terrain: the map is being judged for placement and darkness, not draped over every hill.
+        const F32 gz = cam.mV[VZ] - 1.2f;
+        const F32 plane_z = mPrimary.mBaseZ + mPrimary.mThicknessM * 0.35f;
+        const F32 fall = llmax(plane_z - gz, 0.f) / sz;
+
+        const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+        const S32 n = mShadowRaw->getWidth();
+        const U8* data = mShadowRaw->getData();
+        const F32 texel = mShadowSpanM / (F32)n;
+        const F32 half = texel * 0.5f;
+        const F32 draw_r_sq = 2600.f * 2600.f;
+
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 ty = 0; ty < n; ++ty)
+        {
+            for (S32 tx = 0; tx < n; ++tx)
+            {
+                const F32 occl = 1.f - (F32)data[((size_t)ty * n + tx) * 3] / 255.f;
+                if (occl < 0.04f) continue;
+
+                // Where this texel's shadow lands: down the sun ray from the casting plane.
+                const F32 gx = mShadowOriginX + drift.mV[0] + ((F32)tx + 0.5f) * texel - sun_w.mV[VX] * fall;
+                const F32 gy = mShadowOriginY + drift.mV[1] + ((F32)ty + 0.5f) * texel - sun_w.mV[VY] * fall;
+
+                const F32 ddx = gx - cam.mV[VX];
+                const F32 ddy = gy - cam.mV[VY];
+                if (ddx * ddx + ddy * ddy > draw_r_sq) continue;
+
+                gGL.color4f(0.05f, 0.02f, 0.10f, occl * 0.55f);
+                const LLVector3 p00 = drawn(LLVector3(gx - half, gy - half, gz));
+                const LLVector3 p10 = drawn(LLVector3(gx + half, gy - half, gz));
+                const LLVector3 p11 = drawn(LLVector3(gx + half, gy + half, gz));
+                const LLVector3 p01 = drawn(LLVector3(gx - half, gy + half, gz));
+                gGL.vertex3fv(p00.mV); gGL.vertex3fv(p10.mV); gGL.vertex3fv(p11.mV);
+                gGL.vertex3fv(p00.mV); gGL.vertex3fv(p11.mV); gGL.vertex3fv(p01.mV);
+            }
+        }
+        gGL.end();
+    }
+
     gGL.flush();
 }

@@ -42,16 +42,51 @@ consequences nobody wants:
 
 They are real `settings.xml` entries now, and they have a home in the UI.
 
-On tessellation specifically, since the question comes up: the path is live and does
-something. `ssvolcloud.cpp` emits a 4×4 grid of sub-quads and shears, widens, sinks and
-fades each corner by `skirt = puff.mAnvil * v²` — the anvil skirt. The skirt itself is
-gated on `mAnvil`, so on a calm sky (convection below ~0.4, no authored anvil) the
-geometry collapses to exactly the quad that was always drawn. It is *not* a no-op even
-then, though: `ssVolCloudV.glsl` does non-linear per-vertex work (the `pow()` glow
-hotspot, the radial far-field squash, `calcAtmosphericVars` along each vertex's own ray,
-the `max_y/|view_dir.z|` slab path) and puffs span hundreds of metres, so 5×5 vertices
-instead of 4 interpolates the sky lighting and the aerial perspective far more finely
-across the quad. It costs 16× the vertices, and it is off by default.
+### Tessellation
+
+The toggle used to be `segs = tessellate ? 4 : 1` — one flat subdivision factor for every
+puff at every range, with `skirt = puff.mAnvil * v²` as the only vertex displacement. It
+subdivided, but it never *adapted*: a puff two hundred metres away and one four kilometres
+away got the same sixteen sub-quads, so it cost 16× the vertices everywhere and bought
+shaping only on anvil-bearing puffs. Nothing in it knew about camera distance or about
+scene geometry.
+
+It now does two things:
+
+- **Subdivision by screen size.** `segs` comes from the puff's on-screen diameter — one row
+  per `SS_TESS_PIXELS` (96), floored at 1 and capped at `SS_TESS_MAX_SEGS` (6). Measured in
+  pixels because that is what "can it be seen" means, and off the *true* distance: the
+  far-field squash moves every vertex along its own ray, so the projected size is the true
+  one. A distant puff collapses back to the single card it always was; the cap exists
+  because an overhead puff can fill the view and would otherwise outweigh the rest of the
+  field.
+
+- **Edge breakup** (`SSAtmoCloudEdgeBreakup`, default 0.25, fraction of puff radius). Worth
+  being precise about why this works, because the obvious objection is that the visible
+  silhouette is the fragment alpha carve rather than the quad outline. True — but the carve
+  is a function of `vary_world`, the *interpolated world position*. Move a vertex and you
+  move which piece of the cloud field that part of the card covers, so the carved outline
+  moves with it. A rectangle of vertices therefore reads as a rectangle's worth of cloud,
+  clipped wherever the field wanted to continue past the border. Pushing the rim vertices
+  around in the billboard plane lets the same carve wander instead of clipping.
+
+  Ramped by the squared distance from the quad centre, so the interior — where the texture
+  content lives — barely moves and only the rim is disturbed. Keyed on the *shared* grid
+  vertex, so neighbouring sub-quads displace identically and the mesh cannot tear. In-plane
+  only: displacing along the view normal would move the puff in depth, past the sort that
+  placed it.
+
+The anvil skirt is unchanged and still gated on `mAnvil`. Note that tessellation is not a
+no-op even where nothing displaces: `ssVolCloudV.glsl` does non-linear per-vertex work (the
+`pow()` glow hotspot, the radial squash, `calcAtmosphericVars` along each vertex's own ray,
+the `max_y/|view_dir.z|` slab path) and puffs span hundreds of metres, so a finer grid
+interpolates the sky lighting and aerial perspective more finely across the card.
+
+**Still not structure-aware.** Nothing in the cloud render path knows where buildings or
+terrain are. The only proximity handling is `ss_soft_m` in `ssVolCloudF.glsl`, a
+fragment-stage alpha fade against the depth copy so a puff thins as it approaches a surface
+instead of ending on a hard edge. Doing that in geometry would mean vertex-stage reads of
+the depth copy at billboard corners.
 
 ### Field density and budget
 

@@ -55,7 +55,7 @@ public:
 
     void render();
 
-    // <SS:Nexii> The field's debug overlay, driven by RENDER_DEBUG_CLOUD_FIELD with the view picked by SSAtmoCloudDebugView: the puffs as geometry, their anvil and form shaping, the cell gate and tower map replayed on the builder's own grid, or the vertical profile ramp as a chart. Everything it draws is squash-corrected, so it lands on the cloud rather than behind it. [interaction: pipeline debug masks]
+    // <SS:Nexii> The field's debug overlay, driven by RENDER_DEBUG_CLOUD_FIELD with the view picked by SSAtmoCloudDebugView: the cell gate and tower map replayed on the builder's own 260m grid, or the columns those cells grow outlined at their true altitude so the profile ramp can be read as the shape it makes. Both walk CELLS, not puffs - an outline per puff buries the sky it is describing. Everything it draws is squash-corrected, so it lands on the cloud rather than behind it. [interaction: pipeline debug masks]
     void renderDebug();
 
     void clear();
@@ -237,6 +237,9 @@ private:
     void bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y);
 
     LLPointer<LLViewerTexture> mShadowRef;
+
+    // The bake's CPU copy, kept for the debug overlay's ground-shadow view - it draws the very texels the shader samples, projected the same way, so map and rendered shadow can be read against each other.
+    LLPointer<LLImageRaw> mShadowRaw;
     F32 mShadowOriginX = 0.f;
     F32 mShadowOriginY = 0.f;
     F32 mShadowSpanM = 0.f;

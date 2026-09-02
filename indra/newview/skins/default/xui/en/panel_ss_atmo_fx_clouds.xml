@@ -39,7 +39,7 @@
      left="0"
      min_height="120"
      min_width="300"
-     height="210"
+     height="315"
      width="384">
     <text
      follows="left|top" layout="topleft" left="12" top="8"
@@ -62,8 +62,70 @@
      control_name="SSAtmoCloudTessellation"
      follows="left|top" layout="topleft" left="12" top_pad="6"
      height="16" width="356" name="tessellation_check"
-     label="Tessellate puffs (anvil skirt)"
-     tool_tip="Each puff becomes a 4x4 grid of sub-quads instead of one flat card, so the top rows can shear along the wind, curl down and dissolve - the anvil skirt, which no amount of fragment noise can fake on geometry that is not there. The skirt itself only appears on puffs the deck gave an anvil to, but the finer grid also samples the sky lighting and aerial perspective per sub-quad rather than per corner. Costs sixteen times the vertices" />
+     label="Tessellate puffs by screen size"
+     tool_tip="Subdivide each puff by how large it is on screen: a near one into a grid the renderer can shear into an anvil skirt and break up along its rim, a distant one back into the single flat card it always was. Alpha can carve any outline out of a card but cannot bend one, which is what the geometry is for. Costs vertices only where they land on pixels" />
+    <check_box
+     control_name="SSAtmoCloudSeason"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="cloud_season_check"
+     label="Seasonal deck altitude"
+     tool_tip="Temperature drives an auto-derived deck's base: winter air is dense and squashes the atmosphere down (near 400m at -15C), summer heat lifts it (1.2km at +35C), with the deck capped at a kilometre of thickness. Off keeps the old moisture/convection base derivation" />
+    <check_box
+     control_name="SSAtmoCirrusSeason"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="cirrus_season_check"
+     label="Seasonal cirrus altitude"
+     tool_tip="Temperature slides the cirrus layer around the authored dome height: low in winter air (about 5km at -15C), lifted by summer heat (about 8km at +35C). Off keeps the authored height exactly" />
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="10" height="16" width="122"
+      name="T_SSAtmoCloudEdgeBreakup"
+      tool_tip="How far a subdivided puff's rim may wander, as a fraction of its radius. The cloud you see is carved out of the card by world position, so moving the rim moves which piece of the field the card covers and the carved edge follows - it stops cutting the cloud off in a straight line where the field wanted to continue. 0 is off, and it needs tessellation: a card with four corners has no rim to break up">
+        Edge breakup:
+    </text>
+    <slider_bar
+      control_name="SSAtmoCloudEdgeBreakup" name="SB_SSAtmoCloudEdgeBreakup"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      tool_tip="How far a subdivided puff's rim may wander, as a fraction of its radius. 0 is off, and it needs tessellation" />
+    <spinner
+      control_name="SSAtmoCloudEdgeBreakup" name="S_SSAtmoCloudEdgeBreakup"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      tool_tip="How far a subdivided puff's rim may wander, as a fraction of its radius. 0 is off, and it needs tessellation" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoCloudEdgeBreakup" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoCloudEdgeBreakup" />
+    </button>
+    <text
+      follows="left|top" layout="topleft"
+      left="12" top_pad="6" height="16" width="122"
+      name="T_SSAtmoCloudGroundShadow"
+      tool_tip="How strongly the deck shadows the ground's direct sunlight, 0 (off) to 1 (full). At full the shade is carried by the weather itself - a thin sheet barely dims, a kilometre-deep storm column goes near-black - so this exists to take the effect away, not to tune it. Shadows slide with the wind drift, lengthen with a low sun, and fade out below roughly ten degrees of elevation">
+        Ground shadow:
+    </text>
+    <slider_bar
+      control_name="SSAtmoCloudGroundShadow" name="SB_SSAtmoCloudGroundShadow"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      tool_tip="How strongly the deck shadows the ground's direct sunlight. The shade itself is carried by the deck's thickness; 0 turns it off" />
+    <spinner
+      control_name="SSAtmoCloudGroundShadow" name="S_SSAtmoCloudGroundShadow"
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="-2" height="20" width="62"
+      label_width="0" border_visible="false" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      tool_tip="How strongly the deck shadows the ground's direct sunlight. The shade itself is carried by the deck's thickness; 0 turns it off" />
+    <button
+      follows="left|top" layout="topleft"
+      left_pad="4" top_delta="0" height="20" width="24"
+      name="D_SSAtmoCloudGroundShadow" label="D"
+      tool_tip="Reset to the default value">
+        <button.commit_callback function="ResetControl" parameter="SSAtmoCloudGroundShadow" />
+    </button>
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
      height="14" width="356" name="cloud_debug_label" font="SansSerifSmallBold">
@@ -78,9 +140,10 @@
       control_name="SSAtmoCloudDebugView" name="C_cloud_view"
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="20" width="250"
-      tool_tip="Cell gate and towers: the builder's 260m grid replayed across the field, green where cloud was placed and red where the sky was left open, with a stalk as tall as the noise map wants that column to climb. Column profiles: for nearby cells, the column that cell grows outlined at its true position and altitude, its width at each height exactly what the profile ramp and the anvil give a puff there - the curve as a shape, standing beside the cloud it made">
+      tool_tip="Cell gate and towers: the builder's 260m grid replayed across the field, green where cloud was placed and red where the sky was left open, with a stalk as tall as the noise map wants that column to climb. Column profiles: for nearby cells, the column that cell grows outlined at its true position and altitude, its width at each height exactly what the profile ramp and the anvil give a puff there - the curve as a shape, standing beside the cloud it made. Ground shadow map: the baked transmittance texels drawn as dark blots at the exact ground spot the sun projection lands them, so the overlay and the rendered shadow must coincide">
         <combo_box.item label="Cell gate and towers" value="1" name="cloud_view_gate" />
         <combo_box.item label="Column profiles" value="2" name="cloud_view_profile" />
+        <combo_box.item label="Ground shadow map" value="3" name="cloud_view_shadow" />
     </combo_box>
     </panel>
     </scroll_container>
