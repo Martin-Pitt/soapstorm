@@ -55,6 +55,9 @@ public:
 
     void render();
 
+    // <SS:Nexii> The scene depth copy the soft fades read, taken once per frame by whichever post-deferred weather pass asks first (the puffs, else the lightning pass on a clear sky) - exact for both, since no pass after the deferred lighting writes depth. Null when the copy program or viewport is unavailable. Must be called before the caller binds its own program: it binds the copy program and flushes/rebinds the screen target. [interaction: SSLightningRender discs]
+    LLRenderTarget* ensureSceneDepthCopy();
+
     // <SS:Nexii> The field's debug overlay, driven by RENDER_DEBUG_CLOUD_FIELD with the view picked by SSAtmoCloudDebugView: the cell gate and tower map replayed on the builder's own 260m grid, or the columns those cells grow outlined at their true altitude so the profile ramp can be read as the shape it makes. Both walk CELLS, not puffs - an outline per puff buries the sky it is describing. Everything it draws is squash-corrected, so it lands on the cloud rather than behind it. [interaction: pipeline debug masks]
     void renderDebug();
 
@@ -259,6 +262,7 @@ public:
 private:
 
     LLRenderTarget mDepthCopy;
+    U32 mDepthCopyFrame = 0;
 
     std::vector<LLVector4> mStrikeLights;
 

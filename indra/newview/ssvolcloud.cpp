@@ -933,6 +933,54 @@ F32 SSVolCloud::transmittance(const LLVector3& from_agent, const LLVector3& to_a
     return trans;
 }
 
+// The scene depth copy for the soft fades, once per frame for every weather pass that asks.
+LLRenderTarget* SSVolCloud::ensureSceneDepthCopy()
+{
+    const U32 frame = LLFrameTimer::getFrameCount();
+    const S32 view_w = (S32)gGLViewport[2];
+    const S32 view_h = (S32)gGLViewport[3];
+    if (view_w <= 0 || view_h <= 0 || !gCopyDepthProgram.isComplete()) return nullptr;
+
+    if (mDepthCopyFrame == frame && (S32)mDepthCopy.getWidth() == view_w && (S32)mDepthCopy.getHeight() == view_h)
+    {
+        return &mDepthCopy;
+    }
+
+    if ((S32)mDepthCopy.getWidth() != view_w || (S32)mDepthCopy.getHeight() != view_h)
+    {
+        mDepthCopy.release();
+        if (!mDepthCopy.allocate(view_w, view_h, GL_RGBA, true)) return nullptr;
+    }
+
+    {
+        LL_PROFILE_GPU_ZONE("atmo cloud depth copy");
+
+        LLGLDepthTest copy_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
+
+        gPipeline.mRT->screen.flush();
+        mDepthCopy.bindTarget();
+
+        gCopyDepthProgram.bind();
+
+        S32 diff_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DIFFUSE_MAP);
+        S32 depth_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DEFERRED_DEPTH);
+        gGL.getTexUnit(diff_map)->bind(&gPipeline.mRT->screen);
+        gGL.getTexUnit(depth_map)->bind(&gPipeline.mRT->deferredScreen, true);
+
+        gGL.setColorMask(false, false);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+        gGL.setColorMask(true, true);
+
+        gCopyDepthProgram.unbind();
+
+        mDepthCopy.flush();
+        gPipeline.mRT->screen.bindTarget();
+    }
+    mDepthCopyFrame = frame;
+    return &mDepthCopy;
+}
+
 // Draws the sorted puffs as camera-faced billboards with soft depth, storm lighting and strike flashes.
 void SSVolCloud::render()
 {
@@ -948,52 +996,7 @@ void SSVolCloud::render()
     // <SS:Nexii> Depth copy: taken once before either deck draws - the primary deck is the occluder the soft edges belong to, and the under deck at the bottom of a build blends against world geometry plus the primary deck above it in the one copy.
     LL_PROFILE_GPU_ZONE("atmo volumetric clouds");
 
-    bool have_depth_copy = false;
-
-    {
-        const S32 view_w = (S32)gGLViewport[2];
-        const S32 view_h = (S32)gGLViewport[3];
-
-        if (view_w > 0 && view_h > 0 && gCopyDepthProgram.isComplete())
-        {
-            if ((S32)mDepthCopy.getWidth() != view_w || (S32)mDepthCopy.getHeight() != view_h)
-            {
-                mDepthCopy.release();
-                have_depth_copy = mDepthCopy.allocate(view_w, view_h, GL_RGBA, true);
-            }
-            else
-            {
-                have_depth_copy = true;
-            }
-
-            if (have_depth_copy)
-            {
-                LL_PROFILE_GPU_ZONE("atmo cloud depth copy");
-
-                LLGLDepthTest copy_depth(GL_TRUE, GL_TRUE, GL_ALWAYS);
-
-                gPipeline.mRT->screen.flush();
-                mDepthCopy.bindTarget();
-
-                gCopyDepthProgram.bind();
-
-                S32 diff_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DIFFUSE_MAP);
-                S32 depth_map = gCopyDepthProgram.getTextureChannel(LLShaderMgr::DEFERRED_DEPTH);
-                gGL.getTexUnit(diff_map)->bind(&gPipeline.mRT->screen);
-                gGL.getTexUnit(depth_map)->bind(&gPipeline.mRT->deferredScreen, true);
-
-                gGL.setColorMask(false, false);
-                gPipeline.mScreenTriangleVB->setBuffer();
-                gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
-                gGL.setColorMask(true, true);
-
-                gCopyDepthProgram.unbind();
-
-                mDepthCopy.flush();
-                gPipeline.mRT->screen.bindTarget();
-            }
-        }
-    }
+    const bool have_depth_copy = (ensureSceneDepthCopy() != nullptr);
 
     LLGLDepthTest depth(GL_TRUE, GL_FALSE);
     LLGLEnable blend(GL_BLEND);

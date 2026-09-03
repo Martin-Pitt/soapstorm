@@ -1,6 +1,6 @@
 /**
  * @file ssLightningV.glsl
- * @brief Atmo Magic lightning - channel ribbons and charge sparks.
+ * @brief Atmo Magic lightning - channel ribbons, plasma, sparks, aura and fire discs.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -31,17 +31,25 @@ uniform mat4 modelview_projection_matrix;
 uniform vec3 ss_squash;
 uniform vec3 ss_cam_pos;
 
+// Every quad of the pass arrives through one vertex buffer (sslightningrender.cpp builds it): position and texcoord0 as before, and beside the 8-bit tint two float attributes the
+// immediate-mode path could never carry - normal (the per-vertex data the fragment stage reads: noise seed / amber weight / plasma phase for ribbons, anchor depth / height above ground / hollow radius
+// for discs) and tangent (HDR brightness above white, a mode-specific weight, the depth soft width, and the fragment mode in w). texcoord1 carries the strike point in a disc's own uv frame.
+// doc/atmo_magic_lightning_strike.md
 in vec3 position;
 in vec2 texcoord0;
+in vec2 texcoord1;
 in vec4 diffuse_color;
+in vec3 normal;
+in vec4 tangent;
 
 out vec2 vary_texcoord0;
+out vec2 vary_texcoord1;
 out vec4 vary_color;
+out vec3 vary_aux;
+out vec4 vary_ctl;
 
 void main()
 {
-    // Ribbons arrive pre-built in world space, camera-faced on the CPU with everything else about them - the puff field's arrangement, and for the same reason: the geometry is a
-    // handful of quads a few times a minute, not something worth a geometry stage.
     vec3 rel = position.xyz - ss_cam_pos;
     float d = length(rel);
     vec3 drawn_pos = position.xyz;
@@ -54,6 +62,8 @@ void main()
     gl_Position = modelview_projection_matrix * vec4(drawn_pos, 1.0);
 
     vary_texcoord0 = texcoord0;
+    vary_texcoord1 = texcoord1;
     vary_color = diffuse_color;
+    vary_aux = normal;
+    vary_ctl = tangent;
 }
-

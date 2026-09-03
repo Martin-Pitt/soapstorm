@@ -53,13 +53,13 @@
     <slider_bar
       control_name="SSAtmoDensity" name="SB_SSAtmoDensity"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0.1" max_val="3" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0.1" max_val="3" increment="0.05"
       tool_tip="Global multiplier on how many particles spawn per square meter" />
     <spinner
       control_name="SSAtmoDensity" name="S_SSAtmoDensity"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0.1" max_val="3" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0.1" max_val="3" increment="0.05" decimal_digits="2"
       tool_tip="Global multiplier on how many particles spawn per square meter" />
     <button
       follows="left|top" layout="topleft"
@@ -78,13 +78,13 @@
     <slider_bar
       control_name="SSAtmoParticleBudget" name="SB_SSAtmoParticleBudget"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="500" max_val="120000" increment="500" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="500" max_val="120000" increment="500"
       tool_tip="Total particles allowed in the air at once, across drops, clusters and sheets" />
     <spinner
       control_name="SSAtmoParticleBudget" name="S_SSAtmoParticleBudget"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="500" max_val="200000" increment="500" decimal_digits="0"
+      label_width="0" min_val="500" max_val="200000" increment="500" decimal_digits="0"
       tool_tip="Total particles allowed in the air at once, across drops, clusters and sheets" />
     <button
       follows="left|top" layout="topleft"
@@ -126,13 +126,13 @@
     <slider_bar
       control_name="SSAtmoDropAlpha" name="SB_SSAtmoDropAlpha"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05"
       tool_tip="Opacity multiplier for all precipitation particles, applied live" />
     <spinner
       control_name="SSAtmoDropAlpha" name="S_SSAtmoDropAlpha"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
       tool_tip="Opacity multiplier for all precipitation particles, applied live" />
     <button
       follows="left|top" layout="topleft"
@@ -157,13 +157,13 @@
     <slider_bar
       control_name="SSAtmoRippleScale" name="SB_SSAtmoRippleScale"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0.25" max_val="3" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0.25" max_val="3" increment="0.05"
       tool_tip="Scales the landing rings and splash crowns" />
     <spinner
       control_name="SSAtmoRippleScale" name="S_SSAtmoRippleScale"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0.25" max_val="3" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0.25" max_val="3" increment="0.05" decimal_digits="2"
       tool_tip="Scales the landing rings and splash crowns" />
     <button
       follows="left|top" layout="topleft"
@@ -182,13 +182,13 @@
     <slider_bar
       control_name="SSAtmoRippleSpeed" name="SB_SSAtmoRippleSpeed"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0.5" max_val="5" increment="0.1" decimal_digits="1"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0.5" max_val="5" increment="0.1"
       tool_tip="How quickly rings expand and splashes pop; higher is snappier" />
     <spinner
       control_name="SSAtmoRippleSpeed" name="S_SSAtmoRippleSpeed"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0.5" max_val="5" increment="0.1" decimal_digits="1"
+      label_width="0" min_val="0.5" max_val="5" increment="0.1" decimal_digits="1"
       tool_tip="How quickly rings expand and splashes pop; higher is snappier" />
     <button
       follows="left|top" layout="topleft"
@@ -207,13 +207,13 @@
     <slider_bar
       control_name="SSAtmoRippleAlpha" name="SB_SSAtmoRippleAlpha"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="2" increment="0.05"
       tool_tip="Opacity multiplier for landing rings and splash crowns, applied live" />
     <spinner
       control_name="SSAtmoRippleAlpha" name="S_SSAtmoRippleAlpha"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
       tool_tip="Opacity multiplier for landing rings and splash crowns, applied live" />
     <button
       follows="left|top" layout="topleft"
@@ -244,13 +244,13 @@
     <slider_bar
       control_name="SSAtmoGlowScale" name="SB_SSAtmoGlowScale"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="3" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="3" increment="0.05"
       tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor" />
     <spinner
       control_name="SSAtmoGlowScale" name="S_SSAtmoGlowScale"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="3" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="3" increment="0.05" decimal_digits="2"
       tool_tip="Multiplies the glow of every emissive preset; per-preset glow is in the preset editor" />
     <button
       follows="left|top" layout="topleft"
@@ -270,13 +270,13 @@
     <slider_bar
       control_name="SSAtmoDropBulge" name="SB_SSAtmoDropBulge"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="4" increment="0.05"
       tool_tip="How far the highlight wraps around the sides of a drop. 0 shades it as a flat card facing you" />
     <spinner
       control_name="SSAtmoDropBulge" name="S_SSAtmoDropBulge"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
       tool_tip="How far the highlight wraps around the sides of a drop. 0 shades it as a flat card facing you" />
     <button
       follows="left|top" layout="topleft"
@@ -296,13 +296,13 @@
     <slider_bar
       control_name="SSAtmoDropCore" name="SB_SSAtmoDropCore"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="8" increment="0.1" decimal_digits="1"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="8" increment="0.1"
       tool_tip="How tightly the light a drop throws back is pulled onto its spine. Higher gives a thin bright streak inside a dark body instead of an evenly lit blob" />
     <spinner
       control_name="SSAtmoDropCore" name="S_SSAtmoDropCore"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="8" increment="0.1" decimal_digits="1"
+      label_width="0" min_val="0" max_val="8" increment="0.1" decimal_digits="1"
       tool_tip="How tightly the light a drop throws back is pulled onto its spine. Higher gives a thin bright streak inside a dark body instead of an evenly lit blob" />
     <button
       follows="left|top" layout="topleft"
@@ -322,13 +322,13 @@
     <slider_bar
       control_name="SSAtmoDropSparkle" name="SB_SSAtmoDropSparkle"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="32" increment="0.5" decimal_digits="1"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="32" increment="0.5"
       tool_tip="Strength of the narrow glint that lands on a few drops at a time and twinkles off them as they fall. 0 leaves only the broad wet sheen" />
     <spinner
       control_name="SSAtmoDropSparkle" name="S_SSAtmoDropSparkle"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="32" increment="0.5" decimal_digits="1"
+      label_width="0" min_val="0" max_val="32" increment="0.5" decimal_digits="1"
       tool_tip="Strength of the narrow glint that lands on a few drops at a time and twinkles off them as they fall. 0 leaves only the broad wet sheen" />
     <button
       follows="left|top" layout="topleft"

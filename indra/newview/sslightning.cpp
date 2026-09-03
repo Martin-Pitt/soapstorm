@@ -28,6 +28,7 @@
 #include "ssatmomagic.h"
 #include "ssatmoenvweatherstate.h"
 #include "sssoundscape.h"
+#include "sssurfacefield.h"
 #include "sswindflow.h"
 #include "ssvolcloud.h"
 
@@ -37,6 +38,7 @@
 #include "llviewerdisplay.h"
 #include "llviewerregion.h"
 #include "llviewerwindow.h"
+#include "llvieweroctree.h"
 #include "llworld.h"
 #include "llsurface.h"
 #include "llvector4a.h"
@@ -96,6 +98,23 @@ namespace
     const F32 BLUE_GROUND_MIN_M = 400.f;
     const F32 BLUE_GROUND_MAX_M = 3200.f;
 
+    // <SS:Nexii> The ground crawl's bounds: how far a strike trails along the surface at the dial's 1.0 (quadratic roll, so most are short), the hard cap, and the step and node budgets that keep it minimal.
+    const F32 CRAWL_MAX_M = 30.f;
+    const F32 CRAWL_CAP_M = 45.f;
+    const S32 CRAWL_STEPS_MAX = 12;
+    const F32 CRAWL_JUMP_M = 2.f;
+
+    // <SS:Nexii> The impact spark table: how many a full-intensity strike throws, their flight-time and landing-distance rolls (every one lands inside its life - the old speed x rise roll flew for 2-5s against a 1.4s life and never did).
+    const S32 SPARK_COUNT = 48;
+    const F32 SPARK_HIT_MIN_S = 0.28f;
+    const F32 SPARK_HIT_MAX_S = 0.95f;
+    const F32 SPARK_REACH_MIN_M = 3.f;
+    const F32 SPARK_REACH_MAX_M = 28.f;
+    const F32 SPARK_GRAVITY = 9.8f;
+
+    const S32 FIRE_CRAWL_MAX = 14;
+    const S32 FIRE_EMBER_MAX = 16;
+
     // Setting read with a fallback when it does not exist.
     F32 settingF(const char* name, F32 fallback)
     {
@@ -109,6 +128,46 @@ namespace
     {
         const F32 anticipation = llclamp(settingF("SSAtmoLightningAnticipation", ANTICIPATION_DEFAULT_S), 0.f, ANTICIPATION_MAX_S);
         return llmax(3.f, anticipation + 0.25f);
+    }
+
+    // Stateless integer hash behind the ground show's spawn-time rolls - the renderer's twin, so every client's tables match.
+    U32 ss_hash3(U32 x)
+    {
+        x ^= x >> 16; x *= 0x7feb352du;
+        x ^= x >> 15; x *= 0x846ca68bu;
+        x ^= x >> 16;
+        return x;
+    }
+    // Hash to [0,1).
+    F32 ss_hash_unit(U32 x) { return (F32)(ss_hash3(x) & 0xffffffu) / (F32)0x1000000; }
+
+    // One-dimensional value noise on the hash, for the spatially coherent plasma pop thresholds.
+    F32 ss_vnoise1(F32 x, U32 salt)
+    {
+        const F32 fl = floorf(x);
+        const F32 f = x - fl;
+        const U32 i = (U32)(S32)fl;
+        const F32 a = ss_hash_unit(i * 7919u ^ salt);
+        const F32 b = ss_hash_unit((i + 1u) * 7919u ^ salt);
+        const F32 s = f * f * (3.f - 2.f * f);
+        return a + (b - a) * s;
+    }
+
+    // Wet score of a surface-field sample: wetness plus twice the puddle presence (5-10mm of standing water is a full puddle).
+    F32 ss_wet_score(const SSSurfaceField::Sample& s)
+    {
+        if (!s.mValid) return 0.f;
+        return llclamp(s.mWet, 0.f, 1.f) + 2.f * llclamp(s.mPuddle / 0.01f, 0.f, 1.f);
+    }
+
+    // Hands a strike's pooled occlusion query name back, if it holds one.
+    void ss_release_strike_query(const SSStrike& strike)
+    {
+        if (strike.mOccQuery != 0)
+        {
+            LLOcclusionCullingGroup::releaseOcclusionQueryObjectName(strike.mOccQuery);
+            strike.mOccQuery = 0;
+        }
     }
 }
 
@@ -145,7 +204,39 @@ F32 SSLightning::positiveSkew(F32 temperature_c)
                    / (POSITIVE_WARM_C - POSITIVE_COLD_C), 0.f, 1.f);
 }
 
-// Exports the brightest live strikes as deferred point lights, one per channel at the node nearest the camera.
+// The surface under a point for the ground show: surface field, then the flowmap's height capture, then terrain, never below water.
+F32 SSLightning::surfaceZ(const LLVector3& pos_agent)
+{
+    F32 z = 0.f;
+    bool have = false;
+
+    const SSSurfaceField::Sample s = SSSurfaceField::getInstance()->sample(pos_agent);
+    if (s.mValid)
+    {
+        z = s.mSurfaceZ;
+        have = true;
+    }
+    if (!have)
+    {
+        F32 top = 0.f;
+        if (SSWindFlowMap::getInstance()->surfaceAt(pos_agent, top))
+        {
+            z = top;
+            have = true;
+        }
+    }
+    if (!have)
+    {
+        z = LLWorld::getInstance()->resolveLandHeightAgent(pos_agent);
+    }
+    if (LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent))
+    {
+        z = llmax(z, regionp->getWaterHeight());
+    }
+    return z;
+}
+
+// Exports the brightest live strikes as deferred point lights, one per channel at the node nearest the camera, then the amber ground fire behind them.
 S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
                              std::vector<LLColor3>& out_color, S32 max_count) const
 {
@@ -185,6 +276,36 @@ S32 SSLightning::sceneLights(std::vector<LLVector4>& out_pos_radius,
         out_color.push_back(tint * (b * strength));
     }
 
+    // <SS:Nexii> The ground fire's own amber light, after the bolt lights so it is the first to drop at the light budget: what turns the wet road orange for the half second after contact, as the recorded strike does. Driven by the fire envelope, not the channel brightness, so it outlasts the column.
+    static LLCachedControl<F32> fire_light(gSavedSettings, "SSAtmoLightningFireLight", 1.f);
+    const F32 fire_str = llclamp((F32)fire_light, 0.f, 4.f) * strength;
+    if (fire_str > 0.f)
+    {
+        static const LLColor3 FIRE_LIGHT(1.f, 0.5f, 0.12f);
+        for (const SSStrike& strike : mStrikes)
+        {
+            if ((S32)out_pos_radius.size() >= max_count) break;
+            if (strike.mKind != STRIKE_GROUND) continue;
+
+            const F32 env = llmax(strike.mFire, 0.5f * strike.mHit) * strike.mIntensity;
+            if (env <= 0.01f) continue;
+
+            LLVector3 at = strike.mGround;
+            if (strike.mCrawlCount > 0)
+            {
+                const S32 mid = strike.mCrawlStart + strike.mCrawlCount / 3;
+                at = (strike.mGround + strike.mChannel[(size_t)mid].mPos) * 0.5f;
+            }
+            at.mV[VZ] += 1.5f;
+
+            const F32 radius = llclamp(25.f + 35.f * strike.mIntensity + strike.mCrawlLenM, 25.f, 120.f);
+            if ((at - cam).magVec() - radius > MAX_FAR_CLIP) continue;
+
+            out_pos_radius.push_back(LLVector4(at.mV[VX], at.mV[VY], at.mV[VZ], radius));
+            out_color.push_back(FIRE_LIGHT * (env * fire_str));
+        }
+    }
+
     return (S32)out_pos_radius.size();
 }
 
@@ -220,7 +341,11 @@ static bool ss_branch_forbidden(const SSStrike& strike, const LLVector3& pos)
 // Drops all strikes and scheduling - the off switch.
 void SSLightning::clear()
 {
-    for (SSStrike& strike : mStrikes) ss_kill_strike_text(strike);
+    for (SSStrike& strike : mStrikes)
+    {
+        ss_kill_strike_text(strike);
+        ss_release_strike_query(strike);
+    }
     mStrikes.clear();
     mNextStrikeAt = -1.0;
     mFlash = 0.f;
@@ -414,7 +539,7 @@ void SSLightning::triggerGroundNow()
     mPrepared = false;
 }
 
-// Builds a full strike for a future fire time: kind, polarity, placement, attachment, channel, thunder to the soundscape with its lead. A forced kind or ground point (debug buttons) skips that part's rolls; a forced blue (storm-approach anticipation) is always a positive bolt from the blue.
+// Builds a full strike for a future fire time: kind, polarity, placement, attachment, channel, ground show, thunder to the soundscape with its lead. A forced kind or ground point (debug buttons) skips that part's rolls; a forced blue (storm-approach anticipation) is always a positive bolt from the blue.
 void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force_dist,
                         SSStrikeKind force_kind, const LLVector3* force_ground,
                         bool force_blue)
@@ -519,7 +644,8 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
     }
 
     // Resolves land height at a point, then - for ground strikes - lets the tall-structure
-    // capture pull the attachment toward anything worth hitting nearby.
+    // capture pull the attachment toward anything worth hitting nearby, and wet ground or a
+    // puddle pull it across open ground.
     auto resolve_ground = [&](const LLVector3& at) -> LLVector3
     {
         LLVector3 ground = at;
@@ -536,6 +662,7 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
         if (strike.mKind == STRIKE_GROUND)
         {
             const F32 penalty = llclamp(settingF("SSAtmoLightningAttachBias", 1.f), 0.f, 4.f);
+            const F32 wet_pull = llclamp(settingF("SSAtmoLightningCrawlWet", 1.f), 0.f, 3.f);
 
             F32 best_score = -1.0e9f;
             LLVector3 best;
@@ -556,6 +683,28 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
                         found = true;
                     }
                 });
+
+            // <SS:Nexii> Puddles on open ground: the column search only ever sees captured structures, so a ring of surface probes lets standing water on a bare road bid for the attachment too - a full puddle is worth three metres of height. Probe rolls are consumed whether or not the field is live here, so the rest of the stream stays aligned.
+            if (wet_pull > 0.f)
+            {
+                SSSurfaceField* fieldp = SSSurfaceField::getInstance();
+                for (S32 i = 0; i < 10; ++i)
+                {
+                    const F32 ang = rng.frand(0.f, F_TWO_PI);
+                    const F32 rad = rng.frand(6.f, 40.f);
+                    const LLVector3 probe = ground + LLVector3(cosf(ang) * rad, sinf(ang) * rad, 0.f);
+                    const F32 wet = ss_wet_score(fieldp->sample(probe));
+                    if (wet <= 0.f) continue;
+                    const F32 score = ground.mV[VZ] + 3.f * wet * wet_pull - rad * penalty;
+                    if (score > best_score)
+                    {
+                        best_score = score;
+                        best = probe;
+                        best.mV[VZ] = surfaceZ(probe);
+                        found = true;
+                    }
+                }
+            }
 
             if (found) ground = best;
         }
@@ -615,6 +764,8 @@ void SSLightning::spawn(F32 intensity, F64 fire_at, F32 force_bearing, F32 force
             for (SSStrikeNode& node : strike.mChannel) node.mWidth *= 1.35f;
         }
     }
+
+    buildGroundShow(strike);
 
     LLVector3 thunder_pos = strike.mGround;
     F32 thunder_d_sq = (thunder_pos - cam).magVecSquared();
@@ -814,6 +965,98 @@ void SSLightning::growBranches(SSStrike& strike, const std::vector<S32>& along,
     }
 }
 
+// The ground crawl off the trunk's foot: a surface-following heading walk on its own stream, steered toward wet ground and puddles, ending at a wall or a drop.
+void SSLightning::growCrawl(SSStrike& strike, S32 foot, F32 intensity)
+{
+    if (foot < 0 || foot >= (S32)strike.mChannel.size()) return;
+
+    const F32 dial = llclamp(settingF("SSAtmoLightningCrawl", 1.f), 0.f, 3.f);
+    if (dial <= 0.f) return;
+    const F32 wet_dial = llclamp(settingF("SSAtmoLightningCrawlWet", 1.f), 0.f, 3.f);
+
+    SSRandStream rng((U32)(strike.mFireAt * 6151.0) ^ 0xc4a1u);
+
+    SSSurfaceField* fieldp = SSSurfaceField::getInstance();
+
+    const LLVector3 foot_pos = strike.mChannel[(size_t)foot].mPos;
+    const F32 foot_width = strike.mChannel[(size_t)foot].mWidth;
+
+    // Every roll below is drawn whether or not it is used, so the length, arm and heading
+    // rolls stay aligned across clients; only the wet steering and the surface heights are local.
+    const F32 u = rng.frand();
+    const F32 arm2_roll = rng.frand();
+    const F32 bearing0 = rng.frand(0.f, F_TWO_PI);
+    const F32 arm2_dev = rng.frand(-0.6f, 0.6f);
+
+    const F32 foot_wet = ss_wet_score(fieldp->sample(foot_pos));
+    F32 total = CRAWL_MAX_M * powf(u, 1.6f) * dial * (0.85f + 0.15f * intensity)
+        * (1.f + 0.5f * foot_wet * wet_dial);
+    total = llmin(total, CRAWL_CAP_M);
+    if (total < 1.5f) return;
+
+    const S32 arms = (arm2_roll < 0.35f) ? 2 : 1;
+    const S32 start = (S32)strike.mChannel.size();
+    strike.mCrawlBearing = bearing0;
+
+    F32 longest = 0.f;
+    for (S32 a = 0; a < arms; ++a)
+    {
+        F32 heading = (a == 0) ? bearing0 : bearing0 + F_PI + arm2_dev;
+        const F32 arm_len = (a == 0) ? total : total * 0.4f;
+        F32 travelled = 0.f;
+        LLVector3 pos = foot_pos;
+        S32 prev = foot;
+
+        for (S32 step = 0; step < CRAWL_STEPS_MAX && travelled < arm_len; ++step)
+        {
+            if ((S32)strike.mChannel.size() >= MAX_CHANNEL_NODES) break;
+
+            const F32 step_m = rng.frand(1.5f, 3.f);
+            F32 cand[3];
+            cand[0] = heading - 0.7f + rng.frand(-0.35f, 0.35f);
+            cand[1] = heading + rng.frand(-0.35f, 0.35f);
+            cand[2] = heading + 0.7f + rng.frand(-0.35f, 0.35f);
+
+            // The three headings bid by the wetness two steps ahead; a straight run keeps a small edge.
+            S32 best = 1;
+            F32 best_score = -1.0e9f;
+            for (S32 k = 0; k < 3; ++k)
+            {
+                const LLVector3 probe = pos + LLVector3(cosf(cand[k]), sinf(cand[k]), 0.f) * (step_m * 2.f);
+                const F32 score = ss_wet_score(fieldp->sample(probe)) * wet_dial + ((k == 1) ? 0.15f : 0.f);
+                if (score > best_score)
+                {
+                    best_score = score;
+                    best = k;
+                }
+            }
+            heading = cand[best];
+
+            LLVector3 next = pos + LLVector3(cosf(heading), sinf(heading), 0.f) * step_m;
+            next.mV[VZ] = surfaceZ(next);
+            if (llabs(next.mV[VZ] - pos.mV[VZ]) > CRAWL_JUMP_M) break;
+
+            SSStrikeNode node;
+            node.mPos = next;
+            node.mParent = prev;
+            node.mTrunk = false;
+            node.mCrawl = true;
+            node.mWidth = foot_width * lerp(0.6f, 0.25f, llclamp(travelled / llmax(arm_len, 1.f), 0.f, 1.f));
+            node.mTipDistM = 0.f;
+            strike.mChannel.push_back(node);
+
+            prev = (S32)strike.mChannel.size() - 1;
+            pos = next;
+            travelled += step_m;
+        }
+        longest = llmax(longest, travelled);
+    }
+
+    strike.mCrawlCount = (S32)strike.mChannel.size() - start;
+    strike.mCrawlStart = (strike.mCrawlCount > 0) ? start : -1;
+    strike.mCrawlLenM = longest;
+}
+
 // Chooses the morphology (spider, bidirectional crawler, cloud-to-air, or ground trunk with a fork-style cloud spread) and grows the whole channel.
 void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 {
@@ -868,6 +1111,7 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
         {
             growPath(strike, -1, strike.mOrigin, strike.mGround, levels,
                      1.f, 0.6f, 0.f, 1.f, true, rng, trunk, false);
+            growCrawl(strike, trunk.empty() ? -1 : trunk.back(), intensity);
         }
 
         const S32 arm_levels = llmax(levels - 2, 3);
@@ -937,6 +1181,8 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
 
     if (to_ground)
     {
+        growCrawl(strike, trunk.empty() ? -1 : trunk.back(), intensity);
+
         // Horizontal spread off the top, fork-style: a run out of the origin in each direction,
         // so a ground bolt carries the cloud-level channel a fork does instead of standing as a
         // bare vertical line.
@@ -964,10 +1210,11 @@ void SSLightning::buildChannel(SSStrike& strike, F32 intensity)
     finishChannel(strike);
 }
 
-// After every run, branch and re-route is grown: the leader front sweeps the whole bolt as one
+// After every run, branch, crawl and re-route is grown: the leader front sweeps the whole bolt as one
 // continuous crawl, so each node's reach becomes its path distance from the root (normalized to
 // the leader's progress), not a per-run clock - a long channel takes visible time to travel, and
 // a side branch is reached when the front gets there, not when its own run would have finished.
+// Path metres, tip distances and the plasma thresholds ride the same walk.
 void SSLightning::finishChannel(SSStrike& strike)
 {
     strike.mChannelLenM = 0.f;
@@ -981,8 +1228,9 @@ void SSLightning::finishChannel(SSStrike& strike)
         const F32 d = (strike.mChannel[i].mPos - strike.mChannel[(size_t)p].mPos).magVec();
         strike.mChannel[i].mReachedAt = strike.mChannel[(size_t)p].mReachedAt + d;
     }
-    for (const SSStrikeNode& node : strike.mChannel)
+    for (SSStrikeNode& node : strike.mChannel)
     {
+        node.mPathM = node.mReachedAt;
         strike.mChannelLenM = llmax(strike.mChannelLenM, node.mReachedAt);
     }
     if (strike.mChannelLenM > 1.f)
@@ -992,6 +1240,257 @@ void SSLightning::finishChannel(SSStrike& strike)
             node.mReachedAt = llclamp(node.mReachedAt / strike.mChannelLenM, 0.f, 1.f);
         }
     }
+
+    // <SS:Nexii> Tip distances for the amber gradient: the trunk node nearest the attachment is the foot; the walk up its parents accumulates path metres, and every other node inherits its parent's figure plus its own segment, so a branch forking low is amber where it forks and the crawl is amber throughout. Anything on a chain that never meets the foot keeps the huge default.
+    if (strike.mKind == STRIKE_GROUND)
+    {
+        S32 foot = -1;
+        F32 foot_d2 = 1.0e30f;
+        for (size_t i = 0; i < strike.mChannel.size(); ++i)
+        {
+            const SSStrikeNode& node = strike.mChannel[i];
+            if (!node.mTrunk) continue;
+            const F32 d2 = (node.mPos - strike.mGround).magVecSquared();
+            if (d2 < foot_d2)
+            {
+                foot_d2 = d2;
+                foot = (S32)i;
+            }
+        }
+        if (foot >= 0)
+        {
+            F32 acc = 0.f;
+            S32 at = foot;
+            while (at >= 0)
+            {
+                SSStrikeNode& node = strike.mChannel[(size_t)at];
+                node.mTipDistM = llmin(node.mTipDistM, acc);
+                const S32 p = node.mParent;
+                if (p < 0) break;
+                acc += (node.mPos - strike.mChannel[(size_t)p].mPos).magVec();
+                at = p;
+            }
+            for (size_t i = 1; i < strike.mChannel.size(); ++i)
+            {
+                SSStrikeNode& node = strike.mChannel[i];
+                const S32 p = node.mParent;
+                if (p < 0 || node.mCrawl) continue;
+                const SSStrikeNode& parent = strike.mChannel[(size_t)p];
+                if (parent.mTipDistM >= 1.0e8f) continue;
+                const F32 d = (node.mPos - parent.mPos).magVec();
+                node.mTipDistM = llmin(node.mTipDistM, parent.mTipDistM + d);
+            }
+        }
+    }
+
+    // <SS:Nexii> Plasma pop thresholds: value noise along the path (a 25m period) blended with a per-node jitter, so the column breaks into coherent stretches of a few segments rather than random confetti, and the same pattern every frame and on every client.
+    const U32 salt = (U32)(strike.mFireAt * 3571.0) ^ 0x11feu;
+    for (size_t i = 0; i < strike.mChannel.size(); ++i)
+    {
+        SSStrikeNode& node = strike.mChannel[i];
+        const F32 n = ss_vnoise1(node.mPathM / 25.f, salt);
+        const F32 j = ss_hash_unit(salt ^ ((U32)i * 1313u));
+        node.mThr = llclamp(0.7f * n + 0.3f * j, 0.f, 1.f);
+    }
+}
+
+// The ground show's spawn-time tables: aura discs for every kind, then for a ground strike the impact sparks' ballistics, the fire blobs and the bounding box.
+void SSLightning::buildGroundShow(SSStrike& strike)
+{
+    const U32 seed = ss_hash3((U32)(strike.mFireAt * 271.0) ^ 0xc0fau);
+    const F32 I = strike.mIntensity;
+    const bool ground = (strike.mKind == STRIKE_GROUND);
+
+    // The aura's patch discs: fixed ring positions around the point, radius by intensity, resting on the surface.
+    for (S32 i = 0; i < SSGroundShow::AURA_PATCHES; ++i)
+    {
+        const U32 h = seed + (U32)i * 61u;
+        const F32 ang = ss_hash_unit(h) * F_TWO_PI;
+        const F32 rad = 1.5f + 2.5f * ss_hash_unit(h ^ 3u);
+        const F32 r = (1.2f + 1.0f * I) * (0.7f + 0.6f * ss_hash_unit(h ^ 11u));
+        LLVector3 pos = strike.mGround + LLVector3(cosf(ang) * rad, sinf(ang) * rad, 0.f);
+        const F32 surf = ground ? surfaceZ(pos) : strike.mGround.mV[VZ];
+        pos.mV[VZ] = surf + 0.5f * r;
+        strike.mAuraPos[i] = pos;
+        strike.mAuraR[i] = r;
+        strike.mAuraSurfZ[i] = surf;
+    }
+    strike.mAuraCentreR = 2.f + 2.f * I;
+
+    strike.mSparks.clear();
+    strike.mFireBlobs.clear();
+    strike.mGroundBoxMin = strike.mGround - LLVector3(6.f, 6.f, 1.f);
+    strike.mGroundBoxMax = strike.mGround + LLVector3(6.f, 6.f, 6.f);
+    if (!ground || strike.mChannel.empty()) return;
+
+    const F32 spread = llclamp(settingF("SSAtmoLightningSparkSpread", 1.f), 0.f, 3.f);
+    const F32 ground_z = strike.mGround.mV[VZ];
+
+    LLVector3 box_min = strike.mGroundBoxMin;
+    LLVector3 box_max = strike.mGroundBoxMax;
+    auto grow_box = [&](const LLVector3& p, F32 pad)
+    {
+        box_min.mV[VX] = llmin(box_min.mV[VX], p.mV[VX] - pad);
+        box_min.mV[VY] = llmin(box_min.mV[VY], p.mV[VY] - pad);
+        box_min.mV[VZ] = llmin(box_min.mV[VZ], p.mV[VZ] - pad);
+        box_max.mV[VX] = llmax(box_max.mV[VX], p.mV[VX] + pad);
+        box_max.mV[VY] = llmax(box_max.mV[VY], p.mV[VY] + pad);
+        box_max.mV[VZ] = llmax(box_max.mV[VZ], p.mV[VZ] + pad);
+    };
+
+    // Impact sparks: a horizontal fan, most of it along the crawl, every one landing inside its life.
+    const S32 count = (S32)(SPARK_COUNT * (0.4f + 0.6f * I));
+    strike.mSparks.reserve((size_t)count);
+    for (S32 i = 0; i < count; ++i)
+    {
+        const U32 h = ss_hash3(seed ^ 0x5a7au) + (U32)i * 131u;
+
+        SSStrikeSpark sp;
+        F32 heading = ss_hash_unit(h) * F_TWO_PI;
+        sp.mFrom = strike.mGround;
+        sp.mFrom.mV[VZ] += 0.2f;
+
+        if (strike.mCrawlCount > 0)
+        {
+            const bool from_crawl = ss_hash_unit(h ^ 1u) < 0.4f;
+            const bool along = ss_hash_unit(h ^ 4u) < 0.6f;
+            if (from_crawl)
+            {
+                const S32 idx = strike.mCrawlStart
+                    + llmin((S32)(ss_hash_unit(h ^ 2u) * (F32)strike.mCrawlCount), strike.mCrawlCount - 1);
+                const SSStrikeNode& node = strike.mChannel[(size_t)idx];
+                sp.mFrom = node.mPos;
+                sp.mFrom.mV[VZ] += 0.15f;
+                if (along && node.mParent >= 0)
+                {
+                    const LLVector3 d = node.mPos - strike.mChannel[(size_t)node.mParent].mPos;
+                    heading = atan2f(d.mV[VY], d.mV[VX]) + (ss_hash_unit(h ^ 5u) - 0.5f) * 1.1f;
+                }
+            }
+            else if (along)
+            {
+                heading = strike.mCrawlBearing + (ss_hash_unit(h ^ 5u) - 0.5f) * 1.1f
+                    + ((ss_hash_unit(h ^ 6u) < 0.35f) ? F_PI : 0.f);
+            }
+        }
+        sp.mCos = cosf(heading);
+        sp.mSin = sinf(heading);
+
+        const F32 t_hit = SPARK_HIT_MIN_S + (SPARK_HIT_MAX_S - SPARK_HIT_MIN_S) * ss_hash_unit(h ^ 7u);
+        sp.mVZ = 0.5f * SPARK_GRAVITY * t_hit;
+        const F32 reach = lerp(SPARK_REACH_MIN_M, SPARK_REACH_MAX_M, powf(ss_hash_unit(h ^ 8u), 0.8f))
+            * (0.6f + 0.4f * I) * spread;
+        sp.mVH = llclamp(reach / t_hit, 4.f, 40.f);
+        sp.mT0 = ss_hash_unit(h ^ 9u) * 0.06f;
+        sp.mLife = t_hit + 0.05f + 0.25f * ss_hash_unit(h ^ 10u);
+        sp.mRadius = 0.05f + 0.05f * ss_hash_unit(h ^ 11u);
+        sp.mSeed = h;
+
+        // The real surface crossing of the arc, solved once: a landing within reach of the launch
+        // height keeps the spark; a roof edge or a wall (more than 2.5m of drop or rise) lets it fly off.
+        LLVector3 land = sp.mFrom + LLVector3(sp.mCos, sp.mSin, 0.f) * (sp.mVH * t_hit);
+        land.mV[VZ] = surfaceZ(land);
+        const F32 dz = land.mV[VZ] - sp.mFrom.mV[VZ];
+        const F32 disc = sp.mVZ * sp.mVZ - 2.f * SPARK_GRAVITY * dz;
+        if (llabs(dz) <= 2.5f && disc > 0.f)
+        {
+            sp.mHit = (sp.mVZ + sqrtf(disc)) / SPARK_GRAVITY;
+            sp.mLandZ = land.mV[VZ];
+            sp.mLife = llmax(sp.mLife, sp.mHit + 0.05f);
+            grow_box(land, 1.f);
+        }
+        else
+        {
+            sp.mHit = 0.f;
+            sp.mLandZ = sp.mFrom.mV[VZ] - 50.f;
+            sp.mLife = t_hit + 0.6f;
+        }
+        strike.mSparks.push_back(sp);
+    }
+
+    // Fire blobs along the crawl, igniting outward at the crawl's arc speed.
+    F32 last_fire_m = -10.f;
+    S32 crawl_fires = 0;
+    if (strike.mCrawlCount > 0)
+    {
+        const F32 foot_path = strike.mChannel[(size_t)strike.mChannel[(size_t)strike.mCrawlStart].mParent].mPathM;
+        for (S32 i = 0; i < strike.mCrawlCount && crawl_fires < FIRE_CRAWL_MAX; ++i)
+        {
+            const SSStrikeNode& node = strike.mChannel[(size_t)(strike.mCrawlStart + i)];
+            const F32 dist = llmax(node.mPathM - foot_path, 0.f);
+            if (i > 0 && dist - last_fire_m < 1.8f && dist >= last_fire_m) continue;
+            last_fire_m = dist;
+
+            const U32 h = ss_hash3(seed ^ 0xf1e5u) + (U32)i * 97u;
+            SSStrikeFire fb;
+            fb.mPos = node.mPos;
+            fb.mRadius = (1.f + 1.2f * ss_hash_unit(h)) * (0.7f + 0.6f * I);
+            fb.mIgnite = dist / SSGroundShow::CRAWL_ARC_M_S;
+            fb.mLifeMul = 0.6f + 0.8f * ss_hash_unit(h ^ 3u);
+            fb.mSeed = h;
+            strike.mFireBlobs.push_back(fb);
+            grow_box(fb.mPos, fb.mRadius + 0.5f);
+            ++crawl_fires;
+        }
+    }
+
+    // A short crawl still gets the impact-time fire line: a lateral fan of blobs around the foot.
+    if (strike.mCrawlLenM < 4.f)
+    {
+        for (S32 i = 0; i < 5; ++i)
+        {
+            const U32 h = ss_hash3(seed ^ 0xfa4eu) + (U32)i * 89u;
+            const F32 ang = ss_hash_unit(h) * F_TWO_PI;
+            const F32 rad = 1.5f + 3.5f * ss_hash_unit(h ^ 3u);
+            SSStrikeFire fb;
+            fb.mPos = strike.mGround + LLVector3(cosf(ang) * rad, sinf(ang) * rad, 0.f);
+            fb.mPos.mV[VZ] = surfaceZ(fb.mPos);
+            if (llabs(fb.mPos.mV[VZ] - ground_z) > 2.5f) fb.mPos.mV[VZ] = ground_z;
+            fb.mRadius = (0.9f + 1.0f * ss_hash_unit(h ^ 5u)) * (0.7f + 0.6f * I);
+            fb.mIgnite = rad / SSGroundShow::CRAWL_ARC_M_S;
+            fb.mLifeMul = 0.5f + 0.6f * ss_hash_unit(h ^ 7u);
+            fb.mSeed = h;
+            strike.mFireBlobs.push_back(fb);
+            grow_box(fb.mPos, fb.mRadius + 0.5f);
+        }
+    }
+
+    // Landing embers: the scatter of small short blobs beside the main chain where sparks come down.
+    S32 embers = 0;
+    for (size_t i = 0; i < strike.mSparks.size() && embers < FIRE_EMBER_MAX; ++i)
+    {
+        const SSStrikeSpark& sp = strike.mSparks[i];
+        if (sp.mHit <= 0.f) continue;
+        const U32 h = ss_hash3(sp.mSeed ^ 0xe3bu);
+        if (ss_hash_unit(h) >= 0.5f) continue;
+
+        SSStrikeFire fb;
+        fb.mPos = sp.mFrom + LLVector3(sp.mCos, sp.mSin, 0.f) * (sp.mVH * sp.mHit);
+        fb.mPos.mV[VZ] = sp.mLandZ;
+        fb.mRadius = 0.35f + 0.35f * ss_hash_unit(h ^ 3u);
+        fb.mIgnite = sp.mT0 + sp.mHit;
+        fb.mLifeMul = 0.35f + 0.25f * ss_hash_unit(h ^ 5u);
+        fb.mSeed = h;
+        fb.mEmber = true;
+        strike.mFireBlobs.push_back(fb);
+        ++embers;
+    }
+
+    for (S32 i = 0; i < SSGroundShow::AURA_PATCHES; ++i)
+    {
+        grow_box(strike.mAuraPos[i], strike.mAuraR[i]);
+    }
+    if (strike.mCrawlCount > 0)
+    {
+        for (S32 i = 0; i < strike.mCrawlCount; ++i)
+        {
+            grow_box(strike.mChannel[(size_t)(strike.mCrawlStart + i)].mPos, 2.f);
+        }
+    }
+    box_min.mV[VZ] = llmin(box_min.mV[VZ], ground_z - 1.f);
+    box_max.mV[VZ] = llmax(box_max.mV[VZ], ground_z + 6.f);
+    strike.mGroundBoxMin = box_min;
+    strike.mGroundBoxMax = box_max;
 }
 
 // The under-deck re-route for ground strikes: with the under deck (the cloud band below a
@@ -1077,7 +1576,7 @@ bool SSLightning::underDeckDivert(SSStrike& strike, SSRandStream& rng)
     return true;
 }
 
-// Runs one strike through its phases: charge, leader descent, summed return strokes, flash decay, retirement.
+// Runs one strike through its phases: charge, leader descent, summed return strokes plus an optional late restrike, the flare and fire envelopes, flash decay, retirement once the whole ground show is over.
 void SSLightning::advance(SSStrike& strike, F32 dt)
 {
     strike.mT = (F32)(SSAtmoMagic::getInstance()->sharedTime() - strike.mFireAt);
@@ -1105,6 +1604,7 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
     {
         const F32 until = -leader_s - strike.mT;
         strike.mCharge = (until < charge_s) ? (1.f - until / charge_s) : 0.f;
+        strike.mChargeHeld = llmax(strike.mChargeHeld, strike.mCharge);
 
         if (strike.mCharge > 0.f && !strike.mChargeSent)
         {
@@ -1120,6 +1620,16 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
     F32 brightness = 0.f;
 
     strike.mStrokeCount = 0;
+    strike.mHit = 0.f;
+    strike.mFire = 0.f;
+    strike.mPlasmaSince = -1.f;
+    strike.mLastGap = 0.f;
+
+    static LLCachedControl<F32> fire_life_setting(gSavedSettings, "SSAtmoLightningGroundFireLife", 0.9f);
+    static LLCachedControl<F32> late_setting(gSavedSettings, "SSAtmoLightningLateRestrike", 0.45f);
+    static LLCachedControl<F32> plasma_setting(gSavedSettings, "SSAtmoLightningPlasma", 1.f);
+    const F32 tau_f = llclamp((F32)fire_life_setting, 0.2f, 2.5f) / 2.5f;
+    const F32 hit_tau = strike.mStrokeDecayS * 1.5f;
 
     if (strike.mT < -leader_s)
     {
@@ -1135,52 +1645,109 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
             strike.mStrokeCount = 1;
             strike.mStrokeAt[0] = 0.f;
             strike.mStrokeBright[0] = brightness;
+            strike.mStrokeScale[0] = brightness;
+            strike.mStrokeDrift[0] = 0.f;
         }
     }
     else
     {
         strike.mLeaderProgress = 1.f;
 
+        // One fired stroke: its decayed glow into the channel, the flare and fire envelopes it feeds,
+        // and its record for the renderer.
+        auto fire_stroke = [&](F32 at_k, F32 scale_k, F32 gap_k, F32 drift_k)
+        {
+            if (strike.mT < at_k) return;
+            const F32 since = strike.mT - at_k;
+            const F32 glow = scale_k * expf(-since / strike.mStrokeDecayS);
+            brightness += glow;
+
+            if (strike.mStrokeCount < SSStrike::MAX_STROKES)
+            {
+                strike.mStrokeAt[strike.mStrokeCount] = at_k;
+                strike.mStrokeBright[strike.mStrokeCount] = glow;
+                strike.mStrokeScale[strike.mStrokeCount] = scale_k;
+                strike.mStrokeDrift[strike.mStrokeCount] = drift_k;
+                ++strike.mStrokeCount;
+            }
+
+            // The flare and the fire belong to a strike that reached the ground; a fork or a sheet has no contact to flare.
+            if (strike.mKind == STRIKE_GROUND)
+            {
+                strike.mHit += scale_k * expf(-since / hit_tau) * sqrtf(llmin(1.f, since / 0.02f));
+                const F32 rise = llmin(1.f, since / SSGroundShow::FIRE_RISE_S);
+                const F32 fire_k = scale_k * rise * rise
+                    * expf(-llmax(0.f, since - SSGroundShow::FIRE_RISE_S) / tau_f);
+                strike.mFire = llmax(strike.mFire, fire_k);
+            }
+            strike.mPlasmaSince = since;
+            strike.mLastGap = gap_k;
+        };
+
         F32 at = 0.f;
+        F32 gap = 0.f;
+        F32 drift = 0.f;
+        F32 last_at = 0.f;
         for (S32 i = 0; i < strokes; ++i)
         {
-            if (strike.mT >= at)
-            {
-                const F32 since = strike.mT - at;
-                const F32 scale = 1.f / (1.f + (F32)i * 0.6f);
-                const F32 glow = scale * expf(-since / strike.mStrokeDecayS);
-                brightness += glow;
+            const F32 scale = 1.f / (1.f + (F32)i * 0.6f);
+            fire_stroke(at, scale, gap, drift);
+            last_at = at;
+            gap = rng.frand(strike.mRestrikeMinS, strike.mRestrikeMaxS);
+            drift += llmin(gap, 0.09f);
+            at += gap;
+        }
 
-                if (strike.mStrokeCount < SSStrike::MAX_STROKES)
-                {
-                    strike.mStrokeAt[strike.mStrokeCount] = at;
-                    strike.mStrokeBright[strike.mStrokeCount] = glow;
-                    ++strike.mStrokeCount;
-                }
-            }
-            at += rng.frand(strike.mRestrikeMinS, strike.mRestrikeMaxS);
+        // <SS:Nexii> The late restrike: the recorded column re-lights 0.36s after impact, far outside the fast series, nearly as bright, over its own cooling plasma. Two unconditional rolls after the series keep every earlier draw where it was; the odds are the dial's, positive bolts (already a rapid series) take fewer.
+        const F32 late_roll = rng.frand();
+        const F32 late_gap = rng.frand(0.25f, 0.50f);
+        const F32 late_odds = llclamp((F32)late_setting, 0.f, 1.f) * (strike.mPositive ? 0.65f : 1.f);
+        if (late_roll < late_odds)
+        {
+            const F32 late_at = last_at + late_gap;
+            fire_stroke(late_at, 0.75f, late_gap, drift + 0.03f);
+            last_at = late_at;
         }
 
         // The stroke's honest exponential decay is only half the story: the tail after it is
-        // the dissolve-to-sparks, where the beam breaks apart into individually extinguished
-        // segments and dying sparks. The strike lives through that theatre - last pop, ember
-        // linger, margin - before retiring. Slower dissolve settings stretch the window.
+        // the plasma the column cools into, the sparks landing, the ground fire burning down.
+        // The strike lives through all of that - the longest of them plus a margin - before
+        // retiring, so nothing is cut off mid-air.
         {
             const F32 dissolve = llclamp(settingF("SSAtmoLightningDissolve", 1.f), 0.f, 2.f);
-            const F32 tail_s = (dissolve > 0.f)
-                ? SSDissolve::LAG_S + (SSDissolve::SPAN_S + SSDissolve::EMBER_S) / dissolve + 0.1f
-                : 0.f;
-            if (strike.mT > at + strike.mStrokeDecayS * 6.f + tail_s)
+            F32 tail_s = 0.f;
+            if (dissolve > 0.f)
+            {
+                tail_s = SSDissolve::LAG_S + SSDissolve::SPAN_S / dissolve + 0.1f;
+                tail_s += (plasma_setting > 0.f)
+                    ? SSDissolve::PLASMA_S * SSDissolve::PLASMA_FOOT_MULT
+                    : SSDissolve::EMBER_S / dissolve;
+            }
+            if (strike.mKind == STRIKE_GROUND)
+            {
+                tail_s = llmax(tail_s, SSGroundShow::FIRE_RISE_S + 3.5f * tau_f * 1.4f);
+                F32 spark_tail = 0.f;
+                for (const SSStrikeSpark& sp : strike.mSparks)
+                {
+                    spark_tail = llmax(spark_tail, sp.mT0 + ((sp.mHit > 0.f)
+                        ? sp.mHit + SSGroundShow::SECONDARY_LIFE_S : sp.mLife));
+                }
+                tail_s = llmax(tail_s, spark_tail);
+            }
+            if (strike.mT > last_at + strike.mStrokeDecayS * 6.f + tail_s)
             {
                 brightness = 0.f;
+                strike.mHit = 0.f;
+                strike.mFire = 0.f;
                 strike.mDone = true;
+                ss_release_strike_query(strike);
             }
         }
     }
 
     // During the dissolve tail the real channel is dark but keeps a whisper of presence so the
-    // renderer stays live for the dying sparks - the beam is gone, only its embers remain, and
-    // they need the channel pass running to draw.
+    // renderer stays live for the plasma and the ground show - the beam is gone, only its
+    // afterglow remains, and it needs the channel pass running to draw.
     F32 channel_brightness = llclamp(brightness, 0.f, 1.f);
     if (channel_brightness <= 0.001f && !strike.mChannel.empty()
         && strike.mT >= 0.f && !strike.mDone)
@@ -1218,9 +1785,10 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
             }
             strike.mDebugText->setPositionAgent(label_pos);
             strike.mDebugText->setColor(kindDebugColor(strike.mKind));
-            strike.mDebugText->setString(llformat("%s strike in %.1fs%s",
+            strike.mDebugText->setString(llformat("%s strike in %.1fs%s%s",
                 kindName(strike.mKind), -strike.mT,
-                strike.mCharge > 0.f ? llformat("  charge %.0f%%", strike.mCharge * 100.f).c_str() : ""));
+                strike.mCharge > 0.f ? llformat("  charge %.0f%%", strike.mCharge * 100.f).c_str() : "",
+                strike.mCrawlCount > 0 ? llformat("  crawl %.0fm", strike.mCrawlLenM).c_str() : ""));
         }
     }
     else

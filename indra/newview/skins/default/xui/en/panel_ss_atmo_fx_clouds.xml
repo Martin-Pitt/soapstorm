@@ -86,13 +86,13 @@
     <slider_bar
       control_name="SSAtmoCloudEdgeBreakup" name="SB_SSAtmoCloudEdgeBreakup"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05"
       tool_tip="How far a subdivided puff's rim may wander, as a fraction of its radius. 0 is off, and it needs tessellation" />
     <spinner
       control_name="SSAtmoCloudEdgeBreakup" name="S_SSAtmoCloudEdgeBreakup"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
       tool_tip="How far a subdivided puff's rim may wander, as a fraction of its radius. 0 is off, and it needs tessellation" />
     <button
       follows="left|top" layout="topleft"
@@ -111,13 +111,13 @@
     <slider_bar
       control_name="SSAtmoCloudGroundShadow" name="SB_SSAtmoCloudGroundShadow"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05"
       tool_tip="How strongly the deck shadows the ground's direct sunlight. The shade itself is carried by the deck's thickness; 0 turns it off" />
     <spinner
       control_name="SSAtmoCloudGroundShadow" name="S_SSAtmoCloudGroundShadow"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
       tool_tip="How strongly the deck shadows the ground's direct sunlight. The shade itself is carried by the deck's thickness; 0 turns it off" />
     <button
       follows="left|top" layout="topleft"

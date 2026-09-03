@@ -27342,6 +27342,193 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <real>1.0</real>
   </map>
+  <key>SSAtmoLightningAura</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: strength of the violet charge aura that gathers at the point about to be struck, breathing in from nothing over the anticipation. 1 is roughly a third of the light the old corona threw (3 about the old amount, 10 its old peak); 0 removes the haze. The amber impact flare that reuses the same discs has its own dial.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningAuraHollow</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how far the charge aura fades toward the strike point itself, across all its discs, so the haze reads as a ring around the attachment rather than a blob painted over it. 1 leaves the point dark until the flare fills it in at contact; 0 is a plain soft disc.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.9</real>
+  </map>
+  <key>SSAtmoLightningAuraPull</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: scale on how far the aura, flare and fire discs are pulled toward the camera along the view ray - 4m for a strike 10m off, 120m at a kilometre - so they float in front of kerbs, cars and terrain lips instead of clipping through them. Each disc is rescaled to project exactly where its true point does, so it keeps that point's parallax. 0 leaves the discs at the ground.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningSoftDepth</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: scale on the depth-map soft fade the aura, flare and fire discs use against scene geometry (the same idea the cloud puffs dissolve against buildings with), on top of their height fade against the ground. 0 disables the fade and skips the depth copy it needs.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningHitFlare</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: strength of the amber impact flare re-lit on every return stroke, reusing the charge aura's discs with a power-law hot centre at the contact and fading with the bolt one decay behind it. 0 leaves the ground unlit at contact except by the fire.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningAmberZone</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: metres of channel up from the attachment over which a ground bolt grades from its own colour to yellow-red amber, for a strike close by; the zone triples by a kilometre of distance and never drops under forty pixels, so a far strike still shows its foot. Strength is Ground amber.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>25.0</real>
+  </map>
+  <key>SSAtmoLightningGroundFire</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: brightness of the orange ground fire - blobs along the crawl, the impact fan and the sparks' landings - that ignites over the first frames after contact and burns on after the column has cooled, the way the recorded strike's road fire does. 0 is off.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningGroundFireLife</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how long the ground fire burns, in seconds of visible life after the last return stroke (its e-fold is this over 2.5; each blob varies around it). Longer than the bolt's own decay by design, so the fire outlasts the column; extends the strike's retirement to match.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.9</real>
+  </map>
+  <key>SSAtmoLightningFireLight</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: strength of the amber deferred point light the ground fire casts on the world around the contact (what turns a wet road orange) and of the faint scene-wide amber veil behind it. Multiplies Scene light; 0 keeps the fire to the discs.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningPlasma</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: brightness and noise strength of the plasma each stretch of channel cools into after it pops - a widening, warping, eroding cloud walking white-blue through white-cyan to grey over a third of a second, the amber foot pinching into a yellow knot that outlives the wisps. 0 restores the plain dissolve into dying sparks.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningPlasmaWarp</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: domain-warp amplitude of the plasma noise - how far the cooling column's filament is bent into curling wisps and vortices, growing with age. 0 erodes without curling.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningBead</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: beading of the live bolt's core along its length - the lumpy, pearled look the recorded stroke has - and how strongly a late restrike re-lights a column that has already pinched into knots as a chain of distinct beads. 0 is a smooth filament.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.35</real>
+  </map>
+  <key>SSAtmoLightningCrawl</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: multiplier on how far a ground strike trails along the surface past its attachment, as recorded strikes on wet roads do - 0 to 30m at 1, skewed short, one or two arms, following the ground and stopping at walls and drops. 0 disables the crawl.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningCrawlWet</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: how strongly wet ground and standing puddles steer the crawl, lengthen it, and pull the attachment itself across open ground (a full puddle is worth three metres of height in the attachment search). Reads the local surface field, so viewers can differ slightly on the exact trail.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningSparkSpread</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: multiplier on how far impact sparks fly before they land - 3 to 28m at 1, fanned along the crawl - with the vertical launch fixed so every spark lands inside its life and throws its secondaries. 0 drops them at the foot.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningLateRestrike</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: odds that a strike re-lights its channel a quarter to half a second after the fast series, at three quarters brightness, over its own cooling plasma - the recorded strike's second flash. Positive bolts, already a rapid series, take two thirds of this.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>0.45</real>
+  </map>
+  <key>SSAtmoLightningOcclusionCull</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: ask the GPU whether a ground strike's ground show (crawl, sparks, fire, aura) is entirely hidden behind scene geometry and skip building it while it is. Never affects the scene light, the flash or the sound.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
   <key>SSAtmoSurfaceStructAbove</key>
   <map>
     <key>Comment</key>

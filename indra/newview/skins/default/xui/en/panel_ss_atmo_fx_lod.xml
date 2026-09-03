@@ -51,13 +51,13 @@
     <slider_bar
       control_name="SSAtmoLodDrops" name="SB_SSAtmoLodDrops"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="8" max_val="96" increment="1" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="8" max_val="96" increment="1"
       tool_tip="Meters around the camera with fully modelled individual drops" />
     <spinner
       control_name="SSAtmoLodDrops" name="S_SSAtmoLodDrops"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="8" max_val="96" increment="1" decimal_digits="0"
+      label_width="0" min_val="8" max_val="96" increment="1" decimal_digits="0"
       tool_tip="Meters around the camera with fully modelled individual drops" />
     <button
       follows="left|top" layout="topleft"
@@ -76,13 +76,13 @@
     <slider_bar
       control_name="SSAtmoLodClusters" name="SB_SSAtmoLodClusters"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="24" max_val="256" increment="2" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="24" max_val="256" increment="2"
       tool_tip="Meters out to which clustered multi-drop particles carry the rain" />
     <spinner
       control_name="SSAtmoLodClusters" name="S_SSAtmoLodClusters"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="24" max_val="256" increment="2" decimal_digits="0"
+      label_width="0" min_val="24" max_val="256" increment="2" decimal_digits="0"
       tool_tip="Meters out to which clustered multi-drop particles carry the rain" />
     <button
       follows="left|top" layout="topleft"
@@ -101,13 +101,13 @@
     <slider_bar
       control_name="SSAtmoLodSheets" name="SB_SSAtmoLodSheets"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="64" max_val="512" increment="4" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="64" max_val="512" increment="4"
       tool_tip="Meters out to which large distant shower curtains are drawn" />
     <spinner
       control_name="SSAtmoLodSheets" name="S_SSAtmoLodSheets"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="64" max_val="512" increment="4" decimal_digits="0"
+      label_width="0" min_val="64" max_val="512" increment="4" decimal_digits="0"
       tool_tip="Meters out to which large distant shower curtains are drawn" />
     <button
       follows="left|top" layout="topleft"
@@ -132,13 +132,13 @@
     <slider_bar
       control_name="SSAtmoCloudPuffsPerCell" name="SB_SSAtmoCloudPuffsPerCell"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="1" max_val="8" increment="1" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="1" max_val="8" increment="1"
       tool_tip="How many puffs the field places in each 260m cell it keeps. Lower thins the field toward one body per cell; higher fills the same cells more thickly. It does not open holes - that is the sky's coverage - and it costs nothing in the far field, which already collapses to one puff per cell" />
     <spinner
       control_name="SSAtmoCloudPuffsPerCell" name="S_SSAtmoCloudPuffsPerCell"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="1" max_val="8" increment="1" decimal_digits="0"
+      label_width="0" min_val="1" max_val="8" increment="1" decimal_digits="0"
       tool_tip="How many puffs the field places in each 260m cell it keeps. Lower thins the field toward one body per cell; higher fills the same cells more thickly. It does not open holes - that is the sky's coverage - and it costs nothing in the far field, which already collapses to one puff per cell" />
     <button
       follows="left|top" layout="topleft"
@@ -157,13 +157,13 @@
     <slider_bar
       control_name="SSAtmoCloudPuffBudget" name="SB_SSAtmoCloudPuffBudget"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="64" max_val="4000" increment="20" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="136" min_val="64" max_val="4000" increment="20"
       tool_tip="Most puffs one cloud deck may draw at once. Over budget the field keeps the nearest and drops the farthest, so lowering this pulls the deck's far edge in rather than thinning the sky overhead" />
     <spinner
       control_name="SSAtmoCloudPuffBudget" name="S_SSAtmoCloudPuffBudget"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="64" max_val="8000" increment="20" decimal_digits="0"
+      label_width="0" min_val="64" max_val="8000" increment="20" decimal_digits="0"
       tool_tip="Most puffs one cloud deck may draw at once. Over budget the field keeps the nearest and drops the farthest, so lowering this pulls the deck's far edge in rather than thinning the sky overhead" />
     <button
       follows="left|top" layout="topleft"

@@ -232,13 +232,13 @@
     <slider_bar
       control_name="SSAtmoShadowDebugStride" name="SB_shadow_stride"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0.25" max_val="32" increment="0.25" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0.25" max_val="32" increment="0.25"
       tool_tip="Sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 the cloud interpolates between texels the way the map is read when sampled - smoother, not more detailed - and is doubled automatically if the map is too fine to bake that many points" />
     <spinner
       control_name="SSAtmoShadowDebugStride" name="S_shadow_stride"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0.25" max_val="32" increment="0.25" decimal_digits="2"
+      label_width="0" min_val="0.25" max_val="32" increment="0.25" decimal_digits="2"
       tool_tip="Sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 the cloud interpolates between texels the way the map is read when sampled - smoother, not more detailed - and is doubled automatically if the map is too fine to bake that many points" />
     <button
       follows="left|top" layout="topleft"
@@ -336,13 +336,13 @@
     <slider_bar
       control_name="SSAtmoWhiteoutStrength" name="SB_whiteout_strength"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="2" increment="0.05"
       tool_tip="Master dial on the whiteout layer; 0 removes it entirely" />
     <spinner
       control_name="SSAtmoWhiteoutStrength" name="S_whiteout_strength"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="2" increment="0.05" decimal_digits="2"
       tool_tip="Master dial on the whiteout layer; 0 removes it entirely" />
     <button
       follows="left|top" layout="topleft"
@@ -386,13 +386,13 @@
     <slider_bar
       control_name="SSAtmoShadowRes" name="SB_shadow_res"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="128" max_val="2048" increment="128" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="128" max_val="2048" increment="128"
       tool_tip="Texels across a region; 1024 is about 0.25m accuracy on a 256m region" />
     <spinner
       control_name="SSAtmoShadowRes" name="S_shadow_res"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="128" max_val="2048" increment="128" decimal_digits="0"
+      label_width="0" min_val="128" max_val="2048" increment="128" decimal_digits="0"
       tool_tip="Texels across a region; 1024 is about 0.25m accuracy on a 256m region" />
     <button
       follows="left|top" layout="topleft"
@@ -411,13 +411,13 @@
     <slider_bar
       control_name="SSAtmoShadowMaxAge" name="SB_shadow_age"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="5" max_val="300" increment="5" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="5" max_val="300" increment="5"
       tool_tip="Seconds between full recaptures; local prim updates also queue one" />
     <spinner
       control_name="SSAtmoShadowMaxAge" name="S_shadow_age"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="5" max_val="300" increment="5" decimal_digits="0"
+      label_width="0" min_val="5" max_val="300" increment="5" decimal_digits="0"
       tool_tip="Seconds between full recaptures; local prim updates also queue one" />
     <button
       follows="left|top" layout="topleft"
@@ -481,13 +481,13 @@
     <slider_bar
       control_name="SSAtmoRunoffScale" name="SB_runoff_scale"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="4" increment="0.05"
       tool_tip="Multiplier on how much water the eaves shed; 0 stops shedding entirely" />
     <spinner
       control_name="SSAtmoRunoffScale" name="S_runoff_scale"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="4" increment="0.05" decimal_digits="2"
       tool_tip="Multiplier on how much water the eaves shed; 0 stops shedding entirely" />
     <button
       follows="left|top" layout="topleft"
@@ -506,13 +506,13 @@
     <slider_bar
       control_name="SSAtmoRunoffRadius" name="SB_runoff_radius"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="8" max_val="128" increment="4" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="8" max_val="128" increment="4"
       tool_tip="Metres from the camera within which roof edges shed drips" />
     <spinner
       control_name="SSAtmoRunoffRadius" name="S_runoff_radius"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="8" max_val="128" increment="4" decimal_digits="0"
+      label_width="0" min_val="8" max_val="128" increment="4" decimal_digits="0"
       tool_tip="Metres from the camera within which roof edges shed drips" />
     <button
       follows="left|top" layout="topleft"
@@ -588,13 +588,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowCell" name="SB_flow_cell"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="1" max_val="16" increment="0.5" decimal_digits="1"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="1" max_val="16" increment="0.5"
       tool_tip="Metres per cell. 4m is about the width of an alley; smaller resolves narrower gaps and costs more" />
     <spinner
       control_name="SSAtmoWindFlowCell" name="S_flow_cell"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="1" max_val="16" increment="0.5" decimal_digits="1"
+      label_width="0" min_val="1" max_val="16" increment="0.5" decimal_digits="1"
       tool_tip="Metres per cell. 4m is about the width of an alley; smaller resolves narrower gaps and costs more" />
     <button
       follows="left|top" layout="topleft"
@@ -613,13 +613,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowRes" name="SB_flow_res"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="64" max_val="512" increment="32" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="64" max_val="512" increment="32"
       tool_tip="Ceiling on texels per axis. Only a wide varregion reaches it, and then cells get coarser than the target" />
     <spinner
       control_name="SSAtmoWindFlowRes" name="S_flow_res"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="64" max_val="512" increment="32" decimal_digits="0"
+      label_width="0" min_val="64" max_val="512" increment="32" decimal_digits="0"
       tool_tip="Ceiling on texels per axis. Only a wide varregion reaches it, and then cells get coarser than the target" />
     <button
       follows="left|top" layout="topleft"
@@ -638,13 +638,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowMargin" name="SB_flow_margin"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="256" increment="8" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="256" increment="8"
       tool_tip="How far a region's solve looks into its neighbours. The overlap is what keeps wind continuous across a sim border" />
     <spinner
       control_name="SSAtmoWindFlowMargin" name="S_flow_margin"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="256" increment="8" decimal_digits="0"
+      label_width="0" min_val="0" max_val="256" increment="8" decimal_digits="0"
       tool_tip="How far a region's solve looks into its neighbours. The overlap is what keeps wind continuous across a sim border" />
     <button
       follows="left|top" layout="topleft"
@@ -663,13 +663,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowHeight" name="SB_flow_height"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="48" max_val="1024" increment="16" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="48" max_val="1024" increment="16"
       tool_tip="Starting guess at how tall the build is. The capture probes four times this far up and settles the real ceiling on what it finds" />
     <spinner
       control_name="SSAtmoWindFlowHeight" name="S_flow_height"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="48" max_val="1024" increment="16" decimal_digits="0"
+      label_width="0" min_val="48" max_val="1024" increment="16" decimal_digits="0"
       tool_tip="Starting guess at how tall the build is. The capture probes four times this far up and settles the real ceiling on what it finds" />
     <button
       follows="left|top" layout="topleft"
@@ -688,13 +688,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowIterations" name="SB_flow_iterations"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="4" max_val="512" increment="4" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="4" max_val="512" increment="4"
       tool_tip="Pressure iterations, and the main reason flow looks weak around buildings. Each pass carries information one cell, so this wants to be roughly the texel count" />
     <spinner
       control_name="SSAtmoWindFlowIterations" name="S_flow_iterations"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="4" max_val="512" increment="4" decimal_digits="0"
+      label_width="0" min_val="4" max_val="512" increment="4" decimal_digits="0"
       tool_tip="Pressure iterations, and the main reason flow looks weak around buildings. Each pass carries information one cell, so this wants to be roughly the texel count" />
     <button
       follows="left|top" layout="topleft"
@@ -713,13 +713,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowSliceMax" name="SB_flow_slicemax"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="2" max_val="16" increment="1" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="2" max_val="16" increment="1"
       tool_tip="Most horizontal slabs the vertical axis will be split into" />
     <spinner
       control_name="SSAtmoWindFlowSliceMax" name="S_flow_slicemax"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="2" max_val="16" increment="1" decimal_digits="0"
+      label_width="0" min_val="2" max_val="16" increment="1" decimal_digits="0"
       tool_tip="Most horizontal slabs the vertical axis will be split into" />
     <button
       follows="left|top" layout="topleft"
@@ -738,13 +738,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowSliceMin" name="SB_flow_slicemin"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="1" max_val="32" increment="1" decimal_digits="1"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="1" max_val="32" increment="1"
       tool_tip="Minimum metres between slab boundaries" />
     <spinner
       control_name="SSAtmoWindFlowSliceMin" name="S_flow_slicemin"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="1" max_val="32" increment="1" decimal_digits="1"
+      label_width="0" min_val="1" max_val="32" increment="1" decimal_digits="1"
       tool_tip="Minimum metres between slab boundaries" />
     <button
       follows="left|top" layout="topleft"
@@ -763,13 +763,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowShelterSteps" name="SB_flow_shelter"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="32" increment="1" decimal_digits="0"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="32" increment="1"
       tool_tip="How far upwind a cell looks for cover, in cells. 0 disables the calm pocket behind a building" />
     <spinner
       control_name="SSAtmoWindFlowShelterSteps" name="S_flow_shelter"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="32" increment="1" decimal_digits="0"
+      label_width="0" min_val="0" max_val="32" increment="1" decimal_digits="0"
       tool_tip="How far upwind a cell looks for cover, in cells. 0 disables the calm pocket behind a building" />
     <button
       follows="left|top" layout="topleft"
@@ -788,13 +788,13 @@
     <slider_bar
       control_name="SSAtmoWindFlowGradient" name="SB_flow_gradient"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="0.6" increment="0.05" decimal_digits="2"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="0.6" increment="0.05"
       tool_tip="Boundary layer exponent. 0 is a uniform wind at all altitudes, 0.25 typical over built-up ground, 0.4 a dense city" />
     <spinner
       control_name="SSAtmoWindFlowGradient" name="S_flow_gradient"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="0.6" increment="0.05" decimal_digits="2"
+      label_width="0" min_val="0" max_val="0.6" increment="0.05" decimal_digits="2"
       tool_tip="Boundary layer exponent. 0 is a uniform wind at all altitudes, 0.25 typical over built-up ground, 0.4 a dense city" />
     <button
       follows="left|top" layout="topleft"
@@ -836,13 +836,13 @@
     <slider_bar
       control_name="SSAtmoWindGustTravel" name="SB_gust_travel"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="3" increment="0.1" decimal_digits="1"
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0" max_val="3" increment="0.1"
       tool_tip="How fast fronts sweep downwind relative to the air itself. 1 carries them along with it, so a surge reaches the far side of a region as late as the air takes to get there; 0 pins the pattern to the ground so the wind rises and falls in place instead of in waves" />
     <spinner
       control_name="SSAtmoWindGustTravel" name="S_gust_travel"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" border_visible="false" min_val="0" max_val="3" increment="0.1" decimal_digits="1"
+      label_width="0" min_val="0" max_val="3" increment="0.1" decimal_digits="1"
       tool_tip="How fast fronts sweep downwind relative to the air itself. 1 carries them along with it, so a surge reaches the far side of a region as late as the air takes to get there; 0 pins the pattern to the ground so the wind rises and falls in place instead of in waves" />
     <button
       follows="left|top" layout="topleft"

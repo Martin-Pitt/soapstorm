@@ -1173,8 +1173,11 @@ void SSAtmoMagic::drawInfo()
                                  skew >= 0.5f ? "positive" : "negative", skew * 100.f,
                                  atmo->stormApproach() * 100.f));
         const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
-        lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen   %d segs",
-                                 ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mSegments));
+        lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen / %d occluded   %d quads%s",
+                                 ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mOccluded, ds.mQuads,
+                                 ds.mDepthCopy ? "  depth copy" : ""));
+        lines.push_back(llformat("  segs     %d bolt / %d plasma / %d sparks / %d discs",
+                                 ds.mSegments, ds.mPlasma, ds.mSparks, ds.mDiscs));
     }
 
     for (S32 self = 1; self >= 0; --self)

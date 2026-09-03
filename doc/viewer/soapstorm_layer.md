@@ -18,7 +18,7 @@ Simulation/state (mostly LLSingletons, ticked from idle/update paths):
 - **SSWindFlowMap** (`sswindflow.*`, 89K — largest) — wind flow field around geometry (`doc/archive/atmo_magic_windflow.md`).
 - **SSSurfaceField** (`sssurfacefield.*`) — surface capture for runoff/wetness (`doc/archive/atmo_magic_runoff.md`).
 - **SSVolCloud** (`ssvolcloud.*`) — volumetric cloud field. Far-field depth squash cap shared with lightning so bolts and clouds agree on drawn depth.
-- **SSLightning / SSLightningRender** — bolt simulation + rendering (`doc/archive/atmo_magic_lightning.md`). Bloom via additive alpha into the post-deferred screen RT (see [glow_and_alpha.md](glow_and_alpha.md)).
+- **SSLightning / SSLightningRender** — bolt simulation + rendering (`doc/archive/atmo_magic_lightning.md`; the ground strike's aura, amber, plasma, crawl, sparks and fire in `doc/atmo_magic_lightning_strike.md`, drawn through one per-frame LLVertexBuffer). Bloom via additive alpha into the post-deferred screen RT (see [glow_and_alpha.md](glow_and_alpha.md)).
 - **SSAvatarWet** (`ssavatarwet.*`) — avatar wetness response to rain.
 - **SSSoundscape** (`sssoundscape.*`, `sssoundmeta`) — weather-aware ambient audio.
 - **SSWater / SSWaterWorld** (`sswater.*`, new on this branch) — Atmo-owned water plane objects. Reuses stock water pcodes/pool/shaders wholesale; `LLVOWater::mIsAtmoWater` is the ONLY discriminator, and because pcodes are shared the pcode factory cannot build these — SSWaterWorld news them and hands them to `gObjectList.adoptViewerObject`. See `doc/atmo_magic_water.md`.

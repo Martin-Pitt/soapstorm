@@ -17,7 +17,7 @@ Four tabs, split by **what a person is doing**, not by which subsystem owns the 
 | Tab | Holds | Why together |
 | --- | --- | --- |
 | Rain | Density, particle budget, impact toggles, drop opacity, ripple size/speed/opacity, the water shader switch, glow master, drop roundness, streak contrast, sparkle | Tuning rain is one continuous act. You change the density, then the opacity, then the splash that the new density made too loud. Splitting that across tabs means paging back and forth mid-adjustment. |
-| Lightning | Enable, strike triggers, pending-strike markers, 17 dials, seasonal charge, bolt from the blue, bolt texture | Nobody tunes lightning while tuning rain. This block alone is ~490 lines of markup and is the reason the floater outgrew one column. |
+| Lightning | Enable, strike triggers, pending-strike markers, 33 dials (the bolt's, then the ground strike's: amber zone, bead, plasma, late restrike, aura, flare, fire, crawl, sparks - `doc/atmo_magic_lightning_strike.md`), seasonal charge, bolt from the blue, hidden-ground-show skip, bolt texture | Nobody tunes lightning while tuning rain. This block alone is ~490 lines of markup and is the reason the floater outgrew one column. |
 | Clouds | The volumetric field's three switches and the debug overlay | New tab. See below. |
 | LOD | Precipitation's three distance tiers, the cloud field's density and puff budget | The one place to go when the weather costs more than the machine has. These are *how much to draw* decisions, and they belong together rather than each beside the look dials of the system it trims. |
 
