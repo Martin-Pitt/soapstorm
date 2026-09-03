@@ -69,9 +69,11 @@ void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, c
             // Re-apply so the object's capture baseline tracks the record (capture diffs
             // against mAuthored, which applyRecord refreshes). Revert of a name edit
             // follows the same path via the node's restored values.
-            for (const LLPointer<SSAtmoLandscapeObject>& objp : SSAtmoLandscapeWorld::getInstance()->mObjects)
+            SSAtmoLandscapeWorld* world = SSAtmoLandscapeWorld::getInstance();
+            for (S32 i = 0; i < world->objectCount(); ++i)
             {
-                if (objp.notNull() && objp->meshId() == mesh_id)
+                SSAtmoLandscapeObject* objp = world->objectAt(i);
+                if (objp && objp->meshId() == mesh_id)
                 {
                     objp->applyRecord(record);
                     break;
