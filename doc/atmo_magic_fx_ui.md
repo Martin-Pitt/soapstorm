@@ -16,7 +16,7 @@ Four tabs, split by **what a person is doing**, not by which subsystem owns the 
 
 | Tab | Holds | Why together |
 | --- | --- | --- |
-| Rain | Density, particle budget, impact toggles, drop opacity, ripple size/speed/opacity, the water shader switch, glow master, drop roundness, streak contrast, sparkle, the column trace debug | Tuning rain is one continuous act. You change the density, then the opacity, then the splash that the new density made too loud. Splitting that across tabs means paging back and forth mid-adjustment. |
+| Rain | Density, particle budget, impact toggles, drop opacity, ripple size/speed/opacity, the water shader switch, glow master, drop roundness, streak contrast, sparkle, the column trace debug, the rain shadow and roof runoff overlay toggles | Tuning rain is one continuous act. You change the density, then the opacity, then the splash that the new density made too loud. Splitting that across tabs means paging back and forth mid-adjustment. |
 | Lightning | Enable, strike triggers, pending-strike markers, 33 dials (the bolt's, then the ground strike's: amber zone, bead, plasma, late restrike, aura, flare, fire, crawl, sparks - `doc/atmo_magic_lightning_strike.md`), seasonal charge, bolt from the blue, hidden-ground-show skip, bolt texture | Nobody tunes lightning while tuning rain. This block alone is ~490 lines of markup and is the reason the floater outgrew one column. |
 | Clouds | The volumetric field's three switches and the debug overlay | New tab. See below. |
 | LOD | Precipitation's three distance tiers, the cloud field's density and puff budget | The one place to go when the weather costs more than the machine has. These are *how much to draw* decisions, and they belong together rather than each beside the look dials of the system it trims. |
@@ -173,20 +173,72 @@ built), and the colour is the answer:
 The violet case exists because red would misreport it. A roof past the deck top is *dry* —
 red says "the shelter catches the rain", and up there nothing catches anything.
 
-Density thins with distance — every 2nd column inside 96m, every 4th inside 192m, every 8th
-to the 256m edge — with the parity taken on the world cell indices so a line keeps its slot
-as the camera pans. The stride bands and the radius are fixed constants: the shelter answer
-is local, and a dial would invite reading weather into columns the camera cannot judge.
-Ground-risen weather (riser presets) draws the riser band instead of a climb to the deck,
-since nothing falls from the deck for it — an open column is where the weather appears at
-grade.
+Open columns thin out over the last 10–30m above their impact, so the landing stays
+readable where the ripples and splashes it feeds draw. Density steps with distance — every
+column inside 96m, every 2nd inside 192m, every 4th to the 256m edge — with the parity
+taken on the world cell indices so a line keeps its slot as the camera pans. The stride
+bands and the radius are fixed constants: the shelter answer is local, and a dial would
+invite reading weather into columns the camera cannot judge. Ground-risen weather (riser
+presets) draws the riser band instead of a climb to the deck, since nothing falls from the
+deck for it — an open column is where the weather appears at grade.
+
+Amber deserves its own word: it is the only colour that does not answer the question, it
+reports that no answer exists. The capture keeps region tiles (the camera's region plus
+neighbours within 64m) and void tiles (see below); a column outside all of them draws as a
+short amber stub because a full line would claim a sky nobody has seen — and so does a
+column inside a tile whose texel the capture never reached, which over the void is most
+empty water. Amber is the honest colour; the alternative is confidently lying about ocean.
+
+The Rain tab also carries the rain shadow and roof runoff overlay toggles, copied from the
+Simulation floater — the same switches, not copies, since both drive the one render-debug
+mask. The rain loop (trace, then the map the trace reads, then what the runoff sheds) needs
+one window open, not two.
+
+## Voidscape tiles
+
+The capture used to end at the region borders. Beyond them every column fell to the
+heightmap guess — which in the void means the water plane — and the column trace showed the
+whole void as amber stubs. Region tiles were also the only tiles, so `resolveColumn` dropped
+to its fallback the moment a column crossed a border, even one a neighbouring tile's
+overscan had actually seen.
+
+Two changes, both in `SSRainShadowMap`:
+
+- **Overscan reads.** `resolveColumn` now tries the column's own tile first, then any other
+  valid tile whose capture plane contains it — the ortho box reaches one overscan past its
+  own footprint, so a column just across a border is mapped by whichever tile saw it.
+- **Void tiles.** The super-grid squares past the rendered regions get their own captures,
+  keyed by the square's region handle with a flag bit set. First ring captures at a quarter
+  of `SSAtmoShadowRes`, halving per ring out to three rings — enough to cover the furthest
+  tier radius the precipitation spawner can reach.
+
+The void is **not** treated as open ocean. Objects, mega sculpties and (with the landscape
+option) giant mesh landscapes sit up to a couple of kilometres past their parent region, so
+a void square can hold anything from nothing to a whole mesh terrain. A miss over the void
+is a miss exactly as it is inside a region: the landing falls back to the water plane, the
+trace shows amber, and nothing claims an ocean nobody measured. What the tiles buy is that
+geometry which *is* out there — dock edges, platforms, seafloor and landscape meshes inside
+the capture band — gets mapped like any other geometry, at whatever square resolution it
+lands in. `markDirty` walks every square an edit's radius touches, so a giant mesh rez goes
+stale across its whole footprint, not just the square its root sits in.
+
+Void tiles are deliberately second-class: they are the last thing `capture()` picks, never
+run on a sky track (the track floor already answers every column), render into their own
+small target so they never force the region target to reallocate, and rebake far less
+eagerly — eight times the age limit, a 30s dirty interval instead of 2s, a looser
+fall-direction drift epsilon, and a 2s minimum cadence on top. A far square mostly sees
+still water or nothing between edits; genuine geometry changes out there arrive through the
+dirty path within that interval. They never feed the surface field or drainage (those walk
+region tiles), and the capture volume debug view draws them dimmed.
 
 ## Group resets
 
 Every section heading on the four tabs carries a **Reset group** button beside it, alongside the
 per-row `D` buttons that already reset one control each. The callback is `SSAtmo.ResetGroup`,
 registered next to `SSAtmo.StrikeNow` in `llviewermenu.cpp` because these panels are plain XUI with
-no class of their own to hang a callback on.
+no class of their own to hang a callback on. The one exception is the Rain tab's Debug Overlays
+heading: its checkboxes drive the render-debug mask, which is not a setting, so there is nothing a
+reset could set it back to.
 
 Its parameter is a **comma-separated list of control names, not a prefix**. A prefix would be
 shorter and would need no maintenance, and that is exactly the problem: it would silently widen

@@ -688,6 +688,19 @@
      hover_glow_amount="0.15"
      label="" />
 
+    <!-- <SS:Nexii> What the last Randomize roll turned out to be, in words. A generator the author presses repeatedly has to report itself or the button is a slot machine with the reels hidden - "Autumn with gale-force winds - two spells of precipitation" is what tells you whether to roll again, where eight changed slider positions do not. Blank until something is rolled, and blanked again by Remove. -->
+    <text
+     follows="left|bottom|right"
+     layout="topleft"
+     left="10"
+     top="527"
+     height="14"
+     right="-10"
+     name="weather_roll_text"
+     font="SansSerifSmall"
+     text_color="LtGray">
+    </text>
+
     <!-- <SS:Nexii> Opens the shared Weather Influence editor (one floater, sections grouped by the tab each mapping reaches) - the tuning surface for how far this track's weather may bend the values on this tab. Positioned by an absolute top against the panel's own height rather than by bottom="8". Under layout="topleft" a POSITIVE bottom is measured downward from the panel's top edge, so that put the button at the very top of the panel, overlapping the rows there and reading as a stray control floating above the tab. Only a negative value would have meant "up from the bottom", and an absolute top is plainer than relying on either reading. -->
     <button
      follows="left|bottom"
@@ -699,4 +712,26 @@
      name="influence_button_weather"
      tool_tip="Choose how much the weather cube modulates the sky you authored"
      label="Weather Influence..." />
+
+    <!-- <SS:Nexii> Rolls a whole day into the cube - see SSAtmoEnvWeatherGenerator. Beside Weather Influence because both act on the cube as a whole rather than on any one row above them, and on this tab rather than on Precipitation because the cube IS these rows: the roll writes moisture, convection, temperature and both wind fields, and precipitation only falls out of them. No confirmation on the roll, deliberately - the button is meant to be pressed repeatedly until a day looks right, and a dialog between every press would make that unusable. Remove asks, because it reads as deleting something and has no re-roll to soften it. Both are undone wholesale by Revert. -->
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="8"
+     top_delta="0"
+     height="21"
+     width="110"
+     name="weather_randomize_button"
+     tool_tip="Rolls a whole day of weather into this track - a season, sometimes an extreme event, and precipitation that builds an overcast sky before it falls. Press again for another"
+     label="Randomize" />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="8"
+     top_delta="0"
+     height="21"
+     width="110"
+     name="weather_remove_button"
+     tool_tip="Clears this track's weather back to a still, dry, clear sky - every keyframe on these rows with it"
+     label="Remove" />
 </panel>

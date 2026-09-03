@@ -25684,7 +25684,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoRainTraceDebug</key>
       <map>
       <key>Comment</key>
-      <string>Effects and LOD rain pane debug: one line per precipitation spawn column, traced from the ground it would land on up toward the weather source. Cyan the fall reaches the ground, red a shelter above stops the line short, violet a landing past the weather deck's top where no weather source exists over it, amber a column the rain shadow capture never mapped. Columns thin with distance - every 2nd cell near the camera, every 4th then 8th further out</string>
+      <string>Effects and LOD rain pane debug: one line per precipitation spawn column, traced from the ground it would land on up toward the weather source. Cyan the fall reaches the ground (thinning over the last stretch above the impact), red a shelter above stops the line short, violet a landing past the weather deck's top where no weather source exists over it, amber a column the rain shadow capture never mapped. Columns thin with distance - every cell near the camera, every 2nd then 4th further out</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

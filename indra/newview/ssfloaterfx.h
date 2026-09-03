@@ -3,10 +3,11 @@
  * @brief Atmo Magic: effects and LOD floater.
  *
  *        Almost everything in here binds straight to a setting through
- *        control_name and needs no code at all. This class exists for the one
- *        thing XUI cannot bind: the cloud field debug overlay, which lives in
- *        the pipeline's render-debug mask rather than in a setting, the same
- *        way the Simulation floater drives its five overlays.
+ *        control_name and needs no code at all. This class exists for the
+ *        things XUI cannot bind: the render-debug overlay toggles (cloud
+ *        field, rain shadow, roof runoff), which live in the pipeline's
+ *        render-debug mask rather than in settings, the same way the
+ *        Simulation floater drives its overlays.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code

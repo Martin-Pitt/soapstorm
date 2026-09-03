@@ -91,7 +91,7 @@
      width="382"
      name="shadow_overlay_check"
      label="Draw the rain shadow map"
-     tool_tip="Same overlay as Develop &gt; Render Metadata &gt; Rain shadow" />
+     tool_tip="Every captured depth texel drawn where it saw the world, in the view the Shadow view picker below selects. Texel cloud: olive sits on the ground, green through cyan to blue climbs above it, violet is tall shelter, magenta a grazed near-vertical face whose shelter answer is a guess, dimmed texels landed off the region. Landing grid: grey lands on the ground, green through blue is sheltered at height, loud red is a cell the capture never reached. Depth map: the capture itself, white near to black far, dark red holes. Capture volume: magenta readback in flight, amber dirty, yellow stale, cyan current. Same overlay as Develop &gt; Render Metadata &gt; Rain shadow" />
     <check_box
      follows="left|top"
      layout="topleft"

@@ -28,6 +28,7 @@
 #include "ssatmoenvdiscovery.h" // <SS:Nexii> the Load From Parcel button and its enabled state
 #include "ssdiscpad.h" // <SS:Nexii> disc-padding auto-derive poll
 #include "ssatmoenvweatherstate.h"
+#include "ssatmoenvweathergen.h" // <SS:Nexii> the Randomize button's roll
 #include "ssatmoenvcloudfieldstate.h"
 #include "ssatmoenvplanetarystate.h"
 #include "ssatmoenvapplier.h" // <SS:Nexii> the auto dome altitude the greyed-out row shows
@@ -192,6 +193,11 @@ bool SSFloaterAtmoEnv::postBuild()
                 [this](LLUICtrl*, const LLSD&) { onClickWeatherInfluence(); });
         }
     }
+
+    getChild<LLUICtrl>("weather_randomize_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickRandomizeWeather(); });
+    getChild<LLUICtrl>("weather_remove_button")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickRemoveWeather(); });
 
     getChild<LLUICtrl>("preview_time_slider")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitPreviewTime(); });
@@ -2128,6 +2134,79 @@ void SSFloaterAtmoEnv::onClickWeatherInfluence()
     LLFloaterReg::showInstance("ss_atmo_influence", LLSD(mSelectedTrackIndex));
 }
 
+// <SS:Nexii> Rolls a whole day of weather onto the selected track. Unconfirmed on purpose: the
+// button exists to be pressed until a day looks right, and a dialog between presses would make
+// that loop unusable - Revert is the way back, the same as it is for every other edit here. The
+// roll writes the cube's five curves and nothing else, so the sky, decks and water the author
+// already built are untouched; what the weather then does to them is the influence editor's
+// business, not this one's.
+void SSFloaterAtmoEnv::onClickRandomizeWeather()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    const SSAtmoEnvWeatherRoll roll =
+        SSAtmoEnvWeatherGenerator::randomize(asset.mTracks[mSelectedTrackIndex].mWeather);
+
+    setWeatherRollText(roll.mSummary);
+
+    // The whole tab changed under the author, structural toggles included - a squall turns the
+    // gust Auto box OFF and authors its three rows, so refreshing the row values alone would leave
+    // a checked box over rows that are no longer derived. refreshTrackTab is what rewrites the
+    // boxes; it pulls the auto, lightning and water row refreshes along behind it.
+    refreshTrackTab();
+    refreshStatus();
+    refreshPreview();
+}
+
+// <SS:Nexii> Clears the selected track's weather cube back to its constructed defaults. Confirmed
+// where Randomize is not: this one reads as deleting work and has no second press to soften it.
+void SSFloaterAtmoEnv::onClickRemoveWeather()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    LLSD args;
+    args["MESSAGE"] = "Clear this track's weather? Moisture, convection, temperature, wind and "
+                      "precipitation go back to a still, dry, clear sky - every keyframe on those "
+                      "rows with them.";
+    // The floater can close while the confirmation is up, so the callback goes through a handle
+    // rather than capturing this - same pattern as the template seed above.
+    LLHandle<LLFloater> handle = getHandle();
+    LLNotificationsUtil::add("GenericAlertYesCancel", args, LLSD(),
+        [handle](const LLSD& notification, const LLSD& response)
+        {
+            if (LLNotificationsUtil::getSelectedOption(notification, response) != 0) return;
+
+            SSAtmoEnvManager* inner = SSAtmoEnvManager::getInstance();
+            if (!inner->hasAsset()) return;
+
+            SSFloaterAtmoEnv* self = (SSFloaterAtmoEnv*)handle.get();
+            if (!self) return;
+
+            SSAtmoEnvAsset& asset = inner->editable();
+            if (self->mSelectedTrackIndex < 0
+                || self->mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+            SSAtmoEnvWeatherGenerator::clear(asset.mTracks[self->mSelectedTrackIndex].mWeather);
+
+            self->setWeatherRollText(std::string());
+            self->refreshTrackTab();
+            self->refreshStatus();
+            self->refreshPreview();
+        });
+}
+
+// The line under the weather rows describing the last roll; blank clears it.
+void SSFloaterAtmoEnv::setWeatherRollText(const std::string& text)
+{
+    LLTextBox* label = findChild<LLTextBox>("weather_roll_text");
+    if (label) label->setText(text);
+}
+
 // Selects the ground track.
 void SSFloaterAtmoEnv::onClickGroundRow()
 {
@@ -2150,6 +2229,9 @@ void SSFloaterAtmoEnv::selectTrack(S32 index)
         getChild<LLButton>(llformat("track_name_button_%d", slot))->setToggleState(slot == index);
     }
     getChild<LLUICtrl>("remove_track_button")->setEnabled(index > 0);
+
+    // The roll line describes ONE track's cube, so it does not survive being pointed at another.
+    setWeatherRollText(std::string());
 
     refreshTrackTab();
     refreshPlanetaryScales();
@@ -3281,18 +3363,19 @@ void SSFloaterAtmoEnv::buildGhosts(const std::vector<SSAtmoEnvKeyframe<T>>& keyf
         ghost.mHold = (kf.mCurve == SSAtmoEnvCurve::HOLD);
         ghost.mLabel = format(kf.mValue);
 
-        if (!ghost.mHold)
-        {
-            ghost.mDrawPhase = kf.mTime;
-            ghost.mSpanStart = kf.mTime;
-            ghost.mSpanEnd = kf.mTime;
-        }
-        else
-        {
-            ghost.mSpanStart = (i == 0) ? 0.0 : kf.mTime;
-            ghost.mSpanEnd = (i == count - 1) ? 1.0 : keyframes[i + 1].mTime;
-            ghost.mDrawPhase = 0.5 * (ghost.mSpanStart + ghost.mSpanEnd);
-        }
+        // <SS:Nexii> The mark sits where the key sits, HOLD or not - the stretch it holds is
+        // carried separately (mSpanStart/End) so the head can still light it while the phase
+        // rides that span. Drawing a HOLD key mid-span claimed a keyframe in the middle of the
+        // air it owns, at a spot the head could never land on to edit; and the last key's
+        // through-midnight extension was drawn as a second diamond at the centre of the wrap,
+        // over a phase where no key exists at all.
+        ghost.mDrawPhase = kf.mTime;
+        ghost.mSpanStart = kf.mTime;
+        ghost.mSpanEnd = (ghost.mHold && i < count - 1) ? keyframes[i + 1].mTime : kf.mTime;
+        // The last HOLD key stands through midnight to the end of the rail; the wrap run back
+        // to phase 0 is its ground under a cyclic field and is deliberately unmarked - there is
+        // no keyframe there to put a mark on.
+        if (ghost.mHold && i == count - 1) ghost.mSpanEnd = 1.0;
 
         out.push_back(ghost);
     }
@@ -3764,8 +3847,13 @@ void SSFloaterAtmoEnv::refreshForecastStrip()
         cell.mTemperatureC = track.mWeather.mTemperatureC.valueAt(phase);
         cell.mWindSpeed = state.mWindSpeed;
         cell.mWindHeading = state.mWindHeading;
-        cell.mPrecipPercent =
-            (S32)ll_round(llclamp(state.mPrecipitationIntensity, 0.f, 1.f) * 100.f);
+        // <SS:Nexii> Read off MOISTURE rather than off the resolved intensity, which is the same
+        // number except that suppression zeroes it. The strip wants the figure the cube WOULD
+        // deliver so that switching precipitation off greys a run of real percentages rather than
+        // flattening them to a row of 0% - that is what makes an authored lead-in legible: the
+        // figure climbs greyed while the deck thickens, then turns colour at the first drop.
+        const F32 moisture = track.mWeather.mMoisture.valueAt(phase);
+        cell.mPrecipPercent = (S32)ll_round(llclamp(moisture, 0.f, 1.f) * 100.f);
         cell.mFalling = state.mPrecipitationFalls
                         && state.mIntensityBand != SSAtmoEnvPrecipIntensity::NONE;
         cell.mThunder = state.mLightningEnabled && state.mLightningIntervalMaxSeconds > 0.f;
@@ -3818,8 +3906,10 @@ void SSFloaterAtmoEnv::drawForecastStrip()
                          x, base + STRIP_TEMP_TEXT_Y,
                          TEMP_COLOUR, LLFontGL::HCENTER, LLFontGL::BOTTOM);
 
-        // Dry hours still carry the figure, greyed - a run of 0% is as much a forecast as a run
-        // of 40%, and dropping the row would make the columns jump.
+        // <SS:Nexii> Grey means nothing is reaching the ground this hour - either the air is dry or
+        // the author switched precipitation off - and the number still says how wet the sky is, so
+        // the two read apart: a grey 0% is a clear day, a grey 60% is a deck holding its water.
+        // Colour is the one state where it is actually falling.
         const LLColor4& percent_colour = cell.mFalling
             ? ssStripPrecipColour(cell.mPrecipType) : DIM_COLOUR;
         font->renderUTF8(llformat("%d%%", cell.mPrecipPercent), 0,

@@ -35,13 +35,25 @@ SSFloaterEffects::SSFloaterEffects(const LLSD& key) :
 {
 }
 
-// <SS:Nexii> The one control that is not a setting. The cloud overlay is a render-debug mask so it shares a switch with Develop > Render Metadata > Cloud Field - toggling it either way shows up in both places - which is the same arrangement the Simulation floater's five overlays use, and the reason this floater has a class at all.
+// <SS:Nexii> The controls that are not settings. The cloud, rain shadow and runoff overlays are render-debug masks, so each shares a switch with its Develop > Render Metadata entry - toggling it either way shows up in both places - the same arrangement the Simulation floater's overlays use, and the reason this floater has a class at all. The shadow and runoff checkboxes also live on the Rain tab, so the rain loop - trace, the map the trace reads, what the runoff sheds - needs one window open, not two.
 bool SSFloaterEffects::postBuild()
 {
     getChild<LLCheckBoxCtrl>("cloud_overlay_check")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&)
         {
             LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_CLOUD_FIELD);
+            syncOverlayChecks();
+        });
+    getChild<LLCheckBoxCtrl>("shadow_overlay_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW);
+            syncOverlayChecks();
+        });
+    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF);
             syncOverlayChecks();
         });
 
@@ -59,4 +71,8 @@ void SSFloaterEffects::syncOverlayChecks()
 {
     getChild<LLCheckBoxCtrl>("cloud_overlay_check")->set(
         gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_CLOUD_FIELD));
+    getChild<LLCheckBoxCtrl>("shadow_overlay_check")->set(
+        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_RAIN_SHADOW));
+    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
+        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
 }

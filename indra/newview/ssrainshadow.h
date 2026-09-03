@@ -47,6 +47,7 @@ public:
     void clearCache();
 
     S32 tileCount() const { return (S32)mTiles.size(); }
+    S32 voidTileCount() const { return (S32)mVoidTiles.size(); }
     U32 resolution() const;
 
     U32 captureCount() const { return mCaptureCount; }
@@ -117,6 +118,11 @@ private:
         F32 mNear = 0.f, mFar = 0.f;
         F32 mBandTop = 0.f, mBandBottom = 0.f;
 
+        // <SS:Nexii> Voidscape tile: no region anchors it, so mEyeRegion hangs off the
+        // global super-grid square the key encodes instead of a region origin.
+        bool mVoid = false;
+        LLVector3d mVoidOrigin;
+
         F64 mCaptureTime = 0.0;
         bool mDirty = false;
         bool mValid = false;
@@ -167,7 +173,16 @@ private:
     bool captureTile(Tile& tile);
     void evict();
 
+    // <SS:Nexii> Agent-frame corner of a tile's footprint: a region tile hangs off its region's origin, a void tile off the global super-grid square its key encodes.
+    LLVector3 tileOriginAgent(const Tile& tile) const;
+
     std::map<U64, Tile> mTiles;
+    // <SS:Nexii> Voidscape captures: the same Tile over the squares past the rendered
+    // regions, keyed by the square's region handle with the void flag bit set, so the two
+    // key spaces can never collide. The void carries its own geometry - objects, mega
+    // sculpties and giant mesh builds reach kilometres past a region - so these capture it
+    // like any other tile, just coarser, lower priority, and on a much longer rebake clock.
+    std::map<U64, Tile> mVoidTiles;
     std::map<U64, DebugCloud> mDebugCloud;
     std::map<U64, DebugGrid> mDebugGrid;
 
@@ -177,6 +192,10 @@ private:
     F64 mDebugMapFrom = -1.0;
     U32 mDebugMapRes = 0;
     LLRenderTarget mTarget;
+    // <SS:Nexii> The void tiles' own small target: they capture at a quarter of the shadow
+    // resolution or coarser, and sharing the region target would reallocate it every time
+    // the two alternate.
+    LLRenderTarget mVoidTarget;
     F64 mLastCapture = 0.0;
 
     // <SS:Nexii> One readback in flight, served by SSGLReadback. The shared mTarget must not be re-rendered (or torn down) until the outstanding read lands; mReadbackPending gates capture() and evict(), and a clear requested mid-read is deferred to the read's completion.

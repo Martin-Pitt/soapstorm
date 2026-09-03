@@ -202,10 +202,18 @@ darkening, gusts and lightning never consult it. Every downstream consumer alrea
 resolved type and intensity (the bridge's `mPrecipitation`, the applier's rain-stopped clock, wetness,
 the surface field, soundscape), so suppression propagates without a single new call site.
 
-Keyframed rather than a plain track flag because *when it starts and stops* is the whole ask. Bool
-keyframes step at the segment midpoint (`ss_atmoenv_lerp<bool>`), so the cut lands where the scrubber
-reads half, and bool rows now draw scrubber ghosts like every other keyframed type - a day cycle's
-showers are read off the rail.
+Keyframed rather than a plain track flag because *when it starts and stops* is the whole ask. Flag
+keyframes HOLD (`ss_atmoenv_default_curve<bool>`): a bool has nothing to interpolate, so the value
+stands from its own key until the next and the shower runs from the key that ticks the box to the key
+that unticks it. Bool rows draw scrubber ghosts like every other keyframed type, and because HOLD
+ghosts draw as spans rather than points, a day cycle's showers are read off the rail as the stretches
+they are.
+
+They used to be EASE, which on a bool is not a curve at all - it is a step at the segment *midpoint*,
+so the rain started halfway between the key that turned it on and whatever key happened to precede
+it, a boundary in a place the author never put a mark. EASE was never authored intent on a flag, it
+was the generic default landing on a type with no use for one, so `ss_atmoenv_curve_on_load<bool>`
+corrects it on the way in rather than migrating documents.
 
 The forecast line follows the resolved state instead of raw moisture, or a suppressed SEVERE sky
 would still announce "Thundery showers" over a dry street; it reads "Overcast and strong winds"
@@ -278,6 +286,79 @@ and gaining a `right`. `ParamValue<LLRect>::updateValueFromBlock` only prefers t
 is what `left_pad` becomes) is in play - so `left_pad` plus `right` falls through to a branch that
 happens to work but is not the documented pairing. Every rewritten row resolves to the exact rect
 it had before at the design width; only the follows flags decide what happens after that.
+
+## Rolling a day: Randomize and Remove
+
+`Weather > Conditions` carries two buttons beside **Weather Influence...**: **Randomize**, which
+rolls a whole day of weather into the selected track's cube, and **Remove**, which clears it back
+to a still, dry, clear sky. Both act on one track - the cube is per-track and so is everything else
+on this floater.
+
+The generator (`ssatmoenvweathergen.cpp`) writes *curves*, not constants, and only the five the cube
+actually holds: moisture, convection, temperature, wind heading and wind speed, plus the
+precipitation switch. It never touches a cloud deck, a sky colour or a lightning dial. That is the
+whole trick, and it falls out of the resolver's existing shape: cover in oktas, intensity band,
+precipitation type, storm darkening, gust behaviour and lightning cadence are all *derived* from
+those five, so a generator that gets the curves right gets a day right and never has to know what a
+cloud deck is. It also means every extreme event is a bend in a curve rather than a mode - "blizzard"
+is nowhere in the code as a state, it is cold air plus a wet deck plus hard wind, and
+`derivePrecipitationType()` reaches the word by itself.
+
+### Spells, and why precipitation has four stages
+
+The unit the generator works in is a *spell*: a lead, a fall, an ease and a clear. Real weather
+arrives, and a single "moisture goes up here" keyframe collapses that into a sky that snaps from
+blue to raining. The lead is the load-bearing part - it puts an overcast deck over the region
+*before* the first drop, because moisture is cloud cover as well as rain intensity, so raising it
+ahead of the switch is literally the sky darkening in advance.
+
+The switch itself is two keys per spell and nothing between them - on at the start, off at the end -
+because flag keyframes HOLD. Not even a key at phase 0: the wrap segment holds the *last* key's value
+backwards through midnight, which is the off the last spell ended on.
+
+Spells are confined to phase 0.05-0.90 rather than allowed to wrap midnight. Wrapping any one of the
+four stages past phase 1 turns simple arithmetic into modular arithmetic in five places; the cost is
+that no *rolled* storm runs through midnight, and an author who wants one drags it there in seconds.
+
+### Themes and events
+
+Four times in five the roll is seasonal - spring, summer, autumn or winter, each a band of
+temperature, baseline moisture, convection, wind and how many spells it tends to produce. The bands
+are read off what the resolver does with the numbers rather than off a climate table: autumn's 0.30
+baseline moisture is "four oktas standing over you all day", and winter's temperature band is chosen
+so that `derivePrecipitationType()` stops returning rain, which makes a winter spell a snow spell
+without the generator saying the word.
+
+Roughly half of seasonal rolls also draw an extreme event from a season-filtered pool -
+thunderstorms, a squall line, a hailstorm, a blizzard, a cold snap, a heatwave, a gale, or a
+fog-bound morning. Events bend the bands *before* the curves are laid, so they never rewrite
+keyframes the season already wrote. A cold snap in particular is a bodily drop rather than a re-roll,
+so an autumn day of showers survives it as the same day of sleet.
+
+The remaining one in five is a fantasy archetype - the Stormlands, an Ashen Sky, an Endless Winter, a
+Glass Calm, a Weeping Season, the Tideturn, an Emberfall - each a whole world rather than a day, and
+each deliberately outside the envelope the seasonal path stays inside. No event is layered on top of
+one: sanding an archetype's edges off removes the only reason it exists. They still run through the
+same spell machinery, so an impossible sky still arrives and clears like a real one.
+
+A line under the rows says what the roll turned out to be. A generator meant to be pressed
+repeatedly has to report itself, or the button is a slot machine with the reels hidden - eight
+changed slider positions do not tell you whether to roll again.
+
+### The two confirmations, and why only one
+
+Randomize is unconfirmed on purpose: it exists to be pressed until a day looks right, and a dialog
+between presses makes that loop unusable. Remove asks, because it reads as deleting work and has no
+second press to soften it. Both are undone wholesale by Revert, like every other edit here.
+
+### Reading a roll off the strip
+
+The forecast strip's precipitation figure is taken from **moisture**, not from the resolved
+intensity - the same number except that suppression zeroes it. Grey means nothing reaches the ground
+that hour, whether because the air is dry or because the author switched precipitation off; the
+figure still says how wet the sky is. So a grey 0% is a clear day and a grey 60% is a deck holding
+its water, and an authored lead-in reads directly off the strip: the figure climbs greyed while the
+deck thickens, then turns colour at the first drop.
 
 ## Precipitation types: two tiers
 

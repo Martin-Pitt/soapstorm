@@ -1048,8 +1048,9 @@ void SSAtmoMagic::drawInfo()
 
     {
         SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
-        lines.push_back(llformat("shadow     %d regions at %d texels   %d dirty",
-                                 shadow->tileCount(), (S32)shadow->resolution(),
+        lines.push_back(llformat("shadow     %d regions + %d void at %d texels   %d dirty",
+                                 shadow->tileCount(), shadow->voidTileCount(),
+                                 (S32)shadow->resolution(),
                                  (S32)shadow->dirtyTileCount()));
         lines.push_back(llformat("captures   %u total, %u forced by edits   last %.1fs ago, %.1f ms",
                                  shadow->captureCount(), shadow->dirtyCaptureCount(),

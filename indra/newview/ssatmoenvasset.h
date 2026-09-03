@@ -110,7 +110,7 @@ struct SSAtmoEnvWeather
 
     SSAtmoEnvKeyframed<std::string> mPrecipitationOverride{std::string()};
 
-    // <SS:Nexii> Whether anything falls at all. Moisture used to be the sole switch - the sky wet enough to be overcast was the sky that rained - so an overcast, stormy, dry sky was unauthorable. Keyframed, because when it starts and stops is the whole point: a bool keyframe steps at the segment midpoint (ss_atmoenv_lerp<bool>), so the rain cuts where the scrubber reads half. Off suppresses only the precipitation half of the resolve - cloud cover, gloom, wind and lightning stay exactly as authored. [interaction: precipitation]
+    // <SS:Nexii> Whether anything falls at all. Moisture used to be the sole switch - the sky wet enough to be overcast was the sky that rained - so an overcast, stormy, dry sky was unauthorable. Keyframed, because when it starts and stops is the whole point: flag keyframes HOLD (ss_atmoenv_default_curve<bool>), so the rain starts at the key that turns it on and stops at the key that turns it off - where the author put the marks, not between them. Off suppresses only the precipitation half of the resolve - cloud cover, gloom, wind and lightning stay exactly as authored. [interaction: precipitation]
     SSAtmoEnvKeyframed<bool> mPrecipitationFalls{true};
 
     LLSD asLLSD() const;

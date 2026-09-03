@@ -203,6 +203,7 @@ set(viewer_SOURCE_FILES
     ssatmoenvtrackstate.cpp
     ssvolcloud.cpp
     ssatmoenvweatherstate.cpp
+    ssatmoenvweathergen.cpp
     ssfloateratmo.cpp
     ssfloateratmoenv.cpp
     ssfloateratmoinfluence.cpp
@@ -1122,6 +1123,7 @@ set(viewer_HEADER_FILES
     ssatmoenvtrackstate.h
     ssvolcloud.h
     ssatmoenvweatherstate.h
+    ssatmoenvweathergen.h
     ssfloateratmo.h
     ssfloateratmoenv.h
     ssfloateratmoinfluence.h

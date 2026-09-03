@@ -412,8 +412,13 @@ void SSLightningRender::renderFlash()
                 const F32 radius = llmax(160.f, strike.mDistanceM * 0.08f);
                 const S32 DISCS = 5;
 
+                // <SS:Nexii> Only the trunk the leader has REACHED carries discs: placing all five down the whole trunk at leader start lit the impact point ~leader_s before the bolt visibly arrived - an early flare at the ground that upstaged the real contact. The glow column now stretches downward with the front and reaches the ground the instant the channel does.
                 S32 trunk_n = 0;
-                for (const SSStrikeNode& node : strike.mChannel) { if (node.mTrunk) ++trunk_n; else break; }
+                for (const SSStrikeNode& node : strike.mChannel)
+                {
+                    if (!node.mTrunk || node.mReachedAt > strike.mLeaderProgress) break;
+                    ++trunk_n;
+                }
 
                 if (trunk_n > 0)
                 {

@@ -79,7 +79,7 @@ inline std::string ss_atmoenv_lerp<std::string>(const std::string& a, const std:
     return a;
 }
 
-// <SS:Nexii> A flag steps at the segment midpoint rather than the numeric lerp's asymmetric bool cast - a false->true segment reads true for all but the first instant, a true->false one stays true to the end. Halfway agrees with the scrubber: the eased weight crosses 0.5 exactly when the animation looks switched.
+// <SS:Nexii> The guard rail behind a flag's HOLD curve rather than the rule flags actually follow. Every bool keyframe is HOLD (see ss_atmoenv_default_curve<bool> below), and a HOLD segment weighs everything onto its earlier keyframe, so this is only ever asked for t = 0. It stays specialised because the generic lerp on a bool is an arithmetic cast - (a + (b - a) * t) reads true for all but the first instant of a false->true segment - and a midpoint step is the least surprising thing to fall back to if a curve ever reaches here that is not a HOLD.
 template <>
 inline bool ss_atmoenv_lerp<bool>(const bool& a, const bool& b, F32 t)
 {
@@ -91,6 +91,17 @@ inline SSAtmoEnvCurve ss_atmoenv_default_curve() { return SSAtmoEnvCurve::EASE; 
 
 template <>
 inline SSAtmoEnvCurve ss_atmoenv_default_curve<std::string>() { return SSAtmoEnvCurve::HOLD; }
+
+// <SS:Nexii> A flag has nothing to interpolate, so HOLD is the only curve that means anything on one: the value stands from its own keyframe until the next, which is what the checkbox in front of the author says it does - ticked here, and off again where it unticks. EASE on a bool is not a curve at all, it is a step at the segment MIDPOINT, so the rain used to start halfway between the keyframe that turned it on and whatever key happened to precede it - a boundary in a place the author never put a mark. Same reasoning as the string specialisation above; a precipitation TYPE cannot be half snow either.
+template <>
+inline SSAtmoEnvCurve ss_atmoenv_default_curve<bool>() { return SSAtmoEnvCurve::HOLD; }
+
+// <SS:Nexii> What a stored curve becomes when a document is read back. Normally itself - a curve is authored intent and survives a round trip. Bool is the exception: EASE on a flag was never intent, it was the default curve landing on a type that has no use for one, so documents written before flags went to HOLD carry it and would keep their midpoint steps forever. There is nothing to preserve, so it is corrected on the way in rather than migrated.
+template <typename T>
+inline SSAtmoEnvCurve ss_atmoenv_curve_on_load(SSAtmoEnvCurve stored) { return stored; }
+
+template <>
+inline SSAtmoEnvCurve ss_atmoenv_curve_on_load<bool>(SSAtmoEnvCurve /*stored*/) { return SSAtmoEnvCurve::HOLD; }
 
 template <>
 inline LLUUID ss_atmoenv_lerp<LLUUID>(const LLUUID& a, const LLUUID& /*b*/, F32 /*t*/)
@@ -285,6 +296,23 @@ public:
         insertKeyframe(head_phase, valueAt(head_phase), ss_atmoenv_default_curve<T>());
     }
 
+    // <SS:Nexii> Lays a keyframe down outright rather than through the editing head. Every other
+    // way into this vector is head-relative (setValueAtHead, toggleKeyframeAtHead) because the
+    // editor only ever authors at the preview position; a generator writes a whole curve at once
+    // and has no head to speak of - see SSAtmoEnvWeatherGenerator. Times wrap and the insert keeps
+    // the vector sorted, so keys may be handed over in any order.
+    void addKeyframe(F64 time, const T& value, SSAtmoEnvCurve curve = ss_atmoenv_default_curve<T>())
+    {
+        insertKeyframe(wrapPhase(time), value, curve);
+    }
+
+    // Drops every keyframe and leaves the field the plain constant given.
+    void reset(const T& plain)
+    {
+        mKeyframes.clear();
+        mPlainValue = plain;
+    }
+
     void collapseIfConstant(F32 epsilon)
     {
         if (mKeyframes.empty()) return;
@@ -357,7 +385,9 @@ public:
                 SSAtmoEnvKeyframe<T> kf;
                 kf.mTime = wrapPhase(entry.has("time") ? entry["time"].asReal() : 0.0);
                 kf.mValue = ss_atmoenv_value_from_sd<T>(entry["value"], fallback);
-                kf.mCurve = ss_atmoenv_curve_from_name(entry.has("curve") ? entry["curve"].asString() : "ease");
+                kf.mCurve = ss_atmoenv_curve_on_load<T>(ss_atmoenv_curve_from_name(
+                    entry.has("curve") ? entry["curve"].asString()
+                                       : ss_atmoenv_curve_name(ss_atmoenv_default_curve<T>())));
                 mKeyframes.push_back(kf);
             }
             std::sort(mKeyframes.begin(), mKeyframes.end(),

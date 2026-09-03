@@ -136,6 +136,13 @@ private:
 
     void onClickWeatherInfluence();
 
+    // <SS:Nexii> The weather cube's two wholesale operations - a fresh roll, and back to nothing.
+    // See SSAtmoEnvWeatherGenerator; setWeatherRollText carries the roll's own description down to
+    // the line under the rows.
+    void onClickRandomizeWeather();
+    void onClickRemoveWeather();
+    void setWeatherRollText(const std::string& text);
+
     void refreshAltitudeLabel(S32 slot);
 
     S32 railCentreForValue(F32 value) const;

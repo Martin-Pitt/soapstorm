@@ -31,7 +31,7 @@
      name="weather_source_combo"
      tool_tip="Which cloud deck delivers precipitation. Derived picks the lowest enabled deck above the surface, which is the main deck unless a deck sits between it and the ground" />
 
-    <!-- <SS:Nexii> Whether anything falls at all, above the type because "is it raining" comes before "what is it". Moisture alone used to decide, which made an overcast, dark, thundering, dry sky unauthorable. Keyframed like the type: the shower's start and stop are laid on the rail, and the flag steps at the segment midpoint. -->
+    <!-- <SS:Nexii> Whether anything falls at all, above the type because "is it raining" comes before "what is it". Moisture alone used to decide, which made an overcast, dark, thundering, dry sky unauthorable. Keyframed like the type, and HOLD like it too: a flag has nothing to interpolate, so the shower runs from the key that ticks this box to the key that unticks it - the two marks on the rail ARE the start and the stop. -->
     <text
      follows="left|top"
      layout="topleft"
