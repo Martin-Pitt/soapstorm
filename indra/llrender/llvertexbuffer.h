@@ -293,6 +293,14 @@ protected:
     U8* mMappedData = nullptr;  // pointer to currently mapped data (NULL if unmapped)
     U8* mMappedIndexData = nullptr; // pointer to currently mapped indices (NULL if unmapped)
 
+    // <SS:Nexii> AzdoGaMa - true when the GL buffer behind mMappedData/mMappedIndexData is a
+    // glBufferStorage allocation with a persistent coherent mapping, so uploads need no GL
+    // call of any kind (CPU writes land in GPU-visible memory directly), see
+    // doc/azdo_bindless_textures.md
+    bool mPersistentVertexData = false;
+    bool mPersistentIndexData = false;
+    // </SS:Nexii>
+
     U32     mTypeMask = 0;      // bitmask of present vertex attributes
 
     U32     mSize = 0;          // size in bytes of mMappedData
@@ -328,6 +336,13 @@ private:
 public:
 
     static U64 getBytesAllocated();
+
+    // <SS:Nexii> AzdoGaMa - persistent mapped buffers, see doc/azdo_bindless_textures.md
+    // static gate: the SSPersistentBuffers setting AND gGLManager.mHasBufferStorage.
+    // Set once in initClass (startup-read, like RenderCompressTextures).
+    static bool sUsePersistentBuffers;
+    // </SS:Nexii>
+
     static const U32 sTypeSize[TYPE_MAX];
     static const U32 sGLMode[LLRender::NUM_MODES];
     static U32 sGLRenderBuffer;

@@ -321,6 +321,12 @@ static void delete_buffers(S32 count, GLuint* buffers)
 
 #define ANALYZE_VBO_POOL 0
 
+// <SS:Nexii> AzdoGaMa - bytes of persistent-mapped (glBufferStorage) vertex/index backing
+// store currently handed out to LLVertexBuffer instances, for observability. Declared
+// before the pool classes that account it.
+static U64 gPersistentBufferBytes = 0;
+// </SS:Nexii>
+
 // VBO Pool interface
 class LLVBOPool
 {
@@ -329,6 +335,11 @@ class LLVBOPool
     virtual void allocate(GLenum type, U32 size, GLuint& name, U8*& data) = 0;
     virtual void free(GLenum type, U32 size, GLuint name, U8* data) = 0;
     virtual U64 getVramBytesUsed() = 0;
+    // <SS:Nexii> AzdoGaMa - whether buffers handed out by this pool are backed by a
+    // persistent coherent mapping (glBufferStorage), i.e. CPU writes to the returned
+    // pointer are already visible to the GPU, see doc/azdo_bindless_textures.md
+    virtual bool usesPersistentMapping() const { return false; }
+    // </SS:Nexii>
 };
 
 // VBO Pool for Apple GPUs (as in M1/M2 etc, not Intel macs)
@@ -394,12 +405,29 @@ public:
         U8* mData;
         GLuint mGLName;
         Time mAge;
+        // <SS:Nexii> AzdoGaMa - true when mData is a persistent coherent mapping instead of
+        // a heap allocation; governs unmap-vs-free on destruction and whether uplifts are
+        // needed at all (they are not - writes land in GPU memory directly)
+        bool mPersistent = false;
+        // </SS:Nexii>
     };
 
     ~LLDefaultVBOPool() override
     {
         clear();
     }
+
+    // <SS:Nexii> AzdoGaMa - pool-wide mode, decided once: the SSPersistentBuffers setting
+    // (mirrored into LLVertexBuffer::sUsePersistentBuffers by the newview settings layer),
+    // the GL 4.4 buffer-storage capability, and non-Apple (the Apple pool is a separate
+    // class that never goes persistent)
+    bool mPersistentMode = false;
+
+    bool usesPersistentMapping() const override
+    {
+        return mPersistentMode;
+    }
+    // </SS:Nexii>
 
     typedef std::unordered_map<U32, std::list<Entry>> Pool;
 
@@ -453,7 +481,42 @@ public:
             mMisses++;
             name = gen_buffer();
             glBindBuffer(type, name);
+
+            // <SS:Nexii> AzdoGaMa - persistent mapped buffers, see doc/azdo_bindless_textures.md.
+            // glBufferStorage + a permanent coherent mapping replaces glBufferData + a CPU
+            // mirror: uploads become plain CPU writes with no GL call at all (flush_vbo turns
+            // into a no-op because the writes are already visible to the GPU). Falls back to
+            // the classic path when the map fails, so a driver refusing the mapping degrades
+            // silently.
+            bool persistent = false;
+#if LL_AZDO_GL_ENTRY_POINTS_AVAILABLE
+            if (mPersistentMode)
+            {
+                glBufferStorage(type, size, nullptr, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+                data = (U8*)glMapBufferRange(type, 0, size, GL_MAP_WRITE_BIT | GL_MAP_PERSISTENT_BIT | GL_MAP_COHERENT_BIT);
+                if (data != nullptr)
+                {
+                    persistent = true;
+                    gPersistentBufferBytes += size;
+                }
+                else
+                {
+                    // mapping refused - rebuild as a classic buffer
+                    glBufferData(type, size, nullptr, GL_DYNAMIC_DRAW);
+                    data = (U8*)ll_aligned_malloc_16(size);
+                }
+            }
+            else
+            {
+                glBufferData(type, size, nullptr, GL_DYNAMIC_DRAW);
+                data = (U8*)ll_aligned_malloc_16(size);
+            }
+#else
             glBufferData(type, size, nullptr, GL_DYNAMIC_DRAW);
+            data = (U8*)ll_aligned_malloc_16(size);
+#endif
+            // </SS:Nexii>
+
             if (type == GL_ELEMENT_ARRAY_BUFFER)
             {
                 LLVertexBuffer::sGLRenderIndices = name;
@@ -462,8 +525,6 @@ public:
             {
                 LLVertexBuffer::sGLRenderBuffer = name;
             }
-
-            data = (U8*)ll_aligned_malloc_16(size);
         }
         else
         {
@@ -548,7 +609,8 @@ public:
                 {
                     LL_PROFILE_ZONE_NAMED_CATEGORY_VERTEX("vbo cache timeout");
                     auto& entry = entries.back();
-                    ll_aligned_free_16(entry.mData);
+                    destroyEntry(pool == &mVBOPool ? GL_ARRAY_BUFFER : GL_ELEMENT_ARRAY_BUFFER, entry);
+                    gPersistentBufferBytes -= (entry.mPersistent ? iter->first : 0);
                     delete_buffers(1, &entry.mGLName);
                     llassert(mReserved >= iter->first);
                     mReserved -= iter->first;
@@ -578,13 +640,33 @@ public:
 #endif
     }
 
+    // <SS:Nexii> AzdoGaMa - shared destruction: release a persistent mapping with
+    // glUnmapBuffer (the data pointer is GPU memory, never ll_aligned_free_16), otherwise
+    // free the CPU mirror heap block
+    static void destroyEntry(GLenum type, Entry& entry)
+    {
+        if (entry.mPersistent)
+        {
+            GLint prev_binding = 0;
+            glGetIntegerv(type == GL_ARRAY_BUFFER ? GL_ARRAY_BUFFER_BINDING : GL_ELEMENT_ARRAY_BUFFER_BINDING, &prev_binding);
+            glBindBuffer(type, entry.mGLName);
+            glUnmapBuffer(type);
+            glBindBuffer(type, prev_binding);
+        }
+        else
+        {
+            ll_aligned_free_16(entry.mData);
+        }
+    }
+    // </SS:Nexii>
+
     void clear()
     {
         for (auto& entries : mIBOPool)
         {
             for (auto& entry : entries.second)
             {
-                ll_aligned_free_16(entry.mData);
+                destroyEntry(GL_ELEMENT_ARRAY_BUFFER, entry);
                 delete_buffers(1, &entry.mGLName);
             }
         }
@@ -593,10 +675,12 @@ public:
         {
             for (auto& entry : entries.second)
             {
-                ll_aligned_free_16(entry.mData);
+                destroyEntry(GL_ARRAY_BUFFER, entry);
                 delete_buffers(1, &entry.mGLName);
             }
         }
+
+        gPersistentBufferBytes = 0;
 
         mReserved = 0;
 
@@ -604,6 +688,11 @@ public:
         mVBOPool.clear();
     }
 };
+
+// <SS:Nexii> AzdoGaMa - setting mirror, written by the newview settings layer
+// (ss_azdo_refresh_enabled), combined with capability flags in LLVertexBuffer::initClass
+bool LLVertexBuffer::sUsePersistentBuffers = false;
+// </SS:Nexii>
 
 static LLVBOPool* sVBOPool = nullptr;
 
@@ -964,7 +1053,15 @@ void LLVertexBuffer::initClass(LLWindow* window)
     else
     {
         LL_INFOS() << "VBO Pooling Enabled" << LL_ENDL;
-        sVBOPool = new LLDefaultVBOPool();
+        // <SS:Nexii> AzdoGaMa - persistent mapped buffers: startup decision, mirroring how
+        // RenderCompressTextures is resolved in settings_to_globals. The setting is mirrored
+        // into sUsePersistentBuffers by the newview settings layer; capability gating happens
+        // here so llrender never reads viewer settings.
+        LLDefaultVBOPool* pool = new LLDefaultVBOPool();
+        pool->mPersistentMode = sUsePersistentBuffers && gGLManager.mHasBufferStorage && !gGLManager.mIsApple;
+        sVBOPool = pool;
+        LL_INFOS() << "Persistent mapped vertex buffers: " << (pool->mPersistentMode ? "enabled" : "disabled (fallback: glBufferSubData)") << LL_ENDL;
+        // </SS:Nexii>
     }
 
 #if ENABLE_GL_WORK_QUEUE
@@ -1119,6 +1216,10 @@ void LLVertexBuffer::genBuffer(U32 size)
 
         mSize = size;
         sVBOPool->allocate(GL_ARRAY_BUFFER, mSize, mGLBuffer, mMappedData);
+        // <SS:Nexii> AzdoGaMa - record whether the returned pointer is a persistent coherent
+        // mapping (then uploads need no GL call at all), see doc/azdo_bindless_textures.md
+        mPersistentVertexData = sVBOPool->usesPersistentMapping();
+        // </SS:Nexii>
     }
 }
 
@@ -1134,6 +1235,9 @@ void LLVertexBuffer::genIndices(U32 size)
         llassert(mMappedIndexData == nullptr);
         mIndicesSize = size;
         sVBOPool->allocate(GL_ELEMENT_ARRAY_BUFFER, mIndicesSize, mGLIndices, mMappedIndexData);
+        // <SS:Nexii> AzdoGaMa
+        mPersistentIndexData = sVBOPool->usesPersistentMapping();
+        // </SS:Nexii>
     }
 }
 
@@ -1384,6 +1488,17 @@ void LLVertexBuffer::flush_vbo(GLenum target, U32 start, U32 end, void* data, U8
     else
     {
         llassert(target == GL_ARRAY_BUFFER ? sGLRenderBuffer == mGLBuffer : sGLRenderIndices == mGLIndices);
+
+        // <SS:Nexii> AzdoGaMa - persistent mappings are coherent: the CPU writes of the
+        // striders/mapVertexBuffer calls landed in GPU-visible memory directly, so there is
+        // nothing left to upload. The dirty-region bookkeeping that reached us is still
+        // cleared by _unmapBuffer; only the GL call is skipped.
+        const bool persistent = (target == GL_ARRAY_BUFFER) ? mPersistentVertexData : mPersistentIndexData;
+        if (persistent)
+        {
+            return;
+        }
+        // </SS:Nexii>
 
         // skip mapped data and stream to GPU via glBufferSubData
         if (end != 0)

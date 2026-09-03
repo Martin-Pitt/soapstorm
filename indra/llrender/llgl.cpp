@@ -991,6 +991,14 @@ PFNGLMULTIDRAWARRAYSINDIRECTCOUNTPROC    glMultiDrawArraysIndirectCount = nullpt
 PFNGLMULTIDRAWELEMENTSINDIRECTCOUNTPROC  glMultiDrawElementsIndirectCount = nullptr;
 PFNGLPOLYGONOFFSETCLAMPPROC              glPolygonOffsetClamp = nullptr;
 
+// GL_ARB_bindless_texture
+PFNGLGETTEXTUREHANDLEARBPROC                 glGetTextureHandleARB = nullptr;
+PFNGLGETTEXTURESAMPLERHANDLEARBPROC          glGetTextureSamplerHandleARB = nullptr;
+PFNGLMAKETEXTUREHANDLERESIDENTARBPROC        glMakeTextureHandleResidentARB = nullptr;
+PFNGLMAKETEXTUREHANDLENONRESIDENTARBPROC     glMakeTextureHandleNonResidentARB = nullptr;
+PFNGLUNIFORMHANDLEUI64ARBPROC                glUniformHandleui64ARB = nullptr;
+PFNGLUNIFORMHANDLEUI64VARBPROC               glUniformHandleui64vARB = nullptr;
+
 #endif
 
 LLGLManager gGLManager;
@@ -1428,6 +1436,12 @@ void LLGLManager::asLLSD(LLSD& info)
     info["has_bptc"] = mHasBPTC;
     // </SS:Nexii>
 
+    // <SS:Nexii> AzdoGaMa, see doc/azdo_bindless_textures.md
+    info["has_bindless_texture"] = mHasBindlessTexture;
+    info["has_buffer_storage"] = mHasBufferStorage;
+    info["has_multi_draw_indirect"] = mHasMultiDrawIndirect;
+    // </SS:Nexii>
+
     info["gl_renderer"] = mGLRenderer;
 }
 
@@ -1489,6 +1503,21 @@ void LLGLManager::initExtensions()
     LL_INFOS("RenderInit") << "BPTC/BC7 texture compression: " << (mHasBPTC ? "supported" : "unsupported") << LL_ENDL;
     // </SS:Nexii>
 
+    // <SS:Nexii> AzdoGaMa - AZDO capability gates, see doc/azdo_bindless_textures.md
+    // Bindless texture handles are ARB (GL 4.1+/GLSL 4.10+ per spec); the GLSL injection and the
+    // handle-uniform path both require the extension string to be present.
+    mHasBindlessTexture = (mGLVersion >= 4.19f)
+        && (mGLSLVersionMajor >= 4 && mGLSLVersionMinor >= 10)
+        && (!gGLHExts.mSysExts || ExtensionExists("GL_ARB_bindless_texture", gGLHExts.mSysExts));
+    LL_INFOS("RenderInit") << "Bindless textures (GL_ARB_bindless_texture): " << (mHasBindlessTexture ? "supported" : "unsupported") << LL_ENDL;
+
+    // Persistent mapped buffers and multi-draw indirect are core in GL 4.4 / GL 4.3 respectively
+    // and their entry points are already loaded by the version-gated sections below.
+    mHasBufferStorage = mGLVersion >= 4.39f;
+    mHasMultiDrawIndirect = mGLVersion >= 4.29f;
+    LL_INFOS("RenderInit") << "Persistent mapped buffers (GL 4.4 buffer storage): " << (mHasBufferStorage ? "supported" : "unsupported") << " | Multi-draw indirect (GL 4.3): " << (mHasMultiDrawIndirect ? "supported" : "unsupported") << LL_ENDL;
+    // </SS:Nexii>
+
     // Misc
     glGetIntegerv(GL_MAX_ELEMENTS_VERTICES, (GLint*) &mGLMaxVertexRange);
     glGetIntegerv(GL_MAX_ELEMENTS_INDICES, (GLint*) &mGLMaxIndexRange);
@@ -1531,6 +1560,38 @@ void LLGLManager::initExtensions()
     wglCreateContextAttribsARB = (PFNWGLCREATECONTEXTATTRIBSARBPROC)GLH_EXT_GET_PROC_ADDRESS("wglCreateContextAttribsARB");
 // <FS:Zi>
 // #endif
+
+    // <SS:Nexii> AzdoGaMa - GL_ARB_bindless_texture entry points, loaded whenever the capability
+    // gate above passed (GL 4.1+/GLSL 4.10+ and the extension string). Loaded outside the
+    // version-gated chain below because the extension is orthogonal to the context version,
+    // see doc/azdo_bindless_textures.md
+    if (mHasBindlessTexture)
+    {
+        glGetTextureHandleARB = (PFNGLGETTEXTUREHANDLEARBPROC)GLH_EXT_GET_PROC_ADDRESS("glGetTextureHandleARB");
+        glGetTextureSamplerHandleARB = (PFNGLGETTEXTURESAMPLERHANDLEARBPROC)GLH_EXT_GET_PROC_ADDRESS("glGetTextureSamplerHandleARB");
+        glMakeTextureHandleResidentARB = (PFNGLMAKETEXTUREHANDLERESIDENTARBPROC)GLH_EXT_GET_PROC_ADDRESS("glMakeTextureHandleResidentARB");
+        glMakeTextureHandleNonResidentARB = (PFNGLMAKETEXTUREHANDLENONRESIDENTARBPROC)GLH_EXT_GET_PROC_ADDRESS("glMakeTextureHandleNonResidentARB");
+        glUniformHandleui64ARB = (PFNGLUNIFORMHANDLEUI64ARBPROC)GLH_EXT_GET_PROC_ADDRESS("glUniformHandleui64ARB");
+        glUniformHandleui64vARB = (PFNGLUNIFORMHANDLEUI64VARBPROC)GLH_EXT_GET_PROC_ADDRESS("glUniformHandleui64vARB");
+
+        mHasBindlessTexture = glGetTextureHandleARB != nullptr
+            && glGetTextureSamplerHandleARB != nullptr
+            && glMakeTextureHandleResidentARB != nullptr
+            && glMakeTextureHandleNonResidentARB != nullptr
+            && glUniformHandleui64ARB != nullptr
+            && glUniformHandleui64vARB != nullptr;
+        if (!mHasBindlessTexture)
+        {
+            glGetTextureHandleARB = nullptr;
+            glGetTextureSamplerHandleARB = nullptr;
+            glMakeTextureHandleResidentARB = nullptr;
+            glMakeTextureHandleNonResidentARB = nullptr;
+            glUniformHandleui64ARB = nullptr;
+            glUniformHandleui64vARB = nullptr;
+            LL_INFOS("RenderInit") << "Bindless textures: entry point load failed, disabled" << LL_ENDL;
+        }
+    }
+    // </SS:Nexii>
 
     // Load entire OpenGL API through GetProcAddress, leaving sections beyond mGLVersion unloaded
 

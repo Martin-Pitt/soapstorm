@@ -812,6 +812,15 @@ extern PFNGLMULTIDRAWARRAYSINDIRECTCOUNTPROC    glMultiDrawArraysIndirectCount;
 extern PFNGLMULTIDRAWELEMENTSINDIRECTCOUNTPROC  glMultiDrawElementsIndirectCount;
 extern PFNGLPOLYGONOFFSETCLAMPPROC              glPolygonOffsetClamp;
 
+// <SS:Nexii> AzdoGaMa - GL_ARB_bindless_texture, see doc/azdo_bindless_textures.md
+extern PFNGLGETTEXTUREHANDLEARBPROC                 glGetTextureHandleARB;
+extern PFNGLGETTEXTURESAMPLERHANDLEARBPROC          glGetTextureSamplerHandleARB;
+extern PFNGLMAKETEXTUREHANDLERESIDENTARBPROC        glMakeTextureHandleResidentARB;
+extern PFNGLMAKETEXTUREHANDLENONRESIDENTARBPROC     glMakeTextureHandleNonResidentARB;
+extern PFNGLUNIFORMHANDLEUI64ARBPROC                glUniformHandleui64ARB;
+extern PFNGLUNIFORMHANDLEUI64VARBPROC               glUniformHandleui64vARB;
+// </SS:Nexii>
+
 
 #elif LL_DARWIN
 //----------------------------------------------------------------------------
@@ -1057,6 +1066,19 @@ extern void glGetBufferPointervARB (GLenum, GLenum, GLvoid* *);
 // </FS:Zi>
 
 #endif // LL_MESA / LL_WINDOWS / LL_DARWIN
+
+// <SS:Nexii> AzdoGaMa - the AZDO entry points (bindless ARB, buffer storage, multi-draw
+// indirect) are function-pointer externs on Windows (declared above, loaded in
+// llgl.cpp) and direct glext.h prototypes on Linux/Mesa. macOS OpenGL tops out at 4.1
+// and its SDK glext.h is not guaranteed to declare any of them, so every direct call in
+// shared code is guarded by this macro; capability flags are false there at runtime
+// anyway, see doc/azdo_bindless_textures.md
+#if LL_DARWIN
+#define LL_AZDO_GL_ENTRY_POINTS_AVAILABLE 0
+#else
+#define LL_AZDO_GL_ENTRY_POINTS_AVAILABLE 1
+#endif
+// </SS:Nexii>
 
 // Even when GL_ARB_depth_clamp is available in the driver, the (correct)
 // headers, and therefore GL_DEPTH_CLAMP might not be defined.

@@ -31,8 +31,10 @@
 #include "llrender.h"
 #include "llstaticstringtable.h"
 #include <boost/json.hpp>
+#include <array>
 #include <unordered_map>
 
+class LLImageGL;
 class LLShaderFeatures
 {
 public:
@@ -361,6 +363,29 @@ public:
 
     // hacky flag used for optimization in LLDrawPoolAlpha
     bool mCanBindFast = false;
+
+    // <SS:Nexii> AzdoGaMa - bindless textures, see doc/azdo_bindless_textures.md
+    // Reverse map: texture unit -> reserved uniform index whose sampler is bound to that
+    // unit; -1 = no sampler on the unit; -2 = a sampler ARRAY run (unit-driven, never
+    // handle-bound). Built at link time, consumed by LLTexUnit::bind*/bindFast to switch
+    // a sampler to its bindless handle. LLTexUnit is not a friend, so the entry point is
+    // public; call it only with the currently bound shader.
+    std::array<S32, LL_NUM_TEXTURE_LAYERS> mBindlessUnitToUniform;
+    // Bindless handle last set per reserved uniform index (0 = unit-driven / not yet set).
+    std::vector<LLGLuint64> mBindlessHandleCache;
+    // Global enable: gGLManager.mHasBindlessTexture AND the SSBindlessTextures setting.
+    static bool sUseBindlessTextures;
+    static void setUseBindlessTextures(bool use);
+
+    // attempt to bind gl_tex's bindless handle to the sampler on `unit` of the current
+    // program; returns true when the handle path was taken (no GL unit state was touched)
+    bool bindTextureBindless(U32 unit, LLImageGL* gl_tex);
+
+    // put the sampler on `unit` of the current program back on its texture unit: drops a
+    // previously set bindless handle (used by the classic unbind/bind paths so that
+    // "unbound" and manual binds keep their classic meaning under bindless)
+    void resetTextureUnitBinding(U32 unit);
+    // </SS:Nexii>
 
 #if LL_PROFILER_ENABLE_RENDER_DOC
     void setLabel(const char* label);

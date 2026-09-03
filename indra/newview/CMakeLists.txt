@@ -199,6 +199,7 @@ set(viewer_SOURCE_FILES
     ssstratabudgetwire.cpp
     sspanelprefs.cpp
     sssqueezedebug.cpp
+    ssazdo.cpp
     fspanelradar.cpp
     fsparticipantlist.cpp
     fspose.cpp
@@ -1088,6 +1089,7 @@ set(viewer_HEADER_FILES
     ssstratabudget.h
     sspanelprefs.h
     sssqueezedebug.h
+    ssazdo.h
     fspanelradar.h
     fsparticipantlist.h
     fspose.h

@@ -28,6 +28,9 @@
 
 #include "lldrawpool.h"
 #include "llrender.h"
+// <SS:Nexii> AzdoGaMa - multi-draw indirect command batches
+#include "llmultidraw.h"
+// </SS:Nexii>
 #include "llfasttimer.h"
 #include "llviewercontrol.h"
 
@@ -427,12 +430,69 @@ void LLRenderPass::renderRiggedGroup(LLSpatialGroup* group, U32 type, bool textu
         }
     }
 }
+// <SS:Nexii> AzdoGaMa - multi-draw indirect batching state, see doc/azdo_bindless_textures.md.
+// Stored thread-local because LLRender::gGL is thread-local and batching must never leak
+// across passes; the batch is opened inside pushBatches and flushed at its end (or whenever
+// a draw arrives that cannot join the batch).
 
-void LLRenderPass::pushBatches(U32 type, bool texture, bool batch_textures)
+// setting mirror, written by the newview settings layer (ss_azdo_refresh_enabled)
+bool LLRenderPass::sUseMultiDrawIndirect = false;
+
+static thread_local struct LLMDIBatchState
+{
+    bool active = false;               // pushBatches opened the batch
+    bool batch_textures = false;       // texture-array mode of the pass (never batched)
+    LLGLMultiDraw commands;
+    LLVertexBuffer* vb = nullptr;      // batch key: vertex buffer
+    const LLViewerTexture* tex = nullptr;  // batch key: diffuse texture
+    const LLMatrix4* model = nullptr;  // batch key: object matrix
+    const LLMatrix4* texmat = nullptr; // batch key: texture matrix
+    bool tex_setup = false;            // texture matrix was loaded for this batch
+} sMDIBatch;
+
+// draw the current MDI batch (if any) - the bound state at the call site is the batch's
+// state, because every key change flushed the previous batch first
+static void flushMDIBatch()
+{
+    LL_PROFILE_ZONE_SCOPED_CATEGORY_DRAWPOOL;
+    if (!sMDIBatch.active || sMDIBatch.commands.empty())
+    {
+        return;
+    }
+
+    // upload the deferred matrix state once for the whole batch instead of per draw
+    gGL.syncMatrices();
+    sMDIBatch.commands.draw();
+
+    if (sMDIBatch.tex_setup)
+    {
+        gGL.matrixMode(LLRender::MM_TEXTURE0);
+        gGL.loadIdentity();
+        gGL.matrixMode(LLRender::MM_MODELVIEW);
+        sMDIBatch.tex_setup = false;
+    }
+
+    sMDIBatch.commands.clear();
+}
+// </SS:Nexii>
+
+void LLRenderPass::pushBatches(U32 type, bool texture, bool batch_textures, bool multi_draw_indirect)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_DRAWPOOL;
     if (texture)
     {
+        // <SS:Nexii> AzdoGaMa - open the multi-draw batch when the caller opted in and the
+        // hardware supports it; it is closed unconditionally at the end of this function,
+        // so a batch can never leak into a different pass
+        const bool open_mdi = multi_draw_indirect && sUseMultiDrawIndirect && gGLManager.mHasMultiDrawIndirect
+            && LLGLSLShader::sCurBoundShaderPtr != nullptr;
+        if (open_mdi)
+        {
+            sMDIBatch.active = true;
+            sMDIBatch.batch_textures = batch_textures;
+        }
+        // </SS:Nexii>
+
         auto* begin = gPipeline.beginRenderMap(type);
         auto* end = gPipeline.endRenderMap(type);
         for (LLCullResult::drawinfo_iterator i = begin; i != end; )
@@ -442,6 +502,18 @@ void LLRenderPass::pushBatches(U32 type, bool texture, bool batch_textures)
 
             pushBatch(*pparams, texture, batch_textures);
         }
+
+        // <SS:Nexii> AzdoGaMa
+        if (sMDIBatch.active)
+        {
+            flushMDIBatch();
+            sMDIBatch.active = false;
+            sMDIBatch.vb = nullptr;
+            sMDIBatch.tex = nullptr;
+            sMDIBatch.model = nullptr;
+            sMDIBatch.texmat = nullptr;
+        }
+        // </SS:Nexii>
     }
     else
     {
@@ -550,6 +622,7 @@ void LLRenderPass::pushRiggedMaskBatches(U32 type, bool texture, bool batch_text
     }
 }
 
+
 void LLRenderPass::applyModelMatrix(const LLDrawInfo& params)
 {
     applyModelMatrix(params.mModelMatrix);
@@ -579,6 +652,73 @@ void LLRenderPass::pushBatch(LLDrawInfo& params, bool texture, bool batch_textur
     {
         return;
     }
+
+    // <SS:Nexii> AzdoGaMa - multi-draw indirect accumulation, see doc/azdo_bindless_textures.md.
+    // Draws join the open batch when they match the batch key (vertex buffer, diffuse
+    // texture, model matrix, texture matrix) and carry no state the key cannot express
+    // (rigged objects upload per-draw matrix palettes, texture lists bind sampler arrays).
+    if (sMDIBatch.active)
+    {
+        const bool batchable = params.mVertexBuffer != nullptr
+            && params.mAvatar == nullptr
+            && params.mSkinInfo.isNull()
+            && !(sMDIBatch.batch_textures && params.mTextureList.size() > 1);
+
+        if (batchable)
+        {
+            if (sMDIBatch.vb != params.mVertexBuffer.get()
+                || sMDIBatch.tex != params.mTexture.get()
+                || sMDIBatch.model != params.mModelMatrix
+                || sMDIBatch.texmat != params.mTextureMatrix)
+            {
+                flushMDIBatch();
+
+                sMDIBatch.vb = params.mVertexBuffer.get();
+                sMDIBatch.tex = params.mTexture.get();
+                sMDIBatch.model = params.mModelMatrix;
+                sMDIBatch.texmat = params.mTextureMatrix;
+
+                // establish the batch's draw state once: object matrix, diffuse texture
+                // (a bindless handle equals a texture unit binding, both are one call),
+                // texture matrix where present, and the vertex buffer binding
+                applyModelMatrix(params);
+
+                if (!sMDIBatch.batch_textures)
+                {
+                    if (params.mTexture.notNull())
+                    {
+                        gGL.getTexUnit(0)->bindFast(params.mTexture);
+                        if (params.mTextureMatrix)
+                        {
+                            sMDIBatch.tex_setup = true;
+                            gGL.getTexUnit(0)->activate();
+                            gGL.matrixMode(LLRender::MM_TEXTURE);
+                            gGL.loadMatrix((GLfloat*) params.mTextureMatrix->mMatrix);
+                            gPipeline.mTextureMatrixOps++;
+                        }
+                    }
+                    else
+                    {
+                        // classic "no texture" semantics: point the sampler at the default
+                        // white unit binding (and, under bindless, drop the previous handle)
+                        gGL.getTexUnit(0)->unbindFast(LLTexUnit::TT_TEXTURE);
+                    }
+                }
+
+                params.mVertexBuffer->setBuffer();
+            }
+
+            sMDIBatch.commands.addDrawRange(params.mCount, params.mOffset, params.mStart);
+            return;
+        }
+
+        flushMDIBatch();
+        sMDIBatch.vb = nullptr;
+        sMDIBatch.tex = nullptr;
+        sMDIBatch.model = nullptr;
+        sMDIBatch.texmat = nullptr;
+    }
+    // </SS:Nexii>
 
     applyModelMatrix(params);
 

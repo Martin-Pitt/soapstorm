@@ -122,6 +122,9 @@
 #include "nd/ndlogthrottle.h"
 // <SS:Nexii>
 #include "sssqueezedebug.h"
+// <SS:Nexii> AzdoGaMa, see doc/azdo_bindless_textures.md
+#include "ssazdo.h"
+// </SS:Nexii>
 // </SS:Nexii>
 // <FS:Zi> Run Prio 0 default bento pose in the background to fix splayed hands, open mouths, etc.
 #include "llanimationstates.h"
@@ -1343,6 +1346,30 @@ static bool handleSSSqueezeEnabledChanged(const LLSD& newvalue)
 }
 // </SS:Nexii>
 
+// <SS:Nexii> AzdoGaMa - see doc/azdo_bindless_textures.md. Flipping the bindless mode
+// requires every program to be re-linked (sampler uniforms change meaning), so this
+// listener strings shader reloads the same way every other shader-affecting setting does.
+static bool handleSSBindlessTexturesChanged(const LLSD& newvalue)
+{
+    (void)newvalue;
+    ss_azdo_refresh_enabled();
+    // shader reload is required in BOTH directions: programs compiled with the GLSL
+    // extension must not receive glUniform1i-only samplers, and programs compiled without
+    // it must never receive glUniformHandleui64ARB
+    LLViewerShaderMgr::instance()->setShaders();
+    return true;
+}
+
+// persistent buffers and multi-draw indirect do not affect shaders, so a change only
+// mirrors the setting into the renderer statics
+static bool handleSSAzdoRefreshChanged(const LLSD& newvalue)
+{
+    (void)newvalue;
+    ss_azdo_refresh_enabled();
+    return true;
+}
+// </SS:Nexii>
+
 void settings_setup_listeners()
 {
     LL_PROFILE_ZONE_SCOPED;
@@ -1667,6 +1694,13 @@ void settings_setup_listeners()
     // <SS:Nexii> Squeeze region manifests - the three settings the arrival warm-up reads, listened for so the feature can be switched off mid-session without a restart, exactly as every other Squeeze gate can.
     setting_setup_signal_listener(gSavedSettings, "SSSqueezeManifests", handleSSSqueezeEnabledChanged);
     setting_setup_signal_listener(gSavedSettings, "SSSqueezeManifestWarmMB", handleSSSqueezeEnabledChanged);
+    // <SS:Nexii> AzdoGaMa - see doc/azdo_bindless_textures.md. Persistent buffers and MDI
+    // are startup decisions mirrored into their statics for observability; bindless is
+    // live-toggled with a shader reload.
+    setting_setup_signal_listener(gSavedSettings, "SSBindlessTextures", handleSSBindlessTexturesChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSPersistentBuffers", handleSSAzdoRefreshChanged);
+    setting_setup_signal_listener(gSavedSettings, "SSMultiDrawIndirect", handleSSAzdoRefreshChanged);
+    // </SS:Nexii>
     setting_setup_signal_listener(gSavedSettings, "SSSqueezeManifestWarmDiscard", handleSSSqueezeEnabledChanged);
     // </SS:Nexii>
     // </SS:Nexii>

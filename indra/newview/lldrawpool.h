@@ -353,7 +353,7 @@ public:
     static void applyModelMatrix(const LLDrawInfo& params);
     // For rendering that doesn't use LLDrawInfo for some reason
     static void applyModelMatrix(const LLMatrix4* model_matrix);
-    void pushBatches(U32 type, bool texture = true, bool batch_textures = false);
+    void pushBatches(U32 type, bool texture = true, bool batch_textures = false, bool multi_draw_indirect = false);
     void pushUntexturedBatches(U32 type);
 
     void pushRiggedBatches(U32 type, bool texture = true, bool batch_textures = false);
@@ -386,6 +386,12 @@ public:
     void pushBatch(LLDrawInfo& params, bool texture, bool batch_textures = false);
     void pushUntexturedBatch(LLDrawInfo& params);
     void pushBumpBatch(LLDrawInfo& params, bool texture, bool batch_textures = false);
+    // <SS:Nexii> AzdoGaMa - multi-draw indirect, see doc/azdo_bindless_textures.md.
+    // Setting mirror, written by the newview settings layer; capability gating happens at
+    // the push site. When enabled the simple opaque pass collapses consecutive draws that
+    // share all draw-relevant state into one glMultiDrawElementsIndirect submission.
+    static bool sUseMultiDrawIndirect;
+    // </SS:Nexii>
     static bool uploadMatrixPalette(LLDrawInfo& params);
     // <FS:Beq> be defensive about UAF with skinInfo during LocalMesh
     // static bool uploadMatrixPalette(LLVOAvatar* avatar, LLMeshSkinInfo* skinInfo);

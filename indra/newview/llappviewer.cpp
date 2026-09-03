@@ -116,6 +116,9 @@
 #include "ssbc7encoder.h" // <SS:Nexii>
 #include "ssbc7store.h" // <SS:Nexii>
 #include "sssqueezedebug.h" // <SS:Nexii>
+// <SS:Nexii> AzdoGaMa, see doc/azdo_bindless_textures.md
+#include "ssazdo.h"
+// </SS:Nexii>
 #include "lldiskcache.h"
 #include "ssstrata.h"   // <SS:Nexii/> Strata asset volumes
 #include "ssstratabudget.h"   // <SS:Nexii/> the budget arbiter - CacheSize divided N ways instead of three tiers each deciding for themselves
@@ -639,6 +642,10 @@ static void settings_to_globals()
     LLImageGL::sCompressTextures        = gSavedSettings.getBOOL("RenderCompressTextures");
     // <SS:Nexii>
     LLImageGL::sSqueezeEnabled          = gSavedSettings.getBOOL("SSSqueezeEnabled");
+    // </SS:Nexii>
+    // <SS:Nexii> AzdoGaMa - startup mirror of the AZDO settings into the renderer statics,
+    // see doc/azdo_bindless_textures.md
+    ss_azdo_refresh_enabled();
     // </SS:Nexii>
     LLVOVolume::sLODFactor              = llclamp(gSavedSettings.getF32("RenderVolumeLODFactor"), 0.01f, MAX_LOD_FACTOR);
     LLVOVolume::sDistanceFactor         = 1.f-LLVOVolume::sLODFactor * 0.1f;

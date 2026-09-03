@@ -103,7 +103,11 @@ void LLDrawPoolSimple::renderDeferred(S32 pass)
 
     //render static
     gDeferredDiffuseProgram.bind();
-    pushBatches(LLRenderPass::PASS_SIMPLE, true, true);
+    // <SS:Nexii> AzdoGaMa - the deferred simple pass binds one shader and varies only
+    // matrix/diffuse per draw, which is exactly what multi-draw indirect can express;
+    // see doc/azdo_bindless_textures.md
+    pushBatches(LLRenderPass::PASS_SIMPLE, true, true, true);
+    // </SS:Nexii>
 
     //render rigged
     gDeferredDiffuseProgram.bind(true);

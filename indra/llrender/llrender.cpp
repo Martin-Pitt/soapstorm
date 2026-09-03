@@ -98,6 +98,14 @@ static const GLint sGLAddressMode[] =
     GL_CLAMP_TO_EDGE
 };
 
+// <SS:Nexii> AzdoGaMa, see doc/azdo_bindless_textures.md
+GLint LLTexUnit::getAddressModeGL(eTextureAddressMode mode)
+{
+    llassert(mode >= TAM_WRAP && mode <= TAM_CLAMP);
+    return sGLAddressMode[mode];
+}
+// </SS:Nexii>
+
 const U32 immediate_mask = LLVertexBuffer::MAP_VERTEX | LLVertexBuffer::MAP_COLOR | LLVertexBuffer::MAP_TEXCOORD0;
 
 static const GLenum sGLBlendFactor[] =
@@ -194,6 +202,19 @@ void LLTexUnit::bindFast(LLTexture* texture)
 {
     LLImageGL* gl_tex = texture->getGLTexture();
     texture->setActive();
+
+    // <SS:Nexii> AzdoGaMa - bindless fast path: the sampler uniform takes the texture's
+    // bindless handle and the texture unit binding (and its bookkeeping) is left untouched,
+    // which is what removes the per-draw glActiveTexture/glBindTexture pair. Only bindFast
+    // (the pure draw-loop path) is hijacked - the slow bind() variants stay classic because
+    // they double as upload entry points whose glTexSubImage2D calls target the unit binding.
+    LLGLSLShader* bindless_shader = LLGLSLShader::sUseBindlessTextures ? LLGLSLShader::sCurBoundShaderPtr : nullptr;
+    if (bindless_shader && bindless_shader->bindTextureBindless(mIndex, gl_tex))
+    {
+        return;
+    }
+    // </SS:Nexii>
+
     glActiveTexture(GL_TEXTURE0 + mIndex);
     gGL.mCurrTextureUnitIndex = mIndex;
     mCurrTexture = gl_tex->getTexName();
@@ -232,6 +253,15 @@ bool LLTexUnit::bind(LLTexture* texture, bool for_rendering, bool forceBind)
                 //in audit, replace the selected texture by the default one.
                 if ((mCurrTexture != gl_tex->getTexName()) || forceBind)
                 {
+                    // <SS:Nexii> AzdoGaMa - a slow bind re-establishes classic unit semantics
+                    // for the sampler: drop any bindless handle previously set on this unit
+                    LLGLSLShader* bindless_shader = LLGLSLShader::sUseBindlessTextures ? LLGLSLShader::sCurBoundShaderPtr : nullptr;
+                    if (bindless_shader)
+                    {
+                        bindless_shader->resetTextureUnitBinding(mIndex);
+                    }
+                    // </SS:Nexii>
+
                     activate();
                     enable(gl_tex->getTarget());
                     mCurrTexture = gl_tex->getTexName();
@@ -305,6 +335,15 @@ bool LLTexUnit::bind(LLImageGL* texture, bool for_rendering, bool forceBind, S32
 
     if ((mCurrTexture != texname) || forceBind)
     {
+        // <SS:Nexii> AzdoGaMa - see bind(LLTexture*): drop any bindless handle previously
+        // set on this unit so this bind's unit semantics are authoritative
+        LLGLSLShader* bindless_shader = LLGLSLShader::sUseBindlessTextures ? LLGLSLShader::sCurBoundShaderPtr : nullptr;
+        if (bindless_shader)
+        {
+            bindless_shader->resetTextureUnitBinding(mIndex);
+        }
+        // </SS:Nexii>
+
         gGL.flush();
         stop_glerror();
         activate();
@@ -417,6 +456,16 @@ void LLTexUnit::unbind(eTextureType type)
 
     if (mIndex < 0) return;
 
+    // <SS:Nexii> AzdoGaMa - the white/zero unit bind below is what "unbound" means to the
+    // sampler; if the current program's sampler on this unit was handle-bound, put the
+    // sampler back on the unit first, see doc/azdo_bindless_textures.md
+    LLGLSLShader* bindless_shader = LLGLSLShader::sUseBindlessTextures ? LLGLSLShader::sCurBoundShaderPtr : nullptr;
+    if (bindless_shader)
+    {
+        bindless_shader->resetTextureUnitBinding(mIndex);
+    }
+    // </SS:Nexii>
+
     //always flush and activate for consistency
     //   some code paths assume unbind always flushes and sets the active texture
     gGL.flush();
@@ -441,6 +490,15 @@ void LLTexUnit::unbind(eTextureType type)
 
 void LLTexUnit::unbindFast(eTextureType type)
 {
+    // <SS:Nexii> AzdoGaMa - see unbind(): keep the sampler on this unit honest when the
+    // current program was handle-binding it
+    LLGLSLShader* bindless_shader = LLGLSLShader::sUseBindlessTextures ? LLGLSLShader::sCurBoundShaderPtr : nullptr;
+    if (bindless_shader)
+    {
+        bindless_shader->resetTextureUnitBinding(mIndex);
+    }
+    // </SS:Nexii>
+
     activate();
 
     // Disabled caching of binding state.

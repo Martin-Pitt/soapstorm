@@ -805,6 +805,13 @@ void GLTFSceneManager::bindTexture(Asset& asset, TextureType texture_type, Textu
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_t);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag_filter);
 
+                    // <SS:Nexii> AzdoGaMa - these glTexParameter calls mutate the GL
+                    // object's sampler state out-of-band of LLImageGL's tracking; any
+                    // bindless handle taken from this texture is now stale and must be
+                    // regenerated, see doc/azdo_bindless_textures.md
+                    tex->getGLTexture()->invalidateBindlessHandle();
+                    // </SS:Nexii>
+
                     // NOTE: do not set min filter.  Always respect client preference for min filter
                 }
                 else
@@ -813,6 +820,9 @@ void GLTFSceneManager::bindTexture(Asset& asset, TextureType texture_type, Textu
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    // <SS:Nexii> AzdoGaMa
+                    tex->getGLTexture()->invalidateBindlessHandle();
+                    // </SS:Nexii>
                 }
             }
             else

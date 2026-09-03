@@ -22,6 +22,7 @@ set(llrender_SOURCE_FILES
     llglslshader.cpp
     llgltexture.cpp
     llimagegl.cpp
+    llmultidraw.cpp
     llpostprocess.cpp
     llrender.cpp
     llrender2dutils.cpp
@@ -54,6 +55,7 @@ set(llrender_HEADER_FILES
     llgltexture.h
     llgltypes.h
     llimagegl.h
+    llmultidraw.h
     llpostprocess.h
     llrender.h
     llrender2dutils.h

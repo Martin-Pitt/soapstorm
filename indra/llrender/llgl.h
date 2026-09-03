@@ -101,6 +101,11 @@ public:
     // <SS:Nexii> GL_ARB_texture_compression_bptc, core in GL 4.2 - gates every BC7 texture upload, see doc/super_compressed_textures.md
     bool mHasBPTC = false;
     // </SS:Nexii>
+    // <SS:Nexii> AzdoGaMa - AZDO capability gates, see doc/azdo_bindless_textures.md
+    bool mHasBindlessTexture = false;
+    bool mHasBufferStorage = false;
+    bool mHasMultiDrawIndirect = false;
+    // </SS:Nexii>
 
     // Vendor-specific extensions
     bool mHasAMDAssociations = false;

@@ -156,6 +156,9 @@ bool LLImageGL::sCompressTextures = false;
 // <SS:Nexii>
 bool LLImageGL::sSqueezeEnabled = false;
 // </SS:Nexii>
+// <SS:Nexii> AzdoGaMa
+U32 LLImageGL::sBindlessResidentCount = 0;
+// </SS:Nexii>
 std::unordered_set<LLImageGL*> LLImageGL::sImageList;
 
 
@@ -526,6 +529,10 @@ LLImageGL::LLImageGL(
 {
     init(false, true);
     mTexName = texName;
+    // <SS:Nexii> AzdoGaMa - an existing GL object was wrapped: stamp the state version so the
+    // texture participates in bindless binding from the start
+    mStateVersion++;
+    // </SS:Nexii>
     mTarget = target;
     mComponents = components;
     mAddressMode = addressMode;
@@ -584,6 +591,13 @@ void LLImageGL::init(bool usemipmaps, bool allow_compression)
     mMipLevels = -1;
 
     mIsResident = 0;
+
+    // <SS:Nexii> AzdoGaMa, see doc/azdo_bindless_textures.md
+    mBindlessHandle = 0;
+    mBindlessResident = false;
+    mBindlessStateVersion = 0;
+    mStateVersion = 0;
+    // </SS:Nexii>
 
     mComponents = 0;
     mMaxDiscardLevel = MAX_DISCARD_LEVEL;
@@ -843,6 +857,12 @@ void LLImageGL::setImage(const LLImageRaw* imageraw)
 bool LLImageGL::setImage(const U8* data_in, bool data_hasmips /* = false */, S32 usename /* = 0 */)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
+
+    // <SS:Nexii> AzdoGaMa - image data changed (drivers may rebuild the object), so any
+    // cached bindless handle is conservatively stale. The regeneration is lazy, so this
+    // only costs a version bump for textures that never take the bindless path.
+    mStateVersion++;
+    // </SS:Nexii>
 
     bool is_compressed = isCompressed();
 
@@ -1252,6 +1272,9 @@ void sub_image_lines(U32 target, S32 miplevel, S32 x_offset, S32 y_offset, S32 w
 bool LLImageGL::setSubImage(const U8* datap, S32 data_width, S32 data_height, S32 x_pos, S32 y_pos, S32 width, S32 height, bool force_fast_update /* = false */, LLGLuint use_name)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_TEXTURE;
+    // <SS:Nexii> AzdoGaMa - partial image data changed; lazy bindless handle regeneration
+    mStateVersion++;
+    // </SS:Nexii>
     if (!width || !height)
     {
         return true;
@@ -1647,6 +1670,9 @@ bool LLImageGL::createGLTexture()
 
 
     LLImageGL::generateTextures(1, &mTexName);
+    // <SS:Nexii> AzdoGaMa - fresh GL object: any cached bindless handle is stale
+    mStateVersion++;
+    // </SS:Nexii>
     stop_glerror();
     if (!mTexName)
     {
@@ -1923,6 +1949,9 @@ void LLImageGL::syncTexName(LLGLuint texname)
             LLImageGL::deleteTextures(1, &mTexName);
         }
         mTexName = texname;
+        // <SS:Nexii> AzdoGaMa - the GL object changed, so any cached bindless handle is stale
+        mStateVersion++;
+        // </SS:Nexii>
     }
 }
 
@@ -2133,6 +2162,14 @@ void LLImageGL::destroyGLTexture()
             mTextureMemory = (S64Bytes)0;
         }
 
+        // <SS:Nexii> AzdoGaMa - drop bindless residency while the handle is still valid;
+        // the GL object is about to be deleted
+        makeBindlessNonResident();
+        mBindlessHandle = 0;
+        mBindlessStateVersion = 0;
+        mStateVersion++;
+        // </SS:Nexii>
+
         LLImageGL::deleteTextures(1, &mTexName);
         mCurrentDiscardLevel = -1 ; //invalidate mCurrentDiscardLevel.
         mTexName = 0;
@@ -2158,6 +2195,13 @@ void LLImageGL::forceToInvalidateGLTexture()
 
 void LLImageGL::setAddressMode(LLTexUnit::eTextureAddressMode mode)
 {
+    // <SS:Nexii> AzdoGaMa - the mode can reach the GL object here even before the next
+    // bindless bind (the immediate-apply branch below), and the handle captures the object's
+    // state at creation - so any change invalidates it. The regeneration is lazy and only
+    // costs a fresh glGetTextureHandleARB when the texture is next bound bindless.
+    mStateVersion++;
+    // </SS:Nexii>
+
     if (mAddressMode != mode)
     {
         mTexOptionsDirty = true;
@@ -2173,6 +2217,11 @@ void LLImageGL::setAddressMode(LLTexUnit::eTextureAddressMode mode)
 
 void LLImageGL::setFilteringOption(LLTexUnit::eTextureFilterOptions option)
 {
+    // <SS:Nexii> AzdoGaMa - see setAddressMode: the change can land on the GL object right
+    // here (immediate-apply branch) and would otherwise leave the bindless handle stale
+    mStateVersion++;
+    // </SS:Nexii>
+
     if (mFilterOption != option)
     {
         mTexOptionsDirty = true;
@@ -2186,6 +2235,166 @@ void LLImageGL::setFilteringOption(LLTexUnit::eTextureFilterOptions option)
         stop_glerror();
     }
 }
+
+// <SS:Nexii> AzdoGaMa - bindless texture handles, see doc/azdo_bindless_textures.md
+
+void LLImageGL::applyTexOptions()
+{
+    checkActiveThread();
+
+    if (mTexName == 0)
+    {
+        return;
+    }
+
+    mTexOptionsDirty = false;
+    mStateVersion++;
+
+    // The bindless handle captures the texture's sampler state at glGetTextureHandleARB
+    // time, so the pending address/filter state has to land on the GL object here instead
+    // of waiting for the next unit bind. Bind to a scratch unit (the last one - the
+    // renderer's active channels stay well below it), apply the same state the unit path
+    // would, then restore the unit's previous binding and the previous active unit.
+    GLenum binding_enum = GL_TEXTURE_BINDING_2D;
+    switch (mTarget)
+    {
+        case GL_TEXTURE_2D:         binding_enum = GL_TEXTURE_BINDING_2D; break;
+        case GL_TEXTURE_2D_ARRAY:   binding_enum = GL_TEXTURE_BINDING_2D_ARRAY; break;
+        case GL_TEXTURE_3D:         binding_enum = GL_TEXTURE_BINDING_3D; break;
+        case GL_TEXTURE_CUBE_MAP:   binding_enum = GL_TEXTURE_BINDING_CUBE_MAP; break;
+        case GL_TEXTURE_RECTANGLE:  binding_enum = GL_TEXTURE_BINDING_RECTANGLE; break;
+        default: break;
+    }
+
+    GLint prev_active = 0;
+    GLint prev_tex = 0;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &prev_active);
+    glGetIntegerv(binding_enum, &prev_tex);
+
+    S32 scratch_unit = llmin((S32)LL_NUM_TEXTURE_LAYERS - 1, gGLManager.mNumTextureImageUnits - 1);
+    scratch_unit = llmax(scratch_unit, 0);
+
+    glActiveTexture(GL_TEXTURE0 + scratch_unit);
+    glBindTexture(mTarget, mTexName);
+
+    const GLenum gl_target = mTarget;
+    const GLint wrap_gl = LLTexUnit::getAddressModeGL(mAddressMode);
+    glTexParameteri(gl_target, GL_TEXTURE_WRAP_S, wrap_gl);
+    glTexParameteri(gl_target, GL_TEXTURE_WRAP_T, wrap_gl);
+    if (mBindTarget == LLTexUnit::TT_CUBE_MAP || mBindTarget == LLTexUnit::TT_CUBE_MAP_ARRAY || mBindTarget == LLTexUnit::TT_TEXTURE_3D)
+    {
+        glTexParameteri(gl_target, GL_TEXTURE_WRAP_R, wrap_gl);
+    }
+
+    glTexParameteri(gl_target, GL_TEXTURE_MAG_FILTER, mFilterOption == LLTexUnit::TFO_POINT ? GL_NEAREST : GL_LINEAR);
+    if (mFilterOption >= LLTexUnit::TFO_TRILINEAR && mHasMipMaps)
+    {
+        glTexParameteri(gl_target, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    }
+    else if (mFilterOption >= LLTexUnit::TFO_BILINEAR)
+    {
+        glTexParameteri(gl_target, GL_TEXTURE_MIN_FILTER, mHasMipMaps ? GL_LINEAR_MIPMAP_NEAREST : GL_LINEAR);
+    }
+    else
+    {
+        glTexParameteri(gl_target, GL_TEXTURE_MIN_FILTER, mHasMipMaps ? GL_NEAREST_MIPMAP_NEAREST : GL_NEAREST);
+    }
+
+    if (gGLManager.mHasAnisotropic)
+    {
+        if (LLImageGL::sGlobalUseAnisotropic && mFilterOption == LLTexUnit::TFO_ANISOTROPIC)
+        {
+            glTexParameterf(gl_target, GL_TEXTURE_MAX_ANISOTROPY, gGLManager.mMaxAnisotropy);
+        }
+        else
+        {
+            glTexParameterf(gl_target, GL_TEXTURE_MAX_ANISOTROPY, 1.f);
+        }
+    }
+
+    glBindTexture(mTarget, prev_tex);
+    glActiveTexture(prev_active);
+    stop_glerror();
+}
+
+LLGLuint64 LLImageGL::getBindlessHandle()
+{
+#if !LL_AZDO_GL_ENTRY_POINTS_AVAILABLE
+    return 0;
+#else
+    if (!gGLManager.mHasBindlessTexture || mTexName == 0)
+    {
+        return 0;
+    }
+
+    if (mTexOptionsDirty)
+    {
+        applyTexOptions();
+    }
+
+    if (mBindlessHandle != 0 && mBindlessStateVersion == mStateVersion)
+    {
+        return mBindlessHandle;
+    }
+
+    if (mBindlessHandle != 0)
+    {
+        // a new glGetTextureHandleARB for this texture invalidates the previous handle,
+        // so drop residency while the old handle is still valid
+        makeBindlessNonResident();
+        mBindlessHandle = 0;
+    }
+
+    mBindlessHandle = glGetTextureHandleARB(mTexName);
+    mBindlessStateVersion = mStateVersion;
+    mBindlessResident = false;
+
+    LL_DEBUGS("Texture") << "bindless handle created for texture " << mTexName << " (0x" << std::hex << mBindlessHandle << std::dec << ")" << LL_ENDL;
+    return mBindlessHandle;
+#endif
+}
+
+bool LLImageGL::makeBindlessResident()
+{
+#if !LL_AZDO_GL_ENTRY_POINTS_AVAILABLE
+    return false;
+#else
+    if (!gGLManager.mHasBindlessTexture || mBindlessHandle == 0 || mBindlessResident)
+    {
+        return mBindlessResident;
+    }
+
+    glMakeTextureHandleResidentARB(mBindlessHandle);
+    mBindlessResident = true;
+    sBindlessResidentCount++;
+    return true;
+#endif
+}
+
+void LLImageGL::makeBindlessNonResident()
+{
+#if !LL_AZDO_GL_ENTRY_POINTS_AVAILABLE
+    mBindlessResident = false;
+    return;
+#else
+    if (!gGLManager.mHasBindlessTexture || mBindlessHandle == 0)
+    {
+        mBindlessResident = false;
+        return;
+    }
+
+    if (mBindlessResident)
+    {
+        glMakeTextureHandleNonResidentARB(mBindlessHandle);
+        mBindlessResident = false;
+        if (sBindlessResidentCount > 0)
+        {
+            sBindlessResidentCount--;
+        }
+    }
+#endif
+}
+// </SS:Nexii>
 
 bool LLImageGL::getIsResident(bool test_now)
 {

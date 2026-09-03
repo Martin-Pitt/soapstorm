@@ -84,6 +84,12 @@ public:
         TAM_CLAMP               // No texture type is currently enabled
     } eTextureAddressMode;
 
+    // <SS:Nexii> AzdoGaMa - GL constant for an address mode, single source of truth with
+    // the unit binding path so bindless handle creation applies identical state, see
+    // doc/azdo_bindless_textures.md
+    static GLint getAddressModeGL(eTextureAddressMode mode);
+    // </SS:Nexii>
+
     typedef enum
     {   // Note: If mipmapping or anisotropic are not enabled or supported it should fall back gracefully
         TFO_POINT = 0,          // Equal to: min=point, mag=point, mip=none.

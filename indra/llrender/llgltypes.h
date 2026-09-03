@@ -35,5 +35,8 @@ typedef S32 LLGLint;
 typedef F32 LLGLfloat;
 typedef F64 LLGLdouble;
 typedef U8 LLGLboolean;
+// <SS:Nexii> AzdoGaMa - 64-bit opaque bindless texture/sampler handle, see doc/azdo_bindless_textures.md
+typedef U64 LLGLuint64;
+// </SS:Nexii>
 
 #endif

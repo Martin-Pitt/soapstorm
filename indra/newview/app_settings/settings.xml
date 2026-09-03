@@ -25874,6 +25874,41 @@ Change of this parameter will affect the layout of buttons in notification toast
       <integer>0</integer>
     </map>
     <!-- </SS:Nexii> -->
+    <!-- <SS:Nexii> AzdoGaMa - approaching zero driver overhead, see doc/azdo_bindless_textures.md -->
+    <key>SSBindlessTextures</key>
+    <map>
+      <key>Comment</key>
+      <string>Bind world textures to shaders as 64-bit handles (GL_ARB_bindless_texture) instead of binding them to texture units. This removes the per-draw active-texture unit juggling that the classic pipeline pays for every object, and is completely invisible: the fallback unit path is used automatically for any texture that cannot produce a handle. Requires a GL 4.1+ context; changes reload shaders.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSPersistentBuffers</key>
+    <map>
+      <key>Comment</key>
+      <string>Back pooled vertex and index buffers with persistently mapped GPU memory (GL 4.4 buffer storage), so geometry uploads are plain CPU writes instead of per-frame glBufferSubData calls. Takes effect at startup, like RenderCompressTextures; the CPU-mirror fallback is used automatically on older contexts.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSMultiDrawIndirect</key>
+    <map>
+      <key>Comment</key>
+      <string>Group the draw calls of the main opaque pass that share all their state into one multi-draw indirect submission (GL 4.3) instead of one glDrawRangeElements per object. Objects that change shader, vertex buffer, texture or object matrix are never merged with anything else. The per-target batching is conservative by construction - only ever fewer, larger draw calls with identical rendering.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <!-- </SS:Nexii> -->
     <key>FSdataQAtest</key>
       <map>
       <key>Comment</key>

@@ -582,6 +582,14 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
             {
                 shader_code_text[shader_code_count++] = strdup("#version 420\n");
             }
+            // <SS:Nexii> AzdoGaMa - GL_ARB_bindless_texture is written against GLSL 4.10;
+            // on a 4.1 context the plain "#version 400" below would use the extension outside
+            // its conformance floor. 410 is a strict superset, so the bump is always safe.
+            else if (gGLManager.mHasBindlessTexture)
+            {
+                shader_code_text[shader_code_count++] = strdup("#version 410\n");
+            }
+            // </SS:Nexii>
             else
             {
                 shader_code_text[shader_code_count++] = strdup("#version 400\n");
@@ -621,6 +629,20 @@ GLuint LLShaderMgr::loadShaderFile(const std::string& filename, S32 & shader_lev
             }
         }
     }
+
+// <SS:Nexii> AzdoGaMa - enable GL_ARB_bindless_texture in every shader when the driver
+    // supports it. Sampler uniforms remain fully compatible with texture-unit binding via
+    // glUniform1i; the flag simply makes glUniformHandleui64ARB legal for samplers (see
+    // LLTexUnit::bindFast / LLGLSLShader::bindTextureBindless, doc/azdo_bindless_textures.md).
+    // "enable" rather than "require": a driver advertising the extension string in the GL
+    // layer is expected to accept it in GLSL, but graceful degradation beats a shader load
+    // failure on a corner case.
+    if (gGLManager.mHasBindlessTexture)
+    {
+        extra_code_text[extra_code_count++] = strdup("#extension GL_ARB_bindless_texture : enable\n");
+        extra_code_text[extra_code_count++] = strdup("#define HAS_BINDLESS_TEXTURES 1\n");
+    }
+    // </SS:Nexii>
 
     if (type == GL_FRAGMENT_SHADER)
     {

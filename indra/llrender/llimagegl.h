@@ -182,6 +182,23 @@ public:
 
     bool getIsResident(bool test_now = false); // not const
 
+    // <SS:Nexii> AzdoGaMa - bindless texture handles, see doc/azdo_bindless_textures.md
+    // Returns a 64-bit handle suitable for glUniformHandleui64ARB, or 0 when bindless is
+    // unavailable or the texture has no GL object. The handle captures the texture's sampler
+    // state at creation time, so any pending option change is applied first and the handle is
+    // regenerated whenever the texture's sampler state or GL object changes. Residency is
+    // acquired lazily on first bindless use and retained until the object is destroyed or the
+    // handle is regenerated.
+    LLGLuint64 getBindlessHandle();
+    bool makeBindlessResident();
+    void makeBindlessNonResident();
+    // A caller mutated the GL object's sampler state out-of-band (direct glTexParameter,
+    // bypassing setAddressMode/setFilteringOption); any cached bindless handle is now
+    // stale and will be regenerated lazily on the next bindless use.
+    void invalidateBindlessHandle() { mStateVersion++; }
+    static U32 getBindlessResidentCount() { return sBindlessResidentCount; }
+    // </SS:Nexii>
+
     void setTarget(const LLGLenum target, const LLTexUnit::eTextureType bind_target);
 
     LLTexUnit::eTextureType getTarget(void) const { return mBindTarget; }
@@ -248,6 +265,13 @@ private:
     void deriveFormatFromComponents();
     // </SS:Nexii>
 
+    // <SS:Nexii> AzdoGaMa - applies pending address/filter state to the GL object immediately
+    // (deferred binds can no longer be relied on once bindless handles are used, since the
+    // handle is created from the object's state), then bumps mStateVersion, see
+    // doc/azdo_bindless_textures.md
+    void applyTexOptions();
+    // </SS:Nexii>
+
     LLPointer<LLImageRaw> mSaveData; // used for destroyGL/restoreGL
     LL::WorkQueue::weak_t mMainQueue;
     U8* mPickMask;  //downsampled bitmap approximation of alpha channel.  NULL if no alpha channel
@@ -277,6 +301,16 @@ protected:
     S32 mMipLevels;
 
     LLGLboolean mIsResident;
+
+    // <SS:Nexii> AzdoGaMa - bindless handle cache. mStateVersion is bumped by every change
+    // that can alter the handle's captured state (GL object replacement, image uploads,
+    // applied sampler options), mBindlessStateVersion records the version the current
+    // handle was created at, see doc/azdo_bindless_textures.md
+    LLGLuint64 mBindlessHandle = 0;
+    bool mBindlessResident = false;
+    U32 mBindlessStateVersion = 0;
+    U32 mStateVersion = 0;
+    // </SS:Nexii>
 
     S8 mComponents;
     S8 mMaxDiscardLevel;
@@ -310,6 +344,9 @@ public:
     static bool sSqueezeEnabled;
     static bool canUseSqueeze();
     // </SS:Nexii>
+    // <SS:Nexii> AzdoGaMa - number of bindless handles currently resident, for observability
+    static U32 sBindlessResidentCount;
+    // </SS:Nexii>
 #if DEBUG_MISS
     bool mMissed; // Missed on last bind?
     bool getMissed() const { return mMissed; };
@@ -342,7 +379,13 @@ public:
     void setCategory(S32 category) {mCategory = category;}
     S32  getCategory()const {return mCategory;}
 
-    void setTexName(GLuint texName) { mTexName = texName; }
+    void setTexName(GLuint texName)
+    {
+        mTexName = texName;
+        // <SS:Nexii> AzdoGaMa - the GL object changed, so any cached bindless handle is stale
+        mStateVersion++;
+        // </SS:Nexii>
+    }
 
     //similar to setTexName, but will call deleteTextures on mTexName if mTexName is not 0 or texname
     void syncTexName(LLGLuint texname);

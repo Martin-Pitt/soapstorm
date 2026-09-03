@@ -788,6 +788,26 @@ void LLGLSLShader::mapUniform(GLint index)
                 if (mTexture[i] != -1)
                 {
                     LL_DEBUGS("GLSLTextureChannels") << name << " assigned to texture channel " << mTexture[i] << LL_ENDL;
+
+                    // <SS:Nexii> AzdoGaMa - record the unit -> uniform mapping for bindless
+                    // binding. Scalar samplers can be handle-bound; sampler arrays keep their
+                    // texture-unit bindings (the single handle forms cannot address array
+                    // elements), so their unit runs are marked as unit-driven.
+                    if (size == 1)
+                    {
+                        if ((U32)mTexture[i] < mBindlessUnitToUniform.size())
+                        {
+                            mBindlessUnitToUniform[mTexture[i]] = i;
+                        }
+                    }
+                    else
+                    {
+                        for (S32 u = mTexture[i]; u < mTexture[i] + size && (U32)u < mBindlessUnitToUniform.size(); ++u)
+                        {
+                            mBindlessUnitToUniform[u] = -2;
+                        }
+                    }
+                    // </SS:Nexii>
                 }
                 return;
             }
@@ -847,6 +867,113 @@ GLint LLGLSLShader::mapUniformTextureChannel(GLint location, GLenum type, GLint 
     return -1;
 }
 
+// <SS:Nexii> AzdoGaMa - bindless textures, see doc/azdo_bindless_textures.md
+
+// static
+bool LLGLSLShader::sUseBindlessTextures = false;
+
+// static
+void LLGLSLShader::setUseBindlessTextures(bool use)
+{
+    if (sUseBindlessTextures == use)
+    {
+        return;
+    }
+
+    sUseBindlessTextures = use;
+
+    // Toggling at runtime leaves every already-linked program holding sampler uniforms set
+    // under the other mode: programs compiled without the GLSL extension must not receive
+    // glUniformHandleui64ARB (GL_INVALID_OPERATION), and programs whose samplers were
+    // handle-bound must not be sampled through a texture unit. The caller (settings
+    // listener in llviewercontrol.cpp) therefore re-loads all shaders after the flip;
+    // mapUniforms() rebuilds the unit maps and clears the handle caches.
+    LL_INFOS("Shader") << "Bindless texture binding is now " << (use ? "enabled" : "disabled") << " - shaders must be re-loaded by the caller" << LL_ENDL;
+}
+
+void LLGLSLShader::resetTextureUnitBinding(U32 unit)
+{
+    if (unit >= mBindlessUnitToUniform.size())
+    {
+        return;
+    }
+
+    S32 uniform = mBindlessUnitToUniform[unit];
+    if (uniform < 0 || uniform >= (S32)mBindlessHandleCache.size())
+    {
+        return;
+    }
+
+    if (mBindlessHandleCache[uniform] != 0 && mUniform[uniform] >= 0)
+    {
+        glUniform1i(mUniform[uniform], (GLint)unit);
+        mBindlessHandleCache[uniform] = 0;
+    }
+}
+
+bool LLGLSLShader::bindTextureBindless(U32 unit, LLImageGL* gl_tex)
+{
+    if (unit >= mBindlessUnitToUniform.size())
+    {
+        return false;
+    }
+
+    S32 uniform = mBindlessUnitToUniform[unit];
+    if (uniform < 0)
+    {
+        return false; // no sampler on this unit, or a sampler array run (unit-driven)
+    }
+
+    if (uniform >= (S32)mBindlessHandleCache.size())
+    {
+        return false;
+    }
+
+    LLGLuint tex_name = gl_tex ? gl_tex->getTexName() : 0;
+    if (tex_name == 0)
+    {
+        // no GL object - the classic unit path will bind the default image; make sure the
+        // sampler uniform does not keep sampling through a stale handle
+        if (mBindlessHandleCache[uniform] != 0 && mUniform[uniform] >= 0)
+        {
+            glUniform1i(mUniform[uniform], (GLint)unit);
+            mBindlessHandleCache[uniform] = 0;
+        }
+        return false;
+    }
+
+    LLGLuint64 handle = gl_tex->getBindlessHandle();
+    if (handle == 0)
+    {
+        // bindless unavailable/unusable for this texture - fall back to the unit path and
+        // put the sampler back on its texture unit
+        if (mBindlessHandleCache[uniform] != 0 && mUniform[uniform] >= 0)
+        {
+            glUniform1i(mUniform[uniform], (GLint)unit);
+            mBindlessHandleCache[uniform] = 0;
+        }
+        return false;
+    }
+
+    if (!gl_tex->makeBindlessResident())
+    {
+        return false;
+    }
+
+#if LL_AZDO_GL_ENTRY_POINTS_AVAILABLE
+    if (mUniform[uniform] >= 0 && mBindlessHandleCache[uniform] != handle)
+    {
+        glUniformHandleui64ARB(mUniform[uniform], handle);
+        mBindlessHandleCache[uniform] = handle;
+    }
+#else
+    return false;
+#endif
+
+    return true;
+}
+// </SS:Nexii>
+
 bool LLGLSLShader::mapUniforms()
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_SHADER;
@@ -859,9 +986,12 @@ bool LLGLSLShader::mapUniforms()
     mUniformMap.clear();
     mTexture.clear();
     mValue.clear();
+    mBindlessUnitToUniform.fill(-1);
+    mBindlessHandleCache.clear();
     //initialize arrays
     mUniform.resize(LLShaderMgr::instance()->mReservedUniforms.size(), -1);
     mTexture.resize(LLShaderMgr::instance()->mReservedUniforms.size(), -1);
+    mBindlessHandleCache.resize(LLShaderMgr::instance()->mReservedUniforms.size(), 0);
 
     bind();
 
