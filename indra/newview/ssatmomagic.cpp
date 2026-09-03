@@ -258,6 +258,8 @@ void SSAtmoMagic::refreshParams()
 
     mPrecipitation = llclamp(cfg.mPrecipitation, 0.f, 1.f) * mBlend;
     mTurbulence = llclamp(cfg.mTurbulence, 0.f, 1.f);
+    mDropletScale = cfg.mDropletScale;
+    mImpactScale = cfg.mImpactScale;
 
     mGustDepth = llclamp(cfg.mGustDepth, 0.f, 3.f) * mTurbulence * mBlend;
     mGustLength = llclamp(cfg.mGustLength, 8.f, 2000.f);

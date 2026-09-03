@@ -55,6 +55,10 @@ struct SSAtmoTrackConfig
     F32 mPrecipitation = 0.5f;
     F32 mTurbulence    = 0.3f;
 
+    // <SS:Nexii> The weather cube's per-band drop character (SSAtmoEnvWeatherState::mDropletSizeScale / mImpactScale), -1 when no environment provides them. Derived every refresh like the lightning intervals below - never serialised, a v2 notecard has no intensity bands to author.
+    F32 mDropletScale = -1.f;
+    F32 mImpactScale  = -1.f;
+
     LLQuaternion mWindRot;
     F32 mWindSpeed = 4.f;
 

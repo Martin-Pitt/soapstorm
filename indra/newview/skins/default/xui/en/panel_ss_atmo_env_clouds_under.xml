@@ -41,6 +41,7 @@
      height="14"
      width="110"
      name="ucloud_base_height_label"
+     tool_tip="Height of the under deck's cloud base, metres above the track floor - negative hangs it below, which is the sky-build case. Greyed out under Auto, where the base rides the temperature season instead"
      font="SansSerifSmall">
         Base Height (m)
     </text>
@@ -52,6 +53,7 @@
      height="18"
      width="280"
      name="ucloud_base_height_slider"
+     tool_tip="Height of the under deck's cloud base, metres above the track floor - negative hangs it below, which is the sky-build case. Greyed out under Auto, where the base rides the temperature season instead"
      show_text="false"
      min_val="-400"
      max_val="4096"
@@ -66,6 +68,7 @@
      width="70"
      label_width="0"
      name="ucloud_base_height_value_spinner"
+     tool_tip="Height of the under deck's cloud base, metres above the track floor - negative hangs it below, which is the sky-build case. Greyed out under Auto, where the base rides the temperature season instead"
      min_val="-10000"
      max_val="10000"
      increment="25"
@@ -119,6 +122,7 @@
      height="14"
      width="110"
      name="ucloud_thickness_label"
+     tool_tip="How deep the under deck is at rest. Convection multiplies it up to fivefold, and the storm lid caps the result at a kilometre"
      font="SansSerifSmall">
         Thickness (m)
     </text>
@@ -130,6 +134,7 @@
      height="18"
      width="280"
      name="ucloud_thickness_slider"
+     tool_tip="How deep the under deck is at rest. Convection multiplies it up to fivefold, and the storm lid caps the result at a kilometre"
      show_text="false"
      min_val="10"
      max_val="2000"
@@ -144,6 +149,7 @@
      width="70"
      label_width="0"
      name="ucloud_thickness_value_spinner"
+     tool_tip="How deep the under deck is at rest. Convection multiplies it up to fivefold, and the storm lid caps the result at a kilometre"
      min_val="10"
      max_val="2000"
      increment="10"
@@ -197,6 +203,7 @@
      height="14"
      width="110"
      name="ucloud_coverage_label"
+     tool_tip="Multiplies the coverage moisture derives, which fills fast then saturates. 1 is the meteorological answer; below it the deck keeps holes a wet cube would have closed, above it fills in early"
      font="SansSerifSmall">
         Coverage Scale
     </text>
@@ -208,6 +215,7 @@
      height="18"
      width="280"
      name="ucloud_coverage_slider"
+     tool_tip="Multiplies the coverage moisture derives, which fills fast then saturates. 1 is the meteorological answer; below it the deck keeps holes a wet cube would have closed, above it fills in early"
      show_text="false"
      min_val="0"
      max_val="2"
@@ -222,6 +230,7 @@
      width="70"
      label_width="0"
      name="ucloud_coverage_value_spinner"
+     tool_tip="Multiplies the coverage moisture derives, which fills fast then saturates. 1 is the meteorological answer; below it the deck keeps holes a wet cube would have closed, above it fills in early"
      min_val="0"
      max_val="2"
      increment="0.01"
@@ -275,6 +284,7 @@
      height="14"
      width="110"
      name="ucloud_puff_density_label"
+     tool_tip="Ceiling on one puff's opacity - how solid the under deck's individual clumps read before they merge. Low leaves airy translucent cumulus, high gives dense white cauliflower"
      font="SansSerifSmall">
         Puff Density
     </text>
@@ -286,6 +296,7 @@
      height="18"
      width="280"
      name="ucloud_puff_density_slider"
+     tool_tip="Ceiling on one puff's opacity - how solid the under deck's individual clumps read before they merge. Low leaves airy translucent cumulus, high gives dense white cauliflower"
      show_text="false"
      min_val="0"
      max_val="1"
@@ -300,6 +311,7 @@
      width="70"
      label_width="0"
      name="ucloud_puff_density_value_spinner"
+     tool_tip="Ceiling on one puff's opacity - how solid the under deck's individual clumps read before they merge. Low leaves airy translucent cumulus, high gives dense white cauliflower"
      min_val="0"
      max_val="1"
      increment="0.01"
@@ -353,6 +365,7 @@
      height="14"
      width="110"
      name="ucloud_storm_dark_label"
+     tool_tip="How hard convection chars the under deck's puffs toward storm grey, as an exponential on their albedo. Gated by the wet band and by the Weather Influence floater's storm darkening row"
      font="SansSerifSmall">
         Storm Darkening
     </text>
@@ -364,6 +377,7 @@
      height="18"
      width="280"
      name="ucloud_storm_dark_slider"
+     tool_tip="How hard convection chars the under deck's puffs toward storm grey, as an exponential on their albedo. Gated by the wet band and by the Weather Influence floater's storm darkening row"
      show_text="false"
      min_val="0"
      max_val="2"
@@ -378,6 +392,7 @@
      width="70"
      label_width="0"
      name="ucloud_storm_dark_value_spinner"
+     tool_tip="How hard convection chars the under deck's puffs toward storm grey, as an exponential on their albedo. Gated by the wet band and by the Weather Influence floater's storm darkening row"
      min_val="0"
      max_val="2"
      increment="0.01"
@@ -541,7 +556,7 @@
      top_delta="0"
      height="25"
      width="25"
-     name="ucloud_noise_image_next_button"
+     name="ucloud_detail_image_next_button"
      tool_tip="Jump to the next keyframe"
      image_overlay="SkipForward_Off"
      image_disabled="PushButton_Disabled"
@@ -622,9 +637,10 @@
      top_pad="10"
      height="14"
      width="110"
-     name="ucloud_texture_mix_label"
+     name="ucloud_noise_image_label"
+     tool_tip="Convection noise map: shapes towers and pockets as convection rises and cuts holes in the sky when the air is dry and stable - a moist sky turns the same map into unbroken overcast. None leaves the deck to its plain cluster pattern"
      font="SansSerifSmall">
-        Image Mix
+        Noise Map
     </text>
     <texture_picker
      follows="left|top"
@@ -687,6 +703,7 @@
      height="14"
      width="110"
      name="ucloud_noise_scale_label"
+     tool_tip="Metres per tile of the convection noise map, as a multiplier on the tuned field scale. Smaller packs its towers and holes tighter together, larger spreads them into continent-scale weather. Does nothing with no noise map set"
      font="SansSerifSmall">
         Noise Scale
     </text>
@@ -698,6 +715,7 @@
      height="18"
      width="280"
      name="ucloud_noise_scale_slider"
+     tool_tip="Metres per tile of the convection noise map, as a multiplier on the tuned field scale. Smaller packs its towers and holes tighter together, larger spreads them into continent-scale weather. Does nothing with no noise map set"
      show_text="false"
      min_val="0.1"
      max_val="8"
@@ -712,6 +730,7 @@
      width="70"
      label_width="0"
      name="ucloud_noise_scale_value_spinner"
+     tool_tip="Metres per tile of the convection noise map, as a multiplier on the tuned field scale. Smaller packs its towers and holes tighter together, larger spreads them into continent-scale weather. Does nothing with no noise map set"
      min_val="0.1"
      max_val="8"
      increment="0.01"
@@ -765,6 +784,7 @@
      height="14"
      width="110"
      name="ucloud_texture_mix_label"
+     tool_tip="Bias between the base image and the detail image on the under deck's puffs. 0 is the base map alone, 1 leans fully onto the detail map"
      font="SansSerifSmall">
         Image Mix
     </text>
@@ -776,6 +796,7 @@
      height="18"
      width="280"
      name="ucloud_texture_mix_slider"
+     tool_tip="Bias between the base image and the detail image on the under deck's puffs. 0 is the base map alone, 1 leans fully onto the detail map"
      show_text="false"
      min_val="0"
      max_val="1"
@@ -790,6 +811,7 @@
      width="70"
      label_width="0"
      name="ucloud_texture_mix_value_spinner"
+     tool_tip="Bias between the base image and the detail image on the under deck's puffs. 0 is the base map alone, 1 leans fully onto the detail map"
      min_val="0"
      max_val="1"
      increment="0.01"
@@ -843,6 +865,7 @@
      height="14"
      width="110"
      name="ucloud_detail_scale_label"
+     tool_tip="Size of the fine noise octaves across a puff's surface. Small values give big soft lobes, large ones a crisp curdled surface"
      font="SansSerifSmall">
         Detail Scale
     </text>
@@ -854,6 +877,7 @@
      height="18"
      width="280"
      name="ucloud_detail_scale_slider"
+     tool_tip="Size of the fine noise octaves across a puff's surface. Small values give big soft lobes, large ones a crisp curdled surface"
      show_text="false"
      min_val="0.1"
      max_val="8"
@@ -868,6 +892,7 @@
      width="70"
      label_width="0"
      name="ucloud_detail_scale_value_spinner"
+     tool_tip="Size of the fine noise octaves across a puff's surface. Small values give big soft lobes, large ones a crisp curdled surface"
      min_val="0.1"
      max_val="8"
      increment="0.01"
@@ -921,6 +946,7 @@
      height="14"
      width="110"
      name="ucloud_drift_rate_label"
+     tool_tip="How fast the under deck's own noise evolves - the boil in place, not the travel. Movement across the sky comes from the wind; 0 freezes the shapes where they stand"
      font="SansSerifSmall">
         Boil Rate
     </text>
@@ -932,6 +958,7 @@
      height="18"
      width="280"
      name="ucloud_drift_rate_slider"
+     tool_tip="How fast the under deck's own noise evolves - the boil in place, not the travel. Movement across the sky comes from the wind; 0 freezes the shapes where they stand"
      show_text="false"
      min_val="0"
      max_val="4"
@@ -946,6 +973,7 @@
      width="70"
      label_width="0"
      name="ucloud_drift_rate_value_spinner"
+     tool_tip="How fast the under deck's own noise evolves - the boil in place, not the travel. Movement across the sky comes from the wind; 0 freezes the shapes where they stand"
      min_val="0"
      max_val="4"
      increment="0.01"

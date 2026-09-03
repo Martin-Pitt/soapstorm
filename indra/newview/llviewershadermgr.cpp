@@ -2091,7 +2091,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         }
 
         gSSVolCloudProgram.mName = "SS Volumetric Cloud Shader";
-        // The windlight atmospheric module, for the analytic aerial perspective - the same calcAtmosphericVars the rain shader links, so the deck is hazed by the same maths as the dome and the terrain.
+        // The windlight atmospheric module. Nothing calls calcAtmosphericVars here any more - the deck's aerial perspective moved into ssVolCloudV's own slab-ray transmittance and airlight, the same door the dome band's atmosphere comes in by - but the feature flags stay: they are what pull the windlight uniform declarations in, and dropping them changes the injected header set for no gain.
         gSSVolCloudProgram.mFeatures.calculatesAtmospherics = true;
         gSSVolCloudProgram.mFeatures.hasAtmospherics = true;
         gSSVolCloudProgram.mFeatures.hasGamma = true;
@@ -2100,6 +2100,8 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSVolCloudProgram.mShaderFiles.push_back(make_pair("deferred/ssVolCloudV.glsl", GL_VERTEX_SHADER));
         gSSVolCloudProgram.mShaderFiles.push_back(make_pair("deferred/ssVolCloudF.glsl", GL_FRAGMENT_SHADER));
         gSSVolCloudProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        // <SS:Nexii> A SKY shader, and it has to say so: LLEnvironment::updateShaderUniforms only hands a program the sky uniforms filed under SG_ANY plus the ones filed under its OWN group, and LLSettingsVOSky::applySpecial files sunlight_color, moonlight_color and cloud_color under SG_SKY alone. Left at the default SG_DEFAULT this program received none of those three - they sat at zero for the life of the session - so ssVolCloudV's whole light path collapsed: sunlight zero, cloud_color zero, hence vary_ss_sunlit and vary_ss_amblit both zero and the deck lit by nothing but the ambient half of the airlight. That is a cold blue-grey that never moves, which is exactly how the field read against a burning sunrise while the dome band beside it wore the whole thing. The band is SG_SKY (gDeferredWLCloudProgram) and this field is shaded by the band's own maths, so it belongs in the band's group. [interaction: dome handoff]
+        gSSVolCloudProgram.mShaderGroup = LLGLSLShader::SG_SKY;
         gSSVolCloudProgram.clearPermutations();
         add_common_permutations(&gSSVolCloudProgram);
         if (!gSSVolCloudProgram.createShader())

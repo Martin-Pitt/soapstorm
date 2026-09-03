@@ -388,10 +388,16 @@ void SSLightning::idle(F32 dt)
     F32 interval_max = atmo->lightningIntervalMax();
     if (interval_max < 0.f)
     {
+        // <SS:Nexii> The resolver's wet gate, twinned: precipitation is the cube's moisture verbatim, so the same band keeps this fallback from thundering out of a dry sky.
+        const F32 wet = SSAtmoEnvWeatherResolver::lightningMoistureScale(atmo->precipitation());
         interval_min = 0.f;
         interval_max = 0.f;
-        if (convection >= 0.75f)      { interval_min = 2.f / season;  interval_max = 5.f / season; }
-        else if (convection >= 0.55f) { interval_min = 30.f / season; interval_max = 60.f / season; }
+        if (wet > 0.f)
+        {
+            const F32 scale = season * wet;
+            if (convection >= 0.75f)      { interval_min = 2.f / scale;  interval_max = 5.f / scale; }
+            else if (convection >= 0.55f) { interval_min = 30.f / scale; interval_max = 60.f / scale; }
+        }
     }
 
     // The strike-rate multiplier, shared by the ordinary scheduler and the blue-bolt clock.
@@ -437,8 +443,9 @@ void SSLightning::idle(F32 dt)
         if (mNextBlueAt < 0.0)
         {
             SSRandStream rng((U32)(now * 104729.0) ^ atmo->seed() ^ 0x8a1eu);
+            // <SS:Nexii> Season stretches this clock exactly as the ordinary one - the winter approach announces itself with rarer bolts, not summer-cadence ones. It was the single interval path that skipped the scale.
             const F32 interval = lerp(75.f, 18.f, llclamp(approach, 0.f, 1.f))
-                                 / llmax((F32)rate, 0.05f);
+                                 / (llmax((F32)rate, 0.05f) * season);
             mNextBlueAt = now + rng.frand(interval * 0.6f, interval * 1.5f);
         }
         else if (!mBluePrepared && now >= mNextBlueAt - (F64)PREPARE_LEAD_S)

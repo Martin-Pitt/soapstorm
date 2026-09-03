@@ -81,6 +81,9 @@
              height="15" width="410" label="Intensity sizing:" label_width="130"
              min_val="0" max_val="1" increment="0.01" decimal_digits="2" show_text="true"
              tool_tip="How much the global precipitation slider grows the drops rather than only adding more of them" />
+            <check_box name="weather_size" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="16" width="410" label="Weather grades drop size"
+             tool_tip="Sizes drops from the weather's intensity band - drizzle fine, torrential fat - instead of the raw precipitation number. Needs Intensity sizing above zero to have any reach." />
         </panel>
 
         <panel name="tab_look" label="Look" follows="all" layout="topleft"
@@ -194,6 +197,9 @@
              height="15" width="410" label="Impact strength:" label_width="130"
              min_val="0" max_val="2" increment="0.05" decimal_digits="2" show_text="true"
              tool_tip="Zero means it never lands: no ripples, splashes or impact sounds" />
+            <check_box name="weather_impact" follows="left|top" layout="topleft" left="10" top_pad="8"
+             height="16" width="410" label="Weather grades impact strength"
+             tool_tip="Scales splashes with the weather's intensity band - drizzle barely marks, torrential lands the full strength above" />
             <check_box name="shatter" follows="left|top" layout="topleft" left="10" top_pad="12"
              height="16" width="410" label="Shatter into shards on impact"
              tool_tip="Throws glowing shards off the surface at the speed it hit" />

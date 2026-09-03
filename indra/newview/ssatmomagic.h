@@ -108,6 +108,10 @@ public:
     F32 turbulence() const { return mTurbulence; }
     F32 windSpeed() const { return mWindSpeed; }
 
+    // <SS:Nexii> The cube's intensity-band drop character: droplet render-size scale and splash strength, 0..1 graded per band (drizzle taps, torrential hammers), or -1 with no environment. ssprecipitation modulates the preset's authored values by these where the preset opts in (mWeatherSize / mWeatherImpact).
+    F32 dropletScale() const { return mDropletScale; }
+    F32 impactScale() const { return mImpactScale; }
+
     F32 temperatureC() const { return mTemperatureC; }
 
     // <SS:Nexii> Storm-approach look-ahead: how imminent an approaching thunderstorm is (0..1) from the weather cube's next keyframe (SSAtmoEnvBridge::stormApproach), plus the upwind heading in degrees it comes FROM - negative when none approaches. SSLightning's bolt-from-the-blue anticipation reads these every frame.
@@ -252,6 +256,8 @@ private:
 
     F32 mPrecipitation = 0.f;
     F32 mTurbulence = 0.f;
+    F32 mDropletScale = -1.f;
+    F32 mImpactScale = -1.f;
     F32 mWindSpeed = 0.f;
     F32 mGustDepth = 0.f;
     F32 mGustLength = 140.f;

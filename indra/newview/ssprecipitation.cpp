@@ -162,6 +162,21 @@ static F32 intensitySizeScale(const SSPrecipPreset& preset, F32 precipitation)
     return lerp(1.f, scale, llclamp(preset.mIntensitySize, 0.f, 1.f));
 }
 
+// <SS:Nexii> The size ramp's drive: the cube's graded band value where the preset opts in (mWeatherSize - drizzle drops read fine, torrential fat, per SSAtmoEnvWeatherState's table), the raw precipitation number otherwise or when no environment grades one (-1). Both run the same 0.55-1.45 window above, so a preset never leaves the range the old ramp could reach.
+static F32 intensitySizeDrive(const SSPrecipPreset& preset, SSAtmoMagic* atmo)
+{
+    const F32 band = atmo->dropletScale();
+    return (preset.mWeatherSize && band >= 0.f) ? band : atmo->precipitation();
+}
+
+// <SS:Nexii> Splash strength: the authored value, scaled by the cube's band impact scale where the preset opts in (mWeatherImpact) - the drizzle bands land at zero and never queue, torrential lands the full authored hit. The runoff-clump landing keeps the flat authored value: a gathered stream hits as hard as its volume says, not as hard as the sky currently falls.
+static F32 weatherImpactStrength(const SSPrecipPreset& preset, SSAtmoMagic* atmo)
+{
+    const F32 band = atmo->impactScale();
+    if (!preset.mWeatherImpact || band < 0.f) return preset.mImpactStrength;
+    return preset.mImpactStrength * llclamp(band, 0.f, 1.f);
+}
+
 // The distance band a tier owns, with its cross-fade overlaps.
 void SSPrecipSim::tierBands(SSPrecipTier tier, const SSPrecipPreset& preset,
                             F32& in_lo, F32& in_hi, F32& out_lo, F32& out_hi)
@@ -676,7 +691,7 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
 
         if (tier == TIER_DROPS && !no_platform)
         {
-            const F32 strength = preset.mImpactStrength;
+            const F32 strength = weatherImpactStrength(preset, atmo);
             if (strength > 0.f && (hit - cam_agent).magVec() < IMPACT_QUEUE_RADIUS)
             {
                 const LLVector3 wind_h = windAt(hit) * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f))
@@ -738,7 +753,7 @@ void SSPrecipSim::emitParticle(SSPrecipTier tier, const LLVector3& hit_pos, F32 
     part.mKind = visual.mKind;
     part.mFlags = (preset.mSway >= 1.5f) ? PART_GUSTY : (preset.mSway > 0.f ? PART_SWAY : 0);
     part.mPhase = phase;
-    const F32 intensity = intensitySizeScale(preset, atmo->precipitation());
+    const F32 intensity = intensitySizeScale(preset, intensitySizeDrive(preset, atmo));
     part.mSizeX = visual.mSizeX * size_jitter * intensity;
     part.mSizeY = visual.mSizeY * size_jitter * intensity;
     part.mAlpha = visual.mAlpha;
@@ -880,7 +895,8 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
     }
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-    if (tier == TIER_DROPS && preset.makesImpacts()
+    const F32 impact_strength = weatherImpactStrength(preset, atmo);
+    if (tier == TIER_DROPS && preset.makesImpacts() && impact_strength > 0.f
         && (hit - cam).magVec() < IMPACT_QUEUE_RADIUS)
     {
         const LLVector3 wind_h = windAt(hit) * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f))
@@ -888,7 +904,7 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
         const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -preset.mFallSpeed);
 
         atmo->queueImpact(atmo->sharedTime() + run_fall / llmax(0.1f, preset.mFallSpeed),
-                          hit, preset.mImpactStrength * strength_jitter,
+                          hit, impact_strength * strength_jitter,
                           on_water, normal, impact_vel, preset.mShatter);
     }
 

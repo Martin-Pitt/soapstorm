@@ -36,6 +36,10 @@ namespace
     const F32 LIGHTNING_COLD_C = -15.f;
     const F32 LIGHTNING_FLOOR  = 0.05f;
 
+    // <SS:Nexii> The wet gate's band: numerically the sky modulator's DARKENING_MOIST_MIN/FULL (ssatmoenvskymodulator.cpp), kept in step by hand so storm darkening and thunder agree about what a storm is.
+    const F32 LIGHTNING_MOIST_MIN  = 0.25f;
+    const F32 LIGHTNING_MOIST_FULL = 0.60f;
+
     // Lerp.
     F32 ss_flerp(F32 a, F32 b, F32 t) { return a + (b - a) * t; }
 
@@ -106,6 +110,13 @@ F32 SSAtmoEnvWeatherResolver::lightningTemperatureScale(F32 temperature_c)
     const F32 season = llclamp((temperature_c - LIGHTNING_COLD_C)
                                / (LIGHTNING_WARM_C - LIGHTNING_COLD_C), 0.f, 1.f);
     return LIGHTNING_FLOOR + (1.f - LIGHTNING_FLOOR) * season;
+}
+
+// The wet gate: 0 below the band's onset, 1 from its top. No polarity switch here - a dry sky has nothing to charge whichever bolt model runs.
+F32 SSAtmoEnvWeatherResolver::lightningMoistureScale(F32 moisture)
+{
+    return llclamp((moisture - LIGHTNING_MOIST_MIN)
+                   / (LIGHTNING_MOIST_FULL - LIGHTNING_MOIST_MIN), 0.f, 1.f);
 }
 
 // Moisture into named intensity bands, with the extra drizzle bands only for liquid types.
@@ -208,10 +219,11 @@ std::string SSAtmoEnvWeatherResolver::intensityLabel(const std::string& type, SS
 }
 
 // One human sentence for the HUD: precipitation (or sky cover) plus wind strength.
-std::string SSAtmoEnvWeatherResolver::generateForecastText(const SSAtmoEnvWeatherState& state, F32 moisture)
+std::string SSAtmoEnvWeatherResolver::generateForecastText(const SSAtmoEnvWeatherState& state)
 {
     std::string precip;
-    if (moisture <= CLEAR_MOISTURE_THRESHOLD)
+    // <SS:Nexii> Sky-cover wording whenever nothing is actually falling, resolved state rather than raw moisture: a suppressed sky is wet enough to read SEVERE and used to announce "Thundery showers" over a street where not a drop landed.
+    if (state.mPrecipitationType.empty() || state.mIntensityBand == SSAtmoEnvPrecipIntensity::NONE)
     {
         precip = skyTextForOkta(state.mOktaCloudCover);
     }
@@ -258,7 +270,10 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
 
     state.mOktaCloudCover = oktaFromMoisture(moisture);
 
-    if (moisture <= CLEAR_MOISTURE_THRESHOLD)
+    // <SS:Nexii> The author's switch, read before the moisture test and folded into the same clear branch: moisture alone used to decide, so an overcast stormy sky could not be dry. Off suppresses precipitation and nothing else - the okta cover above is already banked, and the gusts, gloom and lightning below never look at this flag. [interaction: precipitation]
+    state.mPrecipitationFalls = weather.mPrecipitationFalls.valueAt(phase);
+
+    if (!state.mPrecipitationFalls || moisture <= CLEAR_MOISTURE_THRESHOLD)
     {
         state.mPrecipitationType = std::string();
         state.mPrecipitationIntensity = 0.f;
@@ -314,40 +329,49 @@ SSAtmoEnvWeatherState SSAtmoEnvWeatherResolver::resolve(const SSAtmoEnvWeather& 
 
     if (weather.mLightningAuto)
     {
-        switch (state.mConvectionPhase)
+        // <SS:Nexii> The wet gate: convection is the engine but the charge needs cloud. Moisture below the band means NO strikes however severe the convection - the dry heatwave whose thermals used to thunder out of a clear blue okta-0 sky - and a marginally wet sky strikes rarely, the wet scale dividing into the base intervals exactly as the winter season does.
+        const F32 wet = lightningMoistureScale(moisture);
+        if (wet <= 0.f)
         {
-            case SSAtmoEnvWeatherState::TURBULENT:
-                state.mLightningIntervalMinSeconds = 30.f / season;
-                state.mLightningIntervalMaxSeconds = 60.f / season;
-                state.mLightningIntensity = convection;
-                break;
-            case SSAtmoEnvWeatherState::SEVERE:
-                state.mLightningIntervalMinSeconds = 2.f / season;
-                state.mLightningIntervalMaxSeconds = 5.f / season;
-                state.mLightningIntensity = convection;
-                break;
-            default:
-                state.mLightningIntervalMinSeconds = 0.f;
-                state.mLightningIntervalMaxSeconds = 0.f;
-                state.mLightningIntensity = 0.f;
-                break;
+            state.mLightningIntervalMinSeconds = 0.f;
+            state.mLightningIntervalMaxSeconds = 0.f;
+            state.mLightningIntensity = 0.f;
+        }
+        else
+        {
+            const F32 scale = season * wet;
+            switch (state.mConvectionPhase)
+            {
+                case SSAtmoEnvWeatherState::TURBULENT:
+                    state.mLightningIntervalMinSeconds = 30.f / scale;
+                    state.mLightningIntervalMaxSeconds = 60.f / scale;
+                    state.mLightningIntensity = convection;
+                    break;
+                case SSAtmoEnvWeatherState::SEVERE:
+                    state.mLightningIntervalMinSeconds = 2.f / scale;
+                    state.mLightningIntervalMaxSeconds = 5.f / scale;
+                    state.mLightningIntensity = convection;
+                    break;
+                default:
+                    state.mLightningIntervalMinSeconds = 0.f;
+                    state.mLightningIntervalMaxSeconds = 0.f;
+                    state.mLightningIntensity = 0.f;
+                    break;
+            }
         }
     }
     else
     {
+        // <SS:Nexii> Manual mode: the authored intensity IS the storm. It used to only set fierceness while the intervals still came off the convection phase, so a keyframed intensity under a calm sky never fired a single bolt - dead authoring. Now intensity maps straight to cadence (a whisper of it strikes about once a minute, full intensity matches SEVERE's 2-5s) and only the season still stretches it; no wet gate either - an override is an order, the same call mPrecipitationOverride makes.
         state.mLightningIntensity = weather.mLightningIntensity.valueAt(phase);
-        if (state.mConvectionPhase == SSAtmoEnvWeatherState::TURBULENT)
+        const F32 authored = llclamp(state.mLightningIntensity, 0.f, 1.f);
+        if (authored > 0.02f)
         {
-            state.mLightningIntervalMinSeconds = 30.f / season;
-            state.mLightningIntervalMaxSeconds = 60.f / season;
-        }
-        else if (state.mConvectionPhase == SSAtmoEnvWeatherState::SEVERE)
-        {
-            state.mLightningIntervalMinSeconds = 2.f / season;
-            state.mLightningIntervalMaxSeconds = 5.f / season;
+            state.mLightningIntervalMinSeconds = ss_flerp(45.f, 2.f, authored) / season;
+            state.mLightningIntervalMaxSeconds = ss_flerp(90.f, 5.f, authored) / season;
         }
     }
 
-    state.mForecastText = generateForecastText(state, moisture);
+    state.mForecastText = generateForecastText(state);
     return state;
 }

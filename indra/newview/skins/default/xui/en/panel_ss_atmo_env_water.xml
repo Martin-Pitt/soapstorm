@@ -29,6 +29,7 @@
      height="14"
      width="110"
      name="water_height_label"
+     tool_tip="Near-surface dial; the spinner takes the full -10 km to +10 km range by hand"
      font="SansSerifSmall">
         Height (m)
     </text>
@@ -109,6 +110,7 @@
      height="14"
      width="110"
      name="water_fog_density_label"
+     tool_tip="How fast the water swallows light, as an exponential falloff. Low is tropical shallows with the bottom still visible, high is silt where a metre is all you get"
      font="SansSerifSmall">
         Fog Density
     </text>
@@ -120,6 +122,7 @@
      height="18"
      width="280"
      name="water_fog_density_slider"
+     tool_tip="How fast the water swallows light, as an exponential falloff. Low is tropical shallows with the bottom still visible, high is silt where a metre is all you get"
      show_text="false"
      min_val="0.001"
      max_val="100"
@@ -134,6 +137,7 @@
      width="70"
      label_width="0"
      name="water_fog_density_value_spinner"
+     tool_tip="How fast the water swallows light, as an exponential falloff. Low is tropical shallows with the bottom still visible, high is silt where a metre is all you get"
      min_val="0.001"
      max_val="100"
      increment="0.01"
@@ -187,6 +191,7 @@
      height="14"
      width="110"
      name="water_underwater_mod_label"
+     tool_tip="Multiplies fog density once the camera is below the surface, so water that reads clear from a boat can still be murky to a diver without touching the surface look"
      font="SansSerifSmall">
         Underwater Mod
     </text>
@@ -198,6 +203,7 @@
      height="18"
      width="280"
      name="water_underwater_mod_slider"
+     tool_tip="Multiplies fog density once the camera is below the surface, so water that reads clear from a boat can still be murky to a diver without touching the surface look"
      show_text="false"
      min_val="0"
      max_val="20"
@@ -212,6 +218,7 @@
      width="70"
      label_width="0"
      name="water_underwater_mod_value_spinner"
+     tool_tip="Multiplies fog density once the camera is below the surface, so water that reads clear from a boat can still be murky to a diver without touching the surface look"
      min_val="0"
      max_val="20"
      increment="0.01"
@@ -265,6 +272,7 @@
      height="14"
      width="110"
      name="water_fresnel_scale_label"
+     tool_tip="How strongly reflection takes over as the view angle flattens. High gives a mirror at grazing angles while the water stays clear looking straight down"
      font="SansSerifSmall">
         Fresnel Scale
     </text>
@@ -276,6 +284,7 @@
      height="18"
      width="280"
      name="water_fresnel_scale_slider"
+     tool_tip="How strongly reflection takes over as the view angle flattens. High gives a mirror at grazing angles while the water stays clear looking straight down"
      show_text="false"
      min_val="0"
      max_val="1"
@@ -290,6 +299,7 @@
      width="70"
      label_width="0"
      name="water_fresnel_scale_value_spinner"
+     tool_tip="How strongly reflection takes over as the view angle flattens. High gives a mirror at grazing angles while the water stays clear looking straight down"
      min_val="0"
      max_val="1"
      increment="0.01"
@@ -343,6 +353,7 @@
      height="14"
      width="110"
      name="water_fresnel_offset_label"
+     tool_tip="The reflection's floor - how mirrored the surface is looked at head on. Raise it and the water stops being see-through from any angle"
      font="SansSerifSmall">
         Fresnel Offset
     </text>
@@ -354,6 +365,7 @@
      height="18"
      width="280"
      name="water_fresnel_offset_slider"
+     tool_tip="The reflection's floor - how mirrored the surface is looked at head on. Raise it and the water stops being see-through from any angle"
      show_text="false"
      min_val="0"
      max_val="1"
@@ -368,6 +380,7 @@
      width="70"
      label_width="0"
      name="water_fresnel_offset_value_spinner"
+     tool_tip="The reflection's floor - how mirrored the surface is looked at head on. Raise it and the water stops being see-through from any angle"
      min_val="0"
      max_val="1"
      increment="0.01"
@@ -421,6 +434,7 @@
      height="14"
      width="110"
      name="water_normal_scale_x_label"
+     tool_tip="Scales the wave normal the reflection lookup uses, X axis - how far the ripples scramble the reflected image sideways. It reaches the reflection only; the surface's own shading normal is untouched"
      font="SansSerifSmall">
         Wavelet Scale X
     </text>
@@ -432,6 +446,7 @@
      height="18"
      width="280"
      name="water_normal_scale_x_slider"
+     tool_tip="Scales the wave normal the reflection lookup uses, X axis - how far the ripples scramble the reflected image sideways. It reaches the reflection only; the surface's own shading normal is untouched"
      show_text="false"
      min_val="0"
      max_val="10"
@@ -446,6 +461,7 @@
      width="70"
      label_width="0"
      name="water_normal_scale_x_value_spinner"
+     tool_tip="Scales the wave normal the reflection lookup uses, X axis - how far the ripples scramble the reflected image sideways. It reaches the reflection only; the surface's own shading normal is untouched"
      min_val="0"
      max_val="10"
      increment="0.01"
@@ -499,6 +515,7 @@
      height="14"
      width="110"
      name="water_normal_scale_y_label"
+     tool_tip="Scales the wave normal the reflection lookup uses, Y axis - how far the ripples scramble the reflected image sideways. It reaches the reflection only; the surface's own shading normal is untouched"
      font="SansSerifSmall">
         Wavelet Scale Y
     </text>
@@ -510,6 +527,7 @@
      height="18"
      width="280"
      name="water_normal_scale_y_slider"
+     tool_tip="Scales the wave normal the reflection lookup uses, Y axis - how far the ripples scramble the reflected image sideways. It reaches the reflection only; the surface's own shading normal is untouched"
      show_text="false"
      min_val="0"
      max_val="10"
@@ -524,6 +542,7 @@
      width="70"
      label_width="0"
      name="water_normal_scale_y_value_spinner"
+     tool_tip="Scales the wave normal the reflection lookup uses, Y axis - how far the ripples scramble the reflected image sideways. It reaches the reflection only; the surface's own shading normal is untouched"
      min_val="0"
      max_val="10"
      increment="0.01"
@@ -577,6 +596,7 @@
      height="14"
      width="110"
      name="water_normal_scale_z_label"
+     tool_tip="Scales the wave normal the reflection lookup uses, Z axis - how far the ripples are flattened back toward straight up. Low reads as a mirror, high as a broken scatter"
      font="SansSerifSmall">
         Wavelet Scale Z
     </text>
@@ -588,6 +608,7 @@
      height="18"
      width="280"
      name="water_normal_scale_z_slider"
+     tool_tip="Scales the wave normal the reflection lookup uses, Z axis - how far the ripples are flattened back toward straight up. Low reads as a mirror, high as a broken scatter"
      show_text="false"
      min_val="0"
      max_val="10"
@@ -602,6 +623,7 @@
      width="70"
      label_width="0"
      name="water_normal_scale_z_value_spinner"
+     tool_tip="Scales the wave normal the reflection lookup uses, Z axis - how far the ripples are flattened back toward straight up. Low reads as a mirror, high as a broken scatter"
      min_val="0"
      max_val="10"
      increment="0.01"
@@ -655,6 +677,7 @@
      height="14"
      width="110"
      name="water_refraction_above_label"
+     tool_tip="How far the surface bends what is seen through it from above - the wobble in a sunken build seen from the shore"
      font="SansSerifSmall">
         Refract Above
     </text>
@@ -666,6 +689,7 @@
      height="18"
      width="280"
      name="water_refraction_above_slider"
+     tool_tip="How far the surface bends what is seen through it from above - the wobble in a sunken build seen from the shore"
      show_text="false"
      min_val="0"
      max_val="3"
@@ -680,6 +704,7 @@
      width="70"
      label_width="0"
      name="water_refraction_above_value_spinner"
+     tool_tip="How far the surface bends what is seen through it from above - the wobble in a sunken build seen from the shore"
      min_val="0"
      max_val="3"
      increment="0.01"
@@ -733,6 +758,7 @@
      height="14"
      width="110"
      name="water_refraction_below_label"
+     tool_tip="How far the surface bends what is seen through it from below, looking up from underwater"
      font="SansSerifSmall">
         Refract Below
     </text>
@@ -744,6 +770,7 @@
      height="18"
      width="280"
      name="water_refraction_below_slider"
+     tool_tip="How far the surface bends what is seen through it from below, looking up from underwater"
      show_text="false"
      min_val="0"
      max_val="3"
@@ -758,6 +785,7 @@
      width="70"
      label_width="0"
      name="water_refraction_below_value_spinner"
+     tool_tip="How far the surface bends what is seen through it from below, looking up from underwater"
      min_val="0"
      max_val="3"
      increment="0.01"
@@ -811,6 +839,7 @@
      height="14"
      width="110"
      name="water_blur_multip_label"
+     tool_tip="Roughness of the water surface for reflections: 0 is a mirror, the top of the range scatters them into a soft sheen. The renderer doubles this into the PBR roughness"
      font="SansSerifSmall">
         Blur Multiplier
     </text>
@@ -822,6 +851,7 @@
      height="18"
      width="280"
      name="water_blur_multip_slider"
+     tool_tip="Roughness of the water surface for reflections: 0 is a mirror, the top of the range scatters them into a soft sheen. The renderer doubles this into the PBR roughness"
      show_text="false"
      min_val="0"
      max_val="0.5"
@@ -836,6 +866,7 @@
      width="70"
      label_width="0"
      name="water_blur_multip_value_spinner"
+     tool_tip="Roughness of the water surface for reflections: 0 is a mirror, the top of the range scatters them into a soft sheen. The renderer doubles this into the PBR roughness"
      min_val="0"
      max_val="0.5"
      increment="0.001"
@@ -889,6 +920,7 @@
      height="14"
      width="110"
      name="water_fog_color_label"
+     tool_tip="Colour the water turns the light it swallows - the tint of both the underwater view and the fog on anything seen through the surface"
      font="SansSerifSmall">
         Fog Colour
     </text>
@@ -901,7 +933,8 @@
      height="22"
      width="60"
      label_height="0"
-     name="water_fog_color" />
+     name="water_fog_color"
+     tool_tip="Colour the water turns the light it swallows - the tint of both the underwater view and the fog on anything seen through the surface" />
     <button
      follows="left|top"
      layout="topleft"
@@ -1082,6 +1115,7 @@
      height="14"
      width="110"
      name="water_large_wave_label"
+     tool_tip="Direction and speed the large wave normals scroll, metres per second on X and Y. Keep it away from the small wave's vector or the whole surface slides as one sheet"
      font="SansSerifSmall">
         Large Wave (m/s)
     </text>
@@ -1095,6 +1129,7 @@
      label="X"
      label_width="14"
      name="water_large_wave_x_spinner"
+     tool_tip="Direction and speed the large wave normals scroll, metres per second on X and Y. Keep it away from the small wave's vector or the whole surface slides as one sheet"
      min_val="-20"
      max_val="20"
      increment="0.01"
@@ -1109,6 +1144,7 @@
      label="Y"
      label_width="14"
      name="water_large_wave_y_spinner"
+     tool_tip="Direction and speed the large wave normals scroll, metres per second on X and Y. Keep it away from the small wave's vector or the whole surface slides as one sheet"
      min_val="-20"
      max_val="20"
      increment="0.01"
@@ -1123,6 +1159,7 @@
      edit_bar_height="0"
      padding="2"
      name="water_large_wave"
+     tool_tip="Direction and speed the large wave normals scroll, metres per second on X and Y. Keep it away from the small wave's vector or the whole surface slides as one sheet"
      min_val_x="-20"
      max_val_x="20"
      increment_x="0.01"
@@ -1181,6 +1218,7 @@
      height="14"
      width="110"
      name="water_small_wave_label"
+     tool_tip="Direction and speed the small wave normals scroll, metres per second on X and Y. Keep it away from the large wave's vector or the whole surface slides as one sheet"
      font="SansSerifSmall">
         Small Wave (m/s)
     </text>
@@ -1194,6 +1232,7 @@
      label="X"
      label_width="14"
      name="water_small_wave_x_spinner"
+     tool_tip="Direction and speed the small wave normals scroll, metres per second on X and Y. Keep it away from the large wave's vector or the whole surface slides as one sheet"
      min_val="-20"
      max_val="20"
      increment="0.01"
@@ -1208,6 +1247,7 @@
      label="Y"
      label_width="14"
      name="water_small_wave_y_spinner"
+     tool_tip="Direction and speed the small wave normals scroll, metres per second on X and Y. Keep it away from the large wave's vector or the whole surface slides as one sheet"
      min_val="-20"
      max_val="20"
      increment="0.01"
@@ -1222,6 +1262,7 @@
      edit_bar_height="0"
      padding="2"
      name="water_small_wave"
+     tool_tip="Direction and speed the small wave normals scroll, metres per second on X and Y. Keep it away from the large wave's vector or the whole surface slides as one sheet"
      min_val_x="-20"
      max_val_x="20"
      increment_x="0.01"

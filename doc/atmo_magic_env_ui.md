@@ -186,6 +186,37 @@ Weather > Precipitation lets an author override it, for the case of wanting weat
 deck while a lower one is enabled for looks. It is not animatable. If the selected deck is disabled
 or removed it reverts to the main deck rather than leaving weather with no source.
 
+## Falling is its own switch
+
+Moisture was the sole answer to "is it raining", and it is also the answer to "how much cloud" and
+"how hard does it fall". An overcast, gloomy, thundering sky with nothing coming out of it - the
+commonest sky there is - could not be authored at all: any moisture high enough to be overcast
+rained.
+
+**Weather > Precipitation > Falling** is a keyframed bool (`SSAtmoEnvWeather::mPrecipitationFalls`,
+LLSD `precipitation_falls`, default true, written only when authored so old documents keep raining
+and new ones stay clean). Off folds into the resolver's existing clear branch
+(`SSAtmoEnvWeatherResolver::resolve`) after the okta cover has been banked: type, intensity, droplet
+size and impact scale all read clear, and *nothing else* changes - cloud cover, deck gloom, storm
+darkening, gusts and lightning never consult it. Every downstream consumer already keys off the
+resolved type and intensity (the bridge's `mPrecipitation`, the applier's rain-stopped clock, wetness,
+the surface field, soundscape), so suppression propagates without a single new call site.
+
+Keyframed rather than a plain track flag because *when it starts and stops* is the whole ask. Bool
+keyframes step at the segment midpoint (`ss_atmoenv_lerp<bool>`), so the cut lands where the scrubber
+reads half, and bool rows now draw scrubber ghosts like every other keyframed type - a day cycle's
+showers are read off the rail.
+
+The forecast line follows the resolved state instead of raw moisture, or a suppressed SEVERE sky
+would still announce "Thundery showers" over a dry street; it reads "Overcast and strong winds"
+instead. The type row's proof text gains a third answer, `Off`, reported even under a forced type,
+because "the author switched it off" and "the air is dry" are different states that both used to
+read `Clear`.
+
+A "None" entry on the type combo was rejected in its place: `presetNameForType()` passes unknown
+names through and falls back to the *active* preset, so a build that did not know the name would
+render rain anyway - where an unknown LLSD key is simply ignored and behaves as today.
+
 ## Precipitation types: two tiers
 
 There is one preset tier where there need to be two.

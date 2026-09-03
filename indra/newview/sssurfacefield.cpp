@@ -96,6 +96,11 @@ static const F32 FALLBACK_DRY   = 0.002f;
 static const F32 FALLBACK_MELT  = 0.0000045f;
 static const F32 FALLBACK_DRAIN = 0.0001f;
 
+// <SS:Nexii> The melt's live-warmth scale: whether it SNOWS is the preset's call (made upstream from temperature+convection), but how fast the pack goes answers the day's actual temperature - the authored melt rate means "a mild +10C day", real warmth runs up to double it, and sub-zero air holds the pack with only a whisper of sublimation so an abandoned drift still leaves eventually. Wetting, drying and drainage stay temperature-blind: a cold puddle is still a puddle.
+static const F32 MELT_FULL_C      = 10.f;
+static const F32 MELT_WARM_MAX    = 2.f;
+static const F32 MELT_SUBLIMATION = 0.02f;
+
 // <SS:Nexii> The tick lands every quarter second, so the whole cost of one step shows up on one frame. Split per stage: geometry rebuild, ground-flow sample, the transport steps, the shed cursor and the window rebuild all have completely different fixes, and a single summed handle cannot tell them apart. The upload is timed apart from the fill it uploads because only the fill can ever move off this thread.
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE("Atmo Magic Surface Field");
 static LLTrace::BlockTimerStatHandle FTM_SS_SURFACE_GEOM("Surface Geometry");
@@ -523,7 +528,7 @@ SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const Geometr
 // Integrates one region's field for a step: wetting, drying, snow settle and melt, puddle fill and drainage flow,
 // then what the wind does to all of it.
 void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
-                          const SSPrecipPreset& preset, F32 intensity,
+                          const SSPrecipPreset& preset, F32 intensity, F32 melt_scale,
                           const SSGranularParams& granular, const LLVector4* flow)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_TICK);
@@ -548,7 +553,8 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
     const F32 wet_blend   = 1.f - expf(-wet_rate * dt);
 
     const F32 snow_gain   = preset.mSnowRate * intensity * dt;
-    const F32 snow_loss   = (preset.mSnowMelt > 0.f ? preset.mSnowMelt : FALLBACK_MELT) * dt;
+    const F32 snow_loss   = (preset.mSnowMelt > 0.f ? preset.mSnowMelt : FALLBACK_MELT)
+                          * melt_scale * dt;
     const F32 puddle_gain = preset.mPuddleRate * intensity * dt;
     const F32 puddle_loss = (preset.mPuddleDrain > 0.f ? preset.mPuddleDrain : FALLBACK_DRAIN) * dt;
 
@@ -774,6 +780,10 @@ void SSSurfaceField::idle(F32 dt)
 
     const F32 intensity = atmo->hasWeather() ? llclamp(atmo->precipitation(), 0.f, 1.f) : 0.f;
 
+    // Live warmth for the snow melt, one figure per step like every other tick input.
+    const F32 melt_scale = llclamp(atmo->temperatureC() / MELT_FULL_C,
+                                   MELT_SUBLIMATION, MELT_WARM_MAX);
+
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
 
     refreshGeometry();
@@ -819,7 +829,7 @@ void SSSurfaceField::idle(F32 dt)
 
         for (U32 s = 0; s < ran; ++s)
         {
-            tick(*fld, geom, TICK_INTERVAL, preset, intensity, granular, flow);
+            tick(*fld, geom, TICK_INTERVAL, preset, intensity, melt_scale, granular, flow);
         }
     }
 

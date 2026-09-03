@@ -31,6 +31,7 @@
      height="14"
      width="110"
      name="atmo_ambient_label"
+     tool_tip="Ambient skylight. Where the sun has extinguished and the path has saturated the sky IS this colour wearing the haze weights, so the horizon band cannot be removed, only painted - warming this and blue horizon at the dusk keyframes is the entire sunset trick"
      font="SansSerifSmall">
         Ambient
     </text>
@@ -43,7 +44,8 @@
      height="22"
      width="60"
      label_height="0"
-     name="atmo_ambient" />
+     name="atmo_ambient"
+     tool_tip="Ambient skylight. Where the sun has extinguished and the path has saturated the sky IS this colour wearing the haze weights, so the horizon band cannot be removed, only painted - warming this and blue horizon at the dusk keyframes is the entire sunset trick" />
     <button
      follows="left|top"
      layout="topleft"
@@ -95,6 +97,7 @@
      height="14"
      width="110"
      name="atmo_blue_horizon_label"
+     tool_tip="Colour the chromatic haze paints the horizon band with. Blue is only its default name: a red-dominant blue horizon is what a crimson sunset wall is made of"
      font="SansSerifSmall">
         Blue Horizon
     </text>
@@ -107,7 +110,8 @@
      height="22"
      width="60"
      label_height="0"
-     name="atmo_blue_horizon" />
+     name="atmo_blue_horizon"
+     tool_tip="Colour the chromatic haze paints the horizon band with. Blue is only its default name: a red-dominant blue horizon is what a crimson sunset wall is made of" />
     <button
      follows="left|top"
      layout="topleft"
@@ -159,6 +163,7 @@
      height="14"
      width="110"
      name="atmo_blue_density_label"
+     tool_tip="How much chromatic haze the air holds, per channel. It sets how fast each colour dies along a ray, so blue-dominant density is what reddens a low sun. It splits the scattering budget with haze density - raising one takes share from the other"
      font="SansSerifSmall">
         Blue Density
     </text>
@@ -171,7 +176,8 @@
      height="22"
      width="60"
      label_height="0"
-     name="atmo_blue_density" />
+     name="atmo_blue_density"
+     tool_tip="How much chromatic haze the air holds, per channel. It sets how fast each colour dies along a ray, so blue-dominant density is what reddens a low sun. It splits the scattering budget with haze density - raising one takes share from the other" />
     <button
      follows="left|top"
      layout="topleft"
@@ -235,6 +241,7 @@
      height="14"
      width="110"
      name="atmo_haze_horizon_label"
+     tool_tip="The achromatic haze's share of the horizon band - its body and thickness, added without tinting it"
      font="SansSerifSmall">
         Haze Horizon
     </text>
@@ -246,6 +253,7 @@
      height="18"
      width="280"
      name="atmo_haze_horizon_slider"
+     tool_tip="The achromatic haze's share of the horizon band - its body and thickness, added without tinting it"
      show_text="false"
      min_val="0"
      max_val="5"
@@ -260,6 +268,7 @@
      width="70"
      label_width="0"
      name="atmo_haze_horizon_value_spinner"
+     tool_tip="The achromatic haze's share of the horizon band - its body and thickness, added without tinting it"
      min_val="0"
      max_val="5"
      increment="0.01"
@@ -313,6 +322,7 @@
      height="14"
      width="110"
      name="atmo_haze_density_label"
+     tool_tip="How much achromatic haze the air holds. It greys everything equally, so it is the murk dial for overcast (1.5 to 2.5) and the enemy of a saturated sunset, where it pastelises the band toward cream"
      font="SansSerifSmall">
         Haze Density
     </text>
@@ -324,6 +334,7 @@
      height="18"
      width="280"
      name="atmo_haze_density_slider"
+     tool_tip="How much achromatic haze the air holds. It greys everything equally, so it is the murk dial for overcast (1.5 to 2.5) and the enemy of a saturated sunset, where it pastelises the band toward cream"
      show_text="false"
      min_val="0"
      max_val="5"
@@ -338,6 +349,7 @@
      width="70"
      label_width="0"
      name="atmo_haze_density_value_spinner"
+     tool_tip="How much achromatic haze the air holds. It greys everything equally, so it is the murk dial for overcast (1.5 to 2.5) and the enemy of a saturated sunset, where it pastelises the band toward cream"
      min_val="0"
      max_val="5"
      increment="0.01"
@@ -391,6 +403,7 @@
      height="14"
      width="110"
      name="atmo_density_mult_label"
+     tool_tip="How thick the atmosphere is, in editor units - 0.18 is stock. The dangerous one: it both extinguishes the sun sky-wide and fogs every distance. Far below 0.1 deletes the atmosphere and renders black void; above 0.5 the sun is extinct everywhere"
      font="SansSerifSmall">
         Density Multiplier
     </text>
@@ -402,6 +415,7 @@
      height="18"
      width="280"
      name="atmo_density_mult_slider"
+     tool_tip="How thick the atmosphere is, in editor units - 0.18 is stock. The dangerous one: it both extinguishes the sun sky-wide and fogs every distance. Far below 0.1 deletes the atmosphere and renders black void; above 0.5 the sun is extinct everywhere"
      show_text="false"
      min_val="0.0001"
      max_val="2"
@@ -416,6 +430,7 @@
      width="70"
      label_width="0"
      name="atmo_density_mult_value_spinner"
+     tool_tip="How thick the atmosphere is, in editor units - 0.18 is stock. The dangerous one: it both extinguishes the sun sky-wide and fogs every distance. Far below 0.1 deletes the atmosphere and renders black void; above 0.5 the sun is extinct everywhere"
      min_val="0.0001"
      max_val="2"
      increment="0.0001"
@@ -469,6 +484,7 @@
      height="14"
      width="110"
      name="atmo_distance_mult_label"
+     tool_tip="How far you can see through the air. The safe visibility dial, since it only touches the path term and leaves sun extinction alone - overcast wants 2 to 4. Below 0.3 it starves every distance cue and deck, dome and fog can never meet"
      font="SansSerifSmall">
         Distance Multiplier
     </text>
@@ -480,6 +496,7 @@
      height="18"
      width="280"
      name="atmo_distance_mult_slider"
+     tool_tip="How far you can see through the air. The safe visibility dial, since it only touches the path term and leaves sun extinction alone - overcast wants 2 to 4. Below 0.3 it starves every distance cue and deck, dome and fog can never meet"
      show_text="false"
      min_val="0.05"
      max_val="1000"
@@ -494,6 +511,7 @@
      width="70"
      label_width="0"
      name="atmo_distance_mult_value_spinner"
+     tool_tip="How far you can see through the air. The safe visibility dial, since it only touches the path term and leaves sun extinction alone - overcast wants 2 to 4. Below 0.3 it starves every distance cue and deck, dome and fog can never meet"
      min_val="0.05"
      max_val="1000"
      increment="0.01"
@@ -547,6 +565,7 @@
      height="14"
      width="110"
      name="atmo_max_altitude_label"
+     tool_tip="The atmosphere's ceiling - how tall the haze slab is. It sets the horizon band's height and every sky ray's path length, so lowering it compresses haze onto the horizon but also weakens sun extinction. Stock is 1605"
      font="SansSerifSmall">
         Max Altitude (m)
     </text>
@@ -558,6 +577,7 @@
      height="18"
      width="280"
      name="atmo_max_altitude_slider"
+     tool_tip="The atmosphere's ceiling - how tall the haze slab is. It sets the horizon band's height and every sky ray's path length, so lowering it compresses haze onto the horizon but also weakens sun extinction. Stock is 1605"
      show_text="false"
      min_val="0"
      max_val="10000"
@@ -572,6 +592,7 @@
      width="70"
      label_width="0"
      name="atmo_max_altitude_value_spinner"
+     tool_tip="The atmosphere's ceiling - how tall the haze slab is. It sets the horizon band's height and every sky ray's path length, so lowering it compresses haze onto the horizon but also weakens sun extinction. Stock is 1605"
      min_val="0"
      max_val="10000"
      increment="1"
@@ -624,7 +645,8 @@
      top_pad="24"
      height="14"
      width="200"
-     name="atmo_rainbow_label"
+     name="atmo_optics_label"
+     tool_tip="The procedural optics around the light: corona, the 22 and 46 deg halos, sundogs and the circumzenithal arc. These are the authored baselines - the Weather Influence floater's Optics rows decide how hard live weather drives each one"
      font="SansSerifSmallBold">
         Rainbow &amp; Halo
     </text>
@@ -663,6 +685,7 @@
      width="70"
      label_width="0"
      name="atmo_rainbow_value_spinner"
+     tool_tip="Optical moisture driving rainbow and halo effects around the sun - not the Weather tab moisture, which drives precipitation"
      min_val="0"
      max_val="1"
      increment="0.001"
@@ -743,6 +766,7 @@
      width="70"
      label_width="0"
      name="atmo_droplet_radius_value_spinner"
+     tool_tip="Water droplet radius in micrometres, shaping the rainbow and halo optics"
      min_val="5"
      max_val="1000"
      increment="0.01"
@@ -796,6 +820,7 @@
      height="14"
      width="110"
      name="atmo_ice_level_label"
+     tool_tip="Base strength of the ice-crystal optics - the 22 deg halo, the 46 deg family, sundogs and the circumzenithal arc. Weather lifts from this base and needs cold and moisture together, so a dry -30C sky still shows none"
      font="SansSerifSmall">
         Ice Halo
     </text>
@@ -807,6 +832,7 @@
      height="18"
      width="280"
      name="atmo_ice_level_slider"
+     tool_tip="Base strength of the ice-crystal optics - the 22 deg halo, the 46 deg family, sundogs and the circumzenithal arc. Weather lifts from this base and needs cold and moisture together, so a dry -30C sky still shows none"
      show_text="false"
      min_val="0"
      max_val="1"
@@ -821,6 +847,7 @@
      width="70"
      label_width="0"
      name="atmo_ice_level_value_spinner"
+     tool_tip="Base strength of the ice-crystal optics - the 22 deg halo, the 46 deg family, sundogs and the circumzenithal arc. Weather lifts from this base and needs cold and moisture together, so a dry -30C sky still shows none"
      min_val="0"
      max_val="1"
      increment="0.001"

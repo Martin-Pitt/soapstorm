@@ -172,7 +172,7 @@ private:
     Field* fieldFor(U64 region_handle, const Geometry& geom, F64 now);
     void updateWindow();
     void tick(Field& fld, const Geometry& geom, F32 dt,
-              const SSPrecipPreset& preset, F32 intensity,
+              const SSPrecipPreset& preset, F32 intensity, F32 melt_scale,
               const SSGranularParams& granular, const LLVector4* flow);
     void evict(F64 now);
 

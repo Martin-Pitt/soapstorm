@@ -19,6 +19,7 @@
      height="14"
      width="110"
      name="atmo_sunlight_color_label"
+     tool_tip="Colour and strength of direct sunlight, and of moonlight at night, before the atmosphere extinguishes it along each ray"
      font="SansSerifSmall">
         Sunlight Colour
     </text>
@@ -31,7 +32,8 @@
      height="22"
      width="60"
      label_height="0"
-     name="atmo_sunlight_color" />
+     name="atmo_sunlight_color"
+     tool_tip="Colour and strength of direct sunlight, and of moonlight at night, before the atmosphere extinguishes it along each ray" />
     <button
      follows="left|top"
      layout="topleft"
@@ -83,6 +85,7 @@
      height="14"
      width="110"
      name="atmo_glow_focus_label"
+     tool_tip="Tightness of the sun's halo. 0.05 to 0.15 is a soft broad bloom, higher is a small hot core; negative inverts the falloff and dims the sky toward the sun instead"
      font="SansSerifSmall">
         Sun Glow Focus
     </text>
@@ -94,6 +97,7 @@
      height="18"
      width="280"
      name="atmo_glow_focus_slider"
+     tool_tip="Tightness of the sun's halo. 0.05 to 0.15 is a soft broad bloom, higher is a small hot core; negative inverts the falloff and dims the sky toward the sun instead"
      show_text="false"
      min_val="-2"
      max_val="2"
@@ -108,6 +112,7 @@
      width="70"
      label_width="0"
      name="atmo_glow_focus_value_spinner"
+     tool_tip="Tightness of the sun's halo. 0.05 to 0.15 is a soft broad bloom, higher is a small hot core; negative inverts the falloff and dims the sky toward the sun instead"
      min_val="-2"
      max_val="2"
      increment="0.01"
@@ -161,6 +166,7 @@
      height="14"
      width="110"
      name="atmo_glow_size_label"
+     tool_tip="Width of the sun's halo, and the trap of the sky set: a larger value here means a smaller backend glow scale, so the halo grows fast and 1.85 or more whites out the whole frame. Stock 1.75 sits just under that cliff; sunset halos live around 0.4 to 0.8"
      font="SansSerifSmall">
         Sun Glow Size
     </text>
@@ -172,6 +178,7 @@
      height="18"
      width="280"
      name="atmo_glow_size_slider"
+     tool_tip="Width of the sun's halo, and the trap of the sky set: a larger value here means a smaller backend glow scale, so the halo grows fast and 1.85 or more whites out the whole frame. Stock 1.75 sits just under that cliff; sunset halos live around 0.4 to 0.8"
      show_text="false"
      min_val="0"
      max_val="1.99"
@@ -186,6 +193,7 @@
      width="70"
      label_width="0"
      name="atmo_glow_size_value_spinner"
+     tool_tip="Width of the sun's halo, and the trap of the sky set: a larger value here means a smaller backend glow scale, so the halo grows fast and 1.85 or more whites out the whole frame. Stock 1.75 sits just under that cliff; sunset halos live around 0.4 to 0.8"
      min_val="0"
      max_val="1.99"
      increment="0.01"
@@ -266,6 +274,7 @@
      width="70"
      label_width="0"
      name="atmo_moon_brightness_value_spinner"
+     tool_tip="Luminance of the moon disc itself - which body occupies the moon slot is the Planetary tab structure"
      min_val="0"
      max_val="1"
      increment="0.01"

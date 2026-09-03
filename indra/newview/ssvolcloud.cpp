@@ -372,7 +372,8 @@ void SSVolCloud::update(F32 dt)
     mSquashKnee = mSquashCap * 0.8f;
 
     const SSAtmoEnvCloudFieldState field =
-        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, moisture, convection, temperature,
+        SSAtmoEnvCloudFieldResolver::resolve(track.mCloudField, track.mWeatherInfluence,
+                                             moisture, convection, temperature,
                                              phase, track.mFloorZ);
 
     // <SS:Nexii> Which deck the weather's noise gate reads: the authored source when it names the under deck and that deck is on, the main field otherwise - which is every sky build's answer, since its under deck hangs below the platform and is nobody's weather. The same rule the environment editor's derivation follows, kept where the deck lives so precipitation and deck can never disagree about who is making weather. [interaction: precipitation]
@@ -388,7 +389,8 @@ void SSVolCloud::update(F32 dt)
     if (track.mUnderField.mEnabled)
     {
         const SSAtmoEnvCloudFieldState under =
-            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, moisture, convection, temperature,
+            SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, track.mWeatherInfluence,
+                                                 moisture, convection, temperature,
                                                  phase, track.mFloorZ);
         if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
         {

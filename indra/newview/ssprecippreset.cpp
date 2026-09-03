@@ -141,6 +141,7 @@ LLSD SSPrecipPreset::asLLSD() const
 
     sd["rate"] = mRate;
     sd["intensity_size"] = mIntensitySize;
+    sd["weather_size"] = mWeatherSize;
 
     sd["tint"] = mTint.getValue();
     sd["glow"] = mGlow;
@@ -162,6 +163,7 @@ LLSD SSPrecipPreset::asLLSD() const
     }
 
     sd["impact_strength"] = mImpactStrength;
+    sd["weather_impact"] = mWeatherImpact;
     sd["shatter"] = mShatter;
     sd["ripple_size"] = mRippleSize;
     sd["ripple_alpha"] = mRippleAlpha;
@@ -240,6 +242,7 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
 
     if (sd.has("rate")) mRate = (F32)sd["rate"].asReal();
     if (sd.has("intensity_size")) mIntensitySize = (F32)sd["intensity_size"].asReal();
+    if (sd.has("weather_size")) mWeatherSize = sd["weather_size"].asBoolean();
 
     if (sd.has("tint")) mTint.setValue(sd["tint"]);
     if (sd.has("glow")) mGlow = (F32)sd["glow"].asReal();
@@ -264,6 +267,7 @@ void SSPrecipPreset::fromLLSD(const LLSD& sd)
     }
 
     if (sd.has("impact_strength")) mImpactStrength = (F32)sd["impact_strength"].asReal();
+    if (sd.has("weather_impact")) mWeatherImpact = sd["weather_impact"].asBoolean();
     if (sd.has("shatter")) mShatter = sd["shatter"].asBoolean();
     if (sd.has("ripple_size")) mRippleSize = (F32)sd["ripple_size"].asReal();
     if (sd.has("ripple_alpha")) mRippleAlpha = (F32)sd["ripple_alpha"].asReal();

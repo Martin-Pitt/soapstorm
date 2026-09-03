@@ -421,6 +421,7 @@ bool SSFloaterAtmoEnv::postBuild()
 
     mBoolRows = {
         { "water_fog_emissive", [water]() -> SSAtmoEnvKeyframed<bool>& { return water().mFogEmissive; } },
+        { "precipitation_falls", [this]() -> SSAtmoEnvKeyframed<bool>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mPrecipitationFalls; } },
     };
     for (const KeyRow<bool>& row : mBoolRows)
     {
@@ -2650,9 +2651,15 @@ void SSFloaterAtmoEnv::refreshAutoRows()
         }
     }
 
+    // <SS:Nexii> The proof text answers a forced type with nothing, and Auto with what the cube resolves - now three answers rather than two, because "nothing falls because the author switched it off" and "nothing falls because the air is dry" are different states and the row that reads Clear for both teaches the wrong lesson. Off is reported even under a forced type: the switch outranks the combo, and an author who has forced Blizzard needs to see why no snow is landing.
+    const bool falls_now = weather.mPrecipitationFalls.valueAt(mPreviewPhase);
     const std::string override_now = weather.mPrecipitationOverride.valueAt(mPreviewPhase);
     std::string auto_text;
-    if (override_now.empty())
+    if (!falls_now)
+    {
+        auto_text = "Off";
+    }
+    else if (override_now.empty())
     {
         auto_text = resolved.mPrecipitationType.empty()
             ? std::string("Clear")
@@ -3345,6 +3352,16 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
         if (!wanted(row.mPrefix)) continue;
         buildGhosts<std::string>(row.mField().keyframes(),
             [](const std::string& v) { return precipDisplayName(v); }, out);
+        found = true;
+        if (!overview) return true;
+    }
+
+    // <SS:Nexii> Flag rows ghost too. They were the one keyframed type the scrubber never drew, which mattered little while the only one was the water's emissive fog and matters now: a day cycle whose rain starts and stops is authored by reading exactly these marks along the rail.
+    for (const KeyRow<bool>& row : mBoolRows)
+    {
+        if (!wanted(row.mPrefix)) continue;
+        buildGhosts<bool>(row.mField().keyframes(),
+            [](const bool& v) { return std::string(v ? "on" : "off"); }, out);
         found = true;
         if (!overview) return true;
     }

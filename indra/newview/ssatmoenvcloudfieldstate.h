@@ -65,10 +65,11 @@ struct SSAtmoEnvCloudFieldState
 class SSAtmoEnvCloudFieldResolver
 {
 public:
-    // <SS:Nexii> track_floor_z is the owning track's vertical position (SSAtmoEnvTrack::mFloorZ): the authored base height - and the auto derivation's answer - are offsets above it, so the whole deck rides the track. The ground track sits at 0, where nothing changes numerically. temperature_c drives the seasonal altitude: winter air squashes the atmosphere down, so the deck rides low; summer heat lifts it (SSAtmoCloudSeason).
-    static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field, F32 moisture,
-                                            F32 convection, F32 temperature_c, F64 phase,
-                                            F32 track_floor_z);
+    // <SS:Nexii> track_floor_z is the owning track's vertical position (SSAtmoEnvTrack::mFloorZ): the authored base height - and the auto derivation's answer - are offsets above it, so the whole deck rides the track. The ground track sits at 0, where nothing changes numerically. temperature_c drives the seasonal altitude: winter air squashes the atmosphere down, so the deck rides low; summer heat lifts it (SSAtmoCloudSeason). influence gates the gloom - the deck's half of the Storm Darkening row.
+    static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field,
+                                            const SSAtmoEnvWeatherInfluence& influence,
+                                            F32 moisture, F32 convection, F32 temperature_c,
+                                            F64 phase, F32 track_floor_z);
 
     // Floor-relative: out_base_height is metres ABOVE the track floor the deck should sit at.
     static void deriveAutoBaseline(F32 moisture, F32 convection, F32 temperature_c,

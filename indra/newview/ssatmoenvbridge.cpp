@@ -87,6 +87,10 @@ bool SSAtmoEnvBridge::resolveActiveTrack(F32 world_z, F32 prev_world_z, bool tel
     out_cfg.mPrecipitation = llclamp(state.mPrecipitationIntensity, 0.f, 1.f) * neighbor_fade;
     out_cfg.mTurbulence = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
 
+    // <SS:Nexii> The band tables ride along unfaded: they grade what one drop is like (its size, how hard it lands), not how many fall - the neighbor fade already thins the count through mPrecipitation.
+    out_cfg.mDropletScale = llclamp(state.mDropletSizeScale, 0.f, 1.f);
+    out_cfg.mImpactScale  = llclamp(state.mImpactScale, 0.f, 1.f);
+
     out_cfg.mTemperatureC = llclamp(track.mWeather.mTemperatureC.valueAt(phase), -60.f, 60.f);
 
     out_cfg.mLightningColor = state.mLightningColor;

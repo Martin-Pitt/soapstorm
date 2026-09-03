@@ -155,6 +155,9 @@ struct SSPrecipPreset
 
     F32 mIntensitySize = 0.f;
 
+    // <SS:Nexii> Weather-cube opt-in: sizes drops from the cube's graded intensity band (drizzle 0.05 .. torrential 1.0, SSAtmoEnvWeatherState::mDropletSizeScale) instead of the raw precipitation number, through the same 0.55-1.45 multiplier window - never outside what the old ramp could reach. Still needs mIntensitySize > 0 to have any reach; off (or no environment), the raw-number ramp stands.
+    bool mWeatherSize = true;
+
     LLColor4 mTint = LLColor4::white;
     F32 mGlow = 0.f;
     U8 mDropShape = DROP_DOT;
@@ -166,6 +169,9 @@ struct SSPrecipPreset
     SSPrecipTierParams mTiers[TIER_COUNT];
 
     F32 mImpactStrength = 0.7f;
+
+    // <SS:Nexii> Weather-cube opt-in: scales the authored impact strength by the cube's band impact scale (SSAtmoEnvWeatherState::mImpactScale - drizzle 0, torrential 1), so splashes graduate as the storm builds instead of drizzle hammering at the full authored strength. Off (or no environment), the flat authored value stands.
+    bool mWeatherImpact = true;
     bool mShatter = false;
 
     F32 mRippleSize = 0.35f;

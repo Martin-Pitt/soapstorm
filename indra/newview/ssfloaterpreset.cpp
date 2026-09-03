@@ -80,8 +80,8 @@ bool SSFloaterPreset::postBuild()
 
     static const char* widgets[] = {
         "archetype_combo", "fall_speed", "fall_lo", "fall_hi", "sway",
-        "wind_response", "rate", "intensity_size", "tint", "glow", "drop_shape",
-        "drop_scale", "emissive", "water_shading", "impact_strength", "shatter",
+        "wind_response", "rate", "intensity_size", "weather_size", "tint", "glow", "drop_shape",
+        "drop_scale", "emissive", "water_shading", "impact_strength", "weather_impact", "shatter",
         "ripple_size", "ripple_alpha", "ripple_life",
         "crown_size", "crown_alpha", "crown_speed", "crown_life",
         "dark_mix", "puff_mix",
@@ -268,6 +268,7 @@ void SSFloaterPreset::presetToControls()
     getChild<LLUICtrl>("wind_response")->setValue(mEdited.mWindResponse);
     getChild<LLUICtrl>("rate")->setValue(mEdited.mRate);
     getChild<LLUICtrl>("intensity_size")->setValue(mEdited.mIntensitySize);
+    getChild<LLUICtrl>("weather_size")->setValue(mEdited.mWeatherSize);
 
     getChild<LLColorSwatchCtrl>("tint")->set(mEdited.mTint);
     getChild<LLUICtrl>("glow")->setValue(mEdited.mGlow);
@@ -277,6 +278,7 @@ void SSFloaterPreset::presetToControls()
     getChild<LLUICtrl>("water_shading")->setValue(mEdited.mWaterShading);
 
     getChild<LLUICtrl>("impact_strength")->setValue(mEdited.mImpactStrength);
+    getChild<LLUICtrl>("weather_impact")->setValue(mEdited.mWeatherImpact);
     getChild<LLUICtrl>("shatter")->setValue(mEdited.mShatter);
     getChild<LLUICtrl>("ripple_size")->setValue(mEdited.mRippleSize);
     getChild<LLUICtrl>("ripple_alpha")->setValue(mEdited.mRippleAlpha);
@@ -354,6 +356,7 @@ void SSFloaterPreset::controlsToPreset()
     mEdited.mWindResponse = (F32)getChild<LLUICtrl>("wind_response")->getValue().asReal();
     mEdited.mRate = (F32)getChild<LLUICtrl>("rate")->getValue().asReal();
     mEdited.mIntensitySize = (F32)getChild<LLUICtrl>("intensity_size")->getValue().asReal();
+    mEdited.mWeatherSize = getChild<LLUICtrl>("weather_size")->getValue().asBoolean();
 
     mEdited.mTint = getChild<LLColorSwatchCtrl>("tint")->get();
     mEdited.mGlow = (F32)getChild<LLUICtrl>("glow")->getValue().asReal();
@@ -363,6 +366,7 @@ void SSFloaterPreset::controlsToPreset()
     mEdited.mWaterShading = getChild<LLUICtrl>("water_shading")->getValue().asBoolean();
 
     mEdited.mImpactStrength = (F32)getChild<LLUICtrl>("impact_strength")->getValue().asReal();
+    mEdited.mWeatherImpact = getChild<LLUICtrl>("weather_impact")->getValue().asBoolean();
     mEdited.mShatter = getChild<LLUICtrl>("shatter")->getValue().asBoolean();
     mEdited.mRippleSize = (F32)getChild<LLUICtrl>("ripple_size")->getValue().asReal();
     mEdited.mRippleAlpha = (F32)getChild<LLUICtrl>("ripple_alpha")->getValue().asReal();

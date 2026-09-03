@@ -38,11 +38,16 @@ namespace
     const F32 DECK_HALF_C = (DECK_BASE_MAX_C - DECK_BASE_MIN_C) * 0.5f;  // 25C
     const F32 DECK_MID_M  = (DECK_BASE_WINTER_M + DECK_BASE_SUMMER_M) * 0.5f; // 800m
     const F32 DECK_LID_M = 1000.f;
+
+    // <SS:Nexii> The gloom's wet gate: numerically the sky modulator's DARKENING_MOIST_MIN/FULL band (ssatmoenvskymodulator.cpp), kept in step by hand so the puffs char exactly when the dome's churn and the thunder say storm.
+    const F32 GLOOM_MOIST_MIN  = 0.25f;
+    const F32 GLOOM_MOIST_FULL = 0.60f;
 }
 
 // Derives the live cloud field (coverage, height, gloom, churn) from the authored tunables and the moisture/convection cube. The authored base height is an offset above the track's floor, so the
 // floor rides along here - everything downstream of this resolver is world-frame.
 SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvCloudField& field,
+                                                              const SSAtmoEnvWeatherInfluence& influence,
                                                               F32 moisture, F32 convection,
                                                               F32 temperature_c, F64 phase,
                                                               F32 track_floor_z)
@@ -104,7 +109,13 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     const F32 darkening = (auto_darkening >= 0.f)
         ? auto_darkening
         : llclamp(field.mStormDarkening.valueAt(phase), 0.f, 2.f);
-    state.mGloom = llmax(0.03f, expf(-1.7f * darkening * llclamp(convection, 0.f, 1.f)));
+
+    // <SS:Nexii> The puff gloom is the deck's half of "Storm Darkening" and now rides the same influence row the dome's churn does: toggled off, the deck keeps its authored albedo whatever the convection. The wet gate holds the sky modulator's rule here too - convection alone is clear-air turbulence, and a dry heatwave's thermals must not char fair-weather puffs.
+    const F32 wet = llclamp((m - GLOOM_MOIST_MIN) / (GLOOM_MOIST_FULL - GLOOM_MOIST_MIN), 0.f, 1.f);
+    const F32 gloom_gate = (influence.mEnabled && influence.mStormDarkeningEnabled)
+        ? llclamp(influence.mStormDarkeningStrength, 0.f, 1.f) : 0.f;
+    state.mGloom = llmax(0.03f, expf(-1.7f * darkening * llclamp(convection, 0.f, 1.f)
+                                     * wet * gloom_gate));
 
     state.mChurn = llclamp(convection, 0.f, 1.f);
     state.mHasAnvil = convection >= 0.75f;

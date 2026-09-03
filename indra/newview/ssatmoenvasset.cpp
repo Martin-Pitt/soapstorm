@@ -151,6 +151,12 @@ LLSD SSAtmoEnvWeather::asLLSD() const
 
     sd["precipitation_override"] = mPrecipitationOverride.asLLSD();
 
+    // <SS:Nexii> Written only when authored: falling is the default, so a document that never mentions the flag stays clean and every environment written before it existed keeps raining exactly as it did.
+    if (mPrecipitationFalls.hasKeyframes() || !mPrecipitationFalls.valueAt(0.0))
+    {
+        sd["precipitation_falls"] = mPrecipitationFalls.asLLSD();
+    }
+
     return sd;
 }
 
@@ -180,6 +186,10 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     if (sd.has("lightning_core_white")) mLightningCoreWhite.fromLLSD(sd["lightning_core_white"], 0.85f);
 
     if (sd.has("precipitation_override")) mPrecipitationOverride.fromLLSD(sd["precipitation_override"], std::string());
+
+    // An absent flag means the environment predates it, which means it falls.
+    if (sd.has("precipitation_falls")) mPrecipitationFalls.fromLLSD(sd["precipitation_falls"], true);
+    else mPrecipitationFalls = SSAtmoEnvKeyframed<bool>(true);
 
     return true;
 }

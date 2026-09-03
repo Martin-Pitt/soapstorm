@@ -19,6 +19,7 @@
      height="14"
      width="110"
      name="atmo_scene_gamma_label"
+     tool_tip="The tonemapper's soft-clip exponent, not display gamma: out = 1 - (1 - 2 x colour) raised to this. 1 is a straight doubling, large values lift everything toward white, small ones crush the darks - 0.5 to 0.8 is a legitimate floor for a moody preset"
      font="SansSerifSmall">
         Scene Gamma
     </text>
@@ -30,6 +31,7 @@
      height="18"
      width="280"
      name="atmo_scene_gamma_slider"
+     tool_tip="The tonemapper's soft-clip exponent, not display gamma: out = 1 - (1 - 2 x colour) raised to this. 1 is a straight doubling, large values lift everything toward white, small ones crush the darks - 0.5 to 0.8 is a legitimate floor for a moody preset"
      show_text="false"
      min_val="0"
      max_val="20"
@@ -44,6 +46,7 @@
      width="70"
      label_width="0"
      name="atmo_scene_gamma_value_spinner"
+     tool_tip="The tonemapper's soft-clip exponent, not display gamma: out = 1 - (1 - 2 x colour) raised to this. 1 is a straight doubling, large values lift everything toward white, small ones crush the darks - 0.5 to 0.8 is a legitimate floor for a moody preset"
      min_val="0"
      max_val="20"
      increment="0.01"
@@ -125,6 +128,7 @@
      width="70"
      label_width="0"
      name="atmo_probe_ambiance_value_spinner"
+     tool_tip="Intensity of environment-based indirect lighting. Non-zero enables the HDR lighting model, where Scene Gamma acts as HDR scale"
      min_val="0"
      max_val="10"
      increment="0.01"

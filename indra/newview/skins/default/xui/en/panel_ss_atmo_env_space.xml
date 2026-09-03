@@ -17,6 +17,7 @@
      height="14"
      width="110"
      name="atmo_star_brightness_label"
+     tool_tip="How brightly the star field burns. Daylight washes it out on its own, so this only says what the stars read as once the sky has gone dark"
      font="SansSerifSmall">
         Star Brightness
     </text>
@@ -28,6 +29,7 @@
      height="18"
      width="280"
      name="atmo_star_brightness_slider"
+     tool_tip="How brightly the star field burns. Daylight washes it out on its own, so this only says what the stars read as once the sky has gone dark"
      show_text="false"
      min_val="0"
      max_val="500"
@@ -42,6 +44,7 @@
      width="70"
      label_width="0"
      name="atmo_star_brightness_value_spinner"
+     tool_tip="How brightly the star field burns. Daylight washes it out on its own, so this only says what the stars read as once the sky has gone dark"
      min_val="0"
      max_val="500"
      increment="1"
@@ -96,6 +99,7 @@
      height="14"
      width="110"
      name="sun_planet_scale_label"
+     tool_tip="Compresses every Sun-Planet orbital distance for artistic effect - 1.0 is the authored distance, unmodified. Body sizes are untouched"
      font="SansSerifSmall">
         Sun-Planet Scale
     </text>
@@ -122,6 +126,7 @@
      width="70"
      label_width="0"
      name="sun_planet_scale_spinner"
+     tool_tip="Compresses every Sun-Planet orbital distance for artistic effect - 1.0 is the authored distance, unmodified. Body sizes are untouched"
      min_val="0.01"
      max_val="1.0"
      increment="0.01"
@@ -135,6 +140,7 @@
      height="14"
      width="110"
      name="planet_moon_scale_label"
+     tool_tip="Compresses every Planet-Moon orbital distance - a moon that looms large in the sky without touching its authored size"
      font="SansSerifSmall">
         Planet-Moon Scale
     </text>
@@ -161,6 +167,7 @@
      width="70"
      label_width="0"
      name="planet_moon_scale_spinner"
+     tool_tip="Compresses every Planet-Moon orbital distance - a moon that looms large in the sky without touching its authored size"
      min_val="0.01"
      max_val="1.0"
      increment="0.01"
