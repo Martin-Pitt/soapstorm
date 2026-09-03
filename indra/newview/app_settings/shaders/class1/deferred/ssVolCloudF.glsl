@@ -451,7 +451,8 @@ void main()
         // And the same edge-of-field fade the puffs run, so sheet and puffs dissolve together
         // toward the dome handoff instead of the sheet outliving them.
         float horiz = length(world_true.xy - ss_cam_pos.xy);
-        float edge = 1.0 - smoothstep(3400.0, 4900.0, horiz);
+        // The rails are 0.85x the CPU's FIELD_FADE_START_M and just inside its FIELD_DRAW_M - keep them moving with those constants (ssvolcloud.cpp).
+        float edge = 1.0 - smoothstep(6800.0, 9800.0, horiz);
 
         // And the near end of the same idea - see SS_SHEET_NEAR_M. Off TRUE distance, not the drawn one, so the fade measures the metres the eye would actually cross rather than the squashed
         // metres the geometry sits at; near the eye the two agree anyway, and reading eye_dist keeps it agreeing with every other ranged term in this shader.

@@ -54,10 +54,11 @@ namespace
 {
     const F32 CELL_M = 260.f;
 
-    const F32 FIELD_RADIUS_M = 6000.f;
+    // <SS:Nexii> The field's reach. Two cross-file rails are locked to FIELD_DRAW_M and must move with it: the base veil's edge fade in ssVolCloudF.glsl (0.85x the fade start, and just inside the draw radius) and SS_DECK_EDGE_M in lldrawpoolwlsky.cpp (the dome band's horizon melt runs to the deck's dissolve line); the ss_rim uniform in render() derives from these directly. The far plane never moves - the squash folds whatever reach these ask for into the same drawn band, so raising them buys distance with builder cells, sheet tiles and depth compression, not with clip planes.
+    const F32 FIELD_RADIUS_M = 12000.f;
 
-    const F32 FIELD_DRAW_M = 5000.f;
-    const F32 FIELD_FADE_START_M = 4000.f;
+    const F32 FIELD_DRAW_M = 10000.f;
+    const F32 FIELD_FADE_START_M = 8000.f;
 
     // <SS:Nexii> The bounds the puff budget dial (SSAtmoCloudPuffBudget) is held inside. The floor is low enough to be a real emergency setting and high enough that a deck still reads as a deck rather than a scatter of stray quads; the ceiling is well past what any sky asks for, and exists so a typo in the spinner cannot hand the sort loop a number that costs a frame.
     const S32 MIN_PUFF_BUDGET = 64;
@@ -753,7 +754,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                   [](const Puff& a, const Puff& b) { return a.mCamDistSq > b.mCamDistSq; });
 
         // <SS:Nexii> The puff ceiling is a viewer dial rather than a build constant, because it is this field's whole LOD axis and the machine drawing the sky is the only thing that knows what it can afford. Applied per deck, after the depth sort: the farthest puffs are at the front of the vector, so the erase takes the field's far edge and leaves the sky directly overhead whole - the same way the tier distances trim precipitation.
-        static LLCachedControl<U32> budget_setting(gSavedSettings, "SSAtmoCloudPuffBudget", 1260);
+        static LLCachedControl<U32> budget_setting(gSavedSettings, "SSAtmoCloudPuffBudget", 2520);
         const S32 max_puffs = llclamp((S32)budget_setting, MIN_PUFF_BUDGET, MAX_PUFF_BUDGET);
         if ((S32)deck.mPuffs.size() > max_puffs)
         {
@@ -775,7 +776,8 @@ F32 SSVolCloud::squashScale(F32 true_dist) const
 // <SS:Nexii> The ground shadow bake: one small transmittance map over the field's whole extent - how much direct sun survives a straight fall through the deck at each point of the air frame. Built from the builder's own answers (the cell gate that decides which cells hold puffs, the noise map's presence cut, and the map's mottle for texture inside occupied regions), so the shadow on the ground is the deck in the sky, never a second opinion of it. The vertical-column approximation is deliberate: the deck is thin against the map's footprint, and the SUN'S ANGLE enters at sample time in the soften shader, which projects each ground point up along the live sun direction to the casting plane - so the shadows lie, stretch and crawl correctly while the bake stays angle-free and therefore reusable across the whole day. Keyed on everything it reads; update() calls this every frame and the key makes that free.
 void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
 {
-    const S32 N = 128;
+    // N rides FIELD_DRAW_M: the map spans the whole field, so the texel count doubles with the reach to hold a ground texel at ~78m - the scale the shadow's edges were tuned at.
+    const S32 N = 256;
     const F32 span = FIELD_DRAW_M * 2.f;
 
     // The key: the camera's air CELL (which also fixes the grid origin, so equal key means equal frame), and every dial the texels read. Quantised where the source eases continuously, so a slowly-consolidating storm rebakes every few steps of the dial rather than every frame of the easing.
@@ -1177,7 +1179,7 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform1f(s_beam, mBeam);
 
-    gSSVolCloudProgram.uniform2f(s_rim, 4000.f, 4900.f);
+    gSSVolCloudProgram.uniform2f(s_rim, FIELD_FADE_START_M, FIELD_DRAW_M * 0.98f);
 
     gSSVolCloudProgram.uniform3f(s_squash, mSquashKnee, mSquashCap, mEffRadius);
 
@@ -1860,7 +1862,7 @@ LLViewerTexture* SSVolCloud::profilePreviewTexture(bool under_deck) const
     return deck.mProfileProcRef;
 }
 
-// <SS:Nexii> The field's own overlay: four views over one build, picked by SSAtmoCloudDebugView, each answering a different question about a sky that is otherwise only inspectable by looking at it. Every mark goes through the SAME far-field squash the vertex stage applies - squashScale, pulled radially toward the eye - because without it the marks land kilometres behind the cloud they describe and the far half of a 5km field never survives a 2km far plane to be drawn at all. Lines are subdivided BEFORE they are squashed: the squash is not linear along a segment, and the band rings span kilometres.
+// <SS:Nexii> The field's own overlay: four views over one build, picked by SSAtmoCloudDebugView, each answering a different question about a sky that is otherwise only inspectable by looking at it. Every mark goes through the SAME far-field squash the vertex stage applies - squashScale, pulled radially toward the eye - because without it the marks land kilometres behind the cloud they describe and the far half of a 10km field never survives a 2km far plane to be drawn at all. Lines are subdivided BEFORE they are squashed: the squash is not linear along a segment, and the band rings span kilometres.
 void SSVolCloud::renderDebug()
 {
     static LLCachedControl<U32> view_setting(gSavedSettings, "SSAtmoCloudDebugView", 1);

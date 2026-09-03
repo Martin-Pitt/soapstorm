@@ -260,14 +260,20 @@ table *is* the ladder and a new band would be a new line:
 | Drizzle | two dots | - |
 | Drizzle (heavy) | two dashed streaks | - |
 | Light | two streaks | - |
-| Moderate | two streaks | small drop |
-| Heavy | three streaks | large drop |
-| Torrential | three streaks, longest | squared slab |
+| Moderate | two streaks | small puddle |
+| Heavy | three streaks | large puddle |
+| Torrential | three streaks, longest | wide flat slab |
+
+The heads are half-discs sitting on the baseline rather than whole ones floating over it - what has
+collected on the ground is what they stand in for, and a puddle has a flat bottom. That also gives
+the slab something to differ from: a full disc against a squat rectangle is close to the same
+silhouette at four pixels, where a round dome against a wide flat sheet is not, so the slab widens
+and flattens to lean into the difference.
 
 Every adjacent pair differs by at least one whole feature, which is the property that matters: a
 mark is read against its *neighbours* in the band, not against a legend. Dots become dashes, dashes
-become solid lines, a drop appears at the foot, a third streak arrives with a bigger drop, and the
-drop finally squares off into a slab. Non-adjacent pairs differ by more than one, so the ladder
+become solid lines, a puddle appears at the foot, a third streak arrives over a bigger puddle, and
+the puddle finally spreads into a slab. Non-adjacent pairs differ by more than one, so the ladder
 degrades gracefully - a mark misread by one step is still nearly right.
 
 The drizzle family carrying no head at all is the clearest division in the set, and it lands where

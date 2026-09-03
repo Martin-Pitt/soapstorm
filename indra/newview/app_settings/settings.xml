@@ -27736,7 +27736,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Type</key>
     <string>U32</string>
     <key>Value</key>
-    <integer>1260</integer>
+    <integer>2520</integer>
   </map>
   <key>SSAtmoCloudProceduralNoise</key>
   <map>

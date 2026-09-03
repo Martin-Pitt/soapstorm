@@ -3652,6 +3652,16 @@ namespace
         gl_circle_2d((F32)x, (F32)y, radius, 22, false);
     }
 
+    // <SS:Nexii> Filled half-disc standing on its flat edge, centred on the y given. Unbinds the
+    // texture unit itself, which the two above get for free - gl_circle_2d unbinds and gl_arc_2d
+    // does not, so an arc drawn straight after a textured widget takes that widget's texture.
+    void ssStripDome(S32 x, S32 y, F32 radius, const LLColor4& colour)
+    {
+        gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+        gGL.color4fv(colour.mV);
+        gl_arc_2d((F32)x, (F32)y, radius, 14, true, 0.f, F_PI);
+    }
+
     // Disc plus rays - the clear-sky glyph, and the peek from behind a broken deck.
     void ssStripSun(S32 x, S32 y, F32 radius, const LLColor4& colour)
     {
@@ -3825,16 +3835,21 @@ namespace
         S32 foot = baseline;
         switch (shape.mHead)
         {
+            // <SS:Nexii> Half-discs sitting on the baseline rather than whole ones floating over
+            // it: what has collected on the ground is what the head is standing in for, and a
+            // puddle has a flat bottom. It also gives the slab something to differ from - a full
+            // disc and a squat rectangle are close silhouettes at four pixels, where a round dome
+            // against a wide flat sheet is not, so the slab widens and flattens to lean into that.
             case SSStripFallHead::SMALL_DROP:
-                ssStripDisc(x, baseline + 2, 2.f, colour);
-                foot = baseline + 5;
+                ssStripDome(x, baseline, 2.4f, colour);
+                foot = baseline + 4;
                 break;
             case SSStripFallHead::BIG_DROP:
-                ssStripDisc(x, baseline + 3, 2.8f, colour);
-                foot = baseline + 6;
+                ssStripDome(x, baseline, 3.4f, colour);
+                foot = baseline + 5;
                 break;
             case SSStripFallHead::SLAB:
-                gl_rect_2d(x - 3, baseline + 3, x + 3, baseline, colour, true);
+                gl_rect_2d(x - 4, baseline + 2, x + 4, baseline, colour, true);
                 foot = baseline + 4;
                 break;
             case SSStripFallHead::NONE:

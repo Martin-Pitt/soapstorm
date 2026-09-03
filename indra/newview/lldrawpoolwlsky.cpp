@@ -702,7 +702,7 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
             const F32 band_world_height_m = applier.cloudDomeAltitudeMetres();
             cloudshader->uniform1f(sCloudAltM, band_world_height_m - camPosLocal.mV[VZ]);
 
-            // <SS:Nexii> The volumetric deck's perceived edge, as an elevation sine over the camera: the deck's top slab seen at the field's own edge distance - the 4900 m the deck's puffs and base veil dissolve by (ssVolCloudF.glsl). The dome band's horizon melt runs up to this line: past the deck's edge the band has no cloud in front of it, so it fades toward the horizon instead of running the overcast sheet flat into it. Zero - no deck, or the camera at/over its top - leaves the old narrow rim melt.
+            // <SS:Nexii> The volumetric deck's perceived edge, as an elevation sine over the camera: the deck's top slab seen at the field's own edge distance - the 9800 m the deck's puffs and base veil dissolve by (ssVolCloudF.glsl). The dome band's horizon melt runs up to this line: past the deck's edge the band has no cloud in front of it, so it fades toward the horizon instead of running the overcast sheet flat into it. Zero - no deck, or the camera at/over its top - leaves the old narrow rim melt.
             static LLStaticHashedString sDeckEdgeSin("ss_deck_edge_sin");
             F32 deck_edge_sin = 0.f;
             SSVolCloud* vol = SSVolCloud::getInstance();
@@ -711,7 +711,7 @@ void LLDrawPoolWLSky::renderSkyCloudsDeferred(const LLVector3& camPosLocal, F32 
                 const F32 deck_top_m = vol->cloudTopZ() - camPosLocal.mV[VZ];
                 if (deck_top_m > 0.f)
                 {
-                    static const F32 SS_DECK_EDGE_M = 4900.f;
+                    static const F32 SS_DECK_EDGE_M = 9800.f;
                     deck_edge_sin = deck_top_m / sqrtf(deck_top_m * deck_top_m
                                                        + SS_DECK_EDGE_M * SS_DECK_EDGE_M);
                 }

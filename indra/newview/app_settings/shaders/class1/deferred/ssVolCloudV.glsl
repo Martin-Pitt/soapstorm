@@ -26,7 +26,7 @@
 uniform mat4 modelview_projection_matrix;
 
 // The far-field squash: x knee, y cap (just inside the far plane), z virtual field radius. Beyond the knee, vertices pull radially toward the camera - each keeps its exact ray, so the
-// projected image is identical to the true positions and only the depth compresses - what lets the field read out to 5km through a 2km far plane. vary_world stays the TRUE position: the
+// projected image is identical to the true positions and only the depth compresses - what lets the field read out to 10km through a 2km far plane. vary_world stays the TRUE position: the
 // fragment shader samples noise and measures distances in the real world, never the compressed one.
 uniform vec3 ss_squash;
 uniform vec3 ss_cam_pos;
@@ -113,6 +113,14 @@ uniform float ss_layer_thick;
 
 // <SS:Nexii> The glow light's extinction ceiling, in optical depths on the densest attenuation channel. Keep in sync with skyV.glsl / cloudsV.glsl.
 const float SS_SUN_GLOW_DEPTH = 2.0;
+
+// <SS:Nexii> The glow CONE's ceiling over the deck's own rows. The band's haze_glow is a painting of the sun itself - the pow spike runs to the hundreds at the disc's direction - and handing it
+// to the puffs whole repainted the sun THROUGH the deck: the fragment stage's additive glow and the airlight's haze term both wear it, so a dense overcast kept a burning white blob at the sun's
+// position however much cloud stood in the way, thin streaks around it ignited and the one thick puff on the disc left as a dark silhouette inside the fire. The deck's sun story is its GEOMETRY
+// - the wrap, the CPU form term, the graze lid - and the disc itself belongs to the dome behind, obscured by the puffs' ordinary alpha like anything else the deck stands in front of. So the cone
+// is capped here and the cap eased back out across the rim band, where the last rows must wear exactly the glow the band they melt into wears - a horizon sunset keeps its fire (those puffs ARE
+// at the rim), an overhead sun stays behind the deck. Set well above the +0.25 baseline so the broad warmth toward the sun survives; orders of magnitude under the spike. [interaction: dome handoff]
+const float SS_GLOW_CONE_CAP = 1.0;
 
 // <SS:Nexii> The floor under the near haze path, as a share of the ZENITH slab (max_y). The true range fixed the hole the horizontal range put in the sky, but it left that cone's ghost: a steep
 // ray meets the deck at little more than the layer's own height above or below the eye, so the puffs straight overhead - and straight underfoot, flying above the deck - carried a fraction of the
@@ -217,6 +225,10 @@ void main()
     {
         haze_glow = (sun_moon_glow_factor < 1.0) ? 0.0 : (sun_moon_glow_factor * (haze_glow + 0.25));
     }
+
+    // The disc spike stops here, at the deck's own rows - see SS_GLOW_CONE_CAP. Capped AFTER the full composition so both branches (band-mixed and stock) obey the same ceiling, and before the
+    // airlight below is built, so both of the spike's rides down - vary_ss_glow and the airlight's haze term - are covered by the one line.
+    haze_glow = mix(min(haze_glow, SS_GLOW_CONE_CAP), haze_glow, dome_rim);
 
     // <SS:Nexii> The glow's own capped light, as in skyV/cloudsV: the beam extinction's crush BOUNDED at SS_SUN_GLOW_DEPTH optical depths on the densest channel, scaled uniformly so the hue
     // survives - the sunset band deepens TO its colour, never through it to black. Feeds the haze term of the below-cloud airlight, exactly where cloudsV spends it.
