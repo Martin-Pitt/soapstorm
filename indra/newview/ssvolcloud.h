@@ -111,6 +111,10 @@ private:
 
         // <SS:Nexii> The puff's structural form term - facing toward the light and the exponential shade down through the deck, beam-flattened. This used to be a baked LLColor3: (ambient + sun * form) with the sun from a CPU replica of the beam extinction that crushed to grey at every low sun. The LIGHT half of that product now comes from the dome's own uniforms in the vertex shader (ssVolCloudV.glsl) so the deck takes the sunset the dome band does; only the structure - which the builder walks the deck's geometry to know - still rides the puff.
         F32 mForm = 1.f;
+
+        // <SS:Nexii> How BURIED this puff is - the fraction of its own column standing above it, 0 at the lid and 1 at the floor. Sunless and directionless on purpose: mForm above is the sun's story and dies with the beam, while this is the cloud's own body, and the deck's water content has to read on a moonless overcast exactly as it does at noon. The render pass spends it on the spare GREEN vertex channel, where the fragment stage grades the deck's storm gloom over it (ssVolCloudF.glsl) - the lid keeps its light, the belly loses it, which is what "a heavy cloud is dark underneath" means and what a flat per-deck dim could never say. [interaction: storm darkening]
+        F32 mBuried = 0.f;
+
         F32 mCamDistSq = 0.f;
     };
 
@@ -192,6 +196,9 @@ private:
         F32 mSheetForm = 1.f;
         F32 mSheetZ = 0.f;
         F32 mSheetAlpha = 0.f;
+
+        // The veil IS the deck's floor, so it is buried under the whole column and takes the gloom gradient's dark end whole - see Puff::mBuried.
+        static constexpr F32 SHEET_BURIED = 1.f;
 
         // The deck's storm gloom, kept for the render pass's ss_gloom uniform - per deck, not per puff, so it never belonged in the vertex colour.
         F32 mGloom = 1.f;

@@ -47,7 +47,7 @@
      name="atmo_ambient"
      tool_tip="Ambient skylight. Where the sun has extinguished and the path has saturated the sky IS this colour wearing the haze weights, so the horizon band cannot be removed, only painted - warming this and blue horizon at the dusk keyframes is the entire sunset trick" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -63,7 +63,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -73,7 +73,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -113,7 +113,7 @@
      name="atmo_blue_horizon"
      tool_tip="Colour the chromatic haze paints the horizon band with. Blue is only its default name: a red-dominant blue horizon is what a crimson sunset wall is made of" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -129,7 +129,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -139,7 +139,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -179,7 +179,7 @@
      name="atmo_blue_density"
      tool_tip="How much chromatic haze the air holds, per channel. It sets how fast each colour dies along a ray, so blue-dominant density is what reddens a low sun. It splits the scattering budget with haze density - raising one takes share from the other" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -195,7 +195,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -205,7 +205,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -246,12 +246,12 @@
         Haze Horizon
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_haze_horizon_slider"
      tool_tip="The achromatic haze's share of the horizon band - its body and thickness, added without tinting it"
      show_text="false"
@@ -260,7 +260,7 @@
      increment="0.01"
      initial_value="0.19" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -274,7 +274,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -290,7 +290,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -299,7 +299,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -327,12 +327,12 @@
         Haze Density
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_haze_density_slider"
      tool_tip="How much achromatic haze the air holds. It greys everything equally, so it is the murk dial for overcast (1.5 to 2.5) and the enemy of a saturated sunset, where it pastelises the band toward cream"
      show_text="false"
@@ -341,7 +341,7 @@
      increment="0.01"
      initial_value="0.7" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -355,7 +355,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -371,7 +371,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -380,7 +380,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -408,12 +408,12 @@
         Density Multiplier
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_density_mult_slider"
      tool_tip="How thick the atmosphere is, in editor units - 0.18 is stock. The dangerous one: it both extinguishes the sun sky-wide and fogs every distance. Far below 0.1 deletes the atmosphere and renders black void; above 0.5 the sun is extinct everywhere"
      show_text="false"
@@ -422,7 +422,7 @@
      increment="0.0001"
      initial_value="0.0001" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -436,7 +436,7 @@
      increment="0.0001"
      decimal_digits="4" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -452,7 +452,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -461,7 +461,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -489,12 +489,12 @@
         Distance Multiplier
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_distance_mult_slider"
      tool_tip="How far you can see through the air. The safe visibility dial, since it only touches the path term and leaves sun extinction alone - overcast wants 2 to 4. Below 0.3 it starves every distance cue and deck, dome and fog can never meet"
      show_text="false"
@@ -503,7 +503,7 @@
      increment="0.01"
      initial_value="0.8" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -517,7 +517,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -533,7 +533,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -542,7 +542,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -570,12 +570,12 @@
         Max Altitude (m)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_max_altitude_slider"
      tool_tip="The atmosphere's ceiling - how tall the haze slab is. It sets the horizon band's height and every sky ray's path length, so lowering it compresses haze onto the horizon but also weakens sun extinction. Stock is 1605"
      show_text="false"
@@ -584,7 +584,7 @@
      increment="1"
      initial_value="1605" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -598,7 +598,7 @@
      increment="1"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -614,7 +614,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -623,7 +623,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -663,12 +663,12 @@
         Rainbow
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_rainbow_slider"
      show_text="false"
      tool_tip="Optical moisture driving rainbow and halo effects around the sun - not the Weather tab moisture, which drives precipitation"
@@ -677,7 +677,7 @@
      increment="0.001"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -691,7 +691,7 @@
      increment="0.001"
      decimal_digits="3" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -707,7 +707,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -716,7 +716,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -744,12 +744,12 @@
         Rainbow Width (um)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_droplet_radius_slider"
      show_text="false"
      tool_tip="Water droplet radius in micrometres, shaping the rainbow and halo optics"
@@ -758,7 +758,7 @@
      increment="0.01"
      initial_value="800" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -772,7 +772,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -788,7 +788,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -797,7 +797,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -825,12 +825,12 @@
         Ice Halo
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_ice_level_slider"
      tool_tip="Base strength of the ice-crystal optics - the 22 deg halo, the 46 deg family, sundogs and the circumzenithal arc. Weather lifts from this base and needs cold and moisture together, so a dry -30C sky still shows none"
      show_text="false"
@@ -839,7 +839,7 @@
      increment="0.001"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -853,7 +853,7 @@
      increment="0.001"
      decimal_digits="3" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -869,7 +869,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -878,7 +878,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"

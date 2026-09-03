@@ -36,12 +36,12 @@
         Height (m)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_height_slider"
      tool_tip="Altitude of the cirrus band, metres above the track floor. It is what a metre of camera travel is worth to this layer's parallax, and the one authority the sun and moon disc occlusion shares. Auto hands the number back to the deck's own derivation"
      show_text="false"
@@ -50,7 +50,7 @@
      increment="50"
      initial_value="6000" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -64,7 +64,7 @@
      increment="50"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -80,7 +80,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -89,7 +89,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -128,7 +128,7 @@
      name="dome_color"
      tool_tip="Colour of the cirrus band. Near-black turns it into silhouettes against a sunset; warm tints are what catch the last light after the ground has gone dark" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -144,7 +144,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -154,7 +154,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -183,12 +183,12 @@
         Coverage
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_coverage_slider"
      tool_tip="Density of the cirrus band, and the cloud shadow it casts across the world. Nothing on the Weather tab lifts it - this is the dome's one density"
      show_text="false"
@@ -197,7 +197,7 @@
      increment="0.01"
      initial_value="0.27" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -211,7 +211,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -227,7 +227,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -236,7 +236,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -264,12 +264,12 @@
         Scale
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_scale_slider"
      tool_tip="Size of one tile of the cloud image across the band. Small tiles read as fine mackerel texture, large ones as a few broad sheets. Held on the departing keyframe and crossfaded rather than lerped through a blend, so the layer cannot appear to change altitude mid-fade"
      show_text="false"
@@ -278,7 +278,7 @@
      increment="0.01"
      initial_value="0.42" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -292,7 +292,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -308,7 +308,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -317,7 +317,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -345,12 +345,12 @@
         Variance
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_variance_slider"
      tool_tip="Warps the cloud image's lookup and erodes density where the samples agree. A little gives ragged natural edges; too much tears an overcast sheet open into gaps with the lookup peeling at their rims"
      show_text="false"
@@ -359,7 +359,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -373,7 +373,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -389,7 +389,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -398,7 +398,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -426,12 +426,12 @@
         Density X
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_density_x_slider"
      tool_tip="Slides the broad octave's lookup across the cloud image on the X axis - moves the pattern rather than changing it. Use it to shift a feature off a build, or keyframe it for a slow crawl"
      show_text="false"
@@ -440,7 +440,7 @@
      increment="0.01"
      initial_value="1" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -454,7 +454,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -470,7 +470,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -479,7 +479,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -507,12 +507,12 @@
         Density Y
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_density_y_slider"
      tool_tip="Slides the broad octave's lookup across the cloud image on the Y axis - moves the pattern rather than changing it. Use it to shift a feature off a build, or keyframe it for a slow crawl"
      show_text="false"
@@ -521,7 +521,7 @@
      increment="0.01"
      initial_value="0.53" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -535,7 +535,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -551,7 +551,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -560,7 +560,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -588,12 +588,12 @@
         Density D
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_density_d_slider"
      tool_tip="Opacity gain on the broad octave - the band's body. This is the dial that decides whether the layer reads as thin cirrus or as a solid lid"
      show_text="false"
@@ -602,7 +602,7 @@
      increment="0.01"
      initial_value="1" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -616,7 +616,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -632,7 +632,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -641,7 +641,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -669,12 +669,12 @@
         Detail X
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_detail_x_slider"
      tool_tip="Slides the fine octave's lookup across the cloud image on the X axis. Independent of the broad octave's offset, so the two scales can be pulled apart"
      show_text="false"
@@ -683,7 +683,7 @@
      increment="0.01"
      initial_value="1" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -697,7 +697,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -713,7 +713,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -722,7 +722,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -750,12 +750,12 @@
         Detail Y
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_detail_y_slider"
      tool_tip="Slides the fine octave's lookup across the cloud image on the Y axis. Independent of the broad octave's offset, so the two scales can be pulled apart"
      show_text="false"
@@ -764,7 +764,7 @@
      increment="0.01"
      initial_value="0.53" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -778,7 +778,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -794,7 +794,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -803,7 +803,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -831,12 +831,12 @@
         Detail D
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="dome_detail_d_slider"
      tool_tip="How much the fine octave modulates the broad one - the small-scale texture in the band. 0 leaves it smooth, high values speckle it"
      show_text="false"
@@ -845,7 +845,7 @@
      increment="0.01"
      initial_value="1" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -859,7 +859,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -875,7 +875,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -884,7 +884,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -921,7 +921,7 @@
      name="dome_image"
      tool_tip="Noise texture the cloud layer is drawn from; None restores the stock cloud noise" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -937,7 +937,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -947,7 +947,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -985,7 +985,7 @@
      name="dome_large_image"
      tool_tip="Broad-scale noise the large octave and warps are drawn from; None keeps every octave on the cloud noise" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -1001,7 +1001,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -1011,7 +1011,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"

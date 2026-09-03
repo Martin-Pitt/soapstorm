@@ -38,7 +38,7 @@ in vec4 diffuse_color;
 out vec2 vary_texcoord0;
 
 // <SS:Nexii> Per-puff STRUCTURE only, no longer a finished colour: r is the CPU builder's form term (facing toward the light and the exponential shade down through the deck, beam-flattened),
-// a the puff's edge-fade alpha; g and b are spare. The colour it used to carry was (ambient + sun * form) with the sun run through a CPU replica of the beam extinction - the replica whose
+// g the puff's buried depth (SSVolCloud::Puff::mBuried - sunless, so it survives a moonless overcast), a the puff's edge-fade alpha; b is spare. The colour it used to carry was (ambient + sun * form) with the sun run through a CPU replica of the beam extinction - the replica whose
 // cosecant underflows to grey at every low sun, so the deck sat flat white-grey under every authored sunset while the dome beside it burned. The light half is computed below instead.
 out vec4 vary_color;
 
@@ -53,7 +53,7 @@ out vec3 vary_world;
 //
 // RAY LENGTH - the band's cloud colours are multiplied by the transmittance along the ray before anything is drawn, and the length of that ray is a convention, not a measurement: the dome
 // extends every ray to the atmosphere slab (tens of km at the horizon, and a 32km stretch for the downward rays a dome only shows below its horizon). The deck is real geometry seen from
-// any side, so it runs the rim-eased hybrid instead - the deck's own horizontal range near, the dome's slab convention at the rim where it must melt into the band - and the atmosphere is
+// any side, so it runs the rim-eased hybrid instead - the deck's own true range near, the dome's slab convention at the rim where it must melt into the band - and the atmosphere is
 // inside these colours with no separate fog pass to disagree with it, exactly as it is inside the band's. See the long note at haze_len in main() for how both pure conventions failed.
 out vec3 vary_ss_sunlit;
 out vec3 vary_ss_amblit;
@@ -143,15 +143,18 @@ void main()
     // <SS:Nexii> The haze PATH, and the lesson its first two cuts each taught. The dome's own convention extends every ray to the atmosphere slab (max_y/y upward, a 32km stretch DOWNWARD) -
     // an honest convention for a dome, which is all sky and only ever looked at from inside. Adopting it whole meant a camera ABOVE the deck saw every puff through the downward branch's 32km
     // of air: transmittance zero, cloud terms extinguished, and the entire field rendered as bare airlight - pale grey everywhere, white fire in the glow cone, no trace of the sun on any
-    // cloud body. But shading by bare metric distance is no better - that was the first grey deck - because the band the far puffs must join IS painted with the slab maths. So the path is
-    // the fragment stage's old fog rule, restored: the HORIZONTAL range for the deck's own body (the haze layer is horizontally uniform, so a puff a kilometre overhead or underfoot is seen
-    // through a short clean column while one at the horizon is seen through the whole murk), eased up to the dome's slab convention across the same rim band the fragment stage flattens over,
-    // so the last rows are hazed by exactly the maths that hazes the band they melt into. abs() on the slab term so a downward grazing ray converges like an upward one, never to the dome's
-    // 32km collapse. [interaction: dome handoff]
+    // cloud body. But shading by bare metric distance is no better - that was the first grey deck - because the band the far puffs must join IS painted with the slab maths. So the path is the
+    // deck's own TRUE range near, capped at the slab convention the ray would carry anyway, eased up to that convention across the same rim band the fragment stage flattens over, so the last
+    // rows are hazed by exactly the maths that hazes the band they melt into. abs() on the slab term so a downward grazing ray converges like an upward one, never to the dome's 32km collapse.
+    //
+    // The near term was the HORIZONTAL range for a while, on the argument that the haze layer is horizontally uniform - and that argument, applied to a distance, puts a hole in the sky. Straight
+    // up and straight down the horizontal range is ZERO however far the deck actually is, so the airlight vanished there and came back as the ray tipped over: a dark cone of unhazed puffs
+    // centred on the eye, sliding across the deck with every camera move, which is the one thing a sky must never do. The true range is a real distance at every angle and agrees with the old
+    // rule to within a few percent everywhere the old rule was defensible - by 45 degrees of elevation the two are a factor of 1.4 apart and both are far inside the rim easing. [interaction: dome handoff]
     float dome_rim = smoothstep(ss_rim.x, ss_rim.y, d);
-    float horiz = length(rel.xy);
     float slab_len = max_y / max(abs(rel_pos_norm.y), 0.05);
-    float haze_len = mix(horiz, max(slab_len, horiz), dome_rim);
+    float near_len = min(d, slab_len);
+    float haze_len = mix(near_len, max(slab_len, near_len), dome_rim);
 
     // Initialize temp variables
     vec3 sunlight = (sun_up_factor == 1) ? sunlight_color : moonlight_color * 0.7;

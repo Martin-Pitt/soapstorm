@@ -58,6 +58,7 @@
 #include "llsliderctrl.h"
 #include "llspinctrl.h"
 #include "llradiogroup.h"
+#include "llrender.h" // <SS:Nexii> gGL, for the forecast strip's discs and rings
 #include "lltabcontainer.h"
 #include "lltexturectrl.h"
 #include "lltooldraganddrop.h" // <SS:Nexii> the cargo index used to tell when a multi-drop settles
@@ -83,6 +84,41 @@ static const LLColor4 MOON_MARKER_COLOUR(0.72f, 0.78f, 0.95f, 0.75f);
 
 static const S32 HOVER_PAD_X = 6;
 static const S32 HOVER_PAD_Y = 10;
+
+// <SS:Nexii> The forecast strip's vertical rack, all measured UP from STRIP_GAP above the
+// scrubber's top edge - see drawForecastStrip(). Bottom to top: the hour sitting directly on the
+// scrubber it names, the wind rose, how much falls, the temperature, and the condition glyph at
+// the head. Text offsets are the BOTTOM of their line, glyph offsets are a centre.
+//
+// The hour is at the FOOT rather than heading the column the way a printed forecast sets it,
+// because here the column is not the whole story: the scrubber below is, and putting the label
+// against the timeline it indexes lets the two be read as one scale. Everything else keeps the
+// familiar order above it.
+//
+// STRIP_GAP is not padding for looks: drawKeyframeGhosts writes value labels in a lane about
+// 14px above the scrubber rect, so anything tighter than this has hovering a row scribble over
+// the hour row.
+//
+// The gaps between rows are 2-4px and the condition glyph is the reason. It is the only mark
+// here that is not a line of text: it reaches about 14px BELOW its centre (the drops or the bolt
+// hang under the cloud) and 11px above (the sun's rays), so STRIP_CONDITION_Y needs roughly
+// twice a text row's clearance under it or the drops land in the temperature.
+//
+// STRIP_HEIGHT plus STRIP_GAP is what the floater XML reserves between the name row and the
+// scrubber. Move any offset here and move the scrubber's top with it.
+static const S32 STRIP_GAP = 15;
+static const F32 STRIP_WIND_RADIUS = 10.5f;
+static const S32 STRIP_TIME_TEXT_Y = 0;
+static const S32 STRIP_WIND_Y = 31;
+static const S32 STRIP_PRECIP_TEXT_Y = 51;
+static const S32 STRIP_PRECIP_ICON_Y = 69;
+static const S32 STRIP_TEMP_TEXT_Y = 78;
+static const S32 STRIP_CONDITION_Y = 108;
+static const S32 STRIP_HEIGHT = 120;
+
+// Pitch a column needs before the step coarsens, and the coarsest step it will settle for.
+static const S32 STRIP_MIN_COLUMN = 44;
+static const S32 STRIP_STEP_COARSEST = 12;
 
 // Floater shell; all content is wired in postBuild.
 SSFloaterAtmoEnv::SSFloaterAtmoEnv(const LLSD& key) :
@@ -545,6 +581,12 @@ void SSFloaterAtmoEnv::reshape(S32 width, S32 height, bool called_from_parent)
     LLFloater::reshape(width, height, called_from_parent);
 
     repositionRailMarkers();
+
+    // <SS:Nexii> The forecast strip's column PITCH is a function of the scrubber's width, so a
+    // resize can change how many columns there are. Positions come off the live rect and would
+    // have followed on their own; the count would have waited for the half-second poll and read
+    // as the strip lagging the drag.
+    refreshForecastStrip();
 }
 
 // Per-frame: preview playback, ghosts, markers, status polling.
@@ -601,6 +643,7 @@ void SSFloaterAtmoEnv::draw()
     LLFloater::draw();
 
     drawWeatherBracket();
+    drawForecastStrip();
     drawRiseSetMarkers();
     drawKeyframeGhosts();
     drawSliderValueGhosts();
@@ -1142,8 +1185,7 @@ void SSFloaterAtmoEnv::refreshVisibility()
         "name_editor", "save_button", "revert_button", "unload_button",
         "track_panel", "atmo_tabs",
         "preview_time_caption", "preview_play_button", "preview_time_slider",
-        "preview_time_value_text",
-        "forecast_text"
+        "preview_time_value_text"
     };
     for (const char* name : editing_widgets)
     {
@@ -2629,8 +2671,9 @@ void SSFloaterAtmoEnv::refreshAutoRows()
         { "cloud_thickness",     track.mCloudField.mAuto, auto_thickness },
         { "cloud_coverage",      track.mCloudField.mAuto, auto_coverage },
         { "cloud_storm_dark",    track.mCloudField.mAuto, auto_dark },
-        { "ucloud_base_height",  track.mUnderField.mAuto, auto_height },
-        { "ucloud_thickness",    track.mUnderField.mAuto, auto_thickness },
+        // <SS:Nexii> The under deck's altitude and depth stay the author's under Auto too - the resolver holds them back (SSAtmoEnvCloudFieldResolver::resolve's auto_owns_geometry), because one weather baseline handed to both fields stacks them in the same volume. So these two rows stay LIVE while the deck is auto: greying them out and filling them with the storm deck's answer is precisely the overlap, written into the UI.
+        { "ucloud_base_height",  false,                   auto_height },
+        { "ucloud_thickness",    false,                   auto_thickness },
         { "ucloud_coverage",     track.mUnderField.mAuto, auto_coverage },
         { "ucloud_storm_dark",   track.mUnderField.mAuto, auto_dark },
         { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::instance().cirrusAltitudeMetres() },
@@ -2772,8 +2815,8 @@ bool SSFloaterAtmoEnv::rowAutoOwned(const std::string& prefix) const
     {
         return track.mCloudField.mAuto;
     }
-    if (prefix == "ucloud_base_height" || prefix == "ucloud_thickness"
-        || prefix == "ucloud_coverage" || prefix == "ucloud_storm_dark")
+    // The under deck's altitude and depth are never auto-owned, whatever its Auto flag says - the resolver keeps them authored so the two decks cannot be derived into the same volume. See SSAtmoEnvCloudFieldResolver::resolve's auto_owns_geometry, and the matching pair in refreshAutoRows.
+    if (prefix == "ucloud_coverage" || prefix == "ucloud_storm_dark")
     {
         return track.mUnderField.mAuto;
     }
@@ -3213,7 +3256,12 @@ void SSFloaterAtmoEnv::refreshPreview()
 
     const SSAtmoEnvWeatherState resolved = SSAtmoEnvWeatherResolver::resolve(
         mgr->editable().mTracks[mSelectedTrackIndex].mWeather, mPreviewPhase);
+    // Lives on Weather > Conditions now rather than in the floater's own chrome, so this is a
+    // recursive lookup through the tab container - still refreshed whichever tab is showing,
+    // because the phase it reads moved and the text has to be right when the tab is reached.
     getChild<LLTextBox>("forecast_text")->setText(resolved.mForecastText);
+
+    refreshForecastStrip();
 
     refreshAutoRows();
     refreshWaterRows();
@@ -3471,6 +3519,332 @@ void SSFloaterAtmoEnv::drawRiseSetMarkers()
 
     mark(moon, MOON_MARKER_COLOUR, RISE_TRIANGLE_SMALL, SET_TRIANGLE_SMALL);
     mark(sun, SUN_MARKER_COLOUR, RISE_TRIANGLE, SET_TRIANGLE);
+}
+
+namespace
+{
+    // Filled disc, floater space.
+    void ssStripDisc(S32 x, S32 y, F32 radius, const LLColor4& colour)
+    {
+        gGL.color4fv(colour.mV);
+        gl_circle_2d((F32)x, (F32)y, radius, 18, true);
+    }
+
+    // Outlined disc, floater space.
+    void ssStripRing(S32 x, S32 y, F32 radius, const LLColor4& colour)
+    {
+        gGL.color4fv(colour.mV);
+        gl_circle_2d((F32)x, (F32)y, radius, 22, false);
+    }
+
+    // Disc plus rays - the clear-sky glyph, and the peek from behind a broken deck.
+    void ssStripSun(S32 x, S32 y, F32 radius, const LLColor4& colour)
+    {
+        ssStripDisc(x, y, radius, colour);
+        for (S32 i = 0; i < 8; ++i)
+        {
+            const F32 angle = (F32)i * (F_TWO_PI / 8.f);
+            const F32 ax = cosf(angle);
+            const F32 ay = sinf(angle);
+            gl_line_2d(x + (S32)(ax * (radius + 1.5f)), y + (S32)(ay * (radius + 1.5f)),
+                       x + (S32)(ax * (radius + 3.5f)), y + (S32)(ay * (radius + 3.5f)), colour);
+        }
+    }
+
+    // Three lobes over a flat base - the same silhouette at any scale.
+    void ssStripCloud(S32 x, S32 y, F32 scale, const LLColor4& colour)
+    {
+        ssStripDisc(x - (S32)(5.f * scale), y, 3.6f * scale, colour);
+        ssStripDisc(x + (S32)(5.f * scale), y - (S32)(0.5f * scale), 3.0f * scale, colour);
+        ssStripDisc(x, y + (S32)(2.f * scale), 4.6f * scale, colour);
+        gl_rect_2d(x - (S32)(8.f * scale), y + (S32)(1.f * scale),
+                   x + (S32)(8.f * scale), y - (S32)(3.f * scale), colour, true);
+    }
+
+    // <SS:Nexii> Precipitation's colour tier. Liquid reads cold-blue the way every forecast draws it, ice reads white, and the mixes sit between the two rather than picking a side - which is the only visual cue the strip has that sleet is not rain.
+    const LLColor4& ssStripPrecipColour(const std::string& type)
+    {
+        static const LLColor4 RAIN(0.35f, 0.78f, 0.95f, 1.f);
+        static const LLColor4 SNOW(0.92f, 0.96f, 1.f, 1.f);
+        static const LLColor4 HAIL(0.74f, 0.82f, 0.90f, 1.f);
+        static const LLColor4 MIX(0.62f, 0.86f, 0.97f, 1.f);
+
+        if (type == "snow" || type == "blizzard") return SNOW;
+        if (type == "hail") return HAIL;
+        if (type == "sleet" || type == "slush_mix" || type == "freezing_rain") return MIX;
+        return RAIN;
+    }
+
+    // One mark of what is falling: a leaning drop, a six-armed flake, or a pellet.
+    void ssStripPrecipMark(S32 x, S32 y, const std::string& type, const LLColor4& colour)
+    {
+        if (type == "snow" || type == "blizzard")
+        {
+            for (S32 i = 0; i < 3; ++i)
+            {
+                const F32 angle = (F32)i * (F_PI / 3.f);
+                const S32 dx = (S32)(cosf(angle) * 3.f);
+                const S32 dy = (S32)(sinf(angle) * 3.f);
+                gl_line_2d(x - dx, y - dy, x + dx, y + dy, colour);
+            }
+            return;
+        }
+
+        if (type == "hail")
+        {
+            ssStripRing(x, y, 2.6f, colour);
+            return;
+        }
+
+        gl_line_2d(x + 2, y + 3, x - 1, y - 2, colour);
+        ssStripDisc(x - 1, y - 3, 1.6f, colour);
+    }
+
+    // The bolt, for a deck that is discharging.
+    void ssStripBolt(S32 x, S32 y, const LLColor4& colour)
+    {
+        gl_triangle_2d(x - 2, y + 5, x + 2, y + 4, x - 1, y, colour, true);
+        gl_triangle_2d(x - 2, y, x + 2, y - 1, x + 1, y - 5, colour, true);
+    }
+
+    // <SS:Nexii> Wind, as a rose rather than a number and an arrow apart: the speed sits INSIDE the ring and the barb rides the ring's edge along the bearing the air travels, so a column reads as one mark. Heading is the compass bearing the wind blows toward and 0 is north, which is straight up the screen - hence sin on x and cos on y rather than the other way round.
+    void ssStripWind(S32 x, S32 y, F32 radius, F32 heading_deg, const std::string& label,
+                     const LLColor4& colour, LLFontGL* font)
+    {
+        ssStripRing(x, y, radius, colour);
+        font->renderUTF8(label, 0, x, y, colour, LLFontGL::HCENTER, LLFontGL::VCENTER);
+
+        const F32 heading = heading_deg * DEG_TO_RAD;
+        const F32 dx = sinf(heading);
+        const F32 dy = cosf(heading);
+
+        const S32 tail_x = x + (S32)(dx * (radius + 1.5f));
+        const S32 tail_y = y + (S32)(dy * (radius + 1.5f));
+        const S32 tip_x  = x + (S32)(dx * (radius + 7.f));
+        const S32 tip_y  = y + (S32)(dy * (radius + 7.f));
+        gl_line_2d(tail_x, tail_y, tip_x, tip_y, colour);
+
+        for (S32 side = -1; side <= 1; side += 2)
+        {
+            const F32 barb = heading + (F32)side * (F_PI * 0.78f);
+            gl_line_2d(tip_x, tip_y,
+                       tip_x + (S32)(sinf(barb) * 4.f),
+                       tip_y + (S32)(cosf(barb) * 4.f), colour);
+        }
+    }
+
+    // <SS:Nexii> The one glyph that says what an hour is like: cover first, then whatever comes through it. Okta thresholds follow the same scale skyTextForOkta() words the prose forecast by, so the picture and the sentence on Weather > Conditions cannot disagree - 0-1 clear, up to 5 broken with the light still showing, 7-8 a dark overcast deck. A discharging deck draws the bolt INSTEAD of the drops rather than as well: at this size both together is a smudge, and thunder is the more urgent of the two facts.
+    void ssStripCondition(S32 x, S32 y, S32 okta, bool daylight, bool falling,
+                          const std::string& type, bool thunder)
+    {
+        static const LLColor4 SUN(1.f, 0.84f, 0.30f, 1.f);
+        static const LLColor4 MOON(0.84f, 0.87f, 0.97f, 1.f);
+        static const LLColor4 DECK(0.80f, 0.83f, 0.88f, 1.f);
+        static const LLColor4 DECK_DARK(0.52f, 0.55f, 0.61f, 1.f);
+        static const LLColor4 BOLT(0.99f, 0.90f, 0.42f, 1.f);
+
+        const LLColor4& light = daylight ? SUN : MOON;
+
+        if (okta <= 1)
+        {
+            if (daylight) ssStripSun(x, y, 5.f, light);
+            else          ssStripDisc(x, y, 5.f, light);
+            return;
+        }
+
+        const LLColor4& deck = (okta >= 7) ? DECK_DARK : DECK;
+
+        if (okta <= 5)
+        {
+            if (daylight) ssStripSun(x + 7, y + 4, 3.5f, light);
+            else          ssStripDisc(x + 7, y + 4, 3.5f, light);
+            ssStripCloud(x - 3, y - 1, 0.9f, deck);
+        }
+        else
+        {
+            ssStripCloud(x, y + 1, 1.f, deck);
+        }
+
+        if (thunder)
+        {
+            ssStripBolt(x, y - 9, BOLT);
+        }
+        else if (falling)
+        {
+            const LLColor4& fall = ssStripPrecipColour(type);
+            for (S32 i = -1; i <= 1; ++i)
+            {
+                ssStripPrecipMark(x + i * 5, y - 9, type, fall);
+            }
+        }
+    }
+}
+
+// <SS:Nexii> The forecast strip: the resolved weather cube read out as a column per couple of
+// hours, stacked over the scrubber those hours belong to - military time, a condition glyph,
+// temperature, what falls and how much of it, then a wind rose at the foot. The prose forecast
+// this replaced said one thing about one instant; the point of the strip is the SHAPE of a day,
+// which is what a keyframed cube is actually authoring and what no single sentence can show.
+//
+// Drawn rather than built: seventy-odd display-only controls would need repositioning by hand on
+// every resize, and none of them would ever take a click. Column positions come from the
+// scrubber's own rect (scrubberGeometry), so the strip stays in step with the head below it -
+// including after a resize, since the scrubber is anchored to both floater edges.
+//
+// The step coarsens until a column has room for its widest line, so the strip thins out instead
+// of turning into a smear when the floater is narrow. It never goes finer than hourly even on a
+// very wide floater - past that the columns are reading interpolation noise, not weather.
+void SSFloaterAtmoEnv::refreshForecastStrip()
+{
+    mForecastCells.clear();
+
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset()) return;
+
+    const SSAtmoEnvAsset& asset = mgr->editable();
+    if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
+
+    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+
+    LLRect rect;
+    S32 left_edge = 0;
+    S32 travel = 0;
+    if (!scrubberGeometry(rect, left_edge, travel)) return;
+
+    S32 step_hours = STRIP_STEP_COARSEST;
+    for (const S32 candidate : { 1, 2, 3, 4, 6, 8, 12 })
+    {
+        if ((F32)travel * (F32)candidate / 24.f >= (F32)STRIP_MIN_COLUMN)
+        {
+            step_hours = candidate;
+            break;
+        }
+    }
+
+    // <SS:Nexii> Sun or moon comes off the track's OWN sky geometry, the same rise/set the
+    // scrubber markers use, not a hardcoded six-to-six day: a tilted, high-latitude or
+    // tidally-locked world is exactly the kind of thing this editor exists to author, and a
+    // strip that drew a noon sun through a polar winter would be lying about it.
+    F64 sun_rise = 0.25;
+    F64 sun_set = 0.75;
+    const S32 home = track.mPlanetary.homeBodyIndex();
+    if (home >= 0)
+    {
+        SSAtmoEnvResolvedBody sun;
+        SSAtmoEnvResolvedBody moon;
+        SSAtmoEnvPlanetaryResolver::resolveLightRoles(track.mPlanetary, sun, moon);
+        if (sun.mBodyIndex >= 0)
+        {
+            const SSAtmoEnvCelestialBody& home_body = track.mPlanetary.mBodies[(size_t)home];
+            F64 rise = 0.0;
+            F64 set = 0.0;
+            if (SSAtmoEnvPlanetaryResolver::riseSetPhases(sun.mDirection,
+                    home_body.mAxialTiltDeg, home_body.mLatitudeDeg, rise, set))
+            {
+                sun_rise = rise;
+                sun_set = set;
+            }
+        }
+    }
+
+    const S32 columns = 24 / step_hours;
+    mForecastCells.reserve((size_t)columns + 1);
+
+    for (S32 i = 0; i <= columns; ++i)
+    {
+        const S32 hour = i * step_hours;
+        const F64 phase = (F64)hour / 24.0;
+
+        const SSAtmoEnvWeatherState state = SSAtmoEnvWeatherResolver::resolve(track.mWeather, phase);
+
+        ForecastCell cell;
+        cell.mPhase = phase;
+        cell.mHour = hour;
+        cell.mOkta = state.mOktaCloudCover;
+        cell.mTemperatureC = track.mWeather.mTemperatureC.valueAt(phase);
+        cell.mWindSpeed = state.mWindSpeed;
+        cell.mWindHeading = state.mWindHeading;
+        cell.mPrecipPercent =
+            (S32)ll_round(llclamp(state.mPrecipitationIntensity, 0.f, 1.f) * 100.f);
+        cell.mFalling = state.mPrecipitationFalls
+                        && state.mIntensityBand != SSAtmoEnvPrecipIntensity::NONE;
+        cell.mThunder = state.mLightningEnabled && state.mLightningIntervalMaxSeconds > 0.f;
+        // A rise past its set wraps midnight - the day is then the OUTSIDE of the interval.
+        cell.mDaylight = (sun_rise <= sun_set)
+            ? (phase >= sun_rise && phase <= sun_set)
+            : (phase >= sun_rise || phase <= sun_set);
+        cell.mPrecipType = state.mPrecipitationType;
+
+        mForecastCells.push_back(cell);
+    }
+}
+
+// Renders the cells refreshForecastStrip() banked, positioned off the scrubber's live rect.
+void SSFloaterAtmoEnv::drawForecastStrip()
+{
+    // The asset test as well as the empty test: refreshPreview stands down without one, so an
+    // Unload leaves the last cells banked and they would otherwise draw over the landing panel.
+    if (!SSAtmoEnvManager::getInstance()->hasAsset()) return;
+    if (mForecastCells.empty()) return;
+
+    LLRect rect;
+    S32 left_edge = 0;
+    S32 travel = 0;
+    if (!scrubberGeometry(rect, left_edge, travel)) return;
+
+    static const LLColor4 TIME_COLOUR(0.74f, 0.77f, 0.82f, 1.f);
+    static const LLColor4 TEMP_COLOUR(0.93f, 0.88f, 0.76f, 1.f);
+    static const LLColor4 WIND_COLOUR(0.72f, 0.75f, 0.81f, 1.f);
+    static const LLColor4 DIM_COLOUR(0.46f, 0.48f, 0.52f, 1.f);
+    static const LLColor4 HEAD_COLOUR(1.f, 0.74f, 0.38f, 0.5f);
+
+    const S32 base = rect.mTop + STRIP_GAP;
+    LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+
+    // The head, carried up through the strip, so a column is read against where the preview
+    // actually sits rather than against a guess from the scrubber below. Drawn first, so the
+    // columns it passes behind stay legible.
+    const S32 head_x = left_edge + (S32)(llclamp(mPreviewPhase, 0.0, 1.0) * (F64)travel);
+    gl_rect_2d(head_x - 1, base + STRIP_HEIGHT, head_x + 1, base, HEAD_COLOUR, true);
+
+    for (const ForecastCell& cell : mForecastCells)
+    {
+        const S32 x = left_edge + (S32)(cell.mPhase * (F64)travel);
+
+        ssStripCondition(x, base + STRIP_CONDITION_Y, cell.mOkta, cell.mDaylight,
+                         cell.mFalling, cell.mPrecipType, cell.mThunder);
+
+        font->renderUTF8(llformat("%d\xC2\xB0", (S32)ll_round(cell.mTemperatureC)), 0,
+                         x, base + STRIP_TEMP_TEXT_Y,
+                         TEMP_COLOUR, LLFontGL::HCENTER, LLFontGL::BOTTOM);
+
+        // Dry hours still carry the figure, greyed - a run of 0% is as much a forecast as a run
+        // of 40%, and dropping the row would make the columns jump.
+        const LLColor4& percent_colour = cell.mFalling
+            ? ssStripPrecipColour(cell.mPrecipType) : DIM_COLOUR;
+        font->renderUTF8(llformat("%d%%", cell.mPrecipPercent), 0,
+                         x, base + STRIP_PRECIP_TEXT_Y,
+                         percent_colour, LLFontGL::HCENTER, LLFontGL::BOTTOM);
+
+        if (cell.mFalling)
+        {
+            for (S32 mark = -1; mark <= 1; ++mark)
+            {
+                ssStripPrecipMark(x + mark * 6, base + STRIP_PRECIP_ICON_Y,
+                                  cell.mPrecipType, percent_colour);
+            }
+        }
+
+        ssStripWind(x, base + STRIP_WIND_Y, STRIP_WIND_RADIUS, cell.mWindHeading,
+                    llformat("%d", (S32)ll_round(cell.mWindSpeed)),
+                    (cell.mWindSpeed < 1.f) ? DIM_COLOUR : WIND_COLOUR, font);
+
+        // Military time, always, whatever the clock preference: four digits are the same width
+        // at every hour, which is what lets the columns line up at this pitch. Sits directly on
+        // the scrubber so the label and the head it indexes read as one scale.
+        font->renderUTF8(llformat("%02d00", cell.mHour), 0, x, base + STRIP_TIME_TEXT_Y,
+                         TIME_COLOUR, LLFontGL::HCENTER, LLFontGL::BOTTOM);
+    }
 }
 
 // Draws the hovered row's keyframes on the scrubber.

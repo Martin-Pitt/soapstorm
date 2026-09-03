@@ -66,10 +66,12 @@ class SSAtmoEnvCloudFieldResolver
 {
 public:
     // <SS:Nexii> track_floor_z is the owning track's vertical position (SSAtmoEnvTrack::mFloorZ): the authored base height - and the auto derivation's answer - are offsets above it, so the whole deck rides the track. The ground track sits at 0, where nothing changes numerically. temperature_c drives the seasonal altitude: winter air squashes the atmosphere down, so the deck rides low; summer heat lifts it (SSAtmoCloudSeason). influence gates the gloom - the deck's half of the Storm Darkening row.
+    // <SS:Nexii> auto_owns_geometry is false for the UNDER deck. Auto derives one storm-deck baseline from the weather cube, and handing that same base height and thickness to both fields put them at the same altitude with the same depth - two decks occupying one volume, which is not a second layer, it is the first one drawn twice with a different noise salt. The under deck is a PLACE in the build (the cloud floor beneath a sky platform), not a weather answer, so its altitude and depth stay authored while Auto still owns everything the weather genuinely decides for it - coverage, darkening, the churn and the anvil.
     static SSAtmoEnvCloudFieldState resolve(const SSAtmoEnvCloudField& field,
                                             const SSAtmoEnvWeatherInfluence& influence,
                                             F32 moisture, F32 convection, F32 temperature_c,
-                                            F64 phase, F32 track_floor_z);
+                                            F64 phase, F32 track_floor_z,
+                                            bool auto_owns_geometry = true);
 
     // Floor-relative: out_base_height is metres ABOVE the track floor the deck should sit at.
     static void deriveAutoBaseline(F32 moisture, F32 convection, F32 temperature_c,

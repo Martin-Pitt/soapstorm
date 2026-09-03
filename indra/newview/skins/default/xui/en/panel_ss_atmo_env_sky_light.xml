@@ -35,7 +35,7 @@
      name="atmo_sunlight_color"
      tool_tip="Colour and strength of direct sunlight, and of moonlight at night, before the atmosphere extinguishes it along each ray" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -51,7 +51,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -61,7 +61,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -90,12 +90,12 @@
         Sun Glow Focus
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_glow_focus_slider"
      tool_tip="Tightness of the sun's halo. 0.05 to 0.15 is a soft broad bloom, higher is a small hot core; negative inverts the falloff and dims the sky toward the sun instead"
      show_text="false"
@@ -104,7 +104,7 @@
      increment="0.01"
      initial_value="0.096" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -118,7 +118,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -134,7 +134,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -143,7 +143,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -171,12 +171,12 @@
         Sun Glow Size
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_glow_size_slider"
      tool_tip="Width of the sun's halo, and the trap of the sky set: a larger value here means a smaller backend glow scale, so the halo grows fast and 1.85 or more whites out the whole frame. Stock 1.75 sits just under that cliff; sunset halos live around 0.4 to 0.8"
      show_text="false"
@@ -185,7 +185,7 @@
      increment="0.01"
      initial_value="1.75" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -199,7 +199,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -215,7 +215,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -224,7 +224,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -252,12 +252,12 @@
         Moon Brightness
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_moon_brightness_slider"
      show_text="false"
      tool_tip="Luminance of the moon disc itself - which body occupies the moon slot is the Planetary tab structure"
@@ -266,7 +266,7 @@
      increment="0.01"
      initial_value="0.5" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -280,7 +280,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -296,7 +296,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -305,7 +305,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"

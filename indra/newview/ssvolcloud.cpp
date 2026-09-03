@@ -391,7 +391,7 @@ void SSVolCloud::update(F32 dt)
         const SSAtmoEnvCloudFieldState under =
             SSAtmoEnvCloudFieldResolver::resolve(track.mUnderField, track.mWeatherInfluence,
                                                  moisture, convection, temperature,
-                                                 phase, track.mFloorZ);
+                                                 phase, track.mFloorZ, false);
         if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
         {
             buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT);
@@ -659,6 +659,10 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                                * lerp(1.f, shade, beam);
                 puff.mForm = form;
 
+                // <SS:Nexii> The buried depth - see Puff::mBuried. The same "how much of my column stands over me" the shade term above measures, but normalised against the column's own height rather than left in layer fractions and, crucially, NOT gated by the beam: this one has to survive a sunless sky, because a storm deck is dark underneath at midnight too. Eased at the rim with the rest of the structural shading, so the last rows flatten into the dome band's flat painting instead of carrying a gradient it has none of.
+                puff.mBuried = lerp(llclamp((cell_height - up) / llmax(cell_height, 0.01f), 0.f, 1.f),
+                                    0.5f, rim);
+
                 dist_sum += dist_sq;
                 deck.mPuffs.push_back(puff);
 
@@ -697,6 +701,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                         child.mRadius = child_r;
                         child.mAlpha = puff.mAlpha * child_fade;
                         child.mForm = puff.mForm;
+                        child.mBuried = puff.mBuried;
 
                         const LLVector3 to_child = child.mPosAgent - cam;
                         child.mCamDistSq = to_child.magVecSquared();
@@ -726,6 +731,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                                               * (0.7f + 0.6f * hashUnit(cx, cy, 8u + grand_salt));
                                 grand.mAlpha = child.mAlpha * grand_fade;
                                 grand.mForm = child.mForm;
+                                grand.mBuried = child.mBuried;
 
                                 const LLVector3 to_grand = grand.mPosAgent - cam;
                                 grand.mCamDistSq = to_grand.magVecSquared();
@@ -1277,8 +1283,8 @@ void SSVolCloud::render()
             const S32 scy0 = llfloor((cam_pos.mV[VY] - drift.mV[1]) / CELL_M);
 
             gGL.begin(LLRender::TRIANGLES);
-            // r the structural form, a the alpha ceiling - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); g and b spare.
-            gGL.color4f(deck.mSheetForm, 0.f, 0.f, deck.mSheetAlpha);
+            // r the structural form, g the buried depth the gloom grades over (the veil is the floor, so it takes the dark end whole), a the alpha ceiling - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); b spare.
+            gGL.color4f(deck.mSheetForm, Deck::SHEET_BURIED, 0.f, deck.mSheetAlpha);
             for (S32 ty = -sheet_radius; ty <= sheet_radius; ++ty)
             {
                 for (S32 tx = -sheet_radius; tx <= sheet_radius; ++tx)
@@ -1358,9 +1364,10 @@ void SSVolCloud::render()
             // vertices here was tried and cut twice over - the seed keyed on the world position
             // re-rolled against the drift every frame, and even anchored it reshaped the one puff
             // the LOD was meant to leave alone.
-            // r the structural form, a the edge fade - the shader multiplies its own sky light in
-            // (see the vary_color note in ssVolCloudV.glsl); g and b spare.
-            gGL.color4f(puff.mForm, 0.f, 0.f, puff.mAlpha);
+            // r the structural form, g the buried depth (Puff::mBuried) the storm gloom grades
+            // over, a the edge fade - the shader multiplies its own sky light in (see the
+            // vary_color note in ssVolCloudV.glsl); b spare.
+            gGL.color4f(puff.mForm, puff.mBuried, 0.f, puff.mAlpha);
 
             gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
             gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);

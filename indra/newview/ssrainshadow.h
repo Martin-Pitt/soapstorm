@@ -57,6 +57,9 @@ public:
 
     void renderDebug();
 
+    // <SS:Nexii> The rain pane's column trace: one line per spawn cell, from the ground it would land on up toward the weather source, colour by what the fall meets - the "can it actually rain here" answer itself, where the debug views above show the map that answer is read from.
+    void renderColumnTrace();
+
     // <SS:Nexii> The debug views, in SSAtmoShadowDebugView order. Cloud and shelter are the same capture read two ways - the raw texels, and the resampled grid its consumers take - so a disagreement is resampling loss. Map is the capture itself, volume the frame it was taken in.
     enum EDebugView
     {

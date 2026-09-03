@@ -364,22 +364,35 @@ void SSLightningRender::renderFlash()
 
     beginBatch();
 
-    // The flash discs, exactly as before: tint x brightness in rgb, the bloom fraction in the 8-bit alpha, the shader's cubic disc and glow multiply on top.
-    auto flashDisc = [&](const LLVector3& center, F32 radius, F32 bright, F32 a8)
+    // The flash discs: tint x brightness in rgb, the bloom fraction in the 8-bit alpha, the shader's cubic disc and glow multiply on top.
+    // <SS:Nexii> Pulled 30-60m toward the camera along the view ray with the radius rescaled by the same factor, so each disc projects exactly where its true point does (the aura discs' trick at a smaller range): at its true depth the lowest trunk disc's plane cut a hard chord across every rise in the landscape between it and the eye. The per-corner height above the strike's surface rides aux.y for the shader's ground fade.
+    auto flashDisc = [&](const LLVector3& center_true, F32 radius_true, F32 bright, F32 a8, F32 surf_z)
     {
         LLVector3 right, up;
-        if (!billboardAxes(center, cam, right, up)) return;
+        if (!billboardAxes(center_true, cam, right, up)) return;
+        const F32 d = (center_true - cam).magVec();
+        if (d < 1.f) return;
+        const F32 pull = llmin(llclamp(0.1f * d, 30.f, 60.f), 0.5f * d);
+        const F32 k = 1.f - pull / d;
+        const LLVector3 center = cam + (center_true - cam) * k;
+        const F32 radius = radius_true * k;
+
         Vertex v;
         v.mCol = tint8(GLOW_COLOR, a8);
         v.mUV1.set(0.f, 0.f);
-        v.mAux.set(0.f, 0.f, 0.f);
         v.mCtl.set(bright, 0.f, 0.f, 4.f);
-        Vertex bl = v, br = v, tl = v, tr = v;
-        bl.mPos = center - right * radius - up * radius; bl.mUV.set(0.f, 0.f);
-        br.mPos = center + right * radius - up * radius; br.mUV.set(1.f, 0.f);
-        tl.mPos = center - right * radius + up * radius; tl.mUV.set(0.f, 1.f);
-        tr.mPos = center + right * radius + up * radius; tr.mUV.set(1.f, 1.f);
-        pushQuad(bl, br, tl, tr);
+        Vertex c[4];
+        for (S32 i = 0; i < 4; ++i)
+        {
+            const F32 sx = (i & 1) ? 1.f : -1.f;
+            const F32 sy = (i & 2) ? 1.f : -1.f;
+            c[i] = v;
+            c[i].mPos = center + right * (radius * sx) + up * (radius * sy);
+            c[i].mUV.set((i & 1) ? 1.f : 0.f, (i & 2) ? 1.f : 0.f);
+            const F32 z_true = center_true.mV[VZ] + right.mV[VZ] * radius_true * sx + up.mV[VZ] * radius_true * sy;
+            c[i].mAux.set(0.f, (z_true - surf_z) / llmax(radius_true, 0.01f), 0.f);
+        }
+        pushQuad(c[0], c[1], c[2], c[3]);
     };
 
     if (any_flash)
@@ -390,6 +403,9 @@ void SSLightningRender::renderFlash()
             if (!strikeOnScreen(strike)) continue;
 
             const F32 a = llclamp(strike.mFlash, 0.f, 1.f);
+            // Only a ground strike has a surface to fade against; a fork's or sheet's discs hang in cloud, so the sentinel keeps them clear of the fade.
+            const F32 surf_z = (strike.mKind == STRIKE_GROUND)
+                ? SSLightning::surfaceZ(strike.mGround) : -1.0e6f;
 
             if (!strike.mChannel.empty())
             {
@@ -404,14 +420,14 @@ void SSLightningRender::renderFlash()
                     for (S32 di = 0; di < DISCS; ++di)
                     {
                         const S32 want = (S32)((F32)di / (F32)(DISCS - 1) * (F32)(trunk_n - 1));
-                        flashDisc(strike.mChannel[(size_t)want].mPos, radius, a * 0.35f, a * 0.08f);
+                        flashDisc(strike.mChannel[(size_t)want].mPos, radius, a * 0.35f, a * 0.08f, surf_z);
                     }
                 }
             }
             else
             {
                 const F32 radius = llmax(350.f, strike.mDistanceM * 0.18f);
-                flashDisc(strike.mOrigin, radius, a * 0.6f, a * 0.12f);
+                flashDisc(strike.mOrigin, radius, a * 0.6f, a * 0.12f, surf_z);
             }
         }
     }
@@ -513,10 +529,8 @@ void SSLightningRender::render()
     const F32 warp = llclamp((F32)warp_setting, 0.f, 3.f);
     static LLCachedControl<F32> bead_setting(gSavedSettings, "SSAtmoLightningBead", 0.35f);
     const F32 bead = llclamp((F32)bead_setting, 0.f, 0.8f);
-    static LLCachedControl<F32> aura_setting(gSavedSettings, "SSAtmoLightningAura", 1.f);
+    static LLCachedControl<F32> aura_setting(gSavedSettings, "SSAtmoLightningAura", 0.f);
     const F32 aura_dial = llclamp((F32)aura_setting, 0.f, 10.f);
-    static LLCachedControl<F32> hollow_setting(gSavedSettings, "SSAtmoLightningAuraHollow", 0.9f);
-    const F32 hollow_dial = llclamp((F32)hollow_setting, 0.f, 1.f);
     static LLCachedControl<F32> pull_setting(gSavedSettings, "SSAtmoLightningAuraPull", 1.f);
     const F32 pull_dial = llclamp((F32)pull_setting, 0.f, 2.f);
     static LLCachedControl<F32> soft_setting(gSavedSettings, "SSAtmoLightningSoftDepth", 1.f);
@@ -724,9 +738,9 @@ void SSLightningRender::render()
         pushQuad(a0, a1, b0, b1);
     };
 
-    // An aura / flare / fire disc: pulled along the live view ray toward the camera with its radius rescaled so it projects exactly where the true point does, the anchor depth and the per-corner height above the surface riding the vertices for the shader's fades, the strike point in the disc's own uv frame for the aggregate hollow.
-    auto disc = [&](const SSStrike& s, const LLVector3& center_true, F32 r_right, F32 r_up, F32 surf_z,
-                    const LLColor3& tint, F32 bright, F32 a8, F32 hollow_eff, F32 hollow_r_m, F32 q, F32 soft_m)
+    // An aura / flare / fire disc: pulled along the live view ray toward the camera with its radius rescaled so it projects exactly where the true point does, the anchor depth and the per-corner height above the surface riding the vertices for the shader's fades.
+    auto disc = [&](const LLVector3& center_true, F32 r_right, F32 r_up, F32 surf_z,
+                    const LLColor3& tint, F32 bright, F32 a8, F32 q, F32 soft_m)
     {
         LLVector3 right, up;
         if (!billboardAxes(center_true, cam, right, up)) return;
@@ -741,14 +755,10 @@ void SSLightningRender::render()
         F32 sc = 1.f;
         const F32 anchor = (drawnPoint(center_true, cam, sc) - cam) * cam_at;
 
-        const LLVector3 to_ground = s.mGround - center_true;
-        const LLVector2 uv_g((to_ground * right) / r_right, (to_ground * up) / r_up);
-
         Vertex v;
         v.mCol = tint8(tint, a8);
-        v.mUV1 = uv_g;
-        v.mCtl.set(bright, hollow_eff, soft_m, 2.f + 0.5f * llclamp(q, 0.f, 1.f));
-        const F32 hr = hollow_r_m / llmax(r_up, 0.01f);
+        v.mUV1.set(0.f, 0.f);
+        v.mCtl.set(bright, 0.f, soft_m, 2.f + 0.5f * llclamp(q, 0.f, 1.f));
 
         Vertex c[4];
         for (S32 i = 0; i < 4; ++i)
@@ -759,7 +769,7 @@ void SSLightningRender::render()
             c[i].mPos = center + right * (rr * sx) + up * (ru * sy);
             c[i].mUV.set((i & 1) ? 1.f : 0.f, (i & 2) ? 1.f : 0.f);
             const F32 z_true = center_true.mV[VZ] + right.mV[VZ] * r_right * sx + up.mV[VZ] * r_up * sy;
-            c[i].mAux.set(anchor, (z_true - surf_z) / llmax(r_up, 0.01f), hr);
+            c[i].mAux.set(anchor, (z_true - surf_z) / llmax(r_up, 0.01f), 0.f);
         }
         pushQuad(c[0], c[1], c[2], c[3]);
         mStats.mDiscs++;
@@ -923,30 +933,33 @@ void SSLightningRender::render()
                         const LLVector3 pa = parent.mPos + drift_off * (da * da * (3.f - 2.f * da));
                         const LLVector3 pb = node.mPos + drift_off * (db * db * (3.f - 2.f * db));
 
-                        F32 wa = parent.mWidth * CORE_WIDTH_M * dist_scale * (1.f + 0.9f * wa_amber);
-                        F32 wb = node.mWidth * CORE_WIDTH_M * dist_scale * (1.f + 0.9f * wb_amber);
+                        // <SS:Nexii> The amber foot's widening belongs to the GLOW alone: core and sheath fan out toward the attachment, but the plasma copy below keeps the bare channel width, so the foot's triangle fades out with the glow instead of printing itself as a triangle of dissolving cloud.
+                        F32 wa_thin = parent.mWidth * CORE_WIDTH_M * dist_scale;
+                        F32 wb_thin = node.mWidth * CORE_WIDTH_M * dist_scale;
                         if (node.mCrawl)
                         {
-                            wa = llmax(llmin(wa, 0.5f * CORE_WIDTH_M * dist_scale), ground_px_floor);
-                            wb = llmax(llmin(wb, 0.5f * CORE_WIDTH_M * dist_scale), ground_px_floor);
+                            wa_thin = llmax(llmin(wa_thin, 0.5f * CORE_WIDTH_M * dist_scale), ground_px_floor);
+                            wb_thin = llmax(llmin(wb_thin, 0.5f * CORE_WIDTH_M * dist_scale), ground_px_floor);
                         }
+                        const F32 wa = node.mCrawl ? wa_thin : wa_thin * (1.f + 0.9f * wa_amber);
+                        const F32 wb = node.mCrawl ? wb_thin : wb_thin * (1.f + 0.9f * wb_amber);
 
                         const F32 v_unit = 2.f * CORE_WIDTH_M * dist_scale;
                         const F32 v0 = parent.mPathM / v_unit;
                         const F32 v1 = node.mPathM / v_unit;
 
-                        // The node's pop: its stretch of channel discards at its own coherent moment in the window, sped by the dissolve dial; from that instant its plasma phase runs.
+                        // <SS:Nexii> The node's pop times still schedule when each stretch's plasma phase begins, but the pop itself belongs to the EMBERS fallback alone now: with the plasma on, the wide glow - core, sheath, the amber fan at the foot - simply FADES on its own stroke decay while the thin plasma copy dissolves over it. Discarding the core too is what broke every restrike: the fresh stroke's own segments started popping 50ms in, so it shredded while still at full brightness instead of flashing as a solid bolt over the old wisps.
                         const F32 pop_b = SSDissolve::LAG_S + node.mThr * span_s;
                         const F32 pop_a = SSDissolve::LAG_S + parent.mThr * span_s;
                         F32 seg = 1.f;
                         F32 ember = 0.f;
-                        if (dissolve > 0.f)
+                        if (embers_on)
                         {
                             const F32 age = since - pop_b;
                             if (age >= 0.f)
                             {
                                 seg = llclamp(1.f - age * 90.f, 0.f, 1.f);
-                                if (embers_on) ember = llclamp(1.f - age / (SSDissolve::EMBER_S / dissolve), 0.f, 1.f);
+                                ember = llclamp(1.f - age / (SSDissolve::EMBER_S / dissolve), 0.f, 1.f);
                             }
                         }
 
@@ -976,8 +989,7 @@ void SSLightningRender::render()
                             va.mUV1.set(bead_mul, 0.f);
                             vb.mUV1.set(bead_mul, 0.f);
 
-                            // The sheath: dimmer, wide, plain profile, dropped once the plasma has taken over this stretch.
-                            if (!(u_a > 0.15f && u_b > 0.15f))
+                            // The sheath: dimmer, wide, plain profile - the glow gradient, which fades with its stroke's own decay; only the thin plasma copy dissolves.
                             {
                                 va.mCol = tint8(glow_a * 0.22f, 0.3f);
                                 vb.mCol = tint8(glow_b * 0.22f, 0.3f);
@@ -1014,13 +1026,12 @@ void SSLightningRender::render()
                             mStats.mSegments++;
                         }
 
-                        // <SS:Nexii> The plasma is the CHANNEL DISSOLVING, not a second object laid over it: the same ribbon geometry, the same glowing bolt, taken away by an animated alpha mask in the shader while a flowmap curls what is left. So the width barely moves - a constant 1.4x (1.2x on the crawl) to give the flow a little room to carry material past the core's own edge, against the old 2x-to-6x growth. That growth was the whole fault: widening the strip with age turned the dissolve into a wave spreading out along the bolt, hollow behind its own front, when what the recorded frames show is the column staying where it was and coming apart in place. Everything that makes it read as plasma now happens in the mask and the flow, and both need a strip no wider than the thing they are eating. doc/atmo_magic_lightning_strike.md
+                        // <SS:Nexii> The plasma is the THIN CHANNEL DISSOLVING, not a second object laid over it: the same ribbon geometry at the bare channel width - no growth, not even the amber fan - taken away by an animated alpha mask in the shader while a flowmap curls what is left. The old 2x-to-6x growth was the original wave fault, and even the 1.4x that replaced it put dissolving cloud into the foot's widening triangle; the blobs belong ON the core, and the wide glow around it is the sheath's to fade. Everything that makes it read as plasma happens in the mask and the flow, and both need a strip no wider than the thing they are eating. doc/atmo_magic_lightning_strike.md
                         if (is_plasma && (u_a > 0.f || u_b > 0.f))
                         {
-                            const F32 tau_a = lerp(0.20f, 0.32f, wa_amber);
-                            const F32 tau_b = lerp(0.20f, 0.32f, wb_amber);
-                            const F32 pb_a = (u_a > 0.f) ? I * scale_k * 0.5f * expf(-llmax(0.f, since - SSDissolve::LAG_S) / tau_a) * plasma_dial * occ : 0.f;
-                            const F32 pb_b = (u_b > 0.f) ? I * scale_k * 0.5f * expf(-llmax(0.f, since - SSDissolve::LAG_S) / tau_b) * plasma_dial * occ : 0.f;
+                            // <SS:Nexii> The wisps keep nearly their full glow to the end - the shader's mask is what kills them, not a fade. A ~30% slide over the plasma phase is all the cooling the eye needs; the old exp(-t/0.2s) had the copy at a fifth of its brightness before the mask had eaten half of it, which read as the whole column fading together. Per-end u so the amber foot, whose phase runs slower, cools slower with it.
+                            const F32 pb_a = (u_a > 0.f) ? I * scale_k * 0.5f * (1.f - 0.30f * u_a) * plasma_dial * occ : 0.f;
+                            const F32 pb_b = (u_b > 0.f) ? I * scale_k * 0.5f * (1.f - 0.30f * u_b) * plasma_dial * occ : 0.f;
                             if (pb_a > 0.01f || pb_b > 0.01f)
                             {
                                 // Which way world up runs in the strip's own frame, so the shader's convection lifts the mask along the real vertical instead of along whichever way the quad happens to be wound. +1 when the strip runs straight down, 0 where it lies flat and convection has nowhere to go along it.
@@ -1036,14 +1047,14 @@ void SSLightningRender::render()
                                 vb.mAux.set(copy_seed, wb_amber, llmax(u_b, 0.001f));
                                 va.mCtl.set(pb_a, plasma_lod, warp, 0.f);
                                 vb.mCtl.set(pb_b, plasma_lod, warp, 0.f);
-                                const F32 grow = node.mCrawl ? 1.2f : 1.4f;
+                                // The bare channel width, no growth at all: the blobs form along the thin core and stay there, dissolving in place.
                                 if (node.mCrawl)
                                 {
-                                    groundRibbon(pa, pb, wa * grow, wb * grow, v0, v1, va, vb, start_side, end_side);
+                                    groundRibbon(pa, pb, wa_thin, wb_thin, v0, v1, va, vb, start_side, end_side);
                                 }
                                 else
                                 {
-                                    ribbon(pa, pb, wa * grow, wb * grow, v0, v1, va, vb, start_side, end_side);
+                                    ribbon(pa, pb, wa_thin, wb_thin, v0, v1, va, vb, start_side, end_side);
                                 }
                                 mStats.mPlasma++;
                             }
@@ -1238,7 +1249,7 @@ void SSLightningRender::render()
             }
         }
 
-        // <SS:Nexii> The aura and the flare on the same discs: violet St. Elmo's haze breathing in from nothing as the charge gathers, ring-hollow toward the point, held through the leader; at contact the amber flare rises in on top of it (the sum, no palette switch), a power-law spike at the attachment, fading with the bolt one decay behind it while the violet dies under it in 60ms.
+        // <SS:Nexii> The aura and the flare on the same discs: violet St. Elmo's haze breathing in from nothing as the charge gathers (off by default - the aura dial ships at 0), held through the leader; at contact the amber flare rises in on top of it (the sum, no palette switch), a power-law spike at the attachment, fading with the bolt one decay behind it while the violet dies under it in 60ms. The flare has its own dial and survives an aura of zero, so the amber ground-strike glow stays.
         const bool aura_visible = (fx.mHeld > 0.005f || strike.mHit > 0.005f) && (!ground || fx.mGroundOn);
         if (aura_visible)
         {
@@ -1247,7 +1258,6 @@ void SSLightningRender::render()
             const F32 env_c = envC * envC * (3.f - 2.f * envC) * powf(fx.mHeld, 1.5f);
             const F32 grow_t = llclamp(strike.mChargeHeld / 0.6f, 0.f, 1.f);
             const F32 grow = 0.30f + 0.70f * grow_t * grow_t * (3.f - 2.f * grow_t);
-            const F32 hollow_r = 2.f * ground_scale;
             const S32 patches = (gd < 40.f) ? 2 : SSGroundShow::AURA_PATCHES;
 
             for (S32 i = 0; i <= patches; ++i)
@@ -1265,7 +1275,6 @@ void SSLightningRender::render()
                 const F32 m = llmax(1.f, llmax(rgb_sum.mV[0], llmax(rgb_sum.mV[1], rgb_sum.mV[2])));
                 const LLColor3 tint = rgb_sum * (1.f / m);
                 const F32 q = A_h / (A_c + A_h + 1.e-3f);
-                const F32 hollow_eff = hollow_dial * (1.f - q);
 
                 LLVector3 center_true;
                 F32 r_right, r_up, surf;
@@ -1289,7 +1298,7 @@ void SSLightningRender::render()
                 if (!ground) surf = center_true.mV[VZ] - 100.f * r_up;
                 const F32 d = (center_true - cam).magVec();
                 const F32 soft_m = (soft_on ? llmax(2.f, 0.5f * r_up) * llmax(1.f, d / 250.f) * soft_dial : 0.f);
-                disc(strike, center_true, r_right, r_up, surf, tint, m, 0.25f, hollow_eff, hollow_r, q, soft_m);
+                disc(center_true, r_right, r_up, surf, tint, m, 0.25f, q, soft_m);
             }
         }
 
@@ -1312,7 +1321,7 @@ void SSLightningRender::render()
                 const LLColor3 tint = (f > 0.6f) ? mix3(FIRE_1, FIRE_0, (f - 0.6f) / 0.4f) : mix3(FIRE_2, FIRE_1, f / 0.6f);
                 const F32 d = (center_true - cam).magVec();
                 const F32 soft_m = (soft_on ? llmax(1.f, 0.5f * R) * llmax(1.f, d / 250.f) * soft_dial : 0.f);
-                disc(strike, center_true, R, R, fb.mPos.mV[VZ], tint, 1.2f * f * I * fire_dial, 0.35f, 0.f, 0.f, 0.25f, soft_m);
+                disc(center_true, R, R, fb.mPos.mV[VZ], tint, 1.2f * f * I * fire_dial, 0.35f, 0.25f, soft_m);
             }
         }
     }

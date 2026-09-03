@@ -5686,6 +5686,19 @@ void LLPipeline::renderDebug()
         SSRainShadowMap::getInstance()->renderDebug();
     }
 
+    // <SS:Nexii> Atmo Magic rain columns: a line per spawn cell traced from the ground it
+    // would land on up toward the weather source - cyan the fall reaches the ground, red a
+    // shelter above stops the line short, violet a landing past the deck top, amber a
+    // column no capture reached. A setting rather than a debug mask: an authoring aid
+    // toggled from the Effects & LOD floater's Rain pane, like the celestial overlay.
+    {
+        static LLCachedControl<bool> rain_trace_debug(gSavedSettings, "SSAtmoRainTraceDebug", false);
+        if (rain_trace_debug)
+        {
+            SSRainShadowMap::getInstance()->renderColumnTrace();
+        }
+    }
+
     // <SS:Nexii> Atmo Magic celestial debug: a ray and a label per body in the sky. Toggled from the System Designer rather than from Render Metadata, because it is an authoring aid for the floater beside it - hence a setting rather than a debug mask.
     {
         static LLCachedControl<bool> celestial_debug(gSavedSettings, "SSAtmoPlanetaryDebugOverlay", false);

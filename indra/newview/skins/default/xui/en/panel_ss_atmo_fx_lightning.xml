@@ -524,7 +524,7 @@
      name="R_ground_strike" label="Reset group"
      tool_tip="Reset every setting in this section to its default">
         <button.commit_callback function="SSAtmo.ResetGroup"
-         parameter="SSAtmoLightningAmberZone,SSAtmoLightningBead,SSAtmoLightningPlasma,SSAtmoLightningPlasmaWarp,SSAtmoLightningLateRestrike,SSAtmoLightningAura,SSAtmoLightningAuraHollow,SSAtmoLightningAuraPull,SSAtmoLightningSoftDepth,SSAtmoLightningHitFlare,SSAtmoLightningGroundFire,SSAtmoLightningGroundFireLife,SSAtmoLightningSteam,SSAtmoLightningSteamHold,SSAtmoLightningFireLight,SSAtmoLightningCrawl,SSAtmoLightningCrawlWet,SSAtmoLightningSparkSpread" />
+         parameter="SSAtmoLightningAmberZone,SSAtmoLightningBead,SSAtmoLightningPlasma,SSAtmoLightningPlasmaWarp,SSAtmoLightningLateRestrike,SSAtmoLightningAura,SSAtmoLightningAuraPull,SSAtmoLightningSoftDepth,SSAtmoLightningHitFlare,SSAtmoLightningGroundFire,SSAtmoLightningGroundFireLife,SSAtmoLightningSteam,SSAtmoLightningSteamHold,SSAtmoLightningFireLight,SSAtmoLightningCrawl,SSAtmoLightningCrawlWet,SSAtmoLightningSparkSpread" />
     </button>
 
     <text
@@ -676,31 +676,6 @@
       name="D_SSAtmoLightningAura" label="D"
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoLightningAura" />
-    </button>
-    <text
-      follows="left|top" layout="topleft"
-      left="12" top_pad="8" height="16" width="122"
-      name="T_SSAtmoLightningAuraHollow"
-      tool_tip="How far the aura fades toward the strike point so it reads as a ring around the attachment, filled in by the flare at contact">
-        Aura hollow:
-    </text>
-    <slider_bar
-      control_name="SSAtmoLightningAuraHollow" name="SB_SSAtmoLightningAuraHollow"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="136" min_val="0" max_val="1" increment="0.05"
-      tool_tip="How far the aura fades toward the strike point so it reads as a ring around the attachment, filled in by the flare at contact" />
-    <spinner
-      control_name="SSAtmoLightningAuraHollow" name="S_SSAtmoLightningAuraHollow"
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" min_val="0" max_val="1" increment="0.05" decimal_digits="2"
-      tool_tip="How far the aura fades toward the strike point so it reads as a ring around the attachment, filled in by the flare at contact" />
-    <button
-      follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="20" width="24"
-      name="D_SSAtmoLightningAuraHollow" label="D"
-      tool_tip="Reset to the default value">
-        <button.commit_callback function="ResetControl" parameter="SSAtmoLightningAuraHollow" />
     </button>
     <text
       follows="left|top" layout="topleft"

@@ -36,7 +36,7 @@
      left="0"
      min_height="120"
      min_width="300"
-     height="440"
+     height="500"
      width="384">
     <text
      follows="left|top" layout="topleft" left="12" top="8"
@@ -369,6 +369,27 @@
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoDropSparkle" />
     </button>
+
+    <!-- <SS:Nexii> The column trace: where the weather can actually reach. A checkbox rather than a dial because it has no tuning in it - it answers "can rain land here" by drawing the spawn columns the way the fall sees them. -->
+    <text
+     follows="left|top" layout="topleft" left="12" top_pad="12"
+     height="14" width="250" name="trace_label" font="SansSerifSmallBold">
+        Column Trace
+    </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_trace" label="Reset group"
+     tool_tip="Reset every setting in this section to its default">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoRainTraceDebug" />
+    </button>
+    <check_box
+     control_name="SSAtmoRainTraceDebug"
+     follows="left|top" layout="topleft" left="12" top_pad="6"
+     height="16" width="356" name="rain_trace_check"
+     label="Trace rain columns (where rain can land)"
+     tool_tip="One line per spawn column, from the ground it would land on up toward the weather source. Cyan: the fall reaches the ground. Red: something shelters it and the line stops there - the shelter catches the rain, the ground below stays dry. Violet: the landing sits above the weather deck's top, so no weather source exists over it at all. Amber: the rain shadow capture never mapped the column, so nothing here is known. Lines thin with distance - every 2nd column near you, every 4th further out, every 8th beyond that" />
     </panel>
     </scroll_container>
 </panel>

@@ -22,12 +22,12 @@
         Star Brightness
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="atmo_star_brightness_slider"
      tool_tip="How brightly the star field burns. Daylight washes it out on its own, so this only says what the stars read as once the sky has gone dark"
      show_text="false"
@@ -36,7 +36,7 @@
      increment="1"
      initial_value="250" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -50,7 +50,7 @@
      increment="1"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -66,7 +66,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -75,7 +75,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -104,12 +104,12 @@
         Sun-Planet Scale
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="sun_planet_scale_slider"
      show_text="false"
      min_val="0.01"
@@ -118,7 +118,7 @@
      initial_value="1.0"
      tool_tip="Compresses every Sun-Planet orbital distance for artistic effect - 1.0 is the authored distance, unmodified. Body sizes are untouched" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -145,12 +145,12 @@
         Planet-Moon Scale
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="planet_moon_scale_slider"
      show_text="false"
      min_val="0.01"
@@ -159,7 +159,7 @@
      initial_value="1.0"
      tool_tip="Compresses every Planet-Moon orbital distance - a moon that looms large in the sky without touching its authored size" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"

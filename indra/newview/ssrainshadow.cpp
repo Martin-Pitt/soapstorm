@@ -26,6 +26,7 @@
 #include "ssrainshadow.h"
 #include "ssatmomagic.h"
 #include "ssglreadback.h"
+#include "ssvolcloud.h"
 
 #include "llagent.h"
 #include "llfasttimer.h"
@@ -1134,6 +1135,178 @@ void SSRainShadowMap::renderDebug()
         gGL.end();
     }
 
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+}
+
+
+// <SS:Nexii> The trace walks the drops tier's spawn grid (ssprecipitation.cpp's TIER_SPEC
+// cell), so every line is a column the spawner actually samples - not a second grid that
+// could disagree with the one rain uses.
+static const F32 TRACE_CELL = 8.f;
+
+// Fixed draw radius, and where its distance fade starts. Like DEBUG_RANGE: the shelter
+// answer is local, and a dial would invite reading weather into columns the camera cannot
+// judge anyway.
+static const F32 TRACE_RANGE     = 256.f;
+static const F32 TRACE_FADE_FROM = 176.f;
+
+// How far up an open column's line climbs before it is cut - the shelter question was
+// answered on the ground long before this; a deck thousands of metres up must not turn
+// the near field into a forest of 2km lines.
+static const F32 TRACE_MAX_CLIMB = 512.f;
+
+// The stub a column with no answer gets: long enough to see, too short to claim anything
+// about the sky above it.
+static const F32 TRACE_STUB = 6.f;
+
+// Distance thins the comb: every 2nd column near the camera, every 4th inside the mid
+// band, every 8th to the edge. The far field's answer does not change per cell; drawing
+// it denser only costs.
+static const F32 TRACE_STRIDE_NEAR = 96.f;
+static const F32 TRACE_STRIDE_MID  = 192.f;
+
+// One line per spawn column: from the ground it would land on, up along the fall toward
+// the weather source. Cyan the fall reaches the ground; red something shelters it and the
+// line stops at the shelter; violet the landing sits past the deck top, where no weather
+// source exists at all (the spawner rejects those columns outright); amber a column the
+// capture never mapped, drawn as a stub because nothing here is known.
+void SSRainShadowMap::renderColumnTrace()
+{
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    if (!atmo->hasWeather()) return;
+
+    const LLVector3 dir = atmo->rainDirection();
+    const F32 climb = -dir.mV[VZ];
+    if (climb < 0.05f) return;
+
+    const LLVector3 up = dir * -1.f;
+    const bool sky = atmo->isSkyTrack();
+    const F32 sky_floor = atmo->groundZero();
+    const SSPrecipPreset& preset = atmo->preset();
+    const bool rises = preset.risesFromGround();
+
+    SSVolCloud* vol = SSVolCloud::getInstance();
+    const F32 deck_top = vol ? vol->precipTopZ() : -FLT_MAX;
+    const bool has_deck = deck_top > -FLT_MAX;
+    const F32 source_z = has_deck ? vol->precipBaseZ()
+                                  : LLViewerCamera::getInstance()->getOrigin().mV[VZ] + preset.mFallHi;
+
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const LLVector3d cam_global = gAgent.getPosGlobalFromAgent(cam);
+    const LLVector3d agent_origin_global = cam_global - LLVector3d(cam);
+
+    const F64 reach = (F64)TRACE_RANGE + TRACE_CELL;
+    const S32 c0x = (S32)floor((cam_global.mdV[VX] - reach) / TRACE_CELL);
+    const S32 c1x = (S32)floor((cam_global.mdV[VX] + reach) / TRACE_CELL);
+    const S32 c0y = (S32)floor((cam_global.mdV[VY] - reach) / TRACE_CELL);
+    const S32 c1y = (S32)floor((cam_global.mdV[VY] + reach) / TRACE_CELL);
+
+    beginWorldDebug();
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+
+    gGL.begin(LLRender::LINES);
+
+    for (S32 cy = c0y; cy <= c1y; ++cy)
+    {
+        const F64 center_y = (cy + 0.5) * TRACE_CELL;
+        for (S32 cx = c0x; cx <= c1x; ++cx)
+        {
+            const F64 center_x = (cx + 0.5) * TRACE_CELL;
+            const F64 dx = center_x - cam_global.mdV[VX];
+            const F64 dy = center_y - cam_global.mdV[VY];
+            const F64 d2 = dx * dx + dy * dy;
+            if (d2 > (F64)TRACE_RANGE * TRACE_RANGE) continue;
+
+            // Parity on the world cell indices, so a line keeps its slot as the camera
+            // pans instead of flickering at the band edges.
+            const U32 stride = (d2 < (F64)TRACE_STRIDE_NEAR * TRACE_STRIDE_NEAR) ? 2
+                             : (d2 < (F64)TRACE_STRIDE_MID  * TRACE_STRIDE_MID ) ? 4 : 8;
+            if (cx & (S32)(stride - 1)) continue;
+            if (cy & (S32)(stride - 1)) continue;
+
+            const F32 x = (F32)(center_x - agent_origin_global.mdV[VX]);
+            const F32 y = (F32)(center_y - agent_origin_global.mdV[VY]);
+
+            LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(
+                LLVector3(x, y, cam.mV[VZ]));
+
+            F32 ground;
+            if (sky)
+            {
+                ground = sky_floor;
+            }
+            else
+            {
+                const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(
+                    LLVector3(x, y, cam.mV[VZ]));
+                const F32 water = regionp ? regionp->getWaterHeight() : SSAtmoMagic::voidWaterHeight();
+                ground = llmax(land, water);
+            }
+
+            const LLVector3 base(x, y, ground);
+            const LLVector3 anchor = base + up * 0.5f;
+
+            LLVector3 hit;
+            bool on_water = false;
+            const bool mapped = resolveColumn(anchor, hit, on_water);
+            const F32 shelter = hit.mV[VZ] - ground;
+
+            LLColor4 col;
+            LLVector3 top = base;
+
+            if (!mapped)
+            {
+                col.set(1.f, 0.78f, 0.2f, 0.3f);
+                top = base + up * TRACE_STUB;
+            }
+            else if (shelter >= DEBUG_SHELTER_MIN)
+            {
+                top = hit;
+                col.set(1.f, 0.28f, 0.12f, 0.7f);
+
+                // A shelter past the deck top catches nothing - the spawner's own gate -
+                // and red would misreport it as wet.
+                if (has_deck && !rises && hit.mV[VZ] > deck_top)
+                {
+                    col.set(0.62f, 0.38f, 1.f, 0.45f);
+                }
+            }
+            else if (rises)
+            {
+                // Ground-risen weather appears where it lands, so an open column shows
+                // the riser band, not a fall from a deck it never touches.
+                col.set(0.3f, 0.85f, 1.f, 0.5f);
+                top = base + up * preset.mFallHi;
+            }
+            else if ((has_deck && ground > deck_top) || source_z <= ground + 1.f)
+            {
+                // Open, but this ground is over the weather deck: nothing falls on it
+                // however clear the sky above looks.
+                col.set(0.62f, 0.38f, 1.f, 0.35f);
+                top = base + up * TRACE_STUB;
+            }
+            else
+            {
+                col.set(0.3f, 0.85f, 1.f, 0.5f);
+                top = base + up * llmin((source_z - ground) / climb, TRACE_MAX_CLIMB);
+            }
+
+            const F32 dist = sqrtf((F32)d2);
+            if (dist > TRACE_FADE_FROM)
+            {
+                col.mV[3] *= llclamp(1.f - (dist - TRACE_FADE_FROM) / (TRACE_RANGE - TRACE_FADE_FROM),
+                                     0.f, 1.f);
+                if (col.mV[3] <= 0.01f) continue;
+            }
+
+            gGL.color4fv(col.mV);
+            gGL.vertex3fv(base.mV);
+            gGL.vertex3fv(top.mV);
+        }
+    }
+
+    gGL.end();
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
 }
 

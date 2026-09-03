@@ -29,7 +29,8 @@ uniform sampler2D diffuseMap;
 
 in vec2 vary_texcoord0;
 
-// <SS:Nexii> Per-puff STRUCTURE, not a finished colour any more: r the CPU builder's form term (facing and shade-through-the-deck, beam-flattened), a the edge-fade alpha; g and b spare.
+// <SS:Nexii> Per-puff STRUCTURE, not a finished colour any more: r the CPU builder's form term (facing and shade-through-the-deck, beam-flattened), g the buried depth - the fraction of the puff's own
+// column standing above it, 0 at the lid and 1 at the floor, which the storm gloom is graded over below - and a the edge-fade alpha; b spare.
 // The light it gets multiplied against arrives in the vary_ss_* varyings below - see the long note in ssVolCloudV.glsl.
 in vec4 vary_color;
 
@@ -48,7 +49,8 @@ in vec3 vary_ss_airlight;
 // term below so it rides the same sunlit colour, gloom and wrap.
 in float vary_ss_top;
 
-// The deck's storm gloom - per deck, so a uniform rather than a vertex channel.
+// The deck's storm gloom - what the weather's moisture says this deck is carrying, one number for the whole of it, so a uniform rather than a vertex channel. Graded over the buried depth where it is
+// spent below rather than applied flat; see the note there for why flat was the same as not applying it at all.
 uniform float ss_gloom;
 
 // A COPY of the scene depth - see mDepthCopy. Named depthMap because that is one of LLShaderMgr's RESERVED uniform names, and only reserved names can be bound as textures. bindTexture takes an index
@@ -674,7 +676,15 @@ void main()
     // dense deck kept 0.35 of an already-extinguished sun - the whole field fell back to ambient grey under the one sky it had to match. The band gates because a flat painting has only the
     // view angle to direct with; this deck directs with its geometry, and the glow spends itself on the transmitted fire below instead. Cloud light only: the airlight joins at the very end,
     // past every one of these multipliers, because none of them are its business - see the vary_ss_airlight notes.
-    vec3 puff_light = (vary_ss_amblit + vary_ss_sunlit * (vary_color.r + vary_ss_top)) * ss_gloom;
+    // <SS:Nexii> The deck's water content, spent as DEPTH rather than as a flat dim. ss_gloom is one number for the whole deck - what the weather's moisture says the cloud is carrying - and multiplying
+    // every fragment by it uniformly is what made Storm Darkening read as "nothing happened": it dimmed the lit tops and the dark bellies by the same factor, so the deck kept its exact shape and only
+    // its exposure moved, which the eye reads as no change at all. Graded over the buried depth instead (vary_color.g, the fraction of the puff's own column standing above it) it says what water in a
+    // cloud actually does - the lid is the surface the light lands on and keeps it, the belly is under a hundred metres of the stuff and loses it - so darkening a deck DEEPENS it. At ss_gloom 1 this is
+    // the identity, so a fair-weather sky is untouched. Grading the AMBIENT is the half that matters: the ambient is the larger term under any overcast and it was the flood that washed the CPU's
+    // per-puff column shading (vary_color.r) out - a lit top was a tenth brighter than its own base rather than the several times it should be. [interaction: storm darkening]
+    float gloom = mix(1.0, ss_gloom, vary_color.g);
+
+    vec3 puff_light = (vary_ss_amblit + vary_ss_sunlit * (vary_color.r + vary_ss_top)) * gloom;
 
     vec3 body = puff_light
               * mix(mix(SS_FORM_DARK, 1.0, wrap), 0.78, form_flat)

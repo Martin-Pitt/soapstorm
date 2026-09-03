@@ -147,18 +147,19 @@ void main()
     if (mode == 4)
     {
         // The sky flash: a soft disc of light where the discharge is, what the air and cloud around a channel actually do. Cubed rather than linear so it reads as a glow with a centre
-        // instead of a painted circle with an edge.
+        // instead of a painted circle with an edge. The height fade (aux.y, height above the strike's surface in radii) dissolves the lowest trunk disc around the ground, where its plane
+        // otherwise ends in a hard chord across the terrain; forks and sheets pass a surface far below and never fade.
         vec2 d = vary_texcoord0 * 2.0 - 1.0;
         float r = clamp(1.0 - length(d), 0.0, 1.0);
         float soft = r * r * r;
+        soft *= smoothstep(-0.35, 0.25, vary_aux.y);
         frag_color = vec4(col * bright * soft, ss_glow * a8 * soft);
         return;
     }
 
     if (mode == 2)
     {
-        // Aura, flare and fire discs. A soft skirt hollowed toward the STRIKE POINT (texcoord1, in this disc's own uv units, scaled by the hollow radius in aux.z) rather than toward each disc's
-        // own centre, so the five discs' sum is dim at the attachment instead of brightest there; the flare's share (the fraction of ctl.w) fills it back in with a power-law spike at the contact.
+        // Aura, flare and fire discs: a soft skirt, and the flare's share (the fraction of ctl.w) laid on with a power-law spike at the contact.
         // Three fades against the world: the per-vertex height above the surface (aux.y) dissolves the bottom edge instead of the depth test's hard chord; the anchor compare (aux.x, the true
         // strike point's view-axis depth) fades pixels where the scene sits well in front of the point - lenient, because at a grazing view the road under the disc is nearer than the point
         // without hiding it; and the soft-particle compare against the disc's own drawn depth softens whatever it still passes through.
@@ -168,12 +169,6 @@ void main()
         float r = 1.0 - rr;
 
         float skirt = pow(r, 1.5);
-        float hollow = vary_ctl.y;
-        if (hollow > 0.0 && vary_aux.z > 0.0)
-        {
-            float rh = length(d - vary_texcoord1) / vary_aux.z;
-            skirt *= 1.0 - hollow * (1.0 - smoothstep(0.0, 1.0, rh));
-        }
 
         // <SS:Nexii> Taken against the mode the dispatch actually chose, never fract(): the same interpolation slop puts a flare-less disc's 2.0 at 1.9999999, where fract returns 0.9999999 and hands a disc with NO flare share the full spike on those pixels.
         float q = clamp((vary_ctl.w - float(mode)) * 2.0, 0.0, 1.0);
@@ -237,7 +232,9 @@ void main()
         float wmul = 1.0 - b * 0.5 + b * bead;
         x /= max(wmul, 0.05);
 
-        float body = pow(max(0.0, 1.0 - x), mix(mix(4.0, 2.5, w), 1.7, u));
+        // The live core softens toward the amber foot; the plasma copy steepens straight back to the channel's own falloff, because the wisps come off the THIN core, not the glow gradient
+        // around it - the wide glow is the sheath's and the foot's to fade out.
+        float body = pow(max(0.0, 1.0 - x), mix(mix(4.0, 2.5, w), 4.0, smoothstep(0.0, 0.2, u)));
         if (ss_use_tex > 0.5)
         {
             vec4 t = texture(diffuseMap, vec2(clamp(0.5 + 0.5 * x, 0.0, 1.0), vary_texcoord0.y));
@@ -248,29 +245,37 @@ void main()
         mask = body * (0.6 + 0.4 * mix(1.0, bead, b));
 
         // <SS:Nexii> The dissolve, laid OVER the bolt that is already there rather than replacing it: the same glowing channel, taken away by an animated alpha mask read through a flow map.
-        // The flow is the physics. A vortex field - two noise channels read as a vector, the pair rolling slowly so the curl is alive rather than a fixed distortion - plus a steady convection
-        // term that lifts along whichever way world up runs in this strip's frame (texcoord1.y, +1 for a channel running straight down, 0 where it lies flat and there is nowhere along the strip
-        // to rise). That vector displaces the coordinate the mask is sampled at, and the displacement grows with age, so early on the column is barely disturbed and late on it is curling and
-        // climbing. It stays SMALL on purpose: what the recorded frames show is a column coming apart roughly where it stood, not a cloud thrown sideways.
-        // The mask is what makes it dissolve rather than fade. A threshold rising with age eats the noise field wherever it is thinnest, so the channel tears into stretches that each shrink and
-        // go out on their own, and the hot middle of the strip survives longest because the profile weights it. A plain alpha fade can only take the whole ribbon down together, which is what
-        // made the old widening version read as a wave running along the bolt with a void behind its front. doc/atmo_magic_lightning_strike.md
+        // The flow is the physics. A vortex field - two noise channels read as a vector, rolling so the curl is alive rather than a fixed distortion - plus a steady convection term that lifts
+        // along whichever way world up runs in this strip's frame (texcoord1.y, +1 for a channel running straight down, 0 where it lies flat and there is nowhere along the strip to rise).
+        // That vector displaces the coordinate the mask is sampled at, and the displacement grows with age, so early on the column is barely disturbed and late on it is curling and climbing.
+        // It stays SMALL on purpose: what the recorded frames show is a column coming apart roughly where it stood, not a cloud thrown sideways.
+        // The mask is what makes it dissolve rather than fade (the CPU only cools the brightness ~30% over the whole phase - the mask is the death). A threshold rising with age eats the noise
+        // field wherever it is thinnest, so the channel tears into small clumps that each shrink and go out on their own, and the hot middle of the strip survives longest because the profile
+        // weights it. The field itself BOILS like a cloud detail texture: three octaves scrolling against each other at different convection speeds, so at any fixed age the wisps churn and
+        // climb in place instead of freezing into a printed pattern. doc/atmo_magic_lightning_strike.md
         // Gated on the age alone, never on the LOD: the LOD only fades the fine octave, and a far bolt whose core has shrunk under a pixel would otherwise skip the mask entirely and leave a plasma copy that never dissolves at all.
         if (u > 0.0)
         {
-            vec2 fuv = vec2(across * 1.5, along * 0.55) + s;
-            float t = ss_time * 0.5;
-            float f1 = ss_vnoise(fuv + vec2(0.0, t));
-            float f2 = ss_vnoise(fuv + vec2(4.7, -2.3 - t));
+            // <SS:Nexii> Ribbon space made near-isotropic BEFORE any noise reads it: one along unit is two core widths where one across unit is half of one, so the old 0.55 stretched every cell ~5x down the channel - the texture pulled along the whole bolt that made the dissolve read as one wave. And it is read on the SIGNED across, not the folded |across| the profile uses: folding mirrored every wisp about the centreline, which the eye picks out instantly as a printed symmetry.
+            float sx = vary_texcoord0.x * 2.0 - 1.0;
+            vec2 fuv = vec2(sx * 6.0, along * 10.4) + s;
+            float t = ss_time;
+            float f1 = ss_vnoise(fuv * 1.3 + vec2(0.0, t * 0.5));
+            float f2 = ss_vnoise(fuv * 1.3 + vec2(4.7, -2.3 - t * 0.5));
             vec2 flow = vec2(f1 - 0.5, f2 - 0.5) * 2.0;
             flow.y += up_along * 1.25;
 
             vec2 muv = fuv + flow * (u * vary_ctl.z * 0.45);
-            float n = ss_vnoise(muv * 1.7) * 0.62
-                    + ss_vnoise(muv * 4.1 + 13.0) * 0.38 * lod;
-            n /= 0.62 + 0.38 * lod;
+            vec2 conv = vec2(0.0, up_along * t * 1.2);
+            float n = ss_vnoise(muv * 1.7 + conv * 0.8 + vec2(t * 0.11, 0.0)) * 0.45
+                    + ss_vnoise(muv * 3.9 + conv * 1.5 + vec2(-t * 0.19, 0.0) + 13.0) * 0.35
+                    + ss_vnoise(muv * 8.3 + conv * 2.3 + vec2(t * 0.27, 0.0) + 37.0) * 0.20 * lod;
+            n /= 0.80 + 0.20 * lod;
 
-            float keep = smoothstep(0.0, 0.22, n * (1.25 - 0.55 * across) - u * 0.80);
+            // The narrow band is what makes clumps: each wisp holds its edge until the threshold reaches it, then shrinks and goes out on its own. The terminal smoothstep exists only because
+            // the copy stops drawing at u 1: the few wisps the threshold never quite reaches must be gone before the geometry is.
+            float keep = smoothstep(0.0, 0.14, n * (1.25 - 0.55 * across) - u * 0.80);
+            keep *= smoothstep(1.0, 0.85, u);
             mask *= keep;
 
             vec3 air = ss_ramp4(RAMP_AIR0, RAMP_AIR1, RAMP_AIR2, RAMP_AIR3, u);

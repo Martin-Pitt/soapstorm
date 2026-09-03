@@ -1140,6 +1140,24 @@ namespace
         }
     }
 
+    // <SS:Nexii> The seed look's cloud image. A seeded cycle starts on Layered Clouds only when no seed sky carried a cloud image of its own: stock EEP noise imports as null (the applier maps null back to the stock map), so an all-null field means nothing authored arrived and the Atmo seed look may claim it - but a sky authored with a custom cloud image must carry it through the create intact.
+    void seedCloudNoiseFallback(SSAtmoEnvCloudDome& dome)
+    {
+        if (dome.mNoiseTexture.hasKeyframes())
+        {
+            for (const SSAtmoEnvKeyframe<LLUUID>& kf : dome.mNoiseTexture.keyframes())
+            {
+                if (kf.mValue.notNull()) return;
+            }
+        }
+        else if (dome.mNoiseTexture.valueAt(0.0).notNull())
+        {
+            return;
+        }
+        dome.mNoiseTexture =
+            SSAtmoEnvKeyframed<LLUUID>(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED));
+    }
+
     // The seeded default asset: a day cycle from whichever seed skies arrived, or plain defaults from none.
     SSAtmoEnvAsset buildSeededDefault(const SeedSkyCollector& skies,
                                       std::vector<std::pair<S32, LLUUID>>& out_pads)
@@ -1160,6 +1178,7 @@ namespace
             const LLSettingsSky::ptr_t& sky = skies.mSkies[arrived[0]];
             ground.mAtmosphere.fromSettingsSky(*sky);
             ground.mCloudDome.fromSettingsSky(*sky);
+            seedCloudNoiseFallback(ground.mCloudDome);
             seedSkyDiscs(ground, skies, out_pads);
             return def;
         }
@@ -1174,8 +1193,7 @@ namespace
             ground.mCloudDome.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
         }
 
-        ground.mCloudDome.mNoiseTexture =
-            SSAtmoEnvKeyframed<LLUUID>(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED));
+        seedCloudNoiseFallback(ground.mCloudDome);
 
         // <SS:Nexii> The day and night faces: the sun body translates from the sky where the sun stands highest, the moon body likewise.
         seedSkyDiscs(ground, skies, out_pads);
@@ -1456,8 +1474,7 @@ void SSAtmoEnvManager::applyTemplateToTrack(SSAtmoEnvAsset& asset, S32 track_ind
                 track.mCloudDome.addKeyframesFromSky(*skies.mSkies[slot], phase[slot]);
             }
 
-            track.mCloudDome.mNoiseTexture =
-                SSAtmoEnvKeyframed<LLUUID>(LLUUID(SSAtmoEnvCloudDome::CLOUD_TEXTURE_LAYERED));
+            seedCloudNoiseFallback(track.mCloudDome);
 
             // The tint reference: the Daylight slot when it arrived, the first arrival otherwise.
             const LLSettingsSky& reference =

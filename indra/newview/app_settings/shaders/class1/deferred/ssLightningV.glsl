@@ -32,8 +32,8 @@ uniform vec3 ss_squash;
 uniform vec3 ss_cam_pos;
 
 // Every quad of the pass arrives through one vertex buffer (sslightningrender.cpp builds it): position and texcoord0 as before, and beside the 8-bit tint two float attributes the
-// immediate-mode path could never carry - normal (the per-vertex data the fragment stage reads: noise seed / amber weight / plasma phase for ribbons, anchor depth / height above ground / hollow radius
-// for discs) and tangent (HDR brightness above white, a mode-specific weight, the depth soft width, and the fragment mode in w). texcoord1 carries the strike point in a disc's own uv frame.
+// immediate-mode path could never carry - normal (the per-vertex data the fragment stage reads: noise seed / amber weight / plasma phase for ribbons, anchor depth / height above ground for discs)
+// and tangent (HDR brightness above white, a mode-specific weight, the depth soft width, and the fragment mode in w).
 // doc/atmo_magic_lightning_strike.md
 in vec3 position;
 in vec2 texcoord0;

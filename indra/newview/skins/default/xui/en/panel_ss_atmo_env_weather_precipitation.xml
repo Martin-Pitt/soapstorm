@@ -54,7 +54,7 @@
      label="Precipitation reaches the ground"
      tool_tip="Off holds the sky exactly as authored - overcast, gloomy, thundering - with nothing falling out of it. On, moisture decides what falls and how hard, as before" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -70,7 +70,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -80,7 +80,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -113,12 +113,12 @@
         Precipitation
     </text>
     <combo_box
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-4"
      height="23"
-     width="280"
+     right="-174"
      name="precipitation_combo"
      allow_text_entry="false"
      tool_tip="Force what falls regardless of what the cube would pick; moisture still decides whether anything falls at all">
@@ -132,7 +132,7 @@
         <combo_box.item label="Wintry Mix" value="slush_mix" name="precip_slush_mix" />
     </combo_box>
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -148,7 +148,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -158,7 +158,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -201,7 +201,7 @@
          redundant. Sits in the spinner column so the row still lines up
          with its neighbours despite having no number of its own. -->
     <text
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="412"
      top_delta="6"

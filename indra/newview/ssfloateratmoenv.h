@@ -295,6 +295,33 @@ private:
 
     void drawRiseSetMarkers();
 
+    // <SS:Nexii> One column of the forecast strip - the weather cube resolved at that hour,
+    // reduced to exactly what the strip draws. Resolved on the same half-second poll the rest
+    // of the readouts refresh on rather than per frame: thirteen full resolves a frame is a lot
+    // of string building for a display that cannot change faster than an edit or a scrub, and
+    // the prose forecast it stands in for was already refreshed on that clock.
+    struct ForecastCell
+    {
+        F64 mPhase = 0.0;
+        S32 mHour = 0;
+        S32 mOkta = 0;
+        F32 mTemperatureC = 0.f;
+        F32 mWindSpeed = 0.f;
+        F32 mWindHeading = 0.f;
+        S32 mPrecipPercent = 0;
+        bool mFalling = false;
+        bool mThunder = false;
+        bool mDaylight = true;
+        std::string mPrecipType;
+    };
+    std::vector<ForecastCell> mForecastCells;
+
+    void refreshForecastStrip();
+
+    // <SS:Nexii> The hour-by-hour weather rack above the scrubber. Drawn, not built - see the
+    // comment on the definition for why, and the STRIP_* constants for the vertical rack.
+    void drawForecastStrip();
+
     void drawKeyframeGhosts();
 
     void drawSliderValueGhosts();

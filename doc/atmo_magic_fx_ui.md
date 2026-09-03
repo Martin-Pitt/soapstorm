@@ -16,7 +16,7 @@ Four tabs, split by **what a person is doing**, not by which subsystem owns the 
 
 | Tab | Holds | Why together |
 | --- | --- | --- |
-| Rain | Density, particle budget, impact toggles, drop opacity, ripple size/speed/opacity, the water shader switch, glow master, drop roundness, streak contrast, sparkle | Tuning rain is one continuous act. You change the density, then the opacity, then the splash that the new density made too loud. Splitting that across tabs means paging back and forth mid-adjustment. |
+| Rain | Density, particle budget, impact toggles, drop opacity, ripple size/speed/opacity, the water shader switch, glow master, drop roundness, streak contrast, sparkle, the column trace debug | Tuning rain is one continuous act. You change the density, then the opacity, then the splash that the new density made too loud. Splitting that across tabs means paging back and forth mid-adjustment. |
 | Lightning | Enable, strike triggers, pending-strike markers, 33 dials (the bolt's, then the ground strike's: amber zone, bead, plasma, late restrike, aura, flare, fire, crawl, sparks - `doc/atmo_magic_lightning_strike.md`), seasonal charge, bolt from the blue, hidden-ground-show skip, bolt texture | Nobody tunes lightning while tuning rain. This block alone is ~490 lines of markup and is the reason the floater outgrew one column. |
 | Clouds | The volumetric field's three switches and the debug overlay | New tab. See below. |
 | LOD | Precipitation's three distance tiers, the cloud field's density and puff budget | The one place to go when the weather costs more than the machine has. These are *how much to draw* decisions, and they belong together rather than each beside the look dials of the system it trims. |
@@ -148,6 +148,38 @@ Every mark goes through `squashScale()`, the same far-field compression
 kilometres behind the cloud they describe, and the far half of a 5km field never survives a
 2km far plane to be drawn at all. Lines are subdivided *before* they are squashed, because
 the squash is not linear along a segment and the band rings span kilometres.
+
+## The Rain tab's column trace
+
+`SSAtmoRainTraceDebug`, a checkbox on the Rain tab and a setting rather than a debug mask —
+the same arrangement as the celestial overlay. It is an authoring aid for the pane beside it
+("why is the ground dry under this roof"), not a Render Metadata view of a capture, so it
+did not belong in the Simulation floater's shadow-view combo or behind a debug mask bit.
+
+`SSRainShadowMap::renderColumnTrace()` (`pipeline.cpp` dispatches it) walks the drops tier's
+**spawn grid** — the same 8m world cells `spawnTierCell` samples — so every line is a column
+rain actually tests, not a second grid that could disagree with the one the spawner uses.
+Each line climbs from the ground the column would land on, along the fall direction,
+toward the weather source (the deck's base; a fall length above the ground when no deck is
+built), and the colour is the answer:
+
+| Colour | Meaning |
+| --- | --- |
+| Cyan | Open to the source: rain reaches the ground here |
+| Red | Something shelters the column; the line stops at the shelter, which catches the rain while the ground below stays dry |
+| Violet | The landing sits above the weather deck's top — no weather source exists over it, and the spawner rejects those columns outright |
+| Amber | The capture never mapped the column, so nothing is known; drawn as a stub because a full line would claim a sky it cannot see |
+
+The violet case exists because red would misreport it. A roof past the deck top is *dry* —
+red says "the shelter catches the rain", and up there nothing catches anything.
+
+Density thins with distance — every 2nd column inside 96m, every 4th inside 192m, every 8th
+to the 256m edge — with the parity taken on the world cell indices so a line keeps its slot
+as the camera pans. The stride bands and the radius are fixed constants: the shelter answer
+is local, and a dial would invite reading weather into columns the camera cannot judge.
+Ground-risen weather (riser presets) draws the riser band instead of a climb to the deck,
+since nothing falls from the deck for it — an open column is where the weather appears at
+grade.
 
 ## Group resets
 

@@ -73,3 +73,33 @@ still a puddle.
   being the sole answer to *whether* it rains was the one part of this that did not survive: see
   the `Falling` switch in doc/atmo_magic_env_ui.md, which suppresses precipitation without touching
   any of the cloud, gloom or lightning drives recorded above.
+
+## Follow-up: the gloom's drive and where it is spent (same branch)
+
+The audit above put the deck's gloom behind the wet band and the influence toggle, which was
+right, but left two things that between them made Storm Darkening read as doing nothing at all.
+
+**Convection was still a gate, and it counted twice.** `mGloom` multiplied by raw convection, and
+the auto darkening figure it multiplied (`deriveAutoBaseline`) was itself convection-led
+(`0.45 + 1.25c + 0.3mc`). A deck therefore had to be both soaked *and* violently rising before it
+lost a shade — which excludes the one sky that most needs it, since a nimbostratus is a moisture
+regime and not a convective one. The heaviest stratiform rain deck the system can build resolved
+to gloom 1.00, the same albedo as fair-weather cumulus. The drive is moisture-led now
+(`0.45 + 1.05m + 0.5c`), convection survives as a modifier (`turmoil`, 0.6→1.0) rather than a
+gate, and the deck's own **thickness** joins it (`depth`, 0.35→1.0 over the storm lid): the same
+water through 200 m and through a kilometre of cloud are not the same cloud, and "darker due to
+its contents" is water × depth. The extremes are unmoved — soaked and severe still lands on
+darkening 2.0, where the old curve topped out.
+
+**It was spent flat.** `ss_gloom` multiplied every fragment of the deck equally
+(`ssVolCloudF.glsl`), so it moved the exposure and left the shape alone, which the eye reads as no
+change. It is graded over a new per-puff **buried depth** now — `SSVolCloud::Puff::mBuried`, the
+fraction of a puff's own column standing above it, carried on the spare green vertex channel — so
+the lid keeps its light and the belly loses it, and darkening a deck *deepens* it. At gloom 1 the
+grade is the identity, so fair weather is untouched.
+
+The second half also fixes something that was not a gloom bug: the builder's per-puff column
+shading (`Puff::mForm`, the exponential shade through the cloud above each puff) was being washed
+out by the unshaded ambient, which is the larger term under any overcast. A lit top came out a
+tenth brighter than its own base instead of several times. Grading the ambient is what lets that
+existing algorithm show.

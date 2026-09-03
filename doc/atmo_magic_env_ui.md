@@ -217,6 +217,68 @@ A "None" entry on the type combo was rejected in its place: `presetNameForType()
 names through and falls back to the *active* preset, so a build that did not know the name would
 render rain anyway - where an unknown LLSD key is simply ignored and behaves as today.
 
+## The top chrome: forecast strip over the scrub
+
+The band between the Name field and the preview scrubber holds a forecast strip - one column per
+couple of hours across the whole cycle, laid out the way BBC Weather lays out an hourly forecast:
+a condition glyph at the head, then temperature, then what falls and how much of it, then a wind
+rose with the speed inside the ring and a barb on the bearing the air travels. Columns take their x
+from the scrubber's own rect, so they stand over the part of the timeline they describe and stay in
+step with the head.
+
+The one departure from that layout is the hour, which sits at the foot rather than heading the
+column. A printed forecast sets the time on top because the column is the whole story; here it is
+not - the scrubber below it is, and putting the label against the timeline it indexes lets the two
+be read as a single scale.
+
+Every mark is drawn from the viewer's own 2D primitives (`gl_circle_2d`, `gl_line_2d`,
+`gl_rect_2d`, `gl_triangle_2d`) - no textures and no font glyphs. A cloud is three discs over a
+flat rect, the sun a disc with eight rays, rain a leaning line with a dot at its foot, snow three
+crossed lines, hail a ring, the bolt two thin triangles. That keeps the set extensible without an
+art round-trip and keeps it legible at the 20-odd pixels a column can spare, which a downscaled
+texture would not be.
+
+It replaces a one-line prose forecast that used to sit in the same chrome. That line said one thing
+about one instant, which is the least useful thing to say about a *keyframed* weather cube: what an
+author is authoring is the shape of a day, and the shape is exactly what a sentence cannot show. The
+sentence itself is kept, moved down onto `Weather > Conditions` at the head of the very rows it
+summarises - it is only ever read while those numbers are in front of you, and it is redundant with
+the strip anywhere else.
+
+The strip is drawn in `SSFloaterAtmoEnv::drawForecastStrip()` rather than built as widgets. At
+thirteen columns of five marks each it would be some seventy display-only controls, none of which
+ever takes a click and every one of which would need repositioning by hand on each resize. The
+vertical rack lives in the `STRIP_*` constants; the floater XML reserves `STRIP_HEIGHT + STRIP_GAP`
+between the name row and the scrubber and nothing else, so moving a row means moving the scrubber's
+`top` with it.
+
+Two details are load-bearing. `STRIP_GAP` clears the lane `drawKeyframeGhosts()` writes value labels
+into when a row is hovered, which is why the wind row does not sit flush on the scrubber. And
+daylight comes from the track's own rise/set (`SSAtmoEnvPlanetaryResolver::riseSetPhases`, the same
+call the scrubber's sun and moon markers use), not from a hardcoded six-to-six day - a tilted or
+high-latitude world is the kind of thing this editor exists to author, and a strip that drew a noon
+sun through a polar winter would be lying about it.
+
+The step coarsens - hourly, two-hourly, three, four, six - until a column has room for its widest
+line, so a narrow floater thins the strip out instead of smearing it. It never goes finer than
+hourly: past that the columns are reading interpolation noise rather than weather.
+
+### Anchoring, while we were here
+
+The floater was widened at some point and the body was not re-fitted: the tab container kept a
+586px width that left roughly 200px of empty floater beside it, and the scrubber kept a fixed 530.
+Both are now anchored to the floater's right edge. Inside the panels the spinner-and-keyframe column
+is anchored right and the sliders carry a right anchor instead of a width, so the slack goes into
+the sliders rather than into a dead band - which is the same "one right-aligned spinner column"
+rule the panels were already built around, just made to survive a resize.
+
+The stretched sliders carry an explicit `left` and `right` rather than keeping their `left_pad`
+and gaining a `right`. `ParamValue<LLRect>::updateValueFromBlock` only prefers the two edges when
+*both* are provided, and `LLView::applyXUILayout` clears `rect.left` whenever a `left_delta` (which
+is what `left_pad` becomes) is in play - so `left_pad` plus `right` falls through to a branch that
+happens to work but is not the documented pairing. Every rewritten row resolves to the exact rect
+it had before at the design width; only the follows flags decide what happens after that.
+
 ## Precipitation types: two tiers
 
 There is one preset tier where there need to be two.

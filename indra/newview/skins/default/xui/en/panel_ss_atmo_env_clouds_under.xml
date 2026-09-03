@@ -46,12 +46,12 @@
         Base Height (m)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_base_height_slider"
      tool_tip="Height of the under deck's cloud base, metres above the track floor - negative hangs it below, which is the sky-build case. Greyed out under Auto, where the base rides the temperature season instead"
      show_text="false"
@@ -60,7 +60,7 @@
      increment="25"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -74,7 +74,7 @@
      increment="25"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -90,7 +90,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -99,7 +99,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -127,12 +127,12 @@
         Thickness (m)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_thickness_slider"
      tool_tip="How deep the under deck is at rest. Convection multiplies it up to fivefold, and the storm lid caps the result at a kilometre"
      show_text="false"
@@ -141,7 +141,7 @@
      increment="10"
      initial_value="10" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -155,7 +155,7 @@
      increment="10"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -171,7 +171,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -180,7 +180,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -208,12 +208,12 @@
         Coverage Scale
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_coverage_slider"
      tool_tip="Multiplies the coverage moisture derives, which fills fast then saturates. 1 is the meteorological answer; below it the deck keeps holes a wet cube would have closed, above it fills in early"
      show_text="false"
@@ -222,7 +222,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -236,7 +236,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -252,7 +252,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -261,7 +261,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -289,12 +289,12 @@
         Puff Density
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_puff_density_slider"
      tool_tip="Ceiling on one puff's opacity - how solid the under deck's individual clumps read before they merge. Low leaves airy translucent cumulus, high gives dense white cauliflower"
      show_text="false"
@@ -303,7 +303,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -317,7 +317,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -333,7 +333,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -342,7 +342,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -370,12 +370,12 @@
         Storm Darkening
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_storm_dark_slider"
      tool_tip="How hard convection chars the under deck's puffs toward storm grey, as an exponential on their albedo. Gated by the wet band and by the Weather Influence floater's storm darkening row"
      show_text="false"
@@ -384,7 +384,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -398,7 +398,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -414,7 +414,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -423,7 +423,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -460,7 +460,7 @@
      name="ucloud_field_image"
      tool_tip="Noise map the puffs are cut from; None picks one from the weather" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -476,7 +476,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -486,7 +486,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -524,7 +524,7 @@
      name="ucloud_detail_image"
      tool_tip="Finer map layered over it; None reuses the Sky Dome&apos;s own cloud image" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -540,7 +540,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -550,7 +550,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -588,7 +588,7 @@
      name="ucloud_profile_image"
      tool_tip="Vertical profile strip, base at the bottom edge, lid at the top. Red: how much the Noise Map counts (ramp to white for the anvil). Green: where the anvil carve may bite (keep the base black). Blue: torn cap band. Alpha: thick-base fill. None runs the built-in curves" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -604,7 +604,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -614,7 +614,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -653,7 +653,7 @@
      name="ucloud_noise_image"
      tool_tip="Convection noise map: shapes towers and pockets as convection rises and cuts holes in the sky when the air is dry and stable - a moist sky turns the same map into unbroken overcast. None leaves the deck to its plain cluster pattern" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -669,7 +669,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -679,7 +679,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -708,12 +708,12 @@
         Noise Scale
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_noise_scale_slider"
      tool_tip="Metres per tile of the convection noise map, as a multiplier on the tuned field scale. Smaller packs its towers and holes tighter together, larger spreads them into continent-scale weather. Does nothing with no noise map set"
      show_text="false"
@@ -722,7 +722,7 @@
      increment="0.01"
      initial_value="0.1" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -736,7 +736,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -752,7 +752,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -761,7 +761,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -789,12 +789,12 @@
         Image Mix
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_texture_mix_slider"
      tool_tip="Bias between the base image and the detail image on the under deck's puffs. 0 is the base map alone, 1 leans fully onto the detail map"
      show_text="false"
@@ -803,7 +803,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -817,7 +817,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -833,7 +833,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -842,7 +842,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -870,12 +870,12 @@
         Detail Scale
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_detail_scale_slider"
      tool_tip="Size of the fine noise octaves across a puff's surface. Small values give big soft lobes, large ones a crisp curdled surface"
      show_text="false"
@@ -884,7 +884,7 @@
      increment="0.01"
      initial_value="0.1" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -898,7 +898,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -914,7 +914,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -923,7 +923,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -951,12 +951,12 @@
         Boil Rate
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="ucloud_drift_rate_slider"
      tool_tip="How fast the under deck's own noise evolves - the boil in place, not the travel. Movement across the sky comes from the wind; 0 freezes the shapes where they stand"
      show_text="false"
@@ -965,7 +965,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -979,7 +979,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -995,7 +995,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -1004,7 +1004,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"

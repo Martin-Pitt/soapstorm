@@ -50,7 +50,8 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
                                                               const SSAtmoEnvWeatherInfluence& influence,
                                                               F32 moisture, F32 convection,
                                                               F32 temperature_c, F64 phase,
-                                                              F32 track_floor_z)
+                                                              F32 track_floor_z,
+                                                              bool auto_owns_geometry)
 {
     SSAtmoEnvCloudFieldState state;
 
@@ -64,6 +65,13 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
     {
         deriveAutoBaseline(moisture, convection, temperature_c, seasonal,
                            base_height, thickness, coverage_scale, auto_darkening);
+
+        // The under deck keeps its authored altitude and depth - see the auto_owns_geometry note on the declaration - and takes only the weather half of Auto.
+        if (!auto_owns_geometry)
+        {
+            base_height = field.mBaseHeightM.valueAt(phase);
+            thickness   = field.mBaseThicknessM.valueAt(phase);
+        }
     }
     else
     {
@@ -110,12 +118,17 @@ SSAtmoEnvCloudFieldState SSAtmoEnvCloudFieldResolver::resolve(const SSAtmoEnvClo
         ? auto_darkening
         : llclamp(field.mStormDarkening.valueAt(phase), 0.f, 2.f);
 
-    // <SS:Nexii> The puff gloom is the deck's half of "Storm Darkening" and now rides the same influence row the dome's churn does: toggled off, the deck keeps its authored albedo whatever the convection. The wet gate holds the sky modulator's rule here too - convection alone is clear-air turbulence, and a dry heatwave's thermals must not char fair-weather puffs.
+    // <SS:Nexii> The puff gloom is the deck's half of "Storm Darkening" and rides the same influence row the dome's churn does: toggled off, the deck keeps its authored albedo whatever the weather. The wet gate holds the sky modulator's rule - a dry heatwave's thermals must not char fair-weather puffs - but it is the ONSET and no longer the whole story, because what makes a cloud dark is what it is carrying, and what it is carrying is water and depth.
+    //
+    // CONVECTION used to multiply this outright, and it appeared twice - once inside the auto darkening figure and once here - so a deck had to be BOTH soaked and violently rising before it lost a shade. That rules out the one sky most in need of it: a nimbostratus is a moisture regime, not a convective one, and the heaviest rain deck this system can build came out at gloom 1.00, the same albedo as a fair-weather cumulus. It survives as a modifier - a churning deck is deeper and more ragged than a still one - never as a gate.
+    //
+    // DEPTH is the other half of "its contents": the same water spread through 200 m of cloud and through a kilometre of it are not the same cloud, and the deck already knows its own thickness by here. The two together are the mass of water the light has to cross.
     const F32 wet = llclamp((m - GLOOM_MOIST_MIN) / (GLOOM_MOIST_FULL - GLOOM_MOIST_MIN), 0.f, 1.f);
+    const F32 depth = 0.35f + 0.65f * llclamp(state.mThicknessM / DECK_LID_M, 0.f, 1.f);
+    const F32 turmoil = 0.6f + 0.4f * llclamp(convection, 0.f, 1.f);
     const F32 gloom_gate = (influence.mEnabled && influence.mStormDarkeningEnabled)
         ? llclamp(influence.mStormDarkeningStrength, 0.f, 1.f) : 0.f;
-    state.mGloom = llmax(0.03f, expf(-1.7f * darkening * llclamp(convection, 0.f, 1.f)
-                                     * wet * gloom_gate));
+    state.mGloom = llmax(0.03f, expf(-1.7f * darkening * wet * depth * turmoil * gloom_gate));
 
     state.mChurn = llclamp(convection, 0.f, 1.f);
     state.mHasAnvil = convection >= 0.75f;
@@ -136,7 +149,8 @@ void SSAtmoEnvCloudFieldResolver::deriveAutoBaseline(F32 moisture, F32 convectio
     const F32 m = llclamp(moisture, 0.f, 1.f);
     const F32 c = llclamp(convection, 0.f, 1.f);
 
-    out_darkening = 0.45f + 1.25f * c + 0.3f * m * c;
+    // <SS:Nexii> Moisture-led, matching the gloom's own drive downstream: a cloud is dark because of what it holds, so the water gets the large coefficient and the convection the small one. Was 0.45 + 1.25c + 0.3mc - convection-led, and multiplied by convection AGAIN at the point of use, which left every stratiform rain deck at its fair-weather albedo. The extremes are held: soaked and violently convective still lands on 2.0, exactly where the old curve topped out.
+    out_darkening = 0.45f + 1.05f * m + 0.5f * c;
 
     if (seasonal_altitude)
     {

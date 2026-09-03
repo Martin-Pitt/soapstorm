@@ -11,13 +11,26 @@
  height="580">
     <!-- <SS:Nexii> Atmo Magic: Weather > Conditions - the simulation inputs. What the air is doing, before anything falls out of it or discharges through it. Lightning and precipitation are outputs and live on their own sub-tabs. See doc/atmo_magic_env_ui.md. -->
 
+    <!-- <SS:Nexii> The prose forecast, in plain words, standing at the head of the very rows it is a summary of. It used to live in the floater's top chrome, above the tab container, on the reasoning that a summary should stay visible whichever tab is selected - but that space now carries the forecast STRIP (drawForecastStrip()), which says the same thing hour by hour and says it better, and a sentence about moisture and wind is only ever read while those are the numbers in front of you. Purely a display convenience, never persisted - see SSAtmoEnvWeatherResolver::generateForecastText(). -->
+    <text
+     follows="left|top|right"
+     layout="topleft"
+     left="10"
+     top="8"
+     height="16"
+     right="-10"
+     name="forecast_text"
+     font="SansSerifSmallBold">
+        -
+    </text>
+
     <!-- <SS:Nexii> Atmo Magic: the moisture/convection/temperature cube, AE-style keyframe rows - see ssatmoenvkeyframe.h and the FloatRow comment in ssfloateratmoenv.h. Units live in the parameter label rather than glued to the number. That is what lets every tab share one right-aligned spinner column instead of each number drifting by the width of its own suffix. -->
 
     <text
      follows="left|top"
      layout="topleft"
      left="10"
-     top="10"
+     top="34"
      height="14"
      width="110"
      name="moisture_label"
@@ -26,12 +39,12 @@
         Moisture
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="moisture_slider"
      tool_tip="How much water the air is carrying. It sets cloud cover in oktas, scales the deck's coverage, and picks the intensity band that falls - drizzle under 0.15, torrential past 0.85. It is also the wet gate every storm effect rides: darkening, deck gloom and lightning ramp across 0.25 to 0.60 and do nothing below it. Under 0.02 the sky reads clear and nothing falls at all"
      show_text="false"
@@ -40,7 +53,7 @@
      increment="0.001"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -54,7 +67,7 @@
      increment="0.001"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -70,7 +83,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -79,7 +92,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -107,12 +120,12 @@
         Convection
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="convection_slider"
      tool_tip="Vertical energy in the air, bucketed into Stable, Breezy, Turbulent and Severe at 0.25, 0.55 and 0.75. It grows the deck's thickness up to fivefold, opens the anvil past 0.6, drives the auto gusts, picks hail over rain past 0.95 and sets the lightning cadence - but always through moisture: convection over a dry sky is clear-air turbulence and fires nothing"
      show_text="false"
@@ -121,7 +134,7 @@
      increment="0.001"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -135,7 +148,7 @@
      increment="0.001"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -151,7 +164,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -160,7 +173,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -188,12 +201,12 @@
         Temperature (&#176;C)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="temperature_slider"
      tool_tip="Air temperature. It picks the precipitation family - blizzard or snow below -1C, freezing rain or sleet to 0C, wintry mix to 1.5C, rain or hail above - seasons an auto deck's base between a squashed 400m winter and a lifted 1.2km summer, stretches lightning intervals up to twentyfold by -15C, and decides whether lying snow grows or melts"
      show_text="false"
@@ -202,7 +215,7 @@
      increment="1"
      initial_value="-30" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -216,7 +229,7 @@
      increment="1"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -232,7 +245,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -241,7 +254,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -269,12 +282,12 @@
         Wind Heading (&#176;)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="wind_heading_slider"
      tool_tip="Compass bearing the wind blows TOWARD - 0 is north, 90 is east. An approaching storm arrives from the opposite bearing. The whole flow field, the slant of falling precipitation and the cloud drift ride this heading"
      show_text="false"
@@ -283,7 +296,7 @@
      increment="1"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -297,7 +310,7 @@
      increment="1"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -313,7 +326,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -322,7 +335,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -350,12 +363,12 @@
         Wind Speed (m/s)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="wind_speed_slider"
      tool_tip="Wind speed at ground level. The boundary-layer gradient scales it with altitude, so the dome band travels faster than the deck. It is also the forecast wording: still air below 1, a gentle breeze at 3, gale-force past 20"
      show_text="false"
@@ -364,7 +377,7 @@
      increment="1"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -378,7 +391,7 @@
      increment="1"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -394,7 +407,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -403,7 +416,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -445,12 +458,12 @@
         Gust Depth
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="gust_depth_slider"
      tool_tip="How hard the gusts pull against the mean wind. 0 is a steady flow; the felt speed clamps between a tenth and three times the mean however high this goes. Past 0.3 in freezing air it also lifts blowing snow, and 0.35 is one of the squall regime's tests"
      show_text="false"
@@ -459,7 +472,7 @@
      increment="0.05"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -473,7 +486,7 @@
      increment="0.05"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -489,7 +502,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -498,7 +511,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -526,12 +539,12 @@
         Gust Spacing (m)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="gust_length_slider"
      tool_tip="Metres between gust fronts - the wavelength of the noise the gusts ride. Short spacing hits as choppy slams, long spacing as slow surges rolling across the region"
      show_text="false"
@@ -540,7 +553,7 @@
      increment="10"
      initial_value="20" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -554,7 +567,7 @@
      increment="10"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -570,7 +583,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -579,7 +592,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -607,12 +620,12 @@
         Gust Veer (&#176;)
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="gust_veer_slider"
      tool_tip="How far the wind direction swings as a gust passes, degrees either side of the heading. A few degrees reads as a steady wind breathing; the top of the range as air that cannot decide where it is going"
      show_text="false"
@@ -621,7 +634,7 @@
      increment="1"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -635,7 +648,7 @@
      increment="1"
      decimal_digits="0" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -651,7 +664,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -660,7 +673,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"

@@ -68,7 +68,7 @@
      tool_tip="The glow around the channel - what gives lightning its colour. The core stays white unless Core Whiteness is wound down."
      name="lightning_color" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -84,7 +84,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -94,7 +94,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -123,12 +123,12 @@
         Core Whiteness
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="lightning_core_white_slider"
      show_text="false"
      min_val="0"
@@ -136,7 +136,7 @@
      increment="0.01"
      tool_tip="How white the channel core stays against the bolt colour. 1 is a white-hot channel in a coloured glow, as in nature; 0 colours the bolt all the way through." />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-2"
@@ -149,7 +149,7 @@
      max_val="1"
      increment="0.01" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="486"
      top_delta="-2"
@@ -165,7 +165,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="513"
      top_delta="0"
@@ -175,7 +175,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left="540"
      top_delta="0"
@@ -215,12 +215,12 @@
         Lightning Intensity
     </text>
     <slider
-     follows="left|top"
+     follows="left|top|right"
      layout="topleft"
-     left_pad="6"
+     left="126"
      top_delta="-2"
      height="18"
-     width="280"
+     right="-174"
      name="lightning_intensity_slider"
      tool_tip="Strike cadence with Auto off: a whisper near zero is about a strike a minute, full matches a Severe sky's 2 to 5 seconds. An override is an order, so this ignores the moisture gate auto mode obeys - though the temperature season still stretches the intervals"
      show_text="false"
@@ -229,7 +229,7 @@
      increment="0.01"
      initial_value="0" />
     <spinner
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="6"
      top_delta="-1"
@@ -243,7 +243,7 @@
      increment="0.01"
      decimal_digits="2" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="4"
      top_delta="-3"
@@ -259,7 +259,7 @@
      hover_glow_amount="0.15"
      label="" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"
@@ -268,7 +268,7 @@
      tool_tip="Add or remove a keyframe at the current preview time"
      label="&#9671;" />
     <button
-     follows="left|top"
+     follows="right|top"
      layout="topleft"
      left_pad="2"
      height="25"

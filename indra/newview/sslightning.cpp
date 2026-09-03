@@ -1249,6 +1249,16 @@ void SSLightning::finishChannel(SSStrike& strike)
         node.mPathM = node.mReachedAt;
         strike.mChannelLenM = llmax(strike.mChannelLenM, node.mReachedAt);
     }
+    // <SS:Nexii> The leader clock is normalised by the TRUNK's own length, never the longest chain: the ground crawl and the branch chains hang off the same cumulative walk, and dividing by their maximum put the trunk foot at a fraction well short of 1 - the visible leader touched the ground up to half a second before mT 0, then hung there dim while the clock traced chains nothing draws, and the hit flare and return stroke read as arriving late. With the foot at exactly 1, connection and first stroke are the same instant; a branch chain longer than the trunk clamps to 1 and completes at contact, and the crawl is gated to mT >= 0 anyway. mChannelLenM carries the same trunk length so the leader's duration is the distance the front actually traces.
+    F32 trunk_len = 0.f;
+    for (const SSStrikeNode& node : strike.mChannel)
+    {
+        if (node.mTrunk) trunk_len = llmax(trunk_len, node.mReachedAt);
+    }
+    if (trunk_len > 1.f)
+    {
+        strike.mChannelLenM = trunk_len;
+    }
     if (strike.mChannelLenM > 1.f)
     {
         for (SSStrikeNode& node : strike.mChannel)
@@ -1421,6 +1431,14 @@ void SSLightning::buildGroundShow(SSStrike& strike)
         sp.mLife = t_hit + 0.05f + 0.25f * ss_hash_unit(h ^ 10u);
         sp.mRadius = 0.05f + 0.05f * ss_hash_unit(h ^ 11u);
         sp.mSeed = h;
+
+        // <SS:Nexii> A third of the fan leaves steep: risers thrown up by the blast that visibly climb before gravity takes them back, where the flat ballistic roll alone sent every spark skimming to the ground. Slower over the ground, and living most of their own taller arc so the climb reads; the landing solve below already works off the raised launch speed.
+        if (ss_hash_unit(h ^ 21u) < 0.30f)
+        {
+            sp.mVZ *= 2.2f + 1.8f * ss_hash_unit(h ^ 22u);
+            sp.mVH *= 0.45f;
+            sp.mLife = (2.f * sp.mVZ / SPARK_GRAVITY) * (0.55f + 0.35f * ss_hash_unit(h ^ 23u));
+        }
 
         // The real surface crossing of the arc, solved once: a landing within reach of the launch
         // height keeps the spark; a roof edge or a wall (more than 2.5m of drop or rise) lets it fly off.
@@ -1660,9 +1678,10 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
 
     SSRandStream rng((U32)(strike.mFireAt * 3571.0) ^ 0x11feu);
 
-    // The leader's duration is the channel's own: total path length at a visible crawl speed, so
-    // a kilometre-spanning bolt takes clear time to trace while a nearby short one snaps. Sheet
-    // strikes have no channel and keep the plain roll.
+    // The leader's duration is the channel's own: the trunk's path length (what the front actually
+    // traces - see finishChannel's normalisation) at a visible crawl speed, so a kilometre-spanning
+    // bolt takes clear time to trace while a nearby short one snaps. Sheet strikes have no channel
+    // and keep the plain roll.
     const F32 leader_s = (strike.mChannelLenM > 1.f)
         ? llclamp(strike.mChannelLenM
                   / llmax(settingF("SSAtmoLightningLeaderSpeed", LEADER_SPEED_M_S), 100.f)
