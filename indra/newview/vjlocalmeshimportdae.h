@@ -36,6 +36,11 @@
 class LLLocalMeshObject;
 class LLLocalMeshFace;
 class LLLocalMeshFileData;
+class daeDatabase;
+class daeElement;
+class domSkin;
+class domNode;
+class domSource;
 
 /*
     NOTE: basically everything here is just a refactor of lldaeloader

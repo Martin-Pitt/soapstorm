@@ -1424,6 +1424,10 @@ void LLGLManager::asLLSD(LLSD& info)
     info["is_nvidia"] = mIsNVIDIA;
     info["is_intel"] = mIsIntel;
 
+    // <SS:Nexii>
+    info["has_bptc"] = mHasBPTC;
+    // </SS:Nexii>
+
     info["gl_renderer"] = mGLRenderer;
 }
 
@@ -1475,6 +1479,15 @@ void LLGLManager::initExtensions()
     {
         mHasAnisotropic = ExtensionExists("GL_EXT_texture_filter_anisotropic", gGLHExts.mSysExts);
     }
+
+    // <SS:Nexii> BPTC is core in GL 4.2 - the extension fallback is not defensive, RenderMaxOpenGLVersion and the context version walk-down in llwindowwin32.cpp can leave mGLVersion at 3.3 on hardware that fully supports BC7
+    mHasBPTC = mGLVersion >= 4.19f;
+    if (!mHasBPTC && gGLHExts.mSysExts)
+    {
+        mHasBPTC = ExtensionExists("GL_ARB_texture_compression_bptc", gGLHExts.mSysExts);
+    }
+    LL_INFOS("RenderInit") << "BPTC/BC7 texture compression: " << (mHasBPTC ? "supported" : "unsupported") << LL_ENDL;
+    // </SS:Nexii>
 
     // Misc
     glGetIntegerv(GL_MAX_ELEMENTS_VERTICES, (GLint*) &mGLMaxVertexRange);

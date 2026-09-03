@@ -104,6 +104,8 @@ list(APPEND llmath_SOURCE_FILES ${llmath_HEADER_FILES})
 
 add_library (llmath ${llmath_SOURCE_FILES})
 
+ss_hot_loop_codegen(llmath) # <SS:Nexii> see indra/cmake/00-Common.cmake
+
 target_link_libraries(llmath llcommon llmeshoptimizer ll::sse2neon)
 target_include_directories( llmath  INTERFACE   ${CMAKE_CURRENT_SOURCE_DIR})
 

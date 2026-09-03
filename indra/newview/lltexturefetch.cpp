@@ -66,6 +66,7 @@
 #include "fsassetblacklist.h" //For Asset blacklist
 #include "llviewermenu.h"
 #include "llviewernetwork.h" // <FS:Ansariel> OpenSim compatibility
+#include "ssbc7encodequeue.h" // <SS:Nexii> Squeeze
 
 LLTrace::CountStatHandle<F64> LLTextureFetch::sCacheHit("texture_cache_hit");
 LLTrace::CountStatHandle<F64> LLTextureFetch::sCacheAttempt("texture_cache_attempt");
@@ -2140,6 +2141,9 @@ bool LLTextureFetchWorker::doWork(S32 param)
         }
         else
         {
+            // <SS:Nexii> Squeeze - the BC7 encode hook sits HERE rather than in WRITE_TO_CACHE, for two reasons: DONE is also where a cache hit lands, so a texture that was already on disk still gets encoded, and the branch above is the loop back to INIT, so a texture that is still improving its discard is skipped instead of being encoded once per intermediate step. Refusal is silent to the fetcher by design - every rejection is counted and periodically logged by the queue, and the texture continues down the ordinary uncompressed path untouched.
+            ssBC7EncodeConsider(mID, mFTType, mRawImage, mDecodedDiscard, mHaveAllData, mNeedsAux, mInLocalCache);
+            // </SS:Nexii>
             mFetchTime = mFetchTimer.getElapsedTimeF32();
             return true;
         }

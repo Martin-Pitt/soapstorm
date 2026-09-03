@@ -5117,6 +5117,13 @@ void LLAgent::onCapabilitiesReceivedAfterTeleport()
         LL_WARNS("Teleport") << "called when agent region is null!" << LL_ENDL;
     }
 
+    // <SS:Nexii> Ghost temp attachment cleanup after a teleport
+    // Temp attachments from an experience that the new region does not allow
+    // are dropped by the simulator but can survive viewer-side as ghosts.
+    // Once the agent settled, remove them from root down through the linkset.
+    LLAppearanceMgr::instance().checkForGhostTempAttachments();
+    // </SS:Nexii>
+
     check_merchant_status();
 }
 

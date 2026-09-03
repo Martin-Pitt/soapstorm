@@ -85,6 +85,7 @@
 #include "llvocache.h"
 #include "llcorehttputil.h"
 #include "llstartup.h"
+#include "ssrocghost.h" // <SS:Nexii>
 
 #include <algorithm>
 #include <iterator>
@@ -501,6 +502,10 @@ LLViewerObject* LLViewerObjectList::processObjectUpdateFromCache(LLVOCacheEntry*
         objectp->setLastUpdateCached(true);
     }
     LLVOAvatar::cullAvatarsByPixelArea();
+
+    // <SS:Nexii> A region-object-cache ghost is a guess about what is standing here, so it must not behave as though it were the object. This sits on the common tail of EVERY rez from cache - the initial injection and the re-rez after the stock invisibility culling reaps it behind the camera - because the ghost state lives on the cache record, not on the object, and survives the object being thrown away. Costs one hash lookup guarded by an empty-set test on the non-ghost path. See doc/region_object_cache.md.
+    ssROCGhostSuppress(objectp);
+    // </SS:Nexii>
 
     return objectp;
 }

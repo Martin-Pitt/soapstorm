@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<panel
+ border="true"
+ follows="all"
+ height="480"
+ layout="topleft"
+ left="1"
+ top="1"
+ width="540"
+ label="Squeeze"
+ name="ss_squeeze">
+
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="28"
+     layout="topleft"
+     left="10"
+     top="8"
+     width="470"
+     wrap="true">
+        Keeps textures on the graphics card compressed instead of as raw pixels, using around a quarter of the video memory for the same picture.
+    </text>
+    <button
+     follows="left|top"
+     height="20"
+     label="?"
+     layout="topleft"
+     left="492"
+     top="8"
+     width="24"
+     name="ss_squeeze_help"
+     tool_tip="How it works, and when it falls back to the ordinary path">
+        <button.commit_callback
+         function="Pref.SSHelp"
+         parameter="SSSqueezeHelp"/>
+    </button>
+
+    <check_box
+     control_name="SSSqueezeEnabled"
+     follows="left|top"
+     height="16"
+     label="Use GPU-compressed textures"
+     layout="topleft"
+     left="10"
+     name="ss_squeeze_enabled"
+     tool_tip="Needs a graphics card supporting BC7, which means roughly anything from 2012 onward. Cards without it fall back to the normal texture path automatically."
+     top_pad="6"
+     width="490" />
+
+    <check_box
+     control_name="SSSqueezeBackgroundEncode"
+     follows="left|top"
+     height="16"
+     label="Build compressed textures in the background"
+     layout="topleft"
+     left="20"
+     name="ss_squeeze_background"
+     tool_tip="Uses spare processor cores while you are logged in, at low priority. Turning this off means only textures already compressed on disk are used."
+     top_pad="8"
+     width="480" />
+
+    <check_box
+     control_name="SSSqueezeNetworkPromote"
+     follows="left|top"
+     height="16"
+     label="Finish downloading textures so they can be compressed"
+     layout="topleft"
+     left="20"
+     name="ss_squeeze_network"
+     tool_tip="Compression only happens at full resolution, because a compressed copy of a blurry texture would be thrown away as soon as you walked closer. Partly downloaded textures are quietly completed while you are idle."
+     top_pad="8"
+     width="480" />
+
+    <!-- ===== Limits ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="14"
+     width="440">
+        Limits
+    </text>
+
+    <slider
+     control_name="SSBC7CacheSize"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="256"
+     layout="topleft"
+     label="Disk space for compressed textures (MB):"
+     label_width="270"
+     show_text="true"
+     left="20"
+     min_val="512"
+     max_val="16384"
+     name="SSBC7CacheSize"
+     tool_tip="Compressed copies sit alongside the normal texture cache rather than replacing it, so this is extra disk use. Least recently used textures are dropped only when the limit is approached."
+     top_pad="8"
+     width="490" />
+
+    <slider
+     control_name="SSSqueezeEncodeThreads"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1"
+     layout="topleft"
+     label="Processor cores to use (0 = automatic):"
+     label_width="270"
+     show_text="true"
+     left="20"
+     min_val="0"
+     max_val="16"
+     name="SSSqueezeEncodeThreads"
+     tool_tip="Compression runs at low priority so it should stay out of the way of the viewer itself. Lower this if you notice other programs slowing down."
+     top_pad="6"
+     width="490" />
+
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="16"
+     width="500">
+        Clearing the cache removes compressed textures too; they are rebuilt as you go.
+    </text>
+
+</panel>

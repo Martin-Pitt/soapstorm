@@ -1,0 +1,274 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<panel
+ border="true"
+ follows="all"
+ height="480"
+ layout="topleft"
+ left="1"
+ top="1"
+ width="540"
+ label="Region Cache"
+ name="ss_roc">
+
+    <!-- <SS:Nexii> The intro is deliberately one line: the whole explanation lives behind the (?) button, and a second line here would be drawn over the first checkbox rather than pushing it down. -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     height="16"
+     layout="topleft"
+     left="10"
+     top="8"
+     width="470"
+     wrap="true">
+        Remembers the lasting scenery of a region and paints it back when you return.
+    </text>
+    <button
+     follows="left|top"
+     height="20"
+     label="?"
+     layout="topleft"
+     left="492"
+     top="8"
+     width="24"
+     name="ss_roc_help"
+     tool_tip="Instead of waiting for a familiar place to stream in again. Click for what is remembered, and what is deliberately left alone.">
+        <button.commit_callback
+         function="Pref.SSHelp"
+         parameter="SSROCHelp"/>
+    </button>
+
+    <check_box
+     control_name="SSROCEnabled"
+     follows="left|top"
+     height="16"
+     label="Enable the region object cache"
+     layout="topleft"
+     left="10"
+     name="ss_roc_enabled"
+     tool_tip="Off by default while this is still being proven. Takes effect on the next region you enter."
+     top_pad="6"
+     width="490" />
+
+    <!-- ===== How quickly scenery is trusted ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="12"
+     width="440">
+        How quickly scenery is trusted
+    </text>
+    <button
+     follows="left|top"
+     height="20"
+     label="?"
+     layout="topleft"
+     left="492"
+     top_delta="-2"
+     width="24"
+     name="ss_roc_promotion_help"
+     tool_tip="Why time is the evidence, and why auto-return changes it">
+        <button.commit_callback
+         function="Pref.SSHelp"
+         parameter="SSROCPromotionHelp"/>
+    </button>
+
+    <slider
+     control_name="SSROCVisitHours"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="1"
+     increment="0.5"
+     layout="topleft"
+     label="Hours that count as a return visit:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="0.5"
+     max_val="12.0"
+     name="SSROCVisitHours"
+     tool_tip="Time you actually spend somewhere is evidence that it is worth remembering. Every this many hours in a region counts as visiting it again, so an evening at home is worth more than passing through."
+     top_pad="8"
+     width="490" />
+
+    <slider
+     control_name="SSROCPromoteVisits"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1"
+     layout="topleft"
+     label="Visits before caching:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="1"
+     max_val="10"
+     name="SSROCPromoteVisits"
+     tool_tip="How many visits an object must be present for before it is cached, when it is already known to be safe from parcel auto-return."
+     top_pad="6"
+     width="490" />
+
+    <slider
+     control_name="SSROCPromoteDaysUnproven"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1"
+     layout="topleft"
+     label="Days before caching the rest:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="1"
+     max_val="14"
+     name="SSROCPromoteDaysUnproven"
+     tool_tip="Separate days an object must be seen when it could not be shown to be safe from auto-return. Only real days count here, not hours in one sitting, because an object on a return timer can vanish between one hour and the next."
+     top_pad="6"
+     width="490" />
+
+    <slider
+     control_name="SSROCPromoteScore"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="2"
+     increment="0.05"
+     layout="topleft"
+     label="How permanent it must look:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="0.10"
+     max_val="0.90"
+     name="SSROCPromoteScore"
+     tool_tip="Lower values cache more of a region, including things that change more often. Higher values cache only the most obviously permanent scenery."
+     top_pad="6"
+     width="490" />
+
+    <check_box
+     control_name="SSROCRequireAutoReturnProof"
+     follows="left|top"
+     height="16"
+     label="Only cache objects that cannot be auto-returned"
+     layout="topleft"
+     left="20"
+     name="ss_roc_require_proof"
+     tool_tip="Strictest option. When off, objects that could be auto-returned are still cached once they have been seen on enough separate days."
+     top_pad="10"
+     width="490" />
+
+    <!-- ===== Limits ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="14"
+     width="440">
+        Limits
+    </text>
+    <button
+     follows="left|top"
+     height="20"
+     label="?"
+     layout="topleft"
+     left="492"
+     top_delta="-2"
+     width="24"
+     name="ss_roc_limits_help"
+     tool_tip="What each limit bounds, and what gets dropped first"
+     >
+        <button.commit_callback
+         function="Pref.SSHelp"
+         parameter="SSROCLimitsHelp"/>
+    </button>
+
+    <slider
+     control_name="SSROCMaxRecordsPerRegion"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1000"
+     layout="topleft"
+     label="Objects remembered per region:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="1000"
+     max_val="30000"
+     name="SSROCMaxRecordsPerRegion"
+     tool_tip="Thirty thousand covers a full region at its maximum object count. Lower it to spend less memory and disk on very dense regions."
+     top_pad="8"
+     width="490" />
+
+    <slider
+     control_name="SSROCMaxGhostsPerRegion"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="1000"
+     layout="topleft"
+     label="Objects drawn from memory on arrival:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="500"
+     max_val="30000"
+     name="SSROCMaxGhostsPerRegion"
+     tool_tip="How much of a remembered region may be painted back at once when you arrive. Lower it if arriving somewhere dense feels heavy."
+     top_pad="6"
+     width="490" />
+
+    <slider
+     control_name="SSROCDiskBudgetMB"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="256"
+     layout="topleft"
+     label="Disk space for the cache (MB):"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="256"
+     max_val="16384"
+     name="SSROCDiskBudgetMB"
+     tool_tip="A ceiling for the whole cache, not per region. Regions you have not visited for the longest are dropped first, and only when the limit is approached."
+     top_pad="6"
+     width="490" />
+
+    <slider
+     control_name="SSROCGhostTTL"
+     follows="left|top"
+     height="15"
+     can_edit_text="true"
+     decimal_digits="0"
+     increment="10"
+     layout="topleft"
+     label="Seconds to keep unconfirmed scenery:"
+     label_width="250"
+     show_text="true"
+     left="20"
+     min_val="30"
+     max_val="300"
+     name="SSROCGhostTTL"
+     tool_tip="Scenery drawn from memory that the simulator has not mentioned yet stops being drawn after this long. What was learned about it is kept either way."
+     top_pad="6"
+     width="490" />
+
+</panel>

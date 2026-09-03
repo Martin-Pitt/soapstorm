@@ -20,8 +20,7 @@ on:
     - cron: '00 03 * * *' # Run every day at 3am UTC
 env:
   AUTOBUILD_VARIABLES_FILE: ${{github.workspace}}/build-variables/variables
-  EXTRA_ARGS: -DUSE_FMODSTUDIO=ON -DUSE_KDU=ON --crashreporting --lto
-  build_secrets_checkout: ${{github.workspace}}/signing
+  EXTRA_ARGS: -DUSE_FMODSTUDIO=ON -DUSE_KDU=OFF --lto
   XZ_DEFAULTS: -T0
   FS_RELEASE_TYPE: Unknown
   platform: Unknown
@@ -34,10 +33,14 @@ env:
 jobs:
   build_matrix:
     strategy:
+      fail-fast: false
       matrix:
         os: ["ubuntu-24.04","windows-2022"]
         grid: ["sl"]
         variant: ["regular","avx"]
+        exclude:
+          - os: "macos-15"
+            variant: "avx"
     runs-on: ${{ matrix.os }}
     container: ${{ matrix.container_image }}
     outputs:
@@ -47,19 +50,107 @@ jobs:
       viewer_build: ${{ steps.version.outputs.viewer_build }}
       viewer_release_type: ${{ steps.version.outputs.viewer_release_type }}
     steps:
+      - name: Free Disk Space (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h /
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/aws-cli
+          sudo rm -rf /usr/local/aws-sam-cli
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /opt/hostedtoolcache/go
+          sudo rm -rf /opt/hostedtoolcache/Go
+          sudo rm -rf /opt/hostedtoolcache/Ruby
+          sudo rm -rf /opt/hostedtoolcache/Java_*
+          sudo rm -rf /opt/hostedtoolcache/PyPy
+          sudo rm -rf /usr/lib/jvm
+          sudo rm -rf /opt/google
+          sudo rm -rf /opt/microsoft
+          sudo rm -rf /var/lib/docker
+          sudo rm -rf /var/lib/containerd
+          sudo rm -rf /var/cache/apt/archives/*
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get clean
+          echo "=== Disk space after cleanup ==="
+          df -h /
+
+      - name: Free Disk Space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "=== Disk space before cleanup ==="
+          df -h /
+
+          # 1. Delete iOS / tvOS / watchOS / visionOS simulator runtimes (reclaims 30-50 GB)
+          sudo xcrun simctl erase all 2>/dev/null || true
+          sudo xcrun simctl runtime delete all 2>/dev/null || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Images/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Volumes/* || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Caches/* || true
+
+          # 2. Keep the active/default Xcode version, delete others (~20-50 GB)
+          ACTIVE_XCODE=$(xcode-select -p)
+          echo "Active Xcode developer directory: $ACTIVE_XCODE"
+          shopt -s nullglob
+          for xcode in /Applications/Xcode*.app; do
+            if [[ "$ACTIVE_XCODE" != *"$xcode"* ]]; then
+              echo "Deleting unused Xcode: $xcode"
+              sudo rm -rf "$xcode"
+            fi
+          done
+
+          # 3. Delete hosted toolcache (Go, Java, PyPy, Ruby, CodeQL, etc. ~10-15 GB)
+          sudo rm -rf /Users/runner/hostedtoolcache || true
+          sudo rm -rf /Users/runner/Library/Caches/* || true
+
+          # 4. Delete Android SDK / NDK (~10-15 GB)
+          sudo rm -rf /Users/runner/Library/Android || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /usr/local/share/android-sdk || true
+
+          # 5. Delete .NET / dotnet (~3-5 GB)
+          sudo rm -rf /usr/local/share/dotnet || true
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf ~/.dotnet || true
+
+          # 6. Delete Haskell / GHC / other tools
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/.ghcup || true
+          sudo rm -rf ~/.ghcup || true
+
+          # 7. Clean Homebrew cache
+          brew cleanup -s --prune=all 2>/dev/null || true
+          sudo rm -rf "$(brew --cache)" 2>/dev/null || true
+
+          echo "=== Disk space after cleanup ==="
+          df -h /
+
+      - name: Free Disk Space (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Remove-Item -Recurse -Force "C:\Program Files\dotnet" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\Program Files (x86)\Android" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows\Ruby" -ErrorAction SilentlyContinue
+          Remove-Item -Recurse -Force "C:\hostedtoolcache\windows\Go" -ErrorAction SilentlyContinue
+
       - name: Install Bash 4 and GNU sed on Mac
         if: runner.os == 'macOS'
         run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          # aws/tap is preinstalled on the runner but is not used by this workflow.
-          if brew tap | grep -qx 'aws/tap'; then
-            brew untap aws/tap
+          if brew tap 2>/dev/null | grep -qx 'aws/tap'; then
+            brew untap aws/tap || true
           fi
-          brew install bash
-          brew install gnu-sed
-
-          echo "/usr/local/bin" >> $GITHUB_PATH
-          echo "$(brew --prefix)/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
+          brew install bash gnu-sed
+          BREW_PREFIX="$(brew --prefix)"
+          echo "${BREW_PREFIX}/bin" >> $GITHUB_PATH
+          echo "${BREW_PREFIX}/opt/gnu-sed/libexec/gnubin" >> $GITHUB_PATH
 
       - uses: actions/checkout@v7
       # Use apt-based Python when inside the Ubuntu 22.04 container
@@ -122,11 +213,6 @@ jobs:
           EOF
         shell: bash
 
-      - name: Free Disk Space (Ubuntu)
-        if: runner.os == 'Linux'
-        uses: jlumbroso/free-disk-space@main
-        with: 
-          swap-storage: false
 
       - name: Install GCC 14.1
         if: runner.os == 'Linux'
@@ -156,7 +242,7 @@ jobs:
           rclone_config: ${{ secrets.RCLONE_CONFIG }}
 
       - name: Set OS/SL flags
-        run: echo "FS_GRID=-DOPENSIM:BOOL=$([ "${{ matrix.grid }}" == "os" ] && echo "ON" || echo "OFF") -DHAVOK_TPV:BOOL=$([ "${{ matrix.grid }}" == "sl" ] && echo "ON" || echo "OFF")" >> $GITHUB_ENV
+        run: echo "FS_GRID=-DOPENSIM:BOOL=$([ "${{ matrix.grid }}" == "os" ] && echo "ON" || echo "OFF") -DHAVOK_TPV:BOOL=OFF" >> $GITHUB_ENV
         shell: bash
 
       - name: find channel from Branch name
@@ -221,11 +307,11 @@ jobs:
         shell: bash
 
       - name: rclone the private 3p packages for this platform (both 64 & 32)
-        run: 'rclone copy fs_bundles: --filter "- Alpha/*" --filter "+ *${{ env.fallback_platform }}*bz2" .'
+        run: 'rclone copy fs_bundles:fs_bundles --filter "- Alpha/**" --filter "+ *${{ env.fallback_platform }}*bz2" --filter "- *" .'
         
       - name: rclone any extra private 3p packages for Alpha (allows library updates not in the main repo)
         if: env.FS_RELEASE_TYPE == 'Alpha'
-        run: 'rclone copy fs_bundles:Alpha --include "*${{ env.fallback_platform }}*bz2" .'
+        run: 'rclone copy fs_bundles:fs_bundles/Alpha --include "*${{ env.fallback_platform }}*bz2" .'
 
       - name: set VSVER for Windows builds
         if: runner.os == 'Windows'
@@ -240,18 +326,24 @@ jobs:
           FS_KEYCHAIN_PASS: ${{ secrets.FS_KEYCHAIN_PASS }}
           NOTARIZE_CREDS: ${{ secrets.NOTARIZE_CREDS }}
         run: |
-          mkdir -p ${build_secrets_checkout}/code-signing-osx
-          echo -n "$FS_CERT" | base64 --decode --output ${build_secrets_checkout}/code-signing-osx/fs-cert.p12
-          echo -n "$FS_CERT_PASS" >${build_secrets_checkout}/code-signing-osx/password.txt
-          echo -n "$NOTARIZE_CREDS" | base64 --decode --output ${build_secrets_checkout}/code-signing-osx/notarize_creds.sh
+          if [ -z "$FS_CERT" ]; then
+            echo "No macOS signing certificate (FS_CERT) configured. Skipping certificate installation (ad-hoc signing will be used)."
+            exit 0
+          fi
+          build_secrets_dir="${{ github.workspace }}/signing"
+          mkdir -p "${build_secrets_dir}/code-signing-osx"
+          echo -n "$FS_CERT" | base64 --decode --output "${build_secrets_dir}/code-signing-osx/fs-cert.p12"
+          echo -n "$FS_CERT_PASS" >"${build_secrets_dir}/code-signing-osx/password.txt"
+          echo -n "$NOTARIZE_CREDS" | base64 --decode --output "${build_secrets_dir}/code-signing-osx/notarize_creds.sh"
           security create-keychain -p "$FS_KEYCHAIN_PASS" ~/Library/Keychains/viewer.keychain
           # notarize tool uses a specific database keychain by default we need to override this to ours.
           security default-keychain -s viewer.keychain
           security set-keychain-settings -lut 21600 ~/Library/Keychains/viewer.keychain
           security unlock-keychain -p "$FS_KEYCHAIN_PASS" ~/Library/Keychains/viewer.keychain
-          security import ${build_secrets_checkout}/code-signing-osx/fs-cert.p12 -P "$FS_CERT_PASS" -A -t cert -f pkcs12 -k ~/Library/Keychains/viewer.keychain
+          security import "${build_secrets_dir}/code-signing-osx/fs-cert.p12" -P "$FS_CERT_PASS" -A -t cert -f pkcs12 -k ~/Library/Keychains/viewer.keychain
           security set-key-partition-list -S apple-tool:,apple:, -s -k "$FS_KEYCHAIN_PASS" -t private ~/Library/Keychains/viewer.keychain
           security list-keychain -d user -s ~/Library/Keychains/viewer.keychain
+          echo "build_secrets_checkout=${build_secrets_dir}" >> $GITHUB_ENV
 
       - name: Install required Ubuntu packages and release some space.
         if: runner.os == 'Linux'
@@ -263,15 +355,6 @@ jobs:
           sudo apt-get autoremove --purge 
           sudo apt-get clean
         
-      - name: Install Microsoft repository GPG keys
-        if: runner.os == 'Linux'
-        run: |
-          wget -q "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/packages-microsoft-prod.deb" -O packages-microsoft-prod.deb
-          sudo dpkg -i packages-microsoft-prod.deb
-          rm packages-microsoft-prod.deb
-          sudo apt-get update
-          sudo apt-get install -y powershell
-          pwsh -c '$PSVersionTable'
 
       - name: test macOS bundles are present
         if: runner.os == 'MacOS'
@@ -288,31 +371,41 @@ jobs:
           fi
           function find_most_recent_bundle() {
             local pattern="$1-.*$2[-_]+.*"
-            local most_recent_file=$(ls -t "${{ github.workspace }}" | egrep "$pattern" | head -1)
+            local most_recent_file=$(ls -t "${{ github.workspace }}" 2>/dev/null | egrep "$pattern" | head -1)
             if [ -z "$most_recent_file" ]; then
               echo ""
             else
               echo "$most_recent_file"
             fi
           }
-          packages=("fmodstudio" "llphysicsextensions_tpv" "kdu")
+          packages=("fmodstudio" "llphysicsextensions_tpv")
           for package in "${packages[@]}"; do
             package_file=$(find_most_recent_bundle $package ${{ env.platform }})
-            full_package_path="${{ github.workspace }}${path_sep}${package_file}"
-            if [ -n "$package_file" ]; then
-              echo "Installing ${package_file}"
-              autobuild installables remove ${package} 
-              autobuild installables add ${package} platform=${{ env.platform }} url="file:///${full_package_path}"
-            else
-              echo "No bundle found for ${package} on ${{ env.platform }}"
+            if [ -z "$package_file" ]; then
               package_file=$(find_most_recent_bundle $package ${{ env.fallback_platform }})
+              target_plat=${{ env.fallback_platform }}
+            else
+              target_plat=${{ env.platform }}
+            fi
+
+            if [ -n "$package_file" ]; then
               full_package_path="${{ github.workspace }}${path_sep}${package_file}"
-              if [ -n "$package_file" ]; then
-                echo "Installing ${package_file}"
-                autobuild installables remove ${package} 
-                autobuild installables add ${package} platform=${{ env.fallback_platform }} url="file:///${full_package_path}"
-              else
-                echo "No bundle found for ${package} on ${{ env.fallback_platform }}. Package will not be available for build."
+              echo "Installing ${package_file} for ${target_plat}"
+              autobuild installables remove ${package} || true
+              autobuild installables add ${package} platform=${target_plat} url="file:///${full_package_path}"
+              if [ "$package" == "fmodstudio" ]; then
+                echo "EXTRA_ARGS=${EXTRA_ARGS} -DUSE_FMODSTUDIO=ON" >> $GITHUB_ENV
+              fi
+              if [ "$package" == "llphysicsextensions_tpv" ]; then
+                echo "FS_GRID=${FS_GRID} -DHAVOK_TPV:BOOL=ON" >> $GITHUB_ENV
+              fi
+            else
+              echo "No bundle found for ${package}. Package will not be available for build."
+              if [ "$package" == "fmodstudio" ]; then
+                echo "EXTRA_ARGS=${EXTRA_ARGS} -DUSE_FMODSTUDIO=OFF" >> $GITHUB_ENV
+              fi
+              if [ "$package" == "llphysicsextensions_tpv" ]; then
+                echo "FS_GRID=${FS_GRID} -DHAVOK_TPV:BOOL=OFF" >> $GITHUB_ENV
               fi
             fi
           done
@@ -347,7 +440,7 @@ jobs:
         shell: bash
         run: echo "EXTRA_ARGS=${{ env.EXTRA_ARGS }} --tracy" >> $GITHUB_ENV
       - name: Add flags for AVX2 builds
-        if: ${{ matrix.variant == 'avx' }}
+        if: ${{ matrix.variant == 'avx' && runner.os != 'macOS' }}
         shell: bash
         run: echo "EXTRA_ARGS=${{ env.EXTRA_ARGS }} --avx2" >> $GITHUB_ENV
       - name: Add custom UA string if provided
@@ -361,13 +454,13 @@ jobs:
             echo "No custom user-agent string provided."
           fi
         shell: bash
-      - name: Clean up packages to give more space
-        run: rm *${{ env.fallback_platform }}*bz2
-        shell: bash
       - name: Configure
         run: |
           autobuild configure -c ReleaseFS -A${addrsize} -- --package --chan ${{env.FS_RELEASE_CHAN}} ${{env.EXTRA_ARGS}} ${{env.FS_GRID}}
           echo "BUGSPLAT_DB=$BUGSPLAT_DB" >> $GITHUB_ENV
+        shell: bash
+      - name: Clean up packages to give more space
+        run: rm -f *${{ env.fallback_platform }}*.bz2 *${{ env.fallback_platform }}*.tar.* 2>/dev/null || true
         shell: bash
       - name: Generate metadata.json
         if: runner.os == 'Windows'
@@ -441,9 +534,16 @@ jobs:
           echo "AZURE_CLIENT_SECRET=${{ secrets.AZURE_CLIENT_SECRET }}" >> $GITHUB_ENV
           echo "AZURE_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
         shell: bash
+      - name: Clean autobuild cache
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          echo "Cleaning autobuild package cache to reclaim disk space before compilation..."
+          rm -rf ~/.autobuild/cache/* || true
+          df -h /
+        shell: bash
       - name: build
         id: build
-        run: autobuild build -c ReleaseFS -A${addrsize} --no-configure
+        run: autobuild build -c ReleaseFS -A${addrsize} --no-configure -- ${{ env.EXTRA_ARGS }}
         shell: bash
       - name: List macOS build tree
         if: runner.os == 'macOS'
@@ -471,36 +571,6 @@ jobs:
           find . -name '*.xcarchive.zip' -exec sh -c 'unzip -o "{}" -d "$(dirname "{}")"' \;
       
 
-      - name: Post Bugsplat Symbols
-        uses: beqjanus/symbol-upload@main
-        with:
-          clientId: ${{ 
-            steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_ID || 
-            steps.version.outputs.viewer_release_type == 'Nightly' && secrets.BUGSPLAT_NIGHTLY_ID || 
-            steps.version.outputs.viewer_release_type == 'Manual' && secrets.BUGSPLAT_MANUAL_ID || 
-            steps.version.outputs.viewer_release_type == 'Beta' && secrets.BUGSPLAT_PREVIEW_ID || 
-            steps.version.outputs.viewer_release_type == 'Alpha' && secrets.BUGSPLAT_ALPHA_ID || 
-            secrets.BUGSPLAT_DEFAULT_ID }}
-          clientSecret: ${{ 
-            steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Nightly' && secrets.BUGSPLAT_NIGHTLY_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Manual' && secrets.BUGSPLAT_MANUAL_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Beta' && secrets.BUGSPLAT_PREVIEW_SECRET || 
-            steps.version.outputs.viewer_release_type == 'Alpha' && secrets.BUGSPLAT_ALPHA_SECRET || 
-            secrets.BUGSPLAT_DEFAULT_SECRET }}
-          database: ${{ 
-            steps.version.outputs.viewer_release_type == 'Release' && secrets.BUGSPLAT_RELEASE_DB || 
-            steps.version.outputs.viewer_release_type == 'Nightly' && secrets.BUGSPLAT_NIGHTLY_DB || 
-            steps.version.outputs.viewer_release_type == 'Manual' && secrets.BUGSPLAT_MANUAL_DB || 
-            steps.version.outputs.viewer_release_type == 'Beta' && secrets.BUGSPLAT_PREVIEW_DB || 
-            steps.version.outputs.viewer_release_type == 'Alpha' && secrets.BUGSPLAT_ALPHA_DB || 
-            secrets.BUGSPLAT_DEFAULT_DB }}
-          application: "Firestorm-${{ steps.version.outputs.viewer_channel}}"
-          version: ${{ steps.version.outputs.viewer_version }}.${{ steps.version.outputs.viewer_build }}
-          files: ${{ runner.os == 'Windows' && '**/Release/*.{pdb,exe,dll}' || runner.os == 'macOS' && '**/Release/{Firestorm,*.dSYM}' || '**/{do-not-run-directly-firestorm-bin,*.sym}' }}
-          directory: "build-*"
-          node-version: "24"
-          dumpSyms: false
       - name: Publish artifacts
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
@@ -612,8 +682,12 @@ jobs:
           FS_VIEWER_VERSION: ${{ needs.build_matrix.outputs.viewer_version }}
           FS_VIEWER_BUILD: ${{ needs.build_matrix.outputs.viewer_build }}
           FS_VIEWER_RELEASE_TYPE: ${{ needs.build_matrix.outputs.viewer_release_type }}
-          FS_VERSION_MGR_KEY: ${{ secrets.FS_VERSION_MGR_KEY }}
-        run: python ./fsutils/download_list.py ${{steps.download.outputs.download-path}} -w ${{ env.FS_BUILD_WEBHOOK_URL }}
+        run: |
+          if [ -n "$FS_BUILD_WEBHOOK_URL" ]; then
+            python ./fsutils/download_list.py "${{steps.download.outputs.download-path}}" -w "$FS_BUILD_WEBHOOK_URL"
+          else
+            python ./fsutils/download_list.py "${{steps.download.outputs.download-path}}"
+          fi
 
       - name: Setup rclone and download the folder
         uses: beqjanus/setup-rclone@main

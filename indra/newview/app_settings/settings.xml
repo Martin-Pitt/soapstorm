@@ -24429,6 +24429,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <string>None</string>
     </map>
+    <key>FSBuildPrefs_EditHandleScaling</key>
+    <map>
+      <key>Comment</key>
+      <string>Factor to scale editing handles.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>FSBuildPrefs_EditTextShadowing</key>
+    <map>
+      <key>Comment</key>
+      <string>Whether the hint-text while building has a drop-shadow.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
     <key>FSBuildPrefs_FullBright</key>
     <map>
       <key>Comment</key>
@@ -25151,6 +25173,738 @@ Change of this parameter will affect the layout of buttons in notification toast
       <integer>1</integer>
     </map>
     <!-- </FS:Soapstorm> -->
+    <!-- <SS:Nexii> Region Object Cache - see doc/region_object_cache.md -->
+    <key>SSROCEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>Enable the Region Object Cache: rez previously-seen static objects as suppressed ghosts on entering a known region, and restore cached terrain, water height and environment. Off until soaked.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCBackObjectCache</key>
+    <map>
+      <key>Comment</key>
+      <string>Fill the object cache from the region object cache instead of from the .slc files. The region cache already stores everything an .slc entry holds and more, survives a simulator restart, and has no 128-region limit. Off until soaked: turning it off restores the stock object cache on the next region entry, and the .slc files are left untouched so nothing is lost by doing so.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCBackMaxSeed</key>
+    <map>
+      <key>Comment</key>
+      <string>Most cache entries to build from the region object cache on entering one region, freshest first. Zero means no limit. A ceiling here only costs cache misses the simulator answers, so it is a safety valve rather than a tuning knob.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCDiskBudgetMB</key>
+    <map>
+      <key>Comment</key>
+      <string>Disk budget for the region object cache in megabytes. Nothing is evicted until this is approached, then whole least-recently-visited region files are dropped.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2048</integer>
+    </map>
+    <key>SSROCGhostTTL</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds a cached ghost object stays rendered without confirmation from the simulator before it is derezzed. The cache record survives: only an answered existence sweep or a KillObject deletes one.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>120.0</real>
+    </map>
+    <key>SSROCTrashThresholdPct</key>
+    <map>
+      <key>Comment</key>
+      <string>Percentage of a region's ghosts that must be affirmatively refuted before the whole region cache is discarded as stale.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>20</integer>
+    </map>
+    <key>SSROCSweepKeysPerRequest</key>
+    <map>
+      <key>Comment</key>
+      <string>Maximum object keys sent in one LSL bridge RocSweep request. Held below the bridge transport limit so neither request nor reply can be truncated - see doc/roc_bridge_spec.md.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>50</integer>
+    </map>
+    <key>SSROCSweepIntervalSecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Minimum seconds between LSL bridge RocSweep requests, so sweeps never starve the bridge event queue that also serves movelock, AO and flight assist.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>7.0</real>
+    </map>
+    <key>SSROCVisitHours</key>
+    <map>
+      <key>Comment</key>
+      <string>Hours spent in a region that count as one more visit for cache promotion. Time actually spent somewhere is evidence it is worth caching, so a long stay counts for more than a fly-through.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSROCRecentGhostMinutes</key>
+    <map>
+      <key>Comment</key>
+      <string>Scenery confirmed this recently is drawn again on returning to a region, without waiting for it to earn a place in the long term cache. Region contents rarely change over a few hours, so hopping between regions gets the benefit immediately. Set to 0 to draw only long term cached scenery.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>180</integer>
+    </map>
+    <key>SSROCPromoteVisits</key>
+    <map>
+      <key>Comment</key>
+      <string>Visits required before an object that cannot be auto-returned is cached for instant rez. Counts region entries plus every SSROCVisitHours of time spent there.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSObjectFactsPathfinding</key>
+    <map>
+      <key>Comment</key>
+      <string>Read the region's pathfinding table once per region. It names every object the region treats as permanent, unmovable landscape, for one request and no object selection at all.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSObjectFactsPathfindingRefreshSecs</key>
+    <map>
+      <key>Comment</key>
+      <string>How long a region's pathfinding table is trusted before it is read again.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>600</integer>
+    </map>
+    <key>SSROCNavmeshPermanentBonus</key>
+    <map>
+      <key>Comment</key>
+      <string>How much it counts toward caching an object that the region's own navigation mesh treats it as permanent landscape. Nothing that can move is allowed to shape a navigation mesh, so this is a strong signal.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>SSObjectFactsProbe</key>
+    <map>
+      <key>Comment</key>
+      <string>Ask the simulator which group each remembered object is set to, so objects on group land can be recognised as safe from auto-return. Nothing is asked twice and the answers are kept with the region.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSObjectFactsPacketsPerSec</key>
+    <map>
+      <key>Comment</key>
+      <string>Batches of up to 255 objects asked about per second. Selecting a thousand objects at once is ordinary, so this is about not crowding a region while it is still loading rather than about keeping the count low.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSObjectFactsOutstanding</key>
+    <map>
+      <key>Comment</key>
+      <string>Most answers allowed to be in flight at once. The replies are the heavy direction - each one carries a name, description and permissions - so this is the number that actually paces the sweep.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2000</integer>
+    </map>
+    <key>SSObjectFactsBudget</key>
+    <map>
+      <key>Comment</key>
+      <string>Most objects to ask about in any one region in a session.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>5000</integer>
+    </map>
+    <key>SSObjectFactsDelaySecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds to leave a region alone before asking about its objects, so the questions never land while it is still streaming.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>25</integer>
+    </map>
+    <key>SSParcelFactsProbe</key>
+    <map>
+      <key>Comment</key>
+      <string>Ask the simulator who owns each parcel a remembered object stands on, so objects belonging to a landowner can be recognised as safe from auto-return. One metered request per parcel, never per object, and nothing is asked twice.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSParcelFactsPerSec</key>
+    <map>
+      <key>Comment</key>
+      <string>Parcel questions asked per second, across all regions together. The limit exists because these ride the same connection as the object updates they help along.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSParcelFactsBudget</key>
+    <map>
+      <key>Comment</key>
+      <string>Most parcel questions to ask about any one region in a session. A region carved into more parcels than this leaves the rest unanswered, which costs patience rather than correctness.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>64</integer>
+    </map>
+    <key>SSParcelFactsDelaySecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds to leave a region alone before asking it anything, so the questions never land while it is still streaming objects.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>20</integer>
+    </map>
+    <key>SSROCProbeMeasure</key>
+    <map>
+      <key>Comment</key>
+      <string>ROC Phase 1.5 gate: measure how fast and how completely the simulator probes the object cache on region entry, and log a report when leaving the region. Independent of SSROCEnabled because it measures the simulator rather than the cache.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCPromoteDaysUnproven</key>
+    <map>
+      <key>Comment</key>
+      <string>Distinct days an object must be seen before it is cached when it could NOT be shown to be safe from parcel auto-return. Only real days count here, because an object on a timer can vanish with no warning.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>3</integer>
+    </map>
+    <key>SSROCPromoteScore</key>
+    <map>
+      <key>Comment</key>
+      <string>Score an object must reach to be cached, from 0 to 1. Lower values cache more of a region and more speculatively.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.40</real>
+    </map>
+    <key>SSROCPublicWorksBonus</key>
+    <map>
+      <key>Comment</key>
+      <string>Score added to objects owned by a Mole (Linden Department of Public Works). These build the permanent landscape of the mainland - roads, bridges, terraforming, public builds - so they are cached readily. Moving public works such as trains are physical and are excluded before scoring ever happens.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.25</real>
+    </map>
+    <key>SSROCRequireAutoReturnProof</key>
+    <map>
+      <key>Comment</key>
+      <string>Only cache objects that were shown to be safe from parcel auto-return. Turning this off lets unproven objects in after SSROCPromoteDaysUnproven days instead.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCSettledStaySecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds that must be spent in a region before its objects are scored for caching on leaving. Short fly-throughs still record what they saw, they just do not decide anything.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>180</integer>
+    </map>
+    <key>SSROCMaxOwnerLookups</key>
+    <map>
+      <key>Comment</key>
+      <string>Most owner name lookups the region cache may start for one region. Owners are looked up only to spot Linden Department of Public Works builds, are deduplicated across the whole session, and any left unresolved simply take the slower path.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>128</integer>
+    </map>
+    <key>SSROCMaxRecordsPerRegion</key>
+    <map>
+      <key>Comment</key>
+      <string>Most objects the region cache remembers for one region. Cached objects and long-observed ones are kept first; dropping one only means it has to be seen again.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>30000</integer>
+    </map>
+    <key>SSROCMaxGhostsPerRegion</key>
+    <map>
+      <key>Comment</key>
+      <string>Most cached objects rezzed on entering one region.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>30000</integer>
+    </map>
+    <key>SSROCGhostsEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>Draw a known region back from its cache the moment you arrive, instead of waiting for the simulator to describe every object in turn. Turning this off keeps the terrain cache and the object ledger underneath it running.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCGhostPromotedTier</key>
+    <map>
+      <key>Comment</key>
+      <string>Draw objects that earned a place in the long term cache. These are the ones worth showing after days or weeks away.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCGhostRecentTier</key>
+    <map>
+      <key>Comment</key>
+      <string>Draw anything confirmed within SSROCRecentGhostMinutes, whatever its long term standing. A region's contents barely change over a few hours, so this is what makes hopping between a handful of regions pay off straight away.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCGhostCreateEntries</key>
+    <map>
+      <key>Comment</key>
+      <string>Let the region cache rebuild an object the simulator's own cache file no longer holds, instead of only revealing ones it does. Off by default: the ordinary path can check a remembered object against what the simulator wrote and refuse a mismatch, and this one cannot, so a reassigned object id would be drawn as the wrong object. It has never yet been needed in practice.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSROCGhostSuppress</key>
+    <map>
+      <key>Comment</key>
+      <string>Keep objects drawn from cache quiet and still until the simulator confirms them: no attached sound, no spin, and no touch, pay or sit affordance they may no longer have.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCInjectPerFrame</key>
+    <map>
+      <key>Comment</key>
+      <string>Most cached objects drawn back per frame. Painting a whole region takes many frames on purpose; raising this fills the scene sooner at the cost of a heavier arrival.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>200</integer>
+    </map>
+    <key>SSROCInjectMsPerFrame</key>
+    <map>
+      <key>Comment</key>
+      <string>Milliseconds per frame the region cache may spend drawing objects back. This is the ceiling that actually protects the frame rate on arrival, whatever the per-frame object count allows.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSROCGhostArmWaitSecs</key>
+    <map>
+      <key>Comment</key>
+      <string>Seconds to wait for a region's cache file to be read from disk before giving up on drawing it back this visit. The simulator's handshake and the disk read race, and on a large cache the handshake usually wins.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>8.0</real>
+    </map>
+    <key>SSROCGhostSelectable</key>
+    <map>
+      <key>Comment</key>
+      <string>Let objects drawn from cache be selected before the simulator confirms them. On, editing or right-clicking one that is no longer there clears it away immediately; off, they are click-through until confirmed.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSROCGhostShadowMeasure</key>
+    <map>
+      <key>Comment</key>
+      <string>On a region whose simulator restarted since the last visit, work out how much of the remembered region would have been worth drawing back and how much the simulator sent anyway. Draws nothing; it only records the answer in the log.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <!-- </SS:Nexii> -->
+    <!-- <SS:Nexii> Strata - asset volumes, see doc/strata.md -->
+    <key>SSStrataEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>Store cached assets inside a few large volume files instead of tens of thousands of individual ones. Turning this off leaves any existing volumes in place, still readable, and simply stops new assets being folded into them.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSStrataPackAgeSeconds</key>
+    <map>
+      <key>Comment</key>
+      <string>How long a cached asset must sit unchanged before it is folded into a volume. Mesh data is filled in level by level after it first arrives, so a short value here costs extra work rather than correctness.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>300</integer>
+    </map>
+    <key>SSStrataMaxObjectKB</key>
+    <map>
+      <key>Comment</key>
+      <string>Cached assets larger than this stay as individual files. The measured cache has no assets anywhere near the default, so this is a safety valve rather than a tuning knob.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>8192</integer>
+    </map>
+    <key>SSStrataTextures</key>
+    <map>
+      <key>Comment</key>
+      <string>Store cached J2C texture bodies inside a few large volume files instead of the tens of thousands of individual ones in texturecache. Turning this off leaves any existing volumes in place, still readable, and simply stops new texture bodies being folded into them.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSStrataBudgetEnforce</key>
+    <map>
+      <key>Comment</key>
+      <string>Treat the cache size setting as a genuine total that every cache tier is held inside. While this is off the tiers keep the separate budgets they have always had, which together authorise more than twice the number the cache size slider shows, and the viewer only reports in the log what the total would have done. Turning this on will delete cached data that currently survives; nothing is lost that cannot be fetched again.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSStrataAssetCachePercent</key>
+    <map>
+      <key>Comment</key>
+      <string>Share of the total cache size given to cached assets - meshes, sounds, animations and everything else that is not a texture. Set to 0 to ignore the percentage and use the fixed FSDiskCacheSize instead. Only has any effect while the total is being enforced.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>25</integer>
+    </map>
+    <!-- </SS:Nexii> -->
+    <!-- <SS:Nexii> Squeeze - GPU-compressed textures, see doc/super_compressed_textures.md -->
+    <key>SSSqueezeEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>Keep textures on the graphics card in BC7 compressed form instead of raw pixels, using roughly a quarter of the video memory. Falls back to the normal texture path on cards without BC7 support.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSSqueezeBackgroundEncode</key>
+    <map>
+      <key>Comment</key>
+      <string>Build compressed texture copies in the background on spare processor cores. When off, only compressed textures already on disk are used.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSSqueezePromote</key>
+    <map>
+      <key>Comment</key>
+      <string>Compress textures already sitting in the texture cache while nothing else needs the processor. This costs no download at all - it only uses what is already on your disk - and it is how most compressed copies get made.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSSqueezeNetworkPromote</key>
+    <map>
+      <key>Comment</key>
+      <string>Quietly finish downloading partly-downloaded textures in the background so they can be compressed. Compressed copies are only ever made from full resolution, so without this the cache fills much more slowly. Only runs while nothing else is downloading, never during teleports or login, and is limited by the two settings below.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+<key>SSSqueezeEncodeThreads</key>
+    <map>
+      <key>Comment</key>
+      <string>Processor cores used for texture compression. 0 picks a sensible number automatically. Compression runs at low priority.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSSqueezeMinTextureSize</key>
+    <map>
+      <key>Comment</key>
+      <string>Smallest texture worth compressing, given as a square size. 512 means "at least as many pixels as a 512x512", so a 1024x256 banner counts as large enough because it holds exactly as many. The video memory saved grows with the square of the size while the cost of a record stays flat, so the benefit sits almost entirely in large textures: one 1024 saves as much as two hundred and fifty 64s.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>512</integer>
+    </map>
+    <key>SSSqueezeCachePercent</key>
+    <map>
+      <key>Comment</key>
+      <string>Share of the total cache size given to compressed textures, as a percent. BC7 is the tier the renderer actually reads from, so it is meant to be a large share. Set to 0 to ignore the percentage and use the fixed SSBC7CacheSize instead. Compressed textures are a flat 8 bits per pixel on disk while the original JPEG2000 files are heavily compressed, so an equal split by bytes is nothing like an equal split by number of textures kept.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>50</integer>
+    </map>
+    <key>SSSqueezeEncodeQuality</key>
+    <map>
+      <key>Comment</key>
+      <string>Texture compression quality. 0 is fastest but handles blocks containing several unrelated colours badly, 1 brings in the modes that fix that, 2 is the best quality. 3 is the default and picks between them automatically: best quality while the machine keeps up, stepping down only while there is a real backlog, and re-encoding the rushed ones at best quality again once it is idle. Takes effect immediately and never re-compresses what is already cached.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>3</integer>
+    </map>
+    <key>SSSqueezeUpgradeIdle</key>
+    <map>
+      <key>Comment</key>
+      <string>When the machine is idle and nothing is waiting to be compressed, go back over textures that were compressed at a lower quality and redo them at the best one.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSBC7CacheSize</key>
+    <map>
+      <key>Comment</key>
+      <string>Disk space in megabytes for compressed texture copies. These sit alongside the normal texture cache rather than replacing it, so this is additional disk use.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2048</integer>
+    </map>
+    <key>SSSqueezeReadEnabled</key>
+    <map>
+      <key>Comment</key>
+      <string>Use the compressed textures already on disk instead of decoding the originals again. This is the setting that actually saves video memory; turning it off leaves the viewer building compressed copies it never reads.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSMaterialAlphaFailOpaque</key>
+    <map>
+      <key>Comment</key>
+      <string>When a surface says it has see-through parts but the setting that says how to treat them has not arrived from the region yet, draw it solid rather than see-through. Without this a surface in a neighbouring region can go completely invisible instead of merely looking wrong for a moment.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSSqueezeServeAlpha</key>
+    <map>
+      <key>Comment</key>
+      <string>Also use compressed copies for textures that have see-through parts. Saves more video memory, but until per-texel click masks are stored these textures are clicked as whole squares, so fences, plants and hair stop being click-through.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSSqueezeReadThreads</key>
+    <map>
+      <key>Comment</key>
+      <string>Background threads reading compressed textures from disk. 0 picks a sensible number automatically. This is waiting on the disk rather than working, so more than a couple only adds competition for the same drive.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSSqueezeManifests</key>
+    <map>
+      <key>Comment</key>
+      <string>Remember which textures a region used and load their compressed copies from disk as you arrive, instead of waiting to be told about them. Only ever reads the local disk - it never downloads anything - so it does nothing on a region you have not been to before.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSSqueezeManifestWarmMB</key>
+    <map>
+      <key>Comment</key>
+      <string>Most video memory the arrival warm-up may put in place before anything has asked for it. Textures nothing turns out to look at are handed back automatically after half a minute, so this is a ceiling on a temporary cost rather than on a permanent one.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>128</integer>
+    </map>
+    <key>SSSqueezeManifestWarmDiscard</key>
+    <map>
+      <key>Comment</key>
+      <string>How sharp the arrival warm-up loads textures at, where 0 is full size and each step up is half the width. 2 costs a sixteenth of the memory of full size, is already sharper than anything that could have arrived over the network in the same moment, and is sharpened the rest of the way as soon as something actually comes into view.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSSqueezeSelfTest</key>
+    <map>
+      <key>Comment</key>
+      <string>Debug only. Toggling this either way uploads a synthetic BC7 texture and writes the result and the video memory it accounted for to the log.</string>
+      <key>Persist</key>
+      <integer>0</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <!-- </SS:Nexii> -->
     <key>FSdataQAtest</key>
       <map>
       <key>Comment</key>

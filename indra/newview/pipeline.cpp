@@ -1957,6 +1957,16 @@ U32 LLPipeline::getPoolTypeFromTE(const LLTextureEntry* te, LLViewerTexture* ima
                 break;
         }
     }
+    // <SS:Nexii> The face carries a Blinn-Phong material ID but the material itself has not arrived, so the switch above never ran and the alpha channel alone decides. That decision is one-directional: `alpha` starts true and only the material can turn it off, so a material that never arrives can never make a face wrongly opaque - only wrongly invisible, permanently. Confirmed in the wild on a sim surround whose region never received its capabilities, leaving LLMaterialMgr with no RenderMaterials URL to fetch from and the ground texture blended into nothing while the agent stood in the neighbouring region. Guessing opaque is the strictly safer guess, and it is self-correcting: LLVOVolume::setTEMaterialParams marks the drawable REBUILD_ALL, and the rebuild re-runs this function, so a face that genuinely wanted blending gets it back the moment its material lands. See doc/viewer/ and the SSAlphaDebug diagnostic.
+    else if (alpha && !mat && !te->getMaterialID().isNull())
+    {
+        static LLCachedControl<bool> fail_opaque(gSavedSettings, "SSMaterialAlphaFailOpaque", true);
+        if (fail_opaque)
+        {
+            alpha = color_alpha;
+        }
+    }
+    // </SS:Nexii>
 
     if (alpha || (gltf_mat && gltf_mat->mAlphaMode == LLGLTFMaterial::ALPHA_MODE_BLEND))
     {
