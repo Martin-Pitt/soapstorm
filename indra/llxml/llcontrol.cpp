@@ -846,6 +846,30 @@ void LLControlGroup::setLLSD(std::string_view name, const LLSD& val)
     set(name, val);
 }
 
+bool LLControlVariable::setValueFromNotation(const std::string& notation, bool saved_value)
+{
+    if (mType == TYPE_LLSD)
+    {
+        LLPointer<LLSDNotationParser> parser = new LLSDNotationParser;
+        LLSD result;
+        std::stringstream value_stream(notation);
+        S32 parse_count = parser->parse(value_stream, result, LLSDSerialize::SIZE_UNLIMITED);
+        if (parse_count != LLSDParser::PARSE_FAILURE)
+        {
+            setValue(result, saved_value);
+            return true;
+        }
+        LL_WARNS("Controls") << "Failed to parse LLSD notation for control '"
+            << mName << "': " << notation << LL_ENDL;
+    }
+    else
+    {
+        LL_WARNS("Controls") << "setValueFromNotation() called on non-LLSD control '"
+            << mName << "' (type " << LLControlGroup::typeEnumToString(mType) << "); ignoring." << LL_ENDL;
+    }
+    return false;
+}
+
 void LLControlGroup::setUntypedValue(std::string_view name, const LLSD& val)
 {
     if (name.empty())

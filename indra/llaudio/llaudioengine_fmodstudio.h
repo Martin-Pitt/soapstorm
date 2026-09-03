@@ -116,6 +116,10 @@ protected:
     /*virtual*/ bool updateBuffer();
     /*virtual*/ void update3DPosition();
     /*virtual*/ void updateLoop();
+    // <SS:Nexii> pcm byte position for in-flight loudness patches
+    /*virtual*/ U32 getPositionBytes();
+    /*virtual*/ void setPositionBytes(U32 bytes);
+    // </SS:Nexii>
 
     void set3DMode(bool use3d);
 protected:

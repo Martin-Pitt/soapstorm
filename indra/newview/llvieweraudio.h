@@ -38,6 +38,7 @@ void init_audio();
 void audio_update_volume(bool force_update = true);
 void audio_update_listener();
 void audio_update_wind(bool force_update = true);
+void audio_update_sound_normalization(); // <SS:Nexii> push loudness normalization settings + UI sound exemptions into the engine
 
 class LLViewerAudio : public LLSingleton<LLViewerAudio>
 {

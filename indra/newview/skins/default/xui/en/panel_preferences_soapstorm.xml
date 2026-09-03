@@ -40,6 +40,14 @@
 
     <panel
      class="panel_preference"
+     filename="panel_preferences_soapstorm_sounds.xml"
+     label="Sounds"
+     layout="topleft"
+     help_topic="preferences_soapstorm_tab"
+     name="soapstorm_sounds" />
+
+    <panel
+     class="panel_preference"
      filename="panel_preferences_soapstorm_atmo.xml"
      label="Atmo Magic"
      layout="topleft"

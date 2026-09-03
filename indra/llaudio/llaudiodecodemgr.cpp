@@ -39,6 +39,7 @@
 #include "workqueue.h"
 
 #include "llvorbisencode.h"
+#include "sslufs.h" // <SS:Nexii> decode-time loudness normalization
 
 #include "vorbis/codec.h"
 #include "vorbis/vorbisfile.h"
@@ -74,6 +75,11 @@ public:
     bool decodeSection(); // Return true if done.
     bool finishDecode();
 
+    // <SS:Nexii> normalize decoded pcm toward target LUFS before the loop crossfade and disk write; runs on the worker
+    void normalizeLoudness(F32 target_lufs);
+    bool wasLoudnessProcessed() const   { return mLoudnessProcessed; }
+    // </SS:Nexii>
+
     void flushBadFile();
 
     void ioComplete(S32 bytes)          { mBytesRead = bytes; }
@@ -86,6 +92,7 @@ protected:
 
     bool mValid;
     bool mDone;
+    bool mLoudnessProcessed = false; // <SS:Nexii>
     LLAtomicS32 mBytesRead;
     LLUUID mUUID;
 
@@ -519,6 +526,24 @@ bool LLVorbisDecodeState::finishDecode()
     return true;
 }
 
+// <SS:Nexii> decoded pcm is always the canonical mono 16-bit 44.1k layout; swizzles are no-ops on little-endian
+void LLVorbisDecodeState::normalizeLoudness(F32 target_lufs)
+{
+    mLoudnessProcessed = true;
+    if (mWAVBuffer.size() <= WAV_HEADER_SIZE + 2) return;
+    S16* samples = (S16*)(&mWAVBuffer[WAV_HEADER_SIZE]);
+    size_t count = (mWAVBuffer.size() - WAV_HEADER_SIZE) / 2;
+    llendianswizzle(samples, 2, (S32)count);
+    F32 lufs = ss_lufs_measure_mono16(samples, count, 44100);
+    if (lufs > SS_LUFS_SILENCE && fabsf(lufs - target_lufs) > SS_LUFS_TOLERANCE)
+    {
+        ss_lufs_apply_gain16(samples, count, ss_lufs_gain_for_target(lufs, target_lufs));
+        LL_DEBUGS("AudioEngine") << mUUID << " decoded at " << lufs << " LUFS, normalized toward " << target_lufs << LL_ENDL;
+    }
+    llendianswizzle(samples, 2, (S32)count);
+}
+// </SS:Nexii>
+
 void LLVorbisDecodeState::flushBadFile()
 {
     if (mInFilep)
@@ -558,7 +583,8 @@ LLAudioDecodeMgr::Impl::Impl()
 
 // Returns the in-progress decode_state, which may be an empty LLPointer if
 // there was an error and there is no more work to be done.
-LLPointer<LLVorbisDecodeState> beginDecodingAndWritingAudio(const LLUUID &decode_id);
+// <SS:Nexii> normalize_target of 0 disables loudness normalization (0 LUFS is never a legitimate target)
+LLPointer<LLVorbisDecodeState> beginDecodingAndWritingAudio(const LLUUID &decode_id, F32 normalize_target);
 
 // Return true if finished
 bool tryFinishAudio(const LLUUID &decode_id, LLPointer<LLVorbisDecodeState> decode_state);
@@ -612,11 +638,13 @@ void LLAudioDecodeMgr::Impl::startMoreDecodes()
 
         // Kick off a decode
         mDecodes[decode_id] = LLPointer<LLVorbisDecodeState>(NULL);
+        // <SS:Nexii> capture the loudness target on the main thread; exempt sounds (viewer UI) decode untouched
+        F32 normalize_target = (gAudiop->isSoundNormalizationEnabled() && !gAudiop->isSoundNormalizationExempt(decode_id)) ? gAudiop->getSoundNormalizationTarget() : 0.f;
         bool posted = main_queue->postTo(
             general_queue,
-            [decode_id]() // Work done on general queue
+            [decode_id, normalize_target]() // Work done on general queue
             {
-                LLPointer<LLVorbisDecodeState> decode_state = beginDecodingAndWritingAudio(decode_id);
+                LLPointer<LLVorbisDecodeState> decode_state = beginDecodingAndWritingAudio(decode_id, normalize_target);
 
                 if (!decode_state)
                 {
@@ -655,7 +683,7 @@ void LLAudioDecodeMgr::Impl::startMoreDecodes()
     }
 }
 
-LLPointer<LLVorbisDecodeState> beginDecodingAndWritingAudio(const LLUUID &decode_id)
+LLPointer<LLVorbisDecodeState> beginDecodingAndWritingAudio(const LLUUID &decode_id, F32 normalize_target)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_MEDIA;
 
@@ -696,6 +724,13 @@ LLPointer<LLVorbisDecodeState> beginDecodingAndWritingAudio(const LLUUID &decode
             decode_state->flushBadFile();
             return NULL;
         }
+
+        // <SS:Nexii> normalize on this worker before the crossfade and cache write, so disk and memory copies are born normalized
+        if (normalize_target != 0.f)
+        {
+            decode_state->normalizeLoudness(normalize_target);
+        }
+        // </SS:Nexii>
 
         // Kick off the writing of the decoded audio to the disk cache.
         // The receiving thread can then cheaply call finishDecode() again to check
@@ -769,6 +804,12 @@ bool tryFinishAudio(const LLUUID &decode_id, LLPointer<LLVorbisDecodeState> deco
     }
 
     bool valid = decode_state && decode_state->isValid();
+    // <SS:Nexii> a decode-time normalized sound never needs the cached-file loudness check
+    if (valid && decode_state->wasLoudnessProcessed())
+    {
+        gAudiop->markLoudnessChecked(decode_id);
+    }
+    // </SS:Nexii>
     // Mark current decode finished regardless of success or failure
     adp->setHasCompletedDecode(true);
     // Flip flags for decoded data

@@ -1320,6 +1320,10 @@ void settings_setup_listeners()
 {
     LL_PROFILE_ZONE_SCOPED;
     setting_setup_signal_listener(gSavedSettings, "FirstPersonAvatarVisible", handleRenderAvatarMouselookChanged);
+    // <SS:Nexii> downloaded-sound loudness normalization
+    setting_setup_signal_listener(gSavedSettings, "FSNormalizeDownloadedSounds", audio_update_sound_normalization);
+    setting_setup_signal_listener(gSavedSettings, "FSSoundTargetLUFS", audio_update_sound_normalization);
+    // </SS:Nexii>
     setting_setup_signal_listener(gSavedSettings, "RenderFarClip", handleRenderFarClipChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderTerrainScale", handleTerrainScaleChanged);
     setting_setup_signal_listener(gSavedSettings, "RenderTerrainPBRScale", handlePBRTerrainScaleChanged);
