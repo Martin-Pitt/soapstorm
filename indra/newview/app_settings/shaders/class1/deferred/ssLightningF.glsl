@@ -44,11 +44,10 @@ uniform vec2 screen_res;
 uniform vec2 ss_clip;
 uniform float ss_soft_on;
 
-// The bloom dial, the shared clock (wrapped on the CPU so the float keeps sub-millisecond steps), the live bolt's beading and the plasma's warp amplitude.
+// The bloom dial, the shared clock (wrapped on the CPU so the float keeps sub-millisecond steps) and the live bolt's beading. The dissolve's flow amplitude is not a uniform: it rides tangent.z per vertex, beside the noise LOD in tangent.y, because only the plasma copies carry it.
 uniform float ss_glow;
 uniform float ss_time;
 uniform float ss_bead;
-uniform float ss_warp;
 
 // <SS:Nexii> The plasma's colour walk over its life, from the recorded frames: the column in the air goes white to white-cyan to grey (never green - the green stays in the foot), the amber foot goes
 // white-yellow through yellow-green to a yellow knot that outshines the wisps, and the hot flare centre is over-exposed orange-white. doc/atmo_magic_lightning_strike.md
@@ -103,8 +102,9 @@ vec3 ss_ramp4(vec3 c0, vec3 c1, vec3 c2, vec3 c3, float u)
 
 void main()
 {
-    // The fragment mode rides tangent.w: 0 live core ribbon, 1 sheath ribbon, 2 aura / flare / fire disc (fraction = the flare share), 3 plain ribbon (sparks), 4 sky flash disc, 5 flat fill (wash, markers), 6 occlusion box.
-    int mode = int(floor(vary_ctl.w));
+    // The fragment mode rides tangent.w: 0 live core ribbon (and the plasma copy, which is the same ribbon dissolving - normal.z carries its age), 1 sheath ribbon, 2 aura / flare / fire disc (fraction = the flare share), 3 plain ribbon (sparks), 4 sky flash disc, 5 flat fill (wash, markers), 6 occlusion box, 7 steam puff (the one alpha-blended element, drawn in its own batch).
+    // <SS:Nexii> The epsilon is what makes this dispatch survive the rasteriser. ctl.w is one constant across a quad's four vertices, but perspective-correct interpolation of a constant is only exact in exact arithmetic: a 5.0 arrives as 4.9999995 on some pixels and 5.0000005 on others, and a bare floor() reads the first as mode 4. Every mode then draws as itself on half its pixels and as the mode BELOW it on the rest - a marker's flat fill as a flash disc, a flash disc as a plain ribbon (its hard quad edge and all), the sheath as the beaded core - which is the per-pixel stipple that speckled the discs, the sheath and the debug markers while the core, whose -1 still falls through to the ribbon path, stayed clean. doc/atmo_magic_lightning_strike.md
+    int mode = int(floor(vary_ctl.w + 0.001));
     float bright = vary_ctl.x;
     vec3 col = vary_color.rgb;
     float a8 = vary_color.a;
@@ -120,6 +120,27 @@ void main()
     {
         // A flat fill: the fullscreen amber wash (a8 0 - a veil is never a bloom seed) and the debug markers.
         frag_color = vec4(col * bright, a8);
+        return;
+    }
+
+    if (mode == 7)
+    {
+        // <SS:Nexii> The steam burst: the one element of this pass that is NOT a light. Boiled water scatters what is already in the air rather than emitting, so it draws alpha-blended in its own batch and writes no bloom seed at all - an additive white puff over a night storm reads as a second flash, which is exactly wrong. Broken up by two octaves turning slowly in the disc's own frame so it billows instead of presenting a soft circle, and eaten away from the rim as it ages (aux.y, 0 at the boil and 1 at the end of its life) so the cloud thins and tatters rather than fading as a whole. doc/atmo_magic_lightning_strike.md
+        vec2 d = vary_texcoord0 * 2.0 - 1.0;
+        float rr = length(d);
+        if (rr >= 1.0) discard;
+
+        float age = vary_aux.y;
+        float s = vary_aux.x * 71.0;
+        float n = ss_vnoise(d * 2.3 + s + vec2(0.0, -ss_time * 0.5)) * 0.65
+                + ss_vnoise(d * 5.1 + s * 1.7 + vec2(ss_time * 0.35, 0.0)) * 0.35;
+
+        float body = pow(1.0 - rr, 1.25) * mix(0.55, 1.45, n);
+        body *= smoothstep(0.0, 0.35, 1.0 - age * (0.45 + 0.75 * n));
+
+        float a = clamp(body * bright, 0.0, 1.0);
+        if (a < 2.0 / 255.0) discard;
+        frag_color = vec4(col, a);
         return;
     }
 
@@ -154,7 +175,8 @@ void main()
             skirt *= 1.0 - hollow * (1.0 - smoothstep(0.0, 1.0, rh));
         }
 
-        float q = fract(vary_ctl.w) * 2.0;
+        // <SS:Nexii> Taken against the mode the dispatch actually chose, never fract(): the same interpolation slop puts a flare-less disc's 2.0 at 1.9999999, where fract returns 0.9999999 and hands a disc with NO flare share the full spike on those pixels.
+        float q = clamp((vary_ctl.w - float(mode)) * 2.0, 0.0, 1.0);
         float spike = (q > 0.0) ? 1.6 * q * pow(r, 6.0) : 0.0;
 
         float bf = smoothstep(-0.10, 0.45, vary_aux.y);
@@ -188,8 +210,9 @@ void main()
     float u = vary_aux.z;
     float w = vary_aux.y;
     float s = vary_aux.x * 97.0;
-    float pl = vary_ctl.y;
     float bead_mul = vary_texcoord1.x;
+    float up_along = vary_texcoord1.y;
+    float lod = vary_ctl.y;
 
     float mask;
     if (mode == 3 || mode == 1 || (u <= 0.0 && ss_bead <= 0.0))
@@ -208,43 +231,54 @@ void main()
     }
     else
     {
-        // The live core with beading, and the plasma the popped column turns into: the strip's own profile lumps along its length (a re-lit column beads where the old wisps had pinched),
-        // then with age the filament is domain-warped into curling wisps, eroded by a rising threshold into stretches and knots, and grained at 30Hz. Sub-pixel ribbons (fwidth) skip the warp and grain.
-        float aa = clamp(1.0 - fwidth(along) * 3.0, 0.0, 1.0);
+        // The live core with beading: the strip's own profile lumps along its length, because a re-lit column beads where the old wisps had pinched.
         float b = ss_bead * bead_mul;
         float bead = ss_vnoise(vec2(along * 0.8 + s, 0.0));
-        float wmul = mix(1.0 - b * 0.5 + b * bead, 0.35 + 1.4 * bead, u);
+        float wmul = 1.0 - b * 0.5 + b * bead;
         x /= max(wmul, 0.05);
 
-        float keep = 1.0;
-        float spark = 0.0;
-        if (u > 0.0 && pl * aa > 0.0)
-        {
-            float t = ss_time * 3.0 + u * 4.0;
-            float n1 = ss_vnoise(vec2(x * 1.5, along * 0.35) + s + vec2(0.0, -t));
-            float n2 = ss_vnoise(vec2(x * 4.0, along * 0.9) + s * 1.7 + vec2(t * 0.7, n1 * 3.0));
-            x += ((n1 - 0.5) * 2.2 + (n2 - 0.5) * 0.9) * u * ss_warp * pl * aa;
-            keep = smoothstep(u * 1.1 - 0.15, u * 1.1 + 0.15, n2 * 0.6 + n1 * 0.4);
-            float g = ss_h21(vec2(x * 40.0, along * 40.0) + floor(ss_time * 30.0) * 0.37 + s);
-            spark = smoothstep(0.55, 1.0, g) * u * pl * aa;
-        }
-        x = abs(x);
-        float body = pow(max(0.0, 1.0 - x), mix(mix(4.0, 2.5, w), 1.5, u));
+        float body = pow(max(0.0, 1.0 - x), mix(mix(4.0, 2.5, w), 1.7, u));
         if (ss_use_tex > 0.5)
         {
             vec4 t = texture(diffuseMap, vec2(clamp(0.5 + 0.5 * x, 0.0, 1.0), vary_texcoord0.y));
             body = t.a * max(t.r, 0.35) * (1.0 - x * x);
         }
-        // The edge guard on the ORIGINAL across keeps a warped wisp from ending in the quad's straight cut.
+        // The edge guard on the ORIGINAL across keeps a beaded edge from ending in the quad's straight cut.
         body *= smoothstep(1.0, 0.8, across);
-        mask = body * ((u > 0.0) ? keep : 1.0) * (1.0 - 0.7 * u + 1.6 * spark) * (0.6 + 0.4 * mix(1.0, bead, b));
+        mask = body * (0.6 + 0.4 * mix(1.0, bead, b));
 
+        // <SS:Nexii> The dissolve, laid OVER the bolt that is already there rather than replacing it: the same glowing channel, taken away by an animated alpha mask read through a flow map.
+        // The flow is the physics. A vortex field - two noise channels read as a vector, the pair rolling slowly so the curl is alive rather than a fixed distortion - plus a steady convection
+        // term that lifts along whichever way world up runs in this strip's frame (texcoord1.y, +1 for a channel running straight down, 0 where it lies flat and there is nowhere along the strip
+        // to rise). That vector displaces the coordinate the mask is sampled at, and the displacement grows with age, so early on the column is barely disturbed and late on it is curling and
+        // climbing. It stays SMALL on purpose: what the recorded frames show is a column coming apart roughly where it stood, not a cloud thrown sideways.
+        // The mask is what makes it dissolve rather than fade. A threshold rising with age eats the noise field wherever it is thinnest, so the channel tears into stretches that each shrink and
+        // go out on their own, and the hot middle of the strip survives longest because the profile weights it. A plain alpha fade can only take the whole ribbon down together, which is what
+        // made the old widening version read as a wave running along the bolt with a void behind its front. doc/atmo_magic_lightning_strike.md
+        // Gated on the age alone, never on the LOD: the LOD only fades the fine octave, and a far bolt whose core has shrunk under a pixel would otherwise skip the mask entirely and leave a plasma copy that never dissolves at all.
         if (u > 0.0)
         {
+            vec2 fuv = vec2(across * 1.5, along * 0.55) + s;
+            float t = ss_time * 0.5;
+            float f1 = ss_vnoise(fuv + vec2(0.0, t));
+            float f2 = ss_vnoise(fuv + vec2(4.7, -2.3 - t));
+            vec2 flow = vec2(f1 - 0.5, f2 - 0.5) * 2.0;
+            flow.y += up_along * 1.25;
+
+            vec2 muv = fuv + flow * (u * vary_ctl.z * 0.45);
+            float n = ss_vnoise(muv * 1.7) * 0.62
+                    + ss_vnoise(muv * 4.1 + 13.0) * 0.38 * lod;
+            n /= 0.62 + 0.38 * lod;
+
+            float keep = smoothstep(0.0, 0.22, n * (1.25 - 0.55 * across) - u * 0.80);
+            mask *= keep;
+
             vec3 air = ss_ramp4(RAMP_AIR0, RAMP_AIR1, RAMP_AIR2, RAMP_AIR3, u);
             vec3 gnd = ss_ramp4(RAMP_GND0, RAMP_GND1, RAMP_GND2, RAMP_GND3, u);
             col = mix(col, mix(air, gnd, w), smoothstep(0.0, 0.25, u));
-            float k = pow(keep, 6.0) * smoothstep(0.3, 0.8, w) * u;
+
+            // The knot: the last of the amber foot outlives and outshines the wisps around it.
+            float k = pow(keep, 3.0) * smoothstep(0.3, 0.8, w) * u;
             col = mix(col, KNOT_COLOR, 0.5 * k);
             bright *= 1.0 + 3.0 * k;
         }

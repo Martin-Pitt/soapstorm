@@ -60,6 +60,7 @@ public:
         S32 mPlasma = 0;
         S32 mSparks = 0;
         S32 mDiscs = 0;
+        S32 mSteam = 0;
         S32 mOccluded = 0;
         S32 mQuads = 0;
         bool mDepthCopy = false;

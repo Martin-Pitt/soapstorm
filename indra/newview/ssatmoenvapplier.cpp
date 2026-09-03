@@ -575,7 +575,8 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         }
     };
 
-    put(mLastAmbient, mod.ambientColor(atm.mAmbientColor.valueAt(phase)),
+    // <SS:Nexii> Authored straight through - the storm's gamma/ambient cuts that used to ride the darkening modulation are retired: they were global and darkened the sky above the deck too. The scene's storm darkening is the deck's ground shadow (moisture-driven through coverage, bound into the deferred sun pass) plus the authored cloud_shadow's ambience job.
+    put(mLastAmbient, atm.mAmbientColor.valueAt(phase),
         [this](const LLColor3& v) { mSky->setAmbientColor(v); });
     put(mLastBlueHorizon, atm.mBlueHorizon.valueAt(phase),
         [this](const LLColor3& v) { mSky->setBlueHorizon(v); });
@@ -602,7 +603,7 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
         [this](F32 v) { mSky->setMaxY(v); });
     put(mLastProbeAmbiance, atm.mReflectionProbeAmbiance.valueAt(phase),
         [this](F32 v) { mSky->setReflectionProbeAmbiance(v); });
-    put(mLastGamma, mod.sceneGamma(atm.mSceneGamma.valueAt(phase)),
+    put(mLastGamma, atm.mSceneGamma.valueAt(phase),
         [this](F32 v) { mSky->setGamma(v); });
     put(mLastStarBrightness, atm.mStarBrightness.valueAt(phase),
         [this](F32 v) { mSky->setStarBrightness(v); });

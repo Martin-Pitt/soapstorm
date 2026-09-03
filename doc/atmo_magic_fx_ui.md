@@ -44,43 +44,46 @@ They are real `settings.xml` entries now, and they have a home in the UI.
 
 ### Tessellation
 
-The toggle used to be `segs = tessellate ? 4 : 1` — one flat subdivision factor for every
-puff at every range, with `skirt = puff.mAnvil * v²` as the only vertex displacement. It
-subdivided, but it never *adapted*: a puff two hundred metres away and one four kilometres
-away got the same sixteen sub-quads, so it cost 16× the vertices everywhere and bought
-shaping only on anvil-bearing puffs. Nothing in it knew about camera distance or about
-scene geometry.
+The toggle used to subdivide the puff's own card — first as `segs = tessellate ? 4 : 1`, then
+by on-screen size, with `skirt = puff.mAnvil * v²` shearing the top rows into an anvil skirt
+and `SSAtmoCloudEdgeBreakup` wandering the rim vertices. Two things killed it:
 
-It now does two things:
+- **It boiled in the wind.** The rim displacement was seeded by quantising the puff's *world*
+  position. The field's positions include the live wind drift, so every metre the wind pushed
+  a cloud re-rolled the seed and the carved rim churned — the pattern was anchored to the
+  world, not to the cloud it decorated.
+- **It modified the puff it was supposed to serve.** The rim breakup and the skirt both moved
+  the original card's vertices, so toggling the feature changed what every puff already was
+  rather than adding anything to the field.
 
-- **Subdivision by screen size.** `segs` comes from the puff's on-screen diameter — one row
-  per `SS_TESS_PIXELS` (96), floored at 1 and capped at `SS_TESS_MAX_SEGS` (6). Measured in
-  pixels because that is what "can it be seen" means, and off the *true* distance: the
-  far-field squash moves every vertex along its own ray, so the projected size is the true
-  one. A distant puff collapses back to the single card it always was; the cap exists
-  because an overhead puff can fill the view and would otherwise outweigh the rest of the
-  field.
+It is a **puff refinement LOD** now, built in `SSVolCloud::buildDeck` where every other puff
+is built:
 
-- **Edge breakup** (`SSAtmoCloudEdgeBreakup`, default 0.25, fraction of puff radius). Worth
-  being precise about why this works, because the obvious objection is that the visible
-  silhouette is the fragment alpha carve rather than the quad outline. True — but the carve
-  is a function of `vary_world`, the *interpolated world position*. Move a vertex and you
-  move which piece of the cloud field that part of the card covers, so the carved outline
-  moves with it. A rectangle of vertices therefore reads as a rectangle's worth of cloud,
-  clipped wherever the field wanted to continue past the border. Pushing the rim vertices
-  around in the billboard plane lets the same carve wander instead of clipping.
+- **The original puff is untouched.** The render pass emits every puff as the single
+  camera-facing card it always was; there is no per-vertex displacement anywhere in the path.
+- **It adds smaller and smaller puffs.** A placed puff within `SS_TESS_RANGE_M` (1000 m) of
+  the eye grows `SS_TESS_CHILDREN` (4) children at a fraction of its radius, scattered
+  around its body; within `SS_TESS_INNER_M` (500 m) those children grow a smaller generation
+  still (`SS_TESS_GRANDCHILDREN` = 3). Detail scales down geometrically as it climbs toward
+  the viewer, and only exists where cloud already does — children hang off existing parents,
+  so the coverage gate's holes stay holes.
+- **It is stable and moves with the wind.** Every child offset is hashed off the parent's
+  AIR-FRAME cell — the same anchor the parent's own jitter uses, with the drift left out — so
+  a child holds its place inside its cloud while the wind carries both. This is the same
+  air-frame discipline the fragment carving already runs on.
+- **The LOD is a distance fade, not a count switch.** Each ring's puffs fade out approaching
+  their limit (`smoothstep` from half the range to the range, applied to the parent's
+  distance), so walking toward a cloud gathers detail incrementally and no ring boundary ever
+  pops.
+- **The budget pays for it.** Children are ordinary `Puff`s: same sort, same
+  `SSAtmoCloudPuffBudget`, same fragment carve. They are the nearest bodies in the deck, so a
+  full budget trims the field's far edge to make room — the LOD trade that dial already was.
 
-  Ramped by the squared distance from the quad centre, so the interior — where the texture
-  content lives — barely moves and only the rim is disturbed. Keyed on the *shared* grid
-  vertex, so neighbouring sub-quads displace identically and the mesh cannot tear. In-plane
-  only: displacing along the view normal would move the puff in depth, past the sort that
-  placed it.
+The anvil skirt is gone with the rest of the vertex work; the anvil itself is untouched — it
+is carried by the fragment-stage carving (lid flattening, tower cut, cap band) and by the
+builder's width shaping, neither of which ever needed the tessellation toggle.
 
-The anvil skirt is unchanged and still gated on `mAnvil`. Note that tessellation is not a
-no-op even where nothing displaces: `ssVolCloudV.glsl` does non-linear per-vertex work (the
-`pow()` glow hotspot, the radial squash, `calcAtmosphericVars` along each vertex's own ray,
-the `max_y/|view_dir.z|` slab path) and puffs span hundreds of metres, so a finer grid
-interpolates the sky lighting and aerial perspective more finely across the card.
+`SSAtmoCloudEdgeBreakup` no longer exists.
 
 **Still not structure-aware.** Nothing in the cloud render path knows where buildings or
 terrain are. The only proximity handling is `ss_soft_m` in `ssVolCloudF.glsl`, a
@@ -145,6 +148,27 @@ Every mark goes through `squashScale()`, the same far-field compression
 kilometres behind the cloud they describe, and the far half of a 5km field never survives a
 2km far plane to be drawn at all. Lines are subdivided *before* they are squashed, because
 the squash is not linear along a segment and the band rings span kilometres.
+
+## Group resets
+
+Every section heading on the four tabs carries a **Reset group** button beside it, alongside the
+per-row `D` buttons that already reset one control each. The callback is `SSAtmo.ResetGroup`,
+registered next to `SSAtmo.StrikeNow` in `llviewermenu.cpp` because these panels are plain XUI with
+no class of their own to hang a callback on.
+
+Its parameter is a **comma-separated list of control names, not a prefix**. A prefix would be
+shorter and would need no maintenance, and that is exactly the problem: it would silently widen
+the moment a setting was added whose name happened to start the same way, and the failure mode is
+a button that destroys settings the person did not mean to touch. An explicit list can only ever
+fall *behind* its panel, and an unknown name warns to the log and is skipped, so a stale list still
+resets what it can. If a dial is added, add it to the list in the same file, a few lines above.
+
+The Lightning tab needed splitting before it could have groups at all: forty-one controls under one
+heading is not a group. It now divides where the dials genuinely do - **Lightning** (how often,
+what kind, how the bolt looks in the air), **Ground Strike** (the 2026-09 rework's own family, the
+one `doc/atmo_magic_lightning_strike.md` lists together), and **Advanced** (polarity, bolts from
+the blue, occlusion culling, the bolt texture). The Clouds and LOD tabs both carry cloud settings
+and their tooltips say so, since neither button touches the other tab's half.
 
 ## Related
 

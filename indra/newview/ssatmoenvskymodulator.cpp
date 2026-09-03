@@ -36,10 +36,9 @@ namespace
 
     const F32 WATERFOG_FULL_BOOST = 0.5f;
 
-    const F32 GAMMA_FULL_CUT    = 0.5f;
-    const F32 AMBIENT_FULL_CUT  = 0.6f;
-
     const F32 DARKENING_ONSET = 0.55f;
+    const F32 DARKENING_MOIST_MIN  = 0.25f;
+    const F32 DARKENING_MOIST_FULL = 0.60f;
 
     const F32 BLUE_FULL_BOOST     = 0.20f;
     const F32 RED_FULL_CUT        = 0.10f;
@@ -115,7 +114,9 @@ SSAtmoEnvSkyModulation SSAtmoEnvSkyWeatherModulator::compute(const SSAtmoEnvSkyW
     // <SS:Nexii> Precipitation -> water fog. The one atmosphere-adjacent mapping left, and it reaches the Water tab's fog, not the sky: moisture's haze mapping (haze density up, distance multiplier down) is retired - moisture's +1.5 haze drove the fog term's airlight past what custom skies with heavy haze_horizon/glow could hold, blowing the scene out under dynamic exposure, and muggy-by-numbers was never worth that. The authored haze density and distance multiplier now render exactly as keyframed; rain still thickens the underwater fog on its own toggle.
     mod.mPrecip = ss_effect(in.mPrecipitationIntensity, influence.mWaterFogEnabled, influence.mWaterFogStrength);
 
-    mod.mDarkening = ss_effect(ss_ramp(in.mConvection, DARKENING_ONSET, 1.f),
+    // <SS:Nexii> Storm churn needs a wet sky - convection alone is clear-air turbulence, and a dry heatwave's thermals must not move the dome band. The storm's old scene darkening (gamma/ambient cuts off this same drive) is retired: it was global and darkened the sky above the deck too - the deck's ground shadow (moisture-driven through coverage) and the authored cloud_shadow own the scene darkening now.
+    mod.mDarkening = ss_effect(ss_ramp(in.mConvection, DARKENING_ONSET, 1.f)
+                             * ss_ramp(in.mMoisture, DARKENING_MOIST_MIN, DARKENING_MOIST_FULL),
                                influence.mStormDarkeningEnabled, influence.mStormDarkeningStrength);
 
     {
@@ -197,18 +198,6 @@ LLVector2 SSAtmoEnvSkyModulation::cloudScrollRate(const LLVector2& base) const
 void SSAtmoEnvSkyModulation::setChurn(const LLVector2& along)
 {
     mScrollDelta = along * (mDarkening * CHURN_FULL_ADD);
-}
-
-// Storm darkening flattens gamma.
-F32 SSAtmoEnvSkyModulation::sceneGamma(F32 base) const
-{
-    return base * (1.f - mDarkening * GAMMA_FULL_CUT);
-}
-
-// Storm darkening cuts ambient.
-LLColor3 SSAtmoEnvSkyModulation::ambientColor(const LLColor3& base) const
-{
-    return base * (1.f - mDarkening * AMBIENT_FULL_CUT);
 }
 
 // Cold clear sky shifts blue density up and red down.

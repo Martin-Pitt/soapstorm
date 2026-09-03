@@ -691,16 +691,60 @@ namespace
             hint.mNoon = true;
             hint.mAnchorPhase = 0.5;
         }
-        else if (lower.find("sunrise") != std::string::npos)
+        else if (lower.find("golden hour") != std::string::npos)
         {
+            // Golden hour is a window, not a horizon event: its own measured sun places
+            // it; the adjacent qualifier word pieces which side of noon it owns.
+
+            if (lower.find("morning") != std::string::npos)
+            {
+                hint.mSide = SeedSkySide::RISING;
+            }
+            else if (lower.find("evening") != std::string::npos)
+            {
+                hint.mSide = SeedSkySide::SETTING;
+            }
+        }
+        else if (lower.find("post sunrise") != std::string::npos
+                 || lower.find("after sunrise") != std::string::npos
+                 || lower.find("late morning") != std::string::npos)
+        {
+            // Qualified sunrise/sunset skies ride their own measured sun on their side, never
+            // parking on the bare event's anchor - so a Post Sunrise cannot overwrite the Sunrise.
+
+ 
             hint.mSide = SeedSkySide::RISING;
-            hint.mAnchorPhase = 0.25;
+ 
         }
-        else if (lower.find("sunset") != std::string::npos)
+        else if (lower.find("near sunset") != std::string::npos
+                 || lower.find("before sunset") != std::string::npos
+                 || lower.find("early sunset") != std::string::npos
+                 || lower.find("early evening") != std::string::npos
+                 || lower.find("post sunset") != std::string::npos
+                 || lower.find("after sunset") != std::string::npos
+                 || lower.find("late afternoon") != std::string::npos)
+ 
         {
-            hint.mSide = SeedSkySide::SETTING;
-            hint.mAnchorPhase = 0.75;
+            hint.mSide = SeedSkySide::SETTING; 
         }
+        else if (lower.find("sunrise") != std::string::npos)
+
+        {
+            hint.mSide = SeedSkySide::RISING; 
+            hint.mAnchorPhase = 0.25; 
+ 
+        } 
+ 
+        else if (lower.find("sunset") != std::string::npos) 
+
+ 
+        {
+            hint.mSide = SeedSkySide::SETTING; 
+ 
+            hint.mAnchorPhase = 0.75; 
+ 
+        } 
+ 
         else if (lower.find("night") != std::string::npos)
         {
             // "Night" alone states the midnight side - even without a moon to measure, it must never land in daylight.

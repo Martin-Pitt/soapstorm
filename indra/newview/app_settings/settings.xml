@@ -27430,6 +27430,28 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <real>0.9</real>
   </map>
+  <key>SSAtmoLightningSteam</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: strength of the steam burst where a ground strike and its crawl flash-boil standing water. Scales the puff density, and gates the effect entirely at 0 - including the puddle removal, so a viewer with this off leaves the surface field untouched. Nothing is drawn where there was no water to boil, so a strike on dry ground steams regardless of this dial.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>1.0</real>
+  </map>
+  <key>SSAtmoLightningSteamHold</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: seconds a flash-boiled patch of ground is held against re-accumulating wet, puddle and snow after the strike. Without a hold the next rain tick refills the puddle and the vaporisation reads as nothing having happened; too long and a storm progressively strips every puddle it strikes near. The hold decays per cell and is strongest at the centre of the burst.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>6.0</real>
+  </map>
   <key>SSAtmoLightningFireLight</key>
   <map>
     <key>Comment</key>
@@ -27455,7 +27477,7 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoLightningPlasmaWarp</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: domain-warp amplitude of the plasma noise - how far the cooling column's filament is bent into curling wisps and vortices, growing with age. 0 erodes without curling.</string>
+    <string>Atmo Magic: how far the dissolve's flow map carries the cooling column - a live vortex field plus a steady convection lift along world up, displacing the coordinate the alpha mask is read at, growing with age. Deliberately small: the column comes apart roughly where it stood rather than being thrown sideways. 0 dissolves without curling.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
@@ -27749,21 +27771,10 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <integer>1</integer>
   </map>
-  <key>SSAtmoCloudEdgeBreakup</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: how far a tessellated cloud puff's rim vertices may wander, as a fraction of the puff's radius. The fragment carve is a function of world position, so moving the rim moves which piece of the cloud field the card covers and the carved outline follows - the silhouette stops being four straight edges cutting the cloud off where it wanted to continue. The interior barely moves. 0 is off; needs SSAtmoCloudTessellation, since a card with only four corners has no rim to break up.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>F32</string>
-    <key>Value</key>
-    <real>0.25</real>
-  </map>
   <key>SSAtmoCloudTessellation</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: subdivide each cloud puff by the size it covers on screen, instead of drawing it as one camera-facing card. A near puff becomes a grid the renderer can shear into an anvil skirt and break up along its rim; a distant one stays the single card it always was. The fragment carving runs either way - this is for the shaping a card cannot carry, since alpha can cut any outline out of a quad but cannot bend one.</string>
+    <string>Atmo Magic: refine the cloud field around the viewer. Within a kilometre, each cloud puff grows smaller child puffs around its own body (and the nearest grow a smaller generation still), every offset hashed off the cloud's air-frame cell so the detail rides the wind instead of re-rolling against it, and faded toward the ring edges so the detail gathers and thins incrementally as the viewer moves. The original puffs are untouched - the same cards they always were - and the far field is unchanged. Off, the field is the plain puff deck.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>

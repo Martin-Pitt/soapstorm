@@ -40,9 +40,17 @@
      width="384">
     <text
      follows="left|top" layout="topleft" left="12" top="8"
-     height="14" width="356" name="density_label" font="SansSerifSmallBold">
+     height="14" width="250" name="density_label" font="SansSerifSmallBold">
         Density
     </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_density" label="Reset group"
+     tool_tip="Reset every setting in this section to its default">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoDensity,SSAtmoParticleBudget" />
+    </button>
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="16" width="122"
@@ -96,9 +104,17 @@
     <!-- <SS:Nexii> The impact toggles, moved here from the settings window. Everything around them is about what happens when a drop lands - ripple tuning, the tier the splash is drawn at, how long it lasts - so the two switches that decide whether any of it happens at all belong with it rather than one window away from it. -->
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
-     height="14" width="356" name="impact_toggles_label" font="SansSerifSmallBold">
+     height="14" width="250" name="impact_toggles_label" font="SansSerifSmallBold">
         Impact Effects
     </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_impact_toggles" label="Reset group"
+     tool_tip="Reset every setting in this section to its default">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoRipples,SSAtmoSounds,SSAtmoRespawnOnImpact,SSAtmoDropAlpha" />
+    </button>
     <check_box
      control_name="SSAtmoRipples"
      follows="left|top" layout="topleft" left="12" top_pad="6"
@@ -144,9 +160,17 @@
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
-     height="14" width="356" name="impacts_label" font="SansSerifSmallBold">
+     height="14" width="250" name="impacts_label" font="SansSerifSmallBold">
         Impacts
     </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_impacts" label="Reset group"
+     tool_tip="Reset every setting in this section to its default">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoRippleScale,SSAtmoRippleSpeed,SSAtmoRippleAlpha" />
+    </button>
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="16" width="122"
@@ -225,9 +249,17 @@
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
-     height="14" width="356" name="shading_label" font="SansSerifSmallBold">
+     height="14" width="250" name="shading_label" font="SansSerifSmallBold">
         Shading
     </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_shading" label="Reset group"
+     tool_tip="Reset every setting in this section to its default">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoRainShader,SSAtmoGlowScale,SSAtmoDropBulge,SSAtmoDropCore,SSAtmoDropSparkle" />
+    </button>
     <check_box
      control_name="SSAtmoRainShader"
      follows="left|top" layout="topleft" left="12" top_pad="6"

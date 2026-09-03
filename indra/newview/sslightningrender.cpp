@@ -56,6 +56,9 @@ namespace
     const LLColor3 FIRE_0(1.f, 0.60f, 0.12f);
     const LLColor3 FIRE_1(0.95f, 0.38f, 0.06f);
     const LLColor3 FIRE_2(0.60f, 0.18f, 0.03f);
+    // <SS:Nexii> Flash-boiled steam, cool and slightly blue the way water vapour reads against a storm sky rather than the warm white of the fire's smoke. This is an AMBIENT constant, not a sampled sky colour - the puff is mixed toward the bolt's own glow while the channel is still lit, which is the moment that carries the effect, and settles to this afterwards. If it reads too bright on a night storm that constant is the thing to take down. doc/atmo_magic_lightning_strike.md
+    const LLColor3 STEAM_COLOR(0.72f, 0.75f, 0.80f);
+
     const LLColor3 SPARK_0(1.f, 0.97f, 0.85f);
     const LLColor3 SPARK_1(1.f, 0.60f, 0.15f);
     const LLColor3 SPARK_2(0.90f, 0.22f, 0.03f);
@@ -204,7 +207,8 @@ bool SSLightningRender::ensureBuffer(U32 quads)
         return false;
     }
 
-    // <SS:Nexii> The VBO pool hands back recycled buffers unbound, so bind before setIndexData streams the pattern - otherwise it lands in whichever pass drew last and this buffer keeps stale indices (the vertex mess).
+    // <SS:Nexii> The VBO pool hands back recycled buffers unbound, so bind before setIndexData streams the pattern - otherwise it lands in whichever pass drew last and this buffer keeps stale indices (the vertex mess). unbind() first because setBuffer only configures anything when it sees the binding CHANGE: on a pool miss LLVBOPool::allocate has already glBindBuffer'd the new name and assigned sGLRenderBuffer itself, so setBuffer would find them equal and skip the setup entirely. Zeroing the tracker makes both pool paths take the same one. doc/atmo_magic_lightning_strike.md
+    LLVertexBuffer::unbind();
     mVB->setBuffer();
 
     std::vector<U32> indices((size_t)alloc * 6);
@@ -286,6 +290,8 @@ void SSLightningRender::drawBatch()
     }
     mVB->unmapBuffer();
 
+    // <SS:Nexii> The attribute pointers must be re-established here every draw, and unbind() is what forces it. setBuffer only calls setupVertexBuffer when sGLRenderBuffer != mGLBuffer, or when the shader's attribute mask changed - and by this line NEITHER is true: unmapBuffer has just bound this buffer to stream the vertex data (assigning sGLRenderBuffer without configuring a single glVertexAttribPointer), and the pass's own bind() already set sLastMask to this shader's mask. So the draw would run on whichever buffer the previous pass pointed the attributes at - the cloud deck's, or one already returned to the pool. That is the whole fault: geometry built, quads counted, occlusion queries coming back with zero samples on a strike in front of the eye, nothing on screen. The precipitation pass escapes it only by ordering - it unmaps BEFORE binding its shader, and the bind's own unbind() then zeroes the tracker for it. doc/atmo_magic_lightning_strike.md
+    LLVertexBuffer::unbind();
     mVB->setBuffer();
     mVB->drawRange(LLRender::TRIANGLES, 0, n * 4 - 1, n * 6, 0);
     mStats.mQuads += (S32)n;
@@ -336,7 +342,6 @@ void SSLightningRender::renderFlash()
     static LLStaticHashedString s_soft_on("ss_soft_on");
     static LLStaticHashedString s_time("ss_time");
     static LLStaticHashedString s_bead("ss_bead");
-    static LLStaticHashedString s_warp("ss_warp");
     static LLStaticHashedString s_squash("ss_squash");
     static LLStaticHashedString s_cam("ss_cam_pos");
     gSSLightningProgram.uniform1f(s_use_tex, 0.f);
@@ -344,7 +349,6 @@ void SSLightningRender::renderFlash()
     gSSLightningProgram.uniform1f(s_soft_on, 0.f);
     gSSLightningProgram.uniform1f(s_time, 0.f);
     gSSLightningProgram.uniform1f(s_bead, 0.f);
-    gSSLightningProgram.uniform1f(s_warp, 0.f);
     {
         SSVolCloud* vol = SSVolCloud::getInstance();
         gSSLightningProgram.uniform3f(s_squash, vol->squashKnee(), vol->squashCap(), vol->virtualRadius());
@@ -599,13 +603,11 @@ void SSLightningRender::render()
     static LLStaticHashedString s_clip("ss_clip");
     static LLStaticHashedString s_time("ss_time");
     static LLStaticHashedString s_bead("ss_bead");
-    static LLStaticHashedString s_warp("ss_warp");
     gSSLightningProgram.uniform3f(s_squash, vol->squashKnee(), vol->squashCap(), vol->virtualRadius());
     gSSLightningProgram.uniform3fv(s_cam, 1, cam.mV);
     gSSLightningProgram.uniform1f(s_glow, glow);
     gSSLightningProgram.uniform1f(s_time, tnow);
     gSSLightningProgram.uniform1f(s_bead, bead);
-    gSSLightningProgram.uniform1f(s_warp, warp);
 
     const bool textured = mTextureRef.notNull() && mTextureRef->hasGLTexture();
     if (textured)
@@ -705,17 +707,20 @@ void SSLightningRender::render()
 
     // A strip lying in the surface plane (the ground crawl): never pierces the road, so it needs no depth fade at all.
     auto groundRibbon = [&](const LLVector3& a, const LLVector3& b, F32 width_a, F32 width_b, F32 v0, F32 v1,
-                            const Vertex& va, const Vertex& vb)
+                            const Vertex& va, const Vertex& vb,
+                            const LLVector3* side_a = nullptr, const LLVector3* side_b = nullptr)
     {
         LLVector3 seg = b - a;
         LLVector3 side = seg % LLVector3::z_axis;
         if (side.normalize() <= 0.f) return;
+        const LLVector3& sa = side_a ? *side_a : side;
+        const LLVector3& sb = side_b ? *side_b : side;
         const LLVector3 lift(0.f, 0.f, 0.12f);
         Vertex a0 = va, a1 = va, b0 = vb, b1 = vb;
-        a0.mPos = a - side * width_a + lift; a0.mUV.set(0.f, v0);
-        a1.mPos = a + side * width_a + lift; a1.mUV.set(1.f, v0);
-        b0.mPos = b - side * width_b + lift; b0.mUV.set(0.f, v1);
-        b1.mPos = b + side * width_b + lift; b1.mUV.set(1.f, v1);
+        a0.mPos = a - sa * width_a + lift; a0.mUV.set(0.f, v0);
+        a1.mPos = a + sa * width_a + lift; a1.mUV.set(1.f, v0);
+        b0.mPos = b - sb * width_b + lift; b0.mUV.set(0.f, v1);
+        b1.mPos = b + sb * width_b + lift; b1.mUV.set(1.f, v1);
         pushQuad(a0, a1, b0, b1);
     };
 
@@ -856,12 +861,16 @@ void SSLightningRender::render()
                     const S32 c = mSoleChild[(size_t)i];
                     if (c < 0) continue;
                     const SSStrikeNode& node = strike.mChannel[(size_t)i];
-                    if (node.mParent < 0 || node.mCrawl || strike.mChannel[(size_t)c].mCrawl) continue;
+                    if (node.mParent < 0) continue;
                     if (node.mReachedAt > strike.mLeaderProgress
                         || strike.mChannel[(size_t)c].mReachedAt > strike.mLeaderProgress) continue;
 
+                    // <SS:Nexii> The crawl merges too, in its OWN frame. Both of a joint's sides have to be built against the same reference or the averaged corner is meaningless, so a crawl joint - both segments lying in the ground plane and sided against z - merges against z, and an air joint merges against the view as before. A joint BETWEEN the two frames (the foot, where the falling channel becomes the crawl) is left as a plain butt, which is correct rather than lazy: there is no single side vector those two quads share. Without this the crawl was the only strip in the pass drawn as loose segments, and every change of direction showed the notch or the overlap. doc/atmo_magic_lightning_strike.md
+                    const bool crawl_joint = node.mCrawl && strike.mChannel[(size_t)c].mCrawl;
+                    if (!crawl_joint && (node.mCrawl || strike.mChannel[(size_t)c].mCrawl)) continue;
+
                     const LLVector3& p = node.mPos;
-                    const LLVector3 view = p - cam;
+                    const LLVector3 view = crawl_joint ? LLVector3::z_axis : (p - cam);
                     LLVector3 s_in = (p - strike.mChannel[(size_t)node.mParent].mPos) % view;
                     LLVector3 s_out = (strike.mChannel[(size_t)c].mPos - p) % view;
                     s_in.normalize();
@@ -954,9 +963,10 @@ void SSLightningRender::render()
                         const LLColor3 glow_a = mix3(GLOW_COLOR, AMBER_GLOW, wa_amber);
                         const LLColor3 glow_b = mix3(GLOW_COLOR, AMBER_GLOW, wb_amber);
 
-                        const LLVector3* start_side = (!node.mCrawl && mJointSide[(size_t)node.mParent].magVecSquared() > 0.f)
+                        // The crawl is no longer excluded here: the joint pass has built its corners in the ground plane, and a joint it declined to merge - the foot, where the two frames meet - left a zero vector that reads as the plain butt it should be.
+                        const LLVector3* start_side = (mJointSide[(size_t)node.mParent].magVecSquared() > 0.f)
                             ? &mJointSide[(size_t)node.mParent] : nullptr;
-                        const LLVector3* end_side = (!node.mCrawl && mJointSide[(size_t)i].magVecSquared() > 0.f)
+                        const LLVector3* end_side = (mJointSide[(size_t)i].magVecSquared() > 0.f)
                             ? &mJointSide[(size_t)i] : nullptr;
 
                         const F32 bo = b * occ * seg;
@@ -978,7 +988,7 @@ void SSLightningRender::render()
                                 const F32 sheath_mult = node.mCrawl ? 2.5f : GLOW_WIDTH_MULT;
                                 if (node.mCrawl)
                                 {
-                                    groundRibbon(pa, pb, wa * sheath_mult, wb * sheath_mult, v0, v1, va, vb);
+                                    groundRibbon(pa, pb, wa * sheath_mult, wb * sheath_mult, v0, v1, va, vb, start_side, end_side);
                                 }
                                 else
                                 {
@@ -995,7 +1005,7 @@ void SSLightningRender::render()
                             vb.mCtl.set(bo * (1.f + 2.2f * wb_amber * wb_amber), plasma_lod, 0.f, 0.f);
                             if (node.mCrawl)
                             {
-                                groundRibbon(pa, pb, wa, wb, v0, v1, va, vb);
+                                groundRibbon(pa, pb, wa, wb, v0, v1, va, vb, start_side, end_side);
                             }
                             else
                             {
@@ -1004,7 +1014,7 @@ void SSLightningRender::render()
                             mStats.mSegments++;
                         }
 
-                        // <SS:Nexii> The plasma: from its pop the stretch lives on as a wide, softer cloud with its own envelope (the stroke's 55ms decay is gone by the time the recorded column is still bright), widening with age, warped and eroded in the shader, the amber foot's knot on a slower clock.
+                        // <SS:Nexii> The plasma is the CHANNEL DISSOLVING, not a second object laid over it: the same ribbon geometry, the same glowing bolt, taken away by an animated alpha mask in the shader while a flowmap curls what is left. So the width barely moves - a constant 1.4x (1.2x on the crawl) to give the flow a little room to carry material past the core's own edge, against the old 2x-to-6x growth. That growth was the whole fault: widening the strip with age turned the dissolve into a wave spreading out along the bolt, hollow behind its own front, when what the recorded frames show is the column staying where it was and coming apart in place. Everything that makes it read as plasma now happens in the mask and the flow, and both need a strip no wider than the thing they are eating. doc/atmo_magic_lightning_strike.md
                         if (is_plasma && (u_a > 0.f || u_b > 0.f))
                         {
                             const F32 tau_a = lerp(0.20f, 0.32f, wa_amber);
@@ -1013,24 +1023,27 @@ void SSLightningRender::render()
                             const F32 pb_b = (u_b > 0.f) ? I * scale_k * 0.5f * expf(-llmax(0.f, since - SSDissolve::LAG_S) / tau_b) * plasma_dial * occ : 0.f;
                             if (pb_a > 0.01f || pb_b > 0.01f)
                             {
+                                // Which way world up runs in the strip's own frame, so the shader's convection lifts the mask along the real vertical instead of along whichever way the quad happens to be wound. +1 when the strip runs straight down, 0 where it lies flat and convection has nowhere to go along it.
+                                LLVector3 sdir = pb - pa;
+                                const F32 up_along = (sdir.normalize() > 0.f) ? -sdir.mV[VZ] : 0.f;
+
                                 Vertex va, vb;
-                                va.mUV1.set(bead_mul, 0.f);
-                                vb.mUV1.set(bead_mul, 0.f);
+                                va.mUV1.set(bead_mul, up_along);
+                                vb.mUV1.set(bead_mul, up_along);
                                 va.mCol = tint8(core_a, 0.5f);
                                 vb.mCol = tint8(core_b, 0.5f);
                                 va.mAux.set(copy_seed, wa_amber, llmax(u_a, 0.001f));
                                 vb.mAux.set(copy_seed, wb_amber, llmax(u_b, 0.001f));
-                                va.mCtl.set(pb_a, plasma_lod, 0.f, 0.f);
-                                vb.mCtl.set(pb_b, plasma_lod, 0.f, 0.f);
-                                const F32 grow_a = node.mCrawl ? (1.5f + 2.f * u_a) : (2.f + 4.f * u_a);
-                                const F32 grow_b = node.mCrawl ? (1.5f + 2.f * u_b) : (2.f + 4.f * u_b);
+                                va.mCtl.set(pb_a, plasma_lod, warp, 0.f);
+                                vb.mCtl.set(pb_b, plasma_lod, warp, 0.f);
+                                const F32 grow = node.mCrawl ? 1.2f : 1.4f;
                                 if (node.mCrawl)
                                 {
-                                    groundRibbon(pa, pb, wa * grow_a, wb * grow_b, v0, v1, va, vb);
+                                    groundRibbon(pa, pb, wa * grow, wb * grow, v0, v1, va, vb, start_side, end_side);
                                 }
                                 else
                                 {
-                                    ribbon(pa, pb, wa * grow_a, wb * grow_b, v0, v1, va, vb);
+                                    ribbon(pa, pb, wa * grow, wb * grow, v0, v1, va, vb, start_side, end_side);
                                 }
                                 mStats.mPlasma++;
                             }
@@ -1305,6 +1318,77 @@ void SSLightningRender::render()
     }
 
     drawBatch();
+
+    // <SS:Nexii> The steam burst, in its own batch because it is the only element here that is not a light: scattered water vapour, alpha-blended over the scene rather than added to it. The alpha factors are the precipitation pass's - source ZERO, destination ONE_MINUS_SRC_ALPHA - so a puff standing in front of the channel takes the bolt's bloom seed down with it instead of glowing through. Drawn after the additive pass for the same reason: the cloud is in front of the light it came from. doc/atmo_magic_lightning_strike.md
+    static LLCachedControl<F32> steam_setting(gSavedSettings, "SSAtmoLightningSteam", 1.f);
+    const F32 steam_dial = llclamp((F32)steam_setting, 0.f, 3.f);
+    if (steam_dial > 0.f)
+    {
+        bool any_steam = false;
+        for (const SSStrike& s : lightning->strikes())
+        {
+            if (s.mSteamPeak > 0.f && s.mT >= 0.f) { any_steam = true; break; }
+        }
+
+        if (any_steam)
+        {
+            beginBatch();
+            for (size_t si = 0; si < lightning->strikes().size(); ++si)
+            {
+                const SSStrike& strike = lightning->strikes()[si];
+                if (strike.mSteamPeak <= 0.f || strike.mT < 0.f) continue;
+                if (!facts[si].mOnScreen || !facts[si].mGroundOn) continue;
+
+                for (const SSStrikeSteam& sb : strike.mSteam)
+                {
+                    if (sb.mWater <= 0.01f) continue;
+                    const F32 t = strike.mT - sb.mDelay;
+                    if (t < 0.f || t > SSGroundShow::STEAM_LIFE_S) continue;
+
+                    // The boil is over in a breath and the cloud spends the rest of its life rising and thinning: the width snaps out over the burst, then keeps growing slowly while the whole thing lifts and its density falls away.
+                    const F32 age = t / SSGroundShow::STEAM_LIFE_S;
+                    const F32 burst = llclamp(t / SSGroundShow::STEAM_BURST_S, 0.f, 1.f);
+                    const F32 r = sb.mRadius * (0.35f + 0.85f * sqrtf(burst) + 0.9f * age);
+                    const F32 density = sb.mWater * steam_dial * burst * (1.f - age) * (1.f - age);
+                    if (density < 0.004f) continue;
+
+                    const LLVector3 center = sb.mPos
+                        + LLVector3(0.f, 0.f, 0.4f * r + SSGroundShow::STEAM_RISE_M_S * t)
+                        + wind * (t * 0.35f);
+
+                    LLVector3 right, up;
+                    if (!billboardAxes(center, cam, right, up)) continue;
+
+                    // Lit by the channel while the channel is still there: the puff blows white under a live bolt and settles to its ambient grey as the light goes.
+                    Vertex v;
+                    v.mCol = tint8(mix3(STEAM_COLOR, GLOW_COLOR * 0.5f + LLColor3(0.5f, 0.5f, 0.5f),
+                                        llclamp(strike.mChannelBrightness * 1.5f, 0.f, 1.f)), 0.f);
+                    v.mUV1.set(0.f, 0.f);
+                    v.mCtl.set(density, 0.f, 0.f, 7.f);
+                    Vertex c[4];
+                    for (S32 i = 0; i < 4; ++i)
+                    {
+                        const F32 sx = (i & 1) ? 1.f : -1.f;
+                        const F32 sy = (i & 2) ? 1.f : -1.f;
+                        c[i] = v;
+                        c[i].mPos = center + right * (r * sx) + up * (r * sy);
+                        c[i].mUV.set((i & 1) ? 1.f : 0.f, (i & 2) ? 1.f : 0.f);
+                        c[i].mAux.set(hashUnit(sb.mSeed), age, 0.f);
+                    }
+                    pushQuad(c[0], c[1], c[2], c[3]);
+                    mStats.mSteam++;
+                }
+            }
+
+            if (mQuadCount > 0)
+            {
+                gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE_MINUS_SOURCE_ALPHA,
+                              LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+                drawBatch();
+                gGL.setSceneBlendType(LLRender::BT_ADD);
+            }
+        }
+    }
 
     if (markers)
     {

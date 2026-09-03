@@ -38,9 +38,17 @@
      width="384">
     <text
      follows="left|top" layout="topleft" left="12" top="8"
-     height="14" width="356" name="lod_label" font="SansSerifSmallBold">
+     height="14" width="250" name="lod_label" font="SansSerifSmallBold">
         Detail Tier Distances
     </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_lod" label="Reset group"
+     tool_tip="Reset every setting in this section to its default">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoLodDrops,SSAtmoLodClusters,SSAtmoLodSheets" />
+    </button>
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="16" width="122"
@@ -119,9 +127,17 @@
 
     <text
      follows="left|top" layout="topleft" left="12" top_pad="12"
-     height="14" width="356" name="cloud_lod_label" font="SansSerifSmallBold">
+     height="14" width="250" name="cloud_lod_label" font="SansSerifSmallBold">
         Volumetric Clouds
     </text>
+    <button
+     follows="left|top" layout="topleft"
+     left_pad="4" top_delta="-3" height="20" width="102"
+     name="R_cloud_lod" label="Reset group"
+     tool_tip="Reset every setting in this section to its default. The field's own look lives on the Clouds tab and is not touched">
+        <button.commit_callback function="SSAtmo.ResetGroup"
+         parameter="SSAtmoCloudPuffsPerCell,SSAtmoCloudPuffBudget" />
+    </button>
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="16" width="122"

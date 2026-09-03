@@ -78,9 +78,21 @@ namespace
 
     const F32 PUFF_THICKNESS_GAIN = 0.35f;
 
-    // <SS:Nexii> The tessellation grid's pixel budget: one row of sub-quads per this many pixels of a puff's on-screen diameter, and the most rows any one puff may have. 96 puts a near puff at the old fixed 4x4 at roughly a third of the screen and walks it down to a single card by the time it is a couple of hundred pixels across, which is where the sub-quads stop being distinguishable anyway. The cap matters because a puff can fill the view: uncapped, one overhead cell would cost more vertices than the rest of the field together.
-    const F32 SS_TESS_PIXELS = 96.f;
-    const S32 SS_TESS_MAX_SEGS = 6;
+    // <SS:Nexii> The refinement LOD (SSAtmoCloudTessellation): near the eye the field grows
+    // smaller puffs ON TOP of the ones it already has, never instead of them. A placed puff
+    // within SS_TESS_RANGE_M of the camera grows SS_TESS_CHILDREN children at a fraction of
+    // its radius, and inside SS_TESS_INNER_M those children grow a smaller generation still,
+    // so the detail steps down in size as it climbs toward the viewer. The ranges are the
+    // LOD axis: each ring's puffs fade out approaching their limit, so walking toward a
+    // cloud gathers detail incrementally and no ring boundary ever pops. Every offset is
+    // hashed off the parent's AIR-FRAME cell - the same anchor the parent's own jitter uses -
+    // so the detail is part of the cloud and rides the wind instead of re-rolling against it.
+    const F32 SS_TESS_RANGE_M = 1000.f;
+    const F32 SS_TESS_INNER_M = 500.f;
+    const S32 SS_TESS_CHILDREN = 4;
+    const S32 SS_TESS_GRANDCHILDREN = 3;
+    const F32 SS_TESS_CHILD_FRAC = 0.42f;
+    const F32 SS_TESS_GRAND_FRAC = 0.45f;
 
     const F32 COVERAGE_FLOOR = 0.04f;
 
@@ -472,6 +484,12 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     static LLCachedControl<U32> per_cell_setting(gSavedSettings, "SSAtmoCloudPuffsPerCell", (U32)PUFFS_PER_CELL);
     const S32 puffs_per_cell = llclamp((S32)per_cell_setting, MIN_PUFFS_PER_CELL, MAX_PUFFS_PER_CELL);
 
+    // <SS:Nexii> The refinement LOD's switch, read here rather than in render(): what it buys
+    // is built puffs, not vertex work. The render pass has nothing to ask about it either way -
+    // every puff, parent or child, draws as the single camera-facing card it always was.
+    static LLCachedControl<bool> tessellate_setting(gSavedSettings, "SSAtmoCloudTessellation", false);
+    const bool tessellate = tessellate_setting;
+
     // The storm gloom rides the deck for the render pass's ss_gloom uniform - it used to be multiplied into every baked vertex colour, and it is one number per deck.
     deck.mGloom = field.mGloom;
 
@@ -525,7 +543,8 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         deck.mSheetForm = form;
         // The inset: just off the deck's floor, deep enough to sit inside the puffs' base fade,
         // shallow enough that the sheet reads as the deck's underside and not as a second layer.
-        deck.mSheetZ = field.mBaseHeightM + llclamp(field.mThicknessM * 0.08f, 30.f, 90.f);
+        // The flat 16 m lift sits it higher in the fade, so the veil clears the puffs' bottom dissolve instead of hugging the floor.
+        deck.mSheetZ = field.mBaseHeightM + 16.f + llclamp(field.mThicknessM * 0.08f, 30.f, 90.f);
         deck.mSheetAlpha = llclamp(0.30f + 0.45f * field.mCoverage, 0.f, 0.7f);
     }
 
@@ -602,7 +621,6 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
 
                 Puff puff;
                 puff.mPosAgent = pos;
-                puff.mAnvil = puff_anvil;
                 puff.mRadius = base_radius * size_gain * flat
                     * (0.7f + 0.6f * hashUnit(cx, cy, 5u + sub_salt))
                     * (squashed ? 1.6f : 1.f);
@@ -641,6 +659,80 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
 
                 dist_sum += dist_sq;
                 deck.mPuffs.push_back(puff);
+
+                // <SS:Nexii> The refinement LOD (SSAtmoCloudTessellation): the parent above is
+                // finished and untouched. Inside SS_TESS_RANGE_M of the eye it grows smaller
+                // children around its own body, and inside SS_TESS_INNER_M those children grow
+                // a smaller generation still - the field sampling itself finer where a viewer
+                // can see it. The children hang off the parent's AIR-FRAME cell hashes, the
+                // same anchor the parent's own jitter hangs from, so each one holds its place
+                // in its cloud while the wind carries both; a world-frame seed would re-roll
+                // against the drift every frame, which is exactly the swimming the old rim
+                // breakup suffered. Rings fade by the parent's distance, so the detail gathers
+                // and thins incrementally around the viewer instead of popping at a boundary.
+                // The children are ordinary puffs - same sort, same budget, same carve - and
+                // being the nearest bodies in the deck, a full budget pays for them out of the
+                // field's far edge, which is the LOD trade the budget dial already was.
+                if (tessellate && dist < SS_TESS_RANGE_M)
+                {
+                    const F32 child_fade =
+                        1.f - ss_smoothstep(SS_TESS_RANGE_M * 0.5f, SS_TESS_RANGE_M, dist);
+
+                    for (S32 ci = 0; ci < SS_TESS_CHILDREN; ++ci)
+                    {
+                        const U32 child_salt = 4099u + sub_salt * 31u + (U32)ci * 977u;
+
+                        const F32 ang = hashUnit(cx, cy, 6u + child_salt) * 6.2831853f;
+                        const F32 reach = puff.mRadius
+                                        * (0.45f + 0.65f * hashUnit(cx, cy, 7u + child_salt));
+                        const F32 child_r = puff.mRadius * SS_TESS_CHILD_FRAC
+                                          * (0.7f + 0.6f * hashUnit(cx, cy, 8u + child_salt));
+
+                        Puff child;
+                        child.mPosAgent = puff.mPosAgent
+                            + LLVector3(cosf(ang) * reach, sinf(ang) * reach,
+                                        child_r * (hashUnit(cx, cy, 9u + child_salt) - 0.5f) * 1.2f);
+                        child.mRadius = child_r;
+                        child.mAlpha = puff.mAlpha * child_fade;
+                        child.mForm = puff.mForm;
+
+                        const LLVector3 to_child = child.mPosAgent - cam;
+                        child.mCamDistSq = to_child.magVecSquared();
+                        dist_sum += child.mCamDistSq;
+                        deck.mPuffs.push_back(child);
+
+                        if (dist < SS_TESS_INNER_M)
+                        {
+                            const F32 grand_fade =
+                                1.f - ss_smoothstep(SS_TESS_INNER_M * 0.5f, SS_TESS_INNER_M, dist);
+
+                            for (S32 gi = 0; gi < SS_TESS_GRANDCHILDREN; ++gi)
+                            {
+                                const U32 grand_salt = 25013u + child_salt * 17u
+                                                     + (U32)gi * 769u;
+
+                                const F32 gang = hashUnit(cx, cy, 6u + grand_salt) * 6.2831853f;
+                                const F32 greet = child_r
+                                                * (0.5f + 0.9f * hashUnit(cx, cy, 7u + grand_salt));
+
+                                Puff grand;
+                                grand.mPosAgent = child.mPosAgent
+                                    + LLVector3(cosf(gang) * greet, sinf(gang) * greet,
+                                                child_r * 0.4f
+                                                * (hashUnit(cx, cy, 9u + grand_salt) - 0.5f));
+                                grand.mRadius = child_r * SS_TESS_GRAND_FRAC
+                                              * (0.7f + 0.6f * hashUnit(cx, cy, 8u + grand_salt));
+                                grand.mAlpha = child.mAlpha * grand_fade;
+                                grand.mForm = child.mForm;
+
+                                const LLVector3 to_grand = grand.mPosAgent - cam;
+                                grand.mCamDistSq = to_grand.magVecSquared();
+                                dist_sum += grand.mCamDistSq;
+                                deck.mPuffs.push_back(grand);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1096,20 +1188,6 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
-    // <SS:Nexii> The puff tessellation toggle. Off, every puff is the single camera-facing card it has always been. On, each is subdivided by the size it covers ON SCREEN - a near puff into a grid the renderer can shear, curl, dissolve and break up along its rim, a distant one back into the same single card, because a grid finer than the pixels it lands on is vertices spent on nothing. This is what a puff needs geometry for at all: the fragment stage can carve any shape it likes out of a card but cannot BEND one, so the anvil skirt and the wandering rim both live here.
-    static LLCachedControl<bool> tessellate_setting(gSavedSettings, "SSAtmoCloudTessellation", false);
-    const bool tessellate = tessellate_setting;
-
-    // How much a subdivided puff's rim may wander, as a fraction of its radius. Only read
-    // where the grid exists to carry it; see the edge breakup note in the emit lambda.
-    static LLCachedControl<F32> breakup_setting(gSavedSettings, "SSAtmoCloudEdgeBreakup", 0.25f);
-    const F32 edge_breakup = llclamp((F32)breakup_setting, 0.f, 1.f);
-
-    // Pixels per radian down the view, so a puff's diameter over its distance turns into the
-    // pixels it covers. Once per frame, not once per puff.
-    const F32 px_per_rad = (F32)camera->getViewHeightInPixels()
-                         / llmax(camera->getView(), 0.01f);
-
     // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and the shared uniforms above survive across both.
     const bool under_on_top = mUnder.mMeanDistSq < mPrimary.mMeanDistSq;
     Deck* order[2] = { under_on_top ? &mPrimary : &mUnder,
@@ -1270,65 +1348,25 @@ void SSVolCloud::render()
             const LLVector3 right = base_right * (puff.mRadius * wide);
             const LLVector3 up = base_up * (puff.mRadius * tall);
 
-            // <SS:Nexii> How finely THIS puff is subdivided, from the size it actually covers on screen. It used to be a flat 4 for every puff at every range, which is the half of tessellation that was never written: a puff two hundred metres off and one four kilometres away got the same sixteen sub-quads, so the toggle cost 16x the vertices everywhere and bought detail only where a person could see it. Measured in pixels rather than metres because that is what "can it be seen" means, and off the TRUE distance: the far-field squash moves every vertex along its own ray, so the projected image - and so the pixel size - is the true one. One sub-quad per SS_TESS_PIXELS of diameter, floored at 1 (the single quad that was always drawn) and capped so a puff filling the view cannot run away with the vertex budget.
-            const S32 segs = tessellate
-                ? llclamp((S32)((2.f * puff.mRadius * wide) * px_per_rad
-                                / llmax(sqrtf(puff.mCamDistSq), 1.f) / SS_TESS_PIXELS),
-                          1, SS_TESS_MAX_SEGS)
-                : 1;
+            // <SS:Nexii> The card, exactly as it has always been: four corners, one quad, no
+            // vertex displacement of any kind. Every bit of near-field detail is built geometry
+            // placed by the builder's refinement LOD (SSAtmoCloudTessellation), so this pass has
+            // nothing per-puff to decide and nothing to re-roll: what moves with the wind is the
+            // whole card, and what the fragment carve reads stays put with it. Displacing rim
+            // vertices here was tried and cut twice over - the seed keyed on the world position
+            // re-rolled against the drift every frame, and even anchored it reshaped the one puff
+            // the LOD was meant to leave alone.
+            // r the structural form, a the edge fade - the shader multiplies its own sky light in
+            // (see the vary_color note in ssVolCloudV.glsl); g and b spare.
+            gGL.color4f(puff.mForm, 0.f, 0.f, puff.mAlpha);
 
-            // <SS:Nexii> The puff's own displacement seed, quantised off its position so it is stable frame to frame and differs between neighbours.
-            const S32 seed_x = (S32)llfloor(puff.mPosAgent.mV[VX]);
-            const S32 seed_y = (S32)llfloor(puff.mPosAgent.mV[VY]);
+            gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
+            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
+            gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
 
-            // <SS:Nexii> One corner of the puff's quad, parameterised over the billboard: (0,0) is the bottom left, (1,1) the top right, exactly the corners the single quad used. With tessellation on (SSAtmoCloudTessellation) the quad becomes a grid of sub-quads, and the top rows shear out along the wind, widen, curl down and dissolve - the anvil skirt. A shear is linear and one quad could carry it; the CURL is not, and the alpha dissolve wants rows to pull apart: puffs are a single flat card each, and no amount of fragment noise can bend what the geometry does not have. Off, the corner maths collapses to exactly the quad that was always drawn.
-            const LLVector3 wind3(wind.mV[VX], wind.mV[VY], 0.f);
-            auto emit_corner = [&](F32 u, F32 v)
-            {
-                const F32 skirt = tessellate ? (puff.mAnvil * v * v) : 0.f;
-
-                LLVector3 pos = puff.mPosAgent
-                    + right * ((u * 2.f - 1.f) * (1.f + 0.30f * skirt))
-                    + up * (v * 2.f - 1.f)
-                    + wind3 * (puff.mRadius * 0.55f * skirt);
-                pos.mV[VZ] -= puff.mRadius * 0.22f * skirt
-                            * (0.5f + 0.5f * fabsf(u * 2.f - 1.f));
-
-                // <SS:Nexii> The edge breakup, and the reason subdividing is worth anything on an ordinary puff. What a person SEES of a puff is not this quad - the fragment stage carves the cloud out of it with alpha and discards the rest - but the carve is a function of vary_world, the interpolated WORLD position, so moving a vertex moves which piece of the cloud field the quad covers and the carved outline moves with it. A rectangle of vertices therefore reads as a rectangle's worth of cloud, cut off wherever the field wanted to continue past the border; pushing the border vertices around in the billboard plane lets the same carve wander instead of clipping, and the silhouette stops being four straight edges. Ramped by the squared distance from the quad's centre so the interior - where the texture content lives - barely moves and only the rim is disturbed, and keyed on the SHARED grid vertex so neighbouring sub-quads displace identically and the mesh cannot tear. In-plane only: displacing along the view normal would move the puff in depth, past the sort that put it where it is.
-                if (segs > 1 && edge_breakup > 0.f)
-                {
-                    const S32 gx = ll_round(u * (F32)segs);
-                    const S32 gy = ll_round(v * (F32)segs);
-                    const U32 gsalt = (U32)(gx * 73 + gy * 19) + deck.mSalt;
-
-                    const F32 edge = llmax(fabsf(u * 2.f - 1.f), fabsf(v * 2.f - 1.f));
-                    const F32 amp = edge_breakup * edge * edge * puff.mRadius;
-
-                    pos += base_right * ((hashUnit(seed_x, seed_y, gsalt) - 0.5f) * amp)
-                         + base_up * ((hashUnit(seed_x, seed_y, gsalt + 977u) - 0.5f) * amp);
-                }
-
-                const F32 alpha = puff.mAlpha * (1.f - 0.35f * skirt);
-
-                // r the structural form, a the edge fade - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); g and b spare.
-                gGL.color4f(puff.mForm, 0.f, 0.f, alpha);
-                gGL.texCoord2f(u, v);
-                gGL.vertex3fv(pos.mV);
-            };
-
-            for (S32 iy = 0; iy < segs; ++iy)
-            {
-                for (S32 ix = 0; ix < segs; ++ix)
-                {
-                    const F32 u0 = (F32)ix / segs;
-                    const F32 v0 = (F32)iy / segs;
-                    const F32 u1 = (F32)(ix + 1) / segs;
-                    const F32 v1 = (F32)(iy + 1) / segs;
-
-                    emit_corner(u0, v1); emit_corner(u0, v0); emit_corner(u1, v1);
-                    emit_corner(u1, v1); emit_corner(u0, v0); emit_corner(u1, v0);
-                }
-            }
+            gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
+            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
+            gGL.texCoord2f(1.f, 0.f); gGL.vertex3fv((puff.mPosAgent + right - up).mV);
         }
         gGL.end();
     }

@@ -115,6 +115,9 @@ namespace
     const S32 FIRE_CRAWL_MAX = 14;
     const S32 FIRE_EMBER_MAX = 16;
 
+    // The steam burst's disc budget, foot included - one every couple of metres over the crawl's 45m cap, and every one of them costs a field query at contact.
+    const S32 STEAM_MAX = 18;
+
     // Setting read with a fallback when it does not exist.
     F32 settingF(const char* name, F32 fallback)
     {
@@ -1018,23 +1021,29 @@ void SSLightning::growCrawl(SSStrike& strike, S32 foot, F32 intensity)
             cand[2] = heading + 0.7f + rng.frand(-0.35f, 0.35f);
 
             // The three headings bid by the wetness two steps ahead; a straight run keeps a small edge.
-            S32 best = 1;
+            // <SS:Nexii> Each candidate is also walked for real and its own step height taken, because the continuity guard belongs to the CANDIDATE, not to the arm: a heading that would climb a wall is simply not bid, and only a step boxed in on all three sides ends the arm. Breaking on the first steep candidate is what stopped a crawl dead at the foot of anything with relief - it never got to try the two headings that ran along the obstacle instead of into it.
+            S32 best = -1;
             F32 best_score = -1.0e9f;
+            LLVector3 best_next;
             for (S32 k = 0; k < 3; ++k)
             {
+                LLVector3 step_to = pos + LLVector3(cosf(cand[k]), sinf(cand[k]), 0.f) * step_m;
+                step_to.mV[VZ] = surfaceZ(step_to);
+                if (llabs(step_to.mV[VZ] - pos.mV[VZ]) > CRAWL_JUMP_M) continue;
+
                 const LLVector3 probe = pos + LLVector3(cosf(cand[k]), sinf(cand[k]), 0.f) * (step_m * 2.f);
                 const F32 score = ss_wet_score(fieldp->sample(probe)) * wet_dial + ((k == 1) ? 0.15f : 0.f);
                 if (score > best_score)
                 {
                     best_score = score;
                     best = k;
+                    best_next = step_to;
                 }
             }
+            if (best < 0) break;
             heading = cand[best];
 
-            LLVector3 next = pos + LLVector3(cosf(heading), sinf(heading), 0.f) * step_m;
-            next.mV[VZ] = surfaceZ(next);
-            if (llabs(next.mV[VZ] - pos.mV[VZ]) > CRAWL_JUMP_M) break;
+            const LLVector3 next = best_next;
 
             SSStrikeNode node;
             node.mPos = next;
@@ -1295,6 +1304,26 @@ void SSLightning::finishChannel(SSStrike& strike)
 }
 
 // The ground show's spawn-time tables: aura discs for every kind, then for a ground strike the impact sparks' ballistics, the fire blobs and the bounding box.
+// <SS:Nexii> The flash-boil, run once as the stroke lands: every candidate disc takes the water actually under it out of the surface field and keeps the figure as its own burst strength, so a strike into a flooded street steams along its whole crawl and the same strike into a dry one produces nothing. Deliberately NOT deterministic across viewers - it reads the local surface field, whose wetness, puddles and snow are local by construction, the same divergence the crawl's wet-steering and every surface height in this file already carry. The hold is scaled by the dial so a viewer running the effect down does not leave scorch behind it.
+void SSLightning::vaporiseGround(SSStrike& strike)
+{
+    static LLCachedControl<F32> steam_setting(gSavedSettings, "SSAtmoLightningSteam", 1.f);
+    const F32 dial = llclamp((F32)steam_setting, 0.f, 3.f);
+    if (dial <= 0.f) return;
+
+    static LLCachedControl<F32> hold_setting(gSavedSettings, "SSAtmoLightningSteamHold", 6.f);
+    const F32 hold_s = llclamp((F32)hold_setting, 0.f, 60.f);
+
+    SSSurfaceField* fieldp = SSSurfaceField::getInstance();
+    strike.mSteamPeak = 0.f;
+
+    for (SSStrikeSteam& sb : strike.mSteam)
+    {
+        sb.mWater = llclamp(fieldp->vaporise(sb.mPos, sb.mRadius, hold_s), 0.f, 1.f);
+        strike.mSteamPeak = llmax(strike.mSteamPeak, sb.mWater);
+    }
+}
+
 void SSLightning::buildGroundShow(SSStrike& strike)
 {
     const U32 seed = ss_hash3((U32)(strike.mFireAt * 271.0) ^ 0xc0fau);
@@ -1431,6 +1460,40 @@ void SSLightning::buildGroundShow(SSStrike& strike)
             strike.mFireBlobs.push_back(fb);
             grow_box(fb.mPos, fb.mRadius + 0.5f);
             ++crawl_fires;
+        }
+    }
+
+    // <SS:Nexii> Steam candidates: the attachment itself, then one every couple of metres down the crawl, blowing outward at the crawl's own arc speed so the burst runs along the channel the way the fire ignition does. Rolled here with everything else, but carrying no water yet - what is actually under them is a question only contact can answer. Radii run wider than the fire blobs because a boil throws a cloud well past the wet it came from.
+    if (ground)
+    {
+        SSStrikeSteam sb;
+        sb.mPos = strike.mGround;
+        sb.mRadius = (1.6f + 1.4f * I);
+        sb.mDelay = 0.f;
+        sb.mSeed = ss_hash3(seed ^ 0x57eau);
+        strike.mSteam.push_back(sb);
+        grow_box(sb.mPos, sb.mRadius + 1.f);
+
+        if (strike.mCrawlCount > 0)
+        {
+            const F32 foot_path = strike.mChannel[(size_t)strike.mChannel[(size_t)strike.mCrawlStart].mParent].mPathM;
+            F32 last_steam_m = -10.f;
+            for (S32 i = 0; i < strike.mCrawlCount && (S32)strike.mSteam.size() < STEAM_MAX; ++i)
+            {
+                const SSStrikeNode& node = strike.mChannel[(size_t)(strike.mCrawlStart + i)];
+                const F32 dist = llmax(node.mPathM - foot_path, 0.f);
+                if (i > 0 && dist - last_steam_m < 2.2f && dist >= last_steam_m) continue;
+                last_steam_m = dist;
+
+                const U32 h = ss_hash3(seed ^ 0x57eau) + (U32)i * 131u;
+                SSStrikeSteam cb;
+                cb.mPos = node.mPos;
+                cb.mRadius = (1.1f + 1.0f * ss_hash_unit(h)) * (0.7f + 0.6f * I);
+                cb.mDelay = dist / SSGroundShow::CRAWL_ARC_M_S;
+                cb.mSeed = h;
+                strike.mSteam.push_back(cb);
+                grow_box(cb.mPos, cb.mRadius + 1.f);
+            }
         }
     }
 
@@ -1580,6 +1643,13 @@ bool SSLightning::underDeckDivert(SSStrike& strike, SSRandStream& rng)
 void SSLightning::advance(SSStrike& strike, F32 dt)
 {
     strike.mT = (F32)(SSAtmoMagic::getInstance()->sharedTime() - strike.mFireAt);
+
+    // <SS:Nexii> Contact is the only moment the flash-boil can be resolved: the blobs were rolled ten seconds ago, but what is under them is whatever the field holds NOW. Once per strike, never per stroke - the second stroke falls on ground the first already boiled dry.
+    if (!strike.mVaporised && strike.mT >= 0.f && !strike.mSteam.empty())
+    {
+        vaporiseGround(strike);
+        strike.mVaporised = true;
+    }
 
     SSRandStream rng((U32)(strike.mFireAt * 3571.0) ^ 0x11feu);
 
@@ -1733,6 +1803,17 @@ void SSLightning::advance(SSStrike& strike, F32 dt)
                         ? sp.mHit + SSGroundShow::SECONDARY_LIFE_S : sp.mLife));
                 }
                 tail_s = llmax(tail_s, spark_tail);
+
+                // The far end of a long crawl blows its steam a beat after the foot did, so the retirement has to wait on the LAST blob, not the first - otherwise the crawl's own cloud is cut off mid-rise.
+                if (strike.mSteamPeak > 0.f)
+                {
+                    F32 steam_tail = 0.f;
+                    for (const SSStrikeSteam& sb : strike.mSteam)
+                    {
+                        if (sb.mWater > 0.f) steam_tail = llmax(steam_tail, sb.mDelay + SSGroundShow::STEAM_LIFE_S);
+                    }
+                    tail_s = llmax(tail_s, steam_tail);
+                }
             }
             if (strike.mT > last_at + strike.mStrokeDecayS * 6.f + tail_s)
             {

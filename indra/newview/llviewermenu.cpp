@@ -12683,6 +12683,32 @@ void initialize_spellcheck_menu()
     // <SS:Nexii> Atmo Magic: the Effects & LOD floater's debug strike buttons; registered here because that floater is a plain LLFloater with no class of its own to hang a callback on.
     commit.add("SSAtmo.StrikeNow", [](LLUICtrl*, const LLSD&) { SSLightning::getInstance()->triggerNow(); });
     commit.add("SSAtmo.StrikeGround", [](LLUICtrl*, const LLSD&) { SSLightning::getInstance()->triggerGroundNow(); });
+
+    // <SS:Nexii> Resets a named group of settings at once - the per-section buttons on the Effects & LOD tabs, beside the per-row D buttons that already reset one control each. The parameter is a comma-separated list of control names rather than a prefix: a prefix would quietly widen every time a setting was added whose name happened to start the same way, and the failure would be silent and destructive. An unknown name warns and is skipped, so a list that falls behind its panel resets what it still can. doc/atmo_magic_fx_ui.md
+    commit.add("SSAtmo.ResetGroup", [](LLUICtrl*, const LLSD& param)
+    {
+        const std::string names = param.asString();
+        size_t start = 0;
+        while (start <= names.size())
+        {
+            const size_t comma = names.find(',', start);
+            std::string name = names.substr(start, (comma == std::string::npos) ? std::string::npos : comma - start);
+            LLStringUtil::trim(name);
+            if (!name.empty())
+            {
+                if (LLControlVariable* control = gSavedSettings.getControl(name))
+                {
+                    control->resetToDefault(true);
+                }
+                else
+                {
+                    LL_WARNS("Settings") << "SSAtmo.ResetGroup: no such setting '" << name << "'" << LL_ENDL;
+                }
+            }
+            if (comma == std::string::npos) break;
+            start = comma + 1;
+        }
+    });
     commit.add("SpellCheck.ReplaceWithSuggestion", boost::bind(&handle_spellcheck_replace_with_suggestion, _1, _2));
     enable.add("SpellCheck.VisibleSuggestion", boost::bind(&visible_spellcheck_suggestion, _1, _2));
     commit.add("SpellCheck.AddToDictionary", boost::bind(&handle_spellcheck_add_to_dictionary, _1));

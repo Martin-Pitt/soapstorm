@@ -507,6 +507,7 @@ SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const Geometr
         fld.mWet.assign(geom.mZ.size(), 0.f);
         fld.mSnow.assign(geom.mZ.size(), 0.f);
         fld.mPuddle.assign(geom.mZ.size(), 0.f);
+        fld.mScorch.assign(geom.mZ.size(), 0.f);
         fld.mLift.assign(geom.mZ.size(), 0.f);
         fld.mInflow.assign(geom.mZ.size(), 0.f);
         fld.mStore.assign(geom.mZ.size(), 0.f);
@@ -642,9 +643,14 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
                 return llclamp(1.f - angle / repose, 0.f, 1.f);
             };
 
-            fld.mWet[i] += (wet_target - fld.mWet[i]) * wet_blend;
+            // <SS:Nexii> A cell a strike flash-boiled holds off re-accumulation until its hold runs out: the drying and draining paths below still run, so the patch keeps behaving like scorched ground rather than freezing as it was. Without this the very next rain tick puts the puddle straight back and the vaporisation reads as nothing having happened. [interaction: SSLightning::vaporise]
+            const bool scorched = !fld.mScorch.empty() && fld.mScorch[i] > 0.f;
+            if (scorched) fld.mScorch[i] = llmax(0.f, fld.mScorch[i] - dt);
 
-            if (snowing)
+            fld.mWet[i] += ((scorched ? 0.f : wet_target) - fld.mWet[i])
+                         * (scorched ? (1.f - expf(-(preset.mDryRate > 0.f ? preset.mDryRate : FALLBACK_DRY) * dt)) : wet_blend);
+
+            if (snowing && !scorched)
             {
                 const F32 depth_scale = lerp(1.f, snow_struct_frac, structFactor(i));
                 const F32 room = preset.mSnowDepth * depth_scale * lieHere() - fld.mSnow[i];
@@ -668,7 +674,7 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
             // Tall structure cells stop accumulating and let what they hold
             // drain out through the ordinary loss path.
             const F32 grade = 1.f - structFactor(i);
-            if (pooling && geom.mPool[i] && grade > 0.01f)
+            if (pooling && !scorched && geom.mPool[i] && grade > 0.01f)
             {
                 const F32 mask = puddleMask(x, y) * grade;
                 fld.mPuddle[i] = llmin(puddle_depth_ceiling * mask,
@@ -826,6 +832,67 @@ void SSSurfaceField::idle(F32 dt)
 }
 
 // Point query of the field (surface height, wet, snow, puddle) for CPU consumers like avatar exposure.
+// <SS:Nexii> Flash-boils the surface water under a strike. Weighted by distance across the disc so the burst has a soft edge instead of a stamped circle, and weighted per medium by what a return stroke would actually do: the standing puddle goes outright at the centre, the film of wet mostly goes, the snow loses its top but not the drift - a bolt does not clear a snowfield. The hold is written to every cell it touches, in proportion, so the rim recovers before the middle. Returns the water taken against a full puddle over the disc, which is the steam burst's own scale. doc/atmo_magic_lightning_strike.md
+F32 SSSurfaceField::vaporise(const LLVector3& center_agent, F32 radius_m, F32 hold_s)
+{
+    // What counts as a full one of its kind when the three media are summed: the pool depth ceiling's own default, and a snow depth deep enough to walk in.
+    constexpr F32 PUDDLE_FULL_M = 0.15f;
+    constexpr F32 SNOW_FULL_M = 0.25f;
+
+    if (radius_m <= 0.f) return 0.f;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(center_agent);
+    if (!regionp) return 0.f;
+
+    auto it = mFields.find(regionp->getHandle());
+    if (it == mFields.end()) return 0.f;
+
+    Field& fld = it->second;
+    if (fld.mN < 1 || fld.mCell <= 0.f || fld.mScorch.size() != fld.mZ.size()) return 0.f;
+
+    const LLVector3 local = center_agent - regionp->getOriginAgent();
+    const F32 cx = local.mV[VX] / fld.mCell;
+    const F32 cy = local.mV[VY] / fld.mCell;
+    const F32 cr = radius_m / fld.mCell;
+
+    const S32 x0 = llclamp((S32)floorf(cx - cr), 0, fld.mN - 1);
+    const S32 x1 = llclamp((S32)ceilf(cx + cr), 0, fld.mN - 1);
+    const S32 y0 = llclamp((S32)floorf(cy - cr), 0, fld.mN - 1);
+    const S32 y1 = llclamp((S32)ceilf(cy + cr), 0, fld.mN - 1);
+
+    F32 taken = 0.f;
+    F32 area = 0.f;
+
+    for (S32 y = y0; y <= y1; ++y)
+    {
+        for (S32 x = x0; x <= x1; ++x)
+        {
+            const F32 dx = ((F32)x + 0.5f) - cx;
+            const F32 dy = ((F32)y + 0.5f) - cy;
+            const F32 d = sqrtf(dx * dx + dy * dy) / llmax(cr, 0.001f);
+            if (d >= 1.f) continue;
+
+            const F32 w = 1.f - d * d;
+            const size_t i = (size_t)y * fld.mN + x;
+            area += w;
+
+            // The three media carry different units - puddle and snow in metres, wet as a 0-1 film - so each is normalised against what counts as a full one of its kind before they are summed. A brimming puddle alone is worth a full burst; wet ground alone a third of one.
+            taken += llmin(fld.mPuddle[i] / PUDDLE_FULL_M, 1.f) * w;
+            fld.mPuddle[i] *= 1.f - w;
+
+            taken += fld.mWet[i] * 0.35f * w;
+            fld.mWet[i] *= 1.f - 0.85f * w;
+
+            taken += llmin(fld.mSnow[i] / SNOW_FULL_M, 1.f) * 0.5f * w;
+            fld.mSnow[i] *= 1.f - 0.5f * w;
+
+            fld.mScorch[i] = llmax(fld.mScorch[i], hold_s * w);
+        }
+    }
+
+    return (area > 0.f) ? taken / area : 0.f;
+}
+
 SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
 {
     Sample out;
@@ -849,8 +916,24 @@ SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
     out.mSnow = fld.mSnow[i];
     out.mPuddle = fld.mPuddle[i];
     out.mLift = fld.mLift.empty() ? 0.f : fld.mLift[i];
-    out.mSurfaceZ = fld.mZ[i];
     out.mValid = true;
+
+    // <SS:Nexii> The HEIGHT is bilinear over the four surrounding cell centres, where wetness, snow and puddles stay nearest-cell. A stair-stepped surface is a fair answer for a material property and a bad one for a height: every consumer that walks it - the ground crawl above all, stepping 1.5-3m against a 2m continuity guard - reads a cell boundary as a cliff and stops there. Over the Linden heightmap neighbouring cells differ by centimetres and it never showed; over a sculpted or mesh sim surround they differ by the whole relief, so the crawl died on its first step every time. Sampling at cell CENTRES (the half-cell shift) is what keeps the interpolant from leaning half a cell off the data. doc/atmo_magic_lightning_strike.md
+    {
+        const F32 gx = local.mV[VX] / fld.mCell - 0.5f;
+        const F32 gy = local.mV[VY] / fld.mCell - 0.5f;
+        const S32 x0 = llclamp((S32)floorf(gx), 0, fld.mN - 1);
+        const S32 y0 = llclamp((S32)floorf(gy), 0, fld.mN - 1);
+        const S32 x1 = llmin(x0 + 1, fld.mN - 1);
+        const S32 y1 = llmin(y0 + 1, fld.mN - 1);
+        const F32 tx = llclamp(gx - (F32)x0, 0.f, 1.f);
+        const F32 ty = llclamp(gy - (F32)y0, 0.f, 1.f);
+        const F32 z00 = fld.mZ[(size_t)y0 * fld.mN + x0];
+        const F32 z10 = fld.mZ[(size_t)y0 * fld.mN + x1];
+        const F32 z01 = fld.mZ[(size_t)y1 * fld.mN + x0];
+        const F32 z11 = fld.mZ[(size_t)y1 * fld.mN + x1];
+        out.mSurfaceZ = lerp(lerp(z00, z10, tx), lerp(z01, z11, tx), ty);
+    }
 
     if (out.mPuddle > 0.f)
     {

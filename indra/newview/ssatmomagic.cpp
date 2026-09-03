@@ -1176,8 +1176,8 @@ void SSAtmoMagic::drawInfo()
         lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen / %d occluded   %d quads%s",
                                  ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mOccluded, ds.mQuads,
                                  ds.mDepthCopy ? "  depth copy" : ""));
-        lines.push_back(llformat("  segs     %d bolt / %d plasma / %d sparks / %d discs",
-                                 ds.mSegments, ds.mPlasma, ds.mSparks, ds.mDiscs));
+        lines.push_back(llformat("  segs     %d bolt / %d plasma / %d sparks / %d discs / %d steam",
+                                 ds.mSegments, ds.mPlasma, ds.mSparks, ds.mDiscs, ds.mSteam));
     }
 
     for (S32 self = 1; self >= 0; --self)

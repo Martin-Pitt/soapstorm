@@ -52,6 +52,11 @@ namespace SSGroundShow
     constexpr F32 SECONDARY_LIFE_S = 0.6f;
     constexpr F32 CRAWL_ARC_M_S = 60.f;
     constexpr S32 AURA_PATCHES = 4;
+
+    // <SS:Nexii> The steam burst's clock: the flash-boil itself is near-instant (a stroke deposits its energy in microseconds, and the recorded puff is already at full width within a frame or two), then the cloud rises and thins over its life. Held apart from the fire's timing because steam outlives the flare and dies well before the fire does.
+    constexpr F32 STEAM_BURST_S = 0.12f;
+    constexpr F32 STEAM_LIFE_S = 1.6f;
+    constexpr F32 STEAM_RISE_M_S = 1.8f;
 }
 
 enum SSStrikeKind : U8
@@ -113,6 +118,19 @@ struct SSStrikeFire
 
     // A spark's landing ember ages from the first stroke (its spark flew once); crawl and fan blobs age from the latest stroke, so a restrike re-ignites them.
     bool mEmber = false;
+};
+
+// <SS:Nexii> One steam burst where the strike flash-boiled the ground. The disc positions, radii and delays are rolled at spawn like the fire blobs, but mWater cannot be: it is the water the field actually held AT CONTACT, ten seconds after the roll, so it is filled in once when the stroke lands and is zero for every blob over dry ground - which is what makes a strike on a dry road produce no steam at all. doc/atmo_magic_lightning_strike.md
+struct SSStrikeSteam
+{
+    LLVector3 mPos;
+    F32 mRadius = 1.5f;
+
+    // Seconds after contact this blob blows, spread outward along the crawl at the same arc speed the fire ignition uses.
+    F32 mDelay = 0.f;
+
+    F32 mWater = 0.f;
+    U32 mSeed = 0;
 };
 
 struct SSStrike
@@ -206,6 +224,11 @@ struct SSStrike
     std::vector<SSStrikeSpark> mSparks;
     std::vector<SSStrikeFire> mFireBlobs;
 
+    // <SS:Nexii> The steam burst: candidate discs rolled at spawn, charged with the field's live water at contact by vaporiseGround() (once - a restrike falls on ground its own first stroke already boiled dry), and the loudest blob's water kept so retirement and the renderer can skip a strike that found nothing to boil.
+    std::vector<SSStrikeSteam> mSteam;
+    bool mVaporised = false;
+    F32 mSteamPeak = 0.f;
+
     // <SS:Nexii> The ground show's bounding box (attachment, crawl, spark landings, fire blobs), for the renderer's frustum test and its occlusion query.
     LLVector3 mGroundBoxMin;
     LLVector3 mGroundBoxMax;
@@ -292,6 +315,9 @@ private:
 
     // <SS:Nexii> The ground show's spawn-time tables for a ground strike: aura discs, impact spark ballistics, fire blobs and the bounding box - all hashed from the fire time so every frame and every client reads the same show.
     void buildGroundShow(SSStrike& strike);
+
+    // Charges the strike's steam blobs from the live surface field and takes that water out of it - once, at contact.
+    void vaporiseGround(SSStrike& strike);
 
     void advance(SSStrike& strike, F32 dt);
 

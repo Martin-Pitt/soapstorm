@@ -66,6 +66,9 @@ public:
     // has into mSnow. Forwards to the transport's repose logic.
     void depositAt(const LLVector3& pos_agent, F32 depth);
 
+    // <SS:Nexii> Flash-boils the surface water in a disc: takes the standing puddle outright, most of the film of wet, and the top of any snow, and holds those cells against re-accumulation for hold_s so the patch stays gone long enough to read instead of refilling from the next rain tick. Returns the water it actually took, 0..1 against a full puddle, which is what the steam burst scales itself by - a strike on dry ground removes nothing and steams not at all. doc/atmo_magic_lightning_strike.md
+    F32 vaporise(const LLVector3& center_agent, F32 radius_m, F32 hold_s);
+
     // Walks every cell holding settled snow and lift around a point - the drift tier's spawn walk.
     void forEachLiftCell(const LLVector3& center_agent, F32 radius_m,
                          const std::function<void(const LLVector3& pos_agent, F32 depth, F32 lift)>& fn) const;
@@ -140,6 +143,9 @@ public:
         // The granular transport's state: the per-cell lift figure the drift tier's spawn walk
         // reads, and the creep pass's inflow accumulator (one step's arrivals, applied after the
         // outflows so the exchange is order-independent).
+        // <SS:Nexii> Seconds of accumulation hold left on each cell after a strike flash-boiled it. Counts down in the tick; while it is up the cell takes no wet, no pool and no snow, but its ordinary loss paths still run, so a scorched patch dries rather than freezing in place. One F32 per cell, zero for every cell that has never been struck.
+        std::vector<F32> mScorch;
+
         std::vector<F32> mLift;
         std::vector<F32> mInflow;
 

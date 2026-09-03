@@ -112,14 +112,15 @@ private:
         // <SS:Nexii> The puff's structural form term - facing toward the light and the exponential shade down through the deck, beam-flattened. This used to be a baked LLColor3: (ambient + sun * form) with the sun from a CPU replica of the beam extinction that crushed to grey at every low sun. The LIGHT half of that product now comes from the dome's own uniforms in the vertex shader (ssVolCloudV.glsl) so the deck takes the sunset the dome band does; only the structure - which the builder walks the deck's geometry to know - still rides the puff.
         F32 mForm = 1.f;
         F32 mCamDistSq = 0.f;
-
-        // <SS:Nexii> This puff's anvil figure - the deck's own anvil raised by the noise map's tower ramp where the column is one of the strong ones, and by the height ramp wherever the puff climbs the deck's upper stretch toward the cirrus band. Rides on the puff so the renderer can shear its top into a skirt without re-deriving anything.
-        F32 mAnvil = 0.f;
     };
 
     // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are the same renderer run twice - each with its own resolved field state, textures, puff set and uniforms - so a sky-themed build can hang a second layer at the bottom of the build while the weather-driven deck stays overhead. Drawn far deck first; within a deck the puffs stay depth-sorted, and decks separated by hundreds of metres hide the cross-deck ordering.
     struct Deck
     {
+        // <SS:Nexii> The deck's bodies: the builder's cell-placed puffs, plus - when
+        // SSAtmoCloudTessellation is on - the smaller refinement children hung on the ones near
+        // the eye. Children are ordinary Puffs: same sort, same budget, same fragment carve, so
+        // nothing downstream distinguishes them.
         std::vector<Puff> mPuffs;
 
         LLUUID mTexture;
