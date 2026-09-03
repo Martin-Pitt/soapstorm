@@ -247,6 +247,7 @@ extern LLGLSLShader         gDeferredPostProgram;
 extern LLGLSLShader         gDeferredCoFProgram;
 extern LLGLSLShader         gDeferredDoFCombineProgram;
 extern LLGLSLShader         gFXAAProgram[4];
+extern LLGLSLShader         gHUDDownsampleProgram; // <SS:Nexii/> resolves the supersampled HUD target back to the screen
 extern LLGLSLShader         gSMAAEdgeDetectProgram[4];
 extern LLGLSLShader         gSMAABlendWeightsProgram[4];
 extern LLGLSLShader         gSMAANeighborhoodBlendProgram[4];

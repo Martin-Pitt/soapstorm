@@ -227,6 +227,7 @@ LLGLSLShader            gExposureProgram;
 LLGLSLShader            gExposureProgramNoFade;
 LLGLSLShader            gLuminanceProgram;
 LLGLSLShader            gFXAAProgram[4];
+LLGLSLShader            gHUDDownsampleProgram; // <SS:Nexii/>
 LLGLSLShader            gSMAAEdgeDetectProgram[4];
 LLGLSLShader            gSMAABlendWeightsProgram[4];
 LLGLSLShader            gSMAANeighborhoodBlendProgram[4];
@@ -1288,6 +1289,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             gSMAABlendWeightsProgram[i].unload();
             gSMAANeighborhoodBlendProgram[i].unload();
         }
+        gHUDDownsampleProgram.unload(); // <SS:Nexii/>
         gCASProgram.unload();
         gCASLegacyGammaProgram.unload();
         gEnvironmentMapProgram.unload();
@@ -3071,6 +3073,28 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             }
         }
     }
+
+    // <SS:Nexii> HUD supersample resolve. Kept out of the RenderFSAAType chain on purpose: it runs after renderFinalize has
+    // already presented, resolving the offscreen HUD target onto the screen, so it is available regardless of which (if any)
+    // screen-space AA the user has picked. Failure here is non-fatal; LLPipeline::beginHUDSupersample checks isComplete()
+    // and falls back to drawing HUDs straight to the screen.
+    if (success)
+    {
+        gHUDDownsampleProgram.mName = "HUD Downsample Shader";
+        gHUDDownsampleProgram.mFeatures.isDeferred = true;
+        gHUDDownsampleProgram.mShaderFiles.clear();
+        gHUDDownsampleProgram.mShaderFiles.push_back(make_pair("deferred/postDeferredV.glsl", GL_VERTEX_SHADER));
+        gHUDDownsampleProgram.mShaderFiles.push_back(make_pair("deferred/hudDownsampleF.glsl", GL_FRAGMENT_SHADER));
+        gHUDDownsampleProgram.clearPermutations();
+        gHUDDownsampleProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+
+        if (!gHUDDownsampleProgram.createShader())
+        {
+            LL_WARNS() << "Failed to create shader '" << gHUDDownsampleProgram.mName << "', HUD supersampling disabled!" << LL_ENDL;
+            gHUDDownsampleProgram.unload();
+        }
+    }
+    // </SS:Nexii>
 
     if (gGLManager.mGLVersion > 3.15f && success)
     {

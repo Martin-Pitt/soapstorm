@@ -72,6 +72,19 @@ endif()
 # Don't bother with a MinSizeRel or Debug builds.
 set(CMAKE_CONFIGURATION_TYPES "RelWithDebInfo;Release" CACHE STRING "Supported build types." FORCE)
 
+# <SS:Nexii> ss_hot_loop_codegen(<target>)
+#
+# Opts a target out of the MSVC buffer security check (/GS). /GS makes the compiler plant a stack canary and a validation epilogue in any function holding an array or taking the address of a local, which describes essentially every loop in a math or pixel kernel - so the cost lands hardest exactly where it buys least.
+#
+# It is scoped per target rather than set globally because /GS is worth keeping on everything that parses input the viewer did not produce: network messages, LLSD, asset and mesh decoders, the UI. Only call this for libraries whose work is arithmetic over buffers the caller already owns.
+#
+# No effect on GCC or Clang builds, where the equivalent (-fno-stack-protector) is already applied to everything in the LINUX block below.
+function(ss_hot_loop_codegen target)
+  if (WINDOWS AND TARGET ${target})
+    target_compile_options(${target} PRIVATE /GS-)
+  endif ()
+endfunction()
+
 # Platform-specific compilation flags.
 
 if (WINDOWS)
@@ -93,6 +106,19 @@ if (WINDOWS)
   # http://www.ogre3d.org/forums/viewtopic.php?f=2&t=60015
   # http://www.cmake.org/pipermail/cmake/2009-September/032143.html
   string(REPLACE "/Zm1000" " " CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS})
+
+  # <SS:Nexii> Raise inline expansion from /Ob2 to /Ob3. This is a substitution rather than an appended flag on purpose: /Ob2 arrives twice, once from LL_BUILD (fs-build-variables/variables, LL_BUILD_WINDOWS_RELEASE_SWITCHES) and once from CMake's own CMAKE_CXX_FLAGS_RELEASE default, and the Visual Studio generator lifts inline expansion out of the flag string into an MSBuild property - so appending /Ob3 and trusting last-wins is not reliable. Replacing leaves exactly one.
+  #
+  # /Ob3 trades binary size for inlining depth, and it compounds with USE_LTO: if link times or the working set become a problem, this is the first switch to put back to /Ob2.
+  # The inline level goes in the common flags, and every per-config copy is then stripped so exactly one reaches cl. Both halves are needed: the Visual Studio generator recognises /Ob0 through /Ob2 and folds them into the InlineFunctionExpansion MSBuild property, but does not recognise /Ob3, which therefore lands in AdditionalOptions instead. Leaving a per-config /Ob1 in place would put both on the command line - MSBuild emits AdditionalOptions last so /Ob3 would still win, but cl warns D9025 "overriding /Ob1 with /Ob3" once per translation unit, which buries everything else in the build log.
+  set(SS_INLINE_EXPANSION "/Ob3" CACHE STRING "MSVC inline expansion level; set to /Ob2 to revert")
+  string(REPLACE "/Ob2" "${SS_INLINE_EXPANSION}" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+  string(REPLACE "/Ob2" "${SS_INLINE_EXPANSION}" CMAKE_C_FLAGS "${CMAKE_C_FLAGS}")
+  foreach(_ss_cfg RELEASE RELWITHDEBINFO MINSIZEREL DEBUG)
+    foreach(_ss_lang CXX C)
+      string(REGEX REPLACE "/Ob[0-3]" "" CMAKE_${_ss_lang}_FLAGS_${_ss_cfg} "${CMAKE_${_ss_lang}_FLAGS_${_ss_cfg}}")
+    endforeach()
+  endforeach()
 
   add_link_options(/LARGEADDRESSAWARE
           /NODEFAULTLIB:LIBCMT
@@ -116,13 +142,30 @@ if (WINDOWS)
           /c
           /Zc:forScope
           /nologo
-          /Oy-
           /Oi
           /Ot
           /fp:precise
+          # <SS:Nexii> Put each global in its own COMDAT so the linker can fold duplicates and drop what nothing references. Wants /OPT:REF,ICF at link time, which is already the MSVC release default.
+          /Gw
           /MP
           /permissive-
       )
+
+  # <SS:Nexii> /fp:contract was here and is deliberately NOT set. Do not add it back without reading this.
+  #
+  # It let the compiler fuse a*b+c into a single FMA. That is more accurate in isolation - one rounding where the unfused form rounds twice - but accuracy is not the property culling needs, CONSISTENCY is. MSVC contracts scalar float code and does NOT fuse SSE intrinsics, and this viewer's culling is a mixture of both, so the same geometric predicate could be computed two ways that disagree in the last bit. A frustum or occlusion test that straddles zero then answers differently depending on which path asked, and the error is worst where a small difference is taken between large magnitudes - exactly a plane-distance test far from the origin.
+  #
+  # This is CONFIRMED, not suspected. Symptom: object and water geometry dropping out for single frames, triggered by camera movement, at 1-2.5 km altitude, with everything else on the branch held constant. Removing this flag and changing nothing else stopped it. The mechanism above was written down before the test rather than fitted to it afterwards, and it predicted all four properties of the symptom - camera-motion triggered, single frame, water affected as well as prims, and worse with altitude.
+  #
+  # Note what the symptom was NOT: it was not a slowdown, not a crash, and not wrong pixels. It was geometry vanishing for one frame. Anyone re-reading this while looking at a performance flag should understand that contraction here bought a small, unmeasured speedup and cost visible correctness.
+  #
+  # It was the only change in this file that alters a computed result: /Ob3, /Gw and /GS- change inlining, COMDAT folding and stack canaries, none of which move a float. Those all remain.
+  #
+  # If contraction is ever wanted back, the way in is NOT to re-add it globally and hope. Find the specific predicate that two code paths compute inconsistently - the suspicion is a frustum or occlusion plane-distance test evaluated once in contracted scalar code and once in SIMD intrinsics, which MSVC does not fuse - make that one computation consistent, and only then consider re-enabling contraction for everything else.
+  #
+  # /fp:precise above is what MSVC applies by default anyway, and under it contraction is off - so this line's absence is the safe state, not a missing optimisation.
+
+  # <SS:Nexii> /Oy- was here. It disables frame pointer omission, which is an x86-only optimisation - on x64 the switch is parsed and ignored, because the ABI requires unwind data for every frame regardless. It has never done anything in a 64 bit build and reading it here suggests otherwise.
 
   # <FS:Ansariel> AVX/AVX2 support
   if (USE_AVX_OPTIMIZATION)
@@ -204,6 +247,22 @@ if (LINUX)
   if (ADDRESS_SIZE EQUAL 32)
     add_compile_options(-march=pentium4)
   endif (ADDRESS_SIZE EQUAL 32)
+
+  # <SS:Nexii> AVX/AVX2 on Linux, mirroring the /arch block in the WINDOWS section above.
+  #
+  # Until now USE_AVX2_OPTIMIZATION was honoured on Windows only: indra/CMakeLists.txt add_compile_definitions() it on every platform, but the flag that actually changes code generation sat inside if (WINDOWS). A Linux build therefore compiled -msse2 while reporting "AVX2" in the about box and to the crash handler, because both of those read the define.
+  #
+  # -mfma is listed explicitly rather than left to -mavx2. The two are separate feature flags to GCC and Clang even though every shipping AVX2 CPU has FMA3.
+  if (USE_AVX_OPTIMIZATION)
+    add_compile_options(-mavx)
+  elseif (USE_AVX2_OPTIMIZATION)
+    add_compile_options(-mavx2 -mfma)
+  endif ()
+
+  # <SS:Nexii> The counterpart of NOT setting /fp:contract on Windows - see the note in the WINDOWS block above for why contraction is being kept off.
+  #
+  # This has to be stated rather than left alone, because the platforms disagree on the default: MSVC under /fp:precise does not contract, while GCC and Clang contract by default for C++. Saying nothing here would mean a Linux build quietly did the exact thing the Windows build was changed to stop doing - and -mfma above has just guaranteed it the hardware to do it with.
+  add_compile_options(-ffp-contract=off)
 
   # this stops us requiring a really recent glibc at runtime
   add_compile_options(-fno-stack-protector)

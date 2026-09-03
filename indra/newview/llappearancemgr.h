@@ -179,6 +179,17 @@ public:
     // Special handling of temp attachments, which are not in the COF
     bool shouldRemoveTempAttachment(const LLUUID& item_id);
 
+// <SS:Nexii> Ghost temp attachment cleanup after a teleport
+    // After a teleport into a region where the experience a temp attachment
+    // belongs to does not exist, the simulator drops that attachment but the
+    // viewer object can survive as a ghost which can no longer be detached.
+    // Once the agent settled in the new region, this asks the region for its
+    // attachment report and removes every temp attachment the region does not
+    // know about, from the root down through the whole linkset, like a
+    // simulator initiated detach would.
+    void checkForGhostTempAttachments();
+// </SS:Nexii>
+
     //has the current outfit changed since it was loaded?
     bool isOutfitDirty() { return mOutfitIsDirty; }
 
@@ -266,6 +277,10 @@ public:
 private:
     void serverAppearanceUpdateCoro(LLCoreHttpUtil::HttpCoroutineAdapter::ptr_t &httpAdapter);
 
+// <SS:Nexii> Ghost temp attachment cleanup after a teleport
+    void ghostTempAttachmentsCheckCoro();
+// </SS:Nexii>
+
 // [SL:KB] - Patch: Appearance-Misc
     void syncCofVersionAndRefreshCoro();
 // [/SL:KB]
@@ -315,6 +330,10 @@ private:
     doomed_temp_attachments_t   mDoomedTempAttachmentIDs;
 
     void addDoomedTempAttachment(const LLUUID& id_to_remove);
+
+// <SS:Nexii> Ghost temp attachment cleanup after a teleport
+    bool mGhostTempAttachmentCheckRunning;
+// </SS:Nexii>
 
     //////////////////////////////////////////////////////////////////////////////////
     // Item-specific convenience functions

@@ -409,6 +409,9 @@ public:
     LLVOCacheEntry* getCacheEntryForOctree(U32 local_id);
     LLVOCacheEntry* getCacheEntry(U32 local_id, bool valid = true);
     bool probeCache(U32 local_id, U32 crc, U32 flags, U8 &cache_miss_type);
+    // <SS:Nexii> Region object cache: draw a remembered object now instead of waiting for the simulator's probe, rebuilding its cache entry from the supplied blob when the .slc no longer holds one. See doc/region_object_cache.md.
+    bool ssROCActivateCacheEntry(U32 local_id, U32 crc, U32 flags, LLDataPackerBinaryBuffer* dp);
+    // </SS:Nexii>
     U64 getRegionCacheHitCount() { return mRegionCacheHitCount; }
     U64 getRegionCacheMissCount() { return mRegionCacheMissCount; }
     void requestCacheMisses();

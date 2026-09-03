@@ -167,6 +167,11 @@ public:
     void combineGlow(LLRenderTarget* src, LLRenderTarget* dst);
     void visualizeBuffers(LLRenderTarget* src, LLRenderTarget* dst, U32 bufferIndex);
 
+    // <SS:Nexii> HUD supersampling. HUD attachments are drawn after renderFinalize has already resolved FXAA/SMAA and presented, so they land in a single-sample buffer with no antialiasing of any kind. Supersampling them into an offscreen target and resolving it back is the only form of AA that also covers texture alpha edges, which is where most visible HUD jaggedness comes from. Rationale and the alpha/coverage argument in doc/hud_supersampling.md.
+    bool beginHUDSupersample();
+    void endHUDSupersample();
+    // </SS:Nexii>
+
     void init();
     void cleanup();
     bool isInit() { return mInitialized; };
@@ -794,6 +799,11 @@ public:
 
     // render ui to buffer target
     LLRenderTarget          mUIScreen;
+
+    // <SS:Nexii> supersampled HUD attachment target, allocated lazily at the world view size times the supersample factor
+    LLRenderTarget          mHUDScreen;
+    U32                     mHUDSupersampleFactor = 1;
+    // </SS:Nexii>
 
     // downres scratch space for GPU downscaling of textures
     LLRenderTarget          mDownResMap;

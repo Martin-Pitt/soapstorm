@@ -564,6 +564,9 @@ LLFloaterPreference::LLFloaterPreference(const LLSD& key)
     mCommitCallbackRegistrar.add("Pref.Online_Notices",         boost::bind(&LLFloaterPreference::onClickChatOnlineNotices, this));
     // <FS:PP> FIRE-8190: Preview function for "UI Sounds" Panel
     mCommitCallbackRegistrar.add("PreviewUISound",              boost::bind(&LLFloaterPreference::onClickPreviewUISound, this, _2));
+    // <SS:Nexii>
+    mCommitCallbackRegistrar.add("Pref.SSHelp",                 boost::bind(&LLFloaterPreference::onClickSSHelp, this, _2));
+    // </SS:Nexii>
     mCommitCallbackRegistrar.add("Pref.BrowseCache",            boost::bind(&LLFloaterPreference::onClickBrowseCache, this));
     mCommitCallbackRegistrar.add("Pref.BrowseCrashLogs",        boost::bind(&LLFloaterPreference::onClickBrowseCrashLogs, this));
     mCommitCallbackRegistrar.add("Pref.BrowseSettingsDir",      boost::bind(&LLFloaterPreference::onClickBrowseSettingsDir, this));
@@ -2509,6 +2512,17 @@ void LLFloaterPreference::onClickPreviewUISound(const LLSD& ui_sound_id)
     std::string uisndid = ui_sound_id.asString();
     make_ui_sound(uisndid.c_str(), true);
 }
+
+// <SS:Nexii> The Soapstorm panels carry only a one line summary each; the full explanation lives in a notification named by the button's parameter.
+void LLFloaterPreference::onClickSSHelp(const LLSD& notification_name)
+{
+    const std::string name = notification_name.asString();
+    if (!name.empty())
+    {
+        LLNotificationsUtil::add(name);
+    }
+}
+// </SS:Nexii>
 // </FS:PP> FIRE-8190: Preview function for "UI Sounds" Panel
 
 // <FS:Zi> FIRE-19539 - Include the alert messages in Prefs>Notifications>Alerts in preference Search.

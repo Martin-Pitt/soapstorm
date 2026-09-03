@@ -1562,7 +1562,18 @@ void render_hud_attachments()
 
         gPipeline.stateSort(hud_cam, result);
 
+        // <SS:Nexii> Supersample the attachment geometry when enabled. Only the geometry: render_hud_elements below draws
+        // text and selection overlays sized in screen pixels, which would come out at half scale in a target this size, and
+        // they are drawn by the UI path that has its own filtering anyway. Scope kept to the pass that produces the jaggies.
+        bool hud_supersample = gPipeline.beginHUDSupersample();
+
         gPipeline.renderGeomPostDeferred(hud_cam);
+
+        if (hud_supersample)
+        {
+            gPipeline.endHUDSupersample();
+        }
+        // </SS:Nexii>
 
         LLSpatialGroup::sNoDelete = false;
         //gPipeline.clearReferences();

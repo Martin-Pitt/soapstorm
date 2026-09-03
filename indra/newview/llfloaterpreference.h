@@ -211,6 +211,9 @@ public:
     void onSelectSkin();
     // void onClickSetSounds(); //<FS:KC> Handled centrally now
     void onClickPreviewUISound(const LLSD& ui_sound_id); // <FS:PP> FIRE-8190: Preview function for "UI Sounds" Panel
+    // <SS:Nexii> Opens the explanatory notification named by the button's parameter, so the Soapstorm panels can stay short and put the detail behind a question mark.
+    void onClickSSHelp(const LLSD& notification_name);
+    // </SS:Nexii>
     void setPreprocInclude();
     void changePreprocIncludePath(const std::vector<std::string>& filenames, std::string proposed_name);
     // <FS:LO> FIRE-23606 Reveal path to external script editor in prefernces

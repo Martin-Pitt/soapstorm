@@ -37,13 +37,32 @@
 #include <lldaeloader.h> // for preProcessDAE
 #include <llerror.h>
 
-/* dae headers*/
+/* colladadom headers */
+#ifdef __GNUC__
+#pragma GCC diagnostic ignored "-Woverloaded-virtual"
+#endif
+
 #include <dae.h>
+#include <dom/domAsset.h>
+#include <dom/domCOLLADA.h>
 #include <dom/domConstants.h>
-#include <dom/domSkin.h>
+#include <dom/domController.h>
 #include <dom/domGeometry.h>
 #include <dom/domInstance_controller.h>
+#include <dom/domMatrix.h>
 #include <dom/domNode.h>
+#include <dom/domPolylist.h>
+#include <dom/domSkin.h>
+#include <dom/domSource.h>
+#include <dom/domTranslate.h>
+#include <dom/domTriangles.h>
+#include <dom/domVertices.h>
+#include <dom/domVisual_scene.h>
+
+/* glm headers */
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_inverse.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 LLLocalMeshImportDAE::loadFile_return LLLocalMeshImportDAE::loadFile(const std::string& filename,
                                                                      LLLocalMeshFileLOD lod,
@@ -1083,7 +1102,8 @@ bool LLLocalMeshImportDAE::processSkeletonJoint(domNode* current_node, std::map<
         {
             if (daeElement* child_translate_element = current_node->getChild("translate"); child_translate_element)
             {
-                if (current_transformation = daeSafeCast<domTranslate>(child_translate_element); current_transformation)
+                current_transformation = daeSafeCast<domTranslate>(child_translate_element);
+                if (current_transformation)
                 {
                     LL_DEBUGS("LocalMesh") << "Using translate child for " << node_name << LL_ENDL;
                 }

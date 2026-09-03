@@ -1852,6 +1852,10 @@ class Darwin_x86_64_Manifest(ViewerManifest):
                 # Look for an environment variable set via build.sh when running in Team City.
                 try:
                     build_secrets_checkout = os.environ['build_secrets_checkout']
+                    keychain_pwd_path = os.path.join(build_secrets_checkout,'code-signing-osx','password.txt')
+                    if not os.path.isfile(keychain_pwd_path):
+                        ad_hoc_sign = True
+                        identity = '-'
                 except KeyError:
                     ad_hoc_sign = True # A minimum of ad-hoc signing is a requirement for arm64 builds to behave correctly
                     identity = '-' # Ad-hoc identity
