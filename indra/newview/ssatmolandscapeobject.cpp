@@ -28,6 +28,7 @@
 #include "llviewerregion.h"
 
 #include "llmath.h"
+#include "llmaterial.h"
 #include "lltextureentry.h"
 #include "llvolume.h"
 
@@ -193,6 +194,18 @@ void SSAtmoLandscapeObject::applyFaces()
             te.setRotation(f.mRotation);
         }
         te.setColor(f.mColor);
+        if (f.mAlphaMode != 0)
+        {
+            // Alpha mode lives on the face's material params, not the TE - carry any
+            // existing material through and stamp the mode onto it.
+            LLMaterialPtr mat = te.getMaterialParams();
+            if (mat.isNull())
+            {
+                mat = new LLMaterial();
+            }
+            mat->setDiffuseAlphaMode(f.mAlphaMode);
+            te.setMaterialParams(mat);
+        }
 
         setTE((U8)i, te);
 
@@ -266,6 +279,8 @@ bool SSAtmoLandscapeObject::captureToRecord(SSAtmoEnvLandscape& record)
             f.mRepeats = LLVector4(te.getScaleS(), te.getScaleT(), te.getOffsetS(), te.getOffsetT());
             f.mRotation = te.getRotation();
             f.mColor = te.getColor();
+            f.mAlphaMode = te.getMaterialParams().notNull()
+                ? (S32)te.getMaterialParams()->getDiffuseAlphaMode() : 0;
             f.mMaterial = mat;
             faces.push_back(f);
         }

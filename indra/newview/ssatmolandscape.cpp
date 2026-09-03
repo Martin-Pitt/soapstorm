@@ -29,6 +29,7 @@
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 
+#include "llmeshrepository.h"
 #include "llpermissionsflags.h"
 #include "llselectmgr.h"
 
@@ -42,6 +43,43 @@ namespace
     // The capture throttle: the reconcile funnel writes the working asset at a few Hz, so a
     // mid-drag object churns the notecard save only when the author actually rests.
     constexpr F32 SS_LANDSCAPE_CAPTURE_INTERVAL = 0.25f;
+}
+
+void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, const std::string& desc)
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
+    if (!mgr->hasAsset() || !applier->isActive())
+    {
+        return;
+    }
+    SSAtmoEnvAsset& asset = mgr->editable();
+    S32 track = llmax(0, applier->primaryTrackIndex());
+    if (track < 0 || track >= (S32)asset.mTracks.size())
+    {
+        return;
+    }
+    std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
+    for (SSAtmoEnvLandscape& record : records)
+    {
+        if (record.mMeshId == mesh_id)
+        {
+            record.mName = name;
+            record.mDesc = desc;
+            // Re-apply so the object's capture baseline tracks the record (capture diffs
+            // against mAuthored, which applyRecord refreshes). Revert of a name edit
+            // follows the same path via the node's restored values.
+            for (const LLPointer<SSAtmoLandscapeObject>& objp : SSAtmoLandscapeWorld::getInstance()->mObjects)
+            {
+                if (objp.notNull() && objp->meshId() == mesh_id)
+                {
+                    objp->applyRecord(record);
+                    break;
+                }
+            }
+            break;
+        }
+    }
 }
 
 bool ss_landscape_item_fullperm(const LLInventoryItem* item)
@@ -190,6 +228,37 @@ void SSAtmoLandscapeWorld::update()
     }
 
     applyFacesToAll();
+
+    // Prune dead objects (killed by overflow kills or region teardown) so the live set
+    // never accumulates corpses the floater's pairing would trip over.
+    for (size_t oi = mObjects.size(); oi > 0; --oi)
+    {
+        if (mObjects[oi - 1].isNull() || mObjects[oi - 1]->isDead())
+        {
+            mObjects.erase(mObjects.begin() + (S32)(oi - 1));
+        }
+    }
+
+    // Mesh availability feed for the floater's list: 404/purged assets surface as a
+    // "(missing)" suffix (the object still renders the stock proxy box). A header that is
+    // present but resolves to no LOD is a genuine 404; a header that has not arrived yet
+    // is just "unknown".
+    for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    {
+        if (objp.isNull())
+        {
+            continue;
+        }
+        const LLUUID& id = objp->meshId();
+        const bool has_header = gMeshRepo.hasHeader(id);
+        bool available = !has_header;
+        if (has_header)
+        {
+            const LLVolumeParams params = objp->getVolume()->getParams();
+            available = gMeshRepo.getActualMeshLOD(params, 0) != -1;
+        }
+        objp->setMeshAvailable(available, has_header);
+    }
 
     // Capture only while the live set matches the record set. While an object is selected a
     // reshape is deferred by design, and writing the OLD objects' state into the NEW track's
@@ -528,4 +597,29 @@ bool SSAtmoLandscapeWorld::removeRecord(S32 index)
     clearLandscapeObjects();
     mLastSignature.clear();
     return true;
+}
+
+bool SSAtmoLandscapeWorld::removeByMesh(const LLUUID& mesh_id)
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    if (!mgr->hasAsset())
+    {
+        return false;
+    }
+    const SSAtmoEnvAsset& asset = mgr->asset();
+    S32 track = llmax(0, SSAtmoEnvApplier::getInstance()->primaryTrackIndex());
+    if (track < 0 || track >= (S32)asset.mTracks.size())
+    {
+        return false;
+    }
+    const std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
+    for (S32 i = 0; i < (S32)records.size(); ++i)
+    {
+        if (records[static_cast<size_t>(i)].mMeshId == mesh_id)
+        {
+            // Duplicate-mesh records delete one at a time, first match first.
+            return removeRecord(i);
+        }
+    }
+    return false;
 }

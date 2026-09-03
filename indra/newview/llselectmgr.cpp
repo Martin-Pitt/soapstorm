@@ -4453,6 +4453,25 @@ bool LLSelectMgr::confirmDelete(const LLSD& notification, const LLSD& response, 
         {
             // TODO: Make sure you have delete permissions on all of them.
             const LLUUID trash_id = gInventory.findCategoryUUIDForType(LLFolderType::FT_TRASH);
+
+            // <SS:Nexii> Local-content objects (Atmo Magic landscape) have no sim object to
+            // derez - Delete removes the environment record instead. The DeRezObject send
+            // below is funnel-gated anyway (no packet), but the record removal is the actual
+            // deletion; the funnel gate alone would silently no-op.
+            for (LLObjectSelection::iterator iter = handle->begin(); iter != handle->end(); ++iter)
+            {
+                LLViewerObject* obj = (*iter)->getObject();
+                if (obj && obj->ssIsLocalContent())
+                {
+                    const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>(obj);
+                    if (landscape)
+                    {
+                        SSAtmoLandscapeWorld::getInstance()->removeByMesh(landscape->meshId());
+                    }
+                }
+            }
+            // </SS:Nexii>
+
             // attempt to derez into the trash.
             LLDeRezInfo info(DRD_TRASH, trash_id);
             LLSelectMgr::getInstance()->sendListToRegions("DeRezObject",
@@ -5273,7 +5292,29 @@ void LLSelectMgr::selectionSetObjectName(const std::string& name)
 {
     std::string name_copy(name);
 
+    // <SS:Nexii> A local-content (Atmo Magic landscape) single selection: the record is the
+    // store - the sim funnel is a no-op for it. The panel already wrote the node; persist
+    // to the record and let the capture baseline follow.
+    LLObjectSelection::iterator first = mSelectedObjects->begin();
+    if (first != mSelectedObjects->end()
+        && mSelectedObjects->getObjectCount() == 1
+        && (*first)->getObject()
+        && (*first)->getObject()->ssIsLocalContent())
+    {
+        const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>((*first)->getObject());
+        if (landscape)
+        {
+            // Keep the record's current desc - see the matching note in the description path.
+            const SSAtmoEnvLandscape* record = ss_landscape_record_for_mesh(landscape->meshId());
+            const std::string& current_desc = record ? record->mDesc : (*first)->mDescription;
+            ss_landscape_persist_name(landscape->meshId(), name_copy, current_desc);
+            return;
+        }
+    }
+    // </SS:Nexii>
+
     // we only work correctly if 1 object is selected.
+
 // FIRE-777
     if(mSelectedObjects->getRootObjectCount() >= 1)
 //  if(mSelectedObjects->getRootObjectCount() == 1)
@@ -5304,7 +5345,29 @@ void LLSelectMgr::selectionSetObjectDescription(const std::string& desc)
 {
     std::string desc_copy(desc);
 
+    // <SS:Nexii> A local-content (Atmo Magic landscape) single selection: persist to the
+    // record - see selectionSetObjectName.
+    LLObjectSelection::iterator first = mSelectedObjects->begin();
+    if (first != mSelectedObjects->end()
+        && mSelectedObjects->getObjectCount() == 1
+        && (*first)->getObject()
+        && (*first)->getObject()->ssIsLocalContent())
+    {
+        const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>((*first)->getObject());
+        if (landscape)
+        {
+            // Keep the record's current name - the node's is stale from seeding and a
+            // desc edit must not revert a recent rename.
+            const SSAtmoEnvLandscape* record = ss_landscape_record_for_mesh(landscape->meshId());
+            const std::string& current_name = record ? record->mName : (*first)->mName;
+            ss_landscape_persist_name(landscape->meshId(), current_name, desc_copy);
+            return;
+        }
+    }
+    // </SS:Nexii>
+
     // we only work correctly if 1 object is selected.
+
 // FIRE-777
     if(mSelectedObjects->getRootObjectCount() >= 1)
 //  if(mSelectedObjects->getRootObjectCount() == 1)

@@ -1878,8 +1878,14 @@ void SSFloaterAtmoEnv::refreshLandscape()
             continue;
         }
         LLSD row;
+        std::string name = r->mName.empty() ? "(unnamed)" : r->mName;
+        const SSAtmoLandscapeObject* objp = world->objectAt(i);
+        if (objp && objp->meshKnown() && !objp->meshAvailable())
+        {
+            name += " (missing)";
+        }
         row["columns"][0]["column"] = "name";
-        row["columns"][0]["value"] = r->mName.empty() ? "(unnamed)" : r->mName;
+        row["columns"][0]["value"] = name;
         row["columns"][1]["column"] = "mesh";
         row["columns"][1]["value"] = r->mMeshId.asString().substr(0, 8);
         row["columns"][2]["column"] = "mode";

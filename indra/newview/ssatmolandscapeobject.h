@@ -58,11 +58,18 @@ public:
     // cached system volume, but the rebuild is worth skipping.
     void applyRecord(const SSAtmoEnvLandscape& record);
 
-    // Per-frame: write the object's transform + sparse face state back into a record
-    // copy. Returns true when anything changed - the reconcile funnel's dirty signal.
+    // Per-frame: write the object's transform + sparse face state + name/desc back into a
+    // record. Returns true when anything changed - the reconcile funnel's dirty signal.
     // Non-const: the applied snapshot mAuthored is advanced to match what was written,
     // so an unchanged object keeps reporting unchanged.
     bool captureToRecord(SSAtmoEnvLandscape& record);
+
+    // Feeds the mesh's availability state in for floater display - set by the world from
+    // the mesh repo's 404/unavailable notifications.
+    void setMeshAvailable(bool available, bool known) { mMeshAvailable = available; mMeshKnown = known; }
+
+    bool meshAvailable() const { return mMeshAvailable; }
+    bool meshKnown() const { return mMeshKnown; }
 
     // Faces materialise when mesh LOD geometry lands; the world calls this every frame
     // until the applied face count matches the volume's.
@@ -84,6 +91,11 @@ private:
 
     // TE count the record's faces were last applied to; -1 until the first apply.
     S32 mAppliedFaces = -1;
+
+    // Mesh availability for the floater's list: false = 404/purged/proxy (record still
+    // renders as the stock box proxy), known = the repo reported one way or the other.
+    bool mMeshAvailable = true;
+    bool mMeshKnown = false;
 };
 
 #endif // SS_ATMO_LANDSCAPE_OBJECT_H

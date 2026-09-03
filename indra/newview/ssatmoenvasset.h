@@ -45,7 +45,9 @@
 
 class LLSettingsSky;
 
-const S32 SS_ATMOENV_VERSION = 1;
+// <SS:Nexii> 2: landscape scenery arrays landed in 1.x -> 2 carries the per-track
+// "landscape" key. Older builds hard-reject a v2 document (never silently drop scenery).
+const S32 SS_ATMOENV_VERSION = 2;
 
 const S32 SS_ATMOENV_MIN_TRACKS = 1;
 const S32 SS_ATMOENV_MAX_TRACKS = 8;

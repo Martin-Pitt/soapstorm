@@ -85,6 +85,10 @@ public:
     // Removes the record at index in the active track and reshapes now.
     bool removeRecord(S32 index);
 
+    // Removes the active track's record whose mesh id matches (the pie-menu Delete path for
+    // local-content objects). Returns false when nothing matched.
+    bool removeByMesh(const LLUUID& mesh_id);
+
     // Force the live set to match the working asset next tick (floater reorder etc.).
     void invalidate() { mLastSignature.clear(); }
 
@@ -121,6 +125,13 @@ void ss_seed_local_select_node(LLSelectNode* nodep);
 // The record backing a live object in the ACTIVE track - used by seating and the floater
 // list. Null when the object's mesh is not in the active track at all.
 const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id);
+
+// Name/desc write-back from the stock General tab. Called from LLSelectMgr's
+// selectionSetObjectName/Description when the selection is a local-content landscape
+// object: the send funnel ignores local content (no sim to tell), so the record - the
+// authoritative store - is updated here instead, and the live object re-applies so the
+// capture baseline keeps tracking the record.
+void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, const std::string& desc);
 // </SS:Nexii>
 
 #endif // SS_ATMO_LANDSCAPE_H
