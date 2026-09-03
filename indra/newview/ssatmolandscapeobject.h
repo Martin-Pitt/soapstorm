@@ -78,6 +78,11 @@ public:
     // The adoption key.
     const LLUUID& meshId() const { return mAuthored.mMeshId; }
 
+    // Refresh the capture baseline from a record WITHOUT re-applying placement/faces -
+    // the name/desc write-back path wants the diff baseline to track the record but must
+    // not snap an in-flight transform to a (slightly stale) record.
+    void syncAuthored(const SSAtmoEnvLandscape& record) { mAuthored = record; }
+
     // The relaxed landscape LOD range.
     F32 ssLODDistanceScale() const override { return SS_LANDSCAPE_LOD_STRETCH; }
 

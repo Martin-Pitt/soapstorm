@@ -129,8 +129,9 @@ const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id);
 // Name/desc write-back from the stock General tab. Called from LLSelectMgr's
 // selectionSetObjectName/Description when the selection is a local-content landscape
 // object: the send funnel ignores local content (no sim to tell), so the record - the
-// authoritative store - is updated here instead, and the live object re-applies so the
-// capture baseline keeps tracking the record.
+// authoritative store - is updated here instead. Scans all tracks (a same-mesh record may
+// sit in another track); refreshes only the LIVE object's capture baseline, never the
+// placement.
 void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, const std::string& desc);
 // </SS:Nexii>
 

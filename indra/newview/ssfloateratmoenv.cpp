@@ -1861,6 +1861,10 @@ void SSFloaterAtmoEnv::refreshLandscape()
         sig += r->mMeshId.asString();
         sig += r->mName;
         sig += r->mLocked ? 'L' : 'F';
+        // The availability state rides the signature so a header arriving (or 404'ing) after
+        // the list was first drawn flips the "(missing)" marker.
+        const SSAtmoLandscapeObject* objp = world->objectAt(i);
+        sig += (objp && objp->meshKnown()) ? (objp->meshAvailable() ? '1' : '0') : '?';
         sig += '|';
     }
     if (sig == mLandscapeListSignature)

@@ -165,10 +165,10 @@ void SSAtmoLandscapeObject::applyFaces()
         const SSAtmoEnvLandscapeFace& f = mAuthored.mFaces[static_cast<size_t>(src)];
 
         // A fully-default block (nothing authored) is skippable - capture only writes blocks
-        // that differ from the default texture entry. A tint-only block (texture and
-        // material both empty but colour authored) is NOT default, so the test mirrors the
-        // TE defaults rather than just the two ids.
-        const bool empty = f.mTexture.isNull() && f.mMaterial.isNull()
+        // that differ from the default texture entry. A tint-only or alpha-only block
+        // (texture and material both empty but colour/alpha authored) is NOT default, so
+        // the test mirrors the TE defaults rather than just the two ids.
+        const bool empty = f.mTexture.isNull() && f.mMaterial.isNull() && f.mAlphaMode == 0
             && near_v3(LLVector3(f.mRepeats.mV[VX], f.mRepeats.mV[VY], f.mRepeats.mV[VZ]), LLVector3(1.f, 1.f, 0.f))
             && llabs(f.mRepeats.mV[VW]) < 1e-4f
             && llabs(f.mRotation) < 1e-4f
@@ -269,7 +269,11 @@ bool SSAtmoLandscapeObject::captureToRecord(SSAtmoEnvLandscape& record)
             LLTextureEntry def;
             LLTextureEntry te = (i < (S32)getNumTEs()) ? *getTE((U8)i) : def;
             const LLUUID mat = getRenderMaterialID((U8)i);
-            if (te == def && mat.isNull())
+            // TE operator== ignores material params - an alpha-mode face reads as "default"
+            // and would be dropped, so fold the material's diffuse alpha mode in explicitly.
+            const LLMaterialPtr matp = te.getMaterialParams();
+            const S32 alpha = matp.notNull() ? (S32)matp->getDiffuseAlphaMode() : 0;
+            if (te == def && alpha == 0 && mat.isNull())
             {
                 continue;
             }
@@ -279,8 +283,7 @@ bool SSAtmoLandscapeObject::captureToRecord(SSAtmoEnvLandscape& record)
             f.mRepeats = LLVector4(te.getScaleS(), te.getScaleT(), te.getOffsetS(), te.getOffsetT());
             f.mRotation = te.getRotation();
             f.mColor = te.getColor();
-            f.mAlphaMode = te.getMaterialParams().notNull()
-                ? (S32)te.getMaterialParams()->getDiffuseAlphaMode() : 0;
+            f.mAlphaMode = alpha;
             f.mMaterial = mat;
             faces.push_back(f);
         }

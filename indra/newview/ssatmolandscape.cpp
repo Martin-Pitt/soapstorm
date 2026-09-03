@@ -48,37 +48,55 @@ namespace
 void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, const std::string& desc)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
-    SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
-    if (!mgr->hasAsset() || !applier->isActive())
+    if (!mgr->hasAsset())
     {
         return;
     }
     SSAtmoEnvAsset& asset = mgr->editable();
-    S32 track = llmax(0, applier->primaryTrackIndex());
-    if (track < 0 || track >= (S32)asset.mTracks.size())
+
+    // The object is always bound to the ACTIVE track's record while live, but a same-mesh
+    // record may sit in another track (estate layout reuse); find whichever track holds
+    // this mesh so a rename is never silently dropped.
+    SSAtmoEnvLandscape* found = nullptr;
+    S32 found_track = -1;
+    S32 active = SSAtmoEnvApplier::getInstance()->primaryTrackIndex();
+    const S32 first_scan = (active >= 0 && active < (S32)asset.mTracks.size()) ? active : 0;
+    const S32 tracks = (S32)asset.mTracks.size();
+    for (S32 pass = 0; pass < tracks; ++pass)
+    {
+        const S32 t = (first_scan + pass) % tracks;
+        for (SSAtmoEnvLandscape& record : asset.mTracks[static_cast<size_t>(t)].mLandscapes)
+        {
+            if (record.mMeshId == mesh_id)
+            {
+                found = &record;
+                found_track = t;
+                break;
+            }
+        }
+        if (found)
+        {
+            break;
+        }
+    }
+    if (!found)
     {
         return;
     }
-    std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
-    for (SSAtmoEnvLandscape& record : records)
+
+    found->mName = name;
+    found->mDesc = desc;
+    const SSAtmoEnvLandscape copy = *found;
+
+    // Refresh the live object's capture baseline (no placement re-apply - a rename must
+    // never snap an in-flight transform). Only live objects - those are active-track.
+    SSAtmoLandscapeWorld* world = SSAtmoLandscapeWorld::getInstance();
+    for (S32 i = 0; i < world->objectCount(); ++i)
     {
-        if (record.mMeshId == mesh_id)
+        SSAtmoLandscapeObject* objp = world->objectAt(i);
+        if (objp && objp->meshId() == mesh_id)
         {
-            record.mName = name;
-            record.mDesc = desc;
-            // Re-apply so the object's capture baseline tracks the record (capture diffs
-            // against mAuthored, which applyRecord refreshes). Revert of a name edit
-            // follows the same path via the node's restored values.
-            SSAtmoLandscapeWorld* world = SSAtmoLandscapeWorld::getInstance();
-            for (S32 i = 0; i < world->objectCount(); ++i)
-            {
-                SSAtmoLandscapeObject* objp = world->objectAt(i);
-                if (objp && objp->meshId() == mesh_id)
-                {
-                    objp->applyRecord(record);
-                    break;
-                }
-            }
+            objp->syncAuthored(copy);
             break;
         }
     }
