@@ -204,6 +204,9 @@ bool SSLightningRender::ensureBuffer(U32 quads)
         return false;
     }
 
+    // <SS:Nexii> The VBO pool hands back recycled buffers unbound, so bind before setIndexData streams the pattern - otherwise it lands in whichever pass drew last and this buffer keeps stale indices (the vertex mess).
+    mVB->setBuffer();
+
     std::vector<U32> indices((size_t)alloc * 6);
     U32 vtx = 0;
     for (U32 i = 0, o = 0; i < alloc; ++i, o += 6, vtx += 4)
