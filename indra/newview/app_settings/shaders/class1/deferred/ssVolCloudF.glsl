@@ -45,8 +45,8 @@ in float vary_ss_glow;
 // all cloud shaping, inside the band's clamp, which is exactly where cloudsF folds its own.
 in vec3 vary_ss_airlight;
 
-// The graze light's weight - the extra sun a vertex earns for standing high in the deck under a low sun (the alpenglow's lit lid; see the long note in ssVolCloudV.glsl). Added to the form
-// term below so it rides the same sunlit colour, gloom and wrap.
+// The graze light's weight - the extra sun a vertex earns for standing high in the deck under a low sun (the alpenglow's lit lid; see the long note in ssVolCloudV.glsl). Spent below on a
+// gentler wrap of its own (SS_GRAZE_DARK) past the body's, with the same sunlit colour and the same gloom - see the note where it joins.
 in float vary_ss_top;
 
 // The deck's storm gloom - what the weather's moisture says this deck is carrying, one number for the whole of it, so a uniform rather than a vertex channel. Graded over the buried depth where it is
@@ -184,6 +184,10 @@ const float SS_PUFF_SHADE = 0.35;
 // How dark the side of a puff facing away from the light is left. Not very, because cloud is not opaque - light that enters one side comes out of the other, which is why a cloud has soft shading
 // rather than a terminator. But not one flat value either, which is what a per-quad colour gives and why the field read as grey card after grey card with no form to any of it.
 const float SS_FORM_DARK = 0.55;
+
+// And the far side's floor for the GRAZE light alone, deliberately well above the body's: the skimmed lid is lit by the burning horizon sky as much as by the beam itself, and sky arrives from
+// every side of a crown. See the note where the graze light joins main()'s body.
+const float SS_GRAZE_DARK = 0.85;
 
 // How much the thin parts glow. The bright fringe on a cloud is the sun coming THROUGH it where it is thin enough to pass - so the rim lights up while the body stays dull, and that fringe is most of
 // what gives a cloud its silhouette. Keyed to low density, so it lands exactly on the ragged edges the noise cuts.
@@ -684,11 +688,23 @@ void main()
     // per-puff column shading (vary_color.r) out - a lit top was a tenth brighter than its own base rather than the several times it should be. [interaction: storm darkening]
     float gloom = mix(1.0, ss_gloom, vary_color.g);
 
-    vec3 puff_light = (vary_ss_amblit + vary_ss_sunlit * (vary_color.r + vary_ss_top)) * gloom;
+    vec3 puff_light = (vary_ss_amblit + vary_ss_sunlit * vary_color.r) * gloom;
+
+    // The noise self-shade's mid, shared by the body and the graze light below - the lid keeps its texture whichever term is carrying it.
+    float noise_mid = mix(mix(1.0 - SS_PUFF_SHADE, 1.0, noise_v), 0.83, form_flat);
 
     vec3 body = puff_light
               * mix(mix(SS_FORM_DARK, 1.0, wrap), 0.78, form_flat)
-              * mix(mix(1.0 - SS_PUFF_SHADE, 1.0, noise_v), 0.83, form_flat);
+              * noise_mid;
+
+    // <SS:Nexii> The graze light joins HERE, past the body's full wrap, rather than riding the form term as it used to. Inside the form sum it was multiplied by the sun's own wrap, and the sun's
+    // wrap is exactly what a skimmed lid is not shaped by: at a grazing sun the whole horizon band is burning above the deck, and that sky lights the crown of a puff from every side - so the crest
+    // came out as a warm stripe up the sun side of each lid puff with the anti-sun half held at the 0.55 floor, and the alpenglow the ramp exists to paint never read as a lit LID. A gentler wrap
+    // of its own (SS_GRAZE_DARK) keeps the sun side warmest without ever putting a crown's far side in the dark; the same gloom and the same capped sunlit colour, so the crest stays the sunset's
+    // own fire and a storm still eats it.
+    body += vary_ss_sunlit * (vary_ss_top * gloom)
+          * mix(mix(SS_GRAZE_DARK, 1.0, wrap), 0.78, form_flat)
+          * noise_mid;
 
     // The bright fringe where the puff is thin enough for light to come through it - see SS_RIM. Fed by the capped vertex-stage sun light, so at a low sun the fringes carry the sunset's own
     // hue - the uniform this read before was the CPU replica that had already crushed to grey by then.

@@ -44,11 +44,8 @@ public:
     SSFloaterWorldField(const LLSD& key);
 
     bool postBuild() override;
-    void onOpen(const LLSD& key) override;
 
 private:
-    void syncOverlayCheck();
-
     // Drops the cached field tiles on a tuning control's commit so
     // they rebuild under the new setting.
     void watch(const std::string& control);

@@ -193,7 +193,7 @@ Moisture was the sole answer to "is it raining", and it is also the answer to "h
 commonest sky there is - could not be authored at all: any moisture high enough to be overcast
 rained.
 
-**Weather > Precipitation > Falling** is a keyframed bool (`SSAtmoEnvWeather::mPrecipitationFalls`,
+**Weather > Conditions > Falling** is a keyframed bool (`SSAtmoEnvWeather::mPrecipitationFalls`,
 LLSD `precipitation_falls`, default true, written only when authored so old documents keep raining
 and new ones stay clean). Off folds into the resolver's existing clear branch
 (`SSAtmoEnvWeatherResolver::resolve`) after the okta cover has been banked: type, intensity, droplet
@@ -205,9 +205,15 @@ the surface field, soundscape), so suppression propagates without a single new c
 Keyframed rather than a plain track flag because *when it starts and stops* is the whole ask. Flag
 keyframes HOLD (`ss_atmoenv_default_curve<bool>`): a bool has nothing to interpolate, so the value
 stands from its own key until the next and the shower runs from the key that ticks the box to the key
-that unticks it. Bool rows draw scrubber ghosts like every other keyframed type, and because HOLD
-ghosts draw as spans rather than points, a day cycle's showers are read off the rail as the stretches
-they are.
+that unticks it. Bool rows draw scrubber ghosts like every other keyframed type, so a day cycle's
+showers are read straight off the rail: an `on` mark where it starts and an `off` mark where it
+stops.
+
+Those marks sit at the keys themselves and fill only when the head is on one. A HOLD ghost briefly
+drew mid-span and filled anywhere across the stretch its value covers, which put a keyframe mark at
+a phase the head could never land on to edit, and made a three-hour shower look like three hours of
+keyframes. Filled has to mean here what it means on the row's own keyframe button - *the head is on
+this key* - or the two disagree about the same key at the same instant.
 
 They used to be EASE, which on a bool is not a curve at all - it is a step at the segment *midpoint*,
 so the rain started halfway between the key that turned it on and whatever key happened to precede
@@ -229,10 +235,62 @@ render rain anyway - where an unknown LLSD key is simply ignored and behaves as 
 
 The band between the Name field and the preview scrubber holds a forecast strip - one column per
 couple of hours across the whole cycle, laid out the way BBC Weather lays out an hourly forecast:
-a condition glyph at the head, then temperature, then what falls and how much of it, then a wind
-rose with the speed inside the ring and a barb on the bearing the air travels. Columns take their x
-from the scrubber's own rect, so they stand over the part of the timeline they describe and stay in
-step with the head.
+a condition glyph at the head, then temperature, then how much falls, then a wind rose with the
+speed inside the ring and a barb on the bearing the air travels. Columns take their x from the
+scrubber's own rect, so they stand over the part of the timeline they describe and stay in step with
+the head.
+
+One row is deliberately *not* on the column grid. The precipitation marks are a continuous band
+sampled every ten pixels across the whole rail, kept only where something is actually falling, so
+they start and stop where the rain does. Columns are hourly readings, and a shower is not hourly: a
+spell running 07:40 to 09:20 falls between two-hourly columns and reads as a whole morning of rain
+from them, where the band draws its actual extent.
+
+Every mark stands on one baseline and grows upward, so the eye compares the tops - where the
+difference is - rather than hunting for it around a centre that shifts with each glyph's size. That
+alignment is also what makes the heads legible: a disc and a bar only tell apart when they start
+from the same place.
+
+Weight is a seven-step ladder, one rung per intensity band, laid out as a table in enum order so the
+table *is* the ladder and a new band would be a new line:
+
+| band | mark | head |
+| --- | --- | --- |
+| Drizzle (light) | one dot | - |
+| Drizzle | two dots | - |
+| Drizzle (heavy) | two dashed streaks | - |
+| Light | two streaks | - |
+| Moderate | two streaks | small drop |
+| Heavy | three streaks | large drop |
+| Torrential | three streaks, longest | squared slab |
+
+Every adjacent pair differs by at least one whole feature, which is the property that matters: a
+mark is read against its *neighbours* in the band, not against a legend. Dots become dashes, dashes
+become solid lines, a drop appears at the foot, a third streak arrives with a bigger drop, and the
+drop finally squares off into a slab. Non-adjacent pairs differ by more than one, so the ladder
+degrades gracefully - a mark misread by one step is still nearly right.
+
+The drizzle family carrying no head at all is the clearest division in the set, and it lands where
+the resolver puts its own: `classifyIntensity` only hands out the drizzle bands for liquid types
+(`isDrizzleCapable`), so a headless mark means water light enough to drift. Snow and hail scale
+smoothly with the band's position instead of changing form - a flake is a size, not a count, and a
+pellet grows and then fills once it is the size that dents cars.
+
+One thing deliberately does *not* vary across the ladder: the lean. Every streak stands at about 29
+degrees off vertical, held there by expressing the slant as a fraction of the streak's own length
+(`STRIP_RAIN_LEAN`) rather than as a fixed pixel offset. A flat two pixels was 27 degrees on a short
+drizzle streak but 16 on a long heavy one, so the harder it rained the more upright the rain stood -
+and an angle that changes with intensity reads as wind rather than as weight.
+
+One thing was tried and dropped: a three-lane vertical stagger, on the theory that a row of
+identical marks would read as a dotted rule. What it actually produced was a repeating sawtooth, and
+once the marks carried intensity in their own shape it was noise the eye had to subtract before it
+could compare anything.
+
+The preview head draws as a vertical line from the top of the strip down into the scrubber's thumb.
+Stopping it at the strip's floor left the strip and the control reading as two stacked things with a
+coincidence between them; carried into the thumb they are one instrument, and every row it crosses
+is read against the head by following the line.
 
 The one departure from that layout is the hour, which sits at the foot rather than heading the
 column. A printed forecast sets the time on top because the column is the whole story; here it is
@@ -269,7 +327,9 @@ sun through a polar winter would be lying about it.
 
 The step coarsens - hourly, two-hourly, three, four, six - until a column has room for its widest
 line, so a narrow floater thins the strip out instead of smearing it. It never goes finer than
-hourly: past that the columns are reading interpolation noise rather than weather.
+hourly: past that the columns are reading interpolation noise rather than weather. The band below
+them is unaffected - it is sampled off the pixel pitch, not the hour, because what it draws is an
+extent rather than a reading.
 
 ### Anchoring, while we were here
 
@@ -340,6 +400,12 @@ Glass Calm, a Weeping Season, the Tideturn, an Emberfall - each a whole world ra
 each deliberately outside the envelope the seasonal path stays inside. No event is layered on top of
 one: sanding an archetype's edges off removes the only reason it exists. They still run through the
 same spell machinery, so an impossible sky still arrives and clears like a real one.
+
+Every key the generator writes snaps to the preview scrubber's grid through `ss_atmoenv_snap_phase`,
+the same helper the sky seeding uses. The head moves in those steps and nowhere else, and
+`hasKeyframeAt` matches within a tenth of one, so an unsnapped key at 0.3174 is present in the curve
+but visitable by nothing: the diamond never lights, prev/next lands beside it, and removing it means
+reaching a mark the scrubber cannot stand on.
 
 A line under the rows says what the roll turned out to be. A generator meant to be pressed
 repeatedly has to report itself, or the button is a slot machine with the reels hidden - eight

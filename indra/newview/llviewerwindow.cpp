@@ -1264,6 +1264,12 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
             {
                 LL_INFOS() << buttonname << " Mouse " << buttonstatestr << " not handled by view" << LL_ENDL;
             }
+
+        // <SS:Nexii> Atmo Magic info overlay: a left-click on an orange heading row collapses that section
+        if (down && clicktype == CLICK_LEFT && SSAtmoMagic::handleInfoClick(x, y))
+        {
+            return true;
+        }
     }
 
     // Do not allow tool manager to handle mouseclicks if we have disconnected

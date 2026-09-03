@@ -28,33 +28,24 @@
 #include "ssworldfield.h"
 
 #include "llbutton.h"
-#include "llcheckboxctrl.h"
 #include "llcontrol.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
-#include "pipeline.h"
 
 SSFloaterWorldField::SSFloaterWorldField(const LLSD& key) :
     LLFloater(key)
 {
 }
 
-// Wires the overlay toggle, recapture button and tuning watchers. A
-// cell/band/ceiling change must rebuild the cached tiles to take effect -
-// staleness checks compare cell and band against the live
-// settings, but no recent tile is forced to retouch, so the watchers
-// drop them. MaxAge is deliberately unwatched: consumed live by every
-// needsBuild check; a clear on a timing tweak would force an immediate
-// full recapture the new age would have waited out on its own.
+// Wires the recapture button and tuning watchers. A cell/band/ceiling change
+// must rebuild the cached tiles to take effect - staleness checks compare cell
+// and band against the live settings, but no recent tile is forced to retouch,
+// so the watchers drop them. MaxAge is deliberately unwatched: consumed live by
+// every needsBuild check; a clear on a timing tweak would force an immediate
+// full recapture the new age would have waited out on its own. The field's
+// debug views moved to the debug floater.
 bool SSFloaterWorldField::postBuild()
 {
-    getChild<LLCheckBoxCtrl>("field_overlay_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&)
-        {
-            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WORLD_FIELD);
-            syncOverlayCheck();
-        });
-
     const char* tuning_controls[] = {
         "SSWorldFieldCell", "SSWorldFieldBand", "SSWorldFieldCeiling"
     };
@@ -69,22 +60,7 @@ bool SSFloaterWorldField::postBuild()
             SSWorldField::getInstance()->clear();
         });
 
-    syncOverlayCheck();
     return true;
-}
-
-// Fresh overlay state on open.
-void SSFloaterWorldField::onOpen(const LLSD& key)
-{
-    syncOverlayCheck();
-}
-
-// Mirrors the world field debug mask into the overlay checkbox, so toggling it
-// here or from Develop > Render Metadata moves both.
-void SSFloaterWorldField::syncOverlayCheck()
-{
-    getChild<LLCheckBoxCtrl>("field_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WORLD_FIELD));
 }
 
 // A tuning change drops the cached tiles so the field rebuilds under the new

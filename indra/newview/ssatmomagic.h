@@ -27,6 +27,7 @@
 #include "ssprecippreset.h"
 
 #include "llpointer.h"
+#include "llrect.h"
 #include "llsingleton.h"
 #include "lluuid.h"
 #include "v3math.h"
@@ -36,6 +37,8 @@
 
 #include <map>
 #include <memory>
+#include <set>
+#include <utility>
 #include <vector>
 
 class LLViewerObject;
@@ -199,6 +202,12 @@ public:
     void shift(const LLVector3& offset);
 
     static void drawInfo();
+
+    // <SS:Nexii> Click hit-test for the info overlay's orange headings: x/y in
+    // scaled window coordinates (the space drawInfo lays out in). A hit toggles
+    // that section's collapse and returns true so the click is consumed.
+    static bool handleInfoClick(S32 x, S32 y);
+
     size_t pendingImpacts() const { return mImpacts.size(); }
 
     void renderDebug();
@@ -307,6 +316,11 @@ private:
     LLPointer<LLViewerTexture> mRippleTexture;
     std::string mAssetsFingerprint;
     F64 mLastAssetPoll = 0.0;
+
+    // <SS:Nexii> Info overlay: collapsed sections keyed by section name, and
+    // the heading hit rects the last draw laid out.
+    std::set<std::string> mInfoCollapsed;
+    std::vector<std::pair<std::string, LLRect> > mInfoHeadingRects;
 };
 
 #endif

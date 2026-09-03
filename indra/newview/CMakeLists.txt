@@ -215,7 +215,7 @@ set(viewer_SOURCE_FILES
     ssfloatertexturelist.cpp
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
-    ssfloaterfx.cpp
+    ssfloateratmodebug.cpp
     ssfloatersim.cpp
     ssfloaterworldfield.cpp
     ssatmostore.cpp
@@ -1135,7 +1135,7 @@ set(viewer_HEADER_FILES
     ssfloatertexturelist.h
     ssfloateratmoplanetary.h
     ssfloaterpreset.h
-    ssfloaterfx.h
+    ssfloateratmodebug.h
     ssfloatersim.h
     ssatmostore.h
     ssprecippreset.h

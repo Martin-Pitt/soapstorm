@@ -279,7 +279,7 @@ New keys, in the house style (`SSAtmoSnow*`):
   dials, mirroring the `SSAtmoWet*` family.
 - `SSAtmoWhiteoutStrength`, `SSAtmoWhiteoutBand`, `SSAtmoWhiteoutRange`,
   `SSAtmoWhiteoutCorridor` - the fog pass, with the corridor ratio and the band height.
-| `SSAtmoSnowDebug` - Render Metadata styles, matching the wind flow debug family: 0 off, 1 the
+| `SSAtmoSnowDebug` - Debug floater styles, matching the wind flow debug family: 0 off, 1 the
   erosion/deposit field (red scouring, blue banking), 2 the lift rate per cell, 3 the whiteout
   density.
 - `SSAtmoSnowDensityRes` - the air layer's texture resolution (128 default; a quality-tier
@@ -400,7 +400,7 @@ obeys the `SSAtmoParticleBudget` ceiling the rest of precipitation lives under.
 ### Instrumentation
 
 Each phase lands with its `LL_RECORD_BLOCK_TIME` block (`FTM_SS_SNOW_SURFACE`,
-`FTM_SS_WHITEOUT`, plus the drift slice inside the sim block), the Render Metadata debug views
+`FTM_SS_WHITEOUT`, plus the drift slice inside the sim block), the Debug floater debug views
 from section 7 double as the visual verification for LOD cuts, and the ss floater stats line -
 which already prints surface ms and peak wet/snow/puddle - gains drift count and lift activity so
 a user reporting "snow is slow" reports with numbers.
@@ -449,7 +449,7 @@ gust front sweeps a courtyard as a visible fog wave. Drift particles become garn
 - *It breaks the house rule the whole stack is built on.* `SSAtmoMagic` is a synced deterministic
   weather manager: shared clock, cell-hash spawns, a flowmap that is "solved once, anchored to the
   region". A running sim is per-viewer state - two avatars side by side see different plumes, and
-  the Render Metadata debug views draw *the field*, not a divergent local sim. Statistical parity
+  the Debug floater debug views draw *the field*, not a divergent local sim. Statistical parity
   is achievable; the philosophy and its debuggability are not recoverable.
 - *Split-brain accumulation.* The ground truth the shaders, footsteps and avatars read is the CPU
   field. The volume can own airborne density, but deposit must land in the CPU field - either a

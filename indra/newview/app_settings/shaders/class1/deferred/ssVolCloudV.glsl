@@ -67,8 +67,9 @@ out float vary_ss_glow;
 // the alpenglow, the lit lid over a dark volume, seen from above, from inside, and through any gap. The per-puff form term cannot say this: its facing half scales with the sun's VERTICAL
 // component (zero at the horizon, exactly when the effect peaks) and its shade half only ever darkens. A ramp of the sun coefficient over height-in-layer says it directly - the volume
 // brightening bottom to top - with a sharp crest over the lid band, where the puffs that ARE the deck's surface catch the skim. Gated by how grazing the sun is: as it climbs past ~30
-// degrees the beam arrives from above, the CPU shade term already owns the vertical story, and this fades out rather than double-lighting the tops. Added to the form term in the fragment
-// stage, so it rides the same warm sunlit colour, the same gloom and the same wrap - the crest is brightest on the sun's side of each puff, which is where a skimmed lid burns.
+// degrees the beam arrives from above, the CPU shade term already owns the vertical story, and this fades out rather than double-lighting the tops. Spent in the fragment stage on a gentler
+// wrap of its own past the body's full one (SS_GRAZE_DARK there), riding the same warm sunlit colour and the same gloom - the sun side of each crown still burns brightest, but the far side
+// is never left out of a sky that lights the lid from every quarter.
 out float vary_ss_top;
 
 // <SS:Nexii> The AIRLIGHT along this ray - the below-cloud haze colour scattered into the eye by the air BETWEEN eye and puff, weighted by what the slab transmittance removed - handed down
@@ -113,6 +114,16 @@ uniform float ss_layer_thick;
 // <SS:Nexii> The glow light's extinction ceiling, in optical depths on the densest attenuation channel. Keep in sync with skyV.glsl / cloudsV.glsl.
 const float SS_SUN_GLOW_DEPTH = 2.0;
 
+// <SS:Nexii> The floor under the near haze path, as a share of the ZENITH slab (max_y). The true range fixed the hole the horizontal range put in the sky, but it left that cone's ghost: a steep
+// ray meets the deck at little more than the layer's own height above or below the eye, so the puffs straight overhead - and straight underfoot, flying above the deck - carried a fraction of the
+// air the band behind them wears at the same angle (the band's SHORTEST ray is the whole max_y column), and the deck kept a dim unhazed disc riding the camera's vertical: dark navy under a dusk
+// sky while the slant field around it took the airlight, grey under a sunrise while the band burned. Absolute rather than a share of the ray's own slab, deliberately - near the horizon the slab
+// convention runs to twenty slabs' length, and a share of THAT would dissolve a puff at arm's length at eye level into pure airlight. max_y is the one length the atmosphere's maths is calibrated
+// against, so half of it veils a puff exactly as much as half the zenith column veils the dome; and slab_len >= max_y at every angle, so the floor can never exceed the slab convention and the
+// rim easing below stays a one-way trip to the band's own figure. The same floor is what lets a sunrise reach the whole deck: the airlight between eye and puff is where the horizon's fire
+// lives, and an unhazed puff had none of it. [interaction: dome handoff]
+const float SS_NEAR_AIR_FLOOR = 0.5;
+
 // NOTE: Keep the lighting below in sync with cloudsV.glsl's cloud colour path - it is that path, run per puff corner.
 void main()
 {
@@ -153,7 +164,7 @@ void main()
     // rule to within a few percent everywhere the old rule was defensible - by 45 degrees of elevation the two are a factor of 1.4 apart and both are far inside the rim easing. [interaction: dome handoff]
     float dome_rim = smoothstep(ss_rim.x, ss_rim.y, d);
     float slab_len = max_y / max(abs(rel_pos_norm.y), 0.05);
-    float near_len = min(d, slab_len);
+    float near_len = max(min(d, slab_len), max_y * SS_NEAR_AIR_FLOOR);
     float haze_len = mix(near_len, max(slab_len, near_len), dome_rim);
 
     // Initialize temp variables

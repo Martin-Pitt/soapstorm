@@ -3,7 +3,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="268"
+ height="299"
  layout="topleft"
  name="floater_ss_atmo"
  save_rect="true"
@@ -113,7 +113,7 @@
      name="sim_button"
      label="Simulation..."
      tool_tip="Rain shadow and wind flowmap resolution, tuning and rebuilds" />
-<button
+    <button
      follows="left|top"
      layout="topleft"
      left="12"
@@ -133,4 +133,14 @@
      name="worldfield_button"
      label="World Field..."
      tool_tip="The shared world field's debug views and capture tuning - cell size, band height, ceiling and refresh" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="8"
+     height="23"
+     width="160"
+     name="debug_button"
+     label="Debug..."
+     tool_tip="Every debug view, marker and diagnostic overlay - the switches that used to hang off Develop > Render Metadata, and the pickers that shape what each draws" />
 </floater>

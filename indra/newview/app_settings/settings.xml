@@ -25684,7 +25684,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoRainTraceDebug</key>
       <map>
       <key>Comment</key>
-      <string>Effects and LOD rain pane debug: one line per precipitation spawn column, traced from the ground it would land on up toward the weather source. Cyan the fall reaches the ground (thinning over the last stretch above the impact), red a shelter above stops the line short, violet a landing past the weather deck's top where no weather source exists over it, amber a column the rain shadow capture never mapped. Columns thin with distance - every cell near the camera, every 2nd then 4th further out</string>
+      <string>Debug floater rain: one line per precipitation spawn column, traced from the ground it would land on up toward the weather source. Cyan the fall reaches the ground (thinning over the last stretch above the impact), red a shelter above stops the line short, violet a landing past the weather deck's top where no weather source exists over it, amber a column the rain shadow capture never mapped. Columns thin with distance - every cell near the camera, every 2nd then 4th further out</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25695,7 +25695,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoShadowDebugView</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata rain shadow debug: which view to draw. 0 the texel cloud, every captured depth texel unprojected to the world point it saw; 1 the resampled landing grid its consumers read, loud red where the capture never reached; 2 the raw depth map on screen; 3 the capture volume, band and tile state</string>
+      <string>Debug floater rain shadow view: which view to draw. 0 the texel cloud, every captured depth texel unprojected to the world point it saw; 1 the resampled landing grid its consumers read, loud red where the capture never reached; 2 the raw depth map on screen; 3 the capture volume, band and tile state</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25706,7 +25706,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoShadowDebugStride</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata rain shadow debug: sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 there are no more texels to show, so the cloud interpolates between them the way the map is read when it is sampled - a smoother surface, not more detail. Doubled automatically if a map would bake more points than the view will hold, so a sub-texel spacing only survives on a coarse enough map</string>
+      <string>Debug floater rain shadow: sample spacing of the texel cloud, in depth map texels. 1 draws every texel; higher thins it out. Below 1 there are no more texels to show, so the cloud interpolates between them the way the map is read when it is sampled - a smoother surface, not more detail. Doubled automatically if a map would bake more points than the view will hold, so a sub-texel spacing only survives on a coarse enough map</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -25750,7 +25750,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoRunoffDebugView</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata roof runoff debug: which stage to draw. 0 every shelter edge that could ever shed, 1 the water each eave holds and how hard it is draining, 2 the first gate holding each quiet eave back, 3 the drips and gutter streams the shed has spawned</string>
+      <string>Debug floater roof runoff view: which stage to draw. 0 every shelter edge that could ever shed, 1 the water each eave holds and how hard it is draining, 2 the first gate holding each quiet eave back, 3 the drips and gutter streams the shed has spawned</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26498,7 +26498,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugStyle</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: 0 draws one arrow per solved cell, 1 traces flow lines through the field. Lines do not branch, but seeded densely they read as branching, because neighbouring lines diverge around an obstacle and converge again through a gap</string>
+      <string>Debug floater wind flow: 0 draws one arrow per solved cell, 1 traces flow lines through the field. Lines do not branch, but seeded densely they read as branching, because neighbouring lines diverge around an obstacle and converge again through a gap</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26509,7 +26509,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugLineTint</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: how flow lines are coloured. 1 tints by speed against the ambient wind, cold for sheltered through neutral to hot for a jet, leaving direction to the line's own path. 0 uses the same direction hue the arrows use</string>
+      <string>Debug floater wind flow: how flow lines are coloured. 1 tints by speed against the ambient wind, cold for sheltered through neutral to hot for a jet, leaving direction to the line's own path. 0 uses the same direction hue the arrows use</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26520,7 +26520,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugAspect</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: how much further upwind than sideways flow lines are seeded. The seed footprint is stretched along the wind, so lines start well upwind and arrive already shaped by what they have passed through, instead of being short stubs coming in from every side</string>
+      <string>Debug floater wind flow: how much further upwind than sideways flow lines are seeded. The seed footprint is stretched along the wind, so lines start well upwind and arrive already shaped by what they have passed through, instead of being short stubs coming in from every side</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26531,7 +26531,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugSeed</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: cells between flow line seeds. Lower is denser and slower; the seeding is limited to the area around the camera either way</string>
+      <string>Debug floater wind flow: cells between flow line seeds. Lower is denser and slower; the seeding is limited to the area around the camera either way</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26542,7 +26542,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugLength</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: how many steps a flow line is traced for before it is dropped. A step is three quarters of a cell, so this has to be long enough to carry a line from the upwind edge of the seed footprint to the camera</string>
+      <string>Debug floater wind flow: how many steps a flow line is traced for before it is dropped. A step is three quarters of a cell, so this has to be long enough to carry a line from the upwind edge of the seed footprint to the camera</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26553,7 +26553,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugFade</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: how much of its opacity a slab keeps per slab of distance from the one the camera is in. Compounding, so 0.5 draws the neighbouring slab at half strength and the one beyond it at a quarter. Lower separates the layers harder and buries the distant ones sooner; 1 disables the fade</string>
+      <string>Debug floater wind flow: how much of its opacity a slab keeps per slab of distance from the one the camera is in. Compounding, so 0.5 draws the neighbouring slab at half strength and the one beyond it at a quarter. Lower separates the layers harder and buries the distant ones sooner; 1 disables the fade</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26564,7 +26564,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugCapture</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: which capture pass to draw instead of the flow field. 0 the solved flow, 1 the overhead heightmap, 2 to 5 the four oblique probes. Each pass is drawn as the world points it actually saw, so a direction missing whole swathes of a region shows up as a hole</string>
+      <string>Debug floater wind flow: which capture pass to draw instead of the flow field. 0 the solved flow, 1 the overhead heightmap, 2 to 5 the four oblique probes. Each pass is drawn as the world points it actually saw, so a direction missing whole swathes of a region shows up as a hole</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26575,7 +26575,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoWindFlowDebugRange</key>
       <map>
       <key>Comment</key>
-      <string>Render Metadata wind flow debug: distance from the camera drawn at full texel density. Beyond it the arrow field decimates so the far side of the domain still costs something sane</string>
+      <string>Debug floater wind flow: distance from the camera drawn at full texel density. Beyond it the arrow field decimates so the far side of the domain still costs something sane</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -26977,7 +26977,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>1</integer>
+      <integer>0</integer>
     </map>
     <key>SSAtmoWhiteoutBand</key>
       <map>
@@ -27763,7 +27763,7 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoCloudDebugView</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: which view the cloud field debug overlay draws (1 cell gate and tower map, 2 column profiles, 3 ground shadow map projected to where the sun lands it). The overlay itself is the Cloud Field render-metadata mask; this only picks what it shows.</string>
+    <string>Atmo Magic: which view the cloud field debug overlay draws (1 cell gate and tower map, 2 column profiles, 3 ground shadow map projected to where the sun lands it). The overlay itself is the Cloud Field debug mask; this only picks what it shows.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>

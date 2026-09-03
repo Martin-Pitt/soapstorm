@@ -9,7 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Weather > Conditions - the simulation inputs. What the air is doing, before anything falls out of it or discharges through it. Lightning and precipitation are outputs and live on their own sub-tabs. See doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> Atmo Magic: Weather > Conditions - the simulation inputs. What the air is doing, before anything falls out of it or discharges through it. The Falling switch lives here too because it is a cube condition - the master switch the whole wet half answers to - while which type falls stays on Precipitation. Lightning and precipitation presentation are outputs and live on their own sub-tabs. See doc/atmo_magic_env_ui.md. -->
 
     <!-- <SS:Nexii> The prose forecast, in plain words, standing at the head of the very rows it is a summary of. It used to live in the floater's top chrome, above the tab container, on the reasoning that a summary should stay visible whichever tab is selected - but that space now carries the forecast STRIP (drawForecastStrip()), which says the same thing hour by hour and says it better, and a sentence about moisture and wind is only ever read while those are the numbers in front of you. Purely a display convenience, never persisted - see SSAtmoEnvWeatherResolver::generateForecastText(). -->
     <text
@@ -431,8 +431,61 @@
      hover_glow_amount="0.15"
      label="" />
 
-    <!-- Gust and lightning default from the cube; unchecking an Auto box
-         hands its rows below over to the author. The Auto boxes themselves
+    <!-- <SS:Nexii> Whether anything falls at all - moved here from Precipitation, because the switch is part of the cube's weather, not the presentation of what it produces. Keyframed, and HOLD like every flag: the key that ticks this box and the key that unticks it are the shower's start and stop. -->
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     height="16"
+     width="360"
+     name="precipitation_falls"
+     label="Precipitation active"
+     tool_tip="Off holds the sky exactly as authored - overcast, gloomy, thundering - with nothing falling out of it. On, moisture decides what falls and how hard, as before" />
+    <button
+     follows="right|top"
+     layout="topleft"
+     left="486"
+     top_delta="-3"
+     height="25"
+     width="25"
+     name="precipitation_falls_prev_button"
+     tool_tip="Jump to the previous keyframe"
+     image_overlay="SkipBackward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+    <button
+     follows="right|top"
+     layout="topleft"
+     left_pad="2"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="precipitation_falls_keyframe_button"
+     tool_tip="Add or remove a keyframe at the current preview time"
+     label="&#9671;" />
+    <button
+     follows="right|top"
+     layout="topleft"
+     left_pad="2"
+     top_delta="0"
+     height="25"
+     width="25"
+     name="precipitation_falls_next_button"
+     tool_tip="Jump to the next keyframe"
+     image_overlay="SkipForward_Off"
+     image_disabled="PushButton_Disabled"
+     image_disabled_selected="PushButton_Disabled"
+     image_selected="PushButton_Selected"
+     image_unselected="PushButton_Off"
+     hover_glow_amount="0.15"
+     label="" />
+
+    <!-- Gust and lightning default from the cube; unchecking an Auto box hands its rows below over to the author. The Auto boxes themselves
          are structural toggles like the water enable, not keyframe rows. -->
     <check_box
      follows="left|top"
@@ -443,7 +496,7 @@
      width="360"
      name="gust_auto_check"
      label="Gust Auto"
-     tool_tip="Derive gust behaviour from the moisture/convection/temperature cube; uncheck to author the rows below directly" />
+     tool_tip="Derive gust behaviour from the moisture/convection/temperature cube; the rows below collapse while it owns them - uncheck to author them directly" />
 
     <text
      follows="left|top"

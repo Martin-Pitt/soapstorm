@@ -9,7 +9,7 @@
  top="0"
  width="580"
  height="580">
-    <!-- <SS:Nexii> Atmo Magic: Weather > Precipitation - what falls, and which deck it falls from. The type combo is keyframed: which precipitation is running is a property of the moment. The source is not: it is a property of the track, so it carries no keyframe buttons. It sits above the type because it answers "where does this originate" before "what is it". See doc/atmo_magic_env_ui.md. -->
+    <!-- <SS:Nexii> Atmo Magic: Weather > Precipitation - what falls, and which deck it falls from. The Falling switch moved to Conditions, where it belongs with the cube that drives it; the type combo is keyframed: which precipitation is running is a property of the moment. The source is not: it is a property of the track, so it carries no keyframe buttons. It sits above the type because it answers "where does this originate" before "what is it". See doc/atmo_magic_env_ui.md. -->
     <text
      follows="left|top"
      layout="topleft"
@@ -30,71 +30,6 @@
      width="200"
      name="weather_source_combo"
      tool_tip="Which cloud deck delivers precipitation. Derived picks the lowest enabled deck above the surface, which is the main deck unless a deck sits between it and the ground" />
-
-    <!-- <SS:Nexii> Whether anything falls at all, above the type because "is it raining" comes before "what is it". Moisture alone used to decide, which made an overcast, dark, thundering, dry sky unauthorable. Keyframed like the type, and HOLD like it too: a flag has nothing to interpolate, so the shower runs from the key that ticks this box to the key that unticks it - the two marks on the rail ARE the start and the stop. -->
-    <text
-     follows="left|top"
-     layout="topleft"
-     left="10"
-     top_pad="14"
-     height="14"
-     width="110"
-     name="precipitation_falls_label"
-     font="SansSerifSmall">
-        Falling
-    </text>
-    <check_box
-     follows="left|top"
-     layout="topleft"
-     left_pad="6"
-     top_delta="-2"
-     height="16"
-     width="230"
-     name="precipitation_falls"
-     label="Precipitation reaches the ground"
-     tool_tip="Off holds the sky exactly as authored - overcast, gloomy, thundering - with nothing falling out of it. On, moisture decides what falls and how hard, as before" />
-    <button
-     follows="right|top"
-     layout="topleft"
-     left="486"
-     top_delta="-2"
-     height="25"
-     width="25"
-     name="precipitation_falls_prev_button"
-     tool_tip="Jump to the previous keyframe"
-     image_overlay="SkipBackward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
-    <button
-     follows="right|top"
-     layout="topleft"
-     left="513"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="precipitation_falls_keyframe_button"
-     tool_tip="Add or remove a keyframe at the current preview time"
-     label="&#9671;" />
-    <button
-     follows="right|top"
-     layout="topleft"
-     left="540"
-     top_delta="0"
-     height="25"
-     width="25"
-     name="precipitation_falls_next_button"
-     tool_tip="Jump to the next keyframe"
-     image_overlay="SkipForward_Off"
-     image_disabled="PushButton_Disabled"
-     image_disabled_selected="PushButton_Disabled"
-     image_selected="PushButton_Selected"
-     image_unselected="PushButton_Off"
-     hover_glow_amount="0.15"
-     label="" />
 
     <!-- Forced precipitation type. Auto derives from the cube; the rest is
          the exact vocabulary SSAtmoEnvWeatherResolver::derivePrecipitationType()

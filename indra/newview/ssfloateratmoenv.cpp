@@ -89,16 +89,20 @@ static const S32 HOVER_PAD_Y = 10;
 // <SS:Nexii> The forecast strip's vertical rack, all measured UP from STRIP_GAP above the
 // scrubber's top edge - see drawForecastStrip(). Bottom to top: the hour sitting directly on the
 // scrubber it names, the wind rose, how much falls, the temperature, and the condition glyph at
-// the head. Text offsets are the BOTTOM of their line, glyph offsets are a centre.
+// the head. Text offsets are the BOTTOM of their line and the condition glyph's is a centre;
+// STRIP_PRECIP_ICON_Y is a BASELINE, because the marks that sit on it are of three different
+// heights and lining their feet up is what lets the tops be compared.
 //
 // The hour is at the FOOT rather than heading the column the way a printed forecast sets it,
 // because here the column is not the whole story: the scrubber below is, and putting the label
 // against the timeline it indexes lets the two be read as one scale. Everything else keeps the
 // familiar order above it.
 //
-// STRIP_GAP is not padding for looks: drawKeyframeGhosts writes value labels in a lane about
-// 14px above the scrubber rect, so anything tighter than this has hovering a row scribble over
-// the hour row.
+// STRIP_GAP is small on purpose: the hour row names the stretch of scrubber directly beneath it,
+// and a wide gap read as two separate things rather than one scale. drawKeyframeGhosts writes
+// value labels into a lane about 14px above the scrubber rect, so the two now share that space -
+// the ghosts draw last and win, which is the right way round, since a lane of keyframe values only
+// appears while a row is hovered and is exactly what is being read at that moment.
 //
 // The gaps between rows are 2-4px and the condition glyph is the reason. It is the only mark
 // here that is not a line of text: it reaches about 14px BELOW its centre (the drops or the bolt
@@ -107,12 +111,12 @@ static const S32 HOVER_PAD_Y = 10;
 //
 // STRIP_HEIGHT plus STRIP_GAP is what the floater XML reserves between the name row and the
 // scrubber. Move any offset here and move the scrubber's top with it.
-static const S32 STRIP_GAP = 15;
+static const S32 STRIP_GAP = 4;
 static const F32 STRIP_WIND_RADIUS = 10.5f;
 static const S32 STRIP_TIME_TEXT_Y = 0;
-static const S32 STRIP_WIND_Y = 31;
-static const S32 STRIP_PRECIP_TEXT_Y = 51;
-static const S32 STRIP_PRECIP_ICON_Y = 69;
+static const S32 STRIP_WIND_Y = 30;
+static const S32 STRIP_PRECIP_TEXT_Y = 48;
+static const S32 STRIP_PRECIP_ICON_Y = 63;
 static const S32 STRIP_TEMP_TEXT_Y = 78;
 static const S32 STRIP_CONDITION_Y = 108;
 static const S32 STRIP_HEIGHT = 120;
@@ -120,6 +124,12 @@ static const S32 STRIP_HEIGHT = 120;
 // Pitch a column needs before the step coarsens, and the coarsest step it will settle for.
 static const S32 STRIP_MIN_COLUMN = 44;
 static const S32 STRIP_STEP_COARSEST = 12;
+
+// <SS:Nexii> Pixels between precipitation marks. The band is a separate, much finer sampling than
+// the columns - fine enough that a shower reads as a continuous run rather than a dotted line, and
+// coarse enough that neighbouring marks stay apart at the widest a mark gets, which is the
+// three-stroke heavy cluster, which is ten across once the streaks lean. Thirteen leaves three clear.
+static const S32 STRIP_PRECIP_PITCH = 13;
 
 // Floater shell; all content is wired in postBuild.
 SSFloaterAtmoEnv::SSFloaterAtmoEnv(const LLSD& key) :
@@ -1955,24 +1965,37 @@ void SSFloaterAtmoEnv::onClickEditPrecipTypes()
         LLSD().with("scope", "environment").with("name", want));
 }
 
+// <SS:Nexii> The source list is rebuilt from the selected track, but never empty: Derived and Main
+// Deck are offered even with no asset loaded, so the dropdown always shows at least the default.
+// The staged pair guards the rebuild because this now rides refreshTrackTab under the half-second
+// poll, and clearRows would slam shut a dropdown the author is holding open.
 void SSFloaterAtmoEnv::refreshWeatherSource()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
-    if (!mgr->hasAsset()) return;
 
-    const SSAtmoEnvAsset& asset = mgr->asset();
-    if (mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
-    const SSAtmoEnvTrack& track = asset.mTracks[mSelectedTrackIndex];
+    S32 source = SS_ATMOENV_DECK_DERIVED;
+    bool under_enabled = false;
+    if (mgr->hasAsset() && mSelectedTrackIndex >= 0
+        && mSelectedTrackIndex < (S32)mgr->asset().mTracks.size())
+    {
+        const SSAtmoEnvTrack& track = mgr->asset().mTracks[mSelectedTrackIndex];
+        source = track.mWeatherSourceDeck;
+        under_enabled = track.mUnderField.mEnabled;
+    }
+
+    if (source == mWeatherSourceStaged && under_enabled == mWeatherSourceUnderStaged) return;
+    mWeatherSourceStaged = source;
+    mWeatherSourceUnderStaged = under_enabled;
 
     LLComboBox* combo = getChild<LLComboBox>("weather_source_combo");
     combo->clearRows();
     combo->add("Derived", LLSD(SS_ATMOENV_DECK_DERIVED));
     combo->add("Main Deck", LLSD(SS_ATMOENV_DECK_MAIN));
-    if (track.mUnderField.mEnabled)
+    if (under_enabled)
     {
         combo->add("Under Deck", LLSD(SS_ATMOENV_DECK_UNDER));
     }
-    if (!combo->setSelectedByValue(LLSD(track.mWeatherSourceDeck), true))
+    if (!combo->setSelectedByValue(LLSD(source), true))
     {
         combo->setSelectedByValue(LLSD(SS_ATMOENV_DECK_DERIVED), true);
     }
@@ -2153,10 +2176,10 @@ void SSFloaterAtmoEnv::onClickRandomizeWeather()
 
     setWeatherRollText(roll.mSummary);
 
-    // The whole tab changed under the author, structural toggles included - a squall turns the
-    // gust Auto box OFF and authors its three rows, so refreshing the row values alone would leave
-    // a checked box over rows that are no longer derived. refreshTrackTab is what rewrites the
-    // boxes; it pulls the auto, lightning and water row refreshes along behind it.
+    // The roll rewrites the cube's curves wholesale, so the tab refreshes through
+    // refreshTrackTab: it rewrites the structural boxes and pulls the auto, lightning and water
+    // row refreshes along behind it. Gusts and lightning stay on auto through every roll - the
+    // resolver derives both from what the cube now says.
     refreshTrackTab();
     refreshStatus();
     refreshPreview();
@@ -2521,6 +2544,10 @@ void SSFloaterAtmoEnv::refreshTrackTab()
     getChild<LLUICtrl>("cloud_auto_check")->setValue(track.mCloudField.mAuto);
     getChild<LLUICtrl>("dome_auto_check")->setValue(track.mCloudDome.mAuto);
     getChild<LLUICtrl>("atmo_horizon_clip_check")->setValue(track.mAtmosphere.mHorizonClip);
+    // <SS:Nexii> The source combo rides this refresh rather than its own call sites - every
+    // adoption path (seed, stamp, load, revert) and the poll funnel through here, and the staged
+    // guard inside turns the repeats into no-ops.
+    refreshWeatherSource();
     refreshAutoRows();
     refreshLightningRows();
     refreshWaterRows();
@@ -2723,7 +2750,8 @@ namespace
     std::string precipDisplayName(const std::string& value);
 }
 
-// Enables every auto-owned row set per its flag.
+// Enables every auto-owned row set per its flag; auto-owned gust rows collapse instead, since
+// three dead sliders reading the cube back is noise the author cannot act on.
 void SSFloaterAtmoEnv::refreshAutoRows()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -2744,30 +2772,42 @@ void SSFloaterAtmoEnv::refreshAutoRows()
         ss_cloud_season,
         auto_height, auto_thickness, auto_coverage, auto_dark);
 
-    const struct { const char* mPrefix; bool mAuto; F32 mComputed; } rows[] = {
-        { "gust_depth",          weather.mGustAuto,       resolved.mGustDepth },
-        { "gust_length",         weather.mGustAuto,       resolved.mGustLength },
-        { "gust_veer",           weather.mGustAuto,       resolved.mGustVeer },
-        { "lightning_intensity", weather.mLightningAuto,  resolved.mLightningIntensity },
-        { "cloud_base_height",   track.mCloudField.mAuto, auto_height },
-        { "cloud_thickness",     track.mCloudField.mAuto, auto_thickness },
-        { "cloud_coverage",      track.mCloudField.mAuto, auto_coverage },
-        { "cloud_storm_dark",    track.mCloudField.mAuto, auto_dark },
+    const struct { const char* mPrefix; bool mAuto; F32 mComputed; bool mCollapses; } rows[] = {
+        { "gust_depth",          weather.mGustAuto,       resolved.mGustDepth,          true },
+        { "gust_length",         weather.mGustAuto,       resolved.mGustLength,         true },
+        { "gust_veer",           weather.mGustAuto,       resolved.mGustVeer,           true },
+        { "lightning_intensity", weather.mLightningAuto,  resolved.mLightningIntensity, false },
+        { "cloud_base_height",   track.mCloudField.mAuto, auto_height,                  false },
+        { "cloud_thickness",     track.mCloudField.mAuto, auto_thickness,               false },
+        { "cloud_coverage",      track.mCloudField.mAuto, auto_coverage,                false },
+        { "cloud_storm_dark",    track.mCloudField.mAuto, auto_dark,                    false },
         // <SS:Nexii> The under deck's altitude and depth stay the author's under Auto too - the resolver holds them back (SSAtmoEnvCloudFieldResolver::resolve's auto_owns_geometry), because one weather baseline handed to both fields stacks them in the same volume. So these two rows stay LIVE while the deck is auto: greying them out and filling them with the storm deck's answer is precisely the overlap, written into the UI.
-        { "ucloud_base_height",  false,                   auto_height },
-        { "ucloud_thickness",    false,                   auto_thickness },
-        { "ucloud_coverage",     track.mUnderField.mAuto, auto_coverage },
-        { "ucloud_storm_dark",   track.mUnderField.mAuto, auto_dark },
-        { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::instance().cirrusAltitudeMetres() },
+        { "ucloud_base_height",  false,                   auto_height,                  false },
+        { "ucloud_thickness",    false,                   auto_thickness,               false },
+        { "ucloud_coverage",     track.mUnderField.mAuto, auto_coverage,                false },
+        { "ucloud_storm_dark",   track.mUnderField.mAuto, auto_dark,                    false },
+        { "dome_height",         track.mCloudDome.mAuto,  SSAtmoEnvApplier::instance().cirrusAltitudeMetres(), false },
     };
     for (const auto& row : rows)
     {
         const std::string prefix(row.mPrefix);
-        getChild<LLUICtrl>(prefix + "_slider")->setEnabled(!row.mAuto);
-        getChild<LLUICtrl>(prefix + "_value_spinner")->setEnabled(!row.mAuto);
-        getChild<LLUICtrl>(prefix + "_keyframe_button")->setEnabled(!row.mAuto);
-        getChild<LLUICtrl>(prefix + "_prev_button")->setEnabled(!row.mAuto);
-        getChild<LLUICtrl>(prefix + "_next_button")->setEnabled(!row.mAuto);
+        const bool live = !row.mAuto;
+
+        if (row.mCollapses)
+        {
+            for (const char* part : { "_label", "_slider", "_value_spinner",
+                                      "_keyframe_button", "_prev_button", "_next_button" })
+            {
+                getChild<LLView>(prefix + part)->setVisible(live);
+            }
+            continue;
+        }
+
+        getChild<LLUICtrl>(prefix + "_slider")->setEnabled(live);
+        getChild<LLUICtrl>(prefix + "_value_spinner")->setEnabled(live);
+        getChild<LLUICtrl>(prefix + "_keyframe_button")->setEnabled(live);
+        getChild<LLUICtrl>(prefix + "_prev_button")->setEnabled(live);
+        getChild<LLUICtrl>(prefix + "_next_button")->setEnabled(live);
 
         if (row.mAuto)
         {
@@ -3359,23 +3399,15 @@ void SSFloaterAtmoEnv::buildGhosts(const std::vector<SSAtmoEnvKeyframe<T>>& keyf
     {
         const SSAtmoEnvKeyframe<T>& kf = keyframes[i];
 
+        // <SS:Nexii> The mark sits where the key sits, HOLD or not. Drawing a HOLD key mid-span
+        // claimed a keyframe in the middle of the air it owns, at a spot the head could never
+        // land on to edit; and the last key's through-midnight extension drew a second diamond
+        // at the centre of the wrap, over a phase where no key exists at all. The stretch a HOLD
+        // value covers is not marked here either - see the filled/hollow test in
+        // drawKeyframeGhosts for why it is the key alone that lights.
         GhostKeyframe ghost;
-        ghost.mHold = (kf.mCurve == SSAtmoEnvCurve::HOLD);
         ghost.mLabel = format(kf.mValue);
-
-        // <SS:Nexii> The mark sits where the key sits, HOLD or not - the stretch it holds is
-        // carried separately (mSpanStart/End) so the head can still light it while the phase
-        // rides that span. Drawing a HOLD key mid-span claimed a keyframe in the middle of the
-        // air it owns, at a spot the head could never land on to edit; and the last key's
-        // through-midnight extension was drawn as a second diamond at the centre of the wrap,
-        // over a phase where no key exists at all.
         ghost.mDrawPhase = kf.mTime;
-        ghost.mSpanStart = kf.mTime;
-        ghost.mSpanEnd = (ghost.mHold && i < count - 1) ? keyframes[i + 1].mTime : kf.mTime;
-        // The last HOLD key stands through midnight to the end of the rail; the wrap run back
-        // to phase 0 is its ground under a cyclic field and is deliberately unmarked - there is
-        // no keyframe there to put a mark on.
-        if (ghost.mHold && i == count - 1) ghost.mSpanEnd = 1.0;
 
         out.push_back(ghost);
     }
@@ -3658,29 +3690,171 @@ namespace
         return RAIN;
     }
 
-    // One mark of what is falling: a leaning drop, a six-armed flake, or a pellet.
-    void ssStripPrecipMark(S32 x, S32 y, const std::string& type, const LLColor4& colour)
+    // <SS:Nexii> How far a streak leans, as a FRACTION of its own length rather than a fixed pixel
+    // offset. A flat two pixels was 27 degrees off vertical on a 4px drizzle streak and 16 on a 7px
+    // heavy one - so the harder it rained the more upright the rain stood, which is backwards. This
+    // holds every streak at about 29 degrees whatever its length, the lean the original single-drop
+    // marks had, and is deliberately the ONE thing that does not vary across the ladder below: an
+    // angle that changed with intensity would read as wind rather than as weight.
+    static const F32 STRIP_RAIN_LEAN = 0.55f;
+
+    bool ssStripIsDrizzle(SSAtmoEnvPrecipIntensity band)
     {
+        return band == SSAtmoEnvPrecipIntensity::DRIZZLE_LIGHT
+            || band == SSAtmoEnvPrecipIntensity::DRIZZLE
+            || band == SSAtmoEnvPrecipIntensity::DRIZZLE_HEAVY;
+    }
+
+    bool ssStripIsHeavy(SSAtmoEnvPrecipIntensity band)
+    {
+        return band == SSAtmoEnvPrecipIntensity::HEAVY
+            || band == SSAtmoEnvPrecipIntensity::TORRENTIAL;
+    }
+
+    // One streak of falling water at the shared lean. A dashed streak is the same line with its
+    // middle bitten out - the drizzle family's way of reading as barely-there without going shorter,
+    // since length is already carrying weight further up the ladder.
+    void ssStripStreak(S32 x, S32 y, S32 length, bool dashed, const LLColor4& colour)
+    {
+        const S32 slant = ll_round((F32)length * STRIP_RAIN_LEAN);
+
+        if (!dashed)
+        {
+            gl_line_2d(x, y, x + slant, y + length, colour);
+            return;
+        }
+
+        static const F32 BREAK_LO = 0.40f;
+        static const F32 BREAK_HI = 0.64f;
+        gl_line_2d(x, y,
+                   x + (S32)((F32)slant * BREAK_LO), y + (S32)((F32)length * BREAK_LO), colour);
+        gl_line_2d(x + (S32)((F32)slant * BREAK_HI), y + (S32)((F32)length * BREAK_HI),
+                   x + slant, y + length, colour);
+    }
+
+    enum class SSStripFallForm { DOT, DASH, LINE };
+    enum class SSStripFallHead { NONE, SMALL_DROP, BIG_DROP, SLAB };
+
+    struct SSStripFallShape
+    {
+        S32 mCount;
+        SSStripFallForm mForm;
+        S32 mLength;              // along the streak; ignored by DOT
+        SSStripFallHead mHead;
+    };
+
+    // <SS:Nexii> The seven intensity bands as seven distinguishable marks, one row per band in the
+    // enum's own order so the table IS the ladder and a new band would be a new line.
+    //
+    // Every adjacent pair differs by at least one whole feature, which is the property that matters:
+    // a mark is read against its NEIGHBOURS in the band, not against a legend. Dots become dashes,
+    // dashes become solid lines, then a drop appears at the foot, then a third streak with a bigger
+    // drop, then the drop squares off into a slab. Non-adjacent pairs differ by more than one, so
+    // the ladder degrades gracefully - a mark misread by one step is still nearly right.
+    //
+    // The drizzle family carries no head at all. That is the single clearest division in the set and
+    // it lands where the resolver puts its own: classifyIntensity only hands out the drizzle bands
+    // for liquid types (isDrizzleCapable), so a headless mark means water light enough to drift.
+    const SSStripFallShape& ssStripFallShape(SSAtmoEnvPrecipIntensity band)
+    {
+        using Form = SSStripFallForm;
+        using Head = SSStripFallHead;
+
+        static const SSStripFallShape SHAPES[] = {
+            // count  form        length  head                  band
+            {  0,     Form::DOT,   0,     Head::NONE       },  // NONE - never drawn
+            {  1,     Form::DOT,   0,     Head::NONE       },  // DRIZZLE_LIGHT
+            {  2,     Form::DOT,   0,     Head::NONE       },  // DRIZZLE
+            {  2,     Form::DASH,  6,     Head::NONE       },  // DRIZZLE_HEAVY
+            {  2,     Form::LINE,  6,     Head::NONE       },  // LIGHT
+            {  2,     Form::LINE,  6,     Head::SMALL_DROP },  // MODERATE
+            {  3,     Form::LINE,  7,     Head::BIG_DROP   },  // HEAVY
+            {  3,     Form::LINE,  8,     Head::SLAB       },  // TORRENTIAL
+        };
+
+        const size_t index = (size_t)band;
+        return SHAPES[index < (sizeof(SHAPES) / sizeof(SHAPES[0])) ? index : 0];
+    }
+
+    // <SS:Nexii> One mark of what is falling, built UP from a shared baseline rather than around a
+    // centre. Every mark in the band therefore has its feet on the same line, and the eye compares
+    // the TOPS - which is where the difference is - instead of hunting for it around a centre that
+    // shifts with the glyph's own size. That alignment is also what makes the heads legible: a
+    // drop and a slab only tell apart when they start from the same place.
+    void ssStripPrecipMark(S32 x, S32 baseline, const std::string& type,
+                           SSAtmoEnvPrecipIntensity band, const LLColor4& colour)
+    {
+        if (band == SSAtmoEnvPrecipIntensity::NONE) return;
+
+        // The band's position in the ladder, 1 through 7, for the two types that scale smoothly
+        // rather than changing form.
+        const F32 step = (F32)((S32)band - 1);
+
         if (type == "snow" || type == "blizzard")
         {
+            // A flake is a size, not a count - snow does not fall in streaks. The centre lifts by
+            // an arm's length so the flake's lowest point is the baseline like everything else's.
+            const F32 arm = 2.f + 0.32f * step;
+            const S32 centre = baseline + (S32)arm;
             for (S32 i = 0; i < 3; ++i)
             {
                 const F32 angle = (F32)i * (F_PI / 3.f);
-                const S32 dx = (S32)(cosf(angle) * 3.f);
-                const S32 dy = (S32)(sinf(angle) * 3.f);
-                gl_line_2d(x - dx, y - dy, x + dx, y + dy, colour);
+                const S32 dx = (S32)(cosf(angle) * arm);
+                const S32 dy = (S32)(sinf(angle) * arm);
+                gl_line_2d(x - dx, centre - dy, x + dx, centre + dy, colour);
             }
             return;
         }
 
         if (type == "hail")
         {
-            ssStripRing(x, y, 2.6f, colour);
+            // Pellets grow, and fill once they are the size that dents cars.
+            const F32 radius = 1.8f + 0.24f * step;
+            const S32 centre = baseline + (S32)radius;
+            if (ssStripIsHeavy(band)) ssStripDisc(x, centre, radius, colour);
+            else                      ssStripRing(x, centre, radius, colour);
             return;
         }
 
-        gl_line_2d(x + 2, y + 3, x - 1, y - 2, colour);
-        ssStripDisc(x - 1, y - 3, 1.6f, colour);
+        // Liquid, and the mixes that carry it: a head on the baseline with a fan of parallel
+        // streaks leaning out of it.
+        static const S32 SPREAD = 3;
+
+        const SSStripFallShape& shape = ssStripFallShape(band);
+
+        S32 foot = baseline;
+        switch (shape.mHead)
+        {
+            case SSStripFallHead::SMALL_DROP:
+                ssStripDisc(x, baseline + 2, 2.f, colour);
+                foot = baseline + 5;
+                break;
+            case SSStripFallHead::BIG_DROP:
+                ssStripDisc(x, baseline + 3, 2.8f, colour);
+                foot = baseline + 6;
+                break;
+            case SSStripFallHead::SLAB:
+                gl_rect_2d(x - 3, baseline + 3, x + 3, baseline, colour, true);
+                foot = baseline + 4;
+                break;
+            case SSStripFallHead::NONE:
+            default:
+                break;
+        }
+
+        for (S32 i = 0; i < shape.mCount; ++i)
+        {
+            const S32 offset = (S32)(((F32)i - (F32)(shape.mCount - 1) * 0.5f) * (F32)SPREAD);
+
+            if (shape.mForm == SSStripFallForm::DOT)
+            {
+                ssStripDisc(x + offset, foot + 1, 1.2f, colour);
+                continue;
+            }
+
+            ssStripStreak(x + offset, foot, shape.mLength,
+                          shape.mForm == SSStripFallForm::DASH, colour);
+        }
     }
 
     // The bolt, for a deck that is discharging.
@@ -3701,10 +3875,14 @@ namespace
         const F32 dx = sinf(heading);
         const F32 dy = cosf(heading);
 
+        // The barb runs from just outside the ring to five px beyond it. It was seven, and the
+        // percentage row above has since moved down into the space that bought - a bearing is
+        // legible off the barb's ANGLE, which a shorter one carries just as well, where the
+        // percentage overlapping it would not be legible at all.
         const S32 tail_x = x + (S32)(dx * (radius + 1.5f));
         const S32 tail_y = y + (S32)(dy * (radius + 1.5f));
-        const S32 tip_x  = x + (S32)(dx * (radius + 7.f));
-        const S32 tip_y  = y + (S32)(dy * (radius + 7.f));
+        const S32 tip_x  = x + (S32)(dx * (radius + 5.f));
+        const S32 tip_y  = y + (S32)(dy * (radius + 5.f));
         gl_line_2d(tail_x, tail_y, tip_x, tip_y, colour);
 
         for (S32 side = -1; side <= 1; side += 2)
@@ -3716,9 +3894,52 @@ namespace
         }
     }
 
+    // <SS:Nexii> The condition glyph's own fall, centred under its cloud. Deliberately NOT the
+    // band's mark: that one is built up from a baseline and carries a head, and hanging twelve
+    // pixels of it under the cloud either runs into the cloud's own base or pushes the whole glyph
+    // into the temperature row above. It keeps the band's COUNT language - one streak, two, three -
+    // so the icon and the row below it say the same thing about weight, and drops the head, which
+    // is the part that needed the room.
+    void ssStripGlyphFall(S32 x, S32 y, const std::string& type,
+                          SSAtmoEnvPrecipIntensity band, const LLColor4& colour)
+    {
+        const bool drizzle = ssStripIsDrizzle(band);
+        const bool heavy = ssStripIsHeavy(band);
+
+        if (type == "snow" || type == "blizzard")
+        {
+            const F32 arm = heavy ? 3.4f : (drizzle ? 2.2f : 2.8f);
+            for (S32 i = 0; i < 3; ++i)
+            {
+                const F32 angle = (F32)i * (F_PI / 3.f);
+                const S32 dx = (S32)(cosf(angle) * arm);
+                const S32 dy = (S32)(sinf(angle) * arm);
+                gl_line_2d(x - dx, y - dy, x + dx, y + dy, colour);
+            }
+            return;
+        }
+
+        if (type == "hail")
+        {
+            ssStripRing(x, y, heavy ? 3.f : 2.4f, colour);
+            return;
+        }
+
+        static const S32 GLYPH_STREAK = 6;
+        const S32 slant = ll_round((F32)GLYPH_STREAK * STRIP_RAIN_LEAN);
+
+        const S32 strokes = heavy ? 3 : (drizzle ? 1 : 2);
+        for (S32 i = 0; i < strokes; ++i)
+        {
+            const S32 offset = (S32)(((F32)i - (F32)(strokes - 1) * 0.5f) * 4.f);
+            gl_line_2d(x + offset, y - GLYPH_STREAK / 2,
+                       x + offset + slant, y + GLYPH_STREAK / 2, colour);
+        }
+    }
+
     // <SS:Nexii> The one glyph that says what an hour is like: cover first, then whatever comes through it. Okta thresholds follow the same scale skyTextForOkta() words the prose forecast by, so the picture and the sentence on Weather > Conditions cannot disagree - 0-1 clear, up to 5 broken with the light still showing, 7-8 a dark overcast deck. A discharging deck draws the bolt INSTEAD of the drops rather than as well: at this size both together is a smudge, and thunder is the more urgent of the two facts.
     void ssStripCondition(S32 x, S32 y, S32 okta, bool daylight, bool falling,
-                          const std::string& type, bool thunder)
+                          const std::string& type, SSAtmoEnvPrecipIntensity band, bool thunder)
     {
         static const LLColor4 SUN(1.f, 0.84f, 0.30f, 1.f);
         static const LLColor4 MOON(0.84f, 0.87f, 0.97f, 1.f);
@@ -3754,11 +3975,7 @@ namespace
         }
         else if (falling)
         {
-            const LLColor4& fall = ssStripPrecipColour(type);
-            for (S32 i = -1; i <= 1; ++i)
-            {
-                ssStripPrecipMark(x + i * 5, y - 9, type, fall);
-            }
+            ssStripGlyphFall(x, y - 9, type, band, ssStripPrecipColour(type));
         }
     }
 }
@@ -3779,7 +3996,10 @@ namespace
 // very wide floater - past that the columns are reading interpolation noise, not weather.
 void SSFloaterAtmoEnv::refreshForecastStrip()
 {
+    // Both banks cleared up front, not beside the loops that fill them: every guard below returns
+    // early, and a stale band outliving its asset would draw over the landing panel.
     mForecastCells.clear();
+    mForecastMarks.clear();
 
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
@@ -3856,6 +4076,7 @@ void SSFloaterAtmoEnv::refreshForecastStrip()
         cell.mPrecipPercent = (S32)ll_round(llclamp(moisture, 0.f, 1.f) * 100.f);
         cell.mFalling = state.mPrecipitationFalls
                         && state.mIntensityBand != SSAtmoEnvPrecipIntensity::NONE;
+        cell.mBand = state.mIntensityBand;
         cell.mThunder = state.mLightningEnabled && state.mLightningIntervalMaxSeconds > 0.f;
         // A rise past its set wraps midnight - the day is then the OUTSIDE of the interval.
         cell.mDaylight = (sun_rise <= sun_set)
@@ -3864,6 +4085,28 @@ void SSFloaterAtmoEnv::refreshForecastStrip()
         cell.mPrecipType = state.mPrecipitationType;
 
         mForecastCells.push_back(cell);
+    }
+
+    // The band. Sampled off the pixel pitch rather than off the hour, because what it is drawing is
+    // an extent along the rail rather than a reading at an instant - the columns already do that.
+    const S32 slots = travel / STRIP_PRECIP_PITCH;
+    if (slots < 1) return;
+
+    mForecastMarks.reserve((size_t)slots + 1);
+    for (S32 slot = 0; slot <= slots; ++slot)
+    {
+        const F64 phase = (F64)slot / (F64)slots;
+
+        const SSAtmoEnvWeatherState wet = SSAtmoEnvWeatherResolver::resolve(track.mWeather, phase);
+        if (!wet.mPrecipitationFalls) continue;
+        if (wet.mIntensityBand == SSAtmoEnvPrecipIntensity::NONE) continue;
+
+        ForecastMark mark;
+        mark.mPhase = phase;
+        mark.mBand = wet.mIntensityBand;
+        mark.mType = wet.mPrecipitationType;
+
+        mForecastMarks.push_back(mark);
     }
 }
 
@@ -3889,18 +4132,21 @@ void SSFloaterAtmoEnv::drawForecastStrip()
     const S32 base = rect.mTop + STRIP_GAP;
     LLFontGL* font = LLFontGL::getFontSansSerifSmall();
 
-    // The head, carried up through the strip, so a column is read against where the preview
-    // actually sits rather than against a guess from the scrubber below. Drawn first, so the
-    // columns it passes behind stay legible.
+    // <SS:Nexii> The head line, run from the top of the strip all the way DOWN to the scrubber's
+    // thumb rather than stopping at the strip's own floor. Stopping short left the strip and the
+    // control reading as two stacked things with a coincidence between them; carried into the thumb
+    // it is one instrument, and every row it crosses - condition, temperature, rain, wind, hour - is
+    // read against the head by following the line rather than by eyeballing a column. Drawn before
+    // the rows so it passes behind them and nothing it crosses is obscured.
     const S32 head_x = left_edge + (S32)(llclamp(mPreviewPhase, 0.0, 1.0) * (F64)travel);
-    gl_rect_2d(head_x - 1, base + STRIP_HEIGHT, head_x + 1, base, HEAD_COLOUR, true);
+    gl_rect_2d(head_x - 1, base + STRIP_HEIGHT, head_x + 1, rect.getCenterY(), HEAD_COLOUR, true);
 
     for (const ForecastCell& cell : mForecastCells)
     {
         const S32 x = left_edge + (S32)(cell.mPhase * (F64)travel);
 
         ssStripCondition(x, base + STRIP_CONDITION_Y, cell.mOkta, cell.mDaylight,
-                         cell.mFalling, cell.mPrecipType, cell.mThunder);
+                         cell.mFalling, cell.mPrecipType, cell.mBand, cell.mThunder);
 
         font->renderUTF8(llformat("%d\xC2\xB0", (S32)ll_round(cell.mTemperatureC)), 0,
                          x, base + STRIP_TEMP_TEXT_Y,
@@ -3916,15 +4162,6 @@ void SSFloaterAtmoEnv::drawForecastStrip()
                          x, base + STRIP_PRECIP_TEXT_Y,
                          percent_colour, LLFontGL::HCENTER, LLFontGL::BOTTOM);
 
-        if (cell.mFalling)
-        {
-            for (S32 mark = -1; mark <= 1; ++mark)
-            {
-                ssStripPrecipMark(x + mark * 6, base + STRIP_PRECIP_ICON_Y,
-                                  cell.mPrecipType, percent_colour);
-            }
-        }
-
         ssStripWind(x, base + STRIP_WIND_Y, STRIP_WIND_RADIUS, cell.mWindHeading,
                     llformat("%d", (S32)ll_round(cell.mWindSpeed)),
                     (cell.mWindSpeed < 1.f) ? DIM_COLOUR : WIND_COLOUR, font);
@@ -3934,6 +4171,19 @@ void SSFloaterAtmoEnv::drawForecastStrip()
         // the scrubber so the label and the head it indexes read as one scale.
         font->renderUTF8(llformat("%02d00", cell.mHour), 0, x, base + STRIP_TIME_TEXT_Y,
                          TIME_COLOUR, LLFontGL::HCENTER, LLFontGL::BOTTOM);
+    }
+
+    // <SS:Nexii> The precipitation band, laid continuously across the row rather than clustered
+    // under each column. The columns are hourly readings; a shower is not hourly, and three marks
+    // parked under 0800 say "it rained at eight" where the band says "it rained from twenty to
+    // eight until half nine". Every mark sits on one baseline: a vertical stagger was tried and it
+    // only added noise the eye had to subtract before it could compare the marks themselves.
+    for (const ForecastMark& mark : mForecastMarks)
+    {
+        const S32 x = left_edge + (S32)(mark.mPhase * (F64)travel);
+
+        ssStripPrecipMark(x, base + STRIP_PRECIP_ICON_Y, mark.mType, mark.mBand,
+                          ssStripPrecipColour(mark.mType));
     }
 }
 
@@ -3968,9 +4218,18 @@ void SSFloaterAtmoEnv::drawKeyframeGhosts()
         const F64 phase = llclamp(ghost.mDrawPhase, 0.0, 1.0);
         const S32 x = left_edge + (S32)(phase * (F64)travel);
 
-        const bool current = ghost.mHold
-            ? (mPreviewPhase >= ghost.mSpanStart && mPreviewPhase < ghost.mSpanEnd)
-            : (llabs(phase - mPreviewPhase) < SSAtmoEnvKeyframed<F32>::PHASE_EPSILON);
+        // <SS:Nexii> Filled means the head is ON this key - the same thing the row's own keyframe
+        // button means by it, so that the two cannot disagree about the same key at the same
+        // instant. A HOLD key used to fill anywhere across the stretch its value covers, which
+        // read as "there is a keyframe under the head" for the whole span and made a shower's
+        // three hours look like three hours of keyframes.
+        //
+        // Wrapped, because phase 1 and phase 0 are the same instant on a cycle and hasKeyframeAt
+        // already wraps - without it a key at 0 stayed hollow with the head parked at the end of
+        // the rail while the button beside it read filled.
+        F64 delta = llabs(phase - mPreviewPhase);
+        if (delta > 0.5) delta = 1.0 - delta;
+        const bool current = delta < SSAtmoEnvKeyframed<F32>::PHASE_EPSILON;
 
         const LLColor4 colour = current ? LLColor4::white : LLColor4(0.7f, 0.7f, 0.7f, 0.9f);
 

@@ -249,7 +249,7 @@ implementation; two entries is the safer default).
 | `SSAtmoSnowPomSteps` / `SSAtmoSnowPomRange` | S32/F32, 16 / 32 | POM ceiling and near range |
 | `SSAtmoWhiteoutStrength` / `Band` / `Range` / `Corridor` / `Scale` | F32 | band metres, range metres, corridor ratio, 0.5/1.0 res |
 | `SSAtmoLodDrift` | F32, 1.0 | beside `SSAtmoLodDrops` |
-| `SSAtmoSnowDebug` | S32, 0 | Render Metadata styles (field overlay, lift, whiteout density) |
+| `SSAtmoSnowDebug` | S32, 0 | Debug floater styles (field overlay, lift, whiteout density) |
 
 Reused unchanged: `SSAtmoRunoff`, `SSAtmoRunoffScale`, `SSAtmoRunoffRadius`,
 `SSAtmoParticleBudget`, `SSAtmoDensity`, the `SSAtmoWindFlow*` family.

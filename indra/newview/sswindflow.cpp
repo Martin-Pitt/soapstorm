@@ -294,6 +294,32 @@ static void drainGLErrors()
     for (S32 guard = 0; guard < 32 && glGetError() != GL_NO_ERROR; ++guard) {}
 }
 
+// <SS:Nexii> Diagnostic sibling of drainGLErrors: reports what it drained instead of swallowing it. A driver already in trouble (GL_OUT_OF_MEMORY, or a lost context on a robustness build) tends to AV inside nvoglv64 on the next innocuous bind, so surfacing the state here turns that crash into a log line and a clean abandon. [interaction: a false return through stageSolveInit sets mShaderFailed, parking the solver for the session - deliberate, so a sick context is not hammered every rebuild]
+static bool contextLooksHealthy(const char* where)
+{
+    bool healthy = true;
+    for (S32 guard = 0; guard < 32; ++guard)
+    {
+        const GLenum err = glGetError();
+        if (err == GL_NO_ERROR) break;
+        LL_WARNS("AtmoMagic") << "Wind flow entered " << where << " with GL error 0x"
+                              << std::hex << err << std::dec << " already pending" << LL_ENDL;
+        if (err == GL_OUT_OF_MEMORY) healthy = false;
+    }
+    if (glGetGraphicsResetStatus)
+    {
+        const GLenum reset = glGetGraphicsResetStatus();
+        if (reset != GL_NO_ERROR)
+        {
+            LL_WARNS("AtmoMagic") << "Wind flow entered " << where
+                                  << " on a reset GL context (status 0x"
+                                  << std::hex << reset << std::dec << ")" << LL_ENDL;
+            healthy = false;
+        }
+    }
+    return healthy;
+}
+
 // Allocates one 3D texture for the solver.
 static U32 createVolume(S32 res, S32 slices, GLenum format)
 {
@@ -1612,6 +1638,8 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
 {
     LL_PROFILE_GPU_ZONE("atmo wind flow init");
 
+    if (!contextLooksHealthy("the solve init")) return false;
+
     const S32 res = tile.mRes;
     const S32 slices = tile.mSlices;
 
@@ -1652,9 +1680,12 @@ bool SSWindFlowMap::solveInit(const Tile& tile)
     if (mPartial && mCaptureRes > 0)
     {
         glBindTexture(GL_TEXTURE_2D, mHeightTex);
+        // <SS:Nexii> The source is a sub-rect of the res-wide mTop, not a tightly packed image; without the row stride the driver reads mCaptureRes-float rows and shears every row after the first.
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, res);
         glTexSubImage2D(GL_TEXTURE_2D, 0, mCaptureC0[0], mCaptureC0[1],
                         mCaptureRes, mCaptureRes, GL_RED, GL_FLOAT,
                         mTop.data() + (size_t)mCaptureC0[1] * res + mCaptureC0[0]);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         glBindTexture(GL_TEXTURE_2D, 0);
     }
     else
@@ -2374,6 +2405,12 @@ bool SSWindFlowMap::partialBoxes(const Tile& tile, const LLVector3& wind_h)
     const S32 cap_h = mCaptureC1[1] - mCaptureC0[1] + 1;
     mCaptureRes = llmax(cap_w, cap_h);
 
+    // <SS:Nexii> Squaring the footprint to the longer side can push it past the tile edge on the shorter one; slide the origin back so C0+mCaptureRes stays inside, which only widens the margin on that side and keeps the mask box covered. [interaction: solveInit's partial height glTexSubImage2D is rejected outright (stale heights) if the square hangs off the res-sized texture]
+    mCaptureC0[0] = llmin(mCaptureC0[0], res - mCaptureRes);
+    mCaptureC0[1] = llmin(mCaptureC0[1], res - mCaptureRes);
+    mCaptureC1[0] = mCaptureC0[0] + mCaptureRes - 1;
+    mCaptureC1[1] = mCaptureC0[1] + mCaptureRes - 1;
+
     const F32 cell = tile.mExtent / (F32)res;
     mCaptureExtent = (F32)mCaptureRes * cell;
 
@@ -2834,6 +2871,9 @@ void SSWindFlowMap::update()
     if (!ensureShaders()) return;
 
     if (advanceBuild()) return;
+
+    // <SS:Nexii> A rebuildAll/clear mid-solve abandons to IDLE while a worker still owns mBuild; beginBuild would reassign mBuild's vectors under that thread. Hold the next build until the worker reports back. [interaction: postWorker/postSolveGL completions are what drop mWorkerBusy]
+    if (mWorkerBusy) return;
 
     const F64 now = SSAtmoMagic::getInstance()->sharedTime();
     if (now - mLastBuild < BUILD_MIN_INTERVAL) return;

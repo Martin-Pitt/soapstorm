@@ -12,7 +12,7 @@
 > The DRAINAGE_NETWORK core (priority-flood depression fill + pool mask + D8 on
 > the filled surface, `buildDrainage`) ships as the surface field's pool source
 > under the same `SSWorldFieldSurfaceTop` switch. A world field debug overlay
-> (`RENDER_DEBUG_WORLD_FIELD`, Develop > Render Metadata > World field) shows
+> (`RENDER_DEBUG_WORLD_FIELD`, the Atmo Magic Debug floater) shows
 > the band surfaces, the air labels with occlusion depth, and the drainage
 > topology. Still unbuilt: the wind solve's interior-skip (part of step 3; gated
 > on multi-peel spans - see the architecture note at Part 3, SOLID_VOLUME_3D),

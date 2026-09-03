@@ -31,11 +31,9 @@
 #include "sswindflow.h"
 
 #include "llbutton.h"
-#include "llcheckboxctrl.h"
 #include "llcontrol.h"
 #include "lluictrl.h"
 #include "llviewercontrol.h"
-#include "pipeline.h"
 
 // Floater shell; all content is wired in postBuild.
 SSFloaterSimulation::SSFloaterSimulation(const LLSD& key) :
@@ -43,7 +41,9 @@ SSFloaterSimulation::SSFloaterSimulation(const LLSD& key) :
 {
 }
 
-// Wires rebuild buttons, overlay checkboxes, and setting watchers that invalidate the right map.
+// Wires rebuild buttons and the setting watchers that invalidate the right map.
+// The debug views that used to live here moved to the debug floater; what stays
+// is the capture/solve tuning a change to which must force a rebuild.
 bool SSFloaterSimulation::postBuild()
 {
     getChild<LLButton>("shadow_rebuild_button")->setClickedCallback(
@@ -66,38 +66,6 @@ bool SSFloaterSimulation::postBuild()
         watch(name, EInvalidate::FLOW);
     }
 
-    getChild<LLCheckBoxCtrl>("flow_overlay_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&)
-        {
-            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WIND_FLOW);
-            syncOverlayChecks();
-        });
-    getChild<LLCheckBoxCtrl>("shadow_overlay_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&)
-        {
-            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_RAIN_SHADOW);
-            syncOverlayChecks();
-        });
-    getChild<LLCheckBoxCtrl>("settle_overlay_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&)
-        {
-            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_GEOM_SETTLE);
-            syncOverlayChecks();
-        });
-    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&)
-        {
-            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF);
-            syncOverlayChecks();
-        });
-    getChild<LLCheckBoxCtrl>("field_overlay_check")->setCommitCallback(
-        [this](LLUICtrl*, const LLSD&)
-        {
-            LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WORLD_FIELD);
-            syncOverlayChecks();
-        });
-
-    syncOverlayChecks();
     return true;
 }
 
@@ -126,12 +94,6 @@ void SSFloaterSimulation::watch(const std::string& control, EInvalidate what)
         }));
 }
 
-// Fresh overlay state on open.
-void SSFloaterSimulation::onOpen(const LLSD& key)
-{
-    syncOverlayChecks();
-}
-
 // Explicit rain-shadow recapture.
 void SSFloaterSimulation::onClickRecaptureShadow()
 {
@@ -142,21 +104,4 @@ void SSFloaterSimulation::onClickRecaptureShadow()
 void SSFloaterSimulation::onClickRebuildFlow()
 {
     SSWindFlowMap::getInstance()->rebuildAll();
-}
-
-// Mirrors the debug-view masks into the overlay checkboxes. Live map status lives
-// in the Atmo Magic info overlay; this floater carries only toggles and dials,
-// so it just reflects what the debug masks say.
-void SSFloaterSimulation::syncOverlayChecks()
-{
-    getChild<LLCheckBoxCtrl>("flow_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WIND_FLOW));
-    getChild<LLCheckBoxCtrl>("shadow_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_RAIN_SHADOW));
-    getChild<LLCheckBoxCtrl>("settle_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_GEOM_SETTLE));
-    getChild<LLCheckBoxCtrl>("runoff_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_ROOF_RUNOFF));
-    getChild<LLCheckBoxCtrl>("field_overlay_check")->set(
-        gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WORLD_FIELD));
 }

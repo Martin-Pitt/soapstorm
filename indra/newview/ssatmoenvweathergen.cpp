@@ -41,23 +41,17 @@ namespace
     const F64 SPELL_WINDOW_START = 0.05;
     const F64 SPELL_WINDOW_END   = 0.90;
 
-    // Keys closer together than this are dropped rather than merged - findAt() matches within
-    // PHASE_EPSILON, so two keys a whisker apart are one key the editor cannot separate.
-    const F64 MIN_KEY_GAP = 0.008;
-
-    // <SS:Nexii> The keyframe grid. The scrubber head the editor adds keys with moves in
-    // hundredths of a cycle (the preview slider's one-point steps), and hasKeyframeAt()
-    // matches within a tenth of one of those steps - so a key is only ever reachable,
-    // editable or removable where the head can stand. A roll of raw F64 phases put its keys
-    // between the grid's lines: present in the curve, but visitable by nothing. Every key
-    // the generator writes snaps in the two lay functions below, the one place all of them
-    // pass through.
-    const F64 KEY_GRID = 0.01;
-
-    F64 snapPhase(F64 phase)
-    {
-        return llclamp(ll_round(phase, KEY_GRID), 0.0, 1.0);
-    }
+    // <SS:Nexii> Every generated key lands on the preview scrubber's grid, through the same
+    // ss_atmoenv_snap_phase the sky seeding snaps its measured phases with rather than a local
+    // rounding: the grid is 1/SS_ATMOENV_PREVIEW_STEPS and belongs to that constant, not to a
+    // hundredth written out here that would quietly stop agreeing with it.
+    //
+    // The head moves in those steps and nowhere else, and hasKeyframeAt() matches within a tenth
+    // of one, so a key at 0.3174 is a key nothing can visit: present in the curve, but the diamond
+    // never lights, the prev/next jumps land beside it, and removing it means reaching a mark the
+    // scrubber cannot stand on. Snapping in the two lay functions below - the one place every key
+    // the generator writes passes through - makes the grid the only rounding there is, which is
+    // also what leaves exact duplicates as the only collision left to drop.
 
     // The diurnal temperature clock: coldest just before dawn, warmest mid-afternoon. Phases
     // rather than hours, because a track's day length is the author's business, not ours.
@@ -150,10 +144,10 @@ namespace
     const F32 HEADING_MIN = 0.f,      HEADING_MAX = 360.f;
     const F32 WIND_MIN = 0.f,         WIND_MAX = 30.f;
 
-    // Sorts, snaps to the keyframe grid, clamps, drops near-duplicates and lays the curve
-    // into a float field. Snapping runs before the sort: two raw times close enough to
-    // swap order under rounding must not enter the field out of order, and keys that snap
-    // onto the same grid point then fall to the gap drop like any other near-duplicate.
+    // Snaps to the keyframe grid, sorts, clamps, drops duplicates and lays the curve into a float
+    // field. Snapping runs BEFORE the sort: two raw times close enough to swap order under the
+    // rounding must not reach the field out of order, and keys that land on the same grid point
+    // afterwards collapse to one.
     void layCurve(SSAtmoEnvKeyframed<F32>& field, std::vector<std::pair<F64, F32>>& keys,
                   F32 lo, F32 hi)
     {
@@ -162,7 +156,7 @@ namespace
 
         for (std::pair<F64, F32>& key : keys)
         {
-            key.first = snapPhase(key.first);
+            key.first = ss_atmoenv_snap_phase(key.first);
         }
 
         std::sort(keys.begin(), keys.end(),
@@ -172,7 +166,7 @@ namespace
         F64 last_time = -1.0;
         for (const std::pair<F64, F32>& key : keys)
         {
-            if (last_time >= 0.0 && key.first - last_time < MIN_KEY_GAP) continue;
+            if (last_time >= 0.0 && key.first <= last_time + 1e-9) continue;
             field.addKeyframe(key.first, llclamp(key.second, lo, hi));
             last_time = key.first;
         }
@@ -203,8 +197,8 @@ namespace
 
         for (const Spell& spell : spells)
         {
-            field.addKeyframe(spell.mStart, true);
-            field.addKeyframe(spell.mStart + spell.mDuration, false);
+            field.addKeyframe(ss_atmoenv_snap_phase(spell.mStart), true);
+            field.addKeyframe(ss_atmoenv_snap_phase(spell.mStart + spell.mDuration), false);
         }
     }
 
@@ -466,9 +460,9 @@ void SSAtmoEnvWeatherGenerator::clear(SSAtmoEnvWeather& weather)
 
 // <SS:Nexii> One roll of a whole day. Order matters: the theme sets the bands, the event bends them,
 // and only then are the curves laid, so an event never has to re-write keyframes a season already
-// wrote. Lightning is deliberately left on auto throughout - convection, moisture and temperature
-// already decide the cadence through the resolver, and a generator that also authored intensity
-// would be arguing with itself about what a storm is.
+// wrote. Lightning and gusts are deliberately left on auto throughout - convection, moisture and
+// temperature already decide the cadence through the resolver, and a generator that also authored
+// either would be arguing with itself about what a storm is.
 SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weather)
 {
     clear(weather);
@@ -547,18 +541,14 @@ SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weat
             break;
 
         case Event::SQUALL_LINE:
-            // Short, violent and authored rather than derived: a squall's gusts are its whole
-            // character, and the auto gusts read them off convection alone.
+            // Short, violent and entirely derived: a squall's severe convection over a wet deck is
+            // its whole character, and the auto gusts read it straight off the cube.
             spell_count = 1;
             peak_moisture_low = 0.55f;
             peak_moisture_high = 0.85f;
             peak_convection_low = 0.70f;
             peak_convection_high = 0.90f;
             base_wind = rollF(11.f, 19.f);
-            weather.mGustAuto = false;
-            weather.mGustDepth.reset(rollF(1.1f, 2.4f));
-            weather.mGustLength.reset(rollF(60.f, 130.f));
-            weather.mGustVeer.reset(rollF(18.f, 38.f));
             veer = rollF(60.f, 120.f);
             break;
 
@@ -608,10 +598,6 @@ SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weat
             base_wind = rollF(17.f, 27.f);
             base_moisture = llmax(base_moisture, 0.28f);
             veer = rollF(70.f, 150.f);
-            weather.mGustAuto = false;
-            weather.mGustDepth.reset(rollF(0.9f, 1.8f));
-            weather.mGustLength.reset(rollF(180.f, 420.f));
-            weather.mGustVeer.reset(rollF(10.f, 26.f));
             break;
 
         case Event::STILL_FOG:

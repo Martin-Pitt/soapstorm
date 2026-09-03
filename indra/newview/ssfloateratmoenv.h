@@ -28,6 +28,7 @@
 #include "llinventorysettings.h" // <SS:Nexii> LLSettingsType, for classifying dropped settings
 #include "ssatmoenvasset.h" // <SS:Nexii> SS_ATMOENV_REGION_CEILING, for the rail's track-mode range
 #include "ssatmoenvkeyframe.h"
+#include "ssatmoenvweatherstate.h" // <SS:Nexii> SSAtmoEnvPrecipIntensity, the forecast strip's bands
 
 #include <functional>
 #include <string>
@@ -189,6 +190,10 @@ private:
     void onClickRemoveDeck();
     void onCommitWeatherSource();
     void refreshWeatherSource();
+    // What the source combo was last built from. The selection starts at a value no live track
+    // can hold, so the first refresh always builds; later refreshes rebuild only on change.
+    S32  mWeatherSourceStaged = S32_MIN;
+    bool mWeatherSourceUnderStaged = false;
 
     // <SS:Nexii> The precipitation combo lists two tiers: the shipped derivation vocabulary, read once from the XUI so the panel stays the single place it is written, and whatever types this environment carries of its own. Rebuilt whenever the environment's set changes.
     void refreshPrecipitationTypes();
@@ -277,13 +282,14 @@ private:
     void refreshPreview();
     void onCommitPreviewTime();
 
+    // <SS:Nexii> A keyframe as the scrubber draws it: one phase, which is the key's own, carrying
+    // the mark, the label and the filled/hollow test alike. A HOLD key held a span as well for a
+    // while, so that the mark could read filled anywhere across the stretch the value covers - but
+    // filled has to mean what it means on the row's own keyframe button, which is that the head is
+    // ON this key. Anything looser and the two disagree about the same key at the same instant.
     struct GhostKeyframe
     {
         F64 mDrawPhase = 0.0;
-
-        F64 mSpanStart = 0.0;
-        F64 mSpanEnd = 0.0;
-        bool mHold = false;
 
         std::string mLabel;
     };
@@ -320,8 +326,24 @@ private:
         bool mThunder = false;
         bool mDaylight = true;
         std::string mPrecipType;
+        SSAtmoEnvPrecipIntensity mBand = SSAtmoEnvPrecipIntensity::NONE;
     };
     std::vector<ForecastCell> mForecastCells;
+
+    // <SS:Nexii> The precipitation band under the columns, sampled far finer than they are - one
+    // slot every STRIP_PRECIP_PITCH pixels, kept only where something is actually falling. The
+    // columns say what an HOUR is like, which is the wrong unit for a shower: a spell that starts
+    // at 07:40 and stops at 09:20 lands between two-hourly columns and reads as a whole morning of
+    // rain from them. The band draws the extent itself, so it starts and stops where the rain does.
+    // The resolved BAND rides along rather than a drawn shape, because how heavy a fall looks is
+    // the drawing layer's call, not the model's.
+    struct ForecastMark
+    {
+        F64 mPhase = 0.0;
+        SSAtmoEnvPrecipIntensity mBand = SSAtmoEnvPrecipIntensity::NONE;
+        std::string mType;
+    };
+    std::vector<ForecastMark> mForecastMarks;
 
     void refreshForecastStrip();
 

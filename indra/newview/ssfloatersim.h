@@ -39,13 +39,10 @@ public:
     SSFloaterSimulation(const LLSD& key);
 
     bool postBuild() override;
-    void onOpen(const LLSD& key) override;
 
 private:
     void onClickRecaptureShadow();
     void onClickRebuildFlow();
-
-    void syncOverlayChecks();
 
     enum class EInvalidate { SHADOW, FLOW };
 

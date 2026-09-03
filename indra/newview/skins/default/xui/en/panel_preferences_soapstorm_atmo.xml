@@ -40,17 +40,8 @@
      tool_tip="The master switch for the whole system. Off, every subsystem below is inert and the viewer's normal weather, wind and lighting run untouched."
      top_pad="6"
      width="500" />
-    <check_box
-     control_name="SSAtmoShowInfo"
-     follows="left|top"
-     height="16"
-     label="Show the info overlay"
-     layout="topleft"
-     left="10"
-     name="atmo_showinfo_prefs"
-     tool_tip="On-screen readout of live weather values, the wind flowmap's own status and rebuild telemetry, particle counts and the indoor/outdoor probe result."
-     top_pad="4"
-     width="500" />
+
+    <!-- <SS:Nexii> The info overlay toggle lives on the Atmo Magic Debug floater with the rest of the debug views. -->
 
     <!-- ===== Wind flow map ===== -->
     <text

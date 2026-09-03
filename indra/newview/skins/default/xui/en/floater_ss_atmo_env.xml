@@ -149,7 +149,7 @@
      width="360"
      name="name_editor" />
 
-    <!-- <SS:Nexii> The band between the name row and the scrubber is the forecast strip - a column of resolved weather every couple of hours, standing over the stretch of timeline it belongs to, drawn in code by drawForecastStrip() rather than built as widgets here. Nothing is declared for it: at one column per two hours, with a wind rose, a precipitation figure, a temperature and a condition glyph each, a widget tree would be some seventy controls that only ever display, and every one of them would need repositioning by hand each time the floater is resized. The prose forecast that used to sit here has moved onto Weather > Conditions, where the values it is summarising live. Reserved space only - the scrubber's top at 166 leaves this band 135px tall, which is exactly STRIP_HEIGHT plus STRIP_GAP; move either constant and move the scrubber with it or the top row grows into the Name field. -->
+    <!-- <SS:Nexii> The band between the name row and the scrubber is the forecast strip - a column of resolved weather every couple of hours, standing over the stretch of timeline it belongs to, drawn in code by drawForecastStrip() rather than built as widgets here. Nothing is declared for it: at one column per two hours, with a wind rose, a precipitation figure, a temperature and a condition glyph each, a widget tree would be some seventy controls that only ever display, and every one of them would need repositioning by hand each time the floater is resized. The prose forecast that used to sit here has moved onto Weather > Conditions, where the values it is summarising live. Reserved space only - the scrubber's top at 155 leaves this band 124px tall, which is exactly STRIP_HEIGHT plus STRIP_GAP; move either constant and move the scrubber with it or the top row grows into the Name field. -->
 
     <!-- Preview time - under the forecast strip and above the tab container
          (and thus above whatever "Weather" section header lives inside its
@@ -159,11 +159,14 @@
          forecast strip, which takes its column positions from this control's
          rect.
 
-         The generous clearance above and below is load-bearing: the ghost
-         keyframe overlay (drawKeyframeGhosts) renders value labels in two
-         lanes ~16px above and below the scrubber's own rect, so anything
-         packed tighter gets written over on hover. The strip's own bottom row
-         clears that lane by STRIP_GAP.
+         Clearance BELOW is load-bearing: the ghost keyframe overlay
+         (drawKeyframeGhosts) renders value labels in two lanes ~16px above
+         and below the scrubber's own rect, and the lane underneath has to
+         land between this and the tab container. The lane above deliberately
+         shares space with the strip's hour row, which sits STRIP_GAP up so
+         that it reads as labelling the scrubber rather than floating over it;
+         the ghosts draw last and win, which is the right way round for an
+         overlay that only appears while a row is being hovered.
 
          The slider is a PERCENTAGE of the cycle, which is what a phase
          actually is; the track's day length turns that into a time of day
@@ -180,7 +183,7 @@
      follows="left|top"
      layout="topleft"
      left="15"
-     top="168"
+     top="157"
      height="14"
      width="90"
      name="preview_time_caption"
@@ -211,7 +214,7 @@
      follows="left|top|right"
      layout="topleft"
      left="141"
-     top="166"
+     top="155"
      height="18"
      right="-145"
      name="preview_time_slider"
@@ -246,7 +249,7 @@
      follows="left|top|bottom"
      layout="topleft"
      left="15"
-     top="202"
+     top="191"
      bottom="-50"
      width="170"
      name="track_panel"
@@ -711,7 +714,7 @@
      follows="all"
      layout="topleft"
      left="199"
-     top="202"
+     top="191"
      bottom="-50"
      right="-12"
      halign="left"

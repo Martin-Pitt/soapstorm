@@ -120,10 +120,11 @@ second place to set the same thing.
 ## The debug overlay
 
 `LLPipeline::RENDER_DEBUG_CLOUD_FIELD`, dispatched from `pipeline.cpp` to
-`SSVolCloud::renderDebug()`. Reachable two ways, sharing one switch: the checkbox on the
-Clouds tab, and Develop → Render Metadata → Cloud Field. This is the arrangement the
-Simulation floater already uses for its five overlays, and it is why this floater needed a
-C++ class at all — the mask is not a setting and `control_name` cannot bind it.
+`SSVolCloud::renderDebug()`. Reachable from the Debug floater's Overlays tab, which
+now holds every Atmo Magic overlay switch in one place - the copies that used to
+sit on this tab, the Simulation floater and the Develop → Render Metadata menu are
+consolidated there, and the floater's shell class went with them since every
+remaining control binds itself through `control_name`.
 
 `SSAtmoCloudDebugView` picks what it draws. Both views also get both decks' bands: the
 floor and lid each field was built between, as a ring at the field's fade radius.
@@ -151,9 +152,9 @@ the squash is not linear along a segment and the band rings span kilometres.
 
 ## The Rain tab's column trace
 
-`SSAtmoRainTraceDebug`, a checkbox on the Rain tab and a setting rather than a debug mask —
-the same arrangement as the celestial overlay. It is an authoring aid for the pane beside it
-("why is the ground dry under this roof"), not a Render Metadata view of a capture, so it
+`SSAtmoRainTraceDebug`, a checkbox on the Debug floater's Rain tab and a setting rather than a
+debug mask — the same arrangement as the celestial overlay. It is an authoring aid for the pane
+beside it ("why is the ground dry under this roof"), not a view of a capture, so it
 did not belong in the Simulation floater's shadow-view combo or behind a debug mask bit.
 
 `SSRainShadowMap::renderColumnTrace()` (`pipeline.cpp` dispatches it) walks the drops tier's

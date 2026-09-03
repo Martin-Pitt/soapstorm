@@ -39,7 +39,7 @@
      left="0"
      min_height="120"
      min_width="300"
-     height="287"
+     height="215"
      width="384">
     <text
      follows="left|top" layout="topleft" left="12" top="8"
@@ -109,33 +109,6 @@
       tool_tip="Reset to the default value">
         <button.commit_callback function="ResetControl" parameter="SSAtmoCloudGroundShadow" />
     </button>
-    <text
-     follows="left|top" layout="topleft" left="12" top_pad="12"
-     height="14" width="250" name="cloud_debug_label" font="SansSerifSmallBold">
-        Debug Overlay
-    </text>
-    <button
-     follows="left|top" layout="topleft"
-     left_pad="4" top_delta="-3" height="20" width="102"
-     name="R_cloud_debug" label="Reset group"
-     tool_tip="Reset every setting in this section to its default">
-        <button.commit_callback function="SSAtmo.ResetGroup"
-         parameter="SSAtmoCloudDebugView" />
-    </button>
-    <check_box
-     follows="left|top" layout="topleft" left="12" top_pad="6"
-     height="16" width="356" name="cloud_overlay_check"
-     label="Draw the cloud field"
-     tool_tip="The field's view, picked below. Same overlay as Develop &gt; Render Metadata &gt; Cloud Field" />
-    <combo_box
-      control_name="SSAtmoCloudDebugView" name="C_cloud_view"
-      follows="left|top" layout="topleft"
-      left="12" top_pad="6" height="20" width="250"
-      tool_tip="Cell gate and towers: the builder's 260m grid replayed across the field, green where cloud was placed and red where the sky was left open, with a stalk as tall as the noise map wants that column to climb. Column profiles: for nearby cells, the column that cell grows outlined at its true position and altitude, its width at each height exactly what the profile ramp and the anvil give a puff there - the curve as a shape, standing beside the cloud it made. Ground shadow map: the baked transmittance texels drawn as dark blots at the exact ground spot the sun projection lands them, so the overlay and the rendered shadow must coincide">
-        <combo_box.item label="Cell gate and towers" value="1" name="cloud_view_gate" />
-        <combo_box.item label="Column profiles" value="2" name="cloud_view_profile" />
-        <combo_box.item label="Ground shadow map" value="3" name="cloud_view_shadow" />
-    </combo_box>
     </panel>
     </scroll_container>
 </panel>

@@ -249,7 +249,7 @@
 #include "ssfloatertexturelist.h" // <SS:Nexii> Atmo Magic texture lists
 #include "ssfloaterassets.h" // <SS:Nexii> Atmo Magic global assets
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
-#include "ssfloaterfx.h" // <SS:Nexii> Atmo Magic effects and LOD
+#include "ssfloateratmodebug.h" // <SS:Nexii> Atmo Magic debug views
 #include "ssfloatersim.h" // <SS:Nexii> Atmo Magic simulation settings
 #include "ssfloaterworldfield.h" // <SS:Nexii> Atmo Magic world field settings
 #include "quickprefs.h"
@@ -693,7 +693,9 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("particle_editor","floater_particle_editor.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<ParticleEditor>);
     // <SS:Nexii> Atmo Magic weather
     LLFloaterReg::add("ss_atmo", "floater_ss_atmo.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoMagic>);
-    LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterEffects>);
+    // <SS:Nexii> All controls self-bind through control_name now that the
+    // render debug mask switches live on the debug floater, so the shell class is gone.
+    LLFloaterReg::add("ss_atmo_fx", "floater_ss_atmo_fx.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<LLFloater>);
     LLFloaterReg::add("ss_sound_analysis", "floater_ss_sound_analysis.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSoundAnalysis>);
     LLFloaterReg::add("ss_atmo_assets", "floater_ss_atmo_assets.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAssets>);
     LLFloaterReg::add("ss_atmo_preset", "floater_ss_atmo_preset.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterPreset>);
@@ -701,6 +703,8 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_atmo_sim", "floater_ss_atmo_sim.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterSimulation>);
     // <SS:Nexii> Atmo Magic world field settings
     LLFloaterReg::add("ss_atmo_worldfield", "floater_ss_atmo_worldfield.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterWorldField>);
+    // <SS:Nexii> Atmo Magic debug views
+    LLFloaterReg::add("ss_atmo_debug", "floater_ss_atmo_debug.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoDebug>);
     // <SS:Nexii> Atmo Magic unified environment (independent of v2 weather above)
     LLFloaterReg::add("ss_atmo_env", "floater_ss_atmo_env.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoEnv>);
     LLFloaterReg::add("ss_atmo_planetary", "floater_ss_atmo_planetary.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterAtmoPlanetary>);

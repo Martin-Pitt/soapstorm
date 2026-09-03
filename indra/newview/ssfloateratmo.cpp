@@ -51,6 +51,8 @@ bool SSFloaterAtmoMagic::postBuild()
         [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_atmo_sim"); });
     getChild<LLButton>("worldfield_button")->setClickedCallback(
         [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_atmo_worldfield"); });
+    getChild<LLButton>("debug_button")->setClickedCallback(
+        [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_atmo_debug"); });
     getChild<LLButton>("sound_analysis_button")->setClickedCallback(
         [](LLUICtrl*, const LLSD&) { LLFloaterReg::toggleInstance("ss_sound_analysis"); });
     getChild<LLButton>("edit_preset_button")->setClickedCallback(

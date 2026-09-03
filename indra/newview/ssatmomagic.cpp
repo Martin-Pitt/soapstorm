@@ -896,7 +896,10 @@ LLColor4 SSAtmoMagic::colorForEdit(const PendingEdit& edit)
     return LLColor4(0.3f, 1.f, 0.4f, alpha);
 }
 
-// The debug overlay text block: weather, sim, maps, sea, lightning.
+// The debug overlay text block: weather, sim, maps, sea, lightning, audio.
+// Sections are data-driven so every orange heading is a click target that
+// collapses its own body (see handleInfoClick) - lightning got its own heading
+// rather than riding under -- audio --, since its draw stats are render debug.
 void SSAtmoMagic::drawInfo()
 {
     static LLCachedControl<bool> show_info(gSavedSettings, "SSAtmoShowInfo", false);
@@ -913,46 +916,61 @@ void SSAtmoMagic::drawInfo()
 
     static LLCachedControl<bool> use_rain_shader(gSavedSettings, "SSAtmoRainShader", true);
 
-    std::vector<std::string> lines;
-    lines.push_back(llformat("ATMO MAGIC  %s", atmo->isEnabled() ? "[enabled]" : "[disabled]"));
-    lines.push_back(llformat("track      %d of 4   %s   ground zero %.0fm%s",
+    struct InfoSection
+    {
+        std::string key;
+        std::string heading;
+        std::vector<std::string> lines;
+    };
+    std::vector<InfoSection> sections;
+    // A section's reference is only good until the next open_section - each one
+    // is filled completely before the next opens.
+    auto open_section = [&sections](std::string key, std::string heading) -> InfoSection&
+    {
+        sections.emplace_back(InfoSection{ std::move(key), std::move(heading), {} });
+        return sections.back();
+    };
+
+    InfoSection& atmo_section = open_section("atmo",
+        llformat("ATMO MAGIC  %s", atmo->isEnabled() ? "[enabled]" : "[disabled]"));
+    atmo_section.lines.push_back(llformat("track      %d of 4   %s   ground zero %.0fm%s",
                              atmo->track(), SSAtmoEnvManager::getInstance()->statusText().c_str(),
                              atmo->groundZero(), atmo->isSkyTrack() ? " (sky)" : ""));
     if (atmo->trackBlend() < 0.99f)
     {
-        lines.push_back(llformat("crossfade  %.2f", atmo->trackBlend()));
+        atmo_section.lines.push_back(llformat("crossfade  %.2f", atmo->trackBlend()));
     }
-    lines.push_back(llformat("preset     %s (%s)", preset.mName.c_str(),
+    atmo_section.lines.push_back(llformat("preset     %s (%s)", preset.mName.c_str(),
                              SSPrecipPreset::archetypeName(preset.mArchetype)));
-    lines.push_back(llformat("precip     %.2f    turbulence %.2f",
+    atmo_section.lines.push_back(llformat("precip     %.2f    turbulence %.2f",
                              atmo->precipitation(), atmo->turbulence()));
-    lines.push_back(llformat("wind       %.1f m/s   fall %.1f m/s   dir %.2f %.2f %.2f",
+    atmo_section.lines.push_back(llformat("wind       %.1f m/s   fall %.1f m/s   dir %.2f %.2f %.2f",
                              atmo->windSpeed(), preset.mFallSpeed,
                              dir.mV[VX], dir.mV[VY], dir.mV[VZ]));
-    lines.push_back(llformat("gust x%.2f   area x%.2f   %s",
+    atmo_section.lines.push_back(llformat("gust x%.2f   area x%.2f   %s",
                              atmo->gustEnvelopeAt(atmo->sharedTime()),
                              atmo->areaFactorAt(cam_global.mdV[VX], cam_global.mdV[VY]),
                              atmo->hasWeather() ? "active" : "idle"));
 
     if (sim)
     {
-        lines.push_back(llformat("particles  drops %d  clusters %d  sheets %d  ripples %d",
+        atmo_section.lines.push_back(llformat("particles  drops %d  clusters %d  sheets %d  ripples %d",
                                  sim->tierCount(TIER_DROPS), sim->tierCount(TIER_CLUSTERS),
                                  sim->tierCount(TIER_SHEETS), (S32)sim->ripples().size()));
     }
     else
     {
-        lines.push_back("particles  (sim idle)");
+        atmo_section.lines.push_back("particles  (sim idle)");
     }
 
     const bool shader_live = use_rain_shader && preset.mWaterShading && gSSPrecipRainProgram.isComplete();
-    lines.push_back(llformat("shading    rain %s   lit %s   SSR %s",
+    atmo_section.lines.push_back(llformat("shading    rain %s   lit %s   SSR %s",
                              shader_live ? "water" : "fallback",
                              gSSPrecipLitProgram.isComplete() ? "on" : "fallback",
                              gPipeline.mSceneMap.getWidth() > 0 ? "on" : "off"));
 
-    lines.push_back("-- geometry edits --");
-    lines.push_back(llformat("queue      %d settling   %u believed",
+    InfoSection& edits_section = open_section("geometry edits", "-- geometry edits --");
+    edits_section.lines.push_back(llformat("queue      %d settling   %u believed",
                              (S32)atmo->pendingEdits(), atmo->settledEdits()));
     {
         U32 rearming = 0;
@@ -960,33 +978,33 @@ void SSAtmoMagic::drawInfo()
         {
             if (entry.second.mResets >= 2) ++rearming;
         }
-        lines.push_back(llformat("re-arming  %u of %d never settling",
+        edits_section.lines.push_back(llformat("re-arming  %u of %d never settling",
                                  rearming, (S32)atmo->pendingEdits()));
     }
 
-    lines.push_back("-- wind flow --");
+    InfoSection& flow_section = open_section("wind flow", "-- wind flow --");
     SSWindFlowMap* flow = SSWindFlowMap::getInstance();
     if (!SSWindFlowMap::isSupported())
     {
-        lines.push_back("flowmap    unavailable (needs OpenGL 4.3)");
+        flow_section.lines.push_back("flowmap    unavailable (needs OpenGL 4.3)");
     }
     else if (!flow->isValid())
     {
-        lines.push_back("flowmap    idle");
+        flow_section.lines.push_back("flowmap    idle");
     }
     else
     {
-        lines.push_back(llformat("domain     %.0fm at %d texels (%.1fm/cell)  %d tiles",
+        flow_section.lines.push_back(llformat("domain     %.0fm at %d texels (%.1fm/cell)  %d tiles",
                                  flow->extent(), flow->resolution(),
                                  flow->cellSize(), flow->tileCount()));
-        lines.push_back(llformat("solved     %.0fs ago   builds %u",
+        flow_section.lines.push_back(llformat("solved     %.0fs ago   builds %u",
                                  (F32)flow->age(), flow->buildCount()));
 
         // <SS:Nexii> Rebuild telemetry: is the solve off the main thread, and how well the smarter rebuilds are doing.
-        lines.push_back(llformat("worker     %s   solve %s",
+        flow_section.lines.push_back(llformat("worker     %s   solve %s",
                                  flow->workerActive() ? "GL thread" : "main thread",
                                  flow->lastSolveOnWorker() ? "on" : "in-frame"));
-        lines.push_back(llformat("rebuilds   %u full / %u partial   box avg %.0f%% of tile",
+        flow_section.lines.push_back(llformat("rebuilds   %u full / %u partial   box avg %.0f%% of tile",
                                  flow->fullBuildCount(), flow->partialBuildCount(),
                                  flow->partialBoxShare() * 100.f));
 
@@ -995,10 +1013,10 @@ void SSAtmoMagic::drawInfo()
         {
             slabs += llformat("%s%.0f", i ? " / " : "", flow->sliceAltitude(i));
         }
-        lines.push_back(llformat("slabs      %d   %s", flow->sliceCount(), slabs.c_str()));
+        flow_section.lines.push_back(llformat("slabs      %d   %s", flow->sliceCount(), slabs.c_str()));
 
         const LLVector3 local = flow->sample(cam);
-        lines.push_back(llformat("local wind %.1f %.1f %.1f  (%.1f m/s)  exposure %.2f",
+        flow_section.lines.push_back(llformat("local wind %.1f %.1f %.1f  (%.1f m/s)  exposure %.2f",
                                  local.mV[VX], local.mV[VY], local.mV[VZ],
                                  local.magVec(), flow->exposure(cam)));
 
@@ -1010,37 +1028,37 @@ void SSAtmoMagic::drawInfo()
         const F32 gust_length = atmo->gustLength();
         const F32 gust_speed = llmax(0.1f, atmo->windSpeed()
                                            * llclamp((F32)gust_travel, 0.01f, 4.f));
-        lines.push_back(llformat("gust wave  x%.2f   veer %+.0f deg   fronts every %.1fs",
+        flow_section.lines.push_back(llformat("gust wave  x%.2f   veer %+.0f deg   fronts every %.1fs",
                                  gust_scale, gust_veer * RAD_TO_DEG,
                                  gust_length / gust_speed));
-        lines.push_back(llformat("build      %.1f ms%s",
+        flow_section.lines.push_back(llformat("build      %.1f ms%s",
                                  flow->lastSolveOnWorker() ? flow->workerSolveMS() : flow->lastSolveMS(),
                                  flow->lastBuildPartial() ? "  (last partial)" : ""));
 
-        lines.push_back(llformat("solver     %.0f MB VRAM",
+        flow_section.lines.push_back(llformat("solver     %.0f MB VRAM",
                                  flow->vramMB()));
 
         F32 top = 0.f;
         if (flow->surfaceAt(cam, top))
         {
-            lines.push_back(llformat("surface    %.1fm top   %.0f%% solid   %.1f%% under the surface",
+            flow_section.lines.push_back(llformat("surface    %.1fm top   %.0f%% solid   %.1f%% under the surface",
                                      top, flow->solidFill() * 100.f,
                                      flow->carvedFraction() * 100.f));
         }
         else
         {
-            lines.push_back(llformat("surface    open column, nothing captured   %.0f%% solid",
+            flow_section.lines.push_back(llformat("surface    open column, nothing captured   %.0f%% solid",
                                      flow->solidFill() * 100.f));
         }
     }
 
-    lines.push_back("-- rain shadow --");
+    InfoSection& shadow_section = open_section("rain shadow", "-- rain shadow --");
 
     {
         LLVector3 hit;
         bool on_water = false;
         const bool mapped = SSRainShadowMap::getInstance()->resolveColumn(cam, hit, on_water);
-        lines.push_back(llformat("column     %s at %.1fm (%+.1fm)%s",
+        shadow_section.lines.push_back(llformat("column     %s at %.1fm (%+.1fm)%s",
                                  mapped ? "mapped surface" : "heightmap guess",
                                  hit.mV[VZ], hit.mV[VZ] - cam.mV[VZ],
                                  on_water ? ", water" : ""));
@@ -1048,20 +1066,20 @@ void SSAtmoMagic::drawInfo()
 
     {
         SSRainShadowMap* shadow = SSRainShadowMap::getInstance();
-        lines.push_back(llformat("shadow     %d regions + %d void at %d texels   %d dirty",
+        shadow_section.lines.push_back(llformat("shadow     %d regions + %d void at %d texels   %d dirty",
                                  shadow->tileCount(), shadow->voidTileCount(),
                                  (S32)shadow->resolution(),
                                  (S32)shadow->dirtyTileCount()));
-        lines.push_back(llformat("captures   %u total, %u forced by edits   last %.1fs ago, %.1f ms",
+        shadow_section.lines.push_back(llformat("captures   %u total, %u forced by edits   last %.1fs ago, %.1f ms",
                                  shadow->captureCount(), shadow->dirtyCaptureCount(),
                                  (F32)shadow->lastCaptureAge(), shadow->lastCaptureMS()));
     }
 
-    lines.push_back("-- surface --");
+    InfoSection& surface_section = open_section("surface", "-- surface --");
 
     {
         SSSurfaceField* surface = SSSurfaceField::getInstance();
-        lines.push_back(llformat("surface    %d fields   wet %.2f   snow %.0f mm   puddle %.0f mm   %.1f ms",
+        surface_section.lines.push_back(llformat("surface    %d fields   wet %.2f   snow %.0f mm   puddle %.0f mm   %.1f ms",
                                  surface->fieldCount(), surface->peakWet(),
                                  surface->peakSnow() * 1000.f,
                                  surface->peakPuddle() * 1000.f,
@@ -1069,51 +1087,51 @@ void SSAtmoMagic::drawInfo()
     }
 
     // <SS:Nexii> The shared world field: capture health, the state of the air flood, and what its labels say about the camera's own cell.
-    lines.push_back("-- world field --");
+    InfoSection& field_section = open_section("world field", "-- world field --");
     {
         SSWorldField* field = SSWorldField::getInstance();
         const LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
 
-        lines.push_back(llformat("capture    %d tiles, %d cells/axis, %.0fm bands, %d cap",
+        field_section.lines.push_back(llformat("capture    %d tiles, %d cells/axis, %.0fm bands, %d cap",
                                  field->tileCount(), field->resolution(),
                                  (F32)field->bandHeight(), field->bandCount()));
-        lines.push_back(llformat("builds     %u total, %u dirty rects, last %.1f ms",
+        field_section.lines.push_back(llformat("builds     %u total, %u dirty rects, last %.1f ms",
                                  field->captureCount(), field->dirtyCaptureCount(),
                                  field->lastCaptureMS()));
 
         const F64 age = field->tileAge(cam);
         if (age >= 0.0)
         {
-            lines.push_back(llformat("tile       %.0fs old, %d bands live",
+            field_section.lines.push_back(llformat("tile       %.0fs old, %d bands live",
                                      age, field->effectiveBands(cam)));
         }
 
         const U8 air = field->airLabelAt(cam);
         static const char* AIR_NAME[] = { "solid", "outside", "interior", "unknown" };
         const U32 air_depth = field->airDepthAt(cam);
-        lines.push_back(llformat("air        %s, depth %s",
+        field_section.lines.push_back(llformat("air        %s, depth %s",
                                  AIR_NAME[llclamp((S32)air, 0, 3)],
                                  air_depth == SSWorldField::AIR_DEPTH_UNREACHED
                                      ? "n/a" : llformat("%u cells", air_depth).c_str()));
         if (cam_region)
         {
-            lines.push_back(llformat("flood      %.0f%% of cells labelled",
+            field_section.lines.push_back(llformat("flood      %.0f%% of cells labelled",
                                      field->airCoverage(cam_region->getHandle()) * 100.f));
         }
     }
 
     // <SS:Nexii> Snow: every link of the chain in one look - type and temperature (the gate that turns the whole system off), the regime, the lift the transport computed at the camera, and the drift pool's standing population.
+    InfoSection& snow_section = open_section("snow", "-- snow --");
     {
         const LLVector3 ground_flow = SSWindFlowMap::getInstance()->sampleGround(cam);
         const F32 ground_speed = sqrtf(ground_flow.mV[VX] * ground_flow.mV[VX]
                                      + ground_flow.mV[VY] * ground_flow.mV[VY]);
 
-        lines.push_back("-- snow --");
-        lines.push_back(llformat("type       %s   temp %.1f C   %s",
+        snow_section.lines.push_back(llformat("type       %s   temp %.1f C   %s",
                                  preset.mName.c_str(), atmo->temperatureC(),
                                  atmo->granularWeather() ? "granular"
                                      : "NOT granular (warm or liquid type - nothing will blow)"));
-        lines.push_back(llformat("regime     %s   squall %.2f   ground wind %.1f m/s   lift here %.2f",
+        snow_section.lines.push_back(llformat("regime     %s   squall %.2f   ground wind %.1f m/s   lift here %.2f",
                                  regimeName(atmo->regime()), atmo->squallFactor(),
                                  ground_speed, atmo->liftAt(cam)));
 
@@ -1128,28 +1146,50 @@ void SSAtmoMagic::drawInfo()
             });
 
         const S32 drift_count = atmo->sim() ? atmo->sim()->driftCount() : 0;
-        lines.push_back(llformat("drift      %d live   lift cells %d within 64m   peak %.2f",
+        snow_section.lines.push_back(llformat("drift      %d live   lift cells %d within 64m   peak %.2f",
                                  drift_count, lift_cells, peak_lift));
         if (!atmo->granularWeather())
         {
-            lines.push_back("           no drift: the active type is not granular");
+            snow_section.lines.push_back("           no drift: the active type is not granular");
         }
         else if (lift_cells == 0 && drift_count == 0)
         {
-            lines.push_back("           no lift: is snow settled, is the wind over SSAtmoSnowLiftLo?");
+            snow_section.lines.push_back("           no lift: is snow settled, is the wind over SSAtmoSnowLiftLo?");
         }
 
         SSWhiteout* whiteout = SSWhiteout::getInstance();
-        lines.push_back(llformat("whiteout  in %.2f   squall %.2f   drift %.2f   falloff %.0fm",
+        snow_section.lines.push_back(llformat("whiteout  in %.2f   squall %.2f   drift %.2f   falloff %.0fm",
                                  whiteout->intensity(), whiteout->squallPart(),
                                  whiteout->liftPart(), whiteout->falloff()));
     }
 
-    lines.push_back("-- audio --");
-    lines.push_back(llformat("analysis   %d sounds ready   %d pending",
+    // <SS:Nexii> Lightning on its own heading: the draw, segment and charge stats are render debug, not audio.
+    InfoSection& lightning_section = open_section("lightning", "-- lightning --");
+    {
+        SSLightning* lit = SSLightning::getInstance();
+        const F64 next = lit->nextStrikeIn();
+        lightning_section.lines.push_back(llformat("strikes    %d live   flash %.2f   %s   %d thunder pending",
+                                 lit->liveCount(), lit->flash(),
+                                 next < 0.0 ? "not thundery"
+                                            : llformat("next in %.0fs", next).c_str(),
+                                 audio->pendingThunder()));
+        const F32 skew = SSLightning::positiveSkew(atmo->temperatureC());
+        lightning_section.lines.push_back(llformat("charge     %s (%.0f%%)   storm approach %.0f%%",
+                                 skew >= 0.5f ? "positive" : "negative", skew * 100.f,
+                                 atmo->stormApproach() * 100.f));
+        const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
+        lightning_section.lines.push_back(llformat("draw      %d live / %d bright / %d offscreen / %d occluded   %d quads%s",
+                                 ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mOccluded, ds.mQuads,
+                                 ds.mDepthCopy ? "  depth copy" : ""));
+        lightning_section.lines.push_back(llformat("segs      %d bolt / %d plasma / %d sparks / %d discs / %d steam",
+                                 ds.mSegments, ds.mPlasma, ds.mSparks, ds.mDiscs, ds.mSteam));
+    }
+
+    InfoSection& audio_section = open_section("audio", "-- audio --");
+    audio_section.lines.push_back(llformat("analysis   %d sounds ready   %d pending",
                              SSSoundMeta::getInstance()->readyCount(),
                              SSSoundMeta::getInstance()->pendingCount()));
-    lines.push_back(llformat("cover      %s   space %s%s%s",
+    audio_section.lines.push_back(llformat("cover      %s   space %s%s%s",
                              audio->isCovered() ? "ROOFED" : "open sky",
                              SSSoundscape::spaceName(audio->space()),
                              audio->isCovered() ? ""
@@ -1157,32 +1197,12 @@ void SSAtmoMagic::drawInfo()
                              audio->isInterior() ? "   SEALED" : ""));
     if (audio->isCovered())
     {
-        lines.push_back(llformat("roof       %.1fm above   buried %.1fm   occlusion %.2f",
+        audio_section.lines.push_back(llformat("roof       %.1fm above   buried %.1fm   occlusion %.2f",
                                  audio->roofDistance(), audio->burialDepth(),
                                  audio->burialOcclusion()));
     }
-    lines.push_back(llformat("walls      %d hit   avg %.1fm   blend %.2f",
+    audio_section.lines.push_back(llformat("walls      %d hit   avg %.1fm   blend %.2f",
                              audio->wallCount(), audio->wallDistance(), audio->coverBlend()));
-    {
-        SSLightning* lit = SSLightning::getInstance();
-        const F64 next = lit->nextStrikeIn();
-        lines.push_back(llformat("lightning  %d live   flash %.2f   %s   %d thunder pending",
-                                 lit->liveCount(), lit->flash(),
-                                 next < 0.0 ? "not thundery"
-                                            : llformat("next in %.0fs", next).c_str(),
-                                 audio->pendingThunder()));
-        const F32 skew = SSLightning::positiveSkew(atmo->temperatureC());
-        lines.push_back(llformat("  charge    %s (%.0f%%)   storm approach %.0f%%",
-                                 skew >= 0.5f ? "positive" : "negative", skew * 100.f,
-                                 atmo->stormApproach() * 100.f));
-        const SSLightningRender::DrawStats& ds = SSLightningRender::getInstance()->stats();
-        lines.push_back(llformat("  draw     %d live / %d bright / %d offscreen / %d occluded   %d quads%s",
-                                 ds.mStrikes, ds.mBright, ds.mOffScreen, ds.mOccluded, ds.mQuads,
-                                 ds.mDepthCopy ? "  depth copy" : ""));
-        lines.push_back(llformat("  segs     %d bolt / %d plasma / %d sparks / %d discs / %d steam",
-                                 ds.mSegments, ds.mPlasma, ds.mSparks, ds.mDiscs, ds.mSteam));
-    }
-
     for (S32 self = 1; self >= 0; --self)
     {
         const SSSoundscape::StepDebug& st = audio->lastStep(self != 0);
@@ -1190,7 +1210,7 @@ void SSAtmoMagic::drawInfo()
 
         if (st.mWhen < 0.0)
         {
-            lines.push_back(llformat("step %s  none yet", who));
+            audio_section.lines.push_back(llformat("step %s  none yet", who));
             continue;
         }
 
@@ -1203,7 +1223,7 @@ void SSAtmoMagic::drawInfo()
             surface = SSFootstepSounds::surfaceKey((SSStepSurface)st.mSurface);
         }
 
-        lines.push_back(llformat("step %s  %.1fs ago   %s / %s   %s(%c)   wet %.2f%s",
+        audio_section.lines.push_back(llformat("step %s  %.1fs ago   %s / %s   %s(%c)   wet %.2f%s",
                                  who,
                                  (F32)(atmo->sharedTime() - st.mWhen),
                                  surface.c_str(), act,
@@ -1212,45 +1232,87 @@ void SSAtmoMagic::drawInfo()
                                  st.mFieldValid ? "" : "   [field: NO ANSWER]"));
         if (st.mWhyNot[0])
         {
-            lines.push_back(llformat("  SILENT   %s   [%s]",
-                                     st.mWhyNot, st.mSource.c_str()));
+            audio_section.lines.push_back(llformat("  SILENT   %s   [%s]",
+                                    st.mWhyNot, st.mSource.c_str()));
         }
         else
         {
-            lines.push_back(llformat("  played   %s of %d   [%s]",
+            audio_section.lines.push_back(llformat("  played   %s of %d   [%s]",
                                      st.mPicked.asString().substr(0, 8).c_str(),
                                      st.mListSize, st.mSource.c_str()));
         }
-        lines.push_back(llformat("  mode     %s",
+        audio_section.lines.push_back(llformat("  mode     %s",
                                  st.mMode == 'S' ? "per-impact segments" :
                                  st.mMode == 'L' ? "attached loop" : "-"));
         if (st.mMode == 'S')
         {
             // The number to eyeball against the gait: SL walks a step roughly every 0.5s and runs one roughly every 0.3s, so a gap near double that means footfalls are being missed rather than played per step. Any drops at all mean the anti-spam gate is firing, which it should not during a steady walk.
-            lines.push_back(llformat("  cadence  %.2fs between steps   %.1f/s   %d dropped",
-                                     st.mStepGap,
-                                     st.mStepGap > 0.01f ? 1.f / st.mStepGap : 0.f,
-                                     st.mStepDropped));
+            audio_section.lines.push_back(llformat("  cadence  %.2fs between steps   %.1f/s   %d dropped",
+                                    st.mStepGap,
+                                    st.mStepGap > 0.01f ? 1.f / st.mStepGap : 0.f,
+                                    st.mStepDropped));
         }
     }
 
-    lines.push_back(llformat("impacts    %.1f/s   %d queued   loops %d",
+    audio_section.lines.push_back(llformat("impacts    %.1f/s   %d queued   loops %d",
                              audio->impactRate(), (S32)atmo->pendingImpacts(), audio->activeLoops()));
-    lines.push_back(llformat("probe age  %.2fs", (F32)audio->lastProbeAge()));
+    audio_section.lines.push_back(llformat("probe age  %.2fs", (F32)audio->lastProbeAge()));
 
+    // Lay the sections out top down, recording each heading row as a click
+    // target for the next frame's hit test.
     const LLFontGL* font = LLFontGL::getFontMonospace();
     const S32 line_h = font->getLineHeight();
     const S32 left = 12;
-    S32 top = gViewerWindow->getWorldViewRectScaled().getHeight() - 32;
+    const LLRect world_view = gViewerWindow->getWorldViewRectScaled();
+    S32 top = world_view.getHeight() - 32;
+
+    static const LLColor4 heading_color(1.f, 0.75f, 0.3f, 1.f);
+    static const LLColor4 body_color(0.9f, 0.95f, 1.f, 1.f);
+
+    atmo->mInfoHeadingRects.clear();
 
     gGL.pushMatrix();
-    for (const std::string& line : lines)
+    for (const InfoSection& section : sections)
     {
-        const bool header = (line.compare(0, 2, "--") == 0) || (line.compare(0, 4, "ATMO") == 0);
-        const LLColor4 color = header ? LLColor4(1.f, 0.75f, 0.3f, 1.f) : LLColor4(0.9f, 0.95f, 1.f, 1.f);
-        font->renderUTF8(line, 0, (F32)left, (F32)top, color,
+        const bool collapsed = atmo->mInfoCollapsed.count(section.key) > 0;
+        const std::string heading = section.heading + (collapsed ? "  +" : "");
+        atmo->mInfoHeadingRects.emplace_back(section.key,
+            LLRect(left, top, world_view.getWidth(), top - line_h));
+        font->renderUTF8(heading, 0, (F32)left, (F32)top, heading_color,
                          LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
         top -= line_h;
+        if (!collapsed)
+        {
+            for (const std::string& line : section.lines)
+            {
+                font->renderUTF8(line, 0, (F32)left, (F32)top, body_color,
+                                 LLFontGL::LEFT, LLFontGL::TOP, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW_SOFT);
+                top -= line_h;
+            }
+        }
     }
     gGL.popMatrix();
+}
+
+// Click handling for the info overlay's headings: x/y are scaled window
+// coordinates, origin bottom left - the same space drawInfo lays out in. A hit
+// toggles that section's collapse; anything else falls through untouched.
+bool SSAtmoMagic::handleInfoClick(S32 x, S32 y)
+{
+    static LLCachedControl<bool> show_info(gSavedSettings, "SSAtmoShowInfo", false);
+    if (!show_info) return false;
+
+    SSAtmoMagic* atmo = getInstance();
+    for (const auto& heading : atmo->mInfoHeadingRects)
+    {
+        if (heading.second.pointInRect(x, y))
+        {
+            if (!atmo->mInfoCollapsed.insert(heading.first).second)
+            {
+                atmo->mInfoCollapsed.erase(heading.first);
+            }
+            return true;
+        }
+    }
+    return false;
 }

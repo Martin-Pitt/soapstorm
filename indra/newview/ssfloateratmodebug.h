@@ -1,13 +1,6 @@
 /**
- * @file ssfloaterfx.h
- * @brief Atmo Magic: effects and LOD floater.
- *
- *        Almost everything in here binds straight to a setting through
- *        control_name and needs no code at all. This class exists for the
- *        things XUI cannot bind: the render-debug overlay toggles (cloud
- *        field, rain shadow, roof runoff), which live in the pipeline's
- *        render-debug mask rather than in settings, the same way the
- *        Simulation floater drives its overlays.
+ * @file ssfloateratmodebug.h
+ * @brief Atmo Magic: the debug views floater.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -28,21 +21,32 @@
  * $/LicenseInfo$
  */
 
-#ifndef SS_FLOATERFX_H
-#define SS_FLOATERFX_H
+#ifndef SS_FLOATERATMODEBUG_H
+#define SS_FLOATERATMODEBUG_H
 
 #include "llfloater.h"
 
-class SSFloaterEffects : public LLFloater
+#include <utility>
+#include <vector>
+
+// Every Atmo Magic debug view, marker and diagnostic overlay in one place,
+// under tabs. All of this used to live scattered across the Simulation and
+// Effects floaters and the Develop > Render Metadata menu, several switches
+// duplicated two or three times over.
+class SSFloaterAtmoDebug : public LLFloater
 {
 public:
-    SSFloaterEffects(const LLSD& key);
+    SSFloaterAtmoDebug(const LLSD& key);
 
     bool postBuild() override;
     void onOpen(const LLSD& key) override;
 
 private:
-    void syncOverlayChecks();
+    // The overlay switches drive pipeline render debug masks, which are not
+    // settings, so they cannot bind themselves through control_name.
+    void bindOverlayToggle(const std::string& name, U64 mask);
+
+    std::vector<std::pair<std::string, U64> > mOverlayBindings;
 };
 
 #endif
