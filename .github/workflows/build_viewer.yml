@@ -310,6 +310,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set revision environment variables
+        shell: bash
+        run: |
+          REVISION=$(git rev-list --count HEAD)
+          echo "VIEWER_REVISION=${REVISION}" >> $GITHUB_ENV
+          echo "AUTOBUILD_BUILD_ID=${REVISION}" >> $GITHUB_ENV
+          echo "Determined viewer revision / build ID: ${REVISION}"
+
       - name: Checkout build vars (after the main code)
         uses: actions/checkout@v7
         with:
