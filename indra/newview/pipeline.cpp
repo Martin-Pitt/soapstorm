@@ -105,6 +105,7 @@
 #include "llviewerdisplay.h"
 #include "sspreciprenderer.h"
 #include "ssvolcloud.h"
+#include "ssvortexrender.h" // <SS:Nexii> Atmo Magic vortex funnels
 #include "sslightningrender.h"
 #include "sslightning.h" // <SS:Nexii> Atmo Magic weather
 #include "sswindflow.h"  // <SS:Nexii> Atmo Magic wind flowmap
@@ -114,7 +115,6 @@
 #include "ssworldfield.h"   // <SS:Nexii> Atmo Magic shared world field
 #include "sswhiteout.h"     // <SS:Nexii> Atmo Magic whiteout
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
-#include "ssatmoinfoview.h" // <SS:Nexii> Atmo Magic info views: in-world layer
 #include "llspatialpartition.h"
 #include "llmutelist.h"
 #include "lltoolpie.h"
@@ -4475,6 +4475,13 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
                 SSLightningRender::getInstance()->renderFlash();
                 SSVolCloud::getInstance()->render();
 
+                // <SS:Nexii> The vortex funnels, right after the volumetric deck they hang under and in the SAME
+                // sky forward pass with REAL alpha (never post-deferred additive - see doc/viewer/glow_and_alpha.md
+                // and ssvortexcore.h's own file-top comment: "a dark funnel that writes additive alpha blooms").
+                // Own draw, own shader, own cap (SSVortex::MAX_ACTIVE * SSVortex::COLLARS quads) - never enters
+                // mPuffs or the puff budget. [interaction: SSVolCloud squash/depth-copy, SSVortices scheduler]
+                SSVortexRender::getInstance()->render();
+
                 // <SS:Nexii> Atmo Magic whiteout: the local, height-limited fog veil, composited exactly like the haze above - depth staged, one alpha-lerped fullscreen pass. This is its proven placement - the identical machinery moved after the alpha pools flickered the whole frame (world frozen, UI and sky strobing), and back here it draws clean. Drawn after the volumetric deck so the puffs dissolve into the fog with the sky behind them when the camera stands in the storm; before the lightning and the precipitation, which stay crisp in front of their own weather. The trade: alpha surfaces drawn later - windows, foliage - composite over the veil and read unfogged, their fog taken from the geometry behind them.
                 SSWhiteout::getInstance()->render();
 
@@ -5759,11 +5766,7 @@ void LLPipeline::renderDebug()
         SSAtmoMagic::getInstance()->renderDebug();
     }
 
-    // <SS:Nexii> Atmo Magic info views: the active view's in-world layer (V1: the wind mast at the camera column). A setting rather than a mask, like the celestial overlay - the mode picker on the debug floater's Views tab owns it, and it draws nothing at 0.
-    if (SSAtmoInfoView::mode() != 0)
-    {
-        SSAtmoInfoView::renderWorld();
-    }
+    // <SS:Nexii> Atmo Magic info views: the active view's in-world layer used to draw here (V1: the wind mast at the camera column), UNDER the UI stage's dim quad - which then darkened the overlay right along with the world. It now draws from SSAtmoDimView::draw() instead, AFTER the quad, re-entering 3-D from the UI pass so it always sits on top (Skylines-style, depth test off). The "SSAtmoInfoView::mode() != 0" gate still exists, just moved there (SSAtmoDimView::draw() returns at mode() == MODE_OFF) - do not add a second SSAtmoInfoView::renderWorld() call here, or the layer draws twice.
 
     if (mRenderDebugMask & RENDER_DEBUG_COMPOSITION)
     {

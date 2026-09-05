@@ -154,7 +154,22 @@ LLVector2 SSAtmoEnvApplier::windAt(F32 world_z) const
     return LLVector2(w.x, w.y);
 }
 
-// <SS:Nexii> The dome seam: base drift + O(z_band), the band's own CURRENT altitude against the deck base the accumulator ran at (doc/atmo_magic_wind_profile.md section 5, dome row). The offset is scaled by the Wind Scroll influence's share exactly as the drift velocity is, so a sky with drift switched off shows no phantom lean either. Bounded by SHEAR_CAP_M in the core, so band and lid can never slide apart unboundedly. During a storm the anvil ramp drags the band onto the deck lid while the accumulator still runs at the base, so the offset SATURATES at the cap there rather than vanishing; phase 4 puts the same O(z) lean on the anvil puffs themselves, after which band and lid agree by construction.
+// The pure profile at any phase of a track - see the header; the anvil AGL is the authored dome height, not the live band.
+SSWindProfile::Params SSAtmoEnvApplier::windProfileAt(const SSAtmoEnvTrack& track, F64 phase)
+{
+    const SSAtmoEnvWeatherState state = SSAtmoEnvWeatherResolver::resolve(track.mWeather, phase);
+    SSWindProfile::Params p;
+    p.mHeading10Deg  = state.mWindHeading;
+    p.mSpeed10MS     = llmax(0.f, state.mWindSpeed);
+    p.mExponent      = SSWindProfile::EXPONENT_DEFAULT;
+    p.mShearStrength = llclamp(state.mShearStrength, 0.f, 1.f);
+    p.mVeerDeg       = state.mVeerDeg;
+    p.mAnvilAglM     = llmax(track.mCloudDome.mHeightM.valueAt(phase),
+                             SSWindProfile::BL_TOP_M + SSWindProfile::CELL_M);
+    return p;
+}
+
+// <SS:Nexii> The dome seam: base drift + O(z_band), the band's own CURRENT altitude against the deck base the accumulator ran at (doc/atmo_magic_wind_profile.md section 5, dome row). The offset is scaled by the Wind Scroll influence's share exactly as the drift velocity is, so a sky with drift switched off shows no phantom lean either. Bounded by SHEAR_CAP_M in the core, so band and lid can never slide apart unboundedly. NEW-6 fix (2026-09-05): during a storm the anvil ramp drags the band onto the deck lid while the accumulator still runs at the base, so THIS offset saturates at the cap there rather than vanishing - but it does NOT then agree with the anvil puffs' own O(z) lean "by construction", as an earlier draft of this comment claimed. Two real differences: this call reads mWindProfile (the LIVE profile, mAnvilAglM sourced from cirrusAltitudeMetres()'s per-client setting), while SSDeckFrame::placeWorld's puff lean reads deck.mShearTable, baked from the PURE windProfileAt(track, phase) (ssvolcloud.cpp's buildDeck); and this offset is scaled by mDriftBlend, while the puffs' lean carries no such scaling at all. The two O(z) values can therefore differ even when the band and the deck lid sit at the same altitude - no agreement is guaranteed, only that both stay within SHEAR_CAP_M of the base drift.
 LLVector2 SSAtmoEnvApplier::cirrusDriftMetres() const
 {
     const F32 band_agl = cirrusAltitudeMetres() - mTrackFloorZ;
@@ -228,6 +243,9 @@ void SSAtmoEnvApplier::apply()
     const F64 phase = mgr->hasPreviewPhaseOverride()
         ? mgr->previewPhaseOverride()
         : track.currentDayCyclePhase();
+
+    mAppliedTrack = track_index;
+    mAppliedPhase = phase;
 
     const SSAtmoEnvSkyModulation mod = computeModulation(track, phase);
 
@@ -507,6 +525,11 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
         const SSAtmoEnvCloudFieldState field = SSAtmoEnvCloudFieldResolver::resolve(
             track.mCloudField, track.mWeatherInfluence, moisture, convection, temperature, phase, track.mFloorZ);
         mDriftBaseZ = field.mBaseHeightM;
+        // <SS:Nexii> SCHEDULER fix 4: the SAME resolve's coverage, cached alongside the base it is already paying
+        // for - the deterministic field state SSVortices::buildDustWeather reads (windProfileFieldCoverage) instead
+        // of SSVolCloud::weatherCoverage(), which is the LIVE deck and, on a frame where SSVortices::update() runs
+        // before SSVolCloud::update() (see ssvortices.cpp), would be last frame's build.
+        mDriftCoverage = field.mCoverage;
     }
 
     if (!influence.mEnabled)
@@ -514,6 +537,7 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
         mWasPrecipitating = false;
         mSecondsSinceRainStopped = -1.f;
         mDriftBlend = 0.f;
+        mDriftVelocityMS = LLVector2(0.f, 0.f);
         mLastModulation = SSAtmoEnvSkyModulation();
         return mLastModulation;
     }
@@ -558,25 +582,61 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
     mLastModulation = SSAtmoEnvSkyWeatherModulator::compute(in, influence);
 
     // <SS:Nexii> The ONE drift accumulator (doc/atmo_magic_wind_profile.md section 4). It integrates the curve-resolved wind at the PRIMARY DECK'S BASE altitude through the profile's speed factor - the accumulator used to run at cirrus altitude, and since the whole volumetric deck (base often 1-3km), its ground shadow and precipNoiseAt all read it, the deck was advected at cirrus speed. Below the boundary-layer top the factor is byte-for-byte the old windGradientScale shape with the cube's exponent - the altitude it is evaluated at is the fix, and the auto shear's small default S means even a calm sky is not byte-identical to before; the flowmap's region-roughness alpha stays inside the flowmap's own slab math. The dome band reads this plus its bounded shear offset (cirrusDriftMetres) - a second free-running accumulator at a different velocity would diverge without limit and wrap apart from this one. The stock cloud_scroll_rate path is left at zero, so this drift is the only thing that moves the sky.
+    // <SS:Nexii> NEW-3 fix (2026-09-05, doc/atmo_magic_storm_dynamics.md section 3): drift_scale now reads the
+    // PURE profile - windProfileAt(track, phase), not mWindProfile - because mWindProfile.mAnvilAglM comes from
+    // cirrusAltitudeMetres(), a per-client setting reading the live deck (see windProfileAt's own comment); the
+    // ONE drift accumulator that positions the whole sky must not have a per-client input in its integration, only
+    // in its display-only mDriftBlend readout below. Behaviour changes only when base_agl is at/above BL_TOP_M
+    // (the jet leg, where mAnvilAglM enters speedScale) - below it speedScale ignores mAnvilAglM entirely, so a
+    // deck base under the boundary-layer top (the common case) integrates bit-identically to before this fix.
     const F32 base_agl = mDriftBaseZ - mTrackFloorZ;
-    const F32 drift_scale = SSWindProfile::speedScale(base_agl, mWindProfile);
+    const SSWindProfile::Params pure_params = windProfileAt(track, phase);
+    const F32 drift_scale = SSWindProfile::speedScale(base_agl, pure_params);
     mDriftBlend = (mWindProfile.mSpeed10MS > 0.f)
         ? llclamp(mLastModulation.mDriftVelocity.length() / mWindProfile.mSpeed10MS, 0.f, 1.f)
         : 0.f;
 
-    const F32 drift_dt = static_cast<F32>(llclamp(elapsed, 0.0, 0.25));
-    mCloudDriftM += mLastModulation.mDriftVelocity * drift_scale * drift_dt;
+    // <SS:Nexii> Published pre-integration for the storm hero's frame shift (driftVelocityMetresPerSec) - the same
+    // curve-resolved vector*scale the line below integrates, before dt is folded in, so a consumer reads the rate
+    // the accumulator is running at rather than differencing mCloudDriftM (which would see the wrap).
+    mDriftVelocityMS = mLastModulation.mDriftVelocity * drift_scale;
 
-    // <SS:Nexii> Lattice-aligned wrap: the lcm of every period the field draws with on air.xy - the cell lattice, the shader's detail/veil and skew periods (passed first so the precision guard never drops them) and both decks' cell-quantised noise tiles - so a wrap leaves every tiling TEXTURE exactly where it was; {260, 880, 1400, 2080} lands on 800800 m, about the old 1e6 cadence (~22h at 10 m/s) where fmodf(1e6) was a multiple of nothing. Honest caveat: the hash-based cell gate and cluster noise are not periodic in the cell index, so they still re-roll at a wrap until the gate hashes the cell index modulo span/CELL_M in all three replications (phase 6b). [interaction: SSVolCloud noise tile]
+    // <SS:Nexii> F64 ACCUMULATOR FIX (2026-09-05, doc/atmo_magic_wind_profile.md section 4): dt and the running sum
+    // both stay F64 through the integrate - elapsed is already F64 (LLTimer::getElapsedSeconds), and a per-frame
+    // F32 sum of v*dt is where the framerate divergence actually comes from (an F32 add loses precision as the
+    // accumulator grows large between wraps; F64 does not, until well past the wrap span). The velocity/scale
+    // product is still the F32 curve-resolved rate - only the multiply-accumulate widens - matching the design's
+    // "F64 internally, F32 only at the uniform/consumer boundary" rule.
+    const F64 drift_dt = llclamp(elapsed, 0.0, 0.25);
+    mCloudDriftXD += (F64)(mLastModulation.mDriftVelocity.mV[0] * drift_scale) * drift_dt;
+    mCloudDriftYD += (F64)(mLastModulation.mDriftVelocity.mV[1] * drift_scale) * drift_dt;
+
+    // <SS:Nexii> Lattice-aligned wrap: the lcm of every period the field draws with on air.xy - the cell lattice, the shader's detail/veil and skew periods (passed first so the precision guard never drops them) and both decks' cell-quantised noise tiles - so a wrap realigns every one of THOSE tiling textures exactly where it was; {260, 880, 1400, 2080} lands on 800800 m, about the old 1e6 cadence (~22h at 10 m/s) where fmodf(1e6) was a multiple of nothing. Honest caveat, widened (phase 6b de-tile, review F4): this is NOT "every tiling texture" - the de-tile's second octave (ssdecknoisecore.h: detileCoord rotates by 37 degrees and scales by 1/phi before the SAME map is re-read and mixed in) samples a lattice no axis-aligned translation can realign, at any wrap span, because the rotation is irrational relative to the primary grid; the second read re-samples fresh at every wrap regardless of what span is chosen here, on top of the already-accepted hash re-roll below. And the hash-based cell gate and cluster noise are still not periodic in the cell index, so they too re-roll at a wrap until the gate hashes the cell index modulo span/CELL_M in all three replications (scheduled, phase 6b-era) - that scheduled fix would cover the gate hash, not the de-tile's second octave, which has no cell-index modulus to take. [interaction: SSVolCloud noise tile]
+    // <SS:Nexii> F64 ACCUMULATOR FIX: the wrap itself runs in F64 too (wrapDriftD) - wrapping an F64 accumulator
+    // through an F32 wrapDrift would round-trip it back down to F32 precision every apply, throwing away exactly
+    // the precision the widened integrate above just bought. lcmSpanM's span is still computed in F32 (the design
+    // doc's own call: the span is a small fixed constant, not something that accumulates error).
     {
         SSVolCloud* vol = SSVolCloud::getInstance();
         const F32 periods[] = {
             SSWindProfile::CELL_M, SSWindProfile::NOISE_M, SSWindProfile::SKEW_M,
             vol ? vol->noiseTileMetres() : 0.f, vol ? vol->underNoiseTileMetres() : 0.f };
         const F32 span = SSWindProfile::lcmSpanM(periods, 5, SSWindProfile::WRAP_MIN_M, SSWindProfile::WRAP_MAX_M);
-        mCloudDriftM.mV[0] = SSWindProfile::wrapDrift(mCloudDriftM.mV[0], span);
-        mCloudDriftM.mV[1] = SSWindProfile::wrapDrift(mCloudDriftM.mV[1], span);
+        const F64 spanD = (F64)span;
+        const F64 before_x = mCloudDriftXD;
+        const F64 before_y = mCloudDriftYD;
+        mCloudDriftXD = SSWindProfile::wrapDriftD(mCloudDriftXD, spanD);
+        mCloudDriftYD = SSWindProfile::wrapDriftD(mCloudDriftYD, spanD);
+        // <SS:Nexii> Published for the V7 sync console only: the span in force and a count of wraps that actually moved a value. Display state - nothing reads it back into the drift.
+        mDriftWrapSpanM = span;
+        if (before_x != mCloudDriftXD || before_y != mCloudDriftYD) ++mDriftWrapCount;
     }
+
+    // <SS:Nexii> F64 ACCUMULATOR FIX: the F32 CACHE, refreshed here (post-integrate, post-wrap) - the only place
+    // mCloudDriftM is written now. Every uniform/consumer (cloudDriftMetres(), cirrusDriftMetres()) reads this
+    // narrowed snapshot, per the design's "F32 only at the uniform/consumer boundary" rule.
+    mCloudDriftM.mV[0] = (F32)mCloudDriftXD;
+    mCloudDriftM.mV[1] = (F32)mCloudDriftYD;
 
     return mLastModulation;
 }

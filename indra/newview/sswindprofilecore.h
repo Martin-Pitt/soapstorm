@@ -158,9 +158,17 @@ namespace SSWindProfile
 
     // The BOUNDED shear offset of altitude zAgl relative to the deck base at baseAgl: d = windAt(z) - windAt(base);
     // O = d * SHEAR_LEAN_S, and if |O| > SHEAR_CAP_M it is scaled down to exactly SHEAR_CAP_M along the same direction.
-    // This is a frame TRANSFORM (design section 4): the cell gate stays on base drift, shape/carve coordinates read
-    // air.xy - O(z), replicated byte-for-byte in the CPU builder, ssVolCloudF.glsl, the shadow bake and precipNoiseAt.
-    // It is NOT an integral and carries no time - two accumulators at different velocities diverge without bound and
+    // This is a frame TRANSFORM (design section 4, revised - see ssdeckframecore.h's PRODUCER/OBSERVER rule, corrected
+    // 2026-09-05 after the phase-4 opus review found the first contract unsound). CORRECTED rule (the rule below used
+    // to invert this - it named exactly two things and specifically excluded the n_map column read, which was the bug):
+    // O(z) is a PLACEMENT transform - the CPU builder places a puff of column c at altitude z at c + O(z)
+    // (SSDeckFrame::placeWorld) - and it is undone by EVERY fragment read of that puff (SSDeckFrame::frameAir):
+    // the n_map column read (tower window, anvil, floor, fill), the detail octaves, the triplanar skew, the cap band -
+    // all of it, not a named subset. The veil sheet, the shadow bake and precipNoiseAt never see O(z) at all, but not
+    // because they are exceptions carved out of this rule - they are base-anchored BY DEFINITION (the sheet's own
+    // reads are gateAir unconditionally, whatever height it is drawn at) and so never route through frameAir in the
+    // first place. ssdeckframecore.h is the authority for this contract; do not re-derive it here. It is NOT an
+    // integral and carries no time - two accumulators at different velocities diverge without bound and
     // wrap apart, which is the bug this formulation exists to avoid. Invariants: O(base, base) is the zero vector;
     // |O| <= SHEAR_CAP_M for every z in [-1000, 20000] and every Params; continuous in z; a calm-day Params gives
     // |O| == 0 above BL_TOP_M (flat plateau) while below it the speed difference alone leans the column, as intended.
@@ -181,16 +189,26 @@ namespace SSWindProfile
         return o;
     }
 
+    // The storm consolidation product - smoothstep(0.55,0.85,moisture) * smoothstep(0.45,0.75,convection) - the ONE
+    // definition (phase-3c F4: previously respelled in ssvolcloud.cpp's builder, its V2 overlay AND this file's own
+    // autoShear; SSStormCouple::consolidation, in the storm core that includes this one, now forwards here instead
+    // of carrying a fourth copy - a wind core must never include a storm core, so this is the direction the single
+    // definition has to live in). Invariants: 0 when either input is at or below its window floor; 1 at (0.85, 0.75)
+    // and above; monotone in both; in [0,1].
+    inline F32 consolidation(F32 moisture, F32 convection)
+    {
+        return smoothstep(0.55f, 0.85f, moisture) * smoothstep(0.45f, 0.75f, convection);
+    }
+
     // Auto-derivation when nothing is authored (design section 3, mirrors the mGustAuto idiom):
-    //   storm    = smoothstep(0.55,0.85,moisture) * smoothstep(0.45,0.75,convection)   (the consolidation figure, duplicated
-    //              here by the same accepted convention as the wet band)
+    //   storm    = consolidation(moisture, convection)
     //   strength = clamp(lerp(0.15, 1.0, max(convection*0.4, storm)), 0, 1)
     //   veerDeg  = lerp(8, 65, strength) + clamp((15 - temperatureC)*0.4, -10, 15)
     // Invariants: dry calm (0,0,20C) gives strength 0.15 and veer in [7, 12]; a consolidated storm (0.9, 0.8, 20C) gives
     // strength 1.0 and veer 65 +- 3; strength monotone non-decreasing in convection and in moisture; colder air adds veer.
     inline AutoShear autoShear(F32 moisture, F32 convection, F32 temperatureC)
     {
-        const F32 storm = smoothstep(0.55f, 0.85f, moisture) * smoothstep(0.45f, 0.75f, convection);
+        const F32 storm = consolidation(moisture, convection);
         AutoShear r;
         r.mStrength = llclamp(std::lerp(0.15f, 1.f, llmax(convection * 0.4f, storm)), 0.f, 1.f);
         r.mVeerDeg  = std::lerp(8.f, 65.f, r.mStrength) + llclamp((15.f - temperatureC) * 0.4f, -10.f, 15.f);
@@ -234,9 +252,16 @@ namespace SSWindProfile
     // maxM (F32 precision guard) - the shell passes the shader constants first so they are never the ones dropped.
     // Invariants: the result is a multiple of every period it kept; minM <= result <= maxM (or the largest kept lcm
     // multiple below maxM); {260, 2080, 880, 1400} gives 800800 exactly; a lone 260 gives the smallest multiple of 260
-    // >= minM. NOTE: alignment keeps the tiling TEXTURES where they were; the hash-based cell gate and cluster noise are
-    // NOT periodic in the cell index, so they still re-roll at a wrap until the builder/shader/bake hash the cell index
-    // modulo (span / CELL_M) - scheduled with the phase-6b gate work (doc/atmo_magic_wind_profile.md section 4).
+    // >= minM. NOTE, widened (phase 6b de-tile, review F4): alignment keeps only THESE listed periods' tiling
+    // textures where they were - it is not honest to say "every" tiling texture. The de-tile's second octave
+    // (ssdecknoisecore.h: detileCoord rotates by 37 degrees and scales by 1/phi before re-reading the same map) has
+    // no axis-aligned translation that realigns it at any span - the rotation is irrational relative to the primary
+    // grid, so the second read re-samples fresh at every wrap regardless of the lcm chosen here, stacking on top of
+    // the already-accepted hash re-roll below. And the hash-based cell gate and cluster noise are still NOT
+    // periodic in the cell index, so they too re-roll at a wrap until the builder/shader/bake hash the cell index
+    // modulo (span / CELL_M) - scheduled with the phase-6b gate work (doc/atmo_magic_wind_profile.md section 4);
+    // that scheduled fix covers the gate hash only, not the de-tile's second octave, which has no cell-index
+    // modulus to take in the first place.
     inline F32 lcmSpanM(const F32* periodsM, S32 count, F32 minM, F32 maxM)
     {
         uint64_t l = 1;
@@ -284,6 +309,34 @@ namespace SSWindProfile
         if (r < 0.f || r >= spanM)
         {
             r = 0.f;
+        }
+        return r;
+    }
+
+    // F64 OVERLOAD (the accumulator's own precision - doc/atmo_magic_wind_profile.md section 4, F64 accumulator fix,
+    // 2026-09-05): identical shape to wrapDrift above, computed entirely in F64 so the accumulator that carries this
+    // wrap never round-trips through F32 before it is wrapped. lcmSpanM stays F32 (the span itself is a small fixed
+    // constant - {260, 880, 1400, 2080} lands on 800800 exactly in F32 - so only the accumulator's own running sum
+    // and its wrap need the wider type). Invariants: same as wrapDrift, F64 throughout; wrapDriftD((F64)v, (F64)spanM)
+    // equals (F64)wrapDrift(v, spanM) to within F32 rounding for inputs that fit F32 exactly.
+    inline F64 wrapDriftD(F64 v, F64 spanM)
+    {
+        if (!(spanM > 0.0))
+        {
+            return 0.0;
+        }
+        F64 r = v - std::floor(v / spanM) * spanM;
+        if (r < 0.0)
+        {
+            r += spanM;
+        }
+        if (r >= spanM)
+        {
+            r -= spanM;
+        }
+        if (r < 0.0 || r >= spanM)
+        {
+            r = 0.0;
         }
         return r;
     }

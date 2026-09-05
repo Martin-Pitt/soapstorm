@@ -185,6 +185,7 @@ LLGLSLShader            gSSPrecipRainProgram;
 LLGLSLShader            gSSPrecipLitProgram;
 LLGLSLShader            gSSSurfaceWetProgram;
 LLGLSLShader            gSSVolCloudProgram;
+LLGLSLShader            gSSVortexProgram;
 LLGLSLShader            gSSLightningProgram;
 LLGLSLShader            gSSCelestialProgram;
 LLGLSLShader            gSSSurfaceNormalProgram;
@@ -465,6 +466,7 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSPrecipLitProgram);
     mShaderList.push_back(&gSSSurfaceWetProgram);
     mShaderList.push_back(&gSSVolCloudProgram);
+    mShaderList.push_back(&gSSVortexProgram);
     mShaderList.push_back(&gSSLightningProgram);
     mShaderList.push_back(&gSSCelestialProgram);
     mShaderList.push_back(&gSSSurfaceNormalProgram);
@@ -1253,6 +1255,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSPrecipProjProgram.unload();
         gSSSurfaceWetProgram.unload();
         gSSVolCloudProgram.unload();
+        gSSVortexProgram.unload();
         gSSLightningProgram.unload();
         gSSCelestialProgram.unload();
         gSSSurfaceNormalProgram.unload();
@@ -2111,6 +2114,29 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             LL_WARNS("Shader") << "SS volumetric cloud shader failed to compile;"
                                << " the volumetric layer will not draw" << LL_ENDL;
             gSSVolCloudProgram.unload();
+        }
+
+        // <SS:Nexii> Same feature set and SG_SKY group as gSSVolCloudProgram (see its own comment above): the funnel
+        // is shaded by the sky's own sunlight_color/ambient_color/cloud_color/lightnorm uniforms so a dark
+        // condensation funnel and its lit rim track the same sunrise/sunset the deck and the dome band do, rather
+        // than carrying a second, disagreeing light.
+        gSSVortexProgram.mName = "SS Vortex Shader";
+        gSSVortexProgram.mFeatures.calculatesAtmospherics = true;
+        gSSVortexProgram.mFeatures.hasAtmospherics = true;
+        gSSVortexProgram.mFeatures.hasGamma = true;
+        gSSVortexProgram.mFeatures.hasSrgb = true;
+        gSSVortexProgram.mShaderFiles.clear();
+        gSSVortexProgram.mShaderFiles.push_back(make_pair("deferred/ssVortexV.glsl", GL_VERTEX_SHADER));
+        gSSVortexProgram.mShaderFiles.push_back(make_pair("deferred/ssVortexF.glsl", GL_FRAGMENT_SHADER));
+        gSSVortexProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSVortexProgram.mShaderGroup = LLGLSLShader::SG_SKY;
+        gSSVortexProgram.clearPermutations();
+        add_common_permutations(&gSSVortexProgram);
+        if (!gSSVortexProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS vortex shader failed to compile;"
+                               << " tornado/waterspout/landspout funnels will not draw" << LL_ENDL;
+            gSSVortexProgram.unload();
         }
 
         gSSLightningProgram.mName = "SS Lightning Shader";

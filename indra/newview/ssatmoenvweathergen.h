@@ -66,7 +66,15 @@ class SSAtmoEnvWeatherGenerator
 public:
     // Replaces the cube wholesale with a fresh roll. Realistic four times in five; the rest are
     // fantasy archetypes that deliberately leave the envelope real weather stays inside.
-    static SSAtmoEnvWeatherRoll randomize(SSAtmoEnvWeather& weather);
+    //
+    // <SS:Nexii> severeDay/severeDayStrength: authoring-time-only bias (SSSquall::severeDayBias, the core's own
+    // pure function) toward a severe roll - raises the rolled convection/moisture/shear peaks the seasonal path's
+    // spell(s) carry, over a window centred on the spell's own peak phase, rather than touching the whole day.
+    // Ignored on the fantasy path (rolled 1 time in 5): every fantasy archetype is already outside the envelope
+    // this bias reaches toward, and layering it on would only sand its edges rather than sharpen anything. No
+    // effect on a dry roll (no spell to bias) or when strength is 0.
+    static SSAtmoEnvWeatherRoll randomize(SSAtmoEnvWeather& weather,
+                                          bool severeDay = false, F32 severeDayStrength = 1.f);
 
     // Back to a still, dry, clear sky - the cube's own constructed defaults, no keyframes.
     static void clear(SSAtmoEnvWeather& weather);

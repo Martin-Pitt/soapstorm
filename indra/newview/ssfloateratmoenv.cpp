@@ -208,6 +208,15 @@ bool SSFloaterAtmoEnv::postBuild()
         [this](LLUICtrl*, const LLSD&) { onClickRandomizeWeather(); });
     getChild<LLUICtrl>("weather_remove_button")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onClickRemoveWeather(); });
+    // <SS:Nexii> Severe Day's own strength only means anything while the checkbox is on - greyed rather than read
+    // and ignored, the gust/lightning Auto rows' idiom, since both live only on the roll button press and carry
+    // no keyframes of their own to disable instead.
+    getChild<LLUICtrl>("weather_severe_day_check")->setCommitCallback(
+        [this](LLUICtrl*, const LLSD&)
+        {
+            getChild<LLUICtrl>("weather_severe_day_strength_spinner")->setEnabled(
+                getChild<LLUICtrl>("weather_severe_day_check")->getValue().asBoolean());
+        });
 
     getChild<LLUICtrl>("preview_time_slider")->setCommitCallback(
         [this](LLUICtrl*, const LLSD&) { onCommitPreviewTime(); });
@@ -287,6 +296,10 @@ bool SSFloaterAtmoEnv::postBuild()
         { "gust_veer",    [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mGustVeer; },     true },
         { "lightning_intensity", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mLightningIntensity; }, false },
         { "lightning_core_white", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mLightningCoreWhite; }, false },
+        // <SS:Nexii> SCHEDULER: forced-storm cue rows (ssatmoenvasset.h SSAtmoEnvWeather::mStormOverride*, sssquallcore.h SSSquall::ForcedOverride) - phase and offset ride the ordinary FloatRow idiom; the kind itself is a string row, below with precipitation_combo.
+        { "storm_override_phase", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mStormOverridePhase; }, false, 1.f, true },
+        { "storm_override_offset_x", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mStormOverrideOffsetXM; }, true, 1.f, true },
+        { "storm_override_offset_y", [this]() -> SSAtmoEnvKeyframed<F32>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mStormOverrideOffsetYM; }, true, 1.f, true },
     };
 
     auto water = [this]() -> SSAtmoEnvWater& {
@@ -383,7 +396,8 @@ bool SSFloaterAtmoEnv::postBuild()
             [this, row](LLUICtrl*, const LLSD&) { commitFloatRow(row); refreshPreview(); refreshStatus(); });
         getChild<LLUICtrl>(row.mPrefix + "_value_spinner")->setCommitCallback(
             [this, row](LLUICtrl*, const LLSD&) { commitFloatRowSpinner(row); refreshPreview(); refreshStatus(); });
-        bindKeyframeButtons<F32>(row.mPrefix, row.mField);
+        bindKeyframeButtons<F32>(row.mPrefix, row.mField,
+                                  row.mHoldCurve ? SSAtmoEnvCurve::HOLD : ss_atmoenv_default_curve<F32>());
     }
 
     // <SS:Nexii> Height is authored relative to the track's floor. The slider keeps an honest near-floor dial (SS_ATMOENV_WATER_FLOOR..CEILING); the spinner takes the whole authored range, so a sky build can put its ocean kilometres below the track it rides. Values past the slider's ends read pinned at the rail.
@@ -463,6 +477,7 @@ bool SSFloaterAtmoEnv::postBuild()
 
     mStringRows = {
         { "precipitation_combo", [this]() -> SSAtmoEnvKeyframed<std::string>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mPrecipitationOverride; } },
+        { "storm_override_kind_combo", [this]() -> SSAtmoEnvKeyframed<std::string>& { return SSAtmoEnvManager::getInstance()->editable().mTracks[mSelectedTrackIndex].mWeather.mStormOverride; } },
     };
     for (const KeyRow<std::string>& row : mStringRows)
     {
@@ -2171,8 +2186,14 @@ void SSFloaterAtmoEnv::onClickRandomizeWeather()
     SSAtmoEnvAsset& asset = mgr->editable();
     if (mSelectedTrackIndex < 0 || mSelectedTrackIndex >= (S32)asset.mTracks.size()) return;
 
-    const SSAtmoEnvWeatherRoll roll =
-        SSAtmoEnvWeatherGenerator::randomize(asset.mTracks[mSelectedTrackIndex].mWeather);
+    // <SS:Nexii> Severe Day: read straight off the two controls at the moment the button is pressed, not stored
+    // anywhere on the track - it is an option on the NEXT roll, the weathergen's own authoring-time bias
+    // (SSSquall::severeDayBias), not a property of the day that gets rolled.
+    const bool severe_day = getChild<LLUICtrl>("weather_severe_day_check")->getValue().asBoolean();
+    const F32 severe_day_strength = (F32)getChild<LLUICtrl>("weather_severe_day_strength_spinner")->getValue().asReal();
+
+    const SSAtmoEnvWeatherRoll roll = SSAtmoEnvWeatherGenerator::randomize(
+        asset.mTracks[mSelectedTrackIndex].mWeather, severe_day, severe_day_strength);
 
     setWeatherRollText(roll.mSummary);
 
@@ -2748,6 +2769,7 @@ void SSFloaterAtmoEnv::onCommitCloudAuto()
 namespace
 {
     std::string precipDisplayName(const std::string& value);
+    std::string stormOverrideKindDisplayName(const std::string& value);
 }
 
 // Enables every auto-owned row set per its flag; auto-owned gust rows collapse instead, since
@@ -3074,6 +3096,17 @@ namespace
         if (value == "slush_mix")     return "Wintry Mix";
         return value;
     }
+
+    // Forced-storm cue kind key to display name - stormOverrideKindFromString's own vocabulary (ssstormcells.cpp).
+    std::string stormOverrideKindDisplayName(const std::string& value)
+    {
+        if (value.empty())            return "None";
+        if (value == "supercell")     return "Supercell";
+        if (value == "tornado")       return "Tornado";
+        if (value == "waterspout")    return "Waterspout";
+        if (value == "anticyclonic")  return "Anticyclonic";
+        return value;
+    }
 }
 
 template <typename T>
@@ -3093,12 +3126,12 @@ void SSFloaterAtmoEnv::refreshKeyframeControls(const std::string& prefix,
 
 // The keyframe dot: add/edit at the head, or remove the one under it.
 template <typename T>
-void SSFloaterAtmoEnv::toggleKeyframe(SSAtmoEnvKeyframed<T>& field)
+void SSFloaterAtmoEnv::toggleKeyframe(SSAtmoEnvKeyframed<T>& field, SSAtmoEnvCurve curve)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset()) return;
     (void)mgr;
-    field.toggleKeyframeAtHead(mPreviewPhase);
+    field.toggleKeyframeAtHead(mPreviewPhase, curve);
 }
 
 // Scrub the head to the neighbouring keyframe.
@@ -3112,11 +3145,12 @@ void SSFloaterAtmoEnv::jumpKeyframe(const SSAtmoEnvKeyframed<T>& field, bool nex
 template <typename T>
 // Wires one row's keyframe buttons to a field.
 void SSFloaterAtmoEnv::bindKeyframeButtons(const std::string& prefix,
-                                           std::function<SSAtmoEnvKeyframed<T>&()> field)
+                                           std::function<SSAtmoEnvKeyframed<T>&()> field,
+                                           SSAtmoEnvCurve curve)
 {
     getChild<LLButton>(prefix + "_keyframe_button")->setClickedCallback(
-        [this, field](LLUICtrl*, const LLSD&)
-        { toggleKeyframe<T>(field()); refreshPreview(); refreshStatus(); });
+        [this, field, curve](LLUICtrl*, const LLSD&)
+        { toggleKeyframe<T>(field(), curve); refreshPreview(); refreshStatus(); });
     getChild<LLButton>(prefix + "_prev_button")->setClickedCallback(
         [this, field](LLUICtrl*, const LLSD&)
         { jumpKeyframe<T>(field(), false); refreshPreview(); });
@@ -3300,25 +3334,28 @@ void SSFloaterAtmoEnv::refreshFloatRow(const FloatRow& row, F64 phase)
     refreshKeyframeControls<F32>(row.mPrefix, field, phase);
 }
 
-// Float spinner into the field.
+// Float spinner into the field. 7b F4: row.mHoldCurve rows (the three forced-storm override curves) always add or
+// edit at SSAtmoEnvCurve::HOLD, never F32's ordinary default (EASE).
 void SSFloaterAtmoEnv::commitFloatRowSpinner(const FloatRow& row)
 {
+    const SSAtmoEnvCurve curve = row.mHoldCurve ? SSAtmoEnvCurve::HOLD : ss_atmoenv_default_curve<F32>();
     row.mField().setValueAtHead(mPreviewPhase,
-        (F32)getChild<LLUICtrl>(row.mPrefix + "_value_spinner")->getValue().asReal() * row.mScale);
+        (F32)getChild<LLUICtrl>(row.mPrefix + "_value_spinner")->getValue().asReal() * row.mScale, curve);
 }
 
-// Float slider into the field.
+// Float slider into the field. 7b F4: see commitFloatRowSpinner's own comment.
 void SSFloaterAtmoEnv::commitFloatRow(const FloatRow& row)
 {
     const F32 value = (F32)getChild<LLUICtrl>(row.mPrefix + "_slider")->getValue().asReal() * row.mScale;
+    const SSAtmoEnvCurve curve = row.mHoldCurve ? SSAtmoEnvCurve::HOLD : ss_atmoenv_default_curve<F32>();
 
-    row.mField().setValueAtHead(mPreviewPhase, value);
+    row.mField().setValueAtHead(mPreviewPhase, value, curve);
 }
 
-// Float row's keyframe dot.
+// Float row's keyframe dot. 7b F4: see commitFloatRowSpinner's own comment.
 void SSFloaterAtmoEnv::toggleFloatRowKeyframe(const FloatRow& row)
 {
-    toggleKeyframe<F32>(row.mField());
+    toggleKeyframe<F32>(row.mField(), row.mHoldCurve ? SSAtmoEnvCurve::HOLD : ss_atmoenv_default_curve<F32>());
 }
 
 // Float row's previous-keyframe jump.
@@ -3513,8 +3550,11 @@ bool SSFloaterAtmoEnv::collectHoveredKeyframes(std::vector<GhostKeyframe>& out, 
     for (const KeyRow<std::string>& row : mStringRows)
     {
         if (!wanted(row.mPrefix)) continue;
+        // <SS:Nexii> Two vocabularies share mStringRows now - precipitation's and the forced-storm cue's - so the ghost label is picked by which row this is rather than assumed.
+        const bool is_storm_kind = (row.mPrefix == "storm_override_kind_combo");
         buildGhosts<std::string>(row.mField().keyframes(),
-            [](const std::string& v) { return precipDisplayName(v); }, out);
+            [is_storm_kind](const std::string& v)
+            { return is_storm_kind ? stormOverrideKindDisplayName(v) : precipDisplayName(v); }, out);
         found = true;
         if (!overview) return true;
     }

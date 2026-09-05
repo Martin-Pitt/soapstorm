@@ -4061,6 +4061,17 @@
                function="Advanced.ToggleConsole"
                parameter="soapstorm" />
             </menu_item_check>
+            <!-- <SS:Nexii> Atmo Magic V7 sync console (doc/atmo_magic_debug_views.md): every shared-state input the sky and the storm scheduler derive from, so two clients screenshot it side by side and localise a divergence. Read-only. -->
+            <menu_item_check
+                 label="Atmo Sync Console"
+                 name="Atmo Sync Console">
+              <menu_item_check.on_check
+               function="Advanced.CheckConsole"
+               parameter="atmo sync" />
+              <menu_item_check.on_click
+               function="Advanced.ToggleConsole"
+               parameter="atmo sync" />
+            </menu_item_check>
             <!-- </SS:Nexii> -->
             <menu_item_separator/>
 

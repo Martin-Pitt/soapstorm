@@ -46,6 +46,16 @@
      font="SansSerifSmallBold">
         World Field
     </text>
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="16"
+     width="382"
+     name="field_overlay_check"
+     label="Draw the world field"
+     tool_tip="The shared capture&apos;s view - band surfaces, air labels or drainage - picked below. The drainage and air views are distance-thinned" />
     <text
       follows="left|top" layout="topleft"
       left="12" top_pad="6" height="16" width="106"
@@ -86,6 +96,16 @@
         <button.commit_callback function="SSAtmo.ResetGroup"
          parameter="SSAtmoCloudDebugView" />
     </button>
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="8"
+     height="16"
+     width="382"
+     name="cloud_overlay_check"
+     label="Draw the cloud field"
+     tool_tip="The volumetric deck&apos;s builder views, picked below" />
     <combo_box
       control_name="SSAtmoCloudDebugView" name="C_cloud_view"
       follows="left|top"
@@ -107,6 +127,16 @@
      font="SansSerifSmallBold">
         Surface
     </text>
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left="12"
+     top_pad="6"
+     height="16"
+     width="382"
+     name="surface_overlay_check"
+     label="Draw the surface field"
+     tool_tip="The wet/snow/puddle landing grid and its runoff traces, drawn over the ground they land on" />
     <text
      follows="left|top"
      layout="topleft"

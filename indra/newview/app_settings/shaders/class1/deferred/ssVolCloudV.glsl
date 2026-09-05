@@ -38,7 +38,9 @@ in vec4 diffuse_color;
 out vec2 vary_texcoord0;
 
 // <SS:Nexii> Per-puff STRUCTURE only, no longer a finished colour: r is the CPU builder's form term (facing toward the light and the exponential shade down through the deck, beam-flattened),
-// g the puff's buried depth (SSVolCloud::Puff::mBuried - sunless, so it survives a moonless overcast), a the puff's edge-fade alpha; b is spare. The colour it used to carry was (ambient + sun * form) with the sun run through a CPU replica of the beam extinction - the replica whose
+// g the puff's buried depth (SSVolCloud::Puff::mBuried - sunless, so it survives a moonless overcast), a the puff's edge-fade alpha; b == 1 flags a virga shaft card (SSVolCloud::Puff::mShaft,
+// ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3 phase 6c), 0 an ordinary puff - ssVolCloudF.glsl's main() branches its whole carve on vary_color.b > 0.5 rather than shape/rim/n_map logic
+// a shaft has no lid or floor to carve. The colour it used to carry was (ambient + sun * form) with the sun run through a CPU replica of the beam extinction - the replica whose
 // cosecant underflows to grey at every low sun, so the deck sat flat white-grey under every authored sunset while the dome beside it burned. The light half is computed below instead.
 out vec4 vary_color;
 

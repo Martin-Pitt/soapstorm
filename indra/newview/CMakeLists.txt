@@ -213,6 +213,9 @@ set(viewer_SOURCE_FILES
     fsregioncross.cpp
     fsrezqueue.cpp
     ssatmomagic.cpp
+    ssstormcells.cpp
+    ssvortices.cpp
+    ssvortexrender.cpp
     ssatmotrack.cpp
     ssatmoenvapplier.cpp
     ssdiscpad.cpp
@@ -241,6 +244,7 @@ set(viewer_SOURCE_FILES
     ssfloaterpreset.cpp
     ssfloateratmodebug.cpp
     ssatmoinfoview.cpp
+    ssatmosynconsole.cpp
     ssfloatersim.cpp
     ssfloaterworldfield.cpp
     ssatmostore.cpp
@@ -1151,7 +1155,21 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
+    ssdeckframecore.h
+    ssdecklodcore.h
+    ssdeckmacrocore.h
+    ssdecknoisecore.h
+    ssdeckshadecore.h
+    ssdaycyclecore.h
     ssatmonoisecore.h
+    ssstormcellcore.h
+    ssstormcouplecore.h
+    sssquallcore.h
+    ssvortexcore.h
+    ssvirgacore.h
+    ssvortices.h
+    ssvortexrender.h
+    ssstormcells.h
     ssatmotrack.h
     ssatmoenvapplier.h
     ssdiscpad.h
@@ -1182,6 +1200,7 @@ set(viewer_HEADER_FILES
     ssfloateratmodebug.h
     ssatmoinfoview.h
     ssatmoinfoviewcore.h
+    ssatmosynconsole.h
     ssfloatersim.h
     ssatmostore.h
     ssprecippreset.h

@@ -25,7 +25,9 @@
 #define SS_ATMOINFOVIEW_H
 
 #include "llview.h"
+#include "ssstormcellcore.h"
 #include "sswindprofilecore.h"
+#include "v2math.h"
 
 #include <boost/signals2.hpp>
 #include <string>
@@ -36,13 +38,13 @@
 class SSAtmoInfoView
 {
 public:
-    // Creates the dim quad (drawn first, under every other debug overlay) and the legend (drawn last) as children of the debug view, and starts driving the engineering masks off the mode setting. Called once from LLDebugView::init.
+    // Creates the dim quad (drawn first, under every other debug overlay), the legend, and the chart (drawn last) as children of the debug view, and starts driving the engineering masks off the mode setting. The chart is docked to the legend's right edge (its own draw() re-reads the legend's rect every frame and repositions off it, the same way the legend re-sizes itself off its own content), NOT parked at a fixed offset - the legend's width changes with its spec's row count, so a fixed gap would either overlap it or leave a gap that grows. Called once from LLDebugView::init. [interaction: SSAtmoLegendView] [interaction: SSAtmoGraphView]
     static void attach(LLView* debug_view);
 
     // The live mode, 0 when off (SSAtmoInfoViewCore::MODE_*).
     static U32 mode();
 
-    // The active mode's in-world layer (V1: the wind mast), from LLPipeline::renderDebug. Draws nothing when off.
+    // The active mode's in-world layer (V1: the wind mast; V2: lattice tiles, cell rings, squall-line bars/junctions, forced outlines, hero ribbon, rotation glyphs; V5 has none - a pure chart). Draws nothing when off. Called from SSAtmoDimView::draw(), AFTER the dim quad, re-entering 3-D from the UI stage (see that class's comment) - NOT from LLPipeline::renderDebug any more, which used to draw it under the dim and got darkened along with the world. [interaction: SSAtmoDimView]
     static void renderWorld();
 
     // <SS:Nexii> V1's data, gathered once per draw from the systems' resident state: the applier's wind profile and floors, the deck's built band, the flowmap's region exponent. mValid is false with no applied weather cube; mDeckBuilt is false when the volumetric field has no puffs (the rails then read "not built" instead of forcing one). Read-only by construction - every accessor it touches is a const getter. [interaction: SSAtmoEnvApplier windProfile/windAt] [interaction: SSVolCloud cloudBaseZ/cloudTopZ] [interaction: SSWindFlowMap windAlpha]
@@ -63,15 +65,264 @@ public:
     };
     static WindProfileData windProfileData();
 
+    // <SS:Nexii> V2's data (doc/atmo_magic_debug_views.md V2), gathered once per draw from the storm scheduler's RESIDENT frame: SSStormCells::cells()/hero()/whyNot() exactly as update() left them, plus the lattice tiles within FIELD_M of the anchor re-read through the pure core (SSStormCell::candidate at the current epoch - a pure function of the published seed, lattice index and epoch, so reading it here cannot spawn, steer or reorder anything), plus - DEBUG - SSVortices::active()/dustDevils()/whyNot() exactly as ITS update() left them (mVortices/mDustDevils/mVortexWhyNot; empty/default when SSVortices is not valid this frame). Positions are converted global -> agent frame at this read site (SSStormCells::toAgentXY), the frame SSVolCloud positions puffs in; the storm/vortex entities themselves stay world-frame. mValid is false when the scheduler is not driving; the layer then says so instead of asking it to. Read-only by construction. [interaction: SSStormCells] [interaction: SSAtmoEnvManager mWeatherInfluence Allow flags] [interaction: SSVolCloud cloudBaseZ] [interaction: SSVortices active/dustDevils/whyNot]
+    struct StormCellsData
+    {
+        struct Tile
+        {
+            LLVector2 mCentreAgent;
+            F32 mPotential = 0.f;    // P this epoch
+            F32 mShearNoise = 0.f;   // SH this epoch
+            bool mAlive = false;     // an active cell was born on this lattice cell (any epoch in the window)
+        };
+        struct Cell
+        {
+            U64 mId = 0;
+            LLVector2 mCentreAgent;
+            F32 mRadiusM = 0.f;
+            S32 mStage = 0;          // SSStormCell::EStage
+            F32 mAge01 = 0.f;
+            F64 mBirthTime = 0.0;
+            F32 mLifetimeS = 0.f;
+            F32 mRotation = 0.f;     // signed Omega
+            F32 mMeso = 0.f;         // lifecycle rotation strength (0 for non-supercells)
+            F32 mIntensity = 0.f;
+            bool mSupercell = false;
+            bool mIsHero = false;
+            // <SS:Nexii> SQUALL/FORCED (doc/atmo_magic_storm_dynamics.md sections 5-6): mirrors ActiveCell's own
+            // mLineId/mIsForced straight across (SSStormCells::ActiveCell) - 0 is never a real line id (see
+            // ssstormcellcore.h's own comment on ActiveCell::mLineId), so a plain != 0 test is "this cell is a
+            // squall-line member". mIsForced is the (at most one) authored/forced pin (SSSquall::forcedCandidate).
+            U64 mLineId = 0;
+            bool mIsForced = false;
+        };
+        struct HeroPath
+        {
+            U64 mId = 0;
+            LLVector2 mOriginAgent;
+            LLVector2 mNowAgent;
+            LLVector2 mDeathAgent;
+            LLVector2 mClosestAgent;
+            LLVector2 mMotion;       // m/s, agent axes == global axes
+            F32 mClosestDistM = 0.f;
+            F64 mBirthTime = 0.0;
+            F64 mClosestTime = 0.0;
+            F32 mLifetimeS = 0.f;
+            F32 mRotation = 0.f;
+        };
+
+        // <SS:Nexii> DEBUG: one entry per SSVortices::LiveVortex (active(), <= SSVortex::MAX_ACTIVE, already ranked
+        // hero-first by the scheduler). mKind is the DISPLAY kind (post waterspout relabel) as an
+        // SSAtmoInfoViewCore::VORTEX_KIND_* value; mCollars is only populated (SSVortex::COLLARS entries) when
+        // mHasFunnel - a funnel-less gustnado carries an empty table. [interaction: SSVortices active]
+        struct VortexIcon
+        {
+            struct Collar
+            {
+                F32 mRadiusM = 0.f;
+                F32 mAltitudeZ = 0.f;   // world Z (already the collar table's own frame - see SSVortex::collarAltitudeM)
+            };
+
+            U64 mId = 0;
+            S32 mKind = 0;             // SSAtmoInfoViewCore::VORTEX_KIND_*
+            F32 mRotationSign = 1.f;
+            bool mParentIsHero = false;
+            bool mWasRelabelledWaterspout = false;
+            LLVector2 mContactAgent;
+            F32 mCondensation = 0.f;   // [0,1] funnel-aloft -> touchdown -> rope-out
+            F32 mIntensity = 0.f;      // live intensity
+            S32 mMultiN = 0;           // 0 = single vortex; else suction-vortex count
+            bool mHasFunnel = false;
+            std::vector<Collar> mCollars;
+        };
+
+        // A live dust devil (SSVortices::dustDevils()) - parentless, no funnel/collar table.
+        struct DustIcon
+        {
+            U64 mId = 0;
+            LLVector2 mOriginAgent;
+            F32 mIntensity = 0.f;
+        };
+
+        // <SS:Nexii> DEBUG: the tornado "why not" readout (SSVortices::WhyNotTornado), keyed to the SAME hero V2
+        // already shows - this answers "why does the hero cell that DOES exist not carry a live tornado-family
+        // funnel right now", distinct from mWhyNot below (which answers "why is there no hero cell at all").
+        // mKind is slot 0's decided SSAtmoInfoViewCore::VORTEX_KIND_* (VORTEX_KIND_NONE if no gate passed at all).
+        // Empty mFailing iff mAlive. [interaction: SSVortices whyNot]
+        struct TornadoWhyNot
+        {
+            bool mHaveHero = false;
+            S32 mKind = 0;
+            bool mAlive = false;
+            F32 mMeso = 0.f;
+            F32 mPotential = 0.f;
+            bool mSupercell = false;
+            bool mTornadoEligible = false;
+            bool mAllowTornadoes = false;
+            std::vector<std::string> mFailing;
+        };
+
+        // <SS:Nexii> V2 SQUALL (doc/atmo_magic_storm_dynamics.md section 5, V2's own "bar through the members"
+        // ask): one entry per DISTINCT active mLineId this frame, reconstructed read-only through
+        // SSSquall::lineEvent/lineMember/qlcsJunctionAt (pure functions of seed/epoch/anchor/windAnvil/severe, all
+        // re-read from the cube at the SCHEDULER's phase - 7c) rather than a new field carried
+        // on the scheduler. mMembersAgent is only the members that are ACTUALLY alive+spawned this frame (in the
+        // template's own along-the-line order, which the offset formula makes monotone in member index), so the
+        // bar always matches the rings V2 already draws; mJunctionsAgent is every inter-member leading-edge QLCS
+        // spin-up point the template defines, drawn whether or not its neighbours happen to be alive (a property of
+        // the line's geometry, not of which members gated this instant).
+        struct SquallLine
+        {
+            U64 mLineId = 0;
+            std::vector<LLVector2> mMembersAgent;
+            std::vector<LLVector2> mJunctionsAgent;
+        };
+
+        bool mValid = false;
+        bool mDeckBuilt = false;
+        bool mHaveHero = false;
+        bool mAllowSupercells = false;   // the applied track's live checkboxes
+        bool mAllowTornadoes = false;
+        F64 mNow = 0.0;
+        F32 mLayerZ = 0.f;               // altitude the layer is drawn at: the deck base when built, else the drift base
+        LLVector2 mAnchorAgent;
+        S32 mCandidates = 0;
+        S32 mAlive = 0;
+        S32 mSpawned = 0;
+        S32 mSupercells = 0;
+        S32 mTornadoEligible = 0;
+        std::vector<Tile> mTiles;
+        std::vector<Cell> mCells;        // ranked by hashed id, as the scheduler left them
+        std::vector<SquallLine> mSquallLines;
+        HeroPath mHero;
+        std::vector<std::string> mWhyNot;
+        std::vector<VortexIcon> mVortices;     // empty when SSVortices is not valid this frame
+        std::vector<DustIcon> mDustDevils;
+        TornadoWhyNot mVortexWhyNot;
+    };
+    static StormCellsData stormCellsData();
+
+    // <SS:Nexii> V3's data (doc/atmo_magic_far_clouds.md LOD phase, ssdecklodcore.h CONTRACT): a distance-only
+    // diagram of the deck LOD ramp, not a replay of the builder's own cell gate/occupancy - this view has no
+    // access to that state and must not reimplement it (the gate stays exactly where it is). mDeckBuilt mirrors
+    // SSVolCloud::empty(); the counts are the primary deck's own last build (mPuffsPlaced is the COMBINED
+    // primary+under count SSVolCloud::puffCount() already reports - the budget dial is shared across both decks).
+    // mTierBCount added for LOD phase 6d (ssdeckmacrocore.h CONTRACT, doc/atmo_magic_far_clouds.md section 2 step
+    // 2 Tier B): the primary deck's own last-build count of merged macro-puff bodies (SSVolCloud::
+    // primaryTierBCount(), itself Deck::mTierBCount read straight across) - included in mPuffsPlaced already
+    // (Tier B bodies are ordinary Puffs), broken out separately here only for the legend's own "Tier B" line.
+    struct DeckLodData
+    {
+        bool mDeckBuilt = false;
+        F32 mLayerZ = 0.f;
+        S32 mPuffsPlaced = 0;
+        S32 mBudget = 0;
+        S32 mPuffsPerCell = 0;
+        S64 mLodPredicted = 0;
+        S32 mCellsWalked = 0;
+        S32 mTierBCount = 0;
+    };
+    static DeckLodData deckLodData();
+
+    // <SS:Nexii> V4's data (doc/atmo_magic_debug_views.md V4, ssvirgacore.h CONTRACT): the last build's virga
+    // snapshot straight off SSVolCloud::virgaDebug() (read-only - this view never re-derives which cells qualify
+    // or how the hashed trim ordered them), plus the wind and fall-speed numbers needed to draw the fall-tilt
+    // comparison line (SSAtmoInfoViewCore::fallTiltOffsetM): the SAME ground-level wind the applier's profile
+    // gives (SSWindProfile::windAt(0, params) - a display approximation of the flowmap-advected wind
+    // ssprecipitation.cpp's own spawner actually uses, close enough for a comparison line, never claimed
+    // bit-identical to it) and the active precip preset's fall speed. mValid mirrors windProfileData()'s own
+    // "is a weather cube even applied" gate; mActive/mDeckBuilt mirror the snapshot and SSVolCloud::empty().
+    // [interaction: SSVolCloud virgaDebug] [interaction: SSAtmoMagic preset/windXY] [interaction: SSAtmoEnvApplier windProfile]
+    struct VirgaData
+    {
+        struct Cell
+        {
+            F32 mX = 0.f;
+            F32 mY = 0.f;
+            F32 mDrive = 0.f;
+            bool mKept = false;
+        };
+        bool mValid = false;
+        bool mActive = false;
+        bool mDeckBuilt = false;
+        F32 mGroundZ = 0.f;
+        F32 mBaseZ = 0.f;
+        F32 mR2 = 0.f;              // the particle rain's own TIER_SHEETS radius
+        F32 mHandoffRadius = 0.f;   // r2 * SSVirga::HANDOFF_SKIP
+        F32 mFallSpeedMS = 0.f;
+        SSWindProfile::Vec2 mWindGround;
+        S32 mCandidates = 0;
+        S32 mKept = 0;
+        S32 mTrimmed = 0;
+        std::vector<Cell> mCells;
+    };
+    static VirgaData virgaData();
+
+    // <SS:Nexii> V5's data (doc/atmo_magic_debug_views.md V5): the applied track's day-cycle cube sampled at a
+    // fixed grid of phases through the SAME resolvers the sky itself reads (SSAtmoEnvWeatherResolver::resolve,
+    // SSAtmoEnvCloudFieldResolver::resolve, SSWindProfile::consolidation, SSStormCell::gateScore) - nothing here is
+    // a second-guessed formula, every number is a pure function call on published inputs. mSamples is one row per
+    // grid point (phase 0..1 inclusive so the day-cycle wrap closes visually); mCues is the authored override
+    // keyframes (mStormOverride/mPrecipitationOverride) whose value is active, at THEIR OWN keyframe phase - the
+    // markers V5 asks for. mNowPhase is the SAME applied phase the sky itself is drawn at
+    // (SSAtmoEnvApplier::appliedPhase, carrying the editor's preview override when one is set), not a fresh clock
+    // read, so the "now" cursor never disagrees with the sky beside it. Storm spawn score at the anchor
+    // (SSStormCell::gateScore) is read at the anchor's own lattice cell and the CURRENT epoch only (never swept per
+    // sample - an epoch is a wall-clock bucket, not a day-cycle phase) with just the weather term varied per
+    // sample, answering "what would this candidate's score be if it were born at this time of day"; mHaveStormScore
+    // is true whenever mValid is (SSStormCells::anchorNow() is trusted directly once a weather cube is actually
+    // applied - see weatherCubeData()'s own comment), reserved as its own flag so a future gate on it never touches
+    // every other field's own meaning. Read-only: no accessor here builds anything or advances any clock. [interaction: SSAtmoEnvWeatherResolver] [interaction:
+    // SSAtmoEnvCloudFieldResolver] [interaction: SSStormCell::gateScore]
+    struct WeatherCubeData
+    {
+        struct Sample
+        {
+            F32 mPhase = 0.f;
+            F32 mMoisture = 0.f;
+            F32 mConvection = 0.f;
+            F32 mTemperatureC = 0.f;
+            F32 mWindSpeed = 0.f;
+            F32 mWindHeading = 0.f;
+            F32 mShearStrength = 0.f;
+            F32 mVeerDeg = 0.f;
+            F32 mConsolidation = 0.f;
+            F32 mGloom = 0.f;
+            F32 mAnvilRamp = 0.f;
+            F32 mLightningIntensity = 0.f;
+            bool mLightningActive = false;
+            F32 mStormScore = 0.f;
+        };
+        struct Cue
+        {
+            F64 mPhase = 0.0;
+            std::string mLabel;
+            bool mIsStorm = false; // true: mStormOverride cue, false: mPrecipitationOverride cue
+        };
+
+        bool mValid = false;
+        bool mHaveStormScore = false;
+        std::string mTrackName;
+        F64 mDayLengthS = 0.0;
+        F64 mNowPhase = 0.0;
+        std::vector<Sample> mSamples;
+        std::vector<Cue> mCues;
+    };
+    static WeatherCubeData weatherCubeData();
+
 private:
     static void onModeChanged(U32 previous, U32 now);
+    static void renderWindMast();
+    static void renderStormCells();
+    static void renderDeckLod();
+    static void renderVirga();
 
     static U32 sLastMode;
     static bool sFlowMaskWasOn;
     static boost::signals2::scoped_connection sModeConnection;
 };
 
-// <SS:Nexii> The world dimmer: one translucent dark quad over the whole debug-view rect, alpha from SSAtmoInfoViewDim, drawn as the debug view's FIRST child so every other overlay and console sits on top of it. Post-tonemap UI stage: no glow/alpha hazard, no shader touched, and a mode of 0 costs one integer compare.
+// <SS:Nexii> The world dimmer: one translucent dark quad over the whole debug-view rect, alpha from SSAtmoInfoViewDim, drawn as the debug view's FIRST child so every other overlay and console sits on top of it. Post-tonemap UI stage: no glow/alpha hazard, no shader touched, and a mode of 0 costs one integer compare. ALSO draws the active mode's in-world layer (SSAtmoInfoView::renderWorld()), AFTER the quad: the layer used to draw from LLPipeline::renderDebug, BENEATH this quad in the frame, so the dim darkened the wind mast/cell rings/etc right along with the world it was meant to dim under - wrong for a Skylines-style overlay, which should always read on top. draw() now re-enters 3-D itself: pushes the camera's live projection+modelview onto gGL's own matrix stack (loadMatrix, not LLViewerCamera::setPerspective - that would also stomp glViewport and the cached far clip) so renderWorld() sees the frame's real 3-D view, draws with depth test OFF (each render* helper's own LLGLDepthTest - the layer is never occluded by geometry, which is the one behavioural change from the old call site), then pops back to the UI's 2-D ortho. Runs even when the dim alpha is 0. LLPipeline::renderDebug no longer calls renderWorld() at all - this is its only draw site now.
 class SSAtmoDimView : public LLView
 {
 public:
@@ -123,9 +374,13 @@ public:
 
 private:
     static void buildWindProfileSpec(Spec& spec);
+    static void buildStormCellsSpec(Spec& spec);
+    static void buildDeckLodSpec(Spec& spec);
+    static void buildVirgaSpec(Spec& spec);
+    static void buildWeatherCubeSpec(Spec& spec);
 };
 
-// <SS:Nexii> The reusable chart widget (XUI tag ss_atmo_graph_view): an LLView drawing polylines, rails and monospace labels with gGL in 2D. Dispatches on the live mode - V1 draws the altitude-vs-speed boundary-layer curve with annotated rails and a hodograph inset. Read-only like everything else here; it never asks any system to build.
+// <SS:Nexii> The reusable chart widget (XUI tag ss_atmo_graph_view, still registered for any future XUI use, though the debug HUD's own instance is now built programmatically by SSAtmoInfoView::attach rather than parsed off panel_ss_atmo_debug_views.xml): an LLView drawing polylines, rails and monospace labels with gGL in 2D. Dispatches on the live mode - V1 draws the altitude-vs-speed boundary-layer curve with annotated rails and a hodograph inset; V2 the active-cell timeline (one row per cell, stage bands, the now cursor, hero row pinned on top); V3 the deck LOD count-vs-budget chart; V5 the two-lane day-cycle chart (authored curves above, derived gates below, a now cursor and authored-cue markers spanning both). draw() draws nothing at all - not even the background quad - when mode() is MODE_OFF or the live mode has no chart (currently V4 Precip & Virga; decided by falling through the SAME switch that dispatches to drawWindProfile/drawStormCells/drawDeckLod/drawWeatherCube below, not a separately maintained mode list) so the debug HUD never shows an empty placeholder box floating over the world. When it does have something to draw it first re-docks itself against the legend (see SSAtmoInfoView::attach), fixed at ~440x280 px, left edge 8px past the legend's right edge, bottom aligned with the legend's bottom; FOLLOWS_BOTTOM|FOLLOWS_LEFT keeps that pair anchored together through a window resize exactly like the legend anchors itself. Read-only like everything else here; it never asks any system to build.
 class SSAtmoGraphView : public LLView
 {
 public:
@@ -142,6 +397,9 @@ public:
 
 private:
     void drawWindProfile();
+    void drawStormCells();
+    void drawDeckLod();
+    void drawWeatherCube();
     void drawMessage(const std::string& msg);
 
     // 2D primitives in local view pixels.

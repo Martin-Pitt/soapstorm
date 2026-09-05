@@ -3,9 +3,10 @@
      scattered before: seven toggles rode the Develop > Render Metadata menu,
      and each system floater carried its own copies of the switches and view
      pickers it happened to need, two or three deep. One floater now, split by
-     system rather than by who owned the setting - Overlays is the board of
-     switches for everything that draws, and the tabs behind it hold the
-     pickers and dials that shape what each overlay draws. -->
+     system rather than by who owned the setting - each overlay's own switch
+     now sits at the top of the tab that shapes it, and Markers keeps only the
+     settle beacon and the three world-space marker toggles that have no tab
+     of their own. -->
 <floater
  positioning="cascading"
  can_minimize="true"
@@ -37,7 +38,7 @@
          left_delta="0"
          top_pad="5"
          name="overlays_tab"
-         label="Overlays"
+         label="Markers"
          filename="panel_ss_atmo_debug_overlays.xml" />
         <panel
          border="true"

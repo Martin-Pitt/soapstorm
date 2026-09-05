@@ -28587,7 +28587,7 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoInfoView</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: the active info view (doc/atmo_magic_debug_views.md) - 0 off, 1 Wind Profile (V1). One curated mode at a time: the world dims, one data layer pops, the legend and the Views-tab chart explain it. Read-only: a view never builds anything. Does not persist, so the engineering overlays it drives always start a session untouched.</string>
+    <string>Atmo Magic: the active info view (doc/atmo_magic_debug_views.md) - 0 off, 1 Wind Profile (V1), 2 Storm Cells (V2: lattice potential tiles, influence rings by stage, squall lines as a bar through their own active members with leading-edge QLCS junction markers, forced/authored cells with a distinct double outline, the hero flyby ribbon, rotation glyphs, the "why not" gate readout), 3 Deck LOD (V3: the volumetric cloud deck's distance LOD ramp - rings at each rail, a keep-fraction tile grid, live puff count vs the budget dial, ssdecklodcore.h), 4 Precip &amp; Virga (V4: the last build's distant-rain shaft cells outlined and tinted by drive, a fall-tilt comparison line per kept cell, the particle rain handoff ring and band, ssvirgacore.h), 5 Weather Cube (V5: a pure chart - the applied track's day-cycle curves in one lane and the derived gates in another, a "now" cursor and authored override cue markers, no in-world layer). One curated mode at a time: the world dims, one data layer pops, the legend and the Views-tab chart explain it. Read-only: a view never builds anything. Does not persist, so the engineering overlays it drives always start a session untouched.</string>
     <key>Persist</key>
     <integer>0</integer>
     <key>Type</key>
@@ -28605,6 +28605,17 @@ Change of this parameter will affect the layout of buttons in notification toast
     <string>Boolean</string>
     <key>Value</key>
     <integer>1</integer>
+  </map>
+  <key>SSAltCamMaxDistance</key>
+  <map>
+    <key>Comment</key>
+    <string>How far (metres) an ALT-click may reach to find a camera focus point when the ordinary 512 m pick hits nothing: a long-range terrain/object cast, then the region water plane along the same ray (void water included). Lets the camera orbit weather from open water. 512 to 65536.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>4096.0</real>
   </map>
   <key>SSAtmoInfoViewDim</key>
   <map>

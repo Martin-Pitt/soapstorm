@@ -258,7 +258,11 @@ public:
         }
     }
 
-    void setValueAtHead(F64 head_phase, const T& value, F64 epsilon = PHASE_EPSILON)
+    // <SS:Nexii> 7b F4: `curve` defaults to this field's ordinary default (ss_atmoenv_default_curve<T>()) so every
+    // existing 2-arg call site is unaffected; a caller whose field must always be HOLD regardless of T (the three
+    // F32 forced-storm override curves - not every F32 field, so a template specialisation would over-reach) passes
+    // SSAtmoEnvCurve::HOLD explicitly here instead.
+    void setValueAtHead(F64 head_phase, const T& value, SSAtmoEnvCurve curve = ss_atmoenv_default_curve<T>(), F64 epsilon = PHASE_EPSILON)
     {
         if (mKeyframes.empty())
         {
@@ -275,10 +279,11 @@ public:
             return;
         }
 
-        insertKeyframe(head_phase, value, ss_atmoenv_default_curve<T>());
+        insertKeyframe(head_phase, value, curve);
     }
 
-    void toggleKeyframeAtHead(F64 head_phase, F64 epsilon = PHASE_EPSILON)
+    // 7b F4: see setValueAtHead's own comment - `curve` defaults the same way.
+    void toggleKeyframeAtHead(F64 head_phase, SSAtmoEnvCurve curve = ss_atmoenv_default_curve<T>(), F64 epsilon = PHASE_EPSILON)
     {
         head_phase = wrapPhase(head_phase);
 
@@ -293,7 +298,7 @@ public:
             return;
         }
 
-        insertKeyframe(head_phase, valueAt(head_phase), ss_atmoenv_default_curve<T>());
+        insertKeyframe(head_phase, valueAt(head_phase), curve);
     }
 
     // <SS:Nexii> Lays a keyframe down outright rather than through the editing head. Every other
@@ -311,6 +316,19 @@ public:
     {
         mKeyframes.clear();
         mPlainValue = plain;
+    }
+
+    // <SS:Nexii> 7b F4: the bool-correction idiom (ss_atmoenv_curve_on_load<bool>, above) generalised to a call
+    // site rather than a type - a field whose curve must always be one value regardless of what was stored, but
+    // whose type (F32) is shared with fields that legitimately vary their curve, so a template specialisation
+    // would over-reach. The caller applies this on the way in (fromLLSD) the same way ss_atmoenv_curve_on_load
+    // corrects a bool: there is nothing to preserve, so it is corrected rather than migrated.
+    void forceCurve(SSAtmoEnvCurve curve)
+    {
+        for (SSAtmoEnvKeyframe<T>& kf : mKeyframes)
+        {
+            kf.mCurve = curve;
+        }
     }
 
     void collapseIfConstant(F32 epsilon)

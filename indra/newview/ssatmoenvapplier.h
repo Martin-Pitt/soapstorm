@@ -71,6 +71,12 @@ public:
 
     // <SS:Nexii> The ONE drift accumulator, integrated at the primary deck's BASE altitude (doc/atmo_magic_wind_profile.md section 4): the cell gate, the shadow bake and precipNoiseAt all read this frame unchanged. Wrapped on a lattice-aligned span (a multiple of the deck's cell and noise tile), never fmodf(1e6), so the wrap leaves every pattern where it was.
     const LLVector2& cloudDriftMetres() const { return mCloudDriftM; }
+    // <SS:Nexii> The lattice-aligned span the accumulator wraps on (metres, 0 before the first apply) and how many times either axis has wrapped this session - the V7 sync console's drift row (SSAtmoSyncConsole), so two clients can see whether a divergence is the accumulator or a wrap.
+    F32 driftWrapSpanM() const { return mDriftWrapSpanM; }
+    U32 driftWrapCount() const { return mDriftWrapCount; }
+
+    // <SS:Nexii> The CURVE-RESOLVED drift velocity at the deck base, m/s (mLastModulation.mDriftVelocity scaled by the PURE profile's speedScale at base_agl - NEW-3 fix 2026-09-05: windProfileAt(track, phase), never the live mWindProfile, whose mAnvilAglM reads a per-client setting through cirrusAltitudeMetres()) - the same vector cloudDriftMetres() integrates every frame, published pre-integration so the hero's storm-local frame shift (SSDeckFrame::HeroFrame::driftVel, doc/atmo_magic_storm_dynamics.md section 3) can read "the drift velocity" without a second, framerate-dependent derivative of the accumulator. Never the eased SSAtmoMagic::mWind. Zero while inactive.
+    const LLVector2& driftVelocityMetresPerSec() const { return mDriftVelocityMS; }
 
     // <SS:Nexii> The dome/cirrus band's frame: base drift plus the BOUNDED shear offset O(z) of the band's own current altitude relative to the deck base (SSWindProfile::shearOffset, capped) - the design's dome seam, so the deck lid and the cirrus band can never slide apart without limit. Equals cloudDriftMetres() only for S=0 with the deck above the boundary layer; the auto shear floors S at 0.15, so a real calm sky carries a small, static, bounded lean instead.
     LLVector2 cirrusDriftMetres() const;
@@ -78,8 +84,26 @@ public:
     // <SS:Nexii> The altitude wind profile at the applied phase (doc/atmo_magic_wind_profile.md section 3): windAt(world_z) is the drift VECTOR (x east, y north, m/s) the air moves at that height, built from the CURVE-RESOLVED wind and the cube's shear - never the eased SSAtmoMagic::mWind, which is framerate-dependent and so may never position world content. windProfile() hands out the parameters themselves for callers that sample the core directly (the V1 debug view, the storm scheduler).
     LLVector2 windAt(F32 world_z) const;
     const SSWindProfile::Params& windProfile() const { return mWindProfile; }
+
+    // <SS:Nexii> The profile Params a track carries at an ARBITRARY phase, resolved purely from the cube (SSAtmoEnvWeatherResolver::resolve) with no live state read - what the storm scheduler samples at a cell's BIRTH phase (SSStormCells), where the live mWindProfile would be the wrong instant. Heading, speed, S and veer are the same resolver fields the live profile is built from and the exponent is the same core default; the anvil AGL differs on purpose: the live one reads the dome band's current altitude (seasonal setting + the deck's live lid), which is per-client, so this one takes the authored dome height keyframe at the phase, floored a cell above the boundary-layer top exactly like the live one. Inputs: the track's cube and dome-height keyframes, the phase. Nothing else.
+    static SSWindProfile::Params windProfileAt(const SSAtmoEnvTrack& track, F64 phase);
+
+    // <SS:Nexii> Which of the asset's tracks apply() drove this frame (-1 while inactive) and the phase it applied it at - the weather domain the storm scheduler shares with the sky (SSStormCells). The track choice follows the camera's altitude band exactly as the sky does; the phase carries the editor's preview override when one is set.
+    S32 appliedTrackIndex() const { return mActive ? mAppliedTrack : -1; }
+    F64 appliedPhase() const { return mAppliedPhase; }
     F32 windProfileGroundZ() const { return mTrackFloorZ; }
     F32 windProfileBaseZ() const { return mDriftBaseZ; }
+    // <SS:Nexii> SCHEDULER fix 4: the SAME deterministic resolve's coverage (SSAtmoEnvCloudFieldResolver::resolve,
+    // cached alongside mDriftBaseZ above) - the resolved weather-deck coverage for consumers (SSVortices'
+    // dustGate) that must never read SSVolCloud's LIVE deck, which can still be last frame's build depending on
+    // idle() tick order.
+    F32 windProfileFieldCoverage() const { return mDriftCoverage; }
+
+    // <SS:Nexii> Public forwarder to the private sunElevationSin(track, phase) - twilight/rainbow gating's own read
+    // stays internal, but SSVortices needs the same pure (track, phase) figure for dustGate's "high sun" input, at
+    // whatever track/phase the caller is asking about (its own applied-phase read for storm cells, mirrored here for
+    // dust devils' live weather - see ssvortices.cpp).
+    F32 sunElevationSinAt(const SSAtmoEnvTrack& track, F64 phase) const { return sunElevationSin(track, phase); }
 
     // <SS:Nexii> The dome band's altitude, resolved per call rather than cached with the rest of the sky walk - it reads the volumetric field's LIVE geometry, which moves between applies. The band IS the cirrus layer: the Sky Dome's animatable height param relative to the owning track's floor, brought down only by convection's anvil ramp (doc/atmo_magic_cloud_parallax.md). cloudDomeAltitudeMetres and cirrusAltitudeMetres are the same number - the pool and the floater's greyed-out dome row just read it by their own names.
     F32 cloudDomeAltitudeMetres() const;
@@ -172,12 +196,28 @@ private:
     F64 mLastTrailUpdate = 0.0;
 
     SSAtmoEnvSkyModulation mLastModulation;
+    // <SS:Nexii> F64 ACCUMULATOR FIX (2026-09-05, doc/atmo_magic_wind_profile.md section 4): the running sum is
+    // kept in F64 internally - a per-frame F32 sum of v*dt diverges 233.75 m over one hour (30fps vs 144fps, same
+    // windParams; measured by V:\Scratch\atmo\tests\scenario_drift_f64.cpp, f64_accumulator_collapses_framerate_
+    // divergence_to_millimetres); the SAME sum, SAME hour, in F64 measures 0.000000000 m at float-printf precision -
+    // below millimetres, not merely reduced to them. mCloudDriftM stays the F32 CACHE of this pair, refreshed every apply immediately after the F64 integrate+wrap
+    // - the only value uniforms/consumers (cloudDriftMetres(), cirrusDriftMetres()) ever see, per the design's own
+    // "F32 only at the uniform/consumer boundary" rule.
+    F64 mCloudDriftXD = 0.0;
+    F64 mCloudDriftYD = 0.0;
     LLVector2 mCloudDriftM;
 
     // <SS:Nexii> The profile the drift integrates against, rebuilt every apply from the resolved weather state, and the world Z of the deck base the accumulator ran at (the live primary deck's base, else the authored one). mDriftBlend is the Wind Scroll influence's share of the resolved wind - the same factor already inside mDriftVelocity - so the dome seam's shear offset switches off with the drift it rides on.
     SSWindProfile::Params mWindProfile;
     F32 mDriftBaseZ = 0.f;
+    F32 mDriftCoverage = 0.f;
     F32 mDriftBlend = 0.f;
+    F32 mDriftWrapSpanM = 0.f;
+    U32 mDriftWrapCount = 0;
+    // <SS:Nexii> The curve-resolved drift velocity at base, m/s - see driftVelocityMetresPerSec(). Set alongside drift_scale/mDriftBlend, before the accumulator's dt integration, so it is the instantaneous rate the accumulator is running at this apply, not a finite difference of mCloudDriftM (which would carry the wrap discontinuity).
+    LLVector2 mDriftVelocityMS;
+    S32 mAppliedTrack = -1;
+    F64 mAppliedPhase = 0.0;
 
     // <SS:Nexii> The dome band's authored height and its auto flag, sampled at the applied phase - the ANIMATABLE Sky Dome height keyframes, metres relative to the owning track's floor (cirrusAltitudeMetres adds the floor back). The auto flag no longer substitutes an altitude: the height param always rules.
     bool mCloudDomeAuto = false;

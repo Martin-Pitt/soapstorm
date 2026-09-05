@@ -117,6 +117,7 @@
 #include "llterrainpaintmap.h"
 #include "lltextureview.h"
 #include "ssstatsview.h" // <SS:Nexii>
+#include "ssatmosynconsole.h" // <SS:Nexii> Atmo Magic V7 sync console
 #include "lltoolbarview.h"
 #include "lltoolcomp.h"
 #include "lltoolmgr.h"
@@ -836,6 +837,10 @@ class LLAdvancedToggleConsole : public view_listener_t
         {
             toggle_visibility(gSSStatsView);
         }
+        else if ("atmo sync" == console_type)
+        {
+            toggle_visibility(gSSAtmoSyncConsole); // <SS:Nexii> Atmo Magic V7 sync console
+        }
         // </SS:Nexii>
 
         return true;
@@ -871,6 +876,10 @@ class LLAdvancedCheckConsole : public view_listener_t
         else if ("soapstorm" == console_type)
         {
             new_value = get_visibility(gSSStatsView);
+        }
+        else if ("atmo sync" == console_type)
+        {
+            new_value = get_visibility(gSSAtmoSyncConsole); // <SS:Nexii> Atmo Magic V7 sync console
         }
         // </SS:Nexii>
 

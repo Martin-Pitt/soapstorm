@@ -25,11 +25,18 @@
 
 #include "ssvolcloud.h"
 
+#include "ssdecklodcore.h"
+#include "ssdeckmacrocore.h"
+#include "ssdecknoisecore.h"
+#include "ssdeckshadecore.h"
+#include "ssvirgacore.h"
+
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvcloudfieldstate.h"
 #include "ssatmoenvmanager.h"
 #include "ssatmoenvtrackstate.h"
 #include "ssatmomagic.h"
+#include "ssprecipitation.h"
 #include "sslightning.h"
 
 #include "llenvironment.h"
@@ -54,7 +61,7 @@ namespace
 {
     const F32 CELL_M = 260.f;
 
-    // <SS:Nexii> The field's reach. Two cross-file rails are locked to FIELD_DRAW_M and must move with it: the base veil's edge fade in ssVolCloudF.glsl (0.85x the fade start, and just inside the draw radius) and SS_DECK_EDGE_M in lldrawpoolwlsky.cpp (the dome band's horizon melt runs to the deck's dissolve line); the ss_rim uniform in render() derives from these directly. The far plane never moves - the squash folds whatever reach these ask for into the same drawn band, so raising them buys distance with builder cells, sheet tiles and depth compression, not with clip planes.
+    // <SS:Nexii> The field's reach. Two cross-file rails are locked to FIELD_DRAW_M and must move with it: the base veil's edge fade in ssVolCloudF.glsl (ss_edge_rails, SSDeckLod::FIELD_FADE_START_M/DECK_EDGE_M uploaded from the core - not the old hardcoded 6800/9800 pair, see that uniform's own comment) and SS_DECK_EDGE_M in lldrawpoolwlsky.cpp (the dome band's horizon melt runs to the deck's dissolve line); the ss_rim uniform in render() derives from these directly. The far plane never moves - the squash folds whatever reach these ask for into the same drawn band, so raising them buys distance with builder cells, sheet tiles and depth compression, not with clip planes.
     const F32 FIELD_RADIUS_M = 12000.f;
 
     const F32 FIELD_DRAW_M = 10000.f;
@@ -124,8 +131,6 @@ namespace
 
     const F32 CLUSTER_WEIGHT = 0.85f;
 
-    const F32 CLUSTER_EDGE_HEIGHT = 0.3f;
-
     // <SS:Nexii> The convection noise map. One authored tileable greyscale map per deck, read back to the CPU and sampled per cell to give the deck's response to convection a geography. The map's values run through two ramps: the HOLE window - below its low edge the cell is cut away entirely, so where the map runs low the sky opens; this is what breaks a dry stable deck into cloud and holes, the TOWER window - the gradient ramp overlaid on the same values, deciding which columns are rising thermals. As the convection dial climbs, tower-weighted cells keep the full climb to the lid while the pockets between them are held low, and the tower columns take the anvil's flat-and-flare spread before the dial alone would allow it - which is how the anvil forms early, on the strong towers first. Moisture then lifts the whole map: the same values that broke a dry stable sky leave a moist one unbroken, the overcast nimbostratus sheet. The tile is the field-scale metre count at Noise Scale 1, and the grid is the cached readback's fixed resolution - the structure it carries is kilometres wide, so 64 across carries it with texels to spare.
     const F32 SS_NOISE_TILE_M = 2048.f;
     const S32 SS_NOISE_GRID = 64;
@@ -137,16 +142,29 @@ namespace
     const S32 SS_PROFILE_STRIP_W = 256;
     const S32 SS_PROFILE_STRIP_H = 8;
 
-    const F32 SS_HOLE_LO = 0.16f;
-    const F32 SS_HOLE_HI = 0.52f;
-    const F32 SS_TOWER_LO = 0.42f;
-    const F32 SS_TOWER_HI = 0.78f;
-
-    // How low the pockets between towers are held at full convection, as a fraction of the
-    // height they would otherwise reach. Softened from where it started: at 0.45 the pockets
-    // read as stubs hanging under the deck and the map's carving dominated the silhouette from
-    // below; at 0.55 the field keeps a body under its own structure.
-    const F32 SS_POCKET_H = 0.55f;
+    // <SS:Nexii> Phase 6b retune, v2 (doc/atmo_magic_far_clouds.md section 2 step 4, ssdecknoisecore.h CONTRACT; corrected 2026-09-05 per review F1): noiseFieldAt's raw_n is now
+    // SSDeckNoise::mixDetile of two reads (weight 0.65), which measures 0.545x the single read's variance (SSDeckNoise::varianceRatio) - narrower around the mean. The FIRST retune pass matched
+    // TAIL SHARE at each hard edge (hole 0.30/0.66, tower 0.37/0.73) and was wrong: nothing downstream reads a hard edge - the builder (and every replicated site) consumes the CONTINUOUS
+    // smoothstep through gate = gate_raw + (1 - gate_raw) * (1 - presence), so a cell can be partially cut without either value ever crossing lo or hi. Matching only the tail-crossing population
+    // moved the whole ramp toward the mean and, measured against the OLD windows through the SAME mixed field, deleted 18-50% of cells that used to be at least partly occupied - a materially
+    // different sky, not a calibration rounding error.
+    // The v2 windows below are SSDeckNoise::HOLE_LO/HI and TOWER_LO/HI: the OLD edges (0.16/0.52 hole, 0.42/0.78 tower) scaled about the map's measured mean (SSDeckNoise::MAP_MEAN = 0.5579,
+    // seed 0x5EED1337) by sqrt(SSDeckNoise::varianceRatio(DETILE_WEIGHT)) = 0.7382 - see ssdecknoisecore.h's retunedEdge(). Because the mix preserves the mean and scales the spread by exactly
+    // that factor, scaling the threshold the same way about the same mean keeps the STATISTICAL OCCUPANCY the continuous gate produces close to what the old, single-read field produced -
+    // not just the population beyond a hard cutoff. Measured occupancy (fraction of cells with gate <= coverage, the real gate formula above, not a tail share) on the same 20km x 20km / CELL_M
+    // grid the first pass used, new windows vs. old windows through the OLD single read, at hole strength (deck.mNoiseHole) 1.0 and 0.5:
+    //   coverage      0.3      0.5      0.7
+    //   hole 1.0     -5.5%    -2.2%    +0.9%
+    //   hole 0.5     -4.5%    -0.2%    +1.4%
+    // All six within the +-6% relative target. Pinned by V:\Scratch\atmo\tests\scenario_detile_occupancy.cpp, which derives both the old and new occupancy from the transliterated map and gate
+    // rather than hardcoding either. LOCKSTEP with ssVolCloudF.glsl's two `smoothstep(0.264, 0.530, n_map)` hole-window literals (ss_cell_occupied's own presence fetch, and the sheet's presence
+    // cut - the puff path has no presence cut of its own; its n_map read feeds the tower ramp, anvil and thick-base fill instead) - the tower window is NOT a GLSL literal, it reaches the shader
+    // through the ss_tower_ramp uniform (deck.mNoiseTowerLo/Hi below), so retuning SS_TOWER_LO/HI here is enough on that side. STORM_TOWER_LO/HI (ssstormcouplecore.h, the consolidation targets
+    // these lerp toward) are unchanged by this retune - severe weather's blended tower window collapses to STORM_TOWER_HI exactly (storm_eff == 1) regardless of SS_TOWER_HI.
+    const F32 SS_HOLE_LO = SSDeckNoise::HOLE_LO;
+    const F32 SS_HOLE_HI = SSDeckNoise::HOLE_HI;
+    const F32 SS_TOWER_LO = SSDeckNoise::TOWER_LO;
+    const F32 SS_TOWER_HI = SSDeckNoise::TOWER_HI;
 
     // The moisture band that lifts the map's floor over its holes - the dry end keeps them
     // open, the mid-high end closes every one and the deck reads as unbroken nimbostratus.
@@ -161,6 +179,13 @@ namespace
     // main deck's do not. Zero keeps the primary deck's pattern byte-identical to the single-deck
     // field it was before two decks existed.
     constexpr U32 SS_UNDER_DECK_SALT = 61u;
+
+    // <SS:Nexii> Distant rain shafts (ssvirgacore.h): SSVirga::keepHash's own salt argument - a different chain
+    // from the gate hash (1u+salt) and the sub-puff hashes (2u..9u+sub_salt) above, so the stable keep/drop
+    // decision never aliases the cell gate's own pattern. ShaftCandidate::hashKey is a SEPARATE, local hashCell
+    // chain (salt + this constant) used only by the rare hard-ceiling fallback sort below - keepHash never reads
+    // hashKey, it hashes ShaftCandidate::cellId itself.
+    constexpr U32 SS_VIRGA_HASH_SALT = 6151u;
 
     // <SS:Nexii> The procedural fallback for the convection noise map, for decks with no authored texture. Square by construction (the field map is a tiling square, and a square tile is what every consumer of it assumes), tileable by wrapping lattice, and seeded off the weather - so every client sharing an environment grows the same geography without anyone uploading a map.
     const S32 SS_NOISE_PROC_SIZE = 256;
@@ -293,6 +318,30 @@ namespace
         const F32 small = clusterOctave(cx, cy, CLUSTER_CELLS_SMALL, 137u + salt, 0.37f);
         return big * (1.f - CLUSTER_OCTAVE_MIX) + small * CLUSTER_OCTAVE_MIX;
     }
+
+    // <SS:Nexii> review 3b NEW-3, moved into ssstormcouplecore.h (numeric shape maths belongs in a core, not the
+    // shell - PLAN.md lesson 2): the per-cell height/anvil shaping buildDeck's placement loop and the V2
+    // profile-outline debug view both derive from - see SSStormCouple::CellShape/cellShapeAt.
+
+    // <SS:Nexii> Distant rain shafts (ssvirgacore.h): a qualifying cell, gathered during the main cell walk and
+    // only turned into cards AFTER the whole walk finishes - the qualifying SET is a pure function of the field
+    // and weather (SSVirga::qualifies), never of loop order or camera distance, so it has to be collected in full
+    // before SSVirga::keepHash's per-candidate stable trim can run over it (F1: no sort needed for that trim -
+    // keepHash is pure per candidate). x/y are the shaft column's world position, placed through
+    // SSDeckFrame::placeWorld with a ZERO shear table (base-anchored - F11, never a respelled cell-centre + drift
+    // + hero-shift sum) and the hero shift, exactly the PRODUCER placement every ordinary puff uses. cellId packs
+    // the cell's (cx,cy) the way SSVolCloud::mOccGrid does (cx in the HIGH word, cy in the LOW word) - this is what keepHash
+    // hashes, not a precomputed hash value. hashKey is a SEPARATE local hashCell chain (SS_VIRGA_HASH_SALT).
+    // Used ONLY by the rare hard-ceiling fallback sort (keepHash's own kept share running over SSVirga::hardCap on
+    // a small/quantised n) - the ordinary path never sorts candidates at all.
+    struct ShaftCandidate
+    {
+        F32 x = 0.f;
+        F32 y = 0.f;
+        F32 drive = 0.f;
+        U64 cellId = 0u;
+        U32 hashKey = 0u;
+    };
 }
 
 // Drops the field - rebuilt from scratch next update.
@@ -301,6 +350,13 @@ void SSVolCloud::clear()
     mPrimary.mPuffs.clear();
     mUnder.mPuffs.clear();
     mLastBuildMS = 0.f;
+
+    // <SS:Nexii> review S9: drop the scheduler claim with the field it was feeding - nothing left holding it means
+    // SSStormCells::update() early-outs again next frame instead of resolving cells nobody reads.
+    mStormInterest = SSStormCells::Interest();
+    mStormCellCount = 0;
+    mHeroFrame = SSDeckFrame::HeroFrame();
+    mVirgaDebug = SSVirgaDebug();
 }
 
 // Rebuilds the puff field for this frame from the resolved cloud state: deterministic placement, lighting, squash band, strike lights, depth sort.
@@ -309,6 +365,9 @@ void SSVolCloud::update(F32 dt)
     mPrimary.mPuffs.clear();
     mUnder.mPuffs.clear();
     mLastBuildMS = 0.f;
+    // <SS:Nexii> V4 debug snapshot: reset every update() (not just clear()), so an early-out below (feature off,
+    // no asset, no tracks) never leaves the LAST build's shaft set on display as if it were current.
+    mVirgaDebug = SSVirgaDebug();
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoVolumetricClouds", true);
     if (!enabled) return;
@@ -381,12 +440,15 @@ void SSVolCloud::update(F32 dt)
     mWeatherDeck = (track.mWeatherSourceDeck == SS_ATMOENV_DECK_UNDER
                     && track.mUnderField.mEnabled) ? 1 : 0;
 
+    bool primary_built = false;
     if (field.mCoverage >= COVERAGE_FLOOR && field.mThicknessM > 1.f)
     {
-        buildDeck(mPrimary, field, convection, moisture, 0u);
+        buildDeck(mPrimary, field, convection, moisture, 0u, track, phase);
+        primary_built = true;
     }
 
     // <SS:Nexii> The under deck: the same resolver and the same builder against the track's second field, hashed with its own salt so the two decks' cloud patterns are independent - a mirror copy of the main deck at a different altitude would read as exactly the artifact it is.
+    bool under_built = false;
     if (track.mUnderField.mEnabled)
     {
         const SSAtmoEnvCloudFieldState under =
@@ -395,8 +457,21 @@ void SSVolCloud::update(F32 dt)
                                                  phase, track.mFloorZ, false);
         if (under.mCoverage >= COVERAGE_FLOOR && under.mThicknessM > 1.f)
         {
-            buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT);
+            buildDeck(mUnder, under, convection, moisture, SS_UNDER_DECK_SALT, track, phase);
+            under_built = true;
         }
+    }
+
+    // <SS:Nexii> review S9: whichever deck weatherDeck() names is the one buildDeck couples the scheduler through
+    // (S4); when THAT deck falls under the coverage floor this frame (either build skipped above), release the
+    // claim and zero the stale count rather than let a scheduler claim outlive the coupling it was fetched for, or
+    // let precipNoiseAt/renderDebug keep reading a previous frame's cells against a deck that never rebuilt them.
+    const bool weather_built = (mWeatherDeck == 1) ? under_built : primary_built;
+    if (!weather_built)
+    {
+        mStormInterest = SSStormCells::Interest();
+        mStormCellCount = 0;
+        mHeroFrame = SSDeckFrame::HeroFrame();
     }
 
     // <SS:Nexii> The ground shadow bakes from the PRIMARY deck alone - it is the weather's deck at storm altitude, the one standing between the sun and the ground. The under deck hangs below a sky build's platform and shadows nothing anyone stands on. Keyed inside, so this is a no-op almost every frame.
@@ -431,7 +506,8 @@ void SSVolCloud::update(F32 dt)
 
 // Builds one deck's puffs from a resolved field state: same deterministic placement and shading for both decks, hashed with the deck's salt so their patterns differ. Moisture rides along because the
 // noise map's hole-cutting is what moisture moderates.
-void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt)
+void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt,
+                           const SSAtmoEnvTrack& track, F64 phase)
 {
     // <SS:Nexii> The base map and its crossfade partner both fall back to the same built-in art when their keyframe is empty, so a fade between an authored texture and None - either direction - fades between real maps instead of cutting through the fallback logic.
     const bool stormy = field.mHasAnvil || convection > 0.6f;
@@ -505,10 +581,126 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mNoiseHole = (1.f - nimbus) * (1.f - SS_STORM_GAP * llclamp(convection, 0.f, 1.f));
 
     // <SS:Nexii> The storm consolidation: high moisture DRIVING high convection is not the regime the map's carving is for - a rain cloud busy making weather is a large solid mass, not a shredded one. As the two climb together the tower ramp's window widens until most of the map passes it, so the deck's convection variety calms from pockets-and-spikes into the 1-3km connected cells of a thunderstorm, and the pocket suppression eases off with it. The window is baked onto the deck so the shader's carving and the precipitation gate run the same numbers as this builder.
-    const F32 storm = ss_smoothstep(0.55f, 0.85f, moisture)
-                    * ss_smoothstep(0.45f, 0.75f, convection);
-    deck.mNoiseTowerLo = lerp(SS_TOWER_LO, 0.12f, storm);
-    deck.mNoiseTowerHi = lerp(SS_TOWER_HI, 0.60f, storm);
+    // <SS:Nexii> review 3b NEW-3: through SSStormCouple::consolidation - the V2 profile-outline debug view used to
+    // respell this same smoothstep(0.55,0.85,moisture)*smoothstep(0.45,0.75,convection) product by hand a second
+    // time; now there is exactly one implementation, and the overlay reads the BAKED, storm-delegated result
+    // (deck.mStormEff, below) rather than recomputing this raw figure itself.
+    const F32 storm = SSStormCouple::consolidation(moisture, convection);
+
+    // <SS:Nexii> Phase 3 (doc/atmo_magic_storm_dynamics.md section 3): storm cells couple into whichever deck IS
+    // weatherDeck() this frame - mPrimary or mUnder, never both, and never the OTHER deck - fetched ONCE per build
+    // (the selection does not depend on the sample point, only on the frame's resolved cell set) rather than once
+    // per grid cell. mStormInterest is claimed lazily and held for the singleton's life so SSStormCells::update()
+    // actually resolves cells every frame (it early-outs to empty otherwise - see its own Interest note); update()
+    // releases it again once weatherDeck() stops building (review S9). Slots at or past the returned count are
+    // explicitly zeroed (radius <= 0 disables a slot to sampleAt) - fillUniforms only writes [0, picked), and a
+    // shrinking cell count would otherwise leave a stale, still-active cell from a previous frame sitting in the
+    // tail forever.
+    const bool couple_storm = (&deck == weatherDeck());
+    if (couple_storm)
+    {
+        if (!mStormInterest)
+        {
+            mStormInterest = SSStormCells::getInstance()->claim();
+        }
+        mStormCellCount = SSStormCells::getInstance()->fillUniforms(mStormCells, SSStormCouple::MAX_CELLS);
+        for (S32 i = mStormCellCount; i < SSStormCouple::MAX_CELLS; ++i)
+        {
+            mStormCells[i] = SSStormCouple::CellUniform();
+        }
+
+        // <SS:Nexii> Phase 4 fixup (F13, doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud
+        // drift"): the hero's local frame shift inputs, built ONCE for this build from ONE source - the
+        // SSStormCells::hero() record's id, matched to ITS OWN SSStormCells::ActiveCell in cells() (mIsHero) -
+        // rather than motion/age from one scan (the old heroMotionAgeS) and centre/radius from a second,
+        // independent one (mStormCells[0], selectSlots' own separate resolution). driftVel is the applier's
+        // curve-resolved rate (never the eased SSAtmoMagic::mWind), the same vector cloudDriftMetres() integrates.
+        // Left at HeroFrame()'s zero default (ageS 0) whenever there is no hero, which SSDeckFrame::heroShift/
+        // foldFrameKey both read as "no shift" by their own invariants.
+        mHeroFrame = SSDeckFrame::HeroFrame();
+        if (mStormCellCount > 0)
+        {
+            SSStormCells* scheduler = SSStormCells::getInstance();
+            const SSStormCells::Hero* hero = scheduler->hero();
+            const SSStormCells::ActiveCell* hero_cell = nullptr;
+            if (hero)
+            {
+                for (const SSStormCells::ActiveCell& c : scheduler->cells())
+                {
+                    if (c.mIsHero)
+                    {
+                        hero_cell = &c;
+                        break;
+                    }
+                }
+            }
+            if (hero_cell)
+            {
+                const LLVector2 centre_agent = scheduler->toAgentXY(hero_cell->mCentre);
+                const LLVector2& drift_vel_ms = SSAtmoEnvApplier::instance().driftVelocityMetresPerSec();
+                mHeroFrame.motion    = SSDeckFrame::Vec2{hero_cell->mMotion.x, hero_cell->mMotion.y};
+                mHeroFrame.driftVel  = SSDeckFrame::Vec2{drift_vel_ms.mV[0], drift_vel_ms.mV[1]};
+                mHeroFrame.ageS      = hero_cell->mAge01 * hero_cell->mCandidate.mLifetimeS;
+                mHeroFrame.centre    = SSDeckFrame::Vec2{centre_agent.mV[0], centre_agent.mV[1]};
+                mHeroFrame.radius    = hero_cell->mRadiusM;
+
+                // <SS:Nexii> F13: selectSlots' own invariant (ssstormcouplecore.h) puts the hero in mStormCells[0]
+                // whenever one is present - verified here rather than merely asserted in prose, so a future change
+                // to selectSlots/fillUniforms that breaks it fails loudly instead of silently placing the puff
+                // loop's hero_influence weight (which reads mHeroFrame.centre/radius, not mStormCells[0]) against
+                // a different cell than the one occupying uniform slot 0.
+                llassert(mStormCells[0].radius > 0.f);
+                llassert(fabsf(mStormCells[0].x - mHeroFrame.centre.x) < 1.f);
+                llassert(fabsf(mStormCells[0].y - mHeroFrame.centre.y) < 1.f);
+                llassert(fabsf(mStormCells[0].radius - mHeroFrame.radius) < 1.f);
+            }
+        }
+    }
+    // <SS:Nexii> review (self, phase 4): NO else-branch reset here - mHeroFrame is class-level like mStormCells/
+    // mStormCellCount above (read by precipNoiseAt/bakeGroundShadow outside this Deck), and buildDeck runs once
+    // per deck per frame; the non-coupled deck's build must not wipe the coupled deck's just-set frame behind its
+    // back (build order is primary then under - see update()). Cleared only where mStormCellCount already is:
+    // clear() and update()'s "!weather_built" branch.
+
+    // <SS:Nexii> Phase 4 fixup (#5/F2/F8, doc/atmo_magic_wind_profile.md section 4): this deck's own O(z) shear
+    // table, baked EVERY build regardless of storm coupling - the altitude shear is a wind-profile property of the
+    // deck's own column, not a storm phenomenon. z0 is this deck's base (world); z1 is floor + the track's AUTHORED
+    // dome height keyframe at this build's phase (never cirrusAltitudeMetres(), which reads the seasonal setting
+    // and the LIVE deck's anvil-descended band - a per-client, per-frame value the table's own bake-once-per-build
+    // cadence cannot track); groundZ is the track's own floor; params is SSAtmoEnvApplier::windProfileAt(track,
+    // phase) - the PURE profile path (resolves the cube at this exact phase, never the live applier's mWindProfile,
+    // which may belong to a different track/phase than the one this deck is building for). bakeShearTable's own
+    // invariant makes o[0] zero at z0, so a deck whose base sits above the band (z1 <= z0) still bakes a valid,
+    // clamped one-metre span.
+    {
+        const SSWindProfile::Params params = SSAtmoEnvApplier::windProfileAt(track, phase);
+        const F32 z1 = track.mFloorZ + track.mCloudDome.mHeightM.valueAt(phase);
+        deck.mShearTable = SSDeckFrame::bakeShearTable(deck.mBaseZ, z1, track.mFloorZ, params);
+    }
+
+    // <SS:Nexii> review S3 Delegation (doc/atmo_magic_storm_dynamics.md section 3): while any coupled cell is
+    // active, the deck-wide consolidation figure hands half its authority to the cells - SSStormCouple::
+    // deckConsolidation(storm, cellsActive) - so the sky outside the cells is LESS consolidated than the plain
+    // `storm` figure would leave it, which is what makes the discrete cells read against a less-saturated
+    // background instead of a window the deck-wide ramp already maxed out. cellsActive is now a SMOOTH figure -
+    // SSStormCouple::cellsActivity(mStormCells, mStormCellCount) - rather than a 0/1 step on "any radius > 0"
+    // (review 3b NEW-8: the old step snapped the whole deck's consolidation window on a cell's birth frame); it
+    // fades in and out with a cell's own lifecycle radius, 0 for the uncoupled deck, which always reads storm_eff
+    // == storm bit-exactly per deckConsolidation's own invariant. Both mNoiseTowerLo/Hi AND conv_gain (below) are
+    // derived from storm_eff rather than raw storm, so the delegation reaches the fragment stage and the
+    // precipitation gate through the one baked window uniform, with no new replication (twin gap G4: the lerp
+    // targets are SSStormCouple::STORM_TOWER_LO/HI, not a second hand-spelled 0.12f/0.60f).
+    F32 cellsActive = 0.f;
+    if (couple_storm)
+    {
+        // mStormCellCount/mStormCells are THIS build's fetch (just above) whenever couple_storm is true - never a
+        // stale read of the other deck's build earlier/later in the same frame, since only the coupled deck fetches.
+        cellsActive = SSStormCouple::cellsActivity(mStormCells, mStormCellCount);
+    }
+    const F32 storm_eff = SSStormCouple::deckConsolidation(storm, cellsActive);
+    deck.mStormEff = storm_eff; // <SS:Nexii> review 3b NEW-3: baked so the V2 overlay's per-cell shaping helper (cellShapeAt, below) reads the same delegated figure this build actually used, not a re-derived raw storm.
+    deck.mNoiseTowerLo = lerp(SS_TOWER_LO, SSStormCouple::STORM_TOWER_LO, storm_eff);
+    deck.mNoiseTowerHi = lerp(SS_TOWER_HI, SSStormCouple::STORM_TOWER_HI, storm_eff);
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
@@ -525,26 +717,15 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
 
     const LLVector3 light_dir = mLightDir;
     const F32 beam = mBeam;
+    const F32 shade_th = SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage); // one layer, one optical thickness term
 
     // <SS:Nexii> The base veil's structural shading, resolved here rather than per fragment: the shade a puff at the deck's floor would wear, run through the same formulas the puff loop below uses - the facing term at a representative low up, the exponential shade through the layer from that height, the beam gate. The sheet is a fragment of the same body of cloud as the puffs, so it wears the same form a puff in its place would (the light itself is the vertex stage's, shared by construction), and the blend at the boundary is a lighting match rather than a hope.
     {
+        // <SS:Nexii> 6d review fix 3: SSDeckShade::veilForm (ssdeckshadecore.h) - the ONE shading formula site, with
+        // the veil's representative depths baked in as core constants; V:/Scratch/atmo/tests/deckshadecore.cpp pins
+        // it against the old inline block within 1e-6 (the old facing term's multiplication order differed by a last bit).
         const F32 sun_z = llclamp(light_dir.mV[VZ], -1.f, 1.f);
-        const F32 th = (0.5f + llclamp(field.mThicknessM / 500.f, 0.f, 1.f))
-                     * (0.35f + 0.65f * field.mCoverage);
-        F32 shade;
-        if (sun_z >= 0.f)
-        {
-            shade = expf(-(0.65f / llmax(sun_z, 0.35f) * 0.9f
-                           + (1.f - sun_z) * 1.5f) * th);
-        }
-        else
-        {
-            shade = expf(-(0.65f / llmax(-sun_z, 0.35f) * 0.9f + 1.5f) * th);
-        }
-        const F32 facing = 0.5f + 0.2f * light_dir.mV[VZ] * (0.15f - 0.5f) * 2.f;
-        const F32 form = lerp(0.65f, facing, beam) * lerp(1.f, shade, beam);
-
-        deck.mSheetForm = form;
+        deck.mSheetForm = SSDeckShade::veilForm(sun_z, SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage), beam);
         // The inset: just off the deck's floor, deep enough to sit inside the puffs' base fade,
         // shallow enough that the sheet reads as the deck's underside and not as a second layer.
         // The flat 16 m lift sits it higher in the fade, so the veil clears the puffs' bottom dissolve instead of hugging the floor.
@@ -554,6 +735,77 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
 
     F64 dist_sum = 0.0;
 
+    // <SS:Nexii> Distant rain shafts (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): gated on couple_storm
+    // - shafts hang from whichever deck IS weatherDeck() this build, the same deck precipNoiseAt/precipBaseZ/
+    // precipTopZ always name, so a curtain never hangs off a deck that is not the one precipitation actually falls
+    // from. Driven by the resolved precipitation intensity (SSAtmoMagic::precipitation(), the same eased,
+    // world-state figure ssprecipitation.cpp's own spawn gate reads via atmo->precipitation() - "ships first
+    // against the global precip scalar" per the design, never a per-cell storm read yet), never recomputed per
+    // cell. shaft_r2 is the particle sim's own TIER_SHEETS radius (SSPrecipSim::tierBands' out_hi for that tier,
+    // after the LOD dial - the same figure ssprecipitation.cpp's tierRadii resolves to r2) so the handoff shares
+    // one boundary with the particle rain instead of respelling it. Candidates are only collected here - the
+    // keepHash trim and card emission happen once, after the whole cell walk (buildDeck's own
+    // qualifying-cell-is-camera-free contract - see ShaftCandidate above).
+    // <SS:Nexii> F4/F6: shafts_active also requires the Weather Influence row's MASTER enable (mEnabled) - the
+    // per-row mDistantRainEnabled/mDistantRainStrength dials are meaningless once the whole influence system is
+    // off, same as every other row in this struct. Once shaft_r2 is resolved below, shafts_active is narrowed a
+    // second time to require shaft_r2 > 0 (F6) - a zero/negative handoff radius has no meaning for
+    // SSVirga::handoff's skipR/bandEnd maths and would either hide every shaft (skipR 0, bandEnd == HANDOFF_BAND_M
+    // only) or divide by a degenerate band, so the feature simply does not run rather than guess.
+    const SSAtmoEnvWeatherInfluence& weather_influence = track.mWeatherInfluence;
+    bool shafts_active = couple_storm && weather_influence.mEnabled && weather_influence.mDistantRainEnabled
+                        && weather_influence.mDistantRainStrength > 0.f;
+    F32 shaft_precip = 0.f;
+    F32 shaft_ground_z = 0.f;
+    F32 shaft_r2 = 0.f;
+    std::vector<ShaftCandidate> shaft_candidates;
+    if (shafts_active)
+    {
+        shaft_precip = SSAtmoMagic::getInstance()->precipitation();
+        shaft_ground_z = SSAtmoEnvApplier::instance().windProfileGroundZ();
+
+        F32 in_lo, in_hi, out_lo;
+        SSPrecipSim::tierBands(TIER_SHEETS, SSAtmoMagic::getInstance()->preset(), in_lo, in_hi, out_lo, shaft_r2);
+
+        shafts_active = shaft_r2 > 0.f; // F6
+    }
+
+    // <SS:Nexii> F11: shafts are base-anchored (SSVirga::BURIED, like the veil) so their placement takes NO O(z)
+    // shear lean - a default-constructed ShearTable's o[] entries are all the zero vector (ssdeckframecore.h's
+    // ShearTable ctor), so SSDeckFrame::shearTableAt returns zero for ANY z argument. This is the "documented
+    // base-anchored overload" the contract calls for: placeWorld itself still owns the +drift+heroShift terms, so
+    // no call site respells c + drift + S by hand.
+    static const SSDeckFrame::ShearTable SS_VIRGA_NO_SHEAR;
+
+    // <SS:Nexii> LOD phase: this build's own tally of SSDeckLod::subsAt(dist, dial) summed over every occupied
+    // cell - the V3 debug view's "LOD-predicted" figure, read back against the actual placed/kept puff count
+    // (deck.mPuffs.size()) and the budget dial for its legend row. Reset per build so a stale figure from a
+    // previous frame's field never survives into this one's.
+    deck.mLodSubsTally = 0;
+    deck.mLodCellTally = 0;
+    deck.mTierBCount = 0;
+
+    // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT, doc/atmo_magic_far_clouds.md section 2 step 2 Tier B):
+    // the macro tier's per-build accumulator, keyed by macro cell (macroIndex(cx), macroIndex(cy)) packed into one
+    // U64 - the SAME packing idiom ShaftCandidate::cellId already uses below. Filled while walking the fine cell
+    // loop (never resampled - "no fourth gate": occupancy below is a straight tally of the SAME gate verdict this
+    // loop already computed for the fine tier) and only for macro cells whose block centre sits beyond
+    // TIER_B_M - TIER_BLEND_M/2 of the camera (macro_block_lo below) - nearer blocks never reach Tier B and are never
+    // added to this map, so it stays small (far-ring cells only). Local to this one buildDeck call.
+    struct MacroAccum
+    {
+        U8  mVerdicts[SSDeckMacro::MACRO_CELLS * SSDeckMacro::MACRO_CELLS] = {};
+        F32 mUps[SSDeckMacro::MACRO_CELLS * SSDeckMacro::MACRO_CELLS] = {};
+        F32 mCellHeights[SSDeckMacro::MACRO_CELLS * SSDeckMacro::MACRO_CELLS] = {};
+        F32 mCoreness[SSDeckMacro::MACRO_CELLS * SSDeckMacro::MACRO_CELLS] = {};
+        S32 mCount = 0;
+        S32 mMcx = 0;
+        S32 mMcy = 0;
+        F32 mBlockDist = 0.f; // the block's horizontal, drift-only centre distance - the ONE scalar both crossfade halves read
+    };
+    std::unordered_map<U64, MacroAccum> macro_accum;
+    const F32 macro_block_lo = SSDeckMacro::TIER_B_M - SSDeckMacro::TIER_BLEND_M * 0.5f;
+
     for (S32 dy = -cell_radius; dy <= cell_radius; ++dy)
     {
         for (S32 dx = -cell_radius; dx <= cell_radius; ++dx)
@@ -561,48 +813,309 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             const S32 cx = cx0 + dx;
             const S32 cy = cy0 + dy;
 
+            // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT), corrected 2026-09-05 (doc/atmo_magic_far_clouds.md
+            // phase 6a outcome): reject the square walk's corners - outside FIELD_DRAW_M + WALK_PAD_M of the
+            // AIR-frame camera cell (cx0, cy0) is defined from - before any hash, presence or hero-influence work
+            // runs for this cell. SSDeckLod::cellInWalk pads the plain FIELD_DRAW_M circle by WALK_PAD_M, the
+            // farthest a puff is placed from this cell's centre (shear lean + hero shift + jitter), so a cell just
+            // outside FIELD_DRAW_M whose puffs still lean inward is not starved before it gets the chance to place
+            // them; this DOES change some cells' fate versus the plain circle - membership is tested on the padded
+            // walk, and it is edgeFade below (zero at DECK_EDGE_M, well inside this padded radius) that owns
+            // visibility, not this gate. There is no per-puff FIELD_DRAW_M cull left downstream for this to mirror
+            // (removed - see the puff-alpha comment near dist_sq below).
+            if (!SSDeckLod::cellInWalk((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f, air_x, air_y))
+            {
+                continue;
+            }
+
             const F32 gate_raw = clusterUnit(cx, cy, salt) * CLUSTER_WEIGHT
                                + hashUnit(cx, cy, 1u + salt) * (1.f - CLUSTER_WEIGHT);
 
-            // <SS:Nexii> The noise map's say over this cell - two ramps over one sample, taken in the air frame so the pattern drifts with the deck exactly as the cells do. Presence runs the hole window: where the map runs low, the cell's gate is pushed toward a certain skip, and the sky opens. Tower runs the gradient ramp window overlaid on the same values, and decides what this column does with whatever height it keeps.
+            // <SS:Nexii> Phase 4 fixup (#1/#2, doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud
+            // drift"): the cell's WORLD centre (air cell centre + drift), computed ONCE per cell through
+            // SSStormCouple::samplePointM ahead of the gate below - it feeds both the hero influence weight AND the
+            // storm sample. The hero's own PRODUCER rule (ssdeckframecore.h): S is evaluated at this UNSHIFTED
+            // quantized centre - the cell the loop is building, never the shifted one - so the influence weight
+            // matches the cell the builder is actually placing puffs for. Zero whenever mHeroFrame has no age (no
+            // hero), which makes hero_shift_m the zero vector.
+            F32 world_x, world_y;
+            SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
+                                         CELL_M, drift.mV[0], drift.mV[1], world_x, world_y);
+            const F32 hero_influence = (couple_storm && mHeroFrame.ageS > 0.f)
+                ? SSStormCouple::influence(mHeroFrame.centre.x, mHeroFrame.centre.y, mHeroFrame.radius, world_x, world_y)
+                : 0.f;
+            const SSDeckFrame::Vec2 hero_shift_m = SSDeckFrame::heroShift(mHeroFrame, hero_influence);
+
+            // <SS:Nexii> Phase 4 fixup (#1/#2): the PRODUCER reads the pattern (gate hash, presence, n_map) at the
+            // PLAIN, unshifted cell centre - ssdeckframecore.h's producer/observer rule. gateAir is an OBSERVER
+            // transform (air - S) for a point the fragment/bake/precip side is classifying from outside; the
+            // builder IS the producer for this cell and must not shift its own read, or the cell it hashes and the
+            // cell whose pattern it reads would disagree the moment a hero is near. The gate (cx,cy) and gate_raw's
+            // hash stay on base drift exactly as the frame contract requires (nothing repops); the hero's S only
+            // ever reaches this cell's puffs through placeWorld below.
             F32 presence = 1.f;
             F32 tower = 0.f;
-            noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower);
+            F32 raw_n = 0.f;
+            noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower, raw_n);
 
             const F32 gate = gate_raw + (1.f - gate_raw) * (1.f - presence);
-            if (gate > field.mCoverage) continue;
+
+            // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT, doc/atmo_magic_far_clouds.md section 2 step 2
+            // Tier B): the macro block this fine cell belongs to, and that BLOCK's own centre distance from the
+            // true camera - used only to decide (a) whether this cell's gate verdict is worth accumulating for
+            // Tier B (macro_block_lo, the TIER_B_M - TIER_BLEND_M/2 rail) and (b) the Tier A/B crossfade weight
+            // every fine cell in the SAME block shares, so a block never straddles two different wA values between
+            // its own sibling fine cells - a per-fine-cell distance (lod_dist, computed further below for the
+            // established fine-tier ramps and left untouched) would let siblings 260m apart pick different weights
+            // right at the boundary. macro_block_world is the block's plain air centre + drift only (no hero
+            // shift - the coarse crossfade/eligibility test does not need the small hero displacement the body's
+            // own final placement applies after the fine loop, below).
+            const S32 macro_cx = SSDeckMacro::macroIndex(cx);
+            const S32 macro_cy = SSDeckMacro::macroIndex(cy);
+            const F32 macro_block_air_x = ((F32)macro_cx + 0.5f) * SSDeckMacro::MACRO_M;
+            const F32 macro_block_air_y = ((F32)macro_cy + 0.5f) * SSDeckMacro::MACRO_M;
+            F32 macro_block_world_x, macro_block_world_y;
+            SSStormCouple::samplePointM(macro_block_air_x, macro_block_air_y, SSDeckMacro::MACRO_M,
+                                         drift.mV[0], drift.mV[1], macro_block_world_x, macro_block_world_y);
+            const F32 macro_bdx = macro_block_world_x - cam.mV[VX];
+            const F32 macro_bdy = macro_block_world_y - cam.mV[VY];
+            const F32 macro_block_dist = sqrtf(macro_bdx * macro_bdx + macro_bdy * macro_bdy);
+            const bool macro_in_scope = macro_block_dist > macro_block_lo;
+            F32 tier_wA = 1.f, tier_wB = 0.f;
+            if (macro_in_scope)
+            {
+                SSDeckMacro::tierWeights(macro_block_dist, tier_wA, tier_wB);
+            }
+
+            MacroAccum* macro_slot = nullptr;
+            if (macro_in_scope)
+            {
+                const U64 macro_key = ((U64)(U32)macro_cx << 32) | (U64)(U32)macro_cy;
+                macro_slot = &macro_accum[macro_key];
+                macro_slot->mMcx = macro_cx;
+                macro_slot->mMcy = macro_cy;
+                macro_slot->mBlockDist = macro_block_dist;
+            }
+            const S32 macro_slot_cap = (S32)(sizeof(MacroAccum::mVerdicts) / sizeof(MacroAccum::mVerdicts[0]));
+
+            if (gate > field.mCoverage)
+            {
+                // <SS:Nexii> LOD phase 6d: the fine gate's own MISS verdict, tallied into the macro accumulator so
+                // SSDeckMacro::occupancy sees the SAME denominator the fine tier's gate produced right here - no
+                // fourth gate, no resampling.
+                if (macro_slot && macro_slot->mCount < macro_slot_cap)
+                {
+                    macro_slot->mVerdicts[macro_slot->mCount] = 0;
+                    ++macro_slot->mCount;
+                }
+                continue;
+            }
 
             const F32 coreness = llclamp(
                 (field.mCoverage - gate) / llmax(field.mCoverage, 0.01f), 0.f, 1.f);
 
-            // <SS:Nexii> The tower shaping. Convection decides how much say the map gets over heights at all - a stable sky keeps every column at the cluster's own height and only the holes differ - and past that the map decides which columns RISE: tower-weighted cells keep the full climb to the lid while the pockets between them are held low, which is what stands a cumulonimbus tower up in the gaps of its own field. The stretch to the towers comes free with the same stroke: a column the map marks high spans the layer's whole convective thickness, base to lid, because nothing pulls it back down.
-            const F32 conv_gain = ss_smoothstep(0.12f, 0.55f, convection) * (1.f - storm);
-            const F32 height_shape = lerp(1.f, SS_POCKET_H + (1.f - SS_POCKET_H) * tower, conv_gain);
+            // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): the cell's own camera distance, computed ONCE here
+            // and reused by every sub-puff's subsAt/subAlpha/keepPuff/thinAlphaComp call below - a per-cell
+            // granularity by design (the contract's own words: "LOD here is a function of CAMERA DISTANCE ONLY").
+            // Horizontal only (world_x/world_y have no z - height is a per-sub quantity computed later in this
+            // loop), from the TRUE camera `cam`, not the air-frame origin the walk is centred on - the same
+            // reference frame the per-puff FIELD_DRAW_M cull below already measures against. subs is not used to
+            // truncate the sub loop (subAlpha's own blend band is the only thing allowed to fade a sub out, so the
+            // count itself never pops per the contract) - it is only tallied for the V3 debug legend's live count.
+            const F32 cell_dx = world_x - cam.mV[VX];
+            const F32 cell_dy = world_y - cam.mV[VY];
+            const F32 lod_dist = sqrtf(cell_dx * cell_dx + cell_dy * cell_dy);
+            const S32 lod_subs = SSDeckLod::subsAt(lod_dist, puffs_per_cell);
+            deck.mLodSubsTally += lod_subs;
+            deck.mLodCellTally += 1;
 
-            const F32 cell_height =
-                (CLUSTER_EDGE_HEIGHT + (1.f - CLUSTER_EDGE_HEIGHT) * coreness) * height_shape;
+            // <SS:Nexii> Phase 3 coupling (doc/atmo_magic_storm_dynamics.md section 3): the storm field at this
+            // cell's WORLD centre, sampled once per cell, never per sub-puff. review 3b NEW-6 (doc S3 "Sample point
+            // lockstep"): agreement with the fragment stage's own ss_storm_sampleAt is PER-CELL, not per-fragment -
+            // a sub-puff's jitter (up to CELL_M*0.4 off this cell's centre) can put its fragments over a
+            // NEIGHBOURING cell's storm sample at the shader's own, continuous world position, while this builder
+            // shapes every sub-puff in the cell from the one sample taken here. Stated, not hidden: carrying the
+            // owning cell index on a vertex channel so the fragment stage could re-read this exact sample instead
+            // of its own would close the residual, and is deferred.
+            SSStormCouple::Sample storm_sample;
+            if (couple_storm && mStormCellCount > 0)
+            {
+                storm_sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, world_x, world_y);
+            }
 
-            // ...and the anvil: the ramp's tower columns take the lid's spread EARLY - flattened
-            // and flared while the convection dial alone still calls for rounded tops - so the
-            // anvil forms on the strong towers first and fills in deck-wide as convection rises.
-            // The deck's own anvil figure stays the ceiling; the ramp can only bring it forward.
-            const F32 cell_anvil = llmax(field.mAnvil,
-                                         ss_smoothstep(0.40f, 0.70f, convection) * tower);
+            // <SS:Nexii> review S12: tower is ALWAYS derived through SSStormCouple::towerFromMap - never left at
+            // noiseFieldAt's own internal ss_smoothstep result - so there is exactly one tower implementation for
+            // the builder to swap between, not two that happen to agree when storm_sample.boost is 0.
+            // storm_sample.boost defaults to 0 off-cell/uncoupled, and towerFromMap(n, lo, hi, 0) == smoothstep(lo,
+            // hi, n) by the core's own invariant, so this is not claimed bit-identical to the old direct read
+            // without a harness test pinning it - only that the two expressions are the same maths. `n < 0` reads
+            // raw_n 0, and towerFromMap(0, lo, hi, boost) with 0 <= lo is 0 same as the un-widened ramp would give,
+            // so an unready map is unaffected.
+            tower = SSStormCouple::towerFromMap(raw_n, deck.mNoiseTowerLo, deck.mNoiseTowerHi, storm_sample.boost);
+
+            // <SS:Nexii> Distant rain shafts (ssvirgacore.h): qualification off the SAME in-loop presence/tower
+            // this cell's puffs are about to be shaped from - drive is precip_intensity x presence x tower
+            // (SSVirga::drive), and qualifies scales the threshold down as the Weather Influence "Distant rain"
+            // strength rises. This is the pure, camera-free half of the contract: cellInWalk above already bounded
+            // which cells reach here (camera-only pad, same as puffs), but nothing past that gate depends on
+            // distance - the candidate is only COLLECTED here; SSVirga::keepHash's stable trim and the actual card
+            // emission happen once, after the whole cell walk (see shaft_candidates' own comment).
+            if (shafts_active)
+            {
+                const F32 shaft_drive = SSVirga::drive(shaft_precip, presence, tower);
+                if (SSVirga::qualifies(shaft_drive, weather_influence.mDistantRainStrength))
+                {
+                    // <SS:Nexii> F11: PRODUCER placement through SSDeckFrame::placeWorld itself (the PLAIN,
+                    // unshifted cell centre + drift + hero shift + a ZERO O(z) lean - see SS_VIRGA_NO_SHEAR
+                    // above), never a respelled c + drift + S sum - the same call every ordinary puff below
+                    // makes, just with the base-anchored zero table instead of deck.mShearTable.
+                    const SSDeckFrame::Vec2 shaft_placed = SSDeckFrame::placeWorld(
+                        SSDeckFrame::Vec2{(F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f},
+                        SSDeckFrame::Vec2{drift.mV[0], drift.mV[1]}, hero_shift_m, deck.mBaseZ, SS_VIRGA_NO_SHEAR);
+
+                    ShaftCandidate cand;
+                    cand.x = shaft_placed.x;
+                    cand.y = shaft_placed.y;
+                    cand.drive = shaft_drive;
+                    cand.cellId = ((U64)(U32)cx << 32) | (U64)(U32)cy;
+                    cand.hashKey = hashCell(cx, cy, salt + SS_VIRGA_HASH_SALT);
+                    shaft_candidates.push_back(cand);
+                }
+            }
+
+            // <SS:Nexii> The tower shaping. Convection decides how much say the map gets over heights at all - a stable sky keeps every column at the cluster's own height and only the holes differ - and past that the map decides which columns RISE: tower-weighted cells keep the full climb to the lid while the pockets between them are held low, which is what stands a cumulonimbus tower up in the gaps of its own field. The stretch to the towers comes free with the same stroke: a column the map marks high spans the layer's whole convective thickness, base to lid, because nothing pulls it back down. conv_gain reads storm_eff (review S3 Delegation), not raw storm, so the cells' authority over height is delegated the same window the tower ramp was.
+            // <SS:Nexii> review 3b NEW-3: through cellShapeAt, the one helper the V2 profile-outline debug view
+            // also calls (below), so conv_gain/cell_height/cell_anvil can never drift between what is actually
+            // built and what the overlay draws as its explanation of it. The anvil's own storm term
+            // (storm_sample.anvil, 0 off-cell) still joins the max via SSStormCouple::anvilWeight inside the
+            // helper rather than a hand-respelled llmax.
+            const SSStormCouple::CellShape shape = SSStormCouple::cellShapeAt(convection, storm_eff, tower, coreness, field.mAnvil, storm_sample.anvil);
+            const F32 cell_height = shape.cell_height;
+            const F32 cell_anvil = shape.cell_anvil;
+
+            // <SS:Nexii> Phase 4 fixup (#7/F9, doc/atmo_magic_storm_dynamics.md section 3 "Overshooting top vs the
+            // lid cut"): the overshoot bonus goes to sub-puff 0 ALWAYS, never a camera-dependent "tallest survivor"
+            // choice - the phase-3c tallest-sub probe (which read the camera to pick a survivor, and needed its
+            // own squash guard) is deleted entirely. Sub 0 is the one sub-puff every cell always keeps regardless
+            // of the squash knee (`squashed && sub > 0` below only culls sub > 0) and of camera distance (LOD phase,
+            // 2026-09-05: SSDeckLod::keepPuff never thins sub 0, and the builder's pre-gate above and the puff loop
+            // below carry no distance cull that could drop it either - the per-puff FIELD_DRAW_M cull that used to
+            // sit near dist_sq below is gone, edgeFade owns the edge instead). So sub 0 is always placed for every
+            // gated cell (design rule, not a claim any single test pins end to end - decklodcore.cpp's keepPuff_
+            // sub_zero_always_kept test pins the thinning half of it), which is exactly why it is the only choice
+            // that can carry the overshoot lift, and it makes which puff overshoots a pure function of the cell
+            // alone rather than of where the camera happens to be standing.
+            // <SS:Nexii> NEW-4 fix (2026-09-05, doc/atmo_magic_storm_dynamics.md section 3): sub 0 also needs to
+            // BE the cell's tallest sub-puff, not merely the one that keeps the overshoot bonus - otherwise the
+            // lid cut (SSStormCouple::lidTopM, which rises to meet whatever height the overshoot landed on) could
+            // sit above empty air while the cell's actual tallest puff, some other sub, was culled at distance.
+            // Fixed by a DETERMINISTIC SWAP, still world-state and camera-free: up_cell_arr below is the same
+            // hashUnit(cx, cy, 4u + sub_salt) every sub already computes, read once here (before the loop, so
+            // nothing inside it changes) to find its own argmax; only the up_cell VALUE trades places between
+            // slot 0 and the argmax slot - jitter (jx/jy) and every other per-sub hash stay on their own
+            // sub_salt - so the cell's multiset of heights is unchanged and only WHICH physical puff is "sub 0"
+            // (and therefore keeps the overshoot lift and survives the squash cull) changes.
+            // NEW-E, stated (pre-existing, not a bug this pass fixes): puffs_per_cell is SSAtmoCloudPuffsPerCell,
+            // a gSavedSettings dial (see its read above), so the probe loop below runs a different length on
+            // different clients - the sub SET a cell hashes, and therefore which sub_salt's hashUnit wins the
+            // argmax and becomes "sub 0", is per-client. Two viewers looking at the same cell can disagree on
+            // which physical puff carries the overshoot lift; this was already true of the un-swapped hash before
+            // NEW-4 and is orthogonal to the swap itself, which only changes WHICH already-computed sub is 0.
+            S32 tallest_sub = 0;
+            F32 tallest_up = hashUnit(cx, cy, 4u + salt);
+            for (S32 probe = 1; probe < puffs_per_cell; ++probe)
+            {
+                const F32 candidate = hashUnit(cx, cy, 4u + salt + (U32)probe * 8u);
+                if (candidate > tallest_up)
+                {
+                    tallest_up = candidate;
+                    tallest_sub = probe;
+                }
+            }
+
+            // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT): the fine gate's own HIT verdict, plus this
+            // cell's sub-0 up_cell hash (tallest_up - the SAME value sub 0's own placement below uses, after the
+            // NEW-4 swap above) and its cellShapeAt outputs (cell_height, coreness) - tallied into the SAME macro
+            // slot the miss branch above would have used, so SSDeckMacro::occupancy/bodyUp average over exactly
+            // the (cx,cy) set the fine gate actually walked, never a resampled one.
+            if (macro_slot && macro_slot->mCount < macro_slot_cap)
+            {
+                const S32 slot_i = macro_slot->mCount;
+                macro_slot->mVerdicts[slot_i] = 1;
+                macro_slot->mUps[slot_i] = tallest_up;
+                macro_slot->mCellHeights[slot_i] = cell_height;
+                macro_slot->mCoreness[slot_i] = coreness;
+                ++macro_slot->mCount;
+            }
+
+            if (tier_wA <= 0.f)
+            {
+                // <SS:Nexii> LOD phase 6d: beyond TIER_B_M + TIER_BLEND_M/2 (wA == 0) no fine puff is placed for
+                // this cell at all - Tier B's merged body (emitted once per macro cell after the whole fine loop,
+                // below) carries the block from here - but the gate was still evaluated and just tallied above,
+                // exactly as the contract requires ("STILL evaluate the fine gate for the accumulator").
+                continue;
+            }
 
             for (S32 sub = 0; sub < puffs_per_cell; ++sub)
             {
+                // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): deterministic far thinning of sub > 0 puffs -
+                // sub 0 is unconditionally kept (SSDeckLod::keepPuff's own invariant; the constraint that every
+                // gate-occupied cell always draws at least one body). Ahead of the jitter/height/placement work
+                // below so a thinned-out sub costs nothing beyond the hash. Uses lod_dist, the cell-level distance
+                // computed once above, and buildDeck's own deck salt - the SAME salt the gate hash above reads,
+                // through a different hash chain (SSAtmoNoise::combine), so this thinning decision cannot alias
+                // the gate's own pattern.
+                if (sub > 0 && !SSDeckLod::keepPuff(cx, cy, sub, salt, lod_dist))
+                {
+                    continue;
+                }
+
                 const U32 sub_salt = salt + (U32)sub * 8u;
 
                 const F32 jx = (hashUnit(cx, cy, 2u + sub_salt) - 0.5f) * CELL_M * 0.8f;
                 const F32 jy = (hashUnit(cx, cy, 3u + sub_salt) - 0.5f) * CELL_M * 0.8f;
 
-                LLVector3 pos;
-                pos.mV[VX] = (F32)cx * CELL_M + CELL_M * 0.5f + jx + drift.mV[0];
-                pos.mV[VY] = (F32)cy * CELL_M + CELL_M * 0.5f + jy + drift.mV[1];
-
-                const F32 up_cell = hashUnit(cx, cy, 4u + sub_salt);
+                // NEW-4: the swap - sub 0 reads the argmax's hashed height, the argmax sub (if not already 0)
+                // reads sub 0's own hashed height back; every other sub is untouched.
+                F32 up_cell = hashUnit(cx, cy, 4u + sub_salt);
+                if (sub == 0) up_cell = tallest_up;
+                else if (sub == tallest_sub) up_cell = hashUnit(cx, cy, 4u + salt);
                 const F32 up = up_cell * cell_height;
+
+                LLVector3 pos;
                 pos.mV[VZ] = field.mBaseHeightM + up * field.mThicknessM;
+
+                // <SS:Nexii> Phase 4 fixup (#7/F9): the overshooting top, added ONLY to the cell's sub-puff 0 -
+                // ALWAYS, never a "tallest survivor" argmax (see the deleted probe above) - as a straight height
+                // bonus past the column's own ceiling - the real thing punches through the tropopause above
+                // whatever height the layer's own shaping already gave it, so this rides on top of `up`/
+                // `cell_height` rather than folding into them, and BEFORE placeWorld below so the O(z) lean it
+                // folds in is the overshot puff's OWN altitude, not its column's un-lifted one. review 3b NEW-4: no
+                // CPU-side lid uniform is needed for this to survive the fragment stage's lid cut - the shader
+                // derives its own lid altitude from ss_layer_thick and its own storm sample via
+                // SSStormCouple::lidTopM's GLSL twin (topZ + overshootBonusM), the SAME formula this line calls, so
+                // the lid rises to meet exactly the puff this lifts rather than cutting it off at the un-lifted ceiling.
+                if (sub == 0 && storm_sample.overshoot > 0.f)
+                {
+                    // <SS:Nexii> phase-3c fix F4: deck.mThicknessM (llmax(1, field.mThicknessM)), matching the
+                    // shader's ss_layer_thick uniform and the V2 overlay's own overshootBonusM call - not the raw,
+                    // unclamped field.mThicknessM this line used to read.
+                    pos.mV[VZ] += SSStormCouple::overshootBonusM(deck.mThicknessM, storm_sample.overshoot);
+                }
+
+                // <SS:Nexii> Phase 4 fixup (#1/#2, doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs
+                // cloud drift" / doc/atmo_magic_wind_profile.md section 4): PRODUCER placement - pattern-cell
+                // centre (+ this sub's jitter) + drift + the hero's rigid local shift S + the O(z) shear lean at
+                // this puff's OWN final altitude, all folded by SSDeckFrame::placeWorld itself (no hand-added
+                // shearTableAt call at the placement - placeWorld owns the O(z) term so no call site adds it by
+                // hand, per ssdeckframecore.h). Identity (+jitter+drift only) whenever hero_shift_m and the table
+                // are both zero.
+                const SSDeckFrame::Vec2 placed = SSDeckFrame::placeWorld(
+                    SSDeckFrame::Vec2{(F32)cx * CELL_M + CELL_M * 0.5f + jx, (F32)cy * CELL_M + CELL_M * 0.5f + jy},
+                    SSDeckFrame::Vec2{drift.mV[0], drift.mV[1]}, hero_shift_m, pos.mV[VZ], deck.mShearTable);
+                pos.mV[VX] = placed.x;
+                pos.mV[VY] = placed.y;
 
                 const F32 waist = 1.f - 0.35f * ss_smoothstep(0.2f, 0.65f, up_cell);
                 const F32 flare = 1.1f * ss_smoothstep(0.74f, 1.f, up_cell);
@@ -614,13 +1127,32 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 const F32 anvil_h = ramp_v * ss_smoothstep(0.40f, 0.60f, convection);
                 const F32 puff_anvil = llmax(cell_anvil, anvil_h);
 
-                const F32 flat = 1.f + puff_anvil * coreness * (waist + flare - 1.f);
+                // <SS:Nexii> Phase 3: mammatus flares the anvil's flattening on puffs already in its top third
+                // (up_cell >= SSStormCouple::MAMMATUS_TOP_FRAC) - a CPU-only shape modifier (no shader change),
+                // scaling how far the waist/flare term pulls the puff from round (waist+flare-1) rather than the
+                // puffs themselves, so a puff below the top third is untouched regardless of storm_sample.mammatus.
+                F32 flatten_term = waist + flare - 1.f;
+                if (storm_sample.mammatus > 0.f && up_cell >= SSStormCouple::MAMMATUS_TOP_FRAC)
+                {
+                    flatten_term *= SSStormCouple::mammatusScale(storm_sample.mammatus);
+                }
+
+                const F32 flat = 1.f + puff_anvil * coreness * flatten_term;
 
                 const LLVector3 to_cam = pos - cam;
                 const F32 dist_sq = to_cam.magVecSquared();
-                if (dist_sq > FIELD_DRAW_M * FIELD_DRAW_M) continue;
+                // <SS:Nexii> LOD phase, removed 2026-09-05 (doc/atmo_magic_far_clouds.md phase 6a outcome): this
+                // used to cull any puff past FIELD_DRAW_M. It is gone - SSDeckLod::edgeFade (zero at DECK_EDGE_M,
+                // 9800 < FIELD_DRAW_M's 10000) already owns the edge below, and a hard FIELD_DRAW_M cull on top of
+                // it was exactly the thing that could drop a leaned sub-0 puff whose cell centre sat inside the
+                // walk but whose placed position, past the shear/hero/jitter displacement, crossed FIELD_DRAW_M -
+                // silently breaking "sub 0 is always placed for every gated cell". Removing it restores that rule.
 
-                const bool squashed = dist_sq > mSquashKnee * mSquashKnee;
+                // <SS:Nexii> phase-3c fix F1, still in force post phase-4 fixup #7/F9: routed through
+                // SSStormCouple::squashedAt, the one shared predicate for this cull - sub 0 never squashes here,
+                // which is exactly why the overshoot bonus above always goes to sub 0 rather than an argmax that
+                // could land on a sub this line is about to drop.
+                const bool squashed = SSStormCouple::squashedAt(to_cam.mV[VX], to_cam.mV[VY], to_cam.mV[VZ], mSquashKnee);
                 if (squashed && sub > 0) continue;
 
                 Puff puff;
@@ -633,37 +1165,34 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 const F32 dist = sqrtf(dist_sq);
                 const F32 edge_t = llclamp((dist - FIELD_FADE_START_M)
                                            / (FIELD_DRAW_M - FIELD_FADE_START_M), 0.f, 1.f);
-                const F32 edge = 1.f - edge_t * edge_t;
-                puff.mAlpha = edge * llclamp(0.35f + 0.65f * field.mCoverage, 0.f, 1.f);
 
-                const F32 facing = llclamp(
-                    0.5f + 0.2f * (light_dir.mV[VZ] * (up - 0.5f) * 2.f), 0.f, 1.f);
+                // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): the puff's own alpha, in three factors - the
+                // sub-count crossfade (subAlpha, 1 for sub 0 always, so this never dims the one body every
+                // gate-occupied cell keeps), the far-thinning compensation (thinAlphaComp, >= 1, so a surviving
+                // sub > 0 puff brightens to cover for the peers keepPuff above just skipped - the product with
+                // subAlpha is clamped to 1 rather than letting compensation push a puff past fully opaque), and
+                // edgeFade on the puff's own TRUE horizontal distance (to_cam.xy, not the 3-D `dist` above -
+                // matches the veil's ss_edge_rails fade, which reads horizontal distance too) - replacing the old
+                // 3-D edge_t ramp, which used different rails (0.85x FIELD_FADE_START_M) than the veil's did.
+                // edge_t/cubic_step(edge_t) below (the `rim` structural-shading term) is untouched by this change.
+                const F32 horiz = sqrtf(to_cam.mV[VX] * to_cam.mV[VX] + to_cam.mV[VY] * to_cam.mV[VY]);
+                const F32 lod_alpha = llmin(1.f, SSDeckLod::subAlpha(lod_dist, sub, puffs_per_cell)
+                                                * SSDeckLod::thinAlphaComp(lod_dist));
+                // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT): tier_wA - this cell's own macro-block
+                // crossfade weight, computed once above from the BLOCK's centre distance (not lod_dist) so every
+                // fine cell in the same macro block fades together - multiplies in as a fourth factor, 1 below
+                // TIER_B_M - TIER_BLEND_M/2 (Tier B not yet in scope) and falling to 0 by TIER_B_M + TIER_BLEND_M/2
+                // (where the cell never reaches this line at all - see the tier_wA <= 0 skip above), so Tier A's
+                // puffs fade out exactly as Tier B's merged body (below, weighted by wB = 1 - wA) fades in.
+                puff.mAlpha = lod_alpha * SSDeckLod::edgeFade(horiz) * llclamp(0.35f + 0.65f * field.mCoverage, 0.f, 1.f) * tier_wA;
 
-                const F32 sun_z = light_dir.mV[VZ];
-                const F32 th = (0.5f + llclamp(field.mThicknessM / 500.f, 0.f, 1.f))
-                             * (0.35f + 0.65f * field.mCoverage);
-                F32 shade;
-                if (sun_z >= 0.f)
-                {
-                    const F32 above = llmax(cell_height - up, 0.f);
-                    shade = expf(-(above / llmax(sun_z, 0.35f) * 0.9f
-                                   + coreness * (1.f - sun_z) * 1.5f) * th);
-                }
-                else
-                {
-                    shade = expf(-(up / llmax(-sun_z, 0.35f) * 0.9f
-                                   + coreness * 1.5f) * th);
-                }
-
+                // <SS:Nexii> 6d review fix 3: the structural shading (facing term, exponential shade through the layer,
+                // beam gate, rim ease) and the buried depth (see Puff::mBuried - NOT beam-gated, a storm deck is dark
+                // underneath at midnight too) come from SSDeckShade (ssdeckshadecore.h), the one formula site the veil
+                // above and the Tier B body below share; deckshadecore.cpp pins this call bit-identical to the old block.
                 const F32 rim = cubic_step(edge_t);
-
-                const F32 form = lerp(0.65f, lerp(facing, 0.65f, rim), beam)
-                               * lerp(1.f, shade, beam);
-                puff.mForm = form;
-
-                // <SS:Nexii> The buried depth - see Puff::mBuried. The same "how much of my column stands over me" the shade term above measures, but normalised against the column's own height rather than left in layer fractions and, crucially, NOT gated by the beam: this one has to survive a sunless sky, because a storm deck is dark underneath at midnight too. Eased at the rim with the rest of the structural shading, so the last rows flatten into the dome band's flat painting instead of carrying a gradient it has none of.
-                puff.mBuried = lerp(llclamp((cell_height - up) / llmax(cell_height, 0.01f), 0.f, 1.f),
-                                    0.5f, rim);
+                puff.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height, coreness, rim, beam);
+                puff.mBuried = SSDeckShade::buried(cell_height, up, rim);
 
                 dist_sum += dist_sq;
                 deck.mPuffs.push_back(puff);
@@ -747,9 +1276,217 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         }
     }
 
+    // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT, doc/atmo_magic_far_clouds.md section 2 step 2 Tier B):
+    // one merged macro-puff body per accumulated macro cell with occupancy > 0 and macroEligible, emitted as an
+    // ORDINARY Puff - same sort, same budget, same shader path as every fine puff above - so nothing downstream
+    // (the depth sort, the budget trim, the render pass) needs to know Tier A from Tier B. Placed by the PRODUCER
+    // rule: the block's own quantized air-frame centre + drift + the hero shift evaluated AT that unshifted
+    // centre (never the fine cells' own, possibly-jittered placements) + O(z) at the body's own altitude, all
+    // through the SAME SSDeckFrame::placeWorld the fine loop calls. mForm/mBuried reuse the fine puff loop's own
+    // shade formula (above) at the body's own `up`, so a Tier B body shades exactly as a fine puff standing in
+    // its place would - the two tiers must never visibly disagree about which side of a body is lit.
+    for (auto& kv : macro_accum)
+    {
+        MacroAccum& acc = kv.second;
+        const F32 occ = SSDeckMacro::occupancy(acc.mVerdicts, acc.mCount);
+        if (occ <= 0.f) continue;
+
+        const F32 block_air_x = ((F32)acc.mMcx + 0.5f) * SSDeckMacro::MACRO_M;
+        const F32 block_air_y = ((F32)acc.mMcy + 0.5f) * SSDeckMacro::MACRO_M;
+
+        if (!SSDeckMacro::macroEligible(block_air_x, block_air_y, air_x, air_y, occ)) continue;
+
+        // <SS:Nexii> Producer rule: the hero's influence weight is evaluated at the block's own UNSHIFTED,
+        // quantized world point (SSStormCouple::samplePointM on the MACRO lattice - the same helper buildDeck's
+        // own per-cell hero_influence above calls on the fine lattice, one level up) - never the hero-shifted
+        // result placeWorld below produces.
+        F32 block_world_x, block_world_y;
+        SSStormCouple::samplePointM(block_air_x, block_air_y, SSDeckMacro::MACRO_M,
+                                     drift.mV[0], drift.mV[1], block_world_x, block_world_y);
+        const F32 body_hero_influence = (couple_storm && mHeroFrame.ageS > 0.f)
+            ? SSStormCouple::influence(mHeroFrame.centre.x, mHeroFrame.centre.y, mHeroFrame.radius,
+                                        block_world_x, block_world_y)
+            : 0.f;
+        const SSDeckFrame::Vec2 body_hero_shift_m = SSDeckFrame::heroShift(mHeroFrame, body_hero_influence);
+
+        // <SS:Nexii> bodyUp (ssdeckmacrocore.h) is a masked mean over the occupied fine cells' own array - its
+        // contract names `ups` (the up_cell hash) but the implementation is a generic masked mean, so it is
+        // reused here for cell_height and coreness too rather than hand-rolling the identical sum/count loop a
+        // second and third time in shell code; occ > 0 above guarantees at least one occupied slot, so the
+        // default-when-empty branch (0.5) is never actually taken for these two reused calls. Reported as a
+        // formula this pass was tempted to write directly in shell code (see the task's own return-data request).
+        const F32 up_cell_mean = SSDeckMacro::bodyUp(acc.mUps, acc.mVerdicts, acc.mCount);
+        const F32 cell_height_mean = SSDeckMacro::bodyUp(acc.mCellHeights, acc.mVerdicts, acc.mCount);
+        const F32 coreness_mean = SSDeckMacro::bodyUp(acc.mCoreness, acc.mVerdicts, acc.mCount);
+
+        const F32 up = up_cell_mean * cell_height_mean;
+        const F32 z = field.mBaseHeightM + up * field.mThicknessM;
+
+        const SSDeckFrame::Vec2 placed = SSDeckFrame::placeWorld(
+            SSDeckFrame::Vec2{block_air_x, block_air_y},
+            SSDeckFrame::Vec2{drift.mV[0], drift.mV[1]}, body_hero_shift_m, z, deck.mShearTable);
+
+        Puff body;
+        body.mPosAgent = LLVector3(placed.x, placed.y, z);
+        body.mRadius = SSDeckMacro::bodyRadiusM();
+
+        const LLVector3 to_cam = body.mPosAgent - cam;
+        body.mCamDistSq = to_cam.magVecSquared();
+        const F32 dist = sqrtf(body.mCamDistSq);
+        const F32 horiz = sqrtf(to_cam.mV[VX] * to_cam.mV[VX] + to_cam.mV[VY] * to_cam.mV[VY]);
+
+        // <SS:Nexii> 6d review findings 1+2: BOTH halves of the A/B crossfade read ONE scalar - acc.mBlockDist, the
+        // block's horizontal, drift-only centre distance the fine loop computed for this block's cells' tier_wA -
+        // never this body's own 3-D / hero-shifted / O(z)-leaned distance. The body sits at deck altitude, so its 3-D
+        // distance ran hundreds of metres ahead of its fine cells' horizontal one and read wB ~ 1 while they still read
+        // wA ~ 1: double coverage at the band's inner edge, not a crossfade. wA is the fine side's and unused here.
+        F32 body_wA, body_wB;
+        SSDeckMacro::tierWeights(acc.mBlockDist, body_wA, body_wB);
+        (void)body_wA;
+
+        // <SS:Nexii> "fine alpha at that distance": the fine puff loop's own sub-0 alpha factors (subAlpha is
+        // always 1 for sub 0; thinAlphaComp applies to sub 0 too, at the fine loop's horizontal cell distance) -
+        // re-run at the block's SAME horizontal distance rather than a hand respelled constant, so a Tier B body's
+        // brightness tracks what the fine puffs it replaces would have carried.
+        const F32 fine_alpha_at_dist = llmin(1.f, SSDeckLod::subAlpha(acc.mBlockDist, 0, puffs_per_cell)
+                                                  * SSDeckLod::thinAlphaComp(acc.mBlockDist))
+                                      * llclamp(0.35f + 0.65f * field.mCoverage, 0.f, 1.f);
+        body.mAlpha = SSDeckMacro::bodyAlpha(fine_alpha_at_dist, occ) * body_wB * SSDeckLod::edgeFade(horiz);
+        if (body.mAlpha <= 0.001f) continue;
+
+        // <SS:Nexii> 6d review fix 3: the SAME SSDeckShade call the fine loop makes (one formula site, ssdeckshadecore.h),
+        // evaluated at this body's own up / cell_height_mean / coreness_mean; edge_t from the body's own 3-D distance
+        // exactly as a fine puff's rim is.
+        const F32 edge_t = llclamp((dist - FIELD_FADE_START_M) / (FIELD_DRAW_M - FIELD_FADE_START_M), 0.f, 1.f);
+        const F32 rim = cubic_step(edge_t);
+        body.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height_mean, coreness_mean, rim, beam);
+        body.mBuried = SSDeckShade::buried(cell_height_mean, up, rim);
+
+        // <SS:Nexii> A Tier B body counts toward the deck's own (non-shaft) mean distance below, same as a fine
+        // puff - it is an ordinary cloud body, unlike the shaft cards F5 excludes for being a different geometry.
+        dist_sum += body.mCamDistSq;
+        deck.mPuffs.push_back(body);
+        ++deck.mTierBCount;
+    }
+
+    // <SS:Nexii> F5: the deck's own (non-shaft) puff count, captured HERE - before any shaft cards are added to
+    // the SAME mPuffs vector below - so mMeanDistSq (the primary/under draw-order hysteresis input, see
+    // mUnderOnTop) stays a property of the ordinary cloud body. A wide storm's curtain of far shaft cards must
+    // not drag the mean outward and flip which deck draws on top; dist_sum below is likewise never added to by
+    // the shaft loop, only divided by this count.
+    const size_t nonshaft_puff_count = deck.mPuffs.size();
+
+    // <SS:Nexii> Distant rain shafts (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): the qualifying cell
+    // set collected above, trimmed by SSVirga::keepHash - a per-candidate STABLE hash trim (F1), so a camera walk
+    // crossing or an easing precip that moves the candidate count n by one changes only the cells whose hash sits
+    // between the old and new keep threshold, never the whole kept set (the index-based trim this replaced
+    // re-picked all MAX_SHAFTS curtains on every count change). No sort is needed for this - keepHash is a pure
+    // per-candidate test. keepHash's own p targets a SHARE of n, not a literal count, so a run of bad luck on a
+    // small/quantised n can occasionally keep more than MAX_SHAFTS; SSVirga::hardCap (HARD_CAP_FRAC x MAX_SHAFTS,
+    // the stated exception in ssvirgacore.h's header) backstops that - ONLY when the kept set actually exceeds it does
+    // a second pass sort the kept indices by ShaftCandidate::hashKey (a separate, camera-free hash chain) and cut
+    // to the ceiling, so the ordinary path never pays for a sort it does not need. Emitted straight into
+    // deck.mPuffs, ahead of the depth sort and puff-budget trim just below, so shafts get the SAME farthest-first
+    // draw order and the SAME last-resort budget backstop every ordinary puff does - no separate pass, no
+    // separate cap accounting.
+    if (shafts_active)
+    {
+        // <SS:Nexii> V4 debug snapshot (ssatmoinfoviewcore.h MODE_PRECIP_VIRGA): recorded here, once per build,
+        // off the SAME candidate list and the SAME keepHash verdict the card-emission loop below uses (updated a
+        // second time below for any candidate the hard-ceiling backstop later drops) - the view never re-derives
+        // qualification or the trim. Recorded even when shaft_candidates is empty (mCells then empty, mActive
+        // still true), so the legend can say "0 qualifying cells" rather than "off". [interaction: SSAtmoInfoView
+        // virgaDebug]
+        mVirgaDebug.mActive = true;
+        mVirgaDebug.mR2 = shaft_r2;
+        mVirgaDebug.mGroundZ = shaft_ground_z;
+        mVirgaDebug.mBaseZ = deck.mBaseZ;
+        mVirgaDebug.mCells.clear();
+        mVirgaDebug.mCells.reserve(shaft_candidates.size());
+
+        const S32 n = (S32)shaft_candidates.size();
+
+        std::vector<S32> kept_idx;
+        kept_idx.reserve(n);
+        for (S32 i = 0; i < n; ++i)
+        {
+            const ShaftCandidate& cand = shaft_candidates[i];
+            const bool hash_kept = SSVirga::keepHash(cand.cellId, SS_VIRGA_HASH_SALT, n, SSVirga::MAX_SHAFTS);
+            mVirgaDebug.mCells.push_back({ cand.x, cand.y, cand.drive, hash_kept });
+            if (hash_kept) kept_idx.push_back(i);
+        }
+
+        // The core's hard ceiling (SSVirga::hardCap): rank cut on the fixed per-cell hashKey, only if exceeded.
+        const S32 hard_cap = SSVirga::hardCap(SSVirga::MAX_SHAFTS);
+        if ((S32)kept_idx.size() > hard_cap)
+        {
+            std::sort(kept_idx.begin(), kept_idx.end(), [&shaft_candidates](S32 a, S32 b)
+                      { return shaft_candidates[a].hashKey < shaft_candidates[b].hashKey; });
+            for (S32 j = hard_cap; j < (S32)kept_idx.size(); ++j)
+            {
+                mVirgaDebug.mCells[kept_idx[j]].mKept = false; // overridden by the hard-ceiling backstop
+            }
+            kept_idx.resize(hard_cap);
+        }
+
+        for (S32 idx : kept_idx)
+        {
+            const ShaftCandidate& cand = shaft_candidates[idx];
+
+            // <SS:Nexii> F3: the far ground lift (SSVirga::groundLiftZ) - a per-CANDIDATE quantity (the column's
+            // own camera distance), computed once and shared by every card in its stack. Cards whose whole slab
+            // lies below the lifted ground are skipped entirely; the lowest emitted card's bottom clamps UP to
+            // the lift, never down past it - virga: precipitation evaporating before it lands, which also keeps
+            // this column's ground-level geometry out of the far-squash depth fold that would otherwise draw it
+            // over terrain standing in front of it. Stated residual (ssvirgacore.h's own comment): the fold still
+            // affects a curtain's mid-air cards against tall terrain, as it does far puffs. h01/alpha/width below
+            // deliberately use each card's TRUE (unlifted) height fraction - the lift truncates what is drawn, it
+            // does not change the physical curtain's own vertical profile.
+            const F32 cand_dx = cand.x - cam.mV[VX];
+            const F32 cand_dy = cand.y - cam.mV[VY];
+            const F32 cand_horiz = sqrtf(cand_dx * cand_dx + cand_dy * cand_dy);
+            const F32 lift_z = SSVirga::groundLiftZ(shaft_ground_z, deck.mBaseZ, cand_horiz, mSquashKnee);
+
+            // F2/F7: overlapping card slabs (SSVirga::cardCountOverlapped/cardSpanLifted), not the old non-overlapping
+            // ceil(span / CARD_MAX_M) - the shader's two-sided soft ends (SS_SHAFT_V_SOFT) crossfade in the
+            // OVERLAP_FRAC overlap instead of punching a transparent band at each stack seam. The lift truncation
+            // (skip a slab wholly below lift_z, raise the lowest emitted bottom to it) is the core's, so the
+            // twin test calls the same function rather than copying this loop.
+            const S32 cards = SSVirga::cardCountOverlapped(deck.mBaseZ, shaft_ground_z);
+            for (S32 card = 0; card < cards; ++card)
+            {
+                SSVirga::CardSpan cs;
+                if (!SSVirga::cardSpanLifted(card, deck.mBaseZ, shaft_ground_z, lift_z, cs)) continue; // F3
+                const F32 z_bot = cs.zBot;
+                const F32 card_h = cs.zTop - z_bot;
+                const F32 z_mid = 0.5f * (cs.zTop + z_bot);
+
+                Puff shaft;
+                shaft.mPosAgent = LLVector3(cand.x, cand.y, z_mid);
+                shaft.mRadius = SSVirga::halfWidthM(cs.h01Mid);
+                shaft.mHalfHeightM = card_h * 0.5f;
+                shaft.mForm = deck.mSheetForm;
+                shaft.mBuried = SSVirga::BURIED;
+                shaft.mShaft = true;
+
+                const LLVector3 to_cam = shaft.mPosAgent - cam;
+                shaft.mCamDistSq = to_cam.magVecSquared();
+                const F32 horiz = sqrtf(to_cam.mV[VX] * to_cam.mV[VX] + to_cam.mV[VY] * to_cam.mV[VY]);
+
+                shaft.mAlpha = SSVirga::alphaAt(cs.h01Mid, cand.drive)
+                             * SSVirga::handoff(horiz, shaft_r2)
+                             * SSDeckLod::edgeFade(horiz);
+                if (shaft.mAlpha <= 0.001f) continue;
+
+                // F5: shaft cards are EXCLUDED from dist_sum - see nonshaft_puff_count's own comment above.
+                deck.mPuffs.push_back(shaft);
+            }
+        }
+    }
+
     if (!deck.mPuffs.empty())
     {
-        deck.mMeanDistSq = (F32)(dist_sum / (F64)deck.mPuffs.size());
+        deck.mMeanDistSq = (nonshaft_puff_count > 0) ? (F32)(dist_sum / (F64)nonshaft_puff_count) : 0.f;
 
         std::sort(deck.mPuffs.begin(), deck.mPuffs.end(),
                   [](const Puff& a, const Puff& b) { return a.mCamDistSq > b.mCamDistSq; });
@@ -759,6 +1496,14 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         const S32 max_puffs = llclamp((S32)budget_setting, MIN_PUFF_BUDGET, MAX_PUFF_BUDGET);
         if ((S32)deck.mPuffs.size() > max_puffs)
         {
+            // <SS:Nexii> LOD phase: this erase is now the LAST-RESORT safety, not the field's primary far-distance
+            // control - SSDeckLod::keepPuff/subAlpha above are meant to hold the built count under the budget by
+            // thinning, so a trim here means the dial's own density plus the near field alone already outgrew it.
+            // Logged (not warned) so a design pass can see how often/how hard this backstop still fires without
+            // spamming a normal session's log.
+            LL_DEBUGS("AtmoMagic") << "buildDeck: puff budget trimmed " << (deck.mPuffs.size() - (size_t)max_puffs)
+                                   << " of " << deck.mPuffs.size() << " built puffs (budget " << max_puffs
+                                   << ", salt " << salt << ")" << LL_ENDL;
             deck.mPuffs.erase(deck.mPuffs.begin(), deck.mPuffs.end() - max_puffs);
         }
     }
@@ -797,6 +1542,18 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
     fold((U64)llround(deck.mNoiseTileM));
     fold((U64)deck.mSalt);
     fold((U64)(U32)deck.mNoiseW);   // the readback generation: the presence cut sharpens when the map lands
+
+    // <SS:Nexii> Phase 4 fixup (#4/F6, doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud drift"):
+    // mHeroFrame belongs to whichever deck IS weatherDeck() this build (buildDeck only ever sets it for that
+    // deck's own coupled pass - see buildDeck's own comment); this bake is called for `deck`, which may be a
+    // DIFFERENT deck than the one mHeroFrame was built for (bakeGroundShadow always bakes mPrimary, and
+    // weatherDeck() may resolve to mUnder). So the hero frame this bake reads is zeroed out unless `deck` IS
+    // weatherDeck() - ssdeckframecore.h's OWNERSHIP rule ("hero_influence is zero unless couple_storm"). The bake
+    // key folds it with the NEW foldFrameKey signature (no table - the bake applies no O(z), so the table was
+    // never folded here to begin with). Identity fold (key returned unchanged) whenever there is no hero, by the
+    // core's own invariant, so a plain sky's key is untouched.
+    const SSDeckFrame::HeroFrame& hero = (&deck == weatherDeck()) ? mHeroFrame : SSDeckFrame::HeroFrame();
+    key = SSDeckFrame::foldFrameKey(key, hero);
     if (key == mShadowKey && mShadowRef.notNull())
     {
         return;
@@ -805,10 +1562,50 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
     const F32 ox = ((F32)cam_cx + 0.5f) * CELL_M - span * 0.5f;
     const F32 oy = ((F32)cam_cy + 0.5f) * CELL_M - span * 0.5f;
 
-    // The builder's cell gate, cached per cell over the covered range - the same lines buildDeck runs at its coverage check, and the same maths the base veil re-runs per fragment in GLSL. [interaction: buildDeck's gate, ssVolCloudF.glsl's ss_cell_occupied - three implementations, one field]
-    const S32 c0x = llfloor(ox / CELL_M) - 1;
-    const S32 c0y = llfloor(oy / CELL_M) - 1;
-    const S32 cn = (S32)(span / CELL_M) + 3;
+    // <SS:Nexii> Phase 4: the hero's rigid local shift at one AIR-frame cell's quantized centre, in the WORLD
+    // frame samplePointM already converts to (this bake works in the same air/world split the builder does - see
+    // its own comment). Zero whenever `hero` has no age (no hero, or this deck is not weatherDeck() - see above),
+    // making every gateAir call below an identity read.
+    const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
+    const auto heroShiftForCell = [&](S32 cx, S32 cy) -> SSDeckFrame::Vec2
+    {
+        if (!(hero.ageS > 0.f))
+        {
+            return SSDeckFrame::Vec2();
+        }
+        F32 wx, wy;
+        SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
+                                     CELL_M, drift.mV[0], drift.mV[1], wx, wy);
+        const F32 inf = SSStormCouple::influence(hero.centre.x, hero.centre.y, hero.radius, wx, wy);
+        return SSDeckFrame::heroShift(hero, inf);
+    };
+
+    // <SS:Nexii> NEW-1 fix (2026-09-05, ssdeckframecore.h's producer/observer rule): this CELL loop is a PRODUCER
+    // MIRROR, not an observer - buildDeck's gate hash and presence read run at the lattice cell's PLAIN centre c
+    // (see ssdeckframecore.h line 34), so this loop's presence read (below) is likewise at the plain centre, no
+    // hero shift. The three-way replication is therefore: buildDeck's own cell gate (producer, plain centre),
+    // this CELL loop (producer mirror, plain centre) and ssVolCloudF.glsl's ss_cell_occupied (OBSERVER, gateAir =
+    // plain centre - S) - three implementations of one field, but only two of the three agree on which centre to
+    // hash; the TEXEL loop below is the bake's own observer and carries the S subtraction on EVERY read it makes,
+    // not only presence/tower/mottle - the cell-occupancy bilinear lookup is read at the texel's gateAir too (NEW-A
+    // fix, 2026-09-05: it used to index from the raw texel, disagreeing with presence/tower/mottle in the same
+    // loop), which is why the grid below is padded wide enough for a gateAir-shifted lookup to stay in bounds.
+    // [interaction: buildDeck's gate, ssVolCloudF.glsl's ss_cell_occupied]
+    // <SS:Nexii> Phase 6b (ssdecknoisecore.h CONTRACT): the presence half of this same gate lockstep is the
+    // de-tiled read (DETILE_SCALE, DETILE_ROT_RAD, DETILE_WEIGHT, all in ssdecknoisecore.h) on BOTH sides -
+    // noiseFieldAt does the mix internally on the CPU, so buildDeck's cell gate and this CELL loop's
+    // producer-mirror gate read the identical de-tiled field; ss_cell_occupied's GLSL side calls
+    // ss_noise_mapDetiled at its own cell centre (ssVolCloudF.glsl ~415), the GLSL twin of the same
+    // detileCoord/mixDetile formula, so the three-way lockstep this comment describes holds across the CPU/GLSL
+    // boundary too - pinned by V:\Scratch\atmo\tests\twin_detile.cpp's Part 3 call-site tests. Nothing new folds
+    // into the bake key above: the mix is a pure function of the read position, no camera/time/client state,
+    // exactly like the single read it replaces.
+    // <SS:Nexii> NEW-A fix: padded by heroShiftPadCells cells each side beyond the base +3 slop, so a texel whose
+    // gateAir has been pushed by up to HERO_SHIFT_CAP_M still resolves to an in-bounds bx/by (ceil(390 / 260) == 2).
+    const S32 heroShiftPadCells = (S32)std::ceil(SSDeckFrame::HERO_SHIFT_CAP_M / CELL_M);
+    const S32 c0x = llfloor(ox / CELL_M) - 1 - heroShiftPadCells;
+    const S32 c0y = llfloor(oy / CELL_M) - 1 - heroShiftPadCells;
+    const S32 cn = (S32)(span / CELL_M) + 3 + 2 * heroShiftPadCells;
     std::vector<F32> cell_occ((size_t)cn * (size_t)cn);
     for (S32 gy = 0; gy < cn; ++gy)
     {
@@ -820,6 +1617,10 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
                                + hashUnit(cx, cy, 1u + deck.mSalt) * (1.f - CLUSTER_WEIGHT);
             F32 presence = 1.f;
             F32 tower = 0.f;
+            // <SS:Nexii> NEW-1 fix: PRODUCER MIRROR - plain centre, no hero shift (see the CELL-loop comment
+            // above). gate_raw just above already hashes the plain (cx, cy); this presence read must classify
+            // the SAME plain cell buildDeck's own gate does, or the gate the shader observes at gateAir and the
+            // gate this bake's cell_occ array records would disagree on which cell counts as occupied.
             noiseFieldAt(deck, ((F32)cx + 0.5f) * CELL_M, ((F32)cy + 0.5f) * CELL_M, presence, tower);
             const F32 gate = gate_raw + (1.f - gate_raw) * (1.f - presence);
             cell_occ[(size_t)gy * cn + gx] = (gate <= deck.mCoverage) ? 1.f : 0.f;
@@ -837,6 +1638,19 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
     const F32 tau_scale = 5.0f * llclamp(deck.mThicknessM / 1000.f, 0.08f, 1.4f)
                         * (0.4f + 0.6f * llclamp(deck.mPuffDensity, 0.f, 1.f));
 
+    // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): the bake integrates every texel's column as if the full
+    // puffs_per_cell dial stood there, but buildDeck's own SSDeckLod::subAlpha/keepPuff thin the sub > 0 bodies
+    // with distance - so past THIN_START_M the sky the bake shades is darker than the sky actually drawn. Scaled
+    // per texel by SSDeckLod::shadowTauScale(dist, dial), read from the SAME SSAtmoCloudPuffsPerCell dial buildDeck
+    // reads (bakeGroundShadow has no `deck`-carried dial of its own to reuse). "dist" is from the bake's own
+    // camera CELL centre (cam_cx, cam_cy, already quantised above for the bake's key) to the texel's AIR position -
+    // the world-frame distance from the true camera is identical (both shift by the same live drift, which
+    // cancels), so no drift add/subtract is needed here.
+    static LLCachedControl<U32> shadow_dial_setting(gSavedSettings, "SSAtmoCloudPuffsPerCell", (U32)PUFFS_PER_CELL);
+    const S32 shadow_dial = llclamp((S32)shadow_dial_setting, MIN_PUFFS_PER_CELL, MAX_PUFFS_PER_CELL);
+    const F32 cam_air_wx = ((F32)cam_cx + 0.5f) * CELL_M;
+    const F32 cam_air_wy = ((F32)cam_cy + 0.5f) * CELL_M;
+
     const F32 texel = span / (F32)N;
     for (S32 ty = 0; ty < N; ++ty)
     {
@@ -845,9 +1659,22 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
             const F32 ax = ox + ((F32)tx + 0.5f) * texel;
             const F32 ay = oy + ((F32)ty + 0.5f) * texel;
 
-            // The four nearest cells' verdicts, cubic-eased over one cell - the veil's own softening, so the shadow's edges fall where the outermost puffs of an occupied cell reach.
-            const F32 qx = ax / CELL_M - 0.5f;
-            const F32 qy = ay / CELL_M - 0.5f;
+            // <SS:Nexii> NEW-1/NEW-2/NEW-A fix (2026-09-05, ssdeckframecore.h's producer/observer rule): this TEXEL
+            // loop is the bake's OBSERVER, so the read position itself moves for EVERY read it makes below -
+            // texel -> cell via floor((air - S) / CELL_M), then the occupancy lookup (NEW-A), presence AND mottle
+            // (NEW-2) all read at gateAir, not the raw texel. S depends on the owning cell and the owning cell
+            // is derived in ONE step from the texel's own quantized cell (floor(air/CELL_M)) - exactly as the fragment
+            // stage (samplePointM of its air) and precipNoiseAt do; no observer iterates a fixed point (ssdeckframecore.h,
+            // foldFrameKey's note), so the bake, the fragment and precip agree on S wherever their quantized cells agree.
+            // A two-step re-evaluation at the OWNING cell was tried and withdrawn (phase-4d review): inside the plateau
+            // it changed nothing, in the falloff ring it put the bake up to half a cell from the fragment's gate_air.
+            // Hoisted above the occupancy block so every read in this loop shares the one texel_gate_pt.
+            const SSDeckFrame::Vec2 texel_shift = heroShiftForCell(llfloor(ax / CELL_M), llfloor(ay / CELL_M));
+            const SSDeckFrame::Vec2 texel_gate_pt = SSDeckFrame::gateAir(SSDeckFrame::Vec2{ax, ay}, texel_shift);
+
+            // The four nearest cells' verdicts, cubic-eased over one cell - the veil's own softening, so the shadow's edges fall where the outermost puffs of an occupied cell reach. NEW-A fix: indexed from texel_gate_pt (the same shifted point presence/tower/mottle read below), not the raw texel - the cell_occ grid above is padded by heroShiftPadCells so this lookup stays in bounds even at the displacement cap.
+            const F32 qx = texel_gate_pt.x / CELL_M - 0.5f;
+            const F32 qy = texel_gate_pt.y / CELL_M - 0.5f;
             const S32 bx = llfloor(qx);
             const S32 by = llfloor(qy);
             const F32 sx = cubic_step(qx - (F32)bx);
@@ -860,16 +1687,27 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
             const F32 o11 = cell_occ[(size_t)(iy + 1) * cn + ix + 1];
             const F32 occ = lerp(lerp(o00, o10, sx), lerp(o01, o11, sx), sy);
 
+            // <SS:Nexii> Phase 6b (ssdecknoisecore.h CONTRACT): the mottle read below used to be a second, direct
+            // noiseSample call at the same point - now it takes the 5-arg overload's raw_n out-param instead, so
+            // the mottle is the SAME de-tiled field presence/tower were just derived from, not a plain single read
+            // that would show the map's un-broken tiling pattern under a de-tiled hole/tower carve.
             F32 presence = 1.f;
             F32 tower = 0.f;
-            noiseFieldAt(deck, ax, ay, presence, tower);
-
-            // The map's own mottle inside occupied regions, so a shadow is the cloud's shape and not its cell's. Neutral mid-grey while no map has read back.
-            F32 n = noiseSample(deck, ax, ay);
-            if (n < 0.f) n = 0.55f;
+            F32 n = 0.f;
+            noiseFieldAt(deck, texel_gate_pt.x, texel_gate_pt.y, presence, tower, n);
+            // noiseFieldAt's raw_n out-param stays at its 0.f default (not a negative sentinel) whenever
+            // noiseSample's own "not ready" gate trips - mirror that exact gate here, the same one noiseSample
+            // checks internally, rather than trusting n's value to tell ready from a genuine zero-luma sample.
+            if (deck.mNoiseW <= 0 || deck.mNoiseH <= 0 || deck.mNoiseLuma.empty() || deck.mNoiseTileM <= 0.f) n = 0.55f;
 
             const F32 dens = occ * presence * llclamp(0.25f + 1.1f * n, 0.f, 1.f);
-            const U8 b = (U8)llround(llclamp(expf(-dens * tau_scale), 0.f, 1.f) * 255.f);
+
+            const F32 tex_dx = ax - cam_air_wx;
+            const F32 tex_dy = ay - cam_air_wy;
+            const F32 tex_dist = sqrtf(tex_dx * tex_dx + tex_dy * tex_dy);
+            const F32 tau_here = tau_scale * SSDeckLod::shadowTauScale(tex_dist, shadow_dial);
+
+            const U8 b = (U8)llround(llclamp(expf(-dens * tau_here), 0.f, 1.f) * 255.f);
 
             const size_t idx = ((size_t)ty * N + tx) * 3;
             data[idx + 0] = b;
@@ -1139,9 +1977,35 @@ void SSVolCloud::render()
     static LLStaticHashedString s_cam_pos("ss_cam_pos");
     static LLStaticHashedString s_beam("ss_beam");
     static LLStaticHashedString s_rim("ss_rim");
+    static LLStaticHashedString s_edge_rails("ss_edge_rails");
     static LLStaticHashedString s_squash("ss_squash");
     static LLStaticHashedString s_clip("ss_clip");
     static LLStaticHashedString s_soft("ss_soft_m");
+    static LLStaticHashedString s_storm_n("ss_storm_n");
+    static LLStaticHashedString s_storm_a("ss_storm_a");
+    static LLStaticHashedString s_storm_b("ss_storm_b");
+    static LLStaticHashedString s_storm_c("ss_storm_c");
+    // <SS:Nexii> Phase 4, revised 2026-09-05 (doc/atmo_magic_wind_profile.md section 4, doc/atmo_magic_storm_dynamics.md
+    // section 3): the deck's frame transforms - see SSDeckFrameCore. Stale claim corrected: ss_shear_z/ss_shear_table are
+    // NOT weather-pass-only - EVERY deck's pass uploads its own baked table (never gated on weather_pass; see the upload
+    // site below - the shear lean is a wind-profile property of this deck's own column, not a storm phenomenon), and they
+    // are NOT unread - ssVolCloudF.glsl's ss_frame_shearTableAt / ss_frame_frameAir are called ONCE, UNCONDITIONALLY, on
+    // every fragment of both the puff and sheet paths (main()'s shared frame block, before the ss_sheet branch), so the
+    // table is read there too even though the sheet's OWN pattern reads then take gate_air, not shape_air. NEW-5 fix
+    // (2026-09-05), residue corrected same day: the sheet is NOT at the deck floor - it is drawn 46-106 m above z0 - so
+    // this is not "shape_air == gate_air because O(z) happens to be zero there"; per ssdeckframecore.h's corrected
+    // contract the veil sheet is base-anchored BY DEFINITION and every sheet read (presence, gate, mottle) uses gateAir
+    // unconditionally, never routing through shape_air/frameAir at all, at whatever height it is drawn. shape_air is
+    // still computed once per fragment in the shared frame block above (cheap, and the puff path needs it), the sheet
+    // path simply never reads it - one shared call site upstream, but the sheet's own reads are gate_air by definition,
+    // not by a coincidence of z0.
+    // ss_hero/ss_hero_c/ss_drift_vel below ARE gated to the weather pass, zero-filled for the under deck's pass, same
+    // rule as ss_storm_n - see their own upload comment.
+    static LLStaticHashedString s_shear_z("ss_shear_z");
+    static LLStaticHashedString s_shear_table("ss_shear_table");
+    static LLStaticHashedString s_hero("ss_hero");
+    static LLStaticHashedString s_hero_c("ss_hero_c");
+    static LLStaticHashedString s_drift_vel("ss_drift_vel");
 
     const LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
@@ -1183,6 +2047,15 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform2f(s_rim, FIELD_FADE_START_M, FIELD_DRAW_M * 0.98f);
 
+    // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT), doc/atmo_magic_far_clouds.md section 2 step 3 and phase 6a
+    // outcome: an INTENDED VALUE CHANGE, not a same-math relocation - the veil used to fade on its own hardcoded
+    // 6800/9800 rails (ssVolCloudF.glsl, pre-phase-6a), fully independent of the puffs' own edge ramp. Those
+    // numbers are gone; ss_edge_rails now carries SSDeckLod::FIELD_FADE_START_M/DECK_EDGE_M (8000/9800), so the
+    // fade start moved 6800 -> 8000 and the veil's dissolve now literally agrees with buildDeck's own
+    // SSDeckLod::edgeFade() call on the puffs - both dissolve on FIELD_FADE_START_M -> DECK_EDGE_M (ss_rim above
+    // is the separate dome-band rim convergence, still FIELD_DRAW_M*0.98, and is untouched).
+    gSSVolCloudProgram.uniform2f(s_edge_rails, SSDeckLod::FIELD_FADE_START_M, SSDeckLod::DECK_EDGE_M);
+
     gSSVolCloudProgram.uniform3f(s_squash, mSquashKnee, mSquashCap, mEffRadius);
 
     static const F32 SOFT_M = 112.5f;
@@ -1201,7 +2074,13 @@ void SSVolCloud::render()
     gSSVolCloudProgram.uniform2f(s_wind, wind.mV[0], wind.mV[1]);
 
     // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and the shared uniforms above survive across both.
-    const bool under_on_top = mUnder.mMeanDistSq < mPrimary.mMeanDistSq;
+    // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): routed through SSDeckLod::underOnTop's hysteresis rather
+    // than a bare mMeanDistSq compare - the two decks' mean puff distance can cross back and forth across a frame
+    // or two right at the boundary (both are rebuilt every frame, and thinning/tessellation move each mean a
+    // little), which used to flicker the draw order every such frame. mUnderOnTop is this call's own `prev`,
+    // carried across frames on the class; the function's own ORDER_HYST_M2 band absorbs the jitter.
+    mUnderOnTop = SSDeckLod::underOnTop(mUnderOnTop, mUnder.mMeanDistSq, mPrimary.mMeanDistSq);
+    const bool under_on_top = mUnderOnTop;
     Deck* order[2] = { under_on_top ? &mPrimary : &mUnder,
                        under_on_top ? &mUnder    : &mPrimary };
 
@@ -1244,6 +2123,56 @@ void SSVolCloud::render()
         gSSVolCloudProgram.uniform1f(s_noise_hole, deck.mNoiseHole);
         gSSVolCloudProgram.uniform2f(s_tower_ramp, deck.mNoiseTowerLo, deck.mNoiseTowerHi);
 
+        // <SS:Nexii> Phase 3 (doc/atmo_magic_storm_dynamics.md section 3): the coupled storm cells, uploaded for
+        // the WEATHER deck pass only (whichever of mPrimary/mUnder weatherDeck() resolves to this frame -
+        // buildDeck's own skip keys mStormCells/mStormCellCount to that same deck's build, review S4). ss_storm_n
+        // zero for the other deck's pass reads as "no cells" to the shader without this function needing to know
+        // that reason. review S7: the shader DOES read these now (ssVolCloudF.glsl's ss_storm_sampleAt /
+        // ss_storm_towerFromMap / ss_storm_anvilWeight, wired since phase 3) - this is not a forward-looking upload
+        // ahead of an unwired consumer. Layout is ss_storm_a.xy/z/w, ss_storm_b.xyzw, ss_storm_c.xy/z, matching
+        // SSStormCouple::CellUniform's own field comments field-for-field.
+        {
+            const bool weather_pass = (&deck == weatherDeck());
+            const S32 storm_n = weather_pass ? mStormCellCount : 0;
+            gSSVolCloudProgram.uniform1i(s_storm_n, storm_n);
+
+            LLVector4 storm_a[SSStormCouple::MAX_CELLS];
+            LLVector4 storm_b[SSStormCouple::MAX_CELLS];
+            LLVector4 storm_c[SSStormCouple::MAX_CELLS];
+            for (S32 i = 0; i < SSStormCouple::MAX_CELLS; ++i)
+            {
+                const SSStormCouple::CellUniform& c = weather_pass ? mStormCells[i] : SSStormCouple::CellUniform();
+                storm_a[i] = LLVector4(c.x, c.y, c.radius, c.boost);
+                storm_b[i] = LLVector4(c.anvil, c.meso, c.overshoot, c.mammatus);
+                storm_c[i] = LLVector4(c.dirX, c.dirY, c.rotSign, 0.f);
+            }
+            gSSVolCloudProgram.uniform4fv(s_storm_a, SSStormCouple::MAX_CELLS, (F32*)storm_a);
+            gSSVolCloudProgram.uniform4fv(s_storm_b, SSStormCouple::MAX_CELLS, (F32*)storm_b);
+            gSSVolCloudProgram.uniform4fv(s_storm_c, SSStormCouple::MAX_CELLS, (F32*)storm_c);
+
+            // <SS:Nexii> Phase 4: the deck's own baked O(z) table - EVERY deck's pass uploads its own (never
+            // gated on weather_pass; the shear lean is a wind-profile property of this deck's own column, not a
+            // storm phenomenon - see buildDeck's unconditional bake). ss_shear_z is (z0, z1); ss_shear_table[i] is
+            // o[i] as SSDeckFrame::ShearTable lays it out, so shearTableAt's GLSL twin reads the identical layout.
+            gSSVolCloudProgram.uniform2f(s_shear_z, deck.mShearTable.z0, deck.mShearTable.z1);
+            LLVector2 shear_table[SSDeckFrame::SHEAR_TABLE_N];
+            for (S32 i = 0; i < SSDeckFrame::SHEAR_TABLE_N; ++i)
+            {
+                shear_table[i] = LLVector2(deck.mShearTable.o[i].x, deck.mShearTable.o[i].y);
+            }
+            gSSVolCloudProgram.uniform2fv(s_shear_table, SSDeckFrame::SHEAR_TABLE_N, (F32*)shear_table);
+
+            // <SS:Nexii> Phase 4: the hero's frame-shift inputs, gated to the weather pass exactly like ss_storm_n
+            // above (mHeroFrame is only ever non-zero for weatherDeck()'s own build) - ss_hero is (motion.xy,
+            // ageS, radius), ss_hero_c the centre, ss_drift_vel the applier's curve-resolved rate, matching
+            // SSDeckFrame::HeroFrame's own fields. Zero-filled for the under deck's pass, which reads as "no
+            // hero" to heroShift's own invariant (ageS <= 0).
+            const SSDeckFrame::HeroFrame& hf = weather_pass ? mHeroFrame : SSDeckFrame::HeroFrame();
+            gSSVolCloudProgram.uniform4f(s_hero, hf.motion.x, hf.motion.y, hf.ageS, hf.radius);
+            gSSVolCloudProgram.uniform2f(s_hero_c, hf.centre.x, hf.centre.y);
+            gSSVolCloudProgram.uniform2f(s_drift_vel, hf.driftVel.x, hf.driftVel.y);
+        }
+
         // <SS:Nexii> The cell gate's inputs, for the base veil: the builder's coverage threshold and this deck's hash salt, so the veil's fragment stage can re-run the exact cell gate the puff loop above ran (cluster noise, cell hash, the presence push, gate vs coverage) and open its gaps precisely under the sky the builder left empty of puffs. [interaction: buildDeck's gate at the coverage check - the two must run the same numbers or veil and field disagree about where the deck is]
         gSSVolCloudProgram.uniform1f(s_coverage, deck.mCoverage);
         gSSVolCloudProgram.uniform1f(s_cell_salt, (F32)deck.mSalt);
@@ -1281,8 +2210,13 @@ void SSVolCloud::render()
             const F32 z = deck.mSheetZ;
 
             // <SS:Nexii> The sheet is TILED, on the same air-frame cell grid the puffs are placed on (CELL_M steps about the camera's cell, corners slid back by the drift into world space), not drawn as the one camera-centred rect it used to be. The far-field squash is exact per VERTEX, and the fragment stage un-squashes per fragment along the view ray - but a fragment inside a triangle gets its drawn position by interpolation, and the squash bends the sheet's plane, so a triangle as wide as the old 10 km rect reconstructed a world position tens to hundreds of metres off its true plane point, by an amount that changes with the camera's relation to the sheet: the veil swam across the field with every camera move and its texture would not sit under the puffs. At puff-quad scale the interpolation error collapses to nothing, sheet and field read from one anchored frame, and the per-tile cull keeps the pass inside the same draw radius the puffs run.
-            const F32 draw_sq = FIELD_DRAW_M * FIELD_DRAW_M;
-            const S32 sheet_radius = llceil(FIELD_DRAW_M / CELL_M);
+            // <SS:Nexii> LOD phase: the sheet's own reach is max(FIELD_DRAW_M, SSDeckLod::DECK_EDGE_M) rather than
+            // FIELD_DRAW_M alone - today FIELD_DRAW_M (10000 m) already covers DECK_EDGE_M (9800 m), but the tile
+            // loop must not silently fall short of the veil's own fade rail (ss_edge_rails above) if the two
+            // constants are ever retuned so DECK_EDGE_M leads.
+            const F32 sheet_reach = llmax(FIELD_DRAW_M, SSDeckLod::DECK_EDGE_M);
+            const F32 draw_sq = sheet_reach * sheet_reach;
+            const S32 sheet_radius = llceil(sheet_reach / CELL_M);
             const S32 scx0 = llfloor((cam_pos.mV[VX] - drift.mV[0]) / CELL_M);
             const S32 scy0 = llfloor((cam_pos.mV[VY] - drift.mV[1]) / CELL_M);
 
@@ -1321,44 +2255,77 @@ void SSVolCloud::render()
         gGL.begin(LLRender::TRIANGLES);
         for (const Puff& puff : deck.mPuffs)
         {
-            LLVector3 normal = cam_pos - puff.mPosAgent;
-            if (normal.normalize() < 0.001f)
-            {
-                normal = LLVector3::z_axis;
-            }
+            LLVector3 right;
+            LLVector3 up;
 
-            const F32 flatten = llclamp((llabs(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
-            if (flatten > 0.f)
+            if (puff.mShaft)
             {
-                const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;
-                normal = normal * (1.f - flatten) + LLVector3(0.f, 0.f, sgn) * flatten;
+                // <SS:Nexii> Distant rain shaft (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): Z-axis
+                // billboarded, not camera-facing like an ordinary puff's disc - vertical, rotating in yaw only, so
+                // the curtain never goes edge-on and vanishes the way a world-fixed quad would. right is the
+                // horizontal perpendicular to the puff-to-camera direction (the same ref % normal shape the puff
+                // branch below uses, with ref pinned to z_axis and normal flattened into the horizontal plane
+                // rather than the puff's own facing/flatten blend); up is the fixed world Z axis, never derived
+                // from a cross product, so the card's height never rotates into the horizontal.
+                LLVector3 normal = cam_pos - puff.mPosAgent;
+                normal.mV[VZ] = 0.f;
                 if (normal.normalize() < 0.001f)
                 {
-                    normal.setVec(0.f, 0.f, sgn);
+                    normal = cam_right_fallback;
+                    normal.mV[VZ] = 0.f;
+                    if (normal.normalize() < 0.001f) normal = LLVector3::x_axis;
                 }
+
+                LLVector3 base_right = LLVector3::z_axis % normal;
+                if (base_right.normalize() < 0.001f)
+                {
+                    base_right = cam_right_fallback;
+                }
+
+                right = base_right * puff.mRadius;
+                up = LLVector3::z_axis * puff.mHalfHeightM;
             }
-
-            LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
-                          + LLVector3::x_axis * flatten;
-            ref.normalize();
-
-            LLVector3 base_right = ref % normal;
-            if (base_right.normalize() < 0.001f)
+            else
             {
-                base_right = cam_right_fallback;
+                LLVector3 normal = cam_pos - puff.mPosAgent;
+                if (normal.normalize() < 0.001f)
+                {
+                    normal = LLVector3::z_axis;
+                }
+
+                const F32 flatten = llclamp((llabs(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
+                if (flatten > 0.f)
+                {
+                    const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;
+                    normal = normal * (1.f - flatten) + LLVector3(0.f, 0.f, sgn) * flatten;
+                    if (normal.normalize() < 0.001f)
+                    {
+                        normal.setVec(0.f, 0.f, sgn);
+                    }
+                }
+
+                LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
+                              + LLVector3::x_axis * flatten;
+                ref.normalize();
+
+                LLVector3 base_right = ref % normal;
+                if (base_right.normalize() < 0.001f)
+                {
+                    base_right = cam_right_fallback;
+                }
+                const LLVector3 base_up = normal % base_right;
+
+                const F32 layer_h = llclamp(
+                    (puff.mPosAgent.mV[VZ] - deck.mBaseZ) / deck.mThicknessM, 0.f, 1.f);
+                const F32 round = llclamp(
+                    (layer_h - PUFF_ROUND_LO) / (PUFF_ROUND_HI - PUFF_ROUND_LO), 0.f, 1.f);
+
+                const F32 wide = PUFF_WIDE + (1.f - PUFF_WIDE) * round;
+                const F32 tall = PUFF_TALL + (1.f - PUFF_TALL) * round;
+
+                right = base_right * (puff.mRadius * wide);
+                up = base_up * (puff.mRadius * tall);
             }
-            const LLVector3 base_up = normal % base_right;
-
-            const F32 layer_h = llclamp(
-                (puff.mPosAgent.mV[VZ] - deck.mBaseZ) / deck.mThicknessM, 0.f, 1.f);
-            const F32 round = llclamp(
-                (layer_h - PUFF_ROUND_LO) / (PUFF_ROUND_HI - PUFF_ROUND_LO), 0.f, 1.f);
-
-            const F32 wide = PUFF_WIDE + (1.f - PUFF_WIDE) * round;
-            const F32 tall = PUFF_TALL + (1.f - PUFF_TALL) * round;
-
-            const LLVector3 right = base_right * (puff.mRadius * wide);
-            const LLVector3 up = base_up * (puff.mRadius * tall);
 
             // <SS:Nexii> The card, exactly as it has always been: four corners, one quad, no
             // vertex displacement of any kind. Every bit of near-field detail is built geometry
@@ -1370,8 +2337,11 @@ void SSVolCloud::render()
             // the LOD was meant to leave alone.
             // r the structural form, g the buried depth (Puff::mBuried) the storm gloom grades
             // over, a the edge fade - the shader multiplies its own sky light in (see the
-            // vary_color note in ssVolCloudV.glsl); b spare.
-            gGL.color4f(puff.mForm, puff.mBuried, 0.f, puff.mAlpha);
+            // vary_color note in ssVolCloudV.glsl); b is the shaft flag (1 for a virga card, 0 for
+            // an ordinary puff/the sheet) - the fragment stage decodes it before shading and takes
+            // the shaft path (vertical alpha ramp, no puff texture window, taper) instead of the
+            // puff carve. [interaction: ssVolCloudF.glsl's shaft decode]
+            gGL.color4f(puff.mForm, puff.mBuried, puff.mShaft ? 1.f : 0.f, puff.mAlpha);
 
             gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
             gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
@@ -1771,12 +2741,44 @@ F32 SSVolCloud::noiseSample(const Deck& deck, F32 air_x, F32 air_y) const
 // already inside it, so every reader of the field gets the same sky.
 void SSVolCloud::noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower) const
 {
+    F32 raw_n;
+    noiseFieldAt(deck, air_x, air_y, presence, tower, raw_n);
+}
+
+// <SS:Nexii> Phase 3 overload - see the header note. presence and tower are computed exactly as the 4-arg overload
+// always has (unchanged by the storm coupling); raw_n is the map sample the hole/tower ramps were run on, 0 when
+// there is no map cached (matching noiseSample's own "not ready" sentinel before this function used to discard it).
+// <SS:Nexii> Phase 6b (doc/atmo_magic_far_clouds.md section 2 step 4, ssdecknoisecore.h CONTRACT): this is the ONE
+// place every CPU consumer of presence/n_map shares (the builder, precipNoiseAt, the shadow bake's cell loop and
+// texel loop all route through here now - none of them calls noiseSample directly for presence or n_map any
+// more), so the de-tile mix lives here and nowhere else on the CPU side. n = mixDetile(noiseSample(air),
+// noiseSample(detileCoord(air))) - a second, incommensurate-scale-and-rotation read of the SAME map, mixed with
+// the first, so the map's own tiling period stops being a visible repeat at the far edge of the field. Pure
+// function of (deck, air_x, air_y) - nothing camera- or time-dependent enters this read, so the shadow bake's key
+// folds nothing new for it (deck.mNoiseTileM/mSalt/mNoiseW are already folded, and DETILE_SCALE/ROT/WEIGHT are
+// compile-time constants, not per-client state). raw_n out-param is the de-tiled value too, not the single-read
+// raw n - every reader of raw_n (tower's map sample, precipNoiseAt's shifted read, the bake's mottle read) gets
+// the same de-tiled field the hole/tower ramps below were run on. ssVolCloudF.glsl's ss_cell_occupied presence
+// fetch, sheet presence read and puff-path n_map read carry the matching mix too (ss_noise_mapDetiled, the
+// GLSL twin of detileCoord/mixDetile) - this comment previously read "NOT yet changed... pending" while the
+// shader file already had it; that was stale, not a statement of the CPU-only state at the time it was written.
+// [interaction: ssVolCloudF.glsl's ss_cell_occupied, sheet presence read, puff-path n_map read - ss_noise_mapDetiled]
+void SSVolCloud::noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower, F32& raw_n) const
+{
     presence = 1.f;
     tower = 0.f;
+    raw_n = 0.f;
 
-    const F32 n = noiseSample(deck, air_x, air_y);
-    if (n < 0.f) return;
+    const F32 n1 = noiseSample(deck, air_x, air_y);
+    if (n1 < 0.f) return;
 
+    // n2's own "not ready" gate reads the same deck fields (w/h/tileM) as n1's just did, so it cannot fail here
+    // when n1 did not - both reads always land on the mix, exactly as the CONTRACT's formula states.
+    const SSDeckNoise::Vec2 detiled = SSDeckNoise::detileCoord(SSDeckNoise::Vec2{air_x, air_y});
+    const F32 n2 = noiseSample(deck, detiled.x, detiled.y);
+    const F32 n = SSDeckNoise::mixDetile(n1, n2);
+
+    raw_n = n;
     const F32 cut = ss_smoothstep(SS_HOLE_LO, SS_HOLE_HI, n);
     presence = 1.f - (1.f - cut) * deck.mNoiseHole;
     tower = ss_smoothstep(deck.mNoiseTowerLo, deck.mNoiseTowerHi, n);
@@ -1806,12 +2808,89 @@ LLVector2 SSVolCloud::precipNoiseAt(const LLVector3& pos_agent) const
     // The air frame, the same one the cells are placed in, so the gate moves with the deck.
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
 
+    // <SS:Nexii> Phase 3 (doc/atmo_magic_storm_dynamics.md section 3): the storm's downwind precipitation shift -
+    // SSStormCouple::precipShift - through this deck's coupled cells ONLY when this deck IS weatherDeck() (`deck`
+    // above already is weatherDeck(), whichever of mPrimary/mUnder that resolves to this frame - buildDeck fetches
+    // mStormCells/mStormCellCount for that same deck and only that deck, so a plain mStormCellCount > 0 check is
+    // enough here; no separate deck-identity test is needed since `deck` cannot be anything else). review 3b NEW-7
+    // (doc S3 "Sample point lockstep"): the storm sample is taken at the QUANTIZED cell centre of the landing
+    // point - SSStormCouple::samplePointM - the same point buildDeck's per-cell sample and the shader's own
+    // literal twin (ss_storm_samplePoint) use, not the raw sub-cell pos_agent; otherwise this reads a finer-grained
+    // storm figure than the deck was actually built with, and geometry/carve/rain could disagree at a storm's
+    // edge. Its boost widens the tower window exactly as the builder's does; only the noise MAP lookup feeding
+    // towerFromMap moves to the shifted, upwind point, so the rain reads as fed from the updraft's actual column
+    // while the updraft itself stays rain-free.
+    // <SS:Nexii> Phase 4 (doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud drift"): the landing
+    // point's quantized cell centre, WORLD frame - the same samplePointM call phase 3 already made for the storm
+    // sample, now shared with the hero influence weight below (it no longer waits on coupled_deck: the hero's
+    // shift must be known before the presence read runs, and mHeroFrame.ageS is only ever > 0 when coupled_deck
+    // is also true, so this costs nothing extra on an uncoupled deck).
+    F32 sample_x = 0.f;
+    F32 sample_y = 0.f;
+    SSStormCouple::samplePointM(pos_agent.mV[VX] - drift.mV[0], pos_agent.mV[VY] - drift.mV[1],
+                                 CELL_M, drift.mV[0], drift.mV[1], sample_x, sample_y);
+
+    F32 shift_x = 0.f;
+    F32 shift_y = 0.f;
+    SSStormCouple::Sample sample;
+    const bool coupled_deck = mStormCellCount > 0;
+    if (coupled_deck)
+    {
+        sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, sample_x, sample_y);
+        SSStormCouple::precipShift(sample, shift_x, shift_y);
+    }
+
+    // <SS:Nexii> Phase 4: the hero's rigid local shift, evaluated at the UNSHIFTED quantized cell centre
+    // (sample_x, sample_y) exactly as buildDeck's own per-cell hero_shift_m is - per-cell lockstep with the
+    // builder that placed this deck. Zero whenever there is no hero, making gateAir below an identity read.
+    const F32 hero_influence = (mHeroFrame.ageS > 0.f)
+        ? SSStormCouple::influence(mHeroFrame.centre.x, mHeroFrame.centre.y, mHeroFrame.radius, sample_x, sample_y)
+        : 0.f;
+    const SSDeckFrame::Vec2 hero_shift_m = SSDeckFrame::heroShift(mHeroFrame, hero_influence);
+
+    // <SS:Nexii> review S1: presence is read at the UNDISPLACED point - pos_agent - drift, the same point the
+    // builder's own cell gate ran at - or rain would fall out of holes that were never shifted. Only the raw map
+    // sample feeding towerFromMap (the second lookup below) moves to the shifted, upwind point; presence and tower
+    // therefore come from two separate noiseFieldAt calls whenever the deck is coupled. Phase 4: both reads now
+    // additionally go through gateAir, subtracting the hero's own shift - the same GATE transform buildDeck's
+    // cell loop applies, so presence/tower agree with the deck the rain is falling from at a hero's edge too.
+    const SSDeckFrame::Vec2 gate_pt = SSDeckFrame::gateAir(
+        SSDeckFrame::Vec2{pos_agent.mV[VX] - drift.mV[0], pos_agent.mV[VY] - drift.mV[1]}, hero_shift_m);
     F32 presence = 1.f;
     F32 tower = 0.f;
-    noiseFieldAt(*deck,
-                 pos_agent.mV[VX] - drift.mV[0],
-                 pos_agent.mV[VY] - drift.mV[1],
-                 presence, tower);
+    F32 raw_n = 0.f;
+    noiseFieldAt(*deck, gate_pt.x, gate_pt.y, presence, tower, raw_n);
+
+    if (coupled_deck)
+    {
+        // <SS:Nexii> phase-3c fix F4: only the raw map sample at the shifted point is used here (tower is
+        // re-derived from it below), so this reads raw_n through the 5-arg noiseFieldAt's out-param - the overload
+        // that exposes it without discarding a presence/tower pair - instead of two now-dropped, always-discarded
+        // shifted_presence/shifted_tower out-params from the 6-arg noiseFieldAt. Phase 4: gateAir applies here too,
+        // ON TOP of the existing precip shift (shift_x/shift_y) - the hero shift stays on the raw_n read only,
+        // exactly as the precip shift already did; presence above never sees either.
+        // <SS:Nexii> Phase 6b (ssdecknoisecore.h CONTRACT): raw_n is now the de-tiled read (noiseFieldAt does the
+        // mix internally), and its "not ready" case already floors to 0.f inside noiseFieldAt - the llmax(...,
+        // 0.f) this used to wrap a direct noiseSample call with is no longer needed (a plain noiseSample call
+        // here would also have skipped the de-tile mix entirely, which the contract forbids for any n_map read).
+        const SSDeckFrame::Vec2 shifted_gate_pt = SSDeckFrame::gateAir(
+            SSDeckFrame::Vec2{pos_agent.mV[VX] - shift_x - drift.mV[0], pos_agent.mV[VY] - shift_y - drift.mV[1]},
+            hero_shift_m);
+        F32 shifted_presence = 1.f;
+        F32 shifted_tower = 0.f;
+        F32 shifted_raw_n = 0.f;
+        noiseFieldAt(*deck, shifted_gate_pt.x, shifted_gate_pt.y, shifted_presence, shifted_tower, shifted_raw_n);
+        tower = SSStormCouple::towerFromMap(shifted_raw_n, deck->mNoiseTowerLo, deck->mNoiseTowerHi, sample.boost);
+    }
+    else
+    {
+        // <SS:Nexii> review 3b NEW-10 / review S12: tower is derived through SSStormCouple::towerFromMap here too,
+        // boost 0, rather than left at noiseFieldAt's own internal ss_smoothstep result above (the value `tower`
+        // already holds) - one implementation for both of precipNoiseAt's paths, matching the builder's own S12
+        // discipline, even though towerFromMap(raw_n, lo, hi, 0) == smoothstep(lo, hi, n) makes this a no-op today.
+        tower = SSStormCouple::towerFromMap(raw_n, deck->mNoiseTowerLo, deck->mNoiseTowerHi, 0.f);
+    }
+
     return LLVector2(presence, tower);
 }
 
@@ -1931,14 +3010,35 @@ void SSVolCloud::renderDebug()
     band(mUnder,   LLColor4(1.00f, 0.72f, 0.35f, 0.30f));
 
     // <SS:Nexii> The builder's cell gate, as one call both views can share: the cluster lattice and the per-cell hash mixed by CLUSTER_WEIGHT, then pushed toward a certain skip wherever the noise map's presence runs low. A cell holds cloud when this comes back at or under the deck's coverage. Kept in step with buildDeck by hand - the fragment stage replicates the same lines a third time (ssVolCloudF.glsl), and all three must move together.
-    auto cellGate = [&](const Deck& deck, S32 cx, S32 cy, F32& presence, F32& tower) -> F32
+    // <SS:Nexii> review S6/S12: tower is derived through SSStormCouple::towerFromMap exactly as buildDeck's does,
+    // never a bare ss_smoothstep re-spelling - and, when this deck IS weatherDeck() and cells are coupled, sampled
+    // through SSStormCouple::sampleAt at this cell's WORLD centre (air cell centre + drift, the caller's own
+    // drift) so the two views this helper feeds see the same storm-widened window buildDeck used, not a
+    // storm-blind replay of it. storm_sample is returned so a caller (the V2 column outline) can also fold
+    // storm_sample.anvil into SSStormCouple::anvilWeight the same way buildDeck's cell_anvil does.
+    auto cellGate = [&](const Deck& deck, S32 cx, S32 cy, F32 drift_x, F32 drift_y,
+                         F32& presence, F32& tower, SSStormCouple::Sample& storm_sample) -> F32
     {
         const F32 gate_raw = clusterUnit(cx, cy, deck.mSalt) * CLUSTER_WEIGHT
                            + hashUnit(cx, cy, 1u + deck.mSalt) * (1.f - CLUSTER_WEIGHT);
 
         presence = 1.f;
         tower = 0.f;
-        noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower);
+        F32 raw_n = 0.f;
+        noiseFieldAt(deck, (F32)(cx + 0.5) * CELL_M, (F32)(cy + 0.5) * CELL_M, presence, tower, raw_n);
+
+        storm_sample = SSStormCouple::Sample();
+        if (&deck == weatherDeck() && mStormCellCount > 0)
+        {
+            // <SS:Nexii> phase-3c fix F2: routed through SSStormCouple::samplePointM, the same call buildDeck's
+            // per-cell sample and precipNoiseAt's landing-point sample now both make - one point, one call site
+            // form, per doc S3 "Sample point lockstep" - rather than a third hand-derived copy of the same lines.
+            F32 world_x, world_y;
+            SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
+                                         CELL_M, drift_x, drift_y, world_x, world_y);
+            storm_sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, world_x, world_y);
+        }
+        tower = SSStormCouple::towerFromMap(raw_n, deck.mNoiseTowerLo, deck.mNoiseTowerHi, storm_sample.boost);
 
         return gate_raw + (1.f - gate_raw) * (1.f - presence);
     };
@@ -1966,7 +3066,8 @@ void SSVolCloud::renderDebug()
 
                     F32 presence = 1.f;
                     F32 tower = 0.f;
-                    const F32 gate = cellGate(deck, cx, cy, presence, tower);
+                    SSStormCouple::Sample storm_sample;
+                    const F32 gate = cellGate(deck, cx, cy, drift.mV[0], drift.mV[1], presence, tower, storm_sample);
                     const bool kept = gate <= deck.mCoverage;
 
                     const LLVector3 at((F32)cx * CELL_M + CELL_M * 0.5f + drift.mV[0],
@@ -2009,12 +3110,7 @@ void SSVolCloud::renderDebug()
             const F32 base_radius = CELL_M * PUFF_CELL_FRACTION * 0.5f;
             const F32 size_gain = 1.f + PUFF_THICKNESS_GAIN * (deck.mThicknessM / 500.f);
 
-            // The builder's own gains, off the weather the deck was built under.
-            const F32 storm = ss_smoothstep(0.55f, 0.85f, deck.mMoisture)
-                            * ss_smoothstep(0.45f, 0.75f, deck.mConvection);
-            const F32 conv_gain = ss_smoothstep(0.12f, 0.55f, deck.mConvection) * (1.f - storm);
             const F32 anvil_gate = ss_smoothstep(0.40f, 0.60f, deck.mConvection);
-            const F32 early_anvil = ss_smoothstep(0.40f, 0.70f, deck.mConvection);
 
             const S32 cx0 = llfloor((cam.mV[VX] - drift.mV[0]) / CELL_M);
             const S32 cy0 = llfloor((cam.mV[VY] - drift.mV[1]) / CELL_M);
@@ -2028,19 +3124,49 @@ void SSVolCloud::renderDebug()
 
                     F32 presence = 1.f;
                     F32 tower = 0.f;
-                    const F32 gate = cellGate(deck, cx, cy, presence, tower);
+                    SSStormCouple::Sample storm_sample;
+                    const F32 gate = cellGate(deck, cx, cy, drift.mV[0], drift.mV[1], presence, tower, storm_sample);
                     if (gate > deck.mCoverage) continue;
+
+                    // <SS:Nexii> Phase 4 fixup (F10): the hero's local frame shift for this cell, PRODUCER rule -
+                    // S is evaluated at the UNSHIFTED cell centre, the same pattern buildDeck's placement loop
+                    // follows - so the outline leans with the same puffs it explains instead of drawing a straight
+                    // column through a hero's shift. Zero whenever this deck is not weatherDeck(), there are no
+                    // coupled cells, or there is no hero, exactly as buildDeck's own hero_influence gate reads.
+                    F32 world_x, world_y;
+                    SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
+                                                 CELL_M, drift.mV[0], drift.mV[1], world_x, world_y);
+                    const bool couple_storm_view = (&deck == weatherDeck()) && mStormCellCount > 0;
+                    const F32 hero_influence = (couple_storm_view && mHeroFrame.ageS > 0.f)
+                        ? SSStormCouple::influence(mHeroFrame.centre.x, mHeroFrame.centre.y, mHeroFrame.radius, world_x, world_y)
+                        : 0.f;
+                    const SSDeckFrame::Vec2 hero_shift_m = SSDeckFrame::heroShift(mHeroFrame, hero_influence);
 
                     const F32 coreness = llclamp(
                         (deck.mCoverage - gate) / llmax(deck.mCoverage, 0.01f), 0.f, 1.f);
-                    const F32 height_shape =
-                        lerp(1.f, SS_POCKET_H + (1.f - SS_POCKET_H) * tower, conv_gain);
-                    const F32 cell_height =
-                        (CLUSTER_EDGE_HEIGHT + (1.f - CLUSTER_EDGE_HEIGHT) * coreness) * height_shape;
-                    const F32 cell_anvil = llmax(deck.mAnvil, early_anvil * tower);
+                    // <SS:Nexii> review S6 / review 3b NEW-3: cellShapeAt is the SAME helper buildDeck's placement
+                    // loop calls, so cell_height/cell_anvil (and the storm's own anvil term, storm_sample.anvil, 0
+                    // off-cell/uncoupled, folded in via SSStormCouple::anvilWeight inside it) can never drift
+                    // between what is actually built and what this overlay draws as its explanation of it.
+                    // <SS:Nexii> review 3b NEW-3 (phase-3c F4: moved to this read site): deck.mStormEff, not a
+                    // second hand-spelled SSStormCouple::consolidation(deck.mMoisture, deck.mConvection) - buildDeck
+                    // already bakes the storm-delegated figure it actually used (cellsActive included) onto the
+                    // deck, and reading anything else here would show a different consolidation than the one that
+                    // shaped the cloud on screen.
+                    const SSStormCouple::CellShape shape = SSStormCouple::cellShapeAt(deck.mConvection, deck.mStormEff, tower, coreness, deck.mAnvil, storm_sample.anvil);
+                    const F32 cell_height = shape.cell_height;
+                    const F32 cell_anvil = shape.cell_anvil;
 
-                    const F32 wx = (F32)cx * CELL_M + CELL_M * 0.5f + drift.mV[0];
-                    const F32 wy = (F32)cy * CELL_M + CELL_M * 0.5f + drift.mV[1];
+                    // <SS:Nexii> review 3b NEW-3, updated by NEW-4 (2026-09-05): the overshoot lift buildDeck adds
+                    // to sub-puff 0 (SSStormCouple::overshootBonusM), mirrored onto the outline's own top
+                    // (i == steps below) so the drawn ceiling matches where that puff actually reaches instead of
+                    // stopping short of it. Sub 0 IS the cell's tallest sub-puff as of NEW-4's deterministic swap
+                    // (buildDeck's own comment) - a world-state, camera-free swap of the hashed height with
+                    // whichever sub actually hashed the cell's maximum - so "sub 0" and "the tallest sub-puff" are
+                    // the same puff by construction, not merely both lifted by the same formula.
+                    const F32 overshoot_topM = (storm_sample.overshoot > 0.f)
+                        ? SSStormCouple::overshootBonusM(deck.mThicknessM, storm_sample.overshoot)
+                        : 0.f;
 
                     // The two sides of the silhouette, walked together so the outline closes
                     // at both ends and the flare reads as one shape rather than two curves.
@@ -2059,14 +3185,35 @@ void SSVolCloud::renderDebug()
                             : ss_smoothstep(0.55f, 0.85f, up);
                         const F32 puff_anvil = llmax(cell_anvil, ramp_v * anvil_gate);
 
-                        const F32 flat = 1.f + puff_anvil * coreness * (waist + flare - 1.f);
+                        // <SS:Nexii> review 3b NEW-3: mammatus flares this same flatten term on the outline's top
+                        // third (up_cell >= SSStormCouple::MAMMATUS_TOP_FRAC) exactly as buildDeck's per-sub-puff
+                        // flatten_term does - the overlay was drawing every mammatus-flared cell as if it were
+                        // unflared.
+                        F32 flatten_term = waist + flare - 1.f;
+                        if (storm_sample.mammatus > 0.f && up_cell >= SSStormCouple::MAMMATUS_TOP_FRAC)
+                        {
+                            flatten_term *= SSStormCouple::mammatusScale(storm_sample.mammatus);
+                        }
+                        const F32 flat = 1.f + puff_anvil * coreness * flatten_term;
 
                         const F32 round = llclamp(
                             (up - PUFF_ROUND_LO) / (PUFF_ROUND_HI - PUFF_ROUND_LO), 0.f, 1.f);
                         const F32 wide = PUFF_WIDE + (1.f - PUFF_WIDE) * round;
 
                         const F32 half_w = base_radius * size_gain * flat * wide;
-                        const LLVector3 at(wx, wy, deck.mBaseZ + up * deck.mThicknessM);
+                        F32 z = deck.mBaseZ + up * deck.mThicknessM;
+                        if (i == steps && overshoot_topM > 0.f)
+                        {
+                            z += overshoot_topM;
+                        }
+                        // <SS:Nexii> Phase 4 fixup (F10): PRODUCER placement, no respelled transform - the SAME
+                        // placeWorld buildDeck's own puffs go through (cell centre, no jitter for the outline +
+                        // drift + S + O(z) at THIS row's own z), so the outline leans exactly as the cloud it is
+                        // explaining does, row by row, rather than standing as a rigid drift-only column.
+                        const SSDeckFrame::Vec2 placed = SSDeckFrame::placeWorld(
+                            SSDeckFrame::Vec2{(F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f},
+                            SSDeckFrame::Vec2{drift.mV[0], drift.mV[1]}, hero_shift_m, z, deck.mShearTable);
+                        const LLVector3 at(placed.x, placed.y, z);
                         const LLVector3 l = at - cam_right * half_w;
                         const LLVector3 r = at + cam_right * half_w;
 

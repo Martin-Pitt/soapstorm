@@ -115,6 +115,21 @@ struct SSAtmoEnvWeather
 
     SSAtmoEnvKeyframed<std::string> mPrecipitationOverride{std::string()};
 
+    // <SS:Nexii> SCHEDULER: forced-storm cue, doc/atmo_magic_storm_dynamics.md section 6 layer 3, the
+    // mPrecipitationOverride idiom exactly. mStormOverride is the kind ("none" default/"supercell"/"tornado"/
+    // "waterspout"/"anticyclonic" - SSStormCells maps the string to SSSquall::ForcedOverride::mKind's small int),
+    // mStormOverridePhase the CUE phase within the day cycle (converted to a wall-clock instant by
+    // SSAtmoEnvTrack::wallTimeAtPhase, never read as a time itself), mStormOverrideOffsetXM/YM the track-floor-
+    // relative XY offset from the weather-domain anchor the cued cell is pinned near (SSSquall::forcedCandidate).
+    // All four read at the CURRENT day-cycle phase (not a candidate's birth phase - a forced cue is a single
+    // authored instant, not an epoch-keyed lattice draw). Authored from panel_ss_atmo_env_weather_conditions.xml's
+    // storm-override rows (ssfloateratmoenv.cpp); the three F32 curves (phase, offset x/y) are forced to HOLD on
+    // every write and every load (7b F4) so the cue stays piecewise constant and cannot slide.
+    SSAtmoEnvKeyframed<std::string> mStormOverride{std::string()};
+    SSAtmoEnvKeyframed<F32> mStormOverridePhase{0.f};
+    SSAtmoEnvKeyframed<F32> mStormOverrideOffsetXM{0.f};
+    SSAtmoEnvKeyframed<F32> mStormOverrideOffsetYM{0.f};
+
     // <SS:Nexii> Whether anything falls at all. Moisture used to be the sole switch - the sky wet enough to be overcast was the sky that rained - so an overcast, stormy, dry sky was unauthorable. Keyframed, because when it starts and stops is the whole point: flag keyframes HOLD (ss_atmoenv_default_curve<bool>), so the rain starts at the key that turns it on and stops at the key that turns it off - where the author put the marks, not between them. Off suppresses only the precipitation half of the resolve - cloud cover, gloom, wind and lightning stay exactly as authored. [interaction: precipitation]
     SSAtmoEnvKeyframed<bool> mPrecipitationFalls{true};
 
@@ -432,6 +447,29 @@ struct SSAtmoEnvWeatherInfluence
     bool mIceHaloEnabled = true;
     F32  mIceHaloStrength = 1.f;
 
+    // <SS:Nexii> Severe-weather permissions for the storm scheduler (doc/atmo_magic_storm_dynamics.md section 6, layer 1): a lattice candidate may become a supercell only with mAllowSupercells, and only a supercell under mAllowTornadoes is tornado-eligible (SSStormCell::gate). Default OFF - a severe event is something an author opts a track into. Read by SSStormCells at each candidate's BIRTH time, so flipping them affects new births, not cells already alive. The strengths are the Weather Influence rows' dials (enable+strength idiom): STORED AND SERIALISED ONLY in this phase - the gate still decides on the core's constants (SUPERCELL_ROT_MIN, HERO_MIN_LIFE_S); the design has them scale those thresholds once the deck coupling phase wires the gate to them.
+    bool mAllowSupercells = false;
+    F32  mAllowSupercellsStrength = 1.f;
+    bool mAllowTornadoes = false;
+    F32  mAllowTornadoesStrength = 1.f;
+
+    // <SS:Nexii> Distant rain shafts (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): scales down the
+    // qualifying threshold for a cell's virga curtain (SSVirga::qualifies - higher strength admits more cells at
+    // a given precip_intensity x presence x tower drive), enable+strength row idiom like every mapping above.
+    // Default ON at full strength - unlike the severe-weather gates above, a curtain under an existing storm is
+    // not an opt-in event, it is what falling rain already looks like from a distance.
+    bool mDistantRainEnabled = true;
+    F32  mDistantRainStrength = 1.f;
+
+    // <SS:Nexii> Squall lines (doc/atmo_magic_storm_dynamics.md section 5, sssquallcore.h SSSquall::lineEvent):
+    // whether a qualifying severe epoch may roll a LINE event at all. A lone bool, not the enable+strength pair
+    // above - there is no live effect figure to dial down, the lattice draw is either a line or it is not.
+    // Default ON, unlike Allow Supercells/Tornadoes: a line is built from ordinary storm cells the track already
+    // allows, not a new severe-weather opt-in of its own. Gated (7b F11) the same way the two Allow flags are:
+    // ssstormcells.cpp's lineAtEpoch returns no line whenever mEnabled (the influence master) and this flag are
+    // not BOTH true, so a qualifying epoch resolves discrete cells only.
+    bool mSquallLines = true;
+
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
 };
@@ -470,6 +508,18 @@ struct SSAtmoEnvTrack
     S32 mWeatherSourceDeck = SS_ATMOENV_DECK_DERIVED;
 
     F64 currentDayCyclePhase() const;
+
+    // <SS:Nexii> The day-cycle phase this track is at for an arbitrary UTC wall-clock second - the same fmod over mDayOffsetSeconds / mDayLengthSeconds that currentDayCyclePhase runs on time(nullptr), so the storm scheduler can evaluate the weather cube at a cell's BIRTH time rather than at now (SSStormCells). Pure: no clock read. 7b F3: a one-line forward to SSDayCycle::phaseAt (ssdaycyclecore.h) with this track's own length/offset - the formula itself lives there so the storm scheduler's forced-cue conversion (SSStormCells::wallTimeAtPhase) can share it.
+    F64 dayCyclePhaseAt(F64 utc_seconds) const;
+
+    // <SS:Nexii> SCHEDULER (doc/atmo_magic_storm_dynamics.md section 6 layer 3): the inverse of dayCyclePhaseAt - the
+    // UTC wall-clock second nearest near_utc_seconds whose phase (mod 1) equals phase, so an authored forced-storm
+    // cue phase converts to a wall-clock cueTime the same way for every client sharing the wall clock, rather than
+    // the frame clock. Pure: no clock read. Invariant: dayCyclePhaseAt(wallTimeAtPhase(p, t)) == frac(p) for any
+    // finite t and any dayLengthSeconds > 0; |wallTimeAtPhase(p, t) - t| <= 0.5 * mDayLengthSeconds (the nearest
+    // occurrence, never an arbitrary one); returns near_utc_seconds unchanged when mDayLengthSeconds <= 0. 7b F3: a
+    // one-line forward to SSDayCycle::wallTimeAtPhase (ssdaycyclecore.h), moved there VERBATIM alongside phaseAt.
+    F64 wallTimeAtPhase(F64 phase, F64 near_utc_seconds) const;
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);

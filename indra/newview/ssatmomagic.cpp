@@ -34,9 +34,11 @@
 #include "ssvolcloud.h"
 #include "sslightning.h"
 #include "sslightningrender.h"
+#include "ssstormcells.h"
 #include "sssurfacefield.h"
 #include "sswhiteout.h"
 #include "sswindflow.h"
+#include "ssvortices.h"
 #include "ssworldfield.h"
 
 #include "llviewerobject.h"
@@ -626,6 +628,12 @@ void SSAtmoMagic::idle()
     SSAvatarWet::getInstance()->idle(gFrameIntervalSeconds);
 
     SSLightning::getInstance()->idle(gFrameIntervalSeconds);
+
+    // <SS:Nexii> The storm-cell schedule, re-derived from (seed, wall clock, weather at birth) right before the deck builds, so a consumer in the deck (phase 3) reads this frame's cells; this phase only makes them exist for the debug views. No dt: the schedule is closed-form on mNow.
+    SSStormCells::getInstance()->update();
+
+    // <SS:Nexii> Phase 5: the vortex scheduler, right after the storm cells it children off of are resolved for this frame (doc/atmo_magic_storm_dynamics.md section 4) - childVortex/vortexAt/dust devils, all closed-form on (seed, parent id, slot, mNow); no rendering happens here.
+    SSVortices::getInstance()->update();
 
     SSVolCloud::getInstance()->update(gFrameIntervalSeconds);
 

@@ -26,6 +26,7 @@
 #include "ssatmoenvasset.h"
 
 #include "ssatmoenvplanetarystate.h"
+#include "ssdaycyclecore.h"
 #include "ssprecippreset.h"
 
 #include "llagent.h"
@@ -156,6 +157,16 @@ LLSD SSAtmoEnvWeather::asLLSD() const
 
     sd["precipitation_override"] = mPrecipitationOverride.asLLSD();
 
+    // <SS:Nexii> SCHEDULER: written only when authored (the precipitation_falls precedent above) - "none" is the
+    // default, so a document that never mentions a forced storm stays clean.
+    if (mStormOverride.hasKeyframes() || !mStormOverride.valueAt(0.0).empty())
+    {
+        sd["storm_override"] = mStormOverride.asLLSD();
+        sd["storm_override_phase"] = mStormOverridePhase.asLLSD();
+        sd["storm_override_offset_x_m"] = mStormOverrideOffsetXM.asLLSD();
+        sd["storm_override_offset_y_m"] = mStormOverrideOffsetYM.asLLSD();
+    }
+
     // <SS:Nexii> Written only when authored: falling is the default, so a document that never mentions the flag stays clean and every environment written before it existed keeps raining exactly as it did.
     if (mPrecipitationFalls.hasKeyframes() || !mPrecipitationFalls.valueAt(0.0))
     {
@@ -198,6 +209,21 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     if (sd.has("lightning_core_white")) mLightningCoreWhite.fromLLSD(sd["lightning_core_white"], 0.85f);
 
     if (sd.has("precipitation_override")) mPrecipitationOverride.fromLLSD(sd["precipitation_override"], std::string());
+
+    // An absent block means the environment predates the forced-storm cue, which means none is forced.
+    if (sd.has("storm_override")) mStormOverride.fromLLSD(sd["storm_override"], std::string());
+    else mStormOverride = SSAtmoEnvKeyframed<std::string>(std::string());
+    if (sd.has("storm_override_phase")) mStormOverridePhase.fromLLSD(sd["storm_override_phase"], 0.f);
+    else mStormOverridePhase = SSAtmoEnvKeyframed<F32>(0.f);
+    if (sd.has("storm_override_offset_x_m")) mStormOverrideOffsetXM.fromLLSD(sd["storm_override_offset_x_m"], 0.f);
+    else mStormOverrideOffsetXM = SSAtmoEnvKeyframed<F32>(0.f);
+    if (sd.has("storm_override_offset_y_m")) mStormOverrideOffsetYM.fromLLSD(sd["storm_override_offset_y_m"], 0.f);
+    else mStormOverrideOffsetYM = SSAtmoEnvKeyframed<F32>(0.f);
+    // 7b F4: the bool-correction idiom (ssatmoenvkeyframe.h SSAtmoEnvKeyframed::forceCurve) - these three ride HOLD
+    // no matter what an older or hand-edited document's keyframes carry, so the cue can never slide by interpolation.
+    mStormOverridePhase.forceCurve(SSAtmoEnvCurve::HOLD);
+    mStormOverrideOffsetXM.forceCurve(SSAtmoEnvCurve::HOLD);
+    mStormOverrideOffsetYM.forceCurve(SSAtmoEnvCurve::HOLD);
 
     // An absent flag means the environment predates it, which means it falls.
     if (sd.has("precipitation_falls")) mPrecipitationFalls.fromLLSD(sd["precipitation_falls"], true);
@@ -1337,6 +1363,13 @@ LLSD SSAtmoEnvWeatherInfluence::asLLSD() const
     sd["corona_strength"]         = (LLSD::Real)mCoronaStrength;
     sd["ice_halo_enabled"]        = mIceHaloEnabled;
     sd["ice_halo_strength"]       = (LLSD::Real)mIceHaloStrength;
+    sd["allow_supercells"]        = mAllowSupercells;
+    sd["allow_supercells_strength"] = (LLSD::Real)mAllowSupercellsStrength;
+    sd["allow_tornadoes"]         = mAllowTornadoes;
+    sd["allow_tornadoes_strength"]  = (LLSD::Real)mAllowTornadoesStrength;
+    sd["distant_rain_enabled"]    = mDistantRainEnabled;
+    sd["distant_rain_strength"]   = (LLSD::Real)mDistantRainStrength;
+    sd["squall_lines"]            = mSquallLines;
     return sd;
 }
 
@@ -1380,6 +1413,14 @@ bool SSAtmoEnvWeatherInfluence::fromLLSD(const LLSD& sd)
     strength("corona_strength", mCoronaStrength);
     flag("ice_halo_enabled", mIceHaloEnabled);
     strength("ice_halo_strength", mIceHaloStrength);
+    flag("allow_supercells", mAllowSupercells);
+    strength("allow_supercells_strength", mAllowSupercellsStrength);
+    flag("allow_tornadoes", mAllowTornadoes);
+    strength("allow_tornadoes_strength", mAllowTornadoesStrength);
+    flag("distant_rain_enabled", mDistantRainEnabled);
+    strength("distant_rain_strength", mDistantRainStrength);
+    // An absent key means the document predates squall lines, which means they are allowed.
+    flag("squall_lines", mSquallLines);
     return true;
 }
 
@@ -1559,12 +1600,22 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
 // Where in the day cycle this track is right now, from shared wall-clock time.
 F64 SSAtmoEnvTrack::currentDayCyclePhase() const
 {
-    if (mDayLengthSeconds <= 0.0) return 0.0;
+    return dayCyclePhaseAt((F64)time(nullptr));
+}
 
-    const F64 utc_now = (F64)time(nullptr);
-    F64 t = fmod(utc_now - mDayOffsetSeconds, mDayLengthSeconds);
-    if (t < 0.0) t += mDayLengthSeconds;
-    return t / mDayLengthSeconds;
+// The phase at any UTC second - see the header. 7b F3 (lesson 22): the formula itself now lives in
+// ssdaycyclecore.h (SSDayCycle::phaseAt), moved there VERBATIM so the storm scheduler's forced-cue conversion can
+// share it too; this is a one-line forward with this track's own length/offset.
+F64 SSAtmoEnvTrack::dayCyclePhaseAt(F64 utc_seconds) const
+{
+    return SSDayCycle::phaseAt(utc_seconds, mDayLengthSeconds, mDayOffsetSeconds);
+}
+
+// <SS:Nexii> SCHEDULER: the inverse of dayCyclePhaseAt - see the header. 7b F3: a one-line forward to
+// SSDayCycle::wallTimeAtPhase (ssdaycyclecore.h), moved there VERBATIM alongside phaseAt above.
+F64 SSAtmoEnvTrack::wallTimeAtPhase(F64 phase, F64 near_utc_seconds) const
+{
+    return SSDayCycle::wallTimeAtPhase(phase, near_utc_seconds, mDayLengthSeconds, mDayOffsetSeconds);
 }
 
 // The fresh-creation default: one ground track, Earth-like planetary system, sensible weather.

@@ -262,6 +262,11 @@ private:
         bool mIntegerDisplay = false;
 
         F32 mScale = 1.f;
+
+        // <SS:Nexii> 7b F4: true for the three forced-storm override rows (storm_override_phase/offset_x/offset_y)
+        // - every keyframe this row adds or edits is forced to SSAtmoEnvCurve::HOLD instead of F32's ordinary
+        // default (EASE), since the cue is read at one phase and must be piecewise constant.
+        bool mHoldCurve = false;
     };
     std::vector<FloatRow> mFloatRows;
 
@@ -364,13 +369,16 @@ private:
 
     template <typename T>
     void refreshKeyframeControls(const std::string& prefix, const SSAtmoEnvKeyframed<T>& field, F64 phase);
+    // <SS:Nexii> 7b F4: `curve` defaults to this field's ordinary default so every existing call site is
+    // unaffected; FloatRow::mHoldCurve rows pass SSAtmoEnvCurve::HOLD explicitly (see toggleFloatRowKeyframe).
     template <typename T>
-    void toggleKeyframe(SSAtmoEnvKeyframed<T>& field);
+    void toggleKeyframe(SSAtmoEnvKeyframed<T>& field, SSAtmoEnvCurve curve = ss_atmoenv_default_curve<T>());
     template <typename T>
     void jumpKeyframe(const SSAtmoEnvKeyframed<T>& field, bool next);
 
     template <typename T>
-    void bindKeyframeButtons(const std::string& prefix, std::function<SSAtmoEnvKeyframed<T>&()> field);
+    void bindKeyframeButtons(const std::string& prefix, std::function<SSAtmoEnvKeyframed<T>&()> field,
+                              SSAtmoEnvCurve curve = ss_atmoenv_default_curve<T>());
 
     void refreshColorRow(const KeyRow<LLColor3>& row, F64 phase);
     void commitColorRow(const KeyRow<LLColor3>& row);

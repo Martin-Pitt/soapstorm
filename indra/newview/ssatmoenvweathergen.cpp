@@ -25,6 +25,8 @@
 
 #include "ssatmoenvweathergen.h"
 
+#include "sssquallcore.h" // <SS:Nexii> SSSquall::severeDayBias - the severe-day option's numeric formula, core-side
+
 #include "llrand.h"
 
 #include <algorithm>
@@ -143,6 +145,15 @@ namespace
     const F32 TEMPERATURE_MIN = -30.f, TEMPERATURE_MAX = 40.f;
     const F32 HEADING_MIN = 0.f,      HEADING_MAX = 360.f;
     const F32 WIND_MIN = 0.f,         WIND_MAX = 30.f;
+    const F32 SHEAR_MIN = 0.f,        SHEAR_MAX = 1.f;
+
+    // <SS:Nexii> The severe-day option's own baseline: what an ordinary roll's shear would have been had it
+    // rolled one at all. The generator otherwise leaves mShearAuto on throughout - shear derives from moisture/
+    // convection/temperature the same as gusts do - so there is no rolled shear peak of the roll's own to hand
+    // SSSquall::severeDayBias; this nominal floor stands in for it, matching the mild jet SSWindProfile::autoShear
+    // itself derives on an ordinary wet day. Severe day authors the curve explicitly (mShearAuto off) only when
+    // it fires, so an unchecked roll never touches shear at all.
+    const F32 SHEAR_DAY_BASELINE = 0.30f;
 
     // Snaps to the keyframe grid, sorts, clamps, drops duplicates and lays the curve into a float
     // field. Snapping runs BEFORE the sort: two raw times close enough to swap order under the
@@ -463,7 +474,8 @@ void SSAtmoEnvWeatherGenerator::clear(SSAtmoEnvWeather& weather)
 // wrote. Lightning and gusts are deliberately left on auto throughout - convection, moisture and
 // temperature already decide the cadence through the resolver, and a generator that also authored
 // either would be arguing with itself about what a storm is.
-SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weather)
+SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weather,
+                                                          bool severeDay, F32 severeDayStrength)
 {
     clear(weather);
 
@@ -618,10 +630,55 @@ SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weat
     layTemperature(weather, trough_c, swing_c);
     layWindHeading(weather, veer);
 
+    // <SS:Nexii> Severe day: lifts the peak RANGE a spell may roll into, before any spell is actually rolled -
+    // the bias reaches the ceiling scatterSpells draws from, same as an event's own peak_*_high overrides above,
+    // rather than editing a spell after the fact. No effect with no spell to roll one into (a dry day stays dry).
+    if (severeDay && spell_count > 0)
+    {
+        const SSSquall::DayPeaks rolled{ peak_moisture_high, peak_convection_high, SHEAR_DAY_BASELINE };
+        const SSSquall::DayPeaks biased = SSSquall::severeDayBias(rolled, severeDayStrength);
+        peak_moisture_high   = llmax(peak_moisture_high,   biased.mMoisture);
+        peak_moisture_low    = llmax(peak_moisture_low,    biased.mMoisture * 0.85f);
+        peak_convection_high = llmax(peak_convection_high, biased.mConvection);
+        peak_convection_low  = llmax(peak_convection_low,  biased.mConvection * 0.85f);
+    }
+
     std::vector<Spell> spells = scatterSpells(spell_count,
                                               peak_moisture_low, peak_moisture_high,
                                               peak_convection_low, peak_convection_high);
     layWeatherCurves(weather, spells, base_moisture, base_convection, base_wind);
+
+    // <SS:Nexii> Severe day's shear half: authors mShearStrength explicitly (auto stays off) over a window
+    // shaped exactly like the rolled peak's own lead/fall/tail - centred on the same phase moisture and
+    // convection already peak at - rather than the whole cycle, so a severe SPELL gets severe shear and the
+    // fair-weather rest of the day is untouched. Picks the most severe of the day's spells (highest combined
+    // moisture+convection peak) when more than one rolled; the core's severeDayBias is the only formula here.
+    if (severeDay && !spells.empty())
+    {
+        const Spell* peak_spell = &spells.front();
+        for (const Spell& spell : spells)
+        {
+            const F32 severity = spell.mPeakMoisture + spell.mPeakConvection;
+            const F32 peak_severity = peak_spell->mPeakMoisture + peak_spell->mPeakConvection;
+            if (severity > peak_severity) peak_spell = &spell;
+        }
+
+        const SSSquall::DayPeaks rolled{ peak_spell->mPeakMoisture, peak_spell->mPeakConvection, SHEAR_DAY_BASELINE };
+        const SSSquall::DayPeaks biased = SSSquall::severeDayBias(rolled, severeDayStrength);
+
+        const F64 peak_phase = peak_spell->mStart + peak_spell->mDuration * 0.5;
+
+        std::vector<std::pair<F64, F32>> shear;
+        shear.emplace_back(0.0, SHEAR_DAY_BASELINE);
+        shear.emplace_back(llclamp(peak_phase - peak_spell->mLead, 0.0, 1.0), SHEAR_DAY_BASELINE);
+        shear.emplace_back(peak_phase, biased.mShear);
+        shear.emplace_back(llclamp(peak_phase + peak_spell->mDuration * 0.5 + peak_spell->mTail, 0.0, 0.98),
+                           SHEAR_DAY_BASELINE);
+        shear.emplace_back(0.98, SHEAR_DAY_BASELINE);
+
+        weather.mShearAuto = false;
+        layCurve(weather.mShearStrength, shear, SHEAR_MIN, SHEAR_MAX);
+    }
 
     // The fog morning is the one case that wants a wet sky curve without a spell in it: heavy at
     // dawn, thinning through the afternoon, and never once raining.
@@ -648,6 +705,10 @@ SSAtmoEnvWeatherRoll SSAtmoEnvWeatherGenerator::randomize(SSAtmoEnvWeather& weat
     {
         roll.mSummary += (spells.size() == 1) ? " - one spell of precipitation"
                                               : " - two spells of precipitation";
+    }
+    if (severeDay && !spells.empty())
+    {
+        roll.mSummary += ", severe day";
     }
 
     return roll;

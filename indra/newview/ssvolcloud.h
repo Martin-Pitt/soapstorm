@@ -30,6 +30,10 @@
 #include "llimage.h"
 #include "llrendertarget.h"
 #include "llviewertexture.h"
+#include "ssdeckframecore.h"
+#include "ssstormcells.h"
+#include "ssstormcouplecore.h"
+#include "ssvirgacore.h"
 #include "v2math.h"
 #include "v3color.h"
 #include "v3math.h"
@@ -39,6 +43,7 @@
 #include <unordered_map>
 
 struct SSAtmoEnvCloudFieldState;
+struct SSAtmoEnvTrack;
 class LLGLSLShader;
 
 static const S32 SS_MAX_STRIKE_LIGHTS = 4;
@@ -68,6 +73,18 @@ public:
     F32 cloudTopZ() const { return mPrimary.mBaseZ + mPrimary.mThicknessM; }
     bool empty() const { return mPrimary.mPuffs.empty(); }
 
+    // <SS:Nexii> The coupled weather deck's coverage, 0-1 - SSVortices::dustGate's "the deck's coverage" input.
+    // weatherDeck() is whichever of mPrimary/mUnder is coupled to the storm scheduler this build (private; this is
+    // a public read-only forward). Zero when no weather deck is built yet.
+    F32 weatherCoverage() const { const Deck* d = weatherDeck(); return d ? d->mCoverage : 0.f; }
+
+    // <SS:Nexii> The coupled weather deck's own storm gloom and light direction - SSVortexRender reads both so a
+    // funnel darkens under the same storm moisture and lights its rim from the same sun/moon the deck it hangs
+    // under is shaded by, rather than carrying a second, disagreeing light. Neutral (no darkening, +Z) when no
+    // weather deck is built yet.
+    F32 weatherGloom() const { const Deck* d = weatherDeck(); return d ? d->mGloom : 1.f; }
+    LLVector3 lightDir() const { return mLightDir; }
+
     // <SS:Nexii> The primary deck's noise tile, metres (0 when it has no map) - already quantised to the cell lattice by the builder, so the drift accumulator's wrap span can be a multiple of both (SSWindProfile::wrapSpanM) and the wrap leaves the cell gate and the noise map exactly where they were. [interaction: SSAtmoEnvApplier drift]
     F32 noiseTileMetres() const { return mPrimary.mNoiseTileM; }
     F32 underNoiseTileMetres() const { return mUnder.mNoiseTileM; }
@@ -84,6 +101,50 @@ public:
 
     S32 puffCount() const { return (S32)(mPrimary.mPuffs.size() + mUnder.mPuffs.size()); }
     F32 lastBuildMS() const { return mLastBuildMS; }
+
+    // <SS:Nexii> V3 (ssatmoinfoviewcore.h MODE_DECK_LOD): the primary deck's own last-build LOD tally
+    // (SSDeckLod::subsAt(dist, dial) summed over every cell that passed the gate) and the cell count it was
+    // summed over - the "if nothing were thinned or budget-clamped" figure the debug legend reads against
+    // puffCount()/the SSAtmoCloudPuffBudget dial. Zero before any build.
+    S64 primaryLodPredictedSubs() const { return mPrimary.mLodSubsTally; }
+    S32 primaryLodCellsWalked() const { return mPrimary.mLodCellTally; }
+
+    // <SS:Nexii> V3 (ssatmoinfoviewcore.h MODE_DECK_LOD, ssdeckmacrocore.h CONTRACT): the primary deck's own
+    // last-build Tier B macro-puff body count - see Deck::mTierBCount.
+    S32 primaryTierBCount() const { return mPrimary.mTierBCount; }
+
+    // <SS:Nexii> V4 (ssatmoinfoviewcore.h MODE_PRECIP_VIRGA, doc/atmo_magic_debug_views.md V4): one qualifying
+    // virga cell from the LAST build, exactly as buildDeck's shaft-candidate walk resolved it - the view reads
+    // this snapshot rather than re-deriving qualification, so it can never show a cell set the builder did not
+    // actually decide on. mX/mY are the shaft column's world (agent) position - the SAME point the card stack
+    // itself is drawn at (SSDeckFrame::placeWorld through a zero shear table, hero shift included -
+    // ShaftCandidate's own placement). mKept is SSVirga::keepHash's own verdict for this cell (the per-candidate
+    // stable hash trim, plus the rare hard-ceiling backstop when keepHash's own kept share runs over 1.3x
+    // MAX_SHAFTS), recorded once at build time - not a distance cull (the trim is camera-free by contract).
+    struct SSVirgaDebugCell
+    {
+        F32 mX = 0.f;
+        F32 mY = 0.f;
+        F32 mDrive = 0.f;
+        bool mKept = false;
+    };
+
+    // <SS:Nexii> V4: the last build's full virga snapshot. mActive is false whenever the shaft path did not run
+    // this build (Distant Rain off/zero-strength in the Weather Influence row, or this deck is not the one
+    // storm-coupled - couple_storm false) - the view then says so rather than drawing a stale set left over from
+    // a build where it did. mR2 is the particle rain's own TIER_SHEETS radius (SSVirga::handoff's r2 input);
+    // mGroundZ/mBaseZ are the span the card stacks and the fall-tilt comparison line both span. Reset to default
+    // (mActive false, empty mCells) at the top of every update() and by clear(), so an early-out frame (feature
+    // off, no asset) never leaves a stale snapshot behind either.
+    struct SSVirgaDebug
+    {
+        bool mActive = false;
+        F32 mR2 = 0.f;
+        F32 mGroundZ = 0.f;
+        F32 mBaseZ = 0.f;
+        std::vector<SSVirgaDebugCell> mCells;
+    };
+    const SSVirgaDebug& virgaDebug() const { return mVirgaDebug; }
 
     // <SS:Nexii> The convection noise map's gate for the weather. Precipitation asks the deck it falls from two questions about a point of the sky: how much cloud is over it (x, a hole in the map reads zero and takes the rain with it) and how tower-like the column is (y, which tweaks the intensity toward the dense parts). The point handed in must already be the WIND-TILTED one - where a drop falling at the weather's angle entered the deck, not where it lands - because only the caller knows the fall; this side supplies everything else, drift included. A deck with no map, or whose map has not read back yet, answers neutral: everything present, nothing tower-like. [interaction: precipitation]
     LLVector2 precipNoiseAt(const LLVector3& pos_agent) const;
@@ -120,6 +181,16 @@ private:
         F32 mBuried = 0.f;
 
         F32 mCamDistSq = 0.f;
+
+        // <SS:Nexii> Distant rain shaft phase (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): this Puff is
+        // a virga card, not a puff body - emitted into the SAME mPuffs vector so the existing farthest-first sort
+        // interleaves shafts with puffs correctly, flagged on the spare b vertex channel (render() writes b=1)
+        // rather than a second draw pass. mHalfHeightM is the card's vertical half-extent (<= SSVirga::CARD_MAX_M
+        // * 0.5) - render() billboards a shaft about the world Z axis (vertical, camera-facing in yaw only) at
+        // this half-height instead of the puff's camera-facing disc at mRadius; mRadius is still the card's
+        // horizontal half-width (SSVirga::halfWidthM).
+        bool mShaft = false;
+        F32 mHalfHeightM = 0.f;
     };
 
     // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are the same renderer run twice - each with its own resolved field state, textures, puff set and uniforms - so a sky-themed build can hang a second layer at the bottom of the build while the weather-driven deck stays overhead. Drawn far deck first; within a deck the puffs stay depth-sorted, and decks separated by hundreds of metres hide the cross-deck ordering.
@@ -196,27 +267,74 @@ private:
         F32 mNoiseTowerLo = 0.42f;
         F32 mNoiseTowerHi = 0.78f;
 
+        // <SS:Nexii> review 3b NEW-3: the storm-delegated consolidation figure (SSStormCouple::deckConsolidation)
+        // this build actually used to derive mNoiseTowerLo/Hi and the tower ramp's conv_gain - baked here so the
+        // V2 profile-outline debug view reads the SAME figure buildDeck used (including the delegation share any
+        // coupled cells took) instead of respelling the raw, undelegated moisture/convection product by hand.
+        F32 mStormEff = 0.f;
+
+        // <SS:Nexii> Phase 4 (doc/atmo_magic_wind_profile.md section 4, doc/atmo_magic_storm_dynamics.md section 3
+        // "Storm motion vs cloud drift"): this deck's own baked O(z) shear table (SSDeckFrame::bakeShearTable),
+        // z0 = this deck's base, z1 = floor + the track's AUTHORED dome height at phase, groundZ = the track's
+        // floor, params = SSAtmoEnvApplier::windProfileAt(track, phase) - the PURE profile path, never
+        // cirrusAltitudeMetres() (a per-client setting through the live deck) - baked unconditionally every build
+        // (SHAPE-only frame transform, not a storm phenomenon). Read by the puff placement loop below only; the
+        // shadow bake and precipNoiseAt never see O(z) (frame contract: they are gate/presence/n_map OBSERVERS,
+        // shifted by S alone) and foldFrameKey no longer folds this table.
+        SSDeckFrame::ShearTable mShearTable;
+
         // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the puffs so the field reads with its gaps filled instead of as balls over empty sky. Same texture as the puffs, sampled aperiodically in the shader; the form here is the shade a puff at the deck's floor would wear - the same formulas as the puff loop, lit by the same vertex-stage sky light - so sheet and lowest puffs share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
         F32 mSheetForm = 1.f;
         F32 mSheetZ = 0.f;
         F32 mSheetAlpha = 0.f;
 
         // The veil IS the deck's floor, so it is buried under the whole column and takes the gloom gradient's dark end whole - see Puff::mBuried.
-        static constexpr F32 SHEET_BURIED = 1.f;
+        // <SS:Nexii> F12: sourced from SSVirga::BURIED (ssvirgacore.h) rather than a second hardcoded 1.f - a
+        // curtain is the deck's underside like the veil (ssvirgacore.h's own comment on BURIED), so the two are
+        // now LOCKSTEP by construction, not by a comment claiming two independent literals happen to agree.
+        static constexpr F32 SHEET_BURIED = SSVirga::BURIED;
 
         // The deck's storm gloom, kept for the render pass's ss_gloom uniform - per deck, not per puff, so it never belonged in the vertex colour.
         F32 mGloom = 1.f;
 
         F32 mMeanDistSq = 0.f;
+
+        // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): this build's own tally of SSDeckLod::subsAt(dist, dial)
+        // summed over every occupied cell, and the cell count it was summed over - the V3 debug view's
+        // "LOD-predicted" puff count against mPuffs.size() (what actually survived thinning/budget) and the
+        // SSAtmoCloudPuffBudget dial. Reset and filled once per buildDeck() call; not read by anything else.
+        S64 mLodSubsTally = 0;
+        S32 mLodCellTally = 0;
+
+        // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT): the count of Tier B macro-puff bodies this build
+        // actually emitted (occupancy > 0 and macroEligible, after the whole fine cell walk) - the V3 debug
+        // legend's "Tier B" line. Reset to 0 at the top of every buildDeck() call alongside mLodSubsTally/
+        // mLodCellTally; not read by anything else.
+        S32 mTierBCount = 0;
     };
 
-    void buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt);
+    // <SS:Nexii> Phase 4 fixup (#5/F2/F8, doc/atmo_magic_wind_profile.md section 4): track/phase are the PURE inputs
+    // the O(z) table bakes from - SSAtmoEnvApplier::windProfileAt(track, phase) and the track's own authored dome
+    // height, never the live applier's windProfile()/cirrusAltitudeMetres() (per-client setting + live deck lid).
+    void buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F32 convection, F32 moisture, U32 salt,
+                   const SSAtmoEnvTrack& track, F64 phase);
     bool fetchDeckTextures(Deck& deck);
 
     // <SS:Nexii> The noise map's two answers for one point of a deck's field, in the AIR frame (drift already subtracted): presence after the moisture floor and convection's say, and the tower weight the gradient ramp hands back. Shared by the deck builder and the precipitation gate so both always agree about where the holes are.
     void noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower) const;
 
-    // Wrapped bilinear sample of the cached grid, or -1 when the deck has no map cached yet.
+    // <SS:Nexii> Phase 3 overload: same two answers, plus the RAW map sample (0 when there is no map cached yet, matching noiseSample's own "not ready" reading before the hole/tower ramps run) - what SSStormCouple::towerFromMap needs to re-derive `tower` under the storm-widened window without this function's `presence` output changing at all (still just the moisture/convection hole ramp, untouched by the storm). The 4-arg overload above delegates here and drops raw_n.
+    // <SS:Nexii> Phase 6b (doc/atmo_magic_far_clouds.md section 2 step 4, ssdecknoisecore.h CONTRACT): this is the
+    // ONE place every CPU consumer of presence/n_map shares - internally it now reads noiseSample TWICE (the plain
+    // point, then SSDeckNoise::detileCoord(point)) and mixes them with SSDeckNoise::mixDetile before running the
+    // hole/tower ramps, so the map's own SS_NOISE_TILE_M repeat stops being a visible pattern at horizon reach.
+    // raw_n is the de-tiled sample, not a single read - every caller of this overload (buildDeck, precipNoiseAt,
+    // bakeGroundShadow's cell and texel loops) gets the de-tiled field. No caller of either overload may read
+    // noiseSample directly for presence or n_map purposes any more; route through here instead.
+    void noiseFieldAt(const Deck& deck, F32 air_x, F32 air_y, F32& presence, F32& tower, F32& raw_n) const;
+
+    // Wrapped bilinear sample of the cached grid, or -1 when the deck has no map cached yet. A single, un-mixed
+    // read - noiseFieldAt is the only caller that may use this for presence/n_map; it applies the de-tile mix.
     F32 noiseSample(const Deck& deck, F32 air_x, F32 air_y) const;
 
     // Folds the noise map's raw readback into the deck's small wrapped sample grid.
@@ -242,6 +360,29 @@ private:
 
     S32 mWeatherDeck = 0;
 
+    // <SS:Nexii> Phase 3 (doc/atmo_magic_storm_dynamics.md section 3): the storm cells coupled into THIS build of
+    // the primary/weather deck, fetched once per buildDeck call via SSStormCells::fillUniforms rather than once per
+    // grid cell - the selection (hero first, then anchor-nearest) does not depend on the sample point, only on the
+    // frame's resolved cell set. mStormInterest is claimed lazily on the first build and held for the singleton's
+    // life, exactly the SSAtmoInfoView/SSAtmoSyncConsole idiom, because SSStormCells::update() early-outs unless
+    // something currently claims it - without this the coupling would silently see zero cells forever.
+    SSStormCells::Interest mStormInterest;
+    S32 mStormCellCount = 0;
+    SSStormCouple::CellUniform mStormCells[SSStormCouple::MAX_CELLS];
+
+    // <SS:Nexii> Phase 4 (doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud drift"): the hero's
+    // storm-local frame shift inputs for THIS build - class-level like mStormCells/mStormCellCount above (not
+    // per-Deck) because precipNoiseAt and the ground-shadow bake read it outside the Deck that produced it, the
+    // same pattern mStormCells already establishes. Built once per weather-deck build inside buildDeck, whenever
+    // couple_storm is true AND SSStormCells::hero() names an active hero; zero (ageS 0) otherwise, which makes
+    // SSDeckFrame::heroShift and foldFrameKey both read as "no hero" bit-exactly by their own invariants.
+    SSDeckFrame::HeroFrame mHeroFrame;
+
+    // <SS:Nexii> V4 debug snapshot (see the public SSVirgaDebug/virgaDebug() above): class-level like
+    // mStormCells/mHeroFrame, for the same reason - buildDeck runs per Deck but the shaft path only ever coupled
+    // to whichever deck IS weatherDeck(), so one snapshot per update() is correct, not one per Deck.
+    SSVirgaDebug mVirgaDebug;
+
     F32 mLastBuildMS = 0.f;
 
     LLVector3 mLightDir;
@@ -264,6 +405,11 @@ private:
     F32 mEffRadius = 5000.f;
     F32 mSquashKnee = 1600.f;
     F32 mSquashCap = 2000.f;
+
+    // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): render()'s own draw-order hysteresis state - the `prev`
+    // SSDeckLod::underOnTop reads and updates each frame, so the primary/under blend order does not flip back
+    // and forth on a frame-to-frame mMeanDistSq jitter right at the crossover.
+    bool mUnderOnTop = false;
 
 public:
     F32 squashScale(F32 true_dist) const;
