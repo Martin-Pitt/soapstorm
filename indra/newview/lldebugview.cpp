@@ -33,6 +33,7 @@
 #include "llconsole.h"
 #include "lltextureview.h"
 #include "ssstatsview.h" // <SS:Nexii>
+#include "ssatmoinfoview.h" // <SS:Nexii> Atmo Magic info views: dim quad + legend
 #include "llresmgr.h"
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
@@ -128,6 +129,9 @@ void LLDebugView::init()
     gSSStatsView = LLUICtrlFactory::create<SSStatsView>(ssp);
     addChild(gSSStatsView);
     // </SS:Nexii>
+
+    // <SS:Nexii> Atmo Magic info views: the world-dimming quad goes in at the BACK (drawn first, under every console here) and the legend on top; both draw nothing while SSAtmoInfoView is 0.
+    SSAtmoInfoView::attach(this);
 }
 
 void LLDebugView::draw()

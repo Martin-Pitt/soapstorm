@@ -97,6 +97,11 @@ struct SSAtmoEnvWeather
     SSAtmoEnvKeyframed<F32> mGustLength{140.f};
     SSAtmoEnvKeyframed<F32> mGustVeer{0.f};
 
+    // <SS:Nexii> The altitude wind profile's two authored scalars (doc/atmo_magic_wind_profile.md section 3), the mGustAuto idiom exactly: while mShearAuto holds, both are derived from moisture/convection/temperature (SSWindProfile::autoShear) and these curves are ignored; off, they are ordinary keyframes. mShearStrength is S in [0,1] - how much jet and deep-layer veer the day carries - and mVeerDeg the total heading turn from the 10m wind to anvil level, degrees, positive clockwise with height. They live on the weather cube, never on the flowmap, because the flowmap's exponent is derived from the CAMERA's region and two clients in different regions must not disagree about the sky.
+    bool mShearAuto = true;
+    SSAtmoEnvKeyframed<F32> mShearStrength{0.f};
+    SSAtmoEnvKeyframed<F32> mVeerDeg{0.f};
+
     bool mLightningEnabled = true;
     bool mLightningCharge = true;
     bool mLightningSparks = true;

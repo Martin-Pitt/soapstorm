@@ -497,8 +497,9 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mGloom = field.mGloom;
 
     // <SS:Nexii> The noise map's resolved shaping, baked once per build so every consumer of the field - this builder, and the precipitation gate reading the deck from outside - runs the same numbers. The tile scales off the authored Noise Scale slider; the hole weight is what survives of the map's low end once moisture has lifted the floor over it and convection has kept the storm gaps open in what is left. The procedural fallback counts as a map here the same as an authored one.
+    // <SS:Nexii> The tile is quantised to a whole number of cells (2048 -> 2080 = 8 x CELL_M, a 1.5% change no eye reads) so the drift accumulator can wrap on a span that is a multiple of BOTH the cell gate and this map (SSWindProfile::wrapSpanM, doc/atmo_magic_wind_profile.md section 4) - the old fmodf(drift, 1e6) wrap was a multiple of neither and repopped the field. The shader's ss_noise_tile uniform, the shadow key and precipNoiseAt all read this one number, so the lattice holds everywhere. Floored at one cell.
     deck.mNoiseTileM = (field.mNoiseTexture.notNull() || deck.mNoiseProcRaw.notNull())
-        ? SS_NOISE_TILE_M * llmax(0.05f, field.mNoiseScale)
+        ? CELL_M * llmax(1.f, (F32)llround(SS_NOISE_TILE_M * llmax(0.05f, field.mNoiseScale) / CELL_M))
         : 0.f;
     const F32 nimbus = ss_smoothstep(SS_NIMBUS_LO, SS_NIMBUS_HI, moisture);
     deck.mNoiseHole = (1.f - nimbus) * (1.f - SS_STORM_GAP * llclamp(convection, 0.f, 1.f));
@@ -1145,7 +1146,8 @@ void SSVolCloud::render()
     const LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
 
-    LLVector2 wind = drift;
+    // <SS:Nexii> The streak frame's direction is the CURVE-RESOLVED wind at the deck base (SSAtmoEnvApplier::windAt), not the normalised drift accumulator: the accumulator now wraps into [0, span), so its direction is meaningless from the first frame and snaps at every wrap - and which way the wind blows was never a question an accumulated distance could answer. [interaction: SSAtmoEnvApplier wind profile]
+    LLVector2 wind = SSAtmoEnvApplier::instance().windAt(mPrimary.mBaseZ);
     if (wind.length() < 0.001f)
     {
         wind.setVec(1.f, 0.f);

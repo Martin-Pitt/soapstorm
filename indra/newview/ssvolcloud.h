@@ -68,6 +68,10 @@ public:
     F32 cloudTopZ() const { return mPrimary.mBaseZ + mPrimary.mThicknessM; }
     bool empty() const { return mPrimary.mPuffs.empty(); }
 
+    // <SS:Nexii> The primary deck's noise tile, metres (0 when it has no map) - already quantised to the cell lattice by the builder, so the drift accumulator's wrap span can be a multiple of both (SSWindProfile::wrapSpanM) and the wrap leaves the cell gate and the noise map exactly where they were. [interaction: SSAtmoEnvApplier drift]
+    F32 noiseTileMetres() const { return mPrimary.mNoiseTileM; }
+    F32 underNoiseTileMetres() const { return mUnder.mNoiseTileM; }
+
     // <SS:Nexii> The under deck's live world-frame band and whether it has a built field at all. Lightning reads these to decide whether a ground strike would cross the deck (and so be re-routed to cloud-to-cloud) and how deep its in-cloud crawl may dive. The band is only meaningful while underPresent() holds.
     F32 underBaseZ() const { return mUnder.mBaseZ; }
     F32 underTopZ() const { return mUnder.mBaseZ + mUnder.mThicknessM; }

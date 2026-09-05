@@ -24,6 +24,7 @@
 #ifndef SS_ATMOMAGIC_H
 #define SS_ATMOMAGIC_H
 
+#include "ssatmonoisecore.h"
 #include "ssprecippreset.h"
 
 #include "llpointer.h"
@@ -46,24 +47,7 @@ class LLViewerTexture;
 class SSPrecipSim;
 struct SSGranularParams;
 
-namespace SSAtmoNoise
-{
-    inline U32 hashU32(U32 x)
-    {
-        x = x * 747796405u + 2891336453u;
-        U32 w = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
-        return (w >> 22u) ^ w;
-    }
-
-    inline U32 combine(U32 a, U32 b) { return hashU32(a ^ (b + 0x9e3779b9u + (a << 6) + (a >> 2))); }
-
-    inline F32 hash01(U32 x) { return (F32)(hashU32(x) & 0x00ffffffu) / (F32)0x01000000; }
-
-    F32 value1(F32 x, U32 seed);
-    F32 value2(F32 x, F32 y, U32 seed);
-    F32 fbm1(F32 x, U32 seed, S32 octaves = 3);
-    F32 fbm2(F32 x, F32 y, U32 seed, S32 octaves = 3);
-}
+// <SS:Nexii> SSAtmoNoise (hashU32/combine/hash01/value1/value2/fbm1/fbm2) moved header-only into ssatmonoisecore.h on 2026-09-05 so the scratch tests can compile it without the viewer; every consumer still reaches it through this include. SSRandStream stays here - it is a per-burst stream, not the shared field hash.
 
 class SSRandStream
 {

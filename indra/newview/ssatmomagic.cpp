@@ -84,77 +84,6 @@ static const F32 REGIME_DWELL_SQUALL    = 30.f;
 static LLTrace::BlockTimerStatHandle FTM_SS_ATMO("Atmo Magic");
 static LLTrace::BlockTimerStatHandle FTM_SS_ATMO_IMPACTS("Impacts");
 
-namespace SSAtmoNoise
-{
-
-// 1D lattice hash to [-1,1].
-static F32 latticeGrad(U32 seed, S32 ix)
-{
-    return hash01(combine(seed, (U32)ix)) * 2.f - 1.f;
-}
-
-// 2D lattice hash to [-1,1].
-static F32 latticeGrad2(U32 seed, S32 ix, S32 iy)
-{
-    return hash01(combine(seed, combine((U32)ix, (U32)iy * 0x27d4eb2fu))) * 2.f - 1.f;
-}
-
-// Quintic fade.
-static inline F32 quintic(F32 t) { return t * t * t * (t * (t * 6.f - 15.f) + 10.f); }
-
-// 1D value noise.
-F32 value1(F32 x, U32 seed)
-{
-    const S32 ix = llfloor(x);
-    const F32 fx = (F32)ix;
-    F32 t = quintic(x - fx);
-    return lerp(latticeGrad(seed, ix), latticeGrad(seed, ix + 1), t);
-}
-
-// 2D value noise.
-F32 value2(F32 x, F32 y, U32 seed)
-{
-    const S32 ix = llfloor(x);
-    const S32 iy = llfloor(y);
-    const F32 fx = (F32)ix;
-    const F32 fy = (F32)iy;
-    F32 tx = quintic(x - fx);
-    F32 ty = quintic(y - fy);
-    F32 a = lerp(latticeGrad2(seed, ix, iy),     latticeGrad2(seed, ix + 1, iy),     tx);
-    F32 b = lerp(latticeGrad2(seed, ix, iy + 1), latticeGrad2(seed, ix + 1, iy + 1), tx);
-    return lerp(a, b, ty);
-}
-
-// 1D fractal noise - the deterministic wobble everything shares.
-F32 fbm1(F32 x, U32 seed, S32 octaves)
-{
-    F32 sum = 0.f, amp = 0.5f, freq = 1.f, norm = 0.f;
-    for (S32 i = 0; i < octaves; ++i)
-    {
-        sum += amp * value1(x * freq, combine(seed, (U32)i));
-        norm += amp;
-        amp *= 0.5f;
-        freq *= 2.03f;
-    }
-    return sum / norm;
-}
-
-// 2D fractal noise.
-F32 fbm2(F32 x, F32 y, U32 seed, S32 octaves)
-{
-    F32 sum = 0.f, amp = 0.5f, freq = 1.f, norm = 0.f;
-    for (S32 i = 0; i < octaves; ++i)
-    {
-        sum += amp * value2(x * freq, y * freq, combine(seed, (U32)i));
-        norm += amp;
-        amp *= 0.5f;
-        freq *= 2.03f;
-    }
-    return sum / norm;
-}
-
-}
-
 static const F32 TRACK_FADE_RATE = 0.45f;
 static const F32 WIND_FADE_RATE  = 0.8f;
 
@@ -271,11 +200,12 @@ void SSAtmoMagic::refreshParams()
     mWindXY.set(mWind.mV[VX], mWind.mV[VY], 0.f);
     mWindSpeed = mWind.magVec();
 
+    // <SS:Nexii> Seeded from the wall clock UNCONDITIONALLY on the first update (doc/atmo_magic_wind_profile.md section 4, gust seed fix): the seed used to wait for the first frame with a non-zero target speed, so the gust phase depended on when in the session the wind first rose - two clients that logged in at different moments of a calm spell disagreed forever after. Now the seed no longer depends on when the wind first rose; what follows is still each client's own eased-speed integration, which is allowed for gusts (feel-only, never positional).
     if (mWindDriftSeeded)
     {
         mWindDrift = fmod(mWindDrift + (F64)mWindSpeed * dt, WIND_DRIFT_WRAP);
     }
-    else if (target_speed > 0.f)
+    else
     {
         mWindDrift = fmod(mNow * (F64)target_speed, WIND_DRIFT_WRAP);
         mWindDriftSeeded = true;

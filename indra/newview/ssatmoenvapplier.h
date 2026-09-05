@@ -26,6 +26,7 @@
 
 #include "llsingleton.h"
 #include "ssatmoenvskymodulator.h"
+#include "sswindprofilecore.h" // <SS:Nexii> the altitude wind profile core
 #include "llsettingssky.h"
 #include "llsettingswater.h"
 #include "llpointer.h"
@@ -68,7 +69,17 @@ public:
 
     const SSAtmoEnvSkyModulation& lastModulation() const { return mLastModulation; }
 
+    // <SS:Nexii> The ONE drift accumulator, integrated at the primary deck's BASE altitude (doc/atmo_magic_wind_profile.md section 4): the cell gate, the shadow bake and precipNoiseAt all read this frame unchanged. Wrapped on a lattice-aligned span (a multiple of the deck's cell and noise tile), never fmodf(1e6), so the wrap leaves every pattern where it was.
     const LLVector2& cloudDriftMetres() const { return mCloudDriftM; }
+
+    // <SS:Nexii> The dome/cirrus band's frame: base drift plus the BOUNDED shear offset O(z) of the band's own current altitude relative to the deck base (SSWindProfile::shearOffset, capped) - the design's dome seam, so the deck lid and the cirrus band can never slide apart without limit. Equals cloudDriftMetres() only for S=0 with the deck above the boundary layer; the auto shear floors S at 0.15, so a real calm sky carries a small, static, bounded lean instead.
+    LLVector2 cirrusDriftMetres() const;
+
+    // <SS:Nexii> The altitude wind profile at the applied phase (doc/atmo_magic_wind_profile.md section 3): windAt(world_z) is the drift VECTOR (x east, y north, m/s) the air moves at that height, built from the CURVE-RESOLVED wind and the cube's shear - never the eased SSAtmoMagic::mWind, which is framerate-dependent and so may never position world content. windProfile() hands out the parameters themselves for callers that sample the core directly (the V1 debug view, the storm scheduler).
+    LLVector2 windAt(F32 world_z) const;
+    const SSWindProfile::Params& windProfile() const { return mWindProfile; }
+    F32 windProfileGroundZ() const { return mTrackFloorZ; }
+    F32 windProfileBaseZ() const { return mDriftBaseZ; }
 
     // <SS:Nexii> The dome band's altitude, resolved per call rather than cached with the rest of the sky walk - it reads the volumetric field's LIVE geometry, which moves between applies. The band IS the cirrus layer: the Sky Dome's animatable height param relative to the owning track's floor, brought down only by convection's anvil ramp (doc/atmo_magic_cloud_parallax.md). cloudDomeAltitudeMetres and cirrusAltitudeMetres are the same number - the pool and the floater's greyed-out dome row just read it by their own names.
     F32 cloudDomeAltitudeMetres() const;
@@ -162,6 +173,11 @@ private:
 
     SSAtmoEnvSkyModulation mLastModulation;
     LLVector2 mCloudDriftM;
+
+    // <SS:Nexii> The profile the drift integrates against, rebuilt every apply from the resolved weather state, and the world Z of the deck base the accumulator ran at (the live primary deck's base, else the authored one). mDriftBlend is the Wind Scroll influence's share of the resolved wind - the same factor already inside mDriftVelocity - so the dome seam's shear offset switches off with the drift it rides on.
+    SSWindProfile::Params mWindProfile;
+    F32 mDriftBaseZ = 0.f;
+    F32 mDriftBlend = 0.f;
 
     // <SS:Nexii> The dome band's authored height and its auto flag, sampled at the applied phase - the ANIMATABLE Sky Dome height keyframes, metres relative to the owning track's floor (cirrusAltitudeMetres adds the floor back). The auto flag no longer substitutes an altitude: the height param always rules.
     bool mCloudDomeAuto = false;

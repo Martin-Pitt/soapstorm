@@ -240,6 +240,7 @@ set(viewer_SOURCE_FILES
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
     ssfloateratmodebug.cpp
+    ssatmoinfoview.cpp
     ssfloatersim.cpp
     ssfloaterworldfield.cpp
     ssatmostore.cpp
@@ -1150,6 +1151,7 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
+    ssatmonoisecore.h
     ssatmotrack.h
     ssatmoenvapplier.h
     ssdiscpad.h
@@ -1178,6 +1180,8 @@ set(viewer_HEADER_FILES
     ssfloateratmoplanetary.h
     ssfloaterpreset.h
     ssfloateratmodebug.h
+    ssatmoinfoview.h
+    ssatmoinfoviewcore.h
     ssfloatersim.h
     ssatmostore.h
     ssprecippreset.h
@@ -1195,6 +1199,7 @@ set(viewer_HEADER_FILES
     sssoundscape.h
     sswater.h
     sswindflow.h
+    sswindprofilecore.h
     ssworldfield.h
     fsscriptlibrary.h
     fsscrolllistctrl.h

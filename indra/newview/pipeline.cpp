@@ -114,6 +114,7 @@
 #include "ssworldfield.h"   // <SS:Nexii> Atmo Magic shared world field
 #include "sswhiteout.h"     // <SS:Nexii> Atmo Magic whiteout
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
+#include "ssatmoinfoview.h" // <SS:Nexii> Atmo Magic info views: in-world layer
 #include "llspatialpartition.h"
 #include "llmutelist.h"
 #include "lltoolpie.h"
@@ -5756,6 +5757,12 @@ void LLPipeline::renderDebug()
     if (mRenderDebugMask & RENDER_DEBUG_GEOM_SETTLE)
     {
         SSAtmoMagic::getInstance()->renderDebug();
+    }
+
+    // <SS:Nexii> Atmo Magic info views: the active view's in-world layer (V1: the wind mast at the camera column). A setting rather than a mask, like the celestial overlay - the mode picker on the debug floater's Views tab owns it, and it draws nothing at 0.
+    if (SSAtmoInfoView::mode() != 0)
+    {
+        SSAtmoInfoView::renderWorld();
     }
 
     if (mRenderDebugMask & RENDER_DEBUG_COMPOSITION)

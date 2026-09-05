@@ -141,6 +141,11 @@ LLSD SSAtmoEnvWeather::asLLSD() const
     sd["gust_length"] = mGustLength.asLLSD();
     sd["gust_veer"]   = mGustVeer.asLLSD();
 
+    // <SS:Nexii> The wind profile's authored shear, gust idiom: the auto flag always, the curves alongside it.
+    sd["shear_auto"]     = mShearAuto;
+    sd["shear_strength"] = mShearStrength.asLLSD();
+    sd["veer_deg"]       = mVeerDeg.asLLSD();
+
     sd["lightning_enabled"]   = mLightningEnabled;
     sd["lightning_charge"]    = mLightningCharge;
     sd["lightning_sparks"]    = mLightningSparks;
@@ -175,6 +180,13 @@ bool SSAtmoEnvWeather::fromLLSD(const LLSD& sd)
     if (sd.has("gust_depth"))  mGustDepth.fromLLSD(sd["gust_depth"], 0.f);
     if (sd.has("gust_length")) mGustLength.fromLLSD(sd["gust_length"], 140.f);
     if (sd.has("gust_veer"))   mGustVeer.fromLLSD(sd["gust_veer"], 0.f);
+
+    // <SS:Nexii> An absent shear block means the environment predates the wind profile: auto on, curves at their defaults - the gust-auto precedent, so old documents gain the derived shear (a small default veer and jet gain) rather than rendering byte-identically; an author who wants none switches auto off and leaves the curves at zero.
+    mShearAuto = sd.has("shear_auto") ? sd["shear_auto"].asBoolean() : true;
+    if (sd.has("shear_strength")) mShearStrength.fromLLSD(sd["shear_strength"], 0.f);
+    else mShearStrength = SSAtmoEnvKeyframed<F32>(0.f);
+    if (sd.has("veer_deg")) mVeerDeg.fromLLSD(sd["veer_deg"], 0.f);
+    else mVeerDeg = SSAtmoEnvKeyframed<F32>(0.f);
 
     mLightningEnabled = sd.has("lightning_enabled") ? sd["lightning_enabled"].asBoolean() : true;
     mLightningCharge  = sd.has("lightning_charge")  ? sd["lightning_charge"].asBoolean()  : true;

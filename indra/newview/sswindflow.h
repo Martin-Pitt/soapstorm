@@ -91,8 +91,10 @@ public:
 
     F32 exposure(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The boundary-layer wind gradient, for anything scaling the authored 10m wind to another altitude (the cirrus cloud band). windAlpha() is the roughness-derived shear exponent of the current camera region; windGradientScale(z_agl) is the power-law factor v(z)/v_ref = (z/z_ref)^alpha, held constant above the boundary-layer top (~1.5km), the free atmosphere. The caller supplies its own reference ground for z_agl (the track floor - the old per-column groundRefZ/true-ground read is gone, doc/atmo_magic_wind_profile.md). Both fall back to the SSAtmoWindFlowGradient setting until a flowmap tile is solved.
+    // <SS:Nexii> The boundary-layer wind gradient for the flowmap's OWN slab math only. windAlpha() is the roughness-derived shear exponent of the current camera region; windGradientScale(z_agl) is the power-law factor v(z)/v_ref = (z/z_ref)^alpha, held constant above the boundary-layer top (~1.5km). Neither may feed the atmosphere any more: alpha depends on which region the CAMERA is in, so two clients would disagree about the sky - the cloud drift and the cirrus band read SSWindProfile (sswindprofilecore.h) off the weather cube instead (doc/atmo_magic_wind_profile.md section 3); its constants mirror these (LOCKSTEP). Both fall back to the SSAtmoWindFlowGradient setting until a flowmap tile is solved.
     F32 windAlpha() const;
+    // <SS:Nexii> Whether windAlpha() is the camera region's SOLVED roughness exponent (true) or still the SSAtmoWindFlowGradient fallback (false). Read by the V1 Wind Profile info view to label which source is live; the atmosphere itself never reads either (see above).
+    bool windAlphaSolved() const { const Tile* tile = cameraTile(); return tile && tile->mValid; }
     F32 windGradientScale(F32 z_agl) const;
 
     void gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32& veer) const;

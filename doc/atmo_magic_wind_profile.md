@@ -32,7 +32,7 @@ windAt(z) -> (heading, speed) as a 2D vector
 - An authored/derived **shear exponent** on the weather cube, NOT the flowmap's `windAlpha()` — alpha is derived from the *camera's region's* geometry probes, so two clients in different regions would disagree about the sky. `windAlpha()`/`windGradientScale` survive only inside the flowmap's own slab math.
 - `agl = z - groundZero()` (§2).
 
-**Speed:** keep the tuned power-law shape below 1500m (same constants, new exponent source). Above 1500m a jet continuation gated by `shearStrength` S∈[0,1]: `scale(z) = 3.0 * (1 + S * 1.5 * smoothstep(1500, anvilAgl, z))`, clamp [0.35, 6.0]. Calm day ⇒ flat 3× exactly like today.
+**Speed:** keep the tuned power-law shape below 1500m (same constants, new exponent source). Above 1500m a jet continuation gated by `shearStrength` S∈[0,1]: `scale(z) = 3.0 * (1 + S * 1.5 * smoothstep(1500, anvilAgl, z))`, clamp [0.35, 6.0]. S=0 ⇒ flat 3× exactly like today; note the auto derivation floors S at 0.15, so real skies always carry a small jet gain and veer (decided: physics by default, the gust-auto precedent).
 
 **Direction:** total veer split between the friction layer and the free troposphere:
 `heading(z) = heading10 + veerDeg * (B * smoothstep(0, 1500, z) + (1-B) * smoothstep(1500, anvilAgl, z))`, B ≈ 0.35 (tunable, art pass expected). When *blending between two sampled band vectors* (e.g. per-drop precip tilt), lerp the **vectors**, never the headings — bearing lerp is undefined at the wrap.
@@ -57,7 +57,7 @@ The critical review finding: **drift must stay an accumulator; shear must stay b
 - **Every other altitude is a bounded closed-form offset**, never a second integrator: `O(z) = shearSpanM * ramp(z)`, where `shearSpanM` is a capped function of the hodograph (cap ≈ 2500m, ~10×`CELL_M`). Two free-running accumulators at different velocities diverge without limit and their independent 1e6-m wraps snap the difference — rejected.
 - **Frame contract:** the cell **gate** keeps reading base drift only (one frame, unchanged, constraint-5 lockstep intact). Shape/carve coordinates read `air.xy - O(z)`, emitted as one small formula replicated byte-for-byte in **four** places: CPU builder, `ssVolCloudF.glsl`, the ground-shadow bake, and `precipNoiseAt`. This is the only formulation that spreads the anvil downwind without either (a) moving CPU puffs off their own noise columns so the fragment carve deletes them (there is no per-puff reconstruction in the shader — density is a world-space field), or (b) shader-only bias that leaves rain and ground shadows under the unsheared anvil.
 - **Dome seam:** the dome reads `baseDrift + O(cirrusZ)` — bounded offset, so deck lid and cirrus band can never slide apart unboundedly.
-- **Wrap fix (pre-existing bug):** `fmodf(drift, 1e6)` is not a multiple of `CELL_M` (260) or the noise tile (2048×scale) — today's wrap already repops the field. Wrap on a lattice-aligned span (multiple of both), and keep magnitudes far below F32 precision loss in the shader's `air.xy` read.
+- **Wrap fix (pre-existing bug):** `fmodf(drift, 1e6)` is not a multiple of `CELL_M` (260) or the noise tile (2048×scale) — today's wrap already repops the field. ✅ Wrap on the lcm of every air.xy period (cell 260, shader `SS_NOISE_M` 880 / `SS_SKEW_M` 1400, both decks' cell-quantised noise tiles; 2048 → 2080) = 800800m, about the old cadence. **Honest caveat found in review:** alignment keeps the tiling *textures* put, but the hash-based cell gate and cluster noise are not periodic in the cell index, so they still re-roll at a wrap. Full invisibility needs the builder, `ss_cell_occupied` and the shadow bake to hash the cell index modulo `span/CELL_M` — scheduled with phase 6b, which already reworks that replication set.
 - **Gust seed fix (pre-existing bug):** `mWindDriftSeeded` latches on the first frame with speed > 0 — gust phase is session-start dependent. Seed from wall clock unconditionally.
 
 ## 5. Consumer migration
@@ -78,8 +78,8 @@ The critical review finding: **drift must stay an accumulator; shear must stay b
 ## 7. Phasing
 
 1. True Ground removal (✅ done, standalone).
-2. `windAt(z)` + auto derivation, wired only into cirrus drift as a behavior-preserving swap on calm days; verify.
-3. Base-altitude drift fix + lattice-aligned wrap + gust seed fix.
+2. ✅ `windAt(z)` + auto derivation (`SSAtmoEnvApplier::windAt`/`windProfile`, `SSAtmoEnvWeather::mShearAuto/mShearStrength/mVeerDeg`, resolved on `SSAtmoEnvWeatherState`), wired into the drift as a behavior-preserving swap on calm days (exponent = `EXPONENT_DEFAULT`, the flowmap's `windAlpha` is slab-only now).
+3. ✅ Base-altitude drift fix (`mDriftBaseZ` = live primary deck base, else the authored base) + lattice-aligned wrap (`wrapSpanM(CELL_M, noiseTileMetres())`, the deck's noise tile quantised to whole cells in `SSVolCloud`) + unconditional wall-clock gust seed. The dome seam (`cirrusDriftMetres()` = base drift + `shearOffset(z_band, z_base)` × the Wind Scroll influence share) landed here too, since it is CPU-only; the deck-side `O(z)` replication is still phase 4.
 4. `O(z)` shear transform, 4-way replication; precip tilt migration.
 5. UI rows + art pass on B / veer constants.
 
