@@ -113,9 +113,6 @@ public:
     // gate). Consumers switch sources without changing anything else.
     bool buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::SurfaceGrid& out);
 
-    // <SS:Nexii> The TRUE-GROUND reference for the wind profile: per column, the real ground the boundary layer is measured from - the topmost real surface (olivine/green-blue ground tiles), with TALL-STRUCTURE columns (purple tiles: a building or skybox far above the surrounding ground) voided and gap-filled from the surrounding true ground; water columns hold the sea plane. Unlike the ancient Linden terrain heightmap (resolveHeightRegion), this reads the worldfield's real-geometry captures, so streets, mesh terrain and prim ground built ON TOP of the old heightmap become the ground. n is the output resolution (region-anchored like buildSurfaceGrid); false when the tile is not yet valid.
-    bool buildTrueGround(U64 region_handle, S32 n, std::vector<F32>& out);
-
     void validTiles(std::vector<std::pair<U64, U32> >& out) const;
 
     // The topmost surface at a point, absolute Z. False if the column is

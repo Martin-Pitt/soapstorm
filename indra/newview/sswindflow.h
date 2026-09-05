@@ -39,7 +39,6 @@
 
 #include "llrendertarget.h"
 #include "llsingleton.h"
-#include "ssworldfield.h"
 #include "v3math.h"
 #include "v4math.h"
 
@@ -92,10 +91,9 @@ public:
 
     F32 exposure(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The boundary-layer wind gradient, for anything scaling the authored 10m wind to another altitude (the cirrus cloud band). windAlpha() is the roughness-derived shear exponent of the current camera region; windGradientScale(z_agl) is the power-law factor v(z)/v_ref = (z/z_ref)^alpha, held constant above the boundary-layer top (~1.5km), the free atmosphere. groundRefZ() is the reference ground z_agl measures from - the water plane on water regions, else the region's true ground. All fall back to the SSAtmoWindFlowGradient setting until a flowmap tile is solved.
+    // <SS:Nexii> The boundary-layer wind gradient, for anything scaling the authored 10m wind to another altitude (the cirrus cloud band). windAlpha() is the roughness-derived shear exponent of the current camera region; windGradientScale(z_agl) is the power-law factor v(z)/v_ref = (z/z_ref)^alpha, held constant above the boundary-layer top (~1.5km), the free atmosphere. The caller supplies its own reference ground for z_agl (the track floor - the old per-column groundRefZ/true-ground read is gone, doc/atmo_magic_wind_profile.md). Both fall back to the SSAtmoWindFlowGradient setting until a flowmap tile is solved.
     F32 windAlpha() const;
     F32 windGradientScale(F32 z_agl) const;
-    F32 groundRefZ() const;
 
     void gustAt(const LLVector3& pos_agent, F64 time, F32& scale, F32& veer) const;
     F32 gust(const LLVector3& pos_agent) const;
@@ -103,9 +101,6 @@ public:
     void renderDebug();
 
     U64 capturedRegion() const { return mCaptureRegion; }
-
-    // <SS:Nexii> A claim on the worldfield's real-geometry capture for the map's region, so the true-ground read (buildTrueGround) has a valid tile. Refreshed when the camera region changes; released on clear().
-    void refreshTrueGroundClaim(U64 region_handle);
 
     S32 sliceCount() const;
     S32 resolution() const;
@@ -151,6 +146,7 @@ private:
         // <SS:Nexii> The wind-shear exponent of the boundary-layer power law, derived from how tall and how open the region's surface is (deriveWindAlpha in sswindflow.cpp). The reference wind is authored at 10m above open level ground; this alpha scales it upward through the layer and is the number cloud drift uses to reach the cirrus altitude.
         F32 mAlpha = 0.16f;
 
+        // <SS:Nexii> The slab power law's reference ground: a coarse water-floored terrain average, filled by placeSlices. The per-column true-ground grid this summarised is gone (doc/atmo_magic_wind_profile.md).
         F32 mGroundRef = 0.f;
         F32 mBandTop = 0.f;
         F32 mBandBottom = 0.f;
@@ -164,9 +160,6 @@ private:
         std::vector<F32> mPressure;
 
         std::vector<F32> mSurfaceTop;
-
-        // <SS:Nexii> The TRUE-GROUND reference per column: the region terrain heightmap, downsampled to tile resolution and floored by the water plane where set. Unlike the captured mSurfaceTop - the topmost solid, a rooftop over a column - this is the ground the wind profile starts from, so the boundary layer is measured against actual terrain. The terrain grid is always complete (objects never occlude it), so no gap fill; a low-resolution read keeps it cheap and smooth. Null until the tile is full-built.
-        std::vector<F32> mGroundZ;
 
         F32 mCarved = 0.f;
         F32 mSolidFill = 0.f;
@@ -371,9 +364,6 @@ private:
     std::string mLastRebuildReason;    // the last logged rebuild driver (throttle)
     F64 mLastRebuildLog = 0.0;
 
-    // <SS:Nexii> The worldfield interest held while this map has a region, so the worldfield builds its real-geometry tile there for buildTrueGround. Re-claimed on region change.
-    SSWorldField::Interest mTrueGroundClaim;
-    U64 mTrueGroundRegion = 0;
 
     EStage mStage = EStage::IDLE;
 

@@ -520,8 +520,8 @@ SSAtmoEnvSkyModulation SSAtmoEnvApplier::computeModulation(const SSAtmoEnvTrack&
 
     mLastModulation = SSAtmoEnvSkyWeatherModulator::compute(in, influence);
 
-    // <SS:Nexii> The dome/cirrus band drifts with the WIND, scaled to its OWN altitude by the boundary-layer wind gradient - the authored wind is a 10m value, and the cirrus layer sits kilometres up, so the power law (SSWindFlowMap::windGradientScale, clamped at the ~1.5km free-atmosphere top) is exactly the factor that takes the ground wind to where the band is. The reference ground is the water plane or the region's true ground. With no flowmap tile yet it falls back to the SSAtmoWindFlowGradient exponent. The stock cloud_scroll_rate path is left at zero, so this drift is the only thing that moves the band.
-    const F32 cirrus_agl = llmax(cirrusAltitudeMetres() - SSWindFlowMap::getInstance()->groundRefZ(), 1.f);
+    // <SS:Nexii> The dome/cirrus band drifts with the WIND, scaled to its OWN altitude by the boundary-layer wind gradient - the authored wind is a 10m value, and the cirrus layer sits kilometres up, so the power law (SSWindFlowMap::windGradientScale, clamped at the ~1.5km free-atmosphere top) is exactly the factor that takes the ground wind to where the band is. The reference ground is the active track's floor - the per-texel true-ground capture this once read lives in git history; a per-track constant answers "roughly where is the ground" without the async worldfield dependency (doc/atmo_magic_wind_profile.md). With no flowmap tile yet it falls back to the SSAtmoWindFlowGradient exponent. The stock cloud_scroll_rate path is left at zero, so this drift is the only thing that moves the band.
+    const F32 cirrus_agl = llmax(cirrusAltitudeMetres() - mTrackFloorZ, 1.f);
     const F32 drift_scale = SSWindFlowMap::getInstance()->windGradientScale(cirrus_agl);
 
     const F32 drift_dt = static_cast<F32>(llclamp(elapsed, 0.0, 0.25));

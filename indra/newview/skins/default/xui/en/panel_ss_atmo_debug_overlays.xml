@@ -120,7 +120,7 @@
      width="382"
      name="field_overlay_check"
      label="Draw the world field"
-     tool_tip="The shared capture&apos;s view - band surfaces, air labels, drainage or true ground - picked on the Fields tab. The drainage and air views are distance-thinned" />
+     tool_tip="The shared capture&apos;s view - band surfaces, air labels or drainage - picked on the Fields tab. The drainage and air views are distance-thinned" />
     <check_box
      follows="left|top"
      layout="topleft"
