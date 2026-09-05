@@ -128,6 +128,8 @@ if (WINDOWS)
       LL_WINDOWS=1
       WIN32_LEAN_AND_MEAN
       NOMINMAX
+      UNICODE
+      _UNICODE
 #     DOM_DYNAMIC                     # For shared library colladadom
       _CRT_SECURE_NO_WARNINGS         # Allow use of sprintf etc
       _CRT_NONSTDC_NO_DEPRECATE       # Allow use of sprintf etc
@@ -301,11 +303,11 @@ if (LINUX OR DARWIN)
   if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
     # libstdc++ headers contain deprecated declarations that fail on clang
     # macOS currently has many deprecated calls
-    add_compile_options(-Wno-unused-local-typedef)
+    add_compile_options(-Wno-unused-local-typedef -Wno-tautological-pointer-compare -Wno-unused-function -Wno-inconsistent-missing-override -Wno-unused-lambda-capture)
   endif()
 
   if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-    add_compile_options(-Wno-stringop-truncation -Wno-parentheses -Wno-maybe-uninitialized)
+    add_compile_options(-Wno-stringop-truncation -Wno-parentheses -Wno-maybe-uninitialized -Wno-error=aggressive-loop-optimizations -Wno-address)
   endif()
 
   if (NOT GCC_DISABLE_FATAL_WARNINGS AND NOT CLANG_DISABLE_FATAL_WARNINGS)
