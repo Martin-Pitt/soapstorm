@@ -38,6 +38,7 @@
 #include "ssprecippreset.h"
 #include "ssatmoenvbridge.h"
 #include "ssvolcloud.h" // <SS:Nexii> the deck's generated stand-ins for the texture pickers
+#include "sshazecore.h" // <SS:Nexii> SSHaze::invHeight - the haze thin frac row's scale-height read-out
 
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
@@ -375,6 +376,7 @@ bool SSFloaterAtmoEnv::postBuild()
     const std::vector<FloatRow> atmos_rows = {
         { "atmo_haze_horizon",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeHorizon; },        false },
         { "atmo_haze_density",    [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeDensity; },        false },
+        { "atmo_haze_thin_frac",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mHazeThinFrac; },       false },
         { "atmo_rainbow",        [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyMoistureLevel; },   false },
         { "atmo_droplet_radius",  [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyDropletRadius; },   false },
         { "atmo_ice_level",       [atmos]() -> SSAtmoEnvKeyframed<F32>& { return atmos().mSkyIceLevel; },        false },
@@ -3392,6 +3394,19 @@ void SSFloaterAtmoEnv::refreshPreview()
     {
         refreshFloatRow(row, mPreviewPhase);
     }
+
+    // <SS:Nexii> The haze thin frac row's own read-out: the scale height SSHaze::invHeight resolves to from the
+    // AUTHORED dome height (never cirrusAltitudeMetres()) and the frac just refreshed above, in metres. "Off" at
+    // frac 0 rather than a metre figure, since invH == 0 has no scale height to show.
+    {
+        const SSAtmoEnvTrack& haze_track = mgr->editable().mTracks[mSelectedTrackIndex];
+        const F32 dome_height_m = haze_track.mCloudDome.mHeightM.valueAt(mPreviewPhase);
+        const F32 thin_frac = haze_track.mAtmosphere.mHazeThinFrac.valueAt(mPreviewPhase);
+        const F32 inv_h = SSHaze::invHeight(dome_height_m, thin_frac);
+        getChild<LLTextBox>("atmo_haze_thin_scale_label")->setText(
+            (inv_h > 0.f) ? llformat("%.0fm", 1.f / inv_h) : std::string("Off"));
+    }
+
     for (const KeyRow<LLColor3>& row : mColorRows)
     {
         refreshColorRow(row, mPreviewPhase);

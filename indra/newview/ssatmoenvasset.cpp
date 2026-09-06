@@ -1265,6 +1265,7 @@ void SSAtmoEnvAtmosphere::collapseConstantKeyframes()
 
     mHazeHorizon.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mHazeDensity.collapseIfConstant(SEED_COLLAPSE_EPSILON);
+    mHazeThinFrac.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mSkyMoistureLevel.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mSkyDropletRadius.collapseIfConstant(SEED_COLLAPSE_EPSILON);
     mSkyIceLevel.collapseIfConstant(SEED_COLLAPSE_EPSILON);
@@ -1291,6 +1292,7 @@ LLSD SSAtmoEnvAtmosphere::asLLSD() const
 
     sd["haze_horizon"]        = mHazeHorizon.asLLSD();
     sd["haze_density"]        = mHazeDensity.asLLSD();
+    sd["haze_thin_frac"]      = mHazeThinFrac.asLLSD();
     sd["moisture_level"]      = mSkyMoistureLevel.asLLSD();
     sd["droplet_radius"]      = mSkyDropletRadius.asLLSD();
     sd["ice_level"]           = mSkyIceLevel.asLLSD();
@@ -1323,6 +1325,7 @@ bool SSAtmoEnvAtmosphere::fromLLSD(const LLSD& sd)
 
     if (sd.has("haze_horizon"))        mHazeHorizon.fromLLSD(sd["haze_horizon"], def.mHazeHorizon.valueAt(0.0));
     if (sd.has("haze_density"))        mHazeDensity.fromLLSD(sd["haze_density"], def.mHazeDensity.valueAt(0.0));
+    if (sd.has("haze_thin_frac"))      mHazeThinFrac.fromLLSD(sd["haze_thin_frac"], def.mHazeThinFrac.valueAt(0.0));
     if (sd.has("moisture_level"))      mSkyMoistureLevel.fromLLSD(sd["moisture_level"], def.mSkyMoistureLevel.valueAt(0.0));
     if (sd.has("droplet_radius"))      mSkyDropletRadius.fromLLSD(sd["droplet_radius"], def.mSkyDropletRadius.valueAt(0.0));
     if (sd.has("ice_level"))           mSkyIceLevel.fromLLSD(sd["ice_level"], def.mSkyIceLevel.valueAt(0.0));

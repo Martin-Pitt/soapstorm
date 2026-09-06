@@ -110,6 +110,26 @@ public:
     F32 cloudDomeAltitudeMetres() const;
     F32 cirrusAltitudeMetres() const;
 
+    // <SS:Nexii> Atmo Magic altitude haze (doc/atmo_magic_surface_weather.md section 15, sshazecore.h): 1/H sampled
+    // from the AUTHORED dome height keyframe (SSAtmoEnvCloudDome::mHeightM at the applied phase, the same sample
+    // applySky already takes into mCloudDomeHeightM) and mHazeThinFrac at phase, via SSHaze::invHeight - never
+    // cirrusAltitudeMetres(), whose own comment above warns it reads the live volumetric deck and the per-client
+    // auto flag, which two clients would then disagree about. hazeCamHeightM() is the camera's OWN altitude above
+    // the applied track's floor (mTrackFloorZ) - presentation-only and per-client by nature (it is where THIS
+    // viewer's eye happens to be), so unlike every other published figure here it never feeds world state; it only
+    // shapes what this client's own view looks like. Both zero while the applier is not driving, exactly like
+    // sunRiseFraction() above.
+    F32 hazeInvHeight() const { return mActive ? mHazeInvHeight : 0.f; }
+    F32 hazeCamHeightM() const { return mActive ? mHazeCamHeightM : 0.f; }
+
+    // <SS:Nexii> The world-up axis (world Z), expressed in the shader's VIEW/eye space, for the haze falloff to
+    // read the fragment's real altitude off a view-space rel_pos - rel_pos.y alone is the camera's OWN up axis and
+    // only equals world altitude when the camera is exactly level (see the ss_haze_up_view note in
+    // atmosphericsFuncs.glsl). Same camera-axis derivation SSVolCloud::bindGroundShadow already uses for
+    // ss_cshadow_r/u/f. Zero (an inert dot product) while the applier is not driving - like hazeInvHeight() it is
+    // never the actual driver either way, since ss_haze_inv_height is also zero then.
+    LLVector3 hazeUpView() const { return mActive ? mHazeUpView : LLVector3::zero; }
+
     // <SS:Nexii> The home planet's radius, metres, from the applied track's planetary system - the curvature authority the dome cloud's deck mapping curves around (cloudsF.glsl via lldrawpoolwlsky). Zero when the track carries no home body, which leaves the shader on its flat-deck fallback.
     F32 homePlanetRadiusM() const { return mHomePlanetRadiusM; }
 
@@ -223,6 +243,11 @@ private:
     // <SS:Nexii> The dome band's authored height and its auto flag, sampled at the applied phase - the ANIMATABLE Sky Dome height keyframes, metres relative to the owning track's floor (cirrusAltitudeMetres adds the floor back). The auto flag no longer substitutes an altitude: the height param always rules.
     bool mCloudDomeAuto = false;
     F32 mCloudDomeHeightM = 6000.f;
+
+    // <SS:Nexii> The altitude haze pair, sampled at the applied phase - see hazeInvHeight/hazeCamHeightM.
+    F32 mHazeInvHeight = 0.f;
+    F32 mHazeCamHeightM = 0.f;
+    LLVector3 mHazeUpView = LLVector3::zero;
 
     // <SS:Nexii> The applied track's floor, convection and temperature - the cirrus altitude is floor-relative, its anvil ramp rides the convection, and the seasonal band rides the temperature (SSAtmoCirrusSeason) - plus the home planet's radius, metres.
     F32 mTrackFloorZ = 0.f;

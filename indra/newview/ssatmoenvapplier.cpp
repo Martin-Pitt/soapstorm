@@ -48,6 +48,7 @@
 #include "ssatmoenvplanetarystate.h"
 #include "ssatmoenvtrackstate.h"
 #include "ssvolcloud.h" // <SS:Nexii> the auto dome altitude reads the volumetric deck
+#include "sshazecore.h" // <SS:Nexii> SSHaze::invHeight - the altitude haze scale height
 
 #include "v3colorutil.h" // <SS:Nexii> componentMult/componentExp, the light handover's attenuation
 
@@ -731,6 +732,26 @@ void SSAtmoEnvApplier::applySky(const SSAtmoEnvTrack& track, F64 phase,
     mCloudDomeHeightM = dome.mHeightM.valueAt(phase);
     mTrackFloorZ = track.mFloorZ;
     mLargeNoiseId = dome.mLargeNoiseTexture.valueAt(phase);
+
+    // <SS:Nexii> The altitude haze pair (doc/atmo_magic_surface_weather.md section 15): H comes from the AUTHORED
+    // dome height just sampled above (mCloudDomeHeightM), never cirrusAltitudeMetres() - see hazeInvHeight()'s
+    // comment. The camera height is presentation-only (this client's own eye above the track's floor) and never
+    // feeds anything but this client's view.
+    mHazeInvHeight = SSHaze::invHeight(mCloudDomeHeightM, atm.mHazeThinFrac.valueAt(phase));
+    // <SS:Nexii> Floored at 0: the core takes no clamping of its inputs (sshazecore.h), so a camera below the
+    // track's floor (underground, underwater, mid-track-blend) would otherwise feed pathFactor a negative
+    // camHeightM and amplify the haze past 1.0 instead of just reading "at the floor".
+    mHazeCamHeightM = llmax(0.f, LLViewerCamera::getInstance()->getOrigin().mV[VZ] - mTrackFloorZ);
+    // <SS:Nexii> The world-up axis (world Z) expressed in view space - same derivation SSVolCloud::bindGroundShadow
+    // uses for ss_cshadow_r/u/f (world = origin + right*x + up*y - forward*z, so the world-Z row of that same
+    // rotation, read off the camera's own world-space axes, is (right.z, up.z, -forward.z)).
+    {
+        const LLViewerCamera* camera = LLViewerCamera::getInstance();
+        const LLVector3 cam_right = camera->getLeftAxis() * -1.f;
+        const LLVector3 cam_up = camera->getUpAxis();
+        const LLVector3 cam_fwd = camera->getAtAxis();
+        mHazeUpView = LLVector3(cam_right.mV[VZ], cam_up.mV[VZ], -cam_fwd.mV[VZ]);
+    }
 
     // <SS:Nexii> The large map's crossfade, only when both ends are authored maps - the gate switches whole octaves between the cloud noise and the large map, so a fade onto or off of None has no honest mix and snaps as it always did.
     mLargeNoiseTo = mLargeNoiseId;

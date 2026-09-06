@@ -190,8 +190,11 @@ LLGLSLShader            gSSLightningProgram;
 LLGLSLShader            gSSCelestialProgram;
 LLGLSLShader            gSSSurfaceNormalProgram;
 LLGLSLShader            gSSSurfaceCommitProgram;
-LLGLSLShader            gSSSurfaceSnowProgram;
-LLGLSLShader            gSSWhiteoutProgram;
+LLGLSLShader            gSSSurfaceAlbedoProgram; // <SS:Nexii> was gSSSurfaceSnowProgram
+// <SS:Nexii> Atmo Magic surface weather: post-processing screen-space layers (replace the old whiteout)
+LLGLSLShader            gSSPostFogProgram;
+LLGLSLShader            gSSPostHeatProgram;
+LLGLSLShader            gSSPostLensProgram;
 LLGLSLShader            gSSPrecipProjProgram;
 LLGLSLShader            gSSWindInitProgram;
 LLGLSLShader            gSSWindDivProgram;
@@ -471,8 +474,10 @@ void LLViewerShaderMgr::finalizeShaderList()
     mShaderList.push_back(&gSSCelestialProgram);
     mShaderList.push_back(&gSSSurfaceNormalProgram);
     mShaderList.push_back(&gSSSurfaceCommitProgram);
-    mShaderList.push_back(&gSSSurfaceSnowProgram);
-    mShaderList.push_back(&gSSWhiteoutProgram);
+    mShaderList.push_back(&gSSSurfaceAlbedoProgram);
+    mShaderList.push_back(&gSSPostFogProgram);
+    mShaderList.push_back(&gSSPostHeatProgram);
+    mShaderList.push_back(&gSSPostLensProgram);
     mShaderList.push_back(&gSSPrecipProjProgram);
     mShaderList.push_back(&gHUDFullbrightProgram);
     mShaderList.push_back(&gDeferredFullbrightAlphaMaskProgram);
@@ -912,6 +917,15 @@ std::string LLViewerShaderMgr::loadBasicShaders()
     attribs["MAX_JOINTS_PER_MESH_OBJECT"] =
         std::to_string(LLSkinningUtil::getMaxJointCount());
 
+    // <SS:Nexii> atmosphericsFuncs.glsl is a basic shader object (compiled once here, not per-program), so the
+    // per-program addPermutation("SS_ATMO", ...) above never reaches it - it needs the define here too, or the
+    // whole SS_ATMO block in that file (haze falloff, dominant-light handover, sun-rise glow ramp) never compiles.
+    static LLCachedControl<bool> basic_atmo(gSavedSettings, "SSAtmoEnabled", false);
+    if (basic_atmo)
+    {
+        attribs["SS_ATMO"] = "1";
+    }
+
     static LLCachedControl<bool> emissive(gSavedSettings, "RenderEnableEmissiveBuffer", false);
 
     if (emissive)
@@ -1260,8 +1274,10 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSCelestialProgram.unload();
         gSSSurfaceNormalProgram.unload();
         gSSSurfaceCommitProgram.unload();
-        gSSSurfaceSnowProgram.unload();
-        gSSWhiteoutProgram.unload();
+        gSSSurfaceAlbedoProgram.unload();
+        gSSPostFogProgram.unload();
+        gSSPostHeatProgram.unload();
+        gSSPostLensProgram.unload();
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
         gHUDFullbrightAlphaMaskProgram.unload();
@@ -2247,6 +2263,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSSurfaceWetProgram.mShaderFiles.clear();
         gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
         gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceStateF.glsl", GL_FRAGMENT_SHADER));
         gSSSurfaceWetProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceWetF.glsl", GL_FRAGMENT_SHADER));
         gSSSurfaceWetProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
         gSSSurfaceWetProgram.clearPermutations();
@@ -2272,6 +2289,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSSurfaceNormalProgram.mShaderFiles.clear();
         gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
         gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceStateF.glsl", GL_FRAGMENT_SHADER));
         gSSSurfaceNormalProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceNormalF.glsl", GL_FRAGMENT_SHADER));
         gSSSurfaceNormalProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
         gSSSurfaceNormalProgram.clearPermutations();
@@ -2307,48 +2325,27 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         }
     }
 
-    // Snow surfaces. The same shape as the wetness shader - screen space over
+    // Albedo surfaces (was snow-only). The same shape as the wetness shader - screen space over
     // the gbuffer, the field window for coverage - but writing the diffuse
-    // attachment instead of the specular one: the settled depth the field has
-    // always carried becomes visible albedo.
+    // attachment instead of the specular one: wet darkening, liquid tint, stain, ice, frost and
+    // deposit palette all land here now (doc/atmo_magic_surface_weather.md sec 3).
     if (success)
     {
-        gSSSurfaceSnowProgram.mName = "SS Surface Snow Shader";
-        gSSSurfaceSnowProgram.mFeatures.isDeferred = true;
-        gSSSurfaceSnowProgram.mShaderFiles.clear();
-        gSSSurfaceSnowProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
-        gSSSurfaceSnowProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
-        gSSSurfaceSnowProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceSnowF.glsl", GL_FRAGMENT_SHADER));
-        gSSSurfaceSnowProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
-        gSSSurfaceSnowProgram.clearPermutations();
-        add_common_permutations(&gSSSurfaceSnowProgram);
-        if (!gSSSurfaceSnowProgram.createShader())
+        gSSSurfaceAlbedoProgram.mName = "SS Surface Albedo Shader";
+        gSSSurfaceAlbedoProgram.mFeatures.isDeferred = true;
+        gSSSurfaceAlbedoProgram.mShaderFiles.clear();
+        gSSSurfaceAlbedoProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
+        gSSSurfaceAlbedoProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceAlbedoProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceStateF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceAlbedoProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceAlbedoF.glsl", GL_FRAGMENT_SHADER));
+        gSSSurfaceAlbedoProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSSurfaceAlbedoProgram.clearPermutations();
+        add_common_permutations(&gSSSurfaceAlbedoProgram);
+        if (!gSSSurfaceAlbedoProgram.createShader())
         {
-            LL_WARNS("Shader") << "SS Surface snow shader failed to compile;"
-                               << " settled snow will not shade" << LL_ENDL;
-            gSSSurfaceSnowProgram.unload();
-        }
-    }
-
-    // The whiteout veil. Deferred util for the depth/normal reads and the
-    // surface field include for the exposure march; the call site composites
-    // it as an alpha fog lerp over the lit screen.
-    if (success)
-    {
-        gSSWhiteoutProgram.mName = "SS Whiteout Shader";
-        gSSWhiteoutProgram.mFeatures.isDeferred = true;
-        gSSWhiteoutProgram.mShaderFiles.clear();
-        gSSWhiteoutProgram.mShaderFiles.push_back(make_pair("deferred/blurLightV.glsl", GL_VERTEX_SHADER));
-        gSSWhiteoutProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
-        gSSWhiteoutProgram.mShaderFiles.push_back(make_pair("deferred/ssWhiteoutF.glsl", GL_FRAGMENT_SHADER));
-        gSSWhiteoutProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
-        gSSWhiteoutProgram.clearPermutations();
-        add_common_permutations(&gSSWhiteoutProgram);
-        if (!gSSWhiteoutProgram.createShader())
-        {
-            LL_WARNS("Shader") << "SS Whiteout shader failed to compile;"
-                               << " no whiteout layer" << LL_ENDL;
-            gSSWhiteoutProgram.unload();
+            LL_WARNS("Shader") << "SS Surface albedo shader failed to compile;"
+                               << " settled surface state will not shade" << LL_ENDL;
+            gSSSurfaceAlbedoProgram.unload();
         }
     }
 
@@ -3301,6 +3298,66 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gDeferredCoFProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
         success = gDeferredCoFProgram.createShader();
         llassert(success);
+    }
+
+    // <SS:Nexii> Atmo Magic surface weather: the height fog layer replacing the old whiteout veil.
+    // Post program (bound directly, like gDeferredCoFProgram above): the surface field include is
+    // for the column test the veil march reads a pixel's own outdoor/indoor state from.
+    if (success)
+    {
+        gSSPostFogProgram.mName = "SS Post Height Fog Shader";
+        gSSPostFogProgram.mFeatures.isDeferred = true;
+        gSSPostFogProgram.mShaderFiles.clear();
+        gSSPostFogProgram.mShaderFiles.push_back(make_pair("deferred/postDeferredNoTCV.glsl", GL_VERTEX_SHADER));
+        gSSPostFogProgram.mShaderFiles.push_back(make_pair("deferred/ssSurfaceFieldF.glsl", GL_FRAGMENT_SHADER));
+        gSSPostFogProgram.mShaderFiles.push_back(make_pair("deferred/ssPostFogF.glsl", GL_FRAGMENT_SHADER));
+        gSSPostFogProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSPostFogProgram.clearPermutations();
+        add_common_permutations(&gSSPostFogProgram);
+        if (!gSSPostFogProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Post Height Fog shader failed to compile;"
+                               << " no height fog layer" << LL_ENDL;
+            gSSPostFogProgram.unload();
+        }
+    }
+
+    // <SS:Nexii> Atmo Magic surface weather: the heat-shimmer post pass.
+    if (success)
+    {
+        gSSPostHeatProgram.mName = "SS Post Heat Shimmer Shader";
+        gSSPostHeatProgram.mFeatures.isDeferred = true;
+        gSSPostHeatProgram.mShaderFiles.clear();
+        gSSPostHeatProgram.mShaderFiles.push_back(make_pair("deferred/postDeferredNoTCV.glsl", GL_VERTEX_SHADER));
+        gSSPostHeatProgram.mShaderFiles.push_back(make_pair("deferred/ssPostHeatF.glsl", GL_FRAGMENT_SHADER));
+        gSSPostHeatProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSPostHeatProgram.clearPermutations();
+        add_common_permutations(&gSSPostHeatProgram);
+        if (!gSSPostHeatProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Post Heat Shimmer shader failed to compile;"
+                               << " no heat shimmer" << LL_ENDL;
+            gSSPostHeatProgram.unload();
+        }
+    }
+
+    // <SS:Nexii> Atmo Magic surface weather: the lens-drops post pass.
+    if (success)
+    {
+        gSSPostLensProgram.mName = "SS Post Lens Drops Shader";
+        gSSPostLensProgram.mFeatures.isDeferred = true;
+        gSSPostLensProgram.mShaderFiles.clear();
+        gSSPostLensProgram.mShaderFiles.push_back(make_pair("deferred/postDeferredNoTCV.glsl", GL_VERTEX_SHADER));
+        gSSPostLensProgram.mShaderFiles.push_back(make_pair("deferred/ssPostLensF.glsl", GL_FRAGMENT_SHADER));
+        gSSPostLensProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSPostLensProgram.clearPermutations();
+        add_common_permutations(&gSSPostLensProgram);
+        if (!gSSPostLensProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS Post Lens Drops shader failed to compile;"
+                               << " no lens drops" << LL_ENDL;
+            gSSPostLensProgram.unload();
+        }
     }
 
     if (success)

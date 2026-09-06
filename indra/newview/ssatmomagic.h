@@ -101,6 +101,10 @@ public:
 
     F32 temperatureC() const { return mTemperatureC; }
 
+    // <SS:Nexii> Surface weather slice B: the weather cube's moisture 0..1 (SSAtmoTrackConfig::mMoisture, filled beside temperature in the bridge), falling back to clamp(precipitation*2,0,1) with no environment; sun direction Z clamped 0..1, the frost/fog "how much sun is up" input. Both recomputed in refreshParams. doc/atmo_magic_surface_weather.md sec 2.
+    F32 humidity() const { return mHumidity; }
+    F32 sunUp() const { return mSunUp; }
+
     // <SS:Nexii> Storm-approach look-ahead: how imminent an approaching thunderstorm is (0..1) from the weather cube's next keyframe (SSAtmoEnvBridge::stormApproach), plus the upwind heading in degrees it comes FROM - negative when none approaches. SSLightning's bolt-from-the-blue anticipation reads these every frame.
     F32 stormApproach() const { return mStormApproach; }
     F32 stormApproachHeadingDeg() const { return mStormApproachHeading; }
@@ -232,6 +236,8 @@ private:
     bool mSwitchedOn = false;
 
     F32 mTemperatureC = 15.f;
+    F32 mHumidity = 0.5f;
+    F32 mSunUp = 0.f;
 
     // <SS:Nexii> The bolt-from-the-blue storm look-ahead, recomputed every refresh. See the getters.
     F32 mStormApproach = 0.f;

@@ -78,6 +78,24 @@ static F32 ssPuddleMaskNoise(F32 mx, F32 my, F32 scale_m)
                 lerp(latticeHash(ix, iy + 1), latticeHash(ix + 1, iy + 1), sx), sy);
 }
 
+// <SS:Nexii> Look equality within tolerance - a preset whose look already matches the mix's mA must start no crossfade (doc sec 2). Every field, not just the tint, so a preset that only bumped depthFull still counts as "different".
+static bool looksEqual(const SSSurfaceState::LiquidLook& a, const SSSurfaceState::LiquidLook& b)
+{
+    const F32 eps = 1.0e-4f;
+    return fabsf(a.mTint.r - b.mTint.r) < eps && fabsf(a.mTint.g - b.mTint.g) < eps
+        && fabsf(a.mTint.b - b.mTint.b) < eps && fabsf(a.mOpacity - b.mOpacity) < eps
+        && fabsf(a.mStain - b.mStain) < eps && fabsf(a.mMetal - b.mMetal) < eps;
+}
+
+static bool looksEqual(const SSSurfaceState::DepositLook& a, const SSSurfaceState::DepositLook& b)
+{
+    const F32 eps = 1.0e-4f;
+    return fabsf(a.mTint.r - b.mTint.r) < eps && fabsf(a.mTint.g - b.mTint.g) < eps
+        && fabsf(a.mTint.b - b.mTint.b) < eps && fabsf(a.mSparkle - b.mSparkle) < eps
+        && fabsf(a.mTranslucency - b.mTranslucency) < eps && fabsf(a.mDepthFull - b.mDepthFull) < eps
+        && fabsf(a.mWash - b.mWash) < eps && fabsf(a.mMelts - b.mMelts) < eps;
+}
+
 extern bool gCubeSnapshot;
 
 static const F32 TICK_INTERVAL   = 0.25f;
@@ -117,6 +135,13 @@ void SSSurfaceField::clear()
     mWindowValid = false;
     mLastStep = -1.0;
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
+    mPeakIce = mPeakFrost = mPeakStain = 0.f;
+    mPeakWetGain = mPeakDepositGain = 0.f;
+    mPeakWetPresent = mPeakDepositPresent = 0.f;
+    // <SS:Nexii> A full rebuild resets the looks and rings too - nothing left on the ground for them to describe.
+    mLiquidMix = SSSurfaceState::Mix<SSSurfaceState::LiquidLook>();
+    mDepositMix = SSSurfaceState::Mix<SSSurfaceState::DepositLook>();
+    mRings = SSSurfaceState::RingBuffer();
 }
 
 static const F32 SLOPE_RUN_FULL = 0.85f;
@@ -512,6 +537,11 @@ SSSurfaceField::Field* SSSurfaceField::fieldFor(U64 region_handle, const Geometr
         fld.mWet.assign(geom.mZ.size(), 0.f);
         fld.mSnow.assign(geom.mZ.size(), 0.f);
         fld.mPuddle.assign(geom.mZ.size(), 0.f);
+        fld.mIce.assign(geom.mZ.size(), 0.f);
+        fld.mFrost.assign(geom.mZ.size(), 0.f);
+        fld.mStain.assign(geom.mZ.size(), 0.f);
+        fld.mAge.assign(geom.mZ.size(), 0.f);
+        fld.mGroundSpeed01.assign(geom.mZ.size(), 0.f);
         fld.mScorch.assign(geom.mZ.size(), 0.f);
         fld.mLift.assign(geom.mZ.size(), 0.f);
         fld.mInflow.assign(geom.mZ.size(), 0.f);
@@ -592,7 +622,24 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
     static LLCachedControl<F32> snow_struct(gSavedSettings, "SSAtmoSnowStructDepth", 0.4f);
     const F32 snow_struct_frac = llclamp((F32)snow_struct, 0.f, 1.f);
 
+    // <SS:Nexii> Surface weather state (doc sec 2): the tick's shared scalars, assembled once and copied per cell below. mExposure has no sky-view figure to read yet - TODO(core): a WorldField COVERAGE channel would replace the flat 1.0. [interaction: SSAtmoMagic::temperatureC/humidity/sunUp, none else]
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    const bool liquidFalling = falling && !preset.isGranular();
+    const SSSurfaceState::DepositLook resolved_deposit = depositLook();
+    SSSurfaceState::CellIn state_in_template;
+    state_in_template.mExposure = 1.f;
+    state_in_template.mTempC = atmo->temperatureC();
+    state_in_template.mHumidity = atmo->humidity();
+    state_in_template.mSunlit = atmo->sunUp();
+    state_in_template.mLiquidStain = liquidFalling ? preset.mLiquid.mStain : 0.f;
+    state_in_template.mLiquidIntensity = liquidFalling ? intensity : 0.f;
+    state_in_template.mDepositWash = resolved_deposit.mWash;
+    state_in_template.mDepositFull = llmax(resolved_deposit.mDepthFull, 1.0e-6f);
+    const F32 deposit_melts = resolved_deposit.mMelts;
+
     F32 peak_wet = 0.f, peak_snow = 0.f, peak_puddle = 0.f;
+    F32 peak_ice = 0.f, peak_frost = 0.f, peak_stain = 0.f;
+    F32 peak_wet_gain = 0.f, peak_deposit_gain = 0.f;
 
     for (S32 y = 0; y < n; ++y)
     {
@@ -603,6 +650,7 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
             if (!geom.solid(i))
             {
                 fld.mWet[i] = fld.mSnow[i] = fld.mPuddle[i] = 0.f;
+                fld.mIce[i] = fld.mFrost[i] = fld.mStain[i] = fld.mAge[i] = 0.f;
                 fld.mZ[i] = geom.mZ[i];
                 continue;
             }
@@ -610,12 +658,14 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
             if (fabsf(geom.mZ[i] - fld.mZ[i]) > REBUILD_DZ)
             {
                 fld.mWet[i] = fld.mSnow[i] = fld.mPuddle[i] = 0.f;
+                fld.mIce[i] = fld.mFrost[i] = fld.mStain[i] = fld.mAge[i] = 0.f;
                 fld.mZ[i] = geom.mZ[i];
             }
 
             if (geom.water(i))
             {
                 fld.mWet[i] = fld.mSnow[i] = fld.mPuddle[i] = 0.f;
+                fld.mIce[i] = fld.mFrost[i] = fld.mStain[i] = fld.mAge[i] = 0.f;
                 continue;
             }
 
@@ -653,24 +703,25 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
             const bool scorched = !fld.mScorch.empty() && fld.mScorch[i] > 0.f;
             if (scorched) fld.mScorch[i] = llmax(0.f, fld.mScorch[i] - dt);
 
+            const F32 wet_before = fld.mWet[i];
             fld.mWet[i] += ((scorched ? 0.f : wet_target) - fld.mWet[i])
                          * (scorched ? (1.f - expf(-(preset.mDryRate > 0.f ? preset.mDryRate : FALLBACK_DRY) * dt)) : wet_blend);
 
+            F32 deposit_gain_applied = 0.f;
             if (snowing && !scorched)
             {
                 const F32 depth_scale = lerp(1.f, snow_struct_frac, structFactor(i));
                 const F32 room = preset.mSnowDepth * depth_scale * lieHere() - fld.mSnow[i];
                 if (room > 0.f)
                 {
-                    fld.mSnow[i] += llmin(room, snow_gain);
-                }
-                else
-                {
+                    deposit_gain_applied = llmin(room, snow_gain);
+                    fld.mSnow[i] += deposit_gain_applied;
                 }
             }
             else if (fld.mSnow[i] > 0.f)
             {
-                fld.mSnow[i] = llmax(0.f, fld.mSnow[i] - snow_loss);
+                // <SS:Nexii> Melt scaled by the resolved deposit look's mMelts - a deposit with melts 0 (sand, ash) never melts here; it only leaves through washRemoval below. doc sec 8.
+                fld.mSnow[i] = llmax(0.f, fld.mSnow[i] - snow_loss * deposit_melts);
             }
 
             // Standing water is a grade phenomenon: a hollow in a street
@@ -691,15 +742,51 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
                 fld.mPuddle[i] = llmax(0.f, fld.mPuddle[i] - puddle_loss);
             }
 
+            // <SS:Nexii> The state step and the wash removal, in that order, right after settle so both read this tick's post-settle wet/puddle/deposit - doc sec 2's tick order (settle -> stepCell -> washRemoval -> transport).
+            {
+                SSSurfaceState::CellIn cell_in = state_in_template;
+                cell_in.mWet = fld.mWet[i];
+                cell_in.mPuddle = fld.mPuddle[i];
+                cell_in.mDeposit = fld.mSnow[i];
+                cell_in.mDepositGain = deposit_gain_applied;
+                cell_in.mWetGain = llmax(0.f, fld.mWet[i] - wet_before);
+
+                SSSurfaceState::CellState cell_state;
+                cell_state.mIce = fld.mIce[i];
+                cell_state.mFrost = fld.mFrost[i];
+                cell_state.mStain = fld.mStain[i];
+                cell_state.mAge = fld.mAge[i];
+                SSSurfaceState::stepCell(cell_state, cell_in, dt);
+                fld.mIce[i] = cell_state.mIce;
+                fld.mFrost[i] = cell_state.mFrost;
+                fld.mStain[i] = cell_state.mStain;
+                fld.mAge[i] = cell_state.mAge;
+
+                fld.mSnow[i] = llmax(0.f, fld.mSnow[i] - SSSurfaceState::washRemoval(cell_in, dt));
+
+                peak_wet_gain = llmax(peak_wet_gain, cell_in.mWetGain);
+                peak_deposit_gain = llmax(peak_deposit_gain, cell_in.mDepositGain);
+            }
+
             peak_wet = llmax(peak_wet, fld.mWet[i]);
             peak_snow = llmax(peak_snow, fld.mSnow[i]);
             peak_puddle = llmax(peak_puddle, fld.mPuddle[i]);
+            peak_ice = llmax(peak_ice, fld.mIce[i]);
+            peak_frost = llmax(peak_frost, fld.mFrost[i]);
+            peak_stain = llmax(peak_stain, fld.mStain[i]);
         }
     }
 
     mPeakWet = llmax(mPeakWet, peak_wet);
     mPeakSnow = llmax(mPeakSnow, peak_snow);
     mPeakPuddle = llmax(mPeakPuddle, peak_puddle);
+    mPeakIce = llmax(mPeakIce, peak_ice);
+    mPeakFrost = llmax(mPeakFrost, peak_frost);
+    mPeakStain = llmax(mPeakStain, peak_stain);
+    mPeakWetGain = llmax(mPeakWetGain, peak_wet_gain);
+    mPeakDepositGain = llmax(mPeakDepositGain, peak_deposit_gain);
+    mPeakWetPresent = llmax(mPeakWetPresent, peak_wet);
+    mPeakDepositPresent = llmax(mPeakDepositPresent, peak_snow);
 
     // <SS:Nexii> Granular transport: what the wind does to what settle just left. Runs after the settle pass so fresh snow can lift in the same step it landed; the peak scan is re-run afterwards because erosion and banking both move it.
     if (flow)
@@ -715,6 +802,7 @@ void SSSurfaceField::tick(Field& fld, const Geometry& geom, F32 dt,
         }
         peak_snow = llmax(peak_snow, wind_peak);
         mPeakSnow = llmax(mPeakSnow, peak_snow);
+        mPeakDepositPresent = llmax(mPeakDepositPresent, peak_snow);
     }
 }
 
@@ -744,6 +832,9 @@ void SSSurfaceField::evict(F64 now)
 void SSSurfaceField::idle(F32 dt)
 {
     (void)dt; // the transport steps on shared time; presentation below uses the fixed quanta too
+
+    // <SS:Nexii> Rings expire once per frame regardless of the early returns below - a ring's life is camera time, not the field's own tick cadence. doc sec 6.
+    mRings.expire(gFrameTimeSeconds);
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
@@ -785,6 +876,9 @@ void SSSurfaceField::idle(F32 dt)
                                    MELT_SUBLIMATION, MELT_WARM_MAX);
 
     mPeakWet = mPeakSnow = mPeakPuddle = 0.f;
+    mPeakIce = mPeakFrost = mPeakStain = 0.f;
+    mPeakWetGain = mPeakDepositGain = 0.f;
+    mPeakWetPresent = mPeakDepositPresent = 0.f;
 
     refreshGeometry();
 
@@ -804,7 +898,11 @@ void SSSurfaceField::idle(F32 dt)
     const bool blows_here = granular.mLiftRate > 0.f || granular.mDepositRate > 0.f
                          || granular.mCreepRate > 0.f;
 
-    std::vector<LLVector4> flow_grid;
+    // <SS:Nexii> AUDIT (finding 16): per-region setup (fld/flow) stays a once-per-idle cost exactly as before - only the TICK loop below moved, so a stalled client catching up (ran > 1) still samples the flow grid once, not `ran` times. Each region now owns its own flow grid vector (mFlowGrid) rather than sharing one reused buffer: the old code used a region's flow pointer immediately, in the same loop iteration that filled it, but the tick calls are deferred to the s-loop below now, so an earlier region's pointer into a shared, since-refilled buffer would dangle.
+    struct RegionTick { Field* mFld; const Geometry* mGeom; std::vector<LLVector4> mFlowGrid; const LLVector4* mFlow; };
+    std::vector<RegionTick> region_ticks;
+    region_ticks.reserve(mGeometry.size());
+
     for (const auto& entry : mGeometry)
     {
         const Geometry& geom = entry.second;
@@ -813,23 +911,64 @@ void SSSurfaceField::idle(F32 dt)
         Field* fld = fieldFor(entry.first, geom, now);
         if (!fld) continue;
 
-        const LLVector4* flow = nullptr;
+        region_ticks.push_back({ fld, &geom, {}, nullptr });
+        RegionTick& rt = region_ticks.back();
+
         if (blows_here)
         {
             LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_FLOW);
 
             LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
-            flow_grid.clear();
             if (regionp && SSWindFlowMap::getInstance()->sampleGroundGrid(regionp, geom.mN, geom.mCell,
-                                                                          geom.mZ.data(), flow_grid))
+                                                                          geom.mZ.data(), rt.mFlowGrid))
             {
-                flow = flow_grid.data();
+                rt.mFlow = rt.mFlowGrid.data();
             }
         }
 
-        for (U32 s = 0; s < ran; ++s)
+        // <SS:Nexii> Wind carry (doc sec 8): a static figure per solve, taken straight from the flow grid already sampled above - never integrated, never decayed here. Left untouched (whatever the last solve wrote) when this idle() has no flow grid for the region.
+        if (rt.mFlow && fld->mGroundSpeed01.size() == fld->mZ.size())
         {
-            tick(*fld, geom, TICK_INTERVAL, preset, intensity, melt_scale, granular, flow);
+            static LLCachedControl<F32> lift_hi_setting(gSavedSettings, "SSAtmoSnowLiftHi", 8.0f);
+            const F32 lift_hi = llmax((F32)lift_hi_setting, 0.1f);
+            for (size_t i = 0; i < fld->mGroundSpeed01.size(); ++i)
+            {
+                const F32 speed = sqrtf(rt.mFlow[i].mV[0] * rt.mFlow[i].mV[0] + rt.mFlow[i].mV[1] * rt.mFlow[i].mV[1]);
+                fld->mGroundSpeed01[i] = llclamp(speed / lift_hi, 0.f, 1.f);
+            }
+        }
+    }
+
+    // <SS:Nexii> AUDIT (finding 16): the look crossfade now advances once per TICK (s), using that tick's own gain across every region, rather than once per idle() using a gain maxed over up to MAX_STEPS_PER_FRAME ticks - a client that stalled and is replaying several quanta this frame no longer crosses fades several times slower than one that didn't. mPeakWet/mPeakSnow (the render-gate other callers read via peakWet()/peakSnow()) are deliberately left accumulating for the WHOLE idle() as before; the *Gain accumulators AND the present normaliser they divide by are both tick-scoped, so two clients replaying the same shared-time quanta at different frame rates land on the same mT.
+    for (U32 s = 0; s < ran; ++s)
+    {
+        mPeakWetGain = mPeakDepositGain = 0.f;
+        mPeakWetPresent = mPeakDepositPresent = 0.f;
+        for (const RegionTick& rt : region_ticks)
+        {
+            tick(*rt.mFld, *rt.mGeom, TICK_INTERVAL, preset, intensity, melt_scale, granular, rt.mFlow);
+        }
+
+        // Advance toward whatever the active preset currently prescribes; a preset already equal to mA starts nothing, so switching presets with nothing yet fallen changes the ground not at all. [interaction: none - reads only the preset already fetched above]
+        if (!looksEqual(preset.mLiquid, mLiquidMix.mA))
+        {
+            mLiquidMix.mB = preset.mLiquid;
+            mLiquidMix.mT = SSSurfaceState::advanceMix(mLiquidMix.mT, mPeakWetGain, mPeakWetPresent, 1.f);
+            if (mLiquidMix.mT >= 1.f)
+            {
+                mLiquidMix.mA = mLiquidMix.mB;
+                mLiquidMix.mT = 0.f;
+            }
+        }
+        if (!looksEqual(preset.mDeposit, mDepositMix.mA))
+        {
+            mDepositMix.mB = preset.mDeposit;
+            mDepositMix.mT = SSSurfaceState::advanceMix(mDepositMix.mT, mPeakDepositGain, mPeakDepositPresent, mDepositMix.mB.mDepthFull);
+            if (mDepositMix.mT >= 1.f)
+            {
+                mDepositMix.mA = mDepositMix.mB;
+                mDepositMix.mT = 0.f;
+            }
         }
     }
 
@@ -926,6 +1065,10 @@ SSSurfaceField::Sample SSSurfaceField::sample(const LLVector3& pos_agent) const
     out.mSnow = fld.mSnow[i];
     out.mPuddle = fld.mPuddle[i];
     out.mLift = fld.mLift.empty() ? 0.f : fld.mLift[i];
+    out.mIce = fld.mIce.empty() ? 0.f : fld.mIce[i];
+    out.mFrost = fld.mFrost.empty() ? 0.f : fld.mFrost[i];
+    out.mStain = fld.mStain.empty() ? 0.f : fld.mStain[i];
+    out.mAge = fld.mAge.empty() ? 0.f : fld.mAge[i];
     out.mValid = true;
 
     // <SS:Nexii> The HEIGHT is bilinear over the four surrounding cell centres, where wetness, snow and puddles stay nearest-cell. A stair-stepped surface is a fair answer for a material property and a bad one for a height: every consumer that walks it - the ground crawl above all, stepping 1.5-3m against a 2m continuity guard - reads a cell boundary as a cliff and stops there. Over the Linden heightmap neighbouring cells differ by centimetres and it never showed; over a sculpted or mesh sim surround they differ by the whole relief, so the crawl died on its first step every time. Sampling at cell CENTRES (the half-cell shift) is what keeps the interpolant from leaning half a cell off the data. doc/atmo_magic_lightning_strike.md
@@ -1092,6 +1235,7 @@ void SSSurfaceField::updateWindow()
         mWindowData[t * 4] = WINDOW_NO_SURFACE;
     }
     mWindowFlowData.assign((size_t)WINDOW_RES * WINDOW_RES * 4, 0.f);
+    mWindowStateData.assign((size_t)WINDOW_RES * WINDOW_RES * 4, 0.f);
 
     bool any = false;
     for (const auto& entry : mFields)
@@ -1125,12 +1269,20 @@ void SSSurfaceField::updateWindow()
                 mWindowData[wi + 2] = fld.mSnow[fi];
                 mWindowData[wi + 3] = fld.mPuddle[fi];
 
+                // <SS:Nexii> The state window - ice, frost, stain, age - same lattice, uploaded beside the field data (doc sec 2).
+                mWindowStateData[wi]     = fld.mIce.empty() ? 0.f : fld.mIce[fi];
+                mWindowStateData[wi + 1] = fld.mFrost.empty() ? 0.f : fld.mFrost[fi];
+                mWindowStateData[wi + 2] = fld.mStain.empty() ? 0.f : fld.mStain[fi];
+                mWindowStateData[wi + 3] = fld.mAge.empty() ? 0.f : fld.mAge[fi];
+
                 if (have_slope && geom->solid(fi) && !geom->water(fi))
                 {
                     mWindowFlowData[wi]     = geom->mSlopeX[fi];
                     mWindowFlowData[wi + 1] = geom->mSlopeY[fi];
                     mWindowFlowData[wi + 2] =
                         llclamp(geom->mSlope[fi] / SLOPE_RUN_FULL, 0.f, 1.f) * fld.mWet[fi];
+                    // <SS:Nexii> Wind carry spare channel (doc sec 8): ssFieldFlowMap.w reads as ground wind 0..1 so the deposit passes can settle snow in a lee the sky-view term alone would leave bare.
+                    mWindowFlowData[wi + 3] = fld.mGroundSpeed01.empty() ? 0.f : fld.mGroundSpeed01[fi];
                 }
             }
         }
@@ -1179,6 +1331,16 @@ void SSSurfaceField::updateWindow()
         glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
         glBindTexture(GL_TEXTURE_2D, 0);
 
+        glGenTextures(1, &mWindowStateTex);
+        glBindTexture(GL_TEXTURE_2D, mWindowStateTex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
         const GLenum err = glGetError();
         if (err != GL_NO_ERROR)
         {
@@ -1207,6 +1369,11 @@ void SSSurfaceField::updateWindow()
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
                         GL_RGBA, GL_FLOAT, mWindowFlowData.data());
         glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindTexture(GL_TEXTURE_2D, mWindowStateTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                        GL_RGBA, GL_FLOAT, mWindowStateData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
     }
 
     mWindowCell = cell;
@@ -1217,7 +1384,8 @@ void SSSurfaceField::updateWindow()
 // Binds the field window texture.
 bool SSSurfaceField::bindForShader(LLGLSLShader& shader, S32 channel)
 {
-    if (!hasWindow() || channel < 0) return false;
+    // <SS:Nexii> Nothing upstream clamps the running channel count against the driver's actual unit budget - a shader with enough other samplers already bound could hand this an out-of-range unit, which is an out-of-bounds gGL.getTexUnit() index rather than merely "one fewer effect".
+    if (!hasWindow() || channel < 0 || channel >= gGLManager.mNumTextureImageUnits) return false;
 
     static LLStaticHashedString field_map("ssFieldMap");
     static LLStaticHashedString field_origin("ssFieldOrigin");
@@ -1234,7 +1402,7 @@ bool SSSurfaceField::bindForShader(LLGLSLShader& shader, S32 channel)
 // Binds the flow window texture.
 bool SSSurfaceField::bindFlowForShader(LLGLSLShader& shader, S32 channel)
 {
-    if (!hasFlowWindow() || channel < 0) return false;
+    if (!hasFlowWindow() || channel < 0 || channel >= gGLManager.mNumTextureImageUnits) return false;
 
     static LLStaticHashedString field_flow_map("ssFieldFlowMap");
 
@@ -1243,6 +1411,117 @@ bool SSSurfaceField::bindFlowForShader(LLGLSLShader& shader, S32 channel)
     shader.uniform1i(field_flow_map, channel);
 
     return true;
+}
+
+// Binds the state window texture (ice, frost, stain, age).
+bool SSSurfaceField::bindStateForShader(LLGLSLShader& shader, S32 channel)
+{
+    if (!hasStateWindow() || channel < 0 || channel >= gGLManager.mNumTextureImageUnits) return false;
+
+    static LLStaticHashedString field_state_map("ssFieldStateMap");
+
+    gGL.getTexUnit(channel)->activate();
+    gGL.getTexUnit(channel)->bindManual(LLTexUnit::TT_TEXTURE, mWindowStateTex);
+    shader.uniform1i(field_state_map, channel);
+
+    return true;
+}
+
+// Uploads the resolved liquid/deposit looks and the plain weather scalars every surface pass shares (doc sec 2/3).
+void SSSurfaceField::bindLooksForShader(LLGLSLShader& shader) const
+{
+    static LLStaticHashedString liquid_look_u("ssLiquidLook");
+    static LLStaticHashedString liquid_look2_u("ssLiquidLook2");
+    static LLStaticHashedString deposit_look_u("ssDepositLook");
+    static LLStaticHashedString deposit_look2_u("ssDepositLook2");
+    static LLStaticHashedString intensity_u("ssSurfaceIntensity");
+    static LLStaticHashedString temp_u("ssSurfaceTempC");
+    static LLStaticHashedString drops_u("ssSurfaceDrops");
+    static LLStaticHashedString drop_scale_u("ssSurfaceDropScale");
+    static LLStaticHashedString ice_on_u("ssSurfaceIceOn");
+    static LLStaticHashedString frost_on_u("ssSurfaceFrostOn");
+    static LLStaticHashedString frost_strength_u("ssSurfaceFrostStrength");
+    static LLStaticHashedString debug_u("ssSurfaceDebug");
+    static LLStaticHashedString wind_u("ssSurfaceWind");
+    static LLStaticHashedString time_u("ssTime");
+
+    const SSSurfaceState::LiquidLook liquid = liquidLook();
+    const SSSurfaceState::DepositLook deposit = depositLook();
+
+    shader.uniform4f(liquid_look_u, liquid.mTint.r, liquid.mTint.g, liquid.mTint.b, liquid.mOpacity);
+    shader.uniform2f(liquid_look2_u, liquid.mStain, liquid.mMetal);
+    shader.uniform4f(deposit_look_u, deposit.mTint.r, deposit.mTint.g, deposit.mTint.b, deposit.mSparkle);
+    shader.uniform4f(deposit_look2_u, deposit.mTranslucency, deposit.mDepthFull, deposit.mWash, deposit.mMelts);
+
+    SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
+    // <SS:Nexii> Liquid precipitation intensity only - 0 while a granular type falls (doc sec 3's ssSurfaceIntensity).
+    const bool liquidFalling = atmo->hasWeather() && !atmo->preset().isGranular();
+    shader.uniform1f(intensity_u, liquidFalling ? llclamp(atmo->precipitation(), 0.f, 1.f) : 0.f);
+    shader.uniform1f(temp_u, atmo->temperatureC());
+
+    static LLCachedControl<F32> drops(gSavedSettings, "SSAtmoSurfaceDrops", 1.f);
+    static LLCachedControl<F32> drop_scale(gSavedSettings, "SSAtmoSurfaceDropScale", 1.f);
+    static LLCachedControl<bool> ice_on(gSavedSettings, "SSAtmoSurfaceIce", true);
+    static LLCachedControl<bool> frost_on(gSavedSettings, "SSAtmoSurfaceFrost", true);
+    static LLCachedControl<F32> frost_strength(gSavedSettings, "SSAtmoSurfaceFrostStrength", 1.f);
+    static LLCachedControl<S32> debug(gSavedSettings, "SSAtmoSurfaceDebug", 0);
+
+    shader.uniform1f(drops_u, llclamp((F32)drops, 0.f, 1.f));
+    shader.uniform1f(drop_scale_u, llmax((F32)drop_scale, 0.f));
+    shader.uniform1f(ice_on_u, ice_on ? 1.f : 0.f);
+    shader.uniform1f(frost_on_u, frost_on ? 1.f : 0.f);
+    shader.uniform1f(frost_strength_u, llmax((F32)frost_strength, 0.f));
+    shader.uniform1f(debug_u, (F32)(S32)debug);
+
+    const LLVector3 wind = SSWindFlowMap::getInstance()->sampleGround(LLViewerCamera::getInstance()->getOrigin());
+    shader.uniform3fv(wind_u, 1, wind.mV);
+    shader.uniform1f(time_u, gFrameTimeSeconds);
+}
+
+// Uploads the live impact ring buffer (doc sec 6) - expire() already ran this frame in idle().
+void SSSurfaceField::bindRingsForShader(LLGLSLShader& shader) const
+{
+    static LLStaticHashedString ring_count_u("ssRingCount");
+    static LLStaticHashedString rings_u("ssRings");
+    static LLStaticHashedString rings_z_u("ssRingZ");
+
+    // <SS:Nexii> SSAtmoSurfaceRings gates the shader upload only - the buffer itself keeps recording and expiring regardless, so toggling this back on picks up whatever is still live rather than a cold buffer.
+    static LLCachedControl<bool> rings_on(gSavedSettings, "SSAtmoSurfaceRings", true);
+    const S32 count = rings_on ? mRings.mCount : 0;
+    shader.uniform1i(ring_count_u, count);
+    if (count <= 0) return;
+
+    F32 rings[SSSurfaceState::RING_MAX * 4];
+    F32 z[SSSurfaceState::RING_MAX];
+    for (S32 i = 0; i < count; ++i)
+    {
+        const SSSurfaceState::Ring& r = mRings.mRings[i];
+        rings[i * 4]     = r.mX;
+        rings[i * 4 + 1] = r.mY;
+        rings[i * 4 + 2] = r.mBirth;
+        rings[i * 4 + 3] = r.mStrength;
+        z[i] = r.mZ;
+    }
+    shader.uniform4fv(rings_u, count, rings);
+    shader.uniform1fv(rings_z_u, count, z);
+}
+
+// Records an impact into the ring buffer if it fell within RING_NEAR_M of the camera - farther ones stay ripple quads (doc sec 6).
+void SSSurfaceField::noteImpact(const LLVector3& pos_agent, F32 strength)
+{
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const F32 dx = pos_agent.mV[VX] - cam.mV[VX];
+    const F32 dy = pos_agent.mV[VY] - cam.mV[VY];
+    const F32 dz = pos_agent.mV[VZ] - cam.mV[VZ];
+    if (dx * dx + dy * dy + dz * dz > SSSurfaceState::RING_NEAR_M * SSSurfaceState::RING_NEAR_M) return;
+
+    SSSurfaceState::Ring ring;
+    ring.mX = pos_agent.mV[VX];
+    ring.mY = pos_agent.mV[VY];
+    ring.mZ = pos_agent.mV[VZ];
+    ring.mBirth = gFrameTimeSeconds;
+    ring.mStrength = llclamp(strength, 0.f, 1.f);
+    mRings.push(ring);
 }
 
 // Frees the GL objects.
@@ -1257,6 +1536,11 @@ void SSSurfaceField::releaseGL()
     {
         glDeleteTextures(1, &mWindowFlowTex);
         mWindowFlowTex = 0;
+    }
+    if (mWindowStateTex)
+    {
+        glDeleteTextures(1, &mWindowStateTex);
+        mWindowStateTex = 0;
     }
     mWindowRes = 0;
     mWindowValid = false;
@@ -1330,6 +1614,12 @@ void SSSurfaceField::renderWetPass()
 
     const S32 field_channel = gSSSurfaceWetProgram.mActiveTextureChannels;
     bindForShader(gSSSurfaceWetProgram, field_channel);
+    // <SS:Nexii> Flow and state now bind on every surface program, not just the normal pass - the wet pass needs the wind carry channel (doc sec 8) and the state window for ice/frost/deposit matte (doc sec 3/4/7).
+    const S32 wet_flow_channel = field_channel + 1;
+    bindFlowForShader(gSSSurfaceWetProgram, wet_flow_channel);
+    const S32 wet_state_channel = wet_flow_channel + 1;
+    bindStateForShader(gSSSurfaceWetProgram, wet_state_channel);
+    bindLooksForShader(gSSSurfaceWetProgram);
 
     SSAvatarWet::getInstance()->bindForShader(gSSSurfaceWetProgram);
 
@@ -1454,6 +1744,8 @@ void SSSurfaceField::renderWetPass()
     }
 
     gGL.getTexUnit(field_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    gGL.getTexUnit(wet_flow_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    gGL.getTexUnit(wet_state_channel)->unbind(LLTexUnit::TT_TEXTURE);
     gPipeline.unbindDeferredShader(gSSSurfaceWetProgram);
 
     {
@@ -1531,7 +1823,8 @@ void SSSurfaceField::renderWetPass()
 
         static LLStaticHashedString wave_map("ssWaveMap");
         bool have_wave = false;
-        if (wave_tex)
+        // <SS:Nexii> Same out-of-bounds guard as bindForShader/bindFlowForShader/bindStateForShader - this bind is manual (no field window to gate it) so it needs its own channel-budget check.
+        if (wave_tex && wave_channel < gGLManager.mNumTextureImageUnits)
         {
             wave_tex->addTextureStats(1024.f * 1024.f);
             gGL.getTexUnit(wave_channel)->activate();
@@ -1539,6 +1832,12 @@ void SSSurfaceField::renderWetPass()
             gSSSurfaceNormalProgram.uniform1i(wave_map, wave_channel);
             have_wave = true;
         }
+
+        // <SS:Nexii> State after the last texture slot already in use here (field, flow, wave) - the normal pass also needs looks (ice freeze, deposit soften) and the ring buffer (doc sec 3/6/7).
+        const S32 normal_state_channel = wave_channel + 1;
+        bindStateForShader(gSSSurfaceNormalProgram, normal_state_channel);
+        bindLooksForShader(gSSSurfaceNormalProgram);
+        bindRingsForShader(gSSSurfaceNormalProgram);
 
         static LLStaticHashedString norm_inv_view("ssFieldInvView");
         static LLStaticHashedString norm_wet_str("ssWetStrength");
@@ -1605,6 +1904,7 @@ void SSSurfaceField::renderWetPass()
         gGL.getTexUnit(normal_field_channel)->unbind(LLTexUnit::TT_TEXTURE);
         gGL.getTexUnit(flow_field_channel)->unbind(LLTexUnit::TT_TEXTURE);
         if (have_wave) gGL.getTexUnit(wave_channel)->unbind(LLTexUnit::TT_TEXTURE);
+        gGL.getTexUnit(normal_state_channel)->unbind(LLTexUnit::TT_TEXTURE);
         gPipeline.unbindDeferredShader(gSSSurfaceNormalProgram);
 
         {
@@ -1752,19 +2052,20 @@ void SSSurfaceField::renderWetPass()
     gbuffer->flush();
 }
 
-// <SS:Nexii> Snow surfaces. The same screen-space shape as the wet pass - field window in, scratch target, commit back into the gbuffer - but writing the diffuse attachment: the snow channel the field has always carried becomes visible albedo. Runs after the wet pass so it covers it; the gloss interplay (wet ground going matte under snow) is the commit's next target, not this pass's job yet.
-void SSSurfaceField::renderSnowPass()
+// <SS:Nexii> Was renderSnowPass(): now the albedo pass (doc sec 3) - the same screen-space shape as the wet pass - field window in, scratch target, commit back into the gbuffer - but writing the diffuse attachment. Gated on any of wet/snow/ice/frost/stain having accumulated rather than snow depth alone, since ice glaze and frost and a stain all need this pass with nothing settled in mSnow. Program renamed gSSSurfaceAlbedoProgram elsewhere in the shader manager (out of Slice A's file scope) to match. Runs after the wet pass so it covers it.
+void SSSurfaceField::renderAlbedoPass()
 {
     if (gCubeSnapshot) return;
     if (!hasWindow()) return;
-    if (!gSSSurfaceSnowProgram.isComplete()) return;
+    if (!gSSSurfaceAlbedoProgram.isComplete()) return;
     if (!gSSSurfaceCommitProgram.isComplete()) return;
 
+    // <SS:Nexii> AUDIT (finding 11): SSAtmoSnowSurfaces/Strength used to early-return the WHOLE pass, which also killed wet darkening, ice, frost and stain the moment a user turned "snow surfaces" off - it now only scales the deposit layer itself (ssSnowStrength, read in the shader's item (g)); the pass's own gate stays the peak check below.
     static LLCachedControl<F32> strength(gSavedSettings, "SSAtmoSnowSurfaceStrength", 1.f);
-    const F32 snow_strength = llclamp((F32)strength, 0.f, 2.f);
     static LLCachedControl<bool> snow_on(gSavedSettings, "SSAtmoSnowSurfaces", true);
-    if (snow_strength <= 0.f || !snow_on) return;
-    if (peakSnow() <= 0.f) return;
+    const F32 snow_strength = snow_on ? llclamp((F32)strength, 0.f, 2.f) : 0.f;
+    if (peakWet() <= 0.f && peakSnow() <= 0.f && peakIce() <= 0.f
+        && peakFrost() <= 0.f && peakStain() <= 0.f) return;
 
     LLRenderTarget* gbuffer = &gPipeline.mRT->deferredScreen;
     const U32 w = gbuffer->getWidth();
@@ -1777,29 +2078,56 @@ void SSSurfaceField::renderSnowPass()
         if (!mScratch.allocate(w, h, GL_RGBA, false)) return;
     }
 
-    LL_PROFILE_GPU_ZONE("atmo surface snow");
+    LL_PROFILE_GPU_ZONE("atmo surface albedo");
 
     mScratch.bindTarget();
 
-    gPipeline.bindDeferredShader(gSSSurfaceSnowProgram);
+    gPipeline.bindDeferredShader(gSSSurfaceAlbedoProgram);
 
-    const S32 field_channel = gSSSurfaceSnowProgram.mActiveTextureChannels;
-    bindForShader(gSSSurfaceSnowProgram, field_channel);
+    const S32 field_channel = gSSSurfaceAlbedoProgram.mActiveTextureChannels;
+    bindForShader(gSSSurfaceAlbedoProgram, field_channel);
+    // <SS:Nexii> Flow (wind carry, doc sec 8) and state bind here too now - the albedo pass paints ice/frost/deposit tint and needs both.
+    const S32 albedo_flow_channel = field_channel + 1;
+    bindFlowForShader(gSSSurfaceAlbedoProgram, albedo_flow_channel);
+    const S32 albedo_state_channel = albedo_flow_channel + 1;
+    bindStateForShader(gSSSurfaceAlbedoProgram, albedo_state_channel);
+    bindLooksForShader(gSSSurfaceAlbedoProgram);
 
     static LLStaticHashedString inv_view("ssFieldInvView");
     static LLStaticHashedString snow_strength_u("ssSnowStrength");
-    static LLStaticHashedString snow_depth_full("ssSnowDepthFull");
-    static LLStaticHashedString snow_sparkle("ssSnowSparkle");
 
     const glm::mat4 inv = glm::inverse(get_current_modelview());
-    gSSSurfaceSnowProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
+    gSSSurfaceAlbedoProgram.uniformMatrix4fv(inv_view, 1, GL_FALSE, glm::value_ptr(inv));
 
-    static LLCachedControl<F32> depth_full(gSavedSettings, "SSAtmoSnowDepthFull", 0.02f);
-    static LLCachedControl<F32> sparkle(gSavedSettings, "SSAtmoSnowSparkle", 0.6f);
+    gSSSurfaceAlbedoProgram.uniform1f(snow_strength_u, snow_strength);
 
-    gSSSurfaceSnowProgram.uniform1f(snow_strength_u, snow_strength);
-    gSSSurfaceSnowProgram.uniform1f(snow_depth_full, llmax((F32)depth_full, 0.005f));
-    gSSSurfaceSnowProgram.uniform1f(snow_sparkle, llclamp((F32)sparkle, 0.f, 1.f));
+    // <SS:Nexii> AUDIT (finding 10): same settings, same names, as ssSurfaceWetF.glsl's own upload (renderWetPass) - the albedo pass declares these uniforms (doc section 3/4) but nothing was ever binding them for THIS program, so they read as GL's default zero: ssWetFlattenCosZero/Full both 0 made ssSurfaceLevel's smoothstep(0,0,x) undefined, and ssWetPuddleDepthFull 0 made every puddle read as instantly full. [interaction: renderWetPass's own copy of this block]
+    static LLStaticHashedString wet_puddle_depth_u("ssWetPuddleDepthFull");
+    static LLStaticHashedString wet_cos_full_u("ssWetFlattenCosFull");
+    static LLStaticHashedString wet_cos_zero_u("ssWetFlattenCosZero");
+    static LLStaticHashedString mask_amt_u("ssPuddleMaskAmt");
+    static LLStaticHashedString mask_scale_u("ssPuddleMaskScaleM");
+    static LLStaticHashedString mask_anchor_u("ssPuddleMaskAnchor");
+    static LLCachedControl<F32> puddle_depth_full(gSavedSettings, "SSAtmoWetPuddleDepthFull", 0.02f);
+    static LLCachedControl<F32> wet_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 25.f);
+    static LLCachedControl<F32> wet_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 65.f);
+    static LLCachedControl<F32> m_strength(gSavedSettings, "SSAtmoWetPuddleMask", 0.75f);
+    static LLCachedControl<F32> m_scale(gSavedSettings, "SSAtmoWetPuddleMaskScale", 7.f);
+    gSSSurfaceAlbedoProgram.uniform1f(wet_puddle_depth_u, llmax((F32)puddle_depth_full, 0.001f));
+    gSSSurfaceAlbedoProgram.uniform1f(wet_cos_full_u,
+        cosf(llclamp((F32)wet_angle_full, 0.f, 89.f) * DEG_TO_RAD));
+    gSSSurfaceAlbedoProgram.uniform1f(wet_cos_zero_u,
+        cosf(llclamp((F32)wet_angle_zero, 1.f, 90.f) * DEG_TO_RAD));
+    gSSSurfaceAlbedoProgram.uniform1f(mask_amt_u, llclamp((F32)m_strength, 0.f, 1.f));
+    // <SS:Nexii> ssPuddleMaskScaleM is used by ssPuddleMaskNoise inside ssSurfaceStateF.glsl, not by this pass file directly - but uniform locations are resolved against the whole LINKED program, not the file that happened to declare them, so this program's copy still needs its own upload.
+    gSSSurfaceAlbedoProgram.uniform1f(mask_scale_u, llmax((F32)m_scale, 1.f));
+    LLVector3 mask_anchor(0.f, 0.f, 0.f);
+    if (LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(
+            LLViewerCamera::getInstance()->getOrigin()))
+    {
+        mask_anchor = cam_region->getOriginAgent();
+    }
+    gSSSurfaceAlbedoProgram.uniform2f(mask_anchor_u, mask_anchor.mV[VX], mask_anchor.mV[VY]);
 
     {
         LLGLDepthTest depth(GL_FALSE);
@@ -1810,7 +2138,9 @@ void SSSurfaceField::renderSnowPass()
     }
 
     gGL.getTexUnit(field_channel)->unbind(LLTexUnit::TT_TEXTURE);
-    gPipeline.unbindDeferredShader(gSSSurfaceSnowProgram);
+    gGL.getTexUnit(albedo_flow_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    gGL.getTexUnit(albedo_state_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    gPipeline.unbindDeferredShader(gSSSurfaceAlbedoProgram);
 
     mScratch.flush();
 

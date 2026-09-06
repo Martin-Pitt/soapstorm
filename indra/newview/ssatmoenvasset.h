@@ -386,6 +386,12 @@ struct SSAtmoEnvAtmosphere
     SSAtmoEnvKeyframed<F32> mHazeHorizon{0.19f};
     SSAtmoEnvKeyframed<F32> mHazeDensity{0.7f};
 
+    // <SS:Nexii> Atmo Magic: share of the AUTHORED cloud dome height (SSAtmoEnvCloudDome::mHeightM at phase, never
+    // the live cirrusAltitudeMetres()) used as the haze's exponential scale height H, via SSHaze::invHeight
+    // (sshazecore.h). 0 is off - every environment seeded before this existed keeps the stock homogeneous haze
+    // bit-for-bit. See SSAtmoEnvApplier for where domeH and this frac turn into the invH/camHeightM uniform pair.
+    SSAtmoEnvKeyframed<F32> mHazeThinFrac{0.f};
+
     SSAtmoEnvKeyframed<F32> mSkyMoistureLevel{0.f};
     SSAtmoEnvKeyframed<F32> mSkyDropletRadius{800.f};
     SSAtmoEnvKeyframed<F32> mSkyIceLevel{0.f};

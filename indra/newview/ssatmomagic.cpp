@@ -36,7 +36,8 @@
 #include "sslightningrender.h"
 #include "ssstormcells.h"
 #include "sssurfacefield.h"
-#include "sswhiteout.h"
+#include "ssheightfog.h"
+#include "ssscreenfx.h"
 #include "sswindflow.h"
 #include "ssvortices.h"
 #include "ssworldfield.h"
@@ -52,6 +53,7 @@
 #include "llappviewer.h"
 #include "llaudioengine.h"
 #include "lldate.h"
+#include "llenvironment.h"
 #include "llfetchedgltfmaterial.h"
 #include "llgltfmateriallist.h"
 #include "llfasttimer.h"
@@ -166,6 +168,10 @@ void SSAtmoMagic::refreshParams()
     mSwitchedOn = enabled && v3_active;
 
     mTemperatureC = cfg.mTemperatureC;
+
+    // <SS:Nexii> Surface weather slice B: humidity from the weather cube's moisture when an environment resolved one, else the stated fallback (rain implies humid air); reads cfg.mPrecipitation (pre-blend) rather than the mPrecipitation member, which this function has not updated yet this call. Sun-up from the sky's own sun direction, not the track - frost/fog want "is the sun actually up" regardless of which track resolved. [interaction: SSSurfaceField/ssheightfog consumers via humidity()/sunUp()]
+    mHumidity = v3_active ? llclamp(cfg.mMoisture, 0.f, 1.f) : llclamp(llclamp(cfg.mPrecipitation, 0.f, 1.f) * 2.f, 0.f, 1.f);
+    mSunUp = llclamp(LLEnvironment::instance().getSunDirection().mV[VZ], 0.f, 1.f);
 
     // <SS:Nexii> The bolt-from-the-blue look-ahead: when the weather cube's next keyframe is stormier than now and the day phase has run most of the way toward it, a thunderstorm approaches from upwind - lightning starts arriving from that direction before the storm itself does (SSLightning::idle's blue scheduler). Zero without a live environment.
     mStormApproach = 0.f;
@@ -437,6 +443,24 @@ void SSAtmoMagic::processImpacts()
             continue;
         }
 
+        // <SS:Nexii> Surface weather slice B: near the camera and onto wet/puddled ground, the analytic ring (SSSurfaceField::RingBuffer, drawn in the normal pass) replaces the ripple quad - it is driven by the actual impact so the ring sits where the drop fell. [interaction: SSSurfaceField rings]
+        static LLCachedControl<bool> surface_rings(gSavedSettings, "SSAtmoSurfaceRings", true);
+        if (surface_rings && !impact.mOnWater && !impact.mRunoff && dist < SSSurfaceState::RING_NEAR_M)
+        {
+            const SSSurfaceField::Sample s = SSSurfaceField::getInstance()->sample(impact.mPosAgent);
+            if (s.mPuddle > 0.001f || s.mWet > 0.3f)
+            {
+                SSSurfaceField::getInstance()->noteImpact(impact.mPosAgent, impact.mStrength);
+                // <SS:Nexii> AUDIT (finding 9): the ring replaces the RIPPLE quad only (doc sec 6) - a hail impact's shatter burst is not a ripple and was being silently dropped by this same continue.
+                if (impact.mShatter && mSim)
+                {
+                    mSim->spawnShatter(impact.mPosAgent, impact.mNormal, impact.mVelocity,
+                                       impact.mStrength, rng);
+                }
+                continue;
+            }
+        }
+
         if (ripples && mSim)
         {
             mSim->spawnRipple(impact.mPosAgent, impact.mStrength, impact.mOnWater, impact.mNormal, rng);
@@ -622,8 +646,11 @@ void SSAtmoMagic::idle()
 
     SSSurfaceField::getInstance()->idle(gFrameIntervalSeconds);
 
-    // <SS:Nexii> The whiteout layer's intensity state: regime ramps applied CPU-side, the pass itself draws in the pool loop after the haze.
-    SSWhiteout::getInstance()->idle(gFrameIntervalSeconds);
+    // <SS:Nexii> The height fog layer's intensity state: regime ramps applied CPU-side, the pass itself draws at the start of renderFinalize.
+    SSHeightFog::getInstance()->idle(gFrameIntervalSeconds);
+
+    // <SS:Nexii> The screen-space shell's per-frame state: thermal shock/mirage for the heat shimmer, lens wet/condensation for the lens drops.
+    SSScreenFXPost::getInstance()->idle(gFrameIntervalSeconds);
 
     SSAvatarWet::getInstance()->idle(gFrameIntervalSeconds);
 
@@ -1022,6 +1049,11 @@ void SSAtmoMagic::drawInfo()
                                  surface->peakSnow() * 1000.f,
                                  surface->peakPuddle() * 1000.f,
                                  surface->lastTickMS()));
+        // <SS:Nexii> Surface weather slice B: the new state channels and the resolved looks - what the field's Mix currently shows, not what the preset authored (a mix in progress shows the old look until it promotes).
+        surface_section.lines.push_back(llformat("state      ice %.2f   frost %.2f   stain %.2f   liquid opacity %.2f   deposit tint %.2f/%.2f/%.2f",
+                                 surface->peakIce(), surface->peakFrost(), surface->peakStain(),
+                                 surface->liquidLook().mOpacity,
+                                 surface->depositLook().mTint.r, surface->depositLook().mTint.g, surface->depositLook().mTint.b));
     }
 
     // <SS:Nexii> The shared world field: capture health, the state of the air flood, and what its labels say about the camera's own cell.
@@ -1095,10 +1127,14 @@ void SSAtmoMagic::drawInfo()
             snow_section.lines.push_back("           no lift: is snow settled, is the wind over SSAtmoSnowLiftLo?");
         }
 
-        SSWhiteout* whiteout = SSWhiteout::getInstance();
-        snow_section.lines.push_back(llformat("whiteout  in %.2f   squall %.2f   drift %.2f   falloff %.0fm",
-                                 whiteout->intensity(), whiteout->squallPart(),
-                                 whiteout->liftPart(), whiteout->falloff()));
+        SSHeightFog* fog = SSHeightFog::getInstance();
+        snow_section.lines.push_back(llformat("height fog in %.2f   ground %.2f   precip %.2f   squall %.2f   lift %.2f   mist %.2f   falloff %.0fm",
+                                 fog->intensity(), fog->groundPart(), fog->precipPart(),
+                                 fog->squallPart(), fog->liftPart(), fog->mistPart(), fog->falloff()));
+
+        SSScreenFXPost* fx = SSScreenFXPost::getInstance();
+        snow_section.lines.push_back(llformat("screen fx  shock %.2f   mirage %.2f   lens %.2f   fog %.2f",
+                                 fx->shock(), fx->mirage(), fx->lensWet(), fx->lensFog()));
     }
 
     // <SS:Nexii> Lightning on its own heading: the draw, segment and charge stats are render debug, not audio.

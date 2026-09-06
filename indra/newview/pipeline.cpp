@@ -113,7 +113,8 @@
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssworldfield.h"   // <SS:Nexii> Atmo Magic shared world field
-#include "sswhiteout.h"     // <SS:Nexii> Atmo Magic whiteout
+#include "ssheightfog.h"    // <SS:Nexii> Atmo Magic height fog (replaces the whiteout)
+#include "ssscreenfx.h"     // <SS:Nexii> Atmo Magic heat shimmer / lens drops screen-space shell
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
 #include "llmutelist.h"
@@ -1371,6 +1372,9 @@ void LLPipeline::releaseGLBuffers()
     mPostPongMap.release();
 
     mFXAAMap.release();
+
+    // <SS:Nexii> The height fog's own depth-staging FBO (mDepthCopy) - had no caller anywhere, so it never released on GL teardown (L10). instanceExists() guard so a viewer that shut down before the singleton was ever touched does not construct it here, and so a repeat teardown after deletion does not logerrs on a dead singleton.
+    if (SSHeightFog::instanceExists()) SSHeightFog::getInstance()->releaseGL();
 
     mUIScreen.release();
 
@@ -4482,8 +4486,7 @@ void LLPipeline::renderGeomPostDeferred(LLCamera& camera)
                 // mPuffs or the puff budget. [interaction: SSVolCloud squash/depth-copy, SSVortices scheduler]
                 SSVortexRender::getInstance()->render();
 
-                // <SS:Nexii> Atmo Magic whiteout: the local, height-limited fog veil, composited exactly like the haze above - depth staged, one alpha-lerped fullscreen pass. This is its proven placement - the identical machinery moved after the alpha pools flickered the whole frame (world frozen, UI and sky strobing), and back here it draws clean. Drawn after the volumetric deck so the puffs dissolve into the fog with the sky behind them when the camera stands in the storm; before the lightning and the precipitation, which stay crisp in front of their own weather. The trade: alpha surfaces drawn later - windows, foliage - composite over the veil and read unfogged, their fog taken from the geometry behind them.
-                SSWhiteout::getInstance()->render();
+                // <SS:Nexii> The height fog (formerly the whiteout veil drawn here) moved to renderFinalize as a post layer that fogs everything drawn - see SSHeightFog::render() there.
 
                 SSLightningRender::getInstance()->render();
                 SSPrecipRenderer::getInstance()->render();
@@ -9340,6 +9343,9 @@ void LLPipeline::renderFinalize()
     gGL.setColorMask(true, true);
     glClearColor(0, 0, 0, 0);
 
+    // <SS:Nexii> Atmo Magic height fog: the first thing drawn onto the linear HDR screen, before tonemapping, so it fogs everything the frame drew (alpha surfaces, particles, clouds) by the opaque depth behind each pixel.
+    SSHeightFog::getInstance()->render();
+
     static LLCachedControl<bool> has_hdr(gSavedSettings, "RenderHDREnabled", true);
     bool hdr = gGLManager.mGLVersion > 4.05f && has_hdr();
     if (hdr)
@@ -9376,6 +9382,9 @@ void LLPipeline::renderFinalize()
     combineGlow(sourceBuffer, targetBuffer);
     std::swap(sourceBuffer, targetBuffer);
 
+    // <SS:Nexii> Atmo Magic heat shimmer: a mirage ripple over distant, low-screen pixels.
+    if (SSScreenFXPost::getInstance()->renderHeat(sourceBuffer, targetBuffer)) std::swap(sourceBuffer, targetBuffer);
+
     gGLViewport[0] = gViewerWindow->getWorldViewRectRaw().mLeft;
     gGLViewport[1] = gViewerWindow->getWorldViewRectRaw().mBottom;
     gGLViewport[2] = gViewerWindow->getWorldViewRectRaw().getWidth();
@@ -9389,6 +9398,9 @@ void LLPipeline::renderFinalize()
         renderDoF(sourceBuffer, targetBuffer);
         std::swap(sourceBuffer, targetBuffer);
     }
+
+    // <SS:Nexii> Atmo Magic lens drops: rain on the camera lens, after depth of field so the drops are sharp and blur what is behind them, before anti-aliasing.
+    if (SSScreenFXPost::getInstance()->renderLens(sourceBuffer, targetBuffer)) std::swap(sourceBuffer, targetBuffer);
 
      if (RenderFSAAType == 1)
     {
@@ -9404,7 +9416,8 @@ void LLPipeline::renderFinalize()
 
     // <FS:Beq> Restore shader post proc for Vignette
     LLRenderTarget* auxActiveBuffer = sourceBuffer;
-    LLRenderTarget* auxTargetBuffer = RenderFSAAType ? &mRT->screen : &mPostPingMap;
+    // <SS:Nexii> was hard-coded to mPostPingMap, which breaks when the new heat/lens passes leave sourceBuffer already pointing at mPostPingMap - pick whichever ping/pong buffer isn't the active one so auxTargetBuffer is never the same target as auxActiveBuffer.
+    LLRenderTarget* auxTargetBuffer = RenderFSAAType ? &mRT->screen : (auxActiveBuffer == &mPostPingMap ? &mPostPongMap : &mPostPingMap);
 // [RLVa:KB] - @setsphere
     if (RlvActions::hasBehaviour(RLV_BHVR_SETSPHERE))
     {
@@ -9943,10 +9956,10 @@ void LLPipeline::renderDeferredLighting()
             unbindDeferredShader(gDeferredBlurLightProgram);
         }
 
+        // <SS:Nexii> AUDIT (finding 12): Atmo Magic albedo pass FIRST (doc/atmo_magic_surface_weather.md sec 3/4) - this order is what lets the ALBEDO pass alone read both spec and albedo pristine; it does NOT give the wet/normal passes a pristine input (the wet pass keeps pristine spec regardless of order since nothing writes spec before it; the normal pass runs after both albedo and wet have tinted/darkened the diffuse attachment, which is exactly why it uses the roughness-free ssPorosityFromAlbedo rather than ssPorosityAt - a deliberate second-best, not a shared "pristine" estimate across all three).
+        SSSurfaceField::getInstance()->renderAlbedoPass();
         // <SS:Nexii> Atmo Magic wet surfaces. Ahead of every lighting pass below, so the sun, the local lights, the projectors and the probes all read one consistent gbuffer rather than each being taught about the weather on its own.
         SSSurfaceField::getInstance()->renderWetPass();
-        // <SS:Nexii> Atmo Magic snow surfaces: same family, same reasoning - the settled depth the field carries becomes albedo before anything lights it.
-        SSSurfaceField::getInstance()->renderSnowPass();
 
         screen_target->bindTarget();
         // clear color buffer here - zeroing alpha (glow) is important or it will accumulate against sky

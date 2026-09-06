@@ -256,7 +256,8 @@ set(viewer_SOURCE_FILES
     ssglreadback.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
-    sswhiteout.cpp
+    ssheightfog.cpp
+    ssscreenfx.cpp
     sslightning.cpp
     sslightningrender.cpp
     sssoundmeta.cpp
@@ -1211,7 +1212,10 @@ set(viewer_HEADER_FILES
     ssglreadback.h
     ssrainshadow.h
     sssurfacefield.h
-    sswhiteout.h
+    sssurfacestatecore.h
+    ssscreenfxcore.h
+    ssheightfog.h
+    ssscreenfx.h
     sslightning.h
     sslightningrender.h
     sssoundmeta.h
