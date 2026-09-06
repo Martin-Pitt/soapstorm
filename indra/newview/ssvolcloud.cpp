@@ -2623,10 +2623,12 @@ void SSVolCloud::render()
                 // <SS:Nexii> S1 vertex-decode channel fix (doc/atmo_magic_flow_field.md section 2): ordinary puffs
                 // now write texcoord0 = cornerMarker + payload * 0.45, decoded back in ssVolCloudV.glsl by
                 // round()/0.45 before interpolation ever sees it (opus review Q2b: recovering payload AFTER
-                // interpolation is unsound, so the round() must happen here, pre-rasterizer). payload is (0,0)
-                // for every puff at this stage - nothing has anything to put there yet - so every value below is
-                // exactly the old 0.f/1.f literal (0 + 0*0.45 == 0, 1 + 0*0.45 == 1 in IEEE754): BIT-IDENTICAL
-                // output, proved by V:\Scratch\atmo\tests\twin_flowchannel.cpp, not merely asserted here.
+                // interpolation is unsound, so the round() must happen here, pre-rasterizer). The encode is exact
+                // over the whole payload domain [-1,1]^2 (V:\Scratch\flow\tests\twin_flowchannel.cpp's grid and
+                // extremes tests: |payload * 0.45| <= 0.45 < 0.5, so round() can never cross into the neighbouring
+                // corner), and at payload 0 it is bit-identical to the old 0.f/1.f literal. STALE CLAIM REMOVED:
+                // this comment used to say payload is (0,0) for every puff "at this stage" and therefore that the
+                // output is bit-identical - that stopped being true below.
                 // <SS:Nexii> [interaction: ssdeckflowcore.h] THE PAYLOAD IS NO LONGER ZERO: px carries this puff's
                 // flow swirl (Puff::mFlowSwirl, in [-1, 1] by SSDeckFlow::swirlUnit's own range), the same value on
                 // all four corners so the varying is constant across the quad and no seam or gradient can appear

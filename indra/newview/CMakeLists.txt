@@ -1156,6 +1156,7 @@ set(viewer_HEADER_FILES
     fsrezqueue.h
     ssatmomagic.h
     ssdeckboilcore.h
+    ssdeckflowcore.h
     ssdeckframecore.h
     ssdecklodcore.h
     ssdeckmacrocore.h

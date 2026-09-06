@@ -42,8 +42,12 @@ in vec4 diffuse_color;
 // before the rasterizer ever interpolates the value, because recovering payload from an already-interpolated
 // coordinate is unsound (round() on a mid-quad value is a step function, not the corner) - the fragment stage
 // used to read this varying directly as a vec2 card/window coordinate and now reads vary_texcoord0.xy for
-// exactly that (the decoded corner, bit-identical to the old raw value whenever payload is 0), plus .zw for the
-// decoded payload once something rides it.
+// exactly that (the decoded corner - bit-identical to the old raw value at payload 0, and exact for the whole
+// payload domain because |payload * 0.45| <= 0.45 < 0.5), plus .zw for the decoded payload.
+// <SS:Nexii> SOMETHING RIDES IT NOW (fifth build report; [interaction: ssdeckflowcore.h]): .z carries an ordinary
+// puff's flow SWIRL, SSDeckFlow::swirlUnit read at the puff's air-frame cell centre and spent by the fragment
+// stage as a bounded rotation of the billow's outflow azimuth. Same value on all four corners, so the varying is
+// constant across the quad. Shafts and the sheet still write a zero payload and never read this.
 out vec4 vary_texcoord0;
 
 // <SS:Nexii> Per-puff STRUCTURE only, no longer a finished colour: r is the CPU builder's form term (facing toward the light and the exponential shade down through the deck, beam-flattened),
