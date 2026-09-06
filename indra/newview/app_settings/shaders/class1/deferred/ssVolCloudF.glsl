@@ -432,6 +432,25 @@ const float SS_MESO_SWIRL_MIN_M = 60.0;
 const float SS_MESO_SWIRL_M = 900.0;
 const float SS_MESO_SWIRL_MAX = 4.0;
 
+// <SS:Nexii> [interaction: ssdeckflowcore.h] THE CARD'S OWN FRAME, and the per-puff swirl. LOCKSTEP with
+// SSDeckFlow::CARD_FLATTEN_LO / CARD_FLATTEN_SPAN / FRAME_EPS / FALLBACK_RIGHT / SWIRL_MAX_RAD - one construction,
+// spelled on the CPU in ssvolcloud.cpp's render() (which orients the actual quad) and transliterated here (which
+// has to resolve the quad's own p back into world directions). THE FINDING (fifth build report: "the flow map is
+// going in reverse direction", "picking from a few different presets which dont mash well together"): this block
+// used to build its own frame from `ref = (abs(nrm.z) < 0.95) ? +Z : +X` on the UNFLATTENED view ray, while the
+// card it is drawn on was built from a ref BLENDED +Z -> +X across |n.z| in [0.6, 0.95] on a FLATTENED one. The two
+// agree only at the ends of that band. Measured over 6552 sky directions (unit_deckflow.cpp frame_regimes): the old
+// frame's `right` was the exact NEGATIVE of the card's on 7.7% of them and within 60 degrees of perpendicular on
+// 9.6%, with a hard sign flip across the |n.z| = 0.95 cone in 61 of 72 azimuth columns. So the advected octave ran
+// outward near the horizon, sideways in one band, and INWARD - against the drift the whole deck travels on - in
+// another. SS_SWIRL_MAX_RAD is deliberately under a quarter turn so the swirl rotates the outflow's azimuth and
+// can never invert it (worst measured turn cos 0.625).
+const float SS_CARD_FLATTEN_LO   = 0.6;
+const float SS_CARD_FLATTEN_SPAN = 0.35;
+const float SS_FRAME_EPS         = 0.001;
+const vec3  SS_FALLBACK_RIGHT    = vec3(0.0, 1.0, 0.0);
+const float SS_SWIRL_MAX_RAD     = 0.9;
+
 // <SS:Nexii> D3: SS_OCT_LAPS (laps of the boil cycle per second at full convection) and SS_OCT_DRIFT_FLOOR (the share of that a dead-calm sky keeps - never quite nothing, even still air is not
 // static) have MOVED into ssdeckboilcore.h as SSDeckBoil::LAPS_PER_S and SSDeckBoil::DRIFT_FLOOR, because the rate is integrated on the CPU now rather than multiplied by a clock here, and because a
 // rate that the build reports ask to retune is not something a shader const can be reasoned about. LAPS_PER_S was retuned with the move: 0.06 -> 0.012, a full advection cycle every 67 s at maximum
@@ -886,6 +905,49 @@ vec3 ss_sphere_normal(vec3 nrm, vec2 p)
     vec3 tan_v = cross(nrm, tan_u);
     float r = length(p);
     return normalize(tan_u * p.x + tan_v * p.y + nrm * sqrt(max(1.0 - r * r, 0.0)));
+}
+
+// <SS:Nexii> [interaction: ssdeckflowcore.h] LITERAL twin of SSDeckFlow::cardFrame - the SAME statements in the
+// SAME order as the core's body, which is itself the CPU block ssvolcloud.cpp's render() orients the quad with.
+// This is the frame a fragment must resolve its own p into: `right`/`up` are the directions the quad's own corners
+// were laid out along, so `right * p.x + up * p.y` is the fragment's true world offset from the puff's centre (up
+// to the card's 1.7:0.62 aspect, which p-space ignores here exactly as shape/rim/ss_sphere_normal already do). See
+// the SS_CARD_FLATTEN_LO block above for what the frame this replaces did instead. NOT called by
+// ss_sphere_normal: the fake sphere's own frame is unchanged on purpose, so the lighting on this build is
+// untouched and twin_virga.cpp's verbatim text pin on ss_sphere_normal still holds - only the flow moves.
+void ss_card_frame(vec3 to_cam, out vec3 card_n, out vec3 card_right, out vec3 card_up)
+{
+    float ss_cf_l = length(to_cam);
+    vec3 ss_cf_n = (ss_cf_l > SS_FRAME_EPS) ? to_cam / ss_cf_l : vec3(0.0, 0.0, 1.0);
+    float ss_cf_flat = clamp((abs(ss_cf_n.z) - SS_CARD_FLATTEN_LO) / SS_CARD_FLATTEN_SPAN, 0.0, 1.0);
+    if (ss_cf_flat > 0.0)
+    {
+        float ss_cf_sgn = (ss_cf_n.z >= 0.0) ? 1.0 : -1.0;
+        vec3 ss_cf_blend = ss_cf_n * (1.0 - ss_cf_flat) + vec3(0.0, 0.0, ss_cf_sgn) * ss_cf_flat;
+        float ss_cf_bl = length(ss_cf_blend);
+        ss_cf_n = (ss_cf_bl > SS_FRAME_EPS) ? ss_cf_blend / ss_cf_bl : vec3(0.0, 0.0, ss_cf_sgn);
+    }
+    card_n = ss_cf_n;
+
+    vec3 ss_cf_ref = vec3(0.0, 0.0, 1.0) * (1.0 - ss_cf_flat) + vec3(1.0, 0.0, 0.0) * ss_cf_flat;
+    float ss_cf_rl = length(ss_cf_ref);
+    ss_cf_ref = (ss_cf_rl > SS_FRAME_EPS) ? ss_cf_ref / ss_cf_rl : vec3(0.0, 0.0, 1.0);
+
+    vec3 ss_cf_r = cross(ss_cf_ref, ss_cf_n);
+    float ss_cf_crl = length(ss_cf_r);
+    card_right = (ss_cf_crl > SS_FRAME_EPS) ? ss_cf_r / ss_cf_crl : SS_FALLBACK_RIGHT;
+    card_up = cross(ss_cf_n, card_right);
+}
+
+// <SS:Nexii> [interaction: ssdeckflowcore.h] LITERAL twin of SSDeckFlow::rotate2 - the per-puff swirl's azimuth
+// turn, applied to the QUAD POINT before the billow's radial mapping so it stays in the card's own plane at every
+// view angle. The meridional field itself depends only on |p| (the ring cores and the updraft are functions of r
+// alone), so this rotates the outflow's direction and changes nothing else about it.
+vec2 ss_rot2(vec2 p, float ang)
+{
+    float c = cos(ang);
+    float s = sin(ang);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
 }
 
 // <SS:Nexii> [interaction: ssdeckframecore.h] THE one lerp formula both sides use, spelled out rather than called via mix() - LOCKSTEP with SSDeckFrame::lerpExact. GLSL's mix(x, y, a) = x*(1-a) + y*a
@@ -1456,38 +1518,68 @@ void main()
     // gaussian in ss_bulge_m.x, no division, so it adds no singularity of its own and needs no eps guard.
     ss_billow_uv += vec2(0.0, SS_BILLOW_UPDRAFT_MAG) * exp(-(ss_bulge_m.x * ss_bulge_m.x) / SS_BILLOW_UPDRAFT_SPREAD);
 
-    // Map the meridional (radial, bulge) result back to WORLD axes through the SAME tan_u/tan_v/nrm frame
-    // ss_sphere_normal builds sphere_n from - duplicated here rather than factored out of that function, because
-    // twin_virga.cpp's phase8ec_item1 test pins ss_sphere_normal's body text verbatim (ref/tan_u/tan_v/r/return,
-    // in that order); a shared helper would change that pinned text for no behavioural gain, since main() cannot
-    // call a function and also keep the exact old inline statements the twin checks for the OTHER call site. The
-    // radial part is written as p * (ss_billow_uv.x / (SS_FLOW_EPS+r)), NOT p_hat * ss_billow_uv.x: p already IS
+    // Map the meridional (radial, bulge) result back to WORLD axes through the CARD'S OWN frame. The radial part is
+    // written as p * (ss_billow_uv.x / (SS_FLOW_EPS+r)), NOT p_hat * ss_billow_uv.x: p already IS
     // the tangent-plane vector of length r, so scaling it directly keeps the SAME vanishing-numerator idiom as
     // the ring cores above - at r=0 (dead centre of the puff) p is exactly (0,0), so this term is exactly zero
     // however large ss_billow_uv.x is, no separate r==0 branch, and physically right too: an axisymmetric ring
-    // field has no preferred horizontal direction on its own axis. The bulge part is ss_billow_uv.y along nrm,
-    // exactly as ss_sphere_normal's own nrm*sqrt(1-r*r) term is - a WORLD-space vector even though nrm happens to
-    // equal the view ray for this camera-facing quad (ss_sphere_normal's own frame, tan_u/tan_v/nrm are each
-    // individual world-space unit vectors combined into one world-space result).
-    vec3 ss_billow_ref = (abs(nrm.z) < 0.95) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-    vec3 ss_billow_tan_u = normalize(cross(ss_billow_ref, nrm));
-    vec3 ss_billow_tan_v = cross(nrm, ss_billow_tan_u);
-    vec3 ss_billow_w = (ss_billow_tan_u * p.x + ss_billow_tan_v * p.y) * (ss_billow_uv.x / (SS_FLOW_EPS + r))
-                      + nrm * ss_billow_uv.y;
+    // field has no preferred horizontal direction on its own axis (and the swirl rotation below cannot disturb
+    // that: rotating (0,0) is still (0,0), and |p| - the only thing the meridional field reads - is preserved).
+    // The bulge part is ss_billow_uv.y along the card's normal, exactly as ss_sphere_normal's own nrm*sqrt(1-r*r)
+    // term is along the view ray - a WORLD-space vector either way (card_n/tan_u/tan_v are each individual
+    // world-space unit vectors combined into one world-space result).
+    // <SS:Nexii> The claim this comment used to carry - that the frame here is "the SAME tan_u/tan_v/nrm frame
+    // ss_sphere_normal builds sphere_n from", duplicated deliberately so twin_virga.cpp's verbatim text pin on
+    // ss_sphere_normal would keep holding - was TRUE about the text and FALSE about the geometry, and that is the
+    // whole fifth-build-report finding: ss_sphere_normal's frame is not the card's frame either, it is just the
+    // one the OTHER duplicate also got wrong. The flow now builds the card's frame (below); ss_sphere_normal is
+    // left exactly as it was, so the lighting on this build is untouched and its text pin still holds.
+    // <SS:Nexii> THE CARD'S OWN FRAME (fifth build report; [interaction: ssdeckflowcore.h], see SS_CARD_FLATTEN_LO
+    // above for the measurement). This block used to spell `ref = (abs(nrm.z) < 0.95) ? +Z : +X; tan_u =
+    // normalize(cross(ref, nrm)); tan_v = cross(nrm, tan_u)` - a SECOND, independently written frame that is not
+    // the frame the CPU laid the quad out in. It is ss_card_frame now, the literal twin of SSDeckFlow::cardFrame
+    // that render() also calls, so `tan_u * p.x + tan_v * p.y` is the fragment's real outward direction on the
+    // card at every view angle instead of that direction's negative over a third of the sky. The bulge term rides
+    // ss_billow_card_n, the CARD'S normal (the view ray eased toward +-world-Z near the poles) rather than the raw
+    // view ray, for the same reason: it is the axis the card actually stands perpendicular to.
+    // STILL OPEN, and unchanged by this: the ring's AXIS is the card's normal, which still tracks the camera, so a
+    // turret seen from below and one seen edge-on show the same roll where a real one's ring axis is vertical -
+    // review_opus.md's G2 finding part (i), scheduled as Stage 6. This fix makes the frame ONE frame; it does not
+    // make it a world frame.
+    vec3 ss_billow_card_n, ss_billow_tan_u, ss_billow_tan_v;
+    ss_card_frame(nrm, ss_billow_card_n, ss_billow_tan_u, ss_billow_tan_v);
+
+    // <SS:Nexii> S3 per-puff SWIRL (fifth build report: "not handling the different angles and instead seems to be
+    // picking from a few different presets which dont mash well together or look in unison") [interaction:
+    // ssdeckflowcore.h]: the quad point turned by this puff's own swirl angle before the radial mapping reads it.
+    // The angle arrives on the texcoord PAYLOAD channel (vary_texcoord0.z, S1's own encode, constant across the
+    // quad because all four corners carry it), and the CPU sampled it from SSDeckFlow::swirlUnit - a value-noise
+    // FIELD at the puff's air-frame cell centre, NOT a per-puff hash. That is what buys both halves of the
+    // complaint at once: continuous (the turn's distribution over 10920 puffs occupies 22 of 72 five-degree bins
+    // with no bin over 8.1%, against the old frame's 46.8% spike - unit_deckflow.cpp direction_distribution) and
+    // COHERENT (0.82 correlation between puffs one 260 m cell apart, -0.003 at 3120 m; an independent per-puff
+    // hash measures -0.006 at both - swirl_neighbour_correlation). Clamped rather than trusted: nothing else
+    // writes this channel today, and a future payload user must not be able to spin the flow.
+    float ss_swirl_ang = clamp(vary_texcoord0.z, -1.0, 1.0) * SS_SWIRL_MAX_RAD;
+    vec2 ss_billow_p = ss_rot2(p, ss_swirl_ang);
+
+    vec3 ss_billow_w = (ss_billow_tan_u * ss_billow_p.x + ss_billow_tan_v * ss_billow_p.y) * (ss_billow_uv.x / (SS_FLOW_EPS + r))
+                      + ss_billow_card_n * ss_billow_uv.y;
 
     // The world-up rise and no-downdraft clamp, on the WORLD z component of ss_billow_w - NOT along nrm, which
     // is the view ray and re-orients with the camera (review_opus.md's exact G2 finding: "A's replacement...
     // puts the rise along the view direction, deleting both the world-up lift and the no-downdraft clamp").
-    // ss_billow_w's axes are already world axes (built from tan_u/tan_v/nrm, all world-space vectors), so its
-    // OWN .z IS the true world-vertical component, exactly as sphere_n.z already was in the #else branch below.
+    // ss_billow_w's axes are already world axes (built from the card frame's right/up/normal, all world-space
+    // vectors), so its OWN .z IS the true world-vertical component, exactly as sphere_n.z was in the #else branch.
     // Left UN-normalized here on purpose - see the shared normalize below, which this and the #else branch both
     // feed. THIS FIXES ONLY HALF of review_opus.md's G2 finding, and the other half is still open (2026-09-06
     // opus S0-S3 fix pass, finding 4): the finding had two independent parts - (i) the meridional plane's AXIS
-    // is spanned by the quad's radial direction and nrm, and nrm is the VIEW ray for this camera-facing quad, so
-    // the ring still re-orients as the camera orbits a puff (always face-on: a puff seen from below and one seen
-    // edge-on show the SAME roll pattern, where a real turret's ring axis is vertical) - unfixed, and the
-    // ss_billow_tan_u/tan_v/ref block just above builds exactly that camera-framed axis, same as ss_sphere_normal
-    // does; (ii) the rise/clamp being on the view axis rather than world-up - fixed, here, correctly, as the rest
+    // is spanned by the quad's radial direction and the CARD'S normal, which is the view ray eased toward +-Z near
+    // the poles, so the ring still re-orients as the camera orbits a puff (always face-on: a puff seen from below
+    // and one seen edge-on show the SAME roll pattern, where a real turret's ring axis is vertical) - unfixed, and
+    // the ss_card_frame call just above builds exactly that camera-framed axis (correctly, now - it is the axis the
+    // quad really stands on - but still a camera-framed one); (ii) the rise/clamp being on the view axis rather
+    // than world-up - fixed, here, correctly, as the rest
     // of this comment argues. review_opus.md's own adoption plan schedules the axis fix as Stage 6 ("G2 billow
     // roll: prototype only... Build the field in the world frame (world-up as the ring axis, radial distance from
     // the puff's own axis as the meridional coordinate)... Land only if the ring is visible in the PPM") -
@@ -1582,7 +1674,20 @@ void main()
     // The same direction seen in each plane's own two axes. Whichever plane the triplanar weights favour, the detail is travelling the same way through the world. Scaled by boil, so the top of the
     // layer travels further per cycle than the base does. Safe to vary per fragment here in a way it never was on the rate: this multiplies a DISTANCE that resets every cycle, so it cannot
     // accumulate into the growing shear that scaling the rate caused.
-    float reach = min(SS_FLOW_M * boil / oct2_m, SS_FLOW_MAX_TILES);
+    // <SS:Nexii> [interaction: ssdeckflowcore.h] EDGE MASK, LITERAL twin of SSDeckFlow::maskedReach (fifth build
+    // report: "looking quite strange due to lack of masking around edges"): the advected octave's travel faded out
+    // by the puff's OWN radial falloff, `rim` - the same term the carve a few lines below already multiplies the
+    // density by, so the flow reaches zero exactly where the card's silhouette does. WHAT IT FIXES: the silhouette
+    // is decided in the band r in [SS_PUFF_RIM, 1] where rim ramps, and the flow used to run at FULL travel right
+    // through that band, so the edge of the mask writhed by the whole advection distance while the interior only
+    // shuffled its texture. rim is 1.0 for every r <= SS_PUFF_RIM, so the core boils exactly as before.
+    // WHAT IT DOES NOT FIX, stated because the obvious reading is wrong: the flow could never have drawn the
+    // card's square outline. rim is already exactly zero for every r >= 1 and every point of the quad's boundary
+    // has r >= 1 (the corners reach 1.414), so the alpha there was already exactly zero - measured over 400
+    // perimeter points at worst-case noise, max alpha 0.000000000 (unit_deckflow.cpp perimeter_alpha_already_zero).
+    // The rung that pins this one: max |advected - un-advected| around the perimeter at 16 boil phases is
+    // 0.000000000 with the mask and 0.737767 without it, while the centre still moves (edge_mask_perimeter).
+    float reach = min(SS_FLOW_M * boil / oct2_m, SS_FLOW_MAX_TILES) * rim;
     vec2 flow_yz = vec2(flow_w.y / streak, flow_w.z) * reach;
     vec2 flow_xz = vec2(flow_w.x / streak, flow_w.z) * reach;
     vec2 flow_xy = vec2(dot(flow_w.xy, ss_wind) / streak,

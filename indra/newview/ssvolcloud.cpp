@@ -25,6 +25,7 @@
 
 #include "ssvolcloud.h"
 
+#include "ssdeckflowcore.h" // the card's own frame, the advected octave's sign rule, its edge mask and per-puff swirl
 #include "ssdecklodcore.h"
 #include "ssdeckmacrocore.h"
 #include "ssdecknoisecore.h"
@@ -1297,6 +1298,15 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 // or time (I3/I5).
                 puff.mPhase = hashUnit(cx, cy, sub_salt + 977u);
 
+                // <SS:Nexii> [interaction: ssdeckflowcore.h] The per-puff flow SWIRL - a FIELD read, not a hash, so
+                // neighbouring puffs lean the same way (see Puff::mFlowSwirl). Read at the cell's own AIR-frame
+                // centre, exactly like every other per-cell quantity here: no camera, no clock, no drift, so two
+                // clients agree and a wrap realigns it with the lattice. Per CELL rather than per SUB on purpose -
+                // the sub-puffs of one cell are one cloud lump and should boil together; the phase above is what
+                // keeps them out of step in TIME.
+                puff.mFlowSwirl = SSDeckFlow::swirlUnit(((F32)cx + 0.5f) * CELL_M, ((F32)cy + 0.5f) * CELL_M,
+                                                        SSDeckFlow::SWIRL_SALT);
+
                 dist_sum += dist_sq;
                 deck.mPuffs.push_back(puff);
             }
@@ -1413,6 +1423,12 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         // grids hundreds of metres apart, so a shared phase between them is invisible - not "no aliasing", just
         // aliasing that cannot matter.
         body.mPhase = hashUnit(acc.mMcx, acc.mMcy, salt + 977u);
+
+        // <SS:Nexii> [interaction: ssdeckflowcore.h] The same swirl FIELD the fine loop reads, at this body's own
+        // block centre - the same air-frame position, so a Tier B body agrees with the Tier A puffs it stands in
+        // for across the crossfade instead of picking an unrelated lean (the field is continuous, so the block
+        // centre and its cells are all within one lattice cell of each other).
+        body.mFlowSwirl = SSDeckFlow::swirlUnit(block_air_x, block_air_y, SSDeckFlow::SWIRL_SALT);
 
         // <SS:Nexii> A Tier B body counts toward the deck's own (non-shaft) mean distance below, same as a fine
         // puff - it is an ordinary cloud body, unlike the shaft cards F5 excludes for being a different geometry.
@@ -2537,33 +2553,21 @@ void SSVolCloud::render()
             }
             else
             {
-                LLVector3 normal = cam_pos - puff.mPosAgent;
-                if (normal.normalize() < 0.001f)
-                {
-                    normal = LLVector3::z_axis;
-                }
-
-                const F32 flatten = llclamp((llabs(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
-                if (flatten > 0.f)
-                {
-                    const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;
-                    normal = normal * (1.f - flatten) + LLVector3(0.f, 0.f, sgn) * flatten;
-                    if (normal.normalize() < 0.001f)
-                    {
-                        normal.setVec(0.f, 0.f, sgn);
-                    }
-                }
-
-                LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
-                              + LLVector3::x_axis * flatten;
-                ref.normalize();
-
-                LLVector3 base_right = ref % normal;
-                if (base_right.normalize() < 0.001f)
-                {
-                    base_right = cam_right_fallback;
-                }
-                const LLVector3 base_up = normal % base_right;
+                // <SS:Nexii> [interaction: ssdeckflowcore.h] ONE FORMULA SITE for the card's frame. This block used
+                // to spell the flatten blend, the ref blend and the two cross products inline; it is
+                // SSDeckFlow::cardFrame now, character for character in the same order (unit_deckflow.cpp pins its
+                // invariants), because ssVolCloudF.glsl's flow block has to build the SAME frame per fragment and a
+                // second, independently spelled copy is exactly how the fifth build report's reversed flow
+                // happened: the shader spelled `ref = (abs(nrm.z) < 0.95) ? +Z : +X` against this blend, and the
+                // two disagree by a SIGN over a third of the sky. ONE behaviour change, stated: the near-degenerate
+                // fallback was cam_right_fallback (a camera vector the fragment stage cannot reproduce) and is
+                // SSDeckFlow::FALLBACK_RIGHT now - reachable only within 0.0098 degrees of one direction
+                // (elevation 46.3355, bearing +X), a solid-angle share of 6.4e-7.
+                const LLVector3 to_cam = cam_pos - puff.mPosAgent;
+                const SSDeckFlow::CardFrame card = SSDeckFlow::cardFrame(
+                    SSDeckFlow::Vec3{ to_cam.mV[VX], to_cam.mV[VY], to_cam.mV[VZ] });
+                const LLVector3 base_right(card.right.x, card.right.y, card.right.z);
+                const LLVector3 base_up(card.up.x, card.up.y, card.up.z);
 
                 const F32 layer_h = llclamp(
                     (puff.mPosAgent.mV[VZ] - deck.mBaseZ) / deck.mThicknessM, 0.f, 1.f);
@@ -2623,7 +2627,13 @@ void SSVolCloud::render()
                 // for every puff at this stage - nothing has anything to put there yet - so every value below is
                 // exactly the old 0.f/1.f literal (0 + 0*0.45 == 0, 1 + 0*0.45 == 1 in IEEE754): BIT-IDENTICAL
                 // output, proved by V:\Scratch\atmo\tests\twin_flowchannel.cpp, not merely asserted here.
-                const F32 px = 0.f;
+                // <SS:Nexii> [interaction: ssdeckflowcore.h] THE PAYLOAD IS NO LONGER ZERO: px carries this puff's
+                // flow swirl (Puff::mFlowSwirl, in [-1, 1] by SSDeckFlow::swirlUnit's own range), the same value on
+                // all four corners so the varying is constant across the quad and no seam or gradient can appear
+                // inside one card. Clamped to the encode's own safe range rather than trusted: round() recovers the
+                // corner only while |payload * 0.45| < 0.5, i.e. |payload| < 1.111, and twin_flowchannel.cpp pins
+                // the decode at the extremes. py stays 0 - the second payload slot is still unspent.
+                const F32 px = llclamp(puff.mFlowSwirl, -1.f, 1.f);
                 const F32 py = 0.f;
                 gGL.texCoord2f(0.f + px * 0.45f, 1.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
                 gGL.texCoord2f(0.f + px * 0.45f, 0.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);

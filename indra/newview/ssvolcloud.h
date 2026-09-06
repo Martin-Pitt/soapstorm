@@ -231,6 +231,19 @@ private:
         // decode). 0 for shafts and the sheet, both of which ignore this field entirely.
         F32 mPhase = 0.f;
 
+        // <SS:Nexii> [interaction: ssdeckflowcore.h] The per-puff advected-detail SWIRL, in [-1, 1] - the fifth
+        // build report's "not handling the different angles ... picking from a few different presets which dont
+        // mash well together or look in unison". SSDeckFlow::swirlUnit read at this puff's own AIR-frame position:
+        // a value-noise FIELD on a 780 m lattice, not a per-puff hash, so the angle varies continuously across the
+        // deck AND neighbouring puffs agree (correlation 0.82 at one 260 m cell, -0.003 at 3120 m; an independent
+        // per-puff hash measures -0.006 at both - unit_deckflow.cpp swirl_neighbour_correlation). The fragment
+        // stage spends it as a bounded rotation of the billow's outflow azimuth inside the card's own plane
+        // (SSDeckFlow::SWIRL_MAX_RAD, under a quarter turn, so outward never becomes inward). Carried on the
+        // texcoord PAYLOAD channel (S1's own encode: texcoord = corner + 0.45 * payload), not on a colour channel,
+        // because every colour channel is spent and the payload is exactly what S1 built this for. 0 for shafts
+        // and the sheet, both of which never reach the billow block.
+        F32 mFlowSwirl = 0.f;
+
         // <SS:Nexii> Phase 8e, 8e-b PROFILE SKEW (ssvirgacore.h CardGeom::shearXY, doc/atmo_magic_phase8_show.md
         // section 3b): the card's TOP-relative-to-BOTTOM wind skew - profileSkewM(params, baseAglM, aglTop,
         // fallSpeed) minus the same at aglBot - turning the card into a parallelogram whose top and bottom edges

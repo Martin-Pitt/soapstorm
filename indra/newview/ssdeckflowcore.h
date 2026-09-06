@@ -64,22 +64,30 @@ namespace SSDeckFlow
     // cardFrame(toCam): the puff card's orientation, from the (not necessarily unit) vector from the puff to the
     // camera. `normal` is the card's plane normal - the view ray eased toward +-world-Z across the flatten band -
     // and `right`/`up` span the card, with `right` horizontal wherever the blended ref allows it. `degenerate` is
-    // true when ref and normal are within FRAME_EPS of parallel, in which case `right` is left as the caller's
-    // problem (the CPU substitutes the camera's own right vector; the fragment stage substitutes a fixed axis) -
-    // it is reported rather than hidden because the locus where it happens is a real, visible one: see
-    // NEAR-DEGENERATE below.
-    // Invariants: normal/right/up are unit and mutually orthogonal whenever degenerate is false; the result is a
-    // pure function of toCam's direction (scaling toCam changes nothing); normal == normalize(toCam) exactly when
-    // |normalize(toCam).z| <= CARD_FLATTEN_LO; normal == (0,0,sign(z)) exactly when |normalize(toCam).z| >=
-    // CARD_FLATTEN_LO + CARD_FLATTEN_SPAN; every component is continuous in toCam except across the degenerate
-    // locus.
-    // NEAR-DEGENERATE, stated because it is measured and NOT fixed here: ref sweeps +Z -> +X across the same band
-    // the normal sweeps toward +-Z, and the two cross near |n.z| ~ 0.725 for a puff whose horizontal bearing is
-    // along +X (cross length 0.0087 at 46.25 degrees of elevation in the sweep, tests/unit_deckflow.cpp
-    // frame_near_degenerate). The guard never fires there - 0.0087 is well above FRAME_EPS - but the card's
-    // orientation twists through most of a half turn over a couple of degrees of elevation for that one bearing.
-    // That is a property of the SHIPPED card geometry, not of this header; moving it would rotate cards on screen
-    // and is a separate, visible change. Recorded so the next reader does not have to rediscover it.
+    // true when ref and normal are within FRAME_EPS of parallel, in which case `right` takes FALLBACK_RIGHT.
+    // Invariants: normal/right/up are unit and mutually orthogonal; the result is a pure function of toCam's
+    // DIRECTION (scaling toCam changes nothing - measured over 6552 sky directions, agreement 1.000000); normal ==
+    // normalize(toCam) exactly when |normalize(toCam).z| <= CARD_FLATTEN_LO; normal == (0,0,sign(z)) exactly when
+    // |normalize(toCam).z| >= CARD_FLATTEN_LO + CARD_FLATTEN_SPAN; every component is continuous in toCam except
+    // across the degenerate direction below.
+    // THE FALLBACK CHANGED, and this is the one behaviour difference against the code this replaces: render() used
+    // the CAMERA'S OWN right vector, which a fragment stage cannot reproduce, so the two sides could not have been
+    // made one frame while it stood. It is a fixed world axis now. What that costs, measured
+    // (tests/unit_deckflow.cpp frame_near_degenerate): ref sweeps +Z -> +X across the same band the normal sweeps
+    // toward +-Z, and the two become exactly parallel at ONE direction - 46.3355 degrees of elevation, bearing
+    // exactly +X (and its nadir/-X mirror). |cross| falls below FRAME_EPS only within 0.0098 degrees of that
+    // direction: a solid-angle share of 6.7e-7, i.e. a puff has to land inside a disc a hundredth of a degree
+    // across for the fallback to be reached at all.
+    // NEAR-DEGENERATE, stated because it is measured and NOT fixed here: the twist AROUND that direction is much
+    // wider than the guard. |cross| is 0.0083 one degree of azimuth away and 0.166 at twenty, so `right` rotates
+    // through most of a half turn over a few degrees of sky at 46.3 degrees of elevation due east - a small
+    // pinwheel in the card orientations there. That is a property of the SHIPPED card geometry (the ref BLEND
+    // rotating into the normal), not of this header; removing it means choosing a different ref law, which rotates
+    // cards on screen everywhere and is a separate, visible change. Recorded so the next reader does not have to
+    // rediscover it.
+    constexpr F32 FALLBACK_RIGHT_X = 0.f;
+    constexpr F32 FALLBACK_RIGHT_Y = 1.f;
+    constexpr F32 FALLBACK_RIGHT_Z = 0.f;
     struct CardFrame
     {
         Vec3 normal;
@@ -112,7 +120,9 @@ namespace SSDeckFlow
         Vec3 r = cross3(ref, n);
         const F32 crl = len3(r);
         f.degenerate = !(crl > FRAME_EPS);
-        f.right = f.degenerate ? v3(1.f, 0.f, 0.f) : scale3(r, 1.f / crl);
+        // FALLBACK_RIGHT is exactly perpendicular to the normal wherever this branch can be reached: ref has no y
+        // component at any flatten, so ref and n can only be parallel when n itself lies in the xz plane.
+        f.right = f.degenerate ? v3(FALLBACK_RIGHT_X, FALLBACK_RIGHT_Y, FALLBACK_RIGHT_Z) : scale3(r, 1.f / crl);
         f.up    = cross3(n, f.right);
         return f;
     }
@@ -131,7 +141,7 @@ namespace SSDeckFlow
         Vec3 r = cross3(ref, n);
         const F32 crl = len3(r);
         f.degenerate = !(crl > FRAME_EPS);
-        f.right = f.degenerate ? v3(1.f, 0.f, 0.f) : scale3(r, 1.f / crl);
+        f.right = f.degenerate ? v3(FALLBACK_RIGHT_X, FALLBACK_RIGHT_Y, FALLBACK_RIGHT_Z) : scale3(r, 1.f / crl);
         f.up    = cross3(n, f.right);
         f.flatten = 0.f;
         return f;
