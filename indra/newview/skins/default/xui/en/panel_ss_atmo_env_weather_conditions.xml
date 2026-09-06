@@ -750,7 +750,7 @@
      height="14"
      width="110"
      name="storm_override_kind_combo_label"
-     tool_tip="Pins a guaranteed-active storm cell near the anchor at the cue phase below. None leaves the ordinary storm-scheduler lattice alone. Supercell/Tornado/Waterspout ask for cyclonic rotation; Anticyclonic flips the sign. Needs the Weather Influence master enable; overrides the Allow Supercells/Tornadoes checkboxes"
+     tool_tip="Pins a guaranteed-active storm cell near the anchor at the cue phase below. None leaves the ordinary storm-scheduler lattice alone. Supercell/Tornado/Waterspout ask for cyclonic rotation; Anticyclonic flips the sign. Squall line composes a line instead of a pinned cell - the leading edge crosses the region at the cue. Needs the Weather Influence master enable; overrides the Allow Supercells/Tornadoes checkboxes"
      font="SansSerifSmall">
         Storm Override
     </text>
@@ -763,12 +763,13 @@
      right="-174"
      name="storm_override_kind_combo"
      allow_text_entry="false"
-     tool_tip="Pins a guaranteed-active storm cell near the anchor at the cue phase below. None leaves the ordinary storm-scheduler lattice alone. Supercell/Tornado/Waterspout ask for cyclonic rotation; Anticyclonic flips the sign. Needs the Weather Influence master enable; overrides the Allow Supercells/Tornadoes checkboxes">
+     tool_tip="Pins a guaranteed-active storm cell near the anchor at the cue phase below. None leaves the ordinary storm-scheduler lattice alone. Supercell/Tornado/Waterspout ask for cyclonic rotation; Anticyclonic flips the sign. Squall line composes a line instead of a pinned cell - the leading edge crosses the region at the cue. Needs the Weather Influence master enable; overrides the Allow Supercells/Tornadoes checkboxes">
         <combo_box.item label="None" value="" name="storm_override_none" />
         <combo_box.item label="Supercell" value="supercell" name="storm_override_supercell" />
         <combo_box.item label="Tornado" value="tornado" name="storm_override_tornado" />
         <combo_box.item label="Waterspout" value="waterspout" name="storm_override_waterspout" />
         <combo_box.item label="Anticyclonic" value="anticyclonic" name="storm_override_anticyclonic" />
+        <combo_box.item label="Squall line" value="squall" name="storm_override_squall" />
     </combo_box>
     <button
      follows="right|top"

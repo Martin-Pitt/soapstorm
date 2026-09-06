@@ -77,6 +77,8 @@ namespace SSStormCouple
         F32 dirX = 0.f, dirY = 0.f; // owner's motion direction (zero vector when no owner)
         F32 rotSign = 0.f;    // owner's sign, 0 when no owner
         F32 owner = 0.f;      // owner's influence itself
+        F32 lineWall = 0.f;   // 8a: the squall line-band's wall term here (applyLineBand), [0,1]; 0 with no line
+        F32 lineShelf = 0.f;  // 8a: the gust-front shelf term ahead of the line, [0,1]; 0 with no line
         F32 ownerRadius = 0.f; // owner's radius, metres (0 when no owner) - CPU-only consumer (precipShift's cap); the GLSL twin's struct may omit it and the twin test compares the other fields explicitly
     };
 
@@ -338,6 +340,65 @@ namespace SSStormCouple
         dy = mag * s.dirY;
     }
 
+    // ------------------------------------------------------------------------------------------------------------------
+    // 8a LINE BAND (doc/atmo_magic_phase8_show.md section 3 item 2): a squall line couples into the deck as ONE continuous
+    // wall along its segment, not as seven discs fighting for MAX_CELLS slots. The shell fills one LineBand per frame from
+    // the active line (SSStormCells: the line's origin advected to now, its direction and unit motion, half-length,
+    // SSSquall::LINE_BAND_M / LINE_SHELF_M, strength = the line's live intensity), strength <= 0 disables it. LOCKSTEP
+    // ssVolCloudF.glsl uniforms ss_line_a (ox, oy, dirX, dirY), ss_line_b (motX, motY, halfLen, bandM), ss_line_c (shelfM,
+    // strength, 0, 0) and the GLSL twins ss_line_field / ss_line_apply (twin test transliterates them).
+    struct LineBand
+    {
+        F32 ox = 0.f, oy = 0.f;       // segment centre, world frame, at now
+        F32 dirX = 0.f, dirY = 1.f;   // unit along the segment
+        F32 motX = 0.f, motY = 0.f;   // unit motion (the line's advance); (0,0) when the line is still
+        F32 halfLen = 0.f;            // metres
+        F32 bandM = 0.f;              // wall half-thickness (SSSquall::LINE_BAND_M)
+        F32 shelfM = 0.f;             // shelf reach ahead (SSSquall::LINE_SHELF_M)
+        F32 strength = 0.f;           // [0,1]; <= 0 disables
+    };
+    struct LineField
+    {
+        F32 wall = 0.f;   // [0,1]
+        F32 shelf = 0.f;  // [0,1]
+    };
+
+    // The wall and shelf terms at a world point. perp = |component of (p - o) perpendicular to dir|, along = dot(p - o,
+    // dir), ahead = dot(p - o, mot). endcap = 1 - smoothstep(halfLen, halfLen + bandM, |along|). wall = strength * endcap *
+    // (1 - smoothstep(0.5 * bandM, bandM, perp)). shelf = strength * endcap * smoothstep(0, 0.3 * shelfM, ahead) *
+    // (1 - smoothstep(0.6 * shelfM, shelfM, ahead)) - zero behind the line and beyond the shelf's reach. Invariants: both
+    // 0 when strength <= 0 or bandM <= 0; both in [0,1]; wall == strength on the segment (perp <= 0.5 bandM, |along| <=
+    // halfLen); wall == 0 at perp >= bandM; shelf == 0 for ahead <= 0 and for ahead >= shelfM; symmetric under
+    // dir -> -dir; pure; GLSL-portable (smoothstep/dot/abs/max only) so the twin is literal.
+    inline LineField lineField(const LineBand& b, F32 px, F32 py)
+    {
+        LineField f;
+        if (b.strength <= 0.f || b.bandM <= 0.f)
+        {
+            return f;
+        }
+        const F32 dx = px - b.ox;
+        const F32 dy = py - b.oy;
+        const F32 along = dx * b.dirX + dy * b.dirY;
+        const F32 perp = std::sqrt(llmax(dx * dx + dy * dy - along * along, 0.f));
+        const F32 ahead = dx * b.motX + dy * b.motY;
+        const F32 endcap = 1.f - smoothstep(b.halfLen, b.halfLen + b.bandM, std::abs(along));
+        f.wall = b.strength * endcap * (1.f - smoothstep(0.5f * b.bandM, b.bandM, perp));
+        f.shelf = b.strength * endcap * smoothstep(0.f, 0.3f * b.shelfM, ahead) * (1.f - smoothstep(0.6f * b.shelfM, b.shelfM, ahead));
+        return f;
+    }
+
+    // Folds a line field into a Sample: boost = max(boost, wall); anvil = max(anvil, wall * anvilFrac); lineWall = wall;
+    // lineShelf = shelf; every other field untouched (rotation/motion ownership never blends - a line has no meso here).
+    // Invariants: idempotent; never lowers boost/anvil; a zero field leaves the Sample bit-identical.
+    inline void applyLineBand(Sample& s, const LineField& f, F32 anvilFrac)
+    {
+        s.boost = llmax(s.boost, f.wall);
+        s.anvil = llmax(s.anvil, f.wall * anvilFrac);
+        s.lineWall = f.wall;
+        s.lineShelf = f.shelf;
+    }
+
     // review 3b NEW-7 (doc S3 "Sample point lockstep"): the QUANTIZED cell centre a world/air point's storm sample
     // must be taken at, so the builder's per-cell sample, precipNoiseAt's landing-point sample and the shader's own
     // literal twin (ss_storm_samplePoint in ssVolCloudF.glsl) all read the same point instead of each rounding an
@@ -376,6 +437,18 @@ namespace SSStormCouple
     // slot 0 (a true partial selection sort, not merely "some" ordering); result independent of the order of
     // `cells` except for exact ties, which resolve by id, and except for which hero-flagged entry lands in slot 0
     // when more than one is present.
+    // 7f F3: whether an entry earns SelectKey::hero. A slot-preferred cell must be able to INFLUENCE the deck: the
+    // 7f hero is cull-exempt and may spawn up to HERO_SPAWN_MAX_M (30 km) out, where every deck sample reads influence
+    // 0, yet it would hold one of MAX_CELLS slots for half its life. So preference needs the flag AND the centre
+    // within reachM of the anchor (the shell passes its field radius + SSStormCell::RADIUS_MAX_M); reachM <= 0 means
+    // no distance condition. Invariants: false when !flag; true when flag and reachM <= 0; pure.
+    inline bool slotPreferred(bool flag, F32 dx, F32 dy, F32 reachM)
+    {
+        if (!flag) return false;
+        if (reachM <= 0.f) return true;
+        return dx * dx + dy * dy <= reachM * reachM;
+    }
+
     inline S32 selectSlots(const SelectKey* cells, S32 n, F32 anchorX, F32 anchorY, S32* outIdx, S32 cap)
     {
         const S32 count = llmax(n, (S32)0);

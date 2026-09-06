@@ -30,7 +30,9 @@
 #include "llimage.h"
 #include "llrendertarget.h"
 #include "llviewertexture.h"
+#include "ssdeckboilcore.h"
 #include "ssdeckframecore.h"
+#include "ssdeckshadecore.h"
 #include "ssstormcells.h"
 #include "ssstormcouplecore.h"
 #include "ssvirgacore.h"
@@ -133,21 +135,37 @@ public:
     // this build (Distant Rain off/zero-strength in the Weather Influence row, or this deck is not the one
     // storm-coupled - couple_storm false) - the view then says so rather than drawing a stale set left over from
     // a build where it did. mR2 is the particle rain's own TIER_SHEETS radius (SSVirga::handoff's r2 input);
-    // mGroundZ/mBaseZ are the span the card stacks and the fall-tilt comparison line both span. Reset to default
-    // (mActive false, empty mCells) at the top of every update() and by clear(), so an early-out frame (feature
-    // off, no asset) never leaves a stale snapshot behind either.
+    // mGroundZ/mBaseZ are the span the card stacks and the fall-tilt comparison line both span. F9 (2026-09-06
+    // review): mEmbedTopZ is SSVirga::embedTopZ(mBaseZ, deck thickness) as this build's card loop actually used it
+    // (the SAME value Deck::mShaftEmbedTopZ carries to the render pass - the view outlines cells here, not at
+    // mBaseZ, since embedTopZ is where the stack itself now starts). 8e-b PROFILE SKEW (2026-09-06): mWindParams/
+    // mBaseAglM replace the old single mWindBase vector - the emitter's cardGeom calls now integrate the wind
+    // PROFILE (SSVirga::profileSkewM) rather than sample one altitude, so the view needs the same (params,
+    // baseAgl) pair to reconstruct a card's own chord, not a single vector; mFallSpeed is unchanged, the curve-
+    // resolved active preset fall speed the emitter's own profileSkewM calls used this build. A snapshot, not a
+    // value the view re-derives, so V4's drawn skew polyline can never disagree with the geometry it is
+    // describing. Reset to default (mActive false, empty mCells) at the top of every update() and by clear(), so
+    // an early-out frame (feature off, no asset) never leaves a stale snapshot behind either.
     struct SSVirgaDebug
     {
         bool mActive = false;
         F32 mR2 = 0.f;
         F32 mGroundZ = 0.f;
         F32 mBaseZ = 0.f;
+        F32 mEmbedTopZ = 0.f;
+        SSWindProfile::Params mWindParams;
+        F32 mBaseAglM = 0.f;
+        F32 mFallSpeed = 0.f;
         std::vector<SSVirgaDebugCell> mCells;
     };
     const SSVirgaDebug& virgaDebug() const { return mVirgaDebug; }
 
     // <SS:Nexii> The convection noise map's gate for the weather. Precipitation asks the deck it falls from two questions about a point of the sky: how much cloud is over it (x, a hole in the map reads zero and takes the rain with it) and how tower-like the column is (y, which tweaks the intensity toward the dense parts). The point handed in must already be the WIND-TILTED one - where a drop falling at the weather's angle entered the deck, not where it lands - because only the caller knows the fall; this side supplies everything else, drift included. A deck with no map, or whose map has not read back yet, answers neutral: everything present, nothing tower-like. [interaction: precipitation]
-    LLVector2 precipNoiseAt(const LLVector3& pos_agent) const;
+    // <SS:Nexii> 8a item 4 (doc/atmo_magic_phase8_show.md section 3): x presence, y tower (unchanged), z the
+    // squall line-band's wall term at this point (SSStormCouple::Sample::lineWall) - dropRateAt and the spawner
+    // both fold z into their intensity with max() so the wall's own precipitation is never held back by the
+    // authored curve's own ramp. Was LLVector2 before 8a; every caller updated.
+    LLVector3 precipNoiseAt(const LLVector3& pos_agent) const;
 
     // The weather deck's base height, metres, for the same tilt maths - how far above the
     // ground a drop's column reaches.
@@ -184,22 +202,64 @@ private:
 
         // <SS:Nexii> Distant rain shaft phase (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): this Puff is
         // a virga card, not a puff body - emitted into the SAME mPuffs vector so the existing farthest-first sort
-        // interleaves shafts with puffs correctly, flagged on the spare b vertex channel (render() writes b=1)
+        // interleaves shafts with puffs correctly, flagged on the b vertex channel (render() writes
+        // b = 0.5 + 0.5 * mDrive for a shaft, mPhase * 0.49 for an ordinary puff (S2, see mPhase below) - phase 8e
+        // item 4, DRIVE REACHES THE FRAGMENT; the branch test vary_color.b > 0.5 is unchanged since a qualifying
+        // cell's drive is always > 0 and mPhase * 0.49 never reaches it)
         // rather than a second draw pass. mHalfHeightM is the card's vertical half-extent (<= SSVirga::CARD_MAX_M
-        // * 0.5) - render() billboards a shaft about the world Z axis (vertical, camera-facing in yaw only) at
-        // this half-height instead of the puff's camera-facing disc at mRadius; mRadius is still the card's
-        // horizontal half-width (SSVirga::halfWidthM).
+        // * 0.5) - render() billboards a shaft about a vertical axis, camera-facing in yaw only, at this
+        // half-height instead of the puff's camera-facing disc at mRadius; mRadius is still the card's horizontal
+        // half-width (SSVirga::halfWidthM). F7 (2026-09-06 review), stale claim corrected: that billboard axis is
+        // NOT purely "the world Z axis" any more - phase 8e's wind skew (mShearXY below) leans it sideways by half
+        // the card's own top-relative-to-bottom shear, so the card's height axis tilts with the wind rather than
+        // staying strictly vertical.
         bool mShaft = false;
         F32 mHalfHeightM = 0.f;
+
+        // <SS:Nexii> Phase 8e item 4 (doc/atmo_magic_phase8_show.md section 3b): the SAME SSVirga::drive the
+        // cell qualified with, carried through so the fragment stage can shape a shaft's body floor/streak
+        // amplitude/evaporation mask by intensity - a light-rain curtain a few eroded filaments, a heavy one a
+        // near-solid wall. render() encodes it on the shaft-only vertex colour b channel (b = 0.5 + 0.5 * mDrive)
+        // rather than a second uniform; 0 for every ordinary puff (mShaft false), unread there.
+        F32 mDrive = 0.f;
+
+        // <SS:Nexii> S2 (doc/atmo_magic_flow_field.md section 2): the per-puff advected-detail PHASE, hashed once
+        // by buildDeck from (cell x, cell y, sub) same as every other per-sub-puff draw - never camera or build
+        // time (I3/I5) - so it is a constant for this puff's whole life, not an accumulator. Ordinary puffs only
+        // (mShaft false); render() spends it on the low half of the vertex colour's b channel (b = mPhase * 0.49,
+        // see mDrive above for the shaft's own use of that same channel and ssVolCloudF.glsl's puff branch for the
+        // decode). 0 for shafts and the sheet, both of which ignore this field entirely.
+        F32 mPhase = 0.f;
+
+        // <SS:Nexii> [interaction: ssdeckflowcore.h] The per-puff advected-detail SWIRL, in [-1, 1] - the fifth
+        // build report's "not handling the different angles ... picking from a few different presets which dont
+        // mash well together or look in unison". SSDeckFlow::swirlUnit read at this puff's own AIR-frame position:
+        // a value-noise FIELD on a 780 m lattice, not a per-puff hash, so the angle varies continuously across the
+        // deck AND neighbouring puffs agree (correlation 0.82 at one 260 m cell, -0.003 at 3120 m; an independent
+        // per-puff hash measures -0.006 at both - unit_deckflow.cpp swirl_neighbour_correlation). The fragment
+        // stage spends it as a bounded rotation of the billow's outflow azimuth inside the card's own plane
+        // (SSDeckFlow::SWIRL_MAX_RAD, under a quarter turn, so outward never becomes inward). Carried on the
+        // texcoord PAYLOAD channel (S1's own encode: texcoord = corner + 0.45 * payload), not on a colour channel,
+        // because every colour channel is spent and the payload is exactly what S1 built this for. 0 for shafts
+        // and the sheet, both of which never reach the billow block.
+        F32 mFlowSwirl = 0.f;
+
+        // <SS:Nexii> Phase 8e, 8e-b PROFILE SKEW (ssvirgacore.h CardGeom::shearXY, doc/atmo_magic_phase8_show.md
+        // section 3b): the card's TOP-relative-to-BOTTOM wind skew - profileSkewM(params, baseAglM, aglTop,
+        // fallSpeed) minus the same at aglBot - turning the card into a parallelogram whose top and bottom edges
+        // both carry the wind-profile-integrated fall angle, rather than a flat vertical pillar. Zero for an
+        // ordinary puff (only the shaft branch of buildDeck sets
+        // it). render() spends it on the shaft billboard's `up` vector so the quad's slant matches the skew; it is
+        // NOT added to mPosAgent - mPosAgent already carries the card's own CENTRE skew (CardGeom::centreXY), and
+        // this is the additional lean across the card's own height on top of that.
+        LLVector2 mShearXY;
     };
 
     // <SS:Nexii> One resolved cloud deck. The primary storm field and the optional under deck are the same renderer run twice - each with its own resolved field state, textures, puff set and uniforms - so a sky-themed build can hang a second layer at the bottom of the build while the weather-driven deck stays overhead. Drawn far deck first; within a deck the puffs stay depth-sorted, and decks separated by hundreds of metres hide the cross-deck ordering.
     struct Deck
     {
-        // <SS:Nexii> The deck's bodies: the builder's cell-placed puffs, plus - when
-        // SSAtmoCloudTessellation is on - the smaller refinement children hung on the ones near
-        // the eye. Children are ordinary Puffs: same sort, same budget, same fragment carve, so
-        // nothing downstream distinguishes them.
+        // <SS:Nexii> The deck's bodies: the builder's cell-placed puffs (fine tier and macro tier alike - ordinary
+        // Puffs, same sort, same budget, same fragment carve, so nothing downstream distinguishes them).
         std::vector<Puff> mPuffs;
 
         LLUUID mTexture;
@@ -283,19 +343,53 @@ private:
         // shifted by S alone) and foldFrameKey no longer folds this table.
         SSDeckFrame::ShearTable mShearTable;
 
+        // <SS:Nexii> F2 (2026-09-06 review): the embedded virga stack's top Z (SSVirga::embedTopZ(mBaseZ,
+        // mThicknessM)) as this build's shaft-emission loop actually used it - render() uploads (mBaseZ, this) as
+        // ss_shaft_embed for the WEATHER deck's pass only, so the fragment stage's per-pixel embed fade
+        // (ss_virga_embedAlpha) reads the exact span the CPU built cards against rather than a second, independent
+        // embedTopZ() call. Reset to 0 at the top of every buildDeck() call and only set inside the shafts_active
+        // block, so a deck whose shaft path did not run this build never carries a stale span forward.
+        F32 mShaftEmbedTopZ = 0.f;
+
+        // <SS:Nexii> Phase 8e item 2 (doc/atmo_magic_phase8_show.md section 3b): the ground reference Z the same
+        // build's shaft-emission loop resolved (SSAtmoEnvApplier::windProfileGroundZ, the SAME value shaft_ground_z
+        // holds there) - render() uploads (mBaseZ, mShaftEmbedTopZ, this, 0) as ss_shaft_embed for the WEATHER
+        // deck's pass only, so the fragment stage's curtain-height fraction h reads the SAME [ground, base] span
+        // the CPU built cards against rather than a second, independent ground-Z resolve. Reset to 0 at the top of
+        // every buildDeck() call and only set inside the shafts_active block, same rule as mShaftEmbedTopZ.
+        F32 mShaftGroundZ = 0.f;
+
         // <SS:Nexii> The base veil: one soft sheet inset into the deck's floor, drawn under the puffs so the field reads with its gaps filled instead of as balls over empty sky. Same texture as the puffs, sampled aperiodically in the shader; the form here is the shade a puff at the deck's floor would wear - the same formulas as the puff loop, lit by the same vertex-stage sky light - so sheet and lowest puffs share one lighting. mSheetZ is the sheet's altitude (the inset), mSheetAlpha its ceiling.
         F32 mSheetForm = 1.f;
         F32 mSheetZ = 0.f;
         F32 mSheetAlpha = 0.f;
 
-        // The veil IS the deck's floor, so it is buried under the whole column and takes the gloom gradient's dark end whole - see Puff::mBuried.
-        // <SS:Nexii> F12: sourced from SSVirga::BURIED (ssvirgacore.h) rather than a second hardcoded 1.f - a
-        // curtain is the deck's underside like the veil (ssvirgacore.h's own comment on BURIED), so the two are
-        // now LOCKSTEP by construction, not by a comment claiming two independent literals happen to agree.
-        static constexpr F32 SHEET_BURIED = SSVirga::BURIED;
+        // <SS:Nexii> D2 (fourth build report: "the base veil is unnaturally dark near the camera compared to the puffs beside it"). THIS CONSTANT WAS THE MECHANISM. It rides the vertex colour's g
+        // channel (render()'s color4f) and the fragment stage grades the deck's storm gloom over it - ssVolCloudF.glsl's `float gloom = mix(1.0, ss_gloom, vary_color.g)` - so at 1.0 the veil took the
+        // gloom at FULL strength, the extreme of a ramp no puff ever reaches: a puff's mBuried is (cellHeight - up)/cellHeight eased to 0.5 at the rim (SSDeckShade::buried), so only a puff sitting
+        // exactly on the deck floor with no rim ease is ever at 1. Measured in V:/Scratch/atmo/tests/unit_deck_radiance.cpp: at ss_gloom 0.40 the veil came out 37% darker than the low puff beside
+        // it on identical light at the same point, and at 0.15 it came out 69% darker - and the veil is a flat plane, so that gap is most of the frame wherever the eye is under the deck.
+        // It is VEIL_DEPTH now, the SAME representative depth SSDeckShade::veilForm already computes the veil's own form term at (0.65 of a layer above and below a point at the floor). That is the
+        // point of the change: the veil stands for the deck's underside at ONE representative depth, and its two structural terms - the form it wears and the gloom it is graded over - have to agree
+        // about what that depth is. They did not.
+        // The old LOCKSTEP with SSVirga::BURIED is DELIBERATELY BROKEN, not overlooked. A virga curtain hangs BELOW the deck entirely, with the whole column over it, so 1.0 is the honest answer
+        // there and ssvirgacore.h keeps it; the veil sits INSIDE the deck's own floor band (mSheetZ is base + 46..106 m). The two were made equal by an F12 fixup on the argument that "a curtain is
+        // the deck's underside like the veil" - which is true of WHERE they hang and false of HOW MUCH cloud stands over them, and the gloom gradient reads the second.
+        static constexpr F32 SHEET_BURIED = SSDeckShade::VEIL_DEPTH;
 
         // The deck's storm gloom, kept for the render pass's ss_gloom uniform - per deck, not per puff, so it never belonged in the vertex colour.
         F32 mGloom = 1.f;
+
+        // <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: THE BOIL CLOCK's two accumulators, per deck because both
+        // rates are per deck (mDriftRate, mChurn). F64 by PLAN.md lesson 13 - these are summed every frame for as
+        // long as the viewer is open - and folded to their own periods by SSDeckBoil::wrapLaps / wrapFallM only at
+        // the uniform boundary, so the F32 the shader sees keeps its full mantissa forever. They replace the
+        // `ss_time * rate` products ssVolCloudF.glsl used to compute; see SSDeckBoil's header for why that shape
+        // was the once-a-second step the fourth build report describes. Advanced once per update() for every deck,
+        // built or not, so a deck that drops under the coverage floor for a few seconds does not resume on a stale
+        // phase. Animation only - it advances a texture lookup and positions nothing (PLAN.md lesson 31).
+        F64 mBoilLaps = 0.0;
+        F64 mFallM = 0.0;
 
         F32 mMeanDistSq = 0.f;
 
@@ -369,6 +463,12 @@ private:
     SSStormCells::Interest mStormInterest;
     S32 mStormCellCount = 0;
     SSStormCouple::CellUniform mStormCells[SSStormCouple::MAX_CELLS];
+
+    // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): the active squall line's deck coupling for
+    // THIS build, fetched once per buildDeck call via SSStormCells::fillLineBand right next to mStormCells above -
+    // class-level for the same reason (precipNoiseAt and the ground-shadow bake read it outside the Deck that
+    // produced it). Default LineBand() (strength 0) reads as "no line" by the core's own invariant.
+    SSStormCouple::LineBand mLineBand;
 
     // <SS:Nexii> Phase 4 (doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud drift"): the hero's
     // storm-local frame shift inputs for THIS build - class-level like mStormCells/mStormCellCount above (not

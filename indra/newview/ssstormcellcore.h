@@ -73,6 +73,8 @@ namespace SSStormCell
     constexpr F32 RADIUS_MIN_M      = 900.f;   // influence radius at maturity for intensity 0
     constexpr F32 RADIUS_MAX_M      = 2200.f;  // ... for intensity 1
     constexpr F32 SPAWN_THRESHOLD   = 0.245f;  // gate: potential * convection * moisture * (SHEAR_SCORE_BASE + (1 - SHEAR_SCORE_BASE) * shear) must clear this
+    constexpr F32 INTENSITY_FULL_SCORE = 0.65f; // 7f calibration: a gate score at or above this is a full-intensity storm (was 1.0 - a typical severe score of 0.3-0.5 mapped to intensity 0.0-0.15, so every storm was weak and no meso gate could pass)
+    constexpr F32 HERO_INTENSITY_MIN = 0.7f;   // 7f: the composed hero's intensity floor - the one staged cell is a strong one (the show principle); background cells keep the gate's own figure
     constexpr F32 SHEAR_SCORE_BASE  = 0.0f;    // gate score shear term floor at mShearNoise == 0; the term is 1 at mShearNoise == 1 regardless (kept from the original 0.5+0.5*shear shape)
     constexpr F32 SUPERCELL_ROT_MIN = 0.501f;  // |rotation| * shear must clear this for a supercell (and Allow Supercells)
     constexpr F32 ANTICYCLONIC_ODDS = 0.03f;   // share of candidates whose rotation sign flips
@@ -80,10 +82,13 @@ namespace SSStormCell
     constexpr F32 DEVIATION_MAX_DEG = 30.f;    // ... to this much, scaled by |rotation|; sign follows the rotation sign
     constexpr F32 STORM_SPEED_FRAC  = 0.75f;   // supercells move slower than the anvil-level flow
     constexpr F32 CELL_SPEED_FRAC   = 0.85f;   // ordinary cells too, a little less so
-    constexpr F32 HERO_SPAWN_MIN_M  = 1500.f;  // the hero is composed this far up the storm-motion vector from the anchor...
-    constexpr F32 HERO_SPAWN_MAX_M  = 2000.f;
-    constexpr F32 HERO_PASS_MIN_M   = 500.f;   // ... and passes the anchor at this closest approach
-    constexpr F32 HERO_PASS_MAX_M   = 1000.f;
+    constexpr F32 HERO_SPAWN_MIN_M  = 200.f;   // 7f: the hero's spawn distance up the motion vector is now DERIVED (speed * closest-approach lead) and clamped to this range
+    constexpr F32 HERO_SPAWN_MAX_M  = 30000.f; // 7f calibration: a 13.5 m/s storm with a 4200 s life needs 28 km to reach the anchor at mid-life; the 2 km cap made every hero arrive two minutes old (age01 0.07 over 2400 draws) and a 12 km cap still left the long-lived half arriving at 0.21, before the meso window opens. The hero is cull-exempt, so it may be born outside the 12 km field and travel in
+    constexpr F32 HERO_PASS_MIN_M   = 0.f;     // 7f (user): the closest approach ranges 0..2 km, skewed toward 0 - the show passes over or beside the region, not always far away
+    constexpr F32 HERO_PASS_MAX_M   = 2000.f;
+    constexpr F32 HERO_PASS_SKEW    = 2.74f;   // pass = HERO_PASS_MAX_M * u^HERO_PASS_SKEW: median 300 m (0.15^(1/2.74) = 0.5); quartiles 45 m and 909 m (a one-parameter power law fixes the median, the quartiles follow)
+    constexpr F32 HERO_CLOSEST_AGE01 = 0.5f;   // the closest approach happens at this age (mature) unless a spawn clamp bites: a fast wind arrives earlier (30 km cap), a near-calm one (< 0.1 m/s) later
+    constexpr F32 LIFE_ENUM_MARGIN  = 1.05f;   // 8a F6: resolveActive enumerates epochs back to LIFE_MAX_S * this - covers a line member's +LINE_JITTER_AGE01 (4%) lifetime
     constexpr F32 HERO_MIN_LIFE_S   = 1500.f;  // a hero must live long enough to reach and pass the anchor; shorter candidates are not hero-eligible
 
     struct Vec2
@@ -204,6 +209,9 @@ namespace SSStormCell
         F32 mSuppressRadiusM = 0.f;
         S32 mMemberCount = 0;
         Candidate mMembers[LINE_MEMBERS_CAP];
+        bool mForced = false;         // 8a: an AUTHORED line (SSSquall::forcedLine) - the shell's band fill prefers it over any hashed line (audit F2)
+        bool mHasFloor = false;       // 8a F1: when true, every member's live weather is raised through applyWeatherFloor(mWeatherFloor) before gate() - the same floor an authored pin gets; without it the generator's deliberately dry pre-cue sky gated every member out and the authored wall never spawned
+        WeatherAtBirth mWeatherFloor;
     };
 
     // <SS:Nexii> SCHEDULER: the (at most one) authored/forced candidate the shell resolved this frame from the
@@ -239,6 +247,13 @@ namespace SSStormCell
     struct NoForced
     {
         ForcedDesc operator()() const { return ForcedDesc(); }
+    };
+    // 7f: the hero-contact hook - given the hero's ActiveCell (pre-composition) and the closest-approach age, the
+    // FUNNEL contact offset from the cell centre at that age (the shell computes SSVortex::childVortex slot 0's
+    // offsetFrac * radiusAt(age) * (cos, sin)(offsetAngle); this core cannot see the vortex core). Default: zero.
+    struct NoHeroContact
+    {
+        Vec2 operator()(const ActiveCell&, F32) const { return Vec2(); }
     };
 
     // Point-to-segment distance in the plane: the segment is [origin - dir*halfLenM, origin + dir*halfLenM] with dir
@@ -404,7 +419,7 @@ namespace SSStormCell
         Gate g;
         const F32 score = gateScore(c, w);
         g.mSpawn = score >= SPAWN_THRESHOLD;
-        g.mIntensity = g.mSpawn ? smoothstep(SPAWN_THRESHOLD, 1.f, score) : 0.f;
+        g.mIntensity = g.mSpawn ? smoothstep(SPAWN_THRESHOLD, INTENSITY_FULL_SCORE, score) : 0.f; // 7f calibration, see INTENSITY_FULL_SCORE
         g.mSupercell = g.mSpawn && w.mAllowSupercells && rotationTerm(c, w) >= SUPERCELL_ROT_MIN;
         g.mTornadoEligible = g.mSupercell && w.mAllowTornadoes && c.mLifetimeS >= HERO_MIN_LIFE_S;
         return g;
@@ -471,30 +486,53 @@ namespace SSStormCell
         return m;
     }
 
-    // The staged flyby (design section 2, hero cell): given the weather domain's anchor (region centre, world) and the
-    // hero's storm motion, place the origin UP the motion vector by spawn = lerp(HERO_SPAWN_MIN_M, HERO_SPAWN_MAX_M,
-    // mSpawnFrac) and sideways by pass = lerp(HERO_PASS_MIN_M, HERO_PASS_MAX_M, mPassFrac) * mPassSide along the
-    // motion's right-hand perpendicular, so the straight-line path passes the anchor at exactly `pass`. Closest point =
-    // anchor + perp * pass * side; closest time = birth + spawn / |motion|. Invariants: |origin - anchor| ==
-    // sqrt(spawn^2 + pass^2) within 1e-2; mClosestDistM == pass within 1e-2 and in [HERO_PASS_MIN_M, HERO_PASS_MAX_M];
-    // the centre at mClosestTime equals mClosest within 1e-2; dot(origin - anchor, motion) < 0 (upwind); if |motion|
-    // is 0 the hero degenerates to origin = anchor + perp-less offset along +y and mClosestTime = birth (no NaN).
-    inline Hero composeHero(const Candidate& c, const Vec2& anchor, const Vec2& stormMotion)
+    // 7f HERO COMPOSITION (user, 2026-09-06: "0 m..2 km, skewed toward 0, 50% within ~300 m; and stop dying far upwind").
+    // The hero's straight-line path is composed so that its FUNNEL CONTACT point (cell centre + contactOffsetM, the
+    // slot-0 vortex's offset at the closest-approach age as the shell computes it through SSVortex; zero when unknown)
+    // passes the anchor at pass = HERO_PASS_MAX_M * mPassFrac^HERO_PASS_SKEW metres along the motion's right-hand
+    // perpendicular (side from mPassSide), at the age HERO_CLOSEST_AGE01 of the hero's life: closestTime = birth +
+    // HERO_CLOSEST_AGE01 * lifetime, spawn = clamp(|motion| * (closestTime - birth), HERO_SPAWN_MIN_M, HERO_SPAWN_MAX_M)
+    // (a slow wind spawns the hero nearer so it still arrives mature; when the clamp bites, closestTime is recomputed
+    // from the clamped spawn so the two stay consistent), origin = closest - contactOffset - unitMotion * spawn.
+    // Invariants: mClosestDistM == pass within 1e-2 and in [0, HERO_PASS_MAX_M]; over 10000 uniform mPassFrac values the
+    // median pass is within 30 m of 300 m; centreAt(origin, motion, birth, closestTime) + contactOffset == mClosest
+    // within F32 reach (0.25 m at a 256 km anchor, where one ulp is 0.03 m); closestTime - birth == HERO_CLOSEST_AGE01 *
+    // lifetime while neither spawn clamp bites, EARLIER when the high clamp (HERO_SPAWN_MAX_M) bites (fast wind, long
+    // life) and LATER - possibly past death - when the low clamp (HERO_SPAWN_MIN_M) bites (speed below ~0.1 m/s);
+    // dot(origin + contactOffset - anchor, motion) <= 0 (upwind); |motion| == 0 degenerates to origin = closest -
+    // contactOffset + spawn metres north with closestTime = birth (no NaN); pure; bit-identical for equal inputs.
+    // 7f: the closest-approach age composeHero will actually produce for this candidate at this speed - HERO_CLOSEST_AGE01
+    // unless the spawn clamp bites (spawn = clamp(speed * HERO_CLOSEST_AGE01 * lifetime, HERO_SPAWN_MIN_M, HERO_SPAWN_MAX_M),
+    // closest = birth + spawn / speed). The shell's hero-contact hook and the vortex Parent must both use THIS age, never
+    // the nominal constant (lesson 9). Invariants: == (composeHero(...).mClosestTime - birth) / lifetime within 1e-6;
+    // <= HERO_CLOSEST_AGE01 whenever the low spawn clamp does not bite (it can exceed it, up to 1, at speeds below
+    // ~0.1 m/s where the 200 m minimum spawn takes longer than half a life); 0 for zero speed; pure.
+    inline F32 heroClosestAge01(const Candidate& c, F32 speed)
+    {
+        const F32 life = llmax(c.mLifetimeS, 1e-6f);
+        if (speed < 1e-6f) return 0.f;
+        const F64 lead = (F64)HERO_CLOSEST_AGE01 * (F64)life;
+        const F32 spawn = llclamp((F32)((F64)speed * lead), HERO_SPAWN_MIN_M, HERO_SPAWN_MAX_M);
+        return llclamp((F32)((F64)(spawn / speed) / (F64)life), 0.f, 1.f);
+    }
+
+    inline Hero composeHero(const Candidate& c, const Vec2& anchor, const Vec2& stormMotion, const Vec2& contactOffsetM = Vec2())
     {
         Hero h;
         h.mMotion = stormMotion;
-        const F32 spawn = std::lerp(HERO_SPAWN_MIN_M, HERO_SPAWN_MAX_M, llclamp(c.mSpawnFrac, 0.f, 1.f));
-        const F32 pass = std::lerp(HERO_PASS_MIN_M, HERO_PASS_MAX_M, llclamp(c.mPassFrac, 0.f, 1.f));
+        const F32 u = llclamp(c.mPassFrac, 0.f, 1.f);
+        const F32 pass = HERO_PASS_MAX_M * std::pow(u, HERO_PASS_SKEW);
         const F32 side = (c.mPassSide < 0.f) ? -1.f : 1.f;
         const F32 speed = std::sqrt(stormMotion.x * stormMotion.x + stormMotion.y * stormMotion.y);
+        const F64 lead = (F64)HERO_CLOSEST_AGE01 * (F64)llmax(c.mLifetimeS, 0.f);
         if (speed < 1e-6f)
         {
-            // Degenerate: no motion direction, so no perpendicular. Park the hero spawn metres north of the anchor; it never
-            // approaches, so the closest point is where it sits and the closest time is birth.
-            h.mOrigin.x = anchor.x;
-            h.mOrigin.y = anchor.y + spawn;
-            h.mClosest = h.mOrigin;
-            h.mClosestDistM = spawn;
+            // Degenerate: no motion direction, so no perpendicular. Park the hero HERO_SPAWN_MIN_M north of the anchor; it
+            // never approaches, so the closest point is where it sits and the closest time is birth.
+            h.mClosest = anchor;
+            h.mOrigin.x = anchor.x - contactOffsetM.x;
+            h.mOrigin.y = anchor.y - contactOffsetM.y + HERO_SPAWN_MIN_M;
+            h.mClosestDistM = 0.f;
             h.mClosestTime = c.mBirthTime;
             return h;
         }
@@ -502,12 +540,13 @@ namespace SSStormCell
         const F32 dy = stormMotion.y / speed;
         const F32 px = dy;   // right-hand perpendicular of the motion: (my, -mx) normalised
         const F32 py = -dx;
+        F32 spawn = llclamp((F32)((F64)speed * lead), HERO_SPAWN_MIN_M, HERO_SPAWN_MAX_M);
         h.mClosest.x = anchor.x + px * pass * side;
         h.mClosest.y = anchor.y + py * pass * side;
-        h.mOrigin.x = h.mClosest.x - dx * spawn;
-        h.mOrigin.y = h.mClosest.y - dy * spawn;
+        h.mOrigin.x = h.mClosest.x - contactOffsetM.x - dx * spawn;
+        h.mOrigin.y = h.mClosest.y - contactOffsetM.y - dy * spawn;
         h.mClosestDistM = pass;
-        h.mClosestTime = c.mBirthTime + (F64)(spawn / speed);
+        h.mClosestTime = c.mBirthTime + (F64)(spawn / speed); // == birth + lead unless the spawn clamp bit
         return h;
     }
 
@@ -590,35 +629,11 @@ namespace SSStormCell
         return (F32)(t * t * (3.0 - 2.0 * t));
     }
 
-    // <SS:Nexii> S3: the preview-override day-phase mapping, pulled into the core so it is provably pure: phase(t) =
-    // frac(previewPhase + (t - refTime) / dayLengthS). The shell must pass refTime as its memo bucket's OWN start
-    // time (bucket(now, MEMO_BUCKET_S) * MEMO_BUCKET_S), never mNow itself - otherwise every frame's differing "now"
-    // would perturb the memoised WeatherAtBirth even though the memo key (candidate id) did not change. Invariants:
-    // previewPhaseAt(p, t, t, d) == frac(p) for any d > 0; result in [0, 1); continuous in t; 0 when dayLengthS <= 0.
-    inline F64 previewPhaseAt(F64 previewPhase, F64 refTime, F64 t, F64 dayLengthS)
-    {
-        if (dayLengthS <= 0.0)
-        {
-            return 0.0;
-        }
-        F64 p = fmod(previewPhase + (t - refTime) / dayLengthS, 1.0);
-        if (p < 0.0) p += 1.0;
-        return p;
-    }
-
-    // 7b F3 (lesson 24): the INVERSE of previewPhaseAt - the wall-clock instant nearest nearT whose preview phase is
-    // `phase`: t0 = refTime + (frac(phase) - frac(previewPhase)) * dayLengthS, then plus the whole number of day lengths
-    // that lands nearest nearT. Invariants: previewPhaseAt(previewPhase, refTime, previewWallTimeAt(...), d) == frac(phase)
-    // within 1e-9 for d >= 60; |result - nearT| <= 0.5 * d; returns nearT when d <= 0; pure.
-    inline F64 previewWallTimeAt(F64 previewPhase, F64 refTime, F64 phase, F64 dayLengthS, F64 nearT)
-    {
-        if (dayLengthS <= 0.0) return nearT;
-        F64 p = std::fmod(phase, 1.0); if (p < 0.0) p += 1.0;
-        F64 q = std::fmod(previewPhase, 1.0); if (q < 0.0) q += 1.0;
-        const F64 t0 = refTime + (p - q) * dayLengthS;
-        const F64 kk = std::round((nearT - t0) / dayLengthS);
-        return t0 + kk * dayLengthS;
-    }
+    // <SS:Nexii> Phase 8 section 2 (one clock, user 2026-09-06): previewPhaseAt/previewWallTimeAt REMOVED - the
+    // preview no longer substitutes a second day-phase map; it substitutes the CLOCK the one map (SSDayCycle::
+    // phaseAt/wallTimeAtPhase, ssdaycyclecore.h, called with offset 0 since cycle time already has the track's day
+    // offset subtracted) is fed. See SSStormCells::update()'s mCycleRefS/mWallRefS latch (ssstormcells.cpp) for the
+    // shell-side substitution and doc/atmo_magic_phase8_show.md section 2 for the design. Superseded 7b F3/7d.
 
     // Lattice cells whose centres lie within radiusM of centre (world), written as (lx, ly) pairs up to cap; returns the
     // count that WOULD be written (may exceed cap, in which case only cap pairs are). Deterministic order: rows then
@@ -696,7 +711,10 @@ namespace SSStormCell
     // mMembers[0..mMemberCount) are gated and emitted FIRST (same alive/weatherAtBirth/gate/diag/spawn treatment as
     // an ordinary candidate, tagged with mLineId), and any of that epoch's DISCRETE lattice candidates within
     // mSuppressRadiusM of the line segment [mOrigin +- mDirection*mHalfLengthM] (distanceToSegment) are skipped -
-    // the line replaces them, it does not add to them; discrete candidates elsewhere in the same epoch are
+    // the line replaces them, it does not add to them; STATED LATENT (8a audit): an authored line's members are emitted
+    // inside their own epoch's block, after earlier epochs' discrete draws, so under cap pressure they can be truncated
+    // where the authored pin (emitted first) cannot - at ACTIVE_CAP 512 against a severe-day population of 20-40 this
+    // is unreachable; if the cap ever tightens, emit the forced line's members before the epoch loop; discrete candidates elsewhere in the same epoch are
     // untouched. `forced()` is called ONCE per resolveActive call (not per epoch - an authored cue is a single
     // pinned candidate, not an epoch-keyed lattice draw): when it returns mPinned, that ONE candidate is gated with
     // applyWeatherFloor(weatherAtBirth(c), mWeatherFloor) in place of the raw weatherAtBirth(c) - the floor can
@@ -707,11 +725,12 @@ namespace SSStormCell
     // and the discrete loop's draw for the same cell/epoch share the SAME id - comparing ids is enough, no lx/ly/
     // epoch bookkeeping needed). Both hooks default to no-ops (NoLineFn/NoForced) so every existing caller (the
     // shipped shell before this change, every scenario_*_two_clients.cpp test) compiles and behaves unchanged.
-    template <class WeatherFn, class WindFn, class DiagFn = NoDiag, class LineFn = NoLineFn, class ForcedFn = NoForced>
+    template <class WeatherFn, class WindFn, class DiagFn = NoDiag, class LineFn = NoLineFn, class ForcedFn = NoForced, class HeroContactFn = NoHeroContact>
     inline S32 resolveActive(U32 seed, F64 now, const Vec2& anchor, F32 radiusM,
                               WeatherFn weatherAtBirth, WindFn anvilWindAtBirth,
                               ActiveCell* out, S32 cap, Hero* heroOut, S32* heroIndexOut,
-                              DiagFn diag = DiagFn(), LineFn lineAtEpoch = LineFn(), ForcedFn forced = ForcedFn())
+                              DiagFn diag = DiagFn(), LineFn lineAtEpoch = LineFn(), ForcedFn forced = ForcedFn(),
+                              HeroContactFn heroContact = HeroContactFn())
     {
         if (heroOut) *heroOut = Hero();
         if (heroIndexOut) *heroIndexOut = -1;
@@ -728,7 +747,9 @@ namespace SSStormCell
         S32 latticeCount = enumerateLattice(anchor, radiusM, lx, ly, kLatticeEnumCap);
         if (latticeCount > kLatticeEnumCap) latticeCount = kLatticeEnumCap;
 
-        const S64 epochFirst = epochOf(now - (F64)LIFE_MAX_S);
+        // 8a audit F6: reach back LIFE_MAX_S plus the line members' +4% lifetime jitter (LIFE_ENUM_MARGIN), or an
+        // authored line (lifetime exactly LIFE_MAX_S) loses its positive-jitter members' last ~170 s for ~9% of cues.
+        const S64 epochFirst = epochOf(now - (F64)LIFE_MAX_S * (F64)LIFE_ENUM_MARGIN);
         const S64 epochLast = epochOf(now);
 
         const ForcedDesc fd = forced();
@@ -760,7 +781,10 @@ namespace SSStormCell
             cell.mWeather = w;
             cell.mGate = g;
             cell.mOrigin = c.mOriginXY;
-            cell.mMotion = stormMotion(windAnvil, c.mRotation, g.mSupercell);
+            // 8a ladder finding: a LINE member rides IN the line - its motion is the line's own (rotation 0, no supercell
+            // deviation), so the embedded supercell keeps its KIND (the vortex gate reads mGate/mRotation) but not the
+            // 20-30 degree walk-out that carried it 3.8 km off the wall by the cue. Discrete cells deviate as before.
+            cell.mMotion = (lineId != 0) ? stormMotion(windAnvil, 0.f, false) : stormMotion(windAnvil, c.mRotation, g.mSupercell);
             cell.mLineId = lineId;
             cell.mIsForced = isForced;
             cell.mForcedKind = isForced ? fd.mKind : 0;
@@ -787,7 +811,9 @@ namespace SSStormCell
                 {
                     continue;
                 }
-                tryEmit(c, weatherAtBirth(c), line.mWindAnvil, line.mLineId, false);
+                // 8a F1: an authored line's members get its weather floor (like the authored pin); a hashed line's do not.
+                const WeatherAtBirth wm = line.mHasFloor ? applyWeatherFloor(weatherAtBirth(c), line.mWeatherFloor) : weatherAtBirth(c);
+                tryEmit(c, wm, line.mWindAnvil, line.mLineId, false);
             }
 
             for (S32 i = 0; i < latticeCount && n < cap; ++i)
@@ -820,6 +846,11 @@ namespace SSStormCell
         S32 heroIndex = -1;
         Hero forcedHero;
         bool heroIsForced = false;
+        // 7f F11: while any squall-line member is alive the LINE is the show - the spontaneous hero search below is
+        // skipped (a composed hero would otherwise be dragged to the anchor beside the wall, into the very band the
+        // line's suppression keeps clear). An authored (forced) hero still wins: the author asked for both.
+        bool lineAlive = false;
+        for (S32 i = 0; i < n; ++i) { if (out[i].mLineId != 0) { lineAlive = true; break; } }
         for (S32 i = 0; i < n; ++i)
         {
             if (!out[i].mIsForced)
@@ -836,7 +867,7 @@ namespace SSStormCell
                 heroIsForced = true;
             }
         }
-        if (heroIndex < 0)
+        if (heroIndex < 0 && !lineAlive)
         {
             for (S32 i = 0; i < n; ++i)
             {
@@ -844,7 +875,10 @@ namespace SSStormCell
                 // shear 1, life 1600 s) and would otherwise win this search and have composeHero overwrite its
                 // composeForced placement (measured: 5.5% of seeds put an authored supercell 9.8 km off its offset).
                 // An authored non-tornado is never the hero.
-                if (!out[i].mGate.mTornadoEligible || out[i].mIsForced)
+                // 7f: a squall-line member is never the hero either - its embedded supercell is tornado-eligible by
+                // construction, but composing it as the hero would tear it out of the line it exists to form (the line
+                // is its own staging; scenario_squall_line pins the members' rigid spacing).
+                if (!out[i].mGate.mTornadoEligible || out[i].mIsForced || out[i].mLineId != 0)
                 {
                     continue;
                 }
@@ -854,15 +888,32 @@ namespace SSStormCell
         }
         if (heroIndex >= 0)
         {
-            const Hero h = heroIsForced ? forcedHero : composeHero(out[heroIndex].mCandidate, anchor, out[heroIndex].mMotion);
+            // 7f calibration: the staged hero is a strong storm by construction - its intensity is floored to
+            // HERO_INTENSITY_MIN FIRST, before the contact hook, the composition, the lifecycle/radius pass below and
+            // the vortex Parent read it, so every consumer sees ONE intensity (lesson 9). mGate.mSpawn/mSupercell/
+            // mTornadoEligible are untouched - the floor raises the show, never the decision.
+            if (!heroIsForced)
+            {
+                out[heroIndex].mGate.mIntensity = llmax(out[heroIndex].mGate.mIntensity, HERO_INTENSITY_MIN);
+            }
+            // 7f: the hook receives the ACTUAL closest age (after the spawn clamp), the same figure the shell's vortex
+            // Parent derives from mClosestTime afterwards - never the nominal HERO_CLOSEST_AGE01.
+            const Vec2& heroMotion = out[heroIndex].mMotion;
+            const F32 heroSpeed = std::sqrt(heroMotion.x * heroMotion.x + heroMotion.y * heroMotion.y);
+            const F32 closestAge = heroClosestAge01(out[heroIndex].mCandidate, heroSpeed);
+            const Hero h = heroIsForced ? forcedHero
+                                        : composeHero(out[heroIndex].mCandidate, anchor, heroMotion,
+                                                      heroContact(out[heroIndex], closestAge)); // 7f: the FUNNEL passes close
             out[heroIndex].mOrigin = h.mOrigin;
             out[heroIndex].mMotion = h.mMotion;
             out[heroIndex].mIsHero = true;
             if (heroOut) *heroOut = h;
         }
 
-        // 7b (review #1): the hero and every forced pin are exempt from the anchor cull - the hero because composeHero
-        // placed it within HERO_SPAWN_MAX_M, a forced pin because it is authored (its offset may sit anywhere the
+        // 7b (review #1): the hero and every forced pin are exempt from the anchor cull - the hero is exempt BECAUSE
+        // it may be composed up to HERO_SPAWN_MAX_M (30 km) outside the field and must survive the cull to arrive
+        // (the exemption is load-bearing: without it, culling on distance would throw the hero away before it ever
+        // gets close enough to pass the anchor), a forced pin because it is authored (its offset may sit anywhere the
         // author put it, and its drift before/after the cue is the author's business, not the cull's).
         const F32 cullM = radiusM + RADIUS_MAX_M;
         S32 kept = 0;

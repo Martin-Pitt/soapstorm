@@ -596,6 +596,7 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
     // <SS:Nexii> The deck's convection noise map, asked about the column this cell's weather falls out of - where the rain COMES FROM, not where it lands. Wind tips the fall, so a drop landing here entered the deck's base a wind-drift upwind; sampling the tilted point keeps it raining on a spot right under a gap when wind carries the weather across it, and dries the spot the wind carried AWAY from. Presence gates the rate - a map hole takes its rain with it - and the tower weight tweaks intensity slightly toward the high, dense parts. Ground-risen weather never passes through the deck and is left alone. [interaction: SSVolCloud]
     F32 noise_presence = 1.f;
     F32 noise_tower = 0.f;
+    F32 noise_line_wall = 0.f; // 8a item 4: SSStormCouple::Sample::lineWall at the landing point, folded into p below
     if (!preset.risesFromGround())
     {
         SSVolCloud* vol = SSVolCloud::getInstance();
@@ -611,16 +612,23 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
                 const LLVector3 wind_h = windAt(hit);
                 const F32 fall_t = llmax(0.f, vol->precipBaseZ() - hit.mV[VZ])
                                  / llmax(0.1f, preset.mFallSpeed);
-                const LLVector2 gate = vol->precipNoiseAt(
+                const LLVector3 gate = vol->precipNoiseAt(
                     hit - LLVector3(wind_h.mV[VX], wind_h.mV[VY], 0.f) * fall_t);
                 noise_presence = gate.mV[VX];
                 noise_tower = gate.mV[VY];
+                noise_line_wall = gate.mV[VZ];
             }
         }
     }
 
-    const F32 p = powf(atmo->precipitation(), 1.4f)
-                * noise_presence * (0.85f + 0.30f * noise_tower);
+    // <SS:Nexii> 8a item 4 (doc/atmo_magic_phase8_show.md section 3, "line-driven precipitation"): SPAWNER call
+    // site - the squall line's wall term floors the intensity so the rain starts exactly where the wall is, even
+    // when the authored precip curve has not yet ramped at the cue. 8a audit F4: the floor is noise_line_wall *
+    // noise_presence, never the bare wall term - the wall is a purely geometric distance-to-segment field with no
+    // idea where the deck's own noise map has a hole, so an unguarded floor would rain out of a presence hole the
+    // rest of this expression already respects (review S1's "presence gates the rate" invariant, kept here too).
+    const F32 p = llmax(powf(atmo->precipitation(), 1.4f)
+                * noise_presence * (0.85f + 0.30f * noise_tower), noise_line_wall * noise_presence);
 
     const F32 mean_full = preset.mRate * spec.mRateScale * p * area_factor * env
                           * llclamp((F32)density, 0.1f, 3.f)
@@ -1329,9 +1337,13 @@ F32 SSPrecipSim::dropRateAt(const LLVector3& pos_agent)
                 const LLVector3 wind_h = windAt(hit);
                 const F32 fall_t = llmax(0.f, vol->precipBaseZ() - hit.mV[VZ])
                                  / llmax(0.1f, preset.mFallSpeed);
-                const LLVector2 gate = vol->precipNoiseAt(
+                const LLVector3 gate = vol->precipNoiseAt(
                     hit - LLVector3(wind_h.mV[VX], wind_h.mV[VY], 0.f) * fall_t);
-                p *= gate.mV[VX] * (0.85f + 0.30f * gate.mV[VY]);
+                // <SS:Nexii> 8a item 4 (doc/atmo_magic_phase8_show.md section 3): DROP-RATE call site - the same
+                // line-wall floor the spawner applies, so impacts/wetness/sound all start at the wall too. 8a audit
+                // F4: gate.mV[VZ] (the wall) is gated by gate.mV[VX] (presence) same as the spawner - no rain from
+                // a presence hole just because the wall's own geometry reaches it.
+                p = llmax(p * gate.mV[VX] * (0.85f + 0.30f * gate.mV[VY]), gate.mV[VZ] * gate.mV[VX]);
             }
         }
     }

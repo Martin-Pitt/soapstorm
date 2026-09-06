@@ -114,17 +114,20 @@ void SSAtmoSyncConsole::draw()
     else
     {
         const SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
-        // <SS:Nexii> S9 (phase-2b audit): SSStormCells::now() when it is driving, so this row is the SAME
-        // wall-clock instant the STORM CELLS section below actually resolved against, not a second, independently
-        // timed read of SSAtmoMagic::sharedTime() that could differ from it by a hair - the "compare row by row"
-        // promise this console makes wants one clock, not two close ones. Falls back to sharedTime() when the
-        // scheduler is not driving (no track/region/asset), same as before. [interaction: SSStormCells::now]
-        const F64 now = (SSStormCells::instanceExists() && SSStormCells::getInstance()->valid())
+        // <SS:Nexii> D4 (7e audit, 2026-09-06): SSStormCells::now() IS cycle time (tau, phase 8 section 2), not the
+        // raw wall clock - under the editor's preview it can sit hours away from sharedTime(). This row is labelled
+        // "cycle tau" (not "wall") and prints the wall second beside it for exactly that reason: the STORM CELLS
+        // section below resolved against tau, so two clients (or a scrubbed preview against the real clock) compare
+        // row by row on tau, while the wall second alongside shows how far preview has pulled it from real time.
+        // Falls back to sharedTime() for both when the scheduler is not driving (no track/region/asset), same as
+        // before. [interaction: SSStormCells::now]
+        const F64 tau = (SSStormCells::instanceExists() && SSStormCells::getInstance()->valid())
                          ? SSStormCells::getInstance()->now() : atmo->sharedTime();
-        const S64 epoch = SSStormCell::epochOf(now);
-        const F64 into = now - (F64)epoch * SSStormCell::EPOCH_S;
+        const F64 wall_now = atmo->sharedTime();
+        const S64 epoch = SSStormCell::epochOf(tau);
+        const F64 into = tau - (F64)epoch * SSStormCell::EPOCH_S;
         line(llformat("  seed      0x%08x", atmo->seed()));
-        line(llformat("  wall      %.3f s   storm epoch %lld  +%.1f s of %.0f", now, (long long)epoch, into, SSStormCell::EPOCH_S));
+        line(llformat("  cycle tau %.3f s  (wall %.3f s)   storm epoch %lld  +%.1f s of %.0f", tau, wall_now, (long long)epoch, into, SSStormCell::EPOCH_S));
         line(llformat("  weather   %s  precip %.2f  temp %.1f C", atmo->hasWeather() ? "cube applied" : "none", atmo->precipitation(), atmo->temperatureC()),
              !atmo->hasWeather());
     }

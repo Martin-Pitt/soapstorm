@@ -32,6 +32,7 @@
 #include "ssatmomagic.h"
 #include "ssdaycyclecore.h"
 #include "sssquallcore.h"
+#include "ssvortexcore.h" // 7f: heroContact's Parent/childVortex/contactOffsetM - a core may be included from this shell
 #include "sswindprofilecore.h"
 
 #include "llagent.h"
@@ -67,6 +68,7 @@ namespace
         if (kind == "tornado") return 2;
         if (kind == "waterspout") return 3;
         if (kind == "anticyclonic") return 4;
+        if (kind == "squall") return SSSquall::KIND_SQUALL; // 8a: an authored squall LINE, not a pinned cell - see the forced block's own comment
         return 0; // "none" and anything unrecognised
     }
 }
@@ -92,6 +94,8 @@ void SSStormCells::clear()
     mHero = Hero();
     mWhyNot = WhyNot();
     mTrack = nullptr;
+    mLineDescByLineId.clear(); // 8a: fillLineBand's lookup - dropped with everything else this frame's outputs
+    mLineEventByLineId.clear(); // 8a audit F3: lineEventForId's lookup, same lifetime as mLineDescByLineId
 }
 
 // <SS:Nexii> FIX 1: the S2 source-region anchor rule, extracted out of update()'s own anchor block (previously
@@ -157,43 +161,82 @@ SSStormCell::Vec2 SSStormCells::anchorNow() const
     return resolveAnchor(mgr, region);
 }
 
-// <SS:Nexii> S3 (phase-2b audit): wall clock -> the applied track's day phase. Under the editor's preview override,
-// SSStormCell::previewPhaseAt with refTime = mPreviewRefTimeS, the instant the preview last turned on or changed
-// phase (7d - see update()'s memo block): phase(t) = frac(preview + (t - refTime) / dayLength), so at the latch the
-// sky is exactly at the previewed phase and time then flows normally; scrubbing to an authored cue phase shows the
-// forced storm mature at that moment. Otherwise
-// SSDayCycle::phaseAt over the day length/offset CAPTURED in update() - the same core formula SSAtmoEnvTrack::
-// dayCyclePhaseAt forwards to (daycyclecore.cpp pins it bit-identical to the old track body), never mTrack itself:
-// mTrack is a borrowed per-frame pointer, null outside update(), and the 7c opus check caught the public
-// schedulerPhaseAt (called from the V2 view's draw path) dereferencing it. phaseAt is a pure function of the
-// captured values and safe at any time. [interaction: SSDayCycle::phaseAt]
-F64 SSStormCells::phaseAt(F64 wall_time) const
+// <SS:Nexii> D1 (7e audit): the anchorNow() idiom applied to the clock, now sharing latchCycleTime with update() (see
+// its own comment) instead of re-solving the nearest occurrence of the previewed phase fresh every call - that used
+// to hold tau piecewise-constant between day-cycle midpoint crossings under preview (a mislabelled comment here used
+// to call it "continuous"). Real: sharedTime() minus the currently applied track's own day offset; with NO track
+// applied it returns sharedTime() itself (7f F9: the old comment said 0.0, which would have put dust devils at the
+// 1970 epoch - the code never did that).
+F64 SSStormCells::cycleTimeNow() const
+{
+    SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    const F64 wall_now = SSAtmoMagic::getInstance()->sharedTime();
+
+    const S32 track_index = applier->appliedTrackIndex();
+    if (!mgr->hasAsset() || track_index < 0 || track_index >= (S32)mgr->asset().mTracks.size())
+    {
+        return wall_now;
+    }
+    const SSAtmoEnvTrack& track = mgr->asset().mTracks[(size_t)track_index];
+    return latchCycleTime(mgr->hasPreviewPhaseOverride(), mgr->previewPhaseOverride(), track_index,
+                           track.mDayLengthSeconds, track.mDayOffsetSeconds, wall_now);
+}
+
+// <SS:Nexii> D1 (7e audit): see the header comment for the full contract. Real mode is not latched at all - every
+// caller, every frame, gets sharedTime() - dayOffsetS directly. Preview mode latches onto (mCycleRefS, mWallRefS)
+// when previewOverride/previewPhase/trackIndex differ from what was last latched (mMemoPreviewOverride,
+// mMemoPreviewPhase, mMemoTrack - D3: trackIndex shares the WeatherAtBirth memo's own track field rather than a
+// second one), else holds the existing latch and flows at wall rate.
+F64 SSStormCells::latchCycleTime(bool previewOverride, F64 previewPhase, S32 trackIndex,
+                                  F64 dayLengthS, F64 dayOffsetS, F64 wallNow) const
+{
+    const F64 real_tau = wallNow - dayOffsetS;
+    if (!previewOverride)
+    {
+        return real_tau;
+    }
+    const bool changed = previewOverride != mMemoPreviewOverride
+                        || previewPhase != mMemoPreviewPhase
+                        || trackIndex != mMemoTrack;
+    if (changed)
+    {
+        mCycleRefS = (dayLengthS > 0.0) ? SSDayCycle::wallTimeAtPhase(previewPhase, real_tau, dayLengthS, 0.0) : real_tau;
+        mWallRefS = wallNow;
+        mMemoPreviewOverride = previewOverride;
+        mMemoPreviewPhase = previewPhase;
+    }
+    return mCycleRefS + (wallNow - mWallRefS);
+}
+
+// <SS:Nexii> Phase 8 section 2 (one clock, user 2026-09-06): CYCLE time (tau) -> the applied track's day phase, one
+// map, no preview branch - SSDayCycle::phaseAt(tau, mDayLengthS, 0.0), offset 0 because tau already had the
+// track's own day offset subtracted (real mode: mNow = sharedTime() - mDayOffsetS, in update()). The editor's
+// preview no longer swaps in a second map (SSStormCell::previewPhaseAt, removed) - it substitutes what tau IS, a
+// latched clock (see update()'s mCycleRefS/mWallRefS), so scrubbing to an authored cue's phase still shows the
+// forced storm mature at that moment, through the SAME map real time uses. Never mTrack itself: mTrack is a
+// borrowed per-frame pointer, null outside update(), and the 7c opus check caught the public schedulerPhaseAt
+// (called from the V2 view's draw path) dereferencing it. Pure in the captured mDayLengthS, safe at any time.
+// [interaction: SSDayCycle::phaseAt]
+F64 SSStormCells::phaseAt(F64 tau) const
 {
     if (mDayLengthS <= 0.0)
     {
         return 0.0;
     }
-    if (mPreviewOverride)
-    {
-        return SSStormCell::previewPhaseAt(mPreviewPhase, mPreviewRefTimeS, wall_time, mDayLengthS);
-    }
-    return SSDayCycle::phaseAt(wall_time, mDayLengthS, mDayOffsetS);
+    return SSDayCycle::phaseAt(tau, mDayLengthS, 0.0);
 }
 
-// <SS:Nexii> 7b F3: phaseAt's own inverse - see the header. Mirrors phaseAt's preview/real switch exactly so a
-// forced-storm cue phase (read through phaseAt) converts back to wall time through the identical map, never always
-// the real track's map regardless of which is active.
-F64 SSStormCells::wallTimeAtPhase(F64 phase, F64 nearT) const
+// <SS:Nexii> Phase 8 section 2: phaseAt's own inverse - see the header. One map, no preview branch: a forced-storm
+// cue phase (read through phaseAt) converts to a tau through the identical map real time uses, never a second
+// real/preview pair (superseding 7b F3's previewWallTimeAt-branching version, lesson 24).
+F64 SSStormCells::wallTimeAtPhase(F64 phase, F64 nearTau) const
 {
     if (mDayLengthS <= 0.0)
     {
-        return nearT;
+        return nearTau;
     }
-    if (mPreviewOverride)
-    {
-        return SSStormCell::previewWallTimeAt(mPreviewPhase, mPreviewRefTimeS, phase, mDayLengthS, nearT);
-    }
-    return SSDayCycle::wallTimeAtPhase(phase, nearT, mDayLengthS, mDayOffsetS);
+    return SSDayCycle::wallTimeAtPhase(phase, nearTau, mDayLengthS, 0.0);
 }
 
 // <SS:Nexii> The weather cube AT THE CANDIDATE'S BIRTH TIME, never at now: moisture and convection are the cube's own curves at the birth phase (the same valueAt reads SSAtmoEnvApplier::computeModulation makes for the deck base), the shear strength is the resolver's S at that phase (auto-derived or authored, SSAtmoEnvWeatherResolver::resolve), the Allow flags are the track's gated by the influence MASTER enable (S4, phase-2b audit: mWeatherInfluence.mEnabled off means no supercells or tornadoes at all, matching what the Weather Influence floater shows the author), and the anvil wind is SSWindProfile::windAt at the birth-phase profile's own anvil AGL (SSAtmoEnvApplier::windProfileAt - pure, never the live mWindProfile). [interaction: SSAtmoEnvWeatherResolver] [interaction: SSAtmoEnvApplier::windProfileAt]
@@ -272,7 +315,10 @@ S32 SSStormCells::fillUniforms(SSStormCouple::CellUniform* out, S32 cap) const
         keys[(size_t)i].y = c.mCentre.y;
         // 7c NEW-6: an authored pin (mIsForced) is slot-preferred the same as the hero - it is guaranteed-active
         // by the same authoring intent a hero flyby is, so selectSlots must not bump it for an ordinary cell.
-        keys[(size_t)i].hero = c.mIsHero || c.mIsForced;
+        // 7f F3: slot preference needs the flag AND reach - a 30 km hero holds no slot while it cannot influence the deck.
+        // The same reach applies to an authored pin placed beyond it (7f re-check N5): it cannot influence the deck either.
+        keys[(size_t)i].hero = SSStormCouple::slotPreferred(c.mIsHero || c.mIsForced, c.mCentre.x - mAnchor.x, c.mCentre.y - mAnchor.y,
+                                                           FIELD_M + SSStormCell::RADIUS_MAX_M);
     }
 
     const S32 cap_eff = llmin(cap, SSStormCouple::MAX_CELLS);
@@ -300,6 +346,119 @@ S32 SSStormCells::fillUniforms(SSStormCouple::CellUniform* out, S32 cap) const
         u.rotSign = SSStormCouple::rotSignOf(c.mCandidate.mRotation);
     }
     return picked;
+}
+
+// <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3, ssstormcouplecore.h's own LineBand comment): the
+// active squall line's deck coupling, filled next to fillUniforms above and read the same way (AGENT frame, same
+// toAgentXY conversion, so lineField's px/py agree with sampleAt's world_x/world_y at the SAME call sites). "The
+// active line" (8a audit F2/F7) is whichever line has a currently-alive member AND mLineDescByLineId's mForced -
+// an authored squall owns the deck's one line slot over any hashed line, even one with a lower id; among lines
+// that agree on forced-ness, the LOWEST mLineId wins (one line at a time, per the design doc). mCells carries only
+// the id per member, so the line's own geometry (origin/direction/windAnvil/halfLen) is looked up in
+// mLineDescByLineId, populated by lineAtEpoch this same update(). Left at LineBand()'s own zero default (strength
+// 0, which SSStormCouple::lineField reads as "disabled") when no line is alive, its LineDesc went missing (should
+// not happen - defensive only), or the alive members' mean tower boost is 0.
+void SSStormCells::fillLineBand(SSStormCouple::LineBand& out) const
+{
+    out = SSStormCouple::LineBand();
+
+    bool have_line = false;
+    bool best_is_forced = false;
+    U64 line_id = 0;
+    for (const ActiveCell& c : mCells)
+    {
+        if (c.mLineId == 0)
+        {
+            continue;
+        }
+        const auto it = mLineDescByLineId.find(c.mLineId);
+        const bool forced = (it != mLineDescByLineId.end()) && it->second.mForced;
+        if (!have_line || (forced && !best_is_forced) || (forced == best_is_forced && c.mLineId < line_id))
+        {
+            have_line = true;
+            best_is_forced = forced;
+            line_id = c.mLineId;
+        }
+    }
+    if (!have_line)
+    {
+        return;
+    }
+
+    const auto it = mLineDescByLineId.find(line_id);
+    if (it == mLineDescByLineId.end() || it->second.mMemberCount <= 0)
+    {
+        return; // defensive: should be unreachable - every mLineId in mCells came from a LineDesc lineAtEpoch stored
+    }
+    const SSStormCell::LineDesc& d = it->second;
+
+    // 8a audit F7: strength is the MEAN over alive members of SSStormCell::lifecycle(...).mTowerBoost - a lifecycle
+    // envelope (bell over each member's own life, see ssstormcellcore.h) rather than the gate's raw mIntensity, so
+    // the wall grows in as its members mature and fades as they die instead of holding at full strength then
+    // snapping to 0 the instant the last member's lifetime clock runs out.
+    F32 sum_boost = 0.f;
+    S32 n_alive = 0;
+    for (const ActiveCell& c : mCells)
+    {
+        if (c.mLineId == line_id)
+        {
+            const SSStormCell::Lifecycle life = SSStormCell::lifecycle(
+                c.mAge01, c.mGate.mIntensity, c.mCandidate.mRotation, c.mGate.mSupercell);
+            sum_boost += life.mTowerBoost;
+            ++n_alive;
+        }
+    }
+    const F32 strength = (n_alive > 0) ? (sum_boost / (F32)n_alive) : 0.f;
+    if (strength <= 0.f)
+    {
+        return;
+    }
+
+    // 8a audit F2 (no respelled multiply): the advected centre through the SAME functions a line member's own
+    // motion/position use in resolveActive - stormMotion(windAnvil, 0.f, false) (a line member rides IN the line:
+    // rotation 0, no supercell deviation, ssstormcellcore.h's own comment) and centreAt(origin, motion, birth, now).
+    const F64 birth = d.mMembers[0].mBirthTime;
+    const SSStormCell::Vec2 raw_mot = SSStormCell::stormMotion(d.mWindAnvil, 0.f, false);
+    const SSStormCell::Vec2 centre_global = SSStormCell::centreAt(d.mOrigin, raw_mot, birth, mNow);
+    const LLVector2 centre_agent = toAgentXY(centre_global);
+
+    out.ox = centre_agent.mV[0];
+    out.oy = centre_agent.mV[1];
+    out.dirX = d.mDirection.x;
+    out.dirY = d.mDirection.y;
+
+    // unitOrNorth-STYLE, but zero (never north) when still - a stalled line has no "ahead": lineField's shelf term
+    // is a function of `ahead = dot(p - o, mot)`, which is identically 0 for a zero vector, and a stalled gust
+    // front has no shelf to project.
+    const F32 speed = std::sqrt(raw_mot.x * raw_mot.x + raw_mot.y * raw_mot.y);
+    if (speed < 1e-6f)
+    {
+        out.motX = 0.f;
+        out.motY = 0.f;
+    }
+    else
+    {
+        out.motX = raw_mot.x / speed;
+        out.motY = raw_mot.y / speed;
+    }
+
+    out.halfLen = d.mHalfLengthM;
+    out.bandM = SSSquall::LINE_BAND_M;
+    out.shelfM = SSSquall::LINE_SHELF_M;
+    out.strength = strength;
+}
+
+// <SS:Nexii> 8a audit F3: plain lookups into this frame's own line maps (populated by lineAtEpoch, update()) -
+// nullptr when lineId names no line this frame resolved. See the header's own comment.
+const SSStormCell::LineDesc* SSStormCells::lineDescForId(U64 lineId) const
+{
+    const auto it = mLineDescByLineId.find(lineId);
+    return (it != mLineDescByLineId.end()) ? &it->second : nullptr;
+}
+const SSSquall::LineEvent* SSStormCells::lineEventForId(U64 lineId) const
+{
+    const auto it = mLineEventByLineId.find(lineId);
+    return (it != mLineEventByLineId.end()) ? &it->second : nullptr;
 }
 
 // <SS:Nexii> Phase 4: a plain scan of mCells for mIsHero - see the header note. Not memoised (mCells is already
@@ -358,7 +517,6 @@ void SSStormCells::update()
         return;
     }
 
-    mNow = atmo->sharedTime();
     mSeed = atmo->seed();
     mTrackIndex = track_index;
     mTrack = &mgr->asset().mTracks[(size_t)track_index];
@@ -366,6 +524,23 @@ void SSStormCells::update()
     mDayOffsetS = mTrack->mDayOffsetSeconds; // 7c: captured so phaseAt/wallTimeAtPhase never touch mTrack (null outside update())
     mPreviewOverride = mgr->hasPreviewPhaseOverride();
     mPreviewPhase = mgr->previewPhaseOverride();
+
+    // <SS:Nexii> D1/D3 (7e audit): mNow becomes CYCLE time (tau), not the raw wall clock - see the header's own doc
+    // on now(). Real: tau = sharedTime() - mDayOffsetS (an asset constant, so every client sharing the asset
+    // agrees). Preview: the slider substitutes the CLOCK, not the map - latchCycleTime (shared with cycleTimeNow(),
+    // private, above) latches mCycleRefS/mWallRefS once, the instant the preview turns on, its phase changes, or
+    // the track changes (D3: folded into preview_changed below, sharing the memo's own mTrackIndex != mMemoTrack
+    // test rather than a second one - previously a track swap while previewing held the OLD track's latched tau
+    // until the next unrelated phase nudge), and flows at wall rate thereafter, so scrubbing to an authored cue's
+    // phase shows the forced storm mature at that instant and un-scrubbing lets it keep living. preview_changed is
+    // captured from the OLD mMemoPreviewOverride/mMemoPreviewPhase/mMemoTrack BEFORE calling latchCycleTime (which
+    // may overwrite the first two on this exact call) and reused below for the WeatherAtBirth memo-drop decision -
+    // the memo-drop and the latch trigger share one "did it change" test, computed once.
+    const bool preview_changed = mPreviewOverride != mMemoPreviewOverride
+                                || (mPreviewOverride && mPreviewPhase != mMemoPreviewPhase)
+                                || mTrackIndex != mMemoTrack;
+    const F64 wall_now = atmo->sharedTime();
+    mNow = latchCycleTime(mPreviewOverride, mPreviewPhase, mTrackIndex, mDayLengthS, mDayOffsetS, wall_now);
     mEpochNow = epochOf(mNow);
 
     // <SS:Nexii> S2 (phase-2b audit): the weather domain's anchor - resolveAnchor() below, extracted (FIX 1) so
@@ -373,31 +548,24 @@ void SSStormCells::update()
     // source-region rule and its honest limitation.
     mAnchor = resolveAnchor(mgr, region);
 
-    // <SS:Nexii> S3 (phase-2b audit): the memo is pure in (track, birth time, preview phase mapping); it is dropped
-    // on a wall-clock bucket (so a live cube edit shows within MEMO_BUCKET_S), on a track change (birth times then
-    // map to a different cube), and now ALSO whenever the preview override or its phase changes - previously only
-    // the bucket/track were checked, so flipping the override without waiting for a bucket edge could momentarily
-    // keep serving WeatherAtBirth memoised under the pre-flip phase mapping.
+    // <SS:Nexii> D5 (7e audit): birthMemo is pure in (track, birth time) alone - a candidate's birth time already
+    // maps to a fixed cube reading once the track (and its day offset/length) is fixed, and preview only changes
+    // WHICH tau "now" is, never re-scores an already-memoised birth. It is dropped on a wall-clock bucket (so a
+    // live cube edit shows within MEMO_BUCKET_S) and on a track change (birth times then map to a different cube's
+    // curves - mTrackIndex != mMemoTrack, folded into preview_changed above). The preview-changed drop is kept for
+    // one concrete reason: scrubbing the preview slider can jump mNow (and so which epochs are even alive) by
+    // hours in one frame, and while that alone does not invalidate any ALREADY-memoised birth's reading, it does
+    // mean the memo would otherwise accumulate entries for births the lattice will never revisit at the new tau
+    // (harmless but unbounded until the next bucket edge) - dropping on the jump keeps the memo's size tied to one
+    // bucket's worth of actual candidates rather than every phase ever scrubbed past in a session.
     const S64 memo_bucket = bucket(mNow, MEMO_BUCKET_S);
-    const bool preview_changed = mPreviewOverride != mMemoPreviewOverride
-                                || (mPreviewOverride && mPreviewPhase != mMemoPreviewPhase);
-    if (memo_bucket != mMemoBucket || mMemoTrack != mTrackIndex || preview_changed)
+    if (memo_bucket != mMemoBucket || preview_changed)
     {
         mMemo.clear();
         mMemoBucket = memo_bucket;
         mMemoTrack = mTrackIndex;
         mMemoPreviewOverride = mPreviewOverride;
         mMemoPreviewPhase = mPreviewPhase;
-    }
-    // <SS:Nexii> 7d (user report): the preview map's reference instant is LATCHED to mNow when the preview override
-    // turns on or its phase changes, and held while the slider is still - no longer the memo bucket's start (the old
-    // S3 rule). Re-latching every 2 s made the map's inverse (a forced cue's wall time) jump 2 s every bucket, so an
-    // authored storm under preview sawtoothed a few seconds back and forth and its age never advanced. With one
-    // latch, previewPhaseAt(P, ref, now) == P at the latch instant and time then flows normally; the memo is cleared
-    // on the same change (above), so nothing memoised under the previous reference survives.
-    if (preview_changed)
-    {
-        mPreviewRefTimeS = mNow;
     }
 
     // The two hooks resolveActive calls for every alive candidate - both route through the memoised cube read.
@@ -442,9 +610,61 @@ void SSStormCells::update()
     // V2 view's reconstruction reads the SAME constant) - the SAME consolidation figure ssvolcloud.cpp's builder
     // and SSStormCouple both read, never a second-guessed copy.
     const SSSquall::Vec2 anchorSq{ mAnchor.x, mAnchor.y };
-    auto lineAtEpoch = [this, &anchorSq](S64 epoch) -> SSStormCell::LineDesc
+
+    // 8a: this frame's own line geometry, rebuilt from scratch every update() exactly like mCells - lineAtEpoch
+    // (below) repopulates it as resolveActive calls it; fillLineBand reads it after resolveActive returns.
+    mLineDescByLineId.clear();
+    mLineEventByLineId.clear(); // 8a audit F3: repopulated alongside mLineDescByLineId, same lambda, same keys
+
+    // <SS:Nexii> 8a item 1 (doc/atmo_magic_phase8_show.md section 3): filled by the forced block below (which runs
+    // after this lambda is captured by reference, but before resolveActive actually calls it) when the cube's
+    // forced override is KIND_SQUALL. lineAtEpoch then substitutes SSSquall::forcedLine for squallEpoch - the ONE
+    // epoch containing (cueTime - FORCED_LINE_LEAD_S) - in place of that epoch's hashed lineEvent decision; every
+    // other epoch is unaffected. [interaction: sssquallcore.h forcedLine]
+    bool squallActive = false;
+    S64 squallEpoch = 0;
+    SSSquall::ForcedOverride squallOv;
+    SSSquall::Vec2 squallWindAnvil;
+
+    auto lineAtEpoch = [this, &anchorSq, &squallActive, &squallEpoch, &squallOv, &squallWindAnvil](S64 epoch) -> SSStormCell::LineDesc
     {
         SSStormCell::LineDesc d;
+
+        // 8a item 1: an authored squall's own epoch is decided by its cue, not the hash, and is gated on the
+        // Weather Influence MASTER enable ALONE - the Squall Lines checkbox (tested below) gates only the
+        // SPONTANEOUS hashed line, never an authored cue (doc section 3 item 1: "the Squall Lines influence flag
+        // does NOT gate an authored line - the master enable does").
+        if (squallActive && epoch == squallEpoch && mTrack->mWeatherInfluence.mEnabled)
+        {
+            const SSSquall::LineEvent e = SSSquall::forcedLine(mSeed, squallOv, anchorSq, squallWindAnvil);
+            d.mIsLine = e.mIsLine;
+            if (!d.mIsLine)
+            {
+                return d;
+            }
+            d.mLineId = e.mLineId;
+            d.mOrigin = SSStormCell::Vec2{ e.mOrigin.x, e.mOrigin.y };
+            d.mDirection = SSStormCell::Vec2{ e.mDirection.x, e.mDirection.y };
+            d.mHalfLengthM = SSSquall::LINE_LENGTH_M * 0.5f;
+            d.mSuppressRadiusM = SSSquall::LINE_SUPPRESS_M;
+            d.mWindAnvil = SSStormCell::Vec2{ squallWindAnvil.x, squallWindAnvil.y };
+            d.mMemberCount = llmin((S32)SSSquall::LINE_MEMBERS_MAX, SSStormCell::LINE_MEMBERS_CAP);
+            for (S32 i = 0; i < d.mMemberCount; ++i)
+            {
+                d.mMembers[i] = SSSquall::lineMember(e, i);
+            }
+            // 8a audit F1/F2: forcedLine sets mForced/mHasFloor/mWeatherFloor on the LineEvent (the weather floor an
+            // authored pin gets, without which the generator's deliberately dry pre-cue sky gates every member out) -
+            // carry them onto the LineDesc the scheduler actually gates members through (resolveActive reads
+            // line.mHasFloor/mWeatherFloor, never the LineEvent itself) and let fillLineBand prefer this line over a
+            // hashed one.
+            d.mForced = e.mForced;
+            d.mHasFloor = e.mHasFloor;
+            d.mWeatherFloor = e.mWeatherFloor;
+            mLineDescByLineId[d.mLineId] = d; // 8a: fillLineBand's own lookup - ActiveCell carries only the id
+            mLineEventByLineId[d.mLineId] = e; // 8a audit F3: the full event, for a reconstruction's qlcsJunctionAt
+            return d;
+        }
 
         // 7b F11: authored track state, deterministic (never epoch-hashed) - the Weather Influence master enable
         // AND the Squall Lines flag both have to be on, same influence_enabled gate birthMemo applies to the two
@@ -485,6 +705,13 @@ void SSStormCells::update()
         {
             d.mMembers[i] = SSSquall::lineMember(e, i);
         }
+        // 8a audit F1/F2: a hashed line's LineEvent leaves mForced/mHasFloor false and mWeatherFloor default -
+        // copied explicitly (not left to LineDesc's own default) so both branches agree on WHERE this comes from.
+        d.mForced = e.mForced;
+        d.mHasFloor = e.mHasFloor;
+        d.mWeatherFloor = e.mWeatherFloor;
+        mLineDescByLineId[d.mLineId] = d; // 8a: fillLineBand's own lookup - ActiveCell carries only the id
+        mLineEventByLineId[d.mLineId] = e; // 8a audit F3: the full event, for a reconstruction's qlcsJunctionAt
         return d;
     };
 
@@ -516,31 +743,96 @@ void SSStormCells::update()
             ov.mOffsetM.y = mTrack->mWeather.mStormOverrideOffsetYM.valueAt(phaseNow);
         }
 
-        const SSSquall::Pinned pinned = SSSquall::forcedCandidate(mSeed, ov, anchorSq);
-        forcedDesc.mPinned = pinned.mPinned;
-        if (forcedDesc.mPinned)
+        // 8a item 1 (doc/atmo_magic_phase8_show.md section 3): KIND_SQUALL is a LINE, not a pinned cell - do NOT
+        // build a ForcedDesc pin for it (forcedDesc stays default/unpinned, so forcedAt's caller sees "no forced
+        // cell" exactly as it would with the override off). Instead hand lineAtEpoch (above, captured by
+        // reference) the cue and the ONE anvil-wind sample the line is decided with, at phaseAt(cueTime -
+        // FORCED_LINE_LEAD_S) - the same single-sample-per-epoch discipline the hashed line branch already
+        // follows, read through the SAME wind-profile call (SSAtmoEnvApplier::windProfileAt / SSWindProfile::windAt).
+        // 3b F11 (doc section 3 item 4b), corrected 8a audit F5: mPreferHero is left false here exactly as "no
+        // override" would leave it - resolveActive already skips the spontaneous hero search on its own while any
+        // line member is alive (a composed hero would be dragged into the band the line's suppression keeps clear).
+        // The earlier version of this comment claimed an authored tornado cue "still wins... cued independently of
+        // the squall" - false: mStormOverride is a single HOLD string curve (ssatmoenvasset.h), so ov.mKind is
+        // exactly ONE value at phaseNow and this if/else is mutually exclusive - a squall and a tornado cue can
+        // never be active at the same phase, so there is no coexistence to win. The false claim mattered only as a
+        // comment; the code below already does the right thing (skips this whole pinned-candidate branch while
+        // KIND_SQUALL is the active kind).
+        if (ov.mActive && ov.mKind == SSSquall::KIND_SQUALL)
         {
-            forcedDesc.mCandidate = pinned.mCandidate;
-            forcedDesc.mWeatherFloor.mMoisture = pinned.mWeatherFloor.mMoisture;
-            forcedDesc.mWeatherFloor.mConvection = pinned.mWeatherFloor.mConvection;
-            forcedDesc.mWeatherFloor.mShearStrength = pinned.mWeatherFloor.mShearStrength;
-            forcedDesc.mWeatherFloor.mAllowSupercells = pinned.mWeatherFloor.mAllowSupercells;
-            forcedDesc.mWeatherFloor.mAllowTornadoes = pinned.mWeatherFloor.mAllowTornadoes;
-            forcedDesc.mPreferHero = (ov.mKind == 2); // 2 == tornado, sssquallcore.h's ForcedOverride::mKind
-            forcedDesc.mKind = ov.mKind;              // 7d: reaches SSVortex::childVortex through ActiveCell::mForcedKind
-            // 7b F1: composeForced (ssstormcellcore.h) reads these two off ForcedDesc directly - without them the
-            // pinned candidate is placed with a zero offset and cueTime 0.0 regardless of what was authored.
-            forcedDesc.mOffsetM = SSStormCell::Vec2{ ov.mOffsetM.x, ov.mOffsetM.y };
-            forcedDesc.mCueTime = ov.mCueTime;
+            squallActive = true;
+            squallOv = ov;
+            squallEpoch = SSStormCell::epochOf(ov.mCueTime - SSSquall::FORCED_LINE_LEAD_S);
+            const F64 windPhase = phaseAt(ov.mCueTime - SSSquall::FORCED_LINE_LEAD_S);
+            const SSWindProfile::Params profile = SSAtmoEnvApplier::windProfileAt(*mTrack, windPhase);
+            const SSWindProfile::Vec2 wind = SSWindProfile::windAt(profile.mAnvilAglM, profile);
+            squallWindAnvil = SSSquall::Vec2{ wind.x, wind.y };
+        }
+        else
+        {
+            const SSSquall::Pinned pinned = SSSquall::forcedCandidate(mSeed, ov, anchorSq);
+            forcedDesc.mPinned = pinned.mPinned;
+            if (forcedDesc.mPinned)
+            {
+                forcedDesc.mCandidate = pinned.mCandidate;
+                forcedDesc.mWeatherFloor.mMoisture = pinned.mWeatherFloor.mMoisture;
+                forcedDesc.mWeatherFloor.mConvection = pinned.mWeatherFloor.mConvection;
+                forcedDesc.mWeatherFloor.mShearStrength = pinned.mWeatherFloor.mShearStrength;
+                forcedDesc.mWeatherFloor.mAllowSupercells = pinned.mWeatherFloor.mAllowSupercells;
+                forcedDesc.mWeatherFloor.mAllowTornadoes = pinned.mWeatherFloor.mAllowTornadoes;
+                forcedDesc.mPreferHero = (ov.mKind == 2); // 2 == tornado, sssquallcore.h's ForcedOverride::mKind
+                forcedDesc.mKind = ov.mKind;              // 7d: reaches SSVortex::childVortex through ActiveCell::mForcedKind
+                // 7b F1: composeForced (ssstormcellcore.h) reads these two off ForcedDesc directly - without them the
+                // pinned candidate is placed with a zero offset and cueTime 0.0 regardless of what was authored.
+                forcedDesc.mOffsetM = SSStormCell::Vec2{ ov.mOffsetM.x, ov.mOffsetM.y };
+                forcedDesc.mCueTime = ov.mCueTime;
+            }
         }
     }
     auto forcedAt = [&forcedDesc]() -> SSStormCell::ForcedDesc { return forcedDesc; };
+
+    // <SS:Nexii> 7f item 1 (doc/atmo_magic_phase8_show.md section 3c): the FUNNEL's contact passes the anchor, not
+    // the cell centre - resolveActive calls this on the hero candidate (pre-composition) at HERO_CLOSEST_AGE01, so
+    // composeHero can subtract the offset from the closest point BEFORE placing the origin. Builds an
+    // SSVortex::Parent from the hero ActiveCell AT THE CLOSEST AGE (never "now": mRadiusM/mLife are resolved at
+    // closestAge01 with SSStormCell::radiusAt/lifecycle, the same two functions resolveActive's own final loop
+    // calls at "now" for every other cell - just evaluated at a different age here), runs slot 0 through
+    // SSVortex::childVortex, and returns its contact offset (SSVortex::contactOffsetM) when that slot resolved to a
+    // real funnel kind (SSVortex::hasFunnel), else zero - a GUSTNADO's mOffsetFrac is a ring share, not a funnel
+    // contact (see hasFunnel's own comment). Pure in its inputs (seed, the hero ActiveCell, closestAge01): no now(),
+    // no camera.
+    auto heroContact = [seed = mSeed](const SSStormCell::ActiveCell& hero, F32 closestAge01) -> SSStormCell::Vec2
+    {
+        SSVortex::Parent p;
+        p.mId = hero.mCandidate.mId;
+        p.mBirthTime = hero.mCandidate.mBirthTime;
+        p.mLifetimeS = hero.mCandidate.mLifetimeS;
+        p.mIntensity = hero.mGate.mIntensity;
+        p.mRotation = hero.mCandidate.mRotation;
+        p.mPotential = hero.mCandidate.mPotential;
+        p.mSupercell = hero.mGate.mSupercell;
+        p.mTornadoEligible = hero.mGate.mTornadoEligible;
+        p.mRadiusM = SSStormCell::radiusAt(closestAge01, hero.mGate.mIntensity);
+        p.mLife = SSStormCell::lifecycle(closestAge01, hero.mGate.mIntensity, hero.mCandidate.mRotation, hero.mGate.mSupercell);
+        p.mAllowTornadoes = hero.mWeather.mAllowTornadoes;
+        p.mForcedKind = hero.mForcedKind;
+        p.mIsHero = true;
+        p.mClosestAge01 = closestAge01;
+
+        const SSVortex::Candidate c0 = SSVortex::childVortex(seed, p, 0);
+        if (!SSVortex::hasFunnel(c0.mKind))
+        {
+            return SSStormCell::Vec2();
+        }
+        const SSVortex::Vec2 off = SSVortex::contactOffsetM(c0, p.mRadiusM);
+        return SSStormCell::Vec2{ off.x, off.y };
+    };
 
     ActiveCell resolved[ACTIVE_CAP];
     SSStormCell::Hero heroPath; // qualified: SSStormCells::Hero (this class's own nested type) would shadow it otherwise
     S32 heroIndex = -1;
     const S32 n = resolveActive(mSeed, mNow, mAnchor, FIELD_M, weatherAtBirth, anvilWindAtBirth,
-                                 resolved, ACTIVE_CAP, &heroPath, &heroIndex, diag, lineAtEpoch, forcedAt);
+                                 resolved, ACTIVE_CAP, &heroPath, &heroIndex, diag, lineAtEpoch, forcedAt, heroContact);
 
     mCells.assign(resolved, resolved + n);
     mHaveHero = heroIndex >= 0;

@@ -38,7 +38,11 @@
 #include "lluictrlfactory.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llenvironment.h" // <SS:Nexii> info-view look: getLightDirection, the key direction the warm-gray shade is lit from
+#include "llviewershadermgr.h" // <SS:Nexii> info-view look: gSSInfoLookProgram
+#include "llviewerwindow.h" // <SS:Nexii> gViewerWindow setup3DRender for the look pass and the in-world layer
 #include "pipeline.h"
+#include "ssinfolookcore.h" // <SS:Nexii> info-view look: LOOK_KEY_ELEVATION, and the formulas the look shader transliterates
 
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvasset.h"
@@ -46,12 +50,16 @@
 #include "ssatmoenvmanager.h"
 #include "ssatmoenvweatherstate.h"
 #include "ssatmomagic.h"
+#include "sslightning.h"        // <SS:Nexii> V9: SSStrike/SSLightning - the strike list, the scene-light exporter and SSDissolve's plasma window
+#include "sslightningrender.h"  // <SS:Nexii> V9: SSLightningRender::stats() - the pass's own last-frame draw counters
 #include "ssstormcells.h"
 #include "sssquallcore.h"
 #include "ssvolcloud.h"
 #include "ssvortexcore.h"
 #include "ssvortices.h"
 #include "sswindflow.h"
+
+#include <map> // <SS:Nexii> V2 lattice-tint smoothing: lx/ly -> potential lookup for the per-corner average (renderStormCells)
 
 static LLDefaultChildRegistry::Register<SSAtmoGraphView> r_ss_atmo_graph_view("ss_atmo_graph_view");
 
@@ -74,6 +82,11 @@ namespace
     const S32 CHART_W = 440;
     const S32 CHART_H = 280;
     const S32 CHART_GAP = 8;
+
+    // <SS:Nexii> V9: the slot count the deferred lighting pass asks SSLightning::sceneLights for. LOCKSTEP
+    // pipeline.cpp renderDeferredLighting's own sceneLights(strike_lights, strike_colors, 4) call - the view asks
+    // for the same number so what it draws is the same set the world is actually lit by, not a longer one.
+    const S32 SCENE_LIGHT_SLOTS = 4;
     LLHandle<LLView> sLegendHandle;
 
     // Rail palette: geometry annotations, one colour each, shared by the chart, the legend and the mast so a rail reads the same in every place it appears.
@@ -127,6 +140,11 @@ namespace
     // white, the same idiom V2's hero-pass rings use for the anchor below.
     const LLColor4 VIRGA_HANDOFF (1.00f, 1.00f, 1.00f, 0.55f);
 
+    // <SS:Nexii> F9 (2026-09-06 review): the curtain's OWN skew line gets its own swatch, distinct from RAIL_BASE's
+    // fall-tilt approximation - an amber, so the two comparison lines never read as the same colour meaning two
+    // different things.
+    const LLColor4 VIRGA_SKEW (1.00f, 0.70f, 0.20f, 0.85f);
+
     // V2 palette: the anchor and hero marks that are not a ramp colour.
     const LLColor4 ANCHOR_WHITE (1.00f, 1.00f, 1.00f, 0.9f);
     const LLColor4 HERO_ORIGIN  (1.00f, 0.72f, 0.30f, 1.0f);
@@ -142,6 +160,13 @@ namespace
     const LLColor4 SQUALL_LINE      (0.85f, 0.85f, 1.00f, 0.85f);  // the bar through a line's own members
     const LLColor4 SQUALL_JUNCTION  (1.00f, 0.95f, 0.35f, 0.95f);  // leading-edge QLCS spin-up points
     const LLColor4 FORCED_OUTLINE   (1.00f, 0.20f, 0.75f, 0.95f);  // the authored/forced pin's own outline
+
+    // <SS:Nexii> V2 LINE BAND fills (doc/atmo_magic_phase8_show.md section 3 item 1): the same hue as SQUALL_LINE
+    // (a squall line's several visuals should read as one thing) but as translucent FILLS rather than a bar -
+    // the wall darker/more opaque than the shelf ahead of it, so the two never get mistaken for each other. Base
+    // alpha only; both are scaled by the line's live strength at the draw site.
+    const LLColor4 LINE_WALL_FILL  (0.75f, 0.80f, 1.00f, 0.35f);
+    const LLColor4 LINE_SHELF_FILL (0.75f, 0.80f, 1.00f, 0.15f);
 
     // <SS:Nexii> V5 Weather Cube palette: one colour per curve, shared by the top lane's day-cycle curves and the
     // bottom lane's derived gates, plus the "now" cursor and the two cue-marker colours (storm cue vs precipitation
@@ -160,6 +185,21 @@ namespace
     const LLColor4 CUBE_NOW         (1.00f, 1.00f, 1.00f, 0.9f);
     const LLColor4 CUBE_CUE_STORM   (1.00f, 0.20f, 0.75f, 0.9f);   // matches FORCED_OUTLINE: same authored pin
     const LLColor4 CUBE_CUE_PRECIP  (0.35f, 0.85f, 1.00f, 0.9f);
+
+    // <SS:Nexii> V9 Lightning palette (doc/atmo_magic_debug_views.md V9). The CHANNEL and the stage marks are
+    // coloured by the shared lifecycle ramp (SSAtmoInfoViewCore::strikeStageColor - the same cool-to-warm bar V2's
+    // cells use), so nothing new is invented for the thing this view is actually about. These are the marks that
+    // are NOT a ramp colour: the pending strike's aim line, the attachment cross, the ground crawl, the two light
+    // readings (the deferred scene light the world is lit by, and the weaker reading the cloud deck is lit by),
+    // and the "occluded" dimming. CUBE_LIGHTNING's violet is deliberately reused for the strike-light marks - it
+    // is already "lightning" on V5's own chart, and a colour meaning one thing across two views is the point.
+    const LLColor4 STRIKE_AIM       (1.00f, 0.35f, 0.85f, 0.70f);  // origin -> intended attachment, before contact
+    const LLColor4 STRIKE_ATTACH    (1.00f, 1.00f, 1.00f, 0.90f);  // the attachment point itself (named ATTACH, not GROUND: sslightning.h already owns STRIKE_GROUND as an SSStrikeKind value)
+    const LLColor4 STRIKE_CRAWL     (1.00f, 0.55f, 0.15f, 0.90f);  // the surface crawl run past the foot
+    const LLColor4 STRIKE_SCENELIGHT(0.62f, 0.55f, 1.00f, 0.85f);  // sceneLights(): what the deferred pass lights the world with
+    const LLColor4 STRIKE_CLOUDLIGHT(0.62f, 0.55f, 1.00f, 0.45f);  // ... and the weaker cut the cloud shader takes
+    const LLColor4 STRIKE_OCCLUDED  (0.45f, 0.45f, 0.50f, 0.70f);  // the renderer's occlusion query hid this ground show
+    const LLColor4 STRIKE_FIRE_FILL (1.00f, 0.45f, 0.10f, 0.30f);  // ground-fire blob discs (tile-tint fill)
 
     const char* stageLabel(S32 stage)
     {
@@ -237,7 +277,7 @@ void SSAtmoInfoView::attach(LLView* debug_view)
     dp.visible(true);
     dp.mouse_opaque(false);
     SSAtmoDimView* dim = LLUICtrlFactory::create<SSAtmoDimView>(dp);
-    // Under everything else the debug view holds: the consoles and the stats overlay must stay legible over a dimmed world.
+    // <SS:Nexii> Still added, still in back, but it draws nothing now (the quad moved to the 3-D pass - see SSAtmoDimView::draw): kept so the debug view's child order, and every sibling's z-order with it, is exactly what it was.
     debug_view->addChildInBack(dim);
 
     LLRect lr;
@@ -289,6 +329,12 @@ U32 SSAtmoInfoView::mode()
 {
     static LLCachedControl<U32> mode_setting(gSavedSettings, "SSAtmoInfoView", 0);
     return (U32)mode_setting;
+}
+
+// The frame's own gate: a mode, or the lightning mask on its own. See the header for why the mask lives here.
+bool SSAtmoInfoView::wantsDraw()
+{
+    return mode() != MODE_OFF || gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_LIGHTNING);
 }
 
 namespace
@@ -421,6 +467,12 @@ SSAtmoInfoView::VirgaData SSAtmoInfoView::virgaData()
     d.mBaseZ = vd.mBaseZ;
     d.mR2 = vd.mR2;
     d.mHandoffRadius = vd.mR2 * SSVirga::HANDOFF_SKIP;
+    // F9 (2026-09-06 review), 8e-b PROFILE SKEW: the emitter's own skew inputs, copied straight across - never
+    // re-derived.
+    d.mWindParams = vd.mWindParams;
+    d.mBaseAglM = vd.mBaseAglM;
+    d.mFallSpeed = vd.mFallSpeed;
+    d.mEmbedTopZ = vd.mEmbedTopZ;
 
     d.mCells.reserve(vd.mCells.size());
     S32 kept = 0;
@@ -486,10 +538,15 @@ SSAtmoInfoView::WeatherCubeData SSAtmoInfoView::weatherCubeData()
     SSStormCell::Candidate anchor_candidate;
     d.mHaveStormScore = true;
     {
-        const SSStormCell::Vec2 anchor = SSStormCells::getInstance()->anchorNow();
+        // <SS:Nexii> Phase 8 section 2 (one clock, user 2026-09-06): the epoch is scheduler STATE (which lattice
+        // candidate this is), so it runs on SSStormCells::now() (tau), never SSAtmoMagic::sharedTime() directly -
+        // the same clock resolveActive's own epoch/candidate reads use, so this reconstruction's candidate id can
+        // never land on an epoch the live scheduler would not have.
+        const SSStormCells* sc = SSStormCells::getInstance();
+        const SSStormCell::Vec2 anchor = sc->anchorNow();
         const S32 lx = (S32)std::floor(anchor.x / SSStormCell::LATTICE_M);
         const S32 ly = (S32)std::floor(anchor.y / SSStormCell::LATTICE_M);
-        const S64 epoch = SSStormCell::epochOf(SSAtmoMagic::getInstance()->sharedTime());
+        const S64 epoch = SSStormCell::epochOf(sc->cycleTimeNow()); // 7e D1 / 7f F4: claim-free - now() is 0 or stale when nothing drives the scheduler
         anchor_candidate = SSStormCell::candidate(SSAtmoMagic::getInstance()->seed(), lx, ly, epoch);
     }
 
@@ -556,14 +613,314 @@ SSAtmoInfoView::WeatherCubeData SSAtmoInfoView::weatherCubeData()
     return d;
 }
 
+// <SS:Nexii> V9's data: one row per live SSStrike, scalars only (the channel itself is walked in place by
+// renderLightning - see LightningData's own comment for why it is not copied), plus the applied weather's own
+// lightning gate and the deferred scene lights the strike system already exports. Every read is a const getter or
+// a pure core call: SSLightning::strikes()/nextStrikeIn()/sceneLights() and SSAtmoMagic's lightning row are all
+// const, and the stage is SSAtmoInfoViewCore::strikeStage on fields advance() has already written this frame.
+// Nothing here schedules, advances or retires a strike, and the instanceExists guards keep the view from
+// constructing either singleton. [interaction: SSLightning strikes/nextStrikeIn/sceneLights] [interaction: SSAtmoMagic lightning row]
+namespace
+{
+    // <SS:Nexii> V9: the same per-APP-FRAME memo stormCellsData() uses, for the same reason - the layer, the legend
+    // and the chart each ask for this once per draw, and SSLightning::sceneLights() walks every node of every live
+    // channel looking for the one nearest the camera, so an unmemoised gather paid that walk three times a frame.
+    // Display-only cache of an already-computed, frame-stable read (SSLightning::idle() advances once per app
+    // frame): the counter decides nothing about the world, only how often this VIEW recopies it.
+    U32 sLightningDataFrame = ~0u;
+    SSAtmoInfoView::LightningData sLightningDataCache;
+}
+
+SSAtmoInfoView::LightningData SSAtmoInfoView::lightningData()
+{
+    if (gFrameCount == sLightningDataFrame)
+    {
+        return sLightningDataCache;
+    }
+
+    LightningData d;
+    if (!SSLightning::instanceExists())
+    {
+        sLightningDataFrame = gFrameCount;
+        sLightningDataCache = d;
+        return d;
+    }
+
+    d.mValid = true;
+    d.mCloudCap = SS_MAX_STRIKE_LIGHTS;
+    d.mSceneLightCap = SCENE_LIGHT_SLOTS;
+
+    if (SSAtmoMagic::instanceExists())
+    {
+        const SSAtmoMagic* magic = SSAtmoMagic::getInstance();
+        d.mEnabled = magic->lightningOn();
+        d.mChargeOn = magic->lightningCharge();
+        d.mSparksOn = magic->lightningSparks();
+        d.mIntensity = magic->lightningIntensity();
+        d.mIntervalMinS = magic->lightningIntervalMin();
+        d.mIntervalMaxS = magic->lightningIntervalMax();
+    }
+
+    const SSLightning* lightning = SSLightning::getInstance();
+    // nextStrikeIn() reads SSAtmoMagic's shared clock, so it is asked only where that singleton is already up -
+    // a view must never be the thing that constructs one (the same instanceExists discipline every other data
+    // gatherer here follows). Left at -1 (not scheduled) otherwise, which is exactly how the legend reads it.
+    if (SSAtmoMagic::instanceExists())
+    {
+        d.mNextIn = lightning->nextStrikeIn();
+    }
+
+    const std::vector<SSStrike>& strikes = lightning->strikes();
+    d.mStrikes.reserve(strikes.size());
+    for (const SSStrike& s : strikes)
+    {
+        LightningData::Strike out;
+        out.mKind = (S32)s.mKind;   // SSStrikeKind's values are mirrored one for one by STRIKE_KIND_* (core)
+        out.mT = s.mT;
+        out.mIntensity = s.mIntensity;
+        out.mCharge = s.mCharge;
+        out.mChargeHeld = s.mChargeHeld;
+        out.mLeaderProgress = s.mLeaderProgress;
+        out.mChannelBrightness = s.mChannelBrightness;
+        out.mFlash = s.mFlash;
+        out.mHit = s.mHit;
+        out.mFire = s.mFire;
+        out.mPlasmaSince = s.mPlasmaSince;
+        out.mStrokeCount = s.mStrokeCount;
+        out.mChannelNodes = (S32)s.mChannel.size();
+        out.mCrawlCount = s.mCrawlCount;
+        out.mCrawlLenM = s.mCrawlLenM;
+        out.mChannelLenM = s.mChannelLenM;
+        out.mDistanceM = s.mDistanceM;
+        out.mSteamPeak = s.mSteamPeak;
+        out.mPositive = s.mPositive;
+        out.mBlue = s.mBlue;
+        out.mForced = s.mForced;
+        out.mAudible = s.mAudible;
+        out.mOccHidden = s.mOccHidden;
+        out.mOrigin = s.mOrigin;
+        out.mGround = s.mGround;
+        // The stage, off this strike's own clock, leader front and plasma clock: the stroke window is its own
+        // rolled decay constant (a positive bolt holds its glow longer than a negative one), the plasma window
+        // the shared SSDissolve::PLASMA_S the renderer's column lives for.
+        out.mStage = strikeStage(s.mT, s.mLeaderProgress, s.mPlasmaSince,
+                                 s.mStrokeDecayS * 2.f, SSDissolve::PLASMA_S);
+        out.mLightWeight = strikeLightWeight(s.mChannelBrightness, s.mIntensity);
+        // Clearing the cut is not enough to reach the shader: the uploader fills SS_MAX_STRIKE_LIGHTS slots in
+        // list order and drops the rest, so a strike past the cap is marked as NOT lighting the deck - which is
+        // the honest reading, and the one that explains a bright bolt the clouds ignore.
+        out.mLightsCloud = strikeLightsCloud(s.mChannelBrightness, s.mIntensity) && (d.mCloudLit < d.mCloudCap);
+        if (out.mLightsCloud)
+        {
+            ++d.mCloudLit;
+        }
+        d.mStrikes.push_back(out);
+    }
+
+    // The deferred point lights, from the SAME const exporter LLPipeline::renderDeferredLighting calls, asked for
+    // the same slot count it asks for - so what this draws IS what the world is lit by, not a reconstruction.
+    // Behind the same instanceExists guard as nextStrikeIn above: sceneLights reads the weather's own core colour.
+    std::vector<LLVector4> pos_radius;
+    std::vector<LLColor3> colors;
+    const S32 n = SSAtmoMagic::instanceExists() ? lightning->sceneLights(pos_radius, colors, SCENE_LIGHT_SLOTS) : 0;
+    d.mLights.reserve((size_t)llmax(n, 0));
+    for (S32 i = 0; i < n && i < (S32)pos_radius.size() && i < (S32)colors.size(); ++i)
+    {
+        LightningData::SceneLight light;
+        light.mPos.setVec(pos_radius[i].mV[0], pos_radius[i].mV[1], pos_radius[i].mV[2]);
+        light.mRadiusM = pos_radius[i].mV[3];
+        light.mColor = colors[i];
+        d.mLights.push_back(light);
+    }
+
+    sLightningDataFrame = gFrameCount;
+    sLightningDataCache = d;
+    return d;
+}
+
 // ---------------------------------------------------------------------------
 // The in-world layer: V1's wind mast
 // ---------------------------------------------------------------------------
 
-// Dispatch on the live mode; each layer guards its own data.
+// <SS:Nexii> mat3(modelview) * w, renormalised, into three floats the shader can take as a vec3. A w of 0 makes it a DIRECTION transform - no translation - which is what turns a world-space direction into the view space the G-buffer normals live in, and renormalising costs nothing while covering the case where whatever loaded the modelview did not hand us a rigid transform. [interaction: SSAtmoInfoView::renderInfoLook]
+static void ssLookViewDir(const glm::mat4& mv, F32 wx, F32 wy, F32 wz, F32 out[3])
+{
+    const glm::vec4 v = mv * glm::vec4(wx, wy, wz, 0.f);
+    F32 x = v.x;
+    F32 y = v.y;
+    F32 z = v.z;
+    const F32 len = sqrtf(x * x + y * y + z * z);
+    if (len > 1.0e-6f)
+    {
+        x /= len;
+        y /= len;
+        z /= len;
+    }
+    else
+    {
+        x = 0.f;
+        y = 0.f;
+        z = 1.f;
+    }
+    out[0] = x;
+    out[1] = y;
+    out[2] = z;
+}
+
+// <SS:Nexii> The LOOK pass: one full-screen triangle that REPLACES the world with a warm-gray reading of itself (doc/atmo_magic_phase8_show.md section 6 item 4). It runs over the finished, presented frame, so it is not a tint over a tint - blend is OFF and it overwrites every pixel of the world viewport. Three inputs: the PRESENTED colour, which is gPipeline.mSSLastPresented (the exact target renderFinalize handed the "Present the screen target" pass as DEFERRED_DIFFUSE - pipeline.cpp records it on the line above that bind, because the post chain's ping-pong means no fixed target name is right on every path), plus the G-buffer's depth and its normal attachment (mRT->deferredScreen attachment 2), which the post chain never touches. It deliberately does NOT go through gPipeline.bindDeferredShader: that binds deferredScreen's attachment 0 as diffuseRect, i.e. the raw albedo, which is exactly the buffer this pass must not read - the whole point is that everything the eye was shown (tonemap, exposure, CAS, glow, DoF, FSAA, the vignette) is already in the colour. Nor does it read the pipeline's SSAO: mRT->deferredLight is overwritten by the post chain long before this point, so the shader recomputes a 12-tap hemisphere occlusion from depth and normal itself. Alpha-blended surfaces need no special case and get none: water, glass, particles and the rain curtains are already composited into the presented colour, and they take the occlusion, shade and fog of the OPAQUE surface behind them, because depth and normal at that pixel are the opaque one's - a real fog does the same to a pane of glass, and that equivalence is why the design chose a post-screen pass over a warm-gray variant of every material shader in the fork. The two direction uniforms are the shader's entire light model, both in VIEW space because that is the space the G-buffer normals live in: ss_look_up is world up through mat3(modelview), ss_look_key is the environment's light direction flattened to its azimuth and lifted back to SSInfoLook::LOOK_KEY_ELEVATION, so faces read apart without the key ever going flat at noon or vanishing at night. Depth test and blend are both off and the viewport is the one setup3DRender just set, which is the same mWorldViewRectRaw renderFinalize presented into - so the pass covers exactly the world and leaves the UI margins outside it alone. [interaction: LLPipeline::mSSLastPresented] [interaction: ssInfoLookF.glsl]
+void SSAtmoInfoView::renderInfoLook()
+{
+    static LLCachedControl<bool> look_setting(gSavedSettings, "SSAtmoInfoViewLook", true);
+    if (!(bool)look_setting) return;
+
+    if (!gSSInfoLookProgram.isComplete()) return;
+    if (!gPipeline.mRT) return;
+    if (gPipeline.mScreenTriangleVB.isNull()) return;
+
+    LLRenderTarget* presented = gPipeline.mSSLastPresented;
+    LLRenderTarget* gbuf = &gPipeline.mRT->deferredScreen;
+    if (!presented || presented->getWidth() == 0) return;
+    if (gbuf->getWidth() == 0) return;
+
+    LL_PROFILE_GPU_ZONE("atmo info look");
+
+    gSSInfoLookProgram.bind();
+
+    // The presented colour goes on diffuseRect (DEFERRED_DIFFUSE) - this shader's own declaration of that name, not the G-buffer's.
+    S32 channel = gSSInfoLookProgram.enableTexture(LLShaderMgr::DEFERRED_DIFFUSE, presented->getUsage());
+    if (channel > -1)
+    {
+        presented->bindTexture(0, channel, LLTexUnit::TFO_POINT);
+        gGL.getTexUnit(channel)->setTextureAddressMode(LLTexUnit::TAM_CLAMP);
+    }
+
+    // Attachment 2 of deferredScreen is frag_data[2]: the packed normal, plus the gbuffer flag in w that the sky test reads.
+    channel = gSSInfoLookProgram.enableTexture(LLShaderMgr::NORMAL_MAP, gbuf->getUsage());
+    if (channel > -1)
+    {
+        gbuf->bindTexture(2, channel, LLTexUnit::TFO_POINT);
+        gGL.getTexUnit(channel)->setTextureAddressMode(LLTexUnit::TAM_CLAMP);
+    }
+
+    channel = gSSInfoLookProgram.enableTexture(LLShaderMgr::DEFERRED_DEPTH, gbuf->getUsage());
+    if (channel > -1)
+    {
+        gGL.getTexUnit(channel)->bind(gbuf, true);
+    }
+
+    // The two directions, built in world space and carried into view space by the modelview setup3DRender just loaded.
+    const glm::mat4 mv = get_current_modelview();
+
+    LLVector3 key_world = LLEnvironment::instance().getLightDirection();
+    key_world.mV[VZ] = 0.f;
+    if (key_world.magVecSquared() < 1.0e-6f)
+    {
+        key_world.setVec(1.f, 0.f, 0.f);
+    }
+    key_world.normVec();
+    key_world.mV[VZ] = SSInfoLook::LOOK_KEY_ELEVATION;
+    key_world.normVec();
+
+    F32 up_v[3];
+    F32 key_v[3];
+    ssLookViewDir(mv, 0.f, 0.f, 1.f, up_v);
+    ssLookViewDir(mv, key_world.mV[VX], key_world.mV[VY], key_world.mV[VZ], key_v);
+
+    static LLStaticHashedString s_look_up("ss_look_up");
+    static LLStaticHashedString s_look_key("ss_look_key");
+    gSSInfoLookProgram.uniform3fv(s_look_up, 1, up_v);
+    gSSInfoLookProgram.uniform3fv(s_look_key, 1, key_v);
+
+    {
+        LLGLDisable cull(GL_CULL_FACE);
+        LLGLDisable blend(GL_BLEND);
+        LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+        gPipeline.mScreenTriangleVB->setBuffer();
+        gPipeline.mScreenTriangleVB->drawArrays(LLRender::TRIANGLES, 0, 3);
+    }
+
+    // Release every unit this pass claimed: the world layer below draws with gUIProgram on unit 0, and leaving a
+    // render target's colour texture resident on a unit is how the whiteout pass earned its feedback-loop comment.
+    gSSInfoLookProgram.disableTexture(LLShaderMgr::DEFERRED_DIFFUSE, presented->getUsage());
+    gSSInfoLookProgram.disableTexture(LLShaderMgr::NORMAL_MAP, gbuf->getUsage());
+    gSSInfoLookProgram.disableTexture(LLShaderMgr::DEFERRED_DEPTH, gbuf->getUsage());
+    gSSInfoLookProgram.unbind();
+
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+}
+
+// <SS:Nexii> The overlay's ONE 3-D draw site, called from render_ui() in llviewerdisplay.cpp AFTER gPipeline.renderFinalize() and BEFORE render_hud_attachments(): post-tonemap, a 3-D pass with the WORLD camera, in the same window between finalize and the HUD where HUD attachments draw their own 3-D geometry. It draws the LOOK pass first, then the in-world layer on top of it (each render* helper keeps depth test off), which is the Skylines look - the world becomes a warm-gray model, the data stays bright on top of it. What used to be here was a translucent near-black quad driven by SSAtmoInfoViewDim; the user's verdict was "the world dimming still sucks, it is just making the world black at max", so the quad and its slider are gone and renderInfoLook() has their place - see that function for what it reads and why. Two earlier homes were wrong for two different reasons: SSAtmoDimView::draw() in the UI stage (a 3-D layer re-entering from the UI pass clipped the console text and threw the visualisations into the window corners), then LLPipeline::renderDebug, which runs inside renderGeomPostDeferred and so landed the overlay in the HDR screen buffer BEFORE generateLuminance/tonemap - a 0.55 linear tint read as roughly 0.30 perceptual AND auto-exposure then opened up to cancel it over about a second, pumping the whole scene. Drawn here everything lands in the default framebuffer in display space and nothing feeds back into exposure; the look pass needs that just as much, because its ramp is authored against display-space luminance. Nothing 2-D is left in this function - the dim quad was the only thing that wanted setup2DRender's raw-window ortho (and needed it, or a UI scale above 1 left an undimmed strip); the look pass is a clip-space triangle over the world viewport instead, which is the rect the world was actually presented into. Matrix discipline is render_hud_attachments' own, not the LLSceneMonitor block's: push BOTH stacks and save the cached copies, then setup3DRender() (it reloads projection AND modelview from LLViewerCamera and resets the viewport to mWorldViewRectRaw - the same viewport renderFinalize left set), which is what gives the look pass its projection_matrix/inv_proj and its view-space directions as well as giving the world layer its camera, then setup3DRender()/pop/restore on the way out so viewport, GL matrices and the get_current_* cache all come back exactly as found; gGLLastMatrix is cleared because those loads went in behind the pipeline's cache. render_hud_attachments re-derives its own matrices from setup_hud_matrices and restores what it saw, and render_hud_elements (which runs first, in world space) needs precisely the state we restore. gUIProgram (declared by llrender2dutils.h, already included here for gl_rect_2d) is bound around the world layer, which needs a shader as much as any pass does, and unbound at the end, because renderFinalize leaves no shader bound and render_hud_elements binds its own. Runs with the look off: SSAtmoInfoViewLook FALSE means "no look", not "no overlay". [interaction: render_ui] [interaction: render_hud_attachments] [interaction: SSAtmoDimView]
+void SSAtmoInfoView::renderDimAndWorld()
+{
+    // <SS:Nexii> V9's mask (RENDER_DEBUG_LIGHTNING, the eighth switch on the debug floater beside the other
+    // seven): the lightning layer is BOTH an info view and an engineering overlay, so this function also runs
+    // with no mode selected at all when that mask is set. The LOOK pass stays tied to the MODE - a checkbox
+    // overlay must not repaint the world warm-gray - so with the mask on and the mode off, the world is left
+    // exactly as rendered and only the layer draws. This is why the mask is read here rather than dispatched from
+    // LLPipeline::renderDebug like the other seven: renderDebug runs inside renderGeomPostDeferred, ahead of the
+    // luminance sample, which is the very reason this whole overlay was moved out of it (see the comment on
+    // renderWorld's caller in pipeline.cpp). [interaction: LLPipeline::RENDER_DEBUG_LIGHTNING]
+    const U32 active_mode = mode();
+    const bool lightning_mask = gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_LIGHTNING);
+    if (active_mode == MODE_OFF && !lightning_mask) return;
+    if (!gViewerWindow) return;
+
+    gGL.flush();
+
+    // <SS:Nexii> Save everything setup3DRender is about to overwrite: both GL matrix stacks and the get_current_* cache the UI stage and the HUD passes read back out of.
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    const glm::mat4 saved_projection = get_current_projection();
+    const glm::mat4 saved_modelview = get_current_modelview();
+
+    gViewerWindow->setup3DRender();
+
+    if (active_mode != MODE_OFF)
+    {
+        renderInfoLook();
+    }
+
+    gUIProgram.bind();
+
+    {
+        LLGLDisable cull(GL_CULL_FACE);
+        LLGLEnable blend(GL_BLEND);
+        gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+        renderWorld();
+
+        gGL.flush();
+    }
+
+    // <SS:Nexii> setup3DRender() first for the viewport and the matrices, then the stacks and the cache, so what follows sees exactly the state renderFinalize left.
+    gViewerWindow->setup3DRender();
+    gUIProgram.unbind();
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    set_current_projection(saved_projection);
+    set_current_modelview(saved_modelview);
+    gGLLastMatrix = NULL;
+}
+
+// Dispatch on the live mode; each layer guards its own data. V9's layer is the one exception to "one mode, one
+// layer": it also answers to RENDER_DEBUG_LIGHTNING, so it is drawn EXACTLY ONCE whether the mode selects it, the
+// mask does, or both. The reserved modes (V6 World Field, V8 Anatomy - see SSAtmoInfoViewCore's numbering) have no
+// case here on purpose; they fall through and draw nothing until someone builds them.
 void SSAtmoInfoView::renderWorld()
 {
-    switch (mode())
+    const U32 active_mode = mode();
+    const bool lightning = (active_mode == MODE_LIGHTNING) ||
+                           gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_LIGHTNING);
+    if (lightning)
+    {
+        renderLightning();
+    }
+
+    switch (active_mode)
     {
         case MODE_WIND_PROFILE: renderWindMast(); break;
         case MODE_STORM_CELLS:  renderStormCells(); break;
@@ -610,7 +967,7 @@ void SSAtmoInfoView::renderWindMast()
     };
 
     LLGLEnable blend(GL_BLEND);
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this now draws AFTER the dim quad in the UI stage (SSAtmoDimView::draw), on top like a Skylines layer, so it must never be occluded by world geometry
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this draws in the 3-D pass AFTER SSAtmoInfoView::renderDimAndWorld has laid the dim quad down, on top like a Skylines layer, so it must never be occluded by world geometry
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
@@ -825,89 +1182,58 @@ SSAtmoInfoView::StormCellsData SSAtmoInfoView::stormCellsData()
 
     // <SS:Nexii> SQUALL (doc/atmo_magic_storm_dynamics.md section 5, V2's own "bar through the members" ask):
     // reconstructs each active line's geometry read-only, through the SAME pure functions the scheduler used to
-    // spawn it (SSSquall::lineEvent/lineMember/qlcsJunction), never a new field carried on ActiveCell beyond the
-    // mLineId it already has. Every member of a line shares one epoch (sssquallcore.h's lineMember sets
-    // c.mEpoch = epochOf(the line's own birth) for every i), so grouping active cells by mLineId and calling
-    // lineEvent ONCE per distinct (epoch, lineId) - phase read through sc->schedulerPhaseAt (7c NEW-2: the SAME
-    // map ssstormcells.cpp's own lineAtEpoch used, real or preview-overridden, never mTrack->dayCyclePhaseAt
-    // unconditionally), windAnvil then resolved the same way (-> SSAtmoEnvApplier::windProfileAt -> windAt
-    // (anvilAgl)), severe recomputed as SSWindProfile::consolidation(moisture, convection) >=
-    // SSSquall::SEVERE_CONSOLIDATION_MIN at that SAME phase (7c NEW-5: the identical expression
-    // ssstormcells.cpp's lineAtEpoch gates on, not a hard-coded true - a line member existing already proves it
-    // was true at emission, but recomputing it here catches a future divergence between the two instead of
-    // masking one) - reproduces the identical origin/direction/motion/member template. e.mLineId is checked
-    // against the cell's own mLineId before trusting anything from the reconstruction; a mismatch (should not
-    // happen - the epoch is read straight off the member itself) skips the line rather than drawing a wrong one.
-    // Members are matched back to active cells by mCandidate.mId (the SAME pure function applied to the SAME
-    // (lineId, i) gives the SAME id, sssquallcore.h's lineMember), so mMembersAgent only ever contains members
-    // that actually gated and are alive THIS frame, in the template's own along-the-line order (the offset
-    // formula is monotone in member index). With schedulerPhaseAt reading the SAME captured map (real or
-    // preview) update() resolved this frame's cells with, the phase used here and the phase lineAtEpoch used are
-    // identical, not merely close - the old "can disagree by up to one 2s memo bucket" limitation no longer
-    // applies; the only way this reconstruction can be stale is if update() has not run yet this frame (there is
-    // then nothing to reconstruct, since cells is empty). [interaction: SSAtmoEnvApplier::windProfileAt]
-    // [interaction: SSStormCells::schedulerPhaseAt]
-    if (SSAtmoEnvManager::instanceExists())
+    // spawn it (SSSquall::lineMember/qlcsJunctionAt), never a new field carried on ActiveCell beyond the mLineId it
+    // already has. 8a audit F3: the LineEvent itself is no longer RE-DERIVED here (the old version called
+    // SSSquall::lineEvent unconditionally, which only ever reproduces the HASHED branch - an authored line's
+    // mLineId is chained through forcedLine's own SALT_FORCED_LINE_ID salt, so lineEvent() here could never
+    // recompute a matching id for it and an authored squall silently drew no bar/junctions at all). Instead this
+    // reads sc->lineEventForId(lineId), the EXACT event SSStormCells::update()'s lineAtEpoch resolved this frame
+    // (hashed or authored) and stored alongside its LineDesc - so the reconstruction is honest for both. Members
+    // are matched back to active cells by mCandidate.mId (the SAME pure function applied to the SAME (lineId, i)
+    // gives the SAME id, sssquallcore.h's lineMember), so mMembersAgent only ever contains members that actually
+    // gated and are alive THIS frame, in the template's own along-the-line order (the offset formula is monotone
+    // in member index). 7b F9: qlcsJunctionAt advects the birth-frame junction to the wall time the cells were
+    // resolved at (sc->now()) - qlcsJunction alone is the birth-frame position, and drawing it beside members
+    // already advected by mMotion * age would separate the marker from the line by |motion| * age (lesson 12).
     {
-        const SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
-        const S32 track_idx = sc->trackIndex();
-        if (mgr->hasAsset() && track_idx >= 0 && track_idx < (S32)mgr->asset().mTracks.size())
+        // Distinct line ids among this frame's active cells.
+        std::vector<U64> line_ids;
+        for (const SSStormCells::ActiveCell& c : cells)
         {
-            const SSAtmoEnvTrack& track = mgr->asset().mTracks[(size_t)track_idx];
-            const SSSquall::Vec2 anchorSq{ sc->anchor().x, sc->anchor().y };
+            if (c.mLineId == 0) continue;
+            bool have = false;
+            for (U64 id : line_ids) { if (id == c.mLineId) { have = true; break; } }
+            if (!have) line_ids.push_back(c.mLineId);
+        }
 
-            // Distinct line ids among this frame's active cells, each remembering the (shared) epoch it was born on.
-            std::vector<std::pair<U64, S64> > line_epochs;
-            for (const SSStormCells::ActiveCell& c : cells)
+        for (U64 lineId : line_ids)
+        {
+            const SSSquall::LineEvent* e = sc->lineEventForId(lineId);
+            if (!e || !e->mIsLine || e->mLineId != lineId) continue; // defensive: should be unreachable
+
+            StormCellsData::SquallLine sl;
+            sl.mLineId = lineId;
+            const S32 n = llmin((S32)SSSquall::LINE_MEMBERS_MAX, SSStormCell::LINE_MEMBERS_CAP);
+            for (S32 i = 0; i < n; ++i)
             {
-                if (c.mLineId == 0) continue;
-                bool have = false;
-                for (const auto& p : line_epochs) { if (p.first == c.mLineId) { have = true; break; } }
-                if (!have) line_epochs.emplace_back(c.mLineId, c.mCandidate.mEpoch);
-            }
-
-            for (const auto& le : line_epochs)
-            {
-                const U64 lineId = le.first;
-                const S64 epoch = le.second;
-                const F64 phase = sc->schedulerPhaseAt((F64)epoch * SSStormCell::EPOCH_S);
-                const F32 moisture = llclamp(track.mWeather.mMoisture.valueAt(phase), 0.f, 1.f);
-                const F32 convection = llclamp(track.mWeather.mConvection.valueAt(phase), 0.f, 1.f);
-                const bool severe = SSWindProfile::consolidation(moisture, convection) >= SSSquall::SEVERE_CONSOLIDATION_MIN;
-                const SSWindProfile::Params profile = SSAtmoEnvApplier::windProfileAt(track, phase);
-                const SSWindProfile::Vec2 wind = SSWindProfile::windAt(profile.mAnvilAglM, profile);
-                const SSSquall::Vec2 windAnvil{ wind.x, wind.y };
-                const SSSquall::LineEvent e = SSSquall::lineEvent(sc->seed(), epoch, anchorSq, windAnvil, severe);
-                if (!e.mIsLine || e.mLineId != lineId) continue;
-
-                StormCellsData::SquallLine sl;
-                sl.mLineId = lineId;
-                const S32 n = llmin((S32)SSSquall::LINE_MEMBERS_MAX, SSStormCell::LINE_MEMBERS_CAP);
-                for (S32 i = 0; i < n; ++i)
+                const SSStormCell::Candidate m = SSSquall::lineMember(*e, i);
+                for (const SSStormCells::ActiveCell& c : cells)
                 {
-                    const SSStormCell::Candidate m = SSSquall::lineMember(e, i);
-                    for (const SSStormCells::ActiveCell& c : cells)
+                    if (c.mLineId == lineId && c.mCandidate.mId == m.mId)
                     {
-                        if (c.mLineId == lineId && c.mCandidate.mId == m.mId)
-                        {
-                            sl.mMembersAgent.push_back(sc->toAgentXY(c.mCentre));
-                            break;
-                        }
+                        sl.mMembersAgent.push_back(sc->toAgentXY(c.mCentre));
+                        break;
                     }
                 }
-                for (S32 i = 0; i + 1 < n; ++i)
-                {
-                    // 7b F9: qlcsJunctionAt advects the birth-frame junction to the wall time the cells were
-                    // resolved at (sc->now()) - qlcsJunction alone is the birth-frame position, and drawing it
-                    // beside members already advected by mMotion * age would separate the marker from the line by
-                    // |motion| * age (lesson 12).
-                    const SSSquall::Vec2 j = SSSquall::qlcsJunctionAt(e, i, sc->now());
-                    sl.mJunctionsAgent.push_back(sc->toAgentXY(SSStormCell::Vec2{ j.x, j.y }));
-                }
-                if (!sl.mMembersAgent.empty())
-                {
-                    d.mSquallLines.push_back(sl);
-                }
+            }
+            for (S32 i = 0; i + 1 < n; ++i)
+            {
+                const SSSquall::Vec2 j = SSSquall::qlcsJunctionAt(*e, i, sc->now());
+                sl.mJunctionsAgent.push_back(sc->toAgentXY(SSStormCell::Vec2{ j.x, j.y }));
+            }
+            if (!sl.mMembersAgent.empty())
+            {
+                d.mSquallLines.push_back(sl);
             }
         }
     }
@@ -928,6 +1254,8 @@ SSAtmoInfoView::StormCellsData SSAtmoInfoView::stormCellsData()
         t.mCentreAgent = sc->toAgentXY(centre);
         t.mPotential = c.mPotential;
         t.mShearNoise = c.mShearNoise;
+        t.mLX = lx[i];
+        t.mLY = ly[i];
         // <SS:Nexii> S10 (phase-2b audit): match by the alive cell's ACTUAL origin tile, not its natal
         // candidate.mLX/mLY - for the hero those differ (composeHero overrides mOrigin up to HERO_SPAWN_MAX_M from
         // the anchor, which can land in a different lattice cell than the one it was born on), so this is the tile
@@ -949,6 +1277,21 @@ SSAtmoInfoView::StormCellsData SSAtmoInfoView::stormCellsData()
             }
         }
         d.mTiles.push_back(t);
+    }
+
+    // <SS:Nexii> V2 LINE BAND (doc/atmo_magic_phase8_show.md section 3 item 1): the deck coupling's own closed-form
+    // band, read straight off SSStormCells::fillLineBand (already AGENT frame - see its own comment) rather than
+    // reconstructed - mStrength stays 0 (LineBand's own "disabled" reading) when no line is alive this frame.
+    {
+        SSStormCouple::LineBand lb;
+        sc->fillLineBand(lb);
+        d.mLineBand.mOriginAgent.setVec(lb.ox, lb.oy);
+        d.mLineBand.mDir.setVec(lb.dirX, lb.dirY);
+        d.mLineBand.mMotion.setVec(lb.motX, lb.motY);
+        d.mLineBand.mHalfLenM = lb.halfLen;
+        d.mLineBand.mBandM = lb.bandM;
+        d.mLineBand.mShelfM = lb.shelfM;
+        d.mLineBand.mStrength = lb.strength;
     }
 
     // <SS:Nexii> DEBUG: vortex icons - SSVortices::update() is ticked unconditionally from SSAtmoMagic::idle()
@@ -1050,25 +1393,117 @@ void SSAtmoInfoView::renderStormCells()
     };
 
     LLGLEnable blend(GL_BLEND);
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this now draws AFTER the dim quad in the UI stage (SSAtmoDimView::draw), on top like a Skylines layer, so it must never be occluded by world geometry
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this draws in the 3-D pass AFTER SSAtmoInfoView::renderDimAndWorld has laid the dim quad down, on top like a Skylines layer, so it must never be occluded by world geometry
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
-    // Filled lattice tiles first (two triangles each), so every line lands on top of them.
+    // Filled lattice tiles first (two triangles each), so every line lands on top of them. V2 lattice-tint
+    // smoothing (doc/atmo_magic_phase8_show.md section 3 item 2): each tile's SPAWN-DECISION quantity is still one
+    // flat SSStormCell::candidate().mPotential per lattice cell (t.mPotential, unchanged - the gate never reads a
+    // corner) - but the TINT drawn for it is evaluated at the tile's four corners, each corner averaged over the
+    // (up to 4) neighbouring tiles that share it, and painted as two per-vertex-coloured triangles so gGL's
+    // hardware interpolation reads the potential field as a continuous surface across tile boundaries rather than
+    // a flat colour per 2900 m cell. Corner (cx,cy) sits at world (cx*LATTICE_M, cy*LATTICE_M) and is shared by
+    // tiles (cx-1,cy-1)/(cx,cy-1)/(cx-1,cy)/(cx,cy); a tile's own four corners are therefore (mLX,mLY),
+    // (mLX+1,mLY), (mLX+1,mLY+1), (mLX,mLY+1). Tiles outside the enumerated field (e.g. just past FIELD_M) are
+    // simply absent from the lookup, so an edge corner averages over whichever 1-3 neighbours ARE present - never a
+    // fresh candidate() call outside the field, never a different potential than what mTiles already carries.
     const F32 half = SSStormCell::LATTICE_M * 0.47f;
-    gGL.begin(LLRender::TRIANGLES);
-    for (const StormCellsData::Tile& t : d.mTiles)
+    // <SS:Nexii> SSAtmoInfoViewTileTint (default off): skips the filled lattice tint and, further down, the tile
+    // outline lines - `half` stays computed unconditionally since the outline loop still needs the tile's corner
+    // geometry when tinting is on. Every other V2 entity (rings, hero ribbon, vortex icons, line band, pins,
+    // labels) draws regardless.
+    static LLCachedControl<bool> tile_tint(gSavedSettings, "SSAtmoInfoViewTileTint", false);
+    if (tile_tint)
     {
-        const LLColor4 c = toColor(energyRamp(t.mPotential, 1.f), latticeTileAlpha(t.mPotential, SSStormCell::SPAWN_THRESHOLD));
-        gGL.color4fv(c.mV);
-        const LLVector3 a = drawn(LLVector3(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] - half, z));
-        const LLVector3 b = drawn(LLVector3(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] - half, z));
-        const LLVector3 cc = drawn(LLVector3(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] + half, z));
-        const LLVector3 dd = drawn(LLVector3(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] + half, z));
-        gGL.vertex3fv(a.mV); gGL.vertex3fv(b.mV); gGL.vertex3fv(cc.mV);
-        gGL.vertex3fv(a.mV); gGL.vertex3fv(cc.mV); gGL.vertex3fv(dd.mV);
+        std::map<std::pair<S32, S32>, F32> tile_potential;
+        for (const StormCellsData::Tile& t : d.mTiles)
+        {
+            tile_potential[std::make_pair(t.mLX, t.mLY)] = t.mPotential;
+        }
+        auto cornerColor = [&](S32 cx, S32 cy) -> LLColor4
+        {
+            F32 sum = 0.f;
+            S32 n = 0;
+            for (S32 dy = -1; dy <= 0; ++dy)
+            {
+                for (S32 dx = -1; dx <= 0; ++dx)
+                {
+                    const auto it = tile_potential.find(std::make_pair(cx + dx, cy + dy));
+                    if (it != tile_potential.end())
+                    {
+                        sum += it->second;
+                        ++n;
+                    }
+                }
+            }
+            const F32 p = (n > 0) ? (sum / (F32)n) : 0.f;
+            return toColor(energyRamp(p, 1.f), latticeTileAlpha(p, SSStormCell::SPAWN_THRESHOLD));
+        };
+        gGL.begin(LLRender::TRIANGLES);
+        for (const StormCellsData::Tile& t : d.mTiles)
+        {
+            const LLVector3 a = drawn(LLVector3(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] - half, z));
+            const LLVector3 b = drawn(LLVector3(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] - half, z));
+            const LLVector3 cc = drawn(LLVector3(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] + half, z));
+            const LLVector3 dd = drawn(LLVector3(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] + half, z));
+            const LLColor4 ca = cornerColor(t.mLX,     t.mLY);
+            const LLColor4 cb = cornerColor(t.mLX + 1, t.mLY);
+            const LLColor4 ccorner = cornerColor(t.mLX + 1, t.mLY + 1);
+            const LLColor4 cd = cornerColor(t.mLX,     t.mLY + 1);
+            gGL.color4fv(ca.mV);      gGL.vertex3fv(a.mV);
+            gGL.color4fv(cb.mV);      gGL.vertex3fv(b.mV);
+            gGL.color4fv(ccorner.mV); gGL.vertex3fv(cc.mV);
+            gGL.color4fv(ca.mV);      gGL.vertex3fv(a.mV);
+            gGL.color4fv(ccorner.mV); gGL.vertex3fv(cc.mV);
+            gGL.color4fv(cd.mV);      gGL.vertex3fv(dd.mV);
+        }
+        gGL.end();
     }
-    gGL.end();
+
+    // <SS:Nexii> V2 LINE BAND (doc/atmo_magic_phase8_show.md section 3 item 1): the active squall line's own deck-
+    // coupling geometry (SSStormCells::fillLineBand, read-only - d.mLineBand's own comment) drawn as two
+    // translucent quads: the WALL (bandM either side of the segment, halfLen either way along it) and the SHELF (a
+    // parallelogram spanned by dir x halfLen and mot x shelfM, matching SSStormCouple::lineField's own along/ahead
+    // axes rather than assuming they are perpendicular - a stalled line's mot is (0,0) and the shelf quad
+    // degenerates to a zero-area sliver, drawing nothing visible). This is a flat outline of the band's EXTENT for
+    // orientation, not a re-rendering of lineField's own smoothstep falloff inside it; alpha scales with the
+    // line's live strength so a weakening line fades rather than popping off.
+    if (d.mLineBand.mStrength > 0.f && d.mLineBand.mBandM > 0.f && d.mLineBand.mHalfLenM > 0.f)
+    {
+        const LLVector2& o = d.mLineBand.mOriginAgent;
+        const LLVector2& dir = d.mLineBand.mDir;
+        const LLVector2 perp(-dir.mV[1], dir.mV[0]);
+        const F32 halfLen = d.mLineBand.mHalfLenM;
+        const F32 bandM = d.mLineBand.mBandM;
+        const F32 strength = llclamp(d.mLineBand.mStrength, 0.f, 1.f);
+
+        gGL.begin(LLRender::TRIANGLES);
+        {
+            const LLColor4 wc(LINE_WALL_FILL.mV[0], LINE_WALL_FILL.mV[1], LINE_WALL_FILL.mV[2], LINE_WALL_FILL.mV[3] * strength);
+            gGL.color4fv(wc.mV);
+            const LLVector3 p0 = drawn(at(LLVector2(o.mV[0] - dir.mV[0] * halfLen - perp.mV[0] * bandM, o.mV[1] - dir.mV[1] * halfLen - perp.mV[1] * bandM)));
+            const LLVector3 p1 = drawn(at(LLVector2(o.mV[0] + dir.mV[0] * halfLen - perp.mV[0] * bandM, o.mV[1] + dir.mV[1] * halfLen - perp.mV[1] * bandM)));
+            const LLVector3 p2 = drawn(at(LLVector2(o.mV[0] + dir.mV[0] * halfLen + perp.mV[0] * bandM, o.mV[1] + dir.mV[1] * halfLen + perp.mV[1] * bandM)));
+            const LLVector3 p3 = drawn(at(LLVector2(o.mV[0] - dir.mV[0] * halfLen + perp.mV[0] * bandM, o.mV[1] - dir.mV[1] * halfLen + perp.mV[1] * bandM)));
+            gGL.vertex3fv(p0.mV); gGL.vertex3fv(p1.mV); gGL.vertex3fv(p2.mV);
+            gGL.vertex3fv(p0.mV); gGL.vertex3fv(p2.mV); gGL.vertex3fv(p3.mV);
+        }
+        if (d.mLineBand.mShelfM > 0.f)
+        {
+            const LLVector2& mot = d.mLineBand.mMotion;
+            const F32 shelfM = d.mLineBand.mShelfM;
+            const LLColor4 shc(LINE_SHELF_FILL.mV[0], LINE_SHELF_FILL.mV[1], LINE_SHELF_FILL.mV[2], LINE_SHELF_FILL.mV[3] * strength);
+            gGL.color4fv(shc.mV);
+            const LLVector3 p0 = drawn(at(LLVector2(o.mV[0] - dir.mV[0] * halfLen, o.mV[1] - dir.mV[1] * halfLen)));
+            const LLVector3 p1 = drawn(at(LLVector2(o.mV[0] + dir.mV[0] * halfLen, o.mV[1] + dir.mV[1] * halfLen)));
+            const LLVector3 p2 = drawn(at(LLVector2(o.mV[0] + dir.mV[0] * halfLen + mot.mV[0] * shelfM, o.mV[1] + dir.mV[1] * halfLen + mot.mV[1] * shelfM)));
+            const LLVector3 p3 = drawn(at(LLVector2(o.mV[0] - dir.mV[0] * halfLen + mot.mV[0] * shelfM, o.mV[1] - dir.mV[1] * halfLen + mot.mV[1] * shelfM)));
+            gGL.vertex3fv(p0.mV); gGL.vertex3fv(p1.mV); gGL.vertex3fv(p2.mV);
+            gGL.vertex3fv(p0.mV); gGL.vertex3fv(p2.mV); gGL.vertex3fv(p3.mV);
+        }
+        gGL.end();
+    }
 
     auto line = [&](const LLVector3& a, const LLVector3& b)
     {
@@ -1135,21 +1570,28 @@ void SSAtmoInfoView::renderStormCells()
 
     gGL.begin(LLRender::LINES);
 
-    // Tile outlines: faint everywhere, bright where an active cell was born.
-    for (const StormCellsData::Tile& t : d.mTiles)
+    // Tile outlines: faint everywhere, bright where an active cell was born. Gated by the same tile_tint setting
+    // as the filled lattice tint above, so tile tint off means no lattice tile geometry at all.
+    if (tile_tint)
     {
-        const LLColor4& c = t.mAlive ? TILE_ALIVE : TILE_EDGE;
-        gGL.color4fv(c.mV);
-        const LLVector2 p0(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] - half);
-        const LLVector2 p1(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] - half);
-        const LLVector2 p2(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] + half);
-        const LLVector2 p3(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] + half);
-        line(at(p0), at(p1)); line(at(p1), at(p2)); line(at(p2), at(p3)); line(at(p3), at(p0));
+        for (const StormCellsData::Tile& t : d.mTiles)
+        {
+            const LLColor4& c = t.mAlive ? TILE_ALIVE : TILE_EDGE;
+            gGL.color4fv(c.mV);
+            const LLVector2 p0(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] - half);
+            const LLVector2 p1(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] - half);
+            const LLVector2 p2(t.mCentreAgent.mV[0] + half, t.mCentreAgent.mV[1] + half);
+            const LLVector2 p3(t.mCentreAgent.mV[0] - half, t.mCentreAgent.mV[1] + half);
+            line(at(p0), at(p1)); line(at(p1), at(p2)); line(at(p2), at(p3)); line(at(p3), at(p0));
+        }
     }
 
-    // The anchor: the weather domain's region centre, with the hero pass band as two faint rings.
+    // The anchor: the weather domain's region centre, with the hero pass law as two faint rings - the law's own
+    // median (HERO_PASS_MAX_M * 0.5^HERO_PASS_SKEW, ~300 m: half of all passes land inside this ring) and
+    // HERO_PASS_MAX_M itself (the pass never exceeds this). HERO_PASS_MIN_M is 0 m and draws nothing (ring()
+    // skips radius <= 0), so it is not one of the two rings.
     cross(d.mAnchorAgent, 120.f, ANCHOR_WHITE);
-    ring(d.mAnchorAgent, SSStormCell::HERO_PASS_MIN_M, LLColor4(1.f, 1.f, 1.f, 0.25f));
+    ring(d.mAnchorAgent, SSStormCell::HERO_PASS_MAX_M * std::pow(0.5f, SSStormCell::HERO_PASS_SKEW), LLColor4(1.f, 1.f, 1.f, 0.25f));
     ring(d.mAnchorAgent, SSStormCell::HERO_PASS_MAX_M, LLColor4(1.f, 1.f, 1.f, 0.25f));
 
     // Alive cells: influence ring by stage, the 40% plateau inside it, a centre cross, and rotation glyphs for supercells.
@@ -1252,7 +1694,12 @@ void SSAtmoInfoView::renderStormCells()
             line(at(LLVector2(n.mV[0] + r, n.mV[1])), at(LLVector2(n.mV[0], n.mV[1] - r)));
             line(at(LLVector2(n.mV[0], n.mV[1] - r)), at(LLVector2(n.mV[0] - r, n.mV[1])));
         }
-        // Closest approach: a ring at the point, and the perpendicular to the anchor.
+        // Closest approach (7f V2 item 3): a ring at the anchor of radius mClosestDistM - the ACTUAL measured pass
+        // distance for THIS hero, distinct from the two static design-limit band rings drawn at the anchor above
+        // (HERO_PASS_MIN_M/MAX_M) - plus a marker at h.mClosestAgent, the CONTACT PATH's own closest point (composeHero
+        // composes the path to the FUNNEL's contact, not the cell centre - see ssstormcellcore.h's composeHero), and
+        // the perpendicular from that point to the anchor.
+        ring(d.mAnchorAgent, h.mClosestDistM, LLColor4(1.f, 1.f, 1.f, 0.5f));
         ring(h.mClosestAgent, 90.f, ANCHOR_WHITE);
         gGL.color4fv(LLColor4(1.f, 1.f, 1.f, 0.6f).mV);
         line(at(h.mClosestAgent), at(d.mAnchorAgent));
@@ -1391,42 +1838,49 @@ void SSAtmoInfoView::renderDeckLod()
     };
 
     LLGLEnable blend(GL_BLEND);
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this now draws AFTER the dim quad in the UI stage (SSAtmoDimView::draw), on top like a Skylines layer, so it must never be occluded by world geometry
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this draws in the 3-D pass AFTER SSAtmoInfoView::renderDimAndWorld has laid the dim quad down, on top like a Skylines layer, so it must never be occluded by world geometry
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
     // Tinted tiles: a fixed pitch (coarser than the builder's own SSDeckLod::CELL_M, since this is a display
     // sampling of a pure distance function, not a cell-for-cell replay), covering the ramp's whole reach.
-    const F32 pitch = SSDeckLod::CELL_M * 4.f;
+    // <SS:Nexii> SSAtmoInfoViewTileTint (default off): skips just this keep-fraction grid so the rails, their
+    // labels and the Tier B macro grid below (a distinct diagram, untouched by this setting) still read - the
+    // user's complaint was the tile cells burying the rails, not the macro grid.
     const F32 reach = SSDeckLod::DECK_EDGE_M;
-    const S32 half_n = (S32)std::ceil(reach / pitch);
-    const S32 cx0 = (S32)std::floor(cam.mV[VX] / pitch);
-    const S32 cy0 = (S32)std::floor(cam.mV[VY] / pitch);
-    const F32 half_tile = pitch * 0.47f;
-
-    gGL.begin(LLRender::TRIANGLES);
-    for (S32 ty = -half_n; ty <= half_n; ++ty)
+    static LLCachedControl<bool> tile_tint(gSavedSettings, "SSAtmoInfoViewTileTint", false);
+    if (tile_tint)
     {
-        for (S32 tx = -half_n; tx <= half_n; ++tx)
-        {
-            const F32 tcx = (F32)(cx0 + tx) * pitch + pitch * 0.5f;
-            const F32 tcy = (F32)(cy0 + ty) * pitch + pitch * 0.5f;
-            const F32 ddx = tcx - cam.mV[VX];
-            const F32 ddy = tcy - cam.mV[VY];
-            const F32 dist = std::sqrt(ddx * ddx + ddy * ddy);
-            if (dist > reach) continue;
+        const F32 pitch = SSDeckLod::CELL_M * 4.f;
+        const S32 half_n = (S32)std::ceil(reach / pitch);
+        const S32 cx0 = (S32)std::floor(cam.mV[VX] / pitch);
+        const S32 cy0 = (S32)std::floor(cam.mV[VY] / pitch);
+        const F32 half_tile = pitch * 0.47f;
 
-            const LLColor4 tint = toColor(presenceRamp(SSDeckLod::keepFrac(dist), 1.f), 0.30f);
-            gGL.color4fv(tint.mV);
-            const LLVector3 a = drawn(LLVector3(tcx - half_tile, tcy - half_tile, z));
-            const LLVector3 b = drawn(LLVector3(tcx + half_tile, tcy - half_tile, z));
-            const LLVector3 c = drawn(LLVector3(tcx + half_tile, tcy + half_tile, z));
-            const LLVector3 e = drawn(LLVector3(tcx - half_tile, tcy + half_tile, z));
-            gGL.vertex3fv(a.mV); gGL.vertex3fv(b.mV); gGL.vertex3fv(c.mV);
-            gGL.vertex3fv(a.mV); gGL.vertex3fv(c.mV); gGL.vertex3fv(e.mV);
+        gGL.begin(LLRender::TRIANGLES);
+        for (S32 ty = -half_n; ty <= half_n; ++ty)
+        {
+            for (S32 tx = -half_n; tx <= half_n; ++tx)
+            {
+                const F32 tcx = (F32)(cx0 + tx) * pitch + pitch * 0.5f;
+                const F32 tcy = (F32)(cy0 + ty) * pitch + pitch * 0.5f;
+                const F32 ddx = tcx - cam.mV[VX];
+                const F32 ddy = tcy - cam.mV[VY];
+                const F32 dist = std::sqrt(ddx * ddx + ddy * ddy);
+                if (dist > reach) continue;
+
+                const LLColor4 tint = toColor(presenceRamp(SSDeckLod::keepFrac(dist), 1.f), 0.30f);
+                gGL.color4fv(tint.mV);
+                const LLVector3 a = drawn(LLVector3(tcx - half_tile, tcy - half_tile, z));
+                const LLVector3 b = drawn(LLVector3(tcx + half_tile, tcy - half_tile, z));
+                const LLVector3 c = drawn(LLVector3(tcx + half_tile, tcy + half_tile, z));
+                const LLVector3 e = drawn(LLVector3(tcx - half_tile, tcy + half_tile, z));
+                gGL.vertex3fv(a.mV); gGL.vertex3fv(b.mV); gGL.vertex3fv(c.mV);
+                gGL.vertex3fv(a.mV); gGL.vertex3fv(c.mV); gGL.vertex3fv(e.mV);
+            }
         }
+        gGL.end();
     }
-    gGL.end();
 
     // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT): the macro grid, a coarser MACRO_M-pitch tint drawn
     // ONLY beyond the same TIER_B_M - TIER_BLEND_M/2 rail buildDeck's own accumulator uses (macroEligible's own
@@ -1515,12 +1969,17 @@ void SSAtmoInfoView::renderDeckLod()
 
 // The V4 layer (doc/atmo_magic_debug_views.md V4, ssvirgacore.h CONTRACT): every qualifying cell from the LAST
 // build's snapshot (SSAtmoInfoView::virgaData(), itself SSVolCloud::virgaDebug() read straight across) outlined
-// at deck-base height and tinted by drive (presence ramp - grey to white, per the design's colour language),
-// bright for the cells the hashed trim actually KEPT and dim for the ones MAX_SHAFTS trimmed away; a fall-tilt
-// comparison line per kept cell - deck base entry point to landing - using precip's OWN wind-tilt formula
-// (SSAtmoInfoViewCore::fallTiltOffsetM), a separate line from the shaft's own vertical card stack (ssvirgacore.h:
-// a curtain has no per-altitude lean) so the two can be read against each other; and the particle rain's own
-// handoff boundary (r2 * SSVirga::HANDOFF_SKIP) as a ring on the ground plane about the CAMERA, with its ramp
+// at the EMBEDDED stack's top (mEmbedTopZ, F9 2026-09-06 review: not the deck base - phase 8e starts the stack
+// above the base, inside the cloud) and tinted by drive (presence ramp - grey to white, per the design's colour
+// language), bright for the cells the hashed trim actually KEPT and dim for the ones MAX_SHAFTS trimmed away; a
+// fall-tilt comparison line per kept cell - deck base entry point to landing - using precip's OWN wind-tilt
+// formula (SSAtmoInfoViewCore::fallTiltOffsetM); a SEPARATE skew POLYLINE (F9, 8e-b PROFILE SKEW 2026-09-06
+// review) showing the curtain's OWN wind-fall lean - one chord per card boundary from the embedded stack's top
+// down to the ground, each point SSVirga::profileSkewM(mWindParams, mBaseAglM, aglOfBoundary, mFallSpeed) at that
+// boundary's own AGL height (the emitter's snapshotted inputs, never re-derived), tracing the real wind-profile
+// integrated curve rather than one straight line, so the two lines are no longer describing the same, unleaning
+// shape - and can be read against each other; and the particle rain's own handoff boundary (r2 * SSVirga::HANDOFF_SKIP) as a ring on the
+// ground plane about the CAMERA, with its ramp
 // band (HANDOFF_BAND_M) drawn as a short run of fading rings out to full shaft alpha. Squash-corrected like every
 // other in-world layer. [interaction: SSVolCloud squashScale/virgaDebug]
 void SSAtmoInfoView::renderVirga()
@@ -1543,7 +2002,7 @@ void SSAtmoInfoView::renderVirga()
     };
 
     LLGLEnable blend(GL_BLEND);
-    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this now draws AFTER the dim quad in the UI stage (SSAtmoDimView::draw), on top like a Skylines layer, so it must never be occluded by world geometry
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this draws in the 3-D pass AFTER SSAtmoInfoView::renderDimAndWorld has laid the dim quad down, on top like a Skylines layer, so it must never be occluded by world geometry
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
@@ -1581,22 +2040,26 @@ void SSAtmoInfoView::renderVirga()
 
     gGL.begin(LLRender::LINES);
 
-    // The qualifying cells, outlined at the deck base (the shaft column's own top): bright/kept, dim/trimmed.
+    // <SS:Nexii> F9 (2026-09-06 review): the qualifying cells, outlined at the EMBEDDED stack's own top
+    // (mEmbedTopZ), not the deck base - phase 8e's stack starts inside the cloud, above the base, so this is
+    // where the card stack the emitter actually built begins. Bright/kept, dim/trimmed.
     const F32 half = SSVirga::CELL_M * 0.45f;
     for (const VirgaData::Cell& c : d.mCells)
     {
         const LLColor4 col = toColor(presenceRamp(c.mDrive, 1.f), c.mKept ? 0.85f : 0.25f);
         gGL.color4fv(col.mV);
-        const LLVector3 p0(c.mX - half, c.mY - half, d.mBaseZ);
-        const LLVector3 p1(c.mX + half, c.mY - half, d.mBaseZ);
-        const LLVector3 p2(c.mX + half, c.mY + half, d.mBaseZ);
-        const LLVector3 p3(c.mX - half, c.mY + half, d.mBaseZ);
+        const LLVector3 p0(c.mX - half, c.mY - half, d.mEmbedTopZ);
+        const LLVector3 p1(c.mX + half, c.mY - half, d.mEmbedTopZ);
+        const LLVector3 p2(c.mX + half, c.mY + half, d.mEmbedTopZ);
+        const LLVector3 p3(c.mX - half, c.mY + half, d.mEmbedTopZ);
         line(p0, p1); line(p1, p2); line(p2, p3); line(p3, p0);
     }
 
-    // Fall-tilt comparison lines, kept cells only (the ones actually drawn as shaft cards): landing at the
-    // cell's own ground point (the SAME x/y the vertical curtain hangs at - ssvirgacore.h's own "no per-altitude
-    // lean"), entry upwind at the deck base by precip's own wind-tilt offset.
+    // Fall-tilt comparison lines, kept cells only (the ones actually drawn as shaft cards): landing at the cell's
+    // OWN unshifted ground point, entry upwind at the deck base by precip's OWN ground-wind wind-tilt offset - a
+    // display approximation (mWindGround/mFallSpeedMS, see virgaData's own comment), read against the skew line
+    // below rather than against the curtain directly (F9, 2026-09-06 review: the curtain's own ground point is no
+    // longer this same x/y - phase 8e gave it a real per-altitude lean).
     const F32 drop_h = llmax(d.mBaseZ - d.mGroundZ, 0.f);
     const Vec2M tilt = fallTiltOffsetM(d.mWindGround.x, d.mWindGround.y, d.mFallSpeedMS, drop_h);
     for (const VirgaData::Cell& c : d.mCells)
@@ -1606,6 +2069,37 @@ void SSAtmoInfoView::renderVirga()
         const LLVector3 landing(c.mX, c.mY, d.mGroundZ);
         const LLVector3 entry(c.mX - tilt.x, c.mY - tilt.y, d.mBaseZ);
         line(entry, landing);
+    }
+
+    // <SS:Nexii> F9 (2026-09-06 review), 8e-b PROFILE SKEW: the curtain's OWN skew, kept cells only - a POLYLINE
+    // of per-card chords, one vertex per card boundary from the embedded stack's top (mEmbedTopZ) down to the
+    // ground, each vertex SSVirga::profileSkewM(mWindParams, mBaseAglM, aglOfBoundary, mFallSpeed) evaluated at
+    // that boundary's own AGL height (baseAglM - (baseZ - z)) - the SAME pure function and the SAME snapshotted
+    // params/baseAglM/fallSpeed cardGeom evaluated this build with (never re-derived), so this line is exactly
+    // the curve the curtain's own cards actually skew along, not the old single-sample straight line.
+    for (const VirgaData::Cell& c : d.mCells)
+    {
+        if (!c.mKept) continue;
+        gGL.color4fv(VIRGA_SKEW.mV);
+        const S32 nCards = SSVirga::cardCountOverlapped(d.mEmbedTopZ, d.mGroundZ);
+        bool first = true;
+        LLVector3 prev_pt(c.mX, c.mY, d.mEmbedTopZ);
+        for (S32 k = 0; k < nCards; ++k)
+        {
+            const SSVirga::CardSpan cs = SSVirga::cardSpan(k, d.mEmbedTopZ, d.mGroundZ);
+            if (first)
+            {
+                const F32 aglTop = d.mBaseAglM - (d.mBaseZ - cs.zTop);
+                const SSVirga::Vec2 skewTop = SSVirga::profileSkewM(d.mWindParams, d.mBaseAglM, aglTop, d.mFallSpeed);
+                prev_pt = LLVector3(c.mX + skewTop.x, c.mY + skewTop.y, cs.zTop);
+                first = false;
+            }
+            const F32 aglBot = d.mBaseAglM - (d.mBaseZ - cs.zBot);
+            const SSVirga::Vec2 skewBot = SSVirga::profileSkewM(d.mWindParams, d.mBaseAglM, aglBot, d.mFallSpeed);
+            const LLVector3 bot_pt(c.mX + skewBot.x, c.mY + skewBot.y, cs.zBot);
+            line(prev_pt, bot_pt);
+            prev_pt = bot_pt;
+        }
     }
 
     // The handoff ring and its ramp band, on the ground plane, centred on the camera.
@@ -1647,6 +2141,246 @@ void SSAtmoInfoView::renderVirga()
 }
 
 // ---------------------------------------------------------------------------
+// The in-world layer: V9's lightning
+// ---------------------------------------------------------------------------
+
+// <SS:Nexii> The V9 layer (doc/atmo_magic_debug_views.md V9): every LIVE strike drawn as the geometry the model
+// actually holds, plus the lifecycle state it is in and the two lights it feeds. Per strike: the CHANNEL, one
+// line per node-to-parent segment straight off SSStrike::mChannel (never re-derived - the channel is rolled once
+// at spawn from the fire time and this view only reads it), coloured by the strike's lifecycle stage
+// (SSAtmoInfoViewCore::strikeStage / strikeStageColor - the same cool-to-warm bar V2's cells use) and split by
+// the LEADER FRONT: the stretch the leader has reached draws solid, the stretch ahead of it draws faint, so a
+// bolt mid-descent shows exactly how far down it is; the surface CRAWL run past the foot in its own amber; the
+// ATTACHMENT as a cross; a pending strike's aim line from origin to intended ground, which is all a sheet strike
+// (no channel at all) ever has; the ground show's own bounding box in grey when the renderer's occlusion query
+// says it is hidden - the answer to "why is there no flash on my screen"; and the two LIGHT readings, the
+// deferred point lights SSLightning::sceneLights() exports (drawn at their true radius, which is what the world
+// is actually lit by) and a mark on every strike whose brightness clears the cloud shader's own cut. Distance
+// LOD: far channels reduce to their trunk through SSAtmoInfoViewCore::channelWidthCutoff, and every ring is
+// segment-thinned by ringSegments, so a storm's worth of bolts stays a handful of lines. Squash-corrected
+// through the cloud field exactly like the bolts themselves are (sslightningrender.cpp applies the same
+// squashScale), so the diagram lands ON the bolt rather than behind it. TILE TINT: the ground-fire discs and the
+// filled light radii are diagrammatic FILL and sit behind SSAtmoInfoViewTileTint, per the V2/V3 precedent; every
+// entity mark - channel, crawl, attachment, rings, labels - always draws. [interaction: SSLightning strikes/sceneLights] [interaction: SSVolCloud squashScale]
+void SSAtmoInfoView::renderLightning()
+{
+    if (!SSLightning::instanceExists()) return;
+
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    if (!camera) return;
+    const LLVector3 cam = camera->getOrigin();
+
+    const LightningData d = lightningData();
+    const std::vector<SSStrike>& strikes = SSLightning::getInstance()->strikes();
+    // The row table was gathered from this same list, this same frame, in this same order - the loops below index
+    // the two together and this is the assertion of that, not a resize.
+    if (d.mStrikes.size() != strikes.size()) return;
+
+    const SSVolCloud* clouds = SSVolCloud::instanceExists() ? SSVolCloud::getInstance() : nullptr;
+    auto drawn = [&](const LLVector3& p) -> LLVector3
+    {
+        if (!clouds) return p;
+        const LLVector3 rel = p - cam;
+        const F32 dist = rel.magVec();
+        if (dist <= 1.0e-4f) return p;
+        return cam + rel * clouds->squashScale(dist);
+    };
+
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // <SS:Nexii> off, not just no-write: this draws in the 3-D pass after the look pass, on top like a Skylines layer, so it must never be occluded by world geometry
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    // A straight world-space line, subdivided so the far squash bends it rather than shearing it - the same
+    // idiom renderVirga's own line lambda uses.
+    auto line = [&](const LLVector3& a, const LLVector3& b)
+    {
+        const LLVector3 span = b - a;
+        const S32 segs = llclamp((S32)(span.magVec() / 200.f), 1, 24);
+        LLVector3 prev = drawn(a);
+        for (S32 i = 1; i <= segs; ++i)
+        {
+            const LLVector3 next = drawn(a + span * ((F32)i / (F32)segs));
+            gGL.vertex3fv(prev.mV);
+            gGL.vertex3fv(next.mV);
+            prev = next;
+        }
+    };
+    // A horizontal ring about a world point, segment-thinned by its own apparent size (SSAtmoInfoViewCore::
+    // ringSegments) - unlike V3/V4's camera-centred rails, these rings sit out at the strike, so the apparent-size
+    // heuristic is exactly the right one here.
+    auto ring = [&](const LLVector3& centre, F32 radius, const LLColor4& color)
+    {
+        if (radius <= 0.f) return;
+        const S32 n = ringSegments(radius, (centre - cam).magVec());
+        gGL.color4fv(color.mV);
+        LLVector3 prev = drawn(LLVector3(centre.mV[VX] + radius, centre.mV[VY], centre.mV[VZ]));
+        for (S32 i = 1; i <= n; ++i)
+        {
+            const F32 a = (F32)i / (F32)n * TWO_PI_F;
+            const LLVector3 next = drawn(LLVector3(centre.mV[VX] + std::cos(a) * radius,
+                                                   centre.mV[VY] + std::sin(a) * radius, centre.mV[VZ]));
+            gGL.vertex3fv(prev.mV);
+            gGL.vertex3fv(next.mV);
+            prev = next;
+        }
+    };
+
+    // ---- the diagrammatic FILL, behind the tile-tint switch (V2/V3 precedent): the ground fire's own blob discs
+    // and the deferred lights' radii as flat discs on their own plane. Heavy, and it buries the channels it sits
+    // under, which is exactly what that switch is for.
+    static LLCachedControl<bool> tile_tint(gSavedSettings, "SSAtmoInfoViewTileTint", false);
+    if (tile_tint)
+    {
+        gGL.begin(LLRender::TRIANGLES);
+        auto disc = [&](const LLVector3& centre, F32 radius, const LLColor4& color)
+        {
+            if (radius <= 0.f) return;
+            const S32 n = ringSegments(radius, (centre - cam).magVec());
+            gGL.color4fv(color.mV);
+            for (S32 i = 0; i < n; ++i)
+            {
+                const F32 a0 = (F32)i / (F32)n * TWO_PI_F;
+                const F32 a1 = (F32)(i + 1) / (F32)n * TWO_PI_F;
+                const LLVector3 c = drawn(centre);
+                const LLVector3 p0 = drawn(LLVector3(centre.mV[VX] + std::cos(a0) * radius,
+                                                     centre.mV[VY] + std::sin(a0) * radius, centre.mV[VZ]));
+                const LLVector3 p1 = drawn(LLVector3(centre.mV[VX] + std::cos(a1) * radius,
+                                                     centre.mV[VY] + std::sin(a1) * radius, centre.mV[VZ]));
+                gGL.vertex3fv(c.mV); gGL.vertex3fv(p0.mV); gGL.vertex3fv(p1.mV);
+            }
+        };
+        for (const SSStrike& s : strikes)
+        {
+            if (s.mFire <= 0.f) continue;
+            for (const SSStrikeFire& blob : s.mFireBlobs)
+            {
+                disc(blob.mPos, blob.mRadius, LLColor4(STRIKE_FIRE_FILL.mV[0], STRIKE_FIRE_FILL.mV[1],
+                                                       STRIKE_FIRE_FILL.mV[2], STRIKE_FIRE_FILL.mV[3] * llclamp(s.mFire, 0.f, 1.f)));
+            }
+        }
+        for (const LightningData::SceneLight& light : d.mLights)
+        {
+            disc(light.mPos, light.mRadiusM, LLColor4(STRIKE_SCENELIGHT.mV[0], STRIKE_SCENELIGHT.mV[1],
+                                                      STRIKE_SCENELIGHT.mV[2], 0.10f));
+        }
+        gGL.end();
+    }
+
+    // ---- the entity marks: always drawn.
+    gGL.begin(LLRender::LINES);
+    for (size_t si = 0; si < strikes.size(); ++si)
+    {
+        const SSStrike& s = strikes[si];
+        const LightningData::Strike& row = d.mStrikes[si];   // same list, same order, gathered this frame
+        const F32 dist = (s.mOrigin - cam).magVec();
+        const F32 cutoff = channelWidthCutoff(dist);
+        const LLColor4 stage_col = toColor(strikeStageColor(row.mStage), 1.f);
+
+        // The channel, split at the leader front. A node's reach is its own path distance from the root
+        // (SSLightning::finishChannel), so "reached" is exactly the test the renderer itself makes.
+        for (size_t i = 0; i < s.mChannel.size(); ++i)
+        {
+            const SSStrikeNode& node = s.mChannel[i];
+            if (node.mParent < 0 || node.mParent >= (S32)s.mChannel.size()) continue;
+            if (!node.mTrunk && !node.mCrawl && node.mWidth < cutoff) continue;   // far: trunk (and crawl) only
+            const bool reached = node.mReachedAt <= s.mLeaderProgress;
+            if (node.mCrawl)
+            {
+                gGL.color4fv(LLColor4(STRIKE_CRAWL.mV[0], STRIKE_CRAWL.mV[1], STRIKE_CRAWL.mV[2],
+                                      reached ? 0.90f : 0.25f).mV);
+            }
+            else
+            {
+                gGL.color4fv(LLColor4(stage_col.mV[0], stage_col.mV[1], stage_col.mV[2],
+                                      reached ? 0.85f : 0.20f).mV);
+            }
+            line(s.mChannel[(size_t)node.mParent].mPos, node.mPos);
+        }
+
+        // A strike with no channel at all - a sheet flash - still has an origin and an intended ground point, and
+        // so does any strike still counting down; the aim line is the only geometry either has to show.
+        if (s.mChannel.empty())
+        {
+            gGL.color4fv(STRIKE_AIM.mV);
+            line(s.mOrigin, s.mGround);
+        }
+
+        // The attachment: a cross at the ground point, sized so it reads from the air but never swamps the crawl.
+        if (row.mKind == STRIKE_KIND_GROUND)
+        {
+            const F32 arm = llclamp(dist * 0.01f, 2.f, 25.f);
+            gGL.color4fv(row.mOccHidden ? STRIKE_OCCLUDED.mV : STRIKE_ATTACH.mV);
+            line(s.mGround - LLVector3(arm, 0.f, 0.f), s.mGround + LLVector3(arm, 0.f, 0.f));
+            line(s.mGround - LLVector3(0.f, arm, 0.f), s.mGround + LLVector3(0.f, arm, 0.f));
+            line(s.mGround, s.mGround + LLVector3(0.f, 0.f, arm * 2.f));
+
+            // Hidden by the renderer's own occlusion query: outline the ground box that query was issued on, so
+            // "the show is running but nothing is on screen" is answerable without guessing.
+            if (row.mOccHidden)
+            {
+                const LLVector3& lo = s.mGroundBoxMin;
+                const LLVector3& hi = s.mGroundBoxMax;
+                gGL.color4fv(STRIKE_OCCLUDED.mV);
+                line(LLVector3(lo.mV[VX], lo.mV[VY], lo.mV[VZ]), LLVector3(hi.mV[VX], lo.mV[VY], lo.mV[VZ]));
+                line(LLVector3(hi.mV[VX], lo.mV[VY], lo.mV[VZ]), LLVector3(hi.mV[VX], hi.mV[VY], lo.mV[VZ]));
+                line(LLVector3(hi.mV[VX], hi.mV[VY], lo.mV[VZ]), LLVector3(lo.mV[VX], hi.mV[VY], lo.mV[VZ]));
+                line(LLVector3(lo.mV[VX], hi.mV[VY], lo.mV[VZ]), LLVector3(lo.mV[VX], lo.mV[VY], lo.mV[VZ]));
+            }
+        }
+
+        // The cloud-light reading: a small ring at the origin on every strike the deck's own shader is lit by.
+        if (row.mLightsCloud)
+        {
+            ring(s.mOrigin, llmax(dist * 0.02f, 12.f), STRIKE_CLOUDLIGHT);
+        }
+    }
+
+    // The deferred scene lights at their true radius - the set the world is actually lit by this frame.
+    for (const LightningData::SceneLight& light : d.mLights)
+    {
+        ring(light.mPos, light.mRadiusM, STRIKE_SCENELIGHT);
+    }
+    gGL.end();
+
+    // ---- labels: one per strike, at its origin, plus the radius on each scene light.
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    if (!font) return;
+
+    for (size_t si = 0; si < strikes.size(); ++si)
+    {
+        const SSStrike& s = strikes[si];
+        const LightningData::Strike& row = d.mStrikes[si];
+        const LLColor4 stage_col = toColor(strikeStageColor(row.mStage), 1.f);
+        // Before contact the clock is a countdown; after it, an age. Both are the same mT, which is why they are
+        // printed from one field with one sign test rather than two clocks.
+        const std::string when = (row.mT < 0.f) ? llformat("in %.2fs", -row.mT) : llformat("+%.2fs", row.mT);
+        hud_render_utf8text(llformat("%s %s  %s  I %.2f  %s%s%s%s", strikeKindLabel(row.mKind),
+                                     strikeStageLabel(row.mStage), when.c_str(), row.mIntensity,
+                                     row.mPositive ? "positive" : "negative",
+                                     row.mBlue ? "  BLUE" : "", row.mForced ? "  FORCED" : "",
+                                     row.mOccHidden ? "  occluded" : ""),
+                            drawn(s.mOrigin), *font, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW, 6.f, 4.f,
+                            stage_col, false);
+
+        // The second line carries the numbers the legend cannot show per strike: how much of the channel the
+        // leader has, how many return strokes have fired, and what this strike is worth as a light.
+        hud_render_utf8text(llformat("leader %.0f%%  strokes %d  nodes %d  light %.3f%s  %.0f m",
+                                     llclamp(row.mLeaderProgress, 0.f, 1.f) * 100.f, row.mStrokeCount,
+                                     row.mChannelNodes, row.mLightWeight, row.mLightsCloud ? " (deck lit)" : "",
+                                     row.mDistanceM),
+                            drawn(s.mOrigin + LLVector3(0.f, 0.f, -llclamp((s.mOrigin - cam).magVec() * 0.01f, 4.f, 40.f))),
+                            *font, LLFontGL::NORMAL, LLFontGL::DROP_SHADOW, 6.f, 4.f, TEXT_DIM, false);
+    }
+
+    for (const LightningData::SceneLight& light : d.mLights)
+    {
+        hud_render_utf8text(llformat("scene light  r %.0f m", light.mRadiusM), drawn(light.mPos), *font,
+                            LLFontGL::NORMAL, LLFontGL::DROP_SHADOW, 6.f, 4.f, STRIKE_SCENELIGHT, false);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SSAtmoDimView
 // ---------------------------------------------------------------------------
 
@@ -1655,39 +2389,9 @@ SSAtmoDimView::SSAtmoDimView(const Params& p)
 {
 }
 
-// <SS:Nexii> Used to draw only the dim quad, with the in-world layer left to LLPipeline::renderDebug's 3-D pass BENEATH it - so the quad darkened the wind mast/cell rings/etc right along with the world it was dimming, which is backwards for a Skylines-style info overlay (it should always read on top). Now the quad draws first (still nothing while off, still one integer compare at mode 0) and SSAtmoInfoView::renderWorld() draws SECOND, re-entering 3-D from here: push the camera's OWN live projection+modelview onto gGL's matrix stack (the llhudrender.cpp idiom for world-space drawing from the UI pass) rather than recomputing via LLViewerCamera::setPerspective, which would also stomp glViewport and cache a different far clip than the main pass's MAX_FAR_CLIP - loadMatrix only touches gGL's stack, nothing global. Depth test is OFF for the whole overlay (each render* helper's own LLGLDepthTest, not this function's problem to guard) so it is never occluded by geometry - the one behavioural change from the old renderDebug call site. Runs even when the dim alpha is 0 (SSAtmoInfoViewDim at 0 must still show the layer, just without the tint), and pipeline.cpp's renderDebug no longer calls renderWorld() at all, so this is the layer's only draw site now.
+// <SS:Nexii> Draws NOTHING, on purpose. It briefly drew the dim quad and then re-entered 3-D from here to put the in-world layer on top of it; that put a 3-D layer inside the UI stage, which broke the UI around it - clipped console text, visualisations flung into the window corners. Both halves now draw from the 3-D pass instead (SSAtmoInfoView::renderDimAndWorld, called by render_ui() in llviewerdisplay.cpp - post-tonemap, after renderFinalize and before render_hud_attachments), and the UI stage keeps only what is genuinely 2-D: the legend and the chart. The view itself stays registered and attached so LLDebugView's addChildInBack and the debug view's child order do not move - deleting it would reshuffle every sibling's z-order for no gain. Do not put the quad back here.
 void SSAtmoDimView::draw()
 {
-    if (SSAtmoInfoView::mode() == MODE_OFF) return;
-
-    static LLCachedControl<F32> dim_setting(gSavedSettings, "SSAtmoInfoViewDim", 0.55f);
-    const F32 a = llclamp((F32)dim_setting, 0.f, 0.95f);
-    if (a > 0.f)
-    {
-        const LLRect& r = getRect();
-        gl_rect_2d(0, r.getHeight(), r.getWidth(), 0, LLColor4(0.02f, 0.03f, 0.05f, a));
-    }
-
-    LLViewerCamera* camera = LLViewerCamera::getInstance();
-    if (!camera) return;
-
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.pushMatrix();
-    gGL.loadMatrix((GLfloat*)camera->getProjection().mMatrix);
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
-    gGL.pushMatrix();
-    gGL.loadMatrix((GLfloat*)camera->getModelview().mMatrix);
-
-    LLGLDisable cull(GL_CULL_FACE);
-    LLGLEnable blend(GL_BLEND);
-    gGL.setSceneBlendType(LLRender::BT_ALPHA);
-
-    SSAtmoInfoView::renderWorld();
-
-    gGL.popMatrix(); // MODELVIEW
-    gGL.matrixMode(LLRender::MM_PROJECTION);
-    gGL.popMatrix();
-    gGL.matrixMode(LLRender::MM_MODELVIEW);
 }
 
 // ---------------------------------------------------------------------------
@@ -1734,19 +2438,41 @@ void SSAtmoLegendView::buildStormCellsSpec(Spec& spec)
     }
     spec.mSubtitle = llformat("%d alive  %d spawned  %d super  %d eligible  %s  z %.0f%s", d.mAlive, d.mSpawned, d.mSupercells, d.mTornadoEligible,
                               d.mHaveHero ? "HERO LIVE" : "no hero", d.mLayerZ, d.mDeckBuilt ? "" : " (deck not built)");
-    spec.mRampLabel = llformat("lattice potential P (tile tint; spawn floor %.2f)", SSStormCell::SPAWN_THRESHOLD);
-    spec.mRampMin = "0";
-    spec.mRampMax = "1";
-    spec.mRamp = &rampEnergy;
+    static LLCachedControl<bool> tile_tint(gSavedSettings, "SSAtmoInfoViewTileTint", false);
+    if (tile_tint)
+    {
+        spec.mRampLabel = llformat("lattice potential P (tile tint; spawn floor %.2f)", SSStormCell::SPAWN_THRESHOLD);
+        spec.mRampMin = "0";
+        spec.mRampMax = "1";
+        spec.mRamp = &rampEnergy;
+    }
+    else
+    {
+        spec.mRampLabel = "(tile tint off)";
+    }
 
-    spec.mKeys.push_back({ TILE_ALIVE, "tile outline bright: an active cell was born there", true });
+    if (tile_tint)
+    {
+        spec.mKeys.push_back({ TILE_ALIVE, "tile outline bright: an active cell was born there", true });
+    }
     static const char* kBands[STAGE_COUNT] = { "0.00-0.15", "0.15-0.30", "0.30-0.55", "0.55-0.80", "0.80-1.00" };
     for (S32 s = 0; s < STAGE_COUNT; ++s)
     {
         spec.mKeys.push_back({ toColor(stageColor(s), 1.f), llformat("ring: %-8s age %s", stageLabel(s), kBands[s]), true });
     }
     spec.mKeys.push_back({ HERO_ORIGIN, "hero origin + motion arrow", true });
-    spec.mKeys.push_back({ ANCHOR_WHITE, d.mHaveHero ? llformat("now diamond; closest approach %.0f m at anchor", d.mHero.mClosestDistM) : "anchor cross, 500 / 1000 m pass rings", true });
+    // 7f V2 item 3: age at closest approach (fraction of the hero's own life, HERO_CLOSEST_AGE01 == 0.5 whatever the
+    // wind unless the spawn clamp bit) alongside the measured distance, plus the pass law itself in one line - the
+    // no-hero fallback names the two rings actually drawn (the law's median and HERO_PASS_MAX_M), not
+    // HERO_PASS_MIN_M (0 m, which the ring code skips and draws nothing for).
+    const F32 closest_age01 = (d.mHaveHero && d.mHero.mLifetimeS > 0.f)
+        ? llclamp((F32)((d.mHero.mClosestTime - d.mHero.mBirthTime) / (F64)d.mHero.mLifetimeS), 0.f, 1.f) : 0.f;
+    const F32 pass_median_m = SSStormCell::HERO_PASS_MAX_M * std::pow(0.5f, SSStormCell::HERO_PASS_SKEW);
+    spec.mKeys.push_back({ ANCHOR_WHITE, d.mHaveHero
+        ? llformat("now diamond; closest approach %.0f m at age %.2f", d.mHero.mClosestDistM, closest_age01)
+        : llformat("anchor cross, %.0f / %.0f m pass rings (median / max)", pass_median_m, SSStormCell::HERO_PASS_MAX_M), true });
+    spec.mKeys.push_back({ TEXT_DIM, llformat("pass law: %.0f m x u^%.2f, u hashed (median ~300 m, never beyond %.0f m)",
+                                              SSStormCell::HERO_PASS_MAX_M, SSStormCell::HERO_PASS_SKEW, SSStormCell::HERO_PASS_MAX_M), false });
     spec.mKeys.push_back({ HERO_DEATH, d.mHaveHero ? llformat("hero death; ribbon ticks every %.0f s", ribbonTickIntervalS(d.mHero.mLifetimeS)) : "hero death", true });
     spec.mKeys.push_back({ toColor(rotationRamp(1.f), 1.f), "rotation + cyclonic: arrows orbit anticlockwise", true });
     spec.mKeys.push_back({ toColor(rotationRamp(-1.f), 1.f), "rotation - anticyclonic: arrows orbit clockwise", true });
@@ -1756,6 +2482,13 @@ void SSAtmoLegendView::buildStormCellsSpec(Spec& spec)
     spec.mKeys.push_back({ SQUALL_LINE, "squall line: bar through a line's own active members", true });
     spec.mKeys.push_back({ SQUALL_JUNCTION, "squall line: leading-edge QLCS junction marker", true });
     spec.mKeys.push_back({ FORCED_OUTLINE, "forced/authored cell: double outline (mStormOverride cue)", true });
+    // <SS:Nexii> LINE BAND (doc/atmo_magic_phase8_show.md section 3 item 1): the deck coupling's own band extent -
+    // the widths are the fixed design constants (SSSquall::LINE_BAND_M/LINE_SHELF_M, the same ones
+    // SSStormCells::fillLineBand writes into bandM/shelfM whenever a line IS alive), named here regardless of
+    // whether one is alive this instant; fill alpha at the draw site scales with the line's live strength, so "no
+    // fill drawn" and "no line alive" are the same statement.
+    spec.mKeys.push_back({ LINE_WALL_FILL, llformat("line wall fill: %.0f m either side of the segment", SSSquall::LINE_BAND_M), false });
+    spec.mKeys.push_back({ LINE_SHELF_FILL, llformat("line shelf fill: gust front reaching %.0f m ahead", SSSquall::LINE_SHELF_M), false });
 
     // <SS:Nexii> DEBUG: vortex icons - one swatch pair (the icon carries the SAME sign-only rotation colour as the
     // cell arrows above it, per vortexKindColor's own comment), then the taxonomy label list an icon can read as
@@ -1816,10 +2549,18 @@ void SSAtmoLegendView::buildDeckLodSpec(Spec& spec)
     }
     spec.mSubtitle = llformat("placed %d / budget %d  dial %d  LOD-predicted %lld over %d cells",
                               d.mPuffsPlaced, d.mBudget, d.mPuffsPerCell, (long long)d.mLodPredicted, d.mCellsWalked);
-    spec.mRampLabel = llformat("keep fraction (tile tint; floor %.2f)", SSDeckLod::THIN_KEEP_MIN);
-    spec.mRampMin = "0";
-    spec.mRampMax = "1";
-    spec.mRamp = &rampGrey;
+    static LLCachedControl<bool> tile_tint(gSavedSettings, "SSAtmoInfoViewTileTint", false);
+    if (tile_tint)
+    {
+        spec.mRampLabel = llformat("keep fraction (tile tint; floor %.2f)", SSDeckLod::THIN_KEEP_MIN);
+        spec.mRampMin = "0";
+        spec.mRampMax = "1";
+        spec.mRamp = &rampGrey;
+    }
+    else
+    {
+        spec.mRampLabel = "(tile tint off)";
+    }
 
     spec.mKeys.push_back({ RING_SUBS_FULL,  llformat("subs full below  %.0f m", SSDeckLod::SUBS_FULL_M), true });
     spec.mKeys.push_back({ RING_SUBS_TWO,   llformat("2 subs until  %.0f m", SSDeckLod::SUBS_TWO_M), true });
@@ -1831,7 +2572,10 @@ void SSAtmoLegendView::buildDeckLodSpec(Spec& spec)
     // body count can be read against each other), and the tinted macro grid renderDeckLod draws beyond TIER_B_M.
     spec.mKeys.push_back({ RING_TIER_B, llformat("Tier B macro bodies  %d  (merge from  %.0f m, blend  %.0f m)",
                                                   d.mTierBCount, SSDeckMacro::TIER_B_M, SSDeckMacro::TIER_BLEND_M), true });
-    spec.mKeys.push_back({ TEXT_DIM, "tile tint: a distance-only diagram, not the builder's own cell gate", false });
+    if (tile_tint)
+    {
+        spec.mKeys.push_back({ TEXT_DIM, "tile tint: a distance-only diagram, not the builder's own cell gate", false });
+    }
 }
 
 // V4's legend: the drive scale (SSVirga::drive, presence ramp) the cell outlines are tinted by, the qualifying
@@ -1859,8 +2603,9 @@ void SSAtmoLegendView::buildVirgaSpec(Spec& spec)
     spec.mRampMax = "1";
     spec.mRamp = &rampGrey;
 
-    spec.mKeys.push_back({ TEXT_NORMAL, "cell outline: bright = kept, dim = trimmed by MAX_SHAFTS", true });
-    spec.mKeys.push_back({ RAIL_BASE, "fall-tilt: deck base entry -> landing (precip's own wind tilt, kept cells)", true });
+    spec.mKeys.push_back({ TEXT_NORMAL, "cell outline (at the embedded stack's own top): bright = kept, dim = trimmed by MAX_SHAFTS", true });
+    spec.mKeys.push_back({ RAIL_BASE, "fall-tilt: deck base entry -> landing (precip's own ground-wind approximation, kept cells)", true });
+    spec.mKeys.push_back({ VIRGA_SKEW, "curtain skew: base -> its OWN skewed ground point (emitter's actual wind/fall, kept cells)", true });
     spec.mKeys.push_back({ VIRGA_HANDOFF, llformat("handoff ring  r2 x %.1f = %.0f m (particle rain sheets)", SSVirga::HANDOFF_SKIP, d.mHandoffRadius), true });
     spec.mKeys.push_back({ LLColor4(VIRGA_HANDOFF.mV[0], VIRGA_HANDOFF.mV[1], VIRGA_HANDOFF.mV[2], 0.25f),
                            llformat("handoff band  +%.0f m to full shaft alpha", SSVirga::HANDOFF_BAND_M), true });
@@ -1895,6 +2640,78 @@ void SSAtmoLegendView::buildWeatherCubeSpec(Spec& spec)
     spec.mKeys.push_back({ CUBE_CUE_PRECIP, "cue marker: authored mPrecipitationOverride keyframe", true });
 }
 
+// V9's legend: the five lifecycle stages in the colour the channels are drawn in, with the live count in each, so
+// "three bolts on screen, two of them already in plasma" reads at a glance; the marks that are not a stage colour
+// (crawl, attachment, the two light readings, the occlusion grey); the light budgets - how many strikes the cloud
+// deck's own shader is lit by against SS_MAX_STRIKE_LIGHTS, and how many deferred point lights the world got
+// against the slots pipeline.cpp asks for; the renderer's own last-frame counters; and - the "why is nothing
+// striking" readout, the same idea as V2's "why not" rows - the applied weather's lightning gate with its live
+// values whenever no strike is alive.
+void SSAtmoLegendView::buildLightningSpec(Spec& spec)
+{
+    const SSAtmoInfoView::LightningData d = SSAtmoInfoView::lightningData();
+    spec.mTitle = modeLabel(MODE_LIGHTNING);
+    if (!d.mValid)
+    {
+        spec.mSubtitle = "lightning system not running";
+        return;
+    }
+
+    const S32 live = (S32)d.mStrikes.size();
+    spec.mSubtitle = llformat("%d live  next %s  deck lit %d/%d  scene lights %d/%d", live,
+                              (d.mNextIn >= 0.0) ? llformat("in %.1fs", d.mNextIn).c_str() : "not scheduled",
+                              d.mCloudLit, d.mCloudCap, (S32)d.mLights.size(), d.mSceneLightCap);
+
+    S32 per_stage[STRIKE_STAGE_COUNT] = { 0 };
+    for (const auto& s : d.mStrikes)
+    {
+        per_stage[llclamp(s.mStage, 0, STRIKE_STAGE_COUNT - 1)] += 1;
+    }
+    for (S32 i = 0; i < STRIKE_STAGE_COUNT; ++i)
+    {
+        spec.mKeys.push_back({ toColor(strikeStageColor(i), 1.f),
+                               llformat("%s  x%d", strikeStageLabel(i), per_stage[i]), true });
+    }
+    spec.mKeys.push_back({ TEXT_DIM, "channel: solid past the leader front, faint ahead of it", true });
+    spec.mKeys.push_back({ STRIKE_CRAWL, "ground crawl (surface run past the foot)", true });
+    spec.mKeys.push_back({ STRIKE_ATTACH, "attachment point", true });
+    spec.mKeys.push_back({ STRIKE_AIM, "aim line: origin -> intended ground (sheet strikes have only this)", true });
+    spec.mKeys.push_back({ STRIKE_SCENELIGHT, llformat("deferred scene light, drawn at its true radius (%d slots)", d.mSceneLightCap), true });
+    spec.mKeys.push_back({ STRIKE_CLOUDLIGHT, llformat("lights the cloud deck: brightness x intensity over %.3f, first %d only",
+                                                       STRIKE_LIGHT_CUT, d.mCloudCap), true });
+    spec.mKeys.push_back({ STRIKE_OCCLUDED, "ground show hidden by the renderer's own occlusion query", true });
+
+    static LLCachedControl<bool> tile_tint(gSavedSettings, "SSAtmoInfoViewTileTint", false);
+    if (tile_tint)
+    {
+        spec.mKeys.push_back({ STRIKE_FIRE_FILL, "ground-fire blob discs and light radii (tile tint)", false });
+    }
+    else
+    {
+        spec.mKeys.push_back({ TEXT_DIM, "(tile tint off: fire discs and filled light radii hidden)", false });
+    }
+
+    if (SSLightningRender::instanceExists())
+    {
+        const SSLightningRender::DrawStats& st = SSLightningRender::getInstance()->stats();
+        spec.mKeys.push_back({ TEXT_DIM, llformat("renderer: %d strikes  %d bright  %d segs  %d quads  %d occluded%s",
+                                                  st.mStrikes, st.mBright, st.mSegments, st.mQuads, st.mOccluded,
+                                                  st.mShaderOk ? "" : "  SHADER NOT READY"), false });
+    }
+
+    // The gate, when nothing is alive: every term the scheduler needs, with its live value.
+    if (live == 0)
+    {
+        spec.mKeys.push_back({ d.mEnabled ? TEXT_NORMAL : LLColor4(1.f, 0.3f, 0.3f, 1.f),
+                               llformat("why not: lightning %s in the applied weather", d.mEnabled ? "ON" : "OFF"), false });
+        spec.mKeys.push_back({ (d.mIntensity > 0.f) ? TEXT_NORMAL : LLColor4(1.f, 0.3f, 0.3f, 1.f),
+                               llformat("why not: intensity %.2f", d.mIntensity), false });
+        spec.mKeys.push_back({ TEXT_DIM, llformat("interval %.0f-%.0f s  charge %s  sparks %s", d.mIntervalMinS,
+                                                  d.mIntervalMaxS, d.mChargeOn ? "on" : "off",
+                                                  d.mSparksOn ? "on" : "off"), false });
+    }
+}
+
 void SSAtmoLegendView::draw()
 {
     const U32 mode = SSAtmoInfoView::mode();
@@ -1908,8 +2725,12 @@ void SSAtmoLegendView::draw()
         case MODE_DECK_LOD:     buildDeckLodSpec(spec); break;
         case MODE_PRECIP_VIRGA: buildVirgaSpec(spec); break;
         case MODE_WEATHER_CUBE: buildWeatherCubeSpec(spec); break;
+        case MODE_LIGHTNING:    buildLightningSpec(spec); break;
         default:
-            spec.mTitle = llformat("INFO VIEW %u", mode);
+            // <SS:Nexii> The reserved numbers (V6 World Field, V8 Anatomy) and anything past the table land here.
+            // modeLabel names them rather than printing a bare integer, so a picker entry added before its spec
+            // builder exists says WHICH view is missing instead of "INFO VIEW 8".
+            spec.mTitle = modeLabel(mode);
             spec.mSubtitle = "not implemented yet";
             break;
     }
@@ -1925,11 +2746,22 @@ void SSAtmoLegendView::draw()
     // Measure.
     S32 widest = llmax(font->getWidth(spec.mTitle), font->getWidth(spec.mSubtitle));
     S32 needed_h = PAD * 2 + lh * 2;
-    if (spec.mRamp)
+    if (!spec.mRampLabel.empty())
     {
-        widest = llmax(widest, bar_w);
+        // <SS:Nexii> When SSAtmoInfoViewTileTint is off, buildStormCellsSpec/buildDeckLodSpec hand us a label
+        // ("(tile tint off)") with mRamp left null - this row then prints that one line instead of the gradient
+        // bar and its min/max, so the legend still names the row without drawing a ramp for a tile grid the world
+        // layer no longer paints.
         widest = llmax(widest, font->getWidth(spec.mRampLabel));
-        needed_h += lh + bar_h + 2 + lh + 4;
+        if (spec.mRamp)
+        {
+            widest = llmax(widest, bar_w);
+            needed_h += lh + bar_h + 2 + lh + 4;
+        }
+        else
+        {
+            needed_h += lh + 4;
+        }
     }
     for (const KeyRow& k : spec.mKeys)
     {
@@ -1949,23 +2781,30 @@ void SSAtmoLegendView::draw()
     font->renderUTF8(spec.mSubtitle, 0, PAD, y, TEXT_DIM, LLFontGL::LEFT, LLFontGL::TOP);
     y -= lh;
 
-    if (spec.mRamp)
+    if (!spec.mRampLabel.empty())
     {
         y -= 2;
         font->renderUTF8(spec.mRampLabel, 0, PAD, y, TEXT_DIM, LLFontGL::LEFT, LLFontGL::TOP);
         y -= lh;
-        const S32 strips = 32;
-        gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
-        for (S32 i = 0; i < strips; ++i)
+        if (spec.mRamp)
         {
-            const S32 x0 = PAD + (bar_w * i) / strips;
-            const S32 x1 = PAD + (bar_w * (i + 1)) / strips;
-            gl_rect_2d(x0, y, x1, y - bar_h, spec.mRamp((F32)i / (F32)(strips - 1)));
+            const S32 strips = 32;
+            gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+            for (S32 i = 0; i < strips; ++i)
+            {
+                const S32 x0 = PAD + (bar_w * i) / strips;
+                const S32 x1 = PAD + (bar_w * (i + 1)) / strips;
+                gl_rect_2d(x0, y, x1, y - bar_h, spec.mRamp((F32)i / (F32)(strips - 1)));
+            }
+            y -= bar_h + 2;
+            font->renderUTF8(spec.mRampMin, 0, PAD, y, TEXT_DIM, LLFontGL::LEFT, LLFontGL::TOP);
+            font->renderUTF8(spec.mRampMax, 0, PAD + bar_w, y, TEXT_DIM, LLFontGL::RIGHT, LLFontGL::TOP);
+            y -= lh + 2;
         }
-        y -= bar_h + 2;
-        font->renderUTF8(spec.mRampMin, 0, PAD, y, TEXT_DIM, LLFontGL::LEFT, LLFontGL::TOP);
-        font->renderUTF8(spec.mRampMax, 0, PAD + bar_w, y, TEXT_DIM, LLFontGL::RIGHT, LLFontGL::TOP);
-        y -= lh + 2;
+        else
+        {
+            y -= 2;
+        }
     }
 
     for (const KeyRow& k : spec.mKeys)
@@ -2042,8 +2881,9 @@ void SSAtmoGraphView::drawMessage(const std::string& msg)
 // <SS:Nexii> CHART (design section 6.2): floating over the world on the debug HUD now, rather than sitting inside
 // the Views panel's own tab, so there is no "pick a view above" placeholder to show any more when off, and no
 // "no chart yet" placeholder box to float uselessly over the world for a mode the dispatch below does not handle
-// (currently V4 Precip & Virga) - both cases now draw nothing at all, checked against this SAME switch (not a
-// separately maintained mode list) so a future mode gaining a drawX() case picks up a chart automatically.
+// (today: only the RESERVED numbers, V6 World Field and V8 Anatomy - V4 and V9 both have their own panels now)
+// - both cases draw nothing at all, checked against this SAME switch (not a separately maintained mode list) so a
+// future mode gaining a drawX() case picks up a chart automatically.
 void SSAtmoGraphView::draw()
 {
     const U32 mode = SSAtmoInfoView::mode();
@@ -2079,10 +2919,16 @@ void SSAtmoGraphView::draw()
         case MODE_WIND_PROFILE:
         case MODE_STORM_CELLS:
         case MODE_DECK_LOD:
+        case MODE_PRECIP_VIRGA:
         case MODE_WEATHER_CUBE:
+        case MODE_LIGHTNING:
             break;
         default:
-            return; // this mode has no chart (currently V4 Precip & Virga) - draw nothing, not even the background quad
+            // <SS:Nexii> Every BUILT view now has a chart (V4's landed with backlog item 5.3, V9's with the
+            // lightning view), so what falls through here is the reserved numbers - V6 World Field and V8
+            // Anatomy - and nothing else: they draw nothing at all, not even the background quad, rather than
+            // floating an empty box over the world.
+            return;
     }
 
     const LLRect r = getLocalRect();
@@ -2093,7 +2939,9 @@ void SSAtmoGraphView::draw()
         case MODE_WIND_PROFILE: drawWindProfile(); break;
         case MODE_STORM_CELLS:  drawStormCells(); break;
         case MODE_DECK_LOD:     drawDeckLod(); break;
+        case MODE_PRECIP_VIRGA: drawVirga(); break;
         case MODE_WEATHER_CUBE: drawWeatherCube(); break;
+        case MODE_LIGHTNING:    drawLightning(); break;
         default: break;
     }
 
@@ -2613,5 +3461,270 @@ void SSAtmoGraphView::drawWeatherCube()
         const S32 ly = outer.bottom + outer.h - lh - (cue_row % 3) * lh;
         text(cue.mLabel, x + 3, ly, c);
         ++cue_row;
+    }
+}
+
+// V4's chart (doc/atmo_magic_debug_views.md V4; the panel backlog item 5.3 says the shipped in-world layer never
+// got). Four questions, all answered from the LAST BUILD's own snapshot - SSVolCloud::virgaDebug() read straight
+// across by SSAtmoInfoView::virgaData(), never re-derived here:
+//   1. the shaft POPULATION and its budget headroom - a bar of kept against SSVirga::MAX_SHAFTS, plus the number
+//      of candidates the hashed trim had to choose from and the probability it applied to each of them
+//      (SSAtmoInfoViewCore::keepProbability of SSVirga::quantiseCount, the trim's own two-step formula, held to
+//      the shipping SSVirga::keepHash by tests/xsection_infoview_virga_budget.cpp);
+//   2. the DRIVE distribution - a histogram of every qualifying cell's drive, the kept share drawn bright inside
+//      the dim total, so "the trim ate my heavy cells" is a shape rather than a suspicion;
+//   3. the TIER HANDOFF - SSVirga::handoff plotted against camera distance, with rails at the particle rain's own
+//      sheets radius r2, at the r2 x HANDOFF_SKIP line where shaft cards start at all, and at the end of the
+//      HANDOFF_BAND_M ramp where they reach full alpha: the distance at which the two rain systems change hands;
+//   4. whether the numbers are even live (no cube / Distant Rain off / no deck built each say so instead).
+void SSAtmoGraphView::drawVirga()
+{
+    const SSAtmoInfoView::VirgaData d = SSAtmoInfoView::virgaData();
+    const LLRect r = getLocalRect();
+    const S32 W = r.getWidth();
+    const S32 H = r.getHeight();
+
+    if (!d.mValid)
+    {
+        drawMessage("Precip & Virga: no weather cube applied.");
+        return;
+    }
+    if (!d.mActive)
+    {
+        drawMessage("Precip & Virga: Distant Rain off, or this deck is not the storm-coupled one.");
+        return;
+    }
+
+    LLFontGL* font = LLFontGL::getFontMonospace();
+    if (!font) return;
+    const S32 lh = font->getLineHeight();
+
+    // The trim's own two numbers: the quantised candidate count it hashed against, and the probability that gave
+    // each cell. SSVirga owns the quantiser; the info core only turns its answer into the percentage printed here.
+    const F32 quantised = SSVirga::quantiseCount(d.mCandidates);
+    const F32 keep_p = keepProbability(SSVirga::MAX_SHAFTS, quantised);
+
+    text(llformat("PRECIP & VIRGA  %d qualifying  kept %d  trimmed %d  trim p %.0f%% (n->%.0f)  r2 %.0f m%s",
+                  d.mCandidates, d.mKept, d.mTrimmed, keep_p * 100.f, quantised, d.mR2,
+                  d.mDeckBuilt ? "" : "  (deck not built)"),
+         PAD, H - 2, TEXT_NORMAL);
+
+    // ---- the budget bar: kept against MAX_SHAFTS, with the overshoot the rank-cut backstop allows printed as a
+    // number rather than drawn past the bar's own end (SSAtmoInfoViewCore::budgetFrac / budgetFillPx).
+    const S32 bar_h = lh - 2;
+    const S32 bar_w = llmin(220, W - PAD * 2 - 200);
+    const S32 bar_y = H - 2 - lh - 4;
+    if (bar_w > 40)
+    {
+        const S32 fill = budgetFillPx(d.mKept, SSVirga::MAX_SHAFTS, bar_w);
+        const F32 frac = budgetFrac(d.mKept, SSVirga::MAX_SHAFTS);
+        gl_rect_2d(PAD, bar_y, PAD + bar_w, bar_y - bar_h, LLColor4(1.f, 1.f, 1.f, 0.10f));
+        gl_rect_2d(PAD, bar_y, PAD + fill, bar_y - bar_h,
+                   (frac > 1.f) ? LLColor4(1.f, 0.35f, 0.30f, 0.85f)
+                                : LLColor4(RAIL_BASE.mV[0], RAIL_BASE.mV[1], RAIL_BASE.mV[2], 0.85f));
+        gl_line_2d(PAD + bar_w, bar_y, PAD + bar_w, bar_y - bar_h, AXIS);
+        const S32 headroom = SSVirga::MAX_SHAFTS - d.mKept;
+        text((headroom >= 0) ? llformat("budget %d / %d   headroom %d   (hard cap %d)", d.mKept, SSVirga::MAX_SHAFTS,
+                                        headroom, SSVirga::hardCap(SSVirga::MAX_SHAFTS))
+                             : llformat("budget %d / %d   OVER by %d   (hard cap %d)", d.mKept, SSVirga::MAX_SHAFTS,
+                                        -headroom, SSVirga::hardCap(SSVirga::MAX_SHAFTS)),
+             PAD + bar_w + 8, bar_y + 1, (frac > 1.f) ? LLColor4(1.f, 0.55f, 0.45f, 1.f) : TEXT_DIM);
+    }
+
+    ChartBox outer;
+    outer.left   = 46;
+    outer.bottom = 2 * lh + 8;
+    outer.w      = W - outer.left - 8;
+    outer.h      = H - outer.bottom - (2 * lh + bar_h + 10);
+    if (outer.w < 60 || outer.h < 70)
+    {
+        drawMessage("Precip & Virga: widen the floater to see the chart.");
+        return;
+    }
+
+    const ChartBox top_box = cubeLaneBox(outer, 0, 2, 18);
+    const ChartBox bot_box = cubeLaneBox(outer, 1, 2, 18);
+
+    // ---- top lane: the drive histogram. Bars are the TOTAL qualifying count per drive bucket in a flat grey; the
+    // kept share is drawn inside each bar in the presence ramp at that bucket's own drive, so the trim's bite is
+    // visible bucket by bucket.
+    S32 total[DRIVE_BUCKETS] = { 0 };
+    S32 kept[DRIVE_BUCKETS] = { 0 };
+    for (const auto& c : d.mCells)
+    {
+        const S32 b = driveBucket(c.mDrive, DRIVE_BUCKETS);
+        total[b] += 1;
+        if (c.mKept) kept[b] += 1;
+    }
+    S32 tallest = 0;
+    for (S32 i = 0; i < DRIVE_BUCKETS; ++i) tallest = llmax(tallest, total[i]);
+
+    gl_line_2d(top_box.left, top_box.bottom, top_box.left, top_box.bottom + top_box.h, AXIS);
+    gl_line_2d(top_box.left, top_box.bottom, top_box.left + top_box.w, top_box.bottom, AXIS);
+    for (S32 i = 0; i < DRIVE_BUCKETS; ++i)
+    {
+        const ChartBox tb = histogramBarBox(top_box, i, DRIVE_BUCKETS, total[i], tallest, 2);
+        const ChartBox kb = histogramBarBox(top_box, i, DRIVE_BUCKETS, kept[i], tallest, 2);
+        if (tb.h > 0)
+        {
+            gl_rect_2d(tb.left, tb.bottom + tb.h, tb.left + tb.w, tb.bottom, LLColor4(0.55f, 0.55f, 0.55f, 0.45f));
+        }
+        if (kb.h > 0)
+        {
+            const F32 mid_drive = ((F32)i + 0.5f) / (F32)DRIVE_BUCKETS;
+            gl_rect_2d(kb.left, kb.bottom + kb.h, kb.left + kb.w, kb.bottom, toColor(presenceRamp(mid_drive, 1.f), 0.9f));
+        }
+    }
+    // The qualify threshold, as a rail on the drive axis. It is the UNSCALED constant: the live gate divides it by
+    // the Weather Influence "Distant rain" strength, which this snapshot does not carry, so the rail is labelled
+    // for what it is rather than moved to a number the view cannot know.
+    {
+        const S32 x = top_box.left + (S32)floor(llclamp(SSVirga::THRESHOLD, 0.f, 1.f) * (F32)top_box.w + 0.5f);
+        gl_line_2d(x, top_box.bottom, x, top_box.bottom + top_box.h, RING_FADE_START);
+        text(llformat("thr %.2f (unscaled)", SSVirga::THRESHOLD), x + 2, top_box.bottom + top_box.h - 2, RING_FADE_START);
+    }
+    text(llformat("drive histogram  tallest bucket %d  (inner bar = kept by the hash trim)", tallest),
+         top_box.left + 2, top_box.bottom + top_box.h + lh, TEXT_DIM);
+    for (S32 q = 0; q <= 5; ++q)
+    {
+        const F32 dv = (F32)q / 5.f;
+        const S32 x = top_box.left + (S32)floor(dv * (F32)top_box.w + 0.5f);
+        text(llformat("%.1f", dv), x, top_box.bottom - 2, TEXT_DIM, q == 5);
+    }
+
+    // ---- bottom lane: the tier handoff. The curve is SSVirga::handoff itself - the same function the emitter's
+    // own per-card alpha multiplies by - sampled across a distance axis sized to leave the ramp's end inboard.
+    const F32 skip_r = d.mR2 * SSVirga::HANDOFF_SKIP;
+    const F32 ramp_end = skip_r + SSVirga::HANDOFF_BAND_M;
+    const F32 axis_max = distanceAxisMaxM(ramp_end);
+
+    gl_line_2d(bot_box.left, bot_box.bottom, bot_box.left, bot_box.bottom + bot_box.h, AXIS);
+    gl_line_2d(bot_box.left, bot_box.bottom, bot_box.left + bot_box.w, bot_box.bottom, AXIS);
+
+    std::vector<std::pair<S32, S32> > pts;
+    pts.reserve(CURVE_SAMPLES);
+    for (S32 i = 0; i < CURVE_SAMPLES; ++i)
+    {
+        const F32 dist = axis_max * (F32)i / (F32)(CURVE_SAMPLES - 1);
+        const F32 h = SSVirga::handoff(dist, d.mR2);
+        pts.emplace_back(chartX(dist, axis_max, bot_box), chartY(h, 1.f, bot_box));
+    }
+    polyline(pts, CURVE_LIVE, false);
+
+    auto rail = [&](F32 dist, const char* label, const LLColor4& c, S32 label_row)
+    {
+        if (dist <= 0.f || dist > axis_max) return;
+        const S32 x = chartX(dist, axis_max, bot_box);
+        gl_line_2d(x, bot_box.bottom, x, bot_box.bottom + bot_box.h, c);
+        text(llformat("%s %.0f m", label, dist), x + 2, bot_box.bottom + bot_box.h - 2 - label_row * lh, c);
+    };
+    rail(d.mR2, "r2 sheets", VIRGA_HANDOFF, 0);
+    rail(skip_r, "shafts start", RAIL_BASE, 1);
+    rail(ramp_end, "full shaft alpha", RING_THIN_START, 2);
+
+    for (S32 q = 0; q <= 5; ++q)
+    {
+        const F32 dist = axis_max * (F32)q / 5.f;
+        const S32 x = chartX(dist, axis_max, bot_box);
+        text(llformat("%.0f", dist), x, bot_box.bottom - 2, TEXT_DIM, q == 5);
+    }
+    text("camera distance (m)  -  particle rain inside the ramp, shaft cards outside it",
+         bot_box.left + 2, bot_box.bottom - 2 - lh, TEXT_DIM);
+}
+
+// V9's chart: the strike timeline. One row per live strike - a bar across the five lifecycle stages
+// (SSAtmoInfoViewCore::strikeStage's own table) with this strike's stage lit and the ones behind it filled, the
+// kind and polarity, its clock (a countdown before contact, an age after it) and whether the cloud deck is lit by
+// it - plus a header carrying the schedule and the two light budgets, and the gate's own values when nothing is
+// alive. Everything is read from the model's resident fields through SSAtmoInfoView::lightningData(); the chart
+// never advances a strike or asks for one.
+void SSAtmoGraphView::drawLightning()
+{
+    const SSAtmoInfoView::LightningData d = SSAtmoInfoView::lightningData();
+    const LLRect r = getLocalRect();
+    const S32 W = r.getWidth();
+    const S32 H = r.getHeight();
+
+    if (!d.mValid)
+    {
+        drawMessage("Lightning: system not running.");
+        return;
+    }
+
+    LLFontGL* font = LLFontGL::getFontMonospace();
+    if (!font) return;
+    const S32 lh = font->getLineHeight();
+
+    text(llformat("STRIKE TIMELINE  %d live  next %s  deck lit %d/%d  scene lights %d/%d",
+                  (S32)d.mStrikes.size(),
+                  (d.mNextIn >= 0.0) ? llformat("in %.1fs", d.mNextIn).c_str() : "not scheduled",
+                  d.mCloudLit, d.mCloudCap, (S32)d.mLights.size(), d.mSceneLightCap),
+         PAD, H - 2, TEXT_NORMAL);
+
+    const S32 label_w = 132;
+    const S32 right_w = 150;
+    const S32 bar_left = PAD + label_w;
+    const S32 bar_w = W - bar_left - right_w - PAD;
+    if (bar_w < 80 || H < 4 * lh)
+    {
+        drawMessage("Lightning: widen the floater to see the timeline.");
+        return;
+    }
+
+    // The stage scale under the header: five equal steps, the same table and the same colours the channels are
+    // drawn in, so a row's bar is read against the ladder every strike shares.
+    S32 y = H - 2 - lh - 2;
+    for (S32 st = 0; st < STRIKE_STAGE_COUNT; ++st)
+    {
+        const S32 x0 = bar_left + (bar_w * st) / STRIKE_STAGE_COUNT;
+        text(strikeStageLabel(st), x0 + 2, y, toColor(strikeStageColor(st), 1.f));
+    }
+    y -= lh + 2;
+
+    if (d.mStrikes.empty())
+    {
+        text("no live strikes", PAD, y, TEXT_DIM);
+        y -= lh;
+        text(llformat("why not: lightning %s   intensity %.2f   interval %.0f-%.0f s",
+                      d.mEnabled ? "ON" : "OFF", d.mIntensity, d.mIntervalMinS, d.mIntervalMaxS), PAD, y, TEXT_DIM);
+        y -= lh;
+        text((d.mNextIn >= 0.0) ? llformat("next strike scheduled in %.1f s", d.mNextIn)
+                                : std::string("no strike scheduled"), PAD, y, TEXT_DIM);
+        return;
+    }
+
+    const S32 row_h = lh + 4;
+    const S32 seg_h = lh - 2;
+    for (const auto& s : d.mStrikes)
+    {
+        if (y < row_h) break;
+
+        text(llformat("%s %s", strikeKindLabel(s.mKind), s.mPositive ? "+" : "-"), PAD, y,
+             toColor(strikeStageColor(s.mStage), 1.f));
+
+        // The stage bar: every stage up to and including this one filled, the current one at full alpha.
+        for (S32 st = 0; st < STRIKE_STAGE_COUNT; ++st)
+        {
+            const S32 x0 = bar_left + (bar_w * st) / STRIKE_STAGE_COUNT;
+            const S32 x1 = bar_left + (bar_w * (st + 1)) / STRIKE_STAGE_COUNT;
+            const F32 alpha = (st < s.mStage) ? 0.35f : ((st == s.mStage) ? 0.95f : 0.10f);
+            gl_rect_2d(x0, y - 2, x1 - 2, y - 2 - seg_h, toColor(strikeStageColor(st), alpha));
+        }
+
+        // Within-stage detail: the leader's own progress is the one sub-stage with a real fraction behind it, so
+        // it gets a cursor inside its own segment rather than a second bar.
+        if (s.mStage == STRIKE_STAGE_LEADER)
+        {
+            const S32 x0 = bar_left + (bar_w * STRIKE_STAGE_LEADER) / STRIKE_STAGE_COUNT;
+            const S32 x1 = bar_left + (bar_w * (STRIKE_STAGE_LEADER + 1)) / STRIKE_STAGE_COUNT;
+            const S32 cx = x0 + (S32)floor(llclamp(s.mLeaderProgress, 0.f, 1.f) * (F32)(x1 - x0) + 0.5f);
+            gl_line_2d(cx, y - 2, cx, y - 2 - seg_h, TEXT_NORMAL);
+        }
+
+        const std::string when = (s.mT < 0.f) ? llformat("in %.2fs", -s.mT) : llformat("+%.2fs", s.mT);
+        text(llformat("%s  I %.2f  %.0f m%s", when.c_str(), s.mIntensity, s.mDistanceM,
+                      s.mLightsCloud ? "  deck" : ""),
+             W - PAD, y, TEXT_DIM, true);
+        y -= row_h;
     }
 }

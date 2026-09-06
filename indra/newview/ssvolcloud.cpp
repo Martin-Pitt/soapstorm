@@ -25,10 +25,14 @@
 
 #include "ssvolcloud.h"
 
+#include "ssdeckcellsoftcore.h" // the observer's cell-lattice softening - one per-cell quantity read continuously
+#include "ssdeckflowcore.h" // the card's own frame, the advected octave's sign rule, its edge mask and per-puff swirl
 #include "ssdecklodcore.h"
 #include "ssdeckmacrocore.h"
 #include "ssdecknoisecore.h"
 #include "ssdeckshadecore.h"
+#include "sssquallcore.h" // 8a: SSSquall::LINE_ANVIL_FRAC - every applyLineBand call site's anvil weight
+#include "ssveilcore.h" // 8g: SSVeil - the base veil's own law (rim fade-IN, outward reach, tile radii)
 #include "ssvirgacore.h"
 
 #include "ssatmoenvapplier.h"
@@ -61,7 +65,7 @@ namespace
 {
     const F32 CELL_M = 260.f;
 
-    // <SS:Nexii> The field's reach. Two cross-file rails are locked to FIELD_DRAW_M and must move with it: the base veil's edge fade in ssVolCloudF.glsl (ss_edge_rails, SSDeckLod::FIELD_FADE_START_M/DECK_EDGE_M uploaded from the core - not the old hardcoded 6800/9800 pair, see that uniform's own comment) and SS_DECK_EDGE_M in lldrawpoolwlsky.cpp (the dome band's horizon melt runs to the deck's dissolve line); the ss_rim uniform in render() derives from these directly. The far plane never moves - the squash folds whatever reach these ask for into the same drawn band, so raising them buys distance with builder cells, sheet tiles and depth compression, not with clip planes.
+    // <SS:Nexii> The field's reach. Two cross-file rails are locked to FIELD_DRAW_M and must move with it: the base veil's edge fade in ssVolCloudF.glsl (ss_edge_rails, SSDeckLod::FIELD_FADE_START_M/DECK_EDGE_M uploaded from the core - not the old hardcoded 6800/9800 pair, see that uniform's own comment) and SS_DECK_EDGE_M in lldrawpoolwlsky.cpp (the dome band's horizon melt runs to the deck's dissolve line); the ss_rim uniform in render() derives from these directly. The far plane never moves - the squash folds whatever reach these ask for into the same drawn band, so raising them buys distance with builder cells, sheet tiles and depth compression, not with clip planes. 8g CORRECTION (ssveilcore.h): the first of those two rails is stale - ss_edge_rails is now the PUFFS' fade only. The base veil runs on ss_veil_rails (SSDeckLod::THIN_START_M/FIELD_DRAW_M for its rim fade-IN, SSVeil::REACH_START_M/REACH_END_M for its outward reach) and deliberately outlives the puffs, so FIELD_DRAW_M now has a THIRD consumer with the opposite sense. FIELD_RADIUS_M is likewise no longer the pass's outer limit: mEffRadius is llmax(FIELD_RADIUS_M, SSVeil::REACH_END_M) - see its own comment in update().
     const F32 FIELD_RADIUS_M = 12000.f;
 
     const F32 FIELD_DRAW_M = 10000.f;
@@ -70,6 +74,12 @@ namespace
     // <SS:Nexii> The bounds the puff budget dial (SSAtmoCloudPuffBudget) is held inside. The floor is low enough to be a real emergency setting and high enough that a deck still reads as a deck rather than a scatter of stray quads; the ceiling is well past what any sky asks for, and exists so a typo in the spinner cannot hand the sort loop a number that costs a frame.
     const S32 MIN_PUFF_BUDGET = 64;
     const S32 MAX_PUFF_BUDGET = 8000;
+
+    // <SS:Nexii> D3 [interaction: ssVolCloudF.glsl SS_NOISE_M]: metres of world per tile of the noise map, as the
+    // fragment stage spells it. LOCKSTEP - the only CPU consumer is SSDeckBoil::wrapFallM, which folds the rain
+    // curtain's fall on this period so the subtraction the shader does against a wrapping texture is exact; a
+    // divergence here would show as a jump in the streak each time the accumulator wrapped.
+    const F32 SHADER_NOISE_M = 880.f;
 
     const F32 PUFF_CELL_FRACTION = 0.85f;
 
@@ -86,21 +96,9 @@ namespace
 
     const F32 PUFF_THICKNESS_GAIN = 0.35f;
 
-    // <SS:Nexii> The refinement LOD (SSAtmoCloudTessellation): near the eye the field grows
-    // smaller puffs ON TOP of the ones it already has, never instead of them. A placed puff
-    // within SS_TESS_RANGE_M of the camera grows SS_TESS_CHILDREN children at a fraction of
-    // its radius, and inside SS_TESS_INNER_M those children grow a smaller generation still,
-    // so the detail steps down in size as it climbs toward the viewer. The ranges are the
-    // LOD axis: each ring's puffs fade out approaching their limit, so walking toward a
-    // cloud gathers detail incrementally and no ring boundary ever pops. Every offset is
-    // hashed off the parent's AIR-FRAME cell - the same anchor the parent's own jitter uses -
-    // so the detail is part of the cloud and rides the wind instead of re-rolling against it.
-    const F32 SS_TESS_RANGE_M = 1000.f;
-    const F32 SS_TESS_INNER_M = 500.f;
-    const S32 SS_TESS_CHILDREN = 4;
-    const S32 SS_TESS_GRANDCHILDREN = 3;
-    const F32 SS_TESS_CHILD_FRAC = 0.42f;
-    const F32 SS_TESS_GRAND_FRAC = 0.45f;
+    // <SS:Nexii> The refinement LOD (SSAtmoCloudTessellation - hashed child puffs grown around near puffs) was removed
+    // 2026-09-06: near-field detail is the anatomy tier's job, entities acting on the container (doc/atmo_magic_phase8_show.md
+    // section 4.0), not a finer sampling of the same field.
 
     const F32 COVERAGE_FLOOR = 0.04f;
 
@@ -356,6 +354,7 @@ void SSVolCloud::clear()
     mStormInterest = SSStormCells::Interest();
     mStormCellCount = 0;
     mHeroFrame = SSDeckFrame::HeroFrame();
+    mLineBand = SSStormCouple::LineBand(); // 8a: strength 0 - disabled, same rule as mStormCellCount 0 above
     mVirgaDebug = SSVirgaDebug();
 }
 
@@ -374,6 +373,21 @@ void SSVolCloud::update(F32 dt)
 
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr || !mgr->hasAsset()) return;
+
+    // <SS:Nexii> D3 (fourth build report) [interaction: ssdeckboilcore.h]: THE BOIL CLOCK, integrated. The
+    // fragment stage used to build the advected octave's phase as `ss_time * rate` - an absolute clock times a
+    // rate that steps once a second, because both of that rate's factors are resolved from
+    // SSAtmoEnvTrack::currentDayCyclePhase(), which reads time(nullptr) in WHOLE SECONDS. Multiplied by a clock
+    // of thousands of seconds, each one-second tread became a jump in the phase itself. Integrating the rate
+    // instead makes a rate step a change of DERIVATIVE, which nothing can see. See SSDeckBoil's header.
+    // Both decks advance every frame on their own last-resolved dials, whether or not they get rebuilt below -
+    // a deck that dips under the coverage floor for a few seconds must not come back on a stale phase. dt is
+    // gFrameIntervalSeconds (ssatmomagic.cpp's call); SSDeckBoil::clampDt bounds a hitch or an alt-tab out.
+    for (Deck* boil_deck : { &mPrimary, &mUnder })
+    {
+        boil_deck->mBoilLaps = SSDeckBoil::advanceLaps(boil_deck->mBoilLaps, boil_deck->mDriftRate, boil_deck->mChurn, dt);
+        boil_deck->mFallM = SSDeckBoil::advanceFallM(boil_deck->mFallM, boil_deck->mDriftRate, dt);
+    }
 
     LLTimer timer;
 
@@ -426,7 +440,16 @@ void SSVolCloud::update(F32 dt)
 
     mLightDir = light_dir;
 
-    mEffRadius = FIELD_RADIUS_M;
+    // <SS:Nexii> 8g (ssveilcore.h): the squash's virtual radius must cover the FARTHEST thing this pass draws, which is
+    // no longer a puff at FIELD_DRAW_M but the base veil's outer tile ring at SSVeil::REACH_END_M (14000 m) - past
+    // FIELD_RADIUS_M's 12000. Beyond mEffRadius the vertex stage clamps drawn distance to ss_squash.y * 0.999
+    // (ssVolCloudV.glsl), so every veil tile from 12 to 14 km would have collapsed onto one drawn radius: a flat
+    // bright ring at the fold with the fragment stage un-squashing all of it to the same wrong eye distance. Raising
+    // the radius does NOT change apparent size - the squash scales each quad corner about the camera, so angular size
+    // is preserved and the fragment stage inverts the mapping exactly - it only re-spreads drawn depth, so the deck
+    // beyond the knee sits marginally nearer in the depth buffer than before. [interaction: doc/atmo_magic_far_clouds.md
+    // section 4 "Beyond 10km", which states the squash needs no mechanical change for reach - only this radius does.]
+    mEffRadius = llmax(FIELD_RADIUS_M, SSVeil::REACH_END_M);
     // Cap and knee: see SS_SQUASH_CAP_FRAC in ssvolcloud.h. The knee is a plain 0.8 of the cap, so the field from there outward folds into the last fifth of drawn depth.
     mSquashCap = MAX_FAR_CLIP * SS_SQUASH_CAP_FRAC;
     mSquashKnee = mSquashCap * 0.8f;
@@ -472,6 +495,7 @@ void SSVolCloud::update(F32 dt)
         mStormInterest = SSStormCells::Interest();
         mStormCellCount = 0;
         mHeroFrame = SSDeckFrame::HeroFrame();
+        mLineBand = SSStormCouple::LineBand(); // 8a: same staleness rule as mStormCellCount above
     }
 
     // <SS:Nexii> The ground shadow bakes from the PRIMARY deck alone - it is the weather's deck at storm altitude, the one standing between the sun and the ground. The under deck hangs below a sky build's platform and shadows nothing anyone stands on. Keyed inside, so this is a no-op almost every frame.
@@ -563,12 +587,6 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     static LLCachedControl<U32> per_cell_setting(gSavedSettings, "SSAtmoCloudPuffsPerCell", (U32)PUFFS_PER_CELL);
     const S32 puffs_per_cell = llclamp((S32)per_cell_setting, MIN_PUFFS_PER_CELL, MAX_PUFFS_PER_CELL);
 
-    // <SS:Nexii> The refinement LOD's switch, read here rather than in render(): what it buys
-    // is built puffs, not vertex work. The render pass has nothing to ask about it either way -
-    // every puff, parent or child, draws as the single camera-facing card it always was.
-    static LLCachedControl<bool> tessellate_setting(gSavedSettings, "SSAtmoCloudTessellation", false);
-    const bool tessellate = tessellate_setting;
-
     // The storm gloom rides the deck for the render pass's ss_gloom uniform - it used to be multiplied into every baked vertex colour, and it is one number per deck.
     deck.mGloom = field.mGloom;
 
@@ -608,6 +626,13 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         {
             mStormCells[i] = SSStormCouple::CellUniform();
         }
+
+        // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): the active squall line's deck coupling,
+        // fetched next to fillUniforms above from the SAME scheduler instance/frame - AGENT frame, matching
+        // mStormCells so lineField's px/py agree with sampleAt's world_x/world_y at every call site below.
+        // LineBand() default (strength 0) whenever no line is alive; SSStormCouple::lineField reads that as
+        // "disabled" by its own invariant. [interaction: SSStormCells::fillLineBand]
+        SSStormCells::getInstance()->fillLineBand(mLineBand);
 
         // <SS:Nexii> Phase 4 fixup (F13, doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud
         // drift"): the hero's local frame shift inputs, built ONCE for this build from ONE source - the
@@ -671,12 +696,12 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     // phase) - the PURE profile path (resolves the cube at this exact phase, never the live applier's mWindProfile,
     // which may belong to a different track/phase than the one this deck is building for). bakeShearTable's own
     // invariant makes o[0] zero at z0, so a deck whose base sits above the band (z1 <= z0) still bakes a valid,
-    // clamped one-metre span.
-    {
-        const SSWindProfile::Params params = SSAtmoEnvApplier::windProfileAt(track, phase);
-        const F32 z1 = track.mFloorZ + track.mCloudDome.mHeightM.valueAt(phase);
-        deck.mShearTable = SSDeckFrame::bakeShearTable(deck.mBaseZ, z1, track.mFloorZ, params);
-    }
+    // clamped one-metre span. Left in this function's scope past this block, unbraced (F1, 2026-09-06 review): the
+    // virga shaft skew below reuses this SAME params resolution for its own windAt call rather than re-resolving
+    // the cube a second time for the same track/phase.
+    const SSWindProfile::Params params = SSAtmoEnvApplier::windProfileAt(track, phase);
+    const F32 z1 = track.mFloorZ + track.mCloudDome.mHeightM.valueAt(phase);
+    deck.mShearTable = SSDeckFrame::bakeShearTable(deck.mBaseZ, z1, track.mFloorZ, params);
 
     // <SS:Nexii> review S3 Delegation (doc/atmo_magic_storm_dynamics.md section 3): while any coupled cell is
     // active, the deck-wide consolidation figure hands half its authority to the cells - SSStormCouple::
@@ -708,7 +733,24 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     const F32 air_x = cam.mV[VX] - drift.mV[0];
     const F32 air_y = cam.mV[VY] - drift.mV[1];
 
-    const S32 cell_radius = llceil(FIELD_DRAW_M / CELL_M);
+    // <SS:Nexii> F3 (2026-09-06 review), reworded 8e-b REVIEW F3 with measured numbers: padded by
+    // SSDeckLod::WALK_PAD_M, the SAME pad cellInWalk below tests cell membership against - without this the walk's
+    // own bound stopped at FIELD_DRAW_M and never reached the ring between FIELD_DRAW_M and FIELD_DRAW_M +
+    // WALK_PAD_M that cellInWalk's padded disc exists to admit. The ORIGINAL wording here called the pad "inert";
+    // measured instead, the old bare 39-cell-radius square (FIELD_DRAW_M / CELL_M, no pad at all) already admitted
+    // 6217 of its 6241 cells through cellInWalk's own circle test - the pad was not inert, it was ANISOTROPIC: its
+    // effect is realised near the square's diagonals (where the circle's slack against the square corner is
+    // largest) and near-absent along the axes, so in aggregate the walk reads as "effectively a square" even
+    // though the corner rejection is real and cellInWalk is genuinely doing work. HONEST COST, current numbers:
+    // 8e-b's own review (N2, ssdecklodcore.h WALK_PAD_M) drops the virga skew term from the pad, so cell_radius
+    // falls from 54 to 50 cells - about 26% more admitted cells than the old bare 39-cell square, not the "square
+    // vs ring" cliff the first draft of this comment implied. The walk below is still a SQUARE of side
+    // 2*cell_radius+1 cells, so growing this radius grows the walked cell count with its SQUARE, not with the ring
+    // cellInWalk actually admits - cellInWalk (the very first thing the loop body does, ahead of any gate-hash/
+    // presence work) rejects the square's four corners cheaply, but every cell inside the square still pays for
+    // the coordinate math and the distance check itself. Not free; measure mLastBuildMS on a build rather than
+    // assume the corner rejection makes it so.
+    const S32 cell_radius = llceil((FIELD_DRAW_M + SSDeckLod::WALK_PAD_M) / CELL_M);
     const S32 cx0 = llfloor(air_x / CELL_M);
     const S32 cy0 = llfloor(air_y / CELL_M);
 
@@ -718,6 +760,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     const LLVector3 light_dir = mLightDir;
     const F32 beam = mBeam;
     const F32 shade_th = SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage); // one layer, one optical thickness term
+    static LLCachedControl<bool> shade_calib(gSavedSettings, "SSAtmoCloudShadeCalibration", true); // <SS:Nexii> The shade calibration A/B (ssdeckshadecore.h Calibration): TRUE is the retuned constant set, FALSE the pre-retune one bit-identically (V:/Scratch/atmo/tests/deckshadecore.cpp pins it). ONE read, passed to all three SSDeckShade call sites in this function, so the veil, the fine puffs and the Tier B bodies can never disagree about which calibration they are wearing. [interaction: SSAtmoCloudLightVariant, the same kind of in-build A/B]
 
     // <SS:Nexii> The base veil's structural shading, resolved here rather than per fragment: the shade a puff at the deck's floor would wear, run through the same formulas the puff loop below uses - the facing term at a representative low up, the exponential shade through the layer from that height, the beam gate. The sheet is a fragment of the same body of cloud as the puffs, so it wears the same form a puff in its place would (the light itself is the vertex stage's, shared by construction), and the blend at the boundary is a lighting match rather than a hope.
     {
@@ -725,7 +768,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         // the veil's representative depths baked in as core constants; V:/Scratch/atmo/tests/deckshadecore.cpp pins
         // it against the old inline block within 1e-6 (the old facing term's multiplication order differed by a last bit).
         const F32 sun_z = llclamp(light_dir.mV[VZ], -1.f, 1.f);
-        deck.mSheetForm = SSDeckShade::veilForm(sun_z, SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage), beam);
+        deck.mSheetForm = SSDeckShade::veilForm(sun_z, SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage), beam, shade_calib);
         // The inset: just off the deck's floor, deep enough to sit inside the puffs' base fade,
         // shallow enough that the sheet reads as the deck's underside and not as a second layer.
         // The flat 16 m lift sits it higher in the fade, so the veil clears the puffs' bottom dissolve instead of hugging the floor.
@@ -758,6 +801,8 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     F32 shaft_precip = 0.f;
     F32 shaft_ground_z = 0.f;
     F32 shaft_r2 = 0.f;
+    F32 shaft_fall_speed = 1.f;
+    F32 shaft_base_agl = 0.f;
     std::vector<ShaftCandidate> shaft_candidates;
     if (shafts_active)
     {
@@ -768,6 +813,25 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         SSPrecipSim::tierBands(TIER_SHEETS, SSAtmoMagic::getInstance()->preset(), in_lo, in_hi, out_lo, shaft_r2);
 
         shafts_active = shaft_r2 > 0.f; // F6
+
+        // <SS:Nexii> F1 (2026-09-06 review), 8e-b PROFILE SKEW (ssvirgacore.h profileSkewM, doc/atmo_magic_phase8_
+        // show.md section 3b): FRAME RULE - geometry placement reads the CURVE-RESOLVED wind PROFILE
+        // (SSAtmoEnvApplier::windProfileAt(track, phase), i.e. `params`), never the applier's own live
+        // mWindProfile/windAt(z) overload (it reads gSavedSettings and this client's own deck top), never
+        // SSAtmoMagic::mWind, and never the flowmap - the curtain skew reuses `params`, the SAME
+        // windProfileAt(track, phase) resolution the shear table just above already baked from, rather than a
+        // second, independent (and per-client-divergent) resolve. shaft_base_agl is deck.mBaseZ - track.mFloorZ -
+        // the same baseAgl bakeShearTable derives from these two values above - since SSWindProfile::windAt takes
+        // height ABOVE GROUND, not world Z; profileSkewM integrates windAt(z, params) over the fall itself (8e-b:
+        // "segment the virga in parts and follow the wind profile"), so no single windAt sample is taken here any
+        // more - cardGeom below calls profileSkewM per card, at that card's own altitude. This is deliberately NOT
+        // the same accessor render()'s streak frame direction reads (that is still the live, per-client
+        // windAt(mPrimary.mBaseZ) - geometry and that cosmetic streak are allowed to diverge; see ssvirgacore.h
+        // skewOffsetM's own F10 note). fallSpeed is the ACTIVE precipitation preset's own mFallSpeed - the same
+        // preset tierBands above already resolved this shaft's handoff radius from, so the fall-time rule (wind x
+        // dz / v_fall) uses the same v_fall the particle rain's landing shift does.
+        shaft_base_agl = deck.mBaseZ - track.mFloorZ;
+        shaft_fall_speed = SSAtmoMagic::getInstance()->preset().mFallSpeed;
     }
 
     // <SS:Nexii> F11: shafts are base-anchored (SSVirga::BURIED, like the veil) so their placement takes NO O(z)
@@ -784,6 +848,13 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     deck.mLodSubsTally = 0;
     deck.mLodCellTally = 0;
     deck.mTierBCount = 0;
+
+    // <SS:Nexii> F2 (2026-09-06 review): the render pass's ss_shaft_embed uniform source - reset to 0 every build
+    // so a deck whose shaft path does not run this frame (feature off, not the weather deck, no qualifying cells)
+    // never uploads a stale embed span left over from a build where it did; set for real only inside the
+    // shafts_active card-emission block below.
+    deck.mShaftEmbedTopZ = 0.f;
+    deck.mShaftGroundZ = 0.f;
 
     // <SS:Nexii> LOD phase 6d (ssdeckmacrocore.h CONTRACT, doc/atmo_magic_far_clouds.md section 2 step 2 Tier B):
     // the macro tier's per-build accumulator, keyed by macro cell (macroIndex(cx), macroIndex(cy)) packed into one
@@ -817,12 +888,16 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             // phase 6a outcome): reject the square walk's corners - outside FIELD_DRAW_M + WALK_PAD_M of the
             // AIR-frame camera cell (cx0, cy0) is defined from - before any hash, presence or hero-influence work
             // runs for this cell. SSDeckLod::cellInWalk pads the plain FIELD_DRAW_M circle by WALK_PAD_M, the
-            // farthest a puff is placed from this cell's centre (shear lean + hero shift + jitter), so a cell just
-            // outside FIELD_DRAW_M whose puffs still lean inward is not starved before it gets the chance to place
-            // them; this DOES change some cells' fate versus the plain circle - membership is tested on the padded
-            // walk, and it is edgeFade below (zero at DECK_EDGE_M, well inside this padded radius) that owns
-            // visibility, not this gate. There is no per-puff FIELD_DRAW_M cull left downstream for this to mirror
-            // (removed - see the puff-alpha comment near dist_sq below).
+            // farthest an ORDINARY PUFF is placed from this cell's centre - the O(z) shear lean, the hero's frame
+            // shift and this sub-puff's own jitter (three terms; 8e-b REVIEW N2, 2026-09-06: a virga curtain's own
+            // wind-fall skew, SSVirga::SKEW_CAP_M, used to be a fourth term here but is DELETED - a skewed shaft
+            // card from a candidate this walk never even collects draws nothing, so the pad owes the skew nothing;
+            // see ssdecklodcore.h WALK_PAD_M's own comment) - so a cell just outside FIELD_DRAW_M whose puffs
+            // still lean inward is not starved before it gets the chance to place them; this DOES change some
+            // cells' fate versus the plain circle - membership is tested on the padded walk, and it is edgeFade
+            // below (zero at DECK_EDGE_M, well inside this padded radius) that owns visibility, not this gate.
+            // There is no per-puff FIELD_DRAW_M cull left downstream for this to mirror (removed - see the
+            // puff-alpha comment near dist_sq below).
             if (!SSDeckLod::cellInWalk((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f, air_x, air_y))
             {
                 continue;
@@ -938,9 +1013,16 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             // owning cell index on a vertex channel so the fragment stage could re-read this exact sample instead
             // of its own would close the residual, and is deferred.
             SSStormCouple::Sample storm_sample;
-            if (couple_storm && mStormCellCount > 0)
+            if (couple_storm)
             {
-                storm_sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, world_x, world_y);
+                if (mStormCellCount > 0)
+                {
+                    storm_sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, world_x, world_y);
+                }
+                // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): the squall line's wall/shelf
+                // folded in right after the discrete-cell sample, at the SAME world point - BUILDER call site.
+                // Independent of mStormCellCount (a line's members may outnumber the MAX_CELLS uniform slots).
+                SSStormCouple::applyLineBand(storm_sample, SSStormCouple::lineField(mLineBand, world_x, world_y), SSSquall::LINE_ANVIL_FRAC);
             }
 
             // <SS:Nexii> review S12: tower is ALWAYS derived through SSStormCouple::towerFromMap - never left at
@@ -973,13 +1055,26 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                         SSDeckFrame::Vec2{(F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f},
                         SSDeckFrame::Vec2{drift.mV[0], drift.mV[1]}, hero_shift_m, deck.mBaseZ, SS_VIRGA_NO_SHEAR);
 
-                    ShaftCandidate cand;
-                    cand.x = shaft_placed.x;
-                    cand.y = shaft_placed.y;
-                    cand.drive = shaft_drive;
-                    cand.cellId = ((U64)(U32)cx << 32) | (U64)(U32)cy;
-                    cand.hashKey = hashCell(cx, cy, salt + SS_VIRGA_HASH_SALT);
-                    shaft_candidates.push_back(cand);
+                    // <SS:Nexii> 8e-b REVIEW N2 (decided, 2026-09-06): a candidate at or beyond DECK_EDGE_M can
+                    // never emit a card - every emitted card's alpha chain multiplies edgeFade of THIS SAME
+                    // candidate distance (F6, see the alpha line below) - yet before this filter it was still
+                    // counted in keepHash's n, diluting the MAX_SHAFTS budget across cells that could never be
+                    // seen (measured: visible share of the kept set 72% -> 50% after the padded walk widened the
+                    // candidate ring). Pre-filtered here, before push_back, the same class of camera-only LOD
+                    // bound cellInWalk already applies to cell membership - never a world-state gate.
+                    const F32 cand_dx = shaft_placed.x - cam.mV[VX];
+                    const F32 cand_dy = shaft_placed.y - cam.mV[VY];
+                    const F32 cand_horiz = sqrtf(cand_dx * cand_dx + cand_dy * cand_dy);
+                    if (SSDeckLod::edgeFade(cand_horiz) > 0.f)
+                    {
+                        ShaftCandidate cand;
+                        cand.x = shaft_placed.x;
+                        cand.y = shaft_placed.y;
+                        cand.drive = shaft_drive;
+                        cand.cellId = ((U64)(U32)cx << 32) | (U64)(U32)cy;
+                        cand.hashKey = hashCell(cx, cy, salt + SS_VIRGA_HASH_SALT);
+                        shaft_candidates.push_back(cand);
+                    }
                 }
             }
 
@@ -1136,6 +1231,12 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 {
                     flatten_term *= SSStormCouple::mammatusScale(storm_sample.mammatus);
                 }
+                // <SS:Nexii> 8a item 4 (doc/atmo_magic_phase8_show.md section 3): the gust-front shelf ahead of a
+                // squall line's wall floors this same flatten term - the shelf's ONLY visual for now (it does not
+                // yet widen/lower the puff independent of puff_anvil*coreness the way the wall itself does through
+                // boost/anvil above), so a shelf under a puff whose height/convection would otherwise round it off
+                // still reads laminar rather than puffy.
+                flatten_term = llmax(flatten_term, storm_sample.lineShelf);
 
                 const F32 flat = 1.f + puff_anvil * coreness * flatten_term;
 
@@ -1191,87 +1292,25 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 // underneath at midnight too) come from SSDeckShade (ssdeckshadecore.h), the one formula site the veil
                 // above and the Tier B body below share; deckshadecore.cpp pins this call bit-identical to the old block.
                 const F32 rim = cubic_step(edge_t);
-                puff.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height, coreness, rim, beam);
+                puff.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height, coreness, rim, beam, shade_calib);
                 puff.mBuried = SSDeckShade::buried(cell_height, up, rim);
+                // <SS:Nexii> S2 (doc/atmo_magic_flow_field.md section 2, ssvolcloud.h Puff::mPhase): the per-puff
+                // advected-detail phase - same hashUnit/sub_salt idiom as jx/jy/up_cell/mRadius above, its own
+                // untaken slot (977) so it does not alias any of them, keyed on the cell and sub only, never camera
+                // or time (I3/I5).
+                puff.mPhase = hashUnit(cx, cy, sub_salt + 977u);
+
+                // <SS:Nexii> [interaction: ssdeckflowcore.h] The per-puff flow SWIRL - a FIELD read, not a hash, so
+                // neighbouring puffs lean the same way (see Puff::mFlowSwirl). Read at the cell's own AIR-frame
+                // centre, exactly like every other per-cell quantity here: no camera, no clock, no drift, so two
+                // clients agree and a wrap realigns it with the lattice. Per CELL rather than per SUB on purpose -
+                // the sub-puffs of one cell are one cloud lump and should boil together; the phase above is what
+                // keeps them out of step in TIME.
+                puff.mFlowSwirl = SSDeckFlow::swirlUnit(((F32)cx + 0.5f) * CELL_M, ((F32)cy + 0.5f) * CELL_M,
+                                                        SSDeckFlow::SWIRL_SALT);
 
                 dist_sum += dist_sq;
                 deck.mPuffs.push_back(puff);
-
-                // <SS:Nexii> The refinement LOD (SSAtmoCloudTessellation): the parent above is
-                // finished and untouched. Inside SS_TESS_RANGE_M of the eye it grows smaller
-                // children around its own body, and inside SS_TESS_INNER_M those children grow
-                // a smaller generation still - the field sampling itself finer where a viewer
-                // can see it. The children hang off the parent's AIR-FRAME cell hashes, the
-                // same anchor the parent's own jitter hangs from, so each one holds its place
-                // in its cloud while the wind carries both; a world-frame seed would re-roll
-                // against the drift every frame, which is exactly the swimming the old rim
-                // breakup suffered. Rings fade by the parent's distance, so the detail gathers
-                // and thins incrementally around the viewer instead of popping at a boundary.
-                // The children are ordinary puffs - same sort, same budget, same carve - and
-                // being the nearest bodies in the deck, a full budget pays for them out of the
-                // field's far edge, which is the LOD trade the budget dial already was.
-                if (tessellate && dist < SS_TESS_RANGE_M)
-                {
-                    const F32 child_fade =
-                        1.f - ss_smoothstep(SS_TESS_RANGE_M * 0.5f, SS_TESS_RANGE_M, dist);
-
-                    for (S32 ci = 0; ci < SS_TESS_CHILDREN; ++ci)
-                    {
-                        const U32 child_salt = 4099u + sub_salt * 31u + (U32)ci * 977u;
-
-                        const F32 ang = hashUnit(cx, cy, 6u + child_salt) * 6.2831853f;
-                        const F32 reach = puff.mRadius
-                                        * (0.45f + 0.65f * hashUnit(cx, cy, 7u + child_salt));
-                        const F32 child_r = puff.mRadius * SS_TESS_CHILD_FRAC
-                                          * (0.7f + 0.6f * hashUnit(cx, cy, 8u + child_salt));
-
-                        Puff child;
-                        child.mPosAgent = puff.mPosAgent
-                            + LLVector3(cosf(ang) * reach, sinf(ang) * reach,
-                                        child_r * (hashUnit(cx, cy, 9u + child_salt) - 0.5f) * 1.2f);
-                        child.mRadius = child_r;
-                        child.mAlpha = puff.mAlpha * child_fade;
-                        child.mForm = puff.mForm;
-                        child.mBuried = puff.mBuried;
-
-                        const LLVector3 to_child = child.mPosAgent - cam;
-                        child.mCamDistSq = to_child.magVecSquared();
-                        dist_sum += child.mCamDistSq;
-                        deck.mPuffs.push_back(child);
-
-                        if (dist < SS_TESS_INNER_M)
-                        {
-                            const F32 grand_fade =
-                                1.f - ss_smoothstep(SS_TESS_INNER_M * 0.5f, SS_TESS_INNER_M, dist);
-
-                            for (S32 gi = 0; gi < SS_TESS_GRANDCHILDREN; ++gi)
-                            {
-                                const U32 grand_salt = 25013u + child_salt * 17u
-                                                     + (U32)gi * 769u;
-
-                                const F32 gang = hashUnit(cx, cy, 6u + grand_salt) * 6.2831853f;
-                                const F32 greet = child_r
-                                                * (0.5f + 0.9f * hashUnit(cx, cy, 7u + grand_salt));
-
-                                Puff grand;
-                                grand.mPosAgent = child.mPosAgent
-                                    + LLVector3(cosf(gang) * greet, sinf(gang) * greet,
-                                                child_r * 0.4f
-                                                * (hashUnit(cx, cy, 9u + grand_salt) - 0.5f));
-                                grand.mRadius = child_r * SS_TESS_GRAND_FRAC
-                                              * (0.7f + 0.6f * hashUnit(cx, cy, 8u + grand_salt));
-                                grand.mAlpha = child.mAlpha * grand_fade;
-                                grand.mForm = child.mForm;
-                                grand.mBuried = child.mBuried;
-
-                                const LLVector3 to_grand = grand.mPosAgent - cam;
-                                grand.mCamDistSq = to_grand.magVecSquared();
-                                dist_sum += grand.mCamDistSq;
-                                deck.mPuffs.push_back(grand);
-                            }
-                        }
-                    }
-                }
             }
         }
     }
@@ -1322,13 +1361,23 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         const F32 up = up_cell_mean * cell_height_mean;
         const F32 z = field.mBaseHeightM + up * field.mThicknessM;
 
+        // <SS:Nexii> 8g rim de-lattice (ssdeckmacrocore.h, doc/atmo_magic_phase8_show.md section 5): the body's own
+        // hashed offset from the block centre, added HERE - inside placeWorld's position argument, exactly where the
+        // fine loop adds its sub-puff's jx/jy - and nowhere else. Everything that classifies the block still reads the
+        // plain quantized centre: macroEligible above, the hero influence sample (producer rule) and acc.mBlockDist,
+        // the one scalar both halves of the A/B crossfade read. So the jitter moves the drawn body and cannot move the
+        // gate, the walk membership or the tier weight. Bound +-156 m (0.30 * MACRO_M), under the block half-width and
+        // under the smallest body radius - see the constant's own comment for why both matter.
+        F32 body_jx, body_jy;
+        SSDeckMacro::bodyJitterM(acc.mMcx, acc.mMcy, salt, body_jx, body_jy);
+
         const SSDeckFrame::Vec2 placed = SSDeckFrame::placeWorld(
-            SSDeckFrame::Vec2{block_air_x, block_air_y},
+            SSDeckFrame::Vec2{block_air_x + body_jx, block_air_y + body_jy},
             SSDeckFrame::Vec2{drift.mV[0], drift.mV[1]}, body_hero_shift_m, z, deck.mShearTable);
 
         Puff body;
         body.mPosAgent = LLVector3(placed.x, placed.y, z);
-        body.mRadius = SSDeckMacro::bodyRadiusM();
+        // body.mRadius is set below, from the SAME SSDeckMacro::bodyShape call that produces the alpha - see there.
 
         const LLVector3 to_cam = body.mPosAgent - cam;
         body.mCamDistSq = to_cam.magVecSquared();
@@ -1351,7 +1400,15 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         const F32 fine_alpha_at_dist = llmin(1.f, SSDeckLod::subAlpha(acc.mBlockDist, 0, puffs_per_cell)
                                                   * SSDeckLod::thinAlphaComp(acc.mBlockDist))
                                       * llclamp(0.35f + 0.65f * field.mCoverage, 0.f, 1.f);
-        body.mAlpha = SSDeckMacro::bodyAlpha(fine_alpha_at_dist, occ) * body_wB * SSDeckLod::edgeFade(horiz);
+        // <SS:Nexii> 8g rim de-lattice: radius and alpha come from ONE core call - the hashed size roll (0.80..1.25 of
+        // bodyRadiusM()) and the BODY_AREA_NORM factor that keeps the population's mean covered area equal to the
+        // unvaried constant are two halves of one identity, so the core hands them out together and no call site can
+        // take a varied radius with an unvaried alpha (that would inflate far coverage by E[s^2], 6.75%). The tier
+        // weight, edgeFade and the emptiness cut below are unchanged.
+        F32 body_radius_m, body_shape_alpha;
+        SSDeckMacro::bodyShape(acc.mMcx, acc.mMcy, salt, fine_alpha_at_dist, occ, body_radius_m, body_shape_alpha);
+        body.mRadius = body_radius_m;
+        body.mAlpha = body_shape_alpha * body_wB * SSDeckLod::edgeFade(horiz);
         if (body.mAlpha <= 0.001f) continue;
 
         // <SS:Nexii> 6d review fix 3: the SAME SSDeckShade call the fine loop makes (one formula site, ssdeckshadecore.h),
@@ -1359,8 +1416,21 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         // exactly as a fine puff's rim is.
         const F32 edge_t = llclamp((dist - FIELD_FADE_START_M) / (FIELD_DRAW_M - FIELD_FADE_START_M), 0.f, 1.f);
         const F32 rim = cubic_step(edge_t);
-        body.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height_mean, coreness_mean, rim, beam);
+        body.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height_mean, coreness_mean, rim, beam, shade_calib);
         body.mBuried = SSDeckShade::buried(cell_height_mean, up, rim);
+        // <SS:Nexii> S2 review fix (review_s0s2_sonnet.md #1): a Tier B body gets its own hashed phase off its
+        // macro-cell coords - the whole far field otherwise pulsed in lockstep at the default 0. Same 977 slot
+        // idiom as the fine loop's sub_salt + 977; a macro cell (mcx,mcy) can numerically collide with fine cell
+        // (cx,cy) of the same integers and share a phase VALUE, but the two are unrelated puffs on different
+        // grids hundreds of metres apart, so a shared phase between them is invisible - not "no aliasing", just
+        // aliasing that cannot matter.
+        body.mPhase = hashUnit(acc.mMcx, acc.mMcy, salt + 977u);
+
+        // <SS:Nexii> [interaction: ssdeckflowcore.h] The same swirl FIELD the fine loop reads, at this body's own
+        // block centre - the same air-frame position, so a Tier B body agrees with the Tier A puffs it stands in
+        // for across the crossfade instead of picking an unrelated lean (the field is continuous, so the block
+        // centre and its cells are all within one lattice cell of each other).
+        body.mFlowSwirl = SSDeckFlow::swirlUnit(block_air_x, block_air_y, SSDeckFlow::SWIRL_SALT);
 
         // <SS:Nexii> A Tier B body counts toward the deck's own (non-shaft) mean distance below, same as a fine
         // puff - it is an ordinary cloud body, unlike the shaft cards F5 excludes for being a different geometry.
@@ -1401,6 +1471,13 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         mVirgaDebug.mR2 = shaft_r2;
         mVirgaDebug.mGroundZ = shaft_ground_z;
         mVirgaDebug.mBaseZ = deck.mBaseZ;
+        // <SS:Nexii> F9 (2026-09-06 review), 8e-b PROFILE SKEW: the SAME params/baseAgl/fall-speed/embed-top
+        // values the card-emission loop below actually skews its cards by, snapshotted here rather than left for
+        // the view to re-derive.
+        mVirgaDebug.mWindParams = params;
+        mVirgaDebug.mBaseAglM = shaft_base_agl;
+        mVirgaDebug.mFallSpeed = shaft_fall_speed;
+        mVirgaDebug.mEmbedTopZ = SSVirga::embedTopZ(deck.mBaseZ, deck.mThicknessM);
         mVirgaDebug.mCells.clear();
         mVirgaDebug.mCells.reserve(shaft_candidates.size());
 
@@ -1429,6 +1506,22 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             kept_idx.resize(hard_cap);
         }
 
+        // <SS:Nexii> Phase 8e (ssvirgacore.h embedTopZ, doc/atmo_magic_phase8_show.md section 3b): the stack's
+        // TOP is no longer the deck base itself but a fixed span of the puff thickness above it, so the curtain
+        // starts inside the cloud rather than hanging off a hard line - see embedTopZ's own comment. Shared by
+        // every candidate this build (deck.mBaseZ/mThicknessM do not vary per candidate).
+        const F32 shaft_top_z = SSVirga::embedTopZ(deck.mBaseZ, deck.mThicknessM);
+
+        // <SS:Nexii> F2 (2026-09-06 review): carried to render()'s ss_shaft_embed uniform (deck.mBaseZ,
+        // shaft_top_z) so the fragment stage's ss_virga_embedAlpha reads the SAME embed span this build actually
+        // used, rather than a second independent embedTopZ() call in the render pass.
+        deck.mShaftEmbedTopZ = shaft_top_z;
+
+        // <SS:Nexii> Phase 8e item 2: carried to render()'s ss_shaft_embed uniform's z component alongside
+        // deck.mBaseZ/mShaftEmbedTopZ so the fragment stage's curtain-height fraction h reads the SAME
+        // [ground, base] span this build's card loop actually used.
+        deck.mShaftGroundZ = shaft_ground_z;
+
         for (S32 idx : kept_idx)
         {
             const ShaftCandidate& cand = shaft_candidates[idx];
@@ -1441,7 +1534,9 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             // over terrain standing in front of it. Stated residual (ssvirgacore.h's own comment): the fold still
             // affects a curtain's mid-air cards against tall terrain, as it does far puffs. h01/alpha/width below
             // deliberately use each card's TRUE (unlifted) height fraction - the lift truncates what is drawn, it
-            // does not change the physical curtain's own vertical profile.
+            // does not change the physical curtain's own vertical profile. groundLiftZ itself still spans the REAL
+            // deck base (not the embedded top) - the knee/reach retune is about how far virga reaches down, not
+            // about where the stack starts.
             const F32 cand_dx = cand.x - cam.mV[VX];
             const F32 cand_dy = cand.y - cam.mV[VY];
             const F32 cand_horiz = sqrtf(cand_dx * cand_dx + cand_dy * cand_dy);
@@ -1451,31 +1546,76 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
             // ceil(span / CARD_MAX_M) - the shader's two-sided soft ends (SS_SHAFT_V_SOFT) crossfade in the
             // OVERLAP_FRAC overlap instead of punching a transparent band at each stack seam. The lift truncation
             // (skip a slab wholly below lift_z, raise the lowest emitted bottom to it) is the core's, so the
-            // twin test calls the same function rather than copying this loop.
-            const S32 cards = SSVirga::cardCountOverlapped(deck.mBaseZ, shaft_ground_z);
+            // twin test calls the same function rather than copying this loop. The stack spans [groundZ,
+            // shaft_top_z] (phase 8e's embedded top), not [groundZ, deck.mBaseZ].
+            const S32 cards = SSVirga::cardCountOverlapped(shaft_top_z, shaft_ground_z);
             for (S32 card = 0; card < cards; ++card)
             {
-                SSVirga::CardSpan cs;
-                if (!SSVirga::cardSpanLifted(card, deck.mBaseZ, shaft_ground_z, lift_z, cs)) continue; // F3
-                const F32 z_bot = cs.zBot;
-                const F32 card_h = cs.zTop - z_bot;
-                const F32 z_mid = 0.5f * (cs.zTop + z_bot);
+                // <SS:Nexii> Phase 8e (ssvirgacore.h cardGeom), 8e-b PROFILE SKEW: builds this card's wind-skewed
+                // slab in one call - centreXY/shearXY are BOTH profileSkewM(params, baseAglM, ...) evaluated at
+                // this card's own z (never a value copied from a neighbour, which is what keeps consecutive
+                // cards' shear chains continuous - and what makes the card a CHORD of the wind-profile-integrated
+                // trajectory), h01Mid is the DECK BASE profile fraction (not the embedded stack's own
+                // topZ-relative one) that alphaFor/halfWidthM below expect. F2 (2026-09-06 review): no alphaMul
+                // any more - the embed fade is read by the fragment shader itself, per pixel, off ss_shaft_embed
+                // (set just above) and world_true.z, not baked here at the card's mid-height. shaft_base_agl is
+                // the SAME baseAgl bakeShearTable/params resolved this build with - see its own comment above.
+                bool card_emitted = false;
+                const SSVirga::CardGeom cg = SSVirga::cardGeom(
+                    card, deck.mBaseZ, shaft_top_z, shaft_ground_z, lift_z,
+                    params, shaft_base_agl, shaft_fall_speed, card_emitted);
+                if (!card_emitted) continue; // F3
+
+                // <SS:Nexii> ONE PHENOMENON, EVAPORATION FROM BELOW (user, 2026-09-06): a card wholly inside the
+                // drive-dependent evaporated zone is skipped entirely (geometry saved; the fragment's own ragged
+                // mask does the eroded edge) - SSVirga::cardEmittedFor tests the card's OWN TOP fraction against
+                // the deck base profile (SSVirga::baseProfileH01, the SAME normalization cardGeom's own h01Mid
+                // uses), never cg.h01Mid itself (that is the card's MID fraction, not its top).
+                const F32 card_top_h01 = SSVirga::baseProfileH01(cg.zTop, deck.mBaseZ, shaft_ground_z);
+                if (!SSVirga::cardEmittedFor(card_top_h01, cand.drive)) continue;
+
+                const F32 card_h = cg.zTop - cg.zBot;
+                const F32 z_mid = 0.5f * (cg.zTop + cg.zBot);
 
                 Puff shaft;
-                shaft.mPosAgent = LLVector3(cand.x, cand.y, z_mid);
-                shaft.mRadius = SSVirga::halfWidthM(cs.h01Mid);
+                shaft.mPosAgent = LLVector3(cand.x + cg.centreXY.x, cand.y + cg.centreXY.y, z_mid);
+                shaft.mShearXY = LLVector2(cg.shearXY.x, cg.shearXY.y);
+                // <SS:Nexii> WIDTH FOLLOWS INTENSITY (user, 2026-09-06): halfWidthM now also takes the cell's own
+                // drive, so a heavy-rain curtain reads as a wide wall and a wispy one as a narrow filament.
+                shaft.mRadius = SSVirga::halfWidthM(cg.h01Mid, cand.drive);
                 shaft.mHalfHeightM = card_h * 0.5f;
+                // <SS:Nexii> Phase 8e item 3: the shaft's form/buried are the SAME veil terms the deck's own
+                // base floor wears (deck.mSheetForm; the BURIED depths are no longer equal - see D2 at Deck::SHEET_BURIED) - the curtain is the
+                // deck's underside pulled down, so it is lit exactly like the veil's own lower rim, which is why
+                // the shaft branch's shading below (same frame, same tail, same mSheetForm/BURIED inputs) matches
+                // the veil with only the droop differing.
                 shaft.mForm = deck.mSheetForm;
                 shaft.mBuried = SSVirga::BURIED;
                 shaft.mShaft = true;
+                // <SS:Nexii> Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the SAME SSVirga::drive this cell
+                // qualified with (cand.drive), carried to render()'s vertex colour b channel.
+                shaft.mDrive = cand.drive;
 
                 const LLVector3 to_cam = shaft.mPosAgent - cam;
-                shaft.mCamDistSq = to_cam.magVecSquared();
-                const F32 horiz = sqrtf(to_cam.mV[VX] * to_cam.mV[VX] + to_cam.mV[VY] * to_cam.mV[VY]);
+                shaft.mCamDistSq = to_cam.magVecSquared(); // true per-card distance: this is the depth-sort key, and every card's own position is what it must sort by
 
-                shaft.mAlpha = SSVirga::alphaAt(cs.h01Mid, cand.drive)
-                             * SSVirga::handoff(horiz, shaft_r2)
-                             * SSDeckLod::edgeFade(horiz);
+                // <SS:Nexii> F6 (2026-09-06 review): handoff and edgeFade read cand_horiz - the CANDIDATE's own
+                // horizontal distance, computed once above and already shared by groundLiftZ - rather than a fresh
+                // per-card horizontal distance off this card's own skewed position. A curtain is ONE object: its
+                // handoff/edge fade must not vary card-to-card up a skewed stack, or a strong wind's lean would
+                // wipe alpha vertically along the curtain (nearer cards fading in/out independently of farther
+                // ones at the same candidate) instead of the whole curtain fading as a unit with camera distance.
+                //
+                // <SS:Nexii> ONE PHENOMENON, EVAPORATION FROM BELOW (user, 2026-09-06): alphaFor(drive) replaces
+                // alphaAt(h01, drive) - alpha is intensity x density across the whole volume, not a function of
+                // height any more (the OLD vertical alpha profile is deleted); the "denser near the base, wispy at
+                // the ground" look now comes entirely from cardEmittedFor's evaporation gate above, not a per-h01
+                // alpha term. F2 (2026-09-06 review): no cg.alphaMul factor here either - the embed fade is the
+                // fragment's own, per pixel (ss_virga_embedAlpha in ssVolCloudF.glsl), not a value baked once per
+                // card at its mid-height that could never ramp WITHIN a card's own span.
+                shaft.mAlpha = SSVirga::alphaFor(cand.drive)
+                             * SSVirga::handoff(cand_horiz, shaft_r2)
+                             * SSDeckLod::edgeFade(cand_horiz);
                 if (shaft.mAlpha <= 0.001f) continue;
 
                 // F5: shaft cards are EXCLUDED from dist_sum - see nonshaft_puff_count's own comment above.
@@ -1562,21 +1702,16 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
     const F32 ox = ((F32)cam_cx + 0.5f) * CELL_M - span * 0.5f;
     const F32 oy = ((F32)cam_cy + 0.5f) * CELL_M - span * 0.5f;
 
-    // <SS:Nexii> Phase 4: the hero's rigid local shift at one AIR-frame cell's quantized centre, in the WORLD
-    // frame samplePointM already converts to (this bake works in the same air/world split the builder does - see
-    // its own comment). Zero whenever `hero` has no age (no hero, or this deck is not weatherDeck() - see above),
-    // making every gateAir call below an identity read.
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
-    const auto heroShiftForCell = [&](S32 cx, S32 cy) -> SSDeckFrame::Vec2
+    // <SS:Nexii> [interaction: ssdeckcellsoftcore.h] Takes an AIR POINT, not a cell index, and reads the hero's influence through SSDeckCellSoft::heroInfluenceSoft - the same fix ssVolCloudF.glsl's ss_hero_influenceSoft carries, for the same reason and on the same lattice. What this replaced hashed the texel's own cell (llfloor(ax / CELL_M)) and took ONE influence at that cell's centre, so the bake's gate point was a 260 m staircase across the hero's falloff ring exactly as the fragment stage's was - the comment at the call site below already recorded the symptom ("in the falloff ring it put the bake up to half a cell from the fragment's gate_air") without naming it a discontinuity. The blend is bit-identical to the old read at every cell CENTRE (unit_deck_cellsoft.cpp), so the producer-side lockstep this bake mirrors is unchanged; only the points between centres move, and they move continuously. Zero whenever `hero` has no age (no hero, or this deck is not weatherDeck()), making every gateAir call below an identity read.
+    const auto heroShiftAt = [&](F32 ax, F32 ay) -> SSDeckFrame::Vec2
     {
         if (!(hero.ageS > 0.f))
         {
             return SSDeckFrame::Vec2();
         }
-        F32 wx, wy;
-        SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
-                                     CELL_M, drift.mV[0], drift.mV[1], wx, wy);
-        const F32 inf = SSStormCouple::influence(hero.centre.x, hero.centre.y, hero.radius, wx, wy);
+        const F32 inf = SSDeckCellSoft::heroInfluenceSoft(ax, ay, CELL_M, drift.mV[0], drift.mV[1],
+                                                          hero.centre.x, hero.centre.y, hero.radius);
         return SSDeckFrame::heroShift(hero, inf);
     };
 
@@ -1662,14 +1797,18 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
             // <SS:Nexii> NEW-1/NEW-2/NEW-A fix (2026-09-05, ssdeckframecore.h's producer/observer rule): this TEXEL
             // loop is the bake's OBSERVER, so the read position itself moves for EVERY read it makes below -
             // texel -> cell via floor((air - S) / CELL_M), then the occupancy lookup (NEW-A), presence AND mottle
-            // (NEW-2) all read at gateAir, not the raw texel. S depends on the owning cell and the owning cell
-            // is derived in ONE step from the texel's own quantized cell (floor(air/CELL_M)) - exactly as the fragment
-            // stage (samplePointM of its air) and precipNoiseAt do; no observer iterates a fixed point (ssdeckframecore.h,
-            // foldFrameKey's note), so the bake, the fragment and precip agree on S wherever their quantized cells agree.
-            // A two-step re-evaluation at the OWNING cell was tried and withdrawn (phase-4d review): inside the plateau
-            // it changed nothing, in the falloff ring it put the bake up to half a cell from the fragment's gate_air.
+            // (NEW-2) all read at gateAir, not the raw texel. S is derived in ONE step from the texel's own air
+            // position - exactly as the fragment stage does - and no observer iterates a fixed point
+            // (ssdeckframecore.h, foldFrameKey's note). A two-step re-evaluation at the OWNING cell was tried and
+            // withdrawn (phase-4d review): inside the plateau it changed nothing, in the falloff ring it put the
+            // bake up to half a cell from the fragment's gate_air.
+            // <SS:Nexii> 2026-09-06 (ssdeckcellsoftcore.h): that ONE step no longer floors to the texel's containing
+            // cell - "the bake, the fragment and precip agree on S wherever their quantized cells agree" was true and
+            // was also the defect, because it means S is piecewise constant and steps at every cell wall. Both the
+            // bake and the fragment read SSDeckCellSoft::heroInfluenceSoft now, which is the same number at every
+            // cell CENTRE and continuous between them, so they agree everywhere rather than only per cell.
             // Hoisted above the occupancy block so every read in this loop shares the one texel_gate_pt.
-            const SSDeckFrame::Vec2 texel_shift = heroShiftForCell(llfloor(ax / CELL_M), llfloor(ay / CELL_M));
+            const SSDeckFrame::Vec2 texel_shift = heroShiftAt(ax, ay);
             const SSDeckFrame::Vec2 texel_gate_pt = SSDeckFrame::gateAir(SSDeckFrame::Vec2{ax, ay}, texel_shift);
 
             // The four nearest cells' verdicts, cubic-eased over one cell - the veil's own softening, so the shadow's edges fall where the outermost puffs of an occupied cell reach. NEW-A fix: indexed from texel_gate_pt (the same shifted point presence/tower/mottle read below), not the raw texel - the cell_occ grid above is padded by heroShiftPadCells so this lookup stays in bounds even at the displacement cap.
@@ -1949,7 +2088,10 @@ void SSVolCloud::render()
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
     static LLStaticHashedString s_drift("ss_drift");
-    static LLStaticHashedString s_time("ss_time");
+    // <SS:Nexii> D3: ss_time is retired - see the boil-clock block in update() and ssdeckboilcore.h. These two
+    // are the folded accumulators that replace it, uploaded per deck below because both rates are per deck.
+    static LLStaticHashedString s_boil_laps("ss_boil_laps");
+    static LLStaticHashedString s_fall_m("ss_fall_m");
     static LLStaticHashedString s_churn("ss_churn");
     static LLStaticHashedString s_anvil("ss_anvil");
     static LLStaticHashedString s_base_z("ss_base_z");
@@ -1974,10 +2116,12 @@ void SSVolCloud::render()
     static LLStaticHashedString s_strike_occ("ss_strike_occ");
     static LLStaticHashedString s_light_dir("ss_light_dir");
     static LLStaticHashedString s_gloom("ss_gloom");
+    static LLStaticHashedString s_light_variant("ss_light_variant");
     static LLStaticHashedString s_cam_pos("ss_cam_pos");
     static LLStaticHashedString s_beam("ss_beam");
     static LLStaticHashedString s_rim("ss_rim");
     static LLStaticHashedString s_edge_rails("ss_edge_rails");
+    static LLStaticHashedString s_veil_rails("ss_veil_rails");
     static LLStaticHashedString s_squash("ss_squash");
     static LLStaticHashedString s_clip("ss_clip");
     static LLStaticHashedString s_soft("ss_soft_m");
@@ -1985,6 +2129,9 @@ void SSVolCloud::render()
     static LLStaticHashedString s_storm_a("ss_storm_a");
     static LLStaticHashedString s_storm_b("ss_storm_b");
     static LLStaticHashedString s_storm_c("ss_storm_c");
+    static LLStaticHashedString s_line_a("ss_line_a");
+    static LLStaticHashedString s_line_b("ss_line_b");
+    static LLStaticHashedString s_line_c("ss_line_c");
     // <SS:Nexii> Phase 4, revised 2026-09-05 (doc/atmo_magic_wind_profile.md section 4, doc/atmo_magic_storm_dynamics.md
     // section 3): the deck's frame transforms - see SSDeckFrameCore. Stale claim corrected: ss_shear_z/ss_shear_table are
     // NOT weather-pass-only - EVERY deck's pass uploads its own baked table (never gated on weather_pass; see the upload
@@ -2006,6 +2153,9 @@ void SSVolCloud::render()
     static LLStaticHashedString s_hero("ss_hero");
     static LLStaticHashedString s_hero_c("ss_hero_c");
     static LLStaticHashedString s_drift_vel("ss_drift_vel");
+    // <SS:Nexii> F2 (2026-09-06 review): the virga embed span, gated to the weather pass exactly like ss_storm_n/
+    // ss_hero above (mShaftEmbedTopZ is only ever non-zero for weatherDeck()'s own build) - see the upload site.
+    static LLStaticHashedString s_shaft_embed("ss_shaft_embed");
 
     const LLViewerCamera* camera = LLViewerCamera::getInstance();
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
@@ -2045,16 +2195,34 @@ void SSVolCloud::render()
 
     gSSVolCloudProgram.uniform1f(s_beam, mBeam);
 
+    // <SS:Nexii> S4 (doc/atmo_magic_flow_field.md section 2 S4): SSAtmoCloudLightVariant, a runtime A/B dial over the scene-proven lighting variants (ssVolCloudF.glsl's ss_light_variant note) -
+    // 0 keeps today's tail bit-identical, 1/2/3 pick POWDER/HG2/FULL. Clamped so a stray Debug Settings value never indexes past the shader's own branch set.
+    static LLCachedControl<S32> light_variant_setting(gSavedSettings, "SSAtmoCloudLightVariant", 0);
+    gSSVolCloudProgram.uniform1i(s_light_variant, llclamp((S32)light_variant_setting, 0, 3));
+
     gSSVolCloudProgram.uniform2f(s_rim, FIELD_FADE_START_M, FIELD_DRAW_M * 0.98f);
 
     // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT), doc/atmo_magic_far_clouds.md section 2 step 3 and phase 6a
     // outcome: an INTENDED VALUE CHANGE, not a same-math relocation - the veil used to fade on its own hardcoded
     // 6800/9800 rails (ssVolCloudF.glsl, pre-phase-6a), fully independent of the puffs' own edge ramp. Those
     // numbers are gone; ss_edge_rails now carries SSDeckLod::FIELD_FADE_START_M/DECK_EDGE_M (8000/9800), so the
-    // fade start moved 6800 -> 8000 and the veil's dissolve now literally agrees with buildDeck's own
-    // SSDeckLod::edgeFade() call on the puffs - both dissolve on FIELD_FADE_START_M -> DECK_EDGE_M (ss_rim above
-    // is the separate dome-band rim convergence, still FIELD_DRAW_M*0.98, and is untouched).
+    // fade start moved 6800 -> 8000 and the veil's dissolve agreed with buildDeck's own SSDeckLod::edgeFade() call
+    // on the puffs - both dissolving on FIELD_FADE_START_M -> DECK_EDGE_M (ss_rim above is the separate dome-band
+    // rim convergence, still FIELD_DRAW_M*0.98, and is untouched). 8g CORRECTION (ssveilcore.h): the sheet reads
+    // this pair INVERTED now - it is the edge_keep factor inside SSVeil::rimIn, so the veil rises to full where
+    // these rails take the puffs to zero instead of dissolving with them. The pair itself, and the puffs' CPU-side
+    // edgeFade it mirrors, are unchanged.
     gSSVolCloudProgram.uniform2f(s_edge_rails, SSDeckLod::FIELD_FADE_START_M, SSDeckLod::DECK_EDGE_M);
+
+    // <SS:Nexii> 8g veil law (ssveilcore.h), doc/atmo_magic_far_clouds.md section 2 steps 2-3, doc/atmo_magic_phase8_show.md
+    // section 5: the BASE VEIL's own four rails. xy is the far-thinning pair the veil's rim FADE-IN is the complement of
+    // (SSDeckLod::THIN_START_M/FIELD_DRAW_M, 5000/10000), zw its outward reach past the puffs' DECK_EDGE_M
+    // (SSVeil::REACH_START_M/REACH_END_M, 10000/14000). Deliberately a SECOND uniform rather than a widening of
+    // ss_edge_rails: that pair is the deck's dissolve line and the puffs' CPU-side edgeFade still owns it outright -
+    // the whole point of this phase is that the veil is the one surface that fades IN where the puffs fade out, so it
+    // cannot share their rail, only complement it.
+    gSSVolCloudProgram.uniform4f(s_veil_rails, SSDeckLod::THIN_START_M, SSDeckLod::FIELD_DRAW_M,
+                                 SSVeil::REACH_START_M, SSVeil::REACH_END_M);
 
     gSSVolCloudProgram.uniform3f(s_squash, mSquashKnee, mSquashCap, mEffRadius);
 
@@ -2076,7 +2244,7 @@ void SSVolCloud::render()
     // <SS:Nexii> Far deck first: the primary deck lives at storm altitude and the under deck at the build's floor, so the deck whose mean puff is farther from the eye draws first and the nearer one blends over it. Each deck sets its own per-deck uniforms and textures; blending state and the shared uniforms above survive across both.
     // <SS:Nexii> LOD phase (ssdecklodcore.h CONTRACT): routed through SSDeckLod::underOnTop's hysteresis rather
     // than a bare mMeanDistSq compare - the two decks' mean puff distance can cross back and forth across a frame
-    // or two right at the boundary (both are rebuilt every frame, and thinning/tessellation move each mean a
+    // or two right at the boundary (both are rebuilt every frame, and thinning moves each mean a
     // little), which used to flicker the draw order every such frame. mUnderOnTop is this call's own `prev`,
     // carried across frames on the class; the function's own ORDER_HYST_M2 band absorbs the jitter.
     mUnderOnTop = SSDeckLod::underOnTop(mUnderOnTop, mUnder.mMeanDistSq, mPrimary.mMeanDistSq);
@@ -2150,6 +2318,19 @@ void SSVolCloud::render()
             gSSVolCloudProgram.uniform4fv(s_storm_b, SSStormCouple::MAX_CELLS, (F32*)storm_b);
             gSSVolCloudProgram.uniform4fv(s_storm_c, SSStormCouple::MAX_CELLS, (F32*)storm_c);
 
+            // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): the active squall line's band,
+            // uploaded next to ss_storm_a/b/c above, same weather-pass gate (mLineBand is only ever fetched for
+            // that same deck's build - see buildDeck's own fillLineBand call). Zero-filled LineBand() for the
+            // other deck's pass reads as "no line" (strength <= 0) to ss_line_field, same rule as ss_storm_n 0.
+            // Layout LOCKSTEP with SSStormCouple::LineBand's own field comment: ss_line_a.xy/zw, ss_line_b.xyzw,
+            // ss_line_c.xy.
+            {
+                const SSStormCouple::LineBand& lb = weather_pass ? mLineBand : SSStormCouple::LineBand();
+                gSSVolCloudProgram.uniform4f(s_line_a, lb.ox, lb.oy, lb.dirX, lb.dirY);
+                gSSVolCloudProgram.uniform4f(s_line_b, lb.motX, lb.motY, lb.halfLen, lb.bandM);
+                gSSVolCloudProgram.uniform4f(s_line_c, lb.shelfM, lb.strength, 0.f, 0.f);
+            }
+
             // <SS:Nexii> Phase 4: the deck's own baked O(z) table - EVERY deck's pass uploads its own (never
             // gated on weather_pass; the shear lean is a wind-profile property of this deck's own column, not a
             // storm phenomenon - see buildDeck's unconditional bake). ss_shear_z is (z0, z1); ss_shear_table[i] is
@@ -2171,6 +2352,19 @@ void SSVolCloud::render()
             gSSVolCloudProgram.uniform4f(s_hero, hf.motion.x, hf.motion.y, hf.ageS, hf.radius);
             gSSVolCloudProgram.uniform2f(s_hero_c, hf.centre.x, hf.centre.y);
             gSSVolCloudProgram.uniform2f(s_drift_vel, hf.driftVel.x, hf.driftVel.y);
+
+            // <SS:Nexii> F2 (2026-09-06 review), extended phase 8e item 2: the virga embed span PLUS the ground
+            // reference (deck base Z, embedded stack top Z, ground reference Z, 0), gated to the weather pass
+            // exactly like ss_hero/ss_storm_n above (deck.mShaftEmbedTopZ/mShaftGroundZ are only ever non-zero
+            // for weatherDeck()'s own build, and only when the shaft path actually ran this build - see their own
+            // reset comments). Zero-filled for the under deck's pass; that deck never draws a shaft fragment
+            // (shafts only ever hang from weatherDeck()), so the degenerate (0,0,0,0) span is harmless. The z
+            // component (ground reference) feeds the fragment stage's curtain-height fraction h (item 2's droop
+            // and item 5's evaporation mask both read h); w is spare.
+            const F32 shaft_embed_top = weather_pass ? deck.mShaftEmbedTopZ : 0.f;
+            const F32 shaft_embed_ground = weather_pass ? deck.mShaftGroundZ : 0.f;
+            gSSVolCloudProgram.uniform4f(s_shaft_embed, weather_pass ? deck.mBaseZ : 0.f, shaft_embed_top,
+                                         shaft_embed_ground, 0.f);
         }
 
         // <SS:Nexii> The cell gate's inputs, for the base veil: the builder's coverage threshold and this deck's hash salt, so the veil's fragment stage can re-run the exact cell gate the puff loop above ran (cluster noise, cell hash, the presence push, gate vs coverage) and open its gaps precisely under the sky the builder left empty of puffs. [interaction: buildDeck's gate at the coverage check - the two must run the same numbers or veil and field disagree about where the deck is]
@@ -2186,7 +2380,13 @@ void SSVolCloud::render()
         gSSVolCloudProgram.uniform1f(s_profile, profile_map ? 1.f : 0.f);
 
         gSSVolCloudProgram.uniform2f(s_drift, drift.mV[0], drift.mV[1]);
-        gSSVolCloudProgram.uniform1f(s_time, (F32)LLFrameTimer::getElapsedSeconds());
+        // <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: the two folded accumulators in place of the old
+        // `(F32)LLFrameTimer::getElapsedSeconds()`. The folds are EXACT, not approximations - the shader takes
+        // fract() of the phase and subtracts the fall from a coordinate divided by a wrapping map's tile - so
+        // the uniforms keep full F32 precision however long the viewer has been open, which the old raw
+        // elapsed-seconds product did not (at ten hours of uptime an F32 second count has ~4 ms of resolution).
+        gSSVolCloudProgram.uniform1f(s_boil_laps, SSDeckBoil::wrapLaps(deck.mBoilLaps));
+        gSSVolCloudProgram.uniform1f(s_fall_m, SSDeckBoil::wrapFallM(deck.mFallM, SHADER_NOISE_M));
         gSSVolCloudProgram.uniform1f(s_churn, deck.mChurn);
 
         gSSVolCloudProgram.uniform1f(s_anvil, deck.mAnvil);
@@ -2210,42 +2410,90 @@ void SSVolCloud::render()
             const F32 z = deck.mSheetZ;
 
             // <SS:Nexii> The sheet is TILED, on the same air-frame cell grid the puffs are placed on (CELL_M steps about the camera's cell, corners slid back by the drift into world space), not drawn as the one camera-centred rect it used to be. The far-field squash is exact per VERTEX, and the fragment stage un-squashes per fragment along the view ray - but a fragment inside a triangle gets its drawn position by interpolation, and the squash bends the sheet's plane, so a triangle as wide as the old 10 km rect reconstructed a world position tens to hundreds of metres off its true plane point, by an amount that changes with the camera's relation to the sheet: the veil swam across the field with every camera move and its texture would not sit under the puffs. At puff-quad scale the interpolation error collapses to nothing, sheet and field read from one anchored frame, and the per-tile cull keeps the pass inside the same draw radius the puffs run.
-            // <SS:Nexii> LOD phase: the sheet's own reach is max(FIELD_DRAW_M, SSDeckLod::DECK_EDGE_M) rather than
-            // FIELD_DRAW_M alone - today FIELD_DRAW_M (10000 m) already covers DECK_EDGE_M (9800 m), but the tile
-            // loop must not silently fall short of the veil's own fade rail (ss_edge_rails above) if the two
-            // constants are ever retuned so DECK_EDGE_M leads.
-            const F32 sheet_reach = llmax(FIELD_DRAW_M, SSDeckLod::DECK_EDGE_M);
-            const F32 draw_sq = sheet_reach * sheet_reach;
-            const S32 sheet_radius = llceil(sheet_reach / CELL_M);
-            const S32 scx0 = llfloor((cam_pos.mV[VX] - drift.mV[0]) / CELL_M);
-            const S32 scy0 = llfloor((cam_pos.mV[VY] - drift.mV[1]) / CELL_M);
+            // <SS:Nexii> 8g (ssveilcore.h), doc/atmo_magic_phase8_show.md section 5: the sheet's reach is the VEIL's own
+            // SSVeil::REACH_END_M (14000 m), no longer max(FIELD_DRAW_M, DECK_EDGE_M) (10000 m). The old reach was
+            // correct for the old law - the veil died on the puffs' own edge rail at 9800, so a tile past 10 km drew
+            // nothing - and is wrong for this one: reachOut holds the veil at full amplitude to 10 km and dissolves it
+            // over 10-14 km, so the tiles have to be there to carry it. Two tile sizes, because CELL_M (260 m) all the
+            // way to 14 km nearly doubles a draw the far-clouds doc already flags as one of the two dominant per-frame
+            // costs, while a 520 m quad at 10-14 km costs under a third of a degree of extra interpolation error.
+            // <SS:Nexii> 8g F1 (2026-09-06 review), THE PARTITION - the two sizes are ONE grid subdivided, not two
+            // rings: walk SSVeil::COARSE_TILE_M (520 m) blocks once over coarseTileRadius(), drop a block whose own
+            // CENTRE is past REACH_END_M, and then decide the size with ONE rule on that same block - centre inside
+            // SSVeil::FINE_REACH_M (10000 m) emits its SUB_PER_SIDE^2 CELL_M children with no further cull, else the
+            // one 520 m quad. Every surviving block is therefore tiled exactly once, so the emission is gap-free and
+            // overlap-free BY CONSTRUCTION rather than by the two culls happening to agree.
+            // WHAT THIS REPLACES, and why it was a defect and not a seam: the old code ran two loops, a CELL_M ring
+            // culled on `centre d2 > fine_sq` and a COARSE_TILE_M ring culled on `d2 > reach_sq || d2 <= fine_sq`.
+            // Both tested CENTRES while the tiles are squares, so the union was neither a partition nor a cover. Along
+            // +x from a corner-aligned camera the 520 m block centred at 9880 was dropped, its outer 260 m child at
+            // 10010 was dropped too, and the next coarse block only began at 10140 - so [9880, 10140] was drawn by
+            // nothing; a bearing away the phase reverses and a fine tile and a coarse tile blend the veil twice.
+            // Measured by unit_veil_sheet_partition.cpp over 120 rays x 10 m steps across 9000-11500 m, camera (0,0):
+            // 668 of 29225 samples uncovered (radii 9910-10290) and 464 double-covered (9740-10090), against 0 and 0
+            // for this loop. That is exactly the radius where the veil runs at maximum amplitude (rimIn 1, reachOut 1,
+            // SSVeil::RIM_FULL 0.90), so it read as a ragged ring of transparent notches beside a brighter
+            // double-blended band. The comment that stood here claimed the opposite - "a ragged half-tile seam rather
+            // than an overlap ... the seam has nothing to reveal" - with no test behind it.
+            // The children stay on the PUFFS' own lattice, which is what lets the fine tier be reached by subdivision
+            // instead of by its own anchored loop: a block origin is (ccx0 + tx) * coarse_m + drift and coarse_m is
+            // SUB_PER_SIDE * CELL_M, so every child corner is k * CELL_M + drift for an integer k - the same
+            // drift-slid air frame the puff loop walks. [interaction: buildDeck's cell walk, which anchors on that
+            // same floor(air/CELL_M) lattice; unit_veil_sheet_partition.cpp asserts the corners land on it]
+            // Counts, camera at a tile corner: 3025 block candidates at coarse radius 27, of which 2284 survive the
+            // reach cull and 1160 subdivide -> 4640 fine quads + 1124 coarse quads = 5764 (the two-ring code emitted
+            // 5768, gaps and overlaps included); subdividing every surviving block would be 9136. Both counts and the
+            // zero-gap/zero-overlap claim are pinned by unit_veil_sheet_partition.cpp, the source text by
+            // twin_veil_law.cpp.
+            const F32 fine_reach = SSVeil::FINE_REACH_M;
+            const F32 fine_sq = fine_reach * fine_reach;
+
+            const F32 coarse_m = SSVeil::COARSE_TILE_M;
+            const F32 reach_sq = SSVeil::REACH_END_M * SSVeil::REACH_END_M;
+            const S32 coarse_radius = SSVeil::coarseTileRadius();
+            const S32 ccx0 = llfloor((cam_pos.mV[VX] - drift.mV[0]) / coarse_m);
+            const S32 ccy0 = llfloor((cam_pos.mV[VY] - drift.mV[1]) / coarse_m);
 
             gGL.begin(LLRender::TRIANGLES);
             // r the structural form, g the buried depth the gloom grades over (the veil is the floor, so it takes the dark end whole), a the alpha ceiling - the shader multiplies its own sky light in (see the vary_color note in ssVolCloudV.glsl); b spare.
             gGL.color4f(deck.mSheetForm, Deck::SHEET_BURIED, 0.f, deck.mSheetAlpha);
-            for (S32 ty = -sheet_radius; ty <= sheet_radius; ++ty)
+            for (S32 ty = -coarse_radius; ty <= coarse_radius; ++ty)
             {
-                for (S32 tx = -sheet_radius; tx <= sheet_radius; ++tx)
+                for (S32 tx = -coarse_radius; tx <= coarse_radius; ++tx)
                 {
-                    const F32 x0 = (F32)(scx0 + tx) * CELL_M + drift.mV[0];
-                    const F32 y0 = (F32)(scy0 + ty) * CELL_M + drift.mV[1];
-                    const F32 x1 = x0 + CELL_M;
-                    const F32 y1 = y0 + CELL_M;
+                    const F32 bx0 = (F32)(ccx0 + tx) * coarse_m + drift.mV[0];
+                    const F32 by0 = (F32)(ccy0 + ty) * coarse_m + drift.mV[1];
 
-                    const F32 mx = 0.5f * (x0 + x1) - cam_pos.mV[VX];
-                    const F32 my = 0.5f * (y0 + y1) - cam_pos.mV[VY];
-                    if (mx * mx + my * my > draw_sq) continue;
+                    const F32 mx = bx0 + 0.5f * coarse_m - cam_pos.mV[VX];
+                    const F32 my = by0 + 0.5f * coarse_m - cam_pos.mV[VY];
+                    const F32 d2 = mx * mx + my * my;
+                    if (d2 > reach_sq) continue;
 
-                    // A=(x0,y0) B=(x1,y0) C=(x1,y1) D=(x0,y1); (A,D,C) and (A,C,B) run
-                    // front-facing seen from underneath - the old sheet's winding, per tile.
-                    // Texcoords are unused on this path.
-                    gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x0, y0, z).mV);
-                    gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x0, y1, z).mV);
-                    gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x1, y1, z).mV);
+                    const bool subdivide = (d2 <= fine_sq);
+                    const S32 sub = subdivide ? SSVeil::SUB_PER_SIDE : 1;
+                    const F32 step = subdivide ? CELL_M : coarse_m;
 
-                    gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x0, y0, z).mV);
-                    gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x1, y1, z).mV);
-                    gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x1, y0, z).mV);
+                    for (S32 sy = 0; sy < sub; ++sy)
+                    {
+                        for (S32 sx = 0; sx < sub; ++sx)
+                        {
+                            const F32 x0 = bx0 + (F32)sx * step;
+                            const F32 y0 = by0 + (F32)sy * step;
+                            const F32 x1 = x0 + step;
+                            const F32 y1 = y0 + step;
+
+                            // A=(x0,y0) B=(x1,y0) C=(x1,y1) D=(x0,y1); (A,D,C) and (A,C,B) run
+                            // front-facing seen from underneath - the old sheet's winding, per tile.
+                            // Texcoords are unused on this path.
+                            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x0, y0, z).mV);
+                            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x0, y1, z).mV);
+                            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x1, y1, z).mV);
+
+                            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x0, y0, z).mV);
+                            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x1, y1, z).mV);
+                            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv(LLVector3(x1, y0, z).mV);
+                        }
+                    }
                 }
             }
             gGL.end();
@@ -2265,8 +2513,12 @@ void SSVolCloud::render()
                 // the curtain never goes edge-on and vanishes the way a world-fixed quad would. right is the
                 // horizontal perpendicular to the puff-to-camera direction (the same ref % normal shape the puff
                 // branch below uses, with ref pinned to z_axis and normal flattened into the horizontal plane
-                // rather than the puff's own facing/flatten blend); up is the fixed world Z axis, never derived
-                // from a cross product, so the card's height never rotates into the horizontal.
+                // rather than the puff's own facing/flatten blend). F7 (2026-09-06 review), stale claim corrected:
+                // `up` is NOT purely the fixed world Z axis any more - phase 8e's wind skew (below) displaces it
+                // sideways by half the card's own top-relative-to-bottom shear, so the card's height leans with
+                // the wind rather than staying strictly vertical; `right` is still the plain horizontal billboard
+                // axis (unaffected by the skew), and it is that leaned `up`, not a cross product, that carries the
+                // slant into the quad's corners.
                 LLVector3 normal = cam_pos - puff.mPosAgent;
                 normal.mV[VZ] = 0.f;
                 if (normal.normalize() < 0.001f)
@@ -2283,37 +2535,40 @@ void SSVolCloud::render()
                 }
 
                 right = base_right * puff.mRadius;
-                up = LLVector3::z_axis * puff.mHalfHeightM;
+
+                // <SS:Nexii> Phase 8e (ssvirgacore.h CardGeom::shearXY, doc/atmo_magic_phase8_show.md section 3b):
+                // `up` no longer runs straight along world Z - it is displaced by half the card's own top-relative-
+                // to-bottom skew, so the SAME vertex offset that pushes the top corners up also leans them sideways
+                // by +shearXY*0.5 and the bottom corners by -shearXY*0.5 (the vertex loop below adds/subtracts
+                // `up` unchanged), turning the quad into a parallelogram. `right` stays the horizontal billboard
+                // axis - only the vertical edge leans. F4/F5 (2026-09-06 review): with SSVirga::SKEW_RATE_MAX
+                // capping the slope at 1 (45 degrees), shearXY's own length is at most this card's own height, so
+                // the slanted edge |up|*2 is at most sqrt(2) times the card's height - bounded, not unbounded
+                // shear. This is NOT a claim that the whole stack reads as one continuous slanted sheet: the one
+                // card whose span straddles SSVirga::skewOffsetM's magnitude-cap knee is a chord of a piecewise
+                // (linear-then-clamped) path rather than two points on a single line, and its overlap partner -
+                // evaluated at ITS OWN zTop/zBot, per cardGeom's own contract - generally disagrees with it across
+                // their shared overlap band. A stated residual at that one boundary (see ssvirgacore.h's own
+                // comment), not a rendering bug this pass tries to hide.
+                up = LLVector3::z_axis * puff.mHalfHeightM + LLVector3(puff.mShearXY.mV[VX] * 0.5f, puff.mShearXY.mV[VY] * 0.5f, 0.f);
             }
             else
             {
-                LLVector3 normal = cam_pos - puff.mPosAgent;
-                if (normal.normalize() < 0.001f)
-                {
-                    normal = LLVector3::z_axis;
-                }
-
-                const F32 flatten = llclamp((llabs(normal.mV[VZ]) - 0.6f) / 0.35f, 0.f, 1.f);
-                if (flatten > 0.f)
-                {
-                    const F32 sgn = (normal.mV[VZ] >= 0.f) ? 1.f : -1.f;
-                    normal = normal * (1.f - flatten) + LLVector3(0.f, 0.f, sgn) * flatten;
-                    if (normal.normalize() < 0.001f)
-                    {
-                        normal.setVec(0.f, 0.f, sgn);
-                    }
-                }
-
-                LLVector3 ref = LLVector3::z_axis * (1.f - flatten)
-                              + LLVector3::x_axis * flatten;
-                ref.normalize();
-
-                LLVector3 base_right = ref % normal;
-                if (base_right.normalize() < 0.001f)
-                {
-                    base_right = cam_right_fallback;
-                }
-                const LLVector3 base_up = normal % base_right;
+                // <SS:Nexii> [interaction: ssdeckflowcore.h] ONE FORMULA SITE for the card's frame. This block used
+                // to spell the flatten blend, the ref blend and the two cross products inline; it is
+                // SSDeckFlow::cardFrame now, character for character in the same order (unit_deckflow.cpp pins its
+                // invariants), because ssVolCloudF.glsl's flow block has to build the SAME frame per fragment and a
+                // second, independently spelled copy is exactly how the fifth build report's reversed flow
+                // happened: the shader spelled `ref = (abs(nrm.z) < 0.95) ? +Z : +X` against this blend, and the
+                // two disagree by a SIGN over a third of the sky. ONE behaviour change, stated: the near-degenerate
+                // fallback was cam_right_fallback (a camera vector the fragment stage cannot reproduce) and is
+                // SSDeckFlow::FALLBACK_RIGHT now - reachable only within 0.0098 degrees of one direction
+                // (elevation 46.3355, bearing +X), a solid-angle share of 6.4e-7.
+                const LLVector3 to_cam = cam_pos - puff.mPosAgent;
+                const SSDeckFlow::CardFrame card = SSDeckFlow::cardFrame(
+                    SSDeckFlow::Vec3{ to_cam.mV[VX], to_cam.mV[VY], to_cam.mV[VZ] });
+                const LLVector3 base_right(card.right.x, card.right.y, card.right.z);
+                const LLVector3 base_up(card.up.x, card.up.y, card.up.z);
 
                 const F32 layer_h = llclamp(
                     (puff.mPosAgent.mV[VZ] - deck.mBaseZ) / deck.mThicknessM, 0.f, 1.f);
@@ -2328,28 +2583,69 @@ void SSVolCloud::render()
             }
 
             // <SS:Nexii> The card, exactly as it has always been: four corners, one quad, no
-            // vertex displacement of any kind. Every bit of near-field detail is built geometry
-            // placed by the builder's refinement LOD (SSAtmoCloudTessellation), so this pass has
-            // nothing per-puff to decide and nothing to re-roll: what moves with the wind is the
-            // whole card, and what the fragment carve reads stays put with it. Displacing rim
+            // vertex displacement of any kind. Near-field detail is built geometry placed by the
+            // builder (the anatomy tier's entities from 8b on; the old refinement LOD was removed
+            // 2026-09-06), so this pass has nothing per-puff to decide and nothing to re-roll: what
+            // moves with the wind is the whole card, and what the fragment carve reads stays put with it. Displacing rim
             // vertices here was tried and cut twice over - the seed keyed on the world position
             // re-rolled against the drift every frame, and even anchored it reshaped the one puff
             // the LOD was meant to leave alone.
             // r the structural form, g the buried depth (Puff::mBuried) the storm gloom grades
             // over, a the edge fade - the shader multiplies its own sky light in (see the
-            // vary_color note in ssVolCloudV.glsl); b is the shaft flag (1 for a virga card, 0 for
-            // an ordinary puff/the sheet) - the fragment stage decodes it before shading and takes
-            // the shaft path (vertical alpha ramp, no puff texture window, taper) instead of the
-            // puff carve. [interaction: ssVolCloudF.glsl's shaft decode]
-            gGL.color4f(puff.mForm, puff.mBuried, puff.mShaft ? 1.f : 0.f, puff.mAlpha);
+            // vary_color note in ssVolCloudV.glsl); b encodes the shaft flag AND (phase 8e item 4,
+            // DRIVE REACHES THE FRAGMENT) the card's own drive: 0.5 + 0.5 * puff.mDrive for a virga
+            // card (always > 0.5, since a qualifying cell's drive is always > 0); an ordinary puff
+            // (S2, Puff::mPhase) carries mPhase * 0.49 instead of the old flat 0, which stays well
+            // under the shaft flag's 0.5 threshold (0.49 * 255 = 124.95, rounds to 125/255 = 0.4902 -
+            // margin holds under U8 quantization) - the fragment stage's branch test
+            // (vary_color.b > 0.5) is unchanged, and the shaft path recovers drive as
+            // clamp((vary_color.b - 0.5) * 2.0, 0.0, 1.0) to shape its body floor, streak
+            // amplitude, and evaporation mask by intensity. The sheet keeps its own flat 0.
+            // [interaction: ssVolCloudF.glsl's shaft decode and puff phase decode]
+            gGL.color4f(puff.mForm, puff.mBuried, puff.mShaft ? (0.5f + 0.5f * puff.mDrive) : (puff.mPhase * 0.49f), puff.mAlpha);
 
-            gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
-            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
-            gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
+            if (puff.mShaft)
+            {
+                // <SS:Nexii> S1 vertex-decode channel fix (doc/atmo_magic_flow_field.md section 2): shafts carry
+                // NO texcoord payload - these four corners stay the exact 0/1 markers they have always been, read
+                // by the shader's shaft branch as real card u/v (vbox/hedge/p_shaft), never as a corner-plus-payload
+                // pair. Untouched by this stage; see the else branch below for the puff path that DOES ride the
+                // payload encode.
+                gGL.texCoord2f(0.f, 1.f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
+                gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
+                gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
 
-            gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
-            gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
-            gGL.texCoord2f(1.f, 0.f); gGL.vertex3fv((puff.mPosAgent + right - up).mV);
+                gGL.texCoord2f(1.f, 1.f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
+                gGL.texCoord2f(0.f, 0.f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
+                gGL.texCoord2f(1.f, 0.f); gGL.vertex3fv((puff.mPosAgent + right - up).mV);
+            }
+            else
+            {
+                // <SS:Nexii> S1 vertex-decode channel fix (doc/atmo_magic_flow_field.md section 2): ordinary puffs
+                // now write texcoord0 = cornerMarker + payload * 0.45, decoded back in ssVolCloudV.glsl by
+                // round()/0.45 before interpolation ever sees it (opus review Q2b: recovering payload AFTER
+                // interpolation is unsound, so the round() must happen here, pre-rasterizer). The encode is exact
+                // over the whole payload domain [-1,1]^2 (V:\Scratch\flow\tests\twin_flowchannel.cpp's grid and
+                // extremes tests: |payload * 0.45| <= 0.45 < 0.5, so round() can never cross into the neighbouring
+                // corner), and at payload 0 it is bit-identical to the old 0.f/1.f literal. STALE CLAIM REMOVED:
+                // this comment used to say payload is (0,0) for every puff "at this stage" and therefore that the
+                // output is bit-identical - that stopped being true below.
+                // <SS:Nexii> [interaction: ssdeckflowcore.h] THE PAYLOAD IS NO LONGER ZERO: px carries this puff's
+                // flow swirl (Puff::mFlowSwirl, in [-1, 1] by SSDeckFlow::swirlUnit's own range), the same value on
+                // all four corners so the varying is constant across the quad and no seam or gradient can appear
+                // inside one card. Clamped to the encode's own safe range rather than trusted: round() recovers the
+                // corner only while |payload * 0.45| < 0.5, i.e. |payload| < 1.111, and twin_flowchannel.cpp pins
+                // the decode at the extremes. py stays 0 - the second payload slot is still unspent.
+                const F32 px = llclamp(puff.mFlowSwirl, -1.f, 1.f);
+                const F32 py = 0.f;
+                gGL.texCoord2f(0.f + px * 0.45f, 1.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent - right + up).mV);
+                gGL.texCoord2f(0.f + px * 0.45f, 0.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
+                gGL.texCoord2f(1.f + px * 0.45f, 1.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
+
+                gGL.texCoord2f(1.f + px * 0.45f, 1.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent + right + up).mV);
+                gGL.texCoord2f(0.f + px * 0.45f, 0.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent - right - up).mV);
+                gGL.texCoord2f(1.f + px * 0.45f, 0.f + py * 0.45f); gGL.vertex3fv((puff.mPosAgent + right - up).mV);
+            }
         }
         gGL.end();
     }
@@ -2797,12 +3093,12 @@ bool SSVolCloud::precipNoiseReady() const
     return deck && !deck->mPuffs.empty() && deck->mNoiseW > 0 && deck->mNoiseTileM > 0.f;
 }
 
-LLVector2 SSVolCloud::precipNoiseAt(const LLVector3& pos_agent) const
+LLVector3 SSVolCloud::precipNoiseAt(const LLVector3& pos_agent) const
 {
     const Deck* deck = weatherDeck();
     if (!deck || deck->mPuffs.empty() || deck->mNoiseW <= 0 || deck->mNoiseTileM <= 0.f)
     {
-        return LLVector2(1.f, 0.f);
+        return LLVector3(1.f, 0.f, 0.f);
     }
 
     // The air frame, the same one the cells are placed in, so the gate moves with the deck.
@@ -2839,6 +3135,11 @@ LLVector2 SSVolCloud::precipNoiseAt(const LLVector3& pos_agent) const
         sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, sample_x, sample_y);
         SSStormCouple::precipShift(sample, shift_x, shift_y);
     }
+    // <SS:Nexii> 8a item 2/4 (doc/atmo_magic_phase8_show.md section 3): PRECIPNOISEAT call site - folded in at the
+    // same landing point regardless of coupled_deck (a line's own members can leave mStormCellCount at 0 only when
+    // mCells itself is empty, which also empties the line, but this stays independent of that coincidence). sample
+    // (unused by precipShift beyond meso/dir) now also carries lineWall/lineShelf, returned to the caller below.
+    SSStormCouple::applyLineBand(sample, SSStormCouple::lineField(mLineBand, sample_x, sample_y), SSSquall::LINE_ANVIL_FRAC);
 
     // <SS:Nexii> Phase 4: the hero's rigid local shift, evaluated at the UNSHIFTED quantized cell centre
     // (sample_x, sample_y) exactly as buildDeck's own per-cell hero_shift_m is - per-cell lockstep with the
@@ -2891,7 +3192,13 @@ LLVector2 SSVolCloud::precipNoiseAt(const LLVector3& pos_agent) const
         tower = SSStormCouple::towerFromMap(raw_n, deck->mNoiseTowerLo, deck->mNoiseTowerHi, 0.f);
     }
 
-    return LLVector2(presence, tower);
+    // <SS:Nexii> 8a item 4 (doc/atmo_magic_phase8_show.md section 3): z carries the line-band wall term
+    // (sample.lineWall, folded in above) - dropRateAt and the spawner's per-cell rate both take max(intensity,
+    // z * x) so the rain starts exactly where the wall is, even when the authored precip curve has not yet ramped.
+    // 8a audit F4: z is returned RAW here, not pre-multiplied by presence (x) - the wall is a purely geometric
+    // distance-to-segment field (SSStormCouple::lineField) with no notion of the deck's own noise-map holes, so
+    // BOTH callers gate it by x themselves before using it as a floor; do not use z alone as a rate.
+    return LLVector3(presence, tower, sample.lineWall);
 }
 
 F32 SSVolCloud::precipBaseZ() const
@@ -3037,6 +3344,10 @@ void SSVolCloud::renderDebug()
             SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
                                          CELL_M, drift_x, drift_y, world_x, world_y);
             storm_sample = SSStormCouple::sampleAt(mStormCells, mStormCellCount, world_x, world_y);
+            // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): DEBUG-BAKE call site (cellGate, the
+            // V2/V7 debug views' cell-gate replay) - folded in at the same world point, same gate as the other two
+            // CPU sites, so the debug overlay's tower/anvil readout agrees with what buildDeck actually shaped.
+            SSStormCouple::applyLineBand(storm_sample, SSStormCouple::lineField(mLineBand, world_x, world_y), SSSquall::LINE_ANVIL_FRAC);
         }
         tower = SSStormCouple::towerFromMap(raw_n, deck.mNoiseTowerLo, deck.mNoiseTowerHi, storm_sample.boost);
 
@@ -3194,6 +3505,10 @@ void SSVolCloud::renderDebug()
                         {
                             flatten_term *= SSStormCouple::mammatusScale(storm_sample.mammatus);
                         }
+                        // <SS:Nexii> 8a item 4: the shelf's flatten floor, exactly as buildDeck's own flatten_term
+                        // above - kept in step by hand, same discipline as the mammatus fix this replica already
+                        // carries (review 3b NEW-3).
+                        flatten_term = llmax(flatten_term, storm_sample.lineShelf);
                         const F32 flat = 1.f + puff_anvil * coreness * flatten_term;
 
                         const F32 round = llclamp(

@@ -32,13 +32,47 @@
 
 namespace SSAtmoInfoViewCore
 {
-    // The info-view modes of the SSAtmoInfoView setting. 0 is off; the catalogue numbers follow the design doc's V-numbers.
-    constexpr U32 MODE_OFF          = 0;
-    constexpr U32 MODE_WIND_PROFILE = 1;
-    constexpr U32 MODE_STORM_CELLS  = 2;
-    constexpr U32 MODE_DECK_LOD     = 3;
-    constexpr U32 MODE_PRECIP_VIRGA = 4;
-    constexpr U32 MODE_WEATHER_CUBE = 5;
+    // <SS:Nexii> THE AUTHORITATIVE INFO-VIEW NUMBERING (doc/atmo_magic_debug_views.md section 2). Every V-number in the catalogue is named here - including the ones nobody has built yet - because two docs once handed the same number to two different views (atmo_magic_debug_views.md gave V6 to World Field, atmo_magic_phase8_show.md section 6 item 5 gave V6 to Anatomy) and neither shipped, so nothing in code settled it. Settled 2026-09-06: V6 stays World Field (the older claim, made by the doc that owns the numbering scheme) and Anatomy moves to V8, because V7 is NOT free - the catalogue's V7 is the sync console, referenced as V7 by atmo_magic_phase8_show.md section 1 as well. The console is a stackable SSStatsView sibling and never an exclusive mode, so MODE_RESERVED_CONSOLE exists ONLY to burn the number: assigning 7 to the SSAtmoInfoView setting is a bug, and modeIsBuilt(7) is false. RESERVED entries are declarations of intent, not switch cases - the shell's dispatches fall through to their "not implemented yet" branches until someone builds them. ADD A NEW VIEW ONLY BY TAKING MODE_COUNT's value and moving MODE_COUNT up; never renumber an entry above.
+    constexpr U32 MODE_OFF               = 0;
+    constexpr U32 MODE_WIND_PROFILE      = 1;
+    constexpr U32 MODE_STORM_CELLS       = 2;
+    constexpr U32 MODE_DECK_LOD          = 3;
+    constexpr U32 MODE_PRECIP_VIRGA      = 4;
+    constexpr U32 MODE_WEATHER_CUBE      = 5;
+    constexpr U32 MODE_WORLD_FIELD       = 6;   // RESERVED, not built: the existing RENDER_DEBUG_WORLD_FIELD overlay restyled under the shared legend/palette (backlog 5.6)
+    constexpr U32 MODE_RESERVED_CONSOLE  = 7;   // NEVER A MODE: catalogue V7 is the sync console, a stackable console beside the info views
+    constexpr U32 MODE_ANATOMY           = 8;   // RESERVED, not built: storm anatomy (phase 8b) - moved here from its clashing V6 claim
+    constexpr U32 MODE_LIGHTNING         = 9;
+    constexpr U32 MODE_COUNT             = 10;
+
+    // The catalogue name of a mode, as the legend title and the picker's own combo row print it. Invariants: every constant above (0 .. MODE_COUNT-1) maps to its own distinct, non-empty string; the three unbuilt numbers carry their status in the string itself; any value at or above MODE_COUNT reads "?".
+    inline const char* modeLabel(U32 mode)
+    {
+        switch (mode)
+        {
+            case MODE_OFF:              return "off";
+            case MODE_WIND_PROFILE:     return "V1  WIND PROFILE";
+            case MODE_STORM_CELLS:      return "V2  STORM CELLS";
+            case MODE_DECK_LOD:         return "V3  DECK LOD";
+            case MODE_PRECIP_VIRGA:     return "V4  PRECIP & VIRGA";
+            case MODE_WEATHER_CUBE:     return "V5  WEATHER CUBE";
+            case MODE_WORLD_FIELD:      return "V6  WORLD FIELD (reserved, not built)";
+            case MODE_RESERVED_CONSOLE: return "V7  SYNC CONSOLE (not an info view)";
+            case MODE_ANATOMY:          return "V8  ANATOMY (reserved, not built)";
+            case MODE_LIGHTNING:        return "V9  LIGHTNING";
+        }
+        return "?";
+    }
+
+    // Whether a mode has a layer, a legend and a chart behind it today. Invariants: true for MODE_OFF and every built view; false for exactly MODE_WORLD_FIELD, MODE_RESERVED_CONSOLE and MODE_ANATOMY; false at or above MODE_COUNT.
+    inline bool modeIsBuilt(U32 mode)
+    {
+        if (mode >= MODE_COUNT)
+        {
+            return false;
+        }
+        return mode != MODE_WORLD_FIELD && mode != MODE_RESERVED_CONSOLE && mode != MODE_ANATOMY;
+    }
 
     // A metre-space 2D vector for the display geometry below - not SSVirga::Vec2 or SSStormCell::Vec2 (neither
     // core may include this one, nor this one theirs); every crossing at a shell read site is a copy, same idiom
@@ -410,10 +444,13 @@ namespace SSAtmoInfoViewCore
 
     // <SS:Nexii> V4 Precip & Virga helpers (doc/atmo_magic_debug_views.md V4). Display geometry only - the shell
     // hands in the numbers it already reads off SSVolCloud/SSWindProfile/the precip preset; nothing here decides
-    // where a shaft's own cards actually go (ssvirgacore.h owns that - a curtain is a plain vertical stack with no
-    // per-altitude lean, see its own comment). This is a SEPARATE line drawn for comparison: where a raindrop
-    // released from the same column would land if it drifted with the wind the way precipitation's own spawner
-    // tilts it (ssprecipitation.cpp's spawnTierCell: entry = hit - windAt(hit) * fallTime).
+    // where a shaft's own cards actually go (ssvirgacore.h owns that). F7 (2026-09-06 review), stale claim
+    // corrected: a curtain is NOT a plain vertical stack any more - phase 8e (ssvirgacore.h skewOffsetM) gave it a
+    // real per-altitude wind-fall lean. This function's line is a SEPARATE, independent comparison, unaffected by
+    // that change: where a raindrop released from the same column would land if it drifted with the GROUND wind
+    // the way precipitation's own spawner tilts it (ssprecipitation.cpp's spawnTierCell: entry = hit - windAt(hit)
+    // * fallTime) - a display approximation the shaft's own actual skew (drawn as a separate line, see
+    // SSAtmoInfoView::renderVirga) is read against, not a claim that the two describe the same geometry.
 
     // The horizontal drift (metres, downwind) a drop released dropHeightM above its landing point accumulates
     // falling at fallSpeedMS through a wind of (windX, windY): landing = entry + offset, so entry = landing -
@@ -501,6 +538,255 @@ namespace SSAtmoInfoViewCore
     inline S32 cubePhaseX(F64 phase, const ChartBox& box)
     {
         return chartX(cubeWrapPhase(phase), 1.f, box);
+    }
+
+    // <SS:Nexii> V4's CHART arithmetic (doc/atmo_magic_debug_views.md V4; backlog 5.3 - V4 shipped its in-world
+    // layer with no panel beside it). Pure display geometry, exactly like every helper above: the shell hands in
+    // the counts and radii it already reads off SSVolCloud::virgaDebug() and the precip preset, and nothing here
+    // decides which cell qualifies, which the hash trim keeps, or where a card goes - ssvirgacore.h owns all
+    // three. The one formula quoted from that core (keepProbability) is quoted deliberately and cross-checked
+    // against it by a named test rather than re-derived by eye; see its own comment.
+
+    // The drive histogram's bucket for a drive in [0,1]: nBuckets equal-width buckets, bucket i covering
+    // [i/n, (i+1)/n) and the top bucket closed at 1. Invariants: in [0, nBuckets-1]; 0 for drive <= 0 and for
+    // NaN; nBuckets-1 for drive >= 1; monotone non-decreasing in drive; nBuckets < 1 reads as 1 (one bucket).
+    constexpr S32 DRIVE_BUCKETS = 10;
+    inline S32 driveBucket(F32 drive, S32 nBuckets)
+    {
+        const S32 n = llmax(nBuckets, 1);
+        if (!(drive > 0.f))            // NaN and every non-positive drive fall in the first bucket
+        {
+            return 0;
+        }
+        if (drive >= 1.f)
+        {
+            return n - 1;
+        }
+        return llclamp((S32)floor(drive * (F32)n), 0, n - 1);
+    }
+
+    // The pixel column of histogram bar `bucket` inside a lane, and its height for `count` against the tallest
+    // bucket in the same histogram. Bars are laid edge to edge across the lane with gapPx between them, so the
+    // lane's whole width is spent. Invariants: every bar's left/right lies inside the lane; bar i's right edge is
+    // at or left of bar i+1's left edge (never overlapping); the last bar's right edge is the lane's right edge;
+    // a zero count gives h == 0 and a count equal to maxCount gives h == lane.h; maxCount <= 0 gives h == 0;
+    // bucket and nBuckets clamp the same way driveBucket's do.
+    inline ChartBox histogramBarBox(const ChartBox& lane, S32 bucket, S32 nBuckets, S32 count, S32 maxCount, S32 gapPx)
+    {
+        const S32 n = llmax(nBuckets, 1);
+        const S32 i = llclamp(bucket, 0, n - 1);
+        const S32 gap = llmax(gapPx, 0);
+        // Edge positions by exact division from the lane's own left, so rounding never leaves a seam or an
+        // overlap and the last bar lands on the lane's right edge.
+        const S32 x0 = lane.left + (lane.w * i) / n;
+        const S32 x1 = lane.left + (lane.w * (i + 1)) / n;
+        ChartBox bar;
+        bar.left = x0;
+        bar.w = llmax(x1 - x0 - (i + 1 < n ? gap : 0), 0);
+        bar.bottom = lane.bottom;
+        bar.h = (maxCount > 0) ? (S32)floor(unitOf((F32)count, (F32)maxCount) * (F32)lane.h + 0.5f) : 0;
+        return bar;
+    }
+
+    // The shaft budget's fill as a fraction of the cap: kept / cap, DELIBERATELY unclamped above 1, because the
+    // shaft trim's own rank-cut backstop (SSVirga::hardCap) permits a kept set above MAX_SHAFTS and a bar that
+    // silently clamped would hide exactly the overshoot the panel exists to show. Invariants: 0 at kept 0; 1 at
+    // kept == cap; monotone non-decreasing in kept; never negative; a non-positive cap reads any positive kept
+    // count as 1 (full) and 0 as 0, the same convention unitOf uses.
+    inline F32 budgetFrac(S32 kept, S32 cap)
+    {
+        const F32 k = (F32)llmax(kept, 0);
+        if (cap <= 0)
+        {
+            return k > 0.f ? 1.f : 0.f;
+        }
+        return k / (F32)cap;
+    }
+
+    // The filled width, in pixels, of a budget bar barWpx wide - budgetFrac clamped INTO the bar, since a bar
+    // cannot draw past its own end (the overshoot is reported by budgetFrac and printed as a number instead).
+    // Invariants: in [0, barWpx]; 0 at kept 0; barWpx at and above kept == cap; monotone non-decreasing in kept;
+    // a non-positive barWpx gives 0.
+    inline S32 budgetFillPx(S32 kept, S32 cap, S32 barWpx)
+    {
+        const S32 w = llmax(barWpx, 0);
+        const F32 f = llclamp(budgetFrac(kept, cap), 0.f, 1.f);
+        return (S32)floor(f * (F32)w + 0.5f);
+    }
+
+    // The stable hash trim's own keep probability for a candidate set: min(1, cap / quantisedN), where quantisedN
+    // is SSVirga::quantiseCount(n) - the shell passes that core's OWN result in rather than this core quantising
+    // anything, so the only thing quoted here is the min/divide the panel prints as a percentage. Quoted rather
+    // than called because ssvirgacore.h is not includable from this core (see the file header); the quote is held
+    // to SSVirga::keepHash's measured behaviour by tests/xsection_infoview_virga_budget.cpp, which drives the real
+    // keepHash over 20000 cells and compares the kept share to this number. Invariants: in [0,1]; exactly 1 when
+    // quantisedN <= cap; monotone non-increasing in quantisedN; monotone non-decreasing in cap; a non-positive or
+    // NaN quantisedN reads as 1 (nothing to trim).
+    inline F32 keepProbability(S32 cap, F32 quantisedN)
+    {
+        if (!(quantisedN > 0.f))
+        {
+            return 1.f;
+        }
+        const F32 c = (F32)llmax(cap, 0);
+        return llmin(1.f, c / quantisedN);
+    }
+
+    // The distance axis ceiling for the handoff chart: a nice round number comfortably past the end of the ramp
+    // it has to show, so the "full shaft alpha" rail never sits on the axis' own right edge. Invariants: >= 1;
+    // >= rampEndM (strictly greater whenever rampEndM > 0); monotone non-decreasing in rampEndM; a NaN or
+    // non-positive rampEndM gives 1.
+    constexpr F32 DIST_AXIS_MARGIN = 1.25f;
+    inline F32 distanceAxisMaxM(F32 rampEndM)
+    {
+        if (!(rampEndM > 0.f))
+        {
+            return 1.f;
+        }
+        return niceMax(rampEndM * DIST_AXIS_MARGIN);
+    }
+
+    // <SS:Nexii> V9 LIGHTNING helpers (doc/atmo_magic_debug_views.md V9). Same rule as every block above: the
+    // shell reads SSLightning's own resident strike list and hands the numbers in; nothing here schedules,
+    // advances or places a strike, and none of it is on any determinism path (a strike's own geometry is rolled
+    // from its fire time in sslightning.cpp and this file never sees that stream). Plain S32 kind constants
+    // mirroring SSStrikeKind's values one for one, the same idiom the VORTEX_KIND_* mirrors use - a core never
+    // includes a shell header for an enum when a mirrored int does the job, and the shell casts at the read site.
+    constexpr S32 STRIKE_KIND_SHEET  = 0;
+    constexpr S32 STRIKE_KIND_FORK   = 1;
+    constexpr S32 STRIKE_KIND_GROUND = 2;
+    constexpr S32 STRIKE_KIND_COUNT  = 3;
+
+    // Kind label for an icon or legend row. Invariants: every STRIKE_KIND_* constant maps to its own distinct,
+    // non-empty, lower-case string; any other value reads "?".
+    inline const char* strikeKindLabel(S32 kind)
+    {
+        switch (kind)
+        {
+            case STRIKE_KIND_SHEET:  return "sheet";
+            case STRIKE_KIND_FORK:   return "fork";
+            case STRIKE_KIND_GROUND: return "ground";
+        }
+        return "?";
+    }
+
+    // A live strike's lifecycle stage, read off the fields SSLightning::advance() already maintains on the strike:
+    // tSec is its own clock (SSStrike::mT, negative before contact), leaderProgress its stepped leader front
+    // (SSStrike::mLeaderProgress, 0 until the leader starts), plasmaSinceS the seconds since the LATEST return
+    // stroke (SSStrike::mPlasmaSince, negative when no stroke has fired), and the two windows are the caller's own
+    // (the stroke decay constant and SSDissolve::PLASMA_S) so this core takes no dependency on sslightning.h.
+    // Invariants: always in [0, STRIKE_STAGE_COUNT); before contact it is CHARGE while the leader has not started
+    // and LEADER once it has; after contact it is monotone non-decreasing in plasmaSinceS whenever
+    // strokeWindowS <= plasmaWindowS; a negative plasmaSinceS after contact reads AFTERGLOW (no stroke is lit);
+    // NaN in any argument reads as the earliest stage the other arguments allow, never as a crash or a wrap.
+    constexpr S32 STRIKE_STAGE_CHARGE    = 0;
+    constexpr S32 STRIKE_STAGE_LEADER    = 1;
+    constexpr S32 STRIKE_STAGE_STROKE    = 2;
+    constexpr S32 STRIKE_STAGE_PLASMA    = 3;
+    constexpr S32 STRIKE_STAGE_AFTERGLOW = 4;
+    constexpr S32 STRIKE_STAGE_COUNT     = 5;
+    inline S32 strikeStage(F32 tSec, F32 leaderProgress, F32 plasmaSinceS, F32 strokeWindowS, F32 plasmaWindowS)
+    {
+        if (!(tSec == tSec))                       // NaN clock: the strike has not been advanced yet
+        {
+            return STRIKE_STAGE_CHARGE;
+        }
+        if (tSec < 0.f)
+        {
+            return (leaderProgress > 0.f) ? STRIKE_STAGE_LEADER : STRIKE_STAGE_CHARGE;
+        }
+        if (!(plasmaSinceS >= 0.f))                // no stroke is lit (mPlasmaSince -1), or NaN
+        {
+            return STRIKE_STAGE_AFTERGLOW;
+        }
+        if (plasmaSinceS <= llmax(strokeWindowS, 0.f))
+        {
+            return STRIKE_STAGE_STROKE;
+        }
+        if (plasmaSinceS <= llmax(plasmaWindowS, 0.f))
+        {
+            return STRIKE_STAGE_PLASMA;
+        }
+        return STRIKE_STAGE_AFTERGLOW;
+    }
+
+    // Stage label for the legend's stage bar and the in-world tag. Invariants: every STRIKE_STAGE_* constant maps
+    // to its own distinct, non-empty, lower-case string; any other value reads "?".
+    inline const char* strikeStageLabel(S32 stage)
+    {
+        switch (stage)
+        {
+            case STRIKE_STAGE_CHARGE:    return "charge";
+            case STRIKE_STAGE_LEADER:    return "leader";
+            case STRIKE_STAGE_STROKE:    return "stroke";
+            case STRIKE_STAGE_PLASMA:    return "plasma";
+            case STRIKE_STAGE_AFTERGLOW: return "afterglow";
+        }
+        return "?";
+    }
+
+    // Stage colour: the design's lifecycle language (cool -> warm across the stage bar), which is the SAME five-
+    // step ramp the storm cells' own stages already use - a named wrapper rather than a bare stageColor() call at
+    // each site so "strike stage colour" reads as its own concept, exactly as vortexKindColor wraps rotationRamp.
+    // Invariants: strikeStageColor(s) == stageColor(s) for every s (STRIKE_STAGE_COUNT == STAGE_COUNT, so the
+    // clamping at both ends agrees too); therefore channels in [0,1], red non-decreasing and blue non-increasing
+    // across the five stages.
+    inline RGB strikeStageColor(S32 stage)
+    {
+        return stageColor(stage);
+    }
+
+    // Channel LOD: the minimum node width a channel segment must carry to be drawn at this camera distance, so a
+    // far bolt reduces to its trunk instead of spending hundreds of lines on branches a pixel wide. The bracket is
+    // the channel builder's own taper (sslightning.cpp growPath: a trunk runs 1.0 -> 0.6 wide, and growBranches
+    // starts a branch at 0.55x its parent, so 0.55 is the widest a non-trunk node can ever be) - CUTOFF_MAX sits
+    // strictly between the two, which is what makes "the far reading is the trunk and nothing else" true rather
+    // than approximate. LOCKSTEP with those two literals: if the taper changes, these change with it.
+    // Invariants: 0 at and below CHANNEL_FULL_M (everything near the camera draws); CHANNEL_CUTOFF_MAX at and
+    // above CHANNEL_TRUNK_M; monotone non-decreasing; always in [0, CHANNEL_CUTOFF_MAX]; NaN gives
+    // CHANNEL_CUTOFF_MAX (draw the least, never the most).
+    constexpr F32 CHANNEL_TRUNK_MIN_WIDTH  = 0.6f;    // LOCKSTEP sslightning.cpp buildChannel growPath(..., 1.f, 0.6f, ...)
+    constexpr F32 CHANNEL_BRANCH_MAX_WIDTH = 0.55f;   // LOCKSTEP sslightning.cpp growBranches from_node.mWidth * 0.55f
+    constexpr F32 CHANNEL_CUTOFF_MAX       = 0.58f;
+    constexpr F32 CHANNEL_FULL_M           = 400.f;
+    constexpr F32 CHANNEL_TRUNK_M          = 4000.f;
+    inline F32 channelWidthCutoff(F32 distM)
+    {
+        if (!(distM == distM))
+        {
+            return CHANNEL_CUTOFF_MAX;
+        }
+        if (distM <= CHANNEL_FULL_M)
+        {
+            return 0.f;
+        }
+        if (distM >= CHANNEL_TRUNK_M)
+        {
+            return CHANNEL_CUTOFF_MAX;
+        }
+        return CHANNEL_CUTOFF_MAX * ((distM - CHANNEL_FULL_M) / (CHANNEL_TRUNK_M - CHANNEL_FULL_M));
+    }
+
+    // The weight a strike carries as a light on the cloud deck, and whether it clears the cut that decides which
+    // strikes are uploaded to the cloud shader at all: ssvolcloud.cpp's own uploader takes b = channel brightness
+    // x intensity and skips anything at or below STRIKE_LIGHT_CUT, then stops at SS_MAX_STRIKE_LIGHTS. Quoted here
+    // (LOCKSTEP ssvolcloud.cpp update(), the mStrikeLights loop) so the view can mark which live strikes the cloud
+    // shader is actually lit by - the uploaded array itself is private to SSVolCloud, so the panel reports this
+    // reading of the same inputs and says so, rather than claiming to show the array. Invariants: the weight is
+    // never negative and is 0 whenever either input is non-positive or NaN; monotone non-decreasing in each input;
+    // strikeLightsCloud is exactly weight > STRIKE_LIGHT_CUT.
+    constexpr F32 STRIKE_LIGHT_CUT = 0.004f;
+    inline F32 strikeLightWeight(F32 channelBrightness, F32 intensity)
+    {
+        if (!(channelBrightness > 0.f) || !(intensity > 0.f))
+        {
+            return 0.f;
+        }
+        return channelBrightness * intensity;
+    }
+    inline bool strikeLightsCloud(F32 channelBrightness, F32 intensity)
+    {
+        return strikeLightWeight(channelBrightness, intensity) > STRIKE_LIGHT_CUT;
     }
 }
 

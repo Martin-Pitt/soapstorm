@@ -289,6 +289,7 @@ extern LLGLSLShader         gSSSurfaceAlbedoProgram; // <SS:Nexii> was gSSSurfac
 extern LLGLSLShader         gSSPostFogProgram;
 extern LLGLSLShader         gSSPostHeatProgram;
 extern LLGLSLShader         gSSPostLensProgram;
+extern LLGLSLShader         gSSInfoLookProgram;
 // Wind flowmap compute passes; only created when GL 4.3 is present
 extern LLGLSLShader         gSSWindInitProgram;
 extern LLGLSLShader         gSSWindDivProgram;

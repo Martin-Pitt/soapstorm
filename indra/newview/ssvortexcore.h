@@ -38,7 +38,7 @@ namespace SSVortex
     constexpr S32 COLLARS         = 14;     // collar quads per funnel
     constexpr S32 SLOTS_PER_CELL  = 2;      // child vortex slots hashed per storm cell (slot 1 is the satellite slot)
     constexpr F32 WALL_CLOUD_FRAC = 0.85f;  // funnel top as a fraction of the deck base altitude above ground (the lowering)
-    constexpr F32 MESO_TORNADO_MIN = 0.55f; // parent lifecycle meso needed for a mesocyclonic vortex to exist
+    constexpr F32 MESO_TORNADO_MIN = 0.35f; // parent lifecycle meso needed for a mesocyclonic vortex to exist (7f calibration: was 0.55, which k * |rotation| could only reach at intensity ~1 and rotation ~0.6+; a staged hero at HERO_INTENSITY_MIN 0.7 with the supercell floor rotationTerm >= 0.501 peaks near 0.39)
     constexpr F32 LANDSPOUT_POT_MIN = 0.80f; // parent potential needed for a landspout in the TCU stage
     constexpr F32 SATELLITE_ODDS  = 0.25f;  // share of strong mesocyclonic vortices that also carry a satellite in slot 1
     constexpr F32 GUSTNADO_ODDS   = 0.35f;  // share of mature cells that spin up a gustnado on the outflow ring
@@ -75,6 +75,9 @@ namespace SSVortex
     // below via the salt table comment.
     constexpr F32 TWO_PI = 6.283185307179586f;
     constexpr F32 SATELLITE_OFFSET_FRAC = 0.6f;   // the "orbit at ~0.6" the KIND_SATELLITE comment names
+    constexpr F32 MESO_OFFSET_MIN = 0.25f;        // 7f F1: a mesocyclonic funnel forms at the rear-flank interface, this share of the parent radius from the centre at least...
+    constexpr F32 MESO_OFFSET_MAX = 0.55f;        // ...and at most (design 3c item 3 says "up to a cell radius away"; implemented as this band of the radius and - 7f re-check N3 - for EVERY mesocyclonic/anticyclonic funnel through vortexAt, not only the hero: a field-wide change no non-hero rung pins yet); hashed per candidate (SALT_OFFSET_FRAC). Was 0: the funnel sat under the centre and the hero-contact hook composed a zero offset
+    constexpr F32 HERO_FUNNEL_BAND_LO = 0.20f;    // 7f F6: the hero's pinned window may open this early (the meso band's own 0.30 left a fast, long-lived hero arriving at age 0.32-0.41 with its funnel still aloft at the pass)
     constexpr F32 SATELLITE_INTENSITY_MIN = 0.7f; // the "strong mesocyclonic" the SATELLITE_ODDS comment names
     constexpr F32 TAPER_INTENSITY_BIAS = 0.5f;    // how far the taper hash is pulled toward wedge (1) at intensity 1
     constexpr F32 DURATION_MIN_FRAC = 0.05f;      // shortest hashed duration, as a fraction of parent age01
@@ -84,6 +87,8 @@ namespace SSVortex
     constexpr F32 BASE_ALPHA_SCALE = 0.85f;       // baseAlpha's own scale: a fully live funnel never exceeds 85% coverage
     constexpr F32 FORCED_BIRTH_AGE01    = 0.30f;  // 7d: an authored funnel's fixed window - touchdown spans age01 0.39..0.64, the cue (0.5) inside it
     constexpr F32 FORCED_DURATION_AGE01 = 0.45f;
+    constexpr F32 HERO_FUNNEL_LEAD_AGE01     = 0.12f; // 7f: a spontaneous hero's funnel window starts this much before its closest approach...
+    constexpr F32 HERO_FUNNEL_DURATION_AGE01 = 0.35f; // ... and lasts this long: touchdown (t01 0.2..0.75) spans closest-0.05 .. closest+0.14, so the pass is on the ground
 
     // Per-field salts mixed into the chain hash with SSAtmoNoise::combine before hash01, exactly as ssstormcellcore.h
     // does it: every hashed field gets its own salt so no two fields ever read the same random draw. childVortex's
@@ -106,6 +111,7 @@ namespace SSVortex
     constexpr U32 SALT_DUST_DURATION  = 0x5658000Fu; // mDurationS in [30, 300]
     constexpr U32 SALT_DUST_JITTER_X  = 0x56580010u; // mOriginXY.x jitter within the dust lattice cell
     constexpr U32 SALT_DUST_JITTER_Y  = 0x56580011u; // mOriginXY.y jitter
+    constexpr U32 SALT_OFFSET_FRAC    = 0x56580013u; // 7f F1: a mesocyclonic/anticyclonic funnel's contact offset share, [MESO_OFFSET_MIN, MESO_OFFSET_MAX]
     constexpr U32 SALT_DUST_INTENSITY = 0x56580012u; // hashed baseline mIntensity (the shell scales it further by live temperature at spawn - dustDevil() takes no weather)
 
     enum EKind : S32
@@ -182,7 +188,37 @@ namespace SSVortex
         SSStormCell::Lifecycle mLife; // at now
         bool mAllowTornadoes = false;
         S32 mForcedKind = 0;      // 7d: ActiveCell::mForcedKind - 2 tornado / 3 waterspout / 4 anticyclonic GUARANTEE slot 0's funnel (see childVortex); 0/1 change nothing
+        bool mIsHero = false;     // 7f: the resolved hero - when it clears the ordinary meso gates, slot 0's window is PINNED around mClosestAge01 (see childVortex), never hashed
+        F32 mClosestAge01 = 0.5f; // 7f: (hero.mClosestTime - birth) / lifetime as the shell computes it from SSStormCells::hero()
     };
+
+    // 7f: whether kind draws a condensation funnel at all, vs a funnel-less spin-up ring (KIND_GUSTNADO) or nothing
+    // (KIND_NONE/KIND_DUST_DEVIL/KIND_QLCS/KIND_WATERSPOUT - the last is a slot-0 funnel kind RE-LABELLED by the
+    // shell, so it never reaches childVortex's own kind decision as KIND_WATERSPOUT). Exported (not just a local in
+    // childVortex) so the shell's 7f hero-contact hook can gate contactOffsetM the same way childVortex's own
+    // multi-vortex term does - a GUSTNADO's mOffsetFrac is its RING radius share, not a funnel contact, so this must
+    // be an explicit kind check, never "mOffsetFrac != 0". Invariants: true for MESOCYCLONIC/ANTICYCLONIC/LANDSPOUT/
+    // SATELLITE, false for every other kind; pure.
+    inline bool hasFunnel(EKind kind)
+    {
+        return kind == KIND_MESOCYCLONIC || kind == KIND_ANTICYCLONIC || kind == KIND_LANDSPOUT || kind == KIND_SATELLITE;
+    }
+
+    // 7f: the funnel's contact offset from the parent centre - the ONE formula site for "how far and which way the
+    // funnel sits from the cell centre" (design 3c item 3: "up to a cell radius away"). vortexAt (below) calls this
+    // with orbit already folded into a copy of mOffsetAngle for satellites; the shell's hero-contact hook calls it
+    // directly on slot 0's own candidate (no orbit - slot 0 never orbits) built at the closest-approach age, so the
+    // hero's straight-line path is composed to the funnel's CONTACT, not the cell centre (ssstormcellcore.h's
+    // HeroContactFn). Invariants: magnitude == mOffsetFrac * parentRadiusM (for a mesocyclonic/anticyclonic funnel that
+    // is [MESO_OFFSET_MIN, MESO_OFFSET_MAX] of the radius - 7f F1; the old 0 made the whole hero-contact path a
+    // constant zero), zero only for kinds with mOffsetFrac 0 (landspout, waterspout); angle == mOffsetAngle; pure.
+    inline Vec2 contactOffsetM(const Candidate& c, F32 parentRadiusM)
+    {
+        Vec2 v;
+        v.x = c.mOffsetFrac * parentRadiusM * std::cos(c.mOffsetAngle);
+        v.y = c.mOffsetFrac * parentRadiusM * std::sin(c.mOffsetAngle);
+        return v;
+    }
 
     // The child candidate for (parent, slot). Kind decision: slot 0 - mesocyclonic if supercell && tornadoEligible && meso
     // peak >= MESO_TORNADO_MIN (anticyclonic when rotation < 0), else landspout if potential >= LANDSPOUT_POT_MIN &&
@@ -197,9 +233,23 @@ namespace SSVortex
     // different (usually empty) window - the authored funnel vanished as the author moved it. Invariants: for forced
     // kinds 2/3/4 slot 0's kind is MESOCYCLONIC or ANTICYCLONIC, birth/duration are the two constants bit-exactly, and
     // vortexAt is alive in PHASE_TOUCHDOWN at age01 0.5; mForcedKind 0 or 1 leaves every rule below unchanged.
+    // 7f HERO: when parent.mIsHero and the ORDINARY meso gates pass (supercell, tornado-eligible, meso >= MESO_TORNADO_MIN,
+    // allowTornadoes - the gates still decide WHETHER), slot 0's window is pinned, not hashed: birth = clamp(mClosestAge01
+    // - HERO_FUNNEL_LEAD_AGE01, HERO_FUNNEL_BAND_LO, 0.80 - HERO_FUNNEL_DURATION_AGE01), duration HERO_FUNNEL_DURATION_AGE01, so the
+    // funnel is in TOUCHDOWN as the hero passes the anchor (the user's staging principle: a show that happens offscreen
+    // never happened). The window may open as early as HERO_FUNNEL_BAND_LO (0.20), below the meso band's 0.30, so a
+    // fast, long-lived hero whose spawn clamp lands it at age 0.32-0.41 still has the funnel down at the pass.
+    // Invariants: for a hero passing the gates with mClosestAge01 in [0.32, 0.63], vortexAt at age01 == mClosestAge01 is
+    // alive in PHASE_TOUCHDOWN; duration is the constant bit-exactly and birth is the clamped lead; a non-hero or a hero
+    // failing a gate is unchanged. STATED LATENT (7f re-check N2): touchdown spans birth+0.07..birth+0.26 of life, so with
+    // birth floored at HERO_FUNNEL_BAND_LO the pass is on the ground only while mClosestAge01 >= 0.27; the 30 km spawn cap
+    // pushes the closest age below that when |motion| * lifetime > 111 km (anvil wind above ~31 m/s at LIFE_MAX_S), a
+    // windy-day case no fixture drives (the ladder tops out at 25 m/s, closest age 0.383). The constant to move if it
+    // shows is HERO_FUNNEL_LEAD_AGE01 (smaller) or HERO_FUNNEL_BAND_LO (lower) - never the spawn cap.
     // Invariants: bit-identical for equal inputs; mKind == NONE whenever !allowTornadoes for every tornado kind (gustnado
     // and dust devil are not tornadoes and are unaffected); birth/duration windows inside [0,1] and inside the kind's stage
-    // band (mesocyclonic in [0.30, 0.80], landspout in [0.02, 0.13] with duration <= 0.12, gustnado in [0.35, 0.95]);
+    // band (mesocyclonic in [0.30, 0.80] EXCEPT a hero's pinned window, which may open at HERO_FUNNEL_BAND_LO 0.20 - see
+    // the 7f HERO paragraph; landspout in [0.02, 0.13] with duration <= 0.12, gustnado in [0.35, 0.95]);
     // taper in [TAPER_DRILL, TAPER_WEDGE] and monotone in parent intensity on average over a sample; mMultiN either 0 or in
     // [MULTI_N_MIN, MULTI_N_MAX]; mRotSign == sign(parent rotation) for mesocyclonic kinds.
     inline Candidate childVortex(U32 seed, const Parent& parent, S32 slot)
@@ -277,6 +327,12 @@ namespace SSVortex
             c.mBirthAge01 = FORCED_BIRTH_AGE01;       // 7d: the authored funnel's fixed window - no hash, so no tweak can lose it
             c.mDurationAge01 = FORCED_DURATION_AGE01;
         }
+        else if (parent.mIsHero && slot == 0 && (kind == KIND_MESOCYCLONIC || kind == KIND_ANTICYCLONIC))
+        {
+            // 7f: the hero's funnel window is pinned around its closest approach (the gates above already said yes).
+            c.mBirthAge01 = llclamp(parent.mClosestAge01 - HERO_FUNNEL_LEAD_AGE01, HERO_FUNNEL_BAND_LO, bandHi - HERO_FUNNEL_DURATION_AGE01); // 7f F6: may open before the meso band's 0.30
+            c.mDurationAge01 = HERO_FUNNEL_DURATION_AGE01;
+        }
         else
         {
             c.mBirthAge01 = std::lerp(bandLo, bandHi, hash01(combine(chain, SALT_BIRTH)));
@@ -304,13 +360,13 @@ namespace SSVortex
         c.mOffsetAngle = hash01(combine(chain, SALT_OFFSET_ANGLE)) * TWO_PI;
         c.mOffsetFrac = (kind == KIND_SATELLITE) ? SATELLITE_OFFSET_FRAC
                       : (kind == KIND_GUSTNADO) ? GUSTNADO_RING_FRAC
+                      : (kind == KIND_MESOCYCLONIC || kind == KIND_ANTICYCLONIC)
+                          ? std::lerp(MESO_OFFSET_MIN, MESO_OFFSET_MAX, hash01(combine(chain, SALT_OFFSET_FRAC))) // 7f F1
                       : 0.f;
 
         // Multi-vortex angular term: only funnels (never the funnel-less gustnado) carry it, present with odds equal
         // to the candidate's own intensity (a stronger vortex is more likely to show suction vortices).
-        const bool hasFunnel = (kind == KIND_MESOCYCLONIC || kind == KIND_ANTICYCLONIC
-                              || kind == KIND_LANDSPOUT || kind == KIND_SATELLITE);
-        if (hasFunnel && hash01(combine(chain, SALT_MULTI_PRESENT)) < c.mIntensity)
+        if (hasFunnel(kind) && hash01(combine(chain, SALT_MULTI_PRESENT)) < c.mIntensity)
         {
             const F32 nT = hash01(combine(chain, SALT_MULTI_N));
             const S32 span = MULTI_N_MAX - MULTI_N_MIN + 1;
@@ -403,10 +459,14 @@ namespace SSVortex
         s.mTiltDir.x = std::cos(c.mOffsetAngle);
         s.mTiltDir.y = std::sin(c.mOffsetAngle);
 
+        // 7f: contactOffsetM is the one formula site (see its own comment) - orbit (satellites only) is folded into
+        // a copy of c's own mOffsetAngle first since contactOffsetM takes the Candidate's angle, not a bare F32.
         const F32 orbit = (c.mKind == KIND_SATELLITE) ? (TWO_PI * t01 * 1.5f * c.mRotSign) : 0.f;
-        const F32 ang = c.mOffsetAngle + orbit;
-        s.mContact.x = parent.mCentre.x + c.mOffsetFrac * parent.mRadiusM * std::cos(ang);
-        s.mContact.y = parent.mCentre.y + c.mOffsetFrac * parent.mRadiusM * std::sin(ang);
+        Candidate cAtOrbit = c;
+        cAtOrbit.mOffsetAngle = c.mOffsetAngle + orbit;
+        const Vec2 offset = contactOffsetM(cAtOrbit, parent.mRadiusM);
+        s.mContact.x = parent.mCentre.x + offset.x;
+        s.mContact.y = parent.mCentre.y + offset.y;
 
         s.mMultiWeight = s.mIntensity * SSStormCell::smoothstep(0.15f, 0.35f, t01)
                         * (1.f - SSStormCell::smoothstep(0.7f, 0.9f, t01));

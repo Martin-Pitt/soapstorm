@@ -1156,6 +1156,9 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
+    ssdeckboilcore.h
+    ssdeckcellsoftcore.h
+    ssdeckflowcore.h
     ssdeckframecore.h
     ssdecklodcore.h
     ssdeckmacrocore.h
@@ -1163,11 +1166,15 @@ set(viewer_HEADER_FILES
     ssdeckshadecore.h
     ssdaycyclecore.h
     ssatmonoisecore.h
+    ssairlightcore.h
+    ssinfolookcore.h
     ssstormcellcore.h
     ssstormcouplecore.h
     sssquallcore.h
     ssvortexcore.h
+    ssveilcore.h
     ssvirgacore.h
+    ssshellcore.h
     ssvortices.h
     ssvortexrender.h
     ssstormcells.h
@@ -1214,6 +1221,7 @@ set(viewer_HEADER_FILES
     sssurfacefield.h
     sssurfacestatecore.h
     ssscreenfxcore.h
+    sshazecore.h
     ssheightfog.h
     ssscreenfx.h
     sslightning.h
