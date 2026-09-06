@@ -30,7 +30,9 @@
 #include "llimage.h"
 #include "llrendertarget.h"
 #include "llviewertexture.h"
+#include "ssdeckboilcore.h"
 #include "ssdeckframecore.h"
+#include "ssdeckshadecore.h"
 #include "ssstormcells.h"
 #include "ssstormcouplecore.h"
 #include "ssvirgacore.h"
@@ -349,14 +351,32 @@ private:
         F32 mSheetZ = 0.f;
         F32 mSheetAlpha = 0.f;
 
-        // The veil IS the deck's floor, so it is buried under the whole column and takes the gloom gradient's dark end whole - see Puff::mBuried.
-        // <SS:Nexii> F12: sourced from SSVirga::BURIED (ssvirgacore.h) rather than a second hardcoded 1.f - a
-        // curtain is the deck's underside like the veil (ssvirgacore.h's own comment on BURIED), so the two are
-        // now LOCKSTEP by construction, not by a comment claiming two independent literals happen to agree.
-        static constexpr F32 SHEET_BURIED = SSVirga::BURIED;
+        // <SS:Nexii> D2 (fourth build report: "the base veil is unnaturally dark near the camera compared to the puffs beside it"). THIS CONSTANT WAS THE MECHANISM. It rides the vertex colour's g
+        // channel (render()'s color4f) and the fragment stage grades the deck's storm gloom over it - ssVolCloudF.glsl's `float gloom = mix(1.0, ss_gloom, vary_color.g)` - so at 1.0 the veil took the
+        // gloom at FULL strength, the extreme of a ramp no puff ever reaches: a puff's mBuried is (cellHeight - up)/cellHeight eased to 0.5 at the rim (SSDeckShade::buried), so only a puff sitting
+        // exactly on the deck floor with no rim ease is ever at 1. Measured in V:/Scratch/atmo/tests/unit_deck_radiance.cpp: at ss_gloom 0.40 the veil came out 37% darker than the low puff beside
+        // it on identical light at the same point, and at 0.15 it came out 69% darker - and the veil is a flat plane, so that gap is most of the frame wherever the eye is under the deck.
+        // It is VEIL_DEPTH now, the SAME representative depth SSDeckShade::veilForm already computes the veil's own form term at (0.65 of a layer above and below a point at the floor). That is the
+        // point of the change: the veil stands for the deck's underside at ONE representative depth, and its two structural terms - the form it wears and the gloom it is graded over - have to agree
+        // about what that depth is. They did not.
+        // The old LOCKSTEP with SSVirga::BURIED is DELIBERATELY BROKEN, not overlooked. A virga curtain hangs BELOW the deck entirely, with the whole column over it, so 1.0 is the honest answer
+        // there and ssvirgacore.h keeps it; the veil sits INSIDE the deck's own floor band (mSheetZ is base + 46..106 m). The two were made equal by an F12 fixup on the argument that "a curtain is
+        // the deck's underside like the veil" - which is true of WHERE they hang and false of HOW MUCH cloud stands over them, and the gloom gradient reads the second.
+        static constexpr F32 SHEET_BURIED = SSDeckShade::VEIL_DEPTH;
 
         // The deck's storm gloom, kept for the render pass's ss_gloom uniform - per deck, not per puff, so it never belonged in the vertex colour.
         F32 mGloom = 1.f;
+
+        // <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: THE BOIL CLOCK's two accumulators, per deck because both
+        // rates are per deck (mDriftRate, mChurn). F64 by PLAN.md lesson 13 - these are summed every frame for as
+        // long as the viewer is open - and folded to their own periods by SSDeckBoil::wrapLaps / wrapFallM only at
+        // the uniform boundary, so the F32 the shader sees keeps its full mantissa forever. They replace the
+        // `ss_time * rate` products ssVolCloudF.glsl used to compute; see SSDeckBoil's header for why that shape
+        // was the once-a-second step the fourth build report describes. Advanced once per update() for every deck,
+        // built or not, so a deck that drops under the coverage floor for a few seconds does not resume on a stale
+        // phase. Animation only - it advances a texture lookup and positions nothing (PLAN.md lesson 31).
+        F64 mBoilLaps = 0.0;
+        F64 mFallM = 0.0;
 
         F32 mMeanDistSq = 0.f;
 

@@ -54,7 +54,7 @@ namespace SSVirga
     constexpr F32 HANDOFF_BAND_M  = 400.f;   // ramp from 0 at r2 * HANDOFF_SKIP to full over this band
     constexpr S32 MAX_SHAFTS      = 64;
     constexpr F32 HARD_CAP_FRAC   = 1.3f;    // hardCap: the hash trim's kept count may not exceed this share of MAX_SHAFTS (rank-cut backstop, see header)
-    constexpr F32 BURIED          = 1.f;     // LOCKSTEP ssvolcloud.h Deck::SHEET_BURIED - a curtain is the deck's underside like the veil
+    constexpr F32 BURIED          = 1.f;     // <SS:Nexii> D2: NO LONGER LOCKSTEP with ssvolcloud.h Deck::SHEET_BURIED, and deliberately - a curtain hangs BELOW the deck with the whole column over it (1.0 is honest), while the veil sits INSIDE the deck's own floor band and now grades the gloom at SSDeckShade::VEIL_DEPTH, the same representative depth its form term uses. The old shared value read the veil as more buried than any puff, which is what made it darker than the puffs beside it; see Deck::SHEET_BURIED's own note.
     constexpr F32 OVERLAP_FRAC    = 0.22f;   // LOCKSTEP ssVolCloudF.glsl SS_SHAFT_V_SOFT: consecutive cards overlap by this share of a card so the soft ends crossfade
     constexpr F32 LIFT_START_FRAC = 1.5f;    // ground lift begins at this multiple of the squash knee (8e retune: was 1.0 - bite further out so near/mid curtains keep the ground/water reference)
     constexpr F32 LIFT_FULL_FRAC  = 3.0f;    // ... and reaches LIFT_MAX_FRAC of the span at this multiple (8e retune: was 2.0)

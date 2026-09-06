@@ -279,6 +279,80 @@ The user's top-down build shot showed the far deck as a regular lattice of ident
 
 Measured by `tests/deckmacrocore.cpp` and `tests/visual_macro_tier.cpp`: at-centre share 1.000 → 0.026, body radius variance 0 → 826 m² (sd 28.7 m on a mean of 225.7 m), in-blend blocks 69 → 163, mean jitter offset from the block centre 0 → 104.0 m (the disc's exact E[r] = (2/3) × 156 m; a per-axis square would instead average 0.765 × 156 m ≈ 119 m, which is what the first cut of this jitter computed until the review caught it).
 
+## 5b. Cloud and sky light — one airlight, and the dimensionality ladder (proposal, 2026-09-06)
+
+**The request** (user): "I want to make the cloud better match the shading of the sky dome sky but give both some more
+dimensionality if possible."
+
+### There is no mismatch to fix - there is a duplication to remove
+
+The deck is not shaded by a model of its own. `ssVolCloudV.glsl` declares the SAME windlight uniforms the sky runs on
+(`blue_horizon`, `blue_density`, `haze_density`, `haze_horizon`, `density_multiplier`, `max_y`, `lightnorm`,
+`sunlight_color`, `ambient_color`) and composes `vary_ss_sunlit` / `vary_ss_amblit` following, in its own comment,
+"cloudsV's exact composition". The airlight ships separately as `additiveColorBelowCloud * (1 - combined_haze)` and is
+added AFTER every cloud multiplier, and the reason is recorded at the declaration: folded into the ambient it was
+multiplied by the storm gloom and the wrap mids, which stripped the warm dawn air off the deck (cold navy puffs under
+a pink cirrus band) and left the deck meeting the horizon band about 35% darker than the band it joins. Added at the
+end instead, deck and dome band converge to the SAME pure airlight at the rim - "the handoff is exact by
+construction".
+
+So the sky, the cirrus band and the deck already agree by design. What they do NOT share is a single spelling of that
+agreement: the composition is transliterated in `cloudsV`, again in `ssVolCloudV`, and again in the sky itself, and
+8c's deck shell would make a fourth. **`ssairlightcore.h`** - the beam's extinction to a given altitude, and the
+airlight over a path of a given length and direction - with those four as its consumers, is the structural half of
+this request. It is worth landing BEFORE 8c rather than after: it is the difference between the horizon shell
+inheriting the sky's air and approximating it, and the rim convergence that makes the shell's melt physical rather
+than authored depends on exactly that.
+
+### The dimensionality is largely built and switched off
+
+The flow-clouds port (S4) brought three lighting variants into `ssVolCloudF.glsl` behind `SSAtmoCloudLightVariant`,
+all dormant because variant 0 is the default and is pinned bit-identical to the pre-port look:
+
+1. **POWDER** - the Beer-powder factor on the direct-sun body term (`research_lighting.md` #1), `d = 2.5 * buried`.
+2. **HG2** - a two-lobe Henyey-Greenstein phase on the view/sun angle replacing the `thin^3` rim fringe (#3), tuned so
+   the fringe's peak matches the old `SS_RIM` within a couple of percent - the SHAPE changes, not the exposure.
+3. **FULL** - both, plus the storm-green tint on buried bellies under gloom (#4's "green sky" cue).
+
+**The first action costs nothing: A/B the variants in a build and pick a default.** This is the largest single
+dimensionality change available and it is already written, twin-tested and reviewed.
+
+### What remains, in cost order
+
+`research_lighting.md`'s summary lists six march-free portable blocks; three are unbuilt.
+
+- **Ambient as a sky gradient rather than a scalar** (#4). `vary_ss_amblit` is one flat ambient through the cloud
+  colour today. Volume reads when bottoms take the ground-and-haze colour while tops take the zenith. The sky model is
+  direction-only and already in scope in that vertex shader, so this is two evaluations - up and down - lerped by the
+  puff's height in the layer and its up-ness, both of which the deck already carries (`layer_h`, and the graze ramp
+  beside it). This is the literal reading of "match the sky dome's shading", and it is the cheapest real gain.
+- **Multi-scatter octaves** (#2). `sum over i of 0.5^i * HG2(cosTheta, 0.8*0.5^i, -0.3*0.5^i) * beer(d)^(0.5^i)`, two
+  or three terms, no march. A small extension of the HG2 code already in the file; it supplies the soft interior light
+  single scattering cannot.
+- **Puff-on-puff self-shadowing** (#6). The research note's own route is to extend an existing top-down shadow bake
+  into a 2-4 layer sun-facing deep-opacity stack, re-baked on deck/sun change and sampled once per puff. This fork
+  already has `bakeGroundShadow` - a keyed 256^2 transmittance map over the field's extent, with the sun's angle
+  applied at SAMPLE time rather than baked in, which is exactly the property a sun-facing stack needs. Biggest win,
+  most work.
+
+### The sky's own dimensionality
+
+Two changes, both riding 8c rather than competing with it. **Pivot the sky about the true horizon** using the dip
+angle `sqrt(2h/kR)` instead of about eye level, so the haze band, the below-horizon mirror and the horizon clip all
+turn about the same line the deck shell terminates on (0.13 degrees at 20 m, 0.94 at 1 km, 1.9 at 4 km). And make
+**density altitude-dependent**, so a sky build gets a deeper zenith and a thinner, lower haze band instead of the
+sea-level gradient it renders today. The second is the stronger cue and the one that makes altitude read as altitude.
+
+### Order, and the one structural rule
+
+Variants A/B on the next build (free) -> `ssairlightcore.h` and the four-consumer consolidation, before 8c ->
+ambient sky gradient -> multi-scatter octaves -> the sky's dip pivot and altitude density, landing with 8c ->
+self-shadowing last.
+
+**Every step extends `SSAtmoCloudLightVariant`; none of them changes variant 0.** The pristine look stays pinned by
+`twin_lightvariant` over its 58k input combinations, and each addition stays A/B-able against it in a live build -
+which is the only place this class of change can actually be judged.
+
 ## 6. Phase 8d — debug UI (from the same report)
 
 1. **World dim.** The dim is a 2-D quad drawn *after* the in-world overlay (which renders in `LLPipeline::renderDebug`), so it dims the overlay lines too. Fix: draw the info view's in-world layer from the UI stage, after the dim quad, with the 3-D projection pushed (the HUD-render idiom), depth test off — the world dims, the overlay stays bright, the Skylines look. (An RLV-sphere-style post effect would dim the overlay just the same, since `renderDebug` runs before post-processing.)

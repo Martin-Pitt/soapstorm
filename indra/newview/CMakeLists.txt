@@ -1155,6 +1155,7 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
+    ssdeckboilcore.h
     ssdeckframecore.h
     ssdecklodcore.h
     ssdeckmacrocore.h
@@ -1162,6 +1163,7 @@ set(viewer_HEADER_FILES
     ssdeckshadecore.h
     ssdaycyclecore.h
     ssatmonoisecore.h
+    ssairlightcore.h
     ssinfolookcore.h
     ssstormcellcore.h
     ssstormcouplecore.h

@@ -73,6 +73,12 @@ namespace
     const S32 MIN_PUFF_BUDGET = 64;
     const S32 MAX_PUFF_BUDGET = 8000;
 
+    // <SS:Nexii> D3 [interaction: ssVolCloudF.glsl SS_NOISE_M]: metres of world per tile of the noise map, as the
+    // fragment stage spells it. LOCKSTEP - the only CPU consumer is SSDeckBoil::wrapFallM, which folds the rain
+    // curtain's fall on this period so the subtraction the shader does against a wrapping texture is exact; a
+    // divergence here would show as a jump in the streak each time the accumulator wrapped.
+    const F32 SHADER_NOISE_M = 880.f;
+
     const F32 PUFF_CELL_FRACTION = 0.85f;
 
     const F32 PUFF_WIDE = 1.7f;
@@ -365,6 +371,21 @@ void SSVolCloud::update(F32 dt)
 
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr || !mgr->hasAsset()) return;
+
+    // <SS:Nexii> D3 (fourth build report) [interaction: ssdeckboilcore.h]: THE BOIL CLOCK, integrated. The
+    // fragment stage used to build the advected octave's phase as `ss_time * rate` - an absolute clock times a
+    // rate that steps once a second, because both of that rate's factors are resolved from
+    // SSAtmoEnvTrack::currentDayCyclePhase(), which reads time(nullptr) in WHOLE SECONDS. Multiplied by a clock
+    // of thousands of seconds, each one-second tread became a jump in the phase itself. Integrating the rate
+    // instead makes a rate step a change of DERIVATIVE, which nothing can see. See SSDeckBoil's header.
+    // Both decks advance every frame on their own last-resolved dials, whether or not they get rebuilt below -
+    // a deck that dips under the coverage floor for a few seconds must not come back on a stale phase. dt is
+    // gFrameIntervalSeconds (ssatmomagic.cpp's call); SSDeckBoil::clampDt bounds a hitch or an alt-tab out.
+    for (Deck* boil_deck : { &mPrimary, &mUnder })
+    {
+        boil_deck->mBoilLaps = SSDeckBoil::advanceLaps(boil_deck->mBoilLaps, boil_deck->mDriftRate, boil_deck->mChurn, dt);
+        boil_deck->mFallM = SSDeckBoil::advanceFallM(boil_deck->mFallM, boil_deck->mDriftRate, dt);
+    }
 
     LLTimer timer;
 
@@ -1546,7 +1567,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 shaft.mRadius = SSVirga::halfWidthM(cg.h01Mid, cand.drive);
                 shaft.mHalfHeightM = card_h * 0.5f;
                 // <SS:Nexii> Phase 8e item 3: the shaft's form/buried are the SAME veil terms the deck's own
-                // base floor wears (deck.mSheetForm, SSVirga::BURIED == Deck::SHEET_BURIED) - the curtain is the
+                // base floor wears (deck.mSheetForm; the BURIED depths are no longer equal - see D2 at Deck::SHEET_BURIED) - the curtain is the
                 // deck's underside pulled down, so it is lit exactly like the veil's own lower rim, which is why
                 // the shaft branch's shading below (same frame, same tail, same mSheetForm/BURIED inputs) matches
                 // the veil with only the droop differing.
@@ -2050,7 +2071,10 @@ void SSVolCloud::render()
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
     static LLStaticHashedString s_drift("ss_drift");
-    static LLStaticHashedString s_time("ss_time");
+    // <SS:Nexii> D3: ss_time is retired - see the boil-clock block in update() and ssdeckboilcore.h. These two
+    // are the folded accumulators that replace it, uploaded per deck below because both rates are per deck.
+    static LLStaticHashedString s_boil_laps("ss_boil_laps");
+    static LLStaticHashedString s_fall_m("ss_fall_m");
     static LLStaticHashedString s_churn("ss_churn");
     static LLStaticHashedString s_anvil("ss_anvil");
     static LLStaticHashedString s_base_z("ss_base_z");
@@ -2339,7 +2363,13 @@ void SSVolCloud::render()
         gSSVolCloudProgram.uniform1f(s_profile, profile_map ? 1.f : 0.f);
 
         gSSVolCloudProgram.uniform2f(s_drift, drift.mV[0], drift.mV[1]);
-        gSSVolCloudProgram.uniform1f(s_time, (F32)LLFrameTimer::getElapsedSeconds());
+        // <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: the two folded accumulators in place of the old
+        // `(F32)LLFrameTimer::getElapsedSeconds()`. The folds are EXACT, not approximations - the shader takes
+        // fract() of the phase and subtracts the fall from a coordinate divided by a wrapping map's tile - so
+        // the uniforms keep full F32 precision however long the viewer has been open, which the old raw
+        // elapsed-seconds product did not (at ten hours of uptime an F32 second count has ~4 ms of resolution).
+        gSSVolCloudProgram.uniform1f(s_boil_laps, SSDeckBoil::wrapLaps(deck.mBoilLaps));
+        gSSVolCloudProgram.uniform1f(s_fall_m, SSDeckBoil::wrapFallM(deck.mFallM, SHADER_NOISE_M));
         gSSVolCloudProgram.uniform1f(s_churn, deck.mChurn);
 
         gSSVolCloudProgram.uniform1f(s_anvil, deck.mAnvil);

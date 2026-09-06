@@ -173,7 +173,11 @@ uniform sampler2D altDiffuseMap;
 uniform vec2 ss_wind;       // unit, the direction the air is travelling
 
 uniform vec2 ss_drift;      // metres the air has travelled, east and north
-uniform float ss_time;      // seconds, for the boil
+// <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: ss_time is GONE, and its absence is the fix - it was an ABSOLUTE clock (LLFrameTimer::getElapsedSeconds) multiplied by a rate that steps once a second,
+// which is what made every puff's appearance jump; see the note at `cycles` in main(). These two are the INTEGRALS the CPU now keeps in its place (SSDeckBoil::advanceLaps / advanceFallM, F64
+// accumulators on the deck, folded to their own periods before they cross into these F32 uniforms so they stay exact however long the viewer has been open).
+uniform float ss_boil_laps; // the advected detail octave's phase, in laps, already folded into [0,1)
+uniform float ss_fall_m;    // how far the rain curtain's streak has fallen, in metres, folded on the noise map's tile period
 uniform float ss_churn;     // 0 still air, 1 violently convective
 
 // Where the rim convergence toward the dome runs, in TRUE metres from the eye - x start, y full.
@@ -259,6 +263,7 @@ const float SS_PUFF_SHADE = 0.35;
 // rather than a terminator. But not one flat value either, which is what a per-quad colour gives and why the field read as grey card after grey card with no form to any of it.
 const float SS_FORM_DARK = 0.55;
 
+
 // And the far side's floor for the GRAZE light alone, deliberately well above the body's: the skimmed lid is lit by the burning horizon sky as much as by the beam itself, and sky arrives from
 // every side of a crown. See the note where the graze light joins main()'s body.
 const float SS_GRAZE_DARK = 0.85;
@@ -286,7 +291,7 @@ const float SS_HG2_GAIN = 0.4;
 // cell set, the taper and the vertical alpha profile are all baked by ssvirgacore.h and already ride in on vary_color.a and the card's own geometry; these four only round the card's own edges off and
 // give it a texture to carry. SS_SHAFT_V_SOFT: how much of the card's own v range eases in from its top and bottom before the next stacked card takes over, as a fraction of the card. SS_SHAFT_H_CORE:
 // how much of the card's own width, either side of centre, stays solid before the taper's side edges fall away. SS_SHAFT_FALL_MPS: how fast the fall streak's sample point travels down the vertical
-// axis. Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the streak's own AMPLITUDE is no longer this fixed constant - a light-rain curtain is a few eroded filaments, a heavy one a near-solid wall, so it
+// axis (SS_SHAFT_FALL_MPS itself has MOVED into ssdeckboilcore.h as SSDeckBoil::FALL_MPS, unchanged in value - see ss_fall_m). Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the streak's own AMPLITUDE is no longer this fixed constant - a light-rain curtain is a few eroded filaments, a heavy one a near-solid wall, so it
 // now ramps between SS_SHAFT_STREAK_WISPY and SS_SHAFT_STREAK_HEAVY by drive (see where it joins, below).
 // F12: vary_color.a (SSVirga::alphaAt * handoff * edgeFade) is NOT the shaft's whole on-screen ceiling - the shared
 // alpha multiply below (`a = density * vary_color.a * mix(ss_puff_density, 1.0, ss_sheet)`) still folds in the
@@ -298,7 +303,6 @@ const float SS_HG2_GAIN = 0.4;
 // embedded span, or below its own evaporation height.
 const float SS_SHAFT_V_SOFT = 0.22;
 const float SS_SHAFT_H_CORE = 0.10; // 7d: was 0.45 - a wide solid core gave every card flat sides; the column now falls away from its centre line
-const float SS_SHAFT_FALL_MPS = 6.0;
 
 // <SS:Nexii> Phase 8e item 4 (doc/atmo_magic_phase8_show.md section 3b), DRIVE REACHES THE FRAGMENT: the streak's
 // amplitude by drive (the SAME SSVirga::drive the cell qualified with, recovered from vary_color.b - see the shaft
@@ -428,9 +432,10 @@ const float SS_MESO_SWIRL_MIN_M = 60.0;
 const float SS_MESO_SWIRL_M = 900.0;
 const float SS_MESO_SWIRL_MAX = 4.0;
 
-// How many laps of the boil cycle the detail makes per second at full convection, and the share of that it keeps in dead calm. Never quite nothing: even still air is not static.
-const float SS_OCT_LAPS = 0.06;
-const float SS_OCT_DRIFT_FLOOR = 0.25;
+// <SS:Nexii> D3: SS_OCT_LAPS (laps of the boil cycle per second at full convection) and SS_OCT_DRIFT_FLOOR (the share of that a dead-calm sky keeps - never quite nothing, even still air is not
+// static) have MOVED into ssdeckboilcore.h as SSDeckBoil::LAPS_PER_S and SSDeckBoil::DRIFT_FLOOR, because the rate is integrated on the CPU now rather than multiplied by a clock here, and because a
+// rate that the build reports ask to retune is not something a shader const can be reasoned about. LAPS_PER_S was retuned with the move: 0.06 -> 0.012, a full advection cycle every 67 s at maximum
+// convection instead of every 13 s. This shader reads only the result, ss_boil_laps.
 
 // How far the lookup is displaced by a coarse read of the map itself, in metres - domain warping. A tiling map sampled on a straight grid repeats visibly, and at 880m a tile the field is seven
 // repeats wide in each direction: the same scrap of cloud over and over, in rows lined up with the world axes because that is what the planes are aligned to. No amount of octaves hides it, because
@@ -832,6 +837,29 @@ float ss_virga_embedAlpha(float z, float baseZ, float topZ)
     return clamp(1.0 - (z - baseZ) / span, 0.0, 1.0);
 }
 
+// <SS:Nexii> [interaction: ssairlightcore.h SSAirlight::softClipUnit] THE DECK'S OUTPUT RESPONSE, transliterated - the core is the AUTHORITY here and this is the transliteration, pinned bit-identical by V:\Scratch\atmo\tests\twin_deck_softclip.cpp. Replaces the hard `clamp(colour, vec3(0.0), vec3(1.0))` this shader used to end on (see the long note at `shaded` in main() for the finding: EEP's sunlight and ambient run well past 1, the sum saturated, and a 92% cut to the sun body term - SSAtmoCloudLightVariant's POWDER - landed on the same clipped pixel, so the A/B dial showed nothing in daylight). The curve is the compression half of PBRNeutralToneMapping (Khronos Neutral, app_settings/shaders/class1/deferred/tonemapUtilF.glsl - the tonemapper every non-sky pixel in this frame already passes through): identity below the knee, a hyperbola through (K, K) with slope 1 there and asymptotic to 1 from below, so it is C1 at the join, strictly increasing everywhere (no input range is ever flattened) and strictly UNDER 1 for every finite input - which is what keeps the following `* 2.0` inside exactly the range the clamp occupied, so the bloom bright-pass the clamp was introduced for sees nothing new.
+// <SS:Nexii> The stock TOE (`offset = x < 0.08 ? x - 6.25 * x * x : 0.04; color -= offset`) is deliberately NOT transliterated: it is a black-level control that subtracts up to 0.04, which is 8% of this shader's doubled output, and the requirement on this curve was that DARK cloud not move. Below the knee this function is the identity, bit for bit, exactly as the clamp was. Compression runs on the colour's own PEAK, so the hue is carried through rather than clipped - the per-channel clamp desaturated anything past 1 toward white, which is why bright deck stopped matching the sky (skyF.glsl caps the peak, hue-preserving, and says so).
+// <SS:Nexii> Ceiling 1 is folded out rather than passed: the core's `inv = 1/ceiling` and its closing `scale(..., ceiling)` are both multiplications by exactly 1.0 at ceiling 1, which IEEE754 makes the identity, so omitting them is bit-identical and not an approximation. The two constants are SSAirlight::SOFT_CLIP_KNEE (written 0.8 - 0.04 so the pin against tonemapUtilF.glsl's `startCompression` stays textual) and SSAirlight::SOFT_CLIP_DESAT.
+const float SS_SOFT_CLIP_KNEE  = 0.8 - 0.04;
+const float SS_SOFT_CLIP_DESAT = 0.15;
+
+vec3 ss_soft_clip_unit(vec3 colour)
+{
+    vec3 c = max(colour, vec3(0.0));
+    float raw_peak = max(c.r, max(c.g, c.b));
+    if (raw_peak < SS_SOFT_CLIP_KNEE)
+    {
+        return c;
+    }
+    vec3 x = c;
+    float peak = max(x.r, max(x.g, x.b));
+    float d = 1.0 - SS_SOFT_CLIP_KNEE;
+    float newPeak = 1.0 - d * d / (peak + d - SS_SOFT_CLIP_KNEE);
+    x *= newPeak / peak;
+    float g = 1.0 - 1.0 / (SS_SOFT_CLIP_DESAT * (peak - newPeak) + 1.0);
+    return mix(x, vec3(newPeak), g);
+}
+
 // <SS:Nexii> S4 HG2 variant (research_lighting.md #3, "Henyey-Greenstein two-lobe silver-lining term"), ONE FORMULA SITE: single-lobe HG, literal port of scene.h's hgPhase - the RAW form
 // (1-g^2)/(4*pi*(1+g^2-2*g*c)^1.5), normalized only by its own physical 4*pi solid-angle constant, NOT re-normalized to peak at 1 (SS_HG2_GAIN above is where the amplitude gets bounded instead,
 // against the OLD rim term's own peak, not against this function's own range). Finite and bounded for every g in (-1,1) and c in [-1,1]: the denominator's base 1+g^2-2*g*c >= (1-|g|)^2 > 0 there,
@@ -1072,6 +1100,14 @@ void main()
         float veil_amp  = veil_base + (SS_VEIL_RIM_FULL - veil_base) * rim_w;
         density = veil_amp * presence * holes * reach_out * near_fade;
         noise_v = sheet_n;
+        // <SS:Nexii> D2, MEASURED AND STATED, NOT CHANGED [V:\Scratch\atmo\tests\unit_deck_radiance.cpp]: this normal is +Z, i.e. the veil is shaded as a surface facing straight UP, and the shared
+        // tail's wrap term reads it - `wrap = 0.5 + 0.5 * dot(sphere_n, ss_light_dir)`. But the veil is the deck's UNDERSIDE and is wound to face DOWN (ssvolcloud.cpp's sheet draw says so in as many
+        // words), so this is the wrong side of the sheet by inspection: under a high sun it hands the veil wrap = 1, the maximum the term can give, and under a sun BELOW the horizon it hands it wrap
+        // < 0.5 while the puffs beside it get > 0.5. Measured, on identical light at the same point: the veil comes out 39% BRIGHTER than a low puff at sunZ 0.8 and 11% DARKER at sunZ -0.15.
+        // NOT flipped here, deliberately: the sign flip is a one-token change (-1.0) but it cuts the daylight veil by up to 45% (wrap 1 -> SS_FORM_DARK), which is a large unrequested change to the
+        // look on the same build as the gloom-depth fix beside it (Deck::SHEET_BURIED, ssvolcloud.h - the term that actually made the veil dark), and the two would not be judgeable apart. The honest
+        // reading is that a cloud BASE is lit by the whole lower sky and the ground rather than by a cosine against the beam, so neither +Z nor -Z is right and the veil's real answer is a flat
+        // ambient - which is what mSheetForm already is. Recorded here as the next thing to try if the veil still reads wrong in daylight.
         sphere_n = vec3(0.0, 0.0, 1.0);
     }
     else
@@ -1156,14 +1192,17 @@ void main()
         // fragment's own-altitude lean from a placement that never carried one, sliding the streak off the card
         // it is meant to hold to as the deck drifts. The old comment's "exactly as the puff body does" was wrong
         // for that reason: the puff body genuinely IS leaned (shape_air undoes ITS placement's own O(z)), a
-        // shaft never is. Scrolled down the vertical axis only; ss_time * ss_drift_rate * SS_SHAFT_FALL_MPS only
+        // shaft never is. Scrolled down the vertical axis only; ss_fall_m (SSDeckBoil::advanceFallM) only
         // ever GROWS and is never added back with a positive sign the way the puff's flow_w.z is lifted by
         // SS_FLOW_RISE below - the shaft's mirror of that clamp is this term's fixed sign, not a second clamp,
         // so the streak has nowhere to reverse into. Cosmetic only, like the storm rotation's SS_STRIATION_ROT
         // above: no CPU counterpart, no twin to keep in lockstep with, and no claim here that the sign reads as
         // "falling" on screen - that needs eyes on a build, not a comment.
+        // <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: the fall term was `ss_time * ss_drift_rate * SS_SHAFT_FALL_MPS` - the same rate-times-absolute-clock shape the boil phase had, with the same
+        // 1 Hz tread under it (ss_drift_rate steps with the whole-second day-cycle phase), so a curtain's streak jumped once a second exactly as the puffs did. ss_fall_m is the integral instead
+        // (SSDeckBoil::advanceFallM), folded on SS_NOISE_M so the subtraction is exact against a wrapping map.
         vec2 streak_uv = vec2(dot(gate_air, ss_wind) / SS_NOISE_M,
-                               (world_true.z - ss_time * ss_drift_rate * SS_SHAFT_FALL_MPS) / SS_NOISE_M);
+                               (world_true.z - ss_fall_m) / SS_NOISE_M);
         float streak = ss_detail(streak_uv);
         noise_v = streak;
 
@@ -1335,7 +1374,7 @@ void main()
                 + tri.z * ss_mixed(pl_xy / SS_NOISE_M + off_xy, tex_mix);
 
 
-    // Two finer octaves from the DOME's own cloud map, sliding across each other - see SS_OCT_LAPS and SS_FLOW_M. Triplanar, like the base. They were taken on the horizontal plane alone, on the
+    // Two finer octaves from the DOME's own cloud map, sliding across each other - see SSDeckBoil::LAPS_PER_S and SS_FLOW_M. Triplanar, like the base. They were taken on the horizontal plane alone, on the
     // reasoning that surface detail is too fine to need placing carefully - which was wrong in a way that showed. A horizontal coordinate barely changes as you move UP a puff, so on any quad facing
     // the camera the octaves held nearly still down the whole height of it and smeared into vertical streaks. Puffs overhead looked right for the same reason: there the horizontal plane is the
     // correct one. Height changes how FAR an octave wanders, not how fast it goes round. It used to scale the rate, and that reintroduced the same failure the orbit was meant to end - one level
@@ -1344,8 +1383,6 @@ void main()
     // out as horizontal bands. Winding the rate up only got there sooner. Scaling the amplitude keeps the intent - the top of a convective layer moves more than its base - with nothing that grows.
     // The rate is now uniform across the fragment, so there is no gradient to accumulate, and a fixed phase lead with height keeps the layers out of step without ever drifting further apart.
     float boil = mix(1.0, SS_BOIL_TOP, layer_h);
-    float turn = ss_time * SS_OCT_LAPS * ss_drift_rate
-               * (SS_OCT_DRIFT_FLOOR + clamp(ss_churn, 0.0, 1.0)) * 6.2831853;
     float lead = layer_h * SS_BOIL_LEAD;
 
     float oct2_m = SS_NOISE_M * SS_OCT2_SCALE * ss_detail_scale;
@@ -1362,7 +1399,15 @@ void main()
     float phase = clamp(vary_color.b, 0.0, 0.49) / 0.49;
 
     // Where in its cycle the flow is, and its half-cycle partner.
-    float cycles = turn / 6.2831853 + lead * 0.15 + phase;
+    // <SS:Nexii> D3 (fourth build report: "every puff's appearance jumps in a sudden step about once per second, and the flow motion is far too exaggerated") [interaction: ssdeckboilcore.h]: this used
+    // to open `float turn = ss_time * SS_OCT_LAPS * ss_drift_rate * (SS_OCT_DRIFT_FLOOR + ss_churn) * 6.2831853;` - a RATE multiplied by an ABSOLUTE clock (seconds since the viewer started). Both
+    // factors of that rate are resolved from the day-cycle phase every frame, and that phase is SSAtmoEnvTrack::currentDayCyclePhase() == dayCyclePhaseAt((F64)time(nullptr)) - WHOLE SECONDS. So the
+    // rate is a staircase with a 1 Hz tread and phase = rate x t turned each tread into a jump of t x delta-rate: at an hour of uptime a one-part-in-ten-thousand rate change moved the detail phase a
+    // fifth of a cycle in a single frame. The same multiplication made the apparent rate rate + t x d(rate)/dt, whose second term grows without bound with uptime - the exaggeration half of the same
+    // report. ss_boil_laps is now the INTEGRAL of that rate, accumulated in F64 on the CPU (SSDeckBoil::advanceLaps, driven in ssvolcloud.cpp's update()) and folded into [0,1) before it crosses into
+    // this uniform - exact, because only fract() of it is ever read. A step in the rate now changes only the derivative, which is invisible. SS_OCT_LAPS and SS_OCT_DRIFT_FLOOR moved into the core
+    // with it (SSDeckBoil::LAPS_PER_S / DRIFT_FLOOR) and the rate was retuned there, 0.06 -> 0.012 laps/s.
+    float cycles = ss_boil_laps + lead * 0.15 + phase;
     float ph0 = fract(cycles);
     float ph1 = fract(cycles + 0.5);
     float w = abs(1.0 - 2.0 * ph0);
@@ -1689,6 +1734,16 @@ void main()
     // the quad, taken from the world rather than the screen - see the note on derivatives above. Any pair perpendicular to the normal will do: rotating the frame within the quad's own plane turns
     // the fake sphere about the view axis, which a wrapped light term cannot tell apart. Wrapped rather than clamped - see SS_FORM_DARK. Light goes through cloud, so there is no dark side, only a
     // dimmer one.
+    // <SS:Nexii> MEASURED AND STATED, NOT FIXED (fourth build report, D1) [V:\Scratch\atmo\tests\unit_deck_radiance.cpp]: sphere_n is the FAKE SPHERE's normal and ss_sphere_normal builds that sphere
+    // around `nrm`, the view ray, so the sphere's pole always points at the camera. Look up at a deck lit from above and every card's pole IS its anti-light point: wrap runs 0 at the card's own centre
+    // to 0.5 at its limb, the body factor follows it from SS_FORM_DARK to the mid, and the thin-weighted fringe terms below are simultaneously smallest in the middle (thin = 1 - density) and largest in
+    // the ring. Measured with the light overhead, this costs a puff's core 21.5% of its radiance between a 5-degree and an 89-degree view (1.546 -> 1.213) while nothing behind it dims, and the ring gain
+    // (annulus / centre) rises 1.209 -> 1.277 over the same sweep. At a shallow view the identical construction produces the CORRECT lit-top / dark-bottom gradient, which is why the horizon rows read
+    // fine. NOT CHANGED HERE, deliberately: the build report this was chased for turned out to be the advected octave's own once-a-second phase jump (D3, see `cycles` below and ssdeckboilcore.h), the
+    // hypothesis that this term was the cause was retracted, and landing a second, unrequested change to the same pixels on the same build would make neither judgeable. The candidate, measured in the
+    // same rung, is one line - ease wrap toward 0.5 by smoothstep(0.55, 0.95, abs(dot(nrm, ss_light_dir))), the identity for every side-on puff - and it holds the core flat over the sweep (1.546 ->
+    // 1.578) instead of losing a fifth of it. The fuller answer is review_opus.md's own outstanding G2 item (i), which the billow block below already records as unfixed: build the sphere in the WORLD
+    // frame so its axis stops tracking the camera at all.
     float wrap = 0.5 + 0.5 * dot(sphere_n, ss_light_dir);
 
     // Rim convergence toward the dome, the per-fragment half (the vertex stage does the light): the dome band is painted FLAT - no wrap shading, no noise self-shade, no sun-through fringe - so
@@ -1818,16 +1873,23 @@ void main()
         body += ss_strike_color * (ss_strike[i].w * atten * lit * through * veil);
     }
 
-    // Bounded exactly the way the dome layer bounds itself (cloudsF.glsl). Everything feeding this is in EEP's HDR units - sunlight and ambient both run well past 1, and the rim term adds a whole
-    // sun colour on top - so the shading came out far brighter than anything else in the frame. Nothing writes to a glow buffer here, but the bloom pass takes its bright-pass off the finished
-    // screen, and unclamped cloud sails straight over that threshold. Hence the halo around every puff. Clamping to 1 and doubling is not a taste decision: it is the range the dome layer already
-    // occupies, so the two kinds of cloud end up on the same scale as well as out of the bloom. NO scene-gamma term here, and its absence is a lesson: pow(c, 1/gamma) with an authored storm-sky
-    // gamma of a few tenths is an exponent of several - it crushed every mid-tone to black and left white ridges with pink rims (red dies last), the whole deck reading as a burnt negative. The
-    // dome's own gamma response goes through the atmospheric soft-clip curve, which is not a power law, so there is no cheap honest replication - better none than that.
-    // No fog pass after this any more: the atmosphere came in through the vertex-stage colours, the same door it enters the band by (the slab-ray transmittance in the cloud terms, the
-    // airlight joining here - see ssVolCloudV.glsl). At the rim the transmittance has taken the cloud terms to nothing and BOTH deck and band converge to the same pure airlight, so the
-    // handoff is exact whatever the gloom and the shading mids did to the cloud's own light.
-    vec3 shaded = clamp(body + vary_ss_airlight, vec3(0.0), vec3(1.0)) * 2.0;
+    // Bounded, then doubled. Everything feeding this is in EEP's HDR units - sunlight and ambient both run well past 1, and the rim term adds a whole sun colour on top - so the shading came out far
+    // brighter than anything else in the frame. Nothing writes to a glow buffer here, but the bloom pass takes its bright-pass off the finished screen, and unbounded cloud sails straight over that
+    // threshold. Hence the halo around every puff. The bound is what stops that, and it still does: ss_soft_clip_unit is strictly under 1 for every finite input, so `* 2.0` occupies exactly the
+    // range the old `clamp(..., 0, 1)` did. WHAT CHANGED and why (fourth build report, D0): the bound used to be that hard clamp, and a hard clamp has ZERO derivative above 1 - so with a daylight
+    // sky saturating the sum, cutting the direct-sun body term by 92% (SSAtmoCloudLightVariant's POWDER) produced an IDENTICAL pixel and the A/B dial appeared to do nothing at any value. The soft
+    // clip keeps a non-zero derivative at every input, so the variants separate again; it is also hue-preserving where the per-channel clamp desaturated everything past 1 toward white, which is a
+    // second reason bright deck did not match the sky beside it. See ss_soft_clip_unit above and ssairlightcore.h, which owns the curve.
+    // <SS:Nexii> Stale claim corrected while here: this line used to say it was "bounded exactly the way the dome layer bounds itself". That is true of the cirrus BAND (cloudsF.glsl's bound is the
+    // same expression, character for character) and FALSE of the SKY: skyF.glsl carries no per-channel clamp at all any more - it doubles and then caps the PEAK at 5.0, hue-preserving, with its own
+    // note that a per-channel clamp "saturates anything past 5 to white ... so the light's own red came out white". The curve adopted here is the soft, hue-preserving version of exactly that cap.
+    // NO scene-gamma term here, and its absence is a lesson: pow(c, 1/gamma) with an authored storm-sky gamma of a few tenths is an exponent of several - it crushed every mid-tone to black and left
+    // white ridges with pink rims (red dies last), the whole deck reading as a burnt negative.
+    // No fog pass after this any more: the atmosphere came in through the vertex-stage colours, the same door it enters the band by (the slab-ray transmittance in the cloud terms, the airlight
+    // joining here - see ssVolCloudV.glsl). At the rim the transmittance takes the cloud terms to nothing and both deck and band APPROACH the same pure airlight. Softened from the old "converge to
+    // the same pure airlight, so the handoff is exact by construction": measured, the band's airlight weight is (1 - T) and the dome's is (1 - T^0.25), so the gap rises to a mid-path maximum of
+    // 1.14e-2 at 5 km before closing - 5.08e-3 at 20 km, 5.96e-8 at 400 km - and is bit-exact only once T underflows. Convergence is a limit, not an identity.
+    vec3 shaded = ss_soft_clip_unit(body + vary_ss_airlight) * 2.0;
 
     frag_color = vec4(shaded, a);
 }
