@@ -202,7 +202,7 @@
      height="22"
      width="22"
      name="preview_play_button"
-     tool_tip="Run the preview through the cycle"
+     tool_tip="Run the preview through the cycle (60 s). Shift-click: real time, the track's own day length. Alt-click: a third of the speed. Shift+Alt: half."
      image_overlay="Play_Off"
      image_disabled="PushButton_Disabled"
      image_disabled_selected="PushButton_Disabled"

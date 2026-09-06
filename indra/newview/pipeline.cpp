@@ -5693,15 +5693,16 @@ void LLPipeline::renderDebug()
         gAgent.getRegion()->mWind.renderVectors();
     }
 
+    // <SS:Nexii> Every Atmo Magic block below is world-space and runs ONCE per frame: renderDebug is entered a second time from render_hud_attachments (renderGeomPostDeferred with the HUD camera and hud_only set), and an unguarded block there draws its geometry again under the HUD's ortho matrices into the HUD target - V1's flow arrows smeared across the HUD layer whenever the avatar wore an attachment. Same discipline as the stock blocks above (!hud_only). [interaction: SSAtmoInfoView]
     // <SS:Nexii> Atmo Magic wind flowmap: every slab translucently, plus an arrow field on the slab the camera is in
-    if (mRenderDebugMask & RENDER_DEBUG_WIND_FLOW)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_WIND_FLOW))
     {
         SSWindFlowMap::getInstance()->renderDebug();
     }
 
     // Atmo Magic rain shadow: every captured depth texel unprojected to the
     // world point it saw, so holes, eaves and grazed faces read directly
-    if (mRenderDebugMask & RENDER_DEBUG_RAIN_SHADOW)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_RAIN_SHADOW))
     {
         SSRainShadowMap::getInstance()->renderDebug();
     }
@@ -5713,7 +5714,7 @@ void LLPipeline::renderDebug()
     // toggled from the Effects & LOD floater's Rain pane, like the celestial overlay.
     {
         static LLCachedControl<bool> rain_trace_debug(gSavedSettings, "SSAtmoRainTraceDebug", false);
-        if (rain_trace_debug)
+        if (rain_trace_debug && !hud_only)
         {
             SSRainShadowMap::getInstance()->renderColumnTrace();
         }
@@ -5722,7 +5723,7 @@ void LLPipeline::renderDebug()
     // <SS:Nexii> Atmo Magic celestial debug: a ray and a label per body in the sky. Toggled from the System Designer rather than from Render Metadata, because it is an authoring aid for the floater beside it - hence a setting rather than a debug mask.
     {
         static LLCachedControl<bool> celestial_debug(gSavedSettings, "SSAtmoPlanetaryDebugOverlay", false);
-        if (celestial_debug)
+        if (celestial_debug && !hud_only)
         {
             SSAtmoEnvApplier::getInstance()->renderCelestialDebug();
         }
@@ -5731,7 +5732,7 @@ void LLPipeline::renderDebug()
     // Atmo Magic surface field: what the weather has worked into that surface
     // over time - damp, settled snow, standing water - washed over the cells
     // it is held in
-    if (mRenderDebugMask & RENDER_DEBUG_SURFACE_FIELD)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_SURFACE_FIELD))
     {
         SSSurfaceField::getInstance()->renderDebug();
     }
@@ -5739,7 +5740,7 @@ void LLPipeline::renderDebug()
     // Atmo Magic world field: what the shared capture resolved, what the air
     // flood decided about its connectivity, and the drainage topology it
     // feeds - view chosen by SSWorldFieldDebugView
-    if (mRenderDebugMask & RENDER_DEBUG_WORLD_FIELD)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_WORLD_FIELD))
     {
         SSWorldField::getInstance()->renderDebug();
     }
@@ -5747,26 +5748,26 @@ void LLPipeline::renderDebug()
     // Atmo Magic volumetric cloud field: the puffs as geometry, their anvil and
     // form shaping, the cell gate and tower map on the builder's own grid, or
     // the vertical profile ramp - view chosen in the Effects & LOD floater
-    if (mRenderDebugMask & RENDER_DEBUG_CLOUD_FIELD)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_CLOUD_FIELD))
     {
         SSVolCloud::getInstance()->renderDebug();
     }
 
     // Atmo Magic roof runoff: the eaves, the water they hold, the gates that
     // quiet them, or what they shed - view chosen in the Simulation floater
-    if (mRenderDebugMask & RENDER_DEBUG_ROOF_RUNOFF)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_ROOF_RUNOFF))
     {
         SSSurfaceField::getInstance()->renderRunoffDebug();
     }
 
     // Atmo Magic geometry settling: a beacon over every prim change still
     // waiting to be believed, so a queue that never drains can be walked to
-    if (mRenderDebugMask & RENDER_DEBUG_GEOM_SETTLE)
+    if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_GEOM_SETTLE))
     {
         SSAtmoMagic::getInstance()->renderDebug();
     }
 
-    // <SS:Nexii> Atmo Magic info views: the active view's in-world layer used to draw here (V1: the wind mast at the camera column), UNDER the UI stage's dim quad - which then darkened the overlay right along with the world. It now draws from SSAtmoDimView::draw() instead, AFTER the quad, re-entering 3-D from the UI pass so it always sits on top (Skylines-style, depth test off). The "SSAtmoInfoView::mode() != 0" gate still exists, just moved there (SSAtmoDimView::draw() returns at mode() == MODE_OFF) - do not add a second SSAtmoInfoView::renderWorld() call here, or the layer draws twice.
+    // <SS:Nexii> Atmo Magic info views used to draw their 3-D half here (dim quad + the active view's in-world layer). They do not any more: renderDebug runs inside renderGeomPostDeferred, so the dim quad went into the HDR screen buffer BEFORE generateLuminance/tonemap - the tint read washed-out and auto-exposure then opened up to cancel it, pumping the scene for about a second. The call now lives in render_ui() in llviewerdisplay.cpp, after gPipeline.renderFinalize() and before render_hud_attachments(): post-tonemap, still a 3-D pass, still the world camera. See SSAtmoInfoView::renderDimAndWorld. [interaction: SSAtmoInfoView]
 
     if (mRenderDebugMask & RENDER_DEBUG_COMPOSITION)
     {
@@ -9327,6 +9328,9 @@ void LLPipeline::renderFinalize()
 
     assertInitialized();
 
+    // <SS:Nexii> Invalidate the presented-target pointer for the duration of this function: if anything below returns early, a post-screen consumer must see null rather than the previous frame's buffer. It is set again immediately before the present pass binds it.
+    mSSLastPresented = nullptr;
+
     LL_RECORD_BLOCK_TIME(FTM_RENDER_BLOOM);
     LL_PROFILE_GPU_ZONE("renderFinalize");
 
@@ -9466,6 +9470,9 @@ void LLPipeline::renderFinalize()
     // Present the screen target.
 
     gDeferredPostNoDoFNoiseProgram.bind(); // Add noise as part of final render to screen pass to avoid damaging other post effects
+
+    // <SS:Nexii> THE definition of "the presented image": sourceBuffer is what the line below hands the present pass as DEFERRED_DIFFUSE, so recording it here - and only here - is what makes mSSLastPresented true by construction rather than by a guess about which post stage ran. [interaction: SSAtmoInfoView::renderInfoLook]
+    mSSLastPresented = sourceBuffer;
 
     // Whatever is last in the above post processing chain should _always_ be rendered directly here.  If not, expect problems.
     gDeferredPostNoDoFNoiseProgram.bindTexture(LLShaderMgr::DEFERRED_DIFFUSE, sourceBuffer);

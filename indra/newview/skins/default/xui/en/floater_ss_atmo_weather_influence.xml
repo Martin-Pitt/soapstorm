@@ -450,7 +450,7 @@
      height="16"
      width="250"
      name="tornado_enabled"
-     tool_tip="Lets a long-lived supercell become the hero cell: composed to spawn 1.5-2km upwind of the region centre and fly past it at 500m-1km. Needs Allow supercells too, except for an authored storm override on the weather cube, which grants both Allow flags itself (it still needs the master enable above). Strength is stored with the track but does not yet scale the lifetime threshold. The hero's ribbon and closest approach show on the Storm Cells (V2) info view; the 'why not' rows there say which gate is failing."
+     tool_tip="Lets a long-lived supercell become the hero cell: composed to arrive at maturity and pass the region centre at 0-2km, skewed toward 0 (median about 300m) - it may pass right over the region. Needs Allow supercells too, except for an authored storm override on the weather cube, which grants both Allow flags itself (it still needs the master enable above). Strength is stored with the track but does not yet scale the lifetime threshold. The hero's ribbon and closest approach show on the Storm Cells (V2) info view; the 'why not' rows there say which gate is failing."
      label="Allow tornadoes (hero flyby)" />
     <slider
      follows="left|top"

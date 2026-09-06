@@ -1162,10 +1162,12 @@ set(viewer_HEADER_FILES
     ssdeckshadecore.h
     ssdaycyclecore.h
     ssatmonoisecore.h
+    ssinfolookcore.h
     ssstormcellcore.h
     ssstormcouplecore.h
     sssquallcore.h
     ssvortexcore.h
+    ssveilcore.h
     ssvirgacore.h
     ssvortices.h
     ssvortexrender.h

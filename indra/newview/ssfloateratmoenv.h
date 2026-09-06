@@ -396,8 +396,20 @@ private:
 
     bool mPreviewPlaying = false;
     F64 mPreviewPlayLast = 0.0;
+    F64 mPreviewPlayLapS = 60.0;   // <SS:Nexii> seconds per full cycle for the current playback: 60 (plain click), the track's day length (SHIFT: real time), 180 (ALT: a third), 120 (SHIFT+ALT: half)
     void onClickPreviewPlay();
     void advancePreviewPlayback();
+    void refreshPreviewPlayButton(); // <SS:Nexii> per frame: the speed suffix on the time label while hovering the play button / while playing
+    std::string previewTimeText() const; // apparent time + the speed suffix
+    std::string mPreviewPlayLabel;   // the suffix currently showing ("" = none)
+    bool mPreviewPlayHover = false;  // the play button's own mouse-enter/leave signals
+    MASK mPreviewClickMask = MASK_NONE; // the modifier mask the OS delivered with the last mouse-down in this floater (read by onClickPreviewPlay)
+    MASK mPreviewHoverMask = MASK_NONE; // ... and with the last hover event (read for the speed suffix)
+public:
+    // <SS:Nexii> Modifier masks come from the events, not from polling the keyboard (which missed a modifier held through a click).
+    /*virtual*/ bool handleMouseDown(S32 x, S32 y, MASK mask) override;
+    /*virtual*/ bool handleHover(S32 x, S32 y, MASK mask) override;
+private:
 
     F64 mLastPoll = 0.0;
 };

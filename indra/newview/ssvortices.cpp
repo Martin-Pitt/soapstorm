@@ -58,8 +58,13 @@ namespace
 
     // The vortex core's Parent from one resolved storm cell - a field-for-field copy of what SSStormCell::resolveActive
     // already resolved this frame (ssstormcellcore.h), no new formula. mAllowTornadoes rides the cell's OWN
-    // birth-memoised weather (SSStormCells::birthMemo), same as every other tornado-family gate input.
-    SSVortex::Parent toParent(const SSStormCells::ActiveCell& cell)
+    // birth-memoised weather (SSStormCells::birthMemo), same as every other tornado-family gate input. 7f: mIsHero
+    // is cell.mIsHero directly; for the hero, mClosestAge01 is (hero->mClosestTime - birth) / lifetime, clamped
+    // [0,1] - the fraction of the cell's OWN life at which the composed flyby passes closest, which childVortex
+    // pins slot 0's funnel window around (never re-derived there: this is the one place the hero's closest-approach
+    // TIME becomes a life FRACTION). `cells` supplies hero() only for that one read; a non-hero cell never reaches
+    // the branch that needs it, so it may be null when the caller has no hero this frame.
+    SSVortex::Parent toParent(const SSStormCells::ActiveCell& cell, const SSStormCells* cells)
     {
         SSVortex::Parent p;
         p.mId = cell.mCandidate.mId;
@@ -75,6 +80,16 @@ namespace
         p.mLife = cell.mLifecycle;
         p.mAllowTornadoes = cell.mWeather.mAllowTornadoes;
         p.mForcedKind = cell.mForcedKind; // 7d: the authored kind guarantees the funnel (ssvortexcore.h childVortex)
+        p.mIsHero = cell.mIsHero;
+        if (cell.mIsHero && cells)
+        {
+            const SSStormCells::Hero* hero = cells->hero();
+            if (hero && cell.mCandidate.mLifetimeS > 0.f)
+            {
+                const F32 frac = (F32)((hero->mPath.mClosestTime - cell.mCandidate.mBirthTime) / (F64)cell.mCandidate.mLifetimeS);
+                p.mClosestAge01 = llclamp(frac, 0.f, 1.f);
+            }
+        }
         return p;
     }
 
@@ -213,7 +228,7 @@ void SSVortices::buildWhyNot(SSStormCells* cells, U32 seed, F64 now)
         return;
     }
 
-    const SSVortex::Parent parent = toParent(*hero_cell);
+    const SSVortex::Parent parent = toParent(*hero_cell, cells);
     why.mMeso = parent.mLife.mMeso;
     why.mPotential = parent.mPotential;
     why.mSupercell = parent.mSupercell;
@@ -301,13 +316,17 @@ void SSVortices::update()
     // never cells->seed()/anchor()/valid(): SSAtmoMagic::seed() (bit-identical to what cells->seed() would read
     // once resolved - both ultimately read atmo->seed(), see SSStormCells::update()), SSStormCells::anchorNow()
     // (the same S2 source-region logic cells->anchor() uses, callable with no claim held - see its own comment),
-    // and SSAtmoMagic::sharedTime(). mDust is therefore fresh every tick this function runs, independent of mValid
-    // below (which now covers only the storm-cell-children output) - see valid()'s own header comment and
-    // SSVortexRender::render()'s own early-return, updated to draw dust with no funnels present.
+    // and SSStormCells::cycleTimeNow() (phase 8 section 2, one clock, user 2026-09-06: dust-devil epochs/ages are
+    // STATE, so they run on the shared cycle-time clock like every other storm-scheduler state read, never the raw
+    // wall clock - cycleTimeNow() is the anchorNow() idiom applied to the clock, since a dust devil must never
+    // depend on cells->valid()/now() having been resolved this frame either). mDust is therefore fresh every tick
+    // this function runs, independent of mValid below (which now covers only the storm-cell-children output) - see
+    // valid()'s own header comment and SSVortexRender::render()'s own early-return, updated to draw dust with no
+    // funnels present.
     mDust.clear();
     {
         const U32 dust_seed = atmo->seed();
-        const F64 dust_now = atmo->sharedTime();
+        const F64 dust_now = cells->cycleTimeNow();
         const SSVortex::Vec2 dust_anchor = toVortexVec2(cells->anchorNow());
 
         SSVortex::DustWeather weather;
@@ -381,7 +400,12 @@ void SSVortices::update()
     }
 
     const U32 seed = cells->seed();
-    const F64 now = atmo->sharedTime();
+    // <SS:Nexii> Phase 8 section 2 (one clock, user 2026-09-06): CYCLE time, not the raw wall clock - every
+    // storm-cell-child read below (vortexAt/childVortex windows, buildWhyNot) is STATE (which vortex exists, its
+    // age, its funnel's descent), so it runs on the SAME tau cells->cells() was just resolved with, on the far side
+    // of the cells->valid() gate above - cells->now() IS mNow, never a second read of sharedTime() that could
+    // disagree with it by a hair.
+    const F64 now = cells->now();
     const SSVortex::Vec2 anchor = toVortexVec2(cells->anchor());
     const F32 ground_z = applier->windProfileGroundZ();
     // <SS:Nexii> SCHEDULER fix 4: the wall cloud sits on the RESOLVER's deck base (SSAtmoEnvApplier::
@@ -400,7 +424,7 @@ void SSVortices::update()
 
     for (const SSStormCells::ActiveCell& cell : cells->cells())
     {
-        const SSVortex::Parent parent = toParent(cell);
+        const SSVortex::Parent parent = toParent(cell, cells);
         for (S32 slot = 0; slot < SSVortex::SLOTS_PER_CELL; ++slot)
         {
             const SSVortex::Candidate c = SSVortex::childVortex(seed, parent, slot);

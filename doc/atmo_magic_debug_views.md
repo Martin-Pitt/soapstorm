@@ -7,7 +7,7 @@ Status: **design** (2026-09-05). Companion to `atmo_magic_wind_profile.md`, `atm
 The current overlays are engineering probes: combinable checkboxes, raw markers, meaning lives in tooltips. An **info view** is a curated presentation: pick ONE mode, the world dims, one color-coded data layer pops, a legend says what the colors mean, and a chart panel shows the quantities a 3D overlay can't. Principles:
 
 1. **Exclusive mode picker** — a new `SSAtmoInfoView` setting (0 = off, one mode at a time) on a new "Views" tab of the debug floater. The existing low-level checkboxes stay untouched underneath for engineering work; info views are allowed to *drive* them (activating a mode flips the relevant masks, deactivating restores).
-2. **World dimming** — a fullscreen translucent dark quad drawn at the top of the UI stage (post-tonemap: no glow/alpha hazard, no stock shader touched, zero cost when off). Strength dial `SSAtmoInfoViewDim` (~0.55 default).
+2. **The info-view LOOK** — a post-screen pass (`gSSInfoLookProgram`, `ssInfoLookV/F.glsl`, formulas in `ssinfolookcore.h`, twin `V:\Scratch\atmo\tests\twin_infolook.cpp`) drawn after `renderFinalize` and before the HUD. It reads the presented colour plus the G-buffer depth and normal, and writes luminance onto a warm-gray ramp with a 12-tap occlusion, a hemisphere shade and a distance fog; the sky goes flat. Toggle `SSAtmoInfoViewLook` (default on), which replaced the old dim slider per the user's verdict ("it is just making the world black at max"). Alpha is handled by construction, since blended surfaces are already composited in the colour it reads.
 3. **One shared legend widget** — `SSAtmoLegendView` (an `LLView` docked bottom-left, SSStatsView idiom): mode title, a gradient bar with min/max labels in real units, and the mode's icon key. Every view pushes its legend rows through one interface; no view invents its own panel.
 4. **One color language**, used by every view (ramps, not rainbow soup):
    - moisture / water / wet: blue ramp
@@ -65,7 +65,7 @@ Monospace readout of every shared-state input: seed, wall clock + current bucket
 - In-world layers keep the established `renderDebug()` disciplines: cells not puffs, squash-corrected, distance-thinned, drawn post-deferred.
 - Charts draw in UI space via the graph widget; no render-target or shader work anywhere in this doc.
 - XUI: new tab in `floater_ss_atmo_debug.xml`; the mode picker is a combo bound to `SSAtmoInfoView`; per-mode option rows appear under it (the fields-tab combo idiom). Rect anchoring per the stretch rules (explicit left+right).
-- Settings: `SSAtmoInfoView` (U32), `SSAtmoInfoViewDim` (F32), per-mode sub-view U32s reusing `SSAtmoCloudDebugView`/`SSWorldFieldDebugView` where they exist.
+- Settings: `SSAtmoInfoView` (U32), `SSAtmoInfoViewLook` (Boolean, default on: the info-view LOOK post-screen pass), `SSAtmoInfoViewTileTint` (Boolean, default off: the V2/V3 lattice tint, tile outlines and keep-fraction grid; entities always draw), per-mode sub-view U32s reusing `SSAtmoCloudDebugView`/`SSWorldFieldDebugView` where they exist.
 
 ## 4. Phasing
 

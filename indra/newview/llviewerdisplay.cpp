@@ -87,6 +87,7 @@
 #include "llworld.h"
 #include "pipeline.h"
 // <SS:Nexii> Atmo Magic weather
+#include "ssatmoinfoview.h" // <SS:Nexii> Atmo Magic info views: SSAtmoInfoView::renderDimAndWorld, drawn post-tonemap in render_ui
 #include "ssatmomagic.h"
 #include "ssatmoenvapplier.h"
 #include "ssatmoenvdiscovery.h"
@@ -1722,6 +1723,13 @@ void render_ui(F32 zoom_factor, int subfield)
 
     // apply gamma correction and post effects
     gPipeline.renderFinalize();
+
+    // <SS:Nexii> Atmo Magic info views draw their 3-D half HERE: the LOOK pass (a full-screen triangle that rewrites the just-presented world as warm gray), then the active view's in-world layer on top of it, with the WORLD camera (renderDimAndWorld calls setup3DRender itself) into the default framebuffer renderFinalize just presented into. This is the one spot that is both post-tonemap and still 3-D - the same window in which render_hud_attachments below draws HUD geometry - and the look pass needs both halves of that: it SAMPLES the presented image (gPipeline.mSSLastPresented, recorded where renderFinalize binds it) and it needs the world camera's projection to unproject depth. It also has to be after the luminance sample, or auto-exposure would chase the look's own tone; the dim quad this replaced learned that the hard way from LLPipeline::renderDebug, inside renderGeomPostDeferred, where it went into the HDR screen buffer ahead of generateLuminance and the scene pumped for about a second. Ahead of render_hud_elements/render_hud_attachments so nametags, beacons and HUD attachments stay untouched on top; renderDimAndWorld saves and restores both matrix stacks, the get_current_* cache and the viewport, so what follows sees exactly the state renderFinalize left. Skipped for cube snapshots, still snapshots, the disconnected/teleport screen and "hide UI" (Ctrl+Alt+F1 - the legend and chart that explain the overlay go with the UI, so the overlay goes too) - none of them want a debug overlay baked in. [interaction: SSAtmoInfoView]
+    if (!gCubeSnapshot && !gSnapshot && !gDisconnected && SSAtmoInfoView::mode() != 0
+        && gPipeline.hasRenderDebugFeatureMask(LLPipeline::RENDER_DEBUG_FEATURE_UI))
+    {
+        SSAtmoInfoView::renderDimAndWorld();
+    }
 
     {
         LLGLState::checkStates();

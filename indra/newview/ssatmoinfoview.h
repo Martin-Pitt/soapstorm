@@ -38,14 +38,17 @@
 class SSAtmoInfoView
 {
 public:
-    // Creates the dim quad (drawn first, under every other debug overlay), the legend, and the chart (drawn last) as children of the debug view, and starts driving the engineering masks off the mode setting. The chart is docked to the legend's right edge (its own draw() re-reads the legend's rect every frame and repositions off it, the same way the legend re-sizes itself off its own content), NOT parked at a fixed offset - the legend's width changes with its spec's row count, so a fixed gap would either overlap it or leave a gap that grows. Called once from LLDebugView::init. [interaction: SSAtmoLegendView] [interaction: SSAtmoGraphView]
+    // Creates the (now draw-less) dim view, the legend, and the chart (drawn last) as children of the debug view - the dim quad itself draws in the 3-D pass, see renderDimAndWorld -, and starts driving the engineering masks off the mode setting. The chart is docked to the legend's right edge (its own draw() re-reads the legend's rect every frame and repositions off it, the same way the legend re-sizes itself off its own content), NOT parked at a fixed offset - the legend's width changes with its spec's row count, so a fixed gap would either overlap it or leave a gap that grows. Called once from LLDebugView::init. [interaction: SSAtmoLegendView] [interaction: SSAtmoGraphView]
     static void attach(LLView* debug_view);
 
     // The live mode, 0 when off (SSAtmoInfoViewCore::MODE_*).
     static U32 mode();
 
-    // The active mode's in-world layer (V1: the wind mast; V2: lattice tiles, cell rings, squall-line bars/junctions, forced outlines, hero ribbon, rotation glyphs; V5 has none - a pure chart). Draws nothing when off. Called from SSAtmoDimView::draw(), AFTER the dim quad, re-entering 3-D from the UI stage (see that class's comment) - NOT from LLPipeline::renderDebug any more, which used to draw it under the dim and got darkened along with the world. [interaction: SSAtmoDimView]
+    // The active mode's in-world layer (V1: the wind mast; V2: lattice tiles, cell rings, squall-line bars/junctions, forced outlines, hero ribbon, rotation glyphs; V5 has none - a pure chart). Draws nothing when off. Called only from renderDimAndWorld(), i.e. post-tonemap, from a 3-D pass with the world camera, AFTER that function has laid the look pass down. [interaction: render_ui]
     static void renderWorld();
+
+    // <SS:Nexii> The overlay's whole 3-D half in one call, from render_ui() in llviewerdisplay.cpp - post-tonemap, a 3-D pass with the world camera, between gPipeline.renderFinalize() and render_hud_attachments(): the LOOK pass (renderInfoLook, a full-screen triangle that rewrites the presented world as warm gray) and then renderWorld() on top of it. NOT from LLPipeline::renderDebug any more - that runs inside renderGeomPostDeferred, so the overlay landed in the HDR screen buffer ahead of the luminance sample and auto-exposure fought it. The 2-D half - legend and chart - stays in the UI stage as ordinary LLViews. Draws nothing when off; the caller also guards on gCubeSnapshot/gSnapshot/gDisconnected and on the UI debug-feature mask. [interaction: render_ui] [interaction: SSAtmoDimView]
+    static void renderDimAndWorld();
 
     // <SS:Nexii> V1's data, gathered once per draw from the systems' resident state: the applier's wind profile and floors, the deck's built band, the flowmap's region exponent. mValid is false with no applied weather cube; mDeckBuilt is false when the volumetric field has no puffs (the rails then read "not built" instead of forcing one). Read-only by construction - every accessor it touches is a const getter. [interaction: SSAtmoEnvApplier windProfile/windAt] [interaction: SSVolCloud cloudBaseZ/cloudTopZ] [interaction: SSWindFlowMap windAlpha]
     struct WindProfileData
@@ -74,6 +77,10 @@ public:
             F32 mPotential = 0.f;    // P this epoch
             F32 mShearNoise = 0.f;   // SH this epoch
             bool mAlive = false;     // an active cell was born on this lattice cell (any epoch in the window)
+            // <SS:Nexii> V2 lattice-tint smoothing: the lattice index this tile enumerated at (SSStormCell::
+            // enumerateLattice's own lx/ly), kept so renderStormCells can look a neighbouring tile's mPotential up
+            // by index for the per-corner average - display smoothing only, never fed back into mPotential itself.
+            S32 mLX = 0, mLY = 0;
         };
         struct Cell
         {
@@ -178,6 +185,23 @@ public:
             std::vector<LLVector2> mJunctionsAgent;
         };
 
+        // <SS:Nexii> V2 LINE BAND (doc/atmo_magic_phase8_show.md section 3 item 1): mirrors SSStormCells::
+        // fillLineBand's own SSStormCouple::LineBand field for field, straight off the SAME closed-form band the
+        // deck coupling itself reads (ssstormcouplecore.h's own comment) - never re-derived here. mOriginAgent is
+        // ALREADY agent frame (fillLineBand's own toAgentXY conversion); mDir/mMotion are unit vectors (mMotion is
+        // (0,0) when the line is stalled); mHalfLenM/mBandM/mShelfM are metres; mStrength <= 0 means no line is
+        // alive this frame (SSStormCouple::lineField's own "disabled" reading) and the drawing code skips it.
+        struct LineBand
+        {
+            LLVector2 mOriginAgent;
+            LLVector2 mDir;
+            LLVector2 mMotion;
+            F32 mHalfLenM = 0.f;
+            F32 mBandM = 0.f;
+            F32 mShelfM = 0.f;
+            F32 mStrength = 0.f;
+        };
+
         bool mValid = false;
         bool mDeckBuilt = false;
         bool mHaveHero = false;
@@ -194,6 +218,7 @@ public:
         std::vector<Tile> mTiles;
         std::vector<Cell> mCells;        // ranked by hashed id, as the scheduler left them
         std::vector<SquallLine> mSquallLines;
+        LineBand mLineBand;
         HeroPath mHero;
         std::vector<std::string> mWhyNot;
         std::vector<VortexIcon> mVortices;     // empty when SSVortices is not valid this frame
@@ -251,6 +276,18 @@ public:
         F32 mHandoffRadius = 0.f;   // r2 * SSVirga::HANDOFF_SKIP
         F32 mFallSpeedMS = 0.f;
         SSWindProfile::Vec2 mWindGround;
+        // <SS:Nexii> F9 (2026-09-06 review), 8e-b PROFILE SKEW: SSVolCloud::virgaDebug()'s own snapshot of the
+        // emitter's skew inputs (SSVirgaDebug::mWindParams/mBaseAglM/mFallSpeed/mEmbedTopZ), copied straight
+        // across like mCells' mKept flags - never re-derived, so the drawn skew polyline can never disagree with
+        // the geometry it describes. mWindParams/mBaseAglM are the curve-resolved wind PROFILE and the deck
+        // base's own AGL (not mWindGround's live, per-client single-altitude approximation at z=0) - the pair
+        // profileSkewM needs to reconstruct a card's own chord; mFallSpeed is the same active preset value as
+        // mFallSpeedMS, kept as its own field because it belongs to a different comparison line (see renderVirga's
+        // own comment on the two lines' distinct purposes).
+        SSWindProfile::Params mWindParams;
+        F32 mBaseAglM = 0.f;
+        F32 mFallSpeed = 0.f;
+        F32 mEmbedTopZ = 0.f;      // SSVirga::embedTopZ(mBaseZ, deck thickness) - where the card stack itself starts
         S32 mCandidates = 0;
         S32 mKept = 0;
         S32 mTrimmed = 0;
@@ -312,6 +349,8 @@ public:
 
 private:
     static void onModeChanged(U32 previous, U32 now);
+    // <SS:Nexii> The info-view LOOK: one full-screen triangle (gSSInfoLookProgram, ssInfoLookV/F.glsl) that overwrites the world viewport with a warm-gray reading of the frame that was just presented - luminance on a clay-to-cream ramp, a 12-tap hemisphere occlusion recomputed from the G-buffer, a soft sky-lit shade and an extreme-fog distance ramp, sky flat. The formulas are SSInfoLook (ssinfolookcore.h); the shader transliterates them and V:\Scratch\atmo\tests\twin_infolook.cpp holds the two together. Gated by SSAtmoInfoViewLook (default on), which replaced the old SSAtmoInfoViewDim slider. Called only from renderDimAndWorld(), before renderWorld(). [interaction: LLPipeline::mSSLastPresented]
+    static void renderInfoLook();
     static void renderWindMast();
     static void renderStormCells();
     static void renderDeckLod();
@@ -322,10 +361,11 @@ private:
     static boost::signals2::scoped_connection sModeConnection;
 };
 
-// <SS:Nexii> The world dimmer: one translucent dark quad over the whole debug-view rect, alpha from SSAtmoInfoViewDim, drawn as the debug view's FIRST child so every other overlay and console sits on top of it. Post-tonemap UI stage: no glow/alpha hazard, no shader touched, and a mode of 0 costs one integer compare. ALSO draws the active mode's in-world layer (SSAtmoInfoView::renderWorld()), AFTER the quad: the layer used to draw from LLPipeline::renderDebug, BENEATH this quad in the frame, so the dim darkened the wind mast/cell rings/etc right along with the world it was meant to dim under - wrong for a Skylines-style overlay, which should always read on top. draw() now re-enters 3-D itself: pushes the camera's live projection+modelview onto gGL's own matrix stack (loadMatrix, not LLViewerCamera::setPerspective - that would also stomp glViewport and the cached far clip) so renderWorld() sees the frame's real 3-D view, draws with depth test OFF (each render* helper's own LLGLDepthTest - the layer is never occluded by geometry, which is the one behavioural change from the old call site), then pops back to the UI's 2-D ortho. Runs even when the dim alpha is 0. LLPipeline::renderDebug no longer calls renderWorld() at all - this is its only draw site now.
+// <SS:Nexii> Vestigial. This class once WAS the world dimmer - one translucent dark quad over the debug-view rect, alpha from SSAtmoInfoViewDim, drawn as the debug view's first child. The quad moved into the 3-D pass (SSAtmoInfoView::renderDimAndWorld) because the in-world layer it dimmed has to draw on top of it, and then the quad itself was replaced outright by the info-view LOOK pass (renderInfoLook) after the user's verdict that dimming "is just making the world black at max". Nothing about a dim survives: there is no SSAtmoInfoViewDim setting and no draw here. The class stays so LLDebugView's addChildInBack and the debug view's child order are untouched.
 class SSAtmoDimView : public LLView
 {
 public:
+    // <SS:Nexii> draw() is deliberately empty: the dim quad moved into the 3-D pass (SSAtmoInfoView::renderDimAndWorld, called from render_ui() in llviewerdisplay.cpp, post-tonemap, between renderFinalize and the HUD passes) because the in-world layer it dims has to draw on top of it, and a 3-D layer re-entered from the UI stage is what clipped the consoles and threw the visualisations into the corners. The class stays so LLDebugView's addChildInBack and the debug view's child order are untouched.
     struct Params : public LLInitParam::Block<Params, LLView::Params>
     {
         Params()

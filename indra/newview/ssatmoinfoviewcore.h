@@ -410,10 +410,13 @@ namespace SSAtmoInfoViewCore
 
     // <SS:Nexii> V4 Precip & Virga helpers (doc/atmo_magic_debug_views.md V4). Display geometry only - the shell
     // hands in the numbers it already reads off SSVolCloud/SSWindProfile/the precip preset; nothing here decides
-    // where a shaft's own cards actually go (ssvirgacore.h owns that - a curtain is a plain vertical stack with no
-    // per-altitude lean, see its own comment). This is a SEPARATE line drawn for comparison: where a raindrop
-    // released from the same column would land if it drifted with the wind the way precipitation's own spawner
-    // tilts it (ssprecipitation.cpp's spawnTierCell: entry = hit - windAt(hit) * fallTime).
+    // where a shaft's own cards actually go (ssvirgacore.h owns that). F7 (2026-09-06 review), stale claim
+    // corrected: a curtain is NOT a plain vertical stack any more - phase 8e (ssvirgacore.h skewOffsetM) gave it a
+    // real per-altitude wind-fall lean. This function's line is a SEPARATE, independent comparison, unaffected by
+    // that change: where a raindrop released from the same column would land if it drifted with the GROUND wind
+    // the way precipitation's own spawner tilts it (ssprecipitation.cpp's spawnTierCell: entry = hit - windAt(hit)
+    // * fallTime) - a display approximation the shaft's own actual skew (drawn as a separate line, see
+    // SSAtmoInfoView::renderVirga) is read against, not a claim that the two describe the same geometry.
 
     // The horizontal drift (metres, downwind) a drop released dropHeightM above its landing point accumulates
     // falling at fallSpeedMS through a wind of (windX, windY): landing = entry + offset, so entry = landing -

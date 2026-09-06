@@ -39,9 +39,21 @@ namespace SSSquall
     constexpr F32 LINE_SPACING_M    = 2500.f;  // member spacing along the line
     constexpr S32 LINE_MEMBERS_MAX  = 7;       // members materialised (the local advancing segment of a line "hundreds of km long")
     constexpr F32 LINE_LENGTH_M     = LINE_SPACING_M * (F32)(LINE_MEMBERS_MAX - 1);
+    constexpr F32 LINE_SPAWN_MIN_M  = 1500.f;  // a line's origin is composed this far up its motion vector from the anchor (its own range - never the hero's, whose 7f cap is 30 km)
+    constexpr F32 LINE_SPAWN_MAX_M  = 2000.f;
     constexpr F32 LINE_JITTER_AGE01 = 0.04f;   // per-member lifecycle jitter so the line does not look synchronised
     constexpr F32 LINE_SUPPRESS_M   = LINE_SPACING_M; // 7b F6: a discrete lattice draw within this perpendicular distance of the line segment is replaced by the line; farther draws in the same epoch survive (the field is NOT emptied - with the old whole-field radius every discrete cell died on a line epoch)
     constexpr F32 QLCS_JUNCTION_FRAC = 0.5f;   // QLCS spin-ups sit at inter-member junctions on the leading edge
+    // <SS:Nexii> 8g-1: the AUTHORED weather floor (forced pin and forced line). It is the authored severity, not a spawn
+    // aid: with potential 1 and shear noise 1 a line member's gate score is moisture x convection, and the floor's product
+    // must clear INTENSITY_FULL_SCORE so the wall is a full-intensity storm by construction. The first cut floored at
+    // 0.5/0.5 = 0.25 against SPAWN_THRESHOLD 0.245: every member spawned at intensity 0.0005 (V2 read I 0.00), and since
+    // lifecycle(), the line band's strength and the shafts' drive all scale by intensity, the authored wall arrived and
+    // did nothing. applyWeatherFloor only raises, so a live sky already stormier than this keeps its own figures.
+    constexpr F32 AUTHORED_FLOOR_MOISTURE   = 0.85f;
+    constexpr F32 AUTHORED_FLOOR_CONVECTION = 0.85f;
+    static_assert(AUTHORED_FLOOR_MOISTURE * AUTHORED_FLOOR_CONVECTION >= SSStormCell::INTENSITY_FULL_SCORE,
+                  "an authored storm is a full-intensity storm: the floor's score must reach INTENSITY_FULL_SCORE");
     constexpr F64 FORCED_LEAD_S     = 800.0;   // a forced storm's birth is placed this long before its authored cue; lifetime = 2 * lead so age01 == 0.5 (mature) at the cue
     static_assert(2.0 * FORCED_LEAD_S >= (F64)SSStormCell::HERO_MIN_LIFE_S, "a forced tornado must be hero-eligible on its own lifetime - no eligibility bypass");
     static_assert(2.0 * FORCED_LEAD_S <= (F64)SSStormCell::LIFE_MAX_S, "forced lifetime inside the ordinary life range");
@@ -86,6 +98,9 @@ namespace SSSquall
         F64 mBirthTime = 0.0;
         F32 mLifetimeS = 0.f;
         S32 mSupercellSlot = -1; // which member index may be a supercell (-1 none)
+        bool mForced = false;    // 8a: composed by forcedLine (an authored squall) - carried to LineDesc::mForced
+        bool mHasFloor = false;  // 8a F1: forcedLine sets the same weather floor forcedCandidate gives an authored pin (AUTHORED_FLOOR_MOISTURE/CONVECTION, shear 1, both Allow flags), applied to every member before gate() - without it the generator's dry pre-cue sky gated the whole wall out
+        SSStormCell::WeatherAtBirth mWeatherFloor;
     };
 
     // The line decision for an epoch, hashed from (seed, epoch, anchor lattice cell). Invariants: pure; mIsLine true for
@@ -131,8 +146,8 @@ namespace SSSquall
         e.mBirthTime = (F64)epoch * SSStormCell::EPOCH_S + (F64)hash01(combine(chain, SALT_LINE_BIRTH)) * SSStormCell::EPOCH_S;
         e.mLifetimeS = std::lerp(SSStormCell::LIFE_MIN_S, SSStormCell::LIFE_MAX_S, hash01(combine(chain, SALT_LINE_LIFE)));
 
-        // Composed like the hero: origin sits up the motion vector from the anchor so the line advances across it over its life.
-        const F32 spawn = std::lerp(SSStormCell::HERO_SPAWN_MIN_M, SSStormCell::HERO_SPAWN_MAX_M, hash01(combine(chain, SALT_LINE_SPAWN)));
+        // Composed like the hero once was: origin sits LINE_SPAWN_MIN_M..LINE_SPAWN_MAX_M up the motion vector from the anchor so the line advances across it over its life.
+        const F32 spawn = std::lerp(LINE_SPAWN_MIN_M, LINE_SPAWN_MAX_M, hash01(combine(chain, SALT_LINE_SPAWN))); // 7f: the line's OWN range - the hero's spawn cap grew to 30 km for its mid-life arrival law, which would put a line's members outside the field
         e.mOrigin.x = anchor.x - dx * spawn;
         e.mOrigin.y = anchor.y - dy * spawn;
 
@@ -220,10 +235,13 @@ namespace SSSquall
     // origin and the offset never placed anything). Invariants: pure in (seed, override, anchor); the pinned candidate
     // is alive at cueTime and mature (age01 == 0.5 within 1e-6) at cueTime; gate() with any weather >= 0 spawns it
     // (potential 1 with a moisture/convection floor of 0.5 applied by the caller); kind "none" returns pinned == false.
-    // The shell converts the authored cue phase to mCueTime with the SAME phase map it read the override through (real:
-    // SSAtmoEnvTrack::wallTimeAtPhase; preview: SSStormCell::previewWallTimeAt) - 7b F3, lesson 24 - and the three
-    // override curves (phase, offset x/y) are HOLD like the kind string, so the cue is piecewise constant in time
-    // and cannot slide (7b F4).
+    // The shell converts the authored cue phase to mCueTime with the SAME map it read the override through -
+    // SSStormCells::wallTimeAtPhase, ssstormcells.cpp, a one-line forward to SSDayCycle::wallTimeAtPhase(phase,
+    // nearTau, dayLen, 0) applied to CYCLE time (tau), never a real/preview pair of maps: phase 8 section 2 (user
+    // 2026-09-06) has the preview substitute the CLOCK feeding this map (a latched tau_ref/wall_ref), not the map
+    // itself, so mCueTime comes out as a tau exactly like every other candidate's mBirthTime - superseding 7b F3/
+    // lesson 24's SSStormCell::previewWallTimeAt, which is removed. The three override curves (phase, offset x/y)
+    // are HOLD like the kind string, so the cue is piecewise constant in time and cannot slide (7b F4).
     struct ForcedOverride
     {
         bool mActive = false;
@@ -262,8 +280,8 @@ namespace SSSquall
 
         p.mPinned = true;
         p.mCandidate = c;
-        p.mWeatherFloor.mMoisture = 0.5f;
-        p.mWeatherFloor.mConvection = 0.5f;
+        p.mWeatherFloor.mMoisture = AUTHORED_FLOOR_MOISTURE;     // 8g-1: the authored severity, see the constants
+        p.mWeatherFloor.mConvection = AUTHORED_FLOOR_CONVECTION;
         p.mWeatherFloor.mShearStrength = 1.f;
         p.mWeatherFloor.mAllowSupercells = true; // 7c NEW-3: an authored override outranks the Allow checkboxes (applyWeatherFloor ORs them);
         p.mWeatherFloor.mAllowTornadoes = true;  // the Weather Influence MASTER enable is not overridden - the shell gates the forced block on it
@@ -283,6 +301,107 @@ namespace SSSquall
         d.mConvection = std::lerp(rolled.mConvection, 0.85f, b);
         d.mShear = std::lerp(rolled.mShear, 0.8f, b);
         return d;
+    }
+
+    // ------------------------------------------------------------------------------------------------------------------
+    // 8a AUTHORED SQUALL (doc/atmo_magic_phase8_show.md section 3): ForcedOverride::mKind KIND_SQUALL means "a squall line
+    // whose leading edge crosses anchor + offset at the cue". The shell's line hook returns forcedLine's event for the ONE
+    // epoch containing (cueTime - FORCED_LINE_LEAD_S), replacing that epoch's hashed decision (the members then run through
+    // the ordinary member/gate path, so the line is deterministic and previewable exactly like a forced cell). A generated
+    // squall line IS the weather change: the generator writes this override and lays the day's curves so precipitation
+    // steps up AT the cue (onsetValue below) - clear sky, the wall arrives, hours of rain.
+    constexpr S32 KIND_SQUALL           = 5;
+    constexpr F64 FORCED_LINE_LEAD_S    = 1200.0;  // born this long before the cue; with a LIFE_MAX_S life the wall arrives young (age01 ~0.29) and matures over the region
+    constexpr F32 LINE_BAND_M           = 1800.f;  // deck coupling: the wall's half-thickness either side of the segment
+    constexpr F32 LINE_SHELF_M          = 2500.f;  // deck coupling: the gust-front shelf's reach AHEAD of the segment along its motion
+    constexpr F32 LINE_ANVIL_FRAC       = 0.8f;    // the wall's anvil weight as a share of its tower boost (a line's anvil is a sheet, not a plume)
+    constexpr U32 SALT_FORCED_LINE_ID   = 0x53510009u; // forcedLine's mLineId chain (seed, KIND_SQUALL, epoch of birth)
+    constexpr U32 SALT_FORCED_LINE_SLOT = 0x5351000Au; // forcedLine's supercell slot
+
+    // The authored line event for an active KIND_SQUALL override: motion = windAnvil * CELL_SPEED_FRAC (unit north when
+    // degenerate, via unitOrNorth), direction its right-hand perpendicular, birth = cueTime - FORCED_LINE_LEAD_S, lifetime
+    // LIFE_MAX_S, origin = (anchor + offset) - motion * FORCED_LINE_LEAD_S so the segment's CENTRE is at anchor + offset at
+    // the cue, mLineId from combine(seed, KIND_SQUALL, epoch of birth) through SALT_FORCED_LINE_ID (stable while the cue
+    // stays inside one epoch), mSupercellSlot hashed in [0, LINE_MEMBERS_MAX), mWindAnvil = windAnvil. Invariants: mIsLine
+    // false unless o.mActive && o.mKind == KIND_SQUALL; origin + motion * (cueTime - birth) == anchor + offset within F32
+    // reach (0.25 m at a 256 km anchor, where one ulp is 0.03 m - the 7f contact tolerance, same reason: mOrigin is an F32
+    // at a grid-global coordinate, so no spelling of this composition reaches 1e-2 m there) for |motion| <= 60 m/s;
+    // direction unit and perpendicular to motion (dot within 1e-4); lineMember(e, i) for every i
+    // is alive at the cue (age01 == FORCED_LINE_LEAD_S / LIFE_MAX_S within the member jitter); pure; bit-identical.
+    inline LineEvent forcedLine(U32 seed, const ForcedOverride& o, const Vec2& anchor, const Vec2& windAnvil)
+    {
+        using SSAtmoNoise::combine;
+        using SSAtmoNoise::hash01;
+        LineEvent e;
+        if (!o.mActive || o.mKind != KIND_SQUALL)
+        {
+            return e; // not an active squall override
+        }
+        e.mForced = true;
+        e.mHasFloor = true;
+        e.mWeatherFloor.mMoisture = AUTHORED_FLOOR_MOISTURE;     // 8g-1: full intensity by construction, not merely a spawn
+        e.mWeatherFloor.mConvection = AUTHORED_FLOOR_CONVECTION;
+        e.mWeatherFloor.mShearStrength = 1.f;
+        e.mWeatherFloor.mAllowSupercells = true;
+        e.mWeatherFloor.mAllowTornadoes = true;
+
+        e.mIsLine = true;
+        e.mWindAnvil = windAnvil;
+        e.mMotion.x = windAnvil.x * SSStormCell::CELL_SPEED_FRAC;
+        e.mMotion.y = windAnvil.y * SSStormCell::CELL_SPEED_FRAC;
+        const Vec2 unit = unitOrNorth(e.mMotion);
+        e.mDirection.x = unit.y;   // right-hand perpendicular of the motion, unit length - same spelling as lineEvent
+        e.mDirection.y = -unit.x;
+
+        e.mBirthTime = o.mCueTime - FORCED_LINE_LEAD_S;
+        e.mLifetimeS = SSStormCell::LIFE_MAX_S;
+
+        const S64 epoch = SSStormCell::epochOf(e.mBirthTime);
+        const U32 epochLo = (U32)((U64)epoch & 0xffffffffu);
+        const U32 epochHi = (U32)(((U64)epoch >> 32) & 0xffffffffu);
+        U32 chain = combine(seed, (U32)KIND_SQUALL);
+        chain = combine(chain, epochLo);
+        chain = combine(chain, epochHi);
+        e.mLineId = ((U64)combine(chain, SALT_FORCED_LINE_ID) << 32) | (U64)chain;
+
+        // Origin composed like composeForced: the segment centre at the cue is exactly anchor + offset.
+        const F32 centreX = anchor.x + o.mOffsetM.x;
+        const F32 centreY = anchor.y + o.mOffsetM.y;
+        e.mOrigin.x = centreX - e.mMotion.x * (F32)FORCED_LINE_LEAD_S;
+        e.mOrigin.y = centreY - e.mMotion.y * (F32)FORCED_LINE_LEAD_S;
+
+        const S32 slot = (S32)(hash01(combine(chain, SALT_FORCED_LINE_SLOT)) * (F32)LINE_MEMBERS_MAX);
+        e.mSupercellSlot = llclamp(slot, 0, LINE_MEMBERS_MAX - 1);
+
+        return e;
+    }
+
+    // AUTHORED ONSET (authoring time, the generator lays keyframes from it): a curve that sits at `before` until
+    // cuePhase - rampPhase, rises (smoothstep) to `peak` at cuePhase, holds for holdPhase, then falls (smoothstep) back to
+    // `before` over taperPhase. Phases are day fractions and wrap mod 1 (a cue at 0.98 with a 0.1 hold spans midnight).
+    // Invariants: == before well before the ramp and well after the taper; == peak at cuePhase and throughout the hold;
+    // monotone on the ramp and on the taper; continuous; pure; onsetValue(p, o, v, v) == v for every p.
+    struct Onset
+    {
+        F32 cuePhase = 0.5f;
+        F32 rampPhase = 0.02f;   // ONSET_RAMP_PHASE: ~5 min of a 4 h day - a squall's onset is abrupt
+        F32 holdPhase = 0.15f;   // hours of rain
+        F32 taperPhase = 0.10f;
+    };
+    constexpr F32 ONSET_RAMP_PHASE = 0.02f;
+    inline F32 onsetValue(F32 phase, const Onset& o, F32 before, F32 peak)
+    {
+        F32 d = phase - o.cuePhase;
+        d -= std::floor(d + 0.5f); // signed distance from the cue, wrapped onto the circle into [-0.5, 0.5)
+        if (d <= 0.f)
+        {
+            return std::lerp(before, peak, SSStormCell::smoothstep(-o.rampPhase, 0.f, d));
+        }
+        if (d <= o.holdPhase)
+        {
+            return peak;
+        }
+        return std::lerp(peak, before, SSStormCell::smoothstep(o.holdPhase, o.holdPhase + o.taperPhase, d));
     }
 }
 

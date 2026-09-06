@@ -27,10 +27,16 @@ out vec4 frag_color;
 
 uniform sampler2D diffuseMap;
 
-in vec2 vary_texcoord0;
+// <SS:Nexii> S1 vertex-decode channel fix (doc/atmo_magic_flow_field.md section 2, opus review Q2b): widened
+// vec2 -> vec4 in the vertex stage, zero new interpolator slots. .xy is the decoded CORNER (round()'d pre-
+// interpolation, so it interpolates exactly as the old raw 0/1 texcoord did - every .xy read below is
+// bit-identical to the old vary_texcoord0 whenever payload is 0, which it is throughout S0-S2); .zw is the
+// decoded PAYLOAD, unread anywhere in this file yet.
+in vec4 vary_texcoord0;
 
 // <SS:Nexii> Per-puff STRUCTURE, not a finished colour any more: r the CPU builder's form term (facing and shade-through-the-deck, beam-flattened), g the buried depth - the fraction of the puff's own
-// column standing above it, 0 at the lid and 1 at the floor, which the storm gloom is graded over below - and a the edge-fade alpha; b spare.
+// column standing above it, 0 at the lid and 1 at the floor, which the storm gloom is graded over below - and a the edge-fade alpha; b is EITHER the shaft flag/drive (see the branch below) OR, for
+// an ordinary puff (S2, doc/atmo_magic_flow_field.md section 2), the per-puff advected-detail phase on its low half [0, 0.49] (SSVolCloud::Puff::mPhase * 0.49, see the puff branch's own decode).
 // The light it gets multiplied against arrives in the vary_ss_* varyings below - see the long note in ssVolCloudV.glsl.
 in vec4 vary_color;
 
@@ -52,6 +58,12 @@ in float vary_ss_top;
 // The deck's storm gloom - what the weather's moisture says this deck is carrying, one number for the whole of it, so a uniform rather than a vertex channel. Graded over the buried depth where it is
 // spent below rather than applied flat; see the note there for why flat was the same as not applying it at all.
 uniform float ss_gloom;
+
+// <SS:Nexii> S4 (doc/atmo_magic_flow_field.md section 2 S4, "Lighting (scene-proven)" verdict): SSAtmoCloudLightVariant's live value, for an in-build A/B of the scene-proven lighting tail terms -
+// 0 today's tail, BIT-IDENTICAL by construction (nothing in the lighting tail below moves unless this is nonzero). 1 POWDER: the direct-sun body term gains the Beer-powder factor (research_lighting.md
+// #1). 2 HG2: the thin^3 rim fringe is replaced by a two-lobe Henyey-Greenstein phase on the view/sun angle (research_lighting.md #3). 3 FULL: POWDER + HG2 + a subtle green storm tint on buried
+// bellies under gloom. Ported from V:\Scratch\atmo\flow\scene.h's LightVariant enum (V_BASE/V_POWDER/V_HG2/V_FULL) - the CPU prototype the ladder actually judged (doc's "scene_r3 powder vs base A/B").
+uniform int ss_light_variant;
 
 // A COPY of the scene depth - see mDepthCopy. Named depthMap because that is one of LLShaderMgr's RESERVED uniform names, and only reserved names can be bound as textures. bindTexture takes an index
 // into the shader's reserved-uniform table, while looking a custom name up returns a raw GL location - so binding "sceneDepth", as this was called, indexed that table with a number that meant
@@ -107,12 +119,31 @@ uniform vec2  ss_tower_ramp;    // the tower ramp's window as baked by the build
 uniform float ss_profile;       // 1: the authored vertical profile ramp is bound on bumpMap2
 uniform float ss_sheet;         // 0: fragment is a puff. 1: fragment is the deck's base veil
 
+// <SS:Nexii> F2 (2026-09-06 review), extended phase 8e item 2 [interaction: ssvirgacore.h embedTopZ/embedAlpha]:
+// the virga embed span this deck's shaft cards start inside of, PLUS the ground reference - x the deck base Z, y
+// the embedded stack's top Z (embedTopZ(baseZ, thicknessM), the SAME value buildDeck's shaft loop bakes
+// shaft_top_z from), z the ground reference Z (SSAtmoEnvApplier::windProfileGroundZ, the SAME shaft_ground_z the
+// card stack spans down to), w spare. Uploaded for the WEATHER deck's pass only, same rule as ss_storm_n above;
+// zero-filled for the other deck's pass. Harmless for one reason only: that deck never emits a shaft fragment (shafts
+// only ever hang from weatherDeck(), the same couple_storm gate), so nothing reads the zeros - the values they would
+// produce (embedAlpha 0 above 0 m, h == clamp(z, 0, 1) == 1 for any fragment above 1 m) are never evaluated.
+uniform vec4 ss_shaft_embed;    // (deck base Z, embedded stack top Z, ground reference Z, 0)
+
 // <SS:Nexii> Phase 3 (doc/atmo_magic_storm_dynamics.md section 3) [interaction: ssstormcouplecore.h]: the coupled storm cells, uploaded for the WEATHER deck only - ss_storm_n 0 for the under deck reads as "no cells" (see ssvolcloud.cpp's buildDeck upload). Layout LOCKSTEP with SSStormCouple::CellUniform, field for field: ss_storm_a.xy centre / .z radius / .w boost, ss_storm_b.x anvil / .y meso / .z overshoot / .w mammatus, ss_storm_c.xy motion direction / .z rotation sign.
 #define SS_STORM_MAX_CELLS 4
 uniform int  ss_storm_n;
 uniform vec4 ss_storm_a[SS_STORM_MAX_CELLS];
 uniform vec4 ss_storm_b[SS_STORM_MAX_CELLS];
 uniform vec4 ss_storm_c[SS_STORM_MAX_CELLS];
+
+// <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3) [interaction: ssstormcouplecore.h LineBand]: the
+// active squall line's deck coupling, uploaded for the WEATHER deck's pass only, same rule as ss_storm_n above -
+// zero-filled (ss_line_c.y strength 0) for the other deck's pass, which ss_line_field below reads as "disabled".
+// LOCKSTEP with SSStormCouple::LineBand field for field: ss_line_a.xy segment centre / .zw unit direction,
+// ss_line_b.xy unit motion / .z halfLen / .w bandM, ss_line_c.x shelfM / .y strength.
+uniform vec4 ss_line_a; // (ox, oy, dirX, dirY)
+uniform vec4 ss_line_b; // (motX, motY, halfLen, bandM)
+uniform vec4 ss_line_c; // (shelfM, strength, 0, 0)
 
 // <SS:Nexii> Phase 4 (doc/atmo_magic_wind_profile.md section 4 "Drift: one accumulator + bounded shear offsets", doc/atmo_magic_storm_dynamics.md section 3 "Storm motion vs cloud drift") [interaction: ssdeckframecore.h]: the deck's frame transforms, LOCKSTEP with SSDeckFrame's own uniform layout field for field (ssvolcloud.cpp's upload uses these exact names). ss_shear_z is the baked O(z) table's (z0, z1); ss_shear_table[i] is SSDeckFrame::ShearTable::o[i] in the same order - together the ONLY inputs ss_frame_shearTableAt below reads, so the GPU never evaluates the wind profile itself (see the core header's REPLICATION STRATEGY note). ss_hero is the hero's (motion.xy, ageS, radius); ss_hero_c its centre; ss_drift_vel the applier's curve-resolved drift rate in m/s - the SAME vector SSDeckFrame::HeroFrame::driftVel carries, never the eased mWind and never ss_wind (a unit direction, not a rate). Every deck uploads its own shear table; the hero fields are zero-filled (ageS 0) for a deck with no hero, which is what makes ss_frame_heroShift's result the zero vector and every read below an identity.
 #define SS_SHEAR_TABLE_N 8
@@ -151,11 +182,36 @@ uniform vec2 ss_rim;
 // <SS:Nexii> The deck's ONE edge-fade rail pair (SSDeckLod::edgeFade, ssdecklodcore.h): x FIELD_FADE_START_M, y DECK_EDGE_M - uploaded from the core so the veil's horizontal fade agrees with the puff loop's own edgeFade() call instead of a second, hand-tuned pair of literals.
 uniform vec2 ss_edge_rails;
 
+// <SS:Nexii> 8g veil law (SSVeil, ssveilcore.h): the BASE VEIL's OWN four rails, uploaded from the core - xy the far-thinning pair (SSDeckLod::THIN_START_M, FIELD_DRAW_M) the veil's rim FADE-IN is the complement of, zw the veil's outward reach (SSVeil::REACH_START_M, REACH_END_M) past the puffs' DECK_EDGE_M. Kept separate from ss_edge_rails on purpose. Precisely what ss_edge_rails is, since this is easy to get wrong reading the file: the puffs' own edgeFade is applied on the CPU (ssvolcloud.cpp bakes it into puff.mAlpha), so this uniform is the GLSL MIRROR of that rail pair and its only reader in this file is the sheet - which now reads it INVERTED, as the edge_keep factor inside the veil's fade-in. The pair still means what it always meant (SSDeckLod::edgeFade, the deck's dissolve line); what changed is that the veil complements it instead of multiplying by it.
+uniform vec4 ss_veil_rails;
+
 // The far-field squash band (x knee, y cap, z virtual radius) - vary_world arrives at the DRAWN position and main() inverts this mapping per fragment to recover the true one, which every
 // world-space lookup below uses. Exact per pixel where a true-position varying warped mid-quad.
 uniform vec3 ss_squash;
 
 in vec3 vary_world;
+
+// <SS:Nexii> S3 flow-field feature flags (doc/atmo_magic_flow_field.md section 2 stage 3, review_opus.md's
+// G2/G3/G5 correction list, V:\Scratch\atmo\flow\proto.h's f1_ring/f4_anvil/f5_swirl - f1_ring ONLY, the ring
+// cores plus the central updraft; f3_ring_curl's extra 0.5x curl noise is deliberately NOT ported here, see
+// the SS_G2_BILLOW block's own comment below for why): each defaults ON and independently reverts its OWN
+// piece of code to today's exact behaviour at 0 - SS_G2_BILLOW the vortex-ring flow_w replacing the plain
+// radial-and-up construction, SS_G3_OUTFLOW the anvil outflow blend (new; today has no anvil flow bias at
+// all, so 0 is simply "absent, byte-identical"), SS_G5_SWIRL the meso tangential field replacing the
+// constant-angle SS_STRIATION_ROT nudge (0 restores that nudge verbatim), SS_G2_VIGOR the vigor-scaled
+// detail contrast (new; today's SS_PUFF_CONTRAST is applied unscaled at 0). Each flag is independent, not a
+// staged ladder - any combination compiles and runs. Fetch cost: ZERO new texture or textureLod calls behind
+// any of these four flags - every new term below is ALU only (rot90/safeDir/mix/length/dot/normalize/clamp),
+// reusing storm_sample fields and uniforms already resident from the shared frame block above. That ALU is
+// NOT cheap, though, and it is NOT gated off-cell - review_opus.md's hand count against the shipped blocks,
+// all four flags on, comes to ~170 ALU worst case (roughly 6x an earlier +~30 estimate), paid on every
+// fragment including clear-sky ones where storm_sample.owner == 0 and the whole pipeline computes an
+// identity; see doc/atmo_magic_flow_field.md section 3 for the per-block breakdown and the suggested
+// storm_sample.owner > 0.0 gate as the cheap win if this shows up in a frame-time pass.
+#define SS_G2_BILLOW 1
+#define SS_G3_OUTFLOW 1
+#define SS_G5_SWIRL 1
+#define SS_G2_VIGOR 1
 
 // How much of the puff is solid core before the noise starts eating into it, as a fraction of its radius.
 const float SS_PUFF_CORE = 0.15;
@@ -211,20 +267,95 @@ const float SS_GRAZE_DARK = 0.85;
 // what gives a cloud its silhouette. Keyed to low density, so it lands exactly on the ragged edges the noise cuts.
 const float SS_RIM = 0.8;
 
+// <SS:Nexii> S4 POWDER variant (doc/atmo_magic_flow_field.md's settled verdict, research_lighting.md #1): the buried-depth optical-depth stand-in, d = SS_POWDER_DEPTH * vary_color.g, ported
+// verbatim from scene.h's V_POWDER (`const float dOpt = 2.5f * buriedC;`) - the SAME 2.5 the doc's own verdict text quotes ("d ~ 2.5 * buried"). This is the RAW Beer-powder curve
+// exp(-d)*(1-exp(-2d)), UNNORMALIZED: it is 0 at d=0 (a lid), rises to a peak around d~0.55 (buried~0.22), then falls to ~0.08 by d=2.5 (a fully buried belly) - so it does NOT preserve "today's
+// brightness" at a lid the way a naive first read of "deepens bellies" might suggest, and no constant-divisor renormalization can fix that (a zero numerator stays zero however it is scaled). This
+// is the literal curve scene.h shipped and the ladder judged (scene_r3 powder vs base A/B) and the literal curve the doc's verdict spells out - ported as-is rather than re-derived, and applied
+// ONLY to the direct-sun body term (not the graze, not the rim/HG2 fringe, not the glow, not the airlight), so the ambient and the graze/fringe/glow terms still carry a lid's usual brightness even
+// though the direct-sun body contribution itself dips there. See where SS_POWDER_DEPTH is spent, below.
+const float SS_POWDER_DEPTH = 2.5;
+
+// <SS:Nexii> S4 HG2 variant (research_lighting.md #3): gain on the two-lobe phase fringe (ss_hg2_phase below), chosen so its peak (c=1, thin=1) lands close to the OLD thin^3 rim term's own peak
+// (SS_RIM * thin^3 = 0.8 at thin=1) instead of the raw HG's own ~2.0 peak there - phase(c=1) = mix(hg(1,-0.2), hg(1,0.8), 0.55) = mix(0.0442, 3.581, 0.55) = 1.989, so 0.4 * 1.989 = 0.796, within a
+// couple percent of 0.8. The dial changing the fringe's SHAPE (a view/sun-angle-dependent silver lining instead of a thin-only glow) rather than the field's overall exposure is the point - an
+// exposure jump would read as a brightness bug, not a lighting-model swap.
+const float SS_HG2_GAIN = 0.4;
+
 // <SS:Nexii> Distant rain shafts (ssvirgacore.h, doc/atmo_magic_far_clouds.md section 3): the fragment-only box and streak constants a virga card carries. Nothing here is a CPU twin - the qualifying
 // cell set, the taper and the vertical alpha profile are all baked by ssvirgacore.h and already ride in on vary_color.a and the card's own geometry; these four only round the card's own edges off and
 // give it a texture to carry. SS_SHAFT_V_SOFT: how much of the card's own v range eases in from its top and bottom before the next stacked card takes over, as a fraction of the card. SS_SHAFT_H_CORE:
-// how much of the card's own width, either side of centre, stays solid before the taper's side edges fall away. SS_SHAFT_STREAK: how far the fall streak (below) is allowed to swing the density.
-// SS_SHAFT_FALL_MPS: how fast that streak's sample point travels down the vertical axis.
+// how much of the card's own width, either side of centre, stays solid before the taper's side edges fall away. SS_SHAFT_FALL_MPS: how fast the fall streak's sample point travels down the vertical
+// axis. Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the streak's own AMPLITUDE is no longer this fixed constant - a light-rain curtain is a few eroded filaments, a heavy one a near-solid wall, so it
+// now ramps between SS_SHAFT_STREAK_WISPY and SS_SHAFT_STREAK_HEAVY by drive (see where it joins, below).
 // F12: vary_color.a (SSVirga::alphaAt * handoff * edgeFade) is NOT the shaft's whole on-screen ceiling - the shared
 // alpha multiply below (`a = density * vary_color.a * mix(ss_puff_density, 1.0, ss_sheet)`) still folds in the
 // Puff Density dial (ss_sheet is 0 on this draw call, so the ceiling is ss_puff_density, same as an ordinary
-// puff) AND this branch's own `density = vbox * hedge` (further scaled by the streak mix below) - a shaft at
-// vary_color.a's own ceiling can still read far short of it near a card's soft top/bottom seam or its taper edge.
+// puff) AND this branch's own `density = mask * mix(body_floor, 1.0, body) * streak_term * ss_virga_embedAlpha(...)
+// * evap` (F2, 2026-09-06 review: the per-pixel embed fade joined this product in place of the CPU's old per-card
+// alphaMul; phase 8e item 5 then adds the evaporation mask on top) - a shaft at vary_color.a's own ceiling can
+// still read far short of it near a card's soft top/bottom seam, its taper edge, while still inside the deck's own
+// embedded span, or below its own evaporation height.
 const float SS_SHAFT_V_SOFT = 0.22;
 const float SS_SHAFT_H_CORE = 0.10; // 7d: was 0.45 - a wide solid core gave every card flat sides; the column now falls away from its centre line
-const float SS_SHAFT_STREAK = 0.65; // 7d: was 0.30 - the fall streak now erodes most of the card, so no card reads as a uniform slab
 const float SS_SHAFT_FALL_MPS = 6.0;
+
+// <SS:Nexii> Phase 8e item 4 (doc/atmo_magic_phase8_show.md section 3b), DRIVE REACHES THE FRAGMENT: the streak's
+// amplitude by drive (the SAME SSVirga::drive the cell qualified with, recovered from vary_color.b - see the shaft
+// branch's own `drive` line) - a light-rain curtain (low drive) is a few eroded filaments (little amplitude, close
+// to solid, SS_SHAFT_STREAK_WISPY), a heavy one (high drive) a near-solid dark wall with streak texture (more
+// amplitude, SS_SHAFT_STREAK_HEAVY is actually LOWER than WISPY here because streak_term's own mix runs
+// mix(1.0 - amp, 1.0, streak) - a smaller amplitude means streak_term stays closer to 1 (more solid), a larger one
+// swings further toward 0 (more eroded); 7d's old single SS_SHAFT_STREAK (0.65, "was 0.30 - the fall streak now
+// erodes most of the card, so no card reads as a uniform slab") is DELETED, replaced by this pair.
+const float SS_SHAFT_STREAK_WISPY = 0.85;
+const float SS_SHAFT_STREAK_HEAVY = 0.45;
+
+// <SS:Nexii> Phase 8e (doc/atmo_magic_phase8_show.md section 3b): the shaft's BODY. Before this, `density = vbox *
+// hedge` (the box/streak above) was the whole silhouette - a soft rectangle with a falling streak eroding it, no
+// relation to the puff field it hangs from. Now that box is a MASK only, and the actual silhouette comes from
+// sampling the puff's own cloud noise (ss_density, the same base-map read ss_mixed/the sheet's Penrose blend both
+// call) on the card's two vertical planes - (world x, world z * SS_SHAFT_Z_STRETCH) and (world y, world z *
+// SS_SHAFT_Z_STRETCH) - weighted by the card's own facing (|nrm.x|, |nrm.y|), so a curtain reads as the deck's own
+// texture pulled downward rather than a second, unrelated material. SS_SHAFT_Z_STRETCH squashes the vertical axis
+// before the lookup so a card many hundred metres tall does not read as one flat streak of the map's z-period;
+// the body floor (mix(floor, 1, body), never body alone, so the box's taper/seam softening below still shapes the
+// silhouette instead of the noise being able to erase it outright) keeps the mask's own soft edges visible where
+// the body noise happens to read near zero. LOCKSTEP nothing: ssvirgacore.h and the twin harness own
+// the qualifying-cell set, the card geometry (including this card's own gate_air-derived world position) and the
+// alpha profile; this body noise has a CPU twin ONLY for the coordinate construction (gate_air, the frame the
+// producer placed the card in), never for ss_density's own return value - no test asserts a particular texel.
+const float SS_SHAFT_Z_STRETCH = 0.25;
+
+// <SS:Nexii> Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the body floor by drive - a light-rain curtain floors at
+// 0 (its soft mask edges are all that is left where the body noise itself goes dark, so the wispiest filaments can
+// erode all the way to nothing), a heavy one floors at 0.45 (a near-solid wall does not lose its silhouette to a
+// single dark noise sample). The single SS_SHAFT_BODY_FLOOR (0.25) that 8e's first body pass introduced is DELETED,
+// replaced by this pair (7d never had a body floor - it only retuned the streak).
+const float SS_SHAFT_BODY_FLOOR_WISPY = 0.0;
+const float SS_SHAFT_BODY_FLOOR_HEAVY = 0.45;
+
+// <SS:Nexii> Phase 8e item 2 (doc/atmo_magic_phase8_show.md section 3b): a curtain is lit like a puff's lower rim
+// (see the shaft branch's ss_sphere_normal call and its own comment), tilting further down toward the ground the
+// closer to the ground it hangs - continuous across stacked cards because it is keyed on h, the CURTAIN's own
+// height fraction (SSVirga::baseProfileH01's twin), not the card's own v. SS_SHAFT_DROOP_GROUND is the tilt at the
+// ground (h 0); SS_SHAFT_DROOP_BASE is the (shallower) tilt at the deck base (h 1) - a curtain leans more toward
+// the ground than toward the cloud that is dropping it.
+const float SS_SHAFT_DROOP_GROUND = 0.85;
+const float SS_SHAFT_DROOP_BASE = 0.35;
+
+// <SS:Nexii> Phase 8e item 5 (doc/atmo_magic_phase8_show.md section 3b), EVAPORATION MASK (the user's rule: alpha
+// is intensity x density across the volume; virga is masked out from the bottom up with wispy streaks). EVAP_H_
+// WISPY/EVAP_H_HEAVY/EVAP_SOFT LOCKSTEP ssvirgacore.h's own SSVirga::EVAP_H_WISPY/EVAP_H_HEAVY/EVAP_SOFT (the twin
+// pins them from both sources - the CORE's evapHeight01/cardEmittedFor decide which CARDS are emitted at all, this
+// shader's own evap decides the per-pixel fade within an emitted card, so the two must agree on the same height and
+// softness or the geometry cutoff and the pixel fade would disagree about where a curtain ends). EVAP_JITTER is
+// shader-only (no CPU twin): it swings the mask's own threshold by the streak detail read so the bottom edge comes
+// out as ragged wisps of different lengths, never a single flat line.
+const float SS_EVAP_H_WISPY = 0.65;
+const float SS_EVAP_H_HEAVY = 0.0;
+const float SS_EVAP_SOFT = 0.25;
+const float SS_EVAP_JITTER = 0.35;
 
 // <SS:Nexii> [interaction: ssstormcouplecore.h] How much the mesocyclone darkens the wall cloud (doc/atmo_magic_storm_dynamics.md section 3 "Local gloom"): multiplied over the SAME gloom both the puff and sheet paths already read, so the darkening under a wall cloud shares one number with no seam at the veil directly beneath it - see where it joins below.
 const float SS_MESO_GLOOM = 0.35;
@@ -261,6 +392,42 @@ const float SS_FLOW_MAX_TILES = 0.5;
 // is the direction a convective cloud is actually going.
 const float SS_FLOW_RISE = 0.45;
 
+// <SS:Nexii> S3 flow-field constants (doc/atmo_magic_flow_field.md section 1 "Flow fields"; ring/anvil/swirl
+// forms are LITERAL ports of V:\Scratch\atmo\flow\proto.h's f1_ring/f4_anvil/f5_swirl, the ladder-proven forms
+// - "never normalize a summed field vector" is the law those prototypes exist to prove, not a style choice).
+// SS_FLOW_EPS: the shared denominator floor for every eps-floored direction/magnitude below (proto.h's own
+// SS_FLOW_EPS, unitless in the prototype's [-1,1] disc space; reused here at metre scale too - it still only
+// ever guards an exact-zero denominator, and at 0.05 m it is negligible against any real storm-cell or
+// puff-radius distance, so it never softens a genuine direction, only the literal singularity). SS_BILLOW_RING_U/
+// SS_BILLOW_RING_V: where the two counter-rotating ring cores sit along the puff's own meridional (radial, bulge)
+// axes - (+-SS_BILLOW_RING_U, SS_BILLOW_RING_V), below centre, matching cumulus turret morphology, as a fraction
+// of the puff's own radius (unitless, same domain as p). SS_BILLOW_UPDRAFT_MAG/SS_BILLOW_UPDRAFT_SPREAD: the
+// central updraft term f1_ring adds on top of the ring pair - a plain gaussian in the radial coordinate, +y
+// (bulge) up, no division and so no singularity of its own; f1_ring's OWN curl companion (f3_ring_curl, 0.5x
+// fbm-derivative noise) is deliberately NOT ported - it costs 8 extra fbm evaluations (2 central differences x 2
+// axes x 4 octaves) against this block's current zero-new-fetch budget, so ring+updraft-only (f1_ring, not f3)
+// is what ships; the escalation if a build wants more turbulence in the roll is porting f2_curl/f3_ring_curl in
+// full, at that cost. SS_ANVIL_UPWIND_CAP: the anvil outflow's magnitude floor
+// on the upwind (back-shear) side, as a fraction of the downwind magnitude - short, not absent; a real
+// back-shear flank still shows some outward push. SS_ANVIL_STREAK_GAIN: extra streak-stretch multiplier at
+// full downwind alignment under a full anvil, unitless (multiplies the SAME `streak` divisor SS_STREAK
+// already scales). SS_MESO_SWIRL_MIN_M: metres - floors the meso swirl's own radius so the tangential field
+// never divides by a (near-)zero distance at the mesocyclone's own axis. SS_MESO_SWIRL_M: metres - the swirl
+// magnitude's falloff scale, chosen so the field is strong within a couple of SS_MESO_SWIRL_MIN_M and fades
+// over a few hundred more. SS_MESO_SWIRL_MAX: unitless ceiling on swirlMag (review_opus.md's own finding:
+// unfloored, meso*(SS_MESO_SWIRL_M/rMeso) reaches meso*15 at the floor radius, which would let rotation alone
+// dictate flow_w's post-normalize direction with nothing else surviving the renormalize).
+const float SS_FLOW_EPS = 0.05;
+const float SS_BILLOW_RING_U = 0.55;
+const float SS_BILLOW_RING_V = -0.15;
+const float SS_BILLOW_UPDRAFT_MAG = 0.6;
+const float SS_BILLOW_UPDRAFT_SPREAD = 0.18;
+const float SS_ANVIL_UPWIND_CAP = 0.35;
+const float SS_ANVIL_STREAK_GAIN = 2.5;
+const float SS_MESO_SWIRL_MIN_M = 60.0;
+const float SS_MESO_SWIRL_M = 900.0;
+const float SS_MESO_SWIRL_MAX = 4.0;
+
 // How many laps of the boil cycle the detail makes per second at full convection, and the share of that it keeps in dead calm. Never quite nothing: even still air is not static.
 const float SS_OCT_LAPS = 0.06;
 const float SS_OCT_DRIFT_FLOOR = 0.25;
@@ -290,6 +457,9 @@ const float SS_SHEET_TILE_M = 880.0;
 // nothing dissolves it. The far rail sits well inside the puffs' own scale so the sheet is always the first thing to go, and the near rail is short enough that the fade is spent before the plane
 // can reach the near clip and flash. [interaction: SSVolCloud soft-particle fade, which handles the geometry case and not this one]
 const vec2 SS_SHEET_NEAR_M = vec2(8.0, 96.0);
+
+// <SS:Nexii> 8g (SSVeil::RIM_FULL, ssveilcore.h): the BASE VEIL's amplitude ceiling AT THE RIM, which sits deliberately above the near-field cap of 0.75 in the density line below. That cap's reason is a near-field reason - a dense flat plane a few tens of metres overhead shows its whole underside at once and reads as a black slab under a gloom-crushed deck - and none of it applies at 8-14 km, where the veil is seen at a grazing angle through the haze and into the dome handoff and is the only cloud left out there. 0.90 and not 1.0 so the shared sun-through fringe survives at the horizon.
+const float SS_VEIL_RIM_FULL = 0.90;
 
 // Eye-space distance from a depth-buffer reading. The projection is the ordinary one, so this is just its inverse.
 float ss_eye_z(float d)
@@ -453,6 +623,20 @@ float ss_field_occupancy(vec2 air_xy, uint salt)
     return mix(mix(o00, o10, t.x), mix(o01, o11, t.x), t.y);
 }
 
+// <SS:Nexii> S3 flow-field helpers (doc/atmo_magic_flow_field.md section 1 "Flow fields"; LITERAL port of
+// V:\Scratch\atmo\flow\proto.h's ssflow::rot90/safeDir - the same two idioms the CPU ladder proved out over
+// five rounds of visual tests, transliterated here rather than re-derived, so the shipped math carries the
+// same singularity guarantees the prototypes were judged on).
+// ss_rot90: 90-degree rotation of a 2-D vector - which way it turns is picked per caller via a signed weight
+// (see each call site below), exactly as proto.h's own comment states.
+vec2 ss_rot90(vec2 v) { return vec2(-v.y, v.x); }
+
+// ss_safe_dir: "direction that fades out near zero" - v/(eps+|v|). Not a unit vector (magnitude ramps from 0
+// toward 1 as |v| grows past eps) but always finite, including at v=(0,0), so it stands in for normalize() at
+// any point that can pass through or sit near a singularity (a storm's own centre, a fragment exactly on the
+// meso axis) without a hard normalize()-of-zero branch anywhere below.
+vec2 ss_safe_dir(vec2 v) { return v * (1.0 / (SS_FLOW_EPS + length(v))); }
+
 // <SS:Nexii> [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::influence: the radial influence of a storm cell at world point p - 1 inside INFLUENCE_CORE (0.4) of the radius, 0 at and beyond it, 0 whenever the cell is disabled (radius <= 0). LOCKSTEP with SSStormCell::influence and the CPU twin; the phase-3 twin test (V:\Scratch\atmo\tests\twin_stormcouple.cpp) transliterates this text and asserts equality over a grid.
 float ss_storm_influence(vec2 c, float radius, vec2 p)
 {
@@ -475,6 +659,17 @@ struct SSStormSample
     vec2  dir;
     float rotSign;
     float owner;
+    // <SS:Nexii> S3 G3/G5 (doc/atmo_magic_flow_field.md section 2 stage 3, review_opus.md's A-S0 verdict "A-W-FIX
+    // ... ownerC is genuinely free inside the existing owner_idx block"): the owner cell's own centre, read
+    // alongside dir/rotSign/owner in the SAME owner_idx branch below - free because ss_storm_a[owner_idx].xy is
+    // already-resident uniform data, no new upload, no new CPU work. This is what lets the anvil outflow and
+    // meso swirl below read a fragment's true offset from the storm cell that owns it, rather than the whole
+    // coupled field's influence-weighted MAX (boost/anvil/overshoot/mammatus above), which has no single
+    // "centre" a MAX combine could point away from. See ss_storm_samplePoint's own comment for why ownerRadius
+    // is deliberately NOT added here even though it would be just as free to read.
+    vec2  ownerC;
+    float lineWall;  // 8a: [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::Sample::lineWall
+    float lineShelf; // 8a: LITERAL twin of SSStormCouple::Sample::lineShelf
 };
 
 // <SS:Nexii> [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::sampleAt over the ss_storm_a/b/c uniform arrays: boost/anvil/overshoot/mammatus combine by MAX of influence*value; meso/dir/rotSign come from the single OWNER cell (largest influence here; ties broken by lower index so the result is order-stable, matching the CPU loop's strict > comparison).
@@ -489,6 +684,9 @@ SSStormSample ss_storm_sampleAt(vec2 p)
     s.dir = vec2(0.0);
     s.rotSign = 0.0;
     s.owner = 0.0;
+    s.ownerC = vec2(0.0); // S3: off-cell default, same shape as the other owner_idx-only fields above
+    s.lineWall = 0.0;  // 8a: set by ss_line_apply at the call site, never here - ss_storm_sampleAt knows no line
+    s.lineShelf = 0.0;
 
     float owner_inf = 0.0;
     int owner_idx = -1;
@@ -521,8 +719,55 @@ SSStormSample ss_storm_sampleAt(vec2 p)
         s.dir = ss_storm_c[owner_idx].xy;
         s.rotSign = ss_storm_c[owner_idx].z;
         s.owner = owner_inf;
+        s.ownerC = ss_storm_a[owner_idx].xy; // S3: same already-resident uniform the influence test above just read .z (radius) from
     }
     return s;
+}
+
+// <SS:Nexii> 8a item 2 [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::LineField.
+struct SSLineField
+{
+    float wall;
+    float shelf;
+};
+
+// <SS:Nexii> 8a item 2 [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::lineField over the
+// ss_line_a/b/c uniforms: ss_line_a.xy/zw is b.ox/oy/dirX/dirY, ss_line_b.xyzw is b.motX/motY/halfLen/bandM,
+// ss_line_c.xy is b.shelfM/strength - field for field, matching SSStormCouple::LineBand's own layout comment.
+// Twin test transliterates this text.
+SSLineField ss_line_field(vec2 p)
+{
+    SSLineField f;
+    f.wall = 0.0;
+    f.shelf = 0.0;
+    float strength = ss_line_c.y;
+    float bandM = ss_line_b.w;
+    if (strength <= 0.0 || bandM <= 0.0)
+    {
+        return f;
+    }
+    float dx = p.x - ss_line_a.x;
+    float dy = p.y - ss_line_a.y;
+    float along = dx * ss_line_a.z + dy * ss_line_a.w;
+    float perp = sqrt(max(dx * dx + dy * dy - along * along, 0.0));
+    float ahead = dx * ss_line_b.x + dy * ss_line_b.y;
+    float halfLen = ss_line_b.z;
+    float shelfM = ss_line_c.x;
+    float endcap = 1.0 - smoothstep(halfLen, halfLen + bandM, abs(along));
+    f.wall = strength * endcap * (1.0 - smoothstep(0.5 * bandM, bandM, perp));
+    f.shelf = strength * endcap * smoothstep(0.0, 0.3 * shelfM, ahead) * (1.0 - smoothstep(0.6 * shelfM, shelfM, ahead));
+    return f;
+}
+
+// <SS:Nexii> 8a item 2 [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::applyLineBand: boost/anvil
+// take MAX with the wall term, lineWall/lineShelf record it directly, every other field of s untouched. anvilFrac
+// is passed at the call site (SSSquall::LINE_ANVIL_FRAC, 0.8), mirroring the CPU signature exactly.
+void ss_line_apply(inout SSStormSample s, SSLineField f, float anvilFrac)
+{
+    s.boost = max(s.boost, f.wall);
+    s.anvil = max(s.anvil, f.wall * anvilFrac);
+    s.lineWall = f.wall;
+    s.lineShelf = f.shelf;
 }
 
 // <SS:Nexii> [interaction: ssstormcouplecore.h] LITERAL twin of SSStormCouple::towerWindow: the deck's baked tower window, blended toward the storm's own (0.12..0.60) by boost.
@@ -560,9 +805,59 @@ float ss_storm_lidTopM(float topZ, float thicknessM, float overshoot)
 }
 
 // <SS:Nexii> [interaction: ssstormcouplecore.h] S5 sample point lockstep (doc/atmo_magic_storm_dynamics.md section 3, Sample point lockstep bullet): quantizes a fragment's air-frame position to its 260m cell CENTRE, the same lattice ss_cell_occupied already snaps to, before the storm field is sampled, so a fragment reads the storm sample the builder used for ITS CELL - matching the CPU's own cell-centre sample point (buildDeck: world_x/world_y = (cx + 0.5) * CELL_M + drift; floor(air / SS_CELL_M) recovers cx/cy from the air-frame position exactly as this helper does). Honest bound, stated rather than hidden: agreement is per CELL, not per fragment - a puff's quad can straddle a cell boundary (placement jitter, radius), so a fragment can sit in one cell while the puff drawing over it was placed and shaped from a neighbouring cell's sample; carrying the owning cell on a vertex channel would close that gap and is deferred (design doc, Sample point lockstep residual). Not a struct field: ownerRadius is CPU-only (precipShift's cap) and stays out of the GLSL SSStormSample.
+// <SS:Nexii> S3 update (doc/atmo_magic_flow_field.md section 2 stage 3, review_opus.md's A-S0 verdict): ownerC
+// (the owner cell's centre) WAS added to SSStormSample above - it is genuinely free, the same already-resident
+// ss_storm_a[owner_idx] read this function's own influence test uses. ownerRadius above stays OUT on purpose,
+// not by oversight: nothing below reads a per-fragment distance-to-owner-radius ratio (the anvil outflow and
+// meso swirl only need a DIRECTION and a MAX-combined magnitude - ss_storm_influence's own smoothstep already
+// supplies the radius-relative falloff through storm_sample.owner), so adding it would be a field with no
+// reader, the exact opposite of ownerC's justification.
 vec2 ss_storm_samplePoint(vec2 air)
 {
     return (floor(air / SS_CELL_M) + 0.5) * SS_CELL_M + ss_drift;
+}
+
+// <SS:Nexii> F2 (2026-09-06 review) [interaction: ssvirgacore.h]: LITERAL twin of SSVirga::embedAlpha - 1 at or
+// below baseZ, falling linearly to 0 at topZ (the embedded stack's top, ssvirgacore.h's embedTopZ), degenerate
+// topZ <= baseZ stepping from 1 to 0 exactly at baseZ. This is the ONLY place the embed fade is evaluated now: the
+// CPU no longer bakes one alphaMul per whole card (that never let the fade ramp WITHIN a card - a card can span
+// most of the embedded span, so one CardGeom-mid-height sample either over- or under-faded most of its own
+// pixels); this reads world_true.z per fragment instead, so the curtain visibly emerges from inside the cloud
+// pixel by pixel rather than in per-card steps.
+float ss_virga_embedAlpha(float z, float baseZ, float topZ)
+{
+    if (z <= baseZ) return 1.0;
+    float span = topZ - baseZ;
+    if (span <= 1.0e-6) return 0.0;
+    return clamp(1.0 - (z - baseZ) / span, 0.0, 1.0);
+}
+
+// <SS:Nexii> S4 HG2 variant (research_lighting.md #3, "Henyey-Greenstein two-lobe silver-lining term"), ONE FORMULA SITE: single-lobe HG, literal port of scene.h's hgPhase - the RAW form
+// (1-g^2)/(4*pi*(1+g^2-2*g*c)^1.5), normalized only by its own physical 4*pi solid-angle constant, NOT re-normalized to peak at 1 (SS_HG2_GAIN above is where the amplitude gets bounded instead,
+// against the OLD rim term's own peak, not against this function's own range). Finite and bounded for every g in (-1,1) and c in [-1,1]: the denominator's base 1+g^2-2*g*c >= (1-|g|)^2 > 0 there,
+// so it never divides by zero or blows up. Spent as phase = mix(ss_hg2_phase(c,-0.2), ss_hg2_phase(c,0.8), 0.55), the same backward/forward blend and weight scene.h's V_HG2 uses.
+float ss_hg2_phase(float c, float g)
+{
+    float g2 = g * g;
+    float denom = pow(max(1.0 + g2 - 2.0 * g * c, 1.0e-4), 1.5);
+    return (1.0 - g2) / (4.0 * 3.14159265 * denom);
+}
+
+// <SS:Nexii> Phase 8e item 1 (doc/atmo_magic_phase8_show.md section 3b, ONE FORMULA SITE): the fake-sphere normal
+// reconstruction, factored out of the puff branch below so the shaft branch (item 2) can call the SAME function
+// rather than a second, hand-copied inline block. nrm is the fragment's reconstructed view-ray direction (the
+// puff/shaft's own facing frame); p is the point on the quad, in [-1,1] per axis, whose implied third (depth)
+// coordinate this reconstructs - for the puff that is its own texcoord-derived p, for the shaft it is
+// vec2(u, -droop) (see the shaft branch). ref/tan_u/tan_v/r/the final normalize are the SAME statements in the
+// SAME order the puff branch always evaluated inline, so the puff's own result is bit-identical to before this
+// factoring - only the shaft branch is new behaviour.
+vec3 ss_sphere_normal(vec3 nrm, vec2 p)
+{
+    vec3 ref = (abs(nrm.z) < 0.95) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tan_u = normalize(cross(ref, nrm));
+    vec3 tan_v = cross(nrm, tan_u);
+    float r = length(p);
+    return normalize(tan_u * p.x + tan_v * p.y + nrm * sqrt(max(1.0 - r * r, 0.0)));
 }
 
 // <SS:Nexii> [interaction: ssdeckframecore.h] THE one lerp formula both sides use, spelled out rather than called via mix() - LOCKSTEP with SSDeckFrame::lerpExact. GLSL's mix(x, y, a) = x*(1-a) + y*a
@@ -677,6 +972,11 @@ void main()
     vec2 o = ss_frame_shearTableAt(world_true.z); // O(z) at this fragment's own altitude - removed FIRST, before either path's storm_p quantizes, per OBSERVER QUANTIZATION above.
     vec2 storm_p = ss_storm_samplePoint((ss_sheet > 0.5) ? air.xy : (air.xy - o)); // sheet: base-anchored, O never applied, quantized from air.xy directly. puffs: quantized from the un-leaned air.xy - o.
     SSStormSample storm_sample = ss_storm_sampleAt(storm_p);
+    // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): the squall line's wall/shelf folded in right
+    // after the discrete-cell sample, at the SAME storm_p - the shader's one call site for both, matching the CPU
+    // builder's own call-site order. 0.8 is SSSquall::LINE_ANVIL_FRAC, LOCKSTEP the same way ss_storm_influence's
+    // 0.4 above is SSStormCouple::INFLUENCE_CORE.
+    ss_line_apply(storm_sample, ss_line_field(storm_p), 0.8);
     float hero_inf = ss_storm_influence(ss_hero_c, ss_hero.w, storm_p);
     vec2 hero_shift = ss_frame_heroShift(hero_inf);
     vec2 gate_air = air.xy - hero_shift;
@@ -745,13 +1045,18 @@ void main()
         // coverage. Without this the veil drew its floor under sky the builder gave no puffs,
         // and the sheet's mottle sat unrelated to where the field actually stood.
         // <SS:Nexii> Phase 4 [interaction: ssdeckframecore.h]: gate_air, not air.xy - the cell gate stays on base drift plus the hero's rigid shift only, never the wind profile's O(z) (frame contract: "the gate stays on base drift ... nothing repops").
-        float occupancy = ss_field_occupancy(gate_air, uint(ss_cell_salt));
+        // <SS:Nexii> 8g: `holes`, not `occupancy`, and it is the ONLY term of the old law's distance chain that survives - see ssveilcore.h's header for the finding. This is the sky's genuine geography (the coverage gate softened bilinearly) and the veil keeps it whole; what the veil no longer multiplies itself by is the deck's RENDERING economy (the far thinning and the puffs' outward edge fade), which are camera-distance decisions about how many bodies to draw, not statements about where cloud exists.
+        float holes = ss_field_occupancy(gate_air, uint(ss_cell_salt));
 
-        // And the same edge-of-field fade the puffs run, so sheet and puffs dissolve together
-        // toward the dome handoff instead of the sheet outliving them.
         float horiz = length(world_true.xy - ss_cam_pos.xy);
-        // <SS:Nexii> LOD phase, doc/atmo_magic_far_clouds.md section 2 step 3 and phase 6a outcome: an INTENDED VALUE CHANGE, not a same-math relocation - this fade used to run on hardcoded 6800/9800 literals here, independent of the puff loop's own edge ramp. Those are gone; ss_edge_rails now carries SSDeckLod::FIELD_FADE_START_M/DECK_EDGE_M (8000/9800) uploaded from the core, so the fade start moved 6800 -> 8000 and the veil dissolves on the same rails buildDeck's own edgeFade() call uses for the puffs, not a second hand-tuned pair.
-        float edge = 1.0 - smoothstep(ss_edge_rails.x, ss_edge_rails.y, horiz);
+
+        // <SS:Nexii> 8g THE VEIL'S FADE-IN [interaction: ssveilcore.h SSVeil::rimIn, LITERAL transliteration; twin_veil_law.cpp proves it]: rim_w == 1 - puffRimShare, the complement of the share of the deck's own rim presence still being drawn, so the veil rises by exactly what the puffs give up. thin_keep is keepNorm(SSDeckLod::keepFrac(horiz)) - identically 1 - smoothstep(THIN_START_M, FIELD_DRAW_M, horiz), because keepFrac is lerp(1, THIN_KEEP_MIN, that same smoothstep) and keepNorm divides the (1 - THIN_KEEP_MIN) span back out - and edge_keep is SSDeckLod::edgeFade spelled exactly as the puff path spells it. So rim_w is 0 inside 5000 m, rises on the thinning's own curve from there, and is 1 at DECK_EDGE_M where the last puff has gone. What it weights is NOT the base amplitude - see the amp line below and ssveilcore.h's note on why the obvious base * rim_w product is wrong in both directions. The old law had all of this backwards: it multiplied by edge_keep, so the veil was thinnest exactly where the puffs were sparsest and gone entirely past 9800 m.
+        float thin_keep = 1.0 - smoothstep(ss_veil_rails.x, ss_veil_rails.y, horiz);
+        float edge_keep = 1.0 - smoothstep(ss_edge_rails.x, ss_edge_rails.y, horiz);
+        float rim_w     = 1.0 - thin_keep * edge_keep;
+
+        // <SS:Nexii> 8g THE VEIL'S REACH [interaction: ssveilcore.h SSVeil::reachOut]: the veil's own outward dissolve, on its own rails (10000 -> 14000) beyond the puffs' 9800, drawn on the coarse 2*CELL_M tile ring ssvolcloud.cpp emits past FIELD_DRAW_M. This is the term that puts thin cloud where there is no puff at all. PLACEHOLDER, and ssveilcore.h says so at length: when the horizon deck (doc/atmo_magic_phase8_show.md section 5, phase 8c - design text only today, no HORIZON_* symbol exists) is built, its far annulus REPLACES this term and the veil goes back to ending at its rim.
+        float reach_out = 1.0 - smoothstep(ss_veil_rails.z, ss_veil_rails.w, horiz);
 
         // And the near end of the same idea - see SS_SHEET_NEAR_M. Off TRUE distance, not the drawn one, so the fade measures the metres the eye would actually cross rather than the squashed
         // metres the geometry sits at; near the eye the two agree anyway, and reading eye_dist keeps it agreeing with every other ranged term in this shader.
@@ -762,7 +1067,10 @@ void main()
         // fringe lives. Run it denser and it reads as a black slab under the deck (the body
         // colour is gloom-crushed in a storm); this soft it glows faintly through its own mottle
         // and reads as the deck's floor lit from within.
-        density = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75) * presence * occupancy * edge * near_fade;
+        // <SS:Nexii> 8g THE VEIL LAW, transliterated from SSVeil::veilAlpha (ssveilcore.h) times the near fade this file keeps: amp(sheet_n, rim_w) * holes * reach_out, where amp is base + (SS_VEIL_RIM_FULL - base) * rim_w. rim_w weights the DEFICIT, not the base: base * rim_w would delete the veil inside 5 km - the deck-floor support that is the veil's original job - and a rim_w starting at 1 could not rise, so there is no pure-product spelling of this and ssveilcore.h says so at length. Two consequences worth knowing while reading this line: inside SSDeckLod::THIN_START_M rim_w is 0 and reach_out is 1, so the whole expression collapses to the OLD one bit-for-bit (base * presence * holes * near_fade), and outward it is >= the old law at every distance. base's three literals are SSVeil::BASE_MIN/BASE_SPAN/BASE_CAP and the ceiling is SSVeil::RIM_FULL (twin_veil_law.cpp parses all four out of these lines and pins them against the core's own constants, so a hand-edit to one side is a test failure). `presence` - the sheet's own de-tiled noise-map hole cut - and `holes` together are the core's single holesSoft argument. near_fade stays OUT of the core deliberately: it is a function of TRUE eye distance, not horizontal distance, and it solves a parallax problem (a flat plane the eye can fly into) rather than a reach one.
+        float veil_base = clamp(0.30 + 0.40 * sheet_n, 0.0, 0.75);
+        float veil_amp  = veil_base + (SS_VEIL_RIM_FULL - veil_base) * rim_w;
+        density = veil_amp * presence * holes * reach_out * near_fade;
         noise_v = sheet_n;
         sphere_n = vec3(0.0, 0.0, 1.0);
     }
@@ -773,6 +1081,8 @@ void main()
     // CPU has already baked this cell's drive, taper and vertical alpha profile into the card's own geometry and into vary_color.a (SSVirga::halfWidthM/alphaAt/handoff), so this branch supplies only
     // what a hanging curtain needs and a puff's own carve does not: a soft box across the card in place of the puff's radial window, and a falling streak in place of the puff's rising boil. No
     // shape/rim window, no n_map tower/anvil/cap-band logic - a shaft has no lid to consolidate into and no floor to cut flat, it is the curtain hanging under one.
+    // <SS:Nexii> S2: the puff branch's own phase (mPhase * 0.49, always < 0.5) can never trip this test - it lives on the SAME channel but under the flag's floor by construction (0.49 * 255 =
+    // 124.95 -> 125/255 = 0.4902, still < 0.5 after U8 quantization), so an ordinary puff never misreads as a shaft and vice versa.
     if (vary_color.b > 0.5)
     {
         // The card's own uv: x across its width (0 one side edge, 1 the other), y up its height (0 this
@@ -781,11 +1091,61 @@ void main()
         // of this file uses, so a shaft never shows its card as a rectangle: SS_SHAFT_V_SOFT rounds the
         // seam between one stacked card and the next, SS_SHAFT_H_CORE leaves the column's own centre
         // solid and falls away toward the two side edges the taper already narrows.
-        float vbox = smoothstep(0.0, SS_SHAFT_V_SOFT, vary_texcoord0.y)
-                   * smoothstep(1.0, 1.0 - SS_SHAFT_V_SOFT, vary_texcoord0.y);
-        float u = abs(vary_texcoord0.x * 2.0 - 1.0);
+        // <SS:Nexii> Phase 8e: this box is a MASK ONLY now - it no longer IS the silhouette (that is the body
+        // noise below), it only shapes where the body is allowed to show through, exactly as SS_PUFF_RIM masks
+        // the puff branch's own window+noise sum rather than replacing it.
+        // <SS:Nexii> S1: reads go through .xy, the decoded CORNER - shafts carry NO payload (ssvolcloud.cpp's
+        // render() never applies the payload encode to a shaft's corners), so corner == the raw card u/v here,
+        // exactly as vary_texcoord0 always was before the vec4 widen; this read is unchanged in value.
+        vec2 shaft_uv = vary_texcoord0.xy;
+        float vbox = smoothstep(0.0, SS_SHAFT_V_SOFT, shaft_uv.y)
+                   * smoothstep(1.0, 1.0 - SS_SHAFT_V_SOFT, shaft_uv.y);
+        float u = abs(shaft_uv.x * 2.0 - 1.0);
         float hedge = 1.0 - smoothstep(SS_SHAFT_H_CORE, 1.0, u);
-        density = vbox * hedge;
+        float mask = vbox * hedge;
+
+        // <SS:Nexii> Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the SAME SSVirga::drive this cell qualified with
+        // (SSVirga::drive/qualifies, ssvirgacore.h), recovered from the vertex colour's spare b channel where
+        // render() encoded it alongside the shaft flag (b = 0.5 + 0.5 * drive, see ssvolcloud.cpp's color4f call
+        // and the vary_color note in ssVolCloudV.glsl) - never a second, independent per-fragment computation.
+        float drive = clamp((vary_color.b - 0.5) * 2.0, 0.0, 1.0);
+
+        // <SS:Nexii> Phase 8e item 2 (doc/atmo_magic_phase8_show.md section 3b): the curtain's OWN height fraction
+        // (0 at the ground reference, 1 at the deck base) - the SAME fraction as SSVirga::baseProfileH01 with a 1 m span
+        // floor in place of the core's 1e-6 (identical for any real deck; not a literal twin), evaluated on
+        // this fragment's true world height rather than a card's own v, so it is continuous across stacked cards'
+        // seams exactly as the embed fade (ss_virga_embedAlpha) already is. Feeds both the droop (below, item 2)
+        // and the evaporation mask (item 5).
+        float h = clamp((world_true.z - ss_shaft_embed.z) / max(ss_shaft_embed.x - ss_shaft_embed.z, 1.0), 0.0, 1.0);
+
+        // <SS:Nexii> F12 (2026-09-06 review), stated rather than fixed: a shaft fragment now pays 2 ss_density
+        // calls (the x-facing and y-facing body planes below) plus 1 ss_detail call (the fall streak further
+        // down) - 3 texture fetches at minimum, up to 6 while a base/detail crossfade is live (each of those two
+        // functions samples a second texture and mixes when its own blend weight is > 0), on top of whatever the
+        // shared frame block above already paid. No action taken: measure the actual cost on a build before
+        // trading a fetch away.
+        // <SS:Nexii> Phase 8e body (doc/atmo_magic_phase8_show.md section 3b, SS_SHAFT_Z_STRETCH/SS_SHAFT_BODY_
+        // FLOOR_WISPY/HEAVY above): the puff's own cloud noise (ss_density, the puff body's base-map read), on the card's two vertical
+        // planes - x-facing and y-facing, the two planes that actually carry variation on a vertical Z-billboard
+        // (the horizontal xy plane a puff samples would barely change up a shaft's height, the same reasoning the
+        // puff body's own triplanar comment gives for not trusting a single plane on a billboard that can face any
+        // way). gate_air.xy, NOT shape_air - same base-anchored reasoning as the streak below: a shaft carries no
+        // O(z) lean at the producer side (SS_VIRGA_NO_SHEAR), so nothing here undoes one either. world_true.z is
+        // stretched by SS_SHAFT_Z_STRETCH before the divide so the lookup does not read one flat band of the map's
+        // z-period down a card many hundred metres tall. Weighted by the card's own facing (|nrm.x|, |nrm.y| - the
+        // same nrm the puff branch's `tri` weights triplanar with), so a shaft end-on to one plane leans on the
+        // other instead of collapsing to a single texel column the way an unweighted average would.
+        vec2 pl_xz_shaft = vec2(gate_air.x, world_true.z * SS_SHAFT_Z_STRETCH) / SS_NOISE_M;
+        vec2 pl_yz_shaft = vec2(gate_air.y, world_true.z * SS_SHAFT_Z_STRETCH) / SS_NOISE_M;
+        float wx = abs(nrm.x);
+        float wy = abs(nrm.y);
+        float wsum_shaft = max(wx + wy, 1.0e-4);
+        // <SS:Nexii> 8e-c review F1: the weight for |nrm.x| goes with pl_YZ - a card whose normal is +-X spans world Y and
+        // Z, so the plane that VARIES across its width is (y, z); pairing |nrm.x| with the plane that contains x read
+        // one column of the map smeared across the card whenever the camera looked along an axis (the puff branch's
+        // tri.x weights pl_yz for the same reason). Pinned as text by twin_virga.cpp - a text pin, so the pairing is
+        // ALSO stated here in words.
+        float body = (wx * ss_density(pl_yz_shaft) + wy * ss_density(pl_xz_shaft)) / wsum_shaft;
 
         // <SS:Nexii> F9 fix: the one piece of texture a shaft carries: the SAME detail map every puff already
         // reads (ss_detail), sampled at this column's own frame coordinate. This is gate_air, NOT shape_air -
@@ -806,20 +1166,71 @@ void main()
                                (world_true.z - ss_time * ss_drift_rate * SS_SHAFT_FALL_MPS) / SS_NOISE_M);
         float streak = ss_detail(streak_uv);
         noise_v = streak;
-        density *= mix(1.0 - SS_SHAFT_STREAK, 1.0, streak);
 
-        // The card's own true normal - flat, vertical, facing the camera exactly as ssvolcloud.cpp's
-        // Z-billboard right/up construction leaves it (right horizontal-perpendicular to nrm, up the
-        // fixed world Z axis), so the plane's normal is nrm itself with the vertical component dropped
-        // rather than a reconstructed fake sphere.
-        vec3 shaft_n = vec3(nrm.xy, 0.0);
-        sphere_n = (dot(shaft_n, shaft_n) > 1.0e-6) ? normalize(shaft_n) : vec3(1.0, 0.0, 0.0);
+        // <SS:Nexii> Phase 8e item 4, DRIVE REACHES THE FRAGMENT: the streak amplitude by drive - see
+        // SS_SHAFT_STREAK_WISPY/HEAVY's own comment above for why heavy rain's amplitude is the SMALLER number.
+        float streak_amp = mix(SS_SHAFT_STREAK_WISPY, SS_SHAFT_STREAK_HEAVY, drive);
+        float streak_term = mix(1.0 - streak_amp, 1.0, streak);
+
+        // <SS:Nexii> Phase 8e: mask * body * streak, not mask * streak alone - the body noise decides the
+        // silhouette (mix(body_floor, 1, body) so the mask's own soft seam/taper edges stay visible rather than
+        // being erasable to nothing by a low body sample), the mask still bounds it to the card, and the streak
+        // still adds the falling erosion on top. Phase 8e item 4: body_floor is now drive-shaped (see
+        // SS_SHAFT_BODY_FLOOR_WISPY/HEAVY's own comment above), not the old fixed SS_SHAFT_BODY_FLOOR.
+        // <SS:Nexii> F2 (2026-09-06 review): the per-pixel embed fade, in place of the CPU's old one-per-card
+        // alphaMul (ssvirgacore.h's CardGeom no longer carries one - deleted, not left as an always-1 field). A
+        // baked-per-card value never ramped WITHIN a card; this reads world_true.z, the fragment's own true world
+        // height, so the curtain visibly emerges from inside the cloud pixel by pixel rather than in per-card
+        // steps. ss_shaft_embed.xy is (deck base Z, embedded stack top Z) - zero for the under deck's pass, which
+        // never draws a shaft fragment anyway (shafts only ever hang from weatherDeck()).
+        float body_floor = mix(SS_SHAFT_BODY_FLOOR_WISPY, SS_SHAFT_BODY_FLOOR_HEAVY, drive);
+        density = mask * mix(body_floor, 1.0, body) * streak_term
+                * ss_virga_embedAlpha(world_true.z, ss_shaft_embed.x, ss_shaft_embed.y);
+
+        // <SS:Nexii> Phase 8e item 5, EVAPORATION MASK (the user's rule: alpha is intensity x density across the
+        // volume; virga is masked out from the bottom up with wispy streaks). evap_h LOCKSTEP
+        // SSVirga::evapHeight01 (ssvirgacore.h) - light rain (low drive) ends two thirds of the way up from the
+        // ground, heavy rain (high drive) reaches it. The jitter term ((streak - 0.5) * SS_EVAP_JITTER) swings the
+        // mask's own threshold by the SAME streak detail already read above, so the bottom edge comes out as
+        // ragged wisps of different lengths rather than one flat evaporation line. This is GEOMETRY's own
+        // per-pixel evaporation, layered on top of cardEmittedFor's per-card skip (ssvirgacore.h) - that core
+        // function decides whether a card is drawn AT ALL, this decides how a drawn card's own density fades out
+        // near that same height.
+        float evap_h = mix(SS_EVAP_H_WISPY, SS_EVAP_H_HEAVY, smoothstep(0.15, 0.85, drive));
+        float evap = smoothstep(evap_h - SS_EVAP_SOFT, evap_h + SS_EVAP_SOFT * 0.3, h + (streak - 0.5) * SS_EVAP_JITTER);
+        density *= evap;
+
+        // <SS:Nexii> Phase 8e item 2 (doc/atmo_magic_phase8_show.md section 3b): the shaft is lit like a puff's
+        // lower rim, tilting further down toward the ground - continuous across stacked cards because h (above) is
+        // the CURTAIN's own height fraction, not the card's own v. droop is the tilt amount at this fragment's own
+        // height (SS_SHAFT_DROOP_GROUND at the ground, SS_SHAFT_DROOP_BASE at the deck base, see their own
+        // comment); p_shaft is the same [-1,1]-per-axis point ss_sphere_normal (item 1, ONE FORMULA SITE) takes
+        // for a puff, x across the card's own width and y fixed at -droop (the curtain leans DOWN, away from the
+        // light, along its own height axis rather than across its width), length-clamped to 0.999 so the
+        // function's own sqrt(1 - r*r) never hits exactly 0 at the rim. Same frame, same tail, same form/buried
+        // inputs (mSheetForm, SSVirga::BURIED, see ssvolcloud.cpp's shaft emitter comment) - the curtain is the
+        // cloud base pulled down; only the droop differs. F7 (2026-09-06 review)'s own point stands: this is still
+        // the CAMERA-FACING approximation the shaft has always used (nrm, not the tilted parallelogram's true
+        // geometric normal), now folded through the same reconstruction the puff branch uses rather than the old
+        // flat vec3(nrm.xy, 0.0).
+        float droop = mix(SS_SHAFT_DROOP_GROUND, SS_SHAFT_DROOP_BASE, h);
+        // <SS:Nexii> S1: shaft_uv.x (== vary_texcoord0.xy.x, the decoded corner - see the mask block above), not
+        // the bare varying - same value as before the vec4 widen since a shaft carries no payload.
+        vec2 p_shaft = vec2(shaft_uv.x * 2.0 - 1.0, -droop);
+        float p_shaft_len = length(p_shaft);
+        if (p_shaft_len > 0.999)
+        {
+            p_shaft *= 0.999 / p_shaft_len;
+        }
+        sphere_n = ss_sphere_normal(nrm, p_shaft);
     }
     else
     {
 
     // A soft radial window. The art has no edge of its own - it is seamless noise, opaque corner to corner, with no alpha channel - so without a window every puff draws as its quad, hard borders and
     // all. That was the wall of rectangles.
+    // <SS:Nexii> S1: .xy already, unchanged by the vec4 widen (this was the ONLY read that already swizzled rather than using the bare varying) - it is now the decoded CORNER rather than the raw
+    // interpolated texcoord, bit-identical whenever payload is 0 (every puff today, S0-S2).
     vec2 p = vary_texcoord0.xy * 2.0 - 1.0;
     float r = length(p);
     float shape = 1.0 - smoothstep(SS_PUFF_CORE, 1.0, r);
@@ -840,14 +1251,49 @@ void main()
 
     // The sphere the quad stands in for, reconstructed once and used twice - for the light below, and for which way the detail flows. Axes spanning the quad, taken from the world rather than the
     // screen. Any pair perpendicular to the normal will do: rotating the frame within the quad's own plane turns the fake sphere about the view axis, which a wrapped light term cannot tell apart.
-    vec3 ref = (abs(nrm.z) < 0.95) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
-    vec3 tan_u = normalize(cross(ref, nrm));
-    vec3 tan_v = cross(nrm, tan_u);
-    sphere_n = normalize(tan_u * p.x + tan_v * p.y + nrm * sqrt(max(1.0 - r * r, 0.0)));
+    // <SS:Nexii> Phase 8e item 1: this reconstruction is now ss_sphere_normal (ONE FORMULA SITE, see its own
+    // comment above the shared frame block) - same statements, same order, so this result is bit-identical to
+    // the old inline block (pinned by twin_virga.cpp's phase8ec_item1 source-text test, which requires exactly two
+    // call sites with these arguments); only the shaft branch (item 2, below) gained a second caller of it.
+    sphere_n = ss_sphere_normal(nrm, p);
     tri /= max(tri.x + tri.y + tri.z, 1.0e-4);
 
-    // Stretched along the wind, by however little convection there is.
+    // <SS:Nexii> S3 G3/G5 shared input (doc/atmo_magic_flow_field.md section 1 "Flow fields", review_opus.md's Q
+    // findings on both A-G3/A-G5), HOISTED ahead of `streak`'s own declaration below (2026-09-06 opus S0-S3 fix
+    // pass, finding 1: the downwind streak gain has to land IN `streak` itself so wind_uv/pl_yz/pl_xz just below
+    // read the SAME stretched value the later flow offsets do - see that comment for the fuller story). The
+    // fragment's UN-LEANED offset from the storm cell that owns it - both the anvil outflow, the meso swirl, and
+    // now the streak gain need this SAME vector. world_true.xy - o, not the raw world_true.xy the rejected
+    // drafts read: `o` is O(z) at this fragment's own altitude, computed ONCE in the shared frame block above
+    // ("o = O(z) at this fragment's own altitude - removed FIRST, before either path's storm_p quantizes") and
+    // measured by review_opus.md to reach ~2.5km at anvil altitude - comparable to a whole storm radius, so
+    // reading world_true.xy alone would displace the outflow direction and the swirl centre by up to a storm
+    // radius at exactly the altitude an anvil lives at. storm_sample.ownerC is the owner cell's own centre (S3
+    // widen), not the influence-weighted MAX the other storm_sample fields carry. Every input this needs - o,
+    // storm_sample.ownerC, ss_wind - is already resident from the shared frame block well before this point (see
+    // main()'s frame block above), so hoisting it here costs nothing and reorders nothing else.
+#if SS_G3_OUTFLOW || SS_G5_SWIRL
+    vec2 ss_owner_delta = (world_true.xy - o) - storm_sample.ownerC;
+#endif
+#if SS_G3_OUTFLOW
+    // Radial alignment with the wind, needed by the streak gain immediately below AND by the anvil outflow
+    // block further down (which reuses ss_radial_dir/ss_wind_align rather than recomputing them).
+    vec2 ss_radial_dir = ss_safe_dir(ss_owner_delta);
+    float ss_wind_align = clamp(dot(ss_radial_dir, ss_wind) * 0.5 + 0.5, 0.0, 1.0); // remap [-1,1] alignment to [0,1]: 0 upwind, 1 downwind
+#endif
+
+    // Stretched along the wind, by however little convection there is. Under a full anvil, the downwind flank
+    // stretches FURTHER still (fibrous streak; upwind stays short) - folded in HERE, before wind_uv/pl_yz/pl_xz
+    // below read `streak`, so every along-wind lookup on this fragment (the static base body's coordinates below
+    // AND the advected detail's flow offsets further down) agrees on the one gained value. (2026-09-06 opus S0-S3
+    // fix pass, finding 1: the old placement mutated `streak` AFTER these coordinates had already been built from
+    // the un-mutated value, so only the advected detail's travel saw the gain, and it saw it as a SHORTENING -
+    // dividing by a larger streak on an already-divided coordinate - not the lengthening the comment there
+    // claimed. Revert is still SS_ANVIL_STREAK_GAIN = 0, or SS_G3_OUTFLOW = 0 to drop the gain entirely.)
     float streak = mix(SS_STREAK, 1.0, clamp(ss_churn, 0.0, 1.0));
+#if SS_G3_OUTFLOW
+    streak *= mix(1.0, 1.0 + SS_ANVIL_STREAK_GAIN * ss_wind_align, storm_sample.anvil);
+#endif
 
     // The horizontal lookup goes into the wind's own frame first - along and across - so the stretch follows the weather rather than the world axes. Dividing the ALONG coordinate by more metres is
     // what makes the noise change slowly in that direction, and slowly is what a streak is.
@@ -904,8 +1350,19 @@ void main()
 
     float oct2_m = SS_NOISE_M * SS_OCT2_SCALE * ss_detail_scale;
 
+    // <SS:Nexii> S2 per-puff phase (doc/atmo_magic_flow_field.md section 2, review_opus.md Q1/Stage 2): recovered
+    // from vary_color.b's low half - SSVolCloud::Puff::mPhase * 0.49 on the CPU (ssvolcloud.cpp's render()),
+    // undone here by the inverse scale and clamped to guard against any future b use pushing past 0.49 (the
+    // shaft flag's own >0.5 test already keeps this branch's b under 0.49 by construction; the clamp is a
+    // second, cheap guard rather than trust alone). A per-cell hashed phase seams hard across every puff face (a
+    // quad spans 2-10 hash cells) and shears with the wind profile if keyed on shape_air; a per-PUFF constant has
+    // ZERO phase gradient inside one quad, so no seam, no warp, no fold - it costs one CPU hash, zero fetches,
+    // zero varyings, and nothing else reads this deck's b channel for a puff (the sheet takes a different branch
+    // entirely; the shaft's own b>0.5 test is the only other consumer, and phase never reaches it).
+    float phase = clamp(vary_color.b, 0.0, 0.49) / 0.49;
+
     // Where in its cycle the flow is, and its half-cycle partner.
-    float cycles = turn / 6.2831853 + lead * 0.15;
+    float cycles = turn / 6.2831853 + lead * 0.15 + phase;
     float ph0 = fract(cycles);
     float ph1 = fract(cycles + 0.5);
     float w = abs(1.0 - 2.0 * ph0);
@@ -916,14 +1373,166 @@ void main()
     // every puff the same way at the same instant, so the field slides as one and reads as wind however the path is dressed up. The direction has to come from the geometry, and the geometry is right
     // here. Never downward, though. Air in a convective cloud goes up and spreads; the underside is where it is fed from, not where it flows to. So the vertical component is clipped at zero and
     // given a lift on top of that - the lower half of a puff flows sideways rather than draining out of the bottom of it.
-    vec3 flow_w = normalize(vec3(sphere_n.xy,
-                                 max(sphere_n.z, 0.0) + SS_FLOW_RISE));
+#if SS_G2_BILLOW
+    // <SS:Nexii> S3 G2_BILLOW (doc/atmo_magic_flow_field.md section 1 "Flow fields", review_opus.md's G2
+    // correction, proto.h's f1_ring): the vortex-ring roll, built in the puff's OWN meridional frame instead of
+    // the plain "outward and up" direction the #else branch below still carries. Meridional coordinate m =
+    // (r, bulge) reuses the SAME r this branch already computed for shape/rim above (length(p)) and
+    // bulge = sqrt(max(1-r*r,0)), the identical quantity ss_sphere_normal folds onto its own nrm axis - together
+    // they are the puff's own (radial-distance, height-above-the-tangent-plane) cross-section, which by the
+    // ring's rotational symmetry reads the SAME at every azimuth around the puff, so one 2-D field per fragment
+    // is enough; no separate azimuthal parameter is needed. Two counter-rotating cores at
+    // (+-SS_BILLOW_RING_U, SS_BILLOW_RING_V) in that plane, contribution rot90(d)*s*|d|/(SS_FLOW_EPS+|d|^3) per
+    // core (proto.h f1_ring, the ladder-proven form): the numerator ~|d|^2 vanishes at the core faster than the
+    // eps-floored denominator settles, so the term is C0 (in fact C1) at the core with NO normalize anywhere -
+    // the singularity class both the ladder (billow_v1_ring's seam) and review_opus.md's NaN finding hit
+    // independently. NEVER normalize a summed flow vector. This is now a COMPLETE port of f1_ring (2026-09-06
+    // opus S0-S3 fix pass, finding 3 - the first landing was ring-cores-only, at (+-SS_BILLOW_RING_U, 0), missing
+    // both the below-centre offset and the central updraft below; comments and doc/atmo_magic_flow_field.md
+    // section 1 both overclaimed "LITERAL port" against that shorter field). f1_ring's OWN curl companion
+    // (f3_ring_curl, +0.5x fbm-derivative noise) is still deliberately NOT ported - 8 extra fbm evaluations
+    // against a currently zero-new-fetch budget - see SS_BILLOW_UPDRAFT_MAG's own constant comment for the
+    // escalation path if a build wants more turbulence in the roll.
+    vec2 ss_bulge_m = vec2(r, sqrt(max(1.0 - r * r, 0.0)));
+    vec2 ss_billow_uv = vec2(0.0);
+    for (int ss_ring_i = 0; ss_ring_i < 2; ++ss_ring_i)
+    {
+        vec2 ss_ring_c = (ss_ring_i == 0) ? vec2(SS_BILLOW_RING_U, SS_BILLOW_RING_V) : vec2(-SS_BILLOW_RING_U, SS_BILLOW_RING_V);
+        float ss_ring_s = (ss_ring_i == 0) ? -1.0 : 1.0;
+        vec2 ss_ring_d = ss_bulge_m - ss_ring_c;
+        float ss_ring_len = length(ss_ring_d);
+        ss_billow_uv += ss_rot90(ss_ring_d) * (ss_ring_s * ss_ring_len / (SS_FLOW_EPS + ss_ring_len * ss_ring_len * ss_ring_len));
+    }
 
+    // Central updraft (proto.h f1_ring: "V2(0,0.6) * exp(-p.x^2/0.18); central updraft, +y = up") - the term the
+    // first landing dropped. On the constrained per-fragment arc it evaluates to (0, SS_BILLOW_UPDRAFT_MAG) at
+    // the apex (ss_bulge_m.x == 0 there), nearly doubling the ring-only apex value and pushing the up/down
+    // crossover outward - the difference between a bare vortex pair and cumulus turret morphology. A plain
+    // gaussian in ss_bulge_m.x, no division, so it adds no singularity of its own and needs no eps guard.
+    ss_billow_uv += vec2(0.0, SS_BILLOW_UPDRAFT_MAG) * exp(-(ss_bulge_m.x * ss_bulge_m.x) / SS_BILLOW_UPDRAFT_SPREAD);
+
+    // Map the meridional (radial, bulge) result back to WORLD axes through the SAME tan_u/tan_v/nrm frame
+    // ss_sphere_normal builds sphere_n from - duplicated here rather than factored out of that function, because
+    // twin_virga.cpp's phase8ec_item1 test pins ss_sphere_normal's body text verbatim (ref/tan_u/tan_v/r/return,
+    // in that order); a shared helper would change that pinned text for no behavioural gain, since main() cannot
+    // call a function and also keep the exact old inline statements the twin checks for the OTHER call site. The
+    // radial part is written as p * (ss_billow_uv.x / (SS_FLOW_EPS+r)), NOT p_hat * ss_billow_uv.x: p already IS
+    // the tangent-plane vector of length r, so scaling it directly keeps the SAME vanishing-numerator idiom as
+    // the ring cores above - at r=0 (dead centre of the puff) p is exactly (0,0), so this term is exactly zero
+    // however large ss_billow_uv.x is, no separate r==0 branch, and physically right too: an axisymmetric ring
+    // field has no preferred horizontal direction on its own axis. The bulge part is ss_billow_uv.y along nrm,
+    // exactly as ss_sphere_normal's own nrm*sqrt(1-r*r) term is - a WORLD-space vector even though nrm happens to
+    // equal the view ray for this camera-facing quad (ss_sphere_normal's own frame, tan_u/tan_v/nrm are each
+    // individual world-space unit vectors combined into one world-space result).
+    vec3 ss_billow_ref = (abs(nrm.z) < 0.95) ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0);
+    vec3 ss_billow_tan_u = normalize(cross(ss_billow_ref, nrm));
+    vec3 ss_billow_tan_v = cross(nrm, ss_billow_tan_u);
+    vec3 ss_billow_w = (ss_billow_tan_u * p.x + ss_billow_tan_v * p.y) * (ss_billow_uv.x / (SS_FLOW_EPS + r))
+                      + nrm * ss_billow_uv.y;
+
+    // The world-up rise and no-downdraft clamp, on the WORLD z component of ss_billow_w - NOT along nrm, which
+    // is the view ray and re-orients with the camera (review_opus.md's exact G2 finding: "A's replacement...
+    // puts the rise along the view direction, deleting both the world-up lift and the no-downdraft clamp").
+    // ss_billow_w's axes are already world axes (built from tan_u/tan_v/nrm, all world-space vectors), so its
+    // OWN .z IS the true world-vertical component, exactly as sphere_n.z already was in the #else branch below.
+    // Left UN-normalized here on purpose - see the shared normalize below, which this and the #else branch both
+    // feed. THIS FIXES ONLY HALF of review_opus.md's G2 finding, and the other half is still open (2026-09-06
+    // opus S0-S3 fix pass, finding 4): the finding had two independent parts - (i) the meridional plane's AXIS
+    // is spanned by the quad's radial direction and nrm, and nrm is the VIEW ray for this camera-facing quad, so
+    // the ring still re-orients as the camera orbits a puff (always face-on: a puff seen from below and one seen
+    // edge-on show the SAME roll pattern, where a real turret's ring axis is vertical) - unfixed, and the
+    // ss_billow_tan_u/tan_v/ref block just above builds exactly that camera-framed axis, same as ss_sphere_normal
+    // does; (ii) the rise/clamp being on the view axis rather than world-up - fixed, here, correctly, as the rest
+    // of this comment argues. review_opus.md's own adoption plan schedules the axis fix as Stage 6 ("G2 billow
+    // roll: prototype only... Build the field in the world frame (world-up as the ring axis, radial distance from
+    // the puff's own axis as the meridional coordinate)... Land only if the ring is visible in the PPM") -
+    // deliberately not landed in this stage; visual_flowfields_shader.cpp's PPM proves the roll sense (out and
+    // over) but cannot show the orbit dependence, which is what Stage 6 exists to fix.
+    vec3 flow_w = vec3(ss_billow_w.xy, max(ss_billow_w.z, 0.0) + SS_FLOW_RISE);
+#else
+    // RAW, un-normalized - see the shared normalize a few lines below, in the SS_G5_SWIRL #else branch, which
+    // this feeds exactly as it fed the old single-expression `normalize(vec3(...))` (split across two
+    // statements now purely so SS_G2_BILLOW and this branch can share the same later normalize; the VALUE is
+    // identical to before, since normalize(v) computed here or a few lines down is the same call on the same v).
+    vec3 flow_w = vec3(sphere_n.xy, max(sphere_n.z, 0.0) + SS_FLOW_RISE);
+#endif
+
+#if SS_G5_SWIRL
+    // <SS:Nexii> S3 G5_SWIRL (doc/atmo_magic_flow_field.md section 1 "Flow fields", review_opus.md's A-G5
+    // verdict "ADOPT-W-FIX ... clamp swirlMag"): tangential 1/r field around the storm's owner centre, replacing
+    // the constant-angle SS_STRIATION_ROT nudge (the #else branch below) with a field that curls TOWARD the
+    // mesocyclone rather than rotating every puff's flow by the same fixed angle regardless of position.
+    // rMeso floored at SS_MESO_SWIRL_MIN_M so the tangent never divides by a (near-)zero distance at the meso's
+    // own axis - an eps-floor, not a normalize. swirlMag clamped at SS_MESO_SWIRL_MAX: unfloored,
+    // meso*(SS_MESO_SWIRL_M/rMeso) reaches meso*15 at the floor radius (review's own measurement), which would
+    // let rotation alone dictate the post-normalize direction with nothing else surviving it.
+    vec2 ss_to_meso = ss_owner_delta;
+    float ss_r_meso = max(length(ss_to_meso), SS_MESO_SWIRL_MIN_M);
+    vec2 ss_swirl_tangent = ss_rot90(ss_to_meso) / ss_r_meso * storm_sample.rotSign;
+    float ss_swirl_mag = min(storm_sample.meso * (SS_MESO_SWIRL_M / ss_r_meso), SS_MESO_SWIRL_MAX);
+    flow_w.xy += ss_swirl_tangent * ss_swirl_mag;
+
+    // Renormalize the FULL 3-D vector once, here - the fold above only ever touches .xy, so .z is exactly
+    // whatever the SS_G2_BILLOW #if/#else pair above set it to: max(..., 0.0) + SS_FLOW_RISE, which is strictly
+    // positive (SS_FLOW_RISE alone is already > 0) whatever the max() clamped away. A vector with a strictly
+    // positive component has a strictly positive length, so THIS normalize can never see a zero vector - no
+    // guard needed here, unlike G3's blend below, which genuinely can cancel z to exactly zero (this xy-only
+    // add never touches z at all).
+    flow_w = normalize(flow_w);
+#else
     // <SS:Nexii> Optional cosmetic [interaction: ssstormcouplecore.h] (doc/atmo_magic_storm_dynamics.md section 3 "Supercell" - "persistent rotation drives base striations ... via a rotational detail-scroll bias"): nudges the detail flow's horizontal direction by the storm's own spin, meso-weighted so it strengthens toward the wall cloud and signed by rotSign so the rare anticyclonic hash spins the other way. A rotation of just the xy pair leaves flow_w's length untouched (z is unchanged, and rotation preserves the xy sub-vector's own length), so no renormalize is needed. Off-cell storm_sample.meso is 0 and this is the identity.
+    // <SS:Nexii> S3: the normalize that used to open this whole block (`vec3 flow_w = normalize(vec3(...))`)
+    // moved down here unchanged in VALUE - see the SS_G2_BILLOW #else branch's own note above. With both
+    // SS_G2_BILLOW and SS_G5_SWIRL at 0 this reproduces today's exact sequence: build the raw vector, normalize
+    // it, then rotate - byte-identical, just split across two statements instead of one nested expression.
+    flow_w = normalize(flow_w);
     float striation_ang = storm_sample.meso * storm_sample.rotSign * SS_STRIATION_ROT;
     float striation_c = cos(striation_ang);
     float striation_s = sin(striation_ang);
     flow_w.xy = mat2(striation_c, -striation_s, striation_s, striation_c) * flow_w.xy;
+#endif
+
+#if SS_G3_OUTFLOW
+    // <SS:Nexii> S3 G3_OUTFLOW (doc/atmo_magic_flow_field.md section 1 "Flow fields", review_opus.md's A-G3a
+    // verdict "ADOPT-W-FIX ... the best structural idea in A"): anvil outflow - radial from the storm's owner
+    // centre, blended toward the upper wind by downwind alignment (proto.h's f4_anvil, the ladder-proven form),
+    // magnitude capped short (not absent) upwind via SS_ANVIL_UPWIND_CAP, so the back-shear flank still shows
+    // some outward push rather than none. ss_safe_dir wherever a direction is needed from a vector that CAN be
+    // zero (a fragment sat exactly on the owner's centre) - never a bare normalize(). storm_sample.anvil stands
+    // in for the fuller `anvil_w` this function computes later (below the tower/map read, ~40 lines further
+    // down): that value depends on n_map and the storm-widened tower window, neither read yet at this point in
+    // the puff branch, and reordering the base-cut/tower sequence to read it early would touch code well outside
+    // this stage's scope. storm_sample.anvil is already the coupled cell's own quantized-cell anvil term, the
+    // same value anvil_w itself folds in via max() later, so an outflow direction or streak gain keyed on it
+    // agrees structurally with where the fuller anvil_w will also read high. ss_radial_dir/ss_wind_align are NOT
+    // redeclared here - they are the ones hoisted above `streak`'s own declaration (2026-09-06 opus S0-S3 fix
+    // pass, finding 1), reused as-is so the outflow direction and the streak gain agree on the same alignment.
+    vec2 ss_anvil_dir = ss_safe_dir(mix(ss_radial_dir, ss_wind, ss_wind_align));
+    float ss_anvil_flow_mag = storm_sample.anvil * storm_sample.owner * mix(SS_ANVIL_UPWIND_CAP, 1.0, ss_wind_align);
+
+    // NOT a bare normalize-of-a-mix: review_opus.md's own NaN finding is against exactly this shape of blend
+    // (design A's G2/G3 combination fused the mix directly inside a single normalize() call), reproduced
+    // here as the thing NOT to do. In THIS implementation, unlike design A's, flow_w.z is strictly positive
+    // every time this block runs (both SS_G5_SWIRL branches above end by normalizing a vector whose z came from
+    // the rise floor, and the swirl fold, when it runs, only ever touches .xy) - twin_flowfields.cpp's degenerate-
+    // case tests confirm the blended vector never actually reaches exactly zero for any input this pipeline can
+    // produce, because ss_anvil_flow_mag reaching 1.0 would need ss_wind_align to reach exactly 1.0, which
+    // ss_safe_dir's eps floor keeps just short of for any finite ss_owner_delta. The guard is kept anyway as
+    // defensive engineering, not because this exact formula is known to need it: a future change to the mag
+    // formula, to SS_G5_SWIRL, or to the eps constant could reopen the case, and the guard costs one dot product
+    // and a branch. What the guard DOES demonstrably matter for today is the ILL-CONDITIONED case review_opus.md
+    // measured against the ORIGINAL flow (length ~0.21 at mag 0.5 near the equator) - a small-but-nonzero
+    // denominator that swings the normalized direction wildly frame to frame; the guard's fallback keeps that
+    // case bounded rather than amplifying it.
+    vec3 ss_anvil_t = mix(flow_w, vec3(ss_anvil_dir, 0.0), ss_anvil_flow_mag);
+    flow_w = (dot(ss_anvil_t, ss_anvil_t) > 1.0e-6) ? normalize(ss_anvil_t) : flow_w;
+
+    // The streak gain itself is NOT applied here any more - see `streak`'s own declaration, well above this
+    // block, where it now folds into the SAME variable wind_uv/pl_yz/pl_xz already read (2026-09-06 opus S0-S3
+    // fix pass, finding 1). Applying it down here reached only flow_yz/flow_xz/flow_xy below, which shortened
+    // the advected detail's travel instead of stretching the static base body - the opposite of both halves of
+    // A-G3b's point (sharp upwind, fibrous downwind).
+#endif
 
     // The same direction seen in each plane's own two axes. Whichever plane the triplanar weights favour, the detail is travelling the same way through the world. Scaled by boil, so the top of the
     // layer travels further per cycle than the base does. Safe to vary per fragment here in a way it never was on the rate: this multiplies a DISTANCE that resets every cycle, so it cannot
@@ -945,7 +1554,27 @@ void main()
 
     // Window and noise combined by ADDING, the same way the dome layer biases its own noise with coverage (cloudsF.glsl). Multiplying would give a circle with texture painted on it; adding lets the
     // noise decide where the edge falls - solid through the core where the window dominates, ragged and broken toward the rim where the noise does.
+#if SS_G2_VIGOR
+    // <SS:Nexii> S3 G2_VIGOR (doc/atmo_magic_flow_field.md section 1 "Carve", review_opus.md's B-G2c verdict
+    // "ADOPT ... the RIGHT way to spend C3 - and notably it does exactly what A-G1b tried and failed to do, by
+    // turning the dial that already exists"): a puff under high storm boost and not already smothered by an
+    // anvil overhead reads crisper - more of its own detail noise decides the silhouette - than a calm-sky puff
+    // does. Contrast MULTIPLIER only: the erosion-carve swap this axis eventually feeds is S6, not this stage.
+    // max(ss_anvil, storm_sample.anvil) - NOT storm_sample.anvil alone (2026-09-06 opus S0-S3 fix pass, finding
+    // 2: the earlier landing substituted storm_sample.anvil for the fuller, map-refined `anvil_w` this function
+    // computes later - anvil_w = max(ss_anvil, storm_sample.anvil) - on the ordering excuse that anvil_w's own
+    // n_map/tower refinement isn't read yet at this point. That excuse only covers HALF of anvil_w: ss_anvil is
+    // a plain uniform, readable anywhere, with no ordering dependency at all, and reading storm_sample.anvil
+    // alone silently dropped it - so a puff under an AUTHORED anvil (doc/atmo_magic_phase8_show.md's authored
+    // severe weather) sitting over a boosted storm cell went un-suppressed and read crisper where the design
+    // says smothered. Folding in ss_anvil costs nothing - one extra token, no dependency on n_map or the tower
+    // window - and this max() is exactly the anvil_w's own eventual max(), just evaluated early on its two
+    // already-resident inputs rather than deferred to the refined value.
+    float ss_vigor = clamp(storm_sample.boost - max(ss_anvil, storm_sample.anvil) * 0.6, 0.0, 1.0);
+    density = clamp((noise - 0.5) * (SS_PUFF_CONTRAST * mix(1.0, 1.6, ss_vigor)) + shape, 0.0, 1.0) * rim;
+#else
     density = clamp((noise - 0.5) * SS_PUFF_CONTRAST + shape, 0.0, 1.0) * rim;
+#endif
 
     // ...and cut flat underneath - see SS_BASE_SOFT_M. Softened over a few tens of metres rather than a hard edge, because a real cloud base is ragged at the scale of the wisps hanging off it, just
     // not at the scale of the deck.
@@ -1006,7 +1635,13 @@ void main()
         // The thick-base fill: profile alpha, none built-in. A density floor, fed by the map's
         // own mottle so the solid base still varies with the geography the deck was carved by.
         float fill = prof.a * clamp(0.6 + 0.8 * (n_map - 0.5), 0.0, 1.0);
-        density = max(density, fill * step(v_h, 1.0));
+        // <SS:Nexii> S0 fill bug fix (doc/atmo_magic_flow_field.md section 2, review_opus.md F-0.9/Stage 0): the
+        // old `step(v_h, 1.0)` alone is 1 for v_h < 0 too (a one-sided ceiling, no floor), so an authored profile
+        // with a non-zero alpha at v=0 re-filled density BELOW the base cut this fragment already applied above
+        // (the smoothstep(ss_base_z, ss_base_z + SS_BASE_SOFT_M, ...) cut earlier in this branch), defeating the flat base cut and glowing under the deck's own floor. Bound to the [0,1]
+        // band with `step(0.0, v_h)` added: v_h < 0 now contributes 0, [0,1] is bit-for-bit unchanged (step(0,x)
+        // is 1 there), matched and asserted by V:\Scratch\atmo\tests\twin_flowchannel.cpp.
+        density = max(density, fill * step(0.0, v_h) * step(v_h, 1.0));
     }
 
     // ...and flat on top too, once there is an anvil to flatten - see SS_TOP_SOFT_M. Faded in by
@@ -1079,7 +1714,33 @@ void main()
     // <SS:Nexii> [interaction: ssstormcouplecore.h] Local gloom (doc/atmo_magic_storm_dynamics.md section 3 "Local gloom"): the mesocyclone's own wall-cloud darkening, multiplied over the SAME gloom above - both the puff path (this line) and the sheet path share this one gloom variable, and storm_sample.meso is the SAME storm field sample read at this fragment's own quantized cell point (main()'s shared frame block), so the veil directly under a wall cloud darkens by the identical amount with no seam between sheet and puffs. storm_sample.meso is 0 off-cell, so an uncoupled deck is unaffected.
     gloom *= (1.0 - SS_MESO_GLOOM * storm_sample.meso);
 
-    vec3 puff_light = (vary_ss_amblit + vary_ss_sunlit * vary_color.r) * gloom;
+    // <SS:Nexii> S4 (doc/atmo_magic_flow_field.md section 2 S4): the switchable lighting variants, all gated on the SAME live ss_light_variant uniform SSAtmoCloudLightVariant drives - variant 0
+    // touches NONE of ss_powder/ss_amb below (both stay at their identity values 1.0/vary_ss_amblit), so puff_light below is the exact original expression, bit-for-bit.
+    bool ss_v_powder = (ss_light_variant == 1 || ss_light_variant == 3);
+    bool ss_v_hg2 = (ss_light_variant == 2 || ss_light_variant == 3);
+    bool ss_v_tint = (ss_light_variant == 3);
+
+    // POWDER (variants 1/3): darkens the DIRECT-SUN body contribution only - see SS_POWDER_DEPTH's note for the exact curve and why it is ported raw, unnormalized, from scene.h's V_POWDER.
+    float ss_powder = 1.0;
+    if (ss_v_powder)
+    {
+        float ss_d = SS_POWDER_DEPTH * vary_color.g;
+        ss_powder = exp(-ss_d) * (1.0 - exp(-2.0 * ss_d));
+    }
+
+    // FULL only (variant 3), and only under gloom (research_lighting.md #4's airlight-through-a-deep-backlit-storm "green sky" cue): the AMBIENT contribution tints toward a subtle storm green,
+    // deepest where the puff is both heavily buried AND the deck's own gloom is severe - (1.0 - ss_gloom) is 0 at ss_gloom 1 (fair weather, untouched) and grows as the storm darkens, vary_color.g
+    // is the same buried fraction POWDER reads above, so the cast is deepest in the buried bellies of dark storms, exactly as the doc's verdict describes it ("the severe green cast, deepest in
+    // buried bellies of dark storms"). The sun contribution is untouched by this term - only ambient carries it, so a lit lid's direct sun still reads as the sunset's own colour.
+    vec3 ss_amb = vary_ss_amblit;
+    if (ss_v_tint && ss_gloom < 1.0)
+    {
+        vec3 ss_tint = mix(vec3(1.0), vec3(0.92, 1.0, 0.94), (1.0 - ss_gloom) * vary_color.g);
+        ss_amb *= ss_tint;
+    }
+
+    vec3 sun_body = vary_ss_sunlit * vary_color.r * ss_powder;
+    vec3 puff_light = (ss_amb + sun_body) * gloom;
 
     // The noise self-shade's mid, shared by the body and the graze light below - the lid keeps its texture whichever term is carrying it.
     float noise_mid = mix(mix(1.0 - SS_PUFF_SHADE, 1.0, noise_v), 0.83, form_flat);
@@ -1092,14 +1753,30 @@ void main()
     // wrap is exactly what a skimmed lid is not shaped by: at a grazing sun the whole horizon band is burning above the deck, and that sky lights the crown of a puff from every side - so the crest
     // came out as a warm stripe up the sun side of each lid puff with the anti-sun half held at the 0.55 floor, and the alpenglow the ramp exists to paint never read as a lit LID. A gentler wrap
     // of its own (SS_GRAZE_DARK) keeps the sun side warmest without ever putting a crown's far side in the dark; the same gloom and the same capped sunlit colour, so the crest stays the sunset's
-    // own fire and a storm still eats it.
+    // own fire and a storm still eats it. UNTOUCHED by POWDER (research_lighting.md #1's own scope is the sun-facing body term, not every sunlit contribution) and by HG2 below - the graze is its
+    // own light, riding vary_ss_sunlit directly, exactly as variant 0 does.
     body += vary_ss_sunlit * (vary_ss_top * gloom)
           * mix(mix(SS_GRAZE_DARK, 1.0, wrap), 0.78, form_flat)
           * noise_mid;
 
     // The bright fringe where the puff is thin enough for light to come through it - see SS_RIM. Fed by the capped vertex-stage sun light, so at a low sun the fringes carry the sunset's own
     // hue - the uniform this read before was the CPU replica that had already crushed to grey by then.
-    body += vary_ss_sunlit * (SS_RIM * wrap * thin * thin * thin) * (1.0 - form_flat);
+    // <SS:Nexii> S4 HG2 variant (variants 2/3): replaces this thin^3 rim with a two-lobe Henyey-Greenstein phase on the view/sun angle (research_lighting.md #3), so the bright fringe tracks the
+    // sun's SIDE of the puff rather than glowing on every thin silhouette edge regardless of where the sun is. c = dot(-nrm, ss_light_dir): nrm is the existing to-eye normal (fragment-toward-
+    // camera, `nrm = to_eye / drawn_dist` above), so -nrm is the camera-ray-into-the-scene direction (eye toward fragment and beyond) - the same convention scene.h's `camera.rayDir(x,y)` uses
+    // against its own sunDir. When the sun sits BEHIND the puff from the viewer's side (looking toward the sun through the cloud), the ray onward from the fragment and the direction to the sun
+    // both point further into the scene, so c runs toward +1 there - which is exactly where the forward lobe (g=0.8, weighted 0.55) peaks, so that geometry is the one that brightens: the silver
+    // lining lands on the sun side, not on every edge. REPLACED, not added: the old wrap-weighted thin^3 term is skipped entirely on this branch.
+    if (ss_v_hg2)
+    {
+        float ss_c = dot(-nrm, ss_light_dir);
+        float ss_phase = mix(ss_hg2_phase(ss_c, -0.2), ss_hg2_phase(ss_c, 0.8), 0.55);
+        body += vary_ss_sunlit * (SS_HG2_GAIN * ss_phase * thin * thin) * (1.0 - form_flat);
+    }
+    else
+    {
+        body += vary_ss_sunlit * (SS_RIM * wrap * thin * thin * thin) * (1.0 - form_flat);
+    }
 
     // <SS:Nexii> The forward-scatter fire - the band's glow term (cloudsF's glow_gate, same thinness easing, same 0.35 body sliver), spent here as the ADDITIVE it physically is: light
     // transmitted through the thin parts of a puff standing between the eye and the sun. View-angled where the wrap fringe above is light-angled, so the two light different edges - the wrap

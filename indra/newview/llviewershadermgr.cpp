@@ -192,6 +192,7 @@ LLGLSLShader            gSSSurfaceNormalProgram;
 LLGLSLShader            gSSSurfaceCommitProgram;
 LLGLSLShader            gSSSurfaceSnowProgram;
 LLGLSLShader            gSSWhiteoutProgram;
+LLGLSLShader            gSSInfoLookProgram;
 LLGLSLShader            gSSPrecipProjProgram;
 LLGLSLShader            gSSWindInitProgram;
 LLGLSLShader            gSSWindDivProgram;
@@ -1262,6 +1263,7 @@ bool LLViewerShaderMgr::loadShadersDeferred()
         gSSSurfaceCommitProgram.unload();
         gSSSurfaceSnowProgram.unload();
         gSSWhiteoutProgram.unload();
+        gSSInfoLookProgram.unload();
         gHUDFullbrightProgram.unload();
         gDeferredFullbrightAlphaMaskProgram.unload();
         gHUDFullbrightAlphaMaskProgram.unload();
@@ -2349,6 +2351,25 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             LL_WARNS("Shader") << "SS Whiteout shader failed to compile;"
                                << " no whiteout layer" << LL_ENDL;
             gSSWhiteoutProgram.unload();
+        }
+    }
+
+    // <SS:Nexii> The info-view LOOK (doc/atmo_magic_phase8_show.md section 6 item 4): the warm-gray post-screen pass that replaced the debug overlay's world-dim quad. Registered here beside the whiteout because it is the same KIND of shader - a full-screen triangle over the finished frame - but it is NOT a post program in the pipeline's sense and must never join mShaderList: it wants no sky/light uniforms (its whole light model is two direction uniforms the call site uploads), and it does not run from renderFinalize at all. isDeferred is what pulls deferredUtil.glsl in for getDepth/getNormRaw/decodeNormal/getPositionWithDepth and the normalMap/depthMap/inv_proj declarations those need; the vertex stage is its own file rather than postDeferredNoTCV.glsl only because that one declares a screen_res this pass has no use for. Failure to compile is not fatal: the overlay simply draws over an untouched world. [interaction: SSAtmoInfoView::renderInfoLook]
+    if (success)
+    {
+        gSSInfoLookProgram.mName = "SS Info View Look Shader";
+        gSSInfoLookProgram.mFeatures.isDeferred = true;
+        gSSInfoLookProgram.mShaderFiles.clear();
+        gSSInfoLookProgram.mShaderFiles.push_back(make_pair("deferred/ssInfoLookV.glsl", GL_VERTEX_SHADER));
+        gSSInfoLookProgram.mShaderFiles.push_back(make_pair("deferred/ssInfoLookF.glsl", GL_FRAGMENT_SHADER));
+        gSSInfoLookProgram.mShaderLevel = mShaderLevel[SHADER_DEFERRED];
+        gSSInfoLookProgram.clearPermutations();
+        add_common_permutations(&gSSInfoLookProgram);
+        if (!gSSInfoLookProgram.createShader())
+        {
+            LL_WARNS("Shader") << "SS info view look shader failed to compile;"
+                               << " the info views will draw over an unmodified world" << LL_ENDL;
+            gSSInfoLookProgram.unload();
         }
     }
 
