@@ -25,8 +25,8 @@
 #define SS_AIRLIGHTCORE_H
 
 // <SS:Nexii> A CORE header (lldefs.h, other ss*core.h, <cmath>, <cstdint> only - no GL, no LLMath, no settings). Design: doc/atmo_magic_phase8_show.md section 5b. WHAT THIS IS: the windlight atmosphere's light, written once - the sun beam's extinction along its own path to a given elevation (the `off_axis` airmass and the `light_atten` optical depth), the transmittance over a view path of a given length (`combined_haze`), the AIRLIGHT that path has gathered (`additiveColorBelowCloud * (1 - combined_haze)`), and the atmospheric SOFT-CLIP response every cloud surface should end on instead of a hard clamp - all as pure functions of the windlight uniforms. The soft clip's own finding and provenance are at its section below.
-// <SS:Nexii> THE FINDING IT EXISTS FOR (section 5b): there is no mismatch between the sky, the cirrus dome band and the volumetric deck - they already agree BY DESIGN. ssVolCloudV.glsl declares the same nine windlight uniforms the sky runs on (blue_horizon, blue_density, haze_density, haze_horizon, density_multiplier, max_y, lightnorm, sunlight_color, ambient_color) and composes vary_ss_sunlit / vary_ss_amblit following, in its own comment, "cloudsV's exact composition", with the airlight handed down separately (vary_ss_airlight) and added AFTER every cloud multiplier so the deck and the dome band converge on the SAME pure airlight at the rim. What they do not share is a single SPELLING of that agreement: the composition is transliterated three times - app_settings/shaders/class1/deferred/skyV.glsl (the dome), cloudsV.glsl (the cirrus band), ssVolCloudV.glsl (the volumetric deck) - and phase 8c's horizon shell would be the FOURTH. This header is the one place those four are meant to read from.
-// <SS:Nexii> ONE CONSUMER SO FAR, and it is the soft clip only: ssVolCloudF.glsl transliterates softClipUnit() as ss_soft_clip_unit, names this file as the authority, and is held to it by V:\Scratch\atmo\tests\twin_deck_softclip.cpp. Everything else here - the beam, the airmass, the haze split, the path transmittance, the airlight - is PROVEN BUT UNWIRED: the three shipped transliterations (skyV.glsl, cloudsV.glsl, ssVolCloudV.glsl) still carry their own copies, and rewiring them onto these formulas is a separate step that phase 8c is blocked behind (doc/atmo_magic_phase8_show.md section 5b). So do not assume a shader agrees with this file because the file exists - check whether that shader is on the list above. What IS proven today: V:\Scratch\atmo\tests\twin_airlight.cpp transliterates skyV.glsl's and cloudsV.glsl's arithmetic from their TEXT and asserts this core reproduces both bit-identically, and V:\Scratch\atmo\tests\unit_airlight.cpp pins the invariants 8c depends on. Until the rewire, a change to anything but softClipUnit changes nothing on screen.
+// <SS:Nexii> THE FINDING IT EXISTS FOR (section 5b): there is no mismatch between the sky, the cirrus dome band and the volumetric deck - they already agree BY DESIGN. ssVolCloudV.glsl declares the same nine windlight uniforms the sky runs on (blue_horizon, blue_density, haze_density, haze_horizon, density_multiplier, max_y, lightnorm, sunlight_color, ambient_color) and composes vary_ss_sunlit / vary_ss_amblit following, in its own comment, "cloudsV's exact composition", with the airlight handed down separately (vary_ss_airlight) and added AFTER every cloud multiplier so the deck and the dome band converge on the SAME pure airlight at the rim. What they did not share was a single SPELLING of that agreement: the composition was transliterated three times - app_settings/shaders/class1/deferred/skyV.glsl (the dome), cloudsV.glsl (the cirrus band), ssVolCloudV.glsl (the volumetric deck) - and phase 8c's horizon shell would be the FOURTH. This header is the one place those four are meant to read from; two of the three are now transliterations OF IT rather than of each other (see the consumer note below).
+// <SS:Nexii> THE CONSUMERS, and what is still outstanding. app_settings/shaders/class1/deferred/skyV.glsl (the dome) and cloudsV.glsl (the cirrus band) are WIRED: every line of their airlight chains - lightAtten, offAxis, beamToElevation, hazeSplit, pathTransmittance, glowAirmass/glowLight, ambientUnderClouds, dimByCloudShadow, skyColor, and then airlightOverPath (band) / domeHazeColor (dome) - is a transliteration of the function of that name below, names this file as its authority at the site, and is held to it by V:\Scratch\atmo\tests\twin_airlight.cpp, which reads both shader files at runtime, pins their text, and asserts this core reproduces every intermediate of both bit-for-bit. ssVolCloudF.glsl is wired for the soft clip only (softClipUnit as ss_soft_clip_unit, pinned by twin_deck_softclip.cpp). THE ONE TRANSLITERATION LEFT TO FOLD IN is ssVolCloudV.glsl, the volumetric deck: it still carries its own copy of the composition, still carries the UNGUARDED spellings the other two have now given up (DECK_SPELLING below), and folding it in is what phase 8c's horizon shell - the fourth consumer - is blocked behind (doc/atmo_magic_phase8_show.md section 5b). So do not assume a shader agrees with this file because the file exists: check whether it is on the wired list. V:\Scratch\atmo\tests\unit_airlight.cpp pins the invariants 8c depends on. AND THE COPIES THAT ARE NOT THIS CORE'S TO FOLD IN, stated so the consolidation is not read as wider than it is: class1/windlight/atmosphericsFuncs.glsl (calcAtmosphericVars - the haze every deferred surface wears), llsettingssky.cpp (calculateLightSettings) and lllegacyatmospherics.cpp (calcSkyColorInDir) each carry their own spelling of the same composition, and all three still lift the ambient and dim the beam WITHOUT the clamps - so for an authored ambient above 1 they darken under cover where the dome and the band now hold flat. That is one split fewer than before the consolidation, not one more (the dome always held flat and the band has now joined it), but it is a real remaining one and twin_airlight.cpp prints the list every run.
 // <SS:Nexii> [interaction: doc/atmo_magic_phase8_show.md section 5b, the horizon shell] The rim melt 8c's shell is built on is the property `airlightOverPath` states: as the path transmittance goes to zero the airlight goes to the pure below-cloud sky colour, which is exactly what the dome band and the deck both land on at the horizon. A shell that inherits the sky's air rather than approximating it is a shell that calls these functions with its own path length.
 // <SS:Nexii> WHAT THIS CORE DELIBERATELY DOES NOT OWN: the haze GLOW's angular term (1 - dot(ray, glow_dir), the glow.x / glow.z spike and the anti-solar 0.25). That term is genuinely per-site - the dome reads it along the TRUE ray under the horizon mirror, the band along the (possibly mirrored) rel_pos_norm, and the deck caps it at SS_GLOW_CONE_CAP over its own rows - and it is a direction, not air. It enters here as the scalar `hazeGlow`, the way ssVolCloudV.glsl already hands it down as vary_ss_glow. Likewise the sun/moon selection, the horizon-band share (ss_sun_rise), the disc-floored elevation and the ray's own mirroring stay at the call site; this core takes the RESULT of those as `sunlight` and `sunElev`.
 // Bodies here are formulas; the shaders transliterate them and twin_airlight.cpp proves the transliteration.
@@ -70,24 +70,41 @@ namespace SSAirlight
     constexpr F32 AMBIENT_CLOUD_LIFT = 0.5f;
     constexpr F32 SUN_GLOW_DEPTH     = 2.0f;
 
-    // <SS:Nexii> THE THREE PLACES THE SHIPPED SHADERS DISAGREE WITH EACH OTHER, made explicit rather than averaged. All three are guards that skyV.glsl carries and cloudsV.glsl / ssVolCloudV.glsl do not, and all three are INERT for every windlight an authored sky can produce - they differ only where the parameters leave the range the UI can express. Naming them here means a call site has to say which spelling it wants instead of a consolidation quietly picking one and changing a shipped look. twin_airlight.cpp asserts both spellings agree across the production parameter range AND diverge on the degenerate inputs, so the claim "inert" is measured, not asserted.
-    //   guardZeroDensity     - skyV: `max(abs(blue_density) + vec3(abs(haze_density)), vec3(1e-6))`;
-    //                          cloudsV and ssVolCloudV: the same sum with NO max. The weights divide by this sum, so
-    //                          the unguarded spelling is a 0/0 at an all-zero density (inf/NaN weights); the guarded
-    //                          one yields weights of 0. Identical whenever the summed density is >= 1e-6, which every
-    //                          authored sky is by a factor of ~1e5.
-    //   clampAmbientHeadroom - skyV: `ambient_color + max(vec3(0), (1. - ambient_color)) * cloud_shadow * 0.5`;
-    //                          the other two: the same without the max. Identical for every ambient <= 1 per channel;
-    //                          an over-1 ambient (an HDR authored sky) makes skyV hold the ambient flat while the
-    //                          other two DARKEN it as cloud cover rises.
-    //   clampShadowDim       - skyV: `sunlight *= max(0.0, (1. - cloud_shadow))`;
-    //                          the other two: `*= (1. - cloud_shadow)`. Identical for every cloud_shadow <= 1 (the
-    //                          setting is validated to [0,1]); above 1 the unguarded spelling negates the sunlight.
-    // A fourth disagreement is angular, not air, and so is not represented here: in the NON-Atmo path skyV computes
-    // `haze_glow = factor * (haze_glow + 0.25)` while cloudsV computes `haze_glow * factor + 0.25`. These differ for
-    // any factor other than exactly 1 - and sun_moon_glow_factor is 1 for the sun and < 1 for the moon, where both
-    // branches zero the term, so the two spellings agree at every value the viewer actually binds. Under SS_ATMO with
-    // the rise band live both are `ss_sun_rise * (haze_glow + 0.25)`, identical by construction.
+    // <SS:Nexii> THE THREE PLACES THE SHIPPED SHADERS USED TO DISAGREE, and the DECISION taken on each (2026-09-06, the consolidation). All three are guards skyV.glsl carried and cloudsV.glsl / ssVolCloudV.glsl did not. skyV's spelling won all three and cloudsV.glsl now carries it; ssVolCloudV.glsl has not been folded in yet, so DECK_SPELLING still describes a shipped file and is not dead code. The flag stays a parameter for exactly that reason - and so the rung that proves the rewire behaviour-preserving has a name for the OLD spelling.
+    // THE RANGES THE VIEWER ACTUALLY BINDS, derived from the settings and the appliers rather than assumed, because
+    // "inert" has to be a measurement: ambient_color [0,3] per channel (llsettingssky.cpp legacyHazeValidationList,
+    // and Atmo's own dial is a colour swatch scaled by SSFloaterAtmoEnv's SCALE_SUN_AMBIENT = 3); blue_density [0,3]
+    // per channel with black reachable from the swatch; haze_density [0,5] with 0 reachable from the slider's floor;
+    // cloud_shadow [0,1] (validated, and both the slider and the spinner of the dome coverage dial are [0,1] through
+    // SSAtmoEnvSkyModulation::cloudCoverage, which is currently the identity); density_multiplier [1e-7,2];
+    // max_y [0,10000]; sun_moon_glow_factor exactly 1.0 or moon_brightness * 0.25 <= 0.25.
+    //   guardZeroDensity     - skyV: `max(abs(blue_density) + vec3(abs(haze_density)), vec3(1e-6))`; cloudsV and
+    //                          ssVolCloudV: the same sum with NO max. The weights divide by this sum, so the
+    //                          unguarded spelling is a 0/0 at an all-zero density - NaN weights, and from there a NaN
+    //                          cirrus vertex. DECIDED: guarded everywhere. This was NOT unreachable - a black
+    //                          blue_density and a haze_density of 0 are both inside the ranges above and both one
+    //                          control away - so the old cloudsV line was a live latent NaN, not a courtesy. Bit
+    //                          identical to the unguarded form for every summed density >= 1e-6.
+    //   clampAmbientHeadroom - skyV: `ambient_color + max(vec3(0), (1. - ambient_color)) * cloud_shadow * 0.5`; the
+    //                          other two: the same without the max. DECIDED: guarded everywhere, and this is the one
+    //                          of the four that CHANGES a shipped look, because ambient above 1 is inside the bound
+    //                          range (the top two thirds of Atmo's ambient dial). Unguarded, the headroom goes
+    //                          negative and cloud cover DARKENS the sky - the opposite of the line's own comment -
+    //                          so the band and the dome sat on different ambients at the rim they are built to meet
+    //                          on. Identical for every ambient <= 1 per channel.
+    //   clampShadowDim       - skyV: `sunlight *= max(0.0, (1. - cloud_shadow))`; the other two: `*= (1. -
+    //                          cloud_shadow)`. DECIDED: guarded everywhere. Genuinely inert - cloud_shadow is [0,1]
+    //                          on every path above - and adopted for one spelling rather than for a fix; above 1 the
+    //                          unguarded form negates the light, which is the failing control.
+    // A fourth disagreement is angular, not air, and so is deliberately NOT represented here (see the header note on
+    // what this core does not own): in the NON-Atmo path skyV computes `haze_glow = factor * (haze_glow + 0.25)`
+    // while cloudsV computed `haze_glow * factor + 0.25`. These differ for any factor other than exactly 1 - the
+    // anti-solar floor rides undimmed in the second form - and agree at every value the viewer binds, since
+    // sun_moon_glow_factor is 1 for the sun and < 1 for the moon, where the ternary zeroes both. DECIDED: skyV's
+    // grouping, on the argument that the 0.25 is part of the glow's light and must scale with it; cloudsV.glsl now
+    // spells the line identically and twin_airlight.cpp pins the two files' text against each other with an
+    // unreachable factor as its failing control. Under SS_ATMO with the rise band live both are
+    // `ss_sun_rise * (haze_glow + 0.25)`, identical by construction.
     struct Spelling
     {
         bool guardZeroDensity;      // skyV's max(sum, 1e-6) before the weight division
@@ -95,11 +112,13 @@ namespace SSAirlight
         bool clampShadowDim;        // skyV's max(0, 1 - cloud_shadow) on the sunlight dim
     };
 
-    // The dome's spelling (skyV.glsl) and the two cloud spellings (cloudsV.glsl and ssVolCloudV.glsl, which are the
-    // same three choices as each other). BAND_SPELLING and DECK_SPELLING are separate names for one value on purpose:
-    // if a future edit makes them differ, it should differ HERE and be visible, not be discovered on a build.
+    // The three shipped spellings, named separately on purpose: if a future edit makes two of them differ, it should
+    // differ HERE and be visible, not be discovered on a build. SKY_SPELLING and BAND_SPELLING are now the same three
+    // choices because skyV.glsl and cloudsV.glsl have been consolidated onto one spelling; DECK_SPELLING is the
+    // unguarded one ssVolCloudV.glsl still ships, and it is also the name the rewire's own before/after rung uses for
+    // the OLD band spelling.
     constexpr Spelling SKY_SPELLING  { true,  true,  true  };
-    constexpr Spelling BAND_SPELLING { false, false, false };
+    constexpr Spelling BAND_SPELLING { true,  true,  true  };
     constexpr Spelling DECK_SPELLING { false, false, false };
 
     // lightAtten(blueDensity, hazeDensity, densityMultiplier, maxY): the atmosphere's optical depth per unit airmass,
@@ -260,8 +279,9 @@ namespace SSAirlight
     // ambientUnderClouds(ambient, cloudShadow, spelling): the ambient lifted toward white as cloud cover rises -
     // `ambient + (1 - ambient) * cloud_shadow * 0.5`, skyV clamping the headroom at 0 (see the Spelling note). Cloud
     // cover both dims the beam and multiplies the sky's own bounce, and this is the second half.
-    // Invariants: equals ambient at cloudShadow 0; monotone non-decreasing in cloudShadow for ambient <= 1;
-    // <= (ambient + 1) / 2 at cloudShadow 1.
+    // Invariants: equals ambient at cloudShadow 0; under clampAmbientHeadroom monotone non-decreasing in cloudShadow
+    // at EVERY ambient (that is what the clamp buys - unguarded it is monotone only for ambient <= 1);
+    // <= (ambient + 1) / 2 at cloudShadow 1 for ambient <= 1.
     inline Col3 ambientUnderClouds(const Col3& ambient, F32 cloudShadow, const Spelling& spelling)
     {
         Col3 headroom = oneMinus(ambient);

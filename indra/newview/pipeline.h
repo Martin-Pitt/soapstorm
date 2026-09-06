@@ -675,7 +675,13 @@ public:
         RENDER_DEBUG_GEOM_SETTLE        = 0x8000000000,
         RENDER_DEBUG_SURFACE_FIELD      = 0x10000000000,
         RENDER_DEBUG_WORLD_FIELD        = 0x20000000000,
-        RENDER_DEBUG_CLOUD_FIELD        = 0x40000000000
+        RENDER_DEBUG_CLOUD_FIELD        = 0x40000000000,
+        // <SS:Nexii> Atmo Magic lightning: the strike diagram (channels split at the leader front, crawl,
+        // attachment, occlusion box, and the scene/cloud light readings). Unlike the seven above it is NOT
+        // dispatched from LLPipeline::renderDebug - that runs inside renderGeomPostDeferred, ahead of the
+        // luminance sample, which is exactly why the info-view overlay was moved out of it - the mask is read by
+        // SSAtmoInfoView::renderDimAndWorld from render_ui() instead. [interaction: SSAtmoInfoView::renderLightning]
+        RENDER_DEBUG_LIGHTNING          = 0x80000000000
     };
 
 public:

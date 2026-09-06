@@ -28641,10 +28641,21 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <integer>0</integer>
   </map>
+  <key>SSAtmoCloudShadeCalibration</key>
+  <map>
+    <key>Comment</key>
+    <string>Atmo Magic: which calibration the volumetric cloud deck's structural shading uses (ssdeckshadecore.h Calibration, doc/atmo_magic_backlog.md 7.4), for an in-build A/B exactly as SSAtmoCloudLightVariant is. TRUE (the shipping default) is the retuned set: the DEPTH-FREE neighbour term that was darkening a puff sitting on the LID of its column - nothing at all above it - to a fifth for merely being central drops to a third of its scale with a quadratic sun falloff, the slant floor moves 0.35 -&gt; 0.6 so a 260 m cell's own column is no longer traversed along a 2.86x airmass while its coefficient rises to carry that column honestly, and the facing spread widens 0.2 -&gt; 0.3. Measured over a real daylight deck (V:/Scratch/atmo/tests/unit_deckshade_calibration.cpp): the direct-sun share of a puff's light goes 0.582 -&gt; 0.662 at the lid, 0.371 -&gt; 0.391 half way up and 0.209 -&gt; 0.172 at the floor - vertical contrast, not a brightness dial - and the ambient-dominated corner the backlog measured goes 0.083 -&gt; 0.245. FALSE restores the pre-retune constants BIT-IDENTICALLY, so it is the look of every build before this one. A build-time A/B dial, not a taste setting - TRUE is the only value expected outside of judging a build.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>Boolean</string>
+    <key>Value</key>
+    <integer>1</integer>
+  </map>
   <key>SSAtmoInfoView</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: the active info view (doc/atmo_magic_debug_views.md) - 0 off, 1 Wind Profile (V1), 2 Storm Cells (V2: lattice potential tiles, influence rings by stage, squall lines as a bar through their own active members with leading-edge QLCS junction markers, forced/authored cells with a distinct double outline, the hero flyby ribbon, rotation glyphs, the "why not" gate readout), 3 Deck LOD (V3: the volumetric cloud deck's distance LOD ramp - rings at each rail, a keep-fraction tile grid, live puff count vs the budget dial, ssdecklodcore.h), 4 Precip &amp; Virga (V4: the last build's distant-rain shaft cells outlined and tinted by drive, a fall-tilt comparison line per kept cell, the particle rain handoff ring and band, ssvirgacore.h), 5 Weather Cube (V5: a pure chart - the applied track's day-cycle curves in one lane and the derived gates in another, a "now" cursor and authored override cue markers, no in-world layer). One curated mode at a time: the world dims, one data layer pops, the legend and the Views-tab chart explain it. Read-only: a view never builds anything. Does not persist, so the engineering overlays it drives always start a session untouched.</string>
+    <string>Atmo Magic: the active info view (doc/atmo_magic_debug_views.md) - 0 off, 1 Wind Profile (V1), 2 Storm Cells (V2: lattice potential tiles, influence rings by stage, squall lines as a bar through their own active members with leading-edge QLCS junction markers, forced/authored cells with a distinct double outline, the hero flyby ribbon, rotation glyphs, the "why not" gate readout), 3 Deck LOD (V3: the volumetric cloud deck's distance LOD ramp - rings at each rail, a keep-fraction tile grid, live puff count vs the budget dial, ssdecklodcore.h), 4 Precip &amp; Virga (V4: the last build's distant-rain shaft cells outlined and tinted by drive, a fall-tilt comparison line per kept cell, the particle rain handoff ring and band, ssvirgacore.h), 5 Weather Cube (V5: a pure chart - the applied track's day-cycle curves in one lane and the derived gates in another, a "now" cursor and authored override cue markers, no in-world layer), 9 Lightning (V9: every live strike's channel split at the leader front and coloured by lifecycle stage, its ground crawl, attachment, occlusion box and the scene/cloud light readings, with a strike timeline for a chart; the same layer is also reachable on its own through the Lightning diagram checkbox on the Overlays tab, which drives it through RENDER_DEBUG_LIGHTNING). 6, 7 and 8 are RESERVED and deliberately not offered by the picker - the numbering is settled in ssatmoinfoviewcore.h: 6 World Field (designed, not built), 7 the sync console (a stackable console, never an info-view mode), 8 Anatomy (phase 8b). One curated mode at a time: the world dims, one data layer pops, the legend and the Views-tab chart explain it. Read-only: a view never builds anything. Does not persist, so the engineering overlays it drives always start a session untouched.</string>
     <key>Persist</key>
     <integer>0</integer>
     <key>Type</key>
@@ -28699,7 +28710,7 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoInfoViewTileTint</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: paint the diagnostic tile grid an info view diagrams a quantity onto - V2 Storm Cells' lattice-potential tint (and its tile outlines) and V3 Deck LOD's keep-fraction tint. Off by default: the tiles can bury the entities they sit under (rings, the hero ribbon, vortex icons, squall line band, pins and labels for V2; the LOD rails and their labels for V3), which all keep drawing regardless. Off also swaps each view's legend ramp row for "(tile tint off)". Display only, like every info view - never changes what a build does.</string>
+    <string>Atmo Magic: paint the diagnostic tile grid an info view diagrams a quantity onto - V2 Storm Cells' lattice-potential tint (and its tile outlines), V3 Deck LOD's keep-fraction tint, and V9 Lightning's ground-fire blob discs and filled scene-light radii. Off by default: the fill can bury the entities it sits under (rings, the hero ribbon, vortex icons, squall line band, pins and labels for V2; the LOD rails and their labels for V3; channels, crawl, attachment, occlusion box, light rings and labels for V9), which all keep drawing regardless. Off also swaps each view's legend ramp row for "(tile tint off)". Display only, like every info view - never changes what a build does.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>

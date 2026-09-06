@@ -841,6 +841,27 @@ vec2 ss_storm_samplePoint(vec2 air)
     return (floor(air / SS_CELL_M) + 0.5) * SS_CELL_M + ss_drift;
 }
 
+// <SS:Nexii> [interaction: ssdeckcellsoftcore.h] LITERAL twin of SSDeckCellSoft::heroInfluenceSoft, and THE FIX for the sixth build report's two artefacts ("hard stair-stepped rectangular tiling across the whole cloud field" top-down; "large hard-edged grey wedges" from deck altitude). What stood here was `ss_storm_influence(ss_hero_c, ss_hero.w, storm_p)` on the QUANTIZED point, so the hero's influence - and therefore ss_frame_heroShift, and therefore gate_air, the coordinate the veil's mottle, its presence cut, its ss_field_occupancy gate, the puffs' shape_air and the virga body/streak reads are ALL taken in - was piecewise constant per 260 m cell and STEPPED at every cell wall. Measured (V:\Scratch\atmo\tests\unit_deck_cellsoft.cpp, hero r 2076 as photographed): the frame slid 95.94 m across one wall, unchanged at a tenth of the sampling separation (ratio 1.001 - a step, not a slope), which is 0.37 of a whole occupancy cell, and it moved the veil's own alpha by 0.188 across one pixel. The step lives only in the influence FALLOFF RING (0.4r..r; inside that the influence saturates at 1 and the shift is constant, outside it is 0), which is exactly the annulus the screenshots show - stair-stepped, world-axis-aligned, centred on the HERO rather than on the camera, and blown up into screen-filling wedges when the eye sits in the veil's own plane and one cell subtends a fan to the horizon.
+// <SS:Nexii> Why the blend rather than simply dropping the quantization: the quantization is ssdeckframecore.h's producer/observer rule, not an accident - the CPU builder evaluates this influence ONCE PER CELL at that cell's own centre and the observer must recover the same number or it reads a pattern the puff was never built from. This stencil keeps that: t is exactly 0 at a cell centre, so the blend collapses to that one cell's value BIT-IDENTICALLY (unit_deck_cellsoft.cpp checks all 3721 centres of the ring), and interpolates only between the points the producer never evaluated. It is also the idiom this file already uses one step downstream - ss_field_occupancy softens the builder's binary per-cell gate over this same lattice, for this same reason. Note the two cell indices are deliberately different: ss_storm_samplePoint floors air/CELL (the CONTAINING cell), this floors air/CELL - 0.5 (the lower-left of the four cells whose CENTRES bracket the point), which is the only one that can interpolate.
+// <SS:Nexii> Bounded, stated: the blend's own slope is at most 1.5/CELL_M per cell of influence change times the displacement cap, measured at |d gate_air / d air| = 1.527, i.e. |d shift / d air| = 0.527 < 1 - so the observer's frame stays a fold-free map of the world and the pattern can never double back on itself. The storm SAMPLE (boost/anvil/meso/dir) is still read at the quantized point on purpose and is NOT softened here: those are per-cell amplitudes the producer genuinely built each cell's puffs from, and blending them would need four full ss_storm_sampleAt loops. Their residual steps are measured in unit_deck_cellsoft.cpp and reported, not hidden.
+float ss_hero_influenceSoft(vec2 air)
+{
+    if (ss_hero.w <= 0.0)
+    {
+        return 0.0;
+    }
+    vec2 q = air / SS_CELL_M - 0.5;
+    vec2 i = floor(q);
+    vec2 t = q - i;
+    t = t * t * (3.0 - 2.0 * t);
+    vec2 c0 = (i + 0.5) * SS_CELL_M + ss_drift;
+    float i00 = ss_storm_influence(ss_hero_c, ss_hero.w, c0);
+    float i10 = ss_storm_influence(ss_hero_c, ss_hero.w, c0 + vec2(SS_CELL_M, 0.0));
+    float i01 = ss_storm_influence(ss_hero_c, ss_hero.w, c0 + vec2(0.0, SS_CELL_M));
+    float i11 = ss_storm_influence(ss_hero_c, ss_hero.w, c0 + vec2(SS_CELL_M, SS_CELL_M));
+    return mix(mix(i00, i10, t.x), mix(i01, i11, t.x), t.y);
+}
+
 // <SS:Nexii> F2 (2026-09-06 review) [interaction: ssvirgacore.h]: LITERAL twin of SSVirga::embedAlpha - 1 at or
 // below baseZ, falling linearly to 0 at topZ (the embedded stack's top, ssvirgacore.h's embedTopZ), degenerate
 // topZ <= baseZ stepping from 1 to 0 exactly at baseZ. This is the ONLY place the embed fade is evaluated now: the
@@ -1060,14 +1081,17 @@ void main()
     // corrected read. Off a hero-less, table-less deck ss_frame_heroShift returns the zero vector and ss_frame_shearTableAt's lerpExact returns (0,0) bit-exactly (pinned by twin_deckframe), so
     // gate_air == shape_air == air.xy bit-identical to before this existed.
     vec2 o = ss_frame_shearTableAt(world_true.z); // O(z) at this fragment's own altitude - removed FIRST, before either path's storm_p quantizes, per OBSERVER QUANTIZATION above.
-    vec2 storm_p = ss_storm_samplePoint((ss_sheet > 0.5) ? air.xy : (air.xy - o)); // sheet: base-anchored, O never applied, quantized from air.xy directly. puffs: quantized from the un-leaned air.xy - o.
+    // <SS:Nexii> [interaction: ssdeckcellsoftcore.h] The observer's own un-quantized frame point, named once and spent twice below - the storm SAMPLE still floors it to its cell (those are per-cell amplitudes; see ss_hero_influenceSoft's own comment), the hero's INFLUENCE no longer does. sheet: base-anchored, O never applied. puffs: the un-leaned air.xy - o.
+    vec2 frame_air = (ss_sheet > 0.5) ? air.xy : (air.xy - o);
+    vec2 storm_p = ss_storm_samplePoint(frame_air);
     SSStormSample storm_sample = ss_storm_sampleAt(storm_p);
     // <SS:Nexii> 8a item 2 (doc/atmo_magic_phase8_show.md section 3): the squall line's wall/shelf folded in right
     // after the discrete-cell sample, at the SAME storm_p - the shader's one call site for both, matching the CPU
     // builder's own call-site order. 0.8 is SSSquall::LINE_ANVIL_FRAC, LOCKSTEP the same way ss_storm_influence's
     // 0.4 above is SSStormCouple::INFLUENCE_CORE.
     ss_line_apply(storm_sample, ss_line_field(storm_p), 0.8);
-    float hero_inf = ss_storm_influence(ss_hero_c, ss_hero.w, storm_p);
+    // <SS:Nexii> [interaction: ssdeckcellsoftcore.h] ss_hero_influenceSoft(frame_air), NOT ss_storm_influence(..., storm_p): the frame every base-anchored read below is taken in has to be CONTINUOUS, and the quantized read made it a 260 m staircase - see ss_hero_influenceSoft's own comment for the finding, the numbers and why this still recovers the builder's per-cell value exactly at every cell centre.
+    float hero_inf = ss_hero_influenceSoft(frame_air);
     vec2 hero_shift = ss_frame_heroShift(hero_inf);
     vec2 gate_air = air.xy - hero_shift;
     vec2 shape_air = gate_air - o; // EVERY puff-path pattern read - see this block's own comment for what takes this coordinate and why; the sheet path never reads it.

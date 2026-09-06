@@ -28,6 +28,8 @@
 #include "ssstormcellcore.h"
 #include "sswindprofilecore.h"
 #include "v2math.h"
+#include "v3color.h" // <SS:Nexii> V9: LightningData::SceneLight carries sceneLights' own LLColor3
+#include "v3math.h"  // <SS:Nexii> V9: strike origins, attachment points and light positions
 
 #include <boost/signals2.hpp>
 #include <string>
@@ -44,7 +46,14 @@ public:
     // The live mode, 0 when off (SSAtmoInfoViewCore::MODE_*).
     static U32 mode();
 
-    // The active mode's in-world layer (V1: the wind mast; V2: lattice tiles, cell rings, squall-line bars/junctions, forced outlines, hero ribbon, rotation glyphs; V5 has none - a pure chart). Draws nothing when off. Called only from renderDimAndWorld(), i.e. post-tonemap, from a 3-D pass with the world camera, AFTER that function has laid the look pass down. [interaction: render_ui]
+    // <SS:Nexii> Whether the 3-D half has anything to draw at all, asked once per frame by render_ui() in
+    // llviewerdisplay.cpp ahead of renderDimAndWorld. It is NOT just "a mode is selected" any more: V9's layer
+    // also answers to RENDER_DEBUG_LIGHTNING, the engineering checkbox bound beside the other seven overlays, so
+    // the mask keeps the overlay alive with no mode picked. Kept here rather than spelled out at the call site so
+    // a future view that gains its own mask never needs llviewerdisplay.cpp edited again. [interaction: render_ui]
+    static bool wantsDraw();
+
+    // The active mode's in-world layer (V1: the wind mast; V2: lattice tiles, cell rings, squall-line bars/junctions, forced outlines, hero ribbon, rotation glyphs; V4: shaft cells, tilt/skew lines, the handoff ring; V5 has none - a pure chart; V9: strike channels, crawl, attachment, occlusion box and the light readings). Draws nothing when off - EXCEPT V9's layer, which also answers to RENDER_DEBUG_LIGHTNING and so draws with no mode selected; it is dispatched exactly once either way. Called only from renderDimAndWorld(), i.e. post-tonemap, from a 3-D pass with the world camera, AFTER that function has laid the look pass down. [interaction: render_ui]
     static void renderWorld();
 
     // <SS:Nexii> The overlay's whole 3-D half in one call, from render_ui() in llviewerdisplay.cpp - post-tonemap, a 3-D pass with the world camera, between gPipeline.renderFinalize() and render_hud_attachments(): the LOOK pass (renderInfoLook, a full-screen triangle that rewrites the presented world as warm gray) and then renderWorld() on top of it. NOT from LLPipeline::renderDebug any more - that runs inside renderGeomPostDeferred, so the overlay landed in the HDR screen buffer ahead of the luminance sample and auto-exposure fought it. The 2-D half - legend and chart - stays in the UI stage as ordinary LLViews. Draws nothing when off; the caller also guards on gCubeSnapshot/gSnapshot/gDisconnected and on the UI debug-feature mask. [interaction: render_ui] [interaction: SSAtmoDimView]
@@ -347,6 +356,81 @@ public:
     };
     static WeatherCubeData weatherCubeData();
 
+    // <SS:Nexii> V9's data (doc/atmo_magic_debug_views.md V9): the live strike list exactly as SSLightning::idle()
+    // left it - one row per SSStrike in SSLightning::strikes(), scalars only. The CHANNEL GEOMETRY is deliberately
+    // NOT copied here: a channel runs to hundreds of nodes and there can be a dozen strikes at once, so
+    // renderLightning() walks SSLightning::strikes() directly (a const reference to resident state, read the same
+    // frame) while this struct carries only what the legend and the chart need. Every field is a straight read of
+    // a member the model already maintains; mStage is SSAtmoInfoViewCore::strikeStage of that strike's own clock,
+    // leader and plasma fields, and mLightWeight/mLightsCloud are the core's reading of the SAME two numbers
+    // ssvolcloud.cpp's uploader takes (channel brightness x intensity against SS_MAX_STRIKE_LIGHTS' own cut) -
+    // a reading of the shared inputs, not the uploaded array, which SSVolCloud keeps private. mLights IS the real
+    // thing: SSLightning::sceneLights(), the const exporter the deferred lighting pass itself calls, asked for the
+    // same 4 slots pipeline.cpp asks for. mValid is false when no SSLightning instance exists; the gate fields
+    // mirror the applied weather's own lightning row so "nothing is striking" can be read without guessing.
+    // Read-only by construction: every accessor touched here is a const getter, and nothing here advances a clock.
+    // [interaction: SSLightning strikes/nextStrikeIn/sceneLights] [interaction: SSAtmoMagic lightning row]
+    // [interaction: SSVolCloud SS_MAX_STRIKE_LIGHTS]
+    struct LightningData
+    {
+        struct Strike
+        {
+            S32 mKind = 0;             // SSAtmoInfoViewCore::STRIKE_KIND_*
+            S32 mStage = 0;            // SSAtmoInfoViewCore::STRIKE_STAGE_*
+            F32 mT = 0.f;              // the strike's own clock: negative before contact
+            F32 mIntensity = 1.f;
+            F32 mCharge = 0.f;
+            F32 mChargeHeld = 0.f;
+            F32 mLeaderProgress = 0.f;
+            F32 mChannelBrightness = 0.f;
+            F32 mFlash = 0.f;
+            F32 mHit = 0.f;            // amber impact flare envelope
+            F32 mFire = 0.f;           // ground fire envelope
+            F32 mPlasmaSince = -1.f;
+            S32 mStrokeCount = 0;
+            S32 mChannelNodes = 0;
+            S32 mCrawlCount = 0;
+            F32 mCrawlLenM = 0.f;
+            F32 mChannelLenM = 0.f;
+            F32 mDistanceM = 0.f;
+            F32 mSteamPeak = 0.f;
+            bool mPositive = false;    // polarity: a positive anvil discharge
+            bool mBlue = false;        // bolt from the blue
+            bool mForced = false;      // placed by the Strike Now / Ground Strike buttons
+            bool mAudible = false;
+            bool mOccHidden = false;   // the renderer's own occlusion query said the ground show is hidden
+            F32 mLightWeight = 0.f;    // channel brightness x intensity
+            bool mLightsCloud = false; // ... clears the cloud shader's own cut
+            LLVector3 mOrigin;
+            LLVector3 mGround;
+        };
+
+        // One deferred point light as SSLightning::sceneLights() exports it (channel lights first, then the
+        // ground fire's amber light) - position, radius, and the colour already scaled by the strike's own
+        // brightness and the scene-light strength dial.
+        struct SceneLight
+        {
+            LLVector3 mPos;
+            F32 mRadiusM = 0.f;
+            LLColor3 mColor;
+        };
+
+        bool mValid = false;
+        bool mEnabled = false;         // SSAtmoMagic::lightningOn() - the applied weather's own switch
+        bool mChargeOn = false;
+        bool mSparksOn = false;
+        F32 mIntensity = 0.f;          // the weather row's lightning intensity (0 = no strikes scheduled)
+        F32 mIntervalMinS = 0.f;
+        F32 mIntervalMaxS = 0.f;
+        F64 mNextIn = -1.0;            // seconds to the next scheduled strike (negative: none scheduled)
+        S32 mCloudLit = 0;             // strikes clearing the cloud shader's cut this frame
+        S32 mCloudCap = 0;             // SS_MAX_STRIKE_LIGHTS
+        S32 mSceneLightCap = 0;        // the slot count pipeline.cpp asks sceneLights for
+        std::vector<Strike> mStrikes;
+        std::vector<SceneLight> mLights;
+    };
+    static LightningData lightningData();
+
 private:
     static void onModeChanged(U32 previous, U32 now);
     // <SS:Nexii> The info-view LOOK: one full-screen triangle (gSSInfoLookProgram, ssInfoLookV/F.glsl) that overwrites the world viewport with a warm-gray reading of the frame that was just presented - luminance on a clay-to-cream ramp, a 12-tap hemisphere occlusion recomputed from the G-buffer, a soft sky-lit shade and an extreme-fog distance ramp, sky flat. The formulas are SSInfoLook (ssinfolookcore.h); the shader transliterates them and V:\Scratch\atmo\tests\twin_infolook.cpp holds the two together. Gated by SSAtmoInfoViewLook (default on), which replaced the old SSAtmoInfoViewDim slider. Called only from renderDimAndWorld(), before renderWorld(). [interaction: LLPipeline::mSSLastPresented]
@@ -355,6 +439,8 @@ private:
     static void renderStormCells();
     static void renderDeckLod();
     static void renderVirga();
+    // <SS:Nexii> V9's in-world layer. Called for MODE_LIGHTNING and ALSO whenever RENDER_DEBUG_LIGHTNING is set, which is what makes it the engineering overlay bound beside the other seven on the debug floater as well as an info view; renderWorld() draws it exactly once either way. [interaction: LLPipeline::RENDER_DEBUG_LIGHTNING]
+    static void renderLightning();
 
     static U32 sLastMode;
     static bool sFlowMaskWasOn;
@@ -418,9 +504,10 @@ private:
     static void buildDeckLodSpec(Spec& spec);
     static void buildVirgaSpec(Spec& spec);
     static void buildWeatherCubeSpec(Spec& spec);
+    static void buildLightningSpec(Spec& spec);
 };
 
-// <SS:Nexii> The reusable chart widget (XUI tag ss_atmo_graph_view, still registered for any future XUI use, though the debug HUD's own instance is now built programmatically by SSAtmoInfoView::attach rather than parsed off panel_ss_atmo_debug_views.xml): an LLView drawing polylines, rails and monospace labels with gGL in 2D. Dispatches on the live mode - V1 draws the altitude-vs-speed boundary-layer curve with annotated rails and a hodograph inset; V2 the active-cell timeline (one row per cell, stage bands, the now cursor, hero row pinned on top); V3 the deck LOD count-vs-budget chart; V5 the two-lane day-cycle chart (authored curves above, derived gates below, a now cursor and authored-cue markers spanning both). draw() draws nothing at all - not even the background quad - when mode() is MODE_OFF or the live mode has no chart (currently V4 Precip & Virga; decided by falling through the SAME switch that dispatches to drawWindProfile/drawStormCells/drawDeckLod/drawWeatherCube below, not a separately maintained mode list) so the debug HUD never shows an empty placeholder box floating over the world. When it does have something to draw it first re-docks itself against the legend (see SSAtmoInfoView::attach), fixed at ~440x280 px, left edge 8px past the legend's right edge, bottom aligned with the legend's bottom; FOLLOWS_BOTTOM|FOLLOWS_LEFT keeps that pair anchored together through a window resize exactly like the legend anchors itself. Read-only like everything else here; it never asks any system to build.
+// <SS:Nexii> The reusable chart widget (XUI tag ss_atmo_graph_view, still registered for any future XUI use, though the debug HUD's own instance is now built programmatically by SSAtmoInfoView::attach rather than parsed off panel_ss_atmo_debug_views.xml): an LLView drawing polylines, rails and monospace labels with gGL in 2D. Dispatches on the live mode - V1 draws the altitude-vs-speed boundary-layer curve with annotated rails and a hodograph inset; V2 the active-cell timeline (one row per cell, stage bands, the now cursor, hero row pinned on top); V3 the deck LOD count-vs-budget chart; V4 the shaft budget bar, the drive histogram and the particle-rain handoff ramp; V5 the two-lane day-cycle chart (authored curves above, derived gates below, a now cursor and authored-cue markers spanning both); V9 the strike timeline. draw() draws nothing at all - not even the background quad - when mode() is MODE_OFF or the live mode has no chart (today only the RESERVED numbers V6 World Field and V8 Anatomy, neither of which is built; decided by falling through the SAME switch that dispatches to drawWindProfile/drawStormCells/drawDeckLod/drawVirga/drawWeatherCube/drawLightning below, not a separately maintained mode list) so the debug HUD never shows an empty placeholder box floating over the world. When it does have something to draw it first re-docks itself against the legend (see SSAtmoInfoView::attach), fixed at ~440x280 px, left edge 8px past the legend's right edge, bottom aligned with the legend's bottom; FOLLOWS_BOTTOM|FOLLOWS_LEFT keeps that pair anchored together through a window resize exactly like the legend anchors itself. Read-only like everything else here; it never asks any system to build.
 class SSAtmoGraphView : public LLView
 {
 public:
@@ -440,6 +527,8 @@ private:
     void drawStormCells();
     void drawDeckLod();
     void drawWeatherCube();
+    void drawVirga();
+    void drawLightning();
     void drawMessage(const std::string& msg);
 
     // 2D primitives in local view pixels.

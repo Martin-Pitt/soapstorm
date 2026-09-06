@@ -25,6 +25,7 @@
 
 #include "ssvolcloud.h"
 
+#include "ssdeckcellsoftcore.h" // the observer's cell-lattice softening - one per-cell quantity read continuously
 #include "ssdeckflowcore.h" // the card's own frame, the advected octave's sign rule, its edge mask and per-puff swirl
 #include "ssdecklodcore.h"
 #include "ssdeckmacrocore.h"
@@ -759,6 +760,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
     const LLVector3 light_dir = mLightDir;
     const F32 beam = mBeam;
     const F32 shade_th = SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage); // one layer, one optical thickness term
+    static LLCachedControl<bool> shade_calib(gSavedSettings, "SSAtmoCloudShadeCalibration", true); // <SS:Nexii> The shade calibration A/B (ssdeckshadecore.h Calibration): TRUE is the retuned constant set, FALSE the pre-retune one bit-identically (V:/Scratch/atmo/tests/deckshadecore.cpp pins it). ONE read, passed to all three SSDeckShade call sites in this function, so the veil, the fine puffs and the Tier B bodies can never disagree about which calibration they are wearing. [interaction: SSAtmoCloudLightVariant, the same kind of in-build A/B]
 
     // <SS:Nexii> The base veil's structural shading, resolved here rather than per fragment: the shade a puff at the deck's floor would wear, run through the same formulas the puff loop below uses - the facing term at a representative low up, the exponential shade through the layer from that height, the beam gate. The sheet is a fragment of the same body of cloud as the puffs, so it wears the same form a puff in its place would (the light itself is the vertex stage's, shared by construction), and the blend at the boundary is a lighting match rather than a hope.
     {
@@ -766,7 +768,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         // the veil's representative depths baked in as core constants; V:/Scratch/atmo/tests/deckshadecore.cpp pins
         // it against the old inline block within 1e-6 (the old facing term's multiplication order differed by a last bit).
         const F32 sun_z = llclamp(light_dir.mV[VZ], -1.f, 1.f);
-        deck.mSheetForm = SSDeckShade::veilForm(sun_z, SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage), beam);
+        deck.mSheetForm = SSDeckShade::veilForm(sun_z, SSDeckShade::thicknessTerm(field.mThicknessM, field.mCoverage), beam, shade_calib);
         // The inset: just off the deck's floor, deep enough to sit inside the puffs' base fade,
         // shallow enough that the sheet reads as the deck's underside and not as a second layer.
         // The flat 16 m lift sits it higher in the fade, so the veil clears the puffs' bottom dissolve instead of hugging the floor.
@@ -1290,7 +1292,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
                 // underneath at midnight too) come from SSDeckShade (ssdeckshadecore.h), the one formula site the veil
                 // above and the Tier B body below share; deckshadecore.cpp pins this call bit-identical to the old block.
                 const F32 rim = cubic_step(edge_t);
-                puff.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height, coreness, rim, beam);
+                puff.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height, coreness, rim, beam, shade_calib);
                 puff.mBuried = SSDeckShade::buried(cell_height, up, rim);
                 // <SS:Nexii> S2 (doc/atmo_magic_flow_field.md section 2, ssvolcloud.h Puff::mPhase): the per-puff
                 // advected-detail phase - same hashUnit/sub_salt idiom as jx/jy/up_cell/mRadius above, its own
@@ -1414,7 +1416,7 @@ void SSVolCloud::buildDeck(Deck& deck, const SSAtmoEnvCloudFieldState& field, F3
         // exactly as a fine puff's rim is.
         const F32 edge_t = llclamp((dist - FIELD_FADE_START_M) / (FIELD_DRAW_M - FIELD_FADE_START_M), 0.f, 1.f);
         const F32 rim = cubic_step(edge_t);
-        body.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height_mean, coreness_mean, rim, beam);
+        body.mForm = SSDeckShade::puffForm(light_dir.mV[VZ], shade_th, up, cell_height_mean, coreness_mean, rim, beam, shade_calib);
         body.mBuried = SSDeckShade::buried(cell_height_mean, up, rim);
         // <SS:Nexii> S2 review fix (review_s0s2_sonnet.md #1): a Tier B body gets its own hashed phase off its
         // macro-cell coords - the whole far field otherwise pulsed in lockstep at the default 0. Same 977 slot
@@ -1700,21 +1702,16 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
     const F32 ox = ((F32)cam_cx + 0.5f) * CELL_M - span * 0.5f;
     const F32 oy = ((F32)cam_cy + 0.5f) * CELL_M - span * 0.5f;
 
-    // <SS:Nexii> Phase 4: the hero's rigid local shift at one AIR-frame cell's quantized centre, in the WORLD
-    // frame samplePointM already converts to (this bake works in the same air/world split the builder does - see
-    // its own comment). Zero whenever `hero` has no age (no hero, or this deck is not weatherDeck() - see above),
-    // making every gateAir call below an identity read.
     const LLVector2 drift = SSAtmoEnvApplier::instance().cloudDriftMetres();
-    const auto heroShiftForCell = [&](S32 cx, S32 cy) -> SSDeckFrame::Vec2
+    // <SS:Nexii> [interaction: ssdeckcellsoftcore.h] Takes an AIR POINT, not a cell index, and reads the hero's influence through SSDeckCellSoft::heroInfluenceSoft - the same fix ssVolCloudF.glsl's ss_hero_influenceSoft carries, for the same reason and on the same lattice. What this replaced hashed the texel's own cell (llfloor(ax / CELL_M)) and took ONE influence at that cell's centre, so the bake's gate point was a 260 m staircase across the hero's falloff ring exactly as the fragment stage's was - the comment at the call site below already recorded the symptom ("in the falloff ring it put the bake up to half a cell from the fragment's gate_air") without naming it a discontinuity. The blend is bit-identical to the old read at every cell CENTRE (unit_deck_cellsoft.cpp), so the producer-side lockstep this bake mirrors is unchanged; only the points between centres move, and they move continuously. Zero whenever `hero` has no age (no hero, or this deck is not weatherDeck()), making every gateAir call below an identity read.
+    const auto heroShiftAt = [&](F32 ax, F32 ay) -> SSDeckFrame::Vec2
     {
         if (!(hero.ageS > 0.f))
         {
             return SSDeckFrame::Vec2();
         }
-        F32 wx, wy;
-        SSStormCouple::samplePointM((F32)cx * CELL_M + CELL_M * 0.5f, (F32)cy * CELL_M + CELL_M * 0.5f,
-                                     CELL_M, drift.mV[0], drift.mV[1], wx, wy);
-        const F32 inf = SSStormCouple::influence(hero.centre.x, hero.centre.y, hero.radius, wx, wy);
+        const F32 inf = SSDeckCellSoft::heroInfluenceSoft(ax, ay, CELL_M, drift.mV[0], drift.mV[1],
+                                                          hero.centre.x, hero.centre.y, hero.radius);
         return SSDeckFrame::heroShift(hero, inf);
     };
 
@@ -1800,14 +1797,18 @@ void SSVolCloud::bakeGroundShadow(const Deck& deck, F32 air_x, F32 air_y)
             // <SS:Nexii> NEW-1/NEW-2/NEW-A fix (2026-09-05, ssdeckframecore.h's producer/observer rule): this TEXEL
             // loop is the bake's OBSERVER, so the read position itself moves for EVERY read it makes below -
             // texel -> cell via floor((air - S) / CELL_M), then the occupancy lookup (NEW-A), presence AND mottle
-            // (NEW-2) all read at gateAir, not the raw texel. S depends on the owning cell and the owning cell
-            // is derived in ONE step from the texel's own quantized cell (floor(air/CELL_M)) - exactly as the fragment
-            // stage (samplePointM of its air) and precipNoiseAt do; no observer iterates a fixed point (ssdeckframecore.h,
-            // foldFrameKey's note), so the bake, the fragment and precip agree on S wherever their quantized cells agree.
-            // A two-step re-evaluation at the OWNING cell was tried and withdrawn (phase-4d review): inside the plateau
-            // it changed nothing, in the falloff ring it put the bake up to half a cell from the fragment's gate_air.
+            // (NEW-2) all read at gateAir, not the raw texel. S is derived in ONE step from the texel's own air
+            // position - exactly as the fragment stage does - and no observer iterates a fixed point
+            // (ssdeckframecore.h, foldFrameKey's note). A two-step re-evaluation at the OWNING cell was tried and
+            // withdrawn (phase-4d review): inside the plateau it changed nothing, in the falloff ring it put the
+            // bake up to half a cell from the fragment's gate_air.
+            // <SS:Nexii> 2026-09-06 (ssdeckcellsoftcore.h): that ONE step no longer floors to the texel's containing
+            // cell - "the bake, the fragment and precip agree on S wherever their quantized cells agree" was true and
+            // was also the defect, because it means S is piecewise constant and steps at every cell wall. Both the
+            // bake and the fragment read SSDeckCellSoft::heroInfluenceSoft now, which is the same number at every
+            // cell CENTRE and continuous between them, so they agree everywhere rather than only per cell.
             // Hoisted above the occupancy block so every read in this loop shares the one texel_gate_pt.
-            const SSDeckFrame::Vec2 texel_shift = heroShiftForCell(llfloor(ax / CELL_M), llfloor(ay / CELL_M));
+            const SSDeckFrame::Vec2 texel_shift = heroShiftAt(ax, ay);
             const SSDeckFrame::Vec2 texel_gate_pt = SSDeckFrame::gateAir(SSDeckFrame::Vec2{ax, ay}, texel_shift);
 
             // The four nearest cells' verdicts, cubic-eased over one cell - the veil's own softening, so the shadow's edges fall where the outermost puffs of an occupied cell reach. NEW-A fix: indexed from texel_gate_pt (the same shifted point presence/tower/mottle read below), not the raw texel - the cell_occ grid above is padded by heroShiftPadCells so this lookup stays in bounds even at the displacement cap.

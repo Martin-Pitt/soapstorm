@@ -1156,6 +1156,7 @@ set(viewer_HEADER_FILES
     fsrezqueue.h
     ssatmomagic.h
     ssdeckboilcore.h
+    ssdeckcellsoftcore.h
     ssdeckflowcore.h
     ssdeckframecore.h
     ssdecklodcore.h
@@ -1172,6 +1173,7 @@ set(viewer_HEADER_FILES
     ssvortexcore.h
     ssveilcore.h
     ssvirgacore.h
+    ssshellcore.h
     ssvortices.h
     ssvortexrender.h
     ssstormcells.h

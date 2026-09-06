@@ -454,7 +454,7 @@ verdict was that wet and puddle are "passable", which lowers its priority but do
 The standing rule (`atmo_magic_phase8_show.md` §6 item 5): *every entity class that ships gets a view or a layer in
 one before its phase closes.* Measured against that rule today:
 
-**5.1 V6 Anatomy.** The anatomy tier is explicitly NOT an extension of V2. It needs its own view showing each
+**5.1 V8 Anatomy.** The anatomy tier is explicitly NOT an extension of V2. It needs its own view showing each
 entity's archetype and parts, the operator footprints on the container (displacement, density, emission, shading),
 the analytic carves, and the container's own depth and density curves at the cursor.
 *Where:* `atmo_magic_phase8_show.md` §6 item 5. *Status:* DESIGNED-NOT-BUILT. *Depends:* 3.1; **8b cannot close
@@ -756,7 +756,7 @@ What blocks what, in order. Each arrow is a real dependency stated in the source
 7. **8b-1** → 8b-2 (tower + anvil + dome, 3.3) → 8b-3 (mammatus, shelf, wall, tail, flanking line, 3.4/3.5) →
    8b-4 (the line archetype, 3.7). Also gated on 8b-1: the swirl operator (3.2), the tower loop (3.6), the tornado
    displacement operator (3.8), the rain-cloud footprint operators (3.9), flow's surviving S5 items (1.6), and
-   **V6 Anatomy** (5.1), without which 8b cannot close under its own rule.
+   **V8 Anatomy** (5.1), without which 8b cannot close under its own rule.
 8. **Settle the V6 numbering collision** (5.5) before 8b writes a mode constant.
 9. **Flow S6** (1.7 + 1.8) is independent of 8b in dependency terms but competes with it for the fragment budget
    and the spare vertex channel — and 1.13's fix wants that same channel. Sequence them; do not run both.
