@@ -196,6 +196,13 @@ void SSSoundscape::updateProbes(F64 now)
     if (!moved && !stale) return;
     if (now - mLastCycleDone < PROBE_INTERVAL) return;
 
+    // The enclosure spectrum's validity resets only with a cycle that
+    // re-answers it - unlike the interior flag it is read every frame by the
+    // bed blend, so clearing it above the gates would flip the mix to the
+    // fallback and back between a standing listener's cycles. Between cycles
+    // the last verdict holds, eased.
+    mEnclosureValid = false;
+
     mProbeAnchor = cam;
     mProbeOrigin = cam;
     mLastCycleDone = now;
@@ -266,6 +273,17 @@ void SSSoundscape::updateProbes(F64 now)
             {
                 mBuriedDepth = llmax(mBuriedDepth, BURIAL_INTERIOR_DEPTH);
             }
+
+            // The enclosure spectrum: 0 outdoors, 1 sealed interior, ramped
+            // on the flood's depth back to open sky. -1 while the labels are
+            // still flooding (or the point sits inside a band's implied
+            // solid) keeps this cycle on the raycast mix.
+            const F32 enc = field->enclosureAt(cam);
+            if (enc >= 0.f)
+            {
+                mEnclosure = enc;
+                mEnclosureValid = true;
+            }
         }
     }
     else if (mCoverageClaim)
@@ -304,11 +322,29 @@ void SSSoundscape::updateProbes(F64 now)
     }
     }
 
+    // The wall profile: the world field's precomputed acoustic lattice where
+    // it stands - one read standing in for four live raycasts per cycle,
+    // walking the flood's solid map on the worker instead of the render
+    // pipeline - else the four raycasts. The classification math below is
+    // shared; a stale lattice (edited tile, flood pending) falls back
+    // automatically.
+    F32 lattice_walls[4];
+    if (field_answered && SSWorldField::getInstance()->acousticAt(cam, lattice_walls))
+    {
+        for (S32 i = 0; i < 4; ++i) mSideDist[i] = lattice_walls[i];
+    }
+    else
+    {
+        for (S32 i = 0; i < 4; ++i)
+        {
+            mSideDist[i] = castSideProbe(i);
+        }
+    }
+
     S32 walls = 0;
     F32 sum = 0.f;
     for (S32 i = 0; i < 4; ++i)
     {
-        mSideDist[i] = castSideProbe(i);
         if (mSideDist[i] < SIDE_RAY_LENGTH - 0.5f) ++walls;
         sum += mSideDist[i];
     }
@@ -346,6 +382,12 @@ F32 SSSoundscape::burialOcclusion() const
 {
     const F32 t = llclamp(mBuriedSmooth / BURIAL_FULL, 0.f, 1.f);
     return t * t * (3.f - 2.f * t);
+}
+
+// The eased enclosure spectrum, or -1 when the field has no current verdict.
+F32 SSSoundscape::enclosure() const
+{
+    return mEnclosureValid ? mEnclosureSmooth : -1.f;
 }
 
 // Debug label for a cover space.
@@ -402,7 +444,11 @@ F32 SSSoundscape::occlusionGain(const LLVector3& source_pos) const
     const F32 wall = wallDistanceToward(to_source);
     if (dist <= wall + 0.5f) return 1.f;
 
-    return lerp(0.6f, 0.22f, mCoverSmooth);
+    // The spectrum deepens the attenuation beyond what cover alone says: a
+    // source beyond the walls of a space the flood ranks deeply enclosed
+    // loses more than one under an eave, at whatever depth the walk measured.
+    const F32 close = llmax(mCoverSmooth, mEnclosureValid ? mEnclosureSmooth : 0.f);
+    return lerp(0.6f, 0.22f, close);
 }
 
 // Smoothed impacts per second around the camera.
@@ -502,6 +548,7 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
     mCoverSmooth = lerp(mCoverSmooth, mCovered ? 1.f : 0.f, llclamp(COVER_BLEND_RATE * dt, 0.f, 1.f));
+    mEnclosureSmooth = lerp(mEnclosureSmooth, mEnclosure, llclamp(COVER_BLEND_RATE * dt, 0.f, 1.f));
     mBuriedSmooth = lerp(mBuriedSmooth, mBuriedDepth, llclamp(BURIAL_BLEND_RATE * dt, 0.f, 1.f));
 
     const F32 env = llclamp(atmo->gustEnvelopeAt(now), 0.f, 2.5f);
@@ -523,8 +570,16 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 
     const bool sheltered = (mSpace == SPACE_SHELTERED);
 
+    // The enclosure spectrum drives the bed blend where the field answered:
+    // the old sheltered/room duck pair became the two ends of a continuous
+    // ramp, so a cave mouth, an arcade and a warehouse interior each sit
+    // between them at their own measured depth. Without the field, the probe
+    // verdict's own rungs stand in - the same two values the discrete mix
+    // used, so the raycast fallback is unchanged.
+    const F32 enc = mEnclosureValid ? mEnclosureSmooth : (sheltered ? 0.f : 1.f);
+
     const F32 buried = burialOcclusion();
-    const F32 outdoor = (1.f - (sheltered ? 0.4f : 0.85f) * mCoverSmooth)
+    const F32 outdoor = (1.f - lerp(0.4f, 0.85f, enc) * mCoverSmooth)
                       * (1.f - BURIAL_MAX_DUCK * buried);
 
     F32 w_light = tri(wet, 0.01f, 0.18f, 0.55f);
@@ -582,17 +637,31 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     }
 
     const F32 roof = mCoverSmooth * wet * (1.f - BURIAL_MAX_DUCK * buried);
-    targets[LOOP_ROOF_OPEN]   = sheltered ? roof : 0.f;
-    targets[LOOP_ROOF_SMALL]  = (mSpace == SPACE_SMALL) ? roof : 0.f;
-    targets[LOOP_ROOF_MEDIUM] = (mSpace == SPACE_MEDIUM) ? roof : 0.f;
-    targets[LOOP_ROOF_BIG]    = (mSpace == SPACE_BIG && mCovered) ? roof : 0.f;
+    // The roof bed's open-cover share: an eave or canopy sits at the outdoors
+    // end of the spectrum and takes the open recording, the room-character
+    // beds take what it leaves. Without the field, the probe verdict's own
+    // sheltered rung stands in - the exact discrete split this generalises.
+    const F32 open_w = mEnclosureValid ? llclamp(1.f - enc / 0.4f, 0.f, 1.f)
+                                       : (sheltered ? 1.f : 0.f);
+    targets[LOOP_ROOF_OPEN] = roof * open_w;
+    // A sheltered space reads its own wall-distance size for the room beds,
+    // so a deep tunnel lands on the big-hall bed instead of dropping out.
+    const bool small_room  = (mSpace == SPACE_SMALL)
+                          || (mSpace == SPACE_SHELTERED && mOutdoorSize == SIZE_SMALL);
+    const bool medium_room = (mSpace == SPACE_MEDIUM)
+                          || (mSpace == SPACE_SHELTERED && mOutdoorSize == SIZE_MEDIUM);
+    const bool big_room    = (mSpace == SPACE_BIG && mCovered)
+                          || (mSpace == SPACE_SHELTERED && mOutdoorSize == SIZE_LARGE);
+    targets[LOOP_ROOF_SMALL]  = small_room  ? roof * (1.f - open_w) : 0.f;
+    targets[LOOP_ROOF_MEDIUM] = medium_room ? roof * (1.f - open_w) : 0.f;
+    targets[LOOP_ROOF_BIG]    = big_room    ? roof * (1.f - open_w) : 0.f;
 
     const F32 probe_openness = (mOutdoorSize == SIZE_SMALL)  ? 0.55f
                              : (mOutdoorSize == SIZE_MEDIUM) ? 0.8f : 1.f;
     const F32 outdoor_openness = flow->isValid()
         ? llclamp(flow->exposure(cam_pos), 0.f, 1.5f)
         : probe_openness;
-    const F32 wind_indoor = (1.f - (sheltered ? 0.3f : 0.75f) * mCoverSmooth)
+    const F32 wind_indoor = (1.f - lerp(0.3f, 0.75f, enc) * mCoverSmooth)
                           * lerp(outdoor_openness, 1.f, mCoverSmooth);
     targets[LOOP_WIND_LIGHT]  = tri(wind, 0.02f, 0.3f, 0.75f) * wind_indoor;
     targets[LOOP_WIND_STRONG] = llclamp((wind - 0.45f) / 0.4f, 0.f, 1.f) * wind_indoor;

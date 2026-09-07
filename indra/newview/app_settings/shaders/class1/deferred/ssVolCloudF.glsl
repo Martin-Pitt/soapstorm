@@ -173,7 +173,7 @@ uniform sampler2D altDiffuseMap;
 uniform vec2 ss_wind;       // unit, the direction the air is travelling
 
 uniform vec2 ss_drift;      // metres the air has travelled, east and north
-// <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: ss_time is GONE, and its absence is the fix - it was an ABSOLUTE clock (LLFrameTimer::getElapsedSeconds) multiplied by a rate that steps once a second,
+// <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: ss_time is GONE, and its absence is the fix - it was an ABSOLUTE clock (LLFrameTimer::getElapsedSeconds) multiplied by a rate that then stepped once a second (the D3 follow-up, 2026-09-07, made that root clock continuous too - SSAtmoEnvTrack::currentDayCyclePhase now reads SSAtmoMagic::sharedTime(); this absence is still the fix, because integrating the rate is what makes ANY rate change invisible in the phase),
 // which is what made every puff's appearance jump; see the note at `cycles` in main(). These two are the INTEGRALS the CPU now keeps in its place (SSDeckBoil::advanceLaps / advanceFallM, F64
 // accumulators on the deck, folded to their own periods before they cross into these F32 uniforms so they stay exact however long the viewer has been open).
 uniform float ss_boil_laps; // the advected detail octave's phase, in laps, already folded into [0,1)
@@ -1285,7 +1285,7 @@ void main()
         // above: no CPU counterpart, no twin to keep in lockstep with, and no claim here that the sign reads as
         // "falling" on screen - that needs eyes on a build, not a comment.
         // <SS:Nexii> D3 [interaction: ssdeckboilcore.h]: the fall term was `ss_time * ss_drift_rate * SS_SHAFT_FALL_MPS` - the same rate-times-absolute-clock shape the boil phase had, with the same
-        // 1 Hz tread under it (ss_drift_rate steps with the whole-second day-cycle phase), so a curtain's streak jumped once a second exactly as the puffs did. ss_fall_m is the integral instead
+        // 1 Hz tread under it (ss_drift_rate then stepped with the whole-second day-cycle phase; that phase is continuous as of the D3 follow-up, 2026-09-07), so a curtain's streak jumped once a second exactly as the puffs did. ss_fall_m is the integral instead
         // (SSDeckBoil::advanceFallM), folded on SS_NOISE_M so the subtraction is exact against a wrapping map.
         vec2 streak_uv = vec2(dot(gate_air, ss_wind) / SS_NOISE_M,
                                (world_true.z - ss_fall_m) / SS_NOISE_M);
@@ -1487,7 +1487,7 @@ void main()
     // Where in its cycle the flow is, and its half-cycle partner.
     // <SS:Nexii> D3 (fourth build report: "every puff's appearance jumps in a sudden step about once per second, and the flow motion is far too exaggerated") [interaction: ssdeckboilcore.h]: this used
     // to open `float turn = ss_time * SS_OCT_LAPS * ss_drift_rate * (SS_OCT_DRIFT_FLOOR + ss_churn) * 6.2831853;` - a RATE multiplied by an ABSOLUTE clock (seconds since the viewer started). Both
-    // factors of that rate are resolved from the day-cycle phase every frame, and that phase is SSAtmoEnvTrack::currentDayCyclePhase() == dayCyclePhaseAt((F64)time(nullptr)) - WHOLE SECONDS. So the
+    // factors of that rate are resolved from the day-cycle phase every frame, and that phase was then SSAtmoEnvTrack::currentDayCyclePhase() == dayCyclePhaseAt((F64)time(nullptr)) - WHOLE SECONDS (continuous since the D3 follow-up, 2026-09-07). So the
     // rate is a staircase with a 1 Hz tread and phase = rate x t turned each tread into a jump of t x delta-rate: at an hour of uptime a one-part-in-ten-thousand rate change moved the detail phase a
     // fifth of a cycle in a single frame. The same multiplication made the apparent rate rate + t x d(rate)/dt, whose second term grows without bound with uptime - the exaggeration half of the same
     // report. ss_boil_laps is now the INTEGRAL of that rate, accumulated in F64 on the CPU (SSDeckBoil::advanceLaps, driven in ssvolcloud.cpp's update()) and folded into [0,1) before it crosses into

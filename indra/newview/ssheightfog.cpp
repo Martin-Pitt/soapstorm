@@ -30,6 +30,7 @@
 #include "ssscreenfxcore.h"
 #include "sssurfacefield.h"
 #include "sswindflow.h"
+#include "ssworldfield.h"
 
 #include "llappviewer.h"
 #include "llenvironment.h"
@@ -262,6 +263,15 @@ void SSHeightFog::render()
     // passes read.
     const S32 field_channel = gSSPostFogProgram.mActiveTextureChannels;
     const bool field_bound = SSSurfaceField::getInstance()->bindForShader(gSSPostFogProgram, field_channel);
+    // <SS:Nexii> The cover window rides one channel up: the world field's enclosure spectrum
+    // per cell, which grades the march's covered branch. Validity is shared with the field
+    // window (same updateWindow fill), so the two binds succeed or fail together; when neither
+    // binds, the fetch's out-of-window sentinel answers -1 and the march keeps the old binary
+    // covered test.
+    if (field_bound)
+    {
+        SSSurfaceField::getInstance()->bindCoverForShader(gSSPostFogProgram, field_channel + 1);
+    }
     if (!field_bound)
     {
         // <SS:Nexii> No window this frame - force ssFieldFetch's out-of-window sentinel so the march falls back to ssFogGroundZ instead of reading a stale or default-zero origin.
@@ -332,12 +342,19 @@ void SSHeightFog::render()
     F32 column_top = 0.f;
     const bool cam_column = SSWindFlowMap::getInstance()->surfaceAt(cam, column_top);
     const bool cam_outdoors = !(cam_column && (column_top - cam.mV[VZ] > 0.75f));
+    // <SS:Nexii> The sky veil rides the enclosure spectrum where the world field answers: a
+    // sheltered camera's sky fades with its measured depth behind the openings instead of
+    // cutting off at the column-top test, a sealed interior still reads zero. The wind tile's
+    // column test stands in when the field has no verdict (off, tile stale, camera inside a
+    // band's implied solid), so the fallback veil is the old binary.
+    const F32 cam_enclosure = SSWorldField::getInstance()->enclosureAt(cam);
+    const F32 sky_open = (cam_enclosure >= 0.f) ? (1.f - cam_enclosure)
+                                               : (cam_outdoors ? 1.f : 0.f);
     // <SS:Nexii> Above the field's own stored surface when the camera has a column (matches the shader's ssFogSkyDensity twin, ssPostFogF.glsl), the flat ground otherwise - not always groundZero(), or a rooftop camera reads near-zero sky veil while the marched fog around it stays thick (M5).
     const F32 cam_above = llmax(cam.mV[VZ] - (cam_column ? column_top : atmo->groundZero()), 0.f);
     // <SS:Nexii> fogDensityAt has no mist parameter of its own - the shader's mist_term rides the ground term's own scale height exactly (SS_FOG_GROUND_SCALE_M == FOG_GROUND_SCALE_M, ssPostFogF.glsl:68-69), so folding mMistPart into the ground argument here reproduces it exactly instead of leaving the sky veil mist-blind while the marched ground fog is not.
-    const F32 sky_density = cam_outdoors
-        ? SSScreenFX::fogDensityAt(cam_above, mGroundPart + mMistPart, mPrecipPart, mSquallPart * dial, squall_scale_m, mLiftPart * dial, band_m)
-        : 0.f;
+    const F32 sky_density = SSScreenFX::fogDensityAt(cam_above, mGroundPart + mMistPart, mPrecipPart, mSquallPart * dial, squall_scale_m, mLiftPart * dial, band_m)
+                          * sky_open;
     gSSPostFogProgram.uniform1f(fog_skydensity, sky_density);
 
     const LLVector3 wind = SSWindFlowMap::getInstance()->sample(cam);

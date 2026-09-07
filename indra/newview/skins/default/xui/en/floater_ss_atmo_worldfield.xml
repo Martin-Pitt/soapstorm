@@ -99,20 +99,20 @@
       follows="left|top" layout="topleft"
       left="12" top_pad="10" height="16" width="106"
       name="T_field_cell"
-      tool_tip="Metres per column. 2m is a 128x128 column grid over a 256m region; finer resolves narrower walls and costs more capture and more flood work">
+      tool_tip="Metres per column. 0.25 matches the rain shadow texel - a 1024x1024 column grid over a 256m region - so window- and door-scale openings resolve for the shelter flood; coarser cells cost far less capture and flood work">
         Cell size:
     </text>
     <slider_bar
       control_name="SSWorldFieldCell" name="SB_field_cell"
       follows="left|top" layout="topleft"
-      left_pad="4" top_delta="0" height="16" width="160" min_val="0.5" max_val="8" increment="0.25"
-      tool_tip="Metres per column. 2m is a 128x128 column grid over a 256m region; finer resolves narrower walls and costs more capture and more flood work" />
+      left_pad="4" top_delta="0" height="16" width="160" min_val="0.25" max_val="8" increment="0.25"
+      tool_tip="Metres per column. 0.25 matches the rain shadow texel - a 1024x1024 column grid over a 256m region - so window- and door-scale openings resolve for the shelter flood; coarser cells cost far less capture and flood work" />
     <spinner
       control_name="SSWorldFieldCell" name="S_field_cell"
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="-2" height="20" width="62"
-      label_width="0" min_val="0.5" max_val="8" increment="0.25" decimal_digits="2"
-      tool_tip="Metres per column. 2m is a 128x128 column grid over a 256m region; finer resolves narrower walls and costs more capture and more flood work" />
+      label_width="0" min_val="0.25" max_val="8" increment="0.25" decimal_digits="2"
+      tool_tip="Metres per column. 0.25 matches the rain shadow texel - a 1024x1024 column grid over a 256m region - so window- and door-scale openings resolve for the shelter flood; coarser cells cost far less capture and flood work" />
     <button
       follows="left|top" layout="topleft"
       left_pad="4" top_delta="0" height="20" width="24"

@@ -89,6 +89,16 @@ public:
     bool bindStateForShader(LLGLSLShader& shader, S32 channel);
     bool hasStateWindow() const { return mWindowStateTex != 0 && mWindowValid; }
 
+    // <SS:Nexii> The cover window - the world field's enclosure spectrum per
+    // cell (0 outdoors, 1 sealed interior, -1 where neither the field nor the
+    // world field has an answer), sampled just above each cell's stored
+    // surface: the air a fog sample sits in when the covered test gates it.
+    // Same lattice/origin as ssFieldMap, a separate texture the same way; the
+    // height fog is its only consumer, and like the flow window only the
+    // passes that read it bind it.
+    bool bindCoverForShader(LLGLSLShader& shader, S32 channel);
+    bool hasCoverWindow() const { return mWindowCoverTex != 0 && mWindowValid; }
+
     // Uploads the resolved liquid/deposit looks and the plain weather scalars every surface pass shares.
     void bindLooksForShader(LLGLSLShader& shader) const;
 
@@ -97,6 +107,9 @@ public:
 
     // Records an impact for the ring shader if it fell within SSSurfaceState::RING_NEAR_M of the camera; farther ones stay ripple quads.
     void noteImpact(const LLVector3& pos_agent, F32 strength);
+
+    // How fast the analytic ring's clock runs, from the same preset and taste controls the landing ripple quad expands off.
+    F32 ringRate() const;
 
     void releaseGL();
 
@@ -235,6 +248,10 @@ private:
     // <SS:Nexii> The state window (ice, frost, stain, age), same lattice/origin as mWindowTex - filled in updateWindow() beside the other two.
     U32 mWindowStateTex = 0;
     std::vector<F32> mWindowStateData;
+
+    // <SS:Nexii> The cover window (the world field's enclosure spectrum), same lattice/origin - filled in updateWindow() beside the other three.
+    U32 mWindowCoverTex = 0;
+    std::vector<F32> mWindowCoverData;
 
     std::map<U64, S32> mShedCursor;
 

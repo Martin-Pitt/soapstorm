@@ -377,9 +377,16 @@ void SSVolCloud::update(F32 dt)
     // <SS:Nexii> D3 (fourth build report) [interaction: ssdeckboilcore.h]: THE BOIL CLOCK, integrated. The
     // fragment stage used to build the advected octave's phase as `ss_time * rate` - an absolute clock times a
     // rate that steps once a second, because both of that rate's factors are resolved from
-    // SSAtmoEnvTrack::currentDayCyclePhase(), which reads time(nullptr) in WHOLE SECONDS. Multiplied by a clock
-    // of thousands of seconds, each one-second tread became a jump in the phase itself. Integrating the rate
-    // instead makes a rate step a change of DERIVATIVE, which nothing can see. See SSDeckBoil's header.
+    // SSAtmoEnvTrack::currentDayCyclePhase(), which THEN read time(nullptr) in WHOLE SECONDS. Multiplied by a
+    // clock of thousands of seconds, each one-second tread became a jump in the phase itself. Integrating the
+    // rate instead makes a rate step a change of DERIVATIVE, which nothing can see. See SSDeckBoil's header.
+    // <SS:Nexii> D3 follow-up (fifth build report, "still seeing the issue of clouds jumping each second")
+    // [interaction: SSAtmoEnvTrack::currentDayCyclePhase]: that 1 Hz tread is GONE at its root - the phase now
+    // reads SSAtmoMagic::sharedTime(), the per-frame latch of LLDate::now().secondsSinceEpoch(), so
+    // deck.mDriftRate and deck.mChurn (and every other dial resolved below) ease continuously instead of
+    // stepping. This integration is kept and is still the right shape: it is what makes a rate CHANGE of any
+    // kind - continuous or not - invisible in the phase, and it is what keeps the uniforms in F32 range however
+    // long the viewer has been open. Measured in tests/unit_phase_clock.cpp.
     // Both decks advance every frame on their own last-resolved dials, whether or not they get rebuilt below -
     // a deck that dips under the coverage floor for a few seconds must not come back on a stale phase. dt is
     // gFrameIntervalSeconds (ssatmomagic.cpp's call); SSDeckBoil::clampDt bounds a hitch or an alt-tab out.

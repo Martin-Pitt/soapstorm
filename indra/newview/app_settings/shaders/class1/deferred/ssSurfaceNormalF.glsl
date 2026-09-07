@@ -94,6 +94,8 @@ uniform sampler2D diffuseRect;
 uniform int   ssRingCount;
 uniform vec4  ssRings[SS_RING_ARRAY_MAX];   // xy position, z birth time, w strength
 uniform float ssRingZ[SS_RING_ARRAY_MAX];
+// How fast the ring's own clock runs against the wall clock (SSSurfaceState::ringRate, uploaded beside the buffer): the analytic ring and the landing ripple quad it stands in for expand at the same metres per second off the same taste controls, and the ring's larger reach is paid for in time rather than in speed.
+uniform float ssRingRate;
 
 // LOCKSTEP with sssurfacestatecore.h via ssSurfaceStateF.glsl - re-declared here, same names/values, for the ring loop below.
 const float SS_RING_SPEED_MPS = 0.55;
@@ -140,6 +142,13 @@ void main()
     vec4 pos_view = getPositionWithDepth(tc, depth);
     vec3 p = (ssFieldInvView * vec4(pos_view.xyz, 1.0)).xyz;
 
+    // <SS:Nexii> the camera's own agent-space position, which is what ssFieldInvView's translation column IS. Used by the drip frame below to measure its projected coordinate as (p - cam) . t + cam . t: the per-fragment term is then a difference of nearby numbers and the whole-lattice offset is one per-frame constant, so a rounding error in it shifts the lattice coherently instead of shearing it per fragment. See sssurfacedropcore.h's ANCHORING RULE for both failure modes and which one was measured to bite. [interaction: ssvolcloud.cpp's air frame, the same rule one system up]
+    vec3 cam_agent = ssFieldInvView[3].xyz;
+
+    // <SS:Nexii> the gbuffer's own shading normal, hoisted ahead of the derivative batch below (it is a texture read and some maths, under no derivative constraint) because the drip frame's axis is built from it - see the drip block. Nothing here can early-return before it, so it is as safe here as it was where it used to sit.
+    vec3 n_view = decodeNormal(raw).xyz;
+    vec3 n_world = normalize(mat3(ssFieldInvView) * n_view);
+
     // See ssSurfaceWetF.glsl's own copy of this construction for the full rationale: the gradient of view-space position across the screen is the flat GEOMETRIC surface, independent of any normal
     // map, which is what "is this a wall or a roof" actually has to answer.
     vec3 n_geo_view = cross(dFdx(pos_view.xyz), dFdy(pos_view.xyz));
@@ -157,20 +166,42 @@ void main()
 
     // Static-drop lattice: an isotropic world-XY grid (both axes divided by the same pitch), so a cell-fraction distance is already a metrically correct one and the cap law below can use it directly,
     // the same way the doc's own d = (p.xy - centre) / radius does.
+    // <SS:Nexii> DELIBERATELY un-anchored, and the measurement is why. A camera-anchored spelling - sub-cell coordinate from (p.xy - anchor), world index recovered as an integer sum - is the standard cure for a lattice whose coordinate carries the agent-space magnitude, and it was built and measured here (sssurfacedropcore.h SSSurfaceDrop::anchoredCell, unit_surfaceanchor surfaceanchor_B_control_unanchored_quantum). It does not help this lattice: the anchor's own anchor_i * pitch multiply reintroduces the same magnitude rounding, measured 0.0052 cells of sub-cell error at 4 km against 0.00089 for the plain spelling, and BOTH are two orders below the depth buffer's own contribution (rung A: 3 mm at 12 m, 29 mm at 120 m). The static drop lattice is anchored to within a fiftieth of a cell as spelled - which is what the user sees, the static drops being the ones they report as fine. The core keeps anchoredCell so the next reader does not re-derive it.
     float drop_pitch = max(0.04 * law.y * ssSurfaceDropScale, 1.0e-4);
     vec2 drop_cell_uv = p.xy / drop_pitch;
     float drop_texels = max(fwidth(drop_cell_uv.x), fwidth(drop_cell_uv.y));
     float drop_reach = 1.0 - smoothstep(4.0, 24.0, drop_texels);
 
-    // Drip frame: u along the wall's own horizontal tangent, v along world Z (built off n_geo_world, which is already known here). The cell itself is anisotropic (0.06 m wide, 0.30 m tall), so this
-    // uv pair only ever drives cell INDEXING and the footprint reach below - the cap/trail maths further down convert back to metres before measuring any distance in it.
-    vec3 drip_t = normalize(cross(vec3(0.0, 0.0, 1.0), n_geo_world) + vec3(1.0e-4, 0.0, 0.0));
-    float drip_u = dot(p, drip_t) + dot(ssSurfaceWind.xy, drip_t.xy) * 0.02 * (p.z - floor(p.z));
-    vec2 drip_cell_uv = vec2(drip_u / 0.06, p.z / 0.30);
-    float drip_texels = max(fwidth(drip_cell_uv.x), fwidth(drip_cell_uv.y));
-    float drip_reach = 1.0 - smoothstep(4.0, 24.0, drip_texels);
+    // Drip frame: u along the wall's own horizontal tangent, v along world Z. The cell is anisotropic (0.06 m wide, 0.30 m tall), so this uv pair only ever drives cell INDEXING - the cap/trail maths
+    // further down convert back to metres before measuring any distance in it.
+    // <SS:Nexii> the axis is a QUANTISED azimuth of the GBUFFER normal (sssurfacedropcore.h, SSSurfaceDrop::dripAxis), not the screen-space derivative normal it used to come from. A projected
+    // coordinate multiplies its axis's angular error by |p|, and the derivative normal carries 0.03 to 0.24 rad of it: measured, the lattice coordinate at a FIXED world point moved 4.06 m (68 cells)
+    // for a wall 141 m from the agent origin and 161 m (2685 cells) at 1 km, re-randomising the whole pattern every time the camera moved. That is the jitter. n_geo_world stays where it belongs -
+    // the up_align/slope gates below, which are smooth and only ask "is this a wall". [interaction: the eight-direction sheet flow frame further down, the same idiom]
+    const float SS_DRIP_AZIMUTHS = 16.0;
+    float drip_az_step = 6.28318530718 / SS_DRIP_AZIMUTHS;
+    // cross(up, n) = (-n.y, n.x, 0). On a perfectly horizontal surface that vanishes and atan(0, 0) is UNDEFINED in GLSL, so it falls back to world X - the drip block is gated off there anyway, but
+    // an undefined value computed ahead of the gate is not something to leave lying about.
+    vec2 drip_tan_h = vec2(-n_world.y, n_world.x);
+    if (dot(drip_tan_h, drip_tan_h) < 1.0e-12) drip_tan_h = vec2(1.0, 0.0);
+    float drip_az = floor(atan(drip_tan_h.y, drip_tan_h.x) / drip_az_step + 0.5) * drip_az_step;
+    vec3 drip_t = vec3(cos(drip_az), sin(drip_az), 0.0);
 
-    // Deposit grain lattice (item 5 below): a 0.03 m pitch, faded the same way.
+    // <SS:Nexii> camera-relative, and the wind lean is now a CONTINUOUS affine shear on absolute z. It used to be 0.02 * (p.z - floor(p.z)) - a sawtooth that jumped the lattice sideways by up to
+    // dot(wind, t) * 0.02 m at every whole metre of height, which is a discontinuity straight across the one direction a runnel has to stay connected along.
+    float drip_u = dot(p - cam_agent, drip_t) + dot(cam_agent, drip_t)
+                 - dot(ssSurfaceWind.xy, drip_t.xy) * 0.02 * p.z;
+    vec2 drip_cell_uv = vec2(drip_u / 0.06, p.z / 0.30);
+
+    // <SS:Nexii> the drip's LOD fade measures the FEATURE, not the cell (PLAN.md lesson 33). The old fade ran on cells and started at 4 of them - but a drip's cap is 0.008 * dropScale metres and its
+    // trail sigma 0.004 m, seven to fifteen times finer than the 0.06 x 0.30 m cell it was measured against, so the pattern was drawn at full strength while a pixel already covered several caps. That
+    // is the speckle: a hard cap point-sampled far below Nyquist reads as isolated dots instead of a runnel. Measured in world metres per pixel, direction-agnostic, so a grazing wall (where a pixel's
+    // footprint stretches) fades on the same rule as a face-on one.
+    float drip_px_m = max(max(fwidth(p.x), fwidth(p.y)), fwidth(p.z));
+    float drip_feature_m = max(0.008 * ssSurfaceDropScale, 1.0e-4);
+    float drip_reach = 1.0 - smoothstep(0.5, 3.0, drip_px_m / drip_feature_m);
+
+    // Deposit grain lattice (item 5 below): a 0.03 m pitch, faded the same way. Un-anchored for the same measured reason as the drop lattice above.
     vec2 grain_uv = p.xy / 0.03;
     float grain_texels = max(fwidth(grain_uv.x), fwidth(grain_uv.y));
     float grain_reach = 1.0 - smoothstep(4.0, 24.0, grain_texels);
@@ -187,9 +218,6 @@ void main()
         frag_color = raw;
         return;
     }
-
-    vec3 n_view = decodeNormal(raw).xyz;
-    vec3 n_world = normalize(mat3(ssFieldInvView) * n_view);
 
     float wet;
     float puddle;
@@ -257,21 +285,45 @@ void main()
         float drop_gate = ssSurfaceDrops * law.x * wet * slope_factor * (1.0 - porosity) * (1.0 - state.x) * (1.0 - deposit_mask);
         if (drop_gate > 0.001 && drop_reach > 0.001)
         {
-            vec2 dcell = floor(drop_cell_uv);
-            vec2 dlocal = fract(drop_cell_uv);
-            float dpresence = ssFieldHash(dcell);
-            if (dpresence < drop_gate)
+            // <SS:Nexii> DE-LATTICED (sssurfacedropcore.h rule 4, LOCKSTEP SSSurfaceDrop::sampleAt). One drop per cell, a radius band of only
+            // 1.8x and an offset clamped to keep the cap inside its own cell is a stamped grid, not rain - and the clamp was itself the second-best
+            // answer to a straight edge that fract() was cutting across every dome's base (offset to 0.85 plus radius to 0.45 reached 1.30, past
+            // the cell line). Both go away together: the offset spans the whole cell, the fragment tests its own cell AND the eight around it so a
+            // cap may cross a boundary and is never clipped, the radius band widens to 4.8x, and the occupancy is divided by SS_DROP_AREA_NORM so
+            // the MEAN COVERED AREA is exactly what it was - the surface gets less regular, not wetter. Same three ingredients, same order, as the
+            // deck's Tier B macro bodies. [interaction: ssdeckmacrocore.h bodyJitterM/BODY_AREA_NORM, the precedent]
+            const float SS_DROP_R_LO = 0.12;
+            const float SS_DROP_R_HI = 0.58;
+            // meanRadiusSq(0.25, 0.45) / meanRadiusSq(0.12, 0.58), the ratio that holds the covered area fixed. LOCKSTEP SSSurfaceDrop::areaNorm.
+            const float SS_DROP_AREA_NORM = 0.897955;
+
+            vec2 dbase = floor(drop_cell_uv);
+            vec2 dfrac = drop_cell_uv - dbase;
+            float occ = clamp(drop_gate * SS_DROP_AREA_NORM, 0.0, 1.0);
+
+            float best_h = 0.0;
+            vec2 best_d = vec2(0.0);
+            for (int oy = -1; oy <= 1; ++oy)
             {
-                vec2 doff = vec2(0.15) + vec2(0.7) * vec2(ssFieldHash(dcell + vec2(11.7, 3.1)), ssFieldHash(dcell + vec2(3.7, 17.9)));
-                float dradius = 0.25 + 0.20 * ssFieldHash(dcell + vec2(29.3, 7.7));
-                vec2 d2 = (dlocal - doff) / dradius;
-                float d2len2 = dot(d2, d2);
-                if (d2len2 < 1.0)
+                for (int ox = -1; ox <= 1; ++ox)
                 {
-                    vec3 cap = vec3(-d2 * 0.9, sqrt(max(1.0 - d2len2 * 0.81, 0.0)));
-                    vec3 dropNormal = normalize(vec3(1.0, 0.0, 0.0) * cap.x + vec3(0.0, 1.0, 0.0) * cap.y + flat_world * cap.z);
-                    flat_world = normalize(mix(flat_world, dropNormal, drop_reach));
+                    vec2 dcell = dbase + vec2(float(ox), float(oy));
+                    if (ssFieldHash(dcell) >= occ) continue;
+                    vec2 doff = vec2(ssFieldHash(dcell + vec2(11.7, 3.1)), ssFieldHash(dcell + vec2(3.7, 17.9)));
+                    float dradius = SS_DROP_R_LO + (SS_DROP_R_HI - SS_DROP_R_LO) * ssFieldHash(dcell + vec2(29.3, 7.7));
+                    vec2 d2v = (dfrac - vec2(float(ox), float(oy)) - doff) / dradius;
+                    float d2len2 = dot(d2v, d2v);
+                    if (d2len2 >= 1.0) continue;
+                    float h = sqrt(1.0 - d2len2 * 0.81);
+                    if (h > best_h) { best_h = h; best_d = d2v; }
                 }
+            }
+
+            if (best_h > 0.0)
+            {
+                vec3 cap = vec3(-best_d * 0.9, best_h);
+                vec3 dropNormal = normalize(vec3(1.0, 0.0, 0.0) * cap.x + vec3(0.0, 1.0, 0.0) * cap.y + flat_world * cap.z);
+                flat_world = normalize(mix(flat_world, dropNormal, drop_reach));
             }
         }
     }
@@ -302,24 +354,36 @@ void main()
                 vec2 dcap = local_m / cap_r;
                 float dcaplen2 = dot(dcap, dcap);
 
+                // <SS:Nexii> the cap's edge is a FOOTPRINT-WIDE band, not a hard cut. A cap of radius 0.008 * dropScale metres point-sampled by a pixel that already covers more than that is either
+                // fully in or fully out per pixel, which is the speckle rather than a drop; a band the width of one pixel's own world footprint is the analytic filter for it.
+                float aa_m = max(drip_px_m, 1.0e-5);
+                float cap_edge = max(aa_m / cap_r, 0.02);
+                float capMask = 1.0 - smoothstep(1.0 - cap_edge, 1.0 + cap_edge, sqrt(dcaplen2));
+
                 vec3 dripNormal = flat_world;
                 float dripWeight = 0.0;
-                if (dcaplen2 < 1.0)
+                if (capMask > 0.001)
                 {
                     vec3 cap = vec3(-dcap * 0.9, sqrt(max(1.0 - dcaplen2 * 0.81, 0.0)));
                     dripNormal = normalize(drip_t * cap.x + vec3(0.0, 0.0, 1.0) * cap.y + flat_world * cap.z);
-                    dripWeight = 1.0;
+                    dripWeight = capMask;
                 }
 
                 // The trail: a vertical ridge above the drop (toward larger v, the direction it fell from), a gaussian in u fading out over the trailing 60 percent of the cell.
+                // <SS:Nexii> the gaussian's width is FLOORED at the pixel footprint and its amplitude divided by the same widening, so the integral across u is conserved. A 4 mm sigma sampled by a
+                // pixel covering more than 4 mm of wall is exactly the "hard threshold on a fine field reads as isolated dots" failure - widening the kernel to the footprint is the filtered answer,
+                // and the amplitude term is what keeps a distant runnel from getting brighter as it gets blurrier (the same area-conservation discipline as the deck's BODY_AREA_NORM).
+                const float SS_DRIP_TRAIL_SIGMA_M = 0.004;
+                float trail_sigma = max(SS_DRIP_TRAIL_SIGMA_M, aa_m);
                 float dv_above = fract(dlocal.y - dy);
                 float trail_fade = 1.0 - smoothstep(0.0, 0.6, dv_above);
                 float du_m = (dlocal.x - dxoff) * 0.06;
-                float trail_gauss = exp(-(du_m * du_m) / (2.0 * 0.004 * 0.004));
+                float trail_gauss = exp(-(du_m * du_m) / (2.0 * trail_sigma * trail_sigma))
+                                    * (SS_DRIP_TRAIL_SIGMA_M / trail_sigma);
                 float trailMask = trail_gauss * trail_fade;
                 if (trailMask > dripWeight)
                 {
-                    float ridgeTiltU = -clamp(du_m / 0.004, -1.0, 1.0) * trailMask;
+                    float ridgeTiltU = -clamp(du_m / trail_sigma, -1.0, 1.0) * trailMask;
                     dripNormal = normalize(drip_t * ridgeTiltU * 0.6 + flat_world);
                     dripWeight = trailMask;
                 }
@@ -409,7 +473,7 @@ void main()
         flat_world = normalize(flat_world + vec3(-(gx - g0), -(gy - g0), 0.0) * 6.0 * deposit_mask * grain_reach);
     }
 
-    // Item 6: impact rings - the analytic ripple packet from each recorded impact within range, superposed and clamped once as a whole so a crowded puddle cannot shatter its own normal.
+    // Item 6: impact rings - the analytic ripple packet from each recorded impact within range, superposed and clamped once as a whole so a crowded puddle cannot shatter its own normal. The radius test is against the ring's REACH (speed x life on its own clock), which ssRingRate leaves alone: the rate decides how long the ring takes to get there, not how far it gets. [interaction: SSSurfaceField::bindRingsForShader uploads the rate, ssPrecipLitF.glsl shades the landing quad this ring stands in for]
     {
         vec3 tilt = vec3(0.0);
         const int SS_RING_LOOP_MAX = 24;
@@ -419,7 +483,7 @@ void main()
             float r = distance(p.xy, ssRings[i].xy);
             if (abs(p.z - ssRingZ[i]) < 0.35 && r < SS_RING_SPEED_MPS * SS_RING_LIFE_S + 0.2)
             {
-                float rt = ssTime - ssRings[i].z;
+                float rt = (ssTime - ssRings[i].z) * ssRingRate;
                 float slope = ssRingSlope(r, rt, ssRings[i].w);
                 vec2 dir = (p.xy - ssRings[i].xy) / max(r, 1.0e-3);
                 tilt -= vec3(dir * slope, 0.0) * (puddle * slope_factor + 0.25 * wet * slope_factor) * (1.0 - state.x);

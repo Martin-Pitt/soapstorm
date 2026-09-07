@@ -1220,7 +1220,10 @@ set(viewer_HEADER_FILES
     ssrainshadow.h
     sssurfacefield.h
     sssurfacestatecore.h
+    sssurfacedropcore.h
+    sssheltercore.h
     ssscreenfxcore.h
+    sslensdropcore.h
     sshazecore.h
     ssheightfog.h
     ssscreenfx.h

@@ -451,6 +451,11 @@ void SSAtmoMagic::processImpacts()
             if (s.mPuddle > 0.001f || s.mWet > 0.3f)
             {
                 SSSurfaceField::getInstance()->noteImpact(impact.mPosAgent, impact.mStrength);
+                // <SS:Nexii> The ring replaces the RIPPLE QUAD, and only that. The crown is the drop's own water thrown back up out of the surface - it is what a landing looks like from the side, it has nothing to do with which way the ring under it is drawn, and the near field is exactly where it is worth seeing. Same finding as the shatter burst below, one effect over.
+                if (ripples && mSim)
+                {
+                    mSim->spawnCrown(impact.mPosAgent, impact.mStrength, impact.mNormal, rng);
+                }
                 // <SS:Nexii> AUDIT (finding 9): the ring replaces the RIPPLE quad only (doc sec 6) - a hail impact's shatter burst is not a ripple and was being silently dropped by this same continue.
                 if (impact.mShatter && mSim)
                 {
@@ -1077,10 +1082,10 @@ void SSAtmoMagic::drawInfo()
         }
 
         const U8 air = field->airLabelAt(cam);
-        static const char* AIR_NAME[] = { "solid", "outside", "interior", "unknown" };
+        static const char* AIR_NAME[] = { "solid", "outdoors", "sheltered", "interior", "unknown" };
         const U32 air_depth = field->airDepthAt(cam);
         field_section.lines.push_back(llformat("air        %s, depth %s",
-                                 AIR_NAME[llclamp((S32)air, 0, 3)],
+                                 AIR_NAME[llclamp((S32)air, 0, 4)],
                                  air_depth == SSWorldField::AIR_DEPTH_UNREACHED
                                      ? "n/a" : llformat("%u cells", air_depth).c_str()));
         if (cam_region)
@@ -1177,6 +1182,16 @@ void SSAtmoMagic::drawInfo()
     }
     audio_section.lines.push_back(llformat("walls      %d hit   avg %.1fm   blend %.2f",
                              audio->wallCount(), audio->wallDistance(), audio->coverBlend()));
+    {
+        const F32 enc = audio->enclosure();
+        audio_section.lines.push_back(llformat("spectrum   %s   shelter budget %s",
+                                 enc < 0.f ? "n/a (probes)"
+                                           : llformat("%.2f %s", enc,
+                                                      enc < 0.15f ? "outdoors"
+                                                    : enc < 0.5f  ? "sheltered"
+                                                                  : "enclosed").c_str(),
+                                 audio->isInterior() ? "spent (sealed)" : "live"));
+    }
     for (S32 self = 1; self >= 0; --self)
     {
         const SSSoundscape::StepDebug& st = audio->lastStep(self != 0);

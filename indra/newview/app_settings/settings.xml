@@ -27049,24 +27049,24 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldCell</key>
       <map>
       <key>Comment</key>
-      <string>World field column size in metres; 2.0 over a 256m region is a 128x128 column grid</string>
+      <string>World field column size in metres. 0.25 matches the rain shadow capture's texel at its default 1024 resolution - a 1024x1024 column grid over a 256m region - so window- and door-scale openings resolve for the air flood's shelter reach; memory and capture cost scale with bands x columns</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>2.0</real>
+      <real>0.25</real>
     </map>
     <key>SSWorldFieldBand</key>
       <map>
       <key>Comment</key>
-      <string>Height of one capture band in metres. One ortho depth pass per band, stacked bottom-up, so the field is a multi-span column store; finer bands resolve more interior surfaces at the cost of more passes</string>
+      <string>Height of one capture band in metres. One ortho depth pass per band, stacked bottom-up, so the field is a multi-span column store. 4m resolves room-scale air between floors, which the air flood's enclosure spectrum and acoustic lattice need to answer at eye level; the stack caps at 24 bands, so 4m tops the capture at 96m. Finer bands cost more depth passes</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>16.0</real>
+      <real>4.0</real>
     </map>
     <key>SSWorldFieldCeiling</key>
       <map>
@@ -27093,7 +27093,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldDebugView</key>
       <map>
       <key>Comment</key>
-      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's connectivity labels - outside-connected air green fading with occlusion depth, sealed interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
+      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's touching classification - outdoors air green, sheltered air amber fading with occlusion depth, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the column spans themselves - each solid span a wireframe box from band floor to surface top, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), with a dim line threading each span to the next solid above. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27181,7 +27181,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoRippleSpeed</key>
       <map>
       <key>Comment</key>
-      <string>Taste multiplier on how quickly landing ripples and splash crowns expand and fade; higher is snappier. Divides the preset's own ripple and crown lifetimes, so at 2 a preset asking for a 0.4s ring gets 0.2s</string>
+      <string>Taste multiplier on how quickly landing ripples and splash crowns expand and fade; higher is snappier. Divides the preset's own ripple and crown lifetimes, so at 2 a preset asking for a 0.4s ring gets 0.2s. The analytic rings on nearby puddles run off the same figure, so both move at the same speed</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27929,7 +27929,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoLensDropsStrength</key>
       <map>
       <key>Comment</key>
-      <string>Atmo Magic: master dial on the lens drops post pass' size/intensity. 0 removes the drops entirely</string>
+      <string>Atmo Magic: how deeply the lens drops refract - how far the scene behind a drop is displaced by its surface. Derived from Snell at a water lens (sslensdropcore.h REFRACT_DEPTH times 1 - 1/1.333) and multiplied by this. 0 leaves the drops visible but optically flat; it does NOT remove them - SSAtmoLensDrops is the on/off</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27947,6 +27947,72 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>1.0</real>
+    </map>
+    <key>SSAtmoLensStreaks</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: how strongly the lens drops' RUNNERS read - the drops that grow until they release, run down the glass along the slide direction and leave a refracting trail that thins and beads up behind them. This is the only place the wind's screen-projected push is visible in the pass, because the run direction is where it enters. 0 leaves only the sitting drops (the look of every build before the 2026-09-07 R2 fix), 1 is the shipping default, 2 doubles their presence</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoLensReflection</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: weight of the Fresnel reflection on a lens drop's own surface - grazing angles at a drop's rim go strongly reflective, and that rim highlight is most of what makes a drop read as a drop rather than a dark lump. 0 is refraction only (the look of every build before the 2026-09-07 R4 fix, kept as an in-build A/B), 1 is physical Schlick against water's 0.02 normal-incidence reflectance, 2 exaggerates it. NOTE: this pass runs after tonemap with no reflection probes bound, so the reflected surroundings are approximated from the frame itself - see the R4 note in ssscreenfx.cpp for what would have to change to sample the probes properly</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoLensDropWorker</key>
+      <map>
+      <key>Comment</key>
+      <string>Step the lens drop simulation on its own worker thread instead of on the main thread. Off runs the same simulation inline, which is only worth doing to rule the thread out while debugging</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSAtmoLensDryRate</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: how fast the lens drops live out their lives. A drop accretes, sits and evaporates over a hashed 5 to 14 seconds (sslensdropcore.h LIFE_MIN_S/LIFE_SPAN_S), shrinking and thinning to nothing over the last 45% of that rather than blinking out; this multiplies the clock, so 2 halves every life and 0.5 doubles it. 1 is the shipping default. Below about 0.3 the field stops visibly churning and reads as a frozen stipple</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSAtmoLensStreakBudget</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: how many running drops may exist on the lens at once - the streaks that release when they outgrow surface tension, tear down the glass eating the fine droplets in their path and leave a wake of medium beads. These are SIMULATED, so this is a real cost ceiling: each one is a loop iteration per pixel. 24 is the hard maximum the shader's uniform array holds, 12 is the shipping default, 0 leaves only the fine stipple with no streaks at all</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>12</integer>
+    </map>
+    <key>SSAtmoLensClearCentre</key>
+      <map>
+      <key>Comment</key>
+      <string>Atmo Magic: how strongly the FINE droplets and the condensation haze thin toward the middle of the screen (a windscreen's hydrophobic coating), so the frame reads as rain while the centre stays legible. Implemented as a LIFETIME multiplier (sslensdropcore.h clearRadial, growFracAt/evapFracAt, stippleAmplitude), not as an alpha vignette - drops still land in the middle and still evaporate there, they just cannot hold their size as long and cannot grow as large, so there is no ring at the boundary. At 1, measured (tests/lensdropcore.cpp): the centre's droplet coverage is about 22% of the edge's, and condensation is exactly 12% of the margin's. The running streaks and their wake beads are DELIBERATELY EXEMPT and drive straight through the centre. 0 gives a uniform field</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.75</real>
     </map>
     <key>SSAtmoWhiteoutFalloff</key>
       <map>

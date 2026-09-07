@@ -34,6 +34,7 @@
 // per client. Still pure: no settings, no singletons, no clock but the dt handed in; every closed form below is what the twin test
 // transliterates from the GLSL. Bodies marked STUB are the implementer's.
 #include "lldefs.h"
+#include "sssheltercore.h"
 
 #include <cmath>
 #include <cstdint>
@@ -133,6 +134,34 @@ namespace SSScreenFX
     constexpr F32 LENS_FOG_COLD_C    = 8.f;     // condensation demand is full at or below this air temperature...
     constexpr F32 LENS_FOG_WARM_C    = 20.f;    // ... and 0 at or above this
     constexpr F32 LENS_WIND_SLIDE    = 0.15f;   // screen-space slide direction = gravity + LENS_WIND_SLIDE * wind (m/s), see slideDir
+    // <SS:Nexii> SHELTER COLLAPSE (2026-09-07). This was the last of three duplicated spellings of "is this point under cover" -
+    // ssprecipitation.cpp is already collapsed onto SSShelter; this was the remaining one, in the lens's own fence. LENS_COVER_TOL_M is
+    // gone as a local literal; SSShelter::COVER_TOL_M is the one source of the threshold, and lensExposure below now calls
+    // SSShelter::coverExposure directly rather than spelling its own comparison.
+    //
+    // NOT A BIT-IDENTICAL NO-OP, and the collapse also exposed that this consumer needs its own THRESHOLD. The R1-R5 build's
+    // lensExposure had two independently-tuned numbers, a 2 m threshold and a separate 1.5 m soft width, ramping over 2.0-3.5 m.
+    // SSShelter::coverExposure has one number and its ramp is always exactly tol_m wide starting at tol_m. Collapsing onto it with
+    // the SIM's 2 m default was wrong for the lens and is corrected below - see LENS_COVER_TOL_M.
+    // Invariants: 1 when unresolved; 1 when hitZ <= camZ (nothing above); 0 when hitZ - camZ >= 2 * LENS_COVER_TOL_M; monotone
+    // non-increasing in hitZ - camZ; in [0,1]; C1 at both ends of the band.
+    // <SS:Nexii> The lens's OWN cover tolerance, and why it cannot be the sim's. SSShelter::coverExposure remains the one formula -
+    // only this argument differs, which is exactly what its tol_m parameter is for - but SSShelter::COVER_TOL_M's 2 m is calibrated
+    // for the PRECIPITATION SIM's geometry, where the question is whether a hit above a falling drop is a roof or the ground that
+    // drop is heading for, and 2 m separates those cleanly. The lens asks a different question about a different pair of heights:
+    // hitZ is the column's top and camZ is the EYE, so indoors the gap is a ceiling's CLEARANCE above your head - about 1.3 m under
+    // a 3 m ceiling with the camera at 1.7 m. Against a 2 m tolerance that read as NOT COVER, so the shelter gate did nothing in any
+    // ordinary interior, and full shelter would have needed 4 m of clearance - a 5.7 m ceiling. 0.25 m instead: the ramp runs
+    // 0.25 -> 0.50 m of clearance, so anything meaningfully overhead shelters while a surface at or below the eye still does not, and
+    // a camera clipped inside geometry reads sheltered, which is the right answer. OWED: a rung pinning exposure across a clearance
+    // sweep at named interior heights (2.4 / 3.0 / 3.5 m ceilings against a 1.7 m eye must all read 0) with the 2 m tolerance as the
+    // failing control - this constant is stated here, not yet demonstrated. [interaction: SSShelter, sssheltercore.h]
+    constexpr F32 LENS_COVER_TOL_M = 0.25f;
+
+    inline F32 lensExposure(F32 hitZ, F32 camZ, bool resolved)
+    {
+        return SSShelter::coverExposure(resolved, hitZ, camZ, LENS_COVER_TOL_M);
+    }
 
     // <SS:Nexii> forward declaration - full definition (and contract comment) lives with the height-fog relax below; stepLens shares it.
     inline F32 relax(F32 x, F32 target, F32 tauIn, F32 tauOut, F32 dt);

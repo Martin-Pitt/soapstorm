@@ -127,6 +127,10 @@ uniform float ssFogDebug;
 
 vec4 ssFieldFetch(vec2 xy_agent);
 
+// <SS:Nexii> The cover window's fetch (ssSurfaceFieldF.glsl): the world field's enclosure
+// spectrum per cell, 0 outdoors to 1 sealed interior, -1 where there is no verdict.
+float ssFieldFetchCover(vec2 xy_agent);
+
 // <SS:Nexii> mFeatures.isDeferred pulls deferredUtil.glsl into this program's link (llshadermgr.cpp), which already defines these four - prototype only, do not redefine (L6).
 float getDepth(vec2 pos_screen);
 vec2 getScreenCoordinate(vec2 screenpos);
@@ -186,10 +190,31 @@ float ssFogDensityAt(vec3 q)
     vec4 here = ssFieldFetch(q.xy);
 
     float surface_z = ssFogGroundZ;
+    float openness = 1.0;
+
     if (here.x > -1.0e5)
     {
-        if (here.x - q.z > 0.75) return 0.0;   // covered - indoors, under a roof
-        surface_z = here.x;
+        if (here.x - q.z > 0.75)
+        {
+            // <SS:Nexii> COVERED, but by how much: the world field's enclosure
+            // spectrum, stitched per cell into the cover window, grades the air
+            // a cover holds. An open-sided porch or a cave mouth fades the fog
+            // back in toward its openings at the depth the flood measured
+            // behind them; a sealed room stays at the old binary zero. The
+            // height reference under a cover is the flat ground reference -
+            // the window stores only the cover's own top, so there is nothing
+            // better to measure the pool against. -1, the no-verdict sentinel
+            // (world field off, tile stale, sub-band solid), reads as fully
+            // enclosed, so without a world field answer the march is
+            // bit-identical to what it was.
+            float cover = ssFieldFetchCover(q.xy);
+            openness = (cover > -0.5) ? 1.0 - clamp(cover, 0.0, 1.0) : 0.0;
+            if (openness < 0.001) return 0.0;
+        }
+        else
+        {
+            surface_z = here.x;
+        }
     }
 
     float h = max(q.z - surface_z, 0.0);
@@ -206,7 +231,7 @@ float ssFogDensityAt(vec3 q)
     // The wisp: a still fog bank should drift, not just fade in and out uniformly. Only the ground and mist sources wisp - the precipitation veil and the squall/drift band are driven weather already in visible motion, and wisping them on top reads as noise rather than as air moving.
     float wisp = 0.75 + 0.25 * ssFogValueNoise3(q * 0.18 - ssFogWind * ssFogTime * 0.18);
 
-    return (ground_term + mist_term) * wisp + precip_term + squall_term + band_term;
+    return ((ground_term + mist_term) * wisp + precip_term + squall_term + band_term) * openness;
 }
 
 void main()

@@ -1,22 +1,47 @@
 # Atmo Magic: the shared world field (second proposal)
 
-> **Implementation status (2026-09-01):** the capture service (`ssworldfield.h/cpp`,
+> **Implementation status (2026-09-01, revised 2026-09-07):** the capture service (`ssworldfield.h/cpp`,
 > `SSWorldField`) is the sidecar of migration steps 1-2 and 4: staged band-sliced
 > capture, the column store, `buildSurfaceGrid` with rain shadow's exact contract,
 > the interest/channel registry, `coverageAt`/`surfaceTop`/`coverageDetail`,
 > the dirty-rect re-peel path, and the async readback. The wet field reads it
 > behind `SSWorldFieldSurfaceTop` (default off), and the soundscape's cover and
 > burial come from the COVERAGE channel behind `SSWorldFieldCoverage` (default
-> off). The air-connectivity flood fill (labels + occlusion depth) runs on the
-> General worker queue per committed tile, snapshot-gated by geometry serial.
-> The DRAINAGE_NETWORK core (priority-flood depression fill + pool mask + D8 on
+> off). Columns default to 0.25 m - the rain shadow capture's own texel density
+> (`SSAtmoShadowRes` 1024 over 256 m) - with bands allocated lazily as a build
+> sweeps upward. The air-connectivity flood fill runs on the General worker
+> queue per committed tile, snapshot-gated by geometry serial, and its labels
+> now carry the touching classification: OUTDOORS (open to the sky above),
+> SHELTERED (covered, within an opening's aperture budget - each opening's
+> porch of outdoors-touching cells is clustered and seeds sqrt(aperture cells),
+> spent one per cell step inward, widest path wins) and INTERIOR (every budget
+> spent, or sealed). The occlusion depth is the graph distance to the nearest
+> outdoors cell. The DRAINAGE_NETWORK core (priority-flood depression fill +
+> pool mask + D8 on
 > the filled surface, `buildDrainage`) ships as the surface field's pool source
 > under the same `SSWorldFieldSurfaceTop` switch. A world field debug overlay
 > (`RENDER_DEBUG_WORLD_FIELD`, the Atmo Magic Debug floater) shows
-> the band surfaces, the air labels with occlusion depth, and the drainage
-> topology. Still unbuilt: the wind solve's interior-skip (part of step 3; gated
+> the band surfaces, the air labels with occlusion depth, the drainage
+> topology, and the column spans themselves (view 5: each solid span a
+> wireframe box coloured by the air state standing on it, threaded to the next
+> solid above). Bands default to 4 m so room-scale air exists between floors -
+> the resolution the soundscape's reads need at eye level. The ACOUSTIC
+> channel's first slice ships: a precomputed wall-distance lattice (per band,
+> per ~8 m probe, four cardinals) built by the flood's worker job, standing in
+> for the soundscape's four live side raycasts whenever the tile is current.
+> The soundscape blends its beds on the enclosure spectrum (`enclosureAt`):
+> 0 outdoors to 1 sealed interior on the flood's depth back to open sky, with
+> the old discrete sheltered/room mix kept as the raycast fallback. The
+> height fog reads the same spectrum through a fourth stitched surface-field
+> window (the cover window, filled per tick from `enclosureAtRegion`): the
+> march's covered branch grades its density by it, so fog fades back in
+> toward a porch's or cave mouth's openings instead of cutting off at the
+> column-top test, and the camera-side sky veil rides it too. Still
+> unbuilt: the wind solve's interior-skip (part of step 3; gated
 > on multi-peel spans - see the architecture note at Part 3, SOLID_VOLUME_3D),
-> wind capture absorption, WALKABLE (7), ACOUSTIC (8) and Design H (6).
+> wind capture absorption, WALKABLE (7), the ACOUSTIC probe set beyond the
+> wall lattice (room volume, reverb classification, travel-time fields) and
+> Design H (6).
 
 This is a design, not a build log. The implementation status block above says
 what exists. It supersedes

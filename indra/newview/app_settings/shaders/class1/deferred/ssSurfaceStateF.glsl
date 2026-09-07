@@ -81,9 +81,11 @@ const float SS_RING_SPEED_MPS     = 0.55;
 const float SS_RING_WAVELENGTH_M  = 0.045;
 const float SS_RING_WIDTH_M       = 0.06;
 const float SS_RING_DAMP_S        = 1.4;
-const float SS_RING_AMPLITUDE     = 0.012;
+const float SS_RING_AMPLITUDE     = 0.0072;
 const float SS_RING_LIFE_S        = 2.0;
 const float SS_RING_SLOPE_MAX     = 0.6;
+const float SS_RING_SPREAD_R0_M   = 0.35;
+const float SS_RING_FADE_FROM     = 0.55;
 
 // Wind-blown snow settling in the lee of a precipitation shadow (doc section 8, "wind carry"). Not LOCKSTEP with the core - a shader-side art constant, documented here rather than in sssurfacestatecore.h.
 const float SS_DRIFT_CARRY = 0.8;
@@ -224,14 +226,26 @@ float ssDepositSparkle(float base, float age)
     return base * (1.0 - SS_SPARKLE_AGE_LOSS * age);
 }
 
-// Impact ring height at radius r (metres) and age t (seconds). Twin of SSSurfaceState::ringHeight.
+// Amplitude left in a crest that has spread out to radius r. Twin of SSSurfaceState::ringSpread.
+float ssRingSpread(float r)
+{
+    return sqrt(SS_RING_SPREAD_R0_M / max(r, SS_RING_SPREAD_R0_M));
+}
+
+// The terminal taper that eases the ring to zero by the end of its life instead of cutting it off. Twin of SSSurfaceState::ringTaper.
+float ssRingTaper(float t)
+{
+    return 1.0 - smoothstep(SS_RING_FADE_FROM * SS_RING_LIFE_S, SS_RING_LIFE_S, t);
+}
+
+// Impact ring height at radius r (metres) and age t (the ring's own clock - the pass scales the wall clock by ssRingRate before calling). Twin of SSSurfaceState::ringHeight.
 float ssRingHeight(float r, float t, float strength)
 {
     if (t < 0.0 || t > SS_RING_LIFE_S) return 0.0;
     const float kTwoPi = 6.283185307179586;
     float front = SS_RING_SPEED_MPS * t;
     float env = (r - front) / SS_RING_WIDTH_M;
-    return SS_RING_AMPLITUDE * strength * exp(-t / SS_RING_DAMP_S) * exp(-env * env)
+    return SS_RING_AMPLITUDE * strength * exp(-t / SS_RING_DAMP_S) * ssRingSpread(r) * ssRingTaper(t) * exp(-env * env)
         * sin(kTwoPi * (r - front) / SS_RING_WAVELENGTH_M);
 }
 

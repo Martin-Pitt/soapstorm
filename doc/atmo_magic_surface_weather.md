@@ -196,7 +196,36 @@ value-noise mask is the "global noise map anchored to the region"). Additions:
   `RING_WAVELENGTH_M` apart, gone after `RING_LIFE_S`) - the 4rknova raindrops-on-puddle look, but
   driven by the ACTUAL impacts the simulation landed, so the rings are where the drops fell.
   Outside the radius the ripple quads carry on. On non-puddle wet ground the ring is drawn at a
-  quarter strength as a splash mark on the film.
+  quarter strength as a splash mark on the film. Only the RING is replaced: the splash crown still
+  spawns (`SSPrecipSim::spawnCrown`), as does a hail impact's shatter burst - what changes near the
+  camera is how the ring is drawn, not what the landing does.
+
+- **One landing, one look.** The analytic ring and the landing ripple quad are the same event drawn
+  two ways, and the two are held together at both ends:
+  - *Rate.* `ringRate(quad_radius, quad_life)` reads the quad the preset and the taste controls
+    (`SSAtmoRippleScale`, `SSAtmoRippleSpeed`) would have spawned and returns the rate the ring's
+    own clock runs at, so both fronts travel the same metres per second. Every ring time in the
+    core is on that clock; the shell multiplies the wall clock by the rate before the shader's
+    `rt`, and divides `RING_LIFE_S` by it when expiring the buffer. The ring's larger extent
+    (`RING_REACH_M`, 1.1 m against a default quad's 0.35 m - it has a whole puddle to cross) is paid
+    for in TIME, not in speed: the same wave, running at the same speed, simply takes longer.
+  - *Fade.* A crest thins as it spreads (`ringSpread`, `1/sqrt(r)` past `RING_SPREAD_R0_M`) and is
+    eased to exactly zero over the last `1 - RING_FADE_FROM` of its life (`ringTaper`), so a ring
+    leaves the buffer with nothing left to pop out of existence.
+  - *Shading.* The quad is water, so `ssPrecipLitF.glsl` draws it as water, the same way
+    `ssPrecipRainF.glsl` draws a falling drop: the ground beneath refracted through the wave's baked
+    normal (scene map; a mid-grey guess without one), darkened by the wave's own relighting, mixed
+    toward a glossy probe sample by water's fresnel, with the sun's glint added on top. Where the
+    wave is flat the ground shows through untouched. The refraction offset is a world displacement
+    over the fragment's depth, not the drop shader's flat screen-space offset - a ring is ground,
+    not a billboard, so a fixed offset would smear the distant ones. It used to be a white ring
+    painted over the top, which is what gave the two systems away as two systems.
+
+  Two constraints hold that composition together, both from the same fact - the scene map is last
+  frame's scene at this pixel and the quad drew into it, so alpha blending makes the frame-to-frame
+  gain `1 - a + a * relight`: the relighting may only darken (`[0.4, 1]`), and the reflection is
+  mixed in rather than added. Anything above unit gain held over a pixel compounds until the ring
+  blows out white.
 
 ## 7. Ice and frost - the cold look
 

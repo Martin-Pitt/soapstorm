@@ -26,6 +26,7 @@
 #include "ssprecipitation.h"
 #include "ssprecipvariants.h"
 #include "ssrainshadow.h"
+#include "sssheltercore.h"
 #include "sssurfacefield.h"
 #include "ssvolcloud.h"
 #include "sswindflow.h"
@@ -60,7 +61,8 @@ static const F32 DRIFT_RING_RADIUS = 6.f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_SIM_DRIFT("Spawn drift");
 
-static const F32 COVER_TOLERANCE = 2.f;
+// <SS:Nexii> The cover tolerance is SSShelter's now, not this file's (sssheltercore.h, PLAN lesson 9): the same question - is this point sheltered by something above it - was spelled here, again in ssscreenfxcore.h for the lens drops, and was structurally MISSING from the surface field, which is why surface drops appeared indoors. One predicate now. V:/Scratch/atmo/tests/unit_shelter.cpp proves the collapse leaves this file's verdict unchanged over 40401 grid points straddling the threshold, the resolve-miss case included.
+static const F32 COVER_TOLERANCE = SSShelter::COVER_TOL_M;
 
 static const F32 LIFE_EMA = 0.02f;
 
@@ -175,6 +177,29 @@ static F32 weatherImpactStrength(const SSPrecipPreset& preset, SSAtmoMagic* atmo
     const F32 band = atmo->impactScale();
     if (!preset.mWeatherImpact || band < 0.f) return preset.mImpactStrength;
     return preset.mImpactStrength * llclamp(band, 0.f, 1.f);
+}
+
+// <SS:Nexii> A falling particle's leading edge - the FRONT TIP is what meets the surface, not the sprite centre, so the landing resolve reads the tip: streaks/sheets stretch along -vel (renderer, KIND_STREAK/KIND_SHEET), round sprites hang sizeY down on the camera's up. Resolving on the centre left every landed sprite's lower half buried in the surface it was supposed to meet, frozen there through its fade (clusters and sheets, with no impact branch of their own, were the worst).
+static F32 fallTipZ(const SSPrecipParticle& p, F32 cam_up_z)
+{
+    if (p.mKind == KIND_STREAK || p.mKind == KIND_SHEET)
+    {
+        const F32 speed = p.mVel.magVec();
+        const F32 half = p.mSizeY * 0.5f;
+        return p.mPos.mV[VZ] - ((speed > 0.001f)
+            ? half * fabsf(p.mVel.mV[VZ]) / speed : half);
+    }
+    return p.mPos.mV[VZ] - p.mSizeY * cam_up_z;
+}
+
+// <SS:Nexii> The same tip rule at spawn time: the centre-to-tip Z gap the impact queue compensates for, so the splash erupts the moment the drop's tip touches, not half a sprite later when its centre arrives.
+static F32 spawnTipZ(const SSPrecipPreset& preset, SSPrecipTier tier, F32 size_jitter,
+                     SSAtmoMagic* atmo, const LLVector3& impact_vel)
+{
+    const F32 speed = llmax(impact_vel.magVec(), 0.001f);
+    return preset.mTiers[tier].mSizeY * size_jitter
+         * intensitySizeScale(preset, intensitySizeDrive(preset, atmo)) * 0.5f
+         * fabsf(impact_vel.mV[VZ]) / speed;
 }
 
 // The distance band a tier owns, with its cross-fade overlaps.
@@ -335,6 +360,8 @@ void SSPrecipSim::update(F32 dt)
     std::vector<Respawn> respawns;
 
     const LLVector3 cull_cam = LLViewerCamera::getInstance()->getOrigin();
+    // <SS:Nexii> The round sprites' landing edge rides the camera's up, read once per step for fallTipZ.
+    const F32 cam_up_z = fabsf(LLViewerCamera::getInstance()->getUpAxis().mV[VZ]);
     F32 cull_r2[TIER_COUNT];
     {
         const SSPrecipPreset& cull_preset = SSAtmoMagic::getInstance()->preset();
@@ -392,7 +419,7 @@ void SSPrecipSim::update(F32 dt)
             {
                 p.mFloorZ = -FLT_MAX;
             }
-            else if (hit.mV[VZ] - p.mPos.mV[VZ] > COVER_TOLERANCE)
+            else if (SSShelter::underCover(true, hit.mV[VZ], p.mPos.mV[VZ]))
             {
                 --mTierCount[p.mTier];
                 p = mParticles.back();
@@ -406,7 +433,7 @@ void SSPrecipSim::update(F32 dt)
             }
         }
 
-        if (!(p.mFlags & PART_LANDED) && p.mPos.mV[VZ] <= p.mFloorZ)
+        if (!(p.mFlags & PART_LANDED) && fallTipZ(p, cam_up_z) <= p.mFloorZ)
         {
             p.mMaxAge = llmin(p.mMaxAge, p.mAge + ssPrecipFadeOut(p.mTier));
             p.mFlags |= PART_LANDED;
@@ -705,7 +732,8 @@ void SSPrecipSim::spawnTierCell(SSPrecipTier tier, U64 tick, F64 tick_time, S32 
                 const LLVector3 wind_h = windAt(hit) * (0.55f + 0.45f * llclamp(env, 0.f, 2.5f))
                                        * llmax(0.f, preset.mWindResponse);
                 const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -v_fall);
-                atmo->queueImpact(tick_time + run_fall / v_fall, hit, strength * strength_jitter,
+                atmo->queueImpact(tick_time + llmax(0.f, run_fall - spawnTipZ(preset, tier, size_jitter, atmo, impact_vel)) / v_fall,
+                                  hit, strength * strength_jitter,
                                   on_water, normal, impact_vel, preset.mShatter);
             }
         }
@@ -911,7 +939,9 @@ void SSPrecipSim::respawnParticle(SSPrecipTier tier, U32 seed, const LLVector3& 
                                * llmax(0.f, preset.mWindResponse);
         const LLVector3 impact_vel(wind_h.mV[VX], wind_h.mV[VY], -preset.mFallSpeed);
 
-        atmo->queueImpact(atmo->sharedTime() + run_fall / llmax(0.1f, preset.mFallSpeed),
+        atmo->queueImpact(atmo->sharedTime()
+                              + llmax(0.f, run_fall - spawnTipZ(preset, tier, size_jitter, atmo, impact_vel))
+                                / llmax(0.1f, preset.mFallSpeed),
                           hit, impact_strength * strength_jitter,
                           on_water, normal, impact_vel, preset.mShatter);
     }
@@ -1290,7 +1320,25 @@ void SSPrecipSim::spawnRipple(const LLVector3& pos_agent, F32 strength, bool on_
         pushRipple(ring);
     }
 
+    spawnCrown(pos_agent, strength, n, rng);
+}
+
+// The splash crown on its own - the vertical burst a landing throws up, which is the same event whether the ring under it is a quad or the analytic one the surface pass draws.
+void SSPrecipSim::spawnCrown(const LLVector3& pos_agent, F32 strength, const LLVector3& normal, SSRandStream& rng)
+{
+    const SSPrecipPreset& preset = SSAtmoMagic::getInstance()->preset();
     if (!preset.makesCrowns()) return;
+
+    LLVector3 n = normal;
+    if (n.normVec() < 0.5f)
+    {
+        n.set(0.f, 0.f, 1.f);
+    }
+
+    static LLCachedControl<F32> ripple_scale_setting(gSavedSettings, "SSAtmoRippleScale", 1.f);
+    static LLCachedControl<F32> ripple_speed_setting(gSavedSettings, "SSAtmoRippleSpeed", 2.f);
+    const F32 ripple_scale = llclamp((F32)ripple_scale_setting, 0.25f, 3.f);
+    const F32 ripple_speed = llclamp((F32)ripple_speed_setting, 0.5f, 5.f);
 
     SSPrecipParticle crown;
     crown.mKind = KIND_ROUND;

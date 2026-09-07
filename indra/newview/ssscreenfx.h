@@ -25,10 +25,18 @@
 #ifndef SS_SCREENFX_H
 #define SS_SCREENFX_H
 
+#include "llpointer.h"
 #include "llsingleton.h"
+#include "sslensdropcore.h"
 #include "ssscreenfxcore.h"
 
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <vector>
+
 class LLRenderTarget;
+class LLViewerTexture;
 
 // <SS:Nexii> NAMING NOTE: doc/atmo_magic_surface_weather.md section 8 spells this shell "class SSScreenFX", but
 // ssscreenfxcore.h (DO NOT EDIT, harness-green) already claims that identifier as `namespace SSScreenFX` - a class
@@ -61,12 +69,86 @@ public:
     F32 lensWet() const { return mLens.mWet; }
     F32 lensFog() const { return mLens.mFog; }
 
+    // How much rain reaches the lens where the camera is, 0 fully sheltered .. 1 open sky - SSScreenFX::lensExposure() over
+    // SSRainShadowMap's answer for the camera's column, the same authority the precipitation sim culls particles with.
+    F32 lensExposure() const { return mLensExposure; }
+
+    // How many drops are on the glass right now, for the info overlay. Read off an atomic because the simulation that owns the list
+    // runs on its own thread.
+    S32 lensDrops() const { return mDropCount.load(std::memory_order_relaxed); }
+
+    // <SS:Nexii> Takes the simulation thread down before this object does. The posted step captures `this`, so the pool has to be
+    // closed - which joins its thread, and therefore waits out any step already running - while the singleton is still alive.
+    void cleanupSingleton() override;
+
 private:
+    // <SS:Nexii> R16 THREADING. The drop simulation does not run on the main thread. It is a few hundred drops with an all-pairs
+    // (grid-bucketed) merge step, which is cheap - the reference runs the same thing in JavaScript - but it is also pure arithmetic
+    // over state nothing else needs, which makes it the easiest kind of work to move off the frame's critical path.
+    //
+    // THE WHOLE LOCKING DISCIPLINE IS ONE RULE: exactly one step task exists at a time (mSimBusy). While it is in flight the main
+    // thread does not touch mDrops or any of the simulation's own counters, so none of them need a mutex; the ONLY thing shared is the
+    // sprite snapshot the worker publishes at the end of a step, and that has one. If a step has not finished by the time the next
+    // frame draws, the main thread redraws the previous snapshot rather than waiting: this is water on a lens, and a frame of
+    // staleness is not visible. That also means the sim degrades to a lower step rate under load instead of stalling the frame.
+    class SimWorker;
+
+    // One drop as the drop map needs it: centre, and the two radii its tension stretch leaves it with.
+    struct Sprite { F32 mX = 0.f, mY = 0.f, mRX = 0.f, mRY = 0.f; };
+
+    // MAIN: hands one step to the worker, or runs it inline if there is no worker to hand it to.
+    void postLensStep(F32 dt, F32 aspect);
+    // WORKER: the simulation. Fixed quanta, so the look is the same at 30 and 144 fps.
+    void runLensSteps(F32 dt, F32 wet, F32 clear01, F32 aspect, S32 budget, bool reset);
+    void stepLensOnce(F32 dt, F32 wet, F32 clear01, F32 aspect, S32 budget);
+    void publishSprites();
+    // MAIN/GL: the baked drop sprite, and the sprites drawn into the drop map.
+    void bakeCapTexture();
+    bool drawDropMap(S32 w, S32 h, F32 aspect);
+
     SSScreenFX::Thermal mThermal;
     SSScreenFX::Lens mLens;
 
     F32 mMirage = 0.f;            // this frame's undialed mirageStrength(), cached for the render gate and the info overlay
     bool mWasUnderwater = false;  // last frame's underwater state, so stepLens sees the surfacing frame
+    F32 mLensExposure = 1.f;      // this frame's shelter answer, 1 = open sky (defect R3)
+
+    // The lens shader's own clock: dt accumulated through the SSAtmoLensDryRate dial rather than read off gFrameTimeSeconds, so moving
+    // the dial stretches every per-drop life instead of jumping the whole field's phase. F64 per the harness' accumulator rule.
+    F64 mLensClock = 0.0;
+
+    // <SS:Nexii> WORKER-OWNED, all of it. The drops, and the counters the step needs to stay frame-rate independent and free of any
+    // runtime RNG (a monotone spawn sequence and a monotone step index, both hashed rather than drawn). The list deliberately SURVIVES
+    // teleports, region crossings and camera cuts: the water is on the LENS, not in the world, and a lens does not shed its drops
+    // because the avatar moved. The only things that clear it are the two that physically would - the camera going under water (which
+    // also zeroes the wet channel) and the pass being switched off.
+    std::vector<SSLensDrop::Drop> mDrops;
+    std::vector<S32> mGridHead;    // grid bucket -> first drop index, rebuilt each step (see stepLensOnce)
+    std::vector<S32> mGridNext;    // drop index -> next drop in the same bucket, -1 to end
+    F32 mSpawnDebt = 0.f;          // fractional arrivals carried across steps
+    U32 mSpawnSeq = 0;             // monotone arrival counter, hashed for each new drop's position, radius and seed
+    U32 mStepSeq = 0;              // monotone step counter, hashed for each running drop's sideways kick
+    F32 mSimAccum = 0.f;           // unspent dt, so the fixed quantum below survives a variable frame time
+
+    // <SS:Nexii> Raw, not unique_ptr, and deliberately: both of these are types this header only FORWARD-DECLARES, and a unique_ptr
+    // member of an incomplete type needs the complete type wherever the implicit destructor gets instantiated - which for an LLSingleton
+    // is any translation unit that touches getInstance(). Owned explicitly in cleanupSingleton() instead, which is where the worker has
+    // to be taken down by hand anyway.
+    SimWorker* mSimWorker = nullptr;
+    bool mSimWorkerTried = false;
+    std::atomic<bool> mSimBusy{false};
+    std::atomic<S32> mDropCount{0};
+
+    // The handoff. mSprites is written by the worker at the end of a step and swapped into mDrawSprites by the main thread; nothing
+    // else crosses.
+    std::mutex mSpriteMutex;
+    std::vector<Sprite> mSprites;
+    bool mSpritesReady = false;
+    std::vector<Sprite> mDrawSprites;
+
+    // The drop map (rgb = the cap normal, a = coverage) and the one sprite every drop is drawn with.
+    LLRenderTarget* mDropMap = nullptr;
+    LLPointer<LLViewerTexture> mCapTex;
 
     // Screen-space projections refreshed once per idle() from the rotation part of the current modelview: the slide
     // direction the lens drops fall along (unit length), and the raw wind projection the heat shimmer ripples with.

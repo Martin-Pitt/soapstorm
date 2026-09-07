@@ -248,6 +248,41 @@ Each of these was decided, with a reason, on a date. They are listed so that non
 
 ---
 
+### 9a. Rain vocabulary - five different things, named once
+
+Established 2026-09-07 after the orchestrator briefed an agent on the wrong one. "Raindrops" has meant five
+distinct systems in this fork, and the two most easily confused have **opposite** correct behaviour, so the names
+below are the required vocabulary in prompts, comments and reports.
+
+| name | what it is | pass / owner | the invariance it must satisfy |
+|---|---|---|---|
+| **Lens drops** | drops on the camera itself, as though on a lens or a visor | `ssPostLensF.glsl`, post-process, laws in `ssscreenfxcore.h` | fixed in SCREEN space. A drop does not move when the camera turns, rolls, or the wind veers. Only its run-down trail follows the slide direction. |
+| **Surface drops** | drops on opaque world geometry | `ssSurfaceWetF.glsl`, a screen-space pass over the G-buffer, called from `pipeline.cpp` inside the deferred lighting phase | fixed in WORLD space. The pattern at a given world point does not change when the camera moves at all. |
+| **Glass drops** | drops on alpha-BLENDED surfaces | does not exist; structurally unreachable from the G-buffer pass, since blended geometry draws later through `LLDrawPoolAlpha` and never writes the G-buffer. Design: `doc/atmo_magic_wet_alpha.md` | world-fixed like surface drops, plus two-sided and refracting rather than albedo-tinting |
+| **Precipitation particles** | the actual falling rain and snow near the camera | `ssprecipitation.cpp` / `sspreciprenderer.cpp` | world-fixed, wind-advected; hands off to virga at its own tier radius |
+| **Virga shafts** | distant rain as fog-like curtains, emitted into the deck's own puff list | `ssvirgacore.h` + the deck's draw | world-fixed; sorts against puffs because it IS a puff |
+
+**State, and which systems may hold it** (user, 2026-09-07). The LENS is stateful: one surface, always in view, a
+bounded drop population, and a real history the viewer never leaves - so accumulation, drops releasing by size, a
+running head consuming the fine stipple in its path and growing as it does, and medium beads pinched off into the
+wake are all simulated, per the reference the user named (tympanus.net/Development/RainEffect). Every WORLD-anchored
+drop system is stateless, and for a correctness reason rather than a cost one: a surface streams into view already
+wet, so a per-surface simulation could only pop in empty and fill up while you watch, or fabricate an arbitrary
+warm start. A stateless law keyed on world position has the pattern there the instant the surface appears, with
+nothing to seed, evict or clear across teleports and region crossings. The division that follows is the rule: HOW
+WET a surface is may evolve and be remembered (the world-anchored surface field already owns that, and accumulation
+therefore belongs to the wetness scalar, not to a drop list), while WHAT THE DROPS LOOK LIKE at that wetness is a
+stateless function of world position, wetness and time. The asymmetry between lens and world is deliberate.
+
+Two consequences worth stating because they have already caused bugs. First, **"the drops move when I move" is a
+defect for four of the five and the CORRECT behaviour for none of them in the way it usually gets reported** - for
+lens drops the fault is that they move with the camera, for the other four that they move with it too, but the fix
+is the opposite in kind: the lens pass must stop consulting a world-derived direction for placement, the others
+must stop consulting a screen-derived or camera-derived coordinate. Second, alpha-MASKED geometry does write the
+G-buffer, so surface drops already apply to cutout materials; only alpha-BLENDED panes are missing. A report of
+"no drops on glass" therefore means blended glass specifically, and a report of "no drops on foliage" would be a
+different and more ordinary bug.
+
 ## 10. Where the sources disagree, and where code contradicts a stated rule
 
 A contradiction found is worth more than a contradiction silently resolved, so these are recorded rather than fixed. This document does not pick winners.

@@ -26,17 +26,18 @@
 #include "ssatmoenvasset.h"
 
 #include "ssatmoenvplanetarystate.h"
+#include "ssatmomagic.h"
 #include "ssdaycyclecore.h"
 #include "ssprecippreset.h"
 
 #include "llagent.h"
+#include "lldate.h"
 #include "llsettingssky.h"
 #include "llsettingswater.h"
 #include "llviewerregion.h"
 
 #include <algorithm>
 #include <cmath>
-#include <ctime>
 
 // <SS:Nexii> The stock bodies the standard setup seeds. makeDefault() plants them, and the sky import's body groups check against them: a dropped sky may only rewrite a body the author has not already redesigned into something of their own.
 namespace
@@ -1600,10 +1601,22 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
     return true;
 }
 
-// Where in the day cycle this track is right now, from shared wall-clock time.
+// The ONE shared clock, continuous: SSAtmoMagic's per-frame latch of UTC epoch seconds, or a fresh read of the same clock before the first frame.
+static F64 ss_shared_now_seconds()
+{
+    // <SS:Nexii> D3 follow-up (fifth build report, "still seeing the issue of clouds jumping each second") [interaction: SSAtmoMagic::sharedTime]: THE ROOT CLOCK. currentDayCyclePhase() below used to read `(F64)time(nullptr)`, which advances in WHOLE SECONDS, so the day-cycle phase was a 1 Hz staircase and EVERY quantity resolved from it stepped together once a second - the deck's coverage/thickness/base/density/churn/gloom (ssvolcloud.cpp update()), the wind profile the puff shear table is baked from (SSWindProfile::shearOffset x SHEAR_LEAN_S = 600 s, so a wind step of dv m/s moves every puff 600 dv metres in one frame), the sky modulation the puffs are lit by (ssatmoenvapplier.cpp) and the weather bridge's precipitation/wind (ssatmoenvbridge.cpp). The D3 boil fix removed the rate-times-absolute-clock AMPLIFICATION of that staircase; it did not make the staircase itself continuous, which is what this does. WHY THIS SOURCE and not a monotonic uptime clock: the phase must be IDENTICAL ON EVERY CLIENT sharing the asset and the seed (doc/atmo_magic_phase8_show.md section 2, PLAN lesson 31 - one clock for state), so it has to be UTC epoch, not LLTimer::getElapsedSeconds / gFrameTimeSeconds, which count from viewer start and differ per client. SSAtmoMagic::mNow is LLDate::now().secondsSinceEpoch() (LLTimer::getTotalSeconds - the same UTC epoch time(nullptr) reads, at microsecond resolution) latched ONCE at the top of SSAtmoMagic::idle(), which runs before SSVolCloud::update() and before SSAtmoEnvApplier::apply(), so every consumer of the phase in one frame resolves at ONE instant rather than at four slightly different reads of the clock. The fallback covers the frames before the first idle() (mNow still 0) and any call from a tool that never ticks the singleton; it is the same clock, sampled fresh.
+    if (SSAtmoMagic::instanceExists())
+    {
+        const F64 latched = SSAtmoMagic::getInstance()->sharedTime();
+        if (latched > 0.0) return latched;
+    }
+    return LLDate::now().secondsSinceEpoch();
+}
+
+// Where in the day cycle this track is right now, from the one shared continuous clock.
 F64 SSAtmoEnvTrack::currentDayCyclePhase() const
 {
-    return dayCyclePhaseAt((F64)time(nullptr));
+    return dayCyclePhaseAt(ss_shared_now_seconds());
 }
 
 // The phase at any UTC second - see the header. 7b F3 (lesson 22): the formula itself now lives in

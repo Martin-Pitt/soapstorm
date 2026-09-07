@@ -833,8 +833,8 @@ void SSSurfaceField::idle(F32 dt)
 {
     (void)dt; // the transport steps on shared time; presentation below uses the fixed quanta too
 
-    // <SS:Nexii> Rings expire once per frame regardless of the early returns below - a ring's life is camera time, not the field's own tick cadence. doc sec 6.
-    mRings.expire(gFrameTimeSeconds);
+    // <SS:Nexii> Rings expire once per frame regardless of the early returns below - a ring's life is camera time, not the field's own tick cadence. doc sec 6. The rate is what turns the ring's own clock into seconds, so a fast ripple setting retires the buffer sooner as well as drawing it quicker.
+    mRings.expire(gFrameTimeSeconds, ringRate());
 
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
@@ -1236,6 +1236,9 @@ void SSSurfaceField::updateWindow()
     }
     mWindowFlowData.assign((size_t)WINDOW_RES * WINDOW_RES * 4, 0.f);
     mWindowStateData.assign((size_t)WINDOW_RES * WINDOW_RES * 4, 0.f);
+    // <SS:Nexii> The cover window inits to "no verdict" - every cell the loop below does not
+    // answer (past the stitched regions) must read as no-answer in the shader, never as open.
+    mWindowCoverData.assign((size_t)WINDOW_RES * WINDOW_RES * 4, -1.f);
 
     bool any = false;
     for (const auto& entry : mFields)
@@ -1256,6 +1259,17 @@ void SSSurfaceField::updateWindow()
         const Geometry* geom = (geom_it != mGeometry.end()) ? &geom_it->second : nullptr;
         const bool have_slope = geom && geom->valid() && geom->mN == fld.mN;
 
+        // <SS:Nexii> The cover window's source: the shared world field's
+        // enclosure spectrum. Sampled a quarter metre above the cell's stored
+        // surface - the air a fog sample sits in when the covered test gates
+        // it - and answered by the flood's touching classification with its
+        // sub-band resolution. -1 wherever the world field has no verdict
+        // (off, tile stale, point inside a band's implied solid), which the
+        // fog shader reads as the old binary covered test. The bulk form
+        // resolves the region's tile once per region loop, not once per cell.
+        // [interaction: SSWorldField]
+        SSWorldField* worldfield = SSWorldField::getInstance();
+
         for (S32 wy = y0; wy < y1; ++wy)
         {
             const S32 fy = wy - off_y;
@@ -1274,6 +1288,11 @@ void SSSurfaceField::updateWindow()
                 mWindowStateData[wi + 1] = fld.mFrost.empty() ? 0.f : fld.mFrost[fi];
                 mWindowStateData[wi + 2] = fld.mStain.empty() ? 0.f : fld.mStain[fi];
                 mWindowStateData[wi + 3] = fld.mAge.empty() ? 0.f : fld.mAge[fi];
+
+                mWindowCoverData[wi] = worldfield->enclosureAtRegion(entry.first, LLVector3(
+                    forigin.mV[VX] + ((F32)fx + 0.5f) * fld.mCell,
+                    forigin.mV[VY] + ((F32)fy + 0.5f) * fld.mCell,
+                    fld.mZ[fi] + 0.25f));
 
                 if (have_slope && geom->solid(fi) && !geom->water(fi))
                 {
@@ -1341,6 +1360,16 @@ void SSSurfaceField::updateWindow()
         glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
         glBindTexture(GL_TEXTURE_2D, 0);
 
+        glGenTextures(1, &mWindowCoverTex);
+        glBindTexture(GL_TEXTURE_2D, mWindowCoverTex);
+
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32F, WINDOW_RES, WINDOW_RES);
+        glBindTexture(GL_TEXTURE_2D, 0);
+
         const GLenum err = glGetError();
         if (err != GL_NO_ERROR)
         {
@@ -1373,6 +1402,11 @@ void SSSurfaceField::updateWindow()
         glBindTexture(GL_TEXTURE_2D, mWindowStateTex);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
                         GL_RGBA, GL_FLOAT, mWindowStateData.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        glBindTexture(GL_TEXTURE_2D, mWindowCoverTex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, WINDOW_RES, WINDOW_RES,
+                        GL_RGBA, GL_FLOAT, mWindowCoverData.data());
         glBindTexture(GL_TEXTURE_2D, 0);
     }
 
@@ -1423,6 +1457,20 @@ bool SSSurfaceField::bindStateForShader(LLGLSLShader& shader, S32 channel)
     gGL.getTexUnit(channel)->activate();
     gGL.getTexUnit(channel)->bindManual(LLTexUnit::TT_TEXTURE, mWindowStateTex);
     shader.uniform1i(field_state_map, channel);
+
+    return true;
+}
+
+// Binds the cover window texture (the world field's enclosure spectrum).
+bool SSSurfaceField::bindCoverForShader(LLGLSLShader& shader, S32 channel)
+{
+    if (!hasCoverWindow() || channel < 0 || channel >= gGLManager.mNumTextureImageUnits) return false;
+
+    static LLStaticHashedString field_cover_map("ssFieldCoverMap");
+
+    gGL.getTexUnit(channel)->activate();
+    gGL.getTexUnit(channel)->bindManual(LLTexUnit::TT_TEXTURE, mWindowCoverTex);
+    shader.uniform1i(field_cover_map, channel);
 
     return true;
 }
@@ -1478,12 +1526,30 @@ void SSSurfaceField::bindLooksForShader(LLGLSLShader& shader) const
     shader.uniform1f(time_u, gFrameTimeSeconds);
 }
 
+// The analytic ring's clock rate, from the preset's own landing ring and the taste controls that scale it (doc sec 6).
+F32 SSSurfaceField::ringRate() const
+{
+    // <SS:Nexii> The same two controls spawnRipple builds its landing quad from, read the same way (clamped to the same bands), so the analytic ring and the quad it stands in for cannot drift apart: the quad's radius is mRippleSize * scale and it crosses it in mRippleLife / speed seconds. The per-impact strength jitter that also scales a quad is deliberately NOT in here - one rate serves the whole buffer, and a ring that ran at its own speed would need its own uniform per ring.
+    static LLCachedControl<F32> ripple_scale_setting(gSavedSettings, "SSAtmoRippleScale", 1.f);
+    static LLCachedControl<F32> ripple_speed_setting(gSavedSettings, "SSAtmoRippleSpeed", 2.f);
+    const F32 ripple_scale = llclamp((F32)ripple_scale_setting, 0.25f, 3.f);
+    const F32 ripple_speed = llclamp((F32)ripple_speed_setting, 0.5f, 5.f);
+
+    const SSPrecipPreset& preset = SSAtmoMagic::getInstance()->preset();
+    if (!preset.makesRipples()) return 1.f;
+
+    return SSSurfaceState::ringRate(preset.mRippleSize * ripple_scale, preset.mRippleLife / ripple_speed);
+}
+
 // Uploads the live impact ring buffer (doc sec 6) - expire() already ran this frame in idle().
 void SSSurfaceField::bindRingsForShader(LLGLSLShader& shader) const
 {
     static LLStaticHashedString ring_count_u("ssRingCount");
     static LLStaticHashedString rings_u("ssRings");
     static LLStaticHashedString rings_z_u("ssRingZ");
+    static LLStaticHashedString ring_rate_u("ssRingRate");
+
+    shader.uniform1f(ring_rate_u, ringRate());
 
     // <SS:Nexii> SSAtmoSurfaceRings gates the shader upload only - the buffer itself keeps recording and expiring regardless, so toggling this back on picks up whatever is still live rather than a cold buffer.
     static LLCachedControl<bool> rings_on(gSavedSettings, "SSAtmoSurfaceRings", true);
@@ -1541,6 +1607,11 @@ void SSSurfaceField::releaseGL()
     {
         glDeleteTextures(1, &mWindowStateTex);
         mWindowStateTex = 0;
+    }
+    if (mWindowCoverTex)
+    {
+        glDeleteTextures(1, &mWindowCoverTex);
+        mWindowCoverTex = 0;
     }
     mWindowRes = 0;
     mWindowValid = false;
@@ -1721,8 +1792,8 @@ void SSSurfaceField::renderWetPass()
 
     static LLStaticHashedString wet_cos_full("ssWetFlattenCosFull");
     static LLStaticHashedString wet_cos_zero("ssWetFlattenCosZero");
-    static LLCachedControl<F32> wet_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 25.f);
-    static LLCachedControl<F32> wet_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 65.f);
+    static LLCachedControl<F32> wet_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 10.f);
+    static LLCachedControl<F32> wet_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 30.f);
     gSSSurfaceWetProgram.uniform1f(wet_cos_full,
         cosf(llclamp((F32)wet_angle_full, 0.f, 89.f) * DEG_TO_RAD));
     gSSSurfaceWetProgram.uniform1f(wet_cos_zero,
@@ -1857,8 +1928,8 @@ void SSSurfaceField::renderWetPass()
         static LLCachedControl<F32> flatten_amount(gSavedSettings, "SSAtmoWetNormalFlatten", 0.6f);
         gSSSurfaceNormalProgram.uniform1f(norm_flatten, llclamp((F32)flatten_amount, 0.f, 1.f));
 
-        static LLCachedControl<F32> flatten_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 25.f);
-        static LLCachedControl<F32> flatten_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 65.f);
+        static LLCachedControl<F32> flatten_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 10.f);
+        static LLCachedControl<F32> flatten_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 30.f);
         const F32 cos_full = cosf(llclamp((F32)flatten_angle_full, 0.f, 89.f) * DEG_TO_RAD);
         const F32 cos_zero = cosf(llclamp((F32)flatten_angle_zero, 1.f, 90.f) * DEG_TO_RAD);
         gSSSurfaceNormalProgram.uniform1f(norm_cos_full, cos_full);
@@ -2109,8 +2180,8 @@ void SSSurfaceField::renderAlbedoPass()
     static LLStaticHashedString mask_scale_u("ssPuddleMaskScaleM");
     static LLStaticHashedString mask_anchor_u("ssPuddleMaskAnchor");
     static LLCachedControl<F32> puddle_depth_full(gSavedSettings, "SSAtmoWetPuddleDepthFull", 0.02f);
-    static LLCachedControl<F32> wet_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 25.f);
-    static LLCachedControl<F32> wet_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 65.f);
+    static LLCachedControl<F32> wet_angle_full(gSavedSettings, "SSAtmoWetFlattenAngleFull", 10.f);
+    static LLCachedControl<F32> wet_angle_zero(gSavedSettings, "SSAtmoWetFlattenAngleZero", 30.f);
     static LLCachedControl<F32> m_strength(gSavedSettings, "SSAtmoWetPuddleMask", 0.75f);
     static LLCachedControl<F32> m_scale(gSavedSettings, "SSAtmoWetPuddleMaskScale", 7.f);
     gSSSurfaceAlbedoProgram.uniform1f(wet_puddle_depth_u, llmax((F32)puddle_depth_full, 0.001f));

@@ -83,16 +83,23 @@ namespace SSSurfaceState
     constexpr F32 FROST_ROUGHNESS    = 0.85f;   // frost is matte
     constexpr F32 DEPOSIT_ROUGHNESS  = 0.85f;   // so is a deposit
 
-    // Impact ripple rings (doc section 6), LOCKSTEP ssSurfaceNormalF.glsl.
-    constexpr F32 RING_SPEED_MPS     = 0.55f;   // ring radius growth
+    // Impact ripple rings (doc section 6), LOCKSTEP ssSurfaceNormalF.glsl. Every time below is measured on the RING'S OWN CLOCK, which the shell runs at ringRate() times the wall clock so the ring
+    // and the landing ripple quad it stands in for expand at the same metres per second off the same controls; multiply by 1 / ringRate to get seconds.
+    constexpr F32 RING_SPEED_MPS     = 0.55f;   // ring radius growth per unit of the ring's clock
     constexpr F32 RING_WAVELENGTH_M  = 0.045f;  // crest spacing
     constexpr F32 RING_WIDTH_M       = 0.06f;   // gaussian width of the wave packet around the front
     constexpr F32 RING_DAMP_S        = 1.4f;    // amplitude e-folding time
-    constexpr F32 RING_AMPLITUDE     = 0.012f;  // height amplitude, metres, at strength 1, t 0
+    constexpr F32 RING_AMPLITUDE     = 0.0072f; // height amplitude, metres, at strength 1, t 0
     constexpr F32 RING_LIFE_S        = 2.0f;    // a ring older than this contributes nothing (and is dropped from the buffer)
     constexpr F32 RING_NEAR_M        = 4.f;     // rings are only tracked (and ripple quads suppressed) inside this camera radius
     constexpr S32 RING_MAX           = 24;      // buffer capacity: the newest RING_MAX impacts inside RING_NEAR_M
     constexpr F32 RING_SLOPE_MAX     = 0.6f;    // |ringSlope| ceiling, LOCKSTEP ssSurfaceNormalF.glsl
+    constexpr F32 RING_REACH_M       = RING_SPEED_MPS * RING_LIFE_S;   // 1.1 m: how far the front gets before the ring is gone, whatever rate it runs at
+    constexpr F32 RING_SPREAD_R0_M   = 0.35f;   // radius up to which the crest keeps full amplitude - a landing quad's own radius, past which it thins as 1/sqrt(r)
+    constexpr F32 RING_FADE_FROM     = 0.55f;   // fraction of the life where the terminal taper starts, so nothing is left to cut off at the end
+    constexpr F32 RING_QUAD_GROWTH   = 0.85f;   // the fraction of its final radius a landing ripple quad's front crosses over its life (it starts at 0.15 of it)
+    constexpr F32 RING_RATE_MIN      = 0.35f;   // clock rate floor and ceiling: the taste controls scale the quad without bound, the ring stays a ring
+    constexpr F32 RING_RATE_MAX      = 3.0f;
 
     // ------------------------------------------------------------------ looks
 
@@ -411,17 +418,48 @@ namespace SSSurfaceState
         F32 mStrength = 0.f;
     };
 
-    // The ring's height at radius r (metres) and age t (seconds), twin of the GLSL: front = RING_SPEED_MPS * t; h = RING_AMPLITUDE *
-    // strength * exp(-t / RING_DAMP_S) * exp(-((r - front) / RING_WIDTH_M)^2) * sin(2 pi (r - front) / RING_WAVELENGTH_M); 0 for t < 0
-    // or t > RING_LIFE_S. Invariants: 0 outside [0, RING_LIFE_S]; |h| <= RING_AMPLITUDE * strength; decays with t at fixed r - front;
-    // the packet's centre moves outward at RING_SPEED_MPS (argmax over r of |envelope| at t1 > t0 is farther out).
+    // The rate the ring's clock runs at, from the landing ripple quad the ring stands in for, so both are driven by the same
+    // controls: the quad grows from 0.15 to 1 of quad_radius_m over quad_life_s, so its front crosses RING_QUAD_GROWTH of that
+    // radius in that time, and the ring's front covers RING_SPEED_MPS per unit of its own clock - matching the two is a division.
+    // The ring's larger extent is taken in TIME, not in speed: it reaches RING_REACH_M rather than a quad's radius, so the same
+    // wave at the same metres per second simply takes longer to cross a puddle than to cross a splash. Invariants: 1 when the quad
+    // travels exactly RING_SPEED_MPS; monotone in quad_radius_m, falling in quad_life_s; inside [RING_RATE_MIN, RING_RATE_MAX];
+    // 1 for a degenerate quad (zero life or radius), which is the "no quad to match" case.
+    inline F32 ringRate(F32 quad_radius_m, F32 quad_life_s)
+    {
+        if (quad_life_s <= 1.0e-4f || quad_radius_m <= 0.f) return 1.f;
+        return llclamp(RING_QUAD_GROWTH * quad_radius_m / (quad_life_s * RING_SPEED_MPS), RING_RATE_MIN, RING_RATE_MAX);
+    }
+
+    // How much amplitude a crest still carries once it has spread to radius r - the packet's energy is smeared around a circumference
+    // that grows with r, so the height goes as 1/sqrt(r) once the ring is bigger than the splash it started as. Invariants: 1 at or
+    // inside RING_SPREAD_R0_M, never above 1, monotone falling.
+    inline F32 ringSpread(F32 r)
+    {
+        return std::sqrt(RING_SPREAD_R0_M / llmax(r, RING_SPREAD_R0_M));
+    }
+
+    // The terminal taper: the ring is already thin by RING_FADE_FROM of its life and is eased to exactly zero by the end of it, so
+    // the buffer can drop it without anything visibly popping out of existence. Invariants: 1 up to RING_FADE_FROM * RING_LIFE_S,
+    // 0 at RING_LIFE_S and beyond, monotone falling, and C1 at both ends (it is a smoothstep).
+    inline F32 ringTaper(F32 t)
+    {
+        return 1.f - smoothstep(RING_FADE_FROM * RING_LIFE_S, RING_LIFE_S, t);
+    }
+
+    // The ring's height at radius r (metres) and age t (the ring's own clock), twin of the GLSL: front = RING_SPEED_MPS * t; h =
+    // RING_AMPLITUDE * strength * exp(-t / RING_DAMP_S) * ringSpread(r) * ringTaper(t) * exp(-((r - front) / RING_WIDTH_M)^2) *
+    // sin(2 pi (r - front) / RING_WAVELENGTH_M); 0 for t < 0 or t > RING_LIFE_S. Invariants: 0 outside [0, RING_LIFE_S]; |h| <=
+    // RING_AMPLITUDE * strength (spread and taper are both <= 1); decays with t at fixed r - front; reaches 0 continuously at
+    // RING_LIFE_S rather than being cut off there; the packet's centre moves outward at RING_SPEED_MPS (argmax over r of
+    // |envelope| at t1 > t0 is farther out).
     inline F32 ringHeight(F32 r, F32 t, F32 strength)
     {
         if (t < 0.f || t > RING_LIFE_S) return 0.f;
         constexpr F32 kTwoPi = 6.283185307179586f;   // <SS:Nexii> local; no PI constant in the allowed includes
         const F32 front = RING_SPEED_MPS * t;
         const F32 env = (r - front) / RING_WIDTH_M;
-        return RING_AMPLITUDE * strength * std::exp(-t / RING_DAMP_S) * std::exp(-env * env)
+        return RING_AMPLITUDE * strength * std::exp(-t / RING_DAMP_S) * ringSpread(r) * ringTaper(t) * std::exp(-env * env)
             * std::sin(kTwoPi * (r - front) / RING_WAVELENGTH_M);
     }
 
@@ -437,9 +475,9 @@ namespace SSSurfaceState
     }
 
     // A fixed-capacity ring buffer of the newest RING_MAX impacts: push overwrites the oldest; expire drops rings older than
-    // RING_LIFE_S at time now, compacting the survivors into push (oldest-first) order at [0, survivors) - order matters here,
-    // because mNext and every later push() assume index 0 is the oldest survivor. Invariants: count never exceeds RING_MAX;
-    // after expire(now) every remaining ring has now - mBirth <= RING_LIFE_S; push of RING_MAX + 1 rings leaves the LAST RING_MAX
+    // RING_LIFE_S / rate at time now, compacting the survivors into push (oldest-first) order at [0, survivors) - order matters
+    // here, because mNext and every later push() assume index 0 is the oldest survivor. Invariants: count never exceeds RING_MAX;
+    // after expire(now, rate) every remaining ring has now - mBirth <= RING_LIFE_S / rate; push of RING_MAX + 1 rings leaves the LAST RING_MAX
     // pushed; a push right after an expire() that dropped nothing still evicts the TRUE oldest ring, not whatever happened to sit
     // at physical index 0 before the wrap.
     struct RingBuffer
@@ -454,8 +492,10 @@ namespace SSSurfaceState
             mNext = (mNext + 1) % RING_MAX;
             if (mCount < RING_MAX) ++mCount;
         }
-        void expire(F32 now)
+        void expire(F32 now, F32 rate = 1.f)
         {
+            // <SS:Nexii> births are wall-clock, the life is on the ring's own clock (see ringRate), so a ring is over after RING_LIFE_S / rate SECONDS - a rate of 1 is the old behaviour and is what a caller with no quad to match passes.
+            const F32 life = RING_LIFE_S / llmax(rate, RING_RATE_MIN);
             // <SS:Nexii> valid entries occupy [0, mCount) physically, but once the buffer has wrapped (mCount == RING_MAX) that range is NOT in push order - the logical oldest sits at mNext, not at index 0 - so compaction must walk from the logical oldest (start = mNext when full, else 0) and wrap with modulo; the survivors then land at [0, survivors) in push (oldest-first) order, which is what mNext = mCount % RING_MAX and every later push() assume.
             const S32 start = (mCount == RING_MAX) ? mNext : 0;
             S32 w = 0;
@@ -463,7 +503,7 @@ namespace SSSurfaceState
             for (S32 k = 0; k < mCount; ++k)
             {
                 const S32 i = (start + k) % RING_MAX;
-                if (now - mRings[i].mBirth <= RING_LIFE_S)
+                if (now - mRings[i].mBirth <= life)
                 {
                     kept[w++] = mRings[i];
                 }

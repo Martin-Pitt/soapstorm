@@ -231,9 +231,13 @@ private:
     // previewPhaseAt-branching version of this function and removes SSStormCell::previewPhaseAt entirely
     // (doc/atmo_magic_phase8_show.md section 2). Pure in the captured mDayLengthS, so safe to call at any time -
     // schedulerPhaseAt (public, above) calls this from the V2 view's draw path, outside update(), when mTrack is
-    // null. NOTE: this differs in kind from the sky's OWN currentDayCyclePhase(), which quantises to whole seconds
-    // (time(nullptr)) - the storms and the sky agree on the FORMULA, not bit-for-bit on every fractional second,
-    // and no test claims otherwise. [interaction: SSDayCycle::phaseAt]
+    // null. NOTE (updated, D3 follow-up 2026-09-07): the sky's OWN currentDayCyclePhase() used to quantise to
+    // whole seconds (time(nullptr)) and this note recorded that the two agreed on the FORMULA only. It now reads
+    // the same continuous clock the storms do - SSAtmoMagic::sharedTime(), latched once at the top of
+    // SSAtmoMagic::idle() before either consumer runs - so within one frame the sky and the storms sample the
+    // SAME instant. What is still NOT claimed: the two apply different offsets (the sky's phase carries the
+    // track's mDayOffsetSeconds inside phaseAt, tau has it subtracted before), so nothing here asserts
+    // bit-identity between them. [interaction: SSDayCycle::phaseAt]
     F64 phaseAt(F64 tau) const;
 
     // <SS:Nexii> Phase 8 section 2: phaseAt's own inverse, mirroring it exactly - one map, no real/preview pair:

@@ -110,6 +110,13 @@ public:
     // <SS:Nexii> Whether the air flood considers the listener's cell sealed - interior air the connectivity walk could not reach from sky or border. Reads true only on the field coverage path.
     bool isInterior() const { return mInterior; }
     ESpace space() const { return mSpace; }
+    // <SS:Nexii> The world field's enclosure spectrum at the listener, eased:
+    // 0 outdoors, 1 sealed interior, ramped on the flood's air-graph depth
+    // back to open sky. The bed blend and the through-wall occlusion read it
+    // while the field answers; the probe verdict's own rungs stand in when it
+    // does not, so the raycast fallback mix is unchanged. -1 when the field
+    // has no current verdict.
+    F32 enclosure() const;
 
     static const char* spaceName(ESpace space);
     static const char* sizeName(ESize size);
@@ -277,6 +284,11 @@ private:
     bool mCovered = false;
     // <SS:Nexii> Sealed-room verdict from the world field's air flood, set on the field coverage path and cleared everywhere else.
     bool mInterior = false;
+    // <SS:Nexii> The enclosure spectrum (see enclosure()): the field's raw
+    // figure, its eased form, and whether the field answered this cycle.
+    F32 mEnclosure = 0.f;
+    F32 mEnclosureSmooth = 0.f;
+    bool mEnclosureValid = false;
     ESpace mSpace = SPACE_OUTDOOR;
     ESize mOutdoorSize = SIZE_LARGE;
     LLVector3 mProbeOrigin;
