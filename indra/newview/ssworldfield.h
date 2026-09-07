@@ -284,6 +284,12 @@ private:
         std::vector<U16> mGapDepth;
         U32 mAirSerial = 0;
 
+        // <SS:Nexii> The base sweep's band count for this tile - scratch
+        // slots at or above this index belong to Z bisection, and a rect
+        // re-peel clears their columns before re-capturing so stale sub-band
+        // bodies never survive an edit.
+        S32 mBaseBands = 0;
+
         // <SS:Nexii> The precomputed acoustic lattice, built by the flood's
         // worker job from the span store. Per vertical ring (one every few
         // metres of height up to the capture ceiling, mWall holds
@@ -311,17 +317,31 @@ private:
         bool mValid = false;
     };
 
+    // <SS:Nexii> One capture node on the build worklist: a scratch slot and
+    // the Z interval it captures. The base sweep's nodes are the uniform
+    // bands; Z bisection enqueues finer intervals beneath captured bodies
+    // (a column's bodies are vertically disjoint, so topmost-in-interval
+    // queries partition them - every body down to the minimum interval is
+    // found without any peeling).
+    struct CaptureNode
+    {
+        S32 mSlot = 0;       // scratch band slot the results splice into
+        F32 mZ0 = 0.f;       // interval floor
+        F32 mZ1 = 0.f;       // interval ceiling
+        bool mBisect = false;// a bisection node (never triggers the empty-run stop)
+        bool mHung = false;  // set by applyBand: unexplored space beneath the body
+    };
+
     struct Build
     {
         bool mActive = false;
         U64 mRegionHandle = 0;
-        // <SS:Nexii> The capture worklist: band scratch slots to capture, in
-        // order. Stage 1 fills it with the uniform band sweep; the adaptive
-        // stages later enqueue finer nodes - Z bisection beneath captured
-        // bodies, then the XY quadtree, each node becoming (XY rect, Z
-        // interval, texel size) - and the state machine only knows "capture
-        // this slot's two passes, fold, next".
-        std::vector<S32> mWorklist;
+        // <SS:Nexii> The capture worklist: nodes to capture, in order. Stage 1
+        // fills it with the uniform band sweep; Z bisection appends finer
+        // nodes beneath captured bodies (breadth-first, so each level
+        // finishes before the next starts). The XY quadtree is the next
+        // generalisation: nodes become (XY rect, Z interval, texel size).
+        std::vector<CaptureNode> mWorklist;
         size_t mCursor = 0;        // next worklist entry
         S32 mPass = 0;             // capture pass within the node: 0 down, 1 up
         bool mRectOnly = false;    // re-peeling the dirty rectangle only
@@ -330,8 +350,8 @@ private:
         F32 mRectHalf = 0.f;       // world half-extent of the rect frustum
         LLVector3 mRectCentre;     // agent-space centre of the rect
         std::vector<F32> mDepth[2];// the node's two depth readbacks (down, up)
-        std::vector<S32> mSeenBand;// per-column highest band a real capture hit landed in (-1 none); lets the fold tell resolved columns from ones the capture never re-saw
-        S32 mEmptyRun = 0;         // consecutive empty nodes seen by the live build
+        bool mNodeHung = false;    // set by applyBand: the node's body hangs - unexplored space beneath
+        S32 mEmptyRun = 0;         // consecutive empty base nodes seen by the live build
         bool mChanged = false;     // any spliced column differed from what was stored
         bool mJustCaptured = false;// a pass was rendered and its readback landed; apply it next step
     };
@@ -344,8 +364,8 @@ private:
 
     bool advanceBuild();
 
-    bool capturePass(Tile& tile, S32 slot, S32 pass);
-    void applyBand(Tile& tile, S32 slot);
+    bool capturePass(Tile& tile, const CaptureNode& node, S32 pass);
+    void applyBand(Tile& tile, const CaptureNode& node);
     void commitBuild(Tile& tile);
 
     // Grow the tile's flat band arrays to cover at least `bands` layers,
@@ -378,8 +398,6 @@ private:
     void scheduleFlood(Tile& tile);
 
     void evict();
-
-    static F32 bandTopZ(S32 band, F32 band_height) { return (F32)(band + 1) * band_height; }
 
     std::map<U64, Tile> mTiles;
     Build mBuild;
