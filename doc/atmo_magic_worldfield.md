@@ -2,20 +2,35 @@
 
 > **Implementation status (2026-09-01, revised 2026-09-07):** the capture service (`ssworldfield.h/cpp`,
 > `SSWorldField`) is the sidecar of migration steps 1-2 and 4: staged band-sliced
-> capture, the column store, `buildSurfaceGrid` with rain shadow's exact contract,
+> capture, the column span store, `buildSurfaceGrid` with rain shadow's exact contract,
 > the interest/channel registry, `coverageAt`/`surfaceTop`/`coverageDetail`,
 > the dirty-rect re-peel path, and the async readback. The wet field reads it
-> behind `SSWorldFieldSurfaceTop` (default off), and the soundscape's cover and
+> behind `SSWorldFieldSurfaceTop` (default on), and the soundscape's cover and
 > burial come from the COVERAGE channel behind `SSWorldFieldCoverage` (default
-> off). Columns default to 0.25 m - the rain shadow capture's own texel density
-> (`SSAtmoShadowRes` 1024 over 256 m). Each band is captured in TWO top-down
-> passes - front faces give the band's highest surface, an upward shot with a
-> reversed depth test gives the topmost body's underside - and a conversion at
-> commit folds the bands into the store the proposal described: per column, a
-> short list of [bottom, top] solid spans (up to `SS_WF_MAX_SPANS` = 6,
-> overflow collapsing the thinnest air gap), air between them, every stored
-> gap at least the slab threshold tall. The air-connectivity flood runs on the
-> General worker queue per committed tile over the column gaps - a room is one
+> on). Columns default to 0.25 m - the rain shadow capture's own texel density
+> (`SSAtmoShadowRes` 1024 over 256 m).
+>
+> **The store is the proposal's column span list.** Each band is captured in
+> TWO ortho passes per tile - pass 0 looks down from the band ceiling with
+> standard culling and reads the band's highest up-facing surface; pass 1
+> looks UP from the band floor, keeps standard culling, and flips the depth
+> comparison (`GL_GREATER`) so it returns the FARTHEST front-facing hit: the
+> topmost body's underside. A conversion at commit (`computeSpans`) folds the
+> per-band bodies into per-column lists of [bottom, top] solid spans - up to
+> `SS_WF_MAX_SPANS` = 6, overflow collapsing the thinnest air gap, gaps
+> thinner than the slab threshold merged into their surrounding body - so a
+> wall spanning several bands heals into one span and a room is one air
+> interval whatever band its floor and ceiling landed in. The bands are the
+> capture schedule; the spans are the store.
+>
+> The capture is scheduled as a worklist of (XY rect, Z interval) nodes -
+> stage 1 enumerates the uniform bands bottom-up; the planned adaptive stages
+> enqueue finer nodes instead (Z bisection beneath captured bodies for
+> per-body resolution, then the XY quadtree so fine slices only cover the
+> quads that need them).
+>
+> The air-connectivity flood runs on the
+> General worker queue per committed tile over the column AIR GAPS - a room is one
 > gap node whatever band its floor and ceiling landed in - and its labels
 > carry the touching classification: OUTDOORS (nothing above), SHELTERED
 > (covered, within an opening's aperture budget - each opening's porch of
@@ -27,13 +42,16 @@
 > the filled surface, `buildDrainage`) ships as the surface field's pool source
 > under the same `SSWorldFieldSurfaceTop` switch. A world field debug overlay
 > (`RENDER_DEBUG_WORLD_FIELD`, the Atmo Magic Debug floater) shows
-> the band surfaces, the air labels with occlusion depth, the drainage
-> topology, and the column spans themselves (view 5: each solid span a
-> wireframe box coloured by the air state standing on it, threaded to the next
-> solid above). Bands default to 4 m so room-scale air exists between floors -
-> the resolution the soundscape's reads need at eye level. The ACOUSTIC
-> channel's first slice ships: a precomputed wall-distance lattice (per band,
-> per ~8 m probe, four cardinals) built by the flood's worker job, standing in
+> the span tops by altitude, the air-gap labels with occlusion depth, the
+> drainage topology, and the column spans themselves (view 5: each solid span
+> drawn as flat floor and ceiling plates joined by a spine through the solid,
+> coloured by the air state standing on it). Bands default to 4 m as the
+> capture granularity - the store's vertical resolution is per body, not per
+> band, since the underside pass bounds every captured body from beneath. The
+> ACOUSTIC
+> channel's first slice ships: a precomputed wall-distance lattice (vertical
+> rings every ~4 m of height, per ~8 m probe, four cardinals) built by the
+> flood's worker job, standing in
 > for the soundscape's four live side raycasts whenever the tile is current.
 > The soundscape blends its beds on the enclosure spectrum (`enclosureAt`):
 > 0 outdoors to 1 sealed interior on the flood's depth back to open sky, with
@@ -43,9 +61,9 @@
 > march's covered branch grades its density by it, so fog fades back in
 > toward a porch's or cave mouth's openings instead of cutting off at the
 > column-top test, and the camera-side sky veil rides it too. Still
-> unbuilt: the wind solve's interior-skip (part of step 3; gated
-> on multi-peel spans - see the architecture note at Part 3, SOLID_VOLUME_3D),
-> wind capture absorption, WALKABLE (7), the ACOUSTIC probe set beyond the
+> unbuilt: the wind solve's interior-skip (the store now carries interiors -
+> what remains is wiring the solve's mask to the gap labels), wind capture
+> absorption, WALKABLE (7), the ACOUSTIC probe set beyond the
 > wall lattice (room volume, reverb classification, travel-time fields —
 > fully designed 2026-09-07 in `doc/atmo_magic_acoustics.md`) and
 > Design H (6).
@@ -542,6 +560,18 @@ full capture resolution.
 >   then, `buildDrainage` runs over the landing surface only - which is the
 >   level the surface field actually consumes, so step 5's core ships now and
 >   its per-span generalisation lands with the peel.
+>
+> **Addendum (2026-09-07) - resolved, differently.** The gate above is
+> satisfied: the capture grew a second shot per band (an upward pass whose
+> depth comparison is reversed, so it returns the topmost body's underside
+> without any peeling), and the store became true column span lists -
+> [bottom, top] solid pairs per column, band planes healed at conversion.
+> Rooms, underpasses, jetties and stilt spaces now exist in the store as one
+> air interval each, and the flood's labels (outdoors / sheltered / interior)
+> are computed over those air gaps directly. The wind solve's interior-skip
+> is no longer gated on capture shape: what remains is wiring the solve's
+> mask to the gap labels. The note above is kept as the record of why the
+> one-surface-per-band store was not good enough.
 
 The wind solve keeps its shape (voxel init → multigrid pressure projection →
 project + shelter → readback), with two changes the shared store makes possible:
@@ -784,8 +814,8 @@ tier caps the damage):
 
 | Item | Estimate | Notes |
 |---|---|---|
-| Span store | ~1–2 MB/region | 128² columns × 2–4 spans × 12 B |
-| Peel capture | N ortho renders + readbacks per tile, staged | N = span depth (1–4); scissored on patches |
+| Span store | ~40-60 MB/region at 0.25 m columns | 1024² columns × ≤6 spans × 9 B (bottom/top/flags) + gap labels/depths; the band capture scratch (two boundaries × live bands) is transient per build |
+| Peel capture | N ortho renders + readbacks per tile, staged | two passes (down + up) × bands swept; scissored on patches; adaptive per-body bisection would make this content-dependent (see below) |
 | Air mask + solve volume | ~2–7 MB GPU transient | today's solve grid, reused; sparse masking reduces Jacobi work |
 | Coverage arrays | ~100 KB/region | per-column derived flags/depths |
 | Drainage network | ~500 KB/region | per-span D8 + runs; rebuilt on geometry serial only |

@@ -383,6 +383,12 @@ private:
         std::vector<U16> mGapDepth;
         U32 mAirSerial = 0;
 
+        // <SS:Nexii> The base sweep's band count for this tile - scratch
+        // slots at or above this index belong to Z bisection, and a rect
+        // re-peel clears their columns before re-capturing so stale sub-band
+        // bodies never survive an edit.
+        S32 mBaseBands = 0;
+
         // <SS:Nexii> The ACOUSTIC channel's bake, built by the flood's worker job from
         // the span snapshot (doc/atmo_magic_acoustics.md Parts 1-4). Gap-anchored
         // probes (ear at floor + 1.2 m, ceiling under a roof, intermediates every 4 m
@@ -421,21 +427,60 @@ private:
         bool mValid = false;
     };
 
+    // <SS:Nexii> One capture node on the build worklist: an XY rect of grid
+    // columns, a Z interval, and the square capture resolution for that rect.
+    // The base sweep's nodes cover the whole tile (or the build rect) at the
+    // tile resolution with uniform Z bands; Z bisection enqueues finer
+    // intervals beneath captured bodies; the XY quadtree enqueues quadrant
+    // nodes so the fine work only covers the quads that need it. A column's
+    // bodies are vertically disjoint, so topmost-in-interval queries
+    // partition them - every body down to the minimum interval is found
+    // without any peeling.
+    struct CaptureNode
+    {
+        S32 mSlot = 0;       // scratch slot the results splice into (base
+                             // nodes; refine nodes write the span store)
+        S32 mX0 = 0, mY0 = 0, mX1 = 0, mY1 = 0;   // XY rect, grid cells
+        S32 mRes = 0;        // square capture resolution for the rect
+        F32 mZ0 = 0.f;       // interval floor
+        F32 mZ1 = 0.f;       // interval ceiling
+        bool mBisect = false;// a Z-bisection child (never triggers the empty-run stop)
+        bool mRefine = false;// a quad node: bodies insert straight into the span store
+        bool mHung = false;  // set by the apply: unexplored space beneath the body
+    };
+
+    enum EBuildPhase
+    {
+        PHASE_BASE = 0,   // uniform band sweep, folded into the store at the end
+        PHASE_REFINE = 1, // quad nodes inserting sub-band bodies directly
+    };
+
     struct Build
     {
         bool mActive = false;
         U64 mRegionHandle = 0;
-        S32 mBand = 0;
-        S32 mPass = 0;             // capture pass within the band: 0 top faces, 1 back faces
+        // <SS:Nexii> The capture worklist: nodes to capture, in order. The
+        // base phase enumerates the uniform band sweep; the refine phase
+        // appends quad nodes beneath captured bodies (breadth-first, so each
+        // level finishes before the next starts).
+        std::vector<CaptureNode> mWorklist;
+        size_t mCursor = 0;        // next worklist entry
+        S32 mPhase = 0;            // EBuildPhase
+        S32 mPass = 0;             // capture pass within the node: 0 down, 1 up
         bool mRectOnly = false;    // re-peeling the dirty rectangle only
-        S32 mRectX0 = 0, mRectY0 = 0, mRectX1 = 0, mRectY1 = 0;
-        S32 mRectRes = 0;          // square capture resolution covering the rect
-        F32 mRectHalf = 0.f;       // world half-extent of the rect frustum
-        LLVector3 mRectCentre;     // agent-space centre of the rect
-        std::vector<F32> mDepth[2];// the band's two depth readbacks (front faces, back faces)
-        S32 mEmptyRun = 0;         // consecutive empty bands seen by the live build
+        S32 mRectX0 = 0, mRectY0 = 0, mRectX1 = 0, mRectY1 = 0;   // the build's XY rect (grid cells)
+        S32 mRectRes = 0;          // square capture resolution for the rect
+        std::vector<F32> mDepth[2];// the node's two depth readbacks (down, up)
+        bool mNodeHung = false;    // set by the apply: the node's body hangs - unexplored space beneath
+        S32 mEmptyRun = 0;         // consecutive empty base nodes seen by the live build
         bool mChanged = false;     // any spliced column differed from what was stored
         bool mJustCaptured = false;// a pass was rendered and its readback landed; apply it next step
+        // <SS:Nexii> Per column, the highest scratch slot a real capture hit
+        // this build (base slots only). The rect re-peel's carry-forward
+        // rides spans above it: they were never re-resolved, so they ride
+        // along rather than being folded away from empty scratch.
+        std::vector<S32> mSeenBand;
+        S32 mNextSlot = 0;         // the next free scratch slot (bisection/quad allocation)
     };
 
     Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
@@ -446,8 +491,9 @@ private:
 
     bool advanceBuild();
 
-    bool capturePass(Tile& tile, S32 pass);
-    void applyBand(Tile& tile);
+    bool capturePass(Tile& tile, const CaptureNode& node, S32 pass);
+    void applyBand(Tile& tile, const CaptureNode& node);
+    void applyRefine(Tile& tile, const CaptureNode& node);
     void commitBuild(Tile& tile);
 
     // Grow the tile's flat band arrays to cover at least `bands` layers,
@@ -458,11 +504,17 @@ private:
     void ensureBands(Tile& tile, S32 bands);
 
     // Fold the capture scratch into the column span store for a rectangle of
-    // columns: per column, the per-band bodies sort bottom-up, merge across
-    // band planes and any gap thinner than the assumed slab, and the first
-    // span extends to the world floor when the gap beneath it is thinner
-    // still. Runs at commit, before the flood is scheduled.
-    void computeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
+    // columns: per column, the per-band bodies sort bottom-up and union
+    // (band-plane continuations, parent/child duplicates), the gap beneath
+    // the first span extends to the world floor when thinner than the slab.
+    // Runs when the base sweep's worklist exhausts, before the refine phase.
+    void foldSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
+
+    // Finalize the column span store for a rectangle of columns: merge any
+    // gaps the refine phase's insertions left thinner than the slab, and
+    // extend a first span whose below-gap is thinner to the world floor.
+    // Runs at commit, after the refine phase's worklist exhausts.
+    void finalizeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
 
     // Which air gap of a column contains z: 0 none (inside a body), otherwise
     // 1 + the gap index (gap 0 below the lowest span, gap n above the
@@ -486,8 +538,6 @@ private:
     S32 listenerProbeSet(const Tile& tile, const LLVector3& pos_agent, S32* out, S32 max_out) const;
 
     void evict();
-
-    static F32 bandTopZ(S32 band, F32 band_height) { return (F32)(band + 1) * band_height; }
 
     std::map<U64, Tile> mTiles;
     Build mBuild;
