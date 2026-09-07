@@ -49,6 +49,7 @@
 
 #include "llrendertarget.h"
 #include "llsingleton.h"
+#include "ssacousticcore.h"
 #include "ssrainshadow.h"
 #include "v3math.h"
 #include "v3dmath.h"
@@ -182,7 +183,105 @@ public:
     // point's band, saturated at the reach cap so an open direction reads as
     // "no wall". False when the tile or lattice is not current - stale after
     // an edit until the next flood - and the caller keeps its raycasts.
+    //
+    // Since the gap-anchored probe set (doc/atmo_magic_acoustics.md Part 1)
+    // this answers from the NEAREST probe of the listener's lattice cell - the
+    // probes' own 8-direction profiles taken at their real, ear-height z - so
+    // a wall distance again describes air somebody stands in, not whatever
+    // altitude a fixed 4 m ring landed on. probesAt is the richer, connectivity-
+    // aware form the listener blend wants.
     bool acousticAt(const LLVector3& pos_agent, F32 wall[4]) const;
+
+    // <SS:Nexii> The occlusion trace (the doc's Part 3, the brief's realtime ask):
+    // a 2D DDA over the columns the segment a->b crosses; per column, the segment's
+    // z-interval is intersected against the column's span intervals; solid metres
+    // and body crossings accumulate. Exact against the store, no scene raycast,
+    // main thread, ~4 columns per metre at the 0.25 m cell. False when no current
+    // tile covers the segment (either endpoint off-tile counts - a partial count
+    // would read as confidently open air, the optimistic direction for audio);
+    // the caller keeps its heuristic for that.
+    bool traceSolid(const LLVector3& a, const LLVector3& b, F32& solid_m, S32& crossings) const;
+
+    // <SS:Nexii> The listener blend's raw material (the doc's Part 3): the probes of
+    // the listener's own gap in its lattice cell plus graph-adjacent probes,
+    // inverse-distance weighted, at most four. NEVER a raw trilinear tap over the
+    // lattice - the nearest probe through a wall is exactly the one that must not
+    // contribute. False when the tile's probes are stale (edit pending flood) or the
+    // cell carries no probes; the caller keeps its raycast classification.
+    struct ProbeSample
+    {
+        LLVector3 mPos;             // agent-space probe position
+        F32 mWeight = 0.f;          // 1/(d^2+1), unnormalised; blend then normalise
+        F32 mRT60 = 0.f;
+        F32 mSkyOpen = 0.f;
+        F32 mVolume = 0.f;
+        F32 mTravelM = -1.f;        // travel-to-outdoors, metres
+        F32 mWall[8];
+        S32 mSpaceClass = 0;        // 0 outdoor / 1 sheltered / 2 small / 3 medium / 4 big
+        S32 mSizeClass = 0;         // 0 tight / 1 medium / 2 open
+        ProbeSample() { for (S32 i = 0; i < 8; ++i) mWall[i] = 64.f; }
+    };
+    bool probesAt(const LLVector3& pos_agent, ProbeSample out[4], S32& count) const;
+
+    // <SS:Nexii> Per-source propagation (the doc's Part 3): snap the source and the
+    // listener to their gaps' probes in their lattice cells, run Dijkstra over the
+    // baked probe graph (edge cost = length / aperture + the fixed portal loss), and
+    // read the figures back. Reads only the immutable baked graph, so it is safe on
+    // the main thread between floods; the serial gate keeps a stale graph from ever
+    // answering. Thunder's travel time, muffle and arrival direction come from here;
+    // occlusionGain's diffracted floor does too.
+    struct Propagation
+    {
+        F32 mDirectM = 0.f;         // straight-line metres source -> listener
+        F32 mPathM = 0.f;           // geometric path metres along the graph
+        F32 mCostM = 0.f;           // the Dijkstra cost (aperture + portal weighted)
+        S32 mPortals = 0;           // OUTDOORS-boundary crossings on the path
+        F32 mMuffle = 0.f;          // 0..1, from portals and the path-vs-direct ratio
+        bool mHaveArrival = false;  // mArrivalDir valid: the direction from the
+                                    // listener's probe to its Dijkstra parent - sound
+                                    // entering through a doorway renders from it
+        LLVector3 mArrivalDir;
+        std::vector<LLVector3> mPath;   // node positions source -> listener (capped)
+    };
+    bool propagationQuery(const LLVector3& source, const LLVector3& listener, Propagation& out) const;
+
+    // <SS:Nexii> The debug export the V10 info view reads: the tile's probes and
+    // links within range of a centre point, portal flags resolved per probe, and the
+    // listener's own blend set. Read-only over the baked channel.
+    struct AcousticDebug
+    {
+        struct Probe
+        {
+            LLVector3 mPos;
+            F32 mGapBottom = 0.f, mGapTop = 0.f;
+            U8 mLabel = 4;
+            F32 mRT60 = 0.f;
+            F32 mSkyOpen = 0.f;
+            F32 mVolume = 0.f;
+            F32 mTravelM = -1.f;
+            S32 mSpaceClass = 0;
+            S32 mSizeClass = 0;
+            bool mPortal = false;
+            bool mHaveBundle = false;
+        };
+        struct Link
+        {
+            S32 mA = -1, mB = -1;
+            bool mPortal = false;
+        };
+        bool mValid = false;
+        S32 mLatRes = 0;
+        F32 mLatCell = 0.f;
+        S32 mProbeCount = 0;        // the tile's full probe count, drawn set aside
+        S32 mBundleCount = 0;
+        S32 mLinkCount = 0;
+        S32 mPortalCount = 0;
+        std::vector<Probe> mProbes;
+        std::vector<Link> mLinks;
+        std::vector<S32> mListenerProbes;   // indices into mProbes of the blend set
+    };
+    bool acousticDebug(U64 region_handle, const LLVector3& centre_agent, F32 range_m,
+                       AcousticDebug& out) const;
 
     // The share of a tile's air cells the flood actually labelled - 1.0 once
     // the labels are current, less before the first flood or after an edit.
@@ -284,19 +383,30 @@ private:
         std::vector<U16> mGapDepth;
         U32 mAirSerial = 0;
 
-        // <SS:Nexii> The precomputed acoustic lattice, built by the flood's
-        // worker job from the span store. Per vertical ring (one every few
-        // metres of height up to the capture ceiling, mWall holds
-        // rings * mLatRes² entries), per lattice cell, per cardinal
-        // (+X, -X, +Y, -Y): the horizontal wall distance in metres. Valid
-        // while mSerial matches mGeomSerial - the same staleness gate the
-        // labels ride.
+        // <SS:Nexii> The ACOUSTIC channel's bake, built by the flood's worker job from
+        // the span snapshot (doc/atmo_magic_acoustics.md Parts 1-4). Gap-anchored
+        // probes (ear at floor + 1.2 m, ceiling under a roof, intermediates every 4 m
+        // for tall gaps), the probe graph (vertical links by construction, horizontal
+        // links validated by span-store rays, aperture factors, portal flags), and the
+        // tier A statistic bake per probe (8-direction wall profile, sky openness,
+        // room volume/area, Sabine RT60, space/size classes, travel-to-outdoors).
+        // Tier B's stochastic bundles fill the bundle fields in later batch jobs,
+        // each store-back serial-gated individually. Valid while mSerial matches
+        // mGeomSerial - the same staleness gate the labels ride.
         struct Acoustic
         {
-            S32 mLatRes = 0;        // lattice cells per axis
-            F32 mLatCell = 0.f;     // lattice cell size, metres
-            F32 mCeiling = 0.f;     // the capture ceiling the rings span
-            std::vector<F32> mWall; // flat [ring][y * mLatRes + x][4]
+            S32 mLatRes = 0;            // lattice cells per axis
+            F32 mLatCell = 0.f;         // lattice cell size, metres
+            F32 mCeiling = 0.f;         // the capture ceiling the probes span
+
+            std::vector<SSAcoustic::Probe> mProbes;      // CSR per lattice cell:
+            std::vector<S32> mCellStart;                 // [cell] first probe index,
+                                                         // size latRes^2 + 1
+            std::vector<SSAcoustic::Link> mLinks;        // each once, a/b node indices
+            std::vector<S32> mAdjStart;                  // CSR: [probe] first adjacency
+            std::vector<S32> mAdjNode;                   // neighbour probe per slot
+            std::vector<F32> mAdjCost;                   // Dijkstra cost per slot
+
             U32 mSerial = 0;
         };
         Acoustic mAcoustic;
@@ -368,6 +478,12 @@ private:
     // queue. Snapshot in, labels out; the completion stores them only if the
     // tile's geometry serial has not moved underneath the walk.
     void scheduleFlood(Tile& tile);
+
+    // The listener blend's probe set (own-gap probes of the lattice cell plus their
+    // graph-adjacent probes, deduped) as node indices - the shared body of probesAt
+    // and acousticDebug. Returns the count written, 0 when the channel has no
+    // current answer for the cell.
+    S32 listenerProbeSet(const Tile& tile, const LLVector3& pos_agent, S32* out, S32 max_out) const;
 
     void evict();
 

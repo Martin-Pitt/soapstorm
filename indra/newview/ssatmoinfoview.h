@@ -25,6 +25,7 @@
 #define SS_ATMOINFOVIEW_H
 
 #include "llview.h"
+#include "sssoundscape.h"
 #include "ssstormcellcore.h"
 #include "sswindprofilecore.h"
 #include "v2math.h"
@@ -431,6 +432,32 @@ public:
     };
     static LightningData lightningData();
 
+    // <SS:Nexii> V10's data (doc/atmo_magic_acoustics.md, the debug ask): the world
+    // field's baked acoustic channel read straight off the tile - probes and links
+    // in range of the camera (SSWorldField::acousticDebug, read-only over the bake),
+    // the listener's own blend set, the soundscape's last thunder with its
+    // propagation figures (SSSoundscape::lastThunderPath) - plus the summary scalars
+    // the legend prints. mValid is false with no current bake (no tile, stale serial,
+    // channel off); the layer then says so instead of drawing yesterday's room.
+    // Read-only by construction: every accessor touched here is a const getter, and
+    // nothing here re-solves the propagation or re-bakes anything.
+    // [interaction: SSWorldField acousticDebug] [interaction: SSSoundscape lastThunderPath]
+    struct AcousticsData
+    {
+        bool mValid = false;        // a current probe bake exists for the camera's region
+        bool mEnabled = false;      // SSWorldFieldAcoustics
+        U32 mQuality = 0;           // SSWorldFieldAcousticsQuality (0 tier A, 1 tier B)
+        S32 mProbeCount = 0;        // the tile's full probe count
+        S32 mBundleCount = 0;       // probes carrying a tier B bundle
+        S32 mLinkCount = 0;
+        S32 mPortalCount = 0;
+        F32 mLatCell = 0.f;
+        SSWorldField::AcousticDebug mField;
+        SSSoundscape::ThunderPath mThunder; // the last scheduled thunder's propagation
+        F64 mThunderAge = -1.0;             // seconds since it was scheduled; -1 none
+    };
+    static AcousticsData acousticsData();
+
 private:
     static void onModeChanged(U32 previous, U32 now);
     // <SS:Nexii> The info-view LOOK: one full-screen triangle (gSSInfoLookProgram, ssInfoLookV/F.glsl) that overwrites the world viewport with a warm-gray reading of the frame that was just presented - luminance on a clay-to-cream ramp, a 12-tap hemisphere occlusion recomputed from the G-buffer, a soft sky-lit shade and an extreme-fog distance ramp, sky flat. The formulas are SSInfoLook (ssinfolookcore.h); the shader transliterates them and V:\Scratch\atmo\tests\twin_infolook.cpp holds the two together. Gated by SSAtmoInfoViewLook (default on), which replaced the old SSAtmoInfoViewDim slider. Called only from renderDimAndWorld(), before renderWorld(). [interaction: LLPipeline::mSSLastPresented]
@@ -439,6 +466,7 @@ private:
     static void renderStormCells();
     static void renderDeckLod();
     static void renderVirga();
+    static void renderAcoustics();
     // <SS:Nexii> V9's in-world layer. Called for MODE_LIGHTNING and ALSO whenever RENDER_DEBUG_LIGHTNING is set, which is what makes it the engineering overlay bound beside the other seven on the debug floater as well as an info view; renderWorld() draws it exactly once either way. [interaction: LLPipeline::RENDER_DEBUG_LIGHTNING]
     static void renderLightning();
 
@@ -505,6 +533,7 @@ private:
     static void buildVirgaSpec(Spec& spec);
     static void buildWeatherCubeSpec(Spec& spec);
     static void buildLightningSpec(Spec& spec);
+    static void buildAcousticsSpec(Spec& spec);
 };
 
 // <SS:Nexii> The reusable chart widget (XUI tag ss_atmo_graph_view, still registered for any future XUI use, though the debug HUD's own instance is now built programmatically by SSAtmoInfoView::attach rather than parsed off panel_ss_atmo_debug_views.xml): an LLView drawing polylines, rails and monospace labels with gGL in 2D. Dispatches on the live mode - V1 draws the altitude-vs-speed boundary-layer curve with annotated rails and a hodograph inset; V2 the active-cell timeline (one row per cell, stage bands, the now cursor, hero row pinned on top); V3 the deck LOD count-vs-budget chart; V4 the shaft budget bar, the drive histogram and the particle-rain handoff ramp; V5 the two-lane day-cycle chart (authored curves above, derived gates below, a now cursor and authored-cue markers spanning both); V9 the strike timeline. draw() draws nothing at all - not even the background quad - when mode() is MODE_OFF or the live mode has no chart (today only the RESERVED numbers V6 World Field and V8 Anatomy, neither of which is built; decided by falling through the SAME switch that dispatches to drawWindProfile/drawStormCells/drawDeckLod/drawVirga/drawWeatherCube/drawLightning below, not a separately maintained mode list) so the debug HUD never shows an empty placeholder box floating over the world. When it does have something to draw it first re-docks itself against the legend (see SSAtmoInfoView::attach), fixed at ~440x280 px, left edge 8px past the legend's right edge, bottom aligned with the legend's bottom; FOLLOWS_BOTTOM|FOLLOWS_LEFT keeps that pair anchored together through a window resize exactly like the legend anchors itself. Read-only like everything else here; it never asks any system to build.

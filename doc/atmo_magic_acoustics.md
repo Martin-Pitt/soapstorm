@@ -1,13 +1,25 @@
 # Atmo Magic: world-field acoustics (the ACOUSTIC channel, full design)
 
-> **Status (2026-09-07): design, nothing built beyond what
-> `doc/atmo_magic_worldfield.md` already ships.** The shipped slice is the
-> wall-distance lattice: per ~8 m lattice cell, per fixed 4 m vertical ring,
-> four cardinal wall distances, built by the flood's worker job
-> (`ss_wf_acoustic`) and read through `SSWorldField::acousticAt`. Everything
-> below is the rest of the channel: a gap-anchored probe set, a connectivity
-> graph between probes, per-probe reverb analysis in two quality tiers, a
-> real occlusion trace, and per-source propagation over the graph. This doc
+> **Status (2026-09-07, second pass): Parts 1-4 built.** The ring lattice is
+> retired. Shipped now, all riding the flood's worker job over the span
+> snapshot (`ss_wf_acoustic_build` in `ssworldfield.cpp`, pure core in
+> `ssacousticcore.h`): the gap-anchored probe set (Part 1, anchor-column
+> spiral included), the probe graph with validated links, apertures and
+> portal flags (Part 2), `SSWorldField::traceSolid` and the real
+> `occlusionGain` (Part 3's occlusion), per-source Dijkstra propagation
+> through `SSWorldField::propagationQuery` - thunder's travel time, muffle
+> and arrival direction are outputs now - the listener blend
+> (`SSWorldField::probesAt`, own-gap plus graph-adjacent probes, feeding the
+> soundscape's SPACE/size verdicts), and the tier A statistic bake per probe
+> (8-direction wall profile, sky openness, bounded room flood, Sabine RT60,
+> classes, travel-to-outdoors). Tier B ships behind
+> `SSWorldFieldAcousticsQuality` = 1: per-probe ray bundles (128 rays, 8
+> jittered bounces) against the 4x span mip, fanned as probe batches with
+> individually serial-gated store-backs. The V10 ACOUSTICS info view draws
+> the probes, the graph, the listener blend and the last thunder's direct
+> line against its propagated path. Still open: disk bake (Part 4's
+> persistence), source-side reverb wiring, and the lattice-density and
+> traced-source-cap measurements the open questions list. This doc
 > supersedes the ACOUSTIC bullet sketch in Part 3 of the worldfield doc.
 
 The brief:

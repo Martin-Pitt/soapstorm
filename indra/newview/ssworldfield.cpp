@@ -62,17 +62,6 @@ static const F32 NO_SURFACE       = -FLT_MAX;
 // tens of metres of graph away climb toward 1.
 static const F32 SS_WF_ENCLOSURE_TAU_M = 4.f;
 
-// <SS:Nexii> How far the acoustic lattice's wall walks run before an
-// direction is called open. Above the soundscape's own side-ray length, so
-// a lattice open can never count as a wall hit in its consumers.
-static const F32 SS_WF_ACOUSTIC_REACH_M = 64.f;
-
-// <SS:Nexii> The acoustic lattice's vertical ring spacing: the walks sample
-// every this-many metres of height up to the capture ceiling, so a storey
-// whose floor and ceiling share a band still gets its own ring of wall
-// distances.
-static const F32 SS_WF_ACOUSTIC_RING_M = 4.f;
-
 // <SS:Nexii> How many solid spans a column may hold. Real content runs two
 // to five; a column that resolves past the cap merges its smallest air gap
 // rather than dropping a body. The span store's arrays are sized from this.
@@ -1424,29 +1413,517 @@ F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& t
     }
 }
 
-// <SS:Nexii> The precomputed wall profile at a point: the four cardinal
-// distances the lattice holds for the vertical ring the point's height falls
-// in, in the side-probe contract (metres, saturated at the reach cap).
+// <SS:Nexii> The wall profile at a point, from the gap-anchored probe bake: the
+// nearest probe of the listener's lattice cell (its 8 neighbours back it up when the
+// cell is probe-less - a pillar's answer is never stored, so a probe-less cell must
+// reach sideways for one), its 8-direction profile's four cardinals out in the
+// side-probe contract (metres, saturated at the reach cap). The ring lattice this
+// once answered from sampled whatever altitude a fixed 4 m band landed on; the probe
+// profile is taken at a real, ear-height z in real air.
 bool SSWorldField::acousticAt(const LLVector3& pos_agent, F32 wall[4]) const
 {
     const Tile* tile = tileAt(pos_agent);
     if (!tile || !tile->mValid) return false;
 
     const Tile::Acoustic& ac = tile->mAcoustic;
-    if (ac.mLatRes < 1 || ac.mSerial != tile->mGeomSerial || ac.mCeiling <= 0.f) return false;
+    if (ac.mLatRes < 1 || ac.mSerial != tile->mGeomSerial
+        || ac.mProbes.empty() || ac.mCellStart.size() != (size_t)ac.mLatRes * (size_t)ac.mLatRes + 1)
+    {
+        return false;
+    }
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return false;
 
-    const S32 rings = llclamp((S32)(ac.mWall.size() / ((size_t)ac.mLatRes * ac.mLatRes * 4u)), 1, 16);
-    const S32 ring = llclamp((S32)(pos_agent.mV[VZ] / ac.mCeiling * (F32)rings), 0, rings - 1);
-    const S32 lx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / ac.mLatCell), 0, ac.mLatRes - 1);
-    const S32 ly = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / ac.mLatCell), 0, ac.mLatRes - 1);
+    const F32 lx_f = (pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / ac.mLatCell;
+    const F32 ly_f = (pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / ac.mLatCell;
+    const S32 lx = llclamp((S32)lx_f, 0, ac.mLatRes - 1);
+    const S32 ly = llclamp((S32)ly_f, 0, ac.mLatRes - 1);
 
-    const size_t base = ((size_t)ring * ac.mLatRes * ac.mLatRes + (size_t)ly * ac.mLatRes + (size_t)lx) * 4u;
-    if (base + 3 >= ac.mWall.size()) return false;
+    // Own cell first, then the 8-neighbour ring: nearest probe by 3D distance.
+    S32 best = -1;
+    F32 best_d2 = FLT_MAX;
+    for (S32 ring = 0; ring <= 1 && best < 0; ++ring)
+    {
+        const S32 r0 = (ring == 0) ? 0 : -1;
+        const S32 r1 = (ring == 0) ? 0 : 1;
+        for (S32 oy = r0; oy <= r1; ++oy)
+        {
+            for (S32 ox = r0; ox <= r1; ++ox)
+            {
+                const S32 nx = lx + ox;
+                const S32 ny = ly + oy;
+                if (nx < 0 || ny < 0 || nx >= ac.mLatRes || ny >= ac.mLatRes) continue;
+                const S32 cell = ny * ac.mLatRes + nx;
+                for (S32 pi = ac.mCellStart[cell]; pi < ac.mCellStart[cell + 1]; ++pi)
+                {
+                    const SSAcoustic::Probe& p = ac.mProbes[(size_t)pi];
+                    const F32 dx = (regionp->getOriginAgent().mV[VX] + p.mX) - pos_agent.mV[VX];
+                    const F32 dy = (regionp->getOriginAgent().mV[VY] + p.mY) - pos_agent.mV[VY];
+                    const F32 dz = p.mZ - pos_agent.mV[VZ];
+                    const F32 d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < best_d2) { best_d2 = d2; best = pi; }
+                }
+            }
+        }
+    }
 
-    for (S32 i = 0; i < 4; ++i) wall[i] = ac.mWall[base + i];
+    if (best < 0) return false;
+    const SSAcoustic::Probe& p = ac.mProbes[(size_t)best];
+    wall[0] = p.mWall[0];
+    wall[1] = p.mWall[2];
+    wall[2] = p.mWall[4];
+    wall[3] = p.mWall[6];
+    return true;
+}
+
+// <SS:Nexii> The occlusion trace over the span store - the doc's Part 3, the brief's
+// realtime ask. Resolves one region's tile (both endpoints must live in it; the
+// store has no verdict past its border) and hands the segment to the core's DDA.
+bool SSWorldField::traceSolid(const LLVector3& a, const LLVector3& b,
+                              F32& solid_m, S32& crossings) const
+{
+    solid_m = 0.f;
+    crossings = 0;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(a);
+    if (!regionp) return false;
+
+    auto it = mTiles.find(regionp->getHandle());
+    if (it == mTiles.end() || !it->second.mValid) return false;
+
+    const Tile& tile = it->second;
+    const size_t live = (size_t)SS_WF_MAX_SPANS * (size_t)tile.mRes * (size_t)tile.mRes;
+    if (tile.mRes < 1 || tile.mSpanTop.size() < live || tile.mSpanBottom.size() < live) return false;
+
+    SSAcoustic::Snap snap;
+    snap.mTop = tile.mSpanTop.data();
+    snap.mBottom = tile.mSpanBottom.data();
+    snap.mFlags = tile.mSpanFlags.data();
+    snap.mRes = tile.mRes;
+    snap.mCell = tile.mCell;
+    snap.mCeiling = (F32)tile.mBandCount * tile.mBandHeight;
+    snap.mMaxSpans = SS_WF_MAX_SPANS;
+
+    const LLVector3& origin = regionp->getOriginAgent();
+    const F32 A[3] = { a.mV[VX] - origin.mV[VX], a.mV[VY] - origin.mV[VY], a.mV[VZ] };
+    const F32 B[3] = { b.mV[VX] - origin.mV[VX], b.mV[VY] - origin.mV[VY], b.mV[VZ] };
+
+    SSAcoustic::Trace t;
+    if (!SSAcoustic::traceSolid(snap, A, B, t)) return false;
+
+    solid_m = t.mSolidM;
+    crossings = t.mCrossings;
+    return true;
+}
+
+// <SS:Nexii> The listener blend's probe set, shared by probesAt and acousticDebug:
+// the probes of the listener's own gap in its lattice cell (vertical overlap with
+// the listener's gap, the crouch figure) plus their graph-adjacent probes, deduped,
+// at most max_out. Falls back to all of the cell's probes when none overlaps (a
+// listener inside a body's sliver, say), and to the nearest probe of the
+// neighbourhood when the cell is probe-less.
+S32 SSWorldField::listenerProbeSet(const Tile& tile, const LLVector3& pos_agent,
+                                   S32* out, S32 max_out) const
+{
+    const Tile::Acoustic& ac = tile.mAcoustic;
+    if (ac.mLatRes < 1 || ac.mProbes.empty()
+        || ac.mCellStart.size() != (size_t)ac.mLatRes * (size_t)ac.mLatRes + 1
+        || ac.mAdjStart.size() != ac.mProbes.size() + 1)
+    {
+        return 0;
+    }
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    if (!regionp) return 0;
+
+    const S32 lx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / ac.mLatCell),
+                           0, ac.mLatRes - 1);
+    const S32 ly = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / ac.mLatCell),
+                           0, ac.mLatRes - 1);
+    const S32 cell = ly * ac.mLatRes + lx;
+
+    // The listener's own gap, from the capture column it stands in.
+    const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile.mCell),
+                           0, tile.mRes - 1);
+    const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile.mCell),
+                           0, tile.mRes - 1);
+    const size_t col = (size_t)cy * (size_t)tile.mRes + (size_t)cx;
+    F32 g0 = 0.f, g1 = 0.f;
+    const S32 gap = gapAt(tile, col, pos_agent.mV[VZ], g0, g1);
+
+    // Own-gap probes of the cell: vertical overlap with the listener's gap.
+    S32 n = 0;
+    for (S32 pi = ac.mCellStart[cell]; pi < ac.mCellStart[cell + 1] && n < max_out; ++pi)
+    {
+        const SSAcoustic::Probe& p = ac.mProbes[(size_t)pi];
+        if (gap < 0 || llmin(p.mGapTop, g1) - llmax(p.mGapBottom, g0) >= SSAcoustic::LINK_MIN_OVERLAP_M)
+        {
+            out[n++] = pi;
+        }
+    }
+
+    // Graph-adjacent expansion (the connectivity-aware half: a probe behind a wall
+    // reaches the blend only through a validated link), deduped by stamp.
+    std::vector<S32> stamp(ac.mProbes.size(), -1);
+    for (S32 i = 0; i < n; ++i) stamp[(size_t)out[i]] = (S32)i;
+    const S32 own_n = n;
+    for (S32 i = 0; i < own_n && n < max_out; ++i)
+    {
+        const S32 pi = out[i];
+        for (S32 e = ac.mAdjStart[(size_t)pi]; e < ac.mAdjStart[(size_t)pi + 1] && n < max_out; ++e)
+        {
+            const S32 np = ac.mAdjNode[(size_t)e];
+            if (stamp[(size_t)np] < 0)
+            {
+                stamp[(size_t)np] = n;
+                out[n++] = np;
+            }
+        }
+    }
+
+    // Nothing at all in the cell: the nearest probe of the 8-neighbour ring.
+    if (n == 0)
+    {
+        F32 best_d2 = FLT_MAX;
+        S32 best = -1;
+        for (S32 oy = -1; oy <= 1; ++oy)
+        {
+            for (S32 ox = -1; ox <= 1; ++ox)
+            {
+                const S32 nx = lx + ox;
+                const S32 ny = ly + oy;
+                if (nx < 0 || ny < 0 || nx >= ac.mLatRes || ny >= ac.mLatRes) continue;
+                const S32 ncell = ny * ac.mLatRes + nx;
+                for (S32 pi = ac.mCellStart[ncell]; pi < ac.mCellStart[ncell + 1]; ++pi)
+                {
+                    const SSAcoustic::Probe& p = ac.mProbes[(size_t)pi];
+                    const F32 dx = (regionp->getOriginAgent().mV[VX] + p.mX) - pos_agent.mV[VX];
+                    const F32 dy = (regionp->getOriginAgent().mV[VY] + p.mY) - pos_agent.mV[VY];
+                    const F32 dz = p.mZ - pos_agent.mV[VZ];
+                    const F32 d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 < best_d2) { best_d2 = d2; best = pi; }
+                }
+            }
+        }
+        if (best >= 0) out[n++] = best;
+    }
+
+    return n;
+}
+
+// <SS:Nexii> The listener blend (the doc's Part 3): the probes of the listener's own
+// gap plus graph-adjacent probes, inverse-distance weighted. Blended figures: RT60,
+// sky openness, room volume, wall profile, travel-to-outdoors, and the space/size
+// classes - everything the soundscape's classification asked its raycasts for.
+bool SSWorldField::probesAt(const LLVector3& pos_agent, ProbeSample out[4], S32& count) const
+{
+    count = 0;
+    const Tile* tile = tileAt(pos_agent);
+    if (!tile || !tile->mValid) return false;
+    if (tile->mAcoustic.mSerial != tile->mGeomSerial) return false;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return false;
+
+    S32 picks[16];
+    const S32 n = listenerProbeSet(*tile, pos_agent, picks, 16);
+    if (n <= 0) return false;
+
+    // Top four by inverse-distance weight.
+    S32 best[4] = { -1, -1, -1, -1 };
+    F32 best_w[4] = { -1.f, -1.f, -1.f, -1.f };
+    for (S32 i = 0; i < n; ++i)
+    {
+        const SSAcoustic::Probe& p = tile->mAcoustic.mProbes[(size_t)picks[i]];
+        const F32 dx = (regionp->getOriginAgent().mV[VX] + p.mX) - pos_agent.mV[VX];
+        const F32 dy = (regionp->getOriginAgent().mV[VY] + p.mY) - pos_agent.mV[VY];
+        const F32 dz = p.mZ - pos_agent.mV[VZ];
+        const F32 w = 1.f / (dx * dx + dy * dy + dz * dz + 1.f);
+        for (S32 k = 0; k < 4; ++k)
+        {
+            if (w > best_w[k])
+            {
+                for (S32 j = 3; j > k; --j) { best[j] = best[j - 1]; best_w[j] = best_w[j - 1]; }
+                best[k] = picks[i];
+                best_w[k] = w;
+                break;
+            }
+        }
+    }
+
+    for (S32 k = 0; k < 4; ++k)
+    {
+        if (best[k] < 0) break;
+        const SSAcoustic::Probe& p = tile->mAcoustic.mProbes[(size_t)best[k]];
+        ProbeSample& s = out[count++];
+        s.mPos = regionp->getOriginAgent() + LLVector3(p.mX, p.mY, p.mZ);
+        s.mWeight = best_w[k];
+        s.mRT60 = p.mRT60;
+        s.mSkyOpen = p.mSkyOpen;
+        s.mVolume = p.mVolume;
+        s.mTravelM = p.mTravelM;
+        s.mSpaceClass = p.mSpaceClass;
+        s.mSizeClass = p.mSizeClass;
+        for (S32 i = 0; i < 8; ++i) s.mWall[i] = p.mWall[i];
+    }
+    return count > 0;
+}
+
+// <SS:Nexii> Per-source propagation (the doc's Part 3): Dijkstra over the baked
+// probe graph with early exit at the listener's probe. Reads only the immutable
+// baked graph - safe on the main thread between floods - and the serial gate keeps
+// a stale graph from ever answering. The figures drive thunder's travel time
+// (path metres, not euclidean), its muffle (portals and the path-vs-direct ratio),
+// and its arrival direction (the listener's probe toward its Dijkstra parent: sound
+// entering through a doorway is rendered from the doorway).
+bool SSWorldField::propagationQuery(const LLVector3& source, const LLVector3& listener,
+                                    Propagation& out) const
+{
+    out.mDirectM = 0.f;
+    out.mPathM = 0.f;
+    out.mCostM = 0.f;
+    out.mPortals = 0;
+    out.mMuffle = 0.f;
+    out.mHaveArrival = false;
+    out.mArrivalDir.setVec(0.f, 0.f, 1.f);
+    out.mPath.clear();
+
+    const LLVector3 mid = (source + listener) * 0.5f;
+    const Tile* tile = tileAt(mid);
+    if (!tile || !tile->mValid) return false;
+    if (tile->mAcoustic.mSerial != tile->mGeomSerial) return false;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile->mRegionHandle);
+    if (!regionp) return false;
+
+    const Tile::Acoustic& ac = tile->mAcoustic;
+    if (ac.mProbes.empty()
+        || ac.mAdjStart.size() != ac.mProbes.size() + 1
+        || ac.mAdjNode.size() != ac.mAdjCost.size()) return false;
+
+    const LLVector3& origin = regionp->getOriginAgent();
+
+    // Snap source and listener each to the nearest probe of their gap in their
+    // lattice cell: the blend set's first pick is exactly that probe.
+    S32 src_picks[16];
+    S32 dst_picks[16];
+    const S32 src_n = listenerProbeSet(*tile, source, src_picks, 16);
+    const S32 dst_n = listenerProbeSet(*tile, listener, dst_picks, 16);
+    if (src_n <= 0 || dst_n <= 0) return false;
+
+    auto nearest = [&](const S32* picks, S32 n, const LLVector3& pos) -> S32
+    {
+        S32 best = -1;
+        F32 best_d2 = FLT_MAX;
+        for (S32 i = 0; i < n; ++i)
+        {
+            const SSAcoustic::Probe& p = ac.mProbes[(size_t)picks[i]];
+            const F32 dx = (origin.mV[VX] + p.mX) - pos.mV[VX];
+            const F32 dy = (origin.mV[VY] + p.mY) - pos.mV[VY];
+            const F32 dz = p.mZ - pos.mV[VZ];
+            const F32 d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 < best_d2) { best_d2 = d2; best = picks[i]; }
+        }
+        return best;
+    };
+
+    const S32 src = nearest(src_picks, src_n, source);
+    const S32 dst = nearest(dst_picks, dst_n, listener);
+    if (src < 0 || dst < 0) return false;
+
+    out.mDirectM = dist_vec(source, listener);
+
+    // The solve. Cached by the caller's own move/serial discipline; a one-shot query
+    // (thunder) pays its well-under-a-millisecond outright.
+    const S32 n = (S32)ac.mProbes.size();
+    std::vector<S32> parent((size_t)n);
+    std::vector<F32> dist((size_t)n);
+    if (!SSAcoustic::dijkstra(n, ac.mAdjStart.data(), ac.mAdjNode.data(), ac.mAdjCost.data(),
+                              src, dst, parent.data(), dist.data()))
+    {
+        return false;   // no connected path: the caller keeps its guess
+    }
+
+    // Walk the chain listener <- ... <- source, then reverse.
+    std::vector<S32> chain;
+    {
+        S32 cur = dst;
+        S32 guard = 0;
+        while (cur >= 0 && guard++ <= n)
+        {
+            chain.push_back(cur);
+            if (cur == src) break;
+            cur = parent[(size_t)cur];
+        }
+        if (chain.empty() || chain.back() != src) return false;
+    }
+    std::reverse(chain.begin(), chain.end());
+
+    // Geometric path metres: the endpoint hops plus the node-to-node hops.
+    const SSAcoustic::Probe& src_p = ac.mProbes[(size_t)src];
+    const SSAcoustic::Probe& dst_p = ac.mProbes[(size_t)dst];
+    F32 path = dist_vec(source, origin + LLVector3(src_p.mX, src_p.mY, src_p.mZ));
+    for (size_t i = 1; i < chain.size(); ++i)
+    {
+        const SSAcoustic::Probe& a = ac.mProbes[(size_t)chain[i - 1]];
+        const SSAcoustic::Probe& b = ac.mProbes[(size_t)chain[i]];
+        path += sqrtf((b.mX - a.mX) * (b.mX - a.mX) + (b.mY - a.mY) * (b.mY - a.mY)
+                      + (b.mZ - a.mZ) * (b.mZ - a.mZ));
+    }
+    path += dist_vec(origin + LLVector3(dst_p.mX, dst_p.mY, dst_p.mZ), listener);
+
+    // Portals on the chain: consecutive nodes whose labels differ across the
+    // OUTDOORS boundary - the same flag the links carry, recomputed from the pair.
+    S32 portals = 0;
+    for (size_t i = 1; i < chain.size(); ++i)
+    {
+        const U8 la = ac.mProbes[(size_t)chain[i - 1]].mLabel;
+        const U8 lb = ac.mProbes[(size_t)chain[i]].mLabel;
+        if ((la == 1) != (lb == 1)) ++portals;
+    }
+
+    out.mPathM = path;
+    out.mCostM = dist[(size_t)dst];
+    out.mPortals = portals;
+
+    // Muffle from portals and the path-vs-direct ratio: around-buildings sound is
+    // softened and darkened; a straight shot through portals less so.
+    const F32 ratio = (out.mDirectM > 1.f) ? path / out.mDirectM : 1.f;
+    out.mMuffle = llclamp((F32)portals * 0.25f + llmax(ratio - 1.f, 0.f) * 0.3f, 0.f, 0.9f);
+
+    // Arrival direction: the listener's probe toward its Dijkstra parent - sound
+    // entering through a doorway is rendered from the doorway.
+    if (chain.size() >= 2)
+    {
+        const SSAcoustic::Probe& from = ac.mProbes[(size_t)chain[chain.size() - 2]];
+        const LLVector3 dir((origin.mV[VX] + from.mX) - (origin.mV[VX] + dst_p.mX),
+                            (origin.mV[VY] + from.mY) - (origin.mV[VY] + dst_p.mY),
+                            from.mZ - dst_p.mZ);
+        if (dir.magVecSquared() > 1.0e-4f)
+        {
+            out.mArrivalDir = dir;
+            out.mArrivalDir.normVec();
+            out.mHaveArrival = true;
+        }
+    }
+
+    // The path for the debug layer, capped: stride when the chain runs long.
+    const size_t cap = 64;
+    const size_t stride = (chain.size() > cap) ? (chain.size() + cap - 1) / cap : 1;
+    for (size_t i = 0; i < chain.size(); i += stride)
+    {
+        const SSAcoustic::Probe& p = ac.mProbes[(size_t)chain[i]];
+        out.mPath.push_back(origin + LLVector3(p.mX, p.mY, p.mZ));
+    }
+    if ((chain.size() - 1) % stride != 0)
+    {
+        const SSAcoustic::Probe& p = ac.mProbes[(size_t)chain.back()];
+        out.mPath.push_back(origin + LLVector3(p.mX, p.mY, p.mZ));
+    }
+
+    return true;
+}
+
+// <SS:Nexii> The debug export the V10 info view draws: probes and links in range,
+// portal flags resolved per probe, the listener's blend set named. Read-only over
+// the baked channel; a stale or unbaked channel reads mValid false and the view
+// says so instead of drawing yesterday's room.
+bool SSWorldField::acousticDebug(U64 region_handle, const LLVector3& centre_agent, F32 range_m,
+                                 AcousticDebug& out) const
+{
+    out.mValid = false;
+    out.mLatRes = 0;
+    out.mLatCell = 0.f;
+    out.mProbeCount = 0;
+    out.mBundleCount = 0;
+    out.mLinkCount = 0;
+    out.mPortalCount = 0;
+    out.mProbes.clear();
+    out.mLinks.clear();
+    out.mListenerProbes.clear();
+
+    auto it = mTiles.find(region_handle);
+    if (it == mTiles.end() || !it->second.mValid) return false;
+
+    const Tile& tile = it->second;
+    const Tile::Acoustic& ac = tile.mAcoustic;
+    if (ac.mLatRes < 1 || ac.mSerial != tile.mGeomSerial || ac.mProbes.empty()) return false;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp) return false;
+
+    const LLVector3& origin = regionp->getOriginAgent();
+    const F32 centre_x = centre_agent.mV[VX] - origin.mV[VX];
+    const F32 centre_y = centre_agent.mV[VY] - origin.mV[VY];
+    const F32 r2 = range_m * range_m;
+
+    // Range-cull probes, remembering the old->new index map.
+    const S32 count = (S32)ac.mProbes.size();
+    std::vector<S32> remap((size_t)count, -1);
+    std::vector<U8> portal_node((size_t)count, 0);
+    for (const SSAcoustic::Link& l : ac.mLinks)
+    {
+        if (l.mPortal && l.mA >= 0 && l.mA < count) portal_node[(size_t)l.mA] = 1;
+        if (l.mPortal && l.mB >= 0 && l.mB < count) portal_node[(size_t)l.mB] = 1;
+    }
+
+    for (S32 i = 0; i < count; ++i)
+    {
+        const SSAcoustic::Probe& p = ac.mProbes[(size_t)i];
+        const F32 dx = p.mX - centre_x;
+        const F32 dy = p.mY - centre_y;
+        if (dx * dx + dy * dy > r2) continue;
+
+        AcousticDebug::Probe o;
+        o.mPos = origin + LLVector3(p.mX, p.mY, p.mZ);
+        o.mGapBottom = p.mGapBottom;
+        o.mGapTop = p.mGapTop;
+        o.mLabel = p.mLabel;
+        o.mRT60 = p.mRT60;
+        o.mSkyOpen = p.mSkyOpen;
+        o.mVolume = p.mVolume;
+        o.mTravelM = p.mTravelM;
+        o.mSpaceClass = p.mSpaceClass;
+        o.mSizeClass = p.mSizeClass;
+        o.mPortal = portal_node[(size_t)i] != 0;
+        o.mHaveBundle = p.mHaveBundle != 0;
+        remap[(size_t)i] = (S32)out.mProbes.size();
+        out.mProbes.push_back(o);
+    }
+
+    for (const SSAcoustic::Link& l : ac.mLinks)
+    {
+        if (l.mA < 0 || l.mB < 0 || l.mA >= count || l.mB >= count) continue;
+        const S32 ra = remap[(size_t)l.mA];
+        const S32 rb = remap[(size_t)l.mB];
+        if (ra < 0 || rb < 0) continue;
+        AcousticDebug::Link o;
+        o.mA = ra;
+        o.mB = rb;
+        o.mPortal = l.mPortal != 0;
+        out.mLinks.push_back(o);
+        if (o.mPortal) ++out.mPortalCount;
+    }
+
+    // The listener's own blend set, by node index.
+    S32 picks[16];
+    const S32 n = listenerProbeSet(tile, centre_agent, picks, 16);
+    for (S32 i = 0; i < n; ++i)
+    {
+        const S32 r = (picks[i] >= 0 && picks[i] < count) ? remap[(size_t)picks[i]] : -1;
+        if (r >= 0) out.mListenerProbes.push_back(r);
+    }
+
+    out.mValid = true;
+    out.mLatRes = ac.mLatRes;
+    out.mLatCell = ac.mLatCell;
+    out.mProbeCount = count;
+    for (const SSAcoustic::Probe& p : ac.mProbes)
+    {
+        if (p.mHaveBundle) ++out.mBundleCount;
+    }
+    out.mLinkCount = (S32)ac.mLinks.size();
     return true;
 }
 
@@ -1895,92 +2372,258 @@ static void ss_wf_flood(S32 res, S32 max_spans, F32 ceiling,
         }
     }
 }
-// <SS:Nexii> The acoustic lattice: one precomputed wall distance per
-// cardinal, per band, per coarse lattice cell - the room-size and occlusion
-// questions the soundscape otherwise re-raycasts every probe cycle. Walks
-// the labels the flood just made: from each probe's band-cell, step
-// horizontally through air until a solid band-cell stops it, the air count
-// times the capture cell size being the wall distance in metres. A direction
-// that leaves the tile or runs out of reach reads as open at the reach cap,
-// matching the side raycast's own "nothing within 50m" convention (the cap
-// sits above it, so a lattice open can never count as a wall hit). Runs on
-// the flood's worker job; anchor and staleness ride the flood's own gates.
-static void ss_wf_acoustic(S32 res, S32 max_spans, S32 lat_res, F32 cell_m, F32 ceiling,
-                           const std::vector<F32>& span_top, const std::vector<F32>& span_bottom,
-                           std::vector<F32>& wall)
+// <SS:Nexii> The ACOUSTIC channel's bake (doc/atmo_magic_acoustics.md Parts 1-4),
+// over the snapshot the flood just walked. Replaces the shipped ring lattice whole:
+// fixed rings sampled altitudes nothing stands at - a ring inside a floor slab
+// answers for nobody - while the span store knows where listeners actually stand,
+// so probes anchor to air gaps instead. Per lattice cell (the same ~8 m resolution
+// the rings ran at), an anchor column picked by spiralling out from the centre until
+// one carries air at ear height, then per gap of that column: an ear probe at floor
+// + 1.2 m, a ceiling probe under a roof, intermediates every ~4 m for tall gaps, and
+// the tier A statistic bake per probe - the 8-direction wall profile at the probe's
+// REAL z (the 4 side-raycasts' answer), sky openness, the bounded room flood's
+// volume and area at lattice resolution, Sabine's RT60, the space/size classes the
+// loop beds already read, and the flood's own travel-to-outdoors. The probe graph
+// rides the same walk: vertical links by construction, horizontal links between
+// probes whose gaps overlap by at least the crouch figure, each validated by a
+// span-store ray (at 8 m spacing a wall thinner than a lattice cell is invisible to
+// gap overlap alone, and the ray is what keeps the graph from teleporting sound
+// through it), aperture factors from the overlap clamped against the midpoint
+// clearance, and portal flags across the OUTDOORS boundary. Probes are placed from
+// the gap list alone, ignoring the flood's labels - a sealed room still gets probes,
+// because a listener teleporting into it still deserves its reverb; labels ride
+// along as data, not as placement gates.
+static void ss_wf_acoustic_build(S32 res, S32 max_spans, F32 cell_m, F32 ceiling, S32 lat_res,
+                                 const std::vector<F32>& span_top, const std::vector<F32>& span_bottom,
+                                 const std::vector<U8>& gap_label, const std::vector<U16>& gap_depth,
+                                 std::vector<SSAcoustic::Probe>& out_probes,
+                                 std::vector<S32>& out_cell_start,
+                                 std::vector<SSAcoustic::Link>& out_links,
+                                 std::vector<S32>& out_adj_start,
+                                 std::vector<S32>& out_adj_node,
+                                 std::vector<F32>& out_adj_cost)
 {
-    wall.clear();
-    if (lat_res < 1 || lat_res > res || cell_m <= 0.f) return;
+    out_probes.clear();
+    out_cell_start.clear();
+    out_links.clear();
+    out_adj_start.clear();
+    out_adj_node.clear();
+    out_adj_cost.clear();
+    if (lat_res < 1 || lat_res > res || cell_m <= 0.f || res < 1) return;
 
-    const size_t layer = (size_t)res * res;
-    const size_t lat_layer = (size_t)lat_res * lat_res;
+    SSAcoustic::Snap snap;
+    snap.mTop = span_top.data();
+    snap.mBottom = span_bottom.data();
+    snap.mGapLabel = gap_label.data();
+    snap.mGapDepth = gap_depth.data();
+    snap.mRes = res;
+    snap.mCell = cell_m;
+    snap.mCeiling = ceiling;
+    snap.mMaxSpans = max_spans;
 
-    // The lattice rings sample every SS_WF_ACOUSTIC_RING_M of height up to
-    // the capture ceiling, so a storey whose floor and ceiling share a band
-    // still gets its own ring. Sized BEFORE the walk: mWall is
-    // [ring][y * lat_res + x][4] - acousticAt derives rings from its size -
-    // and the old one-ring assign let the r loop write rings-1 rings past the
-    // end, the heap corruption that surfaced as crashes in unrelated mallocs
-    // and frees (the cloud deck's push_back, the flood completion's own
-    // mGapLabel move-assign).
-    const S32 rings = llclamp((S32)(ceiling / SS_WF_ACOUSTIC_RING_M), 1, 16);
-    wall.assign((size_t)rings * lat_layer * 4u, SS_WF_ACOUSTIC_REACH_M);
+    const size_t layer = (size_t)res * (size_t)res;
+    const size_t per = (size_t)max_spans + 1;
+    const F32 lat_cell = (F32)res * cell_m / (F32)lat_res;
 
-    static const S32 DX[4] = { 1, -1, 0, 0 };
-    static const S32 DY[4] = { 0, 0, 1, -1 };
+    // The anchor spiral, resolved once: candidate offsets ordered by ring then angle.
+    constexpr S32 SPIRAL_R = SSAcoustic::ANCHOR_SPIRAL_CELLS;
+    S32 spiral_dx[(2 * SPIRAL_R + 1) * (2 * SPIRAL_R + 1)];
+    S32 spiral_dy[(2 * SPIRAL_R + 1) * (2 * SPIRAL_R + 1)];
+    const S32 spiral_n = SSAcoustic::anchorSpiral(spiral_dx, spiral_dy);
 
-    const S32 reach_cells = llclamp((S32)(SS_WF_ACOUSTIC_REACH_M / cell_m), 1, res);
+    SSAcoustic::LatGaps lat;
+    lat.build(lat_res, max_spans);
 
-    // The walk samples one altitude per lattice ring and asks each column
-    // whether its air reaches that height: a column whose solid spans cover
-    // the sample is a wall, the air between or around them is not.
-    auto airAt = [&](size_t col, F32 z)
+    out_cell_start.assign((size_t)lat_res * (size_t)lat_res + 1, 0);
+
+    for (S32 ly = 0; ly < lat_res; ++ly)
     {
-        F32 prev = 0.f;
-        for (S32 k = 0; k < max_spans; ++k)
+        for (S32 lx = 0; lx < lat_res; ++lx)
         {
-            const F32 stop = span_top[(size_t)k * layer + col];
-            if (stop <= NO_SURFACE * 0.5f) return true;      // open above the last span
-            const F32 bottom = span_bottom[(size_t)k * layer + col];
-            if (z < bottom - 0.01f) return true;             // the gap beneath this span
-            if (z <= stop + 0.01f) return false;             // inside the body
-            prev = stop;
-        }
-        return prev < ceiling - 0.01f;                       // above the last span
-    };
+            const S32 cell = ly * lat_res + lx;
+            out_cell_start[cell] = (S32)out_probes.size();
 
-    // The lattice rings sample every SS_WF_ACOUSTIC_RING_M of height up to
-    // the capture ceiling (rings, resolved and allocated above).
-    for (S32 r = 0; r < rings; ++r)
-    {
-        const F32 z = (F32)(r + 0.5f) * ceiling / (F32)rings;
-        for (S32 ly = 0; ly < lat_res; ++ly)
-        {
-            for (S32 lx = 0; lx < lat_res; ++lx)
+            // Anchor column: the centre, then the spiral, first column whose gap
+            // list has air at ear height. None: the cell stays probe-less and its
+            // neighbours' interpolation covers it.
+            const S32 cx = llclamp((S32)(((F32)lx + 0.5f) * (F32)res / (F32)lat_res), 0, res - 1);
+            const S32 cy = llclamp((S32)(((F32)ly + 0.5f) * (F32)res / (F32)lat_res), 0, res - 1);
+            size_t anchor = ~(size_t)0;
+            for (S32 i = 0; i < spiral_n; ++i)
             {
-                // The lattice cell's centre, back onto the capture grid.
-                const S32 cx = llclamp((S32)(((F32)lx + 0.5f) * (F32)res / (F32)lat_res), 0, res - 1);
-                const S32 cy = llclamp((S32)(((F32)ly + 0.5f) * (F32)res / (F32)lat_res), 0, res - 1);
-                const size_t col = (size_t)cy * res + cx;
-
-                F32* out = &wall[((size_t)r * lat_layer + (size_t)ly * lat_res + lx) * 4u];
-
-                for (S32 d = 0; d < 4; ++d)
+                const S32 nx = llclamp(cx + spiral_dx[i], 0, res - 1);
+                const S32 ny = llclamp(cy + spiral_dy[i], 0, res - 1);
+                const size_t col = (size_t)ny * (size_t)res + (size_t)nx;
+                if (SSAcoustic::columnHasEarAir(snap, col))
                 {
-                    S32 x = cx, y = cy, steps = 0;
-                    while (steps < reach_cells)
-                    {
-                        x += DX[d]; y += DY[d];
-                        if (x < 0 || y < 0 || x >= res || y >= res)
-                        {
-                            steps = reach_cells;    // off-tile: open, not a nearby wall
-                            break;
-                        }
-                        if (!airAt((size_t)y * res + x, z)) break;
-                        ++steps;
-                    }
-                    out[d] = llmin((F32)steps * cell_m, SS_WF_ACOUSTIC_REACH_M);
+                    anchor = col;
+                    break;
                 }
+            }
+            if (anchor == ~(size_t)0) continue;
+
+            SSAcoustic::fillLatGaps(snap, anchor, cell, lat);
+
+            const F32 px = ((F32)(anchor % (size_t)res) + 0.5f) * cell_m;
+            const F32 py = ((F32)(anchor / (size_t)res) + 0.5f) * cell_m;
+            const S32 span_n = SSAcoustic::spanCount(snap, anchor);
+
+            SSAcoustic::ProbeDef defs[16];
+            for (S32 k = 0; k <= max_spans; ++k)
+            {
+                if (k > span_n) break;
+                const F32 g0 = (k == 0) ? 0.f : span_top[(size_t)(k - 1) * layer + anchor];
+                const F32 g1 = (k == span_n) ? ceiling : span_bottom[(size_t)k * layer + anchor];
+                const S32 count = SSAcoustic::placeGapProbes(g0, g1, k == span_n, defs, 16);
+                for (S32 i = 0; i < count; ++i)
+                {
+                    SSAcoustic::Probe p;
+                    p.mX = px;
+                    p.mY = py;
+                    p.mZ = defs[i].mZ;
+                    p.mGapBottom = defs[i].mGapBottom;
+                    p.mGapTop = defs[i].mGapTop;
+                    p.mCell = cell;
+                    p.mGap = k;
+                    p.mLabel = gap_label[anchor * per + (size_t)k];
+                    p.mRoofed = defs[i].mRoofed ? 1 : 0;
+                    const U16 dep = gap_depth[anchor * per + (size_t)k];
+                    p.mGapDepth = dep;
+                    p.mTravelM = (dep != 0xFFFF) ? (F32)dep * cell_m : -1.f;
+
+                    // Tier A, all of it bake-time: the profile at the probe's real z,
+                    // the column stack above, the bounded room flood, Sabine over it,
+                    // and the classes the soundscape's enum already names.
+                    SSAcoustic::wallProfile(snap, px, py, defs[i].mZ, p.mWall);
+                    p.mSkyOpen = SSAcoustic::skyOpenness(snap, anchor, k);
+                    SSAcoustic::roomEstimate(snap, lat, cell, k, p.mVolume, p.mArea);
+                    p.mRT60 = SSAcoustic::sabineRT60(p.mVolume, p.mArea);
+                    SSAcoustic::classify(defs[i].mRoofed, p.mLabel, p.mWall, p.mSpaceClass, p.mSizeClass);
+
+                    out_probes.push_back(p);
+                }
+            }
+        }
+    }
+    out_cell_start[(size_t)lat_res * (size_t)lat_res] = (S32)out_probes.size();
+
+    if (out_probes.empty()) return;
+
+    // ---- the graph ----
+
+    // Vertical links: probes of the same gap in the same cell, consecutive by z -
+    // connected by construction, cost the vertical distance.
+    for (size_t i = 1; i < out_probes.size(); ++i)
+    {
+        SSAcoustic::Probe& a = out_probes[i - 1];
+        SSAcoustic::Probe& b = out_probes[i];
+        if (a.mCell != b.mCell || a.mGap != b.mGap) continue;
+        SSAcoustic::Link l;
+        l.mA = (S32)(i - 1);
+        l.mB = (S32)i;
+        l.mLen = fabsf(b.mZ - a.mZ);
+        l.mAperture = 1.f;
+        l.mPortal = 0;
+        out_links.push_back(l);
+    }
+
+    // Horizontal links: per 4-neighbour lattice cell pair (+X and +Y only, so each
+    // unordered pair validates once), candidate links between probes whose gaps
+    // vertically overlap by the crouch figure, each validated by a span-store ray.
+    for (S32 ly = 0; ly < lat_res; ++ly)
+    {
+        for (S32 lx = 0; lx < lat_res; ++lx)
+        {
+            const S32 cell = ly * lat_res + lx;
+            static const S32 NDX[2] = { 1, 0 };
+            static const S32 NDY[2] = { 0, 1 };
+            for (S32 d = 0; d < 2; ++d)
+            {
+                const S32 nx = lx + NDX[d];
+                const S32 ny = ly + NDY[d];
+                if (nx >= lat_res || ny >= lat_res) continue;
+                const S32 ncell = ny * lat_res + nx;
+
+                for (S32 ai = out_cell_start[cell]; ai < out_cell_start[cell + 1]; ++ai)
+                {
+                    for (S32 bi = out_cell_start[ncell]; bi < out_cell_start[ncell + 1]; ++bi)
+                    {
+                        SSAcoustic::Probe& a = out_probes[(size_t)ai];
+                        SSAcoustic::Probe& b = out_probes[(size_t)bi];
+                        if (!SSAcoustic::gapsOverlap(a, b)) continue;
+
+                        const F32 seg_a[3] = { a.mX, a.mY, a.mZ };
+                        const F32 seg_b[3] = { b.mX, b.mY, b.mZ };
+                        SSAcoustic::Trace tr;
+                        if (!SSAcoustic::traceSolid(snap, seg_a, seg_b, tr)
+                            || tr.mSolidM > SSAcoustic::LINK_BLOCK_SOLID_M)
+                        {
+                            continue;   // blocked: the pair may still connect via
+                                        // another gap's probes or a longer path,
+                                        // which is the point of a graph
+                        }
+
+                        SSAcoustic::Link l;
+                        l.mA = ai;
+                        l.mB = bi;
+                        const F32 ddx = b.mX - a.mX;
+                        const F32 ddy = b.mY - a.mY;
+                        const F32 ddz = b.mZ - a.mZ;
+                        l.mLen = sqrtf(ddx * ddx + ddy * ddy + ddz * ddz);
+
+                        // Aperture: the overlap clamped against a horizontal clearance
+                        // sample at the link's midpoint, the nearest wall distance
+                        // perpendicular to the link.
+                        const F32 mid[3] = { (a.mX + b.mX) * 0.5f, (a.mY + b.mY) * 0.5f,
+                                             (a.mZ + b.mZ) * 0.5f };
+                        const F32 ilen = (l.mLen > 1.0e-4f) ? 1.f / sqrtf(ddx * ddx + ddy * ddy) : 0.f;
+                        const F32 perp_x = -ddy * ilen;
+                        const F32 perp_y = ddx * ilen;
+                        const F32 clear = llmin(
+                            SSAcoustic::wallDistDir(snap, mid[0], mid[1], mid[2], perp_x, perp_y, lat_cell),
+                            SSAcoustic::wallDistDir(snap, mid[0], mid[1], mid[2], -perp_x, -perp_y, lat_cell));
+                        l.mAperture = SSAcoustic::apertureOf(a, b, clear);
+
+                        // Portal: the endpoints' labels differ across the OUTDOORS
+                        // boundary - the edge thunder and the muffle question care
+                        // about, free from the labels.
+                        l.mPortal = (U8)(((a.mLabel == 1) != (b.mLabel == 1)) ? 1 : 0);
+                        out_links.push_back(l);
+                    }
+                }
+            }
+        }
+    }
+
+    // CSR adjacency: every link appears from both ends, cost precomputed once so the
+    // runtime solve reads flat arrays only.
+    const S32 node_count = (S32)out_probes.size();
+    out_adj_start.assign((size_t)node_count + 1, 0);
+    for (const SSAcoustic::Link& l : out_links)
+    {
+        if (l.mA >= 0 && l.mA < node_count) ++out_adj_start[(size_t)l.mA + 1];
+        if (l.mB >= 0 && l.mB < node_count) ++out_adj_start[(size_t)l.mB + 1];
+    }
+    for (size_t i = 1; i < out_adj_start.size(); ++i)
+    {
+        out_adj_start[i] += out_adj_start[i - 1];
+    }
+    out_adj_node.resize((size_t)out_adj_start[node_count]);
+    out_adj_cost.resize((size_t)out_adj_start[node_count]);
+    {
+        std::vector<S32> cursor(out_adj_start.begin(), out_adj_start.end() - 1);
+        for (const SSAcoustic::Link& l : out_links)
+        {
+            const F32 cost = SSAcoustic::linkCost(l);
+            if (l.mA >= 0 && l.mA < node_count)
+            {
+                out_adj_node[(size_t)cursor[(size_t)l.mA]] = l.mB;
+                out_adj_cost[(size_t)cursor[(size_t)l.mA]++] = cost;
+            }
+            if (l.mB >= 0 && l.mB < node_count)
+            {
+                out_adj_node[(size_t)cursor[(size_t)l.mB]] = l.mA;
+                out_adj_cost[(size_t)cursor[(size_t)l.mB]++] = cost;
             }
         }
     }
@@ -1999,6 +2642,16 @@ void SSWorldField::scheduleFlood(Tile& tile)
     const size_t live = (size_t)SS_WF_MAX_SPANS * (size_t)res * res;
     if (tile.mSpanTop.size() < live || tile.mSpanBottom.size() < live) return;
 
+    // <SS:Nexii> The acoustic bake rides the flood (same job, same snapshot, gates
+    // and all); tier B is opt-in quality AND a claimed ACOUSTIC channel - nobody
+    // pays for analysed reverb nobody asked for. Read on the main thread here, so
+    // the worker job and the batch fan-out below never touch a setting.
+    static LLCachedControl<bool> acoustics(gSavedSettings, "SSWorldFieldAcoustics", true);
+    static LLCachedControl<U32> acoustic_quality(gSavedSettings, "SSWorldFieldAcousticsQuality", 0);
+    const bool do_acoustic = (bool)acoustics;
+    const bool tier_b = do_acoustic && llmin((U32)acoustic_quality, 1u) >= 1
+                     && ss_wf_interest_count(tile.mRegionHandle, (S32)EChannel::ACOUSTIC) > 0;
+
     LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
     LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
     if (!general || !main) return;              // no worker: labels stay AIR_UNKNOWN, consumers cope
@@ -2016,7 +2669,15 @@ void SSWorldField::scheduleFlood(Tile& tile)
         tile.mSpanBottom.begin() + live);
     auto gap_labels = std::make_shared<std::vector<U8> >();
     auto gap_depths = std::make_shared<std::vector<U16> >();
-    auto walls = std::make_shared<std::vector<F32> >();
+    auto probes = std::make_shared<std::vector<SSAcoustic::Probe> >();
+    auto cell_start = std::make_shared<std::vector<S32> >();
+    auto links = std::make_shared<std::vector<SSAcoustic::Link> >();
+    auto adj_start = std::make_shared<std::vector<S32> >();
+    auto adj_node = std::make_shared<std::vector<S32> >();
+    auto adj_cost = std::make_shared<std::vector<F32> >();
+    auto mip_top = std::make_shared<std::vector<F32> >();
+    auto mip_bottom = std::make_shared<std::vector<F32> >();
+    auto mip_flags = std::make_shared<std::vector<U8> >();
 
     // The acoustic lattice runs at a coarse multiple of the capture grid -
     // near 8m per probe, never finer than the capture itself.
@@ -2025,15 +2686,41 @@ void SSWorldField::scheduleFlood(Tile& tile)
 
     main->postTo(
         general,
-        [res, max_spans = SS_WF_MAX_SPANS, ceiling, lat_res, cell_m, snapshot_top, snapshot_bottom, gap_labels, gap_depths, walls]()
+        [res, max_spans = SS_WF_MAX_SPANS, ceiling, lat_res, cell_m, do_acoustic, tier_b,
+         snapshot_top, snapshot_bottom, gap_labels, gap_depths,
+         probes, cell_start, links, adj_start, adj_node, adj_cost,
+         mip_top, mip_bottom, mip_flags]()
         {
             ss_wf_flood(res, max_spans, ceiling, *snapshot_top, *snapshot_bottom,
                         *gap_labels, *gap_depths);
-            ss_wf_acoustic(res, max_spans, lat_res, cell_m, ceiling,
-                           *snapshot_top, *snapshot_bottom, *walls);
+            if (do_acoustic)
+            {
+                ss_wf_acoustic_build(res, max_spans, cell_m, ceiling, lat_res,
+                                     *snapshot_top, *snapshot_bottom, *gap_labels, *gap_depths,
+                                     *probes, *cell_start, *links, *adj_start, *adj_node, *adj_cost);
+                if (tier_b && !probes->empty())
+                {
+                    // The 4x-coarsened span mip tier B traces against (reverb
+                    // statistics do not need 0.25 m walls) - built here while the
+                    // snapshot is hot, handed to the batches through the shared
+                    // buffers below.
+                    SSAcoustic::Snap snap;
+                    snap.mTop = snapshot_top->data();
+                    snap.mBottom = snapshot_bottom->data();
+                    snap.mRes = res;
+                    snap.mCell = cell_m;
+                    snap.mCeiling = ceiling;
+                    snap.mMaxSpans = max_spans;
+                    SSAcoustic::Snap mip = SSAcoustic::buildMip(snap, *mip_top, *mip_bottom, *mip_flags);
+                    (void)mip;
+                }
+            }
             return true;
         },
-        [this, generation, region, serial, ceiling, lat_res, cell_m, gap_labels, gap_depths, walls](bool)
+        [this, generation, region, serial, ceiling, lat_res, cell_m, tier_b, res,
+         gap_labels, gap_depths,
+         probes, cell_start, links, adj_start, adj_node, adj_cost,
+         mip_top, mip_bottom, mip_flags](bool)
         {
             mFloodBusy = false;
             if (generation != mFloodGeneration) return;
@@ -2046,11 +2733,88 @@ void SSWorldField::scheduleFlood(Tile& tile)
             it->second.mGapDepth = std::move(*gap_depths);
             it->second.mAirSerial = serial;
 
-            it->second.mAcoustic.mLatRes = lat_res;
-            it->second.mAcoustic.mLatCell = (lat_res > 0) ? (F32)it->second.mRes * it->second.mCell / (F32)lat_res : 0.f;
-            it->second.mAcoustic.mCeiling = ceiling;
-            it->second.mAcoustic.mWall = std::move(*walls);
-            it->second.mAcoustic.mSerial = serial;
+            Tile::Acoustic& ac = it->second.mAcoustic;
+            ac.mLatRes = lat_res;
+            ac.mLatCell = (lat_res > 0) ? (F32)it->second.mRes * it->second.mCell / (F32)lat_res : 0.f;
+            ac.mCeiling = ceiling;
+            ac.mProbes = std::move(*probes);
+            ac.mCellStart = std::move(*cell_start);
+            ac.mLinks = std::move(*links);
+            ac.mAdjStart = std::move(*adj_start);
+            ac.mAdjNode = std::move(*adj_node);
+            ac.mAdjCost = std::move(*adj_cost);
+            ac.mSerial = serial;
+
+            // <SS:Nexii> Tier B behind the flood: every probe's bundle is
+            // independent, so the bake fans probe BATCHES across the general queue
+            // as separate jobs - the flood stays the one-at-a-time job it is, tier B
+            // is many small ones behind it, each store-back serial-gated
+            // individually (an edit-heavy region's re-bake drops the stale batch
+            // and the next flood re-runs the whole walk). The mip the batches
+            // trace against was built in the worker above; its dimensions follow
+            // from buildMip's own formula, so nothing is plumbed back.
+            if (tier_b && !ac.mProbes.empty() && !mip_top->empty()
+                && mip_top->size() == mip_bottom->size())
+            {
+                const S32 mip_res = res / SSAcoustic::BUNDLE_MIP;
+                const S32 mip_spans = SS_WF_MAX_SPANS + 2;
+                const F32 mip_cell = cell_m * (F32)SSAcoustic::BUNDLE_MIP;
+                if (mip_res >= 1 && mip_top->size() == (size_t)mip_spans * (size_t)mip_res * (size_t)mip_res)
+                {
+                    auto probe_snap = std::make_shared<std::vector<SSAcoustic::Probe> >(ac.mProbes);
+                    constexpr S32 BATCH = 256;
+                    const S32 count = (S32)ac.mProbes.size();
+                    for (S32 start = 0; start < count; start += BATCH)
+                    {
+                        const S32 end = llmin(start + BATCH, count);
+                        auto bundles = std::make_shared<std::vector<SSAcoustic::Bundle> >((size_t)(end - start));
+                        main->postTo(
+                            general,
+                            [probe_snap, mip_top, mip_bottom, mip_flags, start, end,
+                             mip_res, mip_spans, mip_cell, ceiling, bundles]()
+                            {
+                                SSAcoustic::Snap ms;
+                                ms.mTop = mip_top->data();
+                                ms.mBottom = mip_bottom->data();
+                                ms.mFlags = mip_flags->data();
+                                ms.mRes = mip_res;
+                                ms.mCell = mip_cell;
+                                ms.mCeiling = ceiling;
+                                ms.mMaxSpans = mip_spans;
+                                for (S32 i = start; i < end; ++i)
+                                {
+                                    SSAcoustic::Bundle b;
+                                    SSAcoustic::traceBundle(ms, (*probe_snap)[(size_t)i],
+                                                            SSAcoustic::BUNDLE_RAYS, SSAcoustic::BUNDLE_BOUNCES, b);
+                                    (*bundles)[(size_t)(i - start)] = b;
+                                }
+                                return true;
+                            },
+                            [this, generation, region, serial, start, end, bundles](bool)
+                            {
+                                if (generation != mFloodGeneration) return;
+                                auto cit = mTiles.find(region);
+                                if (cit == mTiles.end() || !cit->second.mValid) return;
+                                if (cit->second.mGeomSerial != serial) return;
+                                if (cit->second.mAcoustic.mSerial != serial) return;
+                                if (cit->second.mAcoustic.mProbes.size() < (size_t)end) return;
+
+                                for (S32 i = start; i < end; ++i)
+                                {
+                                    const SSAcoustic::Bundle& b = (*bundles)[(size_t)(i - start)];
+                                    SSAcoustic::Probe& p = cit->second.mAcoustic.mProbes[(size_t)i];
+                                    p.mMFP = b.mMFP;
+                                    p.mRT60 = b.mRT60;
+                                    p.mEcho = b.mEcho;
+                                    p.mFirstDelay = b.mFirstDelay;
+                                    for (S32 k = 0; k < 3; ++k) p.mFirstDir[k] = b.mFirstDir[k];
+                                    for (S32 k = 0; k < 8; ++k) p.mOpenness[k] = b.mOpenness[k];
+                                    p.mHaveBundle = 1;
+                                }
+                            });
+                    }
+                }
+            }
         });
 }
 

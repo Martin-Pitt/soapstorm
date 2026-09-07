@@ -68,6 +68,12 @@ static const F32 BURIAL_BLEND_RATE = 2.5f;
 // a few metres up.
 static const F32 BURIAL_INTERIOR_DEPTH = 18.f;
 
+// <SS:Nexii> The through-solid transmission's half-loss thickness (the doc's Part 3):
+// a direct line crossing this many solid metres loses half its energy. One material
+// until span flags grow absorption classes - the doc's own stated guess - so the dial
+// sits between "a 0.5 m wall barely matters" and "a 10 m berm is silence".
+static const F32 OCCLUSION_HALF_LOSS_M = 2.f;
+
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO("Atmo Magic Audio");
 static LLTrace::BlockTimerStatHandle FTM_SS_AUDIO_PROBE("Cover Probes");
 
@@ -292,6 +298,30 @@ void SSSoundscape::updateProbes(F64 now)
         mCoverageRegion = 0;
     }
 
+    // <SS:Nexii> The ACOUSTIC stake: the channel that bakes the gap-anchored probes
+    // and the propagation graph. Held for the camera's region while its switch is
+    // on, independently of the coverage switch - the wall profile and the
+    // classification want the bake even where cover is still answered by rays.
+    static LLCachedControl<bool> field_acoustics(gSavedSettings, "SSWorldFieldAcoustics", true);
+    if ((bool)field_acoustics)
+    {
+        LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(cam);
+        if (regionp)
+        {
+            if (!mAcousticClaim || mAcousticRegion != regionp->getHandle())
+            {
+                mAcousticRegion = regionp->getHandle();
+                mAcousticClaim = SSWorldField::getInstance()->claim(
+                    mAcousticRegion, SSWorldField::EChannel::ACOUSTIC);
+            }
+        }
+    }
+    else if (mAcousticClaim)
+    {
+        mAcousticClaim = SSWorldField::Interest();
+        mAcousticRegion = 0;
+    }
+
     if (!field_answered)
     {
     S32 up_hits = 0;
@@ -322,12 +352,68 @@ void SSSoundscape::updateProbes(F64 now)
     }
     }
 
-    // The wall profile: the world field's precomputed acoustic lattice where
-    // it stands - one read standing in for four live raycasts per cycle,
-    // walking the flood's solid map on the worker instead of the render
-    // pipeline - else the four raycasts. The classification math below is
-    // shared; a stale lattice (edited tile, flood pending) falls back
-    // automatically.
+    // <SS:Nexii> The listener blend from the probe bake where it stands (the doc's
+    // Part 3): the connected probes' blended wall profile, room class and size,
+    // inverse-distance weighted over the listener's own gap plus graph-adjacent
+    // probes - never a raw trilinear tap over the lattice, because the nearest probe
+    // through a wall is exactly the one that must not contribute. This replaces the
+    // classification the cycle used to run its own math for; the lattice read and
+    // the four raycasts below are the fallbacks, in that order.
+    bool probe_answered = false;
+    if ((bool)field_acoustics && SSWorldField::instanceExists())
+    {
+        SSWorldField::ProbeSample samples[4];
+        S32 ns = 0;
+        if (SSWorldField::getInstance()->probesAt(cam, samples, ns) && ns > 0)
+        {
+            F32 wsum = 0.f;
+            F32 wall[4] = { 0.f, 0.f, 0.f, 0.f };
+            F32 space_w[5] = { 0.f, 0.f, 0.f, 0.f, 0.f };
+            F32 size_w[3] = { 0.f, 0.f, 0.f };
+            for (S32 i = 0; i < ns; ++i)
+            {
+                const F32 w = llmax(samples[i].mWeight, 0.f);
+                wsum += w;
+                wall[0] += w * samples[i].mWall[0];
+                wall[1] += w * samples[i].mWall[2];
+                wall[2] += w * samples[i].mWall[4];
+                wall[3] += w * samples[i].mWall[6];
+                space_w[llclamp(samples[i].mSpaceClass, 0, 4)] += w;
+                size_w[llclamp(samples[i].mSizeClass, 0, 2)] += w;
+            }
+            if (wsum > 0.f)
+            {
+                probe_answered = true;
+                const F32 inv = 1.f / wsum;
+                for (S32 i = 0; i < 4; ++i) mSideDist[i] = wall[i] * inv;
+
+                S32 walls = 0;
+                F32 sum = 0.f;
+                for (S32 i = 0; i < 4; ++i)
+                {
+                    if (mSideDist[i] < SIDE_RAY_LENGTH - 0.5f) ++walls;
+                    sum += mSideDist[i];
+                }
+                mWallCount = walls;
+                mWallAvg = sum * 0.25f;
+
+                S32 space = 0;
+                for (S32 i = 1; i < 5; ++i) if (space_w[i] > space_w[space]) space = i;
+                S32 size = 0;
+                for (S32 i = 1; i < 3; ++i) if (size_w[i] > size_w[size]) size = i;
+                mSpace = (ESpace)space;
+                mOutdoorSize = (ESize)size;
+            }
+        }
+    }
+
+    if (!probe_answered)
+    {
+    // The wall profile: the probe bake's nearest probe where the channel stands -
+    // one read standing in for four live raycasts per cycle, walking the flood's
+    // solid map on the worker instead of the render pipeline - else the four
+    // raycasts. The classification math below is shared; a stale bake (edited tile,
+    // flood pending) falls back automatically.
     F32 lattice_walls[4];
     if (field_answered && SSWorldField::getInstance()->acousticAt(cam, lattice_walls))
     {
@@ -374,6 +460,7 @@ void SSSoundscape::updateProbes(F64 now)
     else
     {
         mSpace = SPACE_BIG;
+    }
     }
 }
 
@@ -441,6 +528,33 @@ F32 SSSoundscape::occlusionGain(const LLVector3& source_pos) const
     const F32 dist = to_source.normVec();
     if (dist < 1.f) return 1.f;
 
+    // <SS:Nexii> The real trace where the store answers (the doc's Part 3 replaces
+    // the heuristic): transmission through every solid metre the direct line
+    // crosses - the 2D DDA over the columns, exact against the span store, no scene
+    // raycast - floored by the diffracted path's energy when the probe graph
+    // answers. Sound through a wall or around it, whichever survives better.
+    if (SSWorldField::instanceExists())
+    {
+        SSWorldField* field = SSWorldField::getInstance();
+        F32 solid_m = 0.f;
+        S32 crossings = 0;
+        if (field->traceSolid(mProbeOrigin, source_pos, solid_m, crossings))
+        {
+            F32 gain = exp2f(-solid_m / OCCLUSION_HALF_LOSS_M);
+            SSWorldField::Propagation prop;
+            if (field->propagationQuery(source_pos, mProbeOrigin, prop)
+                && prop.mDirectM > 1.f && prop.mPathM > 1.f)
+            {
+                // Diffracted amplitude scales ~ direct/path; energy squares it.
+                const F32 diffracted = prop.mDirectM / prop.mPathM;
+                gain = llmax(gain, diffracted * diffracted);
+            }
+            return llclamp(gain, 0.02f, 1.f);
+        }
+    }
+
+    // No tile, or the segment left it: the old cover heuristic, unchanged - the
+    // migration rule's "every intermediate state degrades to today's behaviour".
     const F32 wall = wallDistanceToward(to_source);
     if (dist <= wall + 0.5f) return 1.f;
 
@@ -965,36 +1079,88 @@ void SSSoundscape::scheduleThunder(const LLVector3& pos_agent, F32 distance_m,
     if (!sounds || !gAudiop) return;
     muffle = llclamp(muffle, 0.f, 1.f);
 
+    // <SS:Nexii> The ACOUSTIC channel's propagation query turns the storm system's
+    // muffle guess into three outputs (the doc's Part 3): the travel time walks the
+    // graph's PATH metres - around buildings, through alleys, into courtyards -
+    // instead of the euclidean distance, the portal count and the path-vs-direct
+    // ratio become a muffle share of their own, and the arrival direction renders
+    // the sound from the doorway it actually came through. The cloud-burial guess
+    // stays in the mix: intra-cloud lightning is a rumble however close it is.
+    ThunderPath& dbg = mThunderPath;
+    dbg = ThunderPath();
+    dbg.mValid = true;
+    dbg.mSource = pos_agent;
+    dbg.mDirectM = distance_m;
+    dbg.mMuffleCloud = muffle;
+    dbg.mWhen = SSAtmoMagic::getInstance()->sharedTime();
+
+    F32 travel_m = distance_m;
+    F32 field_muffle = 0.f;
+    bool has_arrival = false;
+    LLVector3 arrival_dir(0.f, 0.f, 1.f);
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    if (SSWorldField::instanceExists())
+    {
+        SSWorldField* field = SSWorldField::getInstance();
+        SSWorldField::Propagation prop;
+        if (field->propagationQuery(pos_agent, cam, prop))
+        {
+            dbg.mPropagated = true;
+            dbg.mPathM = prop.mPathM;
+            dbg.mPortals = prop.mPortals;
+            dbg.mMuffleField = prop.mMuffle;
+            dbg.mPath = prop.mPath;
+            travel_m = llmax(prop.mPathM, distance_m);
+            field_muffle = prop.mMuffle;
+            has_arrival = prop.mHaveArrival;
+            arrival_dir = prop.mArrivalDir;
+        }
+
+        F32 solid_m = -1.f;
+        S32 crossings = 0;
+        if (field->traceSolid(pos_agent, cam, solid_m, crossings))
+        {
+            dbg.mSolidM = solid_m;
+            dbg.mCrossings = crossings;
+        }
+    }
+    dbg.mDelayS = (F32)llmax(0.0, (F64)(travel_m - distance_m) / (F64)speed_of_sound_ms());
+
+    const F32 total_muffle = llclamp(1.f - (1.f - muffle) * (1.f - field_muffle), 0.f, 1.f);
+
     SSRandStream rng((U32)(fire_at * 6151.0) ^ (U32)distance_m);
 
-    const F64 travel = (F64)(distance_m / speed_of_sound_ms());
+    const F64 travel = (F64)(travel_m / speed_of_sound_ms());
     const F64 heard_at = fire_at + travel;
 
     const F32 crack_gain = (1.f - llclamp(
         (distance_m - THUNDER_CRACK_M) / (THUNDER_RUMBLE_M - THUNDER_CRACK_M), 0.f, 1.f))
-        * (1.f - muffle);
+        * (1.f - total_muffle);
 
-    const F32 fade = 1.f / (1.f + (distance_m / 3000.f));
+    const F32 fade = 1.f / (1.f + (travel_m / 3000.f));
     const F32 gain = llclamp(intensity * fade * windCarryGain(pos_agent), 0.f, 1.f)
-                   * (1.f - 0.45f * muffle);
+                   * (1.f - 0.45f * total_muffle);
 
     if (crack_gain > 0.02f)
     {
         queueThunder(pick_thunder(false, rng),
-                     pos_agent, distance_m, gain * crack_gain, heard_at, muffle);
+                     pos_agent, distance_m, gain * crack_gain, heard_at, total_muffle,
+                     has_arrival, arrival_dir);
     }
 
     const F64 spread = (F64)(rng.frand(2000.f, 5000.f) * (0.6f + intensity * 0.7f)
-                             / speed_of_sound_ms()) * (F64)(1.f - 0.45f * muffle);
+                             / speed_of_sound_ms()) * (F64)(1.f - 0.45f * total_muffle);
 
     queueThunder(pick_thunder(true, rng),
                  pos_agent, distance_m, gain * (0.5f + 0.5f * (1.f - crack_gain)),
-                 heard_at + spread * (F64)(1.f - crack_gain), muffle);
+                 heard_at + spread * (F64)(1.f - crack_gain), total_muffle,
+                 has_arrival, arrival_dir);
 }
 
 // Queues one thunder playback at an absolute time.
 void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
-                                F32 distance_m, F32 gain, F64 heard_at, F32 muffle)
+                                F32 distance_m, F32 gain, F64 heard_at, F32 muffle,
+                                bool has_arrival, const LLVector3& arrival_dir)
 {
     if (sound.isNull() || gain <= 0.f) return;
 
@@ -1008,6 +1174,8 @@ void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
     pending.mGain = gain;
     pending.mHeardAt = heard_at;
     pending.mPlayAt = heard_at;
+    pending.mHasArrival = has_arrival;
+    pending.mArrivalDir = arrival_dir;
 
     mThunder.push_back(pending);
 }
@@ -1058,9 +1226,20 @@ void SSSoundscape::updateThunder(F64 now)
 
         {
             const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-            LLVector3 dir = p.mPos - cam;
-            const F32 d = dir.normalize();
-            const LLVector3 near_pos = cam + dir * llmin(d, 12.f);
+            // <SS:Nexii> The propagation solve's arrival direction wins when it has
+            // one: sound entering through a doorway is rendered FROM the doorway.
+            LLVector3 dir;
+            if (p.mHasArrival)
+            {
+                dir = p.mArrivalDir;
+                dir.normVec();
+            }
+            else
+            {
+                dir = p.mPos - cam;
+                dir.normVec();
+            }
+            const LLVector3 near_pos = cam + dir * 12.f;
 
             const F32 occ = llclamp(skyOcclusion() + p.mMuffle * 0.55f, 0.f, 1.f);
             registerFollower(ss_play_oneshot(p.mSound, gAgent.getPosGlobalFromAgent(near_pos), gain, occ),

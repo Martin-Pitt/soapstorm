@@ -738,6 +738,57 @@ SSAtmoInfoView::LightningData SSAtmoInfoView::lightningData()
     return d;
 }
 
+// <SS:Nexii> V10's data: the world field's baked acoustic channel, read straight off
+// the camera region's tile through SSWorldField::acousticDebug (probes and links in
+// range, the listener's blend set), plus the soundscape's last thunder with its
+// propagation figures - the pair the debug lines draw (direct vs propagated path).
+// Read-only over state the systems already hold; mValid mirrors the bake's own
+// serial gate, so a stale channel reads "stale" rather than drawing yesterday's room.
+SSAtmoInfoView::AcousticsData SSAtmoInfoView::acousticsData()
+{
+    AcousticsData d;
+    static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldFieldAcoustics", true);
+    static LLCachedControl<U32> quality(gSavedSettings, "SSWorldFieldAcousticsQuality", 0);
+    d.mEnabled = (bool)enabled;
+    d.mQuality = (U32)quality;
+    if (!d.mEnabled) return d;
+    if (!SSWorldField::instanceExists() || !SSAtmoMagic::instanceExists()) return d;
+    if (!SSAtmoMagic::getInstance()->hasWeather()) return d;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(
+        LLViewerCamera::getInstance()->getOrigin());
+    if (!regionp) return d;
+
+    // The debug range: where the probe lattice stops being readable, and past the
+    // lattice's own ~8 m spacing by a wide factor so context survives the cull.
+    static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
+    const F32 range = llclamp((F32)range_setting, 16.f, 4096.f);
+
+    if (!SSWorldField::getInstance()->acousticDebug(regionp->getHandle(),
+                                                    LLViewerCamera::getInstance()->getOrigin(),
+                                                    range * 2.f, d.mField))
+    {
+        return d;
+    }
+
+    d.mValid = true;
+    d.mProbeCount = d.mField.mProbeCount;
+    d.mBundleCount = d.mField.mBundleCount;
+    d.mLinkCount = d.mField.mLinkCount;
+    d.mPortalCount = d.mField.mPortalCount;
+    d.mLatCell = d.mField.mLatCell;
+
+    if (SSSoundscape::instanceExists())
+    {
+        d.mThunder = SSSoundscape::getInstance()->lastThunderPath();
+        if (d.mThunder.mValid)
+        {
+            d.mThunderAge = SSAtmoMagic::getInstance()->sharedTime() - d.mThunder.mWhen;
+        }
+    }
+    return d;
+}
+
 // ---------------------------------------------------------------------------
 // The in-world layer: V1's wind mast
 // ---------------------------------------------------------------------------
@@ -926,6 +977,7 @@ void SSAtmoInfoView::renderWorld()
         case MODE_STORM_CELLS:  renderStormCells(); break;
         case MODE_DECK_LOD:     renderDeckLod(); break;
         case MODE_PRECIP_VIRGA: renderVirga(); break;
+        case MODE_ACOUSTICS:    renderAcoustics(); break;
         default: break;
     }
 }
@@ -2141,6 +2193,192 @@ void SSAtmoInfoView::renderVirga()
 }
 
 // ---------------------------------------------------------------------------
+// The in-world layer: V10's acoustics
+// ---------------------------------------------------------------------------
+
+// <SS:Nexii> The V10 layer (doc/atmo_magic_acoustics.md, the debug ask - the storm
+// cells' info-view treatment applied to the acoustic channel): the baked probe set
+// drawn as the geometry the store holds, the propagation graph between probes, the
+// listener's own blend, and the last thunder's occlusion story - the DIRECT line the
+// straight-line distance assumes (green where the span store says it is clear, red
+// where it crosses solid) against the PROPAGATED path the graph actually routes
+// (around buildings, through alleys, into courtyards), with the portal hops marked
+// and the delay/muffle figures labelled at the source. Probe markers take the world
+// field overlay's own air-state colours (outdoors green, sheltered amber, interior
+// red) sized by the baked room volume, so the two readouts agree. Read-only over the
+// bake - this never asks the field to build, flood or re-solve anything; with no
+// current bake it draws nothing and the legend says why. The warm-gray LOOK pass
+// behind it is the shared info-view dim (SSAtmoInfoViewLook), same as every mode.
+void SSAtmoInfoView::renderAcoustics()
+{
+    const AcousticsData d = acousticsData();
+    if (!d.mValid) return;
+
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    if (!camera) return;
+
+    const LLVector3 cam = camera->getOrigin();
+
+    const SSWorldField::AcousticDebug& fd = d.mField;
+
+    LLGLEnable blend(GL_BLEND);
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE); // on top like a Skylines layer, never occluded
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    const LLColor4 LINK_AIR   (0.55f, 0.60f, 0.70f, 0.16f);
+    const LLColor4 LINK_PORTAL(1.00f, 0.85f, 0.30f, 0.65f);
+    const LLColor4 BLEND_LINE (0.40f, 0.70f, 1.00f, 0.80f);
+    const LLColor4 PATH_CLEAR (0.35f, 1.00f, 0.45f, 0.55f);
+    const LLColor4 PATH_OCCL  (1.00f, 0.25f, 0.20f, 0.60f);
+    const LLColor4 PROP_PATH  (0.20f, 0.95f, 1.00f, 0.90f);
+    const LLColor4 PORTAL_HOP (1.00f, 0.85f, 0.30f, 0.95f);
+
+    auto probe_label_color = [&](const SSWorldField::AcousticDebug::Probe& p)
+    {
+        return toColor(airLabelColor((S32)p.mLabel), 0.9f);
+    };
+
+    gGL.begin(LLRender::LINES);
+
+    // The graph: every link between the drawn probes. Portal edges bright - they are
+    // the edges thunder and the muffle question care about.
+    for (const SSWorldField::AcousticDebug::Link& l : fd.mLinks)
+    {
+        if (l.mA < 0 || l.mB >= (S32)fd.mProbes.size()) continue;
+        gGL.color4fv((l.mPortal ? LINK_PORTAL : LINK_AIR).mV);
+        gGL.vertex3fv(fd.mProbes[(size_t)l.mA].mPos.mV);
+        gGL.vertex3fv(fd.mProbes[(size_t)l.mB].mPos.mV);
+    }
+
+    // The probes: a cross at ear height coloured by air state, sized by the baked
+    // room volume, plus a faint stem spanning the probe's own gap so a stacked
+    // storey reads as a stack.
+    for (const SSWorldField::AcousticDebug::Probe& p : fd.mProbes)
+    {
+        const F32 s = probeMarkerM(p.mVolume);
+        const LLColor4 c = probe_label_color(p);
+
+        gGL.color4fv(c.mV);
+        gGL.vertex3f(p.mPos.mV[VX] - s, p.mPos.mV[VY], p.mPos.mV[VZ]);
+        gGL.vertex3f(p.mPos.mV[VX] + s, p.mPos.mV[VY], p.mPos.mV[VZ]);
+        gGL.vertex3f(p.mPos.mV[VX], p.mPos.mV[VY] - s, p.mPos.mV[VZ]);
+        gGL.vertex3f(p.mPos.mV[VX], p.mPos.mV[VY] + s, p.mPos.mV[VZ]);
+
+        gGL.color4f(c.mV[0], c.mV[1], c.mV[2], 0.20f);
+        gGL.vertex3f(p.mPos.mV[VX], p.mPos.mV[VY], p.mGapBottom);
+        gGL.vertex3f(p.mPos.mV[VX], p.mPos.mV[VY], p.mGapTop);
+
+        // A tier B bundle's probe gets a halo ring's worth of extra spokes: analysed
+        // reverb exists for this one, not just the Sabine estimate.
+        if (p.mHaveBundle)
+        {
+            const F32 d1 = s * 1.6f;
+            gGL.color4f(c.mV[0], c.mV[1], c.mV[2], 0.45f);
+            gGL.vertex3f(p.mPos.mV[VX] - d1, p.mPos.mV[VY], p.mPos.mV[VZ]);
+            gGL.vertex3f(p.mPos.mV[VX] + d1, p.mPos.mV[VY], p.mPos.mV[VZ]);
+            gGL.vertex3f(p.mPos.mV[VX], p.mPos.mV[VY] - d1, p.mPos.mV[VZ]);
+            gGL.vertex3f(p.mPos.mV[VX], p.mPos.mV[VY] + d1, p.mPos.mV[VZ]);
+        }
+    }
+
+    // The listener's blend: the connected probes it is actually interpolating
+    // between, line alpha by weight - the visual answer to "what is the room verdict
+    // standing on".
+    for (S32 idx : fd.mListenerProbes)
+    {
+        if (idx < 0 || idx >= (S32)fd.mProbes.size()) continue;
+        const SSWorldField::AcousticDebug::Probe& p = fd.mProbes[(size_t)idx];
+        const F32 dist = dist_vec(p.mPos, cam);
+        const F32 a = llclamp(BLEND_LINE.mV[3] * 8.f / llmax(dist, 1.f), 0.15f, BLEND_LINE.mV[3]);
+        gGL.color4f(BLEND_LINE.mV[0], BLEND_LINE.mV[1], BLEND_LINE.mV[2], a);
+        gGL.vertex3fv(cam.mV);
+        gGL.vertex3fv(p.mPos.mV);
+    }
+
+    // The last thunder's occlusion story: the direct line the euclidean delay
+    // assumes - green when the span store says the line is clear, red where it
+    // crosses solid - against the propagated path the graph actually routes, with
+    // each portal hop crossed.
+    if (d.mThunder.mValid && d.mThunderAge <= 30.0)
+    {
+        const bool occluded = d.mThunder.mCrossings > 0;
+        gGL.color4fv((occluded ? PATH_OCCL : PATH_CLEAR).mV);
+        gGL.vertex3fv(cam.mV);
+        gGL.vertex3fv(d.mThunder.mSource.mV);
+
+        if (d.mThunder.mPropagated && d.mThunder.mPath.size() >= 2)
+        {
+            gGL.color4fv(PROP_PATH.mV);
+            for (size_t i = 1; i < d.mThunder.mPath.size(); ++i)
+            {
+                gGL.vertex3fv(d.mThunder.mPath[i - 1].mV);
+                gGL.vertex3fv(d.mThunder.mPath[i].mV);
+            }
+        }
+    }
+
+    gGL.end();
+
+    // Portal hops along the propagated path, as crosses over the lines.
+    if (d.mThunder.mValid && d.mThunder.mPropagated && d.mThunder.mPath.size() >= 2)
+    {
+        // The path is stride-sampled, so the hops are approximated by direction
+        // changes between consecutive samples: a portal sits wherever the path's
+        // heading breaks. Mark those, dimly, rather than pretending to the exact
+        // node the stride skipped.
+        gGL.begin(LLRender::LINES);
+        for (size_t i = 1; i + 1 < d.mThunder.mPath.size(); ++i)
+        {
+            const LLVector3 in = d.mThunder.mPath[i] - d.mThunder.mPath[i - 1];
+            const LLVector3 out = d.mThunder.mPath[i + 1] - d.mThunder.mPath[i];
+            if (in.magVecSquared() < 1.0e-4f || out.magVecSquared() < 1.0e-4f) continue;
+            const F32 dot = in * out / (in.magVec() * out.magVec());
+            if (dot > 0.999f) continue;   // straight through: no hop marked
+
+            const F32 s = 1.5f;
+            gGL.color4fv(PORTAL_HOP.mV);
+            gGL.vertex3f(d.mThunder.mPath[i].mV[VX] - s, d.mThunder.mPath[i].mV[VY], d.mThunder.mPath[i].mV[VZ]);
+            gGL.vertex3f(d.mThunder.mPath[i].mV[VX] + s, d.mThunder.mPath[i].mV[VY], d.mThunder.mPath[i].mV[VZ]);
+            gGL.vertex3f(d.mThunder.mPath[i].mV[VX], d.mThunder.mPath[i].mV[VY] - s, d.mThunder.mPath[i].mV[VZ]);
+            gGL.vertex3f(d.mThunder.mPath[i].mV[VX], d.mThunder.mPath[i].mV[VY] + s, d.mThunder.mPath[i].mV[VZ]);
+        }
+        gGL.end();
+    }
+
+    // Labels: the listener's blended RT60 verdict where the camera stands, and the
+    // last thunder's figures at its source.
+    const LLFontGL* font = LLFontGL::getFontSansSerifSmall();
+    if (font)
+    {
+        if (d.mThunder.mValid && d.mThunderAge <= 30.0)
+        {
+            std::string label;
+            if (d.mThunder.mPropagated)
+            {
+                label = llformat("path %.0f m (+%.2f s)  direct %.0f m  portals %d  muffle %.2f",
+                                 d.mThunder.mPathM, d.mThunder.mDelayS, d.mThunder.mDirectM,
+                                 d.mThunder.mPortals,
+                                 llclamp(1.f - (1.f - d.mThunder.mMuffleCloud) * (1.f - d.mThunder.mMuffleField), 0.f, 1.f));
+            }
+            else
+            {
+                label = llformat("direct %.0f m  no propagation (no bake or no path)", d.mThunder.mDirectM);
+            }
+            hud_render_utf8text(label, d.mThunder.mSource, *font, LLFontGL::NORMAL,
+                                LLFontGL::DROP_SHADOW, 6.f, 4.f, PROP_PATH, false);
+        }
+
+        // The tile's own summary, a little above the camera.
+        const std::string summary = llformat("%d probes  %d links  %d portals%s",
+                                             d.mProbeCount, d.mLinkCount, d.mPortalCount,
+                                             d.mQuality >= 1 ? llformat("  tier B %d/%d", d.mBundleCount, d.mProbeCount).c_str() : "");
+        hud_render_utf8text(summary, cam + LLVector3(0.f, 0.f, 6.f), *font, LLFontGL::NORMAL,
+                            LLFontGL::DROP_SHADOW, 6.f, 4.f, TEXT_NORMAL, false);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The in-world layer: V9's lightning
 // ---------------------------------------------------------------------------
 
@@ -2712,6 +2950,73 @@ void SSAtmoLegendView::buildLightningSpec(Spec& spec)
     }
 }
 
+void SSAtmoLegendView::buildAcousticsSpec(Spec& spec)
+{
+    const SSAtmoInfoView::AcousticsData d = SSAtmoInfoView::acousticsData();
+    spec.mTitle = modeLabel(MODE_ACOUSTICS);
+
+    if (!d.mEnabled)
+    {
+        spec.mSubtitle = "acoustics off (SSWorldFieldAcoustics)";
+        spec.mKeys.push_back({ LLColor4(1.f, 0.3f, 0.3f, 1.f),
+                               "why not: the acoustic bake switch is off", false });
+        return;
+    }
+    if (!d.mValid)
+    {
+        spec.mSubtitle = "no current probe bake";
+        spec.mKeys.push_back({ LLColor4(1.f, 0.3f, 0.3f, 1.f),
+                               "why not: no world field tile yet, edited (flood pending), or no weather", false });
+        spec.mKeys.push_back({ TEXT_DIM,
+                               "the bake rides the air flood; hold still and it lands", false });
+        return;
+    }
+
+    spec.mSubtitle = llformat("%d probes @%.0f m  %d links  %d portals%s",
+                              d.mProbeCount, d.mLatCell, d.mLinkCount, d.mPortalCount,
+                              d.mQuality >= 1 ? llformat("  tier B %d/%d", d.mBundleCount, d.mProbeCount).c_str() : "");
+
+    // The ramp: baked RT60 on the energy ramp's 0..3 s band - the same ramp a
+    // marker's colour would take if this view coloured by decay, kept for the
+    // "how dry is the average probe here" reading.
+    spec.mRampLabel = "baked RT60 (Sabine, tier A; decay curve, tier B)";
+    spec.mRamp = rampEnergy;
+    spec.mRampMin = "0 s";
+    spec.mRampMax = "3 s";
+
+    // Probe key: one row per air state the bake stores, counting the drawn set.
+    S32 per_label[5] = { 0, 0, 0, 0, 0 };
+    for (const SSWorldField::AcousticDebug::Probe& p : d.mField.mProbes)
+    {
+        per_label[llclamp((S32)p.mLabel, 0, 4)] += 1;
+    }
+    static const S32 label_order[4] = { 1, 2, 3, 4 };
+    static const char* label_names[5] = { "solid", "outdoors", "sheltered", "interior", "unknown" };
+    for (const S32 l : label_order)
+    {
+        if (per_label[l] == 0) continue;
+        spec.mKeys.push_back({ toColor(airLabelColor(l), 1.f),
+                               llformat("%s probe  x%d", label_names[l], per_label[l]), false });
+    }
+
+    spec.mKeys.push_back({ LLColor4(0.55f, 0.60f, 0.70f, 0.6f), "graph link (validated by a span-store ray)", true });
+    spec.mKeys.push_back({ LLColor4(1.00f, 0.85f, 0.30f, 0.9f), "portal link: crosses the outdoors boundary", true });
+    spec.mKeys.push_back({ LLColor4(0.40f, 0.70f, 1.00f, 0.9f), "listener blend: the probes being interpolated, alpha by weight", true });
+    spec.mKeys.push_back({ LLColor4(0.35f, 1.00f, 0.45f, 0.8f), "last thunder: direct line, clear through the span store", true });
+    spec.mKeys.push_back({ LLColor4(1.00f, 0.25f, 0.20f, 0.9f), "last thunder: direct line crosses solid (occluded)", true });
+    spec.mKeys.push_back({ LLColor4(0.20f, 0.95f, 1.00f, 0.95f), "propagated path: the graph's route, delay from its metres", true });
+    spec.mKeys.push_back({ TEXT_DIM, "tier B spokes: probes carrying the stochastic bundle", true });
+
+    if (!d.mThunder.mValid)
+    {
+        spec.mKeys.push_back({ TEXT_DIM, "no thunder scheduled yet - the path lines draw after the first strike", false });
+    }
+    else if (d.mThunderAge > 30.0)
+    {
+        spec.mKeys.push_back({ TEXT_DIM, llformat("last thunder %.0f s ago (drawn 30 s)", d.mThunderAge), false });
+    }
+}
+
 void SSAtmoLegendView::draw()
 {
     const U32 mode = SSAtmoInfoView::mode();
@@ -2726,6 +3031,7 @@ void SSAtmoLegendView::draw()
         case MODE_PRECIP_VIRGA: buildVirgaSpec(spec); break;
         case MODE_WEATHER_CUBE: buildWeatherCubeSpec(spec); break;
         case MODE_LIGHTNING:    buildLightningSpec(spec); break;
+        case MODE_ACOUSTICS:    buildAcousticsSpec(spec); break;
         default:
             // <SS:Nexii> The reserved numbers (V6 World Field, V8 Anatomy) and anything past the table land here.
             // modeLabel names them rather than printing a bare integer, so a picker entry added before its spec

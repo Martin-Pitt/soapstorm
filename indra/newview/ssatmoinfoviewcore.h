@@ -43,7 +43,8 @@ namespace SSAtmoInfoViewCore
     constexpr U32 MODE_RESERVED_CONSOLE  = 7;   // NEVER A MODE: catalogue V7 is the sync console, a stackable console beside the info views
     constexpr U32 MODE_ANATOMY           = 8;   // RESERVED, not built: storm anatomy (phase 8b) - moved here from its clashing V6 claim
     constexpr U32 MODE_LIGHTNING         = 9;
-    constexpr U32 MODE_COUNT             = 10;
+    constexpr U32 MODE_ACOUSTICS         = 10;
+    constexpr U32 MODE_COUNT             = 11;
 
     // The catalogue name of a mode, as the legend title and the picker's own combo row print it. Invariants: every constant above (0 .. MODE_COUNT-1) maps to its own distinct, non-empty string; the three unbuilt numbers carry their status in the string itself; any value at or above MODE_COUNT reads "?".
     inline const char* modeLabel(U32 mode)
@@ -60,6 +61,7 @@ namespace SSAtmoInfoViewCore
             case MODE_RESERVED_CONSOLE: return "V7  SYNC CONSOLE (not an info view)";
             case MODE_ANATOMY:          return "V8  ANATOMY (reserved, not built)";
             case MODE_LIGHTNING:        return "V9  LIGHTNING";
+            case MODE_ACOUSTICS:        return "V10 ACOUSTICS";
         }
         return "?";
     }
@@ -72,6 +74,58 @@ namespace SSAtmoInfoViewCore
             return false;
         }
         return mode != MODE_WORLD_FIELD && mode != MODE_RESERVED_CONSOLE && mode != MODE_ANATOMY;
+    }
+
+    // <SS:Nexii> V10 Acoustics helpers (doc/atmo_magic_acoustics.md, the V10 debug
+    // ask). Plain S32 constants mirroring SSWorldField::EAirLabel's values one for
+    // one, the same idiom the VORTEX_KIND_* mirrors use - the shell casts at the
+    // read site and this core keeps its no-llmath rule. The probe label colours
+    // reuse the world field overlay's own air-state language (outdoors green,
+    // sheltered amber, interior red) so the two readouts agree.
+    constexpr S32 AIR_LABEL_SOLID    = 0;
+    constexpr S32 AIR_LABEL_OUTDOORS = 1;
+    constexpr S32 AIR_LABEL_SHELTERED = 2;
+    constexpr S32 AIR_LABEL_INTERIOR = 3;
+    constexpr S32 AIR_LABEL_UNKNOWN  = 4;
+
+    inline RGB airLabelColor(S32 label)
+    {
+        switch (label)
+        {
+            case AIR_LABEL_OUTDOORS:  return { 0.30f, 1.00f, 0.40f };
+            case AIR_LABEL_SHELTERED: return { 1.00f, 0.80f, 0.20f };
+            case AIR_LABEL_INTERIOR:  return { 1.00f, 0.25f, 0.25f };
+            default:                  return { 0.55f, 0.60f, 0.70f };
+        }
+    }
+
+    inline const char* airLabelName(S32 label)
+    {
+        switch (label)
+        {
+            case AIR_LABEL_OUTDOORS:  return "outdoors";
+            case AIR_LABEL_SHELTERED: return "sheltered";
+            case AIR_LABEL_INTERIOR:  return "interior";
+            default:                  return "?";
+        }
+    }
+
+    // Probe marker half-size from the baked room volume: sqrt of the volume, clamped
+    // to a readable band in metres, so a closet's probe stays small and a hall's
+    // reads big without dominating. Invariants: in [0.35, 2.5]; monotone
+    // non-decreasing in volume; non-positive volume gives the floor.
+    inline F32 probeMarkerM(F32 volume)
+    {
+        const F32 v = (volume > 0.f) ? volume : 0.f;
+        return llclamp(sqrtf(v) * 0.03f, 0.35f, 2.5f);
+    }
+
+    // RT60 colour: the energy ramp (orange -> red) over a 0..3 s band, so a dry
+    // studio reads amber and a cathedral reads red. Invariants: monotone in rt60
+    // over the band; clamps at both ends; channels in [0,1].
+    inline RGB rt60Color(F32 rt60)
+    {
+        return energyRamp(rt60, 3.f);
     }
 
     // A metre-space 2D vector for the display geometry below - not SSVirga::Vec2 or SSStormCell::Vec2 (neither

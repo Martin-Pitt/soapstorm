@@ -71,6 +71,7 @@
              legend's "not implemented yet" branch, so they stay out of the
              picker until their views exist. -->
         <combo_box.item label="Lightning (V9)" value="9" name="info_view_lightning" />
+        <combo_box.item label="Acoustics (V10)" value="10" name="info_view_acoustics" />
     </combo_box>
 
     <check_box

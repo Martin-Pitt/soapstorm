@@ -1168,6 +1168,7 @@ set(viewer_HEADER_FILES
     ssdaycyclecore.h
     ssatmonoisecore.h
     ssairlightcore.h
+    ssacousticcore.h
     ssinfolookcore.h
     ssstormcellcore.h
     ssstormcouplecore.h

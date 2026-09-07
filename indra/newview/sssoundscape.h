@@ -82,6 +82,30 @@ public:
     void scheduleThunder(const LLVector3& pos_agent, F32 distance_m, F32 intensity,
                          F64 fire_at, F32 muffle = 0.f);
 
+    // <SS:Nexii> What the ACOUSTIC channel made of the last scheduled thunder, kept
+    // for the V10 info view: the propagation figures the field answered with (path
+    // metres vs direct, portals, the field's own muffle share), the cloud-burial
+    // guess the caller handed in, and the graph path itself for the debug lines.
+    // Read-only over state scheduleThunder already computed - the view never
+    // re-solves anything. [interaction: SSWorldField::propagationQuery]
+    struct ThunderPath
+    {
+        bool mValid = false;        // a strike has been scheduled since the last reset
+        bool mPropagated = false;   // the field answered (false: straight-line guess)
+        LLVector3 mSource;
+        F32 mDirectM = 0.f;
+        F32 mPathM = 0.f;
+        F32 mDelayS = 0.f;          // extra travel seconds the indirect path costs
+        S32 mPortals = 0;
+        F32 mMuffleCloud = 0.f;
+        F32 mMuffleField = 0.f;
+        F32 mSolidM = -1.f;         // the direct trace's in-solid metres (-1: no verdict)
+        S32 mCrossings = 0;
+        std::vector<LLVector3> mPath;
+        F64 mWhen = 0.0;            // when it was scheduled (SSAtmoMagic::sharedTime)
+    };
+    const ThunderPath& lastThunderPath() const { return mThunderPath; }
+
     void playCharge(const LLVector3& pos_agent, F32 intensity);
 
     F32 windCarryGain(const LLVector3& source_pos_agent) const;
@@ -152,11 +176,18 @@ private:
         F32 mMuffle = 0.f;
         LLUUID mSound;
         bool mAligned = false;
+        // <SS:Nexii> The propagation solve's arrival direction: sound entering
+        // through a doorway is rendered FROM the doorway, not from the strike's
+        // straight-line bearing. Invalid on the fallback path.
+        bool mHasArrival = false;
+        LLVector3 mArrivalDir;
     };
     std::vector<PendingThunder> mThunder;
+    ThunderPath mThunderPath;
 
     void queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
-                      F32 distance_m, F32 gain, F64 heard_at, F32 muffle);
+                      F32 distance_m, F32 gain, F64 heard_at, F32 muffle,
+                      bool has_arrival, const LLVector3& arrival_dir);
 
     struct AvatarCover
     {
@@ -273,6 +304,13 @@ private:
     // <SS:Nexii> The COVERAGE stake in the shared world field, held for the camera's region while SSWorldFieldCoverage routes the cover and burial questions through the field's band stack instead of the up-raycasts. Holding the handle is what makes the field build tiles here at all.
     SSWorldField::Interest mCoverageClaim;
     U64 mCoverageRegion = 0;
+
+    // <SS:Nexii> The ACOUSTIC stake: the channel that bakes the gap-anchored probes,
+    // the graph and (opt-in) the stochastic bundles. Held for the camera's region
+    // while SSWorldFieldAcoustics routes the wall profile, the classification and the
+    // per-source propagation through the probe bake instead of the raycasts.
+    SSWorldField::Interest mAcousticClaim;
+    U64 mAcousticRegion = 0;
 
     LLVector3 mProbeAnchor;
     F64 mLastCycleDone = -1000.0;
