@@ -13,6 +13,23 @@ emergent-repose granular v2, a per-object identity/record layer, and a near-came
 droplet detail layer — while the three proven screen-space passes remain the weather
 application site throughout v2.
 
+**Rebaseline (2026-09-07, post-merge).** Three merges landed after this plan was
+written and they move its ground:
+
+- **Roof runoff** (`f5d5e4460b`) materialised the DRAINAGE_NETWORK far beyond what P2
+  planned: per-cell catchment (m²) routed down D8 with an eave rule (drop steeper than
+  a roof pitch, ≥ 0.75 m, terminates flow into the air), connected lip **Runs** with
+  summed catchment and stable keys, per-run reservoirs, catchment-weighted curtain
+  streams and drips (`SSSurfaceField::Runoff`, `shedRegion`). **P2 is absorbed** (§3);
+  **P4 is re-scoped** to its true remainder — the wall face film.
+- **Avatar stamping fix** (`688130561b`) committed the interim capsule gate into
+  `ssSurfaceNormalF` — that gate is now the parity baseline P6 must beat, not a
+  working-tree patch.
+- **World-field capture** gained adaptive quadrant refinement and Z bisection with
+  capture worklists — structure is finer than the plan's flat-band assumption, which
+  P4's wall ledger may key off (per-band lip/lip Z at refined precision) instead of
+  raw bands.
+
 ## 1. Constitution (fixed by the competition, non-negotiable)
 
 1. **CPU is the only truth, fixed-step.** No GPU-resident authoritative state. This is
@@ -101,21 +118,21 @@ visuals by design; it builds the scheduling spine everything else runs on.
 - **Budget:** >10× tick cost cut at steady rain (target on `FTM_SS_SURFACE_TICK`);
   predictor cost is O(1) per stale cell.
 
-### P2 — Flow core, static tier (D7, half of it is free)
+### P2 — Flow core, static tier (ABSORBED by the runoff merge, 2026-09-07)
 
-The steady state of shallow water on this world is already computed: `buildDrainage`'s
-Barnes priority flood (spill elevations, pool membership) and D8 routing
-(`ssworldfield.h:191-199`). Claiming it renders region-wide puddles at their true
-spill levels and visible drainage networks with **no sim at all**.
+The runoff work built past this phase's goal: `SSWorldField::buildDrainage` now fills
+depressions, routes D8 with an eave rule, accumulates catchment, and
+`SSSurfaceField::Runoff` materialises it over a finer grid with connected lip runs,
+per-run reservoirs and catchment-weighted shedding. Nothing needs claiming or solving.
 
-- Claim `SSWorldField::EChannel::DRAINAGE_NETWORK` per region; materialise spill/pool/
-  D8 per geometry serial into the flow window (spare channels).
-- Pass changes: `h = max(0, spill − z)` on pool cells feeds the puddle path; D8
-  directions replace the slope-derived scroll direction in the sheet term
-  (`ssSurfaceNormalF.glsl` item 3).
-- **Gate:** `SSAtmoFlowSim = 1` (static only).
-- **Budget:** a one-time synchronous solve per geometry serial — the machinery already
-  exists and runs today.
+**Residue (verify, don't build):**
+- Confirm the puddle path settles on drainage pool membership (spill-level standing
+  water) across the whole window, not only near the camera — the `mPool` channel was
+  written to retire the local-dips check.
+- Confirm the sheet term's scroll direction reads the drainage-corrected flow
+  directions rather than raw cell slope, so water visibly runs toward the outlet.
+- File-level: the debug view for the network exists (`sssurfacefield.cpp` ~3036);
+  wire the two confirmations into the P2 acceptance scene (roof, yard, gutter line).
 
 ### P3 — Flow core, dynamic tier (virtual pipes)
 
@@ -145,24 +162,38 @@ spill levels and visible drainage networks with **no sim at all**.
 - **Tests:** pipe-step twinned in the unit harness; determinism replay; wall-run mass
   conservation vs ground credit (P4).
 
-### P4 — Flow core, wall film (verticals)
+### P4 — Flow core, wall face film (verticals) — re-scoped post-merge
 
-The heightfield honestly dies past ~70°; a separate 1D model takes over, and it makes
-the drip lattice state-driven for the first time.
+The runoff merge took the eave half of this phase: lip runs, per-run reservoirs,
+curtain streams and catchment-weighted drips with landing resolves exist
+(`shedRegion`). What remains is the **wall face itself** — the clinging film that rain
+drives onto vertical faces and that curtain streams and eave drips land on, which the
+heightfield cannot represent and nothing yet simulates.
 
+- **Interface (new, small):** `shedRegion`'s landing resolve already classifies each
+  stream/drip landing (`land`, `on_water`); add a wall-hit branch — a landing whose
+  first surface is a steep face feeds the wall ledger at that entry instead of only
+  splashing. Curtain stream drive and drip pick stay catchment-weighted; they simply
+  gain a downstream sink.
 - **Wall ledger:** sparse per-region map keyed `(azimuth 0..15, v-band 0.25 m,
   along 0.25 m)` — the 16-azimuth quantisation *is* `SSSurfaceDrop::DRIP_AZIMUTHS`
-  (`sssurfacedropcore.h:263`), so sim and shader share one bit-stable frame.
-- **Film model:** per entry `h_wall` decays by Nusselt laminar drainage
-  `q = ρg·h³/3μ`, wind diffuses along-u, porosity absorbs. Below breakup thickness
-  `h_crit ≈ 0.15 mm·(1 − roughness)` the contact line fails: the entry converts its
-  depth into hashed run seeds in the existing 0.06 × 0.30 m drip cells, each carrying
-  mass down at accelerating speed and leaving a trail; runs landing at the wall base
-  credit the macro field's `h` (replacing the painted shed cascades).
-- **Render:** the drip cap/trail code (item 2) keeps its shape but the drip's phase
-  comes from the sim's accumulated run distance instead of `ssTime` — state-driven
-  drips; the Heartfelt stutter becomes a property of the run, not a wall clock.
-- **Gate:** `SSAtmoFlowSim = 3` (or a separate `SSAtmoWallFilm`).
+  (`sssurfacedropcore.h`), so sim and shader share one bit-stable frame. Optionally
+  key lip heights off the world field's refined spans (quadrant refinement / Z
+  bisection) instead of raw 4 m bands.
+- **Film model:** per entry `h_wall` — driven up by the wall-hit branch above plus
+  wind-driven rain deposition on the face; decays by Nusselt laminar drainage
+  `q = ρg·h³/3μ` down-v, wind diffuses along-u, porosity absorbs. Below breakup
+  thickness `h_crit ≈ 0.15 mm·(1 − roughness)` the contact line fails: the entry
+  converts its depth into run seeds in the existing 0.06 × 0.30 m drip cells, each
+  carrying mass down at accelerating speed and leaving a trail; runouts at the wall
+  base credit the macro field's `h` — closing the loop with the ground ledger.
+- **Render:** the drip cap/trail code (item 2) keeps its shape but the wall drip's
+  phase comes from the sim's accumulated run distance instead of `ssTime` — the shed
+  side's drips are already state-driven (reservoir-fed, catchment-weighted); this
+  makes the *face runlets* state-driven too. The Heartfelt stutter becomes a property
+  of the run, not a wall clock.
+- **Gate:** `SSAtmoWallFilm` (separate from `SSAtmoFlowSim`, which is now the ground
+  sim's gate).
 - **Honest scope:** 0.25 m cells cannot resolve centimetre rivulet fingers — streak
   breakup remains a state-modulated lattice; the sim drives its amplitude and phase.
 
