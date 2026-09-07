@@ -127,6 +127,33 @@ float ssWorldNoise(vec2 p, float pitchM);
 float ssDepositMask(float coverage, float up, vec3 p);
 float ssFieldWindCarry(vec2 xy_agent);
 
+// <SS:Nexii> Avatars. The field cannot refuse a body standing in a column: ssFieldAt's height rejection sits at stored + 1.5 cells - 3 m at the window's 2 m cell, however fine the capture texel is - which no body reaches, so a fragment on a person inherits the pavement's wetness and this pass stamped its drop/drip lattices on them (observed: the whole avatar domed over). The capsules are the only "is this a person" answer a screen-space pass has - same stand-in ssSurfaceWetF.glsl's ssAvatarWet uses (ssavatarwet.h), containment only, because nothing this pass draws on a body is a blend: every term is the ground's weather painted on someone, so a body early-returns. The on-surface carve keeps the floor's own drops between a person's feet - the wet pass's dry-island lesson.
+#define SS_AVATAR_MAX 8
+uniform int ssAvatarCount;
+uniform vec4 ssAvatarPos[SS_AVATAR_MAX];    // xyz foot position, w radius
+uniform vec4 ssAvatarShape[SS_AVATAR_MAX];  // x height, y soak (unused here; LOCKSTEP with the wet pass's layout)
+
+// How far above the stored surface a fragment stops being the floor and starts being something in the column. Same figure as the wet pass's SS_AVATAR_LIFT.
+const float SS_BODY_LIFT = 0.15;
+
+float ssAvatarContain(vec3 p_agent)
+{
+    float inside = 0.0;
+    for (int i = 0; i < SS_AVATAR_MAX; ++i)
+    {
+        if (i >= ssAvatarCount) break;
+        vec3 foot = ssAvatarPos[i].xyz;
+        float radius = ssAvatarPos[i].w;
+        float height = ssAvatarShape[i].x;
+        float rel = p_agent.z - foot.z;
+        if (rel < -0.40 || rel > height * 1.15 + 0.50) continue;
+        vec2 off = p_agent.xy - foot.xy;
+        if (dot(off, off) > radius * radius) continue;
+        inside = max(inside, 1.0 - smoothstep(radius * 0.75, radius, length(off)));
+    }
+    return inside;
+}
+
 void main()
 {
     vec2 tc = vary_fragcoord.xy;
@@ -214,6 +241,14 @@ void main()
     // Sky, stars, the sun disc, HDRI - none of them are surfaces with a normal to flatten
     if (GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_HAS_HDRI) ||
         GET_GBUFFER_FLAG(flag, GBUFFER_FLAG_SKIP_ATMOS))
+    {
+        frag_color = raw;
+        return;
+    }
+
+    // <SS:Nexii> A body the pass has nothing to say about - flatten, drops, drips, sheet, ice, grain and rings would all be the ground's weather painted on someone; the body's own wetness model lives in the wet pass (ssavatarwet.h). Inside a capsule but still at the stored surface keeps the floor's answer - the fragment may be the ground between a person's feet. Sits after every derivative batch above, so the quads this return splits are already safe.
+    bool on_stored_surface = ssFieldFetch(p.xy).x > p.z - SS_BODY_LIFT;
+    if (ssAvatarContain(p) > 0.05 && !on_stored_surface)
     {
         frag_color = raw;
         return;

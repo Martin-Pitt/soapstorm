@@ -357,7 +357,8 @@ void SSWorldField::update()
     mNow = SSAtmoMagic::getInstance()->sharedTime();
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldField", true);
-    if (!enabled || !SSAtmoMagic::getInstance()->hasWeather())
+    // <SS:Nexii> Master switch, not hasWeather(): the wind flow map and soundscape consume the field in calm weather too, and pickBuildTarget's interest check already keeps unclaimed regions from building.
+    if (!enabled || !SSAtmoMagic::getInstance()->isEnabled())
     {
         if (!mTiles.empty() || mBuild.mActive) clear();
         return;

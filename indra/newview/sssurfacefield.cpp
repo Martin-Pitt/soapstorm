@@ -1910,6 +1910,9 @@ void SSSurfaceField::renderWetPass()
         bindLooksForShader(gSSSurfaceNormalProgram);
         bindRingsForShader(gSSSurfaceNormalProgram);
 
+        // <SS:Nexii> The capsules are the only "is this a person" answer a screen-space pass has (ssavatarwet.h): the field's height rejection sits 1.5 cells up - 3 m at the window's 2 m cell, above a body's reach - so without them the normal pass stamps the ground's drop lattices on whoever stands there. Same bind the wet pass gets; uniforms the pass does not declare are skipped silently.
+        SSAvatarWet::getInstance()->bindForShader(gSSSurfaceNormalProgram);
+
         static LLStaticHashedString norm_inv_view("ssFieldInvView");
         static LLStaticHashedString norm_wet_str("ssWetStrength");
         static LLStaticHashedString norm_wet_debug("ssWetDebugForce");
