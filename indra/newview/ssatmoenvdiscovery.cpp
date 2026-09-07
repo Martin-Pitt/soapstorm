@@ -26,6 +26,7 @@
 #include "ssatmoenvdiscovery.h"
 
 #include "fslslbridge.h"
+#include "llagent.h"
 #include "llcorehttputil.h"
 #include "llfilesystem.h"
 #include "llfloater.h"
@@ -41,6 +42,7 @@ namespace
 {
     const char* CONFIG_TAG = "atmo:";
     const char* FETCH_COMMAND = "FetchNotecard|";
+    const F32 BRIDGE_RETRY_SECONDS = 5.f;
 
     // Wraps fetched text in notecard format and caches it under the asset id, so later visits skip the Bridge.
     void cacheNotecardBody(const LLUUID& asset_id, const std::string& plain_body)
@@ -80,18 +82,39 @@ namespace
     }
 }
 
-// Watches parcel changes from construction on.
+// Watches both parcel channels from construction on: the LLParcelObserver list fires on land selection (About Land description edits), gAgent's parcel-changed signal on agent parcel arrivals (login, teleport, border crossings) - processParcelProperties never notifies the observer list for those.
 SSAtmoEnvDiscoveryManager::SSAtmoEnvDiscoveryManager()
 {
     LLViewerParcelMgr::getInstance()->addObserver(this);
+    mAgentParcelChangedConnection = gAgent.addParcelChangedCallback([this]() { changed(); });
 }
 
 // Stops watching; guarded because the parcel manager may already be gone at shutdown.
 SSAtmoEnvDiscoveryManager::~SSAtmoEnvDiscoveryManager()
 {
+    mAgentParcelChangedConnection.disconnect();
     if (LLViewerParcelMgr::instanceExists())
     {
         LLViewerParcelMgr::getInstance()->removeObserver(this);
+    }
+}
+
+// First frame: check the parcel that arrived during login, before this singleton existed; afterwards retry a fetch the missing LSL Bridge deferred.
+void SSAtmoEnvDiscoveryManager::idle()
+{
+    if (!mInitialCheckDone)
+    {
+        mInitialCheckDone = true;
+        changed();
+        return;
+    }
+
+    if (mDeferredAssetId.notNull() && mRetryTimer.getElapsedTimeF32() > BRIDGE_RETRY_SECONDS)
+    {
+        mRetryTimer.reset();
+        const LLUUID asset_id = mDeferredAssetId;
+        mDeferredAssetId.setNull();
+        requestFetch(asset_id, mDeferredForce);
     }
 }
 
@@ -156,6 +179,13 @@ void SSAtmoEnvDiscoveryManager::changed()
 
     const bool editing = editorIsOpen();
 
+    // A fetch parked for the Bridge is only worth retrying while the parcel still advertises that same id.
+    if (mDeferredAssetId.notNull() && mDeferredAssetId != asset_id)
+    {
+        mDeferredAssetId.setNull();
+        mDeferredForce = false;
+    }
+
     if (asset_id.isNull())
     {
         if (!editing && mgr->hasAsset() && mgr->cameFromParcel())
@@ -174,7 +204,11 @@ void SSAtmoEnvDiscoveryManager::changed()
 
     // Still advertised, but the user declined it: keep the environment off
     // rather than resurrecting it on every parcel property update.
-    if (asset_id == mDeclinedAssetId) return;
+    if (asset_id == mDeclinedAssetId)
+    {
+        mDeferredAssetId.setNull();
+        return;
+    }
     // A different id than the declined one - the decline no longer applies.
     mDeclinedAssetId.setNull();
 
@@ -217,17 +251,26 @@ void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id, bool force)
     const std::string cached = readCachedNotecardBody(asset_id);
     if (!cached.empty())
     {
+        mDeferredAssetId.setNull();
         applyText(asset_id, cached, force);
         return;
     }
 
     if (!FSLSLBridge::instanceExists() || !FSLSLBridge::instance().canUseBridge())
     {
-        LL_INFOS("AtmoMagicEnv") << "No SL Bridge available - cannot fetch parcel-referenced "
-                                   "Atmo v3 notecard " << asset_id << LL_ENDL;
+        // Not up yet is the normal login case (the parcel arrives seconds before the Bridge attaches): park the fetch for idle() to retry instead of giving up.
+        if (mDeferredAssetId != asset_id)
+        {
+            LL_INFOS("AtmoMagicEnv") << "No SL Bridge available yet - deferring fetch of parcel-referenced "
+                                       "Atmo v3 notecard " << asset_id << LL_ENDL;
+        }
+        mDeferredAssetId = asset_id;
+        mDeferredForce = force;
+        mRetryTimer.reset();
         return;
     }
 
+    mDeferredAssetId.setNull();
     mPendingAssetId = asset_id;
 
     FSLSLBridge::instance().viewerToLSL(

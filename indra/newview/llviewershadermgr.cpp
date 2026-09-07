@@ -204,6 +204,8 @@ LLGLSLShader            gSSWindProjectProgram;
 LLGLSLShader            gSSWindSeedProgram;
 LLGLSLShader            gSSWindRestrictProgram;
 LLGLSLShader            gSSWindProlongProgram;
+LLGLSLShader            gSSHiZProgram; // <SS:Nexii> GPU culling Hi-Z build
+LLGLSLShader            gSSCullProgram; // <SS:Nexii> GPU culling visibility test
 LLGLSLShader            gHUDAlphaProgram;
 LLGLSLShader            gDeferredSkinnedAlphaProgram;
 LLGLSLShader            gDeferredAlphaImpostorProgram;
@@ -2412,6 +2414,40 @@ bool LLViewerShaderMgr::loadShadersDeferred()
             {
                 LL_WARNS("Shader") << pass.name << " failed to compile;"
                                    << " the wind flowmap will stay disabled" << LL_ENDL;
+                pass.prog->unload();
+            }
+        }
+    }
+#endif
+
+#if !LL_DARWIN
+    // <SS:Nexii> GPU culling compute passes. Same contract as the wind flowmap:
+    // compute needs GL 4.3, a failure here just leaves the feature off, and
+    // attachNothing keeps the programs pure compute.
+    if (success && gGLManager.mGLVersion >= 4.29f
+#if LL_WINDOWS
+        && glDispatchCompute != nullptr
+#endif
+       )
+    {
+        struct { LLGLSLShader* prog; const char* name; const char* file; } cull_passes[] = {
+            { &gSSHiZProgram,  "SS GPU Cull Hi-Z", "deferred/ssHiZC.glsl" },
+            { &gSSCullProgram, "SS GPU Cull",      "deferred/ssCullC.glsl" },
+        };
+
+        for (auto& pass : cull_passes)
+        {
+            pass.prog->mName = pass.name;
+            pass.prog->mFeatures.attachNothing = true;
+            pass.prog->mShaderFiles.clear();
+            pass.prog->mShaderFiles.push_back(make_pair(pass.file, GL_COMPUTE_SHADER));
+            pass.prog->mShaderLevel = 1;
+            pass.prog->clearPermutations();
+
+            if (!pass.prog->createShader())
+            {
+                LL_WARNS("Shader") << pass.name << " failed to compile;"
+                                   << " GPU culling will stay disabled" << LL_ENDL;
                 pass.prog->unload();
             }
         }

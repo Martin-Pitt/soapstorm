@@ -114,6 +114,7 @@
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssworldfield.h"   // <SS:Nexii> Atmo Magic shared world field
 #include "ssheightfog.h"    // <SS:Nexii> Atmo Magic height fog (replaces the whiteout)
+#include "ssgpucull.h"      // <SS:Nexii> GPU frustum + occlusion culling
 #include "ssscreenfx.h"     // <SS:Nexii> Atmo Magic heat shimmer / lens drops screen-space shell
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic geometry settling overlay
 #include "llspatialpartition.h"
@@ -3801,6 +3802,17 @@ void LLPipeline::postSort(LLCamera &camera)
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE;
 
     assertInitialized();
+
+    // <SS:Nexii> GPU culling: hand out a fresh candidate frame for the world
+    // camera only - the shadow pass re-enters postSort and must not clobber it
+    if (LLViewerCamera::sCurCameraID == LLViewerCamera::CAMERA_WORLD
+        && !gCubeSnapshot
+        && !sShadowRender
+        && !sReflectionRender)
+    {
+        SSGPUCull::getInstance()->beginFrame();
+    }
+
     sVolumeSAFrame = 0.f; //ZK LBG
 
     LL_PUSH_CALLSTACKS();
@@ -3848,6 +3860,10 @@ void LLPipeline::postSort(LLCamera &camera)
             continue;
         }
 
+        // <SS:Nexii> GPU culling: register the group (and its batches below)
+        // as a candidate for the compute occlusion pass
+        S32 ss_cull_id = SSGPUCull::getInstance()->registerGroup(group);
+
         if (group->hasState(LLSpatialGroup::NEW_DRAWINFO) && group->hasState(LLSpatialGroup::GEOM_DIRTY) && !gCubeSnapshot)
         {  // no way this group is going to be drawable without a rebuild
             group->rebuildGeom();
@@ -3864,6 +3880,11 @@ void LLPipeline::postSort(LLCamera &camera)
             for (LLSpatialGroup::drawmap_elem_t::iterator k = src_vec.begin(); k != src_vec.end(); ++k)
             {
                 LLDrawInfo *info = *k;
+
+                if (ss_cull_id >= 0)
+                {
+                    SSGPUCull::getInstance()->registerDrawInfo(info, ss_cull_id); // <SS:Nexii> GPU culling
+                }
 
                 sCull->pushDrawInfo(j->first, info);
                 if (!sShadowRender && !sReflectionRender && !gCubeSnapshot)
@@ -10901,7 +10922,7 @@ static LLTrace::BlockTimerStatHandle FTM_SHADOW_ALPHA_TREE("Alpha Tree");
 static LLTrace::BlockTimerStatHandle FTM_SHADOW_ALPHA_GRASS("Alpha Grass");
 static LLTrace::BlockTimerStatHandle FTM_SHADOW_FULLBRIGHT_ALPHA_MASKED("Fullbright Alpha Masked");
 
-void LLPipeline::renderShadow(const glm::mat4& view, const glm::mat4& proj, LLCamera& shadow_cam, LLCullResult& result, bool depth_clamp)
+void LLPipeline::renderShadow(const glm::mat4& view, const glm::mat4& proj, LLCamera& shadow_cam, LLCullResult& result, bool depth_clamp, GLenum depth_func)
 {
     LL_PROFILE_ZONE_SCOPED_CATEGORY_PIPELINE; //LL_RECORD_BLOCK_TIME(FTM_SHADOW_RENDER);
     LL_PROFILE_GPU_ZONE("renderShadow");
@@ -10935,7 +10956,7 @@ void LLPipeline::renderShadow(const glm::mat4& view, const glm::mat4& proj, LLCa
     //enable depth clamping if available
     LLGLEnable clamp_depth(depth_clamp ? GL_DEPTH_CLAMP : 0);
 
-    LLGLDepthTest depth_test(GL_TRUE, GL_TRUE, GL_LESS);
+    LLGLDepthTest depth_test(GL_TRUE, GL_TRUE, depth_func);
 
     updateCull(shadow_cam, result);
 

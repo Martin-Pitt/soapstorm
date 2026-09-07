@@ -134,10 +134,10 @@ public:
     bool coverageDetail(const LLVector3& pos_agent, bool& covered,
                         F32& ceiling_z, F32& column_top_z) const;
 
-    // <SS:Nexii> Air connectivity, the flood-fill pass of the worldfield design: every air cell of a tile's band stack is labelled by whether it can actually be reached from the sky or the tile's horizontal borders, then by how enclosed it is. The touching classification splits the reachable air three ways - OUTDOORS where the column is open to the sky above the cell, SHELTERED where cover stands over it but an opening still connects it to outdoors air, INTERIOR once every opening's reach is spent. The reach is a budget handed across each touching between outdoors and sheltered air: the opening's porch (the outdoors cells touching it, clustered 6-connected so one opening is one aperture) seeds sqrt(aperture cells) - the opening's linear width, not its area - and every cell step inward spends one. A cave mouth hands its interior tens of cells of shelter while a window's budget dies a cell or two past the glass; a sealed room was never reached and is interior by construction. Solved on the general worker queue from a snapshot of the band stack, so a build committing on the main thread never races the walk; stored against the tile's geometry serial so a stale answer is never served after an edit. The same job carries the occlusion depth: each outdoors- or sheltered-connected air cell's graph distance to the nearest OUTDOORS cell, for the "how enclosed is this point" consumers (the sparse-air-solve and acoustic occlusion figures).
+    // <SS:Nexii> Air connectivity, the flood-fill pass of the worldfield design, run over the store's air spans: each band-cell holds up to two air spans - the lower under the band's topmost body, the upper above its top - and every span is labelled by whether it can actually be reached from the sky or the tile's horizontal borders, then by how enclosed it is. The touching classification splits the reachable spans three ways - OUTDOORS where the column is open to the sky above, SHELTERED where cover stands over it but an opening still connects it to outdoors air, INTERIOR once every opening's reach is spent. The reach is a budget handed across each touching between outdoors and sheltered spans: the opening's porch (the outdoors spans touching it, clustered so one opening is one aperture) seeds sqrt(aperture spans) - the opening's linear width, not its area - and every span step inward spends one. A cave mouth hands its interior tens of spans of shelter while a window's budget dies a span or two past the glass; a sealed room was never reached and is interior by construction. Solved on the general worker queue from a snapshot of the band stack, so a build committing on the main thread never races the walk; stored against the tile's geometry serial so a stale answer is never served after an edit. The same job carries the occlusion depth: each outdoors- or sheltered-connected span's graph distance to the nearest OUTDOORS span, for the "how enclosed is this point" consumers (the sparse-air-solve and acoustic occlusion figures).
     enum EAirLabel : U8
     {
-        AIR_SOLID = 0,      // a surface occupies the band here
+        AIR_SOLID = 0,      // no air span here - inside a body, or the band-cell is body to its top
         AIR_OUTDOORS,       // open to the sky above - the elements land here
         AIR_SHELTERED,      // covered, but an opening still reaches it
         AIR_INTERIOR,       // beyond every opening's reach, or sealed
@@ -237,47 +237,64 @@ private:
         S32 mBandCount = 0;        // effective bands; bands [0, mBandCount) are live
         F32 mBandHeight = 4.f;
 
-        // Per band, per column: the highest surface inside the band, absolute
-        // Z, NO_SURFACE where the band is open there. Flat [band][y * res + x],
-        // allocated lazily to mAllocBands bands by ensureBands as a build
-        // sweeps upward - a dense 0.25m column tile pinning all MAX_BANDS
-        // layers up front would hold ~126MB per tile before capturing anything,
-        // and real builds usually stop a few bands up.
+        // <SS:Nexii> The capture scratch: per band, per column, the two
+        // boundaries the two ortho passes resolved - mBandTop (front faces,
+        // the highest up-facing surface in the band) and mBandUnder (the
+        // upward shot keeping the farthest front face, the topmost body's
+        // underside). This is the capture's working data, not the store:
+        // computeSpans folds it into the column span store at commit.
+        // NO_SURFACE where a pass found nothing. Flat
+        // [band][y * res + x], allocated lazily to mAllocBands bands by
+        // ensureBands as a build sweeps upward - a dense 0.25m column tile
+        // pinning all MAX_BANDS layers up front would hold ~126MB per tile
+        // before capturing anything, and real builds usually stop a few
+        // bands up.
         std::vector<F32> mBandTop;
+        std::vector<F32> mBandUnder;
         std::vector<U8> mBandFlags;
         S32 mAllocBands = 0;
+
+        // <SS:Nexii> The store: per column, up to SS_WF_MAX_SPANS
+        // (ssworldfield.cpp) solid spans as [bottom, top] pairs, col-major
+        // (col * SS_WF_MAX_SPANS + slot), NO_SURFACE top where the slot is
+        // empty. Air is everything between spans, plus the gap below the
+        // lowest span and above the highest one; the conversion guarantees
+        // every stored gap is at least the slab threshold tall (shorter gaps
+        // merge into the surrounding body), so a wall standing on a floor
+        // never reads as a hollow shell and a room is one air interval
+        // whatever band its floor and ceiling landed in.
+        std::vector<F32> mSpanBottom;
+        std::vector<F32> mSpanTop;
+        std::vector<U8> mSpanFlags;
 
         // Dirty rectangle in cells; empty = whole tile. The re-peel renders
         // only this sub-frustum and splices only these columns.
         S32 mDirtyX0 = 0, mDirtyY0 = 0, mDirtyX1 = 0, mDirtyY1 = 0;
 
-        // Air connectivity labels, EAirLabel per band-cell, same layout as
-        // mBandTop. Valid only while mAirSerial matches mGeomSerial - an edit
-        // invalidates them until the flood re-runs on the next commit.
-        std::vector<U8> mAirLabel;
-
-        // Air-connectivity occlusion depth, same layout and validity gate as
-        // mAirLabel: per outdoors- or sheltered-air band-cell the shortest
-        // 6-connected distance in cells to an AIR_OUTDOORS cell (0 on the
-        // outdoors cells themselves). Interior cells never reach the outdoors
-        // through air, so they keep
-        // AIR_DEPTH_UNREACHED - "maximally enclosed" is exactly the number the
-        // sealed-room consumers want. Produced by the same worker job as the
-        // labels, stored together; distances saturate at UNREACHED - 1 so the
-        // sentinel stays exclusive to "not walked".
-        std::vector<U16> mAirDepth;
+        // <SS:Nexii> The flood's output, one label/depth per air gap: gap k of
+        // a column with n spans sits beneath span k (gap 0 below everything,
+        // gap n above the highest span), col-major
+        // (col * (SS_WF_MAX_SPANS + 1) + k) so a column's gaps are contiguous.
+        // AIR_SOLID marks "no such gap". Valid only while mAirSerial matches
+        // mGeomSerial - an edit invalidates them until the flood re-runs on
+        // the next commit.
+        std::vector<U8> mGapLabel;
+        std::vector<U16> mGapDepth;
         U32 mAirSerial = 0;
 
         // <SS:Nexii> The precomputed acoustic lattice, built by the flood's
-        // worker job from the labels it just made. Per band, per lattice
-        // cell, per cardinal (+X, -X, +Y, -Y): the horizontal wall distance
-        // in metres. Valid while mSerial matches mGeomSerial - the same
-        // staleness gate the labels ride.
+        // worker job from the span store. Per vertical ring (one every few
+        // metres of height up to the capture ceiling, mWall holds
+        // rings * mLatRes² entries), per lattice cell, per cardinal
+        // (+X, -X, +Y, -Y): the horizontal wall distance in metres. Valid
+        // while mSerial matches mGeomSerial - the same staleness gate the
+        // labels ride.
         struct Acoustic
         {
             S32 mLatRes = 0;        // lattice cells per axis
             F32 mLatCell = 0.f;     // lattice cell size, metres
-            std::vector<F32> mWall; // flat [band][y * mLatRes + x][4]
+            F32 mCeiling = 0.f;     // the capture ceiling the rings span
+            std::vector<F32> mWall; // flat [ring][y * mLatRes + x][4]
             U32 mSerial = 0;
         };
         Acoustic mAcoustic;
@@ -297,15 +314,16 @@ private:
         bool mActive = false;
         U64 mRegionHandle = 0;
         S32 mBand = 0;
+        S32 mPass = 0;             // capture pass within the band: 0 top faces, 1 back faces
         bool mRectOnly = false;    // re-peeling the dirty rectangle only
         S32 mRectX0 = 0, mRectY0 = 0, mRectX1 = 0, mRectY1 = 0;
         S32 mRectRes = 0;          // square capture resolution covering the rect
         F32 mRectHalf = 0.f;       // world half-extent of the rect frustum
         LLVector3 mRectCentre;     // agent-space centre of the rect
-        std::vector<F32> mDepth;   // last band's depth readback
+        std::vector<F32> mDepth[2];// the band's two depth readbacks (front faces, back faces)
         S32 mEmptyRun = 0;         // consecutive empty bands seen by the live build
         bool mChanged = false;     // any spliced column differed from what was stored
-        bool mJustCaptured = false;// a band was rendered and its readback landed; apply it next step
+        bool mJustCaptured = false;// a pass was rendered and its readback landed; apply it next step
     };
 
     Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
@@ -316,7 +334,7 @@ private:
 
     bool advanceBuild();
 
-    bool captureBand(Tile& tile);
+    bool capturePass(Tile& tile, S32 pass);
     void applyBand(Tile& tile);
     void commitBuild(Tile& tile);
 
@@ -326,6 +344,18 @@ private:
     // spliced; the flood snapshots mBandCount bands, so the invariant covers
     // it too.
     void ensureBands(Tile& tile, S32 bands);
+
+    // Fold the capture scratch into the column span store for a rectangle of
+    // columns: per column, the per-band bodies sort bottom-up, merge across
+    // band planes and any gap thinner than the assumed slab, and the first
+    // span extends to the world floor when the gap beneath it is thinner
+    // still. Runs at commit, before the flood is scheduled.
+    void computeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
+
+    // Which air gap of a column contains z: 0 none (inside a body), otherwise
+    // 1 + the gap index (gap 0 below the lowest span, gap n above the
+    // highest). Bounds of the air found come back for callers that want them.
+    S32 gapAt(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) const;
 
     // The enclosure spectrum's shared body - label lookup, sub-band
     // resolution and the depth ramp - against a caller-resolved region/tile.

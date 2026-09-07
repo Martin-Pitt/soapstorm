@@ -93,6 +93,7 @@
 #include "ssatmoenvdiscovery.h"
 #include "sswater.h"
 #include "ssrainshadow.h"
+#include "ssgpucull.h" // <SS:Nexii> GPU frustum + occlusion culling
 #include "sswindflow.h"
 #include "ssglreadback.h"
 #include "ssworldfield.h"
@@ -1004,13 +1005,12 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     // never leave a capture hanging (see ssglreadback.cpp).
                     SSGLReadback::getInstance()->poll();
 
-                    // Atmo Magic: this singleton is otherwise never
-                    // touched (it is purely event-driven via
-                    // LLParcelObserver, no per-frame work of its own), so
-                    // this call exists only to bring it - and its parcel
-                    // observer registration - into existence on the first
-                    // frame the pipeline runs, rather than never at all.
-                    SSAtmoEnvDiscoveryManager::getInstance();
+                    // Atmo Magic: parcel discovery maintenance. The first
+                    // call checks the parcel that arrived during login,
+                    // before the singleton (and its parcel hooks) existed;
+                    // later calls retry a notecard fetch that was deferred
+                    // because the LSL Bridge had not attached yet.
+                    SSAtmoEnvDiscoveryManager::getInstance()->idle();
                 }
 
                 LLVertexBuffer::unbind();
@@ -1239,6 +1239,14 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
 
         if (LLPipeline::sRenderDeferred)
         {
+            // <SS:Nexii> GPU culling: opaque depth is final and unbound here -
+            // build the Hi-Z pyramid, run the cull dispatch, and queue the
+            // readback that gates next frame's draw loop
+            SSGPUCull::getInstance()->submit(*LLViewerCamera::getInstance(),
+                                             gPipeline.mRT->deferredScreen.getDepth(),
+                                             gPipeline.mRT->deferredScreen.getWidth(),
+                                             gPipeline.mRT->deferredScreen.getHeight());
+
             gPipeline.renderDeferredLighting();
         }
 

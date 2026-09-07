@@ -160,6 +160,12 @@ void SSScreenFXPost::cleanupSingleton()
         delete mDropMap;
         mDropMap = nullptr;
     }
+    if (mClearMap)
+    {
+        mClearMap->release();
+        delete mClearMap;
+        mClearMap = nullptr;
+    }
     mCapTex = nullptr;
 }
 
@@ -198,6 +204,11 @@ void SSScreenFXPost::postLensStep(F32 dt, F32 aspect)
     const F32 clear01 = llclamp((F32)lens_clear, 0.f, 1.f);
     const S32 budget = llclamp((S32)(((F32)streak_budget / 12.f) * (F32)SSLensDrop::MAX_DROPS), 0, SSLensDrop::MAX_DROPS);
     const bool reset = (mLens.mWet <= 0.f && mLens.mFog <= 0.f);
+
+    // The channel map is drawn on the main thread but decays on the LENS clock, so it stretches with SSAtmoLensDryRate like everything
+    // else on the glass; and a glass that has gone dry drops its channels outright rather than fading them from wherever they were.
+    mLensStepDt = dt;
+    if (reset) mClearMapReset = true;
 
     if (worker_on && !mSimWorkerTried)
     {
@@ -434,6 +445,7 @@ void SSScreenFXPost::publishSprites()
         // BIGGER, not merely elongated, because the volume it swallowed is now in it. It relaxes to round over SPREAD_TAU_S.
         s.mRX = d.mR * (1.f + d.mSpreadX);
         s.mRY = d.mR * (1.f + d.mSpreadY);
+        s.mRunning = d.mRunning;
         out.push_back(s);
     }
 
@@ -566,6 +578,107 @@ bool SSScreenFXPost::drawDropMap(S32 w, S32 h, F32 aspect)
     return true;
 }
 
+// MAIN/GL: the channel a runner cuts through the condensation (R17). Two draws over a buffer that is NOT cleared between frames: first
+// take a slice off everything already in it (the exponential re-hazing, as a blend factor - see SSLensDrop::clearDecay), then mark
+// wherever a RUNNING drop is now. A drop sitting still marks nothing: it is displacing haze under itself, which the drop map already
+// says, not cutting a channel.
+//
+// Quarter resolution, and the blur that comes with it is wanted - a wiped edge on misted glass is soft. It is also why this is affordable
+// enough to keep every frame.
+void SSScreenFXPost::drawClearMap(S32 w, S32 h, F32 aspect)
+{
+    const S32 cw = llmax(w / 4, 16);
+    const S32 ch = llmax(h / 4, 16);
+
+    if (!mClearMap) mClearMap = new LLRenderTarget();
+    if (mClearMap->getWidth() != cw || mClearMap->getHeight() != ch)
+    {
+        mClearMap->release();
+        if (!mClearMap->allocate(cw, ch, GL_RGBA, false)) return;
+        mClearMapReset = true;
+    }
+    if (mCapTex.isNull()) return;
+
+    LL_PROFILE_GPU_ZONE("ss lens clear map");
+
+    mClearMap->bindTarget();
+
+    if (mClearMapReset)
+    {
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+        mClearMap->clear(GL_COLOR_BUFFER_BIT);
+        mClearMapReset = false;
+    }
+
+    LLGLDepthTest depth(GL_FALSE, GL_FALSE);
+    LLGLEnable blend(GL_BLEND);
+
+    gUIProgram.bind();
+
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.pushMatrix();
+    gGL.loadIdentity();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.pushMatrix();
+    gGL.loadIdentity();
+
+    // ---- the re-hazing. dst *= (1 - decay), which is what BF_ZERO / BF_ONE_MINUS_SOURCE_ALPHA spells: no source colour is added at
+    // all, the destination is simply scaled. A full-screen quad is the cheapest way to say "everything, a bit less".
+    const F32 decay = SSLensDrop::clearDecay(mLensStepDt);
+    if (decay > 0.0005f)
+    {
+        gGL.blendFunc(LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA,
+                      LLRender::BF_ZERO, LLRender::BF_ONE_MINUS_SOURCE_ALPHA);
+        gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+        gGL.color4f(0.f, 0.f, 0.f, decay);
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.vertex2f(-1.f, -1.f); gGL.vertex2f(3.f, -1.f); gGL.vertex2f(-1.f, 3.f);
+        gGL.end();
+        gGL.flush();
+    }
+
+    // ---- and what the runners are cutting right now. Additive by coverage, so a channel saturates after a drop or two has been over it
+    // and a fast runner does not draw a fainter line than a slow one.
+    gGL.blendFunc(LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE,
+                  LLRender::BF_SOURCE_ALPHA, LLRender::BF_ONE);
+    gGL.getTexUnit(0)->bind(mCapTex);
+    gGL.color4f(1.f, 1.f, 1.f, 1.f);
+
+    const F32 sx = 2.f / llmax(aspect, 0.01f);
+    const F32 sy = 2.f;
+
+    gGL.begin(LLRender::TRIANGLES);
+    for (const Sprite& s : mDrawSprites)
+    {
+        if (!s.mRunning) continue;
+
+        const F32 x0 = (s.mX - s.mRX) * sx, x1 = (s.mX + s.mRX) * sx;
+        const F32 y0 = (s.mY - s.mRY) * sy, y1 = (s.mY + s.mRY) * sy;
+
+        gGL.texCoord2f(0.f, 0.f); gGL.vertex2f(x0, y0);
+        gGL.texCoord2f(1.f, 0.f); gGL.vertex2f(x1, y0);
+        gGL.texCoord2f(1.f, 1.f); gGL.vertex2f(x1, y1);
+
+        gGL.texCoord2f(0.f, 0.f); gGL.vertex2f(x0, y0);
+        gGL.texCoord2f(1.f, 1.f); gGL.vertex2f(x1, y1);
+        gGL.texCoord2f(0.f, 1.f); gGL.vertex2f(x0, y1);
+    }
+    gGL.end();
+    gGL.flush();
+
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_PROJECTION);
+    gGL.popMatrix();
+    gGL.matrixMode(LLRender::MM_MODELVIEW);
+
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+    gUIProgram.unbind();
+    gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+    mClearMap->flush();
+}
+
 // The heat-shimmer pass. See ssscreenfx.h.
 bool SSScreenFXPost::renderHeat(LLRenderTarget* src, LLRenderTarget* dst)
 {
@@ -648,7 +761,9 @@ bool SSScreenFXPost::renderLens(LLRenderTarget* src, LLRenderTarget* dst)
     // ONE fetch from - so what is on the glass costs the same per fragment whether it is one drop or five hundred, which is what lets the
     // population be a real simulation rather than 24 uniform slots. Built before the pass binds its own target, because it binds its own.
     static LLStaticHashedString u_dropmap("ssLensDropMap");
+    static LLStaticHashedString u_clearmap("ssLensClearMap");
     const bool have_map = drawDropMap(dst->getWidth(), dst->getHeight(), aspect);
+    drawClearMap(dst->getWidth(), dst->getHeight(), aspect);
 
     dst->bindTarget();
 
@@ -665,6 +780,16 @@ bool SSScreenFXPost::renderLens(LLRenderTarget* src, LLRenderTarget* dst)
         gGL.getTexUnit(map_channel)->bindManual(LLTexUnit::TT_TEXTURE, mDropMap->getTexture(0));
         gGL.getTexUnit(map_channel)->setTextureFilteringOption(LLTexUnit::TFO_BILINEAR);
         gSSPostLensProgram.uniform1i(u_dropmap, map_channel);
+    }
+
+    S32 clear_channel = -1;
+    if (mClearMap && mClearMap->getWidth() > 0)
+    {
+        clear_channel = (map_channel > -1) ? (map_channel + 1) : gSSPostLensProgram.mActiveTextureChannels;
+        gGL.getTexUnit(clear_channel)->activate();
+        gGL.getTexUnit(clear_channel)->bindManual(LLTexUnit::TT_TEXTURE, mClearMap->getTexture(0));
+        gGL.getTexUnit(clear_channel)->setTextureFilteringOption(LLTexUnit::TFO_BILINEAR);
+        gSSPostLensProgram.uniform1i(u_clearmap, clear_channel);
     }
 
     gSSPostLensProgram.uniform2f(LLShaderMgr::DEFERRED_SCREEN_RES, (GLfloat)dst->getWidth(), (GLfloat)dst->getHeight());
@@ -699,11 +824,15 @@ bool SSScreenFXPost::renderLens(LLRenderTarget* src, LLRenderTarget* dst)
 
     // <SS:Nexii> unbind() does not unbind textures - src would otherwise stay bound on its unit while it becomes the next pass's draw FBO.
     gSSPostLensProgram.unbindTexture(LLShaderMgr::DEFERRED_DIFFUSE);
+    if (clear_channel > -1)
+    {
+        gGL.getTexUnit(clear_channel)->unbind(LLTexUnit::TT_TEXTURE);
+    }
     if (map_channel > -1)
     {
         gGL.getTexUnit(map_channel)->unbind(LLTexUnit::TT_TEXTURE);
-        gGL.getTexUnit(0)->activate();
     }
+    gGL.getTexUnit(0)->activate();
     gSSPostLensProgram.unbind();
     dst->flush();
 

@@ -8,15 +8,21 @@
 > behind `SSWorldFieldSurfaceTop` (default off), and the soundscape's cover and
 > burial come from the COVERAGE channel behind `SSWorldFieldCoverage` (default
 > off). Columns default to 0.25 m - the rain shadow capture's own texel density
-> (`SSAtmoShadowRes` 1024 over 256 m) - with bands allocated lazily as a build
-> sweeps upward. The air-connectivity flood fill runs on the General worker
-> queue per committed tile, snapshot-gated by geometry serial, and its labels
-> now carry the touching classification: OUTDOORS (open to the sky above),
-> SHELTERED (covered, within an opening's aperture budget - each opening's
-> porch of outdoors-touching cells is clustered and seeds sqrt(aperture cells),
-> spent one per cell step inward, widest path wins) and INTERIOR (every budget
-> spent, or sealed). The occlusion depth is the graph distance to the nearest
-> outdoors cell. The DRAINAGE_NETWORK core (priority-flood depression fill +
+> (`SSAtmoShadowRes` 1024 over 256 m). Each band is captured in TWO top-down
+> passes - front faces give the band's highest surface, an upward shot with a
+> reversed depth test gives the topmost body's underside - and a conversion at
+> commit folds the bands into the store the proposal described: per column, a
+> short list of [bottom, top] solid spans (up to `SS_WF_MAX_SPANS` = 6,
+> overflow collapsing the thinnest air gap), air between them, every stored
+> gap at least the slab threshold tall. The air-connectivity flood runs on the
+> General worker queue per committed tile over the column gaps - a room is one
+> gap node whatever band its floor and ceiling landed in - and its labels
+> carry the touching classification: OUTDOORS (nothing above), SHELTERED
+> (covered, within an opening's aperture budget - each opening's porch of
+> outdoors gaps is clustered and seeds sqrt(aperture), spent one per gap step
+> inward, widest path wins) and INTERIOR (every budget spent, or sealed). The
+> occlusion depth is the graph distance to the nearest outdoors gap. The
+> DRAINAGE_NETWORK core (priority-flood depression fill +
 > pool mask + D8 on
 > the filled surface, `buildDrainage`) ships as the surface field's pool source
 > under the same `SSWorldFieldSurfaceTop` switch. A world field debug overlay

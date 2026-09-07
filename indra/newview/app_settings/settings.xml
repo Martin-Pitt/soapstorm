@@ -27354,6 +27354,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>SSComputeCulling</key>
+      <map>
+      <key>Comment</key>
+      <string>Experimental: run compute-shader frustum + Hi-Z occlusion culling for the main view's deferred draw. Each frame the surviving spatial groups are tested on the GPU against the previous frame's depth pyramid and the results gate whole groups in the draw loop one frame late. Requires OpenGL 4.3 (the wind flowmap's gate); groups only stop drawing after SSComputeCullingHysteresis consecutive hidden reports. OFF by default</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSComputeCullingHysteresis</key>
+      <map>
+      <key>Comment</key>
+      <string>How many consecutive frames the GPU cull pass must report a group hidden before the viewer stops drawing it. Higher is safer against the one-frame depth staleness during fast camera moves; lower culls more aggressively</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
     <key>SSAtmoWindFlowDebugStyle</key>
       <map>
       <key>Comment</key>

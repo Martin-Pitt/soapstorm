@@ -298,6 +298,9 @@ extern LLGLSLShader         gSSWindProjectProgram;
 extern LLGLSLShader         gSSWindSeedProgram;
 extern LLGLSLShader         gSSWindRestrictProgram;
 extern LLGLSLShader         gSSWindProlongProgram;
+// <SS:Nexii> GPU culling compute passes; only created when GL 4.3 is present
+extern LLGLSLShader         gSSHiZProgram;
+extern LLGLSLShader         gSSCullProgram;
 extern LLGLSLShader         gHUDFullbrightProgram;
 extern LLGLSLShader         gDeferredFullbrightAlphaMaskProgram;
 extern LLGLSLShader         gHUDFullbrightAlphaMaskProgram;

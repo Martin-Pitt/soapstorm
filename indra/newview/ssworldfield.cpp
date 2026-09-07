@@ -49,6 +49,9 @@
 
 static const F32 NEIGHBOR_REACH   = 64.f;
 static const F32 DEPTH_MISS       = 0.9999f;
+// The upward pass clears depth to zero and keeps the farthest front-facing
+// fragment, so its miss sentinel is zero rather than one.
+static const F32 DEPTH_MISS_UP    = 0.0001f;
 static const F32 BOUNDARY_EPSILON = 0.05f;
 static const F32 NO_SURFACE       = -FLT_MAX;
 
@@ -61,8 +64,28 @@ static const F32 SS_WF_ENCLOSURE_TAU_M = 4.f;
 
 // <SS:Nexii> How far the acoustic lattice's wall walks run before an
 // direction is called open. Above the soundscape's own side-ray length, so
-// a lattice "open" can never read as a wall hit in its consumers.
+// a lattice open can never count as a wall hit in its consumers.
 static const F32 SS_WF_ACOUSTIC_REACH_M = 64.f;
+
+// <SS:Nexii> The acoustic lattice's vertical ring spacing: the walks sample
+// every this-many metres of height up to the capture ceiling, so a storey
+// whose floor and ceiling share a band still gets its own ring of wall
+// distances.
+static const F32 SS_WF_ACOUSTIC_RING_M = 4.f;
+
+// <SS:Nexii> How many solid spans a column may hold. Real content runs two
+// to five; a column that resolves past the cap merges its smallest air gap
+// rather than dropping a body. The span store's arrays are sized from this.
+static constexpr S32 SS_WF_MAX_SPANS = 6;
+
+// <SS:Nexii> The assumed minimum slab: air under a body's captured underside
+// is trimmed by this much before it becomes a lower span, so a wall standing
+// on a floor - whose underside and the floor's top face coincide - never
+// reads as a hollow shell. The trim is also the body thickness the store
+// assumes between a lower span's top and the body's captured top face; the
+// real slab is usually thinner, and the error is sub-cell at the shipping
+// resolutions.
+static const F32 SS_WF_SPAN_SLAB_M = 0.25f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD("Atmo Magic World Field");
 static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD_GRID("Atmo Magic World Field Grid");
@@ -254,6 +277,14 @@ SSWorldField::Tile* SSWorldField::tileFor(LLViewerRegion* regionp, bool allow_cr
     tile.mCell = width / (F32)res;
     tile.mBandHeight = bandHeight();
     tile.mAllocBands = 0;
+
+    // The column span store and its flood output are fixed-size per tile.
+    const size_t layer = (size_t)res * res;
+    tile.mSpanBottom.assign((size_t)SS_WF_MAX_SPANS * layer, NO_SURFACE);
+    tile.mSpanTop.assign((size_t)SS_WF_MAX_SPANS * layer, NO_SURFACE);
+    tile.mSpanFlags.assign((size_t)SS_WF_MAX_SPANS * layer, 0);
+    tile.mGapLabel.assign((size_t)(SS_WF_MAX_SPANS + 1) * layer, (U8)AIR_SOLID);
+    tile.mGapDepth.assign((size_t)(SS_WF_MAX_SPANS + 1) * layer, (U16)AIR_DEPTH_UNREACHED);
     return &tile;
 }
 
@@ -372,6 +403,7 @@ void SSWorldField::update()
     mBuild.mActive = true;
     mBuild.mRegionHandle = target->mRegionHandle;
     mBuild.mBand = 0;
+    mBuild.mPass = 0;
     mBuild.mEmptyRun = 0;
     mBuild.mChanged = false;
     mBuild.mRectOnly = target->mDirty;
@@ -446,9 +478,10 @@ void SSWorldField::evict()
 }
 
 // One band step: capture, splice, then advance, stop early on empty sky, or
-// commit. The depth readback is async (SSGLReadback): capture renders and
-// submits, applyBand runs a step after the texels land, and the build waits a
-// step while one is in flight.
+// commit. Each band is captured in TWO passes - front faces give the highest
+// surface, back faces give that body's underside - and the depth readback is
+// async (SSGLReadback): the passes render and submit one at a time, and
+// applyBand runs once both have landed.
 bool SSWorldField::advanceBuild()
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(mBuild.mRegionHandle);
@@ -463,13 +496,30 @@ bool SSWorldField::advanceBuild()
     // not here yet) nor render the shared capture target into again.
     if (mReadbackPending) return true;
 
-    // The previous band's capture rendered and its readback landed; splice it
-    // in and advance the build state that depends on it.
+    // The current pass's readback landed; advance to the band's second pass
+    // or splice the pair in.
     if (mBuild.mJustCaptured)
     {
         mBuild.mJustCaptured = false;
+        ++mBuild.mPass;
+
+        if (mBuild.mPass < 2)
+        {
+            if (!capturePass(*tile, mBuild.mPass))
+            {
+                // GL trouble - abandon rather than spin. The tile keeps its
+                // previous contents and stays dirty, so the next update tries
+                // again.
+                mBuild.mActive = false;
+                return false;
+            }
+            mBuild.mJustCaptured = true;
+            return true;
+        }
+
         applyBand(*tile);
         ++mBuild.mBand;
+        mBuild.mPass = 0;
 
 // Full builds stop early once the sky has been genuinely empty for a few
         // consecutive bands; rect builds run to their target so the spliced columns
@@ -495,7 +545,7 @@ bool SSWorldField::advanceBuild()
         return false;
     }
 
-    if (!captureBand(*tile))
+    if (!capturePass(*tile, mBuild.mPass))
     {
         // GL trouble - abandon rather than spin. The tile keeps its previous
         // contents and stays dirty, so the next update tries again.
@@ -507,10 +557,18 @@ bool SSWorldField::advanceBuild()
     return true;
 }
 
-// One band capture: an ortho straight-down depth render whose frustum starts
-// at the band's top, so everything above the band is behind the near plane
-// and the readback is the highest surface *inside the band*.
-bool SSWorldField::captureBand(Tile& tile)
+// One band pass: an ortho depth render covering exactly the band. Pass 0
+// looks down with standard culling and reads the highest up-facing surface
+// (the body's top). Pass 1 looks UP from the band's floor with standard
+// culling - the ceiling's underside is a front face for that camera - and
+// flips the depth comparison so the buffer keeps the FARTHEST front-facing
+// hit: the topmost body's underside, the boundary the air beneath it lives
+// under. A plain nearest-hit shot from below would return the floor slab's
+// underside instead and lose the room. The frustum's far plane sits at the
+// band's top exactly and depth clamping is off for the upward pass - a
+// surface outside the band must never record into it, or every band would
+// steal surfaces from its neighbours and eat the air between them.
+bool SSWorldField::capturePass(Tile& tile, S32 pass)
 {
     LL_PROFILE_GPU_ZONE("atmo world field band");
 
@@ -518,7 +576,8 @@ bool SSWorldField::captureBand(Tile& tile)
     if (!regionp) return false;
 
     const F32 band_top = bandTopZ(mBuild.mBand, tile.mBandHeight);
-    const F32 range = tile.mBandHeight + 2.f;
+    const F32 band_bottom = band_top - tile.mBandHeight;
+    const F32 range = tile.mBandHeight;
 
     S32 res;
     F32 half, centre_x, centre_y;
@@ -537,7 +596,12 @@ bool SSWorldField::captureBand(Tile& tile)
         centre_y = regionp->getOriginAgent().mV[VY] + regionp->getWidth() * 0.5f;
     }
 
-    const LLVector3 eye(centre_x, centre_y, band_top);
+    // Pass 0 anchors at the band's ceiling looking down; pass 1 at the band's
+    // floor looking up.
+    const F32 eye_z = (pass == 0) ? band_top : band_bottom;
+    const F32 look = (pass == 0) ? -1.f : 1.f;
+
+    const LLVector3 eye(centre_x, centre_y, eye_z);
 
     const glm::mat4 saved_view = get_current_modelview();
     const glm::mat4 saved_proj = get_current_projection();
@@ -545,7 +609,7 @@ bool SSWorldField::captureBand(Tile& tile)
 
     const glm::mat4 view = glm::lookAt(
         glm::vec3(eye.mV[VX], eye.mV[VY], eye.mV[VZ]),
-        glm::vec3(eye.mV[VX], eye.mV[VY], eye.mV[VZ] - 1.f),
+        glm::vec3(eye.mV[VX], eye.mV[VY], eye.mV[VZ] + look),
         glm::vec3(0.f, 1.f, 0.f));
     const glm::mat4 proj = glm::ortho(-half, half, -half, half, 0.f, range);
 
@@ -564,7 +628,7 @@ bool SSWorldField::captureBand(Tile& tile)
     frust[3] = eye + LLVector3(-half, half, 0.f);
     for (U32 i = 0; i < 4; i++)
     {
-        frust[i + 4] = frust[i] + LLVector3(0.f, 0.f, -range);
+        frust[i + 4] = frust[i] + LLVector3(0.f, 0.f, look * range);
     }
     cam.calcAgentFrustumPlanes(frust);
     cam.mFrustumCornerDist = 0.f;
@@ -584,7 +648,13 @@ bool SSWorldField::captureBand(Tile& tile)
     {
         mTarget.bindTarget();
         mTarget.getViewport(gGLViewport);
+
+        // The upward pass clears depth to zero and keeps the farthest
+        // front-facing fragment, so its miss sentinel is 0 rather than 1.
+        const bool upward = (pass == 1);
+        if (upward) glClearDepth(0.f);
         mTarget.clear();
+        if (upward) glClearDepth(1.f);
 
         {
             static LLCullResult cull_result;
@@ -593,16 +663,18 @@ bool SSWorldField::captureBand(Tile& tile)
             gPipeline.clearRenderTypeMask(LLPipeline::RENDER_TYPE_AVATAR,
                                           LLPipeline::RENDER_TYPE_CONTROL_AV,
                                           LLPipeline::END_RENDER_TYPES);
-            gPipeline.renderShadow(view, proj, cam, cull_result, true);
+            gPipeline.renderShadow(view, proj, cam, cull_result, !upward,
+                                   upward ? GL_GREATER : GL_LESS);
             gPipeline.popRenderTypeMask();
         }
 
         mTarget.flush();
 
-        // <SS:Nexii> The band's depth lands via the shared SSGLReadback worker: the synchronous glReadPixels that used to block becomes a glGetTexImage on a dedicated GL thread, and applyBand() runs the step after the texels come back (see mJustCaptured). The worker writes only its own buffer; mDone copies into mBuild.mDepth on the main thread, so the Build never sees a partial read.
-        mBuild.mDepth.assign((size_t)res * res, 0.f);
+        // <SS:Nexii> The band's depth lands via the shared SSGLReadback worker: the synchronous glReadPixels that used to block becomes a glGetTexImage on a dedicated GL thread, and applyBand() runs once both passes have landed (see mJustCaptured). The worker writes only its own buffer; mDone copies into the pass's slot on the main thread, so the Build never sees a partial read.
+        mBuild.mDepth[pass].assign((size_t)res * res, upward ? 0.f : 1.f);
         mReadbackPending = true;
         const U32 tres = (U32)res;
+        const S32 pass_copy = pass;
 
         SSGLReadback::Job job;
         job.mTexture = mTarget.getDepth();
@@ -611,7 +683,7 @@ bool SSWorldField::captureBand(Tile& tile)
         job.mHeight = tres;
         job.mFormat = GL_DEPTH_COMPONENT;
         job.mType = GL_FLOAT;
-        job.mDone = [this, tres](const U8* data, size_t bytes)
+        job.mDone = [this, tres, pass_copy](const U8* data, size_t bytes)
         {
             mReadbackPending = false;
             if (mClearPending)
@@ -621,9 +693,9 @@ bool SSWorldField::captureBand(Tile& tile)
                 return;
             }
             const size_t n = (size_t)tres * tres;
-            if (bytes >= n * sizeof(F32) && mBuild.mDepth.size() >= n)
+            if (bytes >= n * sizeof(F32) && mBuild.mDepth[pass_copy].size() >= n)
             {
-                memcpy(mBuild.mDepth.data(), data, n * sizeof(F32));
+                memcpy(mBuild.mDepth[pass_copy].data(), data, n * sizeof(F32));
             }
         };
         if (!SSGLReadback::getInstance()->submit(job))
@@ -658,26 +730,30 @@ void SSWorldField::ensureBands(Tile& tile, S32 bands)
 
     tile.mBandTop.resize(new_cells);
     std::fill(tile.mBandTop.begin() + old_cells, tile.mBandTop.end(), NO_SURFACE);
+    tile.mBandUnder.resize(new_cells);
+    std::fill(tile.mBandUnder.begin() + old_cells, tile.mBandUnder.end(), NO_SURFACE);
     tile.mBandFlags.resize(new_cells);
     std::fill(tile.mBandFlags.begin() + old_cells, tile.mBandFlags.end(), 0);
     tile.mAllocBands = next;
 }
 
-// Splices the captured band into the tile: per column, the highest surface
-// inside the band, projected out of the depth readback. Full builds write
-// every column; rect builds only the dirty rectangle's columns.
+// Splices the captured band into the tile: pass zero's depth is the highest
+// up-facing surface (with the water and ground fallbacks), pass one's is the
+// topmost body's underside. Full builds write every column; rect builds only
+// the dirty rectangle's columns.
 void SSWorldField::applyBand(Tile& tile)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_WORLDFIELD_GRID);
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp || mBuild.mDepth.empty()) return;
+    if (!regionp || mBuild.mDepth[0].empty() || mBuild.mDepth[1].empty()) return;
 
     const S32 band = mBuild.mBand;
     ensureBands(tile, band + 1);
 
     const F32 band_top = bandTopZ(band, tile.mBandHeight);
-    const F32 range = tile.mBandHeight + 2.f;
+    const F32 band_bottom = band_top - tile.mBandHeight;
+    const F32 range = tile.mBandHeight;
     const F32 hi = band_top - BOUNDARY_EPSILON;
 
     const S32 x0 = mBuild.mRectOnly ? mBuild.mRectX0 : 0;
@@ -701,6 +777,7 @@ void SSWorldField::applyBand(Tile& tile)
 
     const S32 stride = tile.mRes;
     F32* top_z = &tile.mBandTop[(size_t)band * (size_t)tile.mRes * (size_t)tile.mRes];
+    F32* under_z = &tile.mBandUnder[(size_t)band * (size_t)tile.mRes * (size_t)tile.mRes];
     U8* top_flags = &tile.mBandFlags[(size_t)band * tile.mRes * tile.mRes];
 
     U32 hits = 0;
@@ -715,6 +792,7 @@ void SSWorldField::applyBand(Tile& tile)
             const size_t idx = (size_t)cy * stride + cx;
 
             F32 z = NO_SURFACE;
+            F32 under = NO_SURFACE;
             U8 flags = 0;
 
             const F32 u = (wx - frust_min_x) / (2.f * half);
@@ -723,13 +801,28 @@ void SSWorldField::applyBand(Tile& tile)
             {
                 const S32 tx = llmin((S32)(u * (F32)cap_res), cap_res - 1);
                 const S32 ty = llmin((S32)(v * (F32)cap_res), cap_res - 1);
-                const F32 d = mBuild.mDepth[(size_t)ty * cap_res + tx];
-                if (d < DEPTH_MISS)
+
+                // Pass zero: the highest up-facing surface. Clamped into the
+                // band at its top (structure reaching the band's ceiling
+                // belongs here and to the band above).
+                const F32 d0 = mBuild.mDepth[0][(size_t)ty * cap_res + tx];
+                if (d0 < DEPTH_MISS)
                 {
-                    z = band_top - d * range;
+                    z = band_top - d0 * range;
                     if (z > hi) z = hi;
                     flags = SSRainShadowMap::SURF_MAPPED;
-                    ++hits;
+                }
+
+                // Pass one: the topmost body's underside - the farthest
+                // front-facing hit from below, so its miss sentinel is zero
+                // and its distance maps up from the band's floor. No
+                // fallbacks - a miss means no body hangs over this column
+                // inside the band.
+                const F32 d1 = mBuild.mDepth[1][(size_t)ty * cap_res + tx];
+                if (d1 > DEPTH_MISS_UP)
+                {
+                    under = band_bottom + d1 * range;
+                    if (under > hi) under = hi;
                 }
             }
 
@@ -771,12 +864,16 @@ void SSWorldField::applyBand(Tile& tile)
 
             // Splice, and notice when the column actually changed so a
             // no-op edit does not bump the geometry serial.
-            if (fabsf(top_z[idx] - z) > 0.01f || top_flags[idx] != flags)
+            if (fabsf(top_z[idx] - z) > 0.01f || top_flags[idx] != flags
+                || fabsf(under_z[idx] - under) > 0.01f)
             {
                 mBuild.mChanged = true;
             }
             top_z[idx] = z;
+            under_z[idx] = under;
             top_flags[idx] = flags;
+
+            if (z > NO_SURFACE + 1.f || under > NO_SURFACE + 1.f) ++hits;
         }
     }
 
@@ -790,6 +887,110 @@ void SSWorldField::applyBand(Tile& tile)
     else
     {
         ++mBuild.mEmptyRun;
+    }
+}
+
+// <SS:Nexii> Folds the capture scratch into the column span store: per
+// column, the per-band bodies ([underside, top], or the band's own floor and
+// ceiling where a body crosses it) sort bottom-up, merge across band planes
+// and any gap thinner than the assumed slab, and the first span extends to
+// the world floor when the gap beneath it is thinner still. The result is the
+// store the proposal described: a column is a short list of [bottom, top]
+// solid spans, air between them, every stored gap at least the slab threshold
+// tall - a wall standing on unmeasured ground stays solid to the floor, and a
+// room is one air interval whatever band its floor and ceiling landed in.
+void SSWorldField::computeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
+{
+    const S32 res = tile.mRes;
+    const size_t layer = (size_t)res * res;
+
+    x0 = llmax(x0, 0); y0 = llmax(y0, 0);
+    x1 = llmin(x1, res); y1 = llmin(y1, res);
+
+    for (S32 y = y0; y < y1; ++y)
+    {
+        for (S32 x = x0; x < x1; ++x)
+        {
+            const size_t col = (size_t)y * res + x;
+
+            F32 bottoms[SS_WF_MAX_SPANS];
+            F32 tops[SS_WF_MAX_SPANS];
+            U8 flags[SS_WF_MAX_SPANS];
+            S32 n = 0;
+
+            for (S32 b = 0; b < tile.mBandCount; ++b)
+            {
+                const size_t bi = (size_t)b * layer + col;
+                const F32 top = tile.mBandTop[bi];
+                const F32 under = tile.mBandUnder[bi];
+                const bool hasT = top > NO_SURFACE * 0.5f;
+                const bool hasU = under > NO_SURFACE * 0.5f;
+                if (!hasT && !hasU) continue;
+
+                const F32 b0 = (F32)b * tile.mBandHeight;
+                const F32 b1 = b0 + tile.mBandHeight;
+                const F32 bot = hasU ? under : b0;
+                const F32 tp = hasT ? top : b1;
+                const U8 fl = hasT ? tile.mBandFlags[bi] : 0;
+
+                // Heal the band planes: a body continuing from the band
+                // below, or separated from it by less than a slab, is one
+                // span.
+                if (n > 0 && bot - tops[n - 1] < SS_WF_SPAN_SLAB_M)
+                {
+                    tops[n - 1] = tp;
+                    flags[n - 1] = fl;
+                    continue;
+                }
+
+                // Over the span budget: collapse the thinnest air gap rather
+                // than dropping a body.
+                if (n == SS_WF_MAX_SPANS)
+                {
+                    S32 thinnest = 0;
+                    F32 best = FLT_MAX;
+                    for (S32 j = 0; j + 1 < n; ++j)
+                    {
+                        const F32 gap = bottoms[j + 1] - tops[j];
+                        if (gap < best) { best = gap; thinnest = j; }
+                    }
+                    for (S32 j = thinnest + 1; j < n; ++j)
+                    {
+                        bottoms[j] = bottoms[j + 1];
+                        tops[j] = tops[j + 1];
+                        flags[j] = flags[j + 1];
+                    }
+                    --n;
+                }
+
+                bottoms[n] = bot;
+                tops[n] = tp;
+                flags[n] = fl;
+                ++n;
+            }
+
+            // The gap beneath the first span is air only when it is at least
+            // a slab tall - a wall standing on unmeasured ground stays solid
+            // to the world floor.
+            if (n > 0 && bottoms[0] < SS_WF_SPAN_SLAB_M) bottoms[0] = 0.f;
+
+            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+            {
+                const size_t si = (size_t)k * layer + col;
+                if (k < n)
+                {
+                    tile.mSpanBottom[si] = bottoms[k];
+                    tile.mSpanTop[si] = tops[k];
+                    tile.mSpanFlags[si] = flags[k];
+                }
+                else
+                {
+                    tile.mSpanBottom[si] = NO_SURFACE;
+                    tile.mSpanTop[si] = NO_SURFACE;
+                    tile.mSpanFlags[si] = 0;
+                }
+            }
+        }
     }
 }
 
@@ -819,13 +1020,27 @@ void SSWorldField::commitBuild(Tile& tile)
 
     // Rect cleared, target reset, timestamps refreshed. The dirty rect is a
     // one-shot: the re-peel splices exactly what was marked.
-    tile.mDirtyX0 = tile.mDirtyY0 = 0;
-    tile.mDirtyX1 = tile.mDirtyY1 = 0;
-    tile.mDirty = false;
-    tile.mBandTarget = 0;
-    tile.mCaptureTime = mNow;
-    tile.mLastTouched = mNow;
-    mBuild.mActive = false;
+// The capture scratch folds into the column span store here - full builds
+// convert every column, rect re-peels only the dirty rectangle's - so the
+// store is current whenever the geometry serial moves, and the flood reads
+// spans, never bands.
+if (mBuild.mRectOnly)
+{
+    computeSpans(tile, tile.mDirtyX0, tile.mDirtyY0, tile.mDirtyX1, tile.mDirtyY1);
+}
+else
+{
+    computeSpans(tile, 0, 0, tile.mRes, tile.mRes);
+}
+
+tile.mDirtyX0 = tile.mDirtyY0 = 0;
+tile.mDirtyX1 = tile.mDirtyY1 = 0;
+tile.mDirty = false;
+tile.mBandTarget = 0;
+tile.mCaptureTime = mNow;
+tile.mLastTouched = mNow;
+mBuild.mPass = 0;
+mBuild.mActive = false;
 
 // The connectivity labels follow every commit, not only the ones that changed
     // something: they also serve their first fill, and a commit that changed
@@ -881,13 +1096,14 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
             F32 z = -FLT_MAX;
             U8 flags = 0;
 
-            for (S32 b = tile.mBandCount - 1; b >= 0; --b)
+            // The column's landing surface: the highest solid span's top.
+            for (S32 k = SS_WF_MAX_SPANS - 1; k >= 0; --k)
             {
-                const size_t bi = (size_t)b * (size_t)tile.mRes * (size_t)tile.mRes + col;
-                if (tile.mBandTop[bi] > -FLT_MAX * 0.5f)
+                const size_t si = (size_t)k * (size_t)tile.mRes * (size_t)tile.mRes + col;
+                if (tile.mSpanTop[si] > -FLT_MAX * 0.5f)
                 {
-                    z = tile.mBandTop[bi];
-                    flags = tile.mBandFlags[bi];
+                    z = tile.mSpanTop[si];
+                    flags = tile.mSpanFlags[si];
                     break;
                 }
             }
@@ -969,13 +1185,13 @@ bool SSWorldField::surfaceTop(const LLVector3& pos_agent, F32& z, U8& flags) con
     const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile->mCell), 0, tile->mRes - 1);
 
     const size_t col = (size_t)cy * tile->mRes + cx;
-    for (S32 b = tile->mBandCount - 1; b >= 0; --b)
+    for (S32 k = SS_WF_MAX_SPANS - 1; k >= 0; --k)
     {
-        const size_t bi = (size_t)b * (size_t)tile->mRes * (size_t)tile->mRes + col;
-        if (tile->mBandTop[bi] > -FLT_MAX * 0.5f)
+        const size_t si = (size_t)k * (size_t)tile->mRes * (size_t)tile->mRes + col;
+        if (tile->mSpanTop[si] > -FLT_MAX * 0.5f)
         {
-            z = tile->mBandTop[bi];
-            flags = tile->mBandFlags[bi];
+            z = tile->mSpanTop[si];
+            flags = tile->mSpanFlags[si];
             return true;
         }
     }
@@ -1025,69 +1241,111 @@ bool SSWorldField::coverageDetail(const LLVector3& pos_agent, bool& covered,
     // land a hair above the camera's own feet.
     const F32 over = pos_agent.mV[VZ] + 0.5f;
 
+    // The column's spans, lowest first: the first span whose top clears the
+    // camera is the ceiling of the space the camera stands in, and the
+    // highest span's top is the column top.
+    const size_t layer = (size_t)tile->mRes * tile->mRes;
     bool any = false;
-    for (S32 b = 0; b < tile->mBandCount; ++b)
+    for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
     {
-        const size_t bi = (size_t)b * (size_t)tile->mRes * (size_t)tile->mRes + col;
-        const F32 z = tile->mBandTop[bi];
-        if (z <= -FLT_MAX * 0.5f) continue;
+        const size_t si = (size_t)k * layer + col;
+        const F32 top = tile->mSpanTop[si];
+        if (top <= -FLT_MAX * 0.5f) break;
 
         any = true;
-        column_top_z = llmax(column_top_z, z);
-        if (z > over && (!covered || z < ceiling_z))
+        column_top_z = llmax(column_top_z, top);
+        if (top > over && (!covered || top < ceiling_z))
         {
             covered = true;
-            ceiling_z = z;
+            ceiling_z = top;
         }
     }
 
     return any;
 }
 
-// <SS:Nexii> Air connectivity lookup: the band the point stands in, read from the labels the flood stored, or AIR_UNKNOWN when nothing is current - after an edit, before the first flood, or off-tile.
+// <SS:Nexii> Which air gap of a column contains z: the gaps are the intervals
+// between, beneath and above the column's solid spans, every stored one at
+// least the slab threshold tall. Returns the gap index (0 below the lowest
+// span, n above the highest), or -1 when z falls inside a body - the store
+// has no verdict for the inside of solid things.
+S32 SSWorldField::gapAt(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) const
+{
+    const size_t layer = (size_t)tile.mRes * tile.mRes;
+    const F32 ceiling = (F32)tile.mBandCount * tile.mBandHeight;
+
+    F32 prev = 0.f;
+    for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+    {
+        const size_t si = (size_t)k * layer + col;
+        const F32 stop = tile.mSpanTop[si];
+        if (stop <= NO_SURFACE * 0.5f)
+        {
+            g0 = prev; g1 = ceiling;
+            return k;                                   // open above the last span
+        }
+        const F32 bottom = tile.mSpanBottom[si];
+        if (z < bottom - 0.01f)
+        {
+            g0 = prev; g1 = bottom;
+            return k;                                   // the gap beneath this span
+        }
+        if (z <= stop + 0.01f) return -1;               // inside the body
+        prev = stop;
+    }
+    g0 = prev; g1 = ceiling;
+    return SS_WF_MAX_SPANS;                             // above the last span
+}
+
+// <SS:Nexii> Air connectivity lookup: the air gap of the column that contains
+// the point, read from the labels the flood stored, or AIR_UNKNOWN when
+// nothing is current - after an edit, before the first flood, or off-tile. A
+// point inside a body reads AIR_SOLID.
 U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
     if (!tile || !tile->mValid) return AIR_UNKNOWN;
-    if (tile->mAirLabel.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_UNKNOWN;
+    if (tile->mGapLabel.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_UNKNOWN;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return AIR_UNKNOWN;
 
     const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile->mCell), 0, tile->mRes - 1);
     const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile->mCell), 0, tile->mRes - 1);
-    const S32 band = llclamp((S32)(pos_agent.mV[VZ] / tile->mBandHeight), 0, tile->mBandCount - 1);
+    const size_t col = (size_t)cy * tile->mRes + cx;
 
-    const size_t bi = ((size_t)band * tile->mRes + cy) * tile->mRes + cx;
-    return (bi < tile->mAirLabel.size()) ? tile->mAirLabel[bi] : (U8)AIR_UNKNOWN;
+    F32 g0, g1;
+    const S32 gap = gapAt(*tile, col, pos_agent.mV[VZ], g0, g1);
+    if (gap < 0) return AIR_SOLID;
+    const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)gap;
+    return (gi < tile->mGapLabel.size()) ? tile->mGapLabel[gi] : (U8)AIR_UNKNOWN;
 }
 
-// Occlusion depth behind airLabelAt: the flood's distance walk per band-cell,
+// Occlusion depth behind airLabelAt: the flood's distance walk per air gap,
 // gated by the same serial check so a stale walk is never served.
 U32 SSWorldField::airDepthAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
     if (!tile || !tile->mValid) return AIR_DEPTH_UNREACHED;
-    if (tile->mAirDepth.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_DEPTH_UNREACHED;
+    if (tile->mGapDepth.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_DEPTH_UNREACHED;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return AIR_DEPTH_UNREACHED;
 
     const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile->mCell), 0, tile->mRes - 1);
     const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile->mCell), 0, tile->mRes - 1);
-    const S32 band = llclamp((S32)(pos_agent.mV[VZ] / tile->mBandHeight), 0, tile->mBandCount - 1);
+    const size_t col = (size_t)cy * tile->mRes + cx;
 
-    const size_t bi = ((size_t)band * tile->mRes + cy) * tile->mRes + cx;
-    return (bi < tile->mAirDepth.size()) ? (U32)tile->mAirDepth[bi] : AIR_DEPTH_UNREACHED;
+    F32 g0, g1;
+    const S32 gap = gapAt(*tile, col, pos_agent.mV[VZ], g0, g1);
+    if (gap < 0) return AIR_DEPTH_UNREACHED;
+    const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)gap;
+    return (gi < tile->mGapDepth.size()) ? (U32)tile->mGapDepth[gi] : AIR_DEPTH_UNREACHED;
 }
 
-// <SS:Nexii> The enclosure spectrum at a point. The raw band-cell label
-// answers only where the point's own band-cell is air - the mezzanine case -
-// so a point sitting inside a SOLID cell is re-resolved against the column's
-// stored surfaces: above the band's surface is open sub-band air, and it
-// inherits the nearest air label above it in the column (the air mass it
-// physically opens into); below the surface is the implied solid body, where
-// the store has no answer. Everything else rides the labels' own serial gate.
+// <SS:Nexii> The enclosure spectrum at a point: the air gap containing the
+// point answers with its own label and occlusion depth. A point inside a body
+// has no verdict (-1) - the caller keeps its own probe answer for that.
 F32 SSWorldField::enclosureAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
@@ -1116,57 +1374,26 @@ F32 SSWorldField::enclosureAtRegion(U64 region_handle, const LLVector3& pos_agen
 F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& tile,
                                     const LLVector3& pos_agent) const
 {
-    if (tile.mAirLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return -1.f;
+    if (tile.mGapLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return -1.f;
 
     const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile.mCell), 0, tile.mRes - 1);
     const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile.mCell), 0, tile.mRes - 1);
-    const S32 band = llclamp((S32)(pos_agent.mV[VZ] / tile.mBandHeight), 0, tile.mBandCount - 1);
-    const size_t cells = (size_t)tile.mBandCount * tile.mRes * tile.mRes;
-    if (cells > tile.mAirLabel.size()) return -1.f;
+    const size_t layer = (size_t)tile.mRes * tile.mRes;
+    const size_t col = (size_t)cy * tile.mRes + cx;
+    if ((size_t)(SS_WF_MAX_SPANS + 1) * layer > tile.mGapLabel.size()) return -1.f;
 
-    auto labelAt = [&](S32 b) -> U8
-    {
-        const size_t bi = ((size_t)b * tile.mRes + cy) * tile.mRes + cx;
-        return (bi < tile.mAirLabel.size()) ? tile.mAirLabel[bi] : (U8)AIR_UNKNOWN;
-    };
-    auto topAt = [&](S32 b) -> F32
-    {
-        const size_t bi = ((size_t)b * tile.mRes + cy) * tile.mRes + cx;
-        return (bi < tile.mBandTop.size()) ? tile.mBandTop[bi] : NO_SURFACE;
-    };
+    F32 g0, g1;
+    const S32 gap = gapAt(tile, col, pos_agent.mV[VZ], g0, g1);
+    if (gap < 0) return -1.f;   // inside a body: the store has no verdict
 
-    U8 label = labelAt(band);
-    S32 air_band = band;    // the band whose depth figure answers for the point
-    if (label == AIR_SOLID)
-    {
-        // Sub-band resolution: the band's own surface decides whether the
-        // point is in the open air above it or inside the implied solid.
-        if (pos_agent.mV[VZ] <= topAt(band) + 0.01f) return -1.f;
-
-        label = AIR_UNKNOWN;
-        for (S32 b = band + 1; b < tile.mBandCount; ++b)
-        {
-            const U8 above = labelAt(b);
-            if (above == AIR_SOLID) continue;
-            label = above;
-            air_band = b;
-            break;
-        }
-        // No air band anywhere above: the sliver of sub-band air is sealed
-        // under a full stack of structure - maximally enclosed, not open.
-        if (label == AIR_UNKNOWN || label == AIR_SOLID) return 1.f;
-    }
-
-    switch (label)
+    const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)gap;
+    switch (tile.mGapLabel[gi])
     {
         case AIR_OUTDOORS: return 0.f;
         case AIR_INTERIOR: return 1.f;
         case AIR_SHELTERED:
         {
-            // The depth figure of the resolved air band - airDepthAt would
-            // re-derive the point's own (solid) band and answer unreached.
-            const size_t di = ((size_t)air_band * tile.mRes + cy) * tile.mRes + cx;
-            const U16 d = (di < tile.mAirDepth.size()) ? tile.mAirDepth[di] : (U16)AIR_DEPTH_UNREACHED;
+            const U16 d = tile.mGapDepth[gi];
             if (d == AIR_DEPTH_UNREACHED) return 1.f;
             const F32 metres = (F32)d * tile.mCell;
             return metres / (metres + SS_WF_ENCLOSURE_TAU_M);
@@ -1176,31 +1403,32 @@ F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& t
 }
 
 // <SS:Nexii> The precomputed wall profile at a point: the four cardinal
-// distances the lattice holds for the point's band, in the side-probe
-// contract (metres, saturated at the reach cap).
+// distances the lattice holds for the vertical ring the point's height falls
+// in, in the side-probe contract (metres, saturated at the reach cap).
 bool SSWorldField::acousticAt(const LLVector3& pos_agent, F32 wall[4]) const
 {
     const Tile* tile = tileAt(pos_agent);
     if (!tile || !tile->mValid) return false;
 
     const Tile::Acoustic& ac = tile->mAcoustic;
-    if (ac.mLatRes < 1 || ac.mSerial != tile->mGeomSerial) return false;
+    if (ac.mLatRes < 1 || ac.mSerial != tile->mGeomSerial || ac.mCeiling <= 0.f) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return false;
 
+    const S32 rings = llclamp((S32)(ac.mWall.size() / ((size_t)ac.mLatRes * ac.mLatRes * 4u)), 1, 16);
+    const S32 ring = llclamp((S32)(pos_agent.mV[VZ] / ac.mCeiling * (F32)rings), 0, rings - 1);
     const S32 lx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / ac.mLatCell), 0, ac.mLatRes - 1);
     const S32 ly = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / ac.mLatCell), 0, ac.mLatRes - 1);
-    const S32 band = llclamp((S32)(pos_agent.mV[VZ] / tile->mBandHeight), 0, tile->mBandCount - 1);
 
-    const size_t base = ((size_t)band * ac.mLatRes * ac.mLatRes + (size_t)ly * ac.mLatRes + (size_t)lx) * 4u;
+    const size_t base = ((size_t)ring * ac.mLatRes * ac.mLatRes + (size_t)ly * ac.mLatRes + (size_t)lx) * 4u;
     if (base + 3 >= ac.mWall.size()) return false;
 
     for (S32 i = 0; i < 4; ++i) wall[i] = ac.mWall[base + i];
     return true;
 }
 
-// Share of a tile's band-cells carrying a current label - 1.0 once the first
+// Share of a tile's air gaps carrying a current label - 1.0 once the first
 // flood has landed and nothing has edited since. The overlay reads this to
 // tell a settled field from one still catching up.
 F32 SSWorldField::airCoverage(U64 region_handle) const
@@ -1209,19 +1437,27 @@ F32 SSWorldField::airCoverage(U64 region_handle) const
     if (it == mTiles.end() || !it->second.mValid) return 0.f;
 
     const Tile& tile = it->second;
-    if (tile.mAirLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return 0.f;
-    if (tile.mBandCount < 1 || tile.mRes < 1) return 0.f;
+    if (tile.mGapLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return 0.f;
+    if (tile.mRes < 1) return 0.f;
 
-    const size_t cells = (size_t)tile.mBandCount * (size_t)tile.mRes * (size_t)tile.mRes;
-    if (tile.mAirLabel.size() < cells) return 0.f;
+    const size_t layer = (size_t)tile.mRes * tile.mRes;
+    const size_t per_col = (size_t)SS_WF_MAX_SPANS + 1;
+    if (tile.mGapLabel.size() < per_col * layer) return 0.f;
 
     size_t labelled = 0;
-    for (size_t i = 0; i < cells; ++i)
+    size_t total = 0;
+    for (size_t col = 0; col < layer; ++col)
     {
-        const U8 l = tile.mAirLabel[i];
-        if (l != AIR_UNKNOWN) ++labelled;
+        S32 n = 0;
+        while (n < SS_WF_MAX_SPANS && tile.mSpanTop[(size_t)n * layer + col] > NO_SURFACE * 0.5f) ++n;
+        for (S32 k = 0; k <= n; ++k)
+        {
+            const size_t gi = col * per_col + (size_t)k;
+            ++total;
+            if (tile.mGapLabel[gi] != AIR_UNKNOWN) ++labelled;
+        }
     }
-    return (F32)labelled / (F32)cells;
+    return (total > 0) ? (F32)labelled / (F32)total : 1.f;
 }
 
 // The DRAINAGE_NETWORK core over one landing surface. Barnes' priority flood
@@ -1383,168 +1619,171 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
     return true;
 }
 
-// The flood itself, run on the general worker queue against a snapshot. A
-// band-cell is solid where the capture found a surface in that band; air
-// otherwise. Every air cell in the top band, and every air cell on the
-// horizontal border, starts OUTSIDE; the flood walks 6-connected through air.
-// The touching classification then splits the reachable air: a cell whose
-// column carries structure above it is covered, everything else is OUTDOORS.
-// Covered air earns SHELTERED or INTERIOR by an aperture budget handed across
-// each outdoors-sheltered touching: the opening's porch (the outdoors cells
-// touching it, clustered 6-connected so one opening is one aperture) seeds
-// sqrt(aperture cells) - the opening's linear width, not its area - and every
-// cell step inward spends one, widest-path propagated so the best opening
-// wins. A cave mouth therefore stays sheltered tens of cells deep while a
-// window's budget dies a cell or two past the glass; air every budget missed
-// is INTERIOR, exactly what the wind solve wants to skip and the soundscape
-// wants to know it is standing in. Evidence-only in the same spirit as the
-// probe carve: a passage narrower than a cell stays uncounted rather than
-// invented. The second walk measures occlusion: every outdoors or sheltered
-// cell's graph distance in cells to the nearest OUTDOORS cell, the "how
-// enclosed is this air" figure the acoustic channel's travel times and sparse
-// air solve both read. Interior cells never reach the outdoors through air,
-// so they keep AIR_DEPTH_UNREACHED - sealed is maximally enclosed by
-// construction. Transient working set at the densest legal tile (1024^2 x 24
-// bands) is a few hundred MB on the worker; typical builds run a few bands
-// and a fraction of that.
-static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
-                        std::vector<U8>& label, std::vector<U16>& depth)
+// The flood, over the store's air gaps. A column is a short list of solid
+// [bottom, top] spans; the air is the gaps between and around them, and the
+// flood's nodes are exactly those gaps - a room is ONE node whatever band its
+// floor and ceiling landed in, the interior the wind solve wants to skip and
+// the soundscape wants to know it is standing in. Adjacency is horizontal
+// only, and strict: two columns' gaps connect when their intervals overlap by
+// more than a sliver - a corner touch where a wall meets a ceiling is not a
+// door. Vertical movement is free inside a node, because a gap already spans
+// its full height. Evidence-only in the same spirit as the probe carve: a
+// passage narrower than the store's slab threshold never becomes a gap at
+// all. The touching classification then splits the reachable gaps three ways
+// - OUTDOORS where nothing stands above them (the gap above every column's
+// highest span starts OUTDOORS by definition), SHELTERED while an opening's
+// aperture budget lasts, INTERIOR once every budget is spent - and the second
+// walk measures each gap's graph distance to the nearest OUTDOORS gap, the
+// "how enclosed is this air" figure the acoustic channel's travel times and
+// sparse air solve both read.
+static void ss_wf_flood(S32 res, S32 max_spans, F32 ceiling,
+                        const std::vector<F32>& span_top,
+                        const std::vector<F32>& span_bottom,
+                        std::vector<U8>& gap_label, std::vector<U16>& gap_depth)
 {
     const size_t layer = (size_t)res * res;
-    const size_t cells = layer * (size_t)bands;
-    label.assign(cells, SSWorldField::AIR_INTERIOR);
-    depth.assign(cells, (U16)SSWorldField::AIR_DEPTH_UNREACHED);
+    const size_t per_col = (size_t)max_spans + 1;
+    const size_t nodes = layer * per_col;
+    gap_label.assign(nodes, SSWorldField::AIR_SOLID);
+    gap_depth.assign(nodes, (U16)SSWorldField::AIR_DEPTH_UNREACHED);
 
-    std::vector<S32> queue;
-    queue.reserve(cells / 8);
+    static const S32 DX[4] = { 1, -1, 0, 0 };
+    static const S32 DY[4] = { 0, 0, 1, -1 };
+    const F32 EPS = 0.05f;
 
-    auto isAir = [&](size_t i) { return band_top[i] <= -FLT_MAX * 0.5f; };
-
-    for (size_t i = 0; i < cells; ++i)
+    // Gap bounds per node, precomputed once: gap k of a column with n spans
+    // runs from the span below (or the world floor) to the span above (or the
+    // capture ceiling). Slots past a column's span count are empty.
+    std::vector<F32> gb0(nodes, 0.f);
+    std::vector<F32> gb1(nodes, 0.f);
+    std::vector<S32> span_count(layer, 0);
+    for (size_t col = 0; col < layer; ++col)
     {
-        if (!isAir(i))
-        {
-            label[i] = SSWorldField::AIR_SOLID;
-            continue;
-        }
+        S32 n = 0;
+        while (n < max_spans && span_top[(size_t)n * layer + col] > NO_SURFACE * 0.5f) ++n;
+        span_count[col] = n;
 
-        const S32 b = (S32)(i / layer);
-        const S32 y = (S32)((i % layer) / res);
-        const S32 x = (S32)(i % res);
-        if (b == bands - 1 || x == 0 || y == 0 || x == res - 1 || y == res - 1)
+        for (S32 k = 0; k <= max_spans; ++k)
         {
-            label[i] = SSWorldField::AIR_OUTDOORS;
-            queue.push_back((S32)i);
+            const size_t node = col * per_col + (size_t)k;
+            if (k > n) continue;
+            gb0[node] = (k == 0) ? 0.f : span_top[(size_t)(k - 1) * layer + col];
+            gb1[node] = (k == n) ? ceiling : span_bottom[(size_t)k * layer + col];
         }
     }
+    auto nodeExists = [&](size_t node) { return gb1[node] > gb0[node] + EPS; };
 
-    static const S32 DX[6] = { 1, -1, 0, 0, 0, 0 };
-    static const S32 DY[6] = { 0, 0, 1, -1, 0, 0 };
-    static const S32 DB[6] = { 0, 0, 0, 0, 1, -1 };
+    // Adjacency is strict overlap: a corner touch where one column's gap ends
+    // exactly where the neighbour's begins is a wall junction, not a door.
+    auto touches = [&](size_t node, auto&& fn)
+    {
+        const size_t col = node / per_col;
+        const S32 x = (S32)(col % (size_t)res);
+        const S32 y = (S32)(col / (size_t)res);
+        for (S32 d = 0; d < 4; ++d)
+        {
+            const S32 nx = x + DX[d], ny = y + DY[d];
+            if (nx < 0 || ny < 0 || nx >= res || ny >= res) continue;
+
+            const size_t ncol = (size_t)ny * res + nx;
+            for (S32 kj = 0; kj <= max_spans; ++kj)
+            {
+                const size_t nnode = ncol * per_col + (size_t)kj;
+                if (gb1[nnode] <= gb0[nnode] + EPS) continue;
+                if (!(gb0[node] < gb1[nnode] - EPS && gb0[nnode] < gb1[node] - EPS)) continue;
+                fn(nnode);
+            }
+        }
+    };
+
+    // Every column's top gap is open sky; every gap of a border column can
+    // walk out sideways. The flood labels the rest from there.
+    std::vector<S32> queue;
+    queue.reserve(nodes / 8);
+    for (size_t col = 0; col < layer; ++col)
+    {
+        const S32 x = (S32)(col % (size_t)res);
+        const S32 y = (S32)(col / (size_t)res);
+        const bool border = x == 0 || y == 0 || x == res - 1 || y == res - 1;
+        const S32 n = span_count[col];
+
+        for (S32 k = 0; k <= max_spans; ++k)
+        {
+            const size_t node = col * per_col + (size_t)k;
+            if (gb1[node] <= gb0[node] + EPS) continue;
+            if (k != n && !border) continue;
+            gap_label[node] = SSWorldField::AIR_OUTDOORS;
+            queue.push_back((S32)node);
+        }
+    }
 
     for (size_t head = 0; head < queue.size(); ++head)
     {
-        const S32 i = queue[head];
-        const S32 b = (S32)((size_t)i / layer);
-        const S32 y = (S32)(((size_t)i % layer) / res);
-        const S32 x = (S32)((size_t)i % res);
-
-        for (S32 d = 0; d < 6; ++d)
+        touches((size_t)queue[head], [&](size_t nnode)
         {
-            const S32 nx = x + DX[d], ny = y + DY[d], nb = b + DB[d];
-            if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
-
-            const size_t j = ((size_t)nb * res + ny) * (size_t)res + nx;
-            if (label[j] != SSWorldField::AIR_INTERIOR) continue;
-
-            label[j] = SSWorldField::AIR_OUTDOORS;
-            queue.push_back((S32)j);
-        }
+            U8& lab = gap_label[nnode];
+            if (lab != SSWorldField::AIR_INTERIOR) return;
+            lab = SSWorldField::AIR_OUTDOORS;
+            queue.push_back((S32)nnode);
+        });
     }
 
     // ---- the touching classification: outdoors / sheltered / indoors ----
-    auto xOf = [&](size_t i) { return (S32)(i % res); };
-    auto yOf = [&](size_t i) { return (S32)((i % layer) / res); };
-    auto bOf = [&](size_t i) { return (S32)(i / layer); };
-    auto at = [&](S32 x, S32 y, S32 b) { return ((size_t)b * res + y) * (size_t)res + x; };
-
-    // Topmost solid band per column: an air cell above it has nothing over it
-    // and the elements land straight on it - outdoors, whatever the flood
-    // walked through to reach it.
-    std::vector<S32> top_solid(layer, -1);
-    for (S32 b = 0; b < bands; ++b)
+    // Covered gaps: outside-connected but with structure standing over them.
+    // A gap below a column's top span always has that structure; the top gap
+    // never does.
+    std::vector<U8> covered(nodes, 0);
+    for (size_t col = 0; col < layer; ++col)
     {
-        const size_t base = (size_t)b * layer;
-        for (S32 c = 0; c < layer; ++c)
+        const S32 n = span_count[col];
+        for (S32 k = 0; k <= max_spans; ++k)
         {
-            if (!isAir(base + c)) top_solid[c] = b;
+            const size_t node = col * per_col + (size_t)k;
+            if (gb1[node] <= gb0[node] + EPS) continue;
+            if (gap_label[node] != SSWorldField::AIR_OUTDOORS) continue;
+            if (k < n) covered[node] = 1;
         }
     }
-
-    // Covered air: outside-connected but with structure standing over it.
-    std::vector<U8> covered(cells, 0);
-    for (size_t i = 0; i < cells; ++i)
+    auto touchesCovered = [&](size_t node)
     {
-        if (label[i] != SSWorldField::AIR_OUTDOORS) continue;
-        if (bOf(i) < top_solid[i % layer]) covered[i] = 1;
-    }
+        bool touch = false;
+        touches(node, [&](size_t nnode) { if (covered[nnode]) touch = true; });
+        return touch;
+    };
 
-    // Porch: the outdoors cells touching covered air, clustered 6-connected
-    // so one opening is one aperture. Two windows in one wall stay separate
-    // clusters (the porch cells are wall-face neighbours only within the
-    // opening), while a door and its adjacent window merge into the one
-    // opening they physically are. Stored as the cluster's budget -
-    // sqrt(cells), the opening's linear width - so a metre-scale window hands
-    // the same shelter in cells whatever the column density is.
-    std::vector<U16> porch(cells, 0);
+    // Porch: the outdoors gaps touching covered air, clustered so one opening
+    // is one aperture. Two windows in one wall stay separate clusters (the
+    // porch gaps are wall-face neighbours only within the opening), while a
+    // door and its adjacent window merge into the one opening they physically
+    // are. Stored as the cluster's budget - sqrt(gaps), the opening's linear
+    // width - so a metre-scale window hands the same shelter in gaps whatever
+    // the column density is.
+    std::vector<U16> porch(nodes, 0);
     std::vector<S32> cluster;
-    for (size_t i = 0; i < cells; ++i)
+    for (size_t node = 0; node < nodes; ++node)
     {
-        if (label[i] != SSWorldField::AIR_OUTDOORS || covered[i] || porch[i]) continue;
-
-        bool touches = false;
-        const S32 ix = xOf(i), iy = yOf(i), ib = bOf(i);
-        for (S32 d = 0; d < 6 && !touches; ++d)
-        {
-            const S32 nx = ix + DX[d], ny = iy + DY[d], nb = ib + DB[d];
-            if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
-            touches = covered[at(nx, ny, nb)] != 0;
-        }
-        if (!touches) continue;
+        if (porch[node] || covered[node]) continue;
+        if (gap_label[node] != SSWorldField::AIR_OUTDOORS) continue;
+        if (!touchesCovered(node)) continue;
 
         cluster.clear();
-        cluster.push_back((S32)i);
-        porch[i] = 1;   // visited mark; the real budget lands after the walk
+        cluster.push_back((S32)node);
+        porch[node] = 1;   // visited mark; the real budget lands after the walk
         for (size_t head = 0; head < cluster.size(); ++head)
         {
-            const S32 j = cluster[head];
-            const S32 jx = xOf(j), jy = yOf(j), jb = bOf(j);
-
-            for (S32 d = 0; d < 6; ++d)
+            touches((size_t)cluster[head], [&](size_t nnode)
             {
-                const S32 nx = jx + DX[d], ny = jy + DY[d], nb = jb + DB[d];
-                if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
+                if (porch[nnode] || covered[nnode]) return;
+                if (gap_label[nnode] != SSWorldField::AIR_OUTDOORS) return;
+                if (!touchesCovered(nnode)) return;
 
-                const size_t k = at(nx, ny, nb);
-                if (label[k] != SSWorldField::AIR_OUTDOORS || covered[k] || porch[k]) continue;
-
-                bool k_touches = false;
-                for (S32 e = 0; e < 6 && !k_touches; ++e)
-                {
-                    const S32 mx = nx + DX[e], my = ny + DY[e], mb = nb + DB[e];
-                    if (mx < 0 || my < 0 || mb < 0 || mx >= res || my >= res || mb >= bands) continue;
-                    k_touches = covered[at(mx, my, mb)] != 0;
-                }
-                if (!k_touches) continue;
-
-                porch[k] = 1;
-                cluster.push_back((S32)k);
-            }
+                porch[nnode] = 1;
+                cluster.push_back((S32)nnode);
+            });
         }
 
         // sqrt(aperture) fits a U16 by construction: a cluster cannot hold
-        // more cells than the tile (25.2M at the densest legal setting), whose
-        // root is ~5020.
+        // more gaps than the tile carries, whose root is far under 65535.
         const U16 budget = (U16)(sqrtf((F32)cluster.size()) + 0.5f);
         for (const S32 j : cluster)
         {
@@ -1552,105 +1791,88 @@ static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
         }
     }
 
-    // Budget propagation over covered air, widest path first: each cell's
+    // Budget propagation over covered gaps, widest path first: each gap's
     // remaining budget is the best (seed budget - steps) over every inward
     // path, so the strongest opening decides how deep the shelter reaches.
     // First pop is final (later entries only ever carry smaller budgets);
-    // spent cells fall back to INTERIOR.
-    std::vector<U16> reach(cells, 0);
+    // spent gaps fall back to INTERIOR.
+    std::vector<U16> reach(nodes, 0);
     std::priority_queue<std::pair<U16, S32> > heap;
-    for (size_t i = 0; i < cells; ++i)
+    for (size_t node = 0; node < nodes; ++node)
     {
-        if (!covered[i]) continue;
+        if (!covered[node]) continue;
 
         U16 best = 0;
-        const S32 ix = xOf(i), iy = yOf(i), ib = bOf(i);
-        for (S32 d = 0; d < 6; ++d)
+        touches(node, [&](size_t nnode)
         {
-            const S32 nx = ix + DX[d], ny = iy + DY[d], nb = ib + DB[d];
-            if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
-
-            const size_t j = at(nx, ny, nb);
-            if (label[j] != SSWorldField::AIR_OUTDOORS || covered[j]) continue;
-            best = llmax(best, porch[j]);
-        }
+            if (covered[nnode]) return;
+            best = llmax(best, porch[nnode]);
+        });
         if (best > 0)
         {
-            reach[i] = best;
-            heap.emplace(best, (S32)i);
+            reach[node] = best;
+            heap.emplace(best, (S32)node);
         }
     }
 
     while (!heap.empty())
     {
         const U16 b = heap.top().first;
-        const S32 i = heap.top().second;
+        const size_t node = (size_t)heap.top().second;
         heap.pop();
-        if (b != reach[(size_t)i]) continue;    // a stronger seed already passed
-        if (b <= 1) continue;                   // nothing left to hand inward
+        if (b != reach[node]) continue;    // a stronger seed already passed
+        if (b <= 1) continue;              // nothing left to hand inward
 
-        const S32 ix = xOf(i), iy = yOf(i), ib = bOf(i);
-        for (S32 d = 0; d < 6; ++d)
+        touches(node, [&](size_t nnode)
         {
-            const S32 nx = ix + DX[d], ny = iy + DY[d], nb = ib + DB[d];
-            if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
+            if (!covered[nnode] || reach[nnode] >= b - 1) return;
 
-            const size_t j = at(nx, ny, nb);
-            if (!covered[j] || reach[j] >= b - 1) continue;
-
-            reach[j] = b - 1;
-            heap.emplace((U16)(b - 1), (S32)j);
-        }
+            reach[nnode] = b - 1;
+            heap.emplace((U16)(b - 1), (S32)nnode);
+        });
     }
 
-    for (size_t i = 0; i < cells; ++i)
+    for (size_t node = 0; node < nodes; ++node)
     {
-        if (!covered[i]) continue;
-        label[i] = reach[i] > 0 ? (U8)SSWorldField::AIR_SHELTERED
-                                : (U8)SSWorldField::AIR_INTERIOR;
+        if (!covered[node]) continue;
+        gap_label[node] = reach[node] > 0 ? (U8)SSWorldField::AIR_SHELTERED
+                                          : (U8)SSWorldField::AIR_INTERIOR;
     }
 
     // Occlusion depth, one BFS from the whole outdoors set over outdoors and
-    // sheltered air. Interior air is unreachable and stays marked.
+    // sheltered gaps. Interior gaps are unreachable and stay marked.
     // Distances saturate at AIR_DEPTH_UNREACHED - 1: the sentinel must stay
-    // exclusive to "unvisited", or a cell whose true distance hit 0xFFFF would
+    // exclusive to "unvisited", or a gap whose true distance hit 0xFFFF would
     // read as never visited and the walk would loop on it forever.
     {
         std::vector<S32> depth_q;
         depth_q.reserve(queue.size());
-        for (size_t i = 0; i < cells; ++i)
+        for (size_t node = 0; node < nodes; ++node)
         {
-            if (label[i] == SSWorldField::AIR_OUTDOORS)
+            if (gap_label[node] == SSWorldField::AIR_OUTDOORS)
             {
-                depth[i] = 0;
-                depth_q.push_back((S32)i);
+                gap_depth[node] = 0;
+                depth_q.push_back((S32)node);
             }
         }
 
         for (size_t head = 0; head < depth_q.size(); ++head)
         {
-            const S32 i = depth_q[head];
-            const S32 b = (S32)((size_t)i / layer);
-            const S32 y = (S32)(((size_t)i % layer) / res);
-            const S32 x = (S32)((size_t)i % res);
-
-            for (S32 d = 0; d < 6; ++d)
+            const S32 cur = depth_q[head];
+            touches((size_t)cur, [&](size_t nnode)
             {
-                const S32 nx = x + DX[d], ny = y + DY[d], nb = b + DB[d];
-                if (nx < 0 || ny < 0 || nb < 0 || nx >= res || ny >= res || nb >= bands) continue;
+                const U8 lab = gap_label[nnode];
+                if (lab != SSWorldField::AIR_OUTDOORS && lab != SSWorldField::AIR_SHELTERED) return;
+                U16& d = gap_depth[nnode];
+                if (d != SSWorldField::AIR_DEPTH_UNREACHED) return;
 
-                const size_t j = ((size_t)nb * res + ny) * (size_t)res + nx;
-                if (label[j] != SSWorldField::AIR_OUTDOORS && label[j] != SSWorldField::AIR_SHELTERED) continue;
-                if (depth[j] != SSWorldField::AIR_DEPTH_UNREACHED) continue;
-
-                depth[j] = (U16)llmin((U32)depth[i] + 1u,
-                                      SSWorldField::AIR_DEPTH_UNREACHED - 1u);
-                depth_q.push_back((S32)j);
-            }
+                d = (U16)llmin((U32)gap_depth[(size_t)cur] + 1u,
+                               SSWorldField::AIR_DEPTH_UNREACHED - 1u);
+                depth_q.push_back((S32)nnode);
+            });
         }
     }
 }
-
 // <SS:Nexii> The acoustic lattice: one precomputed wall distance per
 // cardinal, per band, per coarse lattice cell - the room-size and occlusion
 // questions the soundscape otherwise re-raycasts every probe cycle. Walks
@@ -1661,22 +1883,47 @@ static void ss_wf_flood(S32 res, S32 bands, const std::vector<F32>& band_top,
 // matching the side raycast's own "nothing within 50m" convention (the cap
 // sits above it, so a lattice open can never count as a wall hit). Runs on
 // the flood's worker job; anchor and staleness ride the flood's own gates.
-static void ss_wf_acoustic(S32 res, S32 bands, S32 lat_res, F32 cell_m,
-                           const std::vector<U8>& label, std::vector<F32>& wall)
+static void ss_wf_acoustic(S32 res, S32 max_spans, S32 lat_res, F32 cell_m, F32 ceiling,
+                           const std::vector<F32>& span_top, const std::vector<F32>& span_bottom,
+                           std::vector<F32>& wall)
 {
     wall.clear();
     if (lat_res < 1 || lat_res > res || cell_m <= 0.f) return;
 
+    const size_t layer = (size_t)res * res;
     const size_t lat_layer = (size_t)lat_res * lat_res;
-    wall.assign(lat_layer * (size_t)bands * 4u, SS_WF_ACOUSTIC_REACH_M);
+    wall.assign(lat_layer * 4u, SS_WF_ACOUSTIC_REACH_M);
 
     static const S32 DX[4] = { 1, -1, 0, 0 };
     static const S32 DY[4] = { 0, 0, 1, -1 };
 
     const S32 reach_cells = llclamp((S32)(SS_WF_ACOUSTIC_REACH_M / cell_m), 1, res);
 
-    for (S32 b = 0; b < bands; ++b)
+    // The walk samples one altitude per lattice ring and asks each column
+    // whether its air reaches that height: a column whose solid spans cover
+    // the sample is a wall, the air between or around them is not.
+    auto airAt = [&](size_t col, F32 z)
     {
+        F32 prev = 0.f;
+        for (S32 k = 0; k < max_spans; ++k)
+        {
+            const F32 stop = span_top[(size_t)k * layer + col];
+            if (stop <= NO_SURFACE * 0.5f) return true;      // open above the last span
+            const F32 bottom = span_bottom[(size_t)k * layer + col];
+            if (z < bottom - 0.01f) return true;             // the gap beneath this span
+            if (z <= stop + 0.01f) return false;             // inside the body
+            prev = stop;
+        }
+        return prev < ceiling - 0.01f;                       // above the last span
+    };
+
+    // The lattice rings sample every SS_WF_ACOUSTIC_RING_M of height up to
+    // the capture ceiling, so a storey whose floor and ceiling share a band
+    // still gets its own ring.
+    S32 rings = llclamp((S32)(ceiling / SS_WF_ACOUSTIC_RING_M), 1, 16);
+    for (S32 r = 0; r < rings; ++r)
+    {
+        const F32 z = (F32)(r + 0.5f) * ceiling / (F32)rings;
         for (S32 ly = 0; ly < lat_res; ++ly)
         {
             for (S32 lx = 0; lx < lat_res; ++lx)
@@ -1684,8 +1931,9 @@ static void ss_wf_acoustic(S32 res, S32 bands, S32 lat_res, F32 cell_m,
                 // The lattice cell's centre, back onto the capture grid.
                 const S32 cx = llclamp((S32)(((F32)lx + 0.5f) * (F32)res / (F32)lat_res), 0, res - 1);
                 const S32 cy = llclamp((S32)(((F32)ly + 0.5f) * (F32)res / (F32)lat_res), 0, res - 1);
+                const size_t col = (size_t)cy * res + cx;
 
-                F32* out = &wall[((size_t)b * lat_layer + (size_t)ly * lat_res + lx) * 4u];
+                F32* out = &wall[((size_t)r * lat_layer + (size_t)ly * lat_res + lx) * 4u];
 
                 for (S32 d = 0; d < 4; ++d)
                 {
@@ -1698,7 +1946,7 @@ static void ss_wf_acoustic(S32 res, S32 bands, S32 lat_res, F32 cell_m,
                             steps = reach_cells;    // off-tile: open, not a nearby wall
                             break;
                         }
-                        if (label[((size_t)b * res + y) * (size_t)res + x] == SSWorldField::AIR_SOLID) break;
+                        if (!airAt((size_t)y * res + x, z)) break;
                         ++steps;
                     }
                     out[d] = llmin((F32)steps * cell_m, SS_WF_ACOUSTIC_REACH_M);
@@ -1722,16 +1970,20 @@ void SSWorldField::scheduleFlood(Tile& tile)
     const U64 region = tile.mRegionHandle;
     const U32 serial = tile.mGeomSerial;
     const S32 res = tile.mRes;
-    const S32 bands = tile.mBandCount;
+    const F32 ceiling = (F32)tile.mBandCount * tile.mBandHeight;
 
-    // Snapshot: the walk must never read the live band stack, which the next
-    // build splices on the main thread while the worker is mid-flood.
-    if (tile.mBandTop.size() < (size_t)bands * res * res) return;   // lazy-alloc invariant
-    auto snapshot = std::make_shared<std::vector<F32> >(
-        tile.mBandTop.begin(),
-        tile.mBandTop.begin() + (size_t)bands * res * res);
-    auto labels = std::make_shared<std::vector<U8> >();
-    auto depths = std::make_shared<std::vector<U16> >();
+    // Snapshot: the walk must never read the live span store while the next
+    // build's conversion rewrites it on the main thread.
+    const size_t live = (size_t)SS_WF_MAX_SPANS * (size_t)res * res;
+    if (tile.mSpanTop.size() < live || tile.mSpanBottom.size() < live) return;
+    auto snapshot_top = std::make_shared<std::vector<F32> >(
+        tile.mSpanTop.begin(),
+        tile.mSpanTop.begin() + live);
+    auto snapshot_bottom = std::make_shared<std::vector<F32> >(
+        tile.mSpanBottom.begin(),
+        tile.mSpanBottom.begin() + live);
+    auto gap_labels = std::make_shared<std::vector<U8> >();
+    auto gap_depths = std::make_shared<std::vector<U16> >();
     auto walls = std::make_shared<std::vector<F32> >();
 
     // The acoustic lattice runs at a coarse multiple of the capture grid -
@@ -1741,13 +1993,15 @@ void SSWorldField::scheduleFlood(Tile& tile)
 
     main->postTo(
         general,
-        [res, bands, lat_res, cell_m, snapshot, labels, depths, walls]()
+        [res, max_spans = SS_WF_MAX_SPANS, ceiling, lat_res, cell_m, snapshot_top, snapshot_bottom, gap_labels, gap_depths, walls]()
         {
-            ss_wf_flood(res, bands, *snapshot, *labels, *depths);
-            ss_wf_acoustic(res, bands, lat_res, cell_m, *labels, *walls);
+            ss_wf_flood(res, max_spans, ceiling, *snapshot_top, *snapshot_bottom,
+                        *gap_labels, *gap_depths);
+            ss_wf_acoustic(res, max_spans, lat_res, cell_m, ceiling,
+                           *snapshot_top, *snapshot_bottom, *walls);
             return true;
         },
-        [this, generation, region, serial, lat_res, cell_m, labels, depths, walls](bool)
+        [this, generation, region, serial, ceiling, lat_res, cell_m, gap_labels, gap_depths, walls](bool)
         {
             mFloodBusy = false;
             if (generation != mFloodGeneration) return;
@@ -1756,12 +2010,13 @@ void SSWorldField::scheduleFlood(Tile& tile)
             if (it == mTiles.end() || !it->second.mValid) return;
             if (it->second.mGeomSerial != serial) return;   // edited mid-walk; the next commit refloods
 
-            it->second.mAirLabel = std::move(*labels);
-            it->second.mAirDepth = std::move(*depths);
+            it->second.mGapLabel = std::move(*gap_labels);
+            it->second.mGapDepth = std::move(*gap_depths);
             it->second.mAirSerial = serial;
 
             it->second.mAcoustic.mLatRes = lat_res;
             it->second.mAcoustic.mLatCell = (lat_res > 0) ? (F32)it->second.mRes * it->second.mCell / (F32)lat_res : 0.f;
+            it->second.mAcoustic.mCeiling = ceiling;
             it->second.mAcoustic.mWall = std::move(*walls);
             it->second.mAcoustic.mSerial = serial;
         });
@@ -1830,6 +2085,7 @@ void SSWorldField::renderDebug()
         const LLVector3 origin = regionp->getOriginAgent();
         const F32 cell = tile.mCell;
         const F32 h = tile.mBandHeight;
+        const size_t layer = (size_t)tile.mRes * tile.mRes;
 
         // The tile's stack footprint, so a region nobody has captured yet reads
         // as an empty box rather than as nothing at all.
@@ -1852,10 +2108,10 @@ void SSWorldField::renderDebug()
 
         if (which == 1)
         {
-// Every band the capture gave a surface, standing at the altitude the store
-            // holds it at, hue by band so stacked storeys read separately instead of
-            // fusing into one roof.
-            const S32 b_last = llmax(tile.mBandCount - 1, 1);
+// Every solid span the store holds, standing at the altitude the store
+            // holds it at, hue by altitude so stacked storeys read separately instead
+            // of fusing into one roof.
+            const F32 ceiling = llmax((F32)llmax(tile.mBandCount, 1) * h, 1.f);
             for (S32 y = 0; y < tile.mRes; ++y)
             {
                 const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
@@ -1865,28 +2121,30 @@ void SSWorldField::renderDebug()
                     const S32 step = strideFor(wx, wy);
                     if ((x % step) || (y % step)) continue;
 
-                    for (S32 b = 0; b < tile.mBandCount; ++b)
+                    const size_t col = (size_t)y * tile.mRes + x;
+                    for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
                     {
-                        const size_t bi = ((size_t)b * tile.mRes + y) * (size_t)tile.mRes + x;
-                        const F32 z = tile.mBandTop[bi];
-                        if (z <= -FLT_MAX * 0.5f) continue;
+                        const F32 z = tile.mSpanTop[(size_t)k * layer + col];
+                        if (z <= -FLT_MAX * 0.5f) break;
 
                         mark(LLVector3(wx, wy, z),
-                             ss_wf_band_hue((F32)b / (F32)b_last, 0.85f), cell * 0.4f);
+                             ss_wf_band_hue(z / ceiling, 0.85f), cell * 0.4f);
                     }
                 }
             }
         }
         else if (which == 2)
         {
-            // The touching classification: outdoors air green, sheltered air
-            // amber fading with occlusion depth (how far the opening's reach
-            // still carries), interior air red. Solid cells draw nothing -
-            // the surfaces view shows those. Current means the labels cover
-            // every live band: a no-op re-peel can extend mBandCount without
-            // moving the serial, and the flood refills those bands later.
-            const bool current = !tile.mAirLabel.empty() && tile.mAirSerial == tile.mGeomSerial
-                                 && tile.mAirLabel.size() >= (size_t)tile.mBandCount * tile.mRes * tile.mRes;
+            // The touching classification, per air gap: outdoors air green,
+            // sheltered air amber fading with occlusion depth (how far the
+            // opening's reach still carries), interior air red. A column's
+            // gaps sit between its spans, below the lowest and above the
+            // highest. Current means the labels cover every live gap: a
+            // no-op re-peel can shift the spans without moving the serial,
+            // and the flood refills them later.
+            const bool current = !tile.mGapLabel.empty() && tile.mAirSerial == tile.mGeomSerial
+                                 && tile.mGapLabel.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer
+                                 && tile.mGapDepth.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer;
             if (!current) continue;
 
             for (S32 y = 0; y < tile.mRes; ++y)
@@ -1898,27 +2156,35 @@ void SSWorldField::renderDebug()
                     const S32 step = strideFor(wx, wy);
                     if ((x % step) || (y % step)) continue;
 
-                    for (S32 b = 0; b < tile.mBandCount; ++b)
+                    const size_t col = (size_t)y * tile.mRes + x;
+                    F32 g0 = 0.f;
+                    for (S32 k = 0; k <= SS_WF_MAX_SPANS; ++k)
                     {
-                        const size_t bi = ((size_t)b * tile.mRes + y) * (size_t)tile.mRes + x;
-                        const U8 lab = tile.mAirLabel[bi];
-                        if (lab == AIR_SOLID || lab == AIR_UNKNOWN) continue;
-
-                        const F32 z = ((F32)b + 0.5f) * h;
-                        if (lab == AIR_OUTDOORS)
+                        const F32 stop = (k < SS_WF_MAX_SPANS) ? tile.mSpanTop[(size_t)k * layer + col]
+                                                               : (F32)llmax(tile.mBandCount, 1) * h;
+                        const F32 g1 = (stop > -FLT_MAX * 0.5f) ? stop : (F32)llmax(tile.mBandCount, 1) * h;
+                        if (g1 - g0 > 0.05f)
                         {
-                            mark(LLVector3(wx, wy, z), LLColor4(0.3f, 1.f, 0.4f, 0.85f), cell * 0.4f);
+                            const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)k;
+                            const U8 lab = tile.mGapLabel[gi];
+                            const F32 z = (g0 + g1) * 0.5f;
+                            if (lab == AIR_OUTDOORS)
+                            {
+                                mark(LLVector3(wx, wy, z), LLColor4(0.3f, 1.f, 0.4f, 0.85f), cell * 0.4f);
+                            }
+                            else if (lab == AIR_SHELTERED)
+                            {
+                                const U16 d = tile.mGapDepth[gi];
+                                const F32 a = llmax(0.9f / (1.f + (F32)d * 0.25f), 0.08f);
+                                mark(LLVector3(wx, wy, z), LLColor4(1.f, 0.8f, 0.2f, a), cell * 0.4f);
+                            }
+                            else if (lab == AIR_INTERIOR)
+                            {
+                                mark(LLVector3(wx, wy, z), LLColor4(1.f, 0.25f, 0.25f, 0.85f), cell * 0.4f);
+                            }
                         }
-                        else if (lab == AIR_SHELTERED)
-                        {
-                            const U16 d = tile.mAirDepth[bi];
-                            const F32 a = llmax(0.9f / (1.f + (F32)d * 0.25f), 0.08f);
-                            mark(LLVector3(wx, wy, z), LLColor4(1.f, 0.8f, 0.2f, a), cell * 0.4f);
-                        }
-                        else
-                        {
-                            mark(LLVector3(wx, wy, z), LLColor4(1.f, 0.25f, 0.25f, 0.85f), cell * 0.4f);
-                        }
+                        if (stop <= -FLT_MAX * 0.5f) break;   // past the column's spans
+                        g0 = stop;
                     }
                 }
             }
@@ -1978,15 +2244,17 @@ void SSWorldField::renderDebug()
         }
         else if (which == 5)
         {
-            // The column spans themselves: every solid span drawn as two flat
-            // rects - its floor at the band's bottom, its ceiling at the
-            // surface the capture stored - coloured by the air state standing
-            // on it, with a dim line joining ceiling to floor through the
-            // span's solid body. A column's stack reads as a ladder of
-            // state-coloured plates on one spine; the air gaps between spans
-            // stay empty, which is exactly where the flood walks.
-            const bool current = !tile.mAirLabel.empty() && tile.mAirSerial == tile.mGeomSerial
-                                 && tile.mAirLabel.size() >= (size_t)tile.mBandCount * tile.mRes * tile.mRes;
+            // The column spans themselves: each solid span drawn as two flat
+            // rects - its floor and its ceiling - coloured by the air state
+            // standing on it (the gap above it), with a dim line joining
+            // ceiling to floor through the solid. A column's stack reads as a
+            // ladder of state-coloured plates on one spine; the air gaps
+            // between spans stay empty, which is exactly where the flood
+            // walks.
+            const bool current = !tile.mGapLabel.empty() && tile.mAirSerial == tile.mGeomSerial
+                                 && tile.mGapLabel.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer
+                                 && tile.mGapDepth.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer;
+            const F32 ceiling = llmax((F32)llmax(tile.mBandCount, 1) * h, 1.f);
 
             for (S32 y = 0; y < tile.mRes; ++y)
             {
@@ -1997,6 +2265,7 @@ void SSWorldField::renderDebug()
                     const S32 step = strideFor(wx, wy);
                     if ((x % step) || (y % step)) continue;
 
+                    const size_t col = (size_t)y * tile.mRes + x;
                     const F32 s = cell * 0.4f;
                     auto span_rect = [&](F32 z)
                     {
@@ -2005,31 +2274,8 @@ void SSWorldField::renderDebug()
                         gGL.vertex3f(wx + s, wy + s, z); gGL.vertex3f(wx - s, wy + s, z);
                         gGL.vertex3f(wx - s, wy + s, z); gGL.vertex3f(wx - s, wy - s, z);
                     };
-
-                    for (S32 b = 0; b < tile.mBandCount; ++b)
+                    auto state_color = [&](U8 st)
                     {
-                        const size_t bi = ((size_t)b * tile.mRes + y) * (size_t)tile.mRes + x;
-                        const F32 z = tile.mBandTop[bi];
-                        if (z <= -FLT_MAX * 0.5f) continue;   // an open band
-
-                        const F32 z0 = (F32)b * h;
-
-                        // The state of the air the span holds up: the nearest
-                        // air band-cell at or above it in the column.
-                        U8 st = AIR_UNKNOWN;
-                        if (current)
-                        {
-                            for (S32 bb = b + 1; bb < tile.mBandCount; ++bb)
-                            {
-                                const size_t ai = ((size_t)bb * tile.mRes + y) * (size_t)tile.mRes + x;
-                                if (tile.mAirLabel[ai] != AIR_SOLID)
-                                {
-                                    st = tile.mAirLabel[ai];
-                                    break;
-                                }
-                            }
-                        }
-
                         switch (st)
                         {
                             case AIR_OUTDOORS:  gGL.color4f(0.3f, 1.f, 0.4f, 0.8f); break;
@@ -2037,13 +2283,31 @@ void SSWorldField::renderDebug()
                             case AIR_INTERIOR:  gGL.color4f(1.f, 0.25f, 0.25f, 0.85f); break;
                             default:            gGL.color4f(0.55f, 0.6f, 0.7f, 0.5f); break;
                         }
+                    };
 
-                        span_rect(z);
+                    for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+                    {
+                        const size_t si = (size_t)k * layer + col;
+                        const F32 z1 = tile.mSpanTop[si];
+                        if (z1 <= -FLT_MAX * 0.5f) break;   // past the column's spans
+                        const F32 z0 = tile.mSpanBottom[si];
+                        if (z1 - z0 < 0.01f) continue;
+
+                        // The state of the air the body holds up: the gap
+                        // above it in the column.
+                        U8 st = AIR_UNKNOWN;
+                        if (current)
+                        {
+                            st = tile.mGapLabel[col * (SS_WF_MAX_SPANS + 1) + (size_t)(k + 1)];
+                        }
+
+                        state_color(st);
+                        span_rect(z1);
                         span_rect(z0);
 
                         // The spine: ceiling to floor, through the solid.
                         gGL.color4f(0.6f, 0.65f, 0.75f, 0.35f);
-                        gGL.vertex3f(wx, wy, z);
+                        gGL.vertex3f(wx, wy, z1);
                         gGL.vertex3f(wx, wy, z0);
                     }
                 }

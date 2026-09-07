@@ -254,6 +254,7 @@ set(viewer_SOURCE_FILES
     sspreciprenderer.cpp
     ssgranular.cpp
     ssglreadback.cpp
+    ssgpucull.cpp
     ssrainshadow.cpp
     sssurfacefield.cpp
     ssheightfog.cpp
@@ -1217,6 +1218,7 @@ set(viewer_HEADER_FILES
     sspreciprenderer.h
     ssgranular.h
     ssglreadback.h
+    ssgpucull.h
     ssrainshadow.h
     sssurfacefield.h
     sssurfacestatecore.h

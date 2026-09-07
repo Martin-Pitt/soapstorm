@@ -37,10 +37,13 @@
 #ifndef SS_ATMOENVDISCOVERY_H
 #define SS_ATMOENVDISCOVERY_H
 
+#include "llframetimer.h"
 #include "llsd.h"
 #include "llsingleton.h"
 #include "lluuid.h"
 #include "llviewerparcelmgr.h"
+
+#include <boost/signals2.hpp>
 
 #include <string>
 
@@ -51,6 +54,9 @@ class SSAtmoEnvDiscoveryManager : public LLSingleton<SSAtmoEnvDiscoveryManager>,
 
 public:
     void changed() override;
+
+    // Per-frame maintenance from llviewerdisplay: runs the first parcel check (the login-time agent parcel usually arrives before this singleton exists) and retries a fetch that was deferred because the LSL Bridge was not up yet.
+    void idle();
 
     static bool editorIsOpen();
 
@@ -71,6 +77,16 @@ private:
 
     LLUUID mAppliedAssetId;
     LLUUID mPendingAssetId;
+
+    // A fetch that could not go out because the LSL Bridge was not available yet (the login case: the parcel arrives seconds before the Bridge attaches); idle() retries it until the parcel stops advertising it.
+    LLUUID mDeferredAssetId;
+    bool mDeferredForce = false;
+    LLFrameTimer mRetryTimer;
+
+    bool mInitialCheckDone = false;
+
+    // Agent parcel arrivals (login, teleport, walking across a border) fire gAgent's parcel-changed signal, never the LLParcelObserver list - that one is selection-driven (About Land etc.), so both hooks are needed.
+    boost::signals2::connection mAgentParcelChangedConnection;
 
     // The parcel environment the user unloaded by hand while the parcel still advertises it. Holds the unload down until the tag disappears or the parcel advertises a different environment - otherwise the next parcel property update re-applies the cached notecard and the weather, wind and rain beds come straight back mid-session.
     LLUUID mDeclinedAssetId;

@@ -372,6 +372,29 @@ namespace SSLensDrop
     // Invariants: identity at 1; == CLEAR_COVER_MIN at CLEAR_COVER_MIN; in [0,1]; pure.
     inline F32 stippleAmplitude(F32 tailMul) { return llclamp(tailMul, 0.f, 1.f); }
 
+    // ================================================================== the swept channel
+
+    // <SS:Nexii> R17: WHAT A RUNNER LEAVES IN THE CONDENSATION. A drop running down misted glass does not merely sit on the haze, it
+    // TAKES it - and the bare channel stays bare well after the drop that cut it has gone off the bottom of the frame. That is the one
+    // thing the R16 rewrite lost: the previous build could ask a runner's stored analytic path "were you here, and how long ago", and a
+    // texture cannot be asked that. So the answer is a channel MAP - a persistent single-channel buffer that running drops mark and that
+    // fades on its own clock, which is a truer model of the thing anyway: the state belongs to the GLASS, not to whichever drop happened
+    // to cut it, and once it is the glass's the map keeps working long after that drop is gone.
+    //
+    // Deliberately NOT the same as the water's own life. Water drains in a couple of seconds; a wiped channel in condensation re-hazes
+    // over something much longer, which is why a windscreen keeps showing where the last few drops ran. CLEAR_DECAY_S is that second
+    // number, and it is close to the R1-R15 build's TRACK_DECAY_S (26 s) halved - the old figure was chosen to keep a whole screen's
+    // worth of headless channel visible at once, which was compensating for a model where nothing else marked a runner's path.
+    constexpr F32 CLEAR_DECAY_S    = 12.f;
+
+    // How much of the channel map to take away over dt - an exponential relaxation spelled as the fraction removed, because that is what
+    // a blend factor wants. Invariants: 0 at dt 0; in [0,1); monotone in dt; independent of frame rate in the sense that composing two
+    // half-steps gives the same survival as one whole one.
+    inline F32 clearDecay(F32 dt)
+    {
+        return 1.f - std::exp(-llmax(dt, 0.f) / CLEAR_DECAY_S);
+    }
+
     // ================================================================== what water looks like (defect R4, kept verbatim)
 
     constexpr F32 CONTACT_ANGLE_DEG = 84.f;   // the drop's contact angle with the glass. A coated or greasy lens is hydrophobic, 80-100

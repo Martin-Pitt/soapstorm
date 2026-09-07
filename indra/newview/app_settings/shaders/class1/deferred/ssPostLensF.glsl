@@ -4,14 +4,12 @@
  *        and before anti-aliasing (the drops are ON the lens, so they are sharp
  *        and they blur what is behind them).
  *
- *        Three populations of water. The FINE stipple is procedural, on a square
- *        lattice, each cell growing/sitting/evaporating on its own clock. The
- *        RUNNING heads are SIMULATED on the CPU (SSScreenFXPost) and uploaded as
- *        an array: they release when gravity beats surface tension, tear down the
- *        glass consuming the stipple in their path, and grow as they go. The
- *        MEDIUM beads are the wake those heads pinch off, sized strictly between
- *        the stipple they ate and the head that ate it. A condensation layer the
- *        runners wipe clear sits under all three. No textures beyond the scene.
+ *        ONE population of water, simulated on its own thread (SSScreenFXPost)
+ *        and handed to this pass as a DROP MAP: drops arrive small, grow only by
+ *        absorbing each other, break loose when they are too heavy to stay pinned,
+ *        and shed what they cannot carry as they run. This file no longer places
+ *        any of them - it shades what the map says is there, and thins the
+ *        condensation under it by the channel the runners have cut.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -34,7 +32,8 @@
 
 // <SS:Nexii> Atmo Magic lens drops. EVERY law below is transliterated from indra/newview/sslensdropcore.h - that header is the one
 // formula site and V:/Scratch/atmo/tests/twin_lensdrop.cpp holds the two together over a sample grid. Do not retune a constant here;
-// retune it there. Design: doc/atmo_magic_surface_weather.md section 12, defect report R1-R5 of 2026-09-07, RETUNED same day (R6-R13).
+// retune it there. Design: doc/atmo_magic_surface_weather.md section 12; defect reports R1-R13 of 2026-09-07, then R16 (the rewrite onto
+// the reference's one-population merge model) and R17 (the swept channel) the same day.
 
 out vec4 frag_color;
 
@@ -43,40 +42,47 @@ in vec2 vary_fragcoord;
 uniform sampler2D diffuseRect;
 uniform vec2 screen_res;
 
-// How wet the lens is, 0..1 (SSScreenFX::Lens::mWet) - how many cells hold a drop, and how much a running head finds to eat.
+// How wet the lens is, 0..1 (SSScreenFX::Lens::mWet). The simulation reads it as an ARRIVAL RATE; this pass only uses it for the
+// condensation, since what the drops themselves look like is entirely the drop map's business now.
 uniform float ssLensWet;
 
 // Condensation, 0..1, already multiplied by the SSAtmoLensCondensation dial - the fog layer's strength before the runners cut it clear
 // and before the clear-centre law (R8) thins it toward the middle of the screen.
 uniform float ssLensFog;
 
-// The lens clock in seconds (SSScreenFXPost::mLensClock, wall-clock dt accumulated through SSAtmoLensDryRate). The runner array's
-// release times are in this same clock.
+// The lens clock in seconds (SSScreenFXPost::mLensClock, wall-clock dt accumulated through SSAtmoLensDryRate). Nothing in this pass
+// reads it since the simulation moved off it - kept uploaded because the dial it carries still stretches every drop's life.
 uniform float ssLensTime;
 
-// screen_res.x / screen_res.y - the window's shape, so the lattice's cells stay SQUARE and the drops stay round.
+// screen_res.x / screen_res.y - the window's shape. The drops are placed in stable screen units (x in screen HEIGHTS), so this is what
+// turns a normal's x back into UV here, and what the sprite draw divides out on the way in.
 uniform float ssLensAspect;
 
 // SSAtmoLensDropsStrength as a refraction-depth dial, 0..2.
 uniform float ssLensScale;
 
-// SSAtmoLensStreaks, 0..2 - how strongly the running heads, their tracks and their wake beads read. 0 leaves only the stipple.
+// SSAtmoLensStreaks, 0..2 - the population's visibility dial. With one population left it scales the whole drop map's coverage.
 uniform float ssLensStreaks;
 
 // SSAtmoLensReflection, 0..2 - the Fresnel reflection's weight on a drop's own normal. 0 is refraction only (the pre-R4 look).
 uniform float ssLensReflection;
 
-// SSAtmoLensClearCentre, 0..1 - how strongly the FINE stipple and the CONDENSATION (R8) thin toward the middle of the screen. 0 is a
-// uniform field.
+// SSAtmoLensClearCentre, 0..1 - how strongly the coating thins the CONDENSATION toward the middle of the screen (R8), and how much
+// faster it dries the drops there (applied in the simulation). 0 is a uniform field.
 uniform float ssLensClear;
 
-// The simulated running heads, three vec4 per runner, tightly packed by SSScreenFXPost::renderLens:
 // <SS:Nexii> R16: THE DROP MAP. Every drop the simulation carries was drawn once, as a sprite, into this target before the pass ran:
 // rgb is the drop's cap normal (SSLensDrop::capNormal, baked into the sprite once at startup) and a is its coverage. ONE fetch per
 // fragment, so what is on the glass costs the same here whether it is one drop or five hundred - which is what retired both the 24-slot
 // runner array and the per-fragment lattice search the three-population build needed. Where two sprites overlap their normals blend,
 // and that neck between them is the surface tension of a merge, for free.
 uniform sampler2D ssLensDropMap;
+
+// <SS:Nexii> R17: THE SWEPT CHANNEL. A persistent, quarter-resolution buffer that RUNNING drops mark and that fades on its own much
+// slower clock (SSLensDrop::CLEAR_DECAY_S) - so where a drop has torn down the glass stays bare of condensation long after the drop
+// itself has gone off the bottom of the frame. The R1-R15 build got this by asking a runner's analytic path "were you here, and how long
+// ago"; a texture cannot be asked that, so the state was moved to where it actually belongs - the glass, not the drop that cut it.
+uniform sampler2D ssLensClearMap;
 
 // ---------------------------------------------------------------- sslensdropcore.h, transliterated
 
@@ -97,9 +103,9 @@ float ssLensHash(vec2 p)
     return fract(sin(p.x * 12.9898 + p.y * 78.233) * 43758.5453);
 }
 
-// SSLensDrop::clearRadial - the ONE FORMULA SITE for the clear-centre geometry (R8). Fed as a tail multiplier into the fine stipple's
-// lifetime shortening below, and multiplied DIRECTLY onto the condensation amount in main() - a hydrophobic coating does not stop water
-// arriving, it stops it clinging, which is a lifetime effect for discrete drops and a straight amount reduction for a continuous haze.
+// SSLensDrop::clearRadial - the ONE FORMULA SITE for the clear-centre geometry (R8), used here on the condensation and, on the
+// simulation's side, as a divisor into each drop's evaporation. A hydrophobic coating does not stop water arriving, it stops it
+// clinging: a lifetime effect for discrete drops, a straight amount reduction for a continuous haze.
 float ssLensClearRadial(float rStable)
 {
     float outward = smoothstep(SS_CLEAR_R_IN, SS_CLEAR_R_OUT, rStable);
@@ -157,9 +163,8 @@ void main()
     vec2 uv = vary_fragcoord.xy;
 
     // <SS:Nexii> STABLE SCREEN SPACE (defect R1): aspect-corrected, camera-independent, and the ONLY space anything is placed in. There
-    // is no longer a rotation applied to the field: each runner carries its own run direction, captured at release, and that direction
-    // rotates that one runner's offset from its own release point. So when the wind veers or the camera rolls, nothing already on the
-    // glass moves - which is the whole of R1.
+    // is no rotation applied to the field at any point: a drop's position is its own simulated state in this frame, and nothing re-derives
+    // it from the camera. So when the wind veers or the camera rolls, nothing already on the glass moves - which is the whole of R1.
     vec2 stable = vec2((uv.x - 0.5) * ssLensAspect, uv.y - 0.5);
 
     // <SS:Nexii> R16: ONE FETCH. The whole population - drops sitting, drops running, and the drops a runner shed behind it - was drawn
@@ -174,11 +179,8 @@ void main()
     float nLen = length(nRaw);
     drop.n = (nLen > 1.0e-4) ? (nRaw / nLen) : vec3(0.0, 0.0, 1.0);
 
-    // <SS:Nexii> Water displaces haze where it sits. The R1-R15 build cleared condensation along a RUNNER'S WHOLE PATH, which it could
-    // do because the path was an analytic object it could ask about; here the water is a texture and all this fragment knows is whether
-    // it is under a drop. A runner still leaves a visible line through the haze - it sheds real drops the whole way down, and those
-    // clear it where they land - but the swept-clean channel BETWEEN them is gone. Getting it back wants a second, persistent channel
-    // that running drops darken and that decays on its own clock (the reference keeps exactly such a buffer); noted, not built.
+    // <SS:Nexii> Water displaces haze where it sits - immediate, and gone the moment the water moves on. That is only half of it; the
+    // other half is the CHANNEL a runner leaves behind, which outlives the water by a long way and comes from ssLensClearMap below.
     float wipe = drop.cov;
 
     // <SS:Nexii> Refraction: the scene re-sampled through the drop's own normal, sharp - the drops are windows through the fog, not part
@@ -213,7 +215,9 @@ void main()
     // path - the condensation is a haze ON the glass rather than a property of the glass itself, so it re-settles the moment the water
     // that displaced it has moved on, which is the behaviour this term always wanted and now gets without any per-runner bookkeeping.
     vec3 fogged = blurred * 0.85 + vec3(0.15);
-    float fogAmount = clamp(ssLensFog, 0.0, 1.0) * ssLensClearRadial(length(stable)) * (1.0 - clamp(wipe, 0.0, 1.0));
+    float swept = clamp(texture(ssLensClearMap, uv).r, 0.0, 1.0);
+    float fogAmount = clamp(ssLensFog, 0.0, 1.0) * ssLensClearRadial(length(stable))
+                    * (1.0 - clamp(wipe, 0.0, 1.0)) * (1.0 - swept);
 
     vec3 sceneWithFog = mix(refracted, fogged, fogAmount);
     vec3 rgb = mix(sceneWithFog, water, drop.cov);

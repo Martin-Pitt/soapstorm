@@ -93,8 +93,9 @@ private:
     // staleness is not visible. That also means the sim degrades to a lower step rate under load instead of stalling the frame.
     class SimWorker;
 
-    // One drop as the drop map needs it: centre, and the two radii its tension stretch leaves it with.
-    struct Sprite { F32 mX = 0.f, mY = 0.f, mRX = 0.f, mRY = 0.f; };
+    // One drop as the drop map needs it: centre, the two radii its tension stretch leaves it with, and whether it is RUNNING - which
+    // only the channel map cares about, because a drop sitting still does not cut a channel through the condensation.
+    struct Sprite { F32 mX = 0.f, mY = 0.f, mRX = 0.f, mRY = 0.f; bool mRunning = false; };
 
     // MAIN: hands one step to the worker, or runs it inline if there is no worker to hand it to.
     void postLensStep(F32 dt, F32 aspect);
@@ -105,6 +106,8 @@ private:
     // MAIN/GL: the baked drop sprite, and the sprites drawn into the drop map.
     void bakeCapTexture();
     bool drawDropMap(S32 w, S32 h, F32 aspect);
+    // MAIN/GL: the persistent channel the runners cut through the condensation (R17). Not cleared per frame - it decays.
+    void drawClearMap(S32 w, S32 h, F32 aspect);
 
     SSScreenFX::Thermal mThermal;
     SSScreenFX::Lens mLens;
@@ -148,6 +151,12 @@ private:
 
     // The drop map (rgb = the cap normal, a = coverage) and the one sprite every drop is drawn with.
     LLRenderTarget* mDropMap = nullptr;
+    // <SS:Nexii> R17: the swept channel. PERSISTENT - the only buffer here that is not cleared every frame, because what it holds is a
+    // property of the glass that outlives the drop that put it there. Quarter resolution: it is a soft mask on a haze, and its own
+    // blurriness is the softness a wiped edge should have anyway.
+    LLRenderTarget* mClearMap = nullptr;
+    bool mClearMapReset = true;   // clear it outright rather than decay it: first use, a resize, or the glass having gone dry
+    F32 mLensStepDt = 0.f;        // the lens clock's dt from the last idle(), which is what the channel decays on
     LLPointer<LLViewerTexture> mCapTex;
 
     // Screen-space projections refreshed once per idle() from the rotation part of the current modelview: the slide
