@@ -1,0 +1,344 @@
+# Atmo Magic: surface weather v2 — the synthesis plan
+
+Status: **design plan** (2026-09-07, on `feature-atmo-magic`). This is the plan the
+surface-material design competition converged on — see
+`doc/atmo_magic_surface_competition.md` for the 14 competing designs, the three judges'
+verdicts and the scoreboard. Nothing in this plan has been built; every phase lands
+behind its own debug gate with the shipping path pristine until that phase's acceptance
+criteria are met.
+
+The one-sentence architecture: **the CPU ledger stays the only ground truth, and five
+independent layers attach to it** — a resampling tick, a shallow-water flow core, an
+emergent-repose granular v2, a per-object identity/record layer, and a near-camera hero
+droplet detail layer — while the three proven screen-space passes remain the weather
+application site throughout v2.
+
+## 1. Constitution (fixed by the competition, non-negotiable)
+
+1. **CPU is the only truth, fixed-step.** No GPU-resident authoritative state. This is
+   what funds the LOCKSTEP twin tests, texel-exact goldens and the no-`rand()` discipline;
+   it is nearly free to keep and a sim rewrite to restore (Judge C's "regret decision").
+2. **One write path per ledger.** New subsystems become write-path peers of
+   `depositAt`/the settle pass, never bypasses.
+3. **Off = byte-identical.** Every phase gates on an `SSAtmo*` setting; off means the
+   existing window path runs untouched. No phase deletes a proven pass under its own
+   gate (the D14 cliff lesson) — retirements happen only in a later phase, after parity
+   is proven.
+4. **Phase transitions never interpolate** (D11's rule, adopted fleet-wide). Wet,
+   puddle, stain, age, snow depth advance by the analytic predictor; ice crossings,
+   pool membership, repose/spill events, scorch holds and look-Mix promotions always
+   full-step.
+5. **Determinism.** Integer hashes only, total order on any worklist, frame-rate
+   independence via the shared-time quantum clock.
+6. **The invalidation path is the budget.** Every phase is costed at its worst case
+   (teleport storm, rain onset, 40-avatar churn, dense forest), not its steady state
+   (Judge A's "sunny day" trap).
+
+## 2. Layer map (v2 end state)
+
+```
+SSWorldField  (0.25 m column tiles, bands, air labels, drainage — EXISTS, unchanged)
+      |
+SSSurfaceField::Field  (the ledger — EXISTS; gains stamps/activity in P1)
+      |
+  +---+------------+------------------+---------------------+
+  |                |                  |                     |
+Worklist +      Flow core         Granular v2          Object records
+staleness       (P2-P4)           (P5)                 (P6)
+(P1)            pipes+wall film   cohesion/repose      per-draw id
+      |                |                  |                     |
+      +----------------+--------+---------+---------------------+
+                                |
+                 Three screen passes (wet / normal / albedo)
+                 + hero droplet composite (P7)
+                                |
+                             gbuffer
+```
+
+Height fog keeps its own `ssFieldFetch` (it answers for the column/air, a legitimately
+field-shaped question) and is untouched throughout.
+
+## 3. Phases
+
+### P0 — Baseline instrumentation (prerequisite, small)
+
+Capture the numbers every later phase is judged against.
+
+- Block timers around the tick, window pack and each pass (most exist; add per-phase
+  sub-zones). Record steady-rain and storm tick cost today.
+- Freeze the harness world scenes the competition assumed: level pad, graded slope at
+  repose, a wall with an eave, an overhang, a parking vehicle, two avatars.
+- Debug views for staleness, flow, film depth exist from day one (extend the existing
+  debug-view registry).
+
+*Acceptance: baseline numbers recorded in the harness; no behaviour change.*
+
+### P1 — Amortized tick (D11)
+
+The full-grid 0.25 s tick becomes an importance-sampled event. This phase changes no
+visuals by design; it builds the scheduling spine everything else runs on.
+
+- **State:** per cell `mStamp` (U32 shared-time quantum last fully stepped), `mAct`
+  (F32 activity score), one tolerance-class byte. Added to `SSSurfaceField::Field`
+  (`sssurfacefield.h:171-205`) — the vectors stay the checkpoint; nothing is removed.
+- **Worklist:** each tick, K ≈ 4096 cells win a deterministic hash-threshold draw on
+  activity (wet/puddle gain, exposure change, camera proximity, wind events,
+  phase-danger ±1 °C of 0 °C forced full-step) and get the full `stepCell` + transport
+  step; every other cell is carried by the closed-form predictor the tick already
+  computes (`1 - exp(-rate·dt)`). Total order on (region, cell, quantum), hash
+  tiebreaks — two clients resample identical sets.
+- **Staleness contract:** new fifth window `ssFieldAgeMap` RGBA8 (staleness quanta,
+  predicted rate, activity, class); the shared fetch in `ssSurfaceFieldF.glsl` advances
+  wet/puddle by `rate · staleness` — one site, all three passes inherit it.
+- **Window pack:** only touched rows repacked; persistent-mapped PBO sub-range uploads
+  replace the four full-texture `glTexSubImage2D` calls (`sssurfacefield.cpp:1393-1410`).
+- **Forced promotions:** `markDirty`, external writes (`depositAt`, `vaporise`),
+  preset changes and gust fronts stamp whole regions (the existing `ran > 1` replay
+  path already models this).
+- **Gate:** `SSAtmoSurfaceResample` (0 = pristine full tick).
+- **Tests:** predictor/CPU twin equality grid test (twin harness discipline); bitwise
+  determinism replay; burst-rain resync; puddle-edge cells at 2× rate.
+- **Budget:** >10× tick cost cut at steady rain (target on `FTM_SS_SURFACE_TICK`);
+  predictor cost is O(1) per stale cell.
+
+### P2 — Flow core, static tier (D7, half of it is free)
+
+The steady state of shallow water on this world is already computed: `buildDrainage`'s
+Barnes priority flood (spill elevations, pool membership) and D8 routing
+(`ssworldfield.h:191-199`). Claiming it renders region-wide puddles at their true
+spill levels and visible drainage networks with **no sim at all**.
+
+- Claim `SSWorldField::EChannel::DRAINAGE_NETWORK` per region; materialise spill/pool/
+  D8 per geometry serial into the flow window (spare channels).
+- Pass changes: `h = max(0, spill − z)` on pool cells feeds the puddle path; D8
+  directions replace the slope-derived scroll direction in the sheet term
+  (`ssSurfaceNormalF.glsl` item 3).
+- **Gate:** `SSAtmoFlowSim = 1` (static only).
+- **Budget:** a one-time synchronous solve per geometry serial — the machinery already
+  exists and runs today.
+
+### P3 — Flow core, dynamic tier (virtual pipes)
+
+- **New files** `ssflowfield.h/.cpp`, core laws in `ssflowcore.h` (LOCKSTEP, twinned
+  to GLSL per the `twin_surface_glsl.cpp` discipline).
+- **State:** a 128² × 0.25 m camera window (32 m) parallel to the field window:
+  film depth `h`, four pipe fluxes, suspended sediment `C`, bed erosion offset, ice
+  fraction. `mPuddle` becomes the render view of `h`.
+- **Sim:** three 1/12 s substeps per 0.25 s shared-time tick on the CPU (16 cores,
+  row-striped, gather-only reads); pipe damping factor absorbs the stiffness term so
+  0.083 s substeps hold with 2× CFL margin at 0.25 m cells; splashes never enter the
+  heightfield (they are ring events). Order-independent inflow accumulator — the exact
+  discipline `mInflow` already uses for creep (`sssurfacefield.h:199`).
+- **Sleep/wake:** cells parked at the flood's `spill − z` equilibrium cost nothing;
+  wake on rain, ice transition, avatar splash, edit. Most of the world never steps.
+- **Couplings:** ice scales pipe area by `(1 − ice)`; freeze/thaw events re-run the
+  Barnes flood (event-driven, not per tick) so a frozen pool dams and overflows at a
+  new spill; melt credits `h`; Mei capacity `Cmax = Kc·|u|·sinα` drives
+  erosion/deposition between `C` and the deposit channel.
+- **Render:** rivulets are `|u|`-high / `h`-low cells modulating the sheet wave
+  texture; `ssWetFlowMinWet` becomes the physical film threshold.
+- **Uploads:** persistent-mapped 4-deep PBO ring with `glFenceSync` per slot (GL 4.6,
+  `glBufferStorage` persistent+coherent).
+- **Gate:** `SSAtmoFlowSim = 2`.
+- **Budget:** 16 k cells × 3 substeps ≈ 2 MFLOP/tick — sub-millisecond, single core;
+  escalation row-parallel across 16 cores.
+- **Tests:** pipe-step twinned in the unit harness; determinism replay; wall-run mass
+  conservation vs ground credit (P4).
+
+### P4 — Flow core, wall film (verticals)
+
+The heightfield honestly dies past ~70°; a separate 1D model takes over, and it makes
+the drip lattice state-driven for the first time.
+
+- **Wall ledger:** sparse per-region map keyed `(azimuth 0..15, v-band 0.25 m,
+  along 0.25 m)` — the 16-azimuth quantisation *is* `SSSurfaceDrop::DRIP_AZIMUTHS`
+  (`sssurfacedropcore.h:263`), so sim and shader share one bit-stable frame.
+- **Film model:** per entry `h_wall` decays by Nusselt laminar drainage
+  `q = ρg·h³/3μ`, wind diffuses along-u, porosity absorbs. Below breakup thickness
+  `h_crit ≈ 0.15 mm·(1 − roughness)` the contact line fails: the entry converts its
+  depth into hashed run seeds in the existing 0.06 × 0.30 m drip cells, each carrying
+  mass down at accelerating speed and leaving a trail; runs landing at the wall base
+  credit the macro field's `h` (replacing the painted shed cascades).
+- **Render:** the drip cap/trail code (item 2) keeps its shape but the drip's phase
+  comes from the sim's accumulated run distance instead of `ssTime` — state-driven
+  drips; the Heartfelt stutter becomes a property of the run, not a wall clock.
+- **Gate:** `SSAtmoFlowSim = 3` (or a separate `SSAtmoWallFilm`).
+- **Honest scope:** 0.25 m cells cannot resolve centimetre rivulet fingers — streak
+  breakup remains a state-modulated lattice; the sim drives its amplitude and phase.
+
+### P5 — Granular v2 + footprints (D10 scoped, CPU)
+
+MPM on GPU is rejected for v2 (atomics concede bitwise cross-viewer equality; Judge C
+scores it 4 on perf for calm-weather overkill). What survives is the constitutive
+upgrade, on CPU, through the single write path.
+
+- **Emergent repose:** Drucker-Prager-style yield with friction angle per material
+  replaces the `roomAt` heuristic (`ssgranular.cpp:68-102`); wet-modulated cohesion
+  `c·(1 − wet)` — cohesion raises the angle damp, buoyancy lowers it saturated, so
+  drying then avalanches. Melt mass converts into the flow ledger's `h` (P3 coupling).
+- **Footprint masks:** movers and avatars write per-frame small carve/compression
+  masks into a window texture; a stepped pass applies them as depth displacement and
+  grid impulse **through `depositAt`** — the single write path. Footprints, ploughing
+  and compression follow the actual geometry that made them.
+- **Wind entrainment stays in `liftAt`** — the one lift authority is not re-derived.
+- **Gate:** `SSAtmoGranularV2` (0 = current heuristic repose).
+- **Budget:** CPU tick already amortises (P1 worklist); masks are one 256² texture
+  pass per frame near the camera.
+
+### P6 — Object identity + records (D6 phase 1, D1's PoC grown up)
+
+This is the phase that deletes the capsule hack, in both passes, without any
+per-pixel sim.
+
+- **Id attachment:** one `R16UI` `ssIdRect` (0 = none), written behind a `HAS_SS_ID`
+  define by weather-relevant writers — **avatarF and the simple pools first** (D1's
+  one-day PoC scope), expanding to material/rigged variants. Cleared per frame; a
+  debug view audits coverage (a missed writer reads stale texels — this is the known
+  failure mode, tested not hoped away).
+- **Record table:** SSBO, 4096 rows × 32 B `{wet film, ice, deposit, thermal,
+  exposure, class, geometry serial, soak}` — **CPU-owned**, stepped per tick by the
+  existing `SSAvatarWet` soak/exposure integration (that part is real simulation and
+  survives); refcounted ids with a serial so recycled ids never bleed stale soak.
+- **Pass change:** the capsule loops (`ssSurfaceWetF.glsl:138-226`, the interim
+  `ssAvatarContain` in `ssSurfaceNormalF.glsl`) are replaced by one id fetch + record
+  read. The wet pass's `ground_share` knee ramp keys off the record's height-band
+  answer exactly as before.
+- **Movers:** parked vehicles gain a record (field answers via the column test when
+  parked; the record carries drying while driving — the "tarp into a barn" gap is
+  documented as a known limitation, not hidden).
+- **Gate:** `SSAtmoObjectWeather` (0 = capsule path untouched).
+- **Retirement (after parity):** `SSAvatarWet::bindForShader` calls and the capsule
+  upload die; the singleton shrinks to the CPU soak integrator feeding records.
+- **Budget:** R16 = 2 B/px ≈ 4 MB @1080p, ~0.3 ms write bandwidth; record step is
+  trivial (≤ a few thousand rows).
+
+### P6.5 — Frost physics + crack relief (Judge B's uncovered gap; small, parallel-safe)
+
+Decided 2026-09-07: **scheduled as a small standalone item, not v3** — ice is a
+first-class required feature of the brief, the state channels (`mIce`, `mFrost`) and a
+crack lattice already exist, and the gap is fidelity, not machinery. Independent of
+P3-P6; lands any time after P1.
+
+- **State (CPU, deterministic):** crack damage as accumulated freeze-thaw cycling —
+  per cell a damage scalar that rises when a wet cell's ice fraction crosses 0 in
+  either direction, saturating over several cycles; frost coverage as an
+  exposure × humidity × sub-zero duration law stepping in `SSSurfaceState::stepCell`
+  (the channels exist; the laws sharpen). Damage persists into thaw (scars), so a
+  repeatedly-frozen puddle keeps its crack pattern.
+- **Render (normal pass item 4):** the axis-aligned 0.35 m crack lattice becomes a
+  Voronoi-edge hash lattice seeded per cell; crack line density and width scale with
+  the damage scalar; frost renders as a micron-scale grain tint on the existing
+  deposit grain path.
+- **Gate:** `SSAtmoIceFrostV2` (0 = current crack lattice verbatim).
+- **Tests:** damage accumulation twin test; scar persistence across melt/refreeze;
+  determinism replay.
+- **Budget:** a few FLOP per full-stepped cell inside the P1 worklist; one extra hash
+  tap in the normal pass's ice block.
+
+### P7 — Hero droplets (D8, the detail layer)
+
+The only GPU sim in v2, and it is cosmetic by construction: the macro stays CPU
+truth; heroes are sub-second-lived bodies checked out of the ledger.
+
+- **Spawn:** the flow core's film-thinning (P4) is the spawn condition — a hashed
+  roll launches a run where `mFilm > h_c`; heroes are where those probabilities cash
+  out as visible bodies near the camera (≤16 m, N ≈ 512).
+- **Sim:** compute pass at shared-clock quanta; states CLING/RUN/FREE; gbuffer
+  re-projection adhesion (depth + gbuffer normal, never the derivative normal);
+  merge on proximity, breakoff when mass exceeds the cell's capacity; FREE heroes
+  become impact-ring events through the existing `noteImpact` path.
+- **Render:** half-res splat → bilateral smoothing → normals-from-gradient →
+  composite in the normal pass after item 1; depth-ε match, no position buffer needed.
+- **Ledger handoff:** a dying hero writes mass back to `mFilm`/`mWet` with a 2-cell
+  fade under a per-cell `mHero` shadow — no double cap, no hole.
+- **Gate:** `SSAtmoHeroDrops` (0 = lattice items 1/2 verbatim, the shipping look).
+- **Budget:** ≈ 1 ms GPU total @1080p (0.4 sim + 0.6 splat/smooth/composite, half-res).
+- **Known failures (accepted, bounded):** silhouette/disocclusion pops; the 16 m
+  content cliff; thin-wall merge artifacts; hero placement not bitwise-identical
+  across clients (macro converges; heroes don't — conceded because they are cosmetic).
+
+### P8 — Coverage beyond the window (D12, conditional — not scheduled)
+
+Only if the window proves structurally insufficient: per-region bake set (512² @ 0.5 m +
+wall-strip atlas) produced by the 16-core job graph, streamed via the persistent ring
+at ≤ 4 MB/s, movers keeping per-object 64² overlays. The competition scored it 8 on
+perf precisely because its worst case is a 2 s visibility artifact, never dropped
+frames. Deferred until P1-P6 make the cost real and measurable.
+
+**Promotion tripwires (decided 2026-09-07).** P8 is promoted from conditional to
+scheduled only by measurement, and only after the cheaper mitigations fail:
+
+1. **Coverage tripwire** — a debug counter samples, once per frame, the share of
+   surface pixels whose field fetch returned "outside the window" while the nearest
+   in-window border cell is meaningfully wet (the visible dry/wet discontinuity
+   condition, not just any miss). Promotion when this exceeds **1% of surface pixels
+   sustained over a 60 s window of normal play** (not synthetic stress) — the fraction
+   a player can see as a wet/dry seam at the window border.
+2. **Warmup tripwire** — post-teleport parity time: seconds from teleport until the
+   window around the arrival point is fully stepped and visually consistent.
+   Promotion when this exceeds **3 s** measured on the harness teleport scene.
+
+Mitigation-first rule: before scheduling P8, try (a) widening the window at reduced
+cell fidelity (the P1 predictor makes coarse far cells cheap), (b) predictor-driven
+far-field answers past the border (the ledger knows regions it no longer streams).
+P8 is the answer only when both distort the near field or still leave seams.
+
+## 4. Deletion plan (what v2 removes)
+
+| Thing | Removed in | Replaced by |
+|---|---|---|
+| Capsule geometry test in wet pass (`ssAvatarWet`, `ground_share` wiring) | P6 parity | id fetch + record |
+| Interim `ssAvatarContain` gate + bind in normal pass | P6 parity | same |
+| `SSAvatarWet::mShaded` capsule upload | P6 parity | record table upload |
+| Slope-derived scroll direction in sheet term | P3 | flow-field `u` |
+| Painted shed cascades (rain; snow shed keeps its own path) | P4 | wall-run mass credit |
+| `roomAt` repose heuristic | P5 (gated) | yield-surface repose |
+| Four full-window `glTexSubImage2D` per tick | P1 | persistent-ring sub-range uploads |
+
+`ssavatarwet.h`'s CPU soak/exposure state machine survives to end-of-v2 as the record
+stepper; only its screen-space geometry dies.
+
+## 5. Guardrails (the competition's worst-case lessons)
+
+- **Invalidation storms:** teleports and preset changes stamp whole regions — the
+  predictor absorbs the span, the worklist drains at bounded K, the window refills
+  from the static tier. Guard: per-tick full-step ceiling, overflow defers one quantum.
+- **Dense forest:** v2 adds no per-fragment cost to material writers and no per-pixel
+  attachment beyond P6's R16 write (2 B/px, gated pools only). Heroes render half-res.
+  The forest benchmark runs at every phase gate.
+- **Camera cuts / context loss:** cut detector resets rings and extrapolation
+  uniforms one frame; heroes die on disocclusion (mass returns); no history buffer
+  exists anywhere else to lose — that is a deliberate property of this architecture.
+- **Sub-tick transients:** 0.25 s ticks quantise fast run motion; interpolation of
+  run *phase* is visual-only and never feeds back into state (determinism preserved).
+
+## 6. Budget summary (RTX-class, 1080p, worst cases)
+
+| Phase | GPU | CPU | VRAM |
+|---|---|---|---|
+| P1 resample | — | tick −10× | +1 RGBA8 window (~0.26 MB) |
+| P2 static flow | — | one-time per geometry serial | 0 (existing window channels) |
+| P3 pipes | — | < 1 ms/tick, sleeping world free | +1 window set (~1 MB) |
+| P4 wall film | — | < 0.5 ms/tick, < 24 m | sparse wall ledger < 4 MB |
+| P5 granular v2 | — | inside P1 worklist | +1 mask texture (256²) |
+| P6 records | ~0.3 ms write | trivial | +4 MB (R16UI) + 128 KB SSBO |
+| P7 heroes | ≈ 1 ms | — | ~2 MB targets |
+| Total v2 | ≈ 1.3 ms | tick cheaper than today | ≈ 8 MB |
+
+Compare the competition's rejected alternatives: D3's resident cascade (5 MB + GPU
+truth), D2's visibility buffer (18.6 MB + every writer twice), D9's PBF (standing
+3-5 ms SDF tax).
+
+## 7. Decisions (resolved 2026-09-07)
+
+1. **P6 first-landing scope: avatar + simple pools only** (D1's PoC scope), expanding
+   to material/rigged variants after parity. Adopted.
+2. **P5 footprints: CPU-stepped** through the worklist, masks applied as `depositAt`
+   writes. Determinism preserved. Adopted.
+3. **P8 promotion: dual measured tripwire** — (1) outside-window wet-pixel share
+   > 1% sustained 60 s of normal play, (2) post-teleport parity > 3 s on the harness
+   scene — and only after the mitigation-first rule (widen window, predictor far-field)
+   fails. Recorded in §3 P8.
+4. **Frost/ice cracks: scheduled as P6.5**, a small standalone item (state laws in
+   `stepCell` + Voronoi crack lattice in the normal pass), parallel-safe after P1.
+   Recorded in §3.
