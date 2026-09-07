@@ -1061,8 +1061,9 @@ void SSWorldField::applyBand(Tile& tile, const CaptureNode& node)
 // position, union with touching or overlapping neighbours, and over the span
 // budget a collapse of the thinnest air gap (the two spans around it merge -
 // the gap becomes solid). The list stays sorted and every gap in it at least
-// the slab threshold tall.
-static void spanInsert(SSWorldField::Tile& tile, size_t col, F32 bot, F32 tp, U8 fl)
+// the slab threshold tall. A member, not a file static, because it reshapes
+// the private Tile's store.
+void SSWorldField::spanInsert(Tile& tile, size_t col, F32 bot, F32 tp, U8 fl)
 {
     const size_t layer = (size_t)tile.mRes * tile.mRes;
 
@@ -3332,6 +3333,7 @@ void SSWorldField::scheduleFlood(Tile& tile)
             return true;
         },
         [this, generation, region, serial, ceiling, lat_res, cell_m, tier_b, res,
+         main, general,
          gap_labels, gap_depths,
          probes, cell_start, links, adj_start, adj_node, adj_cost,
          mip_top, mip_bottom, mip_flags](bool)

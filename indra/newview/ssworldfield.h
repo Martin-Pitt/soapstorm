@@ -518,6 +518,14 @@ private:
     // Runs at commit, after the refine phase's worklist exhausts.
     void finalizeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
 
+    // Insert one solid body into a column's span list: sorted position, union
+    // with touching or overlapping neighbours, and over the span budget a
+    // collapse of the thinnest air gap (the two spans around it merge - the
+    // gap becomes solid). The list stays sorted and every gap in it at least
+    // the slab threshold tall. A member, not a file static, because it
+    // reshapes the private Tile's store.
+    static void spanInsert(Tile& tile, size_t col, F32 bottom, F32 top, U8 flags);
+
     // Which air gap of a column contains z: 0 none (inside a body), otherwise
     // 1 + the gap index (gap 0 below the lowest span, gap n above the
     // highest). Bounds of the air found come back for callers that want them.
