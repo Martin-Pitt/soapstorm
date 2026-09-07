@@ -403,7 +403,6 @@ void SSWorldField::update()
     // the edit is not safe.
     mBuild.mActive = true;
     mBuild.mRegionHandle = target->mRegionHandle;
-    mBuild.mBand = 0;
     mBuild.mPass = 0;
     mBuild.mEmptyRun = 0;
     mBuild.mChanged = false;
@@ -437,9 +436,19 @@ void SSWorldField::update()
     }
 
     target->mBandTarget = llmax(llmax(target->mBandTarget, target->mBandCount), 1);
-    mBuild.mBand = 0;
     mBuild.mEmptyRun = 0;
     mBuild.mChanged = false;
+    mBuild.mSeenBand.assign((size_t)target->mRes * (size_t)target->mRes, -1);
+
+    // The capture worklist: the band slots this build sweeps, bottom-up.
+    // Stage 1 enumerates them uniformly; the adaptive stages later enqueue
+    // finer nodes instead.
+    mBuild.mWorklist.clear();
+    for (S32 b = 0; b < target->mBandTarget; ++b)
+    {
+        mBuild.mWorklist.push_back(b);
+    }
+    mBuild.mCursor = 0;
     mLastBandAt = mNow;
 }
 
@@ -478,11 +487,12 @@ void SSWorldField::evict()
     if (erased) ++mFloodGeneration;
 }
 
-// One band step: capture, splice, then advance, stop early on empty sky, or
-// commit. Each band is captured in TWO passes - front faces give the highest
-// surface, back faces give that body's underside - and the depth readback is
-// async (SSGLReadback): the passes render and submit one at a time, and
-// applyBand runs once both have landed.
+// One worklist step: capture the next node's two passes, splice, advance,
+// stop early on empty sky, or commit. Each node is captured in TWO ortho
+// passes - pass 0 looks down and reads the band's highest up-facing surface,
+// pass 1 looks up with a reversed depth test and reads the topmost body's
+// underside - and the depth readback is async (SSGLReadback): the passes
+// render and submit one at a time, and applyBand runs once both have landed.
 bool SSWorldField::advanceBuild()
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(mBuild.mRegionHandle);
@@ -497,7 +507,7 @@ bool SSWorldField::advanceBuild()
     // not here yet) nor render the shared capture target into again.
     if (mReadbackPending) return true;
 
-    // The current pass's readback landed; advance to the band's second pass
+    // The current pass's readback landed; advance to the node's second pass
     // or splice the pair in.
     if (mBuild.mJustCaptured)
     {
@@ -506,7 +516,7 @@ bool SSWorldField::advanceBuild()
 
         if (mBuild.mPass < 2)
         {
-            if (!capturePass(*tile, mBuild.mPass))
+            if (!capturePass(*tile, mBuild.mWorklist[mBuild.mCursor], mBuild.mPass))
             {
                 // GL trouble - abandon rather than spin. The tile keeps its
                 // previous contents and stays dirty, so the next update tries
@@ -518,20 +528,19 @@ bool SSWorldField::advanceBuild()
             return true;
         }
 
-        applyBand(*tile);
-        ++mBuild.mBand;
+        applyBand(*tile, mBuild.mWorklist[mBuild.mCursor]);
+        ++mBuild.mCursor;
         mBuild.mPass = 0;
 
 // Full builds stop early once the sky has been genuinely empty for a few
-        // consecutive bands; rect builds run to their target so the spliced columns
-        // stay consistent with their neighbours.
+        // consecutive nodes; rect builds run their whole worklist so the
+        // spliced columns stay consistent with their neighbours.
         if (!mBuild.mRectOnly && mBuild.mEmptyRun >= EMPTY_BANDS_TO_STOP)
         {
-            commitBuild(*tile);
-            return false;
+            mBuild.mWorklist.clear();   // the sky above is empty; drop the rest
         }
 
-        if (mBuild.mBand >= tile->mBandTarget)
+        if (mBuild.mCursor >= mBuild.mWorklist.size())
         {
             commitBuild(*tile);
             return false;
@@ -540,13 +549,13 @@ bool SSWorldField::advanceBuild()
         return true;
     }
 
-    if (mBuild.mBand >= tile->mBandTarget)
+    if (mBuild.mCursor >= mBuild.mWorklist.size())
     {
         commitBuild(*tile);
         return false;
     }
 
-    if (!capturePass(*tile, mBuild.mPass))
+    if (!capturePass(*tile, mBuild.mWorklist[mBuild.mCursor], mBuild.mPass))
     {
         // GL trouble - abandon rather than spin. The tile keeps its previous
         // contents and stays dirty, so the next update tries again.
@@ -569,14 +578,14 @@ bool SSWorldField::advanceBuild()
 // band's top exactly and depth clamping is off for the upward pass - a
 // surface outside the band must never record into it, or every band would
 // steal surfaces from its neighbours and eat the air between them.
-bool SSWorldField::capturePass(Tile& tile, S32 pass)
+bool SSWorldField::capturePass(Tile& tile, S32 slot, S32 pass)
 {
     LL_PROFILE_GPU_ZONE("atmo world field band");
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp) return false;
 
-    const F32 band_top = bandTopZ(mBuild.mBand, tile.mBandHeight);
+    const F32 band_top = bandTopZ(slot, tile.mBandHeight);
     const F32 band_bottom = band_top - tile.mBandHeight;
     const F32 range = tile.mBandHeight;
 
@@ -742,14 +751,14 @@ void SSWorldField::ensureBands(Tile& tile, S32 bands)
 // up-facing surface (with the water and ground fallbacks), pass one's is the
 // topmost body's underside. Full builds write every column; rect builds only
 // the dirty rectangle's columns.
-void SSWorldField::applyBand(Tile& tile)
+void SSWorldField::applyBand(Tile& tile, S32 slot)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_WORLDFIELD_GRID);
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
     if (!regionp || mBuild.mDepth[0].empty() || mBuild.mDepth[1].empty()) return;
 
-    const S32 band = mBuild.mBand;
+    const S32 band = slot;
     ensureBands(tile, band + 1);
 
     const F32 band_top = bandTopZ(band, tile.mBandHeight);
@@ -874,6 +883,15 @@ void SSWorldField::applyBand(Tile& tile)
             under_z[idx] = under;
             top_flags[idx] = flags;
 
+            // A real capture hit - mapped surface or captured underside -
+            // marks the column resolved up to this band. Fallbacks and misses
+            // never count: the fold may only trust bands the capture saw.
+            if ((flags & SSRainShadowMap::SURF_MAPPED) || under > NO_SURFACE + 1.f)
+            {
+                S32& seen = mBuild.mSeenBand[idx];
+                if (band > seen) seen = band;
+            }
+
             if (z > NO_SURFACE + 1.f || under > NO_SURFACE + 1.f) ++hits;
         }
     }
@@ -976,6 +994,59 @@ void SSWorldField::computeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
                 ++n;
             }
 
+            // Rect re-peels carry forward what the capture could not re-see:
+            // old spans resting entirely above the highest band this build
+            // actually hit are unrebutted (their altitude was never resolved -
+            // churned-out geometry, LOD cull), so they ride along instead of
+            // being folded away from empty scratch. Spans whose base sits
+            // below the seen ceiling were swept through and drop.
+            if (mBuild.mRectOnly && col < mBuild.mSeenBand.size())
+            {
+                const S32 seen = mBuild.mSeenBand[col];
+                const F32 seen_top = (F32)(seen + 1) * tile.mBandHeight;
+                for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+                {
+                    const size_t si = (size_t)k * layer + col;
+                    const F32 old_top = tile.mSpanTop[si];
+                    if (old_top <= NO_SURFACE * 0.5f) break;
+                    const F32 old_bot = tile.mSpanBottom[si];
+                    if (old_bot < seen_top - 0.01f) continue;
+
+                    if (n > 0 && old_bot - tops[n - 1] < SS_WF_SPAN_SLAB_M)
+                    {
+                        tops[n - 1] = old_top;  // continues the carried stack
+                        continue;
+                    }
+
+                    if (n == SS_WF_MAX_SPANS)
+                    {
+                        // Over budget: collapse the thinnest air gap, the
+                        // same rule the band scan folds by.
+                        S32 thinnest = 0;
+                        F32 best = FLT_MAX;
+                        for (S32 j = 0; j + 1 < n; ++j)
+                        {
+                            const F32 gap = bottoms[j + 1] - tops[j];
+                            if (gap < best) { best = gap; thinnest = j; }
+                        }
+                        tops[thinnest] = tops[thinnest + 1];
+                        flags[thinnest] = flags[thinnest + 1];
+                        for (S32 j = thinnest + 1; j + 1 < n; ++j)
+                        {
+                            bottoms[j] = bottoms[j + 1];
+                            tops[j] = tops[j + 1];
+                            flags[j] = flags[j + 1];
+                        }
+                        --n;
+                    }
+
+                    bottoms[n] = old_bot;
+                    tops[n] = old_top;
+                    flags[n] = tile.mSpanFlags[si];
+                    ++n;
+                }
+            }
+
             // The gap beneath the first span is air only when it is at least
             // a slab tall - a wall standing on unmeasured ground stays solid
             // to the world floor.
@@ -1025,26 +1096,38 @@ void SSWorldField::commitBuild(Tile& tile)
         ++mDirtyCaptures;
     }
 
-    // Rect cleared, target reset, timestamps refreshed. The dirty rect is a
-    // one-shot: the re-peel splices exactly what was marked.
-// The capture scratch folds into the column span store here - full builds
-// convert every column, rect re-peels only the dirty rectangle's - so the
-// store is current whenever the geometry serial moves, and the flood reads
-// spans, never bands.
-if (mBuild.mRectOnly)
-{
-    computeSpans(tile, tile.mDirtyX0, tile.mDirtyY0, tile.mDirtyX1, tile.mDirtyY1);
-}
-else
-{
-    computeSpans(tile, 0, 0, tile.mRes, tile.mRes);
-}
+    // The capture scratch folds into the column span store here - full builds
+    // convert every column, rect re-peels only the rectangle the build
+    // actually captured - so the store is current whenever the geometry serial
+    // moves, and the flood reads spans, never bands.
+    if (mBuild.mRectOnly)
+    {
+        // Fold the captured rect, never the live dirty rect: marks merged
+        // mid-build name columns this build never spliced, and folding them
+        // would read the regrown (all NO_SURFACE) scratch and erase spans
+        // across everything that streamed in while the build ran.
+        computeSpans(tile, mBuild.mRectX0, mBuild.mRectY0, mBuild.mRectX1, mBuild.mRectY1);
 
-tile.mDirtyX0 = tile.mDirtyY0 = 0;
-tile.mDirtyX1 = tile.mDirtyY1 = 0;
-tile.mDirty = false;
-tile.mBandTarget = 0;
-tile.mCaptureTime = mNow;
+        // Consume the dirty flag only when nothing merged mid-build; the
+        // grown rect stays dirty and re-peels on the next build.
+        if (tile.mDirty
+            && tile.mDirtyX0 == mBuild.mRectX0 && tile.mDirtyY0 == mBuild.mRectY0
+            && tile.mDirtyX1 == mBuild.mRectX1 && tile.mDirtyY1 == mBuild.mRectY1)
+        {
+            tile.mDirtyX0 = tile.mDirtyY0 = 0;
+            tile.mDirtyX1 = tile.mDirtyY1 = 0;
+            tile.mDirty = false;
+        }
+    }
+    else
+    {
+        computeSpans(tile, 0, 0, tile.mRes, tile.mRes);
+    }
+    // The band scope resets only with no marks pending: marks that merged
+    // mid-build raised it to their own altitude, and the follow-up re-peel
+    // must still sweep past them.
+    if (!tile.mDirty) tile.mBandTarget = 0;
+    tile.mCaptureTime = mNow;
 tile.mLastTouched = mNow;
 mBuild.mPass = 0;
 mBuild.mActive = false;

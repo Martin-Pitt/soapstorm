@@ -23,6 +23,12 @@
 > interval whatever band its floor and ceiling landed in. The bands are the
 > capture schedule; the spans are the store.
 >
+> The capture is scheduled as a worklist of (XY rect, Z interval) nodes -
+> stage 1 enumerates the uniform bands bottom-up; the planned adaptive stages
+> enqueue finer nodes instead (Z bisection beneath captured bodies for
+> per-body resolution, then the XY quadtree so fine slices only cover the
+> quads that need them).
+>
 > The air-connectivity flood runs on the
 > General worker queue per committed tile over the column AIR GAPS - a room is one
 > gap node whatever band its floor and ceiling landed in - and its labels

@@ -315,15 +315,23 @@ private:
     {
         bool mActive = false;
         U64 mRegionHandle = 0;
-        S32 mBand = 0;
-        S32 mPass = 0;             // capture pass within the band: 0 top faces, 1 back faces
+        // <SS:Nexii> The capture worklist: band scratch slots to capture, in
+        // order. Stage 1 fills it with the uniform band sweep; the adaptive
+        // stages later enqueue finer nodes - Z bisection beneath captured
+        // bodies, then the XY quadtree, each node becoming (XY rect, Z
+        // interval, texel size) - and the state machine only knows "capture
+        // this slot's two passes, fold, next".
+        std::vector<S32> mWorklist;
+        size_t mCursor = 0;        // next worklist entry
+        S32 mPass = 0;             // capture pass within the node: 0 down, 1 up
         bool mRectOnly = false;    // re-peeling the dirty rectangle only
         S32 mRectX0 = 0, mRectY0 = 0, mRectX1 = 0, mRectY1 = 0;
         S32 mRectRes = 0;          // square capture resolution covering the rect
         F32 mRectHalf = 0.f;       // world half-extent of the rect frustum
         LLVector3 mRectCentre;     // agent-space centre of the rect
-        std::vector<F32> mDepth[2];// the band's two depth readbacks (front faces, back faces)
-        S32 mEmptyRun = 0;         // consecutive empty bands seen by the live build
+        std::vector<F32> mDepth[2];// the node's two depth readbacks (down, up)
+        std::vector<S32> mSeenBand;// per-column highest band a real capture hit landed in (-1 none); lets the fold tell resolved columns from ones the capture never re-saw
+        S32 mEmptyRun = 0;         // consecutive empty nodes seen by the live build
         bool mChanged = false;     // any spliced column differed from what was stored
         bool mJustCaptured = false;// a pass was rendered and its readback landed; apply it next step
     };
@@ -336,8 +344,8 @@ private:
 
     bool advanceBuild();
 
-    bool capturePass(Tile& tile, S32 pass);
-    void applyBand(Tile& tile);
+    bool capturePass(Tile& tile, S32 slot, S32 pass);
+    void applyBand(Tile& tile, S32 slot);
     void commitBuild(Tile& tile);
 
     // Grow the tile's flat band arrays to cover at least `bands` layers,
