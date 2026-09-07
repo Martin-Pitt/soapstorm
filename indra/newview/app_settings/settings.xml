@@ -27093,7 +27093,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldDebugView</key>
       <map>
       <key>Comment</key>
-      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's touching classification - outdoors air green, sheltered air amber fading with occlusion depth, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the column spans themselves - each solid span a wireframe box from band floor to surface top, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), with a dim line threading each span to the next solid above. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
+      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's touching classification - outdoors air green, sheltered air amber fading with occlusion depth, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the column spans themselves - each solid span a flat rect at its floor and its ceiling, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), joined by a dim line through the span's solid body. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

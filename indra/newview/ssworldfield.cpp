@@ -1978,12 +1978,13 @@ void SSWorldField::renderDebug()
         }
         else if (which == 5)
         {
-            // The column spans themselves: every solid span drawn as a
-            // wireframe box - two crossed rects, one in each vertical plane -
-            // from its band floor to its surface top, coloured by the air
-            // state standing on it. A dim vertical line threads each span to
-            // the next solid above, so the column's stack reads as one
-            // structure and the air gaps the flood walks through are visible.
+            // The column spans themselves: every solid span drawn as two flat
+            // rects - its floor at the band's bottom, its ceiling at the
+            // surface the capture stored - coloured by the air state standing
+            // on it, with a dim line joining ceiling to floor through the
+            // span's solid body. A column's stack reads as a ladder of
+            // state-coloured plates on one spine; the air gaps between spans
+            // stay empty, which is exactly where the flood walks.
             const bool current = !tile.mAirLabel.empty() && tile.mAirSerial == tile.mGeomSerial
                                  && tile.mAirLabel.size() >= (size_t)tile.mBandCount * tile.mRes * tile.mRes;
 
@@ -1997,8 +1998,13 @@ void SSWorldField::renderDebug()
                     if ((x % step) || (y % step)) continue;
 
                     const F32 s = cell * 0.4f;
-                    F32 prev_top = 0.f;
-                    bool have_prev = false;
+                    auto span_rect = [&](F32 z)
+                    {
+                        gGL.vertex3f(wx - s, wy - s, z); gGL.vertex3f(wx + s, wy - s, z);
+                        gGL.vertex3f(wx + s, wy - s, z); gGL.vertex3f(wx + s, wy + s, z);
+                        gGL.vertex3f(wx + s, wy + s, z); gGL.vertex3f(wx - s, wy + s, z);
+                        gGL.vertex3f(wx - s, wy + s, z); gGL.vertex3f(wx - s, wy - s, z);
+                    };
 
                     for (S32 b = 0; b < tile.mBandCount; ++b)
                     {
@@ -2007,14 +2013,6 @@ void SSWorldField::renderDebug()
                         if (z <= -FLT_MAX * 0.5f) continue;   // an open band
 
                         const F32 z0 = (F32)b * h;
-                        const F32 z1 = z;
-
-                        if (have_prev)
-                        {
-                            gGL.color4f(0.6f, 0.65f, 0.75f, 0.35f);
-                            gGL.vertex3f(wx, wy, prev_top);
-                            gGL.vertex3f(wx, wy, z0);
-                        }
 
                         // The state of the air the span holds up: the nearest
                         // air band-cell at or above it in the column.
@@ -2040,18 +2038,13 @@ void SSWorldField::renderDebug()
                             default:            gGL.color4f(0.55f, 0.6f, 0.7f, 0.5f); break;
                         }
 
-                        // Rect in the XZ plane at wy, then the YZ plane at wx.
-                        gGL.vertex3f(wx - s, wy, z0); gGL.vertex3f(wx + s, wy, z0);
-                        gGL.vertex3f(wx + s, wy, z0); gGL.vertex3f(wx + s, wy, z1);
-                        gGL.vertex3f(wx + s, wy, z1); gGL.vertex3f(wx - s, wy, z1);
-                        gGL.vertex3f(wx - s, wy, z1); gGL.vertex3f(wx - s, wy, z0);
-                        gGL.vertex3f(wx, wy - s, z0); gGL.vertex3f(wx, wy + s, z0);
-                        gGL.vertex3f(wx, wy + s, z0); gGL.vertex3f(wx, wy + s, z1);
-                        gGL.vertex3f(wx, wy + s, z1); gGL.vertex3f(wx, wy - s, z1);
-                        gGL.vertex3f(wx, wy - s, z1); gGL.vertex3f(wx, wy - s, z0);
+                        span_rect(z);
+                        span_rect(z0);
 
-                        have_prev = true;
-                        prev_top = z1;
+                        // The spine: ceiling to floor, through the solid.
+                        gGL.color4f(0.6f, 0.65f, 0.75f, 0.35f);
+                        gGL.vertex3f(wx, wy, z);
+                        gGL.vertex3f(wx, wy, z0);
                     }
                 }
             }
