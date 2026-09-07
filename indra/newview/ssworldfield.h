@@ -287,15 +287,17 @@ public:
     // the labels are current, less before the first flood or after an edit.
     F32 airCoverage(U64 region_handle) const;
 
-    // <SS:Nexii> Drainage topology over one landing-surface grid - the DRAINAGE_NETWORK channel core, materialised synchronously over whatever SurfaceGrid the caller already holds (the surface field's geometry, at its own n). A Barnes priority flood fills every depression to its spill elevation; a cell below that level is a pool member (standing water, the figure that retires the surface field's local dips check); flow directions are D8 down the *filled* surface, so a pool's water drains toward its spill outlet rather than into its own floor. Nothing is cached here: the grid carries the geometry serial and the caller already gates retraces on it. Per-span levels wait on the multi-peel store; this is the landing-surface level the design ships first.
+    // <SS:Nexii> Drainage topology over one landing-surface grid - the DRAINAGE_NETWORK channel core, materialised synchronously over whatever SurfaceGrid the caller already holds (the surface field's geometry, at its own n). A Barnes priority flood fills every depression to its spill elevation; a cell below that level is a pool member (standing water, the figure that retires the surface field's local dips check); flow directions are D8 down the *filled* surface, so a pool's water drains toward its spill outlet rather than into its own floor - except across an eave, the capture discontinuity a raw drop steeper than a roof pitch and at least 0.75 m tall marks: water arriving there leaves into the air, so the drop is not a descent and the cell ends the surface. Accumulation then routes contributing area in square metres down the D8 in descending spill order; a cell whose outlet chain ends keeps its catchment, which is the figure the runoff shed reads at the lips. Nothing is cached here: the grid carries the geometry serial and the caller already gates retraces on it. Per-span levels wait on the multi-peel store; this is the landing-surface level the design ships first.
     struct Drainage
     {
         std::vector<F32> mSpill;      // fill elevation per cell, NODATA where unmapped
         std::vector<U8> mPool;        // 1 = cell sits under its spill level (depression member)
         std::vector<U8> mD8;          // outflow cell on the filled surface, 3x3-indexed
                                       // ((dy+1)*3 + (dx+1)); 4 = no outflow (sink or drain edge)
+        std::vector<F32> mCatch;      // contributing area in m2 routed through each cell,
+                                      // retained where the outlet chain ends
     };
-    bool buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out) const;
+    static bool buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out);
 
     bool tileValid(U64 region_handle) const;
     U32 geometrySerial(U64 region_handle) const;

@@ -52,6 +52,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <sstream>
 
 #include <glm/gtc/type_ptr.hpp>
@@ -147,9 +148,6 @@ void SSSurfaceField::clear()
 static const F32 SLOPE_RUN_FULL = 0.85f;
 
 static const F32 GEOM_EDGE_DROP = 1.5f;
-
-static const F32 SHED_FEED_FLAT  = 1.5f;
-static const F32 SHED_FEED_STEEP = 9.f;
 
 static const F32 SHED_MERGE = 12.f;
 
@@ -305,6 +303,285 @@ void SSSurfaceField::buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geo
     }
 }
 
+// <SS:Nexii> The liquid runoff network: the DRAINAGE_NETWORK channel at its
+// own finer resolution, traced over the same source grid the wet field reads
+// at GEOM_RES. buildDrainage fills the surface's depressions, directs D8 down
+// the filled surface and accumulates catchment with the eave rule terminating
+// flow at the capture's discontinuities; this pass picks the lip cells that
+// termination leaves holding catchment, floods them into runs - the connected
+// lines water actually leaves a roof along - and refines each lip point
+// against the world field's full-resolution column tops so a stream or drip
+// leaves the edge of the object rather than the centre of whichever cell
+// happened to straddle it. Runs carry everything the shed needs: summed
+// catchment, the mean way the water leaves, the span to cut curtain slots
+// across, and a key that survives retraces which keep the run's biggest
+// feeder, so a run's reservoir outlives a prim edit next door.
+void SSSurfaceField::buildRunoff(U64 region_handle, Geometry& out, SSWorldField* field)
+{
+    static const F32 EAVE_DROP_M  = 0.75f;  // at least a storey-step of fall
+    static const F32 EAVE_SLOPE   = 2.0f;   // steeper than any roof pitch (~63 deg)
+    static const F32 RUN_Z_JOIN   = 2.f;    // members of a run sit within this of each other
+    static const F32 RUN_DIR_COS  = 0.5f;   // ...and shed within 60 degrees of the same way
+    static const S32 RUN_MAX        = 128;
+    static const S32 RUN_MEMBER_MAX = 64;
+
+    out.mRunoff = Geometry::Runoff();
+
+    // The network's own resolution - finer than the wet field's lattice by
+    // default, because an eave is a line and 2 m cells draw it as dots. Both
+    // sources serve the same SurfaceGrid contract; the world field's 0.25 m
+    // store additionally gives the lip refinement below full-resolution
+    // column tops to walk against.
+    static LLCachedControl<S32> res_setting(gSavedSettings, "SSAtmoRunoffRes", 256);
+    const S32 rn = llclamp((S32)res_setting, 64, 512);
+
+    SSRainShadowMap::SurfaceGrid rgrid;
+    const bool have = field ? field->buildSurfaceGrid(region_handle, rn, rgrid)
+                            : SSRainShadowMap::getInstance()->buildSurfaceGrid(region_handle, rn, rgrid);
+    if (!have) return;
+
+    const S32 n = rgrid.mN;
+    const F32 cell = rgrid.mCell;
+    if (n < 3 || cell <= 0.f) return;
+
+    SSWorldField::Drainage drain;
+    if (!SSWorldField::buildDrainage(rgrid, drain)) return;
+
+    Geometry::Runoff& ro = out.mRunoff;
+    ro.mGeomSerial = rgrid.mGeomSerial;
+    ro.mN = n;
+    ro.mCell = cell;
+    ro.mCatch = std::move(drain.mCatch);
+
+    static LLCachedControl<F32> edge_min_above(gSavedSettings, "SSAtmoRunoffEdgeMinAbove", 1.f);
+    const F32 min_above = llmax((F32)edge_min_above, 0.f);
+
+    // Lips, at the network's own resolution. The same two questions the wet
+    // field's coarse edge pass asks - is a neighbour open air, or is it a
+    // discontinuity the water leaves the surface by - with the eave pair
+    // (steep enough AND tall enough) the finer cells can actually resolve.
+    static const S32 DX[4] = { 1, -1, 0, 0 };
+    static const S32 DY[4] = { 0, 0, 1, -1 };
+
+    std::vector<LLVector3> out_dir;
+    out_dir.assign((size_t)n * n, LLVector3::zero);
+
+    for (S32 y = 0; y < n; ++y)
+    {
+        for (S32 x = 0; x < n; ++x)
+        {
+            const size_t i = (size_t)y * n + x;
+            const U8 f = rgrid.mFlags[i];
+            if (f == 0 || (f & SSRainShadowMap::SURF_WATER) != 0) continue;
+            if (rgrid.mZ[i] <= -FLT_MAX * 0.5f) continue;
+            if (rgrid.mAbove[i] < min_above) continue;
+
+            const F32 z0 = rgrid.mZ[i];
+            F32 ox = 0.f, oy = 0.f;
+
+            for (S32 d = 0; d < 4; ++d)
+            {
+                const S32 nx = x + DX[d], ny = y + DY[d];
+                if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+                const size_t ni = (size_t)ny * n + nx;
+                const U8 nf = rgrid.mFlags[ni];
+                const bool open = (nf == 0) || rgrid.mZ[ni] <= -FLT_MAX * 0.5f;
+                const F32 drop = z0 - rgrid.mZ[ni];
+                const bool below = !open && (nf & SSRainShadowMap::SURF_WATER) == 0
+                    && drop >= EAVE_DROP_M && drop >= EAVE_SLOPE * cell;
+                if (!open && !below) continue;
+
+                ox += (F32)DX[d];
+                oy += (F32)DY[d];
+            }
+
+            const F32 len = sqrtf(ox * ox + oy * oy);
+            if (len < 0.0001f) continue;
+
+            out_dir[i].setVec(ox / len, oy / len, 0.f);
+            ro.mEdgeCells.push_back((S32)i);
+        }
+    }
+
+    if (ro.mEdgeCells.empty()) return;
+
+    // Runs: flood-fill the lips into the lines water leaves along. Members
+    // join when they touch, sit at much the same height, and shed the same
+    // way - a run is split where its direction turns, so one run is one
+    // straightish stretch of eave and a slot cut across it is one curtain.
+    const size_t cells = (size_t)n * n;
+    std::vector<U8> visited(cells, 0);
+    std::vector<S32> queue;
+
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    const LLVector3 origin = regionp ? regionp->getOriginAgent() : LLVector3::zero;
+
+    for (const S32 seed_cell : ro.mEdgeCells)
+    {
+        if (visited[(size_t)seed_cell]) continue;
+
+        queue.clear();
+        queue.push_back(seed_cell);
+        visited[(size_t)seed_cell] = 1;
+
+        std::vector<S32> members;
+        while (!queue.empty())
+        {
+            const S32 c = queue.back();
+            queue.pop_back();
+            members.push_back(c);
+
+            const size_t ui = (size_t)c;
+            const F32 z0 = rgrid.mZ[ui];
+            const LLVector3& d0 = out_dir[ui];
+
+            const S32 cx = c % n;
+            const S32 cy = c / n;
+            for (S32 dy = -1; dy <= 1; ++dy)
+            {
+                for (S32 dx = -1; dx <= 1; ++dx)
+                {
+                    if (dx == 0 && dy == 0) continue;
+                    const S32 nx = cx + dx, ny = cy + dy;
+                    if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+                    const size_t ni = (size_t)ny * n + nx;
+                    if (visited[ni] || out_dir[ni].magVecSquared() < 0.0001f) continue;
+                    if (fabsf(rgrid.mZ[ni] - z0) > RUN_Z_JOIN) continue;
+                    if (out_dir[ni] * d0 < RUN_DIR_COS) continue;
+
+                    visited[ni] = 1;
+                    queue.push_back((S32)ni);
+                }
+            }
+        }
+
+        Geometry::Run run;
+        F32 total_catch = 0.f;
+        F32 sx = 0.f, sy = 0.f;
+        F32 cx_sum = 0.f, cy_sum = 0.f, cz_sum = 0.f;
+
+        for (const S32 c : members)
+        {
+            const size_t ui = (size_t)c;
+            total_catch += ro.mCatch[ui];
+            sx += out_dir[ui].mV[VX];
+            sy += out_dir[ui].mV[VY];
+            cx_sum += ((F32)(c % n) + 0.5f) * cell;
+            cy_sum += ((F32)(c / n) + 0.5f) * cell;
+            cz_sum += rgrid.mZ[ui];
+        }
+
+        if (total_catch <= 0.f) continue;
+
+        const F32 out_len = sqrtf(sx * sx + sy * sy);
+        if (out_len < 0.0001f) continue;
+        run.mOut.setVec(sx / out_len, sy / out_len, 0.f);
+        run.mCatch = total_catch;
+
+        // Along the run: the axis the streams measure their pitch by is
+        // z cross out - the convention the stream renderer reads the slope
+        // back in. Members order themselves along it, endpoints to endpoints.
+        const LLVector3 axis(-run.mOut.mV[VY], run.mOut.mV[VX], 0.f);
+
+        std::sort(members.begin(), members.end(),
+                  [&](S32 a, S32 b)
+                  {
+                      const F32 pa = ((F32)(a % n) + 0.5f) * cell * axis.mV[VX]
+                                   + ((F32)(a / n) + 0.5f) * cell * axis.mV[VY];
+                      const F32 pb = ((F32)(b % n) + 0.5f) * cell * axis.mV[VX]
+                                   + ((F32)(b / n) + 0.5f) * cell * axis.mV[VY];
+                      if (pa != pb) return pa < pb;
+                      return a < b;
+                  });
+
+        run.mCentroid.setVec(cx_sum / (F32)members.size(),
+                             cy_sum / (F32)members.size(),
+                             cz_sum / (F32)members.size());
+
+        // The key is the run's biggest feeder - the cell the most catchment
+        // drains through. A retrace that keeps the roof keeps the feeder, so
+        // the reservoir the shed holds under this key survives the edit.
+        U32 key = (U32)members.front();
+        F32 best_catch = -1.f;
+        for (const S32 c : members)
+        {
+            const F32 catch_c = ro.mCatch[(size_t)c];
+            if (catch_c > best_catch)
+            {
+                best_catch = catch_c;
+                key = (U32)c;
+            }
+        }
+        run.mKey = key;
+
+        // Thinning keeps the whole line covered: stride, never truncate, and
+        // always the two ends a slot's pitch is measured between.
+        if ((S32)members.size() > RUN_MEMBER_MAX)
+        {
+            const S32 stride = (S32)((members.size() + RUN_MEMBER_MAX - 1) / RUN_MEMBER_MAX);
+            std::vector<S32> thinned;
+            thinned.reserve(members.size() / stride + 2);
+            for (size_t k = 0; k < members.size(); k += (size_t)stride)
+            {
+                thinned.push_back(members[k]);
+            }
+            if (thinned.back() != members.back()) thinned.push_back(members.back());
+            members.swap(thinned);
+        }
+
+        run.mCells = std::move(members);
+
+        // Refine the lip points against the world field's own resolution -
+        // walk outward from each cell centre at storey-step granularity until
+        // the surface falls away, and leave the drip at the last point still
+        // standing on it. Without the field (the rain shadow source), the
+        // cell centres stand in, as they always have.
+        run.mLips.reserve(run.mCells.size());
+        const F32 refine_step = field ? 0.25f : cell;
+        for (const S32 c : run.mCells)
+        {
+            const size_t ui = (size_t)c;
+            const F32 lx = ((F32)(c % n) + 0.5f) * cell;
+            const F32 ly = ((F32)(c / n) + 0.5f) * cell;
+            F32 z = rgrid.mZ[ui];
+            F32 bx = lx, by = ly;
+
+            const LLVector3& dir = out_dir[ui];
+            for (F32 t = refine_step; t <= cell + refine_step * 0.5f; t += refine_step)
+            {
+                const LLVector3 probe = origin + LLVector3(lx + dir.mV[VX] * t,
+                                                           ly + dir.mV[VY] * t,
+                                                           0.f);
+                F32 probe_z = 0.f;
+                U8 probe_flags = 0;
+                if (!field || !field->surfaceTop(probe, probe_z, probe_flags)) break;
+                if (probe_z < z - 0.05f) break;
+
+                bx = lx + dir.mV[VX] * t;
+                by = ly + dir.mV[VY] * t;
+                z = probe_z;
+            }
+
+            run.mLips.emplace_back(bx, by, z);
+        }
+
+        ro.mRuns.push_back(std::move(run));
+    }
+
+    // The budget goes to the biggest gutters first.
+    std::sort(ro.mRuns.begin(), ro.mRuns.end(),
+              [](const Geometry::Run& a, const Geometry::Run& b)
+              {
+                  return a.mCatch > b.mCatch;
+              });
+    if ((S32)ro.mRuns.size() > RUN_MAX)
+    {
+        ro.mRuns.resize(RUN_MAX);
+    }
+}
+
 // Rebuilds geometry for tiles whose captures changed - the retrace gate.
 // The grid source is the rain shadow capture by default; SSWorldFieldSurfaceTop
 // routes it through the shared world field's SURFACE_TOP channel instead. The
@@ -343,9 +620,64 @@ void SSSurfaceField::refreshGeometry()
         if (field)
         {
             SSWorldField::Drainage drain;
-            if (field->buildDrainage(grid, drain) && drain.mPool.size() == geom.mPool.size())
+            if (SSWorldField::buildDrainage(grid, drain) && drain.mPool.size() == geom.mPool.size())
             {
                 geom.mPool = std::move(drain.mPool);
+            }
+        }
+
+        // <SS:Nexii> The liquid runoff network, at its own finer resolution
+        // (SSAtmoRunoffRes) off the same source. Both sources serve the same
+        // SurfaceGrid contract, so the network follows the grid switch the
+        // wet field already uses; the world field's 0.25 m store also gives
+        // buildRunoff the full-resolution column tops it refines lip points
+        // against, which is why the source pointer rides along.
+        buildRunoff(entry.first, geom, field);
+
+        // <SS:Nexii> Carry the liquid reservoirs across the retrace: a run
+        // keeps its water when its biggest feeder cell survives the edit, and
+        // whatever belonged to runs that no longer exist is shared out over
+        // the new ones by catchment - the same hand-over the trace has always
+        // needed so a prim edit next door reads as invisible rather than as
+        // every eave on the region pausing for a drain cycle.
+        auto fld_it = mFields.find(entry.first);
+        if (fld_it != mFields.end() && fld_it->second.mN == geom.mN)
+        {
+            Field& fld = fld_it->second;
+
+            std::set<U32> live;
+            F32 total_catch = 0.f;
+            for (const Geometry::Run& run : geom.mRunoff.mRuns)
+            {
+                live.insert(run.mKey);
+                total_catch += run.mCatch;
+            }
+
+            F32 orphan = 0.f;
+            for (auto it = fld.mRunStore.begin(); it != fld.mRunStore.end(); )
+            {
+                if (live.count(it->first))
+                {
+                    ++it;
+                }
+                else
+                {
+                    orphan += it->second;
+                    it = fld.mRunStore.erase(it);
+                }
+            }
+            for (auto it = fld.mRunAccum.begin(); it != fld.mRunAccum.end(); )
+            {
+                if (live.count(it->first)) ++it;
+                else it = fld.mRunAccum.erase(it);
+            }
+
+            if (orphan > 0.f && total_catch > 0.f)
+            {
+                for (const Geometry::Run& run : geom.mRunoff.mRuns)
+                {
+                    fld.mRunStore[run.mKey] += orphan * run.mCatch / total_catch;
+                }
             }
         }
     }
@@ -365,7 +697,8 @@ static const F32 SHED_DRAIN_TAU = 6.f;
 
 static const F32 SHED_STORE_CEILING = 8.f;
 
-// Spends the frame's rain on every region's shelter edges, spawning runoff drips.
+// Spends the frame's weather on every region's shed: granular drains the
+// creep spill at the lips, liquid fills and drains the runoff network's runs.
 void SSSurfaceField::shedEdges(F32 dt)
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_SURFACE_SHED);
@@ -398,12 +731,17 @@ void SSSurfaceField::shedEdges(F32 dt)
     }
 }
 
-// One region's edge shedding: collected water becomes drip and stream spawns near the camera.
+// One region's edge shedding. Granular weather drains the transport's creep
+// spill through the per-lip stores it was debited to - one ledger, one
+// cursor, unchanged. Liquid sheds from the runoff network's runs instead: a
+// run is a stretch of eave with a catchment, so it holds one reservoir, puts
+// up curtain streams cut across its span when it sheds faster than drips can
+// carry, and lets individual drips fall wherever its own flows converge -
+// weighted by the catchment each member drains, so the valley corner a whole
+// roof plane runs into gets the drips a straight rake never earns.
 void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& fld,
                                 F32 dt, F32 rate_m2, const LLVector3& camera_agent)
 {
-    if (geom.mEdgeCells.empty()) return;
-
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
     SSPrecipSim* sim = atmo->sim();
 
@@ -411,8 +749,6 @@ void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& 
     if (!regionp) return;
 
     const LLVector3 origin = regionp->getOriginAgent();
-    const F32 cell = geom.mCell;
-    const F32 cell_area = cell * cell;
 
     static LLCachedControl<F32> radius_setting(gSavedSettings, "SSAtmoRunoffRadius", 48.f);
     const F32 radius = llclamp((F32)radius_setting, 8.f, 128.f);
@@ -424,68 +760,154 @@ void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& 
 
     const F64 now = atmo->sharedTime();
 
-    S32& cursor = mShedCursor[region_handle];
-    const S32 lip_count = (S32)geom.mEdgeCells.size();
-    if (cursor >= lip_count) cursor = 0;
-
-    S32 visited = 0;
-
-    for (S32 k = 0; k < lip_count; ++k)
+    if (atmo->granularWeather())
     {
-        const S32 i = geom.mEdgeCells[(size_t)k];
-        const size_t ui = (size_t)i;
+        if (geom.mEdgeCells.empty()) return;
 
-        // <SS:Nexii> Granular weather feeds the store from the transport's creep spill, not from the rain rate - the lip is debited where the creep pass delivers, and this cursor only drains it into cascades. Liquid keeps the inflow it always had.
-        const F32 inflow = atmo->granularWeather() ? 0.f
-                                                   : cell_area * lerp(SHED_FEED_FLAT, SHED_FEED_STEEP, llclamp(geom.mSlope[ui] / SLOPE_RUN_FULL, 0.f, 1.f)) * rate_m2;
+        const F32 cell = geom.mCell;
 
-        if (inflow > 0.f)
+        S32& cursor = mShedCursor[region_handle];
+        const S32 lip_count = (S32)geom.mEdgeCells.size();
+        if (cursor >= lip_count) cursor = 0;
+
+        S32 visited = 0;
+
+        for (S32 k = 0; k < lip_count; ++k)
         {
-            fld.mStore[ui] = llmin(fld.mStore[ui] + inflow * dt,
-                                   inflow * SHED_STORE_CEILING + 1.f);
+            const S32 i = geom.mEdgeCells[(size_t)k];
+            const size_t ui = (size_t)i;
+
+            // The store is debited where the creep pass delivers; this cursor
+            // only drains it into cascades.
+            const F32 outflow = fld.mStore[ui] / SHED_DRAIN_TAU;
+            fld.mStore[ui] = llmax(0.f, fld.mStore[ui] - outflow * dt);
+
+            if (outflow <= 0.01f)
+            {
+                fld.mAccum[ui] = 0.f;
+                continue;
+            }
+
+            const S32 offset = (k - cursor + lip_count) % lip_count;
+            if (offset >= SHED_VISIT_PER_FRAME) continue;
+            ++visited;
+
+            const S32 x = i % geom.mN;
+            const S32 y = i / geom.mN;
+            const LLVector3 lip = origin
+                + LLVector3(((F32)x + 0.5f) * cell, ((F32)y + 0.5f) * cell, 0.f);
+            const LLVector3 lip_agent(lip.mV[VX], lip.mV[VY], geom.mZ[ui]);
+
+            const LLVector3 delta = lip_agent - camera_agent;
+            if (delta.magVecSquared() > radius_sq)
+            {
+                fld.mAccum[ui] = 0.f;
+                continue;
+            }
+
+            const LLVector3 out_dir(geom.mEdgeX[ui], geom.mEdgeY[ui], 0.f);
+
+            LLVector3 land = lip_agent;
+            bool on_water = false;
+            SSRainShadowMap::getInstance()->resolveColumn(
+                lip_agent + out_dir * (cell * 0.5f) - LLVector3(0.f, 0.f, 0.1f), land, on_water);
+
+            const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
+
+            const F32 stream_drive = llclamp(
+                (raw_rate - SHED_STREAM_MIN) / SHED_STREAM_FULL, 0.f, 1.f);
+
+            const U32 key = SSAtmoNoise::combine(
+                SSAtmoNoise::combine((U32)region_handle, (U32)(region_handle >> 32)),
+                (U32)i);
+
+            SSRandStream rng(SSAtmoNoise::combine(atmo->seed(),
+                SSAtmoNoise::combine((U32)(S64)(now * 8.0), key)));
+            rng.next();
+
+            if (stream_drive > 0.f)
+            {
+                const SSPrecipPreset& preset = atmo->preset();
+                const F32 width = (preset.mStreamSpan > 0.f)
+                    ? llclamp(preset.mStreamSpan, 1.f, STREAM_SPAN_MAX) : cell;
+
+                sim->refreshStream(key, lip_agent, out_dir, land,
+                                   stream_drive, width, 0.f, rng);
+            }
+
+            const F32 drips_per_s = raw_rate * (1.f - 0.9f * stream_drive);
+            if (budget <= 0.f) continue;
+
+            fld.mAccum[ui] += drips_per_s * budget * dt;
+            S32 shed_now = (S32)fld.mAccum[ui];
+            if (shed_now <= 0) continue;
+
+            shed_now = llmin(shed_now, SHED_MAX_BURST);
+            fld.mAccum[ui] -= (F32)shed_now;
+
+            for (S32 d = 0; d < shed_now; ++d)
+            {
+                const LLVector3 along(-out_dir.mV[VY], out_dir.mV[VX], 0.f);
+                const LLVector3 jitter = along * (rng.frand(-0.5f, 0.5f) * cell);
+                sim->spawnDrip(lip_agent + jitter, out_dir, land + jitter, SHED_MERGE, rng);
+            }
         }
 
-        const F32 outflow = fld.mStore[ui] / SHED_DRAIN_TAU;
-        fld.mStore[ui] = llmax(0.f, fld.mStore[ui] - outflow * dt);
+        cursor = (cursor + llmax(1, visited)) % lip_count;
+        return;
+    }
+
+    const Geometry::Runoff& ro = geom.mRunoff;
+    if (!ro.valid() || ro.mRuns.empty()) return;
+
+    const F32 cell = ro.mCell;
+
+    for (const Geometry::Run& run : ro.mRuns)
+    {
+        F32& store = fld.mRunStore[run.mKey];
+        F32& accum = fld.mRunAccum[run.mKey];
+
+        // The roof's reservoir: the run's whole catchment fills it, it drains
+        // on its own time constant, and what drains is what the eave sheds. A
+        // gust lull overhead empties the store, not the eave.
+        const F32 inflow = run.mCatch * rate_m2;
+        if (inflow > 0.f)
+        {
+            store = llmin(store + inflow * dt, inflow * SHED_STORE_CEILING + 1.f);
+        }
+
+        const F32 outflow = store / SHED_DRAIN_TAU;
+        store = llmax(0.f, store - outflow * dt);
 
         if (outflow <= 0.01f)
         {
-            fld.mAccum[ui] = 0.f;
+            accum = 0.f;
             continue;
         }
 
-        const S32 offset = (k - cursor + lip_count) % lip_count;
-        if (offset >= SHED_VISIT_PER_FRAME) continue;
-        ++visited;
-
-        const S32 x = i % geom.mN;
-        const S32 y = i / geom.mN;
-        const LLVector3 lip = origin
-            + LLVector3(((F32)x + 0.5f) * cell, ((F32)y + 0.5f) * cell, 0.f);
-        const LLVector3 lip_agent(lip.mV[VX], lip.mV[VY], geom.mZ[ui]);
-
-        const LLVector3 delta = lip_agent - camera_agent;
+        const LLVector3 run_centroid(run.mCentroid.mV[VX] + origin.mV[VX],
+                                     run.mCentroid.mV[VY] + origin.mV[VY],
+                                     run.mCentroid.mV[VZ]);
+        const LLVector3 delta = run_centroid - camera_agent;
         if (delta.magVecSquared() > radius_sq)
         {
-            fld.mAccum[ui] = 0.f;
+            accum = 0.f;
             continue;
         }
-
-        const LLVector3 out_dir(geom.mEdgeX[ui], geom.mEdgeY[ui], 0.f);
-
-        LLVector3 land = lip_agent;
-        bool on_water = false;
-        SSRainShadowMap::getInstance()->resolveColumn(
-            lip_agent + out_dir * (cell * 0.5f) - LLVector3(0.f, 0.f, 0.1f), land, on_water);
 
         const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
 
         const F32 stream_drive = llclamp(
             (raw_rate - SHED_STREAM_MIN) / SHED_STREAM_FULL, 0.f, 1.f);
 
+        const LLVector3 out_dir = run.mOut;
+        // Along the lip: z cross out, the axis the network ordered the run by
+        // and the one the stream renderer reads its pitch back in.
+        const LLVector3 along(-out_dir.mV[VY], out_dir.mV[VX], 0.f);
+
         const U32 key = SSAtmoNoise::combine(
             SSAtmoNoise::combine((U32)region_handle, (U32)(region_handle >> 32)),
-            (U32)i);
+            run.mKey);
 
         SSRandStream rng(SSAtmoNoise::combine(atmo->seed(),
             SSAtmoNoise::combine((U32)(S64)(now * 8.0), key)));
@@ -493,33 +915,131 @@ void SSSurfaceField::shedRegion(U64 region_handle, const Geometry& geom, Field& 
 
         if (stream_drive > 0.f)
         {
+            // The curtain spans what the art was drawn for: the preset's span,
+            // or its sheet tier's quad width, cut into slots across the run so
+            // together they are the length of the eave - a gutter, without
+            // anything having to know that the run exists.
             const SSPrecipPreset& preset = atmo->preset();
-            const F32 width = (preset.mStreamSpan > 0.f)
-                ? llclamp(preset.mStreamSpan, 1.f, STREAM_SPAN_MAX) : cell;
+            const F32 span = (preset.mStreamSpan > 0.f)
+                ? llclamp(preset.mStreamSpan, 1.f, STREAM_SPAN_MAX)
+                : llclamp(preset.mTiers[TIER_SHEETS].mSizeX * 2.f, 1.f, STREAM_SPAN_MAX);
 
-            sim->refreshStream(key, lip_agent, out_dir, land,
-                               stream_drive, width, 0.f, rng);
+            const size_t count = run.mCells.size();
+            auto proj_at = [&](size_t m)
+            {
+                const LLVector3& lip = run.mLips[m];
+                return lip.mV[VX] * along.mV[VX] + lip.mV[VY] * along.mV[VY];
+            };
+
+            // The run's own span, measured over the refined lip points.
+            const F32 run_len = llmax(proj_at(count - 1) - proj_at(0), 0.f) + cell;
+            const S32 slots = llclamp((S32)(run_len / span + 0.5f), 1, 64);
+            const F32 slot_len = run_len / (F32)slots;
+
+            size_t m = 0;
+            for (S32 s = 0; s < slots; ++s)
+            {
+                const F32 lo = proj_at(0) + (F32)s * slot_len;
+                const F32 hi = lo + slot_len;
+                const F32 mid = lo + 0.5f * slot_len;
+
+                size_t first = count, last = 0, mid_at = 0;
+                F32 near_dp = FLT_MAX;
+                while (m < count)
+                {
+                    const F32 p = proj_at(m);
+                    if (p >= hi) break;
+                    if (p >= lo)
+                    {
+                        if (first == count) first = m;
+                        last = m;
+                        const F32 dp = fabsf(p - mid);
+                        if (dp < near_dp)
+                        {
+                            near_dp = dp;
+                            mid_at = m;
+                        }
+                    }
+                    ++m;
+                }
+                if (first == count)
+                {
+                    // A thinned long run can leave a slot between members:
+                    // anchor it on the nearest member there is.
+                    mid_at = last = first = llmin(m, count - 1);
+                }
+
+                const LLVector3& lip_local = run.mLips[mid_at];
+                const LLVector3 lip_agent(lip_local.mV[VX] + origin.mV[VX],
+                                          lip_local.mV[VY] + origin.mV[VY],
+                                          lip_local.mV[VZ]);
+
+                // The pitch of this stretch of lip, so a curtain off a rake
+                // hangs along the rake instead of cutting through the roof.
+                F32 pitch = 0.f;
+                if (last > first)
+                {
+                    const F32 run_m = llmax(proj_at(last) - proj_at(first), 0.01f);
+                    pitch = llclamp((run.mLips[last].mV[VZ] - run.mLips[first].mV[VZ]) / run_m,
+                                    -4.f, 4.f);
+                }
+
+                LLVector3 land = lip_agent;
+                bool on_water = false;
+                SSRainShadowMap::getInstance()->resolveColumn(
+                    lip_agent + out_dir * (cell * 0.5f) - LLVector3(0.f, 0.f, 0.1f), land, on_water);
+
+                const U32 slot_key = SSAtmoNoise::combine(key, (U32)s);
+                sim->refreshStream(slot_key, lip_agent, out_dir, land,
+                                   stream_drive, slot_len, pitch, rng);
+            }
         }
 
         const F32 drips_per_s = raw_rate * (1.f - 0.9f * stream_drive);
         if (budget <= 0.f) continue;
 
-        fld.mAccum[ui] += drips_per_s * budget * dt;
-        S32 shed_now = (S32)fld.mAccum[ui];
+        accum += drips_per_s * budget * dt;
+        S32 shed_now = (S32)accum;
         if (shed_now <= 0) continue;
 
         shed_now = llmin(shed_now, SHED_MAX_BURST);
-        fld.mAccum[ui] -= (F32)shed_now;
+        accum -= (F32)shed_now;
 
         for (S32 d = 0; d < shed_now; ++d)
         {
-            const LLVector3 along(-out_dir.mV[VY], out_dir.mV[VX], 0.f);
+            // Members are picked weighted by the catchment each drains: a
+            // drip lands where the roof's flows gathered, which is why a
+            // valley corner runs while the plain rake beside it stays quiet.
+            F32 pick_total = 0.f;
+            for (const S32 c : run.mCells)
+            {
+                pick_total += ro.mCatch[(size_t)c];
+            }
+
+            F32 pick = rng.frand(0.f, pick_total);
+            size_t mi = 0;
+            for (; mi < run.mCells.size(); ++mi)
+            {
+                pick -= ro.mCatch[(size_t)run.mCells[mi]];
+                if (pick <= 0.f) break;
+            }
+            if (mi >= run.mCells.size()) mi = run.mCells.size() - 1;
+
+            const LLVector3& lip_local = run.mLips[mi];
+            const LLVector3 lip_agent(lip_local.mV[VX] + origin.mV[VX],
+                                      lip_local.mV[VY] + origin.mV[VY],
+                                      lip_local.mV[VZ]);
             const LLVector3 jitter = along * (rng.frand(-0.5f, 0.5f) * cell);
-            sim->spawnDrip(lip_agent + jitter, out_dir, land + jitter, SHED_MERGE, rng);
+
+            LLVector3 land = lip_agent;
+            bool on_water = false;
+            SSRainShadowMap::getInstance()->resolveColumn(
+                lip_agent + jitter + out_dir * (cell * 0.5f) - LLVector3(0.f, 0.f, 0.1f),
+                land, on_water);
+
+            sim->spawnDrip(lip_agent + jitter, out_dir, land, SHED_MERGE, rng);
         }
     }
-
-    cursor = (cursor + llmax(1, visited)) % lip_count;
 }
 
 // The per-region wet/snow/puddle field, created to match its geometry.
@@ -2360,66 +2880,117 @@ void SSSurfaceField::renderDebug()
 void SSSurfaceField::renderRunoffLips(U32 view, const LLVector3& cam,
                                       F32 radius_sq, F32 budget, bool context_only) const
 {
+    const bool granular = SSAtmoMagic::getInstance()->granularWeather();
+
     for (const auto& entry : mGeometry)
     {
         const Geometry& geom = entry.second;
-        if (!geom.valid() || geom.mEdgeCells.empty()) continue;
+        if (!geom.valid()) continue;
 
         LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(entry.first);
         if (!regionp) continue;
 
         const LLVector3 origin = regionp->getOriginAgent();
-        const S32 n = geom.mN;
-        const F32 cell = geom.mCell;
-        const F32 half = cell * 0.35f;
 
         auto field_it = mFields.find(entry.first);
-        const Field* fld = (field_it != mFields.end() && field_it->second.mN == n)
+        const Field* fld = (field_it != mFields.end() && field_it->second.mN == geom.mN)
                                ? &field_it->second : nullptr;
 
-        auto cursor_it = mShedCursor.find(entry.first);
-        const S32 cursor = (cursor_it != mShedCursor.end()) ? cursor_it->second : 0;
-        const S32 lip_count = (S32)geom.mEdgeCells.size();
-
-        gGL.begin(LLRender::TRIANGLES);
-        for (S32 k = 0; k < lip_count; ++k)
+        if (granular)
         {
-            const S32 i = geom.mEdgeCells[(size_t)k];
-            const size_t ui = (size_t)i;
+            // Granular sheds at the lips: the cascade debug is per lip cell.
+            if (geom.mEdgeCells.empty()) continue;
 
-            const F32 cx = origin.mV[VX] + ((F32)(i % n) + 0.5f) * cell;
-            const F32 cy = origin.mV[VY] + ((F32)(i / n) + 0.5f) * cell;
-            const F32 cz = geom.mZ[ui] + 0.05f;
+            const S32 n = geom.mN;
+            const F32 cell = geom.mCell;
+            const F32 half = cell * 0.35f;
+
+            gGL.begin(LLRender::TRIANGLES);
+            for (const S32 i : geom.mEdgeCells)
+            {
+                const size_t ui = (size_t)i;
+
+                const F32 cx = origin.mV[VX] + ((F32)(i % n) + 0.5f) * cell;
+                const F32 cy = origin.mV[VY] + ((F32)(i / n) + 0.5f) * cell;
+                const F32 cz = geom.mZ[ui] + 0.05f;
+
+                F32 r = 0.4f, g = 0.45f, b = 0.5f, a = 0.12f;
+                if (!context_only)
+                {
+                    const F32 store = fld ? fld->mStore[ui] : 0.f;
+                    const F32 outflow = store / SHED_DRAIN_TAU;
+                    const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
+                    const F32 t = llclamp(raw_rate / SHED_STREAM_MIN, 0.f, 1.f);
+
+                    r = lerp(0.15f, 0.1f, t);
+                    g = lerp(0.3f, 0.7f, t);
+                    b = lerp(0.6f, 0.95f, t);
+                    a = llmax(0.2f + 0.6f * t, (view == 0) ? 0.3f : 0.f);
+                }
+
+                gGL.color4f(r, g, b, a);
+
+                gGL.vertex3f(cx - half, cy - half, cz);
+                gGL.vertex3f(cx + half, cy - half, cz);
+                gGL.vertex3f(cx + half, cy + half, cz);
+
+                gGL.vertex3f(cx - half, cy - half, cz);
+                gGL.vertex3f(cx + half, cy + half, cz);
+                gGL.vertex3f(cx - half, cy + half, cz);
+
+                // An arrowhead out over the edge: the way the water leaves.
+                const F32 ex = geom.mEdgeX[ui], ey = geom.mEdgeY[ui];
+                const F32 px = -ey * half * 0.55f, py = ex * half * 0.55f;
+                const F32 bx = cx + ex * half, by = cy + ey * half;
+                const F32 tx = cx + ex * half * 2.4f, ty = cy + ey * half * 2.4f;
+
+                gGL.vertex3f(bx + px, by + py, cz);
+                gGL.vertex3f(bx - px, by - py, cz);
+                gGL.vertex3f(tx, ty, cz);
+            }
+            gGL.end();
+            continue;
+        }
+
+        const Geometry::Runoff& ro = geom.mRunoff;
+        if (!ro.valid() || ro.mRuns.empty()) continue;
+
+        const F32 cell = ro.mCell;
+
+        gGL.begin(LLRender::LINES);
+        for (const Geometry::Run& run : ro.mRuns)
+        {
+            const LLVector3 centroid(run.mCentroid.mV[VX] + origin.mV[VX],
+                                     run.mCentroid.mV[VY] + origin.mV[VY],
+                                     run.mCentroid.mV[VZ]);
 
             F32 r = 0.4f, g = 0.45f, b = 0.5f, a = 0.12f;
             if (!context_only)
             {
-                const F32 store = fld ? fld->mStore[ui] : 0.f;
-                const F32 outflow = store / SHED_DRAIN_TAU;
-                const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
-                const F32 stream_drive = llclamp((raw_rate - SHED_STREAM_MIN)
-                                                     / SHED_STREAM_FULL, 0.f, 1.f);
-
                 if (view == 2)
                 {
-                    // The first gate shedRegion applies that still holds
-                    // this lip back - dry, waiting on the visit window,
-                    // beyond the shed radius, starved by the drip budget,
-                    // or actually producing.
+                    // The first gate that still holds this run back - dry,
+                    // beyond the shed radius, starved by the drip budget, or
+                    // actually producing.
+                    F32 store = 0.f;
+                    if (fld)
+                    {
+                        auto store_it = fld->mRunStore.find(run.mKey);
+                        if (store_it != fld->mRunStore.end()) store = store_it->second;
+                    }
+                    const F32 outflow = store / SHED_DRAIN_TAU;
+                    const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
+                    const F32 stream_drive = llclamp((raw_rate - SHED_STREAM_MIN)
+                                                         / SHED_STREAM_FULL, 0.f, 1.f);
+
                     if (outflow <= 0.01f)
                     {
                         r = 0.35f; g = 0.35f; b = 0.38f; a = 0.15f;
                     }
                     else
                     {
-                        const S32 offset = (k - cursor + lip_count) % lip_count;
-                        const LLVector3 delta(cx - cam.mV[VX], cy - cam.mV[VY],
-                                              cz - cam.mV[VZ]);
-                        if (offset >= SHED_VISIT_PER_FRAME)
-                        {
-                            r = 1.f; g = 0.75f; b = 0.2f; a = 0.5f;
-                        }
-                        else if (delta.magVecSquared() > radius_sq)
+                        const LLVector3 delta = centroid - cam;
+                        if (delta.magVecSquared() > radius_sq)
                         {
                             r = 1.f; g = 0.25f; b = 0.2f; a = 0.5f;
                         }
@@ -2438,47 +3009,78 @@ void SSSurfaceField::renderRunoffLips(U32 view, const LLVector3& cam,
                         }
                     }
                 }
-                else
+                else if (view == 1)
                 {
-                    // Eaves (0) and shed flow (1) share one ramp: dry slate
-                    // filling toward the stream threshold, white once the
-                    // lip is driving a stream. Eaves never disappear, so
-                    // the geometry reads even between rains.
+                    // Water the run holds, ramped the same slate-to-white the
+                    // lips drew: filling toward the stream threshold, white
+                    // once the run is driving a curtain.
+                    F32 store = 0.f;
+                    if (fld)
+                    {
+                        auto store_it = fld->mRunStore.find(run.mKey);
+                        if (store_it != fld->mRunStore.end()) store = store_it->second;
+                    }
+                    const F32 outflow = store / SHED_DRAIN_TAU;
+                    const F32 raw_rate = llmin(outflow / SHED_MERGE, SHED_MAX_RATE);
+                    const F32 stream_drive = llclamp((raw_rate - SHED_STREAM_MIN)
+                                                         / SHED_STREAM_FULL, 0.f, 1.f);
                     const F32 t = llclamp(raw_rate / SHED_STREAM_MIN, 0.f, 1.f);
+
                     r = lerp(lerp(0.15f, 0.1f, t), 1.f, stream_drive);
                     g = lerp(lerp(0.3f, 0.7f, t), 1.f, stream_drive);
                     b = lerp(lerp(0.6f, 0.95f, t), 1.f, stream_drive);
-                    a = llmax(0.2f + 0.6f * t, (view == 0) ? 0.3f : 0.f);
+                    a = llmax(0.2f + 0.6f * t, 0.f);
+                }
+                else
+                {
+                    // The network itself: brightening with the catchment the
+                    // run collects, so a gutter reads as a gutter between
+                    // rains as well as under them.
+                    const F32 t = llclamp(run.mCatch / 64.f, 0.f, 1.f);
+                    r = lerp(0.15f, 0.1f, t);
+                    g = lerp(0.3f, 0.7f, t);
+                    b = lerp(0.6f, 0.95f, t);
+                    a = 0.2f + 0.6f * t;
                 }
             }
 
             gGL.color4f(r, g, b, a);
 
-            gGL.vertex3f(cx - half, cy - half, cz);
-            gGL.vertex3f(cx + half, cy - half, cz);
-            gGL.vertex3f(cx + half, cy + half, cz);
+            // The run as the connected line it is.
+            const size_t members = run.mLips.size();
+            for (size_t k = 0; k + 1 < members; ++k)
+            {
+                const LLVector3& a_lip = run.mLips[k];
+                const LLVector3& b_lip = run.mLips[k + 1];
+                gGL.vertex3f(a_lip.mV[VX] + origin.mV[VX], a_lip.mV[VY] + origin.mV[VY],
+                             a_lip.mV[VZ] + 0.05f);
+                gGL.vertex3f(b_lip.mV[VX] + origin.mV[VX], b_lip.mV[VY] + origin.mV[VY],
+                             b_lip.mV[VZ] + 0.05f);
+            }
 
-            gGL.vertex3f(cx - half, cy - half, cz);
-            gGL.vertex3f(cx + half, cy + half, cz);
-            gGL.vertex3f(cx - half, cy + half, cz);
-
-            // An arrowhead out over the edge: the way the water leaves.
-            const F32 ex = geom.mEdgeX[ui], ey = geom.mEdgeY[ui];
+            // An arrowhead out over the edge at the run's middle: the way the
+            // water leaves.
+            const F32 ex = run.mOut.mV[VX], ey = run.mOut.mV[VY];
+            const F32 half = cell * 0.5f;
             const F32 px = -ey * half * 0.55f, py = ex * half * 0.55f;
-            const F32 bx = cx + ex * half, by = cy + ey * half;
-            const F32 tx = cx + ex * half * 2.4f, ty = cy + ey * half * 2.4f;
+            const F32 bx = centroid.mV[VX] + ex * half, by = centroid.mV[VY] + ey * half;
+            const F32 tx = centroid.mV[VX] + ex * half * 2.4f;
+            const F32 ty = centroid.mV[VY] + ey * half * 2.4f;
+            const F32 tz = centroid.mV[VZ] + 0.05f;
 
-            gGL.vertex3f(bx + px, by + py, cz);
-            gGL.vertex3f(bx - px, by - py, cz);
-            gGL.vertex3f(tx, ty, cz);
+            gGL.vertex3f(bx + px, by + py, tz);
+            gGL.vertex3f(bx - px, by - py, tz);
+            gGL.vertex3f(tx, ty, tz);
         }
         gGL.end();
     }
 }
 
 // The runoff overlay: one stage of the shed per SSAtmoRunoffDebugView - the
-// eaves, the water they hold, the gates that quiet them, or the drips and
-// gutter streams they have actually spawned.
+// runs and the catchment they collect, the water they hold, the gates that
+// quiet them, or the drips and gutter streams they have actually spawned.
+// Granular weather sheds at the lips instead, so every view draws the per-lip
+// cascade surface there.
 void SSSurfaceField::renderRunoffDebug()
 {
     static LLCachedControl<U32> view_setting(gSavedSettings, "SSAtmoRunoffDebugView", 0);

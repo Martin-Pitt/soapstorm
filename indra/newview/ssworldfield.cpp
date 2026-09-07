@@ -100,7 +100,6 @@ struct SS_WF_DrainDebug
 {
     SSRainShadowMap::SurfaceGrid mGrid;
     SSWorldField::Drainage mDrain;
-    S32 mN = 0;
     U32 mSerial = 0;
 };
 static std::map<U64, SS_WF_DrainDebug> sDrainDebug;
@@ -2498,12 +2497,24 @@ F32 SSWorldField::airCoverage(U64 region_handle) const
 // height, each cell pops once at the lowest spill reaching it, and a cell
 // whose spill stands meaningfully above its own surface is standing water.
 // Flow directions then run down the FILLED surface, so a pool's water heads
-// for its outlet instead of into its own floor.
-bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out) const
+// for its outlet instead of into its own floor - with one exception the raw
+// surface contributes: an EAVE. A step down steeper than a roof pitch and at
+// least the eave-drop tall is a discontinuity in the capture, not a slope -
+// water arriving there leaves into the air, so the drop is not a descent the
+// flow may take and the cell holding it ends the surface. That is what stops
+// a roof's catchment from pouring through the wall it borders and arriving
+// invisibly on the street below, and it is what makes the accumulation
+// terminate at the edges the shed reads. Accumulation itself is the
+// hydrology-standard descending-fill pass: on the filled surface water only
+// ever moves to a strictly lower cell, so one visit per cell in descending
+// spill order sees every upstream contribution first, and each cell is left
+// holding the area that drains through it in square metres.
+bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out)
 {
     out.mSpill.clear();
     out.mPool.clear();
     out.mD8.clear();
+    out.mCatch.clear();
 
     const S32 n = grid.mN;
     if (n < 3 || grid.mZ.size() < (size_t)n * n) return false;
@@ -2512,6 +2523,7 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
     out.mSpill.assign(count, -FLT_MAX);
     out.mPool.assign(count, 0);
     out.mD8.assign(count, 4);
+    out.mCatch.assign(count, 0.f);
 
     // The hydrological domain: cells with any surface flag, water excluded -
     // water, unmapped sky and the grid border are drains the fill opens out at.
@@ -2610,7 +2622,15 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
     static const F32 POOL_FILL_EPS = 0.05f;
 
     // Flow: D8 down the filled surface, 3x3-indexed ((dy+1)*3 + (dx+1)), 4 when
-    // nothing is lower - a pool floor, a sink, or a drain cell.
+    // nothing is lower - a pool floor, a sink, or a drain cell. The eave rule
+    // removes the one descent a raw surface drop can offer that is not a
+    // descent at all: the step off an edge.
+    static const F32 EAVE_DROP_M  = 0.75f;  // at least a storey-step of fall
+    static const F32 EAVE_SLOPE   = 2.0f;   // steeper than any roof pitch (~63 deg)
+
+    const F32 cell = grid.mCell;
+    const F32 eave_run = (cell > 0.f) ? EAVE_SLOPE * cell : FLT_MAX;
+
     for (S32 c = 0; c < (S32)count; ++c)
     {
         const size_t i = (size_t)c;
@@ -2624,9 +2644,11 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
         const S32 cx = c % n;
         const S32 cy = c / n;
         const F32 here = out.mSpill[i];
+        const F32 z_here = grid.mZ[i];
 
         S32 best_dir = 4;
         F32 best_z = here;
+        bool has_eave = false;
         for (S32 d = 0; d < 8; ++d)
         {
             const S32 nx = cx + DX[d], ny = cy + DY[d];
@@ -2634,6 +2656,17 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
 
             const size_t ni = (size_t)ny * n + nx;
             if (!land(ni)) continue;
+
+            // The eave rule, tested on the RAW surface: the filled surface
+            // smooths the very discontinuity that ends it. A neighbour over a
+            // genuine cliff is not downhill, it is off the surface - water
+            // goes into the air there rather than onto whatever is below.
+            const F32 drop = z_here - grid.mZ[ni];
+            if (drop >= EAVE_DROP_M && drop >= eave_run)
+            {
+                has_eave = true;
+                continue;
+            }
 
             // Dropping the FILLED elevation from the outlet chain windows out
             // the water-plane cases a raw-surface D8 gets wrong: a pool run
@@ -2645,7 +2678,55 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
                 best_dir = (DY[d] + 1) * 3 + (DX[d] + 1);
             }
         }
+
+        // A cell with an eave side is where the surface ends for the water
+        // standing on it: it leaves there, whatever other descents the cell
+        // could offer. Terminal here is what keeps a sloped gutter's lip line
+        // from routing its catchment along itself and counting it twice.
+        if (has_eave) best_dir = 4;
+
         out.mD8[i] = (U8)best_dir;
+    }
+
+    // Accumulation: contributing area in square metres, routed down the D8 in
+    // descending spill order. On the filled surface water only ever moves to a
+    // strictly lower cell, so one pass visits every cell after everything that
+    // drains into it - no cycles, no second pass. A cell whose outlet chain
+    // ends (an eave, a pool floor, the border) keeps what arrived: that is the
+    // catchment the shed reads at the lips, and because an eave cell is
+    // terminal, every lip of a run holds a disjoint share of the roof - the
+    // run can sum its members' catchments without counting a sloped gutter
+    // twice.
+    std::vector<S32> order;
+    order.reserve(count / 4);
+    for (S32 c = 0; c < (S32)count; ++c)
+    {
+        if (land((size_t)c)) order.push_back(c);
+    }
+    std::sort(order.begin(), order.end(), [&out](S32 a, S32 b)
+    {
+        const F32 sa = out.mSpill[(size_t)a];
+        const F32 sb = out.mSpill[(size_t)b];
+        if (sa != sb) return sa > sb;
+        return a > b;
+    });
+
+    const F32 area = cell * cell;
+    for (const S32 c : order)
+    {
+        const size_t i = (size_t)c;
+        out.mCatch[i] += area;
+
+        const U8 dir = out.mD8[i];
+        if (dir == 4) continue;
+
+        const S32 dx = (dir % 3) - 1;
+        const S32 dy = (dir / 3) - 1;
+        const S32 nx = (c % n) + dx;
+        const S32 ny = (c / n) + dy;
+        if (nx < 0 || ny < 0 || nx >= n || ny >= n) continue;
+
+        out.mCatch[(size_t)ny * n + nx] += out.mCatch[i];
     }
 
     return true;
@@ -3522,13 +3603,15 @@ void SSWorldField::renderDebug()
         {
             // Drainage topology at the tile's own resolution: standing water
             // blue, and an arrow per cell down the filled surface's D8 - the
-            // outlet chain a pool's water will actually follow.
+            // outlet chain a pool's water will actually follow, ending where
+            // the eave rule ends the surface. The grid clamps its resolution,
+            // so the walk and the spacing follow the grid's own answers, not
+            // the tile's.
             auto& cached = sDrainDebug[tile.mRegionHandle];
-            if (cached.mSerial != tile.mGeomSerial || cached.mN != tile.mRes)
+            if (cached.mSerial != tile.mGeomSerial)
             {
                 cached.mGrid = SSRainShadowMap::SurfaceGrid();
                 cached.mDrain = Drainage();
-                cached.mN = tile.mRes;
                 cached.mSerial = tile.mGeomSerial;
                 if (!buildSurfaceGrid(tile.mRegionHandle, tile.mRes, cached.mGrid)
                     || !buildDrainage(cached.mGrid, cached.mDrain))
@@ -3540,28 +3623,32 @@ void SSWorldField::renderDebug()
             const SSRainShadowMap::SurfaceGrid& grid = cached.mGrid;
             const Drainage& drain = cached.mDrain;
 
-            for (S32 y = 0; y < tile.mRes; ++y)
+            const S32 gn = grid.mN;
+            const F32 gcell = grid.mCell;
+            if (gn < 3 || gcell <= 0.f) continue;
+
+            for (S32 y = 0; y < gn; ++y)
             {
-                const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
-                for (S32 x = 0; x < tile.mRes; ++x)
+                const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * gcell;
+                for (S32 x = 0; x < gn; ++x)
                 {
-                    const F32 wx = origin.mV[VX] + ((F32)x + 0.5f) * cell;
+                    const F32 wx = origin.mV[VX] + ((F32)x + 0.5f) * gcell;
                     const S32 step = strideFor(wx, wy);
                     if ((x % step) || (y % step)) continue;
 
-                    const size_t i = (size_t)y * tile.mRes + x;
+                    const size_t i = (size_t)y * gn + x;
                     const U8 f = grid.mFlags[i];
                     if (f == 0 || (f & SSRainShadowMap::SURF_WATER)) continue;
 
                     const F32 z = grid.mZ[i];
                     if (drain.mPool[i])
                     {
-                        mark(LLVector3(wx, wy, z), LLColor4(0.2f, 0.5f, 1.f, 0.9f), cell * 0.45f);
+                        mark(LLVector3(wx, wy, z), LLColor4(0.2f, 0.5f, 1.f, 0.9f), gcell * 0.45f);
                     }
                     else if (drain.mD8[i] != 4)
                     {
                         const S32 di = drain.mD8[i];
-                        const F32 len = cell * 0.7f;
+                        const F32 len = gcell * 0.7f;
                         const F32 dx = (F32)((di % 3) - 1) * len;
                         const F32 dy = (F32)((di / 3) - 1) * len;
                         gGL.color4f(0.7f, 0.85f, 1.f, 0.55f);
