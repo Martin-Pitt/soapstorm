@@ -26606,10 +26606,21 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>48.0</real>
     </map>
+    <key>SSAtmoRunoffRes</key>
+      <map>
+      <key>Comment</key>
+      <string>Drainage samples across a region for the liquid runoff network - 256 is 1 m cells on a standard region, traced where the shed hangs its curtain streams and drips. The wet field keeps its own coarser lattice</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>256</integer>
+    </map>
     <key>SSAtmoRunoffDebugView</key>
       <map>
       <key>Comment</key>
-      <string>Debug floater roof runoff view: which stage to draw. 0 every shelter edge that could ever shed, 1 the water each eave holds and how hard it is draining, 2 the first gate holding each quiet eave back, 3 the drips and gutter streams the shed has spawned</string>
+      <string>Debug floater roof runoff view: which stage to draw. 0 every runoff run that could ever shed - brightening with the catchment it collects, 1 the water each run holds and how hard it is draining, 2 the first gate holding each quiet run back, 3 the drips and gutter streams the shed has spawned. Granular weather draws the per-lip cascade surface instead in every view</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

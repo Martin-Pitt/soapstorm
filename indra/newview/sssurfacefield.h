@@ -39,6 +39,7 @@
 struct SSPrecipPreset;
 class LLGLSLShader;
 struct SSGranularParams;
+class SSWorldField;
 
 class SSSurfaceField : public LLSingleton<SSSurfaceField>
 {
@@ -162,6 +163,38 @@ public:
 
         std::vector<U8> mPool;
 
+        // <SS:Nexii> The runoff network: the DRAINAGE_NETWORK channel
+        // materialised over a finer grid than the wet field's lattice (the
+        // capture serves it, the wet field never sees it). SSWorldField::
+        // buildDrainage fills depressions, directs D8 flow down the filled
+        // surface and accumulates catchment; the eave rule terminates that
+        // flow at the capture's discontinuities, and the edge cells holding
+        // catchment flood-fill into RUNS - a connected line of lip cells that
+        // shed the same way, the grouping layer the liquid shed hangs its
+        // curtain streams and catchment-weighted drips on. The per-cell edge
+        // arrays above stay the granular transport's spilling surface at the
+        // wet field's own resolution; this is the liquid's.
+        struct Run
+        {
+            std::vector<S32> mCells;        // member cells, ordered along the run
+            std::vector<LLVector3> mLips;   // refined lip point per member, region-local XY, absolute Z
+            F32 mCatch = 0.f;               // summed catchment, m2
+            LLVector3 mOut;                 // mean outward direction, horizontal, normalised
+            LLVector3 mCentroid;            // mean member lip, region-local XY, absolute Z
+            U32 mKey = 0;                   // stable across retraces that keep the biggest feeder
+        };
+        struct Runoff
+        {
+            U32 mGeomSerial = 0xFFFFFFFFu;
+            S32 mN = 0;
+            F32 mCell = 0.f;
+            std::vector<S32> mEdgeCells;
+            std::vector<F32> mCatch;        // contributing area per cell, m2 (0 where none)
+            std::vector<Run> mRuns;
+            bool valid() const { return mN > 0 && mCell > 0.f; }
+        };
+        Runoff mRunoff;
+
         bool valid() const { return mN > 0 && !mZ.empty(); }
         bool solid(size_t i) const { return mFlags[i] != 0; }
         bool water(size_t i) const { return (mFlags[i] & SSRainShadowMap::SURF_WATER) != 0; }
@@ -201,12 +234,22 @@ public:
         std::vector<F32> mStore;
         std::vector<F32> mAccum;
 
+        // <SS:Nexii> The liquid shed's per-run state, keyed by Run::mKey so a retrace that
+        // keeps a run's biggest feeder keeps its water: mRunStore is the roof reservoir the
+        // rain fills and the eave drains (drops' worth, as mStore is for granular creep),
+        // mRunAccum the fractional drip the run is owed. Runs are the liquid shed's only
+        // sites - granular creep keeps debiting the per-cell mStore above and the per-lip
+        // cursor drains it, one ledger per weather.
+        std::map<U32, F32> mRunStore;
+        std::map<U32, F32> mRunAccum;
+
         F64 mLastTouched = 0.0;
     };
 
 private:
     void refreshGeometry();
     static void buildGeometry(const SSRainShadowMap::SurfaceGrid& grid, Geometry& out);
+    static void buildRunoff(U64 region_handle, Geometry& out, SSWorldField* field);
 
     std::map<U64, Geometry> mGeometry;
 

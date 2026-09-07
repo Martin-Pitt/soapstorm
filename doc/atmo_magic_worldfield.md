@@ -38,9 +38,15 @@
 > inward, widest path wins) and INTERIOR (every budget spent, or sealed). The
 > occlusion depth is the graph distance to the nearest outdoors gap. The
 > DRAINAGE_NETWORK core (priority-flood depression fill +
-> pool mask + D8 on
-> the filled surface, `buildDrainage`) ships as the surface field's pool source
-> under the same `SSWorldFieldSurfaceTop` switch. A world field debug overlay
+> pool mask + eave-ruled D8 + flow
+> accumulation on the filled surface, `buildDrainage`) ships as the surface
+> field's pool source under the same `SSWorldFieldSurfaceTop` switch, and the
+> surface field's liquid shed now consumes the whole channel: it materialises
+> the network at its own resolution (`SSAtmoRunoffRes`, 1 m cells), floods the
+> eave cells into runs and sheds them per run - curtain streams cut across
+> the run's span, catchment-weighted drips where the flows converge. The
+> granular transport keeps its per-lip spilling surface unchanged. A world
+> field debug overlay
 > (`RENDER_DEBUG_WORLD_FIELD`, the Atmo Magic Debug floater) shows
 > the span tops by altitude, the air-gap labels with occlusion depth, the
 > drainage topology, and the column spans themselves (view 5: each solid span
@@ -621,6 +627,28 @@ The current shed is per-edge-cell with a reservoir, fed by a capture slope and
 a delivery correction. The shared store makes it a proper hydrology pass at
 negligible extra cost, on every span level that has a surface:
 
+> **Implementation note (2026-09-07) - the landing-surface level ships.**
+> `buildDrainage` (still over the landing surface; per-span waits on the
+> multi-peel store) now runs the whole numbered list below at whatever
+> resolution the caller's grid is: the flood and pool mask exactly as
+> described, D8 with the eave rule as a *descent exclusion and a terminator*
+> (a cell with an eave side is where the surface ends for the water on it -
+> it keeps its catchment rather than passing it along the lip line, which is
+> also what keeps a run's summed catchment from double-counting a sloped
+> gutter), and flow accumulation in descending spill order into
+> `Drainage::mCatch`. `SSSurfaceField` consumes it as the design intended:
+> the network is materialised per region at `SSAtmoRunoffRes` (1 m cells,
+> finer than the wet field's own 2 m lattice, which nothing of the wet field's
+> changes), the lip cells flood-fill into runs with refined lip points walked
+> against the 0.25 m store, and the liquid shed works per run - one
+> reservoir per run filled by its catchment, curtain streams cut into the
+> preset's span slots across it, and drips placed catchment-weighted so they
+> gather where the roof's flows converge. Reservoirs survive a retrace keyed
+> by each run's biggest feeder, with the water of runs that died shared out
+> by catchment. The per-lip cursor shed remains as the granular transport's
+> drain (creep debits the per-cell stores; the cursor drains them into
+> cascades), because granular delivers to cells, not to catchments.
+
 1. **Priority-flood depression filling** (Barnes et al. 2014 — O(n), one
    pass with a heap): fill each span surface's sinks so every cell has a
    descent path; unfilled spills become the **pool mask** (this generalises
@@ -635,9 +663,11 @@ negligible extra cost, on every span level that has a surface:
 3. **Flow accumulation in descending-height order** (already the shape of the
    current trace) yields catchment per cell and per edge; eaves, pool rims
    and water-plane cells terminate. Runs (flood-filled edge groups, the
-   archived runoff doc's shape) come back as the grouping layer for streams
-   when the per-lip cursor model runs out of fidelity — the field's
-   reservoir/store math is unchanged either way.
+   archived runoff doc's shape) come back as the grouping layer for streams —
+   which the 2026-09-07 note above shows landing for the landing-surface
+   level: the run carries the summed catchment, the mean shed direction and
+   the refined lip points, the stream slots and the drip placement both hang
+   off it, and the field's drain-tau reservoir math is unchanged either way.
 4. **The wet/puddle/snow field keeps its contract**: it still reads a
    `SurfaceGrid`-shaped geometry, still integrates per cell, still feeds the
    shed and the granular transport. What changes is who owns the surface it
@@ -787,7 +817,11 @@ frame cascade.
    whose payoff is a feature, not just a deleted pipeline.
 5. **`DRAINAGE` replaces the edge-cell trace.** Priority-flood + D8 per span
    level; eaves and pools feed the existing reservoir/shed code unchanged;
-   the puddle mask's slope test becomes filled-depression membership.
+   the puddle mask's slope test becomes filled-depression membership. The
+   landing-surface half of this step is built (2026-09-07): `buildDrainage`
+   carries the fill, the pool mask, the eave-ruled D8 and the catchment
+   accumulation, and the surface field's liquid shed reads runs off it —
+   per-span levels still wait on the multi-peel store.
 6. **Design H lands behind its own setting, after step 5, identify tier
    first.** It needs the trace to already know which cells are lips before
    it has anything to refine. The ID buffer and the closed-form primitive
