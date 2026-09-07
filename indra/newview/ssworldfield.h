@@ -245,8 +245,10 @@ private:
         // computeSpans folds it into the column span store at commit.
         // NO_SURFACE where a pass found nothing. Flat
         // [band][y * res + x], allocated lazily to mAllocBands bands by
-        // ensureBands as a build sweeps upward - a dense 0.25m column tile
-        // pinning all MAX_BANDS layers up front would hold ~126MB per tile
+        // ensureBands as a build sweeps upward and released at commit (the
+        // store is the spans; only the next build needs the scratch back).
+        // A dense 0.25m column tile pinning all MAX_BANDS layers up front
+        // would hold ~126MB per tile
         // before capturing anything, and real builds usually stop a few
         // bands up.
         std::vector<F32> mBandTop;

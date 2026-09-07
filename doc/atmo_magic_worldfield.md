@@ -46,7 +46,8 @@
 > unbuilt: the wind solve's interior-skip (part of step 3; gated
 > on multi-peel spans - see the architecture note at Part 3, SOLID_VOLUME_3D),
 > wind capture absorption, WALKABLE (7), the ACOUSTIC probe set beyond the
-> wall lattice (room volume, reverb classification, travel-time fields) and
+> wall lattice (room volume, reverb classification, travel-time fields —
+> fully designed 2026-09-07 in `doc/atmo_magic_acoustics.md`) and
 > Design H (6).
 
 This is a design, not a build log. The implementation status block above says
@@ -650,6 +651,11 @@ region partition, contours, polymesh) works on spans. The mapping:
    consumes.
 
 ### ACOUSTIC
+
+> Superseded in detail by `doc/atmo_magic_acoustics.md` (2026-09-07): the
+> gap-anchored probe set, the probe graph, the realtime occlusion trace and
+> the two-tier reverb bake. The sketch below stays as the channel's original
+> outline.
 
 The soundscape today raycasts 3 up + 4 out on a 50 ms cycle, classifies
 SPACE_OUTDOOR/SHELTERED/SMALL/MEDIUM/BIG, and borrows the wind tile's column

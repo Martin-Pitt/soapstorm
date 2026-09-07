@@ -944,7 +944,11 @@ void SSWorldField::computeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
                 }
 
                 // Over the span budget: collapse the thinnest air gap rather
-                // than dropping a body.
+                // than dropping a body - the two spans around it merge into
+                // one (the gap becomes solid), the tail shifts down a slot,
+                // and the incoming body takes the freed slot. The shift's
+                // last read was bottoms[n] once - off the end of the stack
+                // arrays.
                 if (n == SS_WF_MAX_SPANS)
                 {
                     S32 thinnest = 0;
@@ -954,7 +958,9 @@ void SSWorldField::computeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
                         const F32 gap = bottoms[j + 1] - tops[j];
                         if (gap < best) { best = gap; thinnest = j; }
                     }
-                    for (S32 j = thinnest + 1; j < n; ++j)
+                    tops[thinnest] = tops[thinnest + 1];
+                    flags[thinnest] = fl;
+                    for (S32 j = thinnest + 1; j + 1 < n; ++j)
                     {
                         bottoms[j] = bottoms[j + 1];
                         tops[j] = tops[j + 1];
@@ -1041,6 +1047,22 @@ tile.mCaptureTime = mNow;
 tile.mLastTouched = mNow;
 mBuild.mPass = 0;
 mBuild.mActive = false;
+
+// <SS:Nexii> The capture scratch folds into the span store above; release it.
+// At the default 0.25m cell a 1024-res tile holds ~9MB per band of band arrays
+// (~226MB at the 24-band cap) that nothing but the NEXT build reads - keeping
+// them across commits held up to ~1.2GB live at MAX_TILES and was starving the
+// heap (crash inside malloc from the cloud deck's next allocation). The
+// rect re-peel's change detection reads NO_SURFACE after this, so a no-op edit
+// now costs one extra async flood instead of ~226MB per tile of dead weight.
+// ensureBands regrows lazily on the next build's first applyBand.
+tile.mBandTop.clear();
+tile.mBandTop.shrink_to_fit();
+tile.mBandUnder.clear();
+tile.mBandUnder.shrink_to_fit();
+tile.mBandFlags.clear();
+tile.mBandFlags.shrink_to_fit();
+tile.mAllocBands = 0;
 
 // The connectivity labels follow every commit, not only the ones that changed
     // something: they also serve their first fill, and a commit that changed
@@ -1892,7 +1914,17 @@ static void ss_wf_acoustic(S32 res, S32 max_spans, S32 lat_res, F32 cell_m, F32 
 
     const size_t layer = (size_t)res * res;
     const size_t lat_layer = (size_t)lat_res * lat_res;
-    wall.assign(lat_layer * 4u, SS_WF_ACOUSTIC_REACH_M);
+
+    // The lattice rings sample every SS_WF_ACOUSTIC_RING_M of height up to
+    // the capture ceiling, so a storey whose floor and ceiling share a band
+    // still gets its own ring. Sized BEFORE the walk: mWall is
+    // [ring][y * lat_res + x][4] - acousticAt derives rings from its size -
+    // and the old one-ring assign let the r loop write rings-1 rings past the
+    // end, the heap corruption that surfaced as crashes in unrelated mallocs
+    // and frees (the cloud deck's push_back, the flood completion's own
+    // mGapLabel move-assign).
+    const S32 rings = llclamp((S32)(ceiling / SS_WF_ACOUSTIC_RING_M), 1, 16);
+    wall.assign((size_t)rings * lat_layer * 4u, SS_WF_ACOUSTIC_REACH_M);
 
     static const S32 DX[4] = { 1, -1, 0, 0 };
     static const S32 DY[4] = { 0, 0, 1, -1 };
@@ -1918,9 +1950,7 @@ static void ss_wf_acoustic(S32 res, S32 max_spans, S32 lat_res, F32 cell_m, F32 
     };
 
     // The lattice rings sample every SS_WF_ACOUSTIC_RING_M of height up to
-    // the capture ceiling, so a storey whose floor and ceiling share a band
-    // still gets its own ring.
-    S32 rings = llclamp((S32)(ceiling / SS_WF_ACOUSTIC_RING_M), 1, 16);
+    // the capture ceiling (rings, resolved and allocated above).
     for (S32 r = 0; r < rings; ++r)
     {
         const F32 z = (F32)(r + 0.5f) * ceiling / (F32)rings;
@@ -1961,6 +1991,14 @@ void SSWorldField::scheduleFlood(Tile& tile)
     if (mFloodBusy) return;                     // this commit's successor will reschedule
     if (tile.mBandCount < 1 || tile.mRes < 1) return;
 
+    // Snapshot: the walk must never read the live span store while the next
+    // build's conversion rewrites it on the main thread. Checked BEFORE the
+    // busy flag - an undersized store bailing out must not wedge mFloodBusy
+    // true and silently retire the flood for the rest of the session.
+    const S32 res = tile.mRes;
+    const size_t live = (size_t)SS_WF_MAX_SPANS * (size_t)res * res;
+    if (tile.mSpanTop.size() < live || tile.mSpanBottom.size() < live) return;
+
     LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
     LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
     if (!general || !main) return;              // no worker: labels stay AIR_UNKNOWN, consumers cope
@@ -1969,13 +2007,7 @@ void SSWorldField::scheduleFlood(Tile& tile)
     const U32 generation = mFloodGeneration;
     const U64 region = tile.mRegionHandle;
     const U32 serial = tile.mGeomSerial;
-    const S32 res = tile.mRes;
     const F32 ceiling = (F32)tile.mBandCount * tile.mBandHeight;
-
-    // Snapshot: the walk must never read the live span store while the next
-    // build's conversion rewrites it on the main thread.
-    const size_t live = (size_t)SS_WF_MAX_SPANS * (size_t)res * res;
-    if (tile.mSpanTop.size() < live || tile.mSpanBottom.size() < live) return;
     auto snapshot_top = std::make_shared<std::vector<F32> >(
         tile.mSpanTop.begin(),
         tile.mSpanTop.begin() + live);
