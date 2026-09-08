@@ -213,6 +213,7 @@ set(viewer_SOURCE_FILES
     fsregioncross.cpp
     fsrezqueue.cpp
     ssatmomagic.cpp
+    ssfasttimerexport.cpp
     ssstormcells.cpp
     ssvortices.cpp
     ssvortexrender.cpp
@@ -266,6 +267,7 @@ set(viewer_SOURCE_FILES
     sswater.cpp
     sswindflow.cpp
     ssworldfield.cpp
+    ssworldfieldshapes.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1157,6 +1159,7 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
+    ssfasttimerexport.h
     ssdeckboilcore.h
     ssdeckcellsoftcore.h
     ssdeckflowcore.h
@@ -1238,6 +1241,7 @@ set(viewer_HEADER_FILES
     sswindflow.h
     sswindprofilecore.h
     ssworldfield.h
+    ssworldfieldshapes.h
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h

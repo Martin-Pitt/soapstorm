@@ -30,6 +30,7 @@
 #include "ssprecippreset.h"
 #include "sssurfacefield.h"
 #include "sssoundmeta.h"
+#include "ssworldfieldshapes.h"
 
 #include "llrand.h"
 
@@ -145,6 +146,21 @@ bool SSSoundscape::castUpProbe(S32 index, F32& hit_dist)
     const F32 tilt = UP_RAY_TILT * DEG_TO_RAD;
     const LLVector3 dir(cosf(azimuth) * sinf(tilt), sinf(azimuth) * sinf(tilt), cosf(tilt));
 
+    // <SS:Nexii> Exact declared-shape cast first (doc/atmo_magic_worldfield_competition.md 10):
+    // wall-exact ceiling answers without the octree walk; the census includes
+    // phantom decks the stock ray's skip_phantom would ignore, so a phantom
+    // roof finally shelters. Unanswered census falls through to the stock ray.
+    static LLCachedControl<bool> shapes_cast(gSavedSettings, "SSWorldFieldShapes", false);
+    if (shapes_cast)
+    {
+        SSWorldFieldShapes::SegmentHit probe_hit;
+        if (SSWorldFieldShapes::getInstance()->segmentCast(cam, cam + dir * UP_RAY_LENGTH, probe_hit))
+        {
+            hit_dist = probe_hit.mHit ? probe_hit.mDistance : UP_RAY_LENGTH;
+            return probe_hit.mHit;
+        }
+    }
+
     LLVector4a start4, end4, intersect;
     start4.load3(cam.mV);
     const LLVector3 end = cam + dir * UP_RAY_LENGTH;
@@ -170,6 +186,19 @@ F32 SSSoundscape::castSideProbe(S32 index)
     };
 
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+
+    // <SS:Nexii> Exact declared-shape cast first - the wall profile becomes
+    // wall-exact instead of cell-quantized; unanswered census falls through.
+    static LLCachedControl<bool> shapes_cast(gSavedSettings, "SSWorldFieldShapes", false);
+    if (shapes_cast)
+    {
+        SSWorldFieldShapes::SegmentHit probe_hit;
+        if (SSWorldFieldShapes::getInstance()->segmentCast(cam, cam + cardinals[index] * SIDE_RAY_LENGTH, probe_hit))
+        {
+            return probe_hit.mHit ? probe_hit.mDistance : SIDE_RAY_LENGTH;
+        }
+    }
+
     LLVector4a start4, end4, intersect;
     start4.load3(cam.mV);
     const LLVector3 end = cam + cardinals[index] * SIDE_RAY_LENGTH;

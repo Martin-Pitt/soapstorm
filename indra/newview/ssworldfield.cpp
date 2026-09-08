@@ -26,6 +26,7 @@
 #include "ssworldfield.h"
 #include "ssatmomagic.h"
 #include "ssglreadback.h"
+#include "ssworldfieldshapes.h"
 
 #include "llfasttimer.h"
 #include "llrender.h"
@@ -149,6 +150,9 @@ void SSWorldField::markDirty(const LLVector3& pos_agent, F32 radius)
 {
     SSWorldField* self = getInstance();
     if (!self) return;
+
+    // <SS:Nexii> The declared-shape census rides the same fan-out, debounced on its side.
+    SSWorldFieldShapes::markDirty(pos_agent, radius);
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return;
@@ -3465,7 +3469,7 @@ static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
 void SSWorldField::renderDebug()
 {
     static LLCachedControl<U32> view(gSavedSettings, "SSWorldFieldDebugView", 1);
-    const S32 which = llclamp((S32)view, 1, 5);
+    const S32 which = llclamp((S32)view, 1, 6);
     if (mTiles.empty()) return;
 
     static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
@@ -3744,6 +3748,14 @@ void SSWorldField::renderDebug()
 
     gGL.end();
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
+
+    // <SS:Nexii> View 6: the declared-shape census overlay - what the exact
+    // query layer holds, boxes by layer and provenance
+    // (doc/atmo_magic_worldfield_competition.md 7.8).
+    if (which == 6)
+    {
+        SSWorldFieldShapes::getInstance()->renderDebug();
+    }
 
     // Drop debug views for regions the field no longer holds.
     for (auto it = sDrainDebug.begin(); it != sDrainDebug.end();)
