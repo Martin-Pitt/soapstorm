@@ -23,9 +23,11 @@
 
 #include "ssworldfieldshapes.h"
 
+#include "indra_constants.h"
 #include "llfasttimer.h"
 #include "llframetimer.h"
 #include "llgl.h"
+#include "lldrawable.h"
 #include "llmeshrepository.h"
 #include "llmodel.h"
 #include "llprimitive.h"
@@ -40,9 +42,10 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
-#include "llvolumemgr.h"
+#include "llviewertexture.h"
 #include "llvovolume.h"
 #include "llworld.h"
+#include "lltextureentry.h"
 
 #include <cfloat>
 #include <cmath>
@@ -62,8 +65,27 @@ static constexpr F32 SS_SHAPES_LARGE_PART_M = 16.f;
 static constexpr F32 SS_SHAPES_TERRAIN_STEP_M = 4.f;
 static constexpr S32 SS_SHAPES_TERRAIN_SAMPLES = 96;
 static constexpr S32 SS_SHAPES_DDA_GUARD = 512;
+static constexpr S32 SS_SHAPES_DEBUG_TRIS = 512;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_SHAPES_CENSUS("SS Shapes Census");
+
+// The overlay's 12 AABB edges, shared by the classes that draw their bounds.
+static void ss_debug_aabb(const LLVector3& mn, const LLVector3& mx)
+{
+    gGL.vertex3fv(mn.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
+    gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
+    gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]);
+    gGL.vertex3fv(mx.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
+    gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+    gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]);
+    gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
+    gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
+    gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+    gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mx.mV[VZ]);
+    gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
+    gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
+    gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+}
 
 // Terrain height under an agent-space point, clamped into the region.
 static F32 ss_terrain_z(LLViewerRegion* regionp, const LLVector3& pos_agent)
@@ -80,15 +102,42 @@ static LLVector3 ss_vert(const LLVector4a& vert)
     return LLVector3(vert.getF32ptr());
 }
 
-// World rotation of a part: its local rotation composed over its linkset ancestors.
+// Fully hidden: every face carries alpha-zero colour, an invisiprim texture, or the
+// default transparent texture. A phantom that is invisible everywhere is not part
+// of the world at all - no shelter, no block, no record.
+static bool ss_part_fully_hidden(LLVOVolume* vov)
+{
+    const U8 n = vov->getNumTEs();
+    if (n <= 0) return false;
+    for (U8 i = 0; i < n; ++i)
+    {
+        const LLTextureEntry* te = vov->getTE(i);
+        if (!te) return false;
+        if (te->getColor().mV[3] > 0.01f
+            && !LLViewerTexture::isInvisiprim(te->getID())
+            && te->getID() != IMG_TRANSPARENT)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+// World rotation of a part: the drawable's xform-maintained world frame - the
+// same one the physics debug renderer draws through (xform.cpp composes
+// world = local * parent, which a hand-rolled parent-first walk gets wrong).
 static LLQuaternion ss_world_rotation(const LLViewerObject* vobj)
 {
+    if (vobj->mDrawable)
+    {
+        return vobj->mDrawable->getWorldRotation();
+    }
     LLQuaternion rot = vobj->getRotation();
     const LLViewerObject* cur = vobj;
     while (cur->getParent())
     {
-        cur = (const LLViewerObject*)cur->getParent();
-        rot = cur->getRotation() * rot;
+        cur = (LLViewerObject*)cur->getParent();
+        rot = rot * cur->getRotation();
     }
     return rot;
 }
@@ -267,23 +316,29 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     LLViewerObject* rootp = vov;
     while (rootp->getParent()) rootp = (LLViewerObject*)rootp->getParent();
     const bool phantom = rootp->flagPhantom();
-    const U8 layer = phantom ? (U8)LAYER_DECLARED_PHANTOM : (U8)LAYER_DECLARED;
 
-    // Never fire an ObjectPhysicsProperties request: unknown shape types read
-    // as conservative boxes until the data arrives on its own.
+    // Invisible phantoms are not part of the world: no shelter, no block, no
+    // record. Invisible non-phantom prims are the opposite - the builder's
+    // collision proxy where a mesh lacks a good physics shape - so they stay
+    // solid for every consumer and carry their own layer for the overlay.
+    // Visible-but-shapeless phantoms still carry their prim's own geometry -
+    // that is what a drop and an ear actually meet.
+    const bool hidden = ss_part_fully_hidden(vov);
+    if (phantom && hidden) return;
+    const U8 layer = hidden ? (U8)LAYER_INVISIBLE_SOLID
+                            : (phantom ? (U8)LAYER_DECLARED_PHANTOM : (U8)LAYER_DECLARED);
+
     const bool shape_known = !vov->getPhysicsShapeUnknown();
     const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
+    // No declared collision shape: the prim's own volume is the geometry,
+    // provenance RENDER (no server shape behind it). Unknown shape types stay
+    // a conservative box until the data arrives - unless phantom, where the
+    // visible geometry is the only truth there will ever be.
+    const bool geometry_only = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE) || (!shape_known && phantom);
 
-    if (!shape_known)
+    if (!shape_known && !phantom)
     {
         addOBB(pos, rot, scale * 0.5f, layer, PROV_UNFETCHED);
-        return;
-    }
-    if (ptype == LLViewerObject::PHYSICS_SHAPE_NONE)
-    {
-        // Declared non-colliding but very visible: geometry kept, provenance
-        // marks it - walkability will filter, sound will not.
-        addOBB(pos, rot, scale * 0.5f, layer, PROV_BBOX);
         return;
     }
 
@@ -312,7 +367,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
                     soup.insert(soup.end(), hull.begin(), hull.end());
                 }
                 if (!soup.empty() && (S32)(soup.size() / 3) <= tri_cap
-                    && addTriangles(pos, rot, scale, soup, layer, PROV_HULL))
+                    && addTriangles(pos, rot, scale, soup, layer, geometry_only ? (U8)PROV_RENDER : (U8)PROV_HULL))
                 {
                     return;
                 }
@@ -321,14 +376,16 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
             }
             if (!decomp->mPhysicsShapeMesh.empty())
             {
-                if (addTriangles(pos, rot, scale, decomp->mPhysicsShapeMesh.mPositions, layer, PROV_TESSELLATED))
+                if (addTriangles(pos, rot, scale, decomp->mPhysicsShapeMesh.mPositions, layer,
+                                 geometry_only ? (U8)PROV_RENDER : (U8)PROV_TESSELLATED))
                 {
                     return;
                 }
             }
             else if (!decomp->mBaseHullMesh.empty())
             {
-                if (addTriangles(pos, rot, scale, decomp->mBaseHullMesh.mPositions, layer, PROV_HULL))
+                if (addTriangles(pos, rot, scale, decomp->mBaseHullMesh.mPositions, layer,
+                                 geometry_only ? (U8)PROV_RENDER : (U8)PROV_HULL))
                 {
                     return;
                 }
@@ -353,16 +410,16 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 
     if (st == (S32)LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification::BOX)
     {
-        addOBB(spec_center, rot, spec_half, layer, PROV_EXACT);
+        addOBB(spec_center, rot, spec_half, layer, prov_base);
     }
     else if (st == (S32)LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification::SPHERE)
     {
-        addEllipsoid(spec_center, rot, spec_half, layer, PROV_EXACT);
+        addEllipsoid(spec_center, rot, spec_half, layer, prov_base);
     }
     else if (st == (S32)LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification::CYLINDER)
     {
         const F32 radius = llmax(spec_half.mV[VX], spec_half.mV[VY]);
-        addCylinder(spec_center, rot, radius, spec_half.mV[VZ], layer, PROV_EXACT);
+        addCylinder(spec_center, rot, radius, spec_half.mV[VZ], layer, prov_base);
     }
     else
     {
@@ -410,7 +467,9 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
         LLPrimitive::sVolumeManager->unrefVolume(phys_vol);
 
         if (!truncated && !soup.empty()
-            && addTriangles(pos, rot, scale, soup, layer, from_hull ? (U8)PROV_HULL : (U8)PROV_TESSELLATED))
+            && addTriangles(pos, rot, scale, soup, layer,
+                            geometry_only ? (U8)PROV_RENDER
+                                          : (from_hull ? (U8)PROV_HULL : (U8)PROV_TESSELLATED)))
         {
             return;
         }
@@ -889,6 +948,12 @@ void SSWorldFieldShapes::renderDebug()
         {
             gGL.color4f(1.f, 0.82f, 0.3f, 0.45f);
         }
+        else if (rec.mLayer == LAYER_INVISIBLE_SOLID)
+        {
+            // The builder's collision proxy - invisible in the world, drawn
+            // bright here because it is load-bearing.
+            gGL.color4f(0.95f, 0.95f, 1.f, 0.65f);
+        }
         else
         {
             switch (rec.mProv)
@@ -897,6 +962,7 @@ void SSWorldFieldShapes::renderDebug()
                 case PROV_HULL:         gGL.color4f(0.5f, 0.8f, 0.9f, 0.45f); break;
                 case PROV_TESSELLATED:  gGL.color4f(0.5f, 1.f, 0.7f, 0.45f); break;
                 case PROV_BBOX:         gGL.color4f(1.f, 0.6f, 0.3f, 0.45f); break;
+                case PROV_RENDER:       gGL.color4f(0.95f, 0.95f, 0.55f, 0.45f); break;
                 default:                gGL.color4f(1.f, 0.4f, 1.f, 0.45f); break;
             }
         }
@@ -952,22 +1018,29 @@ void SSWorldFieldShapes::renderDebug()
                 prev1 = q1;
             }
         }
+        else if (rec.mClass == Record::CLASS_TRI)
+        {
+            // The actual physics-detail soup - an AABB would hide tapered
+            // edges behind a box. Overlay-capped so dense soups stay cheap.
+            const size_t nt = rec.mTri.size() / 3;
+            if (nt <= SS_SHAPES_DEBUG_TRIS)
+            {
+                for (size_t k = 0; k < nt; ++k)
+                {
+                    gGL.vertex3fv(rec.mTri[k * 3].mV);     gGL.vertex3fv(rec.mTri[k * 3 + 1].mV);
+                    gGL.vertex3fv(rec.mTri[k * 3 + 1].mV); gGL.vertex3fv(rec.mTri[k * 3 + 2].mV);
+                    gGL.vertex3fv(rec.mTri[k * 3 + 2].mV); gGL.vertex3fv(rec.mTri[k * 3].mV);
+                }
+            }
+            else
+            {
+                ss_debug_aabb(mn, mx);
+            }
+        }
         else
         {
-            // Spheres and triangle soups stay on their AABB bounds.
-            gGL.vertex3fv(mn.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
-            gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
-            gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]);
-            gGL.vertex3fv(mx.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
-            gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
-            gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]);
-            gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
-            gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
-            gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
-            gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mx.mV[VZ]);
-            gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
-            gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
-            gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+            // Spheres stay on their AABB bounds.
+            ss_debug_aabb(mn, mx);
         }
     }
 

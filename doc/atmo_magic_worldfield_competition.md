@@ -305,7 +305,13 @@ quantization. No capture source fixes this while the answer is stored as spans.
      window areas, eave edges) instead of span-count budgets.
    - Layer semantics fit sound naturally: `L_DECLARED` and `L_DECLARED_PHANTOM` walls block
      sound; `PHYSICS_SHAPE_NONE` reads through, optionally supplemented by render-derived
-     coarse occluders (policy decided by the probe oracle's numbers).
+     coarse occluders (policy decided by the probe oracle's numbers). Fully hidden objects —
+     phantom and invisible on every face (alpha-zero colour, an invisiprim texture, or the
+     default transparent texture) — are not part of the world at all and enter no record.
+     Invisible **non-phantom** prims are the opposite: the builder's collision proxy where a
+     mesh lacks a good physics shape — they stay solid for every consumer and carry their own
+     overlay layer (`L_INVISIBLE_SOLID`). Shapeless phantoms carry their prim's own volume
+     geometry at `PROV_RENDER` instead of a bbox.
    - Broadphase: the 64 m bucket grid walked 3D-DDA along each segment; queries batched on the
      worker queue. Hand-rolled — no Jolt (§8 deferral stands; the reopen gate is unchanged).
    - This is the P6+P13+P14 lineage: P6's exact-query insight, P13's declared-shape census and

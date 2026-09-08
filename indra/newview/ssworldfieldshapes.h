@@ -61,6 +61,7 @@ public:
     {
         LAYER_DECLARED = 0,         // non-phantom declared geometry
         LAYER_DECLARED_PHANTOM,     // phantom - visible, declared, non-colliding
+        LAYER_INVISIBLE_SOLID,      // invisible non-phantom: the builder's collision proxy, solid for every consumer
         LAYER_COUNT
     };
 
@@ -71,6 +72,7 @@ public:
         PROV_TESSELLATED,           // physics-detail volume tessellation
         PROV_BBOX,                  // conservative box of the prim bounds
         PROV_UNFETCHED,             // shape type or mesh physics not arrived yet
+        PROV_RENDER,                // no declared shape: the prim's own volume is the geometry
         PROV_TERRAIN                // the heightfield, answered analytically
     };
 
