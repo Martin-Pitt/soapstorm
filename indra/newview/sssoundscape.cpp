@@ -1647,6 +1647,19 @@ void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_a
                                    llclamp((F32)vol, 0.f, 1.f), 0.f));
 }
 
+// Mirrors the avatar-side ankle detector into the debug readout: the band and armed state decide whether segmented steps fire at all.
+void SSSoundscape::noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2])
+{
+    StepDebug& dbg = is_self ? mStepSelf : mStepOther;
+    dbg.mLoco = loco;
+    for (S32 f = 0; f < 2; ++f)
+    {
+        dbg.mFootLow[f] = low[f];
+        dbg.mFootHigh[f] = high[f];
+        dbg.mFootArmed[f] = armed[f];
+    }
+}
+
 // Tags a source as a step sound for the reaper.
 void SSSoundscape::markStepSource(const LLUUID& source_id)
 {

@@ -1354,6 +1354,8 @@ private:
     F32                 mSSFootHigh[2]  = { 0.f, 0.f };
     bool                mSSFootArmed[2] = { false, false };
     bool                mSSFootTracking = false;
+    // <SS:Nexii> Per-foot re-fit after a jump/stand gap: the ceiling may only ride the foot's real height until the first fire, so a jump's foot tuck cannot hold the arm threshold out of the gait's reach.
+    bool                mSSFootRefit[2] = { true, true };
     bool                mWasOnGroundRight;
 
 /**                    Sounds

@@ -61,6 +61,9 @@ public:
     // <SS:Nexii> One cut footfall window from a recording, no step loop required.
     LLUUID playStepCut(const LLUUID& sound, const LLVector3& pos_agent, F32 gain);
 
+    // <SS:Nexii> Mirrors the avatar-side ankle detector into the step debug readout.
+    void noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2]);
+
     struct StepDebug
     {
         F64 mWhen = -1.0;
@@ -79,6 +82,11 @@ public:
         const char* mWhyNot = "";
         F32 mStepGap = 0.f;     // seconds between the last two footfalls that actually played - compare against the gait to see whether steps are being missed
         S32 mStepDropped = 0;   // footfalls refused by the anti-spam gap since this avatar started moving
+        // <SS:Nexii> Mirrored ankle-detector state from the avatar (noteFootBand): the per-foot envelope band and armed flags decide whether segmented steps fire at all.
+        S32 mLoco = -2;         // classified locomotion last reported (-1 stopped)
+        F32 mFootLow[2] = { 0.f, 0.f };
+        F32 mFootHigh[2] = { 0.f, 0.f };
+        bool mFootArmed[2] = { false, false };
     };
     const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
 

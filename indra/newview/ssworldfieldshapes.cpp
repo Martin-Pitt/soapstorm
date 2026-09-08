@@ -385,20 +385,20 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     mBuildDynamic = dynamic;
 
     const bool phantom = rootp->flagPhantom();
+    const bool shape_known = !vov->getPhysicsShapeUnknown();
+    const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
 
-    // Invisible phantoms are not part of the world: no shelter, no block, no
-    // record. Invisible non-phantom prims are the opposite - the builder's
-    // collision proxy where a mesh lacks a good physics shape - so they stay
-    // solid for every consumer and carry their own layer for the overlay.
-    // Visible-but-shapeless phantoms still carry their prim's own geometry -
-    // that is what a drop and an ear actually meet.
+    // Hidden parts: phantom (no collision declared) or shape-NONE (collision
+    // explicitly declined) with no visible face anywhere affect nothing at all
+    // - no shelter, no block, no record. Invisible solids stay: the builder's
+    // collision proxy where a mesh lacks a good physics shape - every consumer
+    // reads them, the layer only marks them for the overlay. An unknown type
+    // stays a proxy until its data arrives saying NONE.
     const bool hidden = ss_part_fully_hidden(vov);
-    if (phantom && hidden) return;
+    if (hidden && (phantom || ptype == LLViewerObject::PHYSICS_SHAPE_NONE)) return;
     const U8 layer = hidden ? (U8)LAYER_INVISIBLE_SOLID
                             : (phantom ? (U8)LAYER_DECLARED_PHANTOM : (U8)LAYER_DECLARED);
 
-    const bool shape_known = !vov->getPhysicsShapeUnknown();
-    const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
     // No declared shape, or a shape type nobody ever queried: the prim's own
     // volume is the geometry, provenance RENDER - the same math the server
     // shape builder runs, without a server shape behind it. A tapered prim

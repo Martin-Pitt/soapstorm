@@ -5334,13 +5334,20 @@ void LLVOAvatar::updateFootstepSounds()
     static LLCachedControl<bool> PlayModeUISndFootstepsJump(gSavedSettings, "PlayModeUISndFootsteps");
     const LLUUID AGENT_JUMP_ANIMS[] = {ANIM_AGENT_PRE_JUMP, ANIM_AGENT_JUMP};
     const bool jumping = isAnyAnimationSignaled(AGENT_JUMP_ANIMS, LL_ARRAY_SIZE(AGENT_JUMP_ANIMS));
-    if (gAudiop && jumping && !mWasJumping && PlayModeUISndFootstepsJump)
+    const bool jump_start = jumping && !mWasJumping;
+    if (gAudiop && jump_start && PlayModeUISndFootstepsJump)
     {
         LLVector3 jump_foot = getPositionAgent();
         jump_foot.mV[VZ] -= mPelvisToFoot;
         SSSoundscape::getInstance()->footstepEvent(getID(), jump_foot, mStepOnLand, STEP_JUMP, isSelf());
     }
     mWasJumping = jumping;
+
+    // <SS:Nexii> A hop too small to trip mInAir never runs the airborne branch below, so the takeoff edge is what flags the detector for a re-fit; without it the tucked feet would ride the high envelope for seconds after touchdown.
+    if (jump_start)
+    {
+        mSSFootRefit[0] = mSSFootRefit[1] = true;
+    }
 
     const LLUUID AGENT_FOOTSTEP_ANIMS[] = {ANIM_AGENT_WALK, ANIM_AGENT_RUN, ANIM_AGENT_LAND};
     const S32 NUM_AGENT_FOOTSTEP_ANIMS = LL_ARRAY_SIZE(AGENT_FOOTSTEP_ANIMS);
@@ -5400,6 +5407,13 @@ void LLVOAvatar::updateFootstepSounds()
                 mSSFootLow[f]  = llmin(elev[f], mSSFootLow[f]  + (elev[f] - mSSFootLow[f])  * decay);
                 mSSFootHigh[f] = llmax(elev[f], mSSFootHigh[f] - (mSSFootHigh[f] - elev[f]) * decay);
 
+                // <SS:Nexii> A jump's foot tuck rides the ceiling far above the walking swing, and at the 3s decay the 60%-into-band arm threshold then stays out of the gait's reach for seconds -
+                // the post-landing step silence. While refitting, the ceiling may only ride the foot's actual height (floored just over the calibration gate); the first fire ends the refit.
+                if (mSSFootRefit[f])
+                {
+                    mSSFootHigh[f] = llmin(mSSFootHigh[f], llmax(elev[f], mSSFootLow[f] + 0.04f));
+                }
+
                 const F32 range = mSSFootHigh[f] - mSSFootLow[f];
                 if (range < 0.03f) continue;   // no usable lift yet: still calibrating, or the anim keeps this foot planted
 
@@ -5410,16 +5424,21 @@ void LLVOAvatar::updateFootstepSounds()
                 else if (mSSFootArmed[f] && elev[f] < mSSFootLow[f] + range * 0.25f)
                 {
                     mSSFootArmed[f] = false;
+                    mSSFootRefit[f] = false;
                     SSSoundscape::getInstance()->footstepImpact(getID(), *ankle[f], isSelf());
                 }
             }
         }
         else
         {
-            // Standing, sitting or airborne: drop the envelopes so the next walk refits them instead of inheriting a band measured in some other pose.
+            // Standing, sitting or airborne: re-arm the refit so the next walk re-anchors the band at what the feet actually do, instead of inheriting a ceiling some other pose peaked at.
             mSSFootTracking = false;
             mSSFootArmed[0] = mSSFootArmed[1] = false;
+            mSSFootRefit[0] = mSSFootRefit[1] = true;
         }
+
+        // <SS:Nexii> Mirror the detector into the step debug readout - the band and armed state are what decide whether segmented steps fire at all.
+        SSSoundscape::getInstance()->noteFootBand(isSelf(), locomotion, mSSFootLow, mSSFootHigh, mSSFootArmed);
 
         // Touchdown: airborne last frame, grounded now.
         if (mSSWasInAir && !mInAir && !isSitting())
