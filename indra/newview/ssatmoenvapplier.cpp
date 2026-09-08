@@ -229,6 +229,9 @@ void SSAtmoEnvApplier::apply()
     {
         track_index = 0;
     }
+    // <SS:Nexii> The landscape world tracks the exact cut the sky made this frame.
+    mPrimaryTrackIndex = track_index;
+    // </SS:Nexii>
     const SSAtmoEnvTrack& track = asset.mTracks[static_cast<size_t>(track_index)];
 
     // <SS:Nexii> The home body's radius - the curvature authority the dome cloud's deck mapping curves around (cloudsF.glsl, fed by lldrawpoolwlsky). A track with no home body falls back to an Earth-sized default rather than to flat: the deck's own curved horizon - a finite disc terminating at its tangent elevation instead of rows of compressed tiles running into the world's horizon line - is the whole point of the curved mapping, and "no planet authored" should not read as "flat cartoon sky". A track with a home body overrides with its real radius.

@@ -784,6 +784,16 @@
          name="look_tab"
          label="Look"
          filename="panel_ss_atmo_env_look.xml" />
+        <!-- <SS:Nexii> Landscape scenery tab - mesh objects owned by the environment. -->
+        <panel
+         border="true"
+         layout="topleft"
+         left_delta="0"
+         top_pad="5"
+         name="landscape_tab"
+         label="Landscape"
+         filename="panel_ss_atmo_env_landscape.xml" />
+        <!-- </SS:Nexii> -->
     </tab_container>
 
     <!-- CRUD row, docked at the floater's bottom edge, same as Save/Cancel

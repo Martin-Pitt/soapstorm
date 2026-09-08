@@ -55,6 +55,18 @@ public:
                            EDragAndDropType cargo_type, void* cargo_data,
                            EAcceptance* accept, std::string& tooltip_msg) override;
 
+    // <SS:Nexii> Landscape scenery list: repopulated from the active track's records when
+    // the tab is current and the record set changed (signature-guarded so an idle list is
+    // never rebuilt under the user's mouse).
+    void refreshLandscape();
+    void onClickLandscapeDelete();
+    void onClickLandscapeLock();
+    void onClickLandscapeSelect();
+
+    // <SS:Nexii> The signature the landscape list was last built from - mesh ids, names and
+    // lock states joined; a changed signature (or a call while it is stale) rebuilds.
+    std::string mLandscapeListSignature;
+
     // <SS:Nexii> The EEP sky import dialog drives the same preview/status refresh the drop path used to - the stamp happens there now, and the poll alone would leave fresh keyframes and the modified asterisk up to half a second late.
     friend class SSFloaterAtmoSkyImport;
 

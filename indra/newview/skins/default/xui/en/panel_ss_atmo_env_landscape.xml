@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<panel
+ border="true"
+ follows="all"
+ label="Landscape"
+ layout="topleft"
+ left="0"
+ name="panel_ss_atmo_env_landscape"
+ top="0"
+ width="580"
+ height="1180">
+
+    <!-- <SS:Nexii> Atmo Magic: Landscape tab - mesh scenery owned by the environment
+         instead of the region. Drag a full-perm mesh item from inventory onto this
+         floater to add it to the active track's scenery; the entries are positional
+         (reconcile keeps a live viewer object per record, matched by mesh uuid).
+
+         The scenery itself is edited with the normal build tools: select-in-world,
+         then move/rotate/scale and drop textures on faces exactly like any object.
+         The list here manages membership: add (drop), delete, lock-to-region, and
+         jump-to-selection. The lock toggle re-anchors the scenery to the region
+         origin on every region crossing (estate copies render identically) or pins
+         it to one fixed global spot. -->
+
+    <scroll_list
+     follows="all"
+     layout="topleft"
+     left="10"
+     name="landscape_list"
+     top="10"
+     height="1020"
+     multi_select="false"
+     width="560">
+        <columns>
+            <column
+             label="Name"
+             name="name"
+             width="220" />
+            <column
+             label="Mesh"
+             name="mesh"
+             width="100" />
+            <column
+             label="Position"
+             name="mode"
+             width="120" />
+        </columns>
+    </scroll_list>
+
+    <button
+     follows="bottom|left"
+     height="24"
+     label="Select in world"
+     layout="topleft"
+     left="10"
+     name="landscape_select_button"
+     tool_tip="Select this scenery with the normal selection tools - edit it like any object"
+     top="1040"
+     width="130" />
+
+    <button
+     follows="bottom|left"
+     height="24"
+     label="Lock to region"
+     layout="topleft"
+     left="150"
+     name="landscape_lock_button"
+     tool_tip="Toggle between region-locked (scenery sits at the same spot relative to every region of the estate) and free (pinned to one global position)"
+     top="1040"
+     width="130" />
+
+    <button
+     follows="bottom|left"
+     height="24"
+     label="Delete"
+     layout="topleft"
+     left="290"
+     name="landscape_delete_button"
+     tool_tip="Remove this scenery from the environment"
+     top="1040"
+     width="90" />
+
+    <text
+     follows="bottom|left"
+     height="16"
+     layout="topleft"
+     left="10"
+     name="landscape_hint"
+     top="1075"
+     width="560">
+        Drop a full-perm mesh here to add it to this track's scenery. Transactions:
+        the scenery renders only while Atmo Magic is active and its own gate is on
+        (the SSAtmoLandscape debug setting, layered under SSAtmoEnabled).
+    </text>
+</panel>

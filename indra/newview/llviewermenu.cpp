@@ -6351,6 +6351,17 @@ static bool get_derezzable_objects(
             }
             break;
         }
+
+        // <SS:Nexii> Local-content objects (Atmo Magic landscape) cannot be derezzed -
+        // they exist only in this viewer, on this environment asset. Skip local content so
+        // Take / Take Copy / Delete / Return / Save Into Task all resolve against real
+        // objects only (and never busy-spin the client derezzing a phantom).
+        if (object->ssIsLocalContent())
+        {
+            can_derez_current = false;
+        }
+        // </SS:Nexii>
+
         if(can_derez_current)
         {
             found = true;

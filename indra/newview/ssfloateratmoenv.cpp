@@ -70,6 +70,9 @@
 #include "llui.h"
 #include "llviewercontrol.h"
 #include "llviewerinventory.h"
+#include "llscrolllistctrl.h" // <SS:Nexii> landscape scenery list
+#include "llselectmgr.h" // <SS:Nexii> landscape select-in-world
+#include "ssatmolandscape.h" // <SS:Nexii> scenery world
 
 #include <algorithm>
 
@@ -177,6 +180,15 @@ bool SSFloaterAtmoEnv::postBuild()
 
     getChild<LLButton>("track_ground_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickGroundRow(); });
+
+    // <SS:Nexii> Landscape scenery list actions.
+    getChild<LLButton>("landscape_delete_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickLandscapeDelete(); });
+    getChild<LLButton>("landscape_lock_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickLandscapeLock(); });
+    getChild<LLButton>("landscape_select_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickLandscapeSelect(); });
+    // </SS:Nexii>
 
     for (S32 slot = 1; slot < SS_ATMOENV_MAX_TRACKS; ++slot)
     {
@@ -672,6 +684,7 @@ void SSFloaterAtmoEnv::draw()
         refreshStatus();
         refreshVisibility();
         refreshTrackTab();
+        refreshLandscape(); // <SS:Nexii> landscape list, signature-guarded inside
         LLView* captured = dynamic_cast<LLView*>(gFocusMgr.getMouseCapture());
         if (!captured || !captured->hasAncestor(this))
         {
@@ -753,6 +766,34 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         }
         return true;
     }
+
+    // <SS:Nexii> A mesh drop is a landscape scenery add. The R1 fullperm gate: scenery rides
+    // inside the environment notecard and travels the estate, so only full-perm meshes may
+    // enter - same rule the settings drop already applies to EEP assets.
+    if (cargo_type == DAD_MESH)
+    {
+        *accept = ACCEPT_YES_SINGLE;
+        if (drop)
+        {
+            const LLInventoryItem* item = (const LLInventoryItem*)cargo_data;
+            if (!ss_landscape_item_fullperm(item))
+            {
+                LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                    "MESSAGE", "That mesh isn't full permission - only full-perm meshes can become the Atmo landscape."));
+                return true;
+            }
+            std::string reason;
+            const S32 index = SSAtmoLandscapeWorld::getInstance()->addFromItem(item, reason);
+            if (index < 0)
+            {
+                LLNotificationsUtil::add("GenericAlert", LLSD().with(
+                    "MESSAGE", std::string("That mesh could not be added to the landscape: ") + reason));
+            }
+            refreshLandscape();
+        }
+        return true;
+    }
+    // </SS:Nexii>
 
     if (cargo_type != DAD_NOTECARD)
     {
@@ -2325,6 +2366,129 @@ void SSFloaterAtmoEnv::selectTrack(S32 index)
 }
 
 // The header status line: source, modified state.
+// <SS:Nexii> Landscape scenery: the list mirrors the active track's records. Rebuilt only
+// when the tab is the one shown and the record set changed (mesh ids + names + lock states),
+// so an idle panel never fights the user's mouse mid-scroll.
+void SSFloaterAtmoEnv::refreshLandscape()
+{
+    LLPanel* landscape_tab = findChild<LLPanel>("landscape_tab");
+    if (!landscape_tab || !landscape_tab->getVisible())
+    {
+        return;
+    }
+    LLScrollListCtrl* list = findChild<LLScrollListCtrl>("landscape_list");
+    if (!list)
+    {
+        return;
+    }
+
+    SSAtmoLandscapeWorld* world = SSAtmoLandscapeWorld::getInstance();
+    std::string sig;
+    const S32 count = world->recordCount();
+    for (S32 i = 0; i < count; ++i)
+    {
+        const SSAtmoEnvLandscape* r = world->recordAt(i);
+        if (!r)
+        {
+            continue;
+        }
+        sig += r->mMeshId.asString();
+        sig += r->mName;
+        sig += r->mLocked ? 'L' : 'F';
+        // The availability state rides the signature so a header arriving (or 404'ing) after
+        // the list was first drawn flips the "(missing)" marker.
+        const SSAtmoLandscapeObject* objp = world->objectAt(i);
+        sig += (objp && objp->meshKnown()) ? (objp->meshAvailable() ? '1' : '0') : '?';
+        sig += '|';
+    }
+    if (sig == mLandscapeListSignature)
+    {
+        return;
+    }
+    mLandscapeListSignature = sig;
+
+    list->deleteAllItems();
+    for (S32 i = 0; i < count; ++i)
+    {
+        const SSAtmoEnvLandscape* r = world->recordAt(i);
+        if (!r)
+        {
+            continue;
+        }
+        LLSD row;
+        std::string name = r->mName.empty() ? "(unnamed)" : r->mName;
+        const SSAtmoLandscapeObject* objp = world->objectAt(i);
+        if (objp && objp->meshKnown() && !objp->meshAvailable())
+        {
+            name += " (missing)";
+        }
+        row["columns"][0]["column"] = "name";
+        row["columns"][0]["value"] = name;
+        row["columns"][1]["column"] = "mesh";
+        row["columns"][1]["value"] = r->mMeshId.asString().substr(0, 8);
+        row["columns"][2]["column"] = "mode";
+        row["columns"][2]["value"] = r->mLocked ? "locked" : "free";
+        list->addElement(row);
+    }
+}
+
+void SSFloaterAtmoEnv::onClickLandscapeDelete()
+{
+    LLScrollListCtrl* list = findChild<LLScrollListCtrl>("landscape_list");
+    if (!list)
+    {
+        return;
+    }
+    const S32 index = list->getFirstSelectedIndex();
+    if (index < 0)
+    {
+        return;
+    }
+    mLandscapeListSignature.clear();
+    SSAtmoLandscapeWorld::getInstance()->removeRecord(index);
+    refreshLandscape();
+}
+
+void SSFloaterAtmoEnv::onClickLandscapeLock()
+{
+    LLScrollListCtrl* list = findChild<LLScrollListCtrl>("landscape_list");
+    if (!list)
+    {
+        return;
+    }
+    const S32 index = list->getFirstSelectedIndex();
+    if (index < 0)
+    {
+        return;
+    }
+    mLandscapeListSignature.clear();
+    SSAtmoLandscapeWorld::getInstance()->toggleRecordLock(index);
+    refreshLandscape();
+}
+
+void SSFloaterAtmoEnv::onClickLandscapeSelect()
+{
+    LLScrollListCtrl* list = findChild<LLScrollListCtrl>("landscape_list");
+    if (!list)
+    {
+        return;
+    }
+    const S32 index = list->getFirstSelectedIndex();
+    if (index < 0)
+    {
+        return;
+    }
+    SSAtmoLandscapeObject* objp = SSAtmoLandscapeWorld::getInstance()->objectAt(index);
+    if (!objp)
+    {
+        return;
+    }
+    LLSelectMgr::getInstance()->deselectAll();
+    LLObjectSelectionHandle handle = LLSelectMgr::getInstance()->selectObjectOnly(objp);
+    (void)handle;
+}
+// </SS:Nexii>
+
 void SSFloaterAtmoEnv::refreshStatus()
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
