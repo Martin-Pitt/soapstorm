@@ -426,8 +426,12 @@ void SSWorldField::update()
         // base bands, but these slots would silently fold stale bodies back
         // into the store - an edited-away room would keep its floor. Clear
         // them; this build's bisection re-discovers what is still there.
+        // Only slots the arrays actually cover can hold stale bodies: the
+        // commit released the scratch (mAllocBands = 0) and applyBand ensures
+        // before it writes, so the bound is mAllocBands, not MAX_SLOTS -
+        // indexing past the allocation here crashed on the released arrays.
         const size_t layer = (size_t)target->mRes * target->mRes;
-        for (S32 k = target->mBaseBands; k < SS_WF_MAX_SLOTS; ++k)
+        for (S32 k = target->mBaseBands; k < target->mAllocBands; ++k)
         {
             for (S32 y = mBuild.mRectY0; y < mBuild.mRectY1; ++y)
             {
@@ -1250,7 +1254,12 @@ void SSWorldField::foldSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
             U8 flags[SS_WF_MAX_SPANS];
             S32 n = 0;
 
-            for (S32 b = 0; b < tile.mBandCount; ++b)
+            // The scratch release at commit leaves mBandCount standing as the
+            // tile's persistent band statistic while the arrays it names are
+            // gone; a build re-grows only the bands it re-splices. Fold what
+            // this build actually has, not what a previous capture saw.
+            const S32 band_limit = llmin(tile.mBandCount, tile.mAllocBands);
+            for (S32 b = 0; b < band_limit; ++b)
             {
                 const size_t bi = (size_t)b * layer + col;
                 const F32 top = tile.mBandTop[bi];

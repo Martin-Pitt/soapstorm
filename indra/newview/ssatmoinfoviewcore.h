@@ -88,6 +88,14 @@ namespace SSAtmoInfoViewCore
     constexpr S32 AIR_LABEL_INTERIOR = 3;
     constexpr S32 AIR_LABEL_UNKNOWN  = 4;
 
+    // The core's colour type: the ramps below return it and the shell's toColor lifts it into LLColor4.
+    struct RGB
+    {
+        F32 r = 0.f;
+        F32 g = 0.f;
+        F32 b = 0.f;
+    };
+
     inline RGB airLabelColor(S32 label)
     {
         switch (label)
@@ -123,6 +131,7 @@ namespace SSAtmoInfoViewCore
     // RT60 colour: the energy ramp (orange -> red) over a 0..3 s band, so a dry
     // studio reads amber and a cathedral reads red. Invariants: monotone in rt60
     // over the band; clamps at both ends; channels in [0,1].
+    inline RGB energyRamp(F32 value, F32 max);
     inline RGB rt60Color(F32 rt60)
     {
         return energyRamp(rt60, 3.f);
@@ -135,13 +144,6 @@ namespace SSAtmoInfoViewCore
     {
         F32 x = 0.f;
         F32 y = 0.f;
-    };
-
-    struct RGB
-    {
-        F32 r = 0.f;
-        F32 g = 0.f;
-        F32 b = 0.f;
     };
 
     struct PixelPoint

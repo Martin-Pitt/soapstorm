@@ -84,11 +84,16 @@ Capture the numbers every later phase is judged against.
 - Block timers around the tick, window pack and each pass (most exist; add per-phase
   sub-zones). Record steady-rain and storm tick cost today.
 - Freeze the harness world scenes the competition assumed: level pad, graded slope at
-  repose, a wall with an eave, an overhang, a parking vehicle, two avatars.
+  repose, a wall with an eave, an overhang, a parking vehicle, two avatars — **plus
+  the three stress scenes the guardrails demand (Judge C, R2): a dense forest parcel
+  (alpha overdraw), a 40-avatar churn scene, and an 8-region teleport storm path.**
 - Debug views for staleness, flow, film depth exist from day one (extend the existing
   debug-view registry).
 
-*Acceptance: baseline numbers recorded in the harness; no behaviour change.*
+*Acceptance: baseline numbers recorded in the harness; no behaviour change. Every
+later phase's acceptance adds three stress gates against these baselines: storm-tick
+≤ 2× steady-tick; window staleness ≤ 8 quanta during a storm; forest frame-time delta
+≤ +0.1 ms vs P0.*
 
 ### P1 — Amortized tick (D11)
 
@@ -97,18 +102,37 @@ visuals by design; it builds the scheduling spine everything else runs on.
 
 - **State:** per cell `mStamp` (U32 shared-time quantum last fully stepped), `mAct`
   (F32 activity score), one tolerance-class byte. Added to `SSSurfaceField::Field`
-  (`sssurfacefield.h:171-205`) — the vectors stay the checkpoint; nothing is removed.
+  (`sssurfacefield.h:204-247`) — the vectors stay the checkpoint; nothing is removed.
 - **Worklist:** each tick, K ≈ 4096 cells win a deterministic hash-threshold draw on
-  activity (wet/puddle gain, exposure change, camera proximity, wind events,
-  phase-danger ±1 °C of 0 °C forced full-step) and get the full `stepCell` + transport
-  step; every other cell is carried by the closed-form predictor the tick already
-  computes (`1 - exp(-rate·dt)`). Total order on (region, cell, quantum), hash
-  tiebreaks — two clients resample identical sets.
-- **Staleness contract:** new fifth window `ssFieldAgeMap` RGBA8 (staleness quanta,
-  predicted rate, activity, class); the shared fetch in `ssSurfaceFieldF.glsl` advances
-  wet/puddle by `rate · staleness` — one site, all three passes inherit it.
+  activity (wet/puddle gain, exposure change, wind events, phase-danger ±1 °C of
+  0 °C forced full-step) and get the full `stepCell` + transport step; every other
+  cell is carried by the closed-form predictor the tick already computes
+  (`1 - exp(-rate·dt)`). Total order on (region, cell, quantum), hash tiebreaks.
+  *Determinism note (Judge B): the draw must be pure in (region, cell, quantum) —
+  camera proximity is client-local and is excluded from the set-selecting hash; it
+  may bias step *priority* only where that cannot change the selected set. The
+  equality claim is bitwise-given-identical-inputs; cross-camera behaviour is
+  convergence, tested by T4.*
+- **Staleness contract (Judge B fix):** `ssFieldAgeMap` RGBA8 carries **`mStamp`,
+  rate and class — never the live staleness value** (that would change every tick and
+  degenerate the touched-rows pack into a full repack). The shader derives staleness
+  as `(currentQuantum − stamp)·TICK_INTERVAL` from one uniform. Rate is stored in a
+  twinned fixed-point encoding so the shader's `rate·staleness` matches the CPU
+  predictor exactly at 8 bits (`twin_surface_agepack`). Saturating stamps
+  (255 quanta ≈ 64 s) force a full step.
+- **CPU readers (Judge A gap):** `sample()` (`ssavatarwet.cpp:66`) and
+  `forEachLiftCell` (`ssprecipitation.cpp:1109`) read raw vectors — each read applies
+  the same closed-form advance at read time, or force-promotes its cells that tick.
+  Also: the settle loop's peak scan feeds `advanceMix` — peaks must stay tick-scoped
+  via an O(1) max-scan over the full arrays, or look crossfades stall under partial
+  stepping.
+- **Ramp promotion (Judge C, R6):** preset changes stamp whole regions *and* a
+  d(intensity)/dt threshold stamps on continuous ramps — otherwise a rising-storm
+  front arrives one quantum late everywhere.
 - **Window pack:** only touched rows repacked; persistent-mapped PBO sub-range uploads
-  replace the four full-texture `glTexSubImage2D` calls (`sssurfacefield.cpp:1393-1410`).
+  replace the four full-texture `glTexSubImage2D` calls (`sssurfacefield.cpp:1909-1931`).
+  Origin moves upload whole — dirty-row skipping applies only when the camera-anchored
+  origin is unchanged, else it silently degrades (build-time risk R3 in §8).
 - **Forced promotions:** `markDirty`, external writes (`depositAt`, `vaporise`),
   preset changes and gust fronts stamp whole regions (the existing `ran > 1` replay
   path already models this).
@@ -125,14 +149,24 @@ depressions, routes D8 with an eave rule, accumulates catchment, and
 `SSSurfaceField::Runoff` materialises it over a finer grid with connected lip runs,
 per-run reservoirs and catchment-weighted shedding. Nothing needs claiming or solving.
 
-**Residue (verify, don't build):**
-- Confirm the puddle path settles on drainage pool membership (spill-level standing
-  water) across the whole window, not only near the camera — the `mPool` channel was
-  written to retire the local-dips check.
-- Confirm the sheet term's scroll direction reads the drainage-corrected flow
-  directions rather than raw cell slope, so water visibly runs toward the outlet.
-- File-level: the debug view for the network exists (`sssurfacefield.cpp` ~3036);
-  wire the two confirmations into the P2 acceptance scene (roof, yard, gutter line).
+**Residue (reviewed 2026-09-07, Judge A — one was wrong, now a finding):**
+- Pool membership: **verified** — the puddle fill tests `geom.mPool[i]` for every
+  solid, non-water cell region-wide (`sssurfacefield.cpp:1254`); camera radius gates
+  only stream/drip emission. Gate dependency named: the drainage mask lands only when
+  the world field is the grid source (`SSWorldFieldSurfaceTop`, default 1; the
+  local-dips check at `sssurfacefield.cpp:232-255` is the off-path). The P2 acceptance
+  scene must run with the world-field source.
+- Sheet-flow direction: **finding, not a confirm** — the flow window is filled from
+  raw central-difference cell slope (`sssurfacefield.cpp:1819-1822` from
+  `buildGeometry:228-229`); `buildRunoff`'s D8 directions never reach any texture.
+  Water does **not** visibly run toward the outlet today. Fix rides P3's flow field
+  (`u` replaces the scroll source); pulled forward into P2 only if the acceptance
+  scene must show outlet-ward flow before P3.
+- Reservoir persistence across retraces: verified in code (stable run keys, orphan
+  mass redistributed by catchment, `sssurfacefield.cpp:503-517, 637-682`) — but a
+  retrace that *changes a run's biggest feeder* re-keys and drops mass mid-storm;
+  test owns this (T6).
+- Debug view: `renderRunoffDebug` at `sssurfacefield.cpp:3084`.
 
 ### P3 — Flow core, dynamic tier (virtual pipes)
 
@@ -171,10 +205,15 @@ drives onto vertical faces and that curtain streams and eave drips land on, whic
 heightfield cannot represent and nothing yet simulates.
 
 - **Interface (new, small):** `shedRegion`'s landing resolve already classifies each
-  stream/drip landing (`land`, `on_water`); add a wall-hit branch — a landing whose
-  first surface is a steep face feeds the wall ledger at that entry instead of only
-  splashing. Curtain stream drive and drip pick stay catchment-weighted; they simply
-  gain a downstream sink.
+  stream/drip landing (`land`, `on_water`) at `sssurfacefield.cpp:989-995` and
+  `:1034-1040`; add a wall-hit branch — a landing whose first surface is a steep face
+  feeds the wall ledger at that entry instead of only splashing. Curtain stream drive
+  and drip pick stay catchment-weighted; they simply gain a downstream sink.
+  *Classifier (Judge B): `resolveColumn` returns no normal and cannot see vertical
+  faces at vertical rain — the branch classifies with a worldfield column test /
+  span-store lateral trace (`SSWorldField::traceSolid`) at the landing point, never a
+  screen-space derivative; the splash-vs-wall mass split is conservation-accounted
+  (T8).*
 - **Wall ledger:** sparse per-region map keyed `(azimuth 0..15, v-band 0.25 m,
   along 0.25 m)` — the 16-azimuth quantisation *is* `SSSurfaceDrop::DRIP_AZIMUTHS`
   (`sssurfacedropcore.h`), so sim and shader share one bit-stable frame. Optionally
@@ -225,7 +264,13 @@ per-pixel sim.
   define by weather-relevant writers — **avatarF and the simple pools first** (D1's
   one-day PoC scope), expanding to material/rigged variants. Cleared per frame; a
   debug view audits coverage (a missed writer reads stale texels — this is the known
-  failure mode, tested not hoped away).
+  failure mode, tested not hoped away). *Exclusion semantics (Judge C, R3): writers
+  are an allow-list of OPAQUE pools only — alpha/blended writers would need integer
+  blending (a GL error) and R16UI MSAA resolve is undefined, so the attachment is
+  allocated resolve-off and impostor/flexi/foliage pixels keep id 0, falling through
+  to the field/column answer; the class split impostors need (so a distant impostor
+  card doesn't re-inherit ground weather) is P6-expansion scope, named as a known
+  limitation until then.*
 - **Record table:** SSBO, 4096 rows × 32 B `{wet film, ice, deposit, thermal,
   exposure, class, geometry serial, soak}` — **CPU-owned**, stepped per tick by the
   existing `SSAvatarWet` soak/exposure integration (that part is real simulation and
@@ -256,15 +301,18 @@ P3-P6; lands any time after P1.
   exposure × humidity × sub-zero duration law stepping in `SSSurfaceState::stepCell`
   (the channels exist; the laws sharpen). Damage persists into thaw (scars), so a
   repeatedly-frozen puddle keeps its crack pattern.
-- **Render (normal pass item 4):** the axis-aligned 0.35 m crack lattice becomes a
-  Voronoi-edge hash lattice seeded per cell; crack line density and width scale with
-  the damage scalar; frost renders as a micron-scale grain tint on the existing
-  deposit grain path.
+- **Render (both passes — Judge C, R7):** the axis-aligned 0.35 m crack lattice
+  becomes a Voronoi-edge hash lattice seeded per cell, as a **shared include consumed
+  by the normal pass's relief block AND the albedo pass's crack-line block** (both
+  carry the lattice today at the same pitch; upgrading one alone desyncs relief from
+  lines). Crack line density and width scale with the damage scalar; frost renders as
+  a micron-scale grain tint on the existing deposit grain path. Twin test asserts the
+  two passes' lattice functions agree.
 - **Gate:** `SSAtmoIceFrostV2` (0 = current crack lattice verbatim).
 - **Tests:** damage accumulation twin test; scar persistence across melt/refreeze;
   determinism replay.
 - **Budget:** a few FLOP per full-stepped cell inside the P1 worklist; one extra hash
-  tap in the normal pass's ice block.
+  tap in each pass's ice/crack block (shared function).
 
 ### P7 — Hero droplets (D8, the detail layer)
 
@@ -280,8 +328,12 @@ truth; heroes are sub-second-lived bodies checked out of the ledger.
   become impact-ring events through the existing `noteImpact` path.
 - **Render:** half-res splat → bilateral smoothing → normals-from-gradient →
   composite in the normal pass after item 1; depth-ε match, no position buffer needed.
-- **Ledger handoff:** a dying hero writes mass back to `mFilm`/`mWet` with a 2-cell
-  fade under a per-cell `mHero` shadow — no double cap, no hole.
+- **Ledger handoff (Judge B/C determinism fix):** a dying hero's mass return is
+  **debit-at-spawn, ledger-bookkept** — the spawn walk checks mass out of `mFilm`
+  deterministically, and the refund on death is a tick-aligned, cell-stated function
+  of ledger state (never the GPU hero's exact merge-order mass), routed through
+  `depositAt`. With `SSAtmoHeroDrops` on, hero *placement* is conceded cosmetic
+  non-bitwise; the ledger itself stays bitwise (T13 proves it).
 - **Gate:** `SSAtmoHeroDrops` (0 = lattice items 1/2 verbatim, the shipping look).
 - **Budget:** ≈ 1 ms GPU total @1080p (0.4 sim + 0.6 splat/smooth/composite, half-res).
 - **Known failures (accepted, bounded):** silhouette/disocclusion pops; the 16 m
@@ -316,18 +368,23 @@ P8 is the answer only when both distort the near field or still leave seams.
 
 ## 4. Deletion plan (what v2 removes)
 
-| Thing | Removed in | Replaced by |
+Retirement timing rule (Judge B): every row is **added under its gate at the named
+phase and deleted only when that gate flips to default-on** (or at a named later
+retirement phase) — never deleted at the phase that introduces its replacement, or
+the off path breaks (the D14 cliff).
+
+| Thing | Added under gate | Deleted at |
 |---|---|---|
-| Capsule geometry test in wet pass (`ssAvatarWet`, `ground_share` wiring) | P6 parity | id fetch + record |
-| Interim `ssAvatarContain` gate + bind in normal pass | P6 parity | same |
-| `SSAvatarWet::mShaded` capsule upload | P6 parity | record table upload |
-| Slope-derived scroll direction in sheet term | P3 | flow-field `u` |
-| Painted shed cascades (rain; snow shed keeps its own path) | P4 | wall-run mass credit |
-| `roomAt` repose heuristic | P5 (gated) | yield-surface repose |
-| Four full-window `glTexSubImage2D` per tick | P1 | persistent-ring sub-range uploads |
+| Capsule geometry in wet pass + `mShaded` upload | (shipping today) | `SSAtmoObjectWeather` default-on (P6 parity) |
+| Interim normal-pass capsule gate (`ssAvatarContain`) | (shipping today, `688130561b`) | same |
+| Slope-derived scroll direction in sheet term | (shipping today) | `SSAtmoFlowSim` default-on (P3 parity) |
+| Painted granular shed cascade (`mStore` cursor path — note: the *liquid* shed side is already replaced by the runoff merge) | (shipping today) | retirement review after P3+P4 parity |
+| `roomAt` repose heuristic | `SSAtmoGranularV2` | that gate's default-on |
+| Four full-window `glTexSubImage2D` per tick | (shipping today) | `SSAtmoSurfaceResample` default-on (P1 parity) |
 
 `ssavatarwet.h`'s CPU soak/exposure state machine survives to end-of-v2 as the record
-stepper; only its screen-space geometry dies.
+stepper; only its screen-space geometry dies. The avatar-soak debug view migrates onto
+records at P6 (named so nothing strands).
 
 ## 5. Guardrails (the competition's worst-case lessons)
 
@@ -347,14 +404,19 @@ stepper; only its screen-space geometry dies.
 
 | Phase | GPU | CPU | VRAM |
 |---|---|---|---|
-| P1 resample | — | tick −10× | +1 RGBA8 window (~0.26 MB) |
-| P2 static flow | — | one-time per geometry serial | 0 (existing window channels) |
+| P1 resample | — | tick −10× (vs post-runoff tick) | +1 RGBA8 window (~0.26 MB) |
+| P2 absorbed | — | verify only | 0 |
 | P3 pipes | — | < 1 ms/tick, sleeping world free | +1 window set (~1 MB) |
-| P4 wall film | — | < 0.5 ms/tick, < 24 m | sparse wall ledger < 4 MB |
+| P4 wall film | — | < 0.5 ms/tick + shed-landing classification (shed timer) | sparse wall ledger < 4 MB |
 | P5 granular v2 | — | inside P1 worklist | +1 mask texture (256²) |
-| P6 records | ~0.3 ms write | trivial | +4 MB (R16UI) + 128 KB SSBO |
+| P6 records | ~0.3 ms write | trivial | +4 MB @1080p (**16.6 MB @4K** — footnoted per Judge B) + 128 KB SSBO |
 | P7 heroes | ≈ 1 ms | — | ~2 MB targets |
-| Total v2 | ≈ 1.3 ms | tick cheaper than today | ≈ 8 MB |
+| Total v2 | ≈ 1.3 ms @1080p | tick cheaper than today | ≈ 8 MB @1080p (~25 MB @4K) |
+
+Unpriced-but-named (Judge B): P3's event-driven Barnes reflood re-runs per freeze/thaw
+event — a hard-freeze front re-floods the grid at transition frames; priced against
+the storm gates. `shedRegion`'s per-landing resolves already live on
+`FTM_SS_SURFACE_SHED` and P4's branch adds to that timer, not the tick.
 
 Compare the competition's rejected alternatives: D3's resident cascade (5 MB + GPU
 truth), D2's visibility buffer (18.6 MB + every writer twice), D9's PBF (standing
@@ -373,3 +435,89 @@ truth), D2's visibility buffer (18.6 MB + every writer twice), D9's PBF (standin
 4. **Frost/ice cracks: scheduled as P6.5**, a small standalone item (state laws in
    `stepCell` + Voronoi crack lattice in the normal pass), parallel-safe after P1.
    Recorded in §3.
+
+## 8. Review record (three judges, 2026-09-07)
+
+Full fact-check / architecture / risk verdicts ran against the post-merge tree.
+Scores: factual accuracy **8/10** (Judge A), architecture **7/10** (Judge B), plan
+readiness **7/10** (Judge C). Their must-fixes are applied in place above, marked
+`(Judge A/B/C)`; the material ones:
+
+1. P2's sheet-direction "confirm" was **false** — flow window carries raw cell slope;
+   D8 never reaches a texture. Now a finding; fix rides P3's `u`.
+2. P1's staleness texture must carry **stamps, not live staleness** (else touched-row
+   packing degenerates to full repack); camera proximity is out of the set-selection
+   hash; `sample()`/`forEachLiftCell` and the `advanceMix` peak scan are named CPU
+   readers that the worklist must not strand; rain *ramps* promote, not just presets.
+3. P4's wall-hit classifier must be a worldfield column/span test — `resolveColumn`
+   cannot see vertical faces; splash-vs-wall mass is conservation-accounted (T8).
+4. P6's R16UI is **opaque-pool allow-list only** (no integer blending, MSAA resolve
+   undefined); impostor/flexi/foliage stay id 0 with the class split named as
+   expansion scope.
+5. P7's hero→ledger refund is debit-at-spawn, tick-aligned bookkeeping — the ledger
+   stays bitwise even with heroes on (T13).
+6. Cross-gate sinks defined where a phase's consumer gate is off (melt→`mPuddle`
+   fallback with `SSAtmoFlowSim` off; `SSAtmoFlowSim`'s static tier now belongs to
+   the shipping runoff path — its ladder reduces to off/dynamic).
+7. Deletion plan rewritten as add-under-gate / delete-at-default-flip; P0 gained the
+   forest/churn/storm scenes with numeric stress gates; P6.5 extended to **both**
+   passes; budget table corrected (P2 absorbed, 4K footnotes, shed-timer naming).
+
+Named test list (owners per phase): T1 predictor/CPU divergence at phase transitions,
+T2 look-Mix determinism under partial stepping, T3 ramp-onset front latency,
+T4 cross-camera border convergence, T5 staleness saturation, T6 reservoir persistence
+across feeder-changing retraces, T7 flow-window re-entry without mass spike,
+T8 wall-hit mass split conservation, T9 freeze-thaw crossing not missed between
+resamples, T10 Voronoi lattice parity across passes, T11 id coverage audit automation
+(alpha occlusion, impostor, MSAA), T12 record id recycle bleed, T13 hero-handoff
+ledger equality.
+
+## 9. Implementation outline (first slices — P0, P1, P3, P4)
+
+Insertion points verified against the current tree; P5/P6/P6.5/P7/P8 stay one-line
+placeholders until their gates open.
+
+**P0** (no behaviour change): sub-zone timers around the settle loop
+(`tick()`, `sssurfacefield.cpp:1164-1298`), transport call (`:1312-1326`) and the
+window pack loop (`updateWindow()`, `:1793-1829`) — `FTM_SS_SURFACE_TICK` already
+exists at `:127`; extend the `SSAtmoSurfaceDebug` switch (`:2035`, pattern
+`renderRunoffDebug()` `:3084`) with staleness/flow/film views; freeze the six
+harness scenes plus the three stress scenes.
+
+**P1**: add `mStamp`/`mAct`/`mClass` to `Field` (`sssurfacefield.h:204-247`,
+allocated in `fieldFor()` `sssurfacefield.cpp:1052-1072`); restructure the per-cell
+loop into K-winners full path (`stepCell` call site `:1279`, `washRemoval` `:1285`)
+vs closed-form carry (reuse the `1 - exp(-rate·dt)` blend at `:1103`); force-promote
+in `depositAt` (`:1630`), `vaporise` (`:1505`), the `REBUILD_DZ` reset (`:1178-1183`)
+and preset changes in `idle()` (`:1367`), plus `SSWorldField::markDirty` — which the
+field does not have yet and P1 adds; fifth window allocated beside `mWindowCoverTex`
+(`:1883-1891`), filled in the pack loop, fifth upload in the `glTexSubImage2D` block
+(`:1909-1931`), `bindAgeForShader` cloned from `bindStateForShader` (`:1971-1982`),
+bound in all three passes; the predictor advance lives in **one site** —
+`ssFieldAt` in `ssSurfaceFieldF.glsl:126-208` — so wet/normal/albedo inherit it;
+`SSAtmoSurfaceResample` uniform rides `bindLooksForShader` (`:1999-2047`).
+Tests: `twin_surface_predictor` (predictor ≡ stepCell over the grid),
+`twin_surface_resample` (bitwise replay across burst-vs-single quantum delivery —
+the worklist hash includes the quantum index so replay selects identical cells),
+`twin_surface_agepack` (RGBA8 stamp/rate/class round-trip), T1-T5.
+
+**P3**: new `ssflowfield.h/.cpp` + LOCKSTEP `ssflowcore.h`; 128² window stepped from
+`idle()` after the tick loop (`:1463-1493`) and before `shedEdges` (`:1495`); inflow
+accumulator follows the `mInflow` pattern (`sssurfacefield.h:232`, applied in
+`ssgranular.cpp:158-196`); `mPuddle` becomes the render view of `h` at the
+`updateWindow()` write (`:1804`) under `SSAtmoFlowSim`; 4-deep persistent-mapped PBO
+ring with `glFenceSync`. `SSAtmoFlowSim`'s ladder post-absorption: 0 off / 2 dynamic
+(the static tier is the shipping runoff path's job). Cross-gate sink: with FlowSim
+off, P5's melt credits `mPuddle` directly. Tests: `twin_flowcore_pipes`, T7.
+
+**P4**: wall-hit branch at the two landing resolves (`:989-995`, `:1034-1040`),
+classified by a worldfield column/span test at the landing point (never
+`resolveColumn`'s depth derivative); wall ledger (`sswallfilmcore.h`): sparse
+per-region map keyed `(azimuth&0xF | band<<4 | along<<12)`, anchored to the region
+origin projected on `drip_t` with wind shear excluded from the key; Nusselt decay,
+breakup at `h_crit = 0.15 mm·(1−roughness)` into run seeds in the existing
+0.06 × 0.30 m drip cells, runouts credit ground via `depositAt` exactly once;
+render side: the drip block in `ssSurfaceNormalF.glsl` takes its phase from the
+ledger's run distance (the shader's `SS_DRIP_AZIMUTHS` re-declaration at `:208` is a
+per-unit const — note, not LOCKSTEP). Tests: `twin_wallfilm`, T8. Cross-gate sink:
+with `SSAtmoWallFilm` off, wall-landed mass stays a splash (current behaviour).

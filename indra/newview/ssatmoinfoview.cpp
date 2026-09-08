@@ -38,6 +38,8 @@
 #include "lluictrlfactory.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
+#include "llviewerregion.h" // <SS:Nexii> V10: regionp->getHandle() for the acoustics probe
+#include "llworld.h" // <SS:Nexii> V10: LLWorld::getInstance()->getRegionFromPosAgent for the acoustics probe
 #include "llenvironment.h" // <SS:Nexii> info-view look: getLightDirection, the key direction the warm-gray shade is lit from
 #include "llviewershadermgr.h" // <SS:Nexii> info-view look: gSSInfoLookProgram
 #include "llviewerwindow.h" // <SS:Nexii> gViewerWindow setup3DRender for the look pass and the in-world layer

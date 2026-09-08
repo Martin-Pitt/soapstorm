@@ -394,8 +394,10 @@ namespace SSAcoustic
                 ++n;
                 // Intermediates every ~4 m between ear and ceiling, so a vertical
                 // path is never a single 20 m hop through a wall the graph cannot
-                // see.
-                for (F32 z = ear + INTERMEDIATE_STEP_M; z < ceil_p - 1.0f && n < max_out; z += INTERMEDIATE_STEP_M)
+                // see. Capped at max_out - 1 so the ceiling probe below always
+                // fits: a gap tall enough to fill the budget (~67 m) must not
+                // write past it.
+                for (F32 z = ear + INTERMEDIATE_STEP_M; z < ceil_p - 1.0f && n < max_out - 1; z += INTERMEDIATE_STEP_M)
                 {
                     out[n].mZ = z; out[n].mGapBottom = g0; out[n].mGapTop = g1;
                     out[n].mRoofed = true; out[n].mSkyOpen = false;
