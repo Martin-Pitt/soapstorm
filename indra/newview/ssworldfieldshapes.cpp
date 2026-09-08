@@ -65,6 +65,9 @@ static constexpr F32 SS_SHAPES_LARGE_PART_M = 16.f;
 static constexpr F32 SS_SHAPES_TERRAIN_STEP_M = 4.f;
 static constexpr S32 SS_SHAPES_TERRAIN_SAMPLES = 96;
 static constexpr S32 SS_SHAPES_DDA_GUARD = 512;
+// The DYNAMIC classifier's settle window and slop - the settleEdits pattern's values.
+static constexpr F64 SS_SHAPES_SETTLE_SECONDS = 4.0;
+static constexpr F32 SS_SHAPES_REST_SLOP = 0.25f;
 static constexpr S32 SS_SHAPES_DEBUG_TRIS = 512;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_SHAPES_CENSUS("SS Shapes Census");
@@ -275,6 +278,13 @@ void SSWorldFieldShapes::buildCensus(LLViewerRegion* regionp)
     mTriCount = 0;
     mDirty = false;
 
+    // Rest-state seen flags: false going in, set by trackRest during the scan,
+    // and whatever stayed unseen left the envelope or the region - pruned.
+    for (auto& rest : mRest)
+    {
+        rest.second.mSeen = false;
+    }
+
     const S32 n = gObjectList.getNumObjects();
     for (S32 i = 0; i < n; ++i)
     {
@@ -298,7 +308,48 @@ void SSWorldFieldShapes::buildCensus(LLViewerRegion* regionp)
         addPart(vov);
     }
 
+    for (auto it = mRest.begin(); it != mRest.end();)
+    {
+        if (it->second.mSeen) { ++it; } else { it = mRest.erase(it); }
+    }
+
     mLastBuildMS = build_timer.getElapsedTimeF32() * 1000.f;
+}
+
+// The DYNAMIC classifier: an object at rest across the settle window reads
+// at-rest; any transform change re-marks it dynamic and restarts the window
+// (the settleEdits pattern, per-root). State outlives the build-scoped census
+// so a jittering stack never re-enters anything store-bound.
+void SSWorldFieldShapes::trackRest(const LLViewerObject* rootp, bool& out_dynamic)
+{
+    RestState& state = mRest[rootp->getID()];
+    const LLVector3d pos(rootp->getPositionAgent());
+    const LLQuaternion rot = rootp->getRotation();
+    const LLVector3 scale = rootp->getScale();
+
+    if (!state.mSeen)
+    {
+        // First sighting: unknown history - dynamic until the window proves still.
+        state.mMovedAt = mNow;
+        state.mDynamic = true;
+    }
+    else if ((state.mPos - pos).magVecSquared() > SS_SHAPES_REST_SLOP * SS_SHAPES_REST_SLOP
+             || state.mRot != rot
+             || state.mScale != scale)
+    {
+        state.mMovedAt = mNow;
+        state.mDynamic = true;
+    }
+    else if (state.mDynamic && mNow - state.mMovedAt >= SS_SHAPES_SETTLE_SECONDS)
+    {
+        state.mDynamic = false;
+    }
+
+    state.mPos = pos;
+    state.mRot = rot;
+    state.mScale = scale;
+    state.mSeen = true;
+    out_dynamic = state.mDynamic;
 }
 
 // One volume part in: classify its declared shape exactly the way the physics
@@ -315,6 +366,13 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     const LLVector3 scale = vov->getScale();
     LLViewerObject* rootp = vov;
     while (rootp->getParent()) rootp = (LLViewerObject*)rootp->getParent();
+
+    // The DYNAMIC bit rides the root: a mover's parts are query-time only and
+    // never store-bound, whatever their layer.
+    bool dynamic = false;
+    trackRest(rootp, dynamic);
+    mBuildDynamic = dynamic;
+
     const bool phantom = rootp->flagPhantom();
 
     // Invisible phantoms are not part of the world: no shelter, no block, no
@@ -330,17 +388,13 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 
     const bool shape_known = !vov->getPhysicsShapeUnknown();
     const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
-    // No declared collision shape: the prim's own volume is the geometry,
-    // provenance RENDER (no server shape behind it). Unknown shape types stay
-    // a conservative box until the data arrives - unless phantom, where the
-    // visible geometry is the only truth there will ever be.
-    const bool geometry_only = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE) || (!shape_known && phantom);
-
-    if (!shape_known && !phantom)
-    {
-        addOBB(pos, rot, scale * 0.5f, layer, PROV_UNFETCHED);
-        return;
-    }
+    // No declared shape, or a shape type nobody ever queried: the prim's own
+    // volume is the geometry, provenance RENDER - the same math the server
+    // shape builder runs, without a server shape behind it. A tapered prim
+    // keeps its taper this way; a bbox would erase it. Unknown MESH physics
+    // still needs its asset, so those keep the fetch-then-box path below.
+    // Never fired an ObjectPhysicsProperties request here.
+    const bool geometry_only = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE) || !shape_known;
 
     const S32 tri_cap = (llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) > SS_SHAPES_LARGE_PART_M)
                             ? SS_SHAPES_PART_TRIS_LARGE : SS_SHAPES_PART_TRIS;
@@ -590,6 +644,7 @@ void SSWorldFieldShapes::addRecord(Record& rec)
     if (z1 - z0 > 512) z1 = z0 + 512;
 
     const U32 index = (U32)mCensus.mRecords.size();
+    rec.mDynamic = mBuildDynamic;
     mCensus.mRecords.push_back(rec);
     for (S32 z = z0; z <= z1; ++z)
     {

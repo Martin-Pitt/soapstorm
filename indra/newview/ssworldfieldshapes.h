@@ -41,6 +41,7 @@
 
 #include "llquaternion.h"
 #include "llsingleton.h"
+#include "v3dmath.h"
 #include "v3math.h"
 
 #include <unordered_map>
@@ -138,6 +139,7 @@ private:
         U8 mLayer = LAYER_DECLARED;
         U8 mProv = PROV_EXACT;
         U32 mVisit = 0;                 // per-query dedupe stamp
+        bool mDynamic = false;          // root moved within the settle window: query-time only, never store-bound
     };
 
     // The build-scoped snapshot: records plus the 64 m bucket grid over them.
@@ -155,6 +157,7 @@ private:
     bool needsRebuild(LLViewerRegion* regionp) const;
     void buildCensus(LLViewerRegion* regionp);
     void addPart(class LLVOVolume* vov);
+    void trackRest(const class LLViewerObject* rootp, bool& out_dynamic);
     void addOBB(const LLVector3& center, const LLQuaternion& rot, const LLVector3& half, U8 layer, U8 prov);
     void addEllipsoid(const LLVector3& center, const LLQuaternion& rot, const LLVector3& radii, U8 layer, U8 prov);
     void addCylinder(const LLVector3& center, const LLQuaternion& rot, F32 radius, F32 half_height, U8 layer, U8 prov);
@@ -171,6 +174,22 @@ private:
     F32 mDirtyRadius = 0.f;
     F64 mDirtyAt = 0.0;
     bool mDirty = false;
+
+    // <SS:Nexii> The DYNAMIC classifier's memory (doc/atmo_magic_worldfield_competition.md 11):
+    // per-root transform history that outlives the build-scoped census, so an object at rest
+    // across the settle window reads at-rest and a mover reads DYNAMIC - excluded from any
+    // store-bound raster, resolved at query time, never bumping a geometry serial.
+    struct RestState
+    {
+        LLVector3d mPos;
+        LLQuaternion mRot;
+        LLVector3 mScale;
+        F64 mMovedAt = 0.0;
+        bool mDynamic = true;
+        bool mSeen = false;
+    };
+    std::unordered_map<LLUUID, RestState> mRest;
+    bool mBuildDynamic = false;     // the part being filed rides its root's rest state
 
     F64 mNow = 0.0;
     F32 mLastBuildMS = 0.f;

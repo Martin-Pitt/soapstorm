@@ -58,6 +58,9 @@ public:
 
     void footstepImpact(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self);
 
+    // <SS:Nexii> One cut footfall window from a recording, no step loop required.
+    LLUUID playStepCut(const LLUUID& sound, const LLVector3& pos_agent, F32 gain);
+
     struct StepDebug
     {
         F64 mWhen = -1.0;

@@ -1545,7 +1545,7 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
     }
 }
 
-// One discrete footstep: pick and play at the foot.
+// One discrete footstep from a live segmented loop: gate, then cut at the foot.
 void SSSoundscape::footstepImpact(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self)
 {
     auto it = mStepLoops.find(avatar_id);
@@ -1569,27 +1569,37 @@ void SSSoundscape::footstepImpact(const LLUUID& avatar_id, const LLVector3& foot
     if (gap < 5.0) dbg.mStepGap = (F32)gap;   // the first footfall of a walk has no predecessor to measure against - mLastImpactAt is still the epoch
     it->second.mLastImpactAt = now;
 
+    static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
+
+    fadeKill(it->second.mSegSourceID);
+    it->second.mSegSourceID = playStepCut(it->second.mSound, foot_pos_agent, llclamp((F32)vol, 0.f, 1.f));
+}
+
+// One discrete footfall window cut from a recording, at the foot; no step loop required.
+LLUUID SSSoundscape::playStepCut(const LLUUID& sound, const LLVector3& pos_agent, F32 gain)
+{
+    if (!gAudiop || sound.isNull()) return LLUUID::null;
+
+    const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(sound);
+    if (!meta || meta->mOnsets.size() < 2 || meta->mLengthMS == 0) return LLUUID::null;
+
     const size_t k = (size_t)ll_rand((S32)meta->mOnsets.size() - 1);
 
     const U32 start = (meta->mOnsets[k] > 60) ? meta->mOnsets[k] - 60 : 0;
     const U32 cut = meta->mOnsets[k] + (meta->mOnsets[k + 1] - meta->mOnsets[k]) * 2 / 3;
     const F64 window_s = llclamp((F64)(cut - start) / 1000.0, 0.1, 0.9);
 
-    static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
-
-    fadeKill(it->second.mSegSourceID);
-
     const LLUUID id = LLUUID::generateNewID();
-    it->second.mSegSourceID = id;
     LLAudioSource* source = new LLAudioSource(id, gAgent.getID(),
-                                              llclamp((F32)vol, 0.f, 1.f), LLAudioEngine::AUDIO_TYPE_AMBIENT);
+                                              llclamp(gain, 0.f, 1.f), LLAudioEngine::AUDIO_TYPE_AMBIENT);
     source->setStartOffsetMS(start);
-    source->setPositionGlobal(gAgent.getPosGlobalFromAgent(foot_pos_agent));
+    source->setPositionGlobal(gAgent.getPosGlobalFromAgent(pos_agent));
     gAudiop->addAudioSource(source);
-    source->play(it->second.mSound);
+    source->play(sound);
     markStepSource(id);
 
     mSegmentStops.emplace_back(id, SSAtmoMagic::getInstance()->sharedTime() + window_s);
+    return id;
 }
 
 // Stops segment-scheduled sources at their planned end.
@@ -1612,7 +1622,24 @@ void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_a
                                  bool on_land, S32 action, bool is_self)
 {
     const LLUUID sound = footstepSound(avatar_id, pos_agent, on_land, action, is_self);
-    if (sound.isNull() || !gAudiop) return;
+    if (sound.isNull())
+    {
+        // <SS:Nexii> A touchdown is a footstep even with no Land recording configured:
+        // cut one step from the walk recording instead of going silent. The touchdown
+        // edge fires once per landing, so a two-foot soft landing sounds once; a live
+        // loop mode no-ops the impact because the restarted loop already sounds.
+        if (action == STEP_LAND)
+        {
+            footstepImpact(avatar_id, pos_agent, is_self);
+            if (mStepLoops.find(avatar_id) == mStepLoops.end())
+            {
+                static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
+                playStepCut(footstepSound(avatar_id, pos_agent, on_land, STEP_WALK, is_self),
+                            pos_agent, llclamp((F32)vol, 0.f, 1.f));
+            }
+        }
+        return;
+    }
 
     static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
 

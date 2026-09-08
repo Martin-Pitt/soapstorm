@@ -21,6 +21,12 @@
 > lineage, hand-rolled, no Jolt) for the fidelity-hungry consumers, and demotes the probe
 > oracle to the governance instrument. Column spans remain only where 0.25 m is the right
 > fidelity (rain/wet, drainage, coverage).
+>
+> **Addendum (2026-09-08, §11):** decisions from the WorldField review thread that plan the
+> next round — the band sweep is demoted to the OUTDOORS bulk authority, SHELTERED/INTERIOR
+> structure moves to census rasterization under the Recast scratch rule (cache-resident,
+> publish-and-free), and the DYNAMIC-element, door-portal and foliage-deposit classifications
+> are recorded with it.
 
 ## 1. The question and the process
 
@@ -338,3 +344,113 @@ off) — because it attacks the indoor fidelity pain directly. The probe oracle 
 the same census as the governance instrument that decides, with per-consumer numbers, which
 truth feeds which consumer (the phantom/alpha attribution and the NONE-shape fallback policy
 for sound). WALKABLE (§6 phase 3) becomes capsule casts against the same census.
+
+## 11. Addendum (2026-09-08): the capture-role split and the classification rules
+
+Recorded from the WorldField review thread so the next planning round starts from the
+decisions, not the transcript. Amends §6 phase 3 and §10 item 2 where noted; the competition
+evidence stands.
+
+**Decided: the render band sweep is the OUTDOORS authority and nothing more.** The sweep stays
+as the bulk first pass — it is the cheapest possible measurement of "what the sky sees" (a
+handful of ortho passes per tile against bulk raycasts) and its answer is authoritative:
+`SURFACE_TOP`'s landing surface and the sky-open column seeds the flood starts from. It is
+structurally blind beneath its own answer, and that is its contract, not something to iterate
+on. Evidence on record: the band/bisection pipeline missed detailed indoor environments
+entirely (debug-verified), and the binary-search (Z-bisection) iteration regressed before it
+improved — consistent with §10's quantization analysis: a depth-pass capture never hands over
+indoor bodies exactly, and no search schedule fixes a sampling-pipeline ceiling. The band
+store as a *vertical structure producer* is dropped; the sweep keeps its shipped scratch
+economics.
+
+**Decided: SHELTERED and INTERIOR structure comes from census rasterization (the navmesh
+model).** Recast's lesson, now the plan: fast in-CPU voxelization of the declared-shape census
+(§7.1's snapshot, layers and provenance) produces the solid spans beneath the sweep's landing
+surface; the flood classifies the merged air graph with the porch budget unchanged, seeded by
+the sweep's outdoors cells. Amendment to §6 phase 3: the flood's structure no longer waits on
+render peels seeing indoors — it reads sweep-outdoors + census-spans. Planning target; §7's
+consumer-invariant gates still apply to anything the census feeds.
+
+**Decided: the Recast scratch rule (the L1/L2 rule).** All rasterized span work is ephemeral:
+per tile, compact cell+span layout, publish derived output (spans into the store, wall/soffit/
+lip geometry, labels), free the scratch. Nothing fine persists; the persistent set is the span
+store, the derived artifacts, and the lattice state — which survives rebuilds by being keyed
+to the region lattice, never to tile geometry. Tile extent is the parameter that buys cache
+residency (a 32 m tile at 0.25 m is ~128×128 columns — a few hundred KB of scratch; Recast
+tiles are sized for exactly this). Economics note: Recast can afford ephemeral rasterization
+because re-iterating CPU triangles is near-free — true of the census, not of a GPU ortho pass
+with readback — so GPU passes remain bulk-only.
+
+**Decided (amendment, same day): the census raster tiles in 3D, not 2D-with-columns.** SL
+builds are vertically complex user-generated content — stacked towers, skyboxes, underground
+clubs, bridges over bridges — and a 2D tile whose vertical axis is a per-column span collapse
+is exactly the representation §10 rejected (span quantization eats storeys, slab thresholds
+merge floors). Recast's own answer to this case is layers-within-tile (`dtTileCache`); the
+cleaner generalization for a world with a 0–4096 m build range is to make **Z a tiling
+dimension**: the tile is a 32×32×32 m voxel block (128³ cells at 0.25 m, ~2 MB of solid/empty
+scratch — still cache-resident, still publish-and-free), sparse-hashed by tile key so a
+skybox's tiles exist wherever declared geometry exists and cost nothing where it doesn't. The
+scratch is free to keep per-voxel detail for geometry extraction before publishing; the
+published bulk forms stay spans-per-column *within the tile* plus per-tile labels. Consequences
+recorded with the decision: the render sweep's ground-anchored band model and its `MAX_BANDS`/
+ceiling bind only the sweep (which §11 keeps as the outdoors authority with its shipped
+economics) — census tiles go wherever declared geometry is, unbounded upward; the flood and
+the WALKABLE/navmesh bake run over a 3D tile adjacency graph (26-neighbourhood), which is what
+makes multi-storey interiors label and route correctly without special cases; the §11
+sweep-schedules-the-raster rule extends vertically (a 3D tile with no census candidates costs
+no raster — the bucket grid proves emptiness before any voxelization); and the region lattice
+that survives rebuilds is keyed by 3D tile key, never tile geometry.
+
+**Decided: the sweep schedules the census raster.** A column whose landing surface sits above
+terrain past the grade-vs-structure threshold is a column with structure worth rasterizing;
+open-field columns cost no census raster. Interest refcounts plus the existing dirty machinery
+order the tiles.
+
+**Decided: the landing-surface agreement gate.** Three sources answer "where does a drop
+land": the sweep (sky-visible tops — authoritative), the census raster (everything beneath —
+authoritative), and raycasts (non-physical cover neither source sees). They merge once, at the
+`buildSurfaceGrid` gate; no consumer re-merges or re-prioritises.
+
+**Decided: dynamic elements are classified at census time and never cause geometry edits.**
+The recorded failures this closes: P3 (a jittering physical stack at 50 footprint swaps/s
+starves the serial) and P11 as shipped (per-move serial bumps; history-dependent output). The
+rule: the static span store admits only objects at rest across the census's settle window
+(`settleEdits`' debounce); an object whose transform changed between consecutive census
+snapshots is classified DYNAMIC — excluded from the store, so its motion never bumps
+`mGeomSerial` (§4.1: serial is the currency). Its cover, occlusion and walkability effects are
+resolved at query time against the live census (bucket-grid segment casts, the
+`SSWorldFieldShapes` contract) — read-time, never history, the P11 harvest. Hysteresis is
+mandatory: DYNAMIC until at rest for a cooldown, re-admitted on a debounced dirty; a jittering
+stack never re-enters. Avatars and temp-attachments are DYNAMIC unconditionally. A dynamic
+gate's walkability is a query-time gate check, not a re-bake.
+
+**Decided: doors are a classifier over geometric apertures; the name buys walkability.** The
+flood already finds apertures geometrically (the porch clustering; the acoustic graph's portal
+flags). The platform's de-facto authoring convention — a door prim's name contains "door"
+(case-insensitive, per-linkset-member) — classifies an aperture's filler: door-named →
+walkable portal; open aperture → walkable; anything else (window, rail, hole cover) → acoustic
+portal only. Door slabs are portal-transparent in the air topology: the flood reads every
+doorway as open, so connectivity never flips on door state, while `traceSolid`/tier-B
+occlusion still counts the slab and live checks read the door's current rotation. A static
+closed door must therefore stay solid for occlusion yet open for connectivity — portal
+transparency is a flood-input rule, not an omission from the store. This is also what makes
+WALKABLE (Part 3 of `doc/atmo_magic_worldfield.md`) a derived view rather than a second
+system: walkable spans + door portals + the flood graph = the navmesh, falling out of the
+store. Portal misclassifications get a debug overlay entry (the acoustic debug's portal view
+already draws half of this).
+
+**Decided: foliage wears an untracked thin-deposit tier.** The rain-shadow/census miss on
+non-physical canopy is accepted for water (a bush holds no puddle) and answered for deposit
+looks: snow/frost/wet on foliage is a pure function of current weather + rain-shadow exposure
+at the object's position, rendered with the existing `SSSurfaceState` look constants, depth
+clamped to a shallow fraction of `depthFull`. No per-cell storage, no ledger, no state
+machine — deterministic and free by construction. Classification: phantom/non-physical and
+small, with a name convention as an author override; the ground under a canopy stays bare by
+the existing exposure answer, so the tiers cannot fight over one cell.
+
+**Planning items this leaves (next round):** census rasterization in 3D tiles (32³ m voxel
+blocks, sparse-hashed) publishing beneath-surface spans and per-tile labels under the scratch
+rule; the DYNAMIC bit and hysteresis in the census (shipped in `ssworldfieldshapes`); the 3D
+tile adjacency graph for the flood; portal-transparent door handling in flood + `traceSolid`;
+the WALKABLE/door-portal bake over 3D tiles; the foliage tier in surface weather; the
+`buildSurfaceGrid` merge gate.
