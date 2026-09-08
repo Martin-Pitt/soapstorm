@@ -40,6 +40,7 @@
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
+#include "llvolumemgr.h"
 #include "llvovolume.h"
 #include "llworld.h"
 
@@ -86,7 +87,7 @@ static LLQuaternion ss_world_rotation(const LLViewerObject* vobj)
     const LLViewerObject* cur = vobj;
     while (cur->getParent())
     {
-        cur = cur->getParent();
+        cur = (const LLViewerObject*)cur->getParent();
         rot = cur->getRotation() * rot;
     }
     return rot;
@@ -264,7 +265,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     const LLQuaternion rot = ss_world_rotation(vov);
     const LLVector3 scale = vov->getScale();
     LLViewerObject* rootp = vov;
-    while (rootp->getParent()) rootp = rootp->getParent();
+    while (rootp->getParent()) rootp = (LLViewerObject*)rootp->getParent();
     const bool phantom = rootp->flagPhantom();
     const U8 layer = phantom ? (U8)LAYER_DECLARED_PHANTOM : (U8)LAYER_DECLARED;
 
@@ -741,7 +742,9 @@ bool SSWorldFieldShapes::castRecord(const Record& rec, const LLVector3& a, const
                         if (t < t_min || t > t_max) continue;
                         const F32 z = e2 + t * d2;
                         if (fabsf(z) > h) continue;
-                        out_n = (rec.mAxisU * (e0 + t * d0) + rec.mAxisV * (e1 + t * d1)).normVec();
+                        LLVector3 n = rec.mAxisU * (e0 + t * d0) + rec.mAxisV * (e1 + t * d1);
+                        n.normVec();
+                        out_n = n;
                         out_t = t;
                         return true;
                     }
@@ -900,19 +903,72 @@ void SSWorldFieldShapes::renderDebug()
 
         const LLVector3& mn = rec.mBMin;
         const LLVector3& mx = rec.mBMax;
-        gGL.vertex3fv(mn.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
-        gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
-        gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]);
-        gGL.vertex3fv(mx.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
-        gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
-        gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]);
-        gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
-        gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
-        gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
-        gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mx.mV[VZ]);
-        gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
-        gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
-        gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+
+        if (rec.mClass == Record::CLASS_BOX)
+        {
+            // The true oriented frame - the AABB alone would read as zero rotation.
+            const LLVector3 hx = rec.mAxes[0] * rec.mHalf.mV[VX];
+            const LLVector3 hy = rec.mAxes[1] * rec.mHalf.mV[VY];
+            const LLVector3 hz = rec.mAxes[2] * rec.mHalf.mV[VZ];
+            const LLVector3 p[8] = {
+                rec.mCenter - hx - hy - hz, rec.mCenter + hx - hy - hz,
+                rec.mCenter + hx + hy - hz, rec.mCenter - hx + hy - hz,
+                rec.mCenter - hx - hy + hz, rec.mCenter + hx - hy + hz,
+                rec.mCenter + hx + hy + hz, rec.mCenter - hx + hy + hz,
+            };
+            static const S32 edges[12][2] = {
+                {0, 1}, {1, 2}, {2, 3}, {3, 0}, {4, 5}, {5, 6},
+                {6, 7}, {7, 4}, {0, 4}, {1, 5}, {2, 6}, {3, 7},
+            };
+            for (S32 e = 0; e < 12; ++e)
+            {
+                gGL.vertex3fv(p[edges[e][0]].mV);
+                gGL.vertex3fv(p[edges[e][1]].mV);
+            }
+        }
+        else if (rec.mClass == Record::CLASS_CYLINDER)
+        {
+            // Axis frame: two cap rings and one cross spoke.
+            const LLVector3 ax = rec.mAxes[2] * rec.mHalfHeight;
+            const LLVector3 c0 = rec.mCenter - ax;
+            const LLVector3 c1 = rec.mCenter + ax;
+            LLVector3 prev0, prev1;
+            for (S32 k = 0; k <= 8; ++k)
+            {
+                const F32 ang = (F32)k * (F_TWO_PI / 8.f);
+                const LLVector3 off = (rec.mAxisU * cosf(ang) + rec.mAxisV * sinf(ang)) * rec.mRadius;
+                const LLVector3 q0 = c0 + off;
+                const LLVector3 q1 = c1 + off;
+                if (k > 0)
+                {
+                    gGL.vertex3fv(prev0.mV); gGL.vertex3fv(q0.mV);
+                    gGL.vertex3fv(prev1.mV); gGL.vertex3fv(q1.mV);
+                    if (k == 4)
+                    {
+                        gGL.vertex3fv(q0.mV); gGL.vertex3fv(q1.mV);
+                    }
+                }
+                prev0 = q0;
+                prev1 = q1;
+            }
+        }
+        else
+        {
+            // Spheres and triangle soups stay on their AABB bounds.
+            gGL.vertex3fv(mn.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
+            gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
+            gGL.vertex3fv(mn.mV); gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]);
+            gGL.vertex3fv(mx.mV); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
+            gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+            gGL.vertex3fv(mx.mV); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]);
+            gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
+            gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mx.mV[VZ]);
+            gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+            gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mx.mV[VY], mx.mV[VZ]);
+            gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mn.mV[VX], mx.mV[VY], mn.mV[VZ]);
+            gGL.vertex3f(mx.mV[VX], mx.mV[VY], mn.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mn.mV[VZ]);
+            gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
+        }
     }
 
     gGL.end();
