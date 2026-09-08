@@ -718,6 +718,8 @@ default
                     }
                 }
                 while(notecard);
+                
+                return;
             }
 
             else if (cmd == "RelockMoveLockAfterMovement")
@@ -754,6 +756,8 @@ default
                 // If bridge doesn't receive "URL Confirmed" message as a reply to handshake it'll automatically detach after next region change anyway
                 detachBridge();
             }
+
+            else if (cmd == "GetTrackedAgents") return;
 
             // Acknowledgment of receipt for all commands, which are not sending back HTTP response for FSLSLBridgeRequestResponder
             llHTTPResponse(httpReqID, 200, "<llsd><string>ok</string></llsd>");
