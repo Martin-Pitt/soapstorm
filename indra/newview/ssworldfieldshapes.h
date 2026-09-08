@@ -166,7 +166,7 @@ private:
     void addRecord(Record& rec);
     bool castRecord(const Record& rec, const LLVector3& a, const LLVector3& dirn,
                     F32 t_min, F32 t_max, F32& out_t, LLVector3& out_n) const;
-    bool castTerrain(const LLVector3& a, const LLVector3& b, LLViewerRegion* regionp,
+    bool castTerrain(const LLVector3& a, const LLVector3& b,
                      F32& out_t, LLVector3& out_normal) const;
 
     Census mCensus;

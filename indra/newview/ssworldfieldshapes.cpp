@@ -37,6 +37,7 @@
 #include "llsurface.h"
 #include "lltimer.h"
 #include "llvector4a.h"
+#include "llvolumemgr.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
@@ -90,13 +91,18 @@ static void ss_debug_aabb(const LLVector3& mn, const LLVector3& mx)
     gGL.vertex3f(mn.mV[VX], mn.mV[VY], mx.mV[VZ]); gGL.vertex3f(mx.mV[VX], mn.mV[VY], mx.mV[VZ]);
 }
 
-// Terrain height under an agent-space point, clamped into the region.
-static F32 ss_terrain_z(LLViewerRegion* regionp, const LLVector3& pos_agent)
+// Terrain height under an agent-space point: the heightfield of whichever
+// region contains the sample - neighbor terrain included, so surrounds and
+// border-crossing casts see the real land. Void (between regions) has none.
+static bool ss_terrain_z(const LLVector3& pos_agent, F32& out_z)
 {
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    if (!regionp) return false;
     LLVector3 region_pos = regionp->getPosRegionFromAgent(pos_agent);
     region_pos.mV[VX] = llclamp(region_pos.mV[VX], 0.f, 255.9f);
     region_pos.mV[VY] = llclamp(region_pos.mV[VY], 0.f, 255.9f);
-    return regionp->getLand().resolveHeightRegion(region_pos.mV[VX], region_pos.mV[VY]);
+    out_z = regionp->getLand().resolveHeightRegion(region_pos.mV[VX], region_pos.mV[VY]);
+    return true;
 }
 
 // Volume-space vertex to a plain vector.
@@ -290,7 +296,10 @@ void SSWorldFieldShapes::buildCensus(LLViewerRegion* regionp)
     {
         LLViewerObject* vobj = gObjectList.getObject(i);
         if (!vobj || vobj->isDead() || vobj->isOrphaned()) continue;
-        if (vobj->getRegion() != regionp) continue;
+        // No region filter: the envelope is world-space and owns the census.
+        // Neighbor-region parts and border-straddling geometry belong here -
+        // sim surrounds and landscape assets are exactly the structure the
+        // region-anchored sweep can never see.
         if (vobj->isAvatar() || vobj->isAttachment()) continue;
         const U32 pcode = vobj->getPCode();
         if (pcode == LLViewerObject::LL_VO_WATER || pcode == LLViewerObject::LL_VO_VOID_WATER) continue;
@@ -302,7 +311,9 @@ void SSWorldFieldShapes::buildCensus(LLViewerRegion* regionp)
 
         const LLVector3 pos = vov->getPositionAgent();
         const LLVector3 scale = vov->getScale();
-        const F32 approx = 0.5f * llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) + 1.f;
+        // Half-diagonal reach: a rotated or huge part (a 1 km surround mesh
+        // centred well outside the envelope) must still test against it.
+        const F32 approx = 0.5f * scale.magVec() + 1.f;
         if ((pos - mCensus.mAnchor).magVec() - approx > env) continue;
 
         addPart(vov);
@@ -455,6 +466,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 
     // Prim: closed form for the three implicit specs, physics-detail geometry
     // for everything cut, hollow, twisted or otherwise non-implicit.
+    const U8 prov_base = geometry_only ? (U8)PROV_RENDER : (U8)PROV_EXACT;
     LLPhysicsVolumeParams phys_params(params, ptype == LLViewerObject::PHYSICS_SHAPE_CONVEX_HULL);
     LLPhysicsShapeBuilderUtil::PhysicsShapeSpecification spec;
     LLPhysicsShapeBuilderUtil::determinePhysicsShape(phys_params, scale, false, spec);
@@ -669,9 +681,20 @@ bool SSWorldFieldShapes::segmentCast(const LLVector3& a, const LLVector3& b, Seg
     if (!enabled) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(a);
+    if (!regionp && mCensus.mRegionHandle)
+    {
+        // A cast from over the void still reads the resident census - the
+        // envelope is world-space; the context region only anchors rebuilds.
+        regionp = LLWorld::getInstance()->getRegionFromHandle(mCensus.mRegionHandle);
+    }
     if (!regionp) return false;
     if (needsRebuild(regionp)) buildCensus(regionp);
-    if (mCensus.mRegionHandle != regionp->getHandle()) return false;
+    if (mCensus.mRegionHandle != regionp->getHandle())
+    {
+        static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
+        const F32 env = llclamp((F32)range, 32.f, 1024.f);
+        if ((a - mCensus.mAnchor).magVec() > env) return false;
+    }
 
     const LLVector3 dir = b - a;
     const F32 len = dir.magVec();
@@ -686,7 +709,7 @@ bool SSWorldFieldShapes::segmentCast(const LLVector3& a, const LLVector3& b, Seg
 
     F32 terr_t = 0.f;
     LLVector3 terr_n;
-    if (castTerrain(a, b, regionp, terr_t, terr_n))
+    if (castTerrain(a, b, terr_t, terr_n))
     {
         best_t = terr_t;
         best_n = terr_n;
@@ -901,9 +924,10 @@ bool SSWorldFieldShapes::castRecord(const Record& rec, const LLVector3& a, const
     return false;
 }
 
-// Heightfield march: 4 m samples, sign flip, 10 bisection refinements; the
-// normal from finite differences of the same heightfield.
-bool SSWorldFieldShapes::castTerrain(const LLVector3& a, const LLVector3& b, LLViewerRegion* regionp,
+// Heightfield march: 4 m samples resolved per sample against whichever region
+// contains the point - neighbor terrain included, void counts as no ground -
+// sign flip, 10 bisection refinements; the normal from finite differences.
+bool SSWorldFieldShapes::castTerrain(const LLVector3& a, const LLVector3& b,
                                      F32& out_t, LLVector3& out_normal) const
 {
     const LLVector3 d = b - a;
@@ -912,39 +936,63 @@ bool SSWorldFieldShapes::castTerrain(const LLVector3& a, const LLVector3& b, LLV
 
     const S32 steps = llmin(SS_SHAPES_TERRAIN_SAMPLES, (S32)(len / SS_SHAPES_TERRAIN_STEP_M) + 1);
     F32 prev_t = 0.f;
-    F32 prev_dz = a.mV[VZ] - ss_terrain_z(regionp, a);
-    if (prev_dz <= 0.f)
+    F32 z = 0.f;
+    bool have_prev = false;
+    if (ss_terrain_z(a, z))
     {
-        out_t = 0.f;
-        out_normal.setVec(0.f, 0.f, 1.f);
-        return true;
+        if (a.mV[VZ] - z <= 0.f)
+        {
+            out_t = 0.f;
+            out_normal.setVec(0.f, 0.f, 1.f);
+            return true;
+        }
+        have_prev = true;
     }
 
     for (S32 i = 1; i <= steps; ++i)
     {
         const F32 t = (F32)i / (F32)steps;
         const LLVector3 p = a + d * t;
-        const F32 dz = p.mV[VZ] - ss_terrain_z(regionp, p);
+        F32 land;
+        if (!ss_terrain_z(p, land))
+        {
+            // Over void: no ground, the crossing hunt restarts at the next sample.
+            have_prev = false;
+            prev_t = t;
+            continue;
+        }
+        const F32 dz = p.mV[VZ] - land;
         if (dz <= 0.f)
         {
-            F32 lo = prev_t, hi = t;
+            F32 lo = have_prev ? prev_t : t;
+            F32 hi = t;
             for (S32 k = 0; k < 10; ++k)
             {
                 const F32 mid = 0.5f * (lo + hi);
                 const LLVector3 pm = a + d * mid;
-                if (pm.mV[VZ] - ss_terrain_z(regionp, pm) > 0.f) lo = mid; else hi = mid;
+                F32 mz;
+                if (!ss_terrain_z(pm, mz) || pm.mV[VZ] - mz > 0.f) lo = mid; else hi = mid;
             }
             out_t = 0.5f * (lo + hi);
 
             const LLVector3 ph = a + d * out_t;
-            const F32 hx0 = ss_terrain_z(regionp, ph + LLVector3(1.f, 0.f, 0.f));
-            const F32 hx1 = ss_terrain_z(regionp, ph + LLVector3(-1.f, 0.f, 0.f));
-            const F32 hy0 = ss_terrain_z(regionp, ph + LLVector3(0.f, 1.f, 0.f));
-            const F32 hy1 = ss_terrain_z(regionp, ph + LLVector3(0.f, -1.f, 0.f));
-            out_normal.setVec(-(hx0 - hx1), -(hy0 - hy1), 2.f);
-            out_normal.normVec();
+            F32 hx0, hx1, hy0, hy1;
+            const bool ok = ss_terrain_z(ph + LLVector3(1.f, 0.f, 0.f), hx0)
+                         && ss_terrain_z(ph + LLVector3(-1.f, 0.f, 0.f), hx1)
+                         && ss_terrain_z(ph + LLVector3(0.f, 1.f, 0.f), hy0)
+                         && ss_terrain_z(ph + LLVector3(0.f, -1.f, 0.f), hy1);
+            if (ok)
+            {
+                out_normal.setVec(-(hx0 - hx1), -(hy0 - hy1), 2.f);
+                out_normal.normVec();
+            }
+            else
+            {
+                out_normal.setVec(0.f, 0.f, 1.f);
+            }
             return true;
         }
+        have_prev = true;
         prev_t = t;
     }
     return false;

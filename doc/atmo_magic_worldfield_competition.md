@@ -401,6 +401,18 @@ sweep-schedules-the-raster rule extends vertically (a 3D tile with no census can
 no raster — the bucket grid proves emptiness before any voxelization); and the region lattice
 that survives rebuilds is keyed by 3D tile key, never tile geometry.
 
+**Decided (amendment, same day): the census envelope extends across region borders — sim
+surrounds and landscape assets are census structure.** The region-anchored sweep cannot see
+past its own region's frustum, and §2's unowned failure (the border-straddling bridge casting
+no shadow in its neighbour) is closed by making the census world-space: the record scan carries
+no region filter (envelope intersection is the only admission test, with a half-diagonal reach
+so kilometre-scale surround meshes centred far outside still qualify), queries serve from the
+resident envelope regardless of which region the cast starts in, and terrain samples resolve
+per sample against whichever region contains them — neighbour land included, void counting as
+no ground. The context region only anchors rebuilds and terrain fallback; census-sourced
+structure beyond the border is exactly the class the sweep can never answer, so surrounds ride
+the census raster and its 3D tile lattice, which are already world-keyed.
+
 **Decided: the sweep schedules the census raster.** A column whose landing surface sits above
 terrain past the grade-vs-structure threshold is a column with structure worth rasterizing;
 open-field columns cost no census raster. Interest refcounts plus the existing dirty machinery
