@@ -13,23 +13,30 @@
 # the build falls back to the portable C++ block backend with no loss of correctness - only of
 # encode speed. Nothing here is required to build the viewer.
 
-set(SS_ISPC_EXECUTABLE "" CACHE FILEPATH "Path to ispc.exe. Leave empty to use the portable C++ BC7 backend.")
+if(NOT SS_ISPC_EXECUTABLE)
+  unset(SS_ISPC_EXECUTABLE CACHE)
+  find_program(SS_ISPC_EXECUTABLE
+    NAMES ispc ispc.exe
+    HINTS
+      "$ENV{ISPC_DIR}/bin"
+      "$ENV{ISPC_DIR}"
+      "$ENV{LOCALAPPDATA}/Programs/ispc/bin"
+      "C:/tools/ispc/bin"
+      "C:/Program Files/ISPC/bin"
+    DOC "Path to ispc.exe. Leave empty to use the portable C++ BC7 backend."
+  )
+endif()
 
-# Instruction sets to generate. The dispatch object picks the best one the running CPU supports,
-# so a build made on an AVX2 machine still runs on an SSE4 one.
-#
-# SSE2 is in the list as a floor rather than for speed. The default x64 viewer build sets no /arch
-# flag at all (indra/cmake/00-Common.cmake:134, "x64 implies SSE2"), so SSE2 is the only instruction
-# set the viewer itself actually guarantees. If the running CPU matched none of the generated
-# targets the ISPC dispatcher would abort - a hard crash, in a feature whose entire failure story is
-# meant to be a silent fall back to uncompressed textures. One extra object is a cheap price for
-# that not being possible.
-#
-# Suffix note for anyone editing this: the object names ispc emits are derived below by stripping
-# everything from the first dash, which is correct for these three (sse2, sse4, avx2). Newer ispc
-# spells some targets "sse4.1-i32x4", which would derive "sse4.1" while the emitted object is
-# "_sse41" - so check the emitted names if you change this list.
-set(SS_ISPC_TARGETS "sse2-i32x4,sse4-i32x4,avx2-i32x8" CACHE STRING "ISPC target ISAs, comma separated")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64" OR (DARWIN AND NOT CMAKE_OSX_ARCHITECTURES MATCHES "x86_64"))
+  set(_default_arch "aarch64")
+  set(_default_targets "neon-i32x4")
+else()
+  set(_default_arch "x86-64")
+  set(_default_targets "sse2-i32x4,sse4-i32x4,avx2-i32x8")
+endif()
+
+set(SS_ISPC_ARCH "${_default_arch}" CACHE STRING "ISPC target architecture (x86-64 or aarch64)")
+set(SS_ISPC_TARGETS "${_default_targets}" CACHE STRING "ISPC target ISAs, comma separated")
 
 if(SS_ISPC_EXECUTABLE AND EXISTS "${SS_ISPC_EXECUTABLE}")
   set(SS_ISPC_FOUND TRUE)
@@ -39,10 +46,10 @@ endif()
 
 # ss_add_ispc_sources(<out_objects_var> <out_include_dir_var> <ispc file> [more ispc files...])
 #
-# Compiles each .ispc into a dispatch object plus one object per target ISA, and generates the
-# C++ header that declares the exported functions. Appends every produced object to
-# <out_objects_var> so the caller can add them straight to a target's sources - MSVC and the
-# other generators accept .obj files in a source list.
+# Compiles each .ispc into a dispatch object plus one object per target ISA (or a single object
+# when targeting a single ISA like NEON), and generates the C++ header that declares the exported
+# functions. Appends every produced object to <out_objects_var> so the caller can add them straight
+# to a target's sources - MSVC and the other generators accept .obj files in a source list.
 function(ss_add_ispc_sources out_objects out_include_dir)
   if(NOT SS_ISPC_FOUND)
     message(STATUS "ISPC not configured; Squeeze will use the portable C++ BC7 backend")
@@ -57,6 +64,7 @@ function(ss_add_ispc_sources out_objects out_include_dir)
   # Turn "sse4-i32x4,avx2-i32x8" into the object-name suffixes ispc actually emits, which are
   # the ISA part only: sse4, avx2.
   string(REPLACE "," ";" _target_list "${SS_ISPC_TARGETS}")
+  list(LENGTH _target_list _target_count)
   set(_suffixes "")
   foreach(_t IN LISTS _target_list)
     string(REGEX REPLACE "-.*$" "" _isa "${_t}")
@@ -73,9 +81,13 @@ function(ss_add_ispc_sources out_objects out_include_dir)
     set(_dispatch_obj "${_gen_dir}/${_name}${CMAKE_C_OUTPUT_EXTENSION}")
 
     set(_outputs "${_dispatch_obj}" "${_header}")
-    foreach(_sfx IN LISTS _suffixes)
-      list(APPEND _outputs "${_gen_dir}/${_name}_${_sfx}${CMAKE_C_OUTPUT_EXTENSION}")
-    endforeach()
+    # When multiple targets are specified, ISPC emits one object per target ISA suffix plus the dispatch object.
+    # When only a single target is specified (e.g. neon on ARM64), ISPC emits only the main object without suffixes.
+    if(_target_count GREATER 1)
+      foreach(_sfx IN LISTS _suffixes)
+        list(APPEND _outputs "${_gen_dir}/${_name}_${_sfx}${CMAKE_C_OUTPUT_EXTENSION}")
+      endforeach()
+    endif()
 
     add_custom_command(
       OUTPUT ${_outputs}
@@ -84,13 +96,13 @@ function(ss_add_ispc_sources out_objects out_include_dir)
               -o "${_dispatch_obj}"
               -h "${_header}"
               --target=${SS_ISPC_TARGETS}
-              --arch=x86-64
+              --arch=${SS_ISPC_ARCH}
               --opt=fast-math
               --opt=disable-assertions
               -O2
               --pic
       DEPENDS "${_abs}"
-      COMMENT "ISPC ${_name}.ispc -> ${SS_ISPC_TARGETS}"
+      COMMENT "ISPC ${_name}.ispc -> ${SS_ISPC_TARGETS} (${SS_ISPC_ARCH})"
       VERBATIM)
 
     foreach(_o IN LISTS _outputs)
