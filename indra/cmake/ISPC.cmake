@@ -91,11 +91,6 @@ function(ss_add_ispc_sources out_objects out_include_dir)
 
       set(_outputs "${_dispatch_obj}" "${_header}")
 
-      set(_ld_min_os "")
-      if(CMAKE_OSX_DEPLOYMENT_TARGET)
-        set(_ld_min_os "-macosx_version_min" "${CMAKE_OSX_DEPLOYMENT_TARGET}")
-      endif()
-
       add_custom_command(
         OUTPUT ${_outputs}
         COMMAND "${SS_ISPC_EXECUTABLE}"
@@ -117,7 +112,7 @@ function(ss_add_ispc_sources out_objects out_include_dir)
                 --opt=disable-assertions
                 -O2
                 --pic
-        COMMAND ld -r -arch x86_64 ${_ld_min_os} -o "${_x86_combined}" "${_x86_obj}" "${_x86_sse2}" "${_x86_sse4}" "${_x86_avx2}"
+        COMMAND ld -r -arch x86_64 -o "${_x86_combined}" "${_x86_obj}" "${_x86_sse2}" "${_x86_sse4}" "${_x86_avx2}"
         COMMAND lipo -create "${_arm_obj}" "${_x86_combined}" -output "${_dispatch_obj}"
         DEPENDS "${_abs}"
         COMMENT "ISPC universal: ${_name}.ispc -> arm64 (neon) + x86_64 (sse2,sse4,avx2)"
