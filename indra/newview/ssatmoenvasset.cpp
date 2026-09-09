@@ -1578,10 +1578,10 @@ LLSD SSAtmoEnvLandscapeFace::asLLSD() const
         sd["rotation"] = (LLSD::Real)mRotation;
     }
     sd["color"] = LLSD::emptyArray();
-    sd["color"].append((LLSD::Real)mColor.mV[VR]);
-    sd["color"].append((LLSD::Real)mColor.mV[VG]);
-    sd["color"].append((LLSD::Real)mColor.mV[VB]);
-    sd["color"].append((LLSD::Real)mColor.mV[VA]);
+    sd["color"].append((LLSD::Real)mColor.mV[VRED]);
+    sd["color"].append((LLSD::Real)mColor.mV[VGREEN]);
+    sd["color"].append((LLSD::Real)mColor.mV[VBLUE]);
+    sd["color"].append((LLSD::Real)mColor.mV[VALPHA]);
     if (mAlphaMode != 0)
     {
         sd["alpha_mode"] = (LLSD::Integer)mAlphaMode;

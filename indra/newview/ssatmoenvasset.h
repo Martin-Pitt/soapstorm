@@ -32,8 +32,8 @@
 // per-face colour and repeats.
 #include "m3math.h"
 #include "v3dmath.h"
-#include "llcolor4.h"
-#include "llvector4.h"
+#include "v4color.h"
+#include "v4math.h"
 // </SS:Nexii>
 
 #include <cfloat>

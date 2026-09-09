@@ -25,6 +25,9 @@
 
 #include "ssatmolandscape.h"
 
+#include "llagent.h"
+#include "llagentdata.h"
+#include "llviewercontrol.h"
 #include "llviewerinventory.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
@@ -561,7 +564,7 @@ S32 SSAtmoLandscapeWorld::addFromItem(const LLInventoryItem* item, std::string& 
     // and headline-first. The editor moves it from there like any object.
     if (gAgent.getRegion())
     {
-        record.mLockedOffset = gAgent.getPositionRegion();
+        record.mLockedOffset = gAgent.getPositionAgent();
         record.mLockedOffset.mV[VZ] += 8.f;
         record.mFreeGlobal = gAgent.getPositionGlobal();
         record.mFreeGlobal.mdV[VZ] += 8.0;

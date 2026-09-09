@@ -65,8 +65,8 @@ namespace
             && near_v3(LLVector3(a.mRepeats.mV[VX], a.mRepeats.mV[VY], a.mRepeats.mV[VZ]), LLVector3(b.mRepeats.mV[VX], b.mRepeats.mV[VY], b.mRepeats.mV[VZ]))
             && llabs(a.mRepeats.mV[VW] - b.mRepeats.mV[VW]) < 1e-4f
             && llabs(a.mRotation - b.mRotation) < 1e-4f
-            && near_v3(LLVector3(a.mColor.mV[VR], a.mColor.mV[VG], a.mColor.mV[VB]), LLVector3(b.mColor.mV[VR], b.mColor.mV[VG], b.mColor.mV[VB]))
-            && llabs(a.mColor.mV[VA] - b.mColor.mV[VA]) < 1e-4f;
+            && near_v3(LLVector3(a.mColor.mV[VRED], a.mColor.mV[VGREEN], a.mColor.mV[VBLUE]), LLVector3(b.mColor.mV[VRED], b.mColor.mV[VGREEN], b.mColor.mV[VBLUE]))
+            && llabs(a.mColor.mV[VALPHA] - b.mColor.mV[VALPHA]) < 1e-4f;
     }
 }
 
@@ -80,13 +80,15 @@ SSAtmoLandscapeObject::SSAtmoLandscapeObject(const LLUUID& id, LLViewerRegion* r
     // (permMove/permModify/permCopy/permYouOwner). A local object's permissions come from
     // the author's captured item metadata rather than a sim, and authoring the scenery the
     // author dropped is always allowed - so the object carries full perms in its flags.
-    mFlags |= FLAGS_OBJECT_YOU_OWNER
+    // WithoutUpdate: the flags exist only for local permission checks and there is no sim
+    // to tell.
+    setFlagsWithoutUpdate(FLAGS_OBJECT_YOU_OWNER
         | FLAGS_OBJECT_MODIFY
         | FLAGS_OBJECT_COPY
         | FLAGS_OBJECT_MOVE
         | FLAGS_OBJECT_TRANSFER
         | FLAGS_OBJECT_ANY_OWNER
-        | FLAGS_OBJECT_OWNER_MODIFY;
+        | FLAGS_OBJECT_OWNER_MODIFY, true);
 
     applyRecord(record);
 }
@@ -125,7 +127,7 @@ void SSAtmoLandscapeObject::applyPlacement(const SSAtmoEnvLandscape& record)
         setPositionGlobal(record.mFreeGlobal);
     }
     setRotation(record.mRotation);
-    setScale(record.mScale);
+    setScale(record.mScale, false);
 }
 
 void SSAtmoLandscapeObject::applyFaces()
