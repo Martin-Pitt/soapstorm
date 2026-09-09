@@ -142,6 +142,7 @@
 #include "llspellcheck.h"
 #include "llscenemonitor.h"
 #include "llavatarrenderinfoaccountant.h"
+#include "sscombatlog.h" // <SS:Nexii> Combat Log store tick
 #include "lllocalbitmaps.h"
 #include "llperfstats.h"
 #include "llgltfmateriallist.h"
@@ -6435,6 +6436,13 @@ void LLAppViewer::idle()
 
     // Update AV render info
     LLAvatarRenderInfoAccountant::getInstance()->idle();
+
+    // <SS:Nexii> Combat Log: playback cursor, synthetic replay and retention; instanceExists() keeps the store unbuilt until the floater or the debug menu asks for it. [interaction: CombatLog]
+    if (SSCombatLog::instanceExists())
+    {
+        SSCombatLog::instance().idle(LLFrameTimer::getElapsedSeconds());
+    }
+    // </SS:Nexii>
 
     {
         LL_PROFILE_ZONE_NAMED_CATEGORY_APP("audio update"); //LL_RECORD_BLOCK_TIME(FTM_AUDIO_UPDATE);

@@ -28652,6 +28652,259 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>SSCombatLogEnabled</key>
+      <map>
+      <key>Comment</key>
+      <string>Record the Combat 2.0 combat log and combatant movement region-wide through the LSL bridge for the Combat Log tool (Combat > Combat Log)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogOverlay</key>
+      <map>
+      <key>Comment</key>
+      <string>Draw the Combat Log in-world overlay while the Combat Log floater is open and you are stationary and alt-camming</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>1</integer>
+    </map>
+    <key>SSCombatLogOverlayXray</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log overlay: draw lines through world geometry instead of showing occlusion</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogTrailSeconds</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log overlay: seconds of combatant trail drawn behind the cursor</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>20.0</real>
+    </map>
+    <key>SSCombatLogMaxLabels</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log overlay: maximum 3D labels drawn at once</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>12</integer>
+    </map>
+    <key>SSCombatLogMaxDamageLines</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log overlay: maximum damage lines drawn per frame, top N by damage</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>40</integer>
+    </map>
+    <key>SSCombatLogMouselookGrace</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log overlay: seconds after leaving mouselook or OTS before the overlay may draw</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>5.0</real>
+    </map>
+    <key>SSCombatLogRetentionMinutes</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: minutes of events and tracks kept in memory before the oldest are dropped</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>S32</string>
+      <key>Value</key>
+      <integer>180</integer>
+    </map>
+    <key>SSCombatLogDeathWindowSeconds</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: seconds of damage before a death considered when attributing it</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>20.0</real>
+    </map>
+    <key>SSCombatLogReconBefore</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log reconstruction: seconds before the death shown</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>6.0</real>
+    </map>
+    <key>SSCombatLogReconAfter</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log reconstruction: seconds after the death shown</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSCombatLogEscalationLane</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: draw the escalation lane (first use per side of explosives, vehicles, mechs, drones, staffs). Class sets are a group's own; off by default</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogPresenceLane</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: draw the presence lane (headcount per side, militia band, last-life call)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogShowStrain</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: show the internal-fire share and tag-dependence readings on team pages. Inferences are limited by the simulator interest list and may be wrong</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogSignals</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: enable the behaviour signal pages. Evidence aids only; limited by what the simulator sends this viewer</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogLegendSeen</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: the legend panel has been shown once</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogLabelCullDistance</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log overlay label cull distance in metres</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>256.0</real>
+    </map>
+    <key>SSCombatLogLodNear</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log overlay near LOD band in metres</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>40.0</real>
+    </map>
+    <key>SSCombatLogLodFar</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log overlay far LOD band in metres</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>120.0</real>
+    </map>
+    <key>SSCombatLogTrackHz</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: bridge combatant tracking rate in samples per second</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSCombatLogPollSeconds</key>
+      <map>
+      <key>Comment</key>
+      <string>Combat Log: seconds between bridge tracking polls</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>1.0</real>
+    </map>
+    <key>SSCombatLogChannelLog</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log: write every foreign (non-simulator) combat channel message to a log file</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
+    <key>SSCombatLogFileLog</key>
+      <map>
+      <key>Comment</key>
+      <string>DEBUG: Combat Log: write the whole combat log stream to a log file</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>FSLoginLogoImage</key>
       <map>
       <key>Comment</key>

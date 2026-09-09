@@ -1776,6 +1776,39 @@
              function="Floater.Toggle"
              parameter="fs_kill_feed" />
         </menu_item_check>
+        <!-- <SS:Nexii> Combat Log: one floater per job, each directly reachable -->
+        <menu
+         create_jump_keys="true"
+         label="Combat Log"
+         name="Combat Log"
+         tear_off="true">
+            <menu_item_check
+             label="Log"
+             name="Combat Log Events">
+                <menu_item_check.on_check
+                 function="Floater.Visible"
+                 parameter="ss_combat_events" />
+                <menu_item_check.on_click
+                 function="Floater.Toggle"
+                 parameter="ss_combat_events" />
+            </menu_item_check>
+            <menu_item_separator />
+            <menu_item_call
+             label="Load mock raid"
+             name="Load mock raid">
+                <menu_item_call.on_click
+                 function="SSCombat.LoadSynthetic"
+                 parameter="0" />
+            </menu_item_call>
+            <menu_item_call
+             label="Replay mock raid live"
+             name="Replay mock raid live">
+                <menu_item_call.on_click
+                 function="SSCombat.LoadSynthetic"
+                 parameter="1" />
+            </menu_item_call>
+        </menu>
+        <!-- </SS:Nexii> -->
         <menu_item_check
          label="Group Viewer"
          name="Group Viewer">

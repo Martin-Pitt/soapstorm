@@ -159,6 +159,42 @@
          function="Pref.KillFeedSettings" />
     </button>
 
+    <!-- ===== Combat Log (Soapstorm) ===== -->
+    <text
+     type="string"
+     length="1"
+     follows="left|top"
+     font="SansSerifSmallBold"
+     height="16"
+     layout="topleft"
+     left="10"
+     top_pad="10"
+     width="520">
+        Combat Log
+    </text>
+    <check_box
+     control_name="SSCombatLogEnabled"
+     follows="left|top"
+     height="16"
+     label="Record combat log and combatant movement (via the LSL bridge)"
+     layout="topleft"
+     left="10"
+     name="ss_combat_log_enabled_pref"
+     tool_tip="Keeps the region's Combat 2.0 events and every combatant's movement in memory for review in Combat > Combat Log. Nothing is written to disk."
+     top_pad="6"
+     width="400" />
+    <check_box
+     control_name="SSCombatLogOverlay"
+     enabled_control="SSCombatLogEnabled"
+     follows="left|top"
+     height="16"
+     label="Draw the in-world overlay while stationary and alt-camming"
+     layout="topleft"
+     left="28"
+     name="ss_combat_log_overlay_pref"
+     top_pad="5"
+     width="400" />
+
     <!-- ===== Mouselook Zoom ===== -->
     <text
      type="string"

@@ -240,6 +240,8 @@
 #include "fscombathitmarker.h"
 #include "fsrezqueue.h" // <SS:Nexii> Rez queue watch
 #include "ssatmomagic.h" // <SS:Nexii> Atmo Magic weather
+#include "sscombatoverlay.h" // <SS:Nexii> Combat Log overlay picking
+#include "sscombatreconstruct.h" // <SS:Nexii> Combat Log reconstruction panel and keys
 #include "fspanellogin.h"
 
 #include "lltracerecording.h"
@@ -1270,6 +1272,19 @@ bool LLViewerWindow::handleAnyMouseClick(LLWindow *window, LLCoordGL pos, MASK m
         {
             return true;
         }
+        // <SS:Nexii> Combat Log overlay picking (doc/combat_log_ux.md 4.6): the press arms, the release resolves; drags over 4 px or presses over 350 ms cancel; modified presses are never consumed so alt-cam orbit keeps its gesture. [interaction: CombatLog]
+        if (clicktype == CLICK_LEFT)
+        {
+            if (down && SSCombatOverlay::handleMouseDown(x, y, mask))
+            {
+                return true;
+            }
+            if (!down && SSCombatOverlay::handleMouseUp(x, y, mask))
+            {
+                return true;
+            }
+        }
+        // </SS:Nexii>
     }
 
     // Do not allow tool manager to handle mouseclicks if we have disconnected
@@ -2537,6 +2552,10 @@ void LLViewerWindow::initWorldUI()
         gHUDView = new LLHUDView(hud_rect);
         getRootView()->addChild(gHUDView);
         getRootView()->sendChildToBack(gHUDView);
+
+        // <SS:Nexii> Combat Log reconstruction transport panel: stock XUI docked bottom-centre, hidden until a death marker is clicked (doc/combat_log_ux.md 3.10).
+        SSCombatReconstruct::createPanel();
+        // </SS:Nexii>
     }
 
     LLPanel* panel_ssf_container = gToolBarView->getChild<LLPanel>("state_management_buttons_container");
@@ -3385,6 +3404,13 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
         LLViewerEventRecorder::instance().logKeyEvent(key,mask);
         return true;
     }
+
+    // <SS:Nexii> Combat Log reconstruction transport: Space plays, ',' and '.' step one event, Esc leaves; consumed only while a reconstruction is loaded. [interaction: CombatLog]
+    if (SSCombatReconstruct::handleKey(key, mask))
+    {
+        return true;
+    }
+    // </SS:Nexii>
 
     LLFocusableElement* keyboard_focus = gFocusMgr.getKeyboardFocus();
 
@@ -4295,6 +4321,13 @@ void LLViewerWindow::updateUI()
                 }
             }
         }
+
+        // <SS:Nexii> Combat Log overlay hover: selects nothing, only refreshes which noun the pointer is over. [interaction: CombatLog]
+        if (!handled)
+        {
+            SSCombatOverlay::handleHover(x, y);
+        }
+        // </SS:Nexii>
 
         // Show a new tool tip (or update one that is already shown)
         bool tool_tip_handled = false;

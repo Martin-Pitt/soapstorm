@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- <SS:Nexii> Combat Log Reconstruction transport (doc/combat_log_ux.md 3.10). Stock widgets only, docked
+     bottom-centre by sscombatreconstruct.cpp because that is where the officer's camera is not, and small
+     enough to leave the world visible. The scrub slider spans the death window and nothing else, so a scrub
+     cannot wander into the rest of the session; its min and max are set in code from [mReconStart, mReconEnd]
+     as seconds relative to the death, which is also what the readout prints. -->
+<panel
+ name="panel_ss_combat_reconstruct"
+ follows="bottom"
+ layout="topleft"
+ background_visible="true"
+ mouse_opaque="true"
+ visible="false"
+ left="0"
+ top="0"
+ height="64"
+ width="420">
+    <button
+     name="step_back_btn"
+     follows="left|top"
+     layout="topleft"
+     left="8"
+     top="8"
+     height="20"
+     width="28"
+     label="|&lt;"
+     tool_tip="Step back one event (,)" />
+    <button
+     name="play_btn"
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="0"
+     height="20"
+     width="54"
+     label="Play"
+     tool_tip="Play or pause the replay (Space)" />
+    <button
+     name="step_fwd_btn"
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="0"
+     height="20"
+     width="28"
+     label="&gt;|"
+     tool_tip="Step forward one event (.)" />
+    <combo_box
+     name="speed_combo"
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="0"
+     height="20"
+     width="64"
+     tool_tip="Replay speed">
+        <combo_box.item label="0.1x" value="0.1" name="speed_010" />
+        <combo_box.item label="0.25x" value="0.25" name="speed_025" />
+        <combo_box.item label="1x" value="1" name="speed_100" />
+    </combo_box>
+    <check_box
+     name="loop_check"
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     top_delta="2"
+     height="16"
+     width="54"
+     label="Loop"
+     tool_tip="Restart at the beginning of the window when the replay reaches the end" />
+    <button
+     name="page_btn"
+     follows="left|top"
+     layout="topleft"
+     left_pad="4"
+     top_delta="-2"
+     height="20"
+     width="52"
+     label="Page"
+     tool_tip="Open this death's page" />
+    <button
+     name="close_btn"
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     top_delta="0"
+     height="20"
+     width="24"
+     label="X"
+     tool_tip="Leave the reconstruction (Esc)" />
+    <slider_bar
+     name="scrub_slider"
+     follows="left|top"
+     layout="topleft"
+     left="8"
+     top="36"
+     height="16"
+     width="330"
+     min_val="-6"
+     max_val="2"
+     increment="0.01"
+     tool_tip="Scrub the death window" />
+    <text
+     name="time_readout"
+     follows="left|top"
+     layout="topleft"
+     left_pad="8"
+     top_delta="0"
+     height="16"
+     width="66"
+     font="SansSerifSmall"
+     tool_tip="Time relative to the death">
+        +0.00 s
+    </text>
+</panel>

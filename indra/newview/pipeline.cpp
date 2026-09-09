@@ -87,6 +87,8 @@
 #include "llviewerregion.h" // for audio debugging.
 #include "llviewerwindow.h" // For getSpinAxis
 #include "fscombathitmarker.h"
+#include "sscombatoverlay.h"     // <SS:Nexii> Combat Log overlay
+#include "sscombatreconstruct.h" // <SS:Nexii> Combat Log reconstruction
 #include "llvoavatarself.h"
 #include "llvocache.h"
 #include "llvosky.h"
@@ -5790,6 +5792,14 @@ void LLPipeline::renderDebug()
             gGL.end();
         }
     }
+
+    // <SS:Nexii> Combat Log in-world overlay and the ghosted death reconstruction (doc/combat_log_ux.md 4 and 3.10), drawn under the gUIProgram bound above, never in the HUD-only pass; wantsDraw() polls its own posture timers every frame. [interaction: CombatLog]
+    if (!hud_only && SSCombatOverlay::wantsDraw())
+    {
+        SSCombatOverlay::render();
+        SSCombatReconstruct::render();
+    }
+    // </SS:Nexii>
 
     gGL.flush();
     gUIProgram.unbind();

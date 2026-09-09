@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Soapstorm Combat Log, one page per noun. Prose first, table second, links last (doc/combat_log_ux.md 3.8). -->
+<floater
+ legacy_header_height="18"
+ can_minimize="true"
+ can_resize="true"
+ height="520"
+ min_height="360"
+ min_width="440"
+ layout="topleft"
+ name="floater_ss_combat_page"
+ help_topic="floater_ss_combat_page"
+ save_rect="true"
+ single_instance="false"
+ reuse_instance="true"
+ title="Page"
+ width="560">
+
+    <text
+     follows="left|top|right"
+     layout="topleft"
+     left="10"
+     right="-10"
+     top="24"
+     height="28"
+     word_wrap="true"
+     name="header_text"
+     font="SansSerifSmall">
+        No noun selected.
+    </text>
+
+    <!-- ===== level bar ===== -->
+    <button
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top="56"
+     height="20"
+     width="60"
+     name="level_raw"
+     label="Raw"
+     tool_tip="The log lines behind this" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="3"
+     height="20"
+     width="70"
+     name="level_moment"
+     label="Moment"
+     tool_tip="This at the cursor instant" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="3"
+     height="20"
+     width="94"
+     name="level_engagement"
+     label="Engagement"
+     tool_tip="The smallest engagement containing this" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="3"
+     height="20"
+     width="66"
+     name="level_sweep"
+     label="Sweep"
+     tool_tip="This reading run across one parameter" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="3"
+     height="20"
+     width="90"
+     name="level_comparison"
+     label="Comparison"
+     tool_tip="The peer set this belongs to" />
+    <button
+     follows="left|top"
+     layout="topleft"
+     left_pad="3"
+     height="20"
+     width="70"
+     name="level_session"
+     label="Session"
+     tool_tip="This row in the session ledger" />
+
+    <text_editor
+     follows="left|top|right"
+     layout="topleft"
+     left="10"
+     right="-10"
+     top="82"
+     height="180"
+     max_length="65536"
+     read_only="true"
+     word_wrap="true"
+     parse_urls="true"
+     name="body_text"
+     font="SansSerifSmall">
+    </text_editor>
+
+    <scroll_list
+     follows="all"
+     layout="topleft"
+     left="10"
+     right="-10"
+     top="268"
+     height="200"
+     draw_heading="true"
+     name="related_list"
+     tool_tip="Related rows; clicking one opens its page">
+        <scroll_list.columns label="Item" name="col_a" width="150" />
+        <scroll_list.columns label="Value" name="col_b" width="110" />
+        <scroll_list.columns label="Detail" name="col_c" width="130" />
+        <scroll_list.columns label="More" name="col_d" width="-1" />
+    </scroll_list>
+
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left="10"
+     top="476"
+     height="20"
+     width="110"
+     name="reconstruct_button"
+     label="Reconstruct"
+     tool_tip="Watch this death happen again, ghosted, where it happened"
+     visible="false" />
+
+</floater>

@@ -117,6 +117,7 @@
 #include "llterrainpaintmap.h"
 #include "lltextureview.h"
 #include "ssstatsview.h" // <SS:Nexii>
+#include "ssfloatercombatevents.h" // <SS:Nexii> Combat Log synthetic raid loader
 #include "lltoolbarview.h"
 #include "lltoolcomp.h"
 #include "lltoolmgr.h"
@@ -13144,6 +13145,7 @@ void initialize_menus()
     view_listener_t::addMenu(new LLAdvancedCheckInfoDisplay(), "Advanced.CheckInfoDisplay");
     view_listener_t::addMenu(new LLAdvancedSelectedTextureInfo(), "Advanced.SelectedTextureInfo");
     commit.add("Advanced.SelectedMaterialInfo", boost::bind(&handle_selected_material_info));
+    commit.add("SSCombat.LoadSynthetic", boost::bind(&ss_combat_log_load_synthetic, _2)); // <SS:Nexii> Combat Log
     view_listener_t::addMenu(new LLAdvancedToggleWireframe(), "Advanced.ToggleWireframe");
     view_listener_t::addMenu(new LLAdvancedCheckWireframe(), "Advanced.CheckWireframe");
     // Develop > Render

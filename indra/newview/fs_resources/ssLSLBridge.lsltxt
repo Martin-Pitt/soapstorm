@@ -1,18 +1,33 @@
 integer combatLogListener;
 
+ReportRegionSettings() {
+    llOwnerSay("C2RS|" + llList2Json(JSON_OBJECT, [
+        "flags", llGetRegionFlags(), // Only relevant for REGION_FLAG_ALLOW_DIRECT_TELEPORT really
+        "allow_damage_adjust", llGetEnv("allow_damage_adjust"),
+        "restrict_combat_log", llGetEnv("restrict_combat_log"),
+        "damage_throttle", llGetEnv("damage_throttle"),
+        "damage_limit", llGetEnv("damage_limit"),
+        "restore_health", llGetEnv("restore_health"),
+        "health_regen_rate", llGetEnv("health_regen_rate"),
+        "invulnerability_time", llGetEnv("invulnerability_time"),
+        "death_action", llGetEnv("death_action"),
+        "agent_limit", llGetEnv("agent_limit")
+    ]));
+}
+
+
 default
 {
     listen(integer channel, string name, key identifier, string text)
     {
         // Pass through combat log messages from the simulator
-        if(identifier == COMBAT_LOG_ID) llOwnerSay("C2" + text); // "C2[{damage or death event},...]
+        if(identifier == COMBAT_LOG_ID) llOwnerSay("C2" + llGetEnv("frame_number") + "|" + text);
         
         // Scripted combat log messages from other sources than the simulator
         else
         {
             key owner = llGetOwnerKey(identifier);
-            string header = (string)identifier + (string)owner; // 2 36-key UUIDs identifying source and owner as header before actual payload
-            llOwnerSay("C2" + header + text); // "C2<identifier key><owner key>[{damage or death event},...]" -- untrusted message, text may not be actually valid JSON or known schema
+            llOwnerSay("C2" + llGetEnv("frame_number") + "|" + (string)identifier + (string)owner + text);
         }
     }
     
@@ -56,6 +71,8 @@ default
         
         float time = llGetTime();
         vector targetPos = llGetPos();
+        rotation targetRot = llGetRot();
+        vector targetVel = llGetVel();
         
         integer index;
         for(index = 0; index < count; ++index)
@@ -178,25 +195,38 @@ default
             float original = llList2Float(damage, 2);
             string owner = llDetectedOwner(index);
             
+            string source; list sourceDetails;
+            string rezzer; list rezzerDetails;
+            string root; list rootDetails;
             
-        }
-        
-        /*
-            vector sourcePos = llDetectedPos(deadlyDamage);
-            vector targetPos = llGetPos();
-            llRegionSay(COMBAT_CHANNEL, llList2Json(JSON_ARRAY, [
-                llList2Json(JSON_OBJECT, [
-                    "event", "OBJECT_DEATH",
-                    "owner", llDetectedOwner(deadlyDamage),
-                    "rezzer", llDetectedRezzer(deadlyDamage),
-                    "source", llDetectedKey(deadlyDamage),
-                    "source_pos", llList2Json(JSON_ARRAY, [sourcePos.x, sourcePos.y, sourcePos.z]),
-                    "target", llGetKey(),
-                    "target_pos", llList2Json(JSON_ARRAY, [targetPos.x, targetPos.y, targetPos.z]),
-                    "type", llList2Integer(llDetectedDamage(deadlyDamage), 1)
-                ])
+            if(index == 0) { source = source0; sourceDetails = sourceDetails0; rezzer = rezzer0; rezzerDetails = rezzerDetails0; root = root0; rootDetails = rootDetails0; }
+            else if(index == 1) { source = source1; sourceDetails = sourceDetails1; rezzer = rezzer1; rezzerDetails = rezzerDetails1; root = root1; rootDetails = rootDetails1; }
+            else if(index == 2) { source = source2; sourceDetails = sourceDetails2; rezzer = rezzer2; rezzerDetails = rezzerDetails2; root = root2; rootDetails = rootDetails2; }
+            else if(index == 3) { source = source3; sourceDetails = sourceDetails3; rezzer = rezzer3; rezzerDetails = rezzerDetails3; root = root3; rootDetails = rootDetails3; }
+            else if(index == 4) { source = source4; sourceDetails = sourceDetails4; rezzer = rezzer4; rezzerDetails = rezzerDetails4; root = root4; rootDetails = rootDetails4; }
+            else if(index == 5) { source = source5; sourceDetails = sourceDetails5; rezzer = rezzer5; rezzerDetails = rezzerDetails5; root = root5; rootDetails = rootDetails5; }
+            else if(index == 6) { source = source6; sourceDetails = sourceDetails6; rezzer = rezzer6; rezzerDetails = rezzerDetails6; root = root6; rootDetails = rootDetails6; }
+            else if(index == 7) { source = source7; sourceDetails = sourceDetails7; rezzer = rezzer7; rezzerDetails = rezzerDetails7; root = root7; rootDetails = rootDetails7; }
+            else if(index == 8) { source = source8; sourceDetails = sourceDetails8; rezzer = rezzer8; rezzerDetails = rezzerDetails8; root = root8; rootDetails = rootDetails8; }
+            
+            // Note unlike combat log the typecasting of vectors and rotations like <#, #, #> etc
+            llOwnerSay("C2" + llGetEnv("frame_number") + "|" + llList2Json(JSON_OBJECT, [
+                "event", "FINAL_DAMAGE",
+                
+                "source", source, "sourceDetails", llList2Json(JSON_ARRAY, sourceDetails),
+                "rezzer", rezzer, "rezzerDetails", llList2Json(JSON_ARRAY, rezzerDetails),
+                "root", root, "rootDetails", llList2Json(JSON_ARRAY, rootDetails),
+                "owner", owner,
+                
+                "damage", delivered,
+                "type", type,
+                "original", original,
+                
+                "targetPos", targetPos,
+                "targetRot", targetRot,
+                "targetVel", targetVel
             ]));
-        */
+        }
     }
     
     /*timer()
@@ -241,6 +271,19 @@ default
                 // llHTTPResponse(httpReqID, 200, "<llsd><string>" + ... + "</string></llsd>");
                 return;
             }
+        }
+        
+        else if (Method == URL_REQUEST_GRANTED)
+        {
+            ReportRegionSettings();
+        }
+    }
+    
+    changed(integer change)
+    {
+        if (change & CHANGED_REGION)
+        {
+            ReportRegionSettings();
         }
     }
 }

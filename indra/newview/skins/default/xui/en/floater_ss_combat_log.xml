@@ -1,0 +1,485 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Soapstorm Combat Log, main floater. Chrome is fixed and the stage swaps with the level (doc/combat_log_ux.md 3.1). -->
+<floater
+ legacy_header_height="18"
+ can_minimize="true"
+ can_resize="true"
+ height="620"
+ min_height="460"
+ min_width="720"
+ layout="topleft"
+ name="floater_ss_combat_log"
+ help_topic="floater_ss_combat_log"
+ save_rect="true"
+ single_instance="true"
+ title="COMBAT LOG"
+ width="900">
+
+    <!-- ===== status line ===== -->
+    <text
+     follows="left|top|right"
+     layout="topleft"
+     left="10"
+     right="-270"
+     top="24"
+     height="14"
+     name="status_text"
+     font="SansSerifSmall">
+        Combat Log - not recording
+    </text>
+    <text
+     follows="left|top|right"
+     layout="topleft"
+     left="10"
+     right="-10"
+     top_pad="2"
+     height="14"
+     name="span_text"
+     font="SansSerifSmall">
+        no session yet
+    </text>
+    <button
+     follows="top|right"
+     layout="topleft"
+     right="-144"
+     top="22"
+     height="20"
+     width="118"
+     name="load_mock_button"
+     label="Load mock raid"
+     tool_tip="Stage 0 preview data; removed once real bridge data flows" />
+    <button
+     follows="top|right"
+     layout="topleft"
+     right="-10"
+     top="22"
+     height="20"
+     width="128"
+     name="replay_mock_button"
+     label="Replay mock live"
+     tool_tip="Stage 0 preview data; removed once real bridge data flows" />
+
+    <!-- ===== parameter strip ===== -->
+    <text
+     follows="left|top"
+     layout="topleft"
+     left="10"
+     top="60"
+     height="16"
+     width="70"
+     name="params_label"
+     font="SansSerifSmall">
+        Parameters
+    </text>
+    <slider
+     follows="left|top"
+     layout="topleft"
+     left_pad="2"
+     top_delta="0"
+     height="16"
+     width="260"
+     name="window_slider"
+     label="window (s)"
+     label_width="70"
+     min_val="2"
+     max_val="120"
+     increment="1"
+     decimal_digits="0"
+     show_text="true"
+     tool_tip="Seconds of trail kept behind the cursor" />
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left_pad="12"
+     top_delta="1"
+     height="16"
+     width="70"
+     name="live_check"
+     label="LIVE"
+     tool_tip="Follow the newest data instead of the cursor" />
+    <check_box
+     follows="left|top"
+     layout="topleft"
+     left_pad="6"
+     height="16"
+     width="120"
+     name="follow_check"
+     label="follow cursor"
+     tool_tip="Keep the stage and the overlay on the cursor as it moves" />
+
+    <!-- ===== stage, tabbed ===== -->
+    <tab_container
+     follows="all"
+     layout="topleft"
+     left="10"
+     right="-206"
+     top="84"
+     height="406"
+     name="stage_tabs"
+     tab_position="top"
+     tab_min_width="80">
+
+        <!-- Session -->
+        <panel name="stage_session" label="Session" layout="topleft" left="0" top="0" width="670" height="378">
+            <text
+             follows="left|top|right"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="2"
+             height="42"
+             word_wrap="true"
+             name="headline_text"
+             font="SansSerifSmall">
+                No session recorded yet.
+            </text>
+            <scroll_list
+             follows="left|top"
+             layout="topleft"
+             left="4"
+             top="48"
+             height="96"
+             width="250"
+             draw_heading="true"
+             name="team_list"
+             tool_tip="Teams as the tool resolved them; a row selects the team page">
+                <scroll_list.columns label="Team" name="team" width="70" />
+                <scroll_list.columns label="Members" name="members" width="60" />
+                <scroll_list.columns label="Kills" name="kills" width="50" />
+                <scroll_list.columns label="Deaths" name="deaths" width="50" />
+            </scroll_list>
+            <text
+             follows="top|right"
+             layout="topleft"
+             left="260"
+             right="-4"
+             top="48"
+             height="96"
+             word_wrap="true"
+             name="region_text"
+             font="SansSerifSmall">
+                Region settings not reported.
+            </text>
+
+            <combo_box
+             follows="left|top"
+             layout="topleft"
+             left="4"
+             top="150"
+             height="20"
+             width="120"
+             name="kind_filter"
+             tool_tip="Show only one kind of event">
+                <combo_box.item label="All events" name="all" value="all" />
+                <combo_box.item label="Damage" name="damage" value="damage" />
+                <combo_box.item label="Deaths" name="death" value="death" />
+                <combo_box.item label="Object deaths" name="object" value="object" />
+                <combo_box.item label="Other" name="custom" value="custom" />
+            </combo_box>
+            <combo_box
+             follows="left|top"
+             layout="topleft"
+             left_pad="6"
+             height="20"
+             width="140"
+             name="team_filter"
+             tool_tip="Show only events whose attacker sits on one team">
+                <combo_box.item label="All teams" name="allteams" value="-2" />
+            </combo_box>
+
+            <scroll_list
+             follows="all"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="174"
+             height="196"
+             draw_heading="true"
+             name="event_list"
+             tool_tip="Every typed event; a row selects it and moves the cursor">
+                <scroll_list.columns label="Time" name="time" width="56" />
+                <scroll_list.columns label="Kind" name="kind" width="52" />
+                <scroll_list.columns label="Attacker" name="attacker" width="96" />
+                <scroll_list.columns label="Target" name="target" width="96" />
+                <scroll_list.columns label="Family" name="family" width="96" />
+                <scroll_list.columns label="Damage" name="damage" width="54" />
+                <scroll_list.columns label="Type" name="type" width="-1" />
+            </scroll_list>
+        </panel>
+
+        <!-- Engagements -->
+        <panel name="stage_engagement" label="Engagements" layout="topleft" left="0" top="0" width="670" height="378">
+            <text
+             follows="left|top|right"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="2"
+             height="28"
+             word_wrap="true"
+             name="engagement_header"
+             font="SansSerifSmall">
+                No engagement selected.
+            </text>
+            <scroll_list
+             follows="left|top|bottom"
+             layout="topleft"
+             left="4"
+             top="34"
+             height="336"
+             width="266"
+             draw_heading="true"
+             name="engagement_list"
+             tool_tip="Timeline - the events inside this engagement">
+                <scroll_list.columns label="Time" name="time" width="56" />
+                <scroll_list.columns label="Kind" name="kind" width="50" />
+                <scroll_list.columns label="Attacker" name="attacker" width="76" />
+                <scroll_list.columns label="Target" name="target" width="-1" />
+            </scroll_list>
+            <ss_map_view
+             follows="all"
+             layout="topleft"
+             left="274"
+             right="-4"
+             top="34"
+             height="336"
+             name="engagement_map"
+             tool_tip="Map - overhead, north up; click a mark to select it" />
+        </panel>
+
+        <!-- Moment -->
+        <panel name="stage_moment" label="Moment" layout="topleft" left="0" top="0" width="670" height="378">
+            <scroll_list
+             follows="all"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="2"
+             height="246"
+             draw_heading="true"
+             name="moment_list"
+             tool_tip="Everything within one second of the cursor">
+                <scroll_list.columns label="Time" name="time" width="56" />
+                <scroll_list.columns label="Kind" name="kind" width="52" />
+                <scroll_list.columns label="Attacker" name="attacker" width="96" />
+                <scroll_list.columns label="Target" name="target" width="96" />
+                <scroll_list.columns label="Damage" name="damage" width="54" />
+                <scroll_list.columns label="Delivery" name="delivery" width="-1" />
+            </scroll_list>
+            <text_editor
+             follows="left|right|bottom"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="254"
+             height="120"
+             max_length="16384"
+             read_only="true"
+             word_wrap="true"
+             name="moment_summary"
+             font="SansSerifSmall">
+                Nothing at the cursor.
+            </text_editor>
+        </panel>
+
+        <!-- Sweep (Stage 0 placeholder) -->
+        <panel name="stage_sweep" label="Sweep" layout="topleft" left="0" top="0" width="670" height="378">
+            <text_editor
+             follows="all"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="2"
+             height="368"
+             max_length="8192"
+             read_only="true"
+             word_wrap="true"
+             name="sweep_text"
+             font="SansSerifSmall">
+Sweep is not built yet.
+
+The Sweep face takes one reading you distrust and runs it again across one parameter, drawing the outcome as a strip: the parameter on the horizontal, the outcome as colour, the value in force marked. The headline is how many of the tested values came out clear, over how many were testable - never a single word, and never a percentage on its own. A second row re-runs the same reading one second either side of the stamped frame, because the log's own lag is the same size as the windows being swept.
+
+Parameters this face will sweep:
+  travel time (the seconds a shot was in flight)
+  the death attribution window
+  the team confidence threshold
+  the tracking-lead cone
+  which adjustment scripts are included
+  the track-quality cutoff
+  the engagement segmentation constants
+  the event timestamp itself, one second either side
+  every numeric constant in the region's rule catalogue
+            </text_editor>
+        </panel>
+
+        <!-- Compare (Stage 0 placeholder) -->
+        <panel name="stage_comparison" label="Compare" layout="topleft" left="0" top="0" width="670" height="378">
+            <text_editor
+             follows="all"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="2"
+             height="368"
+             max_length="8192"
+             read_only="true"
+             word_wrap="true"
+             name="comparison_text"
+             font="SansSerifSmall">
+Comparison is not built yet.
+
+The Comparison face puts a whole set side by side across two or more dimensions, so a single reading can be seen against its peers instead of on its own. Faces planned: who damaged whom as a grid; Allegiance, one strand per combatant over time; Front, distance to the contested surface; Signals, the behaviour-signal filter; and Compare, one cell per pinned noun on shared, scale-locked axes.
+
+Parameters this face will sweep across the set:
+  the set itself (all combatants, one team, one family, the pinned nouns)
+  the row and column facets
+  the time window and the cursor
+  the same team, tracking and inclusion knobs the Sweep face uses
+            </text_editor>
+        </panel>
+
+        <!-- Raw -->
+        <panel name="stage_raw" label="Raw" layout="topleft" left="0" top="0" width="670" height="378">
+            <scroll_list
+             follows="all"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="2"
+             height="226"
+             draw_heading="true"
+             name="raw_list"
+             tool_tip="The log lines behind everything above, exactly as they arrived">
+                <scroll_list.columns label="Received" name="received" width="60" />
+                <scroll_list.columns label="Frame" name="frame" width="64" />
+                <scroll_list.columns label="Trust" name="trust" width="72" />
+                <scroll_list.columns label="Salvage" name="salvage" width="60" />
+                <scroll_list.columns label="Events" name="events" width="-1" />
+            </scroll_list>
+            <text_editor
+             follows="left|right|bottom"
+             layout="topleft"
+             left="4"
+             right="-4"
+             top="234"
+             height="140"
+             max_length="65536"
+             read_only="true"
+             word_wrap="true"
+             name="raw_text"
+             font="Monospace">
+            </text_editor>
+        </panel>
+    </tab_container>
+
+    <!-- ===== evidence column ===== -->
+    <text
+     follows="top|right|bottom"
+     layout="topleft"
+     left="714"
+     width="176"
+     top="84"
+     height="406"
+     word_wrap="true"
+     name="evidence_text"
+     font="SansSerifSmall">
+        EVIDENCE
+    </text>
+
+    <!-- ===== ribbon ===== -->
+    <ss_ribbon_view
+     follows="left|right|bottom"
+     layout="topleft"
+     left="10"
+     top="496"
+     height="78"
+     width="880"
+     name="ribbon"
+     tool_tip="Drag to scrub. Double-click an engagement band to open it." />
+
+    <!-- ===== transport ===== -->
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left="10"
+     top="578"
+     height="20"
+     width="26"
+     name="rewind_button"
+     label="|&lt;"
+     tool_tip="Back to the start of the session" />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="2"
+     height="20"
+     width="26"
+     name="step_back_button"
+     label="&lt;"
+     tool_tip="Back one event" />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="2"
+     height="20"
+     width="46"
+     name="play_button"
+     label="Play"
+     tool_tip="Play or pause (Space)" />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="2"
+     height="20"
+     width="26"
+     name="step_forward_button"
+     label="&gt;"
+     tool_tip="Forward one event" />
+    <button
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="2"
+     height="20"
+     width="26"
+     name="forward_button_end"
+     label="&gt;|"
+     tool_tip="Forward to the newest data" />
+    <combo_box
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="8"
+     top_delta="0"
+     height="20"
+     width="70"
+     name="speed_combo"
+     tool_tip="Playback speed">
+        <combo_box.item label="0.25x" name="quarter" value="0.25" />
+        <combo_box.item label="1x" name="one" value="1.0" />
+        <combo_box.item label="4x" name="four" value="4.0" />
+    </combo_box>
+    <text
+     follows="left|bottom"
+     layout="topleft"
+     left_pad="10"
+     top_delta="3"
+     height="14"
+     width="240"
+     name="time_text"
+     font="SansSerifSmall">
+        00:00.0
+    </text>
+
+    <text
+     follows="left|right|bottom"
+     layout="topleft"
+     left="10"
+     right="-10"
+     top="602"
+     height="12"
+     name="not_available_text"
+     font="SansSerifSmall">
+        not available: nothing recorded yet
+    </text>
+
+</floater>

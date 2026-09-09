@@ -1226,4 +1226,46 @@ with the same filename but different name
 <texture name="LagStatus_Good" file_name="icons/green_square.png" preload="false" />
 <texture name="LagStatus_Warning" file_name="icons/yellow_square.png" preload="false" />
 <texture name="LagStatus_Critical" file_name="icons/red_square.png" preload="false" />
+
+  <!-- <SS:Nexii> Combat Log damage type and combat event icons: one 128 px cell each of ss_combat/damage_types.png (16 x 4 grid), clip rects in GL pixel coordinates (bottom-up). Layout per NexiiLSL damage-types.lsl DamageTypeAsIcon. -->
+  <texture name="SS_Dmg_Impact_0" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="0" clip.right="128" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Impact_1" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="128" clip.right="256" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Impact_2" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="256" clip.right="384" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Impact_3" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="384" clip.right="512" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Generic" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="512" clip.right="640" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Acid" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="640" clip.right="768" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Bludgeoning" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="768" clip.right="896" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Cold" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="896" clip.right="1024" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Electric" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1024" clip.right="1152" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Fire" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1152" clip.right="1280" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Force" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1280" clip.right="1408" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Necrotic" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1408" clip.right="1536" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Piercing" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1536" clip.right="1664" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Poison" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1664" clip.right="1792" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Psychic" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1792" clip.right="1920" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Radiant" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1920" clip.right="2048" clip.top="512" clip.bottom="384" />
+  <texture name="SS_Dmg_Slashing" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="0" clip.right="128" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Sonic_0" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="128" clip.right="256" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Sonic_1" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="256" clip.right="384" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Emotional" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="384" clip.right="512" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Medical_0" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="512" clip.right="640" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Medical_1" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="640" clip.right="768" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Repair_0" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="768" clip.right="896" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Repair_1" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="896" clip.right="1024" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Explosive" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1024" clip.right="1152" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Crushing" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1152" clip.right="1280" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_AntiArmor" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1280" clip.right="1408" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Dmg_Suffocation" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1536" clip.right="1664" clip.top="384" clip.bottom="256" />
+  <texture name="SS_Combat_Death" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="0" clip.right="128" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_EnemyDeath" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="128" clip.right="256" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_FriendlyDeath" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="256" clip.right="384" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_ObjectDeath" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="384" clip.right="512" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_VehicleDeath" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="512" clip.right="640" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_AircraftDeath" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="640" clip.right="768" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_Downed" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="768" clip.right="896" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_ReviveRequested" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="896" clip.right="1024" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Combat_BeingRevived" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1024" clip.right="1152" clip.top="128" clip.bottom="0" />
+  <texture name="SS_Dmg_Redeploy" file_name="ss_combat/damage_types.png" preload="false" use_mips="true" clip.left="1024" clip.right="1152" clip.top="128" clip.bottom="0" />
+  <!-- </SS:Nexii> -->
+
 </textures>
