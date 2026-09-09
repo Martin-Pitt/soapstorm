@@ -347,7 +347,7 @@ jobs:
         shell: bash
 
       - name: Install ISPC
-        uses: ispc/install-ispc-action@v1
+        uses: ispc/install-ispc-action@main
 
       - name: Configure
         run: |
