@@ -28619,6 +28619,17 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>Value</key>
     <integer>1</integer>
   </map>
+  <key>SSAltCamMaxDistance</key>
+  <map>
+    <key>Comment</key>
+    <string>How far (metres) an ALT-click may reach to find a camera focus point when the ordinary 512 m pick hits nothing: a long-range terrain/object cast, then the region water plane along the same ray (void water included). Lets the camera orbit weather from open water. 512 to 65536.</string>
+    <key>Persist</key>
+    <integer>1</integer>
+    <key>Type</key>
+    <string>F32</string>
+    <key>Value</key>
+    <real>4096.0</real>
+  </map>
   <key>SSAtmoCloudTessellation</key>
   <map>
     <key>Comment</key>
