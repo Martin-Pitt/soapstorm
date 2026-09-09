@@ -69,6 +69,7 @@
 #include "llweb.h"
 #include "llmediactrl.h"
 #include "llrootview.h"
+#include "ssloginavatar.h" // <SS:Nexii> login-screen avatar preview overlay lifecycle
 
 #include "llfloatertos.h"
 #include "lltrans.h"
@@ -534,6 +535,10 @@ void FSPanelLogin::show(const LLRect &rect,
         new FSPanelLogin(rect, callback, callback_data);
     }
 
+    // <SS:Nexii> Login-avatar preview: ride the same lifecycle as the panel; re-added after the panel so it draws in front.
+    SSLoginAvatar::showOverlay();
+    // </SS:Nexii>
+
     if( !gFocusMgr.getKeyboardFocus() )
     {
         // Grab focus and move cursor to first enabled control
@@ -883,6 +888,10 @@ void FSPanelLogin::autologinToLocation(const LLSLURL& slurl)
 // static
 void FSPanelLogin::closePanel()
 {
+    // <SS:Nexii> Login-avatar preview: every close path funnels through here; take the overlay down with the panel.
+    SSLoginAvatar::hideOverlay();
+    // </SS:Nexii>
+
     if (sInstance)
     {
         if (FSPanelLogin::sInstance->getParent())

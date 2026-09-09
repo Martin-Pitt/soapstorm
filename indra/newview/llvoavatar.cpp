@@ -8908,6 +8908,29 @@ const LLViewerJointAttachment *LLVOAvatar::attachObject(LLViewerObject *viewer_o
     return attachment;
 }
 
+// <SS:Nexii> See header; mirrors attachObject with the point passed in instead of decoded from the object's state byte.
+LLViewerJointAttachment* LLVOAvatar::ssAttachObjectTo(LLViewerObject* viewer_object, S32 attachment_point)
+{
+    if (!viewer_object)
+    {
+        return NULL;
+    }
+    LLViewerJointAttachment* attachment = get_if_there(mAttachmentPoints, attachment_point, (LLViewerJointAttachment*)NULL);
+    if (!attachment || !attachment->addObject(viewer_object))
+    {
+        return NULL;
+    }
+
+    if (!viewer_object->isAnimatedObject())
+    {
+        updateAttachmentOverrides();
+    }
+    viewer_object->refreshBakeTexture();
+    updateMeshVisibility();
+    return attachment;
+}
+// </SS:Nexii>
+
 //-----------------------------------------------------------------------------
 // getNumAttachments()
 //-----------------------------------------------------------------------------

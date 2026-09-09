@@ -116,6 +116,7 @@
 #include "ssbc7encoder.h" // <SS:Nexii>
 #include "ssbc7store.h" // <SS:Nexii>
 #include "sssqueezedebug.h" // <SS:Nexii>
+#include "ssloginavatar.h" // <SS:Nexii> login-screen avatar preview capture
 #include "lldiskcache.h"
 #include "ssstrata.h"   // <SS:Nexii/> Strata asset volumes
 #include "ssstratabudget.h"   // <SS:Nexii/> the budget arbiter - CacheSize divided N ways instead of three tiers each deciding for themselves
@@ -6509,6 +6510,16 @@ void LLAppViewer::idleShutdown()
         return;
     }
 
+    // <SS:Nexii> Login-avatar preview: last staged point where the agent avatar is still fully baked and animated; mirrors the saveFinalSnapshot stage above.
+    static bool saved_login_avatar = false;
+    if (!saved_login_avatar)
+    {
+        saved_login_avatar = true;
+        SSLoginAvatar::captureOnLogout();
+        return;
+    }
+    // </SS:Nexii>
+
     const F32 SHUTDOWN_UPLOAD_SAVE_TIME = 5.f;
 
     S32 pending_uploads = gAssetStorage->getNumPendingUploads();
@@ -6958,6 +6969,10 @@ void LLAppViewer::disconnectViewer()
 // [RLVa:KB] - Checked: RLVa-2.3 (Housekeeping)
     SUBSYSTEM_CLEANUP(RlvHandler);
 // [/RLVa:KB]
+
+    // <SS:Nexii> Login-avatar preview: in-session logout passes through here, so capture while the wearables below are still alive. captureOnLogout guards itself when the avatar is already gone (app-quit already captured in idleShutdown).
+    SSLoginAvatar::captureOnLogout();
+    // </SS:Nexii>
 
     gAgentWearables.cleanup();
     gAgentCamera.cleanup();

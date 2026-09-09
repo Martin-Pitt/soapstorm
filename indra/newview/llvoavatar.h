@@ -1079,6 +1079,8 @@ public:
     /*virtual*/ bool    isWearingWearableType(LLWearableType::EType type ) const;
     LLViewerObject *    findAttachmentByID( const LLUUID & target_id ) const;
     LLViewerJointAttachment* getTargetAttachmentPoint(LLViewerObject* viewer_object);
+    // <SS:Nexii> Login-screen avatar preview (ssloginavatar): its offline avatar never receives the simulator state byte getTargetAttachmentPoint decodes, so the point is passed explicitly; mirrors attachObject otherwise.
+    LLViewerJointAttachment* ssAttachObjectTo(LLViewerObject* viewer_object, S32 attachment_point);
 
 //-TT Patch: ReplaceWornItemsOnly
 //-TT
