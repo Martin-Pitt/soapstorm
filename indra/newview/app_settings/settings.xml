@@ -27090,16 +27090,93 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>192.0</real>
     </map>
-    <key>SSWorldFieldTiles</key>
+    <key>SSNavMesh</key>
       <map>
       <key>Comment</key>
-      <string>Rasterize the declared-shape census into 32 m voxel tiles under the Recast scratch rule and publish per-column solid spans - the SHELTERED and INTERIOR structure source the flood and the WALKABLE bake will read, with the render sweep staying the outdoors authority. DYNAMIC objects are excluded from tiles by design</string>
+      <string>Build the census navmesh: the declared-shape census emitted as triangles per 32 m column, split into height bands at air gaps, rasterized by Recast on a worker and published through DetourTileCache. Needs SSWorldFieldShapes. Movers ride the tile cache as obstacles. Off frees everything</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
       <integer>0</integer>
+    </map>
+    <key>SSNavMeshBandGap</key>
+      <map>
+      <key>Comment</key>
+      <string>Metres of empty air that split a column into separate height bands (Detour layers) - a skybox never shares a build with the ground and a band boundary never cuts a floor. Smaller means more, cheaper bands</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>8.0</real>
+    </map>
+    <key>SSNavMeshBuildsPerFrame</key>
+      <map>
+      <key>Comment</key>
+      <string>Band builds handed to the worker queue per frame while the worklist drains</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSNavMeshMaxInFlight</key>
+      <map>
+      <key>Comment</key>
+      <string>Band builds allowed on the worker queue at once</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>2</integer>
+    </map>
+    <key>SSNavMeshAgentHeight</key>
+      <map>
+      <key>Comment</key>
+      <string>Navmesh agent height in metres (the clearance a walkable surface needs above it)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>2.0</real>
+    </map>
+    <key>SSNavMeshAgentRadius</key>
+      <map>
+      <key>Comment</key>
+      <string>Navmesh agent radius in metres (walkable area is eroded by it)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.5</real>
+    </map>
+    <key>SSNavMeshAgentClimb</key>
+      <map>
+      <key>Comment</key>
+      <string>Navmesh agent step height in metres (ledges up to this merge into walkable surface)</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>0.75</real>
+    </map>
+    <key>SSNavMeshAgentSlope</key>
+      <map>
+      <key>Comment</key>
+      <string>Navmesh maximum walkable slope in degrees</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>45.0</real>
     </map>
     <key>SSWorldFieldAcoustics</key>
       <map>
@@ -27170,7 +27247,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldDebugView</key>
       <map>
       <key>Comment</key>
-      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's touching classification - outdoors air green, sheltered air amber fading with occlusion depth, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the column spans themselves - each solid span a flat rect at its floor and its ceiling, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), joined by a dim line through the span's solid body. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
+      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's touching classification - outdoors air green, sheltered air amber fading with occlusion depth, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the column spans themselves - each solid span a flat rect at its floor and its ceiling, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), joined by a dim line through the span's solid body, 7 the census navmesh - Detour polygon edges coloured by height band. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

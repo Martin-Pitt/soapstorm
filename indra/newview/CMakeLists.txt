@@ -270,7 +270,7 @@ set(viewer_SOURCE_FILES
     sswindflow.cpp
     ssworldfield.cpp
     ssworldfieldshapes.cpp
-    ssworldfieldtiles.cpp
+    ssnavmesh.cpp
     fsscriptlibrary.cpp
     fsscrolllistctrl.cpp
     fsslurlcommand.cpp
@@ -1247,7 +1247,7 @@ set(viewer_HEADER_FILES
     sswindprofilecore.h
     ssworldfield.h
     ssworldfieldshapes.h
-    ssworldfieldtiles.h
+    ssnavmesh.h
     fsscriptlibrary.h
     fsscrolllistctrl.h
     fsslurl.h
@@ -2833,6 +2833,7 @@ target_link_libraries(${VIEWER_BINARY_NAME}
         llcorehttp
         llcommon
         llmeshoptimizer
+        recastnavigation
         llwebrtc
         lllogin
         llprimitive

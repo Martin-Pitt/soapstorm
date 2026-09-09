@@ -27,6 +27,7 @@
 #include "ssatmomagic.h"
 #include "ssglreadback.h"
 #include "ssworldfieldshapes.h"
+#include "ssnavmesh.h"
 
 #include "llfasttimer.h"
 #include "llrender.h"
@@ -3755,6 +3756,12 @@ void SSWorldField::renderDebug()
     if (which == 6)
     {
         SSWorldFieldShapes::getInstance()->renderDebug();
+    }
+
+    // <SS:Nexii> View 7: the census navmesh - Detour polygon edges by band (doc/atmo_magic_navmesh.md).
+    if (which == 7)
+    {
+        SSNavMesh::getInstance()->renderDebug();
     }
 
     // Drop debug views for regions the field no longer holds.

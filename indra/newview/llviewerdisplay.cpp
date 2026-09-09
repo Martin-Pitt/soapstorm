@@ -99,7 +99,7 @@
 #include "ssglreadback.h"
 #include "ssworldfield.h"
 #include "ssworldfieldshapes.h"
-#include "ssworldfieldtiles.h"
+#include "ssnavmesh.h"
 
 #include <boost/json.hpp>
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
@@ -1007,8 +1007,8 @@ void display(bool rebuild, F32 zoom_factor, int subfield, bool for_snapshot)
                     SSWorldField::getInstance()->update();
                     // <SS:Nexii> Atmo Magic: the declared-shape query census rots and rebuilds on the same tick (doc/atmo_magic_worldfield_competition.md 7).
                     SSWorldFieldShapes::getInstance()->update();
-                    // <SS:Nexii> The 3D-tiled census raster follows the census rebuilds and publishes structure spans (doc/atmo_magic_worldfield_competition.md 11).
-                    SSWorldFieldTiles::getInstance()->update();
+                    // <SS:Nexii> The census navmesh (Recast/Detour over the same census) schedules its bands off each rebuild and pumps its tile cache (doc/atmo_magic_navmesh.md).
+                    SSNavMesh::getInstance()->update();
 
                     // Atmo Magic: the readback worker's per-frame poll. Completes
                     // texture readbacks the worker has finished and, after a
