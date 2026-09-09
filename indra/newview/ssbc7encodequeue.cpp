@@ -238,9 +238,9 @@ void ssBC7EncodeRefreshPolicy()
             //
             // Width is NOT what keeps this out of the way. The pool runs at background QoS, which deprioritises CPU, disk and memory pressure together, so a wide pool yields to foreground work exactly as readily as a narrow one and merely finishes sooner when nothing is competing. Being polite is the scheduler's job here, not the width's.
             //
-            // What actually stops paying is the hardware. This encoder is bc7e through AVX2, so it lives in the vector units - and the two logical processors on one physical core SHARE those units. The second thread per core therefore buys something like a fifth of a thread's work, not a whole one, while costing a whole thread's worth of wakeups, cache pressure and pinned decoded image. Past the physical core count the curve is nearly flat.
+            // What actually stops paying is the hardware. The rule was set when this encoder was bc7e through AVX2, living in the vector units that the two logical processors on one physical core SHARE, so the second thread per core bought something like a fifth of a thread's work while costing a whole thread's worth of wakeups, cache pressure and pinned decoded image. bc7f is scalar floating point and the sharing is less severe, but the half rule stays because the other half of the argument below is now the stronger one.
             //
-            // And upstream of all of it the pool is SUPPLY limited, not compute limited: at bc7e veryfast a worker turns over roughly six 1024 square textures a second, so even half of a large machine can consume far more than the fetch path can deliver. Widening past this point would buy idle workers.
+            // And upstream of all of it the pool is SUPPLY limited, not compute limited: at bc7f Default a single worker turns over roughly thirty-five 1024 square textures a second on textured content, so even a couple of workers can consume far more than the fetch path can deliver. Widening past this point would buy idle workers.
             //
             // Anyone who wants every thread can still say so - SSSqueezeEncodeThreads is an explicit override and this branch only runs when it is left at zero.
             const unsigned hw = std::thread::hardware_concurrency();
