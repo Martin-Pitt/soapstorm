@@ -35,7 +35,7 @@ numbers it takes. The shipped shapes, which between them cover the whole of Appe
 |---|---|---|
 | `RADIUS` — distance from an area source to each target it hit | kill / wound distance | 5 m kill, 10 m wound |
 | `RATIO_CAP` — a distribution of `damage/initial` per victim per script against a cap | cap, min attackers, min damage types | 25 % armour cap |
-| `ZONE_EVENT` — events or tracks intersecting a marked spawn zone | zone id, event kinds | no shooting into red spawn |
+| `ZONE_EVENT` — events or tracks intersecting an owner-designed zone (future; no zones exist in v1 [owner]) | zone id, event kinds | no shooting into red spawn |
 | `BURST` — speed or fire segments: duration, displacement, recharge gap, in-air flag | max duration, max distance, min recharge | sprints, dashes, jetpacks |
 | `INTERVAL` — time between two observable states of one object | min or max seconds | turret rez-to-first-shot |
 | `CONCURRENCY` — objects of a class alive at once per owner | cap per person | one auto-turret per person |
@@ -59,7 +59,7 @@ without invalidating any that were already written.
 the load-bearing field. Three classes:
 
 - **MEASURABLE** — a standing query exists and its result means something: explosive radii, the 25 %
-  armour cap, healing limits, fire into a marked spawn zone, sprint and dash bursts, turret
+  armour cap, healing limits, fire into an owner-designed zone (future), sprint and dash bursts, turret
   rez-to-first-shot, vehicle hover height, mine scale, AoE not group-safe.
 - **PARTIAL** — the query runs but the denominator is untrustworthy: "no infinite ammo" and raycast
   cadence (a miss produces no event), through-wall kills (bounded by everything in
@@ -111,8 +111,8 @@ all sweepable ([ux §1.2](combat_log_ux.md)).
 
 | Rule as written | What the tool measures | |
 |---|---|---|
-| No entering or shooting into red spawn zones unless returning fire | membership of a spawn zone the officer marked by hand, from tracks × damage events with the shooter's position; no marked zone means no check, and the row says so; "returning fire" needs the officer's judgement, so the return-fire case is listed beside each candidate | **M** |
-| Vehicles and armour must be LBA compatible | the LBA header in the object description, where the viewer saw the object; its absence is not proof of absence | **P** |
+| No entering or shooting into red spawn zones unless returning fire | membership of an owner-designed zone (a future region-owner feature, not v1 [owner]), from tracks x damage events with the shooter's position; no zone means no check, and the row says so; "returning fire" needs the officer's judgement, so the return-fire case is listed beside each candidate | **M** |
+| Vehicles and armour must be LBA compatible | an object description beginning `LBA.v.`, where the viewer saw the object; its absence is not proof of absence | **P** |
 | Vehicles must have respawn timers | the interval from published HP reaching zero to the next rez of the same identity, where both were in view ([analysis §5.7](combat_log_analysis.md)); out of view a re-rez is indistinguishable from an unrelated deploy | **P** |
 | LBA damage cap 2000/min per weapon (+750 per extra crew) | only anti-armor type 104 reaches the combat log; the rest of the damage is invisible, so any total is a floor | **P** |
 | Avatars ≥ 1.5 m tall; prejump enabled; no obnoxious sounds | nothing | **A** |
@@ -157,7 +157,7 @@ parameter [rules].
 |---|---|---|
 | **360° body armour ≤ 25 % damage reduction** | `1 − median(damage/initial)` per victim per script, over ≥ 2 attackers and ≥ 2 damage types ([analysis §5.14](combat_log_analysis.md)) | **M** |
 | Healing limited per life or by recharge | negative type-100 events per life, totals and inter-heal intervals, self versus received ([analysis §5.14](combat_log_analysis.md)) | **M** |
-| Riot shields ≤ 50 HP and directional | published max HP from the LBA header where the shield was in view; directionality, nothing | **P** |
+| Riot shields ≤ 50 HP and directional | published max HP parsed from hover text (a `#/#` pattern), on objects confirmed LBA by the `LBA.v.` description prefix, where the shield was in view; directionality, nothing | **P** |
 | Blinding / movement-limiting effects must recharge longer than they last | only if the effect emits combat-log events; most do not | **A** |
 | Immunity beyond limits (the officers' phrasing) | the immunity patterns of [analysis §5.14](combat_log_analysis.md): at-spawn versus mid-field-while-dealing-damage, bystander versus while-killing, with `task_id` resolved to owner and creator | **M** |
 
@@ -165,7 +165,7 @@ parameter [rules].
 
 | Rule as written | What the tool measures | |
 |---|---|---|
-| Explosive deployables ≤ 1 HP, destroyable by projectiles | published max HP from the LBA header where the object was in view | **P** |
+| Explosive deployables ≤ 1 HP, destroyable by projectiles | published max HP parsed from hover text, on objects confirmed LBA by the `LBA.v.` description prefix, where the object was in view | **P** |
 | One auto-turret per person | turret-classed rezzers alive concurrently per owner | **M** |
 | Turrets must be constructed, not instant | rez-to-first-shot interval | **M** |
 | Turret field of fire ≤ 180° | bearings from the turret to its targets relative to its facing, where the object was seen | **P** |
@@ -204,14 +204,15 @@ do to rules of this kind.
 |---|---|---|
 | No client-side assistance (wireframe, hitboxes, derendering, ARC) | never provable. Behavioural signals only ([analysis §5.15](combat_log_analysis.md), [analysis §5.19](combat_log_analysis.md)), each with its confound list and its mandatory context strip | **P** |
 | No killing through walls by phantom bullets, non-raycast explosions or rez offsets | [analysis §5.5](combat_log_analysis.md)'s delivery taxonomy plus [analysis §5.12](combat_log_analysis.md) | **P** |
-| Safe zones and courtesy lines around spawns | a marked spawn zone or an auto-detected spawn hotspot, plus tracks, damage and `d_spawn` ([analysis §5.7a](combat_log_analysis.md)) | **M** |
+| Safe zones and courtesy lines around spawns | an auto-detected spawn hotspot, plus tracks, damage and `d_spawn` ([analysis §5.7a](combat_log_analysis.md)); owner-designed zones are a future feature, not v1 [owner] | **M** |
 | "You should always be killable" — no invincible armour | [analysis §5.14](combat_log_analysis.md)'s immunity patterns | **M** |
 | Renaming gear to evade a banned-equipment enforcer | same creator and damage-type signature, new name, mid-session ([analysis §5.13](combat_log_analysis.md)) | **M** |
 | Doxxing, GPU crashing, mass abuse-reporting, content theft | nothing, and nothing here should ever pretend otherwise | **A** |
 
 Counting the table: roughly a third of the written rules are measurable, half partial, and the
 remainder annotate-only — the balance moved toward *partial* once LBA health turned out to be
-readable from object descriptions and hover text
+readable from hover text (detected by a `#/#` pattern, confirmed LBA by the object description's
+`LBA.v.` prefix)
 ([analysis §5.7](combat_log_analysis.md)), which is exactly the kind of correction the measurability
 field exists to absorb. That ratio is the honest headline of this document. A tool that presented
 rule checking as coverage would be lying about most of the rule book; one that presents it as

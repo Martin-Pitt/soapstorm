@@ -58,6 +58,19 @@ namespace
     const F32 SS_DMG_LO[]   = {  9.f,  14.f,  26.f,  22.f };
     const F32 SS_DMG_HI[]   = { 17.f,  23.f,  44.f,  38.f };
 
+    // Damage type per weapon (fscombathitmarker.cpp's DAMAGE_TYPES table): the type the weapon actually implies
+    // almost every hit, with an occasional neighbour so a raid's numbers are not perfectly monochrome (owner
+    // request 2026-09-09: rifle -> piercing, grenade -> explosive; the mortar shell was already explosive, the
+    // grenade was wrongly wired to crushing).
+    struct WeaponDamage { S16 mUsual, mOccasional; F32 mOccasionalChance; };
+    const WeaponDamage SS_DAMAGE_TYPE[] =
+    {
+        /* W_RIFLE   */ {   8, 12, 0.15f },   // piercing, sometimes slashing
+        /* W_BOLT    */ {   8,  0, 0.10f },   // piercing, sometimes generic
+        /* W_MORTAR  */ { 102,  2, 0.10f },   // explosive, sometimes bludgeoning
+        /* W_GRENADE */ { 102,  2, 0.10f },   // explosive, sometimes bludgeoning
+    };
+
     // The scripted moments the officer is meant to find.
     enum ECue : U8
     {
@@ -167,6 +180,14 @@ F32 SSCombatSynth::frand()
 F32 SSCombatSynth::range(F32 lo, F32 hi)
 {
     return lo + (hi - lo) * frand();
+}
+
+// The damage type for one shot from this weapon: its usual type almost every time, occasionally the neighbour
+// SS_DAMAGE_TYPE lists beside it, so a raid's own numbers show a little of the variety a real one would.
+S16 SSCombatSynth::damageTypeFor(U8 weapon)
+{
+    const WeaponDamage& d = SS_DAMAGE_TYPE[weapon];
+    return (frand() < d.mOccasionalChance) ? d.mOccasional : d.mUsual;
 }
 
 // A UUID drawn from the same stream, so keys are reproducible too.
@@ -464,6 +485,10 @@ void SSCombatSynth::step(F64 t, U32 frame)
                 p.mHealth = SS_HEALTH;
                 p.mPos = clampToRegion(p.mSpawn + LLVector3(range(-6.f, 6.f), range(-6.f, 6.f), 0.f));
                 p.mVel.clear();
+                // The true respawn is its own instant jump, one tick and no interpolation, same as the
+                // death_action landing above; the store's own detector would also catch this, but the
+                // generator is honest about what it just did.
+                p.mFlags |= FLAG_TELEPORT;
             }
             else
             {
@@ -561,13 +586,14 @@ void SSCombatSynth::fire(Person& shooter, Person& victim, F64 t, U32 frame)
     shooter.mFlags |= FLAG_MOUSELOOK;
 
     const F32 raw = range(SS_DMG_LO[shooter.mWeapon], SS_DMG_HI[shooter.mWeapon]);
+    const S16 type = damageTypeFor(shooter.mWeapon);
 
     switch (shooter.mWeapon)
     {
         case W_RIFLE:
         {
             // Attached and its own rezzer: hitscan, no flight, no travel window.
-            applyDamage(shooter, victim, raw, 0, shooter.mWeaponId, shooter.mWeaponId, t, frame, false);
+            applyDamage(shooter, victim, raw, type, shooter.mWeaponId, shooter.mWeaponId, t, frame, false);
             break;
         }
         case W_BOLT:
@@ -595,11 +621,19 @@ void SSCombatSynth::fire(Person& shooter, Person& victim, F64 t, U32 frame)
 
             LLVector3 from = shooter.mPos + LLVector3(0.f, 0.f, 1.4f);
             LLVector3 to = victim.mPos + LLVector3(0.f, 0.f, 1.0f);
-            const F32 travel = llmax(0.01f, (to - from).length() / 120.f);
+            // Havok's own physics speed limit is ~200 m/s (llSetKeyframedMotion/physics step ceiling), which
+            // is about as fast as a scripted, tracked projectile can move; the bolt used to travel at a mere
+            // 120 m/s and, worse, land its damage at the muzzle instant t rather than the impact instant the
+            // flight above actually reaches -- the victim was recorded dead while their own death's evidence
+            // still showed the bolt mid-air (owner bug report 2026-09-09).
+            const F32 SS_BOLT_SPEED = 200.f;
+            const F32 travel = llmax(0.01f, (to - from).length() / SS_BOLT_SPEED);
+            const F64 impact_t = t + (F64)travel;
+            const U32 impact_frame = frameAt(impact_t);
             Flight f;
             f.mObject = bolt;
             f.mStart = t;
-            f.mEnd = t + (F64)travel;
+            f.mEnd = impact_t;
             f.mShooter = shooter.mId;
             f.mShooterConfidence = CONF_LIKELY;
             for (S32 s = 0; s <= 5; ++s)
@@ -609,20 +643,20 @@ void SSCombatSynth::fire(Person& shooter, Person& victim, F64 t, U32 frame)
             }
             {
                 Msg m;
-                m.mAt = t + (F64)travel;
+                m.mAt = impact_t;
                 m.mKind = MSG_FLIGHT;
                 m.mIndex = (U32)mFlightPool.size();
                 mFlightPool.push_back(f);
                 mQueue.push_back(m);
             }
-            applyDamage(shooter, victim, raw, 0, bolt, shooter.mWeaponId, t, frame, false);
+            applyDamage(shooter, victim, raw, type, bolt, shooter.mWeaponId, impact_t, impact_frame, false);
             break;
         }
         case W_MORTAR:
         {
             // Lobbed, and it hits everyone near the impact: one source, several targets in the same second.
             const LLUUID shell = makeId();
-            applyDamage(shooter, victim, raw, 102, shell, shooter.mWeaponId, t, frame, true);
+            applyDamage(shooter, victim, raw, type, shell, shooter.mWeaponId, t, frame, true);
             for (Person& other : mPeople)
             {
                 if (!other.mAlive || other.mId == victim.mId || !ss_hostile(other.mSide, shooter.mSide))
@@ -632,7 +666,7 @@ void SSCombatSynth::fire(Person& shooter, Person& victim, F64 t, U32 frame)
                 const F32 d = (other.mPos - victim.mPos).length();
                 if (d <= 7.f)
                 {
-                    applyDamage(shooter, other, raw * (1.f - d / 9.f), 102, shell, shooter.mWeaponId, t, frame, true);
+                    applyDamage(shooter, other, raw * (1.f - d / 9.f), type, shell, shooter.mWeaponId, t, frame, true);
                 }
             }
             break;
@@ -642,7 +676,7 @@ void SSCombatSynth::fire(Person& shooter, Person& victim, F64 t, U32 frame)
         {
             // Rezzed by a HUD attachment, which is what makes it lobbed rather than hitscan.
             const LLUUID nade = makeId();
-            applyDamage(shooter, victim, raw, 103, nade, mHud, t, frame, true);
+            applyDamage(shooter, victim, raw, type, nade, mHud, t, frame, true);
             for (Person& other : mPeople)
             {
                 if (!other.mAlive || other.mId == victim.mId || !ss_hostile(other.mSide, shooter.mSide))
@@ -651,7 +685,7 @@ void SSCombatSynth::fire(Person& shooter, Person& victim, F64 t, U32 frame)
                 }
                 if ((other.mPos - victim.mPos).length() <= 5.f)
                 {
-                    applyDamage(shooter, other, raw * 0.6f, 103, nade, mHud, t, frame, true);
+                    applyDamage(shooter, other, raw * 0.6f, type, nade, mHud, t, frame, true);
                 }
             }
             break;
@@ -821,10 +855,10 @@ void SSCombatSynth::runCues(F64 t, U32 frame)
                 Person& victim = mPeople[1];
                 victim.mAlive = true;
                 victim.mHealth = 24.f;
-                applyDamage(a, victim, 12.f, 0, a.mWeaponId, a.mWeaponId, t, frame, false);
+                applyDamage(a, victim, 12.f, damageTypeFor(a.mWeapon), a.mWeaponId, a.mWeaponId, t, frame, false);
                 if (victim.mAlive)
                 {
-                    applyDamage(b, victim, 18.f, 0, b.mWeaponId, b.mWeaponId, t, frame, false);
+                    applyDamage(b, victim, 18.f, damageTypeFor(b.mWeapon), b.mWeaponId, b.mWeaponId, t, frame, false);
                 }
                 break;
             }
@@ -879,7 +913,7 @@ void SSCombatSynth::runCues(F64 t, U32 frame)
                 victim.mHealth = SS_HEALTH;
                 killer.mAlive = true;
                 killer.mPos = clampToRegion(victim.mPos + LLVector3(-62.f, 9.f, 0.f));
-                kill(killer, victim, killer.mWeaponId, killer.mWeaponId, 0, 34.f, t, frame, true);
+                kill(killer, victim, killer.mWeaponId, killer.mWeaponId, damageTypeFor(killer.mWeapon), 34.f, t, frame, true);
                 break;
             }
             case CUE_SITHACK:
@@ -898,7 +932,7 @@ void SSCombatSynth::runCues(F64 t, U32 frame)
                 Person& killer = mPeople[SS_SIDE_A + 4];
                 victim.mAlive = true;
                 killer.mAlive = true;
-                kill(killer, victim, killer.mWeaponId, killer.mWeaponId, 0, 28.f, t, frame, false);
+                kill(killer, victim, killer.mWeaponId, killer.mWeaponId, damageTypeFor(killer.mWeapon), 28.f, t, frame, false);
                 break;
             }
         }

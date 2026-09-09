@@ -21,7 +21,6 @@
 #include <boost/signals2.hpp>
 #include <string>
 
-class LLButton;
 class LLCheckBoxCtrl;
 class LLComboBox;
 class LLLineEditor;
@@ -54,8 +53,6 @@ private:
     // Double-click a death row jumps straight into reconstruction.
     void onDoubleClickEvent();
 
-    void onClickShowInWorld();
-    void onClickReconstruct();
     void onClickLoadMock();
     void onClickReplayMock();
 
@@ -71,8 +68,6 @@ private:
     void refreshCountText();
     // Rebuilds the lower pane for whatever is selected in events_list, or clears it when nothing is.
     void rebuildRelated();
-    // Reconstruct only makes sense for a death; Show in world needs any selection at all.
-    void refreshButtons();
     // Swaps related_list's columns between the hit-list layout and the adjustment-list layout.
     void setRelatedColumns(bool hitsMode);
 
@@ -94,8 +89,6 @@ private:
     LLScrollListCtrl*   mEventsList = nullptr;
     LLTextBox*          mRelatedLabel = nullptr;
     LLScrollListCtrl*   mRelatedList = nullptr;
-    LLButton*           mShowWorldBtn = nullptr;
-    LLButton*           mReconstructBtn = nullptr;
 
     boost::signals2::scoped_connection mDataConnection;
     boost::signals2::scoped_connection mViewConnection;
@@ -116,6 +109,12 @@ private:
     U32                 mListRevision = 0;      // bumped once per appendNewEvents() call
     U32                 mLastRevision = ~0u;
     SSCombat::NounRef   mLastHover;
+
+    // Click-to-deselect state (ux idle click, doc/combat_log_ux.md 4.6): the list commits on every mouse-up
+    // inside it, hit or not, so onSelectEvent() tells a repeat click on the already-selected row (deselect it)
+    // from the second half of a double-click (leave it selected so onDoubleClickEvent still finds it selected).
+    SSCombat::NounRef   mLastCommitRef;
+    F64                 mLastCommitTime = 0.0;
 
     static constexpr size_t MAX_VISIBLE_ROWS = 2000;
 };

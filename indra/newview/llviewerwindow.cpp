@@ -3105,6 +3105,7 @@ void LLViewerWindow::draw()
         // Kill feed: text-only overlay, positioned and scaled via the Kill
         // Feed settings floater. Renders in and out of mouselook.
         FSFloaterKillFeed::drawOverlay();
+        SSCombatOverlay::drawLegend(); // <SS:Nexii> Combat Log legend, bottom-centre, only while the world overlay draws [interaction: CombatLog]
 
         // Hitmarker flash and fading hit report for outgoing combat damage.
         // Reset the crosshair tint each frame; the combat features pass
@@ -3407,11 +3408,6 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
 
     // <SS:Nexii> Combat Log reconstruction transport: Space plays, ',' and '.' step one event, Esc leaves; consumed only while a reconstruction is loaded. [interaction: CombatLog]
     if (SSCombatReconstruct::handleKey(key, mask))
-    {
-        return true;
-    }
-    // Esc clears a pinned Combat Log selection in the world when no reconstruction is running.
-    if (SSCombatOverlay::handleKey(key, mask))
     {
         return true;
     }
@@ -4327,11 +4323,8 @@ void LLViewerWindow::updateUI()
             }
         }
 
-        // <SS:Nexii> Combat Log overlay hover: selects nothing, only refreshes which noun the pointer is over. [interaction: CombatLog]
-        if (!handled)
-        {
-            SSCombatOverlay::handleHover(x, y);
-        }
+        // <SS:Nexii> Combat Log overlay hover: bookkeeping only (which noun the pointer is over), so it runs regardless of `handled`, which LLToolPie sets every frame in third person. [interaction: CombatLog]
+        SSCombatOverlay::handleHover(x, y);
         // </SS:Nexii>
 
         // Show a new tool tip (or update one that is already shown)

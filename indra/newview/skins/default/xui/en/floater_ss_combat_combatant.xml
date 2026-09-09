@@ -2,6 +2,7 @@
 <floater
  name="ss_combat_combatant"
  title="Combatant"
+ legacy_header_height="18"
  layout="topleft"
  width="420"
  height="360"
@@ -17,7 +18,7 @@
 	 layout="topleft"
 	 left="10"
 	 right="-10"
-	 top="8"
+	 top="26"
 	 height="16"
 	 follows="left|right|top">
 		Side: Unassigned
@@ -124,7 +125,7 @@
 	 left="10"
 	 right="-10"
 	 top_pad="2"
-	 bottom="40"
+	 bottom="-40"
 	 follows="left|right|top|bottom"
 	 draw_heading="false"
 	 multi_select="false"
@@ -144,7 +145,7 @@
 	 label="Reconstruct last death"
 	 layout="topleft"
 	 left="10"
-	 bottom="8"
+	 bottom="-8"
 	 width="160"
 	 height="24"
 	 follows="left|bottom" />

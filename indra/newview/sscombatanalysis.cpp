@@ -301,7 +301,9 @@ void SSCombatAnalysis::buildLives()
             life.mStart = open;
             life.mEnd = death->mTime;
             life.mDeathEvent = death->mId;
-            // The teleport that usually follows a death is its own signal (analysis 5.7): look, never assume.
+            // The teleport that usually follows a death is its own signal (analysis 5.7): derived solely from
+            // the store's own FLAG_TELEPORT sample within the grace window, never a distance heuristic of our
+            // own that could disagree with what addSample already decided.
             if (const Track* track = mLog.track(id))
             {
                 for (const Sample& s : track->mSamples)
@@ -311,7 +313,7 @@ void SSCombatAnalysis::buildLives()
                     {
                         continue;
                     }
-                    if (t > death->mTime + 6.0)
+                    if (t > death->mTime + 5.0)
                     {
                         break;
                     }

@@ -1,10 +1,13 @@
 /**
  * @file sscombatreconstruct.cpp
- * @brief Combat Log Reconstruction: the ghosted replay of one death (doc/combat_log_ux.md 3.10).
- *        Opening it resamples the tracks of everyone with a damage edge into or out of the death, plus anyone
- *        inside the engagement at that time, into a 10 Hz ring of prepared frames, so scrubbing costs an array
- *        index. It runs zero raycasts: every geometric claim was computed before it opened, and the killer's
- *        line draws neutral grey captioned "not tested" until a sweep has actually run.
+ * @brief Combat Log Reconstruction: the ghosted replay of one combat event, DEATH or DAMAGE (doc/combat_log_ux.md
+ *        3.10). Selecting the event in any pane opens this directly (ux rework 2026-09-09); opening it resamples
+ *        the tracks of everyone with a damage edge into or out of the event, plus anyone inside the engagement
+ *        at that time, into a 10 Hz ring of prepared frames, so scrubbing costs an array index. Everyone in that
+ *        ring who is not the victim or an attributed attacker is a wider-cast bystander and fades. The kill line
+ *        is the one exception to "everything here is a resampled ghost": it is fixed at the event's own recorded
+ *        source/target position and never moves as the scrub cursor does, with a single line-of-sight raycast
+ *        run once when the reconstruction is built (owner correction 2026-09-09), not swept every frame.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Soapstorm Viewer Source Code
@@ -18,26 +21,30 @@
 
 #include "sscombatreconstruct.h"
 
+#include "sscombaticons.h"
 #include "sscombatlog.h"
 #include "sscombatoverlay.h"
 
 #include "indra_constants.h"
 #include "llbutton.h"
 #include "llcheckboxctrl.h"
-#include "llcombobox.h"
-#include "llfloaterreg.h"
 #include "llframetimer.h"
 #include "llgl.h"
 #include "llglstates.h"
 #include "llpanel.h"
 #include "llrender.h"
+#include "llrender2dutils.h"
 #include "llrootview.h"
-#include "llslider.h"
+#include "llsliderctrl.h"
 #include "lltextbox.h"
+#include "llui.h"
 #include "lluictrlfactory.h"
+#include "lluiimage.h"
+#include "llvector4a.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerwindow.h"
+#include "pipeline.h"
 
 #include <algorithm>
 #include <cmath>
@@ -48,18 +55,19 @@
 // Palette. Reconstruction reuses the overlay's meanings and adds only the ones it alone needs.
 // ---------------------------------------------------------------------------------------------------------
 
-// A geometric claim Stage 0 never tested; the killer's line wears this until a sweep has run.
-static const LLColor4 COL_UNTESTED(0.64f, 0.64f, 0.67f, 1.f);
+// The kill line's own neutral colour: dashed rather than damage-type-coloured, so it is never mistaken for one
+// of the solid hit lines draw_hit_discs()/draw_hit_line() draw for the DAMAGE evidence.
+static const LLColor4 COL_KILL_LINE(0.64f, 0.64f, 0.67f, 1.f);
 // Ghost labels.
 static const LLColor4 COL_LABEL(0.93f, 0.93f, 0.96f, 1.f);
-// The health the estimate still credits the victim with; hatched in the drawing because it is estimated.
-static const LLColor4 COL_HEALTH(0.34f, 0.86f, 0.40f, 1.f);
-// The health the estimate says is already gone.
-static const LLColor4 COL_HEALTH_LOST(0.52f, 0.16f, 0.16f, 1.f);
 // A measured projectile flight, solid because it was seen.
 static const LLColor4 COL_FLIGHT(0.96f, 0.92f, 0.72f, 1.f);
 // The head of a flight that is in the air at the current instant.
 static const LLColor4 COL_FLIGHT_HEAD(1.00f, 0.98f, 0.86f, 1.f);
+// The health bar (a hatched estimate over the ghost) was pulled 2026-09-09: a Stage 0 walk of cumulative
+// damage from life-start is too rough a guess to show as a bar, and the owner called it a bad implementation.
+// estimate_health()/draw_health_bar() are gone with it; if a real read comes in Stage 2, redesign rather than
+// resurrect this.
 
 // The frame ring's rate; 10 Hz over an eight-second window is 80 frames per ghost.
 static const F64 RECON_HZ = 10.0;
@@ -68,6 +76,9 @@ static const size_t RECON_MAX_GHOSTS = 24;
 // Fallback window when the store has not set one; ux 3.10 fixes it at [t - 6 s, t + 2 s].
 static const F64 RECON_PRE = 6.0;
 static const F64 RECON_POST = 2.0;
+// Bystanders (everyone in the cast who is not the victim or an attributed attacker) fade to this fraction of
+// their normal alpha and lose their label while a reconstruction is up (ux rework 2026-09-09, item 3).
+static const F32 FADE_ALPHA_SCALE = 0.30f;
 
 // ---------------------------------------------------------------------------------------------------------
 // Prepared frames.
@@ -76,12 +87,15 @@ static const F64 RECON_POST = 2.0;
 namespace
 {
     // One combatant resampled over the window. mValid is separate from mFrames because a track gap must draw
-    // hollow and stop rather than sliding across the missing seconds.
+    // hollow and stop rather than sliding across the missing seconds. mVictim/mAttacker mark the two party
+    // roles (the victim, and the recorded blow's owner or any other attributed attacker); everyone else in the
+    // cast is a bystander that fades to FADE_ALPHA_SCALE with no label while the reconstruction is up (ux
+    // rework 2026-09-09, item 3).
     struct Ghost
     {
         LLUUID                      mId;
         bool                        mVictim = false;
-        bool                        mKiller = false;
+        bool                        mAttacker = false;
         std::vector<SSCombat::Sample> mFrames;
         std::vector<bool>           mValid;
     };
@@ -96,6 +110,13 @@ namespace
     bool                sLoop = false;
     F64                 sLastAdvance = 0.0;
     U32                 sAdvanceFrame = 0xFFFFFFFFu;
+
+    // The kill line's fixed endpoints (agent space, eye/chest heights already added) and its line-of-sight
+    // verdict, both resolved once by resolve_kill_line() when the ring is built, never per frame.
+    enum ELosState : U8 { LOS_UNTESTED = 0, LOS_CLEAR, LOS_BLOCKED };
+    LLVector3           sKillFrom, sKillTo;
+    bool                sHaveKillLine = false;
+    U8                  sLos = LOS_UNTESTED;
 
     LLPanel*            sPanel = NULL;
     bool                sSyncingWidgets = false;
@@ -119,20 +140,53 @@ static F64 recon_time()
     return llclamp(SSCombatLog::instance().view().mCursor, sStart, sEnd);
 }
 
-// Resamples one combatant into the ring.
-static void build_ghost(const SSCombatLog& store, const LLUUID& id, bool victim, bool killer)
+// Resamples one combatant into the ring. sampleAt already holds position steady across a teleport rather than
+// sliding, but the ring goes further: once the query time actually reaches the flagged sample's own instant,
+// the frame is invalid (hollow) rather than showing the far side, so the victim's ghost stays put at the death
+// spot and then simply stops instead of ever popping to the respawn point inside the window.
+static void build_ghost(const SSCombatLog& store, const LLUUID& id, bool victim, bool attacker)
 {
     Ghost ghost;
     ghost.mId = id;
     ghost.mVictim = victim;
-    ghost.mKiller = killer;
+    ghost.mAttacker = attacker;
     const S32 frames = frame_count();
     ghost.mFrames.resize((size_t)frames);
     ghost.mValid.resize((size_t)frames, false);
+
+    // The first teleport at or after the death, if any is inside the window; only this one stops the ghost.
+    F64 teleport_at = -1.0;
+    if (const SSCombat::Track* track = store.track(id))
+    {
+        const F64 session = store.sessionStart();
+        for (const SSCombat::Sample& s : track->mSamples)
+        {
+            if (!(s.mFlags & SSCombat::FLAG_TELEPORT))
+            {
+                continue;
+            }
+            const F64 st = session + (F64)s.mTime;
+            if (st < sDeathTime - 0.001)
+            {
+                continue; // an older, unrelated jump
+            }
+            if (st > sEnd + 0.001)
+            {
+                break; // samples are ascending; nothing left in this window
+            }
+            teleport_at = st;
+            break;
+        }
+    }
+
     bool any = false;
     for (S32 i = 0; i < frames; ++i)
     {
         const F64 t = sStart + (F64)i / RECON_HZ;
+        if (teleport_at >= 0.0 && t >= teleport_at - 0.001)
+        {
+            continue; // past the jump: hollow, never the far side
+        }
         SSCombat::Sample sample;
         if (store.sampleAt(id, t, sample))
         {
@@ -141,14 +195,66 @@ static void build_ghost(const SSCombatLog& store, const LLUUID& id, bool victim,
             any = true;
         }
     }
-    if (any || victim || killer)
+    if (any || victim || attacker)
     {
         sGhosts.push_back(ghost);
     }
 }
 
+// Resolves the kill line's two fixed endpoints and, once, whether the straight line between them is blocked by
+// static geometry: a single raycast per reconstruction, run here rather than every frame the way the overlay's
+// broader detective view deliberately never does. The endpoints come from the event's own recorded source/
+// target position when it carries one (a DEATH does; a DAMAGE does not, struct Event's own comment), else the
+// ghosts' resampled position at the event's own instant -- never the scrub cursor, so the line stays put while
+// the officer scrubs (owner correction 2026-09-09: it used to resample at the current cursor, which dragged the
+// line along with the moving ghosts before the death and made it look like a claim about wherever they were
+// standing right now, not about the recorded shot).
+static void resolve_kill_line(const SSCombatLog& store, const SSCombat::Event& death)
+{
+    sHaveKillLine = false;
+    sLos = LOS_UNTESTED;
+    if (sKiller.isNull())
+    {
+        return;
+    }
+
+    LLVector3 from_region, to_region;
+    bool have_from = false, have_to = false;
+    if (death.mHasPositions)
+    {
+        from_region = death.mSourcePos;
+        to_region = death.mTargetPos;
+        have_from = have_to = true;
+    }
+    else
+    {
+        SSCombat::Sample killer_sample, victim_sample;
+        have_from = store.sampleAt(sKiller, sDeathTime, killer_sample);
+        have_to = store.sampleAt(sVictim, sDeathTime, victim_sample);
+        if (have_from) from_region = killer_sample.mPos;
+        if (have_to)   to_region = victim_sample.mPos;
+    }
+    if (!have_from || !have_to)
+    {
+        return;
+    }
+
+    sKillFrom = SSCombatDraw::agentFromRegion(from_region) + LLVector3(0.f, 0.f, 1.60f);
+    sKillTo   = SSCombatDraw::agentFromRegion(to_region) + LLVector3(0.f, 0.f, 1.20f);
+    sHaveKillLine = true;
+
+    LLVector4a start;
+    start.load3(sKillFrom.mV);
+    LLVector4a end;
+    end.load3(sKillTo.mV);
+    LLVector4a hit;
+    sLos = (gPipeline.lineSegmentIntersectWorldGeometry(start, end, &hit) == NULL) ? LOS_CLEAR : LOS_BLOCKED;
+}
+
 // Collects the cast and resamples it. Everyone with a damage edge into or out of the death, plus anyone the
-// containing engagement had inside its radius at the time, capped at the ghost budget.
+// containing engagement had inside its radius at the time, capped at the ghost budget. Tracks which of them
+// are the victim or an attributed attacker (the party) versus a wider-cast bystander, so build_ghost can mark
+// the fade (ux rework 2026-09-09, item 3).
 static void build_frames(U32 death_event)
 {
     sGhosts.clear();
@@ -163,6 +269,7 @@ static void build_frames(U32 death_event)
     sDeathTime = death->mTime;
     sVictim = death->mTarget;
     sKiller = death->mOwner;
+    resolve_kill_line(store, *death);
 
     const SSCombat::View& view = store.view();
     sStart = view.mReconStart;
@@ -184,15 +291,28 @@ static void build_frames(U32 death_event)
     };
 
     add(sVictim);
-    add(sKiller);
 
-    // Damage edges into and out of the death, from the attribution the store already computed.
+    // The party: the recorded blow's owner plus every other attributed attacker from the attribution the store
+    // already computed (empty for a DAMAGE event, which has no attribution and needs none -- sKiller alone is
+    // its one attacker). Anyone here draws in the attacker palette at full strength; everyone else in the cast
+    // below is a bystander.
+    std::set<LLUUID> attackers;
+    if (sKiller.notNull())
+    {
+        add(sKiller);
+        attackers.insert(sKiller);
+    }
     const SSCombat::Attribution attribution = store.attribution(death_event);
     for (const SSCombat::VolleyShare& share : attribution.mShares)
     {
-        add(share.mAttacker);
+        if (share.mAttacker.notNull())
+        {
+            add(share.mAttacker);
+            attackers.insert(share.mAttacker);
+        }
     }
-    // Anyone the victim was shooting at inside the window is an edge out of the death.
+    // Anyone the victim was shooting at inside the window is an edge out of the death, but a bystander to it,
+    // not a party: they fade with the rest of the wider cast.
     const size_t first = store.eventIndexAt(sStart);
     const std::vector<SSCombat::Event>& events = store.events();
     for (size_t i = first; i < events.size(); ++i)
@@ -207,7 +327,7 @@ static void build_frames(U32 death_event)
             add(ev.mTarget);
         }
     }
-    // Everyone inside the engagement that contains the death.
+    // Everyone inside the engagement that contains the death; also bystanders.
     for (const SSCombat::Engagement& eng : store.engagements())
     {
         if (sDeathTime < eng.mStart || sDeathTime > eng.mEnd)
@@ -226,51 +346,8 @@ static void build_frames(U32 death_event)
     }
     for (const LLUUID& id : cast)
     {
-        build_ghost(store, id, id == sVictim, id == sKiller && id != sVictim);
+        build_ghost(store, id, id == sVictim, id != sVictim && attackers.count(id) != 0);
     }
-}
-
-// ---------------------------------------------------------------------------------------------------------
-// Health estimate (analysis 5.25 in its Stage 0 form: 100 minus cumulative damage, plus regen).
-// ---------------------------------------------------------------------------------------------------------
-
-// The victim's estimated health at a time, walking their damage from the start of the life that ended here.
-static F32 estimate_health(const SSCombatLog& store, F64 at)
-{
-    F64 life_start = sStart;
-    for (const SSCombat::Life& life : store.lives(sVictim))
-    {
-        if (life.mDeathEvent == sDeath)
-        {
-            life_start = life.mStart;
-            break;
-        }
-    }
-
-    const SSCombat::RegionSettings& settings = store.regionSettings();
-    const F32 regen = (settings.mKnown && settings.mRestoreHealth) ? llmax(0.f, settings.mHealthRegenRate) : 0.f;
-
-    F32 health = 100.f;
-    F64 last = life_start;
-    const size_t first = store.eventIndexAt(life_start);
-    const std::vector<SSCombat::Event>& events = store.events();
-    for (size_t i = first; i < events.size(); ++i)
-    {
-        const SSCombat::Event& ev = events[i];
-        if (ev.mTime > at)
-        {
-            break;
-        }
-        if (ev.mKind != SSCombat::EVENT_DAMAGE || ev.mTarget != sVictim)
-        {
-            continue;
-        }
-        health = llmin(100.f, health + (F32)(ev.mTime - last) * regen * 100.f);
-        health -= ev.mDamage;
-        last = ev.mTime;
-    }
-    health = llmin(100.f, health + (F32)(at - last) * regen * 100.f);
-    return llclamp(health, 0.f, 100.f);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -278,10 +355,14 @@ static F32 estimate_health(const SSCombatLog& store, F64 at)
 // ---------------------------------------------------------------------------------------------------------
 
 // One ghost at the current instant: capsule (or a hollow ring across a track gap), yaw arrow, label, pick rect.
-// The solid branch is SSCombatDraw::ghostBody(), the shared body also used by the overlay's detective view.
+// The solid branch is SSCombatDraw::ghostBody(), the shared body also used by the overlay's detective view. A
+// ghost that is neither the victim nor an attributed attacker is a bystander: it fades to FADE_ALPHA_SCALE and
+// draws no label, party members stay at full strength (ux rework 2026-09-09, item 3).
 static void draw_ghost(const SSCombatLog& store, const Ghost& ghost, S32 index, F64 t)
 {
-    const LLColor4 color = SSCombatDraw::ghostColor(ghost.mVictim, ghost.mKiller);
+    const bool party = ghost.mVictim || ghost.mAttacker;
+    const F32 alpha_scale = party ? 1.f : FADE_ALPHA_SCALE;
+    const LLColor4 color = SSCombatDraw::ghostColor(ghost.mVictim, ghost.mAttacker);
 
     if (index < 0 || index >= (S32)ghost.mValid.size())
     {
@@ -305,10 +386,13 @@ static void draw_ghost(const SSCombatLog& store, const Ghost& ghost, S32 index, 
             return;
         }
         LLColor4 hollow = color;
-        hollow.mV[VALPHA] = color.mV[VALPHA] * 0.5f;
+        hollow.mV[VALPHA] = color.mV[VALPHA] * 0.5f * alpha_scale;
         const LLVector3 stopped = SSCombatDraw::agentFromRegion(ghost.mFrames[(size_t)last].mPos);
         SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, stopped, 0.42f, hollow, SSCombatDraw::WIDTH_THIN);
-        SSCombatDraw::pushLabel(store.displayName(ghost.mId) + " ?", stopped + LLVector3(0.f, 0.f, 2.05f), hollow);
+        if (party)
+        {
+            SSCombatDraw::pushLabel(store.displayName(ghost.mId) + " ?", stopped + LLVector3(0.f, 0.f, 2.05f), hollow);
+        }
         return;
     }
     const SSCombat::Sample& sample = ghost.mFrames[(size_t)index];
@@ -320,7 +404,8 @@ static void draw_ghost(const SSCombatLog& store, const Ghost& ghost, S32 index, 
     ref.mType = SSCombat::NOUN_COMBATANT;
     ref.mId = ghost.mId;
     ref.mTime = t;
-    SSCombatDraw::ghostBody(feet, sample.mYaw, sample.mFlags, color, store.displayName(ghost.mId), ref, true);
+    const std::string label = party ? store.displayName(ghost.mId) : std::string();
+    SSCombatDraw::ghostBody(feet, sample.mYaw, sample.mFlags, color, label, ref, true, alpha_scale);
 }
 
 // The bullet flights whose measured span touches the window, animated along their own polylines at their own
@@ -416,90 +501,40 @@ static void draw_hit_discs(const SSCombatLog& store, F64 t)
     }
 }
 
-// The killer's line, at full alpha because the shot is not in doubt, in neutral grey because Stage 0 has run
-// no sightline analysis at all and a coloured verdict here would be an assertion nobody tested.
-static void draw_killer_line(F64 t)
+// The killer's line: fixed at the endpoints resolve_kill_line() resolved when the ring was built (the event's
+// own recorded source/target position, never the current scrub position), dashed rather than solid so it is
+// never mistaken for one of draw_hit_discs()'s or draw_hit_line()'s solid, damage-type-coloured hit lines. An
+// eye icon at the midpoint carries the line-of-sight verdict the one raycast actually found: on/off once it
+// has run, no icon at all while sLos is still LOS_UNTESTED (no positions to test).
+static void draw_killer_line()
 {
-    const Ghost* victim = NULL;
-    const Ghost* killer = NULL;
-    for (const Ghost& ghost : sGhosts)
-    {
-        if (ghost.mVictim) victim = &ghost;
-        if (ghost.mKiller) killer = &ghost;
-    }
-    if (!victim || !killer)
+    if (!sHaveKillLine)
     {
         return;
     }
-    const S32 index = frame_index(llmin(t, sDeathTime));
-    if (index >= (S32)victim->mValid.size() || !victim->mValid[(size_t)index] || !killer->mValid[(size_t)index])
+    SSCombatDraw::dashedSeg(SSCombatDraw::LAYER_LINE, sKillFrom, sKillTo, COL_KILL_LINE, COL_KILL_LINE, SSCombatDraw::WIDTH_MID);
+
+    const char* icon_name = (sLos == LOS_CLEAR) ? "Profile_Group_Visibility_On"
+                           : (sLos == LOS_BLOCKED) ? "Profile_Group_Visibility_Off" : NULL;
+    if (!icon_name)
     {
         return;
     }
-    const LLVector3 from = SSCombatDraw::agentFromRegion(killer->mFrames[(size_t)index].mPos) + LLVector3(0.f, 0.f, 1.60f);
-    const LLVector3 to = SSCombatDraw::agentFromRegion(victim->mFrames[(size_t)index].mPos) + LLVector3(0.f, 0.f, 1.20f);
-    LLColor4 color = COL_UNTESTED;
-    color.mV[VALPHA] = 1.f;
-    SSCombatDraw::seg(SSCombatDraw::LAYER_LINE, from, to, color, color, SSCombatDraw::WIDTH_MID);
-    SSCombatDraw::pushLabel("not tested", lerp(from, to, 0.5f), COL_UNTESTED);
-}
-
-// The victim's health estimate as a hatched bar over the ghost; hatched because it is an estimate, not a read.
-static void draw_health_bar(const SSCombatLog& store, F64 t)
-{
-    const Ghost* victim = NULL;
-    for (const Ghost& ghost : sGhosts)
-    {
-        if (ghost.mVictim)
-        {
-            victim = &ghost;
-            break;
-        }
-    }
-    const S32 index = frame_index(t);
-    if (!victim || index >= (S32)victim->mValid.size() || !victim->mValid[(size_t)index])
+    LLPointer<LLUIImage> image = LLUI::getUIImage(icon_name);
+    if (!image)
     {
         return;
     }
-
-    const F32 health = estimate_health(store, t) / 100.f;
-    const LLVector3 feet = SSCombatDraw::agentFromRegion(victim->mFrames[(size_t)index].mPos);
-    const LLVector3 centre = feet + LLVector3(0.f, 0.f, 2.45f);
-
-    LLViewerCamera* camera = LLViewerCamera::getInstance();
-    LLVector3 right = camera->getLeftAxis() * -1.f;
-    right.mV[VZ] = 0.f;
-    if (right.magVecSquared() < 0.0001f)
-    {
-        right.setVec(1.f, 0.f, 0.f);
-    }
-    right.normalize();
-    const LLVector3 up(0.f, 0.f, 1.f);
-
-    const F32 half = 0.55f;
-    const F32 bar_h = 0.10f;
-    const LLVector3 left_end = centre - right * half;
-    const LLVector3 right_end = centre + right * half;
-
-    // Outline, then hatch: one short upright per tick, filled ticks in the health colour and spent ticks in
-    // the lost colour, so the bar reads as an estimate at a glance and never as a health bar the sim gave us.
-    SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, left_end + up * bar_h, right_end + up * bar_h, COL_UNTESTED, COL_UNTESTED, SSCombatDraw::WIDTH_THIN);
-    SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, left_end - up * bar_h, right_end - up * bar_h, COL_UNTESTED, COL_UNTESTED, SSCombatDraw::WIDTH_THIN);
-    const S32 ticks = 20;
-    for (S32 i = 0; i < ticks; ++i)
-    {
-        const F32 f = ((F32)i + 0.5f) / (F32)ticks;
-        const LLVector3 at = lerp(left_end, right_end, f);
-        const LLColor4 color = (f <= health) ? COL_HEALTH : COL_HEALTH_LOST;
-        SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, at - up * bar_h, at + up * bar_h, color, color, SSCombatDraw::WIDTH_THIN);
-    }
+    const LLVector3 mid = lerp(sKillFrom, sKillTo, 0.5f);
+    const F32 half = llmax(0.02f, 9.f * SSCombatDraw::metresPerPixelAt(mid)); // ~18 px, screen-constant
+    SSCombatDraw::icon(mid, image, half, LLColor4::white);
 }
 
 // ---------------------------------------------------------------------------------------------------------
 // Transport.
 // ---------------------------------------------------------------------------------------------------------
 
-// Every event time inside the window, ascending; the step buttons and keys walk exactly this list.
+// Every event time inside the window, ascending; the hidden ',' '.' step keys walk exactly this list.
 static std::vector<F64> window_event_times(const SSCombatLog& store)
 {
     std::vector<F64> times;
@@ -592,10 +627,79 @@ static void advance_transport()
 }
 
 // ---------------------------------------------------------------------------------------------------------
+// The panel's own "0 s" marker: a tick across the scrub track at the reconstructed event's own instant, plus
+// its small icon just below, so the officer can read how far the transport has scrubbed from the event
+// without doing the arithmetic on the readout. A tiny LLPanel subclass registered like the codebase's other
+// custom ss_ controls (e.g. SSOrbitViewCtrl), rather than a second overlay pass, because it only ever needs
+// to draw over this one panel's own children in this one panel's own coordinate space (owner addition,
+// ux rework 2026-09-09).
+// ---------------------------------------------------------------------------------------------------------
+
+class SSCombatReconPanel : public LLPanel
+{
+public:
+    struct Params : public LLInitParam::Block<Params, LLPanel::Params> {};
+    SSCombatReconPanel() {}
+    /*virtual*/ void draw();
+};
+
+static LLPanelInjector<SSCombatReconPanel> register_ss_combat_recon_panel("ss_combat_recon_panel");
+
+// The atlas icon for the reconstructed event itself: the damage-type glyph for a DAMAGE, the death glyph for a
+// DEATH or object death. Mirrors the Events list's and the overlay's own icon choice (sscombaticons.h) so the
+// marker never shows a different symbol than everywhere else calls this event.
+static std::string marker_icon_name()
+{
+    const SSCombat::Event* ev = SSCombatLog::instanceExists() ? SSCombatLog::instance().event(sDeath) : NULL;
+    if (!ev)
+    {
+        return std::string();
+    }
+    switch (ev->mKind)
+    {
+        case SSCombat::EVENT_DAMAGE:       return SSCombatIcons::forType(ev->mType);
+        case SSCombat::EVENT_OBJECT_DEATH: return SSCombatIcons::forType(SSCombatIcons::ICON_OBJECT_DEATH);
+        default:                           return SSCombatIcons::forType(SSCombatIcons::ICON_DEATH);
+    }
+}
+
+void SSCombatReconPanel::draw()
+{
+    LLPanel::draw();
+    if (sEnd <= sStart)
+    {
+        return;
+    }
+    LLSliderCtrl* scrub = findChild<LLSliderCtrl>("scrub_slider");
+    if (!scrub)
+    {
+        return;
+    }
+
+    // Where t = 0 s (the event's own instant) falls in the window's own span, as a fraction of the track.
+    const F32 frac = (F32)llclamp((sDeathTime - sStart) / (sEnd - sStart), 0.0, 1.0);
+    const LLRect& track = scrub->getRect();
+    const S32 x = track.mLeft + (S32)(frac * (F32)track.getWidth() + 0.5f);
+
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+    gl_line_2d(x, track.mTop, x, track.mBottom, COL_LABEL);
+
+    const std::string icon_name = marker_icon_name();
+    LLPointer<LLUIImage> icon = icon_name.empty() ? LLPointer<LLUIImage>() : LLUI::getUIImage(icon_name);
+    if (icon)
+    {
+        const S32 size = 16;
+        icon->draw(x - size / 2, track.mBottom - size, size, size, LLColor4::white);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------
 // Control panel.
 // ---------------------------------------------------------------------------------------------------------
 
-// Places the panel bottom-centre of the world view, which is where the officer's camera is not.
+// Docks the panel top-centre of the world view, just below the menu/top bar: the root view's own top edge
+// minus ~40 px, never the legend's territory at the bottom (ux rework 2026-09-09; the panel used to be
+// bottom-centre).
 static void dock_panel()
 {
     if (!sPanel || !gViewerWindow)
@@ -606,8 +710,10 @@ static void dock_panel()
     const S32 w = sPanel->getRect().getWidth();
     const S32 h = sPanel->getRect().getHeight();
     const S32 left = world.mLeft + (world.getWidth() - w) / 2;
-    const S32 bottom = world.mBottom + 96;
-    sPanel->setOrigin(llmax(0, left), llmax(0, bottom));
+    const LLView* root = gViewerWindow->getRootView();
+    const S32 root_top = root ? root->getRect().mTop : world.mTop;
+    const S32 top = root_top - 40;
+    sPanel->setOrigin(llmax(0, left), llmax(0, top - h));
     sPanel->reshape(w, h, false);
 }
 
@@ -625,15 +731,17 @@ static void sync_panel()
 
     if (LLButton* play = sPanel->findChild<LLButton>("play_btn"))
     {
-        play->setLabel(store.view().mPlaying ? std::string("Pause") : std::string("Play"));
+        // Same icon-swap idiom as the Atmo Magic environment editor's preview_play_button.
+        play->setImageOverlay(store.view().mPlaying ? "Pause_Off" : "Play_Off");
     }
-    if (LLSlider* scrub = sPanel->findChild<LLSlider>("scrub_slider"))
+    if (LLSliderCtrl* scrub = sPanel->findChild<LLSliderCtrl>("scrub_slider"))
     {
-        scrub->setMinValue((F32)(sStart - sDeathTime));
-        scrub->setMaxValue((F32)(sEnd - sDeathTime));
-        if (!scrub->hasMouseCapture())
+        // 0..100 across the window regardless of its span, so the slider never needs reconfiguring per event.
+        const F64 span = sEnd - sStart;
+        if (!scrub->isMouseHeldDown())
         {
-            scrub->setValue((F32)(t - sDeathTime), false);
+            const F32 frac = (span > 0.0) ? (F32)llclamp((t - sStart) / span, 0.0, 1.0) : 0.f;
+            scrub->setValue(frac * 100.f, false);
         }
     }
     if (LLTextBox* readout = sPanel->findChild<LLTextBox>("time_readout"))
@@ -662,19 +770,8 @@ static void on_play(LLUICtrl*, const LLSD&)
     store.notifyViewChanged();
 }
 
-// Step one event back.
-static void on_step_back(LLUICtrl*, const LLSD&)
-{
-    step_event(-1);
-}
-
-// Step one event forward.
-static void on_step_forward(LLUICtrl*, const LLSD&)
-{
-    step_event(1);
-}
-
-// Scrub: the slider spans the death window and nothing else, so a scrub cannot wander into the session.
+// Scrub: the slider spans the death window and nothing else (as a 0..100 fraction of it), so a scrub cannot
+// wander into the session.
 static void on_scrub(LLUICtrl* ctrl, const LLSD&)
 {
     if (sSyncingWidgets || !ctrl)
@@ -682,20 +779,10 @@ static void on_scrub(LLUICtrl* ctrl, const LLSD&)
         return;
     }
     SSCombatLog& store = SSCombatLog::instance();
-    store.view().mCursor = llclamp(sDeathTime + (F64)ctrl->getValue().asReal(), sStart, sEnd);
+    const F32 frac = llclamp((F32)ctrl->getValue().asReal() / 100.f, 0.f, 1.f);
+    store.view().mCursor = llclamp(sStart + (F64)frac * (sEnd - sStart), sStart, sEnd);
     store.view().mPlaying = false;
     store.notifyViewChanged();
-}
-
-// Playback speed.
-static void on_speed(LLUICtrl* ctrl, const LLSD&)
-{
-    if (sSyncingWidgets || !ctrl)
-    {
-        return;
-    }
-    const F32 speed = (F32)ctrl->getValue().asReal();
-    SSCombatLog::instance().view().mSpeed = (speed > 0.f) ? speed : 1.f;
 }
 
 // Loop at the end of the window.
@@ -706,15 +793,6 @@ static void on_loop(LLUICtrl* ctrl, const LLSD&)
         return;
     }
     sLoop = ctrl->getValue().asBoolean();
-}
-
-// The one escape from the replay: the victim's own Combatant page.
-static void on_page(LLUICtrl*, const LLSD&)
-{
-    if (sVictim.notNull())
-    {
-        LLFloaterReg::showInstance("ss_combat_combatant", LLSD(sVictim.asString()));
-    }
 }
 
 // Close: leave the mode, exactly as Esc does.
@@ -738,13 +816,9 @@ void SSCombatReconstruct::createPanel()
     }
     sPanel->setVisible(false);
 
-    if (LLButton* button = sPanel->findChild<LLButton>("play_btn"))       button->setCommitCallback(boost::bind(&on_play, _1, _2));
-    if (LLButton* button = sPanel->findChild<LLButton>("step_back_btn"))  button->setCommitCallback(boost::bind(&on_step_back, _1, _2));
-    if (LLButton* button = sPanel->findChild<LLButton>("step_fwd_btn"))   button->setCommitCallback(boost::bind(&on_step_forward, _1, _2));
-    if (LLButton* button = sPanel->findChild<LLButton>("page_btn"))       button->setCommitCallback(boost::bind(&on_page, _1, _2));
-    if (LLButton* button = sPanel->findChild<LLButton>("close_btn"))      button->setCommitCallback(boost::bind(&on_close, _1, _2));
-    if (LLSlider* scrub = sPanel->findChild<LLSlider>("scrub_slider"))    scrub->setCommitCallback(boost::bind(&on_scrub, _1, _2));
-    if (LLComboBox* speed = sPanel->findChild<LLComboBox>("speed_combo")) speed->setCommitCallback(boost::bind(&on_speed, _1, _2));
+    if (LLButton* button = sPanel->findChild<LLButton>("play_btn"))            button->setCommitCallback(boost::bind(&on_play, _1, _2));
+    if (LLButton* button = sPanel->findChild<LLButton>("close_btn"))           button->setCommitCallback(boost::bind(&on_close, _1, _2));
+    if (LLSliderCtrl* scrub = sPanel->findChild<LLSliderCtrl>("scrub_slider")) scrub->setCommitCallback(boost::bind(&on_scrub, _1, _2));
     if (LLCheckBoxCtrl* loop = sPanel->findChild<LLCheckBoxCtrl>("loop_check")) loop->setCommitCallback(boost::bind(&on_loop, _1, _2));
 
     dock_panel();
@@ -797,12 +871,6 @@ void SSCombatReconstruct::enter(U32 death_event)
     createPanel();
     if (sPanel)
     {
-        if (LLComboBox* speed = sPanel->findChild<LLComboBox>("speed_combo"))
-        {
-            sSyncingWidgets = true;
-            speed->setValue(LLSD(llformat("%g", view.mSpeed)));
-            sSyncingWidgets = false;
-        }
         dock_panel();
         sPanel->setVisible(true);
     }
@@ -814,13 +882,15 @@ void SSCombatReconstruct::leave()
 {
     sGhosts.clear();
     sDeath = 0;
+    sHaveKillLine = false;
+    sLos = LOS_UNTESTED;
     if (sPanel)
     {
         sPanel->setVisible(false);
     }
     if (SSCombatLog::instanceExists())
     {
-        SSCombatLog::instance().leaveReconstruction();
+        SSCombatLog::instance().leaveReconstruction(); // also clears the selection now (rework 2026-09-09)
     }
 }
 
@@ -872,8 +942,13 @@ void SSCombatReconstruct::render()
         }
         return;
     }
-    // The store may have entered the mode without going through the overlay's click path.
-    if (sGhosts.empty() && view.mSubject.mType == SSCombat::NOUN_DEATH)
+    // Selecting any event now enters its reconstruction directly through SSCombatLog::select() (ux rework
+    // 2026-09-09), which only ever touches the View, so this is the normal path -- not a fallback -- for
+    // picking that up: it (re)builds the ring whenever the subject is a different event than the one already
+    // loaded, which is also how switching the selection to another event while already reconstructing gets
+    // the whole ghost cast moved onto it.
+    const bool subject_is_event = (view.mSubject.mType == SSCombat::NOUN_DEATH || view.mSubject.mType == SSCombat::NOUN_DAMAGE);
+    if (subject_is_event && (sGhosts.empty() || sDeath != view.mSubject.mIndex))
     {
         enter(view.mSubject.mIndex);
     }
@@ -899,8 +974,7 @@ void SSCombatReconstruct::render()
     }
     draw_flights(store, t);
     draw_hit_discs(store, t);
-    draw_killer_line(t);
-    draw_health_bar(store, t);
+    draw_killer_line();
 
     if (SSCombatDraw::empty())
     {
@@ -936,6 +1010,7 @@ void SSCombatReconstruct::render()
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
         SSCombatDraw::emitTris(1.f);
         SSCombatDraw::emitLines(SSCombatDraw::LAYER_MARKER, 1.f);
+        SSCombatDraw::emitIcons(1.f); // the kill line's line-of-sight eye
         SSCombatDraw::emitLabels();
     }
     gGL.flush();

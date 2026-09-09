@@ -33,9 +33,9 @@ class LLUIImage;
 // The draw list every world figure emits into. Two line layers exist because they want different depth state:
 // LAYER_LINE is the connective geometry (killer/hit lines, trails, flights) which is drawn twice when x-ray is
 // off so a wall between two points is visible as a ghosted middle; LAYER_MARKER is the glyph geometry (rings,
-// stems, arrows, eye glyphs) which is always depth-off because a marker you cannot see is a marker you cannot
-// click. Triangles are a third list for the filled things (ghost capsules); icons are a fourth because each one
-// binds its own atlas page and cannot share a batch with the untextured lists.
+// stems, arrows) which is always depth-off because a marker you cannot see is a marker you cannot click.
+// Triangles are a third list for the filled things (ghost capsules); icons are a fourth because each one binds
+// its own atlas page and cannot share a batch with the untextured lists.
 namespace SSCombatDraw
 {
     enum ELayer : U8 { LAYER_LINE = 0, LAYER_MARKER = 1, LAYER_COUNT = 2 };
@@ -67,8 +67,6 @@ namespace SSCombatDraw
     void cross(ELayer layer, const LLVector3& centre_agent, F32 size, const LLColor4& color, U8 width);
     // A ground arrow of the given length pointing along the world-Z yaw, with two barbs; direction is geometry.
     void arrow(ELayer layer, const LLVector3& base_agent, F32 yaw, F32 length, const LLColor4& color, U8 width);
-    // The mouselook eye: a small lens outline with a pupil tick, floated above a head.
-    void eyeGlyph(const LLVector3& centre_agent, F32 size, const LLColor4& color);
     // One filled triangle; used only by the ghost capsules.
     void tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color);
     // A camera-facing filled disc.
@@ -76,10 +74,12 @@ namespace SSCombatDraw
     // A translucent capsule standing on its feet: the ghost body, shared by the overlay's detective view and
     // by Reconstruction's replay.
     void capsule(const LLVector3& feet_agent, F32 radius, F32 height, const LLColor4& color);
-    // One ghost: capsule, outline ring, yaw arrow, mouselook eye, name label, and (when pickable) a pick rect
-    // addressed at pickRef. The single body shared by every ghost drawn anywhere in the Combat Log.
+    // One ghost: capsule, outline ring, yaw arrow, name label, and (when pickable) a pick rect addressed at
+    // pickRef. The single body shared by every ghost drawn anywhere in the Combat Log. alpha_scale multiplies
+    // every colour used (body, outline, label) so a caller can draw the same body ghosted for a hover preview
+    // without touching the colour it was handed.
     void ghostBody(const LLVector3& feet_agent, F32 yaw, U16 flags, const LLColor4& color,
-                  const std::string& label, const SSCombat::NounRef& pickRef, bool pickable);
+                  const std::string& label, const SSCombat::NounRef& pickRef, bool pickable, F32 alpha_scale = 1.f);
     // A camera-facing textured quad sampling the given UI atlas image; half_size is agent-space metres.
     void icon(const LLVector3& centre_agent, LLPointer<LLUIImage> image, F32 half_size, const LLColor4& color);
 
@@ -100,21 +100,26 @@ namespace SSCombatDraw
 class SSCombatOverlay
 {
 public:
-    // The posture gate: floater open (Events or Combatant), setting on, not snapshotting, third person,
-    // alt-cammed, past the mouselook/OTS grace, and standing still. Polls its own timers every frame.
+    // The posture gate: floater open (Events or Combatant), setting on, not snapshotting, not mouselook/OTS,
+    // and past the mouselook/OTS grace. Polls its own timers every frame, and also polls the camera-vantage
+    // flight check (see sscombatoverlay.cpp) every frame regardless of what it returns, so a floater-driven
+    // selection flies the camera even on a frame this gate would otherwise refuse to draw.
     static bool wantsDraw();
     // Called from LLPipeline::renderDebug with gUIProgram already bound; emits geometry and labels only.
     static void render();
+    // A 2D screen-space legend (background panel, title, subtitle, key rows) explaining the world figure's
+    // colours and glyphs. Called from LLViewerWindow::draw in the 2D UI pass (gUIProgram bound, ortho set up);
+    // draws only when wantsDraw() last returned true, and shifts above SSCombatReconstruct's panel when that
+    // is visible.
+    static void drawLegend();
 
     // ----- pick model -----
     static bool handleMouseDown(S32 x, S32 y, MASK mask);
     static bool handleMouseUp(S32 x, S32 y, MASK mask);
     static void handleHover(S32 x, S32 y);
-    // Esc clears a pinned selection (the detective view's freeze-frame). Wiring note: llviewerwindow.cpp does
-    // not call this today; it would need one more line beside its SSCombatReconstruct::handleKey call.
-    static bool handleKey(KEY key, MASK mask);
 
-    // The noun the pointer is currently over, so the figure can highlight it; invalid when nothing is under it.
+    // The noun the pointer is currently over (mirrors SSCombatLog::view().mHover when this overlay is the one
+    // that set it); invalid when nothing is under it.
     static const SSCombat::NounRef& hovered();
 };
 

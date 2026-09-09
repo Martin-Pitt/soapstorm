@@ -154,22 +154,29 @@ enhancer, and it is only ever listed, never named. Under a Battlefield-style DOW
 simulator's DEATH is *not* followed by a teleport until the downed combatant fails to be revived, so
 on such a region the anomaly rule inverts and the Life noun shows a downed interval. **The region says
 which regime is in force, and it says it in `death_action`**: 0 teleports home, 1 sends the combatant
-to the parcel landing point, 2 to a telehub, and **3 does nothing at all**, which is the signature of
-a DOWNED-style system and switches the anomaly rule off rather than filling the flagged panel with
-88 non-anomalies ([ux §3.7](combat_log_ux.md)). A region that reported no value leaves the tool printing `downed-regime
+to the parcel landing point, 2 to a telehub, and **3 does nothing at all**, which is the signal that a
+scripted combat system such as EBCS or FLECS is handling deaths in this region rather than the
+simulator itself, not merely the signature of "a DOWNED-style system" [owner], and switches the
+anomaly rule off rather than filling the flagged panel with
+88 non-anomalies ([ux §3.7](combat_log_ux.md)). A region that reported no value leaves the tool printing `death-regime
 unknown` rather than counting anomalies it cannot interpret.
 
-**Object health is observable after all, and only the damage behind it is not.** LBA objects publish
-their health in the object description (`LBA.v.<rev>,<hp>,<maxhp>`) and in hover text
-(`[LBA] [hp/maxhp] [bar]`), both of which the viewer already receives for in-view objects through
-object updates and object properties. So the Object noun carries a **health-over-time series** sampled
-from description and text changes, with the coverage caveat that it is blank whenever the object was
+**Object health is observable after all, and only the damage behind it is not** [owner]. The
+universal, reliable part of the LBA standard is the object **description prefix `LBA.v.`**; the text
+that follows it varies heavily across LBA variants and custom scripts, so the tool does not parse a
+fixed `<rev>,<hp>,<maxhp>` layout. Hover text also varies a lot between LBA objects and is not always
+present, but when it is, it typically contains a `#/#` pair (current over max points). Detection runs
+in two steps: a simple regex for **two integers separated by a slash** in hover text flags a candidate
+object, and the `LBA.v.` description prefix **confirms** it as LBA; once confirmed, the tool tracks
+**name, owner, group, position, rotation and health over time**, sampled from the hover-text and
+object-property updates the viewer already receives for anything in view. So the Object noun carries a
+**health-over-time series**, with the coverage caveat that it is blank whenever the object was
 out of view. What stays unobservable is the **damage source**: LBA damage is chat on a per-object
 private channel, so only anti-armor type-104 hits appear in the log at all. Two findings become
 measurable on the back of the series: **time to kill** against the region's HP class table, and
 **instant regeneration after death**, which is the recurring equipment dispute in Incidents
 [reports]. "The drone was not taking anti-armor damage" is now answerable as *"31 type-104 hits over
-6 minutes, and its published HP went 400 → 400"* rather than as a shrug.
+6 minutes, and its published HP went 400 -> 400"* rather than as a shrug.
 
 **5.7b Session boundaries and declarations.** A session is one region, because combat and death
 teleports stay inside one [owner]. Its start and end are inferred from event density, and the
@@ -184,21 +191,18 @@ against it would fit one sim and no others. The tool does not print a
 instead is the debug channel log ([ux §7](combat_log_ux.md)), which records everything those platforms broadcast for anyone
 who later wants to design a listener from evidence.
 
-One external source can still sharpen a session, and it is not required:
-
-- **The raid declaration.** Groups run a Discord bot that posts *"ALERT: &lt;avatar&gt; [&lt;group&gt;]
-  wants to raid &lt;region&gt; with a party of N or more"* when an attacker registers at a sim
-  [reports]. Pasted in, it is a **weak seed and nothing more**: a proposed start, region, attacking
-  group and party size, shown as an expectation to check ("declared party ≥ 6; 9 matched that group
-  by 14:12"), never as an allegiance fact — militia fight without the tag and third parties turn up
-  uninvited. It enters §5.9 on the group-tag prior's terms and is ablated in the second solve, so a
-  wrong declaration surfaces as a dependence flag rather than silent structure.
+**No external source seeds a session** [owner]. SLMC groups share an unofficial raid-declaration
+button on Discord that posts an alert when an attacker registers at a sim, but it is a community
+convenience passed between groups, not a session-boundary marker and not an allegiance seed: no
+session id, no party size and no allegiance fact from it ever crosses into the tool. There is no
+external raid signal in this design; session boundaries come from event density alone, as above.
 
 **5.7a Spawn hotspots, `d_spawn`, and the respawn test** [08][11]. Three quantities that several other
 sections lean on, and one precondition that switches all three on or off together — the same shape as
 §5.9's group-tag admission tests. Everything here is **auto-detected and unnamed**: a hotspot is a
-cluster of landing points and claims to be nothing else. Where an officer has marked a spawn
-safe-zone by hand ([ux §2.1](combat_log_ux.md)) the marked zone is used instead, because a drawn box beats an inferred one.
+cluster of landing points and claims to be nothing else. Officers are never asked to draw or mark a
+spawn zone by hand [owner]: hotspots are the only spawn geometry v1 has, and owner-designed zones
+remain a future region-owner feature ([ux §2.1](combat_log_ux.md)).
 
 - **The respawn test**, decided before any spawn geometry is built: the session has ≥ 8 deaths, and
   ≥ 60 % of deaths are followed within 6 s by a teleport jump (§5.7) whose landing point lies within
@@ -208,8 +212,7 @@ safe-zone by hand ([ux §2.1](combat_log_ux.md)) the marked zone is used instead
   team-window when teams exist and unlabelled otherwise. Hotspot radius = 90th percentile of member
   distance from the medoid. A hotspot with under 4 landings draws hatched and is never a denominator,
   and none of them is ever given a name by the tool.
-- **`d_spawn(a, t)`** = horizontal distance from `p(a, t)` (§5.2) to the nearest hotspot centre (or
-  marked spawn zone) of that
+- **`d_spawn(a, t)`** = horizontal distance from `p(a, t)` (§5.2) to the nearest hotspot centre of that
   combatant's current assignment (nearest of any when unassigned); `—` when the track has no sample
   within 1 s or the respawn test failed. Its uncertainty is §5.2's σ, so it prints as an interval
   whenever it is used as a threshold — including §5.14's "immune at the spawn hub" pattern, which is
@@ -287,7 +290,7 @@ rows, the courtyard episode and the Front face's "contested surface" all lean on
 gets the same treatment as every other derived quantity. **An area is contested over a window when
 combatants from ≥ 2 bands were simultaneously inside it (or within 4 m of its edge) for ≥ 20 s of
 that window, and ≥ 1 damage event with a target inside it occurred in the same window.** The areas
-it can be applied to in v1 are the officer's marked spawn zones and the Front face's ground grid;
+it can be applied to in v1 are the auto-detected spawn hotspots and the Front face's ground grid;
 **objective areas require owner-designed zones and are a future item** ([ux §2.1](combat_log_ux.md)), so every summary statistic and
 offered fact that wanted one prints *requires owner-designed zones* instead of a number. The dwell
 threshold and the edge margin are ParamSet entries and sweepable at R2 ([ux §1.2](combat_log_ux.md)). Reported as
@@ -297,7 +300,7 @@ are named rather than defaulted: when the structure index says DEATHMATCH (§5.9
 so the band test falls back to **≥ 2 combatants who damaged each other within the window**, and the area
 header prints `contested (no bands)`; when track coverage in the area is under 60 % the contested
 seconds hatch and cannot seed a summary statistic or an offered fact. "Contested surface" in the Front face is
-the same predicate applied to the 4 m ground grid rather than to a marked zone.
+the same predicate applied to the 4 m ground grid rather than to a spawn hotspot.
 
 **5.10 Friendly fire, and the ordering that keeps it non-circular.** Friendly fire is damage where
 attacker and target share the *window's* assignment — which is produced by the very clustering that

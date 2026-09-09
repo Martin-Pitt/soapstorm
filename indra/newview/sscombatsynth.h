@@ -87,6 +87,10 @@ private:
     F32 range(F32 lo, F32 hi);
     LLUUID makeId();
 
+    // The damage type for one shot: the weapon's usual type almost every time, with an occasional neighbour so
+    // a raid's numbers are not perfectly monochrome (owner request 2026-09-09).
+    S16 damageTypeFor(U8 weapon);
+
     // Simulator frame counter with a dilation dip in the middle of the fight.
     U32 frameAt(F64 t) const;
     // Ground height under a point, memoised on a 4 m grid; the officer's own height where no land is loaded.

@@ -25,6 +25,7 @@
 #include "llfloaterreg.h"
 #include "llfontgl.h"
 #include "llformat.h"
+#include "llframetimer.h"
 #include "lllineeditor.h"
 #include "llscrolllistcell.h"
 #include "llscrolllistcolumn.h"
@@ -97,8 +98,6 @@ bool SSFloaterCombatEvents::postBuild()
     mEventsList = getChild<LLScrollListCtrl>("events_list");
     mRelatedLabel = getChild<LLTextBox>("related_label");
     mRelatedList = getChild<LLScrollListCtrl>("related_list");
-    mShowWorldBtn = getChild<LLButton>("show_world_btn");
-    mReconstructBtn = getChild<LLButton>("reconstruct_btn");
 
     // XUI's keystroke_callback does not reliably reach here, so the filter edit is wired by hand (same
     // workaround as floater_settings_debug.xml).
@@ -115,8 +114,6 @@ bool SSFloaterCombatEvents::postBuild()
         mEventIconColumnIndex = icon_col->mIndex;
     }
 
-    mShowWorldBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { onClickShowInWorld(); });
-    mReconstructBtn->setCommitCallback([this](LLUICtrl*, const LLSD&) { onClickReconstruct(); });
     getChild<LLButton>("load_mock_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onClickLoadMock(); });
     getChild<LLButton>("replay_mock_btn")->setCommitCallback([this](LLUICtrl*, const LLSD&) { onClickReplayMock(); });
 
@@ -128,7 +125,6 @@ bool SSFloaterCombatEvents::postBuild()
 
     rebuildEvents();
     rebuildRelated();
-    refreshButtons();
     return true;
 }
 
@@ -154,12 +150,19 @@ void SSFloaterCombatEvents::onDataChanged()
     }
 }
 
-// The shared selection moved from elsewhere; mirror it into events_list without re-entering select().
+// The shared selection moved from elsewhere; mirror it into events_list without re-entering select(). An
+// invalid selection (the overlay's idle-click deselect, or our own toggle-off below) clears the row too, so
+// the list never sits highlighted once the store says nothing is selected.
 void SSFloaterCombatEvents::onViewChanged()
 {
     const SSCombat::View& view = SSCombatLog::instance().view();
     if (!view.mSelection.valid())
     {
+        if (mEventsList->getFirstSelected())
+        {
+            mEventsList->deselectAllItems(true);
+            rebuildRelated();
+        }
         return;
     }
 
@@ -173,7 +176,6 @@ void SSFloaterCombatEvents::onViewChanged()
     if (mEventsList->setSelectedByValue(LLSD(want), true))
     {
         mEventsList->scrollToShowSelected();
-        refreshButtons();
         rebuildRelated();
     }
 }
@@ -188,41 +190,51 @@ void SSFloaterCombatEvents::onFilterChanged()
     rebuildEvents();
 }
 
-// The officer picked a row: tell the store, then refresh the lower pane and the buttons.
+// The officer picked a row. LLScrollListCtrl::handleMouseUp commits on every click that lands inside the
+// list, whether or not the selection actually changed (llscrolllistctrl.cpp), so a second click on the row
+// that is already selected reaches here too; that is what lets it double as the deselect/idle click (ux 4.6).
+// A double-click's second commit looks identical to that, so it is spared by the same 400 ms/same-ref window
+// the world overlay uses for its own double-click, leaving the row selected for onDoubleClickEvent() to see.
 void SSFloaterCombatEvents::onSelectEvent()
-{
-    if (const LLScrollListItem* item = mEventsList->getFirstSelected())
-    {
-        const NounRef ref = NounRef::parse(item->getValue().asString());
-        if (ref.valid())
-        {
-            SSCombatLog::instance().select(ref, true);
-        }
-    }
-    refreshButtons();
-    rebuildRelated();
-}
-
-// Double-clicking a death (or object death) jumps straight into reconstruction.
-void SSFloaterCombatEvents::onDoubleClickEvent()
 {
     const LLScrollListItem* item = mEventsList->getFirstSelected();
     if (!item)
     {
+        rebuildRelated();
         return;
     }
     const NounRef ref = NounRef::parse(item->getValue().asString());
-    if (const Event* ev = SSCombatLog::instance().event(ref.mIndex))
+    if (!ref.valid())
     {
-        if (ev->mKind == EVENT_DEATH || ev->mKind == EVENT_OBJECT_DEATH)
-        {
-            SSCombatLog::instance().enterReconstruction(ev->mId);
-        }
+        rebuildRelated();
+        return;
     }
+
+    SSCombatLog& store = SSCombatLog::instance();
+    const bool already_selected = (store.view().mSelection == ref);
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    const bool double_click = (ref == mLastCommitRef) && ((now - mLastCommitTime) <= 0.4);
+    mLastCommitRef = ref;
+    mLastCommitTime = now;
+
+    if (already_selected && !double_click)
+    {
+        // Clicking the already-selected row again deselects it, which leaves its reconstruction too (rework
+        // 2026-09-09: selecting an event and reconstructing it are the same action now).
+        mEventsList->deselectAllItems(true);
+        store.leaveReconstruction();
+    }
+    else if (!already_selected)
+    {
+        store.select(ref, true);
+    }
+    rebuildRelated();
 }
 
-// Selects the current row and moves the cursor to it, same as clicking the row.
-void SSFloaterCombatEvents::onClickShowInWorld()
+// Double-click is redundant with a single click now that selecting an event enters its reconstruction (rework
+// 2026-09-09); kept only so a fast double click still lands on "selected", not "deselected" (onSelectEvent's
+// own 400 ms guard above already spares this commit from the toggle-off, this just re-affirms the selection).
+void SSFloaterCombatEvents::onDoubleClickEvent()
 {
     const LLScrollListItem* item = mEventsList->getFirstSelected();
     if (!item)
@@ -233,24 +245,6 @@ void SSFloaterCombatEvents::onClickShowInWorld()
     if (ref.valid())
     {
         SSCombatLog::instance().select(ref, true);
-    }
-}
-
-// Enters reconstruction for the selected death; refreshButtons() keeps this disabled otherwise.
-void SSFloaterCombatEvents::onClickReconstruct()
-{
-    const LLScrollListItem* item = mEventsList->getFirstSelected();
-    if (!item)
-    {
-        return;
-    }
-    const NounRef ref = NounRef::parse(item->getValue().asString());
-    if (const Event* ev = SSCombatLog::instance().event(ref.mIndex))
-    {
-        if (ev->mKind == EVENT_DEATH || ev->mKind == EVENT_OBJECT_DEATH)
-        {
-            SSCombatLog::instance().enterReconstruction(ev->mId);
-        }
     }
 }
 
@@ -304,6 +298,12 @@ void SSFloaterCombatEvents::appendNewEvents()
         mEventsList->deleteSingleItem(0);
     }
     mEventsList->setLineHeight(SS_EVENT_ROW_HEIGHT);
+    // setLineHeight() alone leaves the scrollbar's page size and doc size computed from whatever inflated
+    // per-row height LLScrollListCtrl saw while the icon column still reported its native (unshrunk) size
+    // during each addRow(). reshape() to the same size is a no-op geometrically but LLScrollListCtrl
+    // overrides it to unconditionally call updateLayout(), which resyncs the scrollbar against the
+    // corrected line height; without this the thumb allows scrolling well past the last row.
+    mEventsList->reshape(mEventsList->getRect().getWidth(), mEventsList->getRect().getHeight());
 
     if (added_any && was_at_bottom)
     {
@@ -407,6 +407,10 @@ void SSFloaterCombatEvents::publishVisibleViewport()
 
 // Resolves the row under the pointer from LLScrollListCtrl's own hover highlight (it already tracks this for
 // row shading, so no extra hit-testing is needed) and writes it straight into view().mHover; no signal fires.
+// This floater does not own mHover exclusively: the in-world overlay also writes it when the pointer is over
+// a world icon instead of a list row. So a row hover is always published, but losing the row hover only
+// clears the shared value when it still holds what this floater last set there (mLastHover) - otherwise the
+// overlay has since claimed it and clearing would stomp on that.
 void SSFloaterCombatEvents::updateHover()
 {
     NounRef ref;
@@ -418,12 +422,26 @@ void SSFloaterCombatEvents::updateHover()
             ref = NounRef::parse(item->getValue().asString());
         }
     }
-    if (ref == mLastHover)
+
+    if (ref.valid())
     {
+        if (!(ref == mLastHover))
+        {
+            mLastHover = ref;
+            SSCombatLog::instance().view().mHover = ref;
+        }
         return;
     }
-    mLastHover = ref;
-    SSCombatLog::instance().view().mHover = ref;
+
+    if (mLastHover.valid())
+    {
+        SSCombat::View& view = SSCombatLog::instance().view();
+        if (view.mHover == mLastHover)
+        {
+            view.mHover = NounRef();
+        }
+        mLastHover = NounRef();
+    }
 }
 
 // Kind combo, "mine only" and the name/weapon filter, all ANDed together.
@@ -464,24 +482,6 @@ bool SSFloaterCombatEvents::passesFilter(const Event& ev) const
         }
     }
     return true;
-}
-
-// Reconstruct only makes sense for a death; Show in world needs any selection at all.
-void SSFloaterCombatEvents::refreshButtons()
-{
-    const LLScrollListItem* item = mEventsList->getFirstSelected();
-    mShowWorldBtn->setEnabled(item != nullptr);
-
-    bool is_death = false;
-    if (item)
-    {
-        const NounRef ref = NounRef::parse(item->getValue().asString());
-        if (const Event* ev = SSCombatLog::instance().event(ref.mIndex))
-        {
-            is_death = (ev->mKind == EVENT_DEATH || ev->mKind == EVENT_OBJECT_DEATH);
-        }
-    }
-    mReconstructBtn->setEnabled(is_death);
 }
 
 // Rebuilds the lower pane for whatever is selected in events_list: hits leading to a death, or the
@@ -649,6 +649,8 @@ void SSFloaterCombatEvents::rebuildRelated()
     }
 
     mRelatedList->setLineHeight(SS_EVENT_ROW_HEIGHT);
+    // Same scrollbar-resync as appendNewEvents(); see the comment there.
+    mRelatedList->reshape(mRelatedList->getRect().getWidth(), mRelatedList->getRect().getHeight());
 }
 
 // Swaps related_list between the seven-column hit-list layout and the three-column adjustment-list layout;

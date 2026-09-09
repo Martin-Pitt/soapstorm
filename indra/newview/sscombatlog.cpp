@@ -31,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <unordered_set>
 
 using namespace SSCombat;
 
@@ -240,6 +241,38 @@ namespace
     }
 
     static const std::vector<Life> sNoLives;
+
+    // ---------------------------------------------------------------------
+    // Teleport detection (owner verdicts, 2026-09-09). A jump is a teleport when it is not explained by the
+    // sample's own reported velocity; an unseated jump additionally needs an impossible ground speed, since a
+    // seated sample (vehicle, aircraft) can legitimately cover 10+ m in one tick at its own reported velocity.
+    // ---------------------------------------------------------------------
+    constexpr F32 SS_TELEPORT_MIN_DISPLACEMENT = 10.f;  // metres; dashes/sprints/vehicles routinely beat 8 m
+    constexpr F32 SS_TELEPORT_MIN_MISMATCH     = 8.f;   // metres of disagreement with pos_prev + v_prev * dt
+    constexpr F32 SS_TELEPORT_MIN_SPEED        = 40.f;  // m/s, unseated samples only
+    constexpr F32 SS_TELEPORT_DEATH_JUMP       = 8.f;   // metres; any jump this size right after a death is a respawn
+    constexpr F64 SS_TELEPORT_DEATH_WINDOW     = 3.0;   // seconds after a DEATH targeting this combatant
+    constexpr F32 SS_TELEPORT_GROUP_TICK       = 0.4f;  // seconds; samples this close in time count as "one tick"
+    constexpr F64 SS_TELEPORT_UNSEAT_WINDOW    = 1.0;   // seconds; a whole crew unseating inside this is one event
+
+    // True when the sample's own state means it is riding something and its velocity is a vehicle's, not a body's.
+    bool ss_is_seated(const Sample& s)
+    {
+        return !s.mParent.isNull() || (s.mFlags & FLAG_ON_OBJECT) != 0;
+    }
+
+    // Per-combatant last DEATH time (viewer seconds): a same-tick respawn is a teleport even at low speed.
+    // File-scope because the header contract (sscombatlog.h) is closed for this fix and there is one store.
+    std::unordered_map<LLUUID, F64> sLastDeathTime;
+
+    // Per-parent bookkeeping for the vehicle-teleport-as-a-group rule and the vehicle-death debug hint.
+    struct VehicleOccupancy
+    {
+        std::unordered_map<LLUUID, F32>     mFlaggedTicks; // occupant id -> sample time of its last flagged jump
+        std::unordered_set<LLUUID>          mSeated;       // occupant ids currently riding this parent
+        std::vector<std::pair<LLUUID, F64>> mUnseat;       // recent (occupant, abs time) unseat events
+    };
+    std::unordered_map<LLUUID, VehicleOccupancy> sVehicles;
 }
 
 // ---------------------------------------------------------------------------
@@ -1184,6 +1217,17 @@ void SSCombatLog::appendEvent(Event& ev)
         ev.mDelivery = ss_classify_delivery(*this, ev);
     }
 
+    // The teleport detector in addSample needs to know a respawn is imminent even at low speed; this is the
+    // only place a DEATH's target and time are both known before the sample itself ever arrives.
+    if (ev.mKind == EVENT_DEATH && !ev.mTarget.isNull())
+    {
+        F64& last = sLastDeathTime[ev.mTarget];
+        if (ev.mTime > last)
+        {
+            last = ev.mTime;
+        }
+    }
+
     ev.mId = 0;
     dedupFinalDamage(ev);
     if (ev.mId != 0)
@@ -1340,8 +1384,9 @@ size_t SSCombatLog::eventIndexAt(F64 t) const
 // Tracks
 // ---------------------------------------------------------------------------
 
-// Adds one position sample, decimating still viewer samples and keeping the track sorted.
-void SSCombatLog::addSample(const LLUUID& id, bool isAgent, const Sample& sample)
+// Adds one position sample, flagging an unexplained jump as a teleport, decimating still viewer samples, and
+// keeping the track sorted. Applies to every source: viewer, bridge, coarse, synthetic.
+void SSCombatLog::addSample(const LLUUID& id, bool isAgent, const Sample& sampleIn)
 {
     if (id.isNull())
     {
@@ -1349,13 +1394,133 @@ void SSCombatLog::addSample(const LLUUID& id, bool isAgent, const Sample& sample
     }
     if (mSessionStart <= 0.0)
     {
-        mSessionStart = now() - (F64)sample.mTime;
+        mSessionStart = now() - (F64)sampleIn.mTime;
     }
     Track& track = mTracks[id];
     track.mId = id;
     track.mIsAgent = isAgent;
 
-    if (!track.mSamples.empty() && sample.mSource == SAMPLE_VIEWER)
+    Sample sample = sampleIn;
+    const LLUUID prevParent = track.mSamples.empty() ? LLUUID::null : track.mSamples.back().mParent;
+
+    // Teleport detection: compare against the chronologically previous sample, whatever its own source was.
+    if (!track.mSamples.empty())
+    {
+        const Sample* prev = &track.mSamples.back();
+        if (prev->mTime > sample.mTime)
+        {
+            auto it = std::upper_bound(track.mSamples.begin(), track.mSamples.end(), sample.mTime,
+                                       [](F32 t, const Sample& s) { return t < s.mTime; });
+            prev = (it == track.mSamples.begin()) ? nullptr : &*(it - 1);
+        }
+        if (prev)
+        {
+            const F32 dt = sample.mTime - prev->mTime;
+            if (dt > 0.f)
+            {
+                // Position only: an unsit (parent -> null) with a small displacement is standing up next to
+                // the wreck, ordinary, and must never be flagged by the parent change alone.
+                const F32 dp = (sample.mPos - prev->mPos).length();
+                bool teleport = false;
+
+                // Death-context override: any jump past a hostile respawn is a teleport regardless of speed,
+                // because a fresh spawn can land the avatar walking, seated or standing with no odd velocity.
+                const auto death_it = sLastDeathTime.find(id);
+                if (death_it != sLastDeathTime.end() && dp > SS_TELEPORT_DEATH_JUMP)
+                {
+                    const F64 abs_time = mSessionStart + (F64)sample.mTime;
+                    const F64 since = abs_time - death_it->second;
+                    if (since >= 0.0 && since <= SS_TELEPORT_DEATH_WINDOW)
+                    {
+                        teleport = true;
+                    }
+                }
+
+                // Velocity-consistency test: a real move is explained by the sample's own reported velocity.
+                if (!teleport && dp > SS_TELEPORT_MIN_DISPLACEMENT)
+                {
+                    const LLVector3 predicted = prev->mPos + prev->mVel * dt;
+                    const F32 mismatch = (sample.mPos - predicted).length();
+                    if (mismatch > SS_TELEPORT_MIN_MISMATCH)
+                    {
+                        if (ss_is_seated(sample))
+                        {
+                            teleport = true; // a moving vehicle/aircraft's own velocity would have explained it
+                        }
+                        else
+                        {
+                            const F32 speed = dp / llmax(dt, 0.05f);
+                            teleport = speed > SS_TELEPORT_MIN_SPEED;
+                        }
+                    }
+                }
+
+                if (teleport)
+                {
+                    sample.mFlags |= FLAG_TELEPORT;
+                }
+            }
+        }
+    }
+
+    // Vehicle-teleport-as-a-group: crew riding the same parent jump together; corroborate and mark the
+    // parent's own track too, since its own sample may arrive at a different moment than the crew's.
+    if ((sample.mFlags & FLAG_TELEPORT) && !sample.mParent.isNull())
+    {
+        VehicleOccupancy& veh = sVehicles[sample.mParent];
+        for (auto it = veh.mFlaggedTicks.begin(); it != veh.mFlaggedTicks.end(); )
+        {
+            if (std::fabs(it->second - sample.mTime) > SS_TELEPORT_GROUP_TICK) it = veh.mFlaggedTicks.erase(it);
+            else ++it;
+        }
+        veh.mFlaggedTicks[id] = sample.mTime;
+        if (veh.mFlaggedTicks.size() >= 2)
+        {
+            auto vt = mTracks.find(sample.mParent);
+            if (vt != mTracks.end())
+            {
+                for (Sample& vs : vt->second.mSamples)
+                {
+                    if (std::fabs(vs.mTime - sample.mTime) <= SS_TELEPORT_GROUP_TICK)
+                    {
+                        vs.mFlags |= FLAG_TELEPORT;
+                    }
+                }
+            }
+        }
+    }
+
+    // Vehicle-death debug hint: every rider of one parent unseating within a second is worth a note in the
+    // log. Parent changes are otherwise ignored for teleport detection (position only, per the rule above).
+    if (prevParent != sample.mParent)
+    {
+        if (!prevParent.isNull())
+        {
+            VehicleOccupancy& veh = sVehicles[prevParent];
+            veh.mSeated.erase(id);
+            if (sample.mParent.isNull())
+            {
+                const F64 abs_time = mSessionStart + (F64)sample.mTime;
+                veh.mUnseat.erase(std::remove_if(veh.mUnseat.begin(), veh.mUnseat.end(),
+                                                 [abs_time](const std::pair<LLUUID, F64>& e)
+                                                 { return abs_time - e.second > SS_TELEPORT_UNSEAT_WINDOW; }),
+                                  veh.mUnseat.end());
+                veh.mUnseat.emplace_back(id, abs_time);
+                if (veh.mSeated.empty() && veh.mUnseat.size() > 1)
+                {
+                    LL_DEBUGS("CombatLog") << "likely vehicle death: parent " << prevParent << " lost all "
+                                           << veh.mUnseat.size() << " rider(s) within a second" << LL_ENDL;
+                    veh.mUnseat.clear();
+                }
+            }
+        }
+        if (!sample.mParent.isNull())
+        {
+            sVehicles[sample.mParent].mSeated.insert(id);
+        }
+    }
+
+    if (!track.mSamples.empty() && sample.mSource == SAMPLE_VIEWER && !(sample.mFlags & FLAG_TELEPORT))
     {
         const Sample& last = track.mSamples.back();
         const F32 dt = sample.mTime - last.mTime;
@@ -1396,7 +1561,12 @@ const Track* SSCombatLog::track(const LLUUID& id) const
     return it == mTracks.end() ? nullptr : &it->second;
 }
 
-// Interpolated position at t: a nearby bridge sample wins, else Hermite, else linear; a gap over 5 s is unknown.
+// Position at t: a nearby bridge sample wins, else dead reckoning forward from the last sample at or before t,
+// exactly as LLViewerObject::interpolateLinearMotion() would have rendered it live (pos += vel * dt, capped at
+// sMaxUpdateInterpolationTime); a gap over 5 s is unknown. This never blends toward the later sample the way a
+// spline would -- the renderer never had that sample yet at time t either, so a ghost that moved off a straight
+// line between updates pops to the correction the same way the live avatar did (owner correction 2026-09-09:
+// the old Hermite blend used both samples' velocity and looked like a smooth curve nobody actually saw).
 bool SSCombatLog::sampleAt(const LLUUID& id, F64 t, Sample& out) const
 {
     const Track* track_p = track(id);
@@ -1412,16 +1582,41 @@ bool SSCombatLog::sampleAt(const LLUUID& id, F64 t, Sample& out) const
     const size_t hi = (size_t)(it - s.begin());
     const size_t lo = hi ? hi - 1 : 0;
 
-    // A bridge sample inside a quarter second is ground truth; take it as it stands.
+    // A bridge sample inside a quarter second is ground truth; take it as it stands, unless doing so would
+    // borrow the far side of a teleport for a query time that has not reached it yet.
     const size_t scan_first = lo > 2 ? lo - 2 : 0;
     const size_t scan_last  = llmin(s.size() - 1, hi + 2);
     for (size_t i = scan_first; i <= scan_last; ++i)
     {
-        if (s[i].mSource == SAMPLE_BRIDGE && std::fabs(s[i].mTime - st) <= 0.25f)
+        if (s[i].mSource != SAMPLE_BRIDGE || std::fabs(s[i].mTime - st) > 0.25f)
         {
-            out = s[i];
-            return true;
+            continue;
         }
+        if ((s[i].mFlags & FLAG_TELEPORT) && st < s[i].mTime)
+        {
+            continue; // this candidate is the post-jump ground truth; st has not reached the jump yet
+        }
+        bool crosses = false;
+        if (i < hi)
+        {
+            for (size_t k = i + 1; k < hi; ++k)
+            {
+                if (s[k].mFlags & FLAG_TELEPORT) { crosses = true; break; }
+            }
+        }
+        else if (i > hi)
+        {
+            for (size_t k = hi; k < i; ++k)
+            {
+                if (s[k].mFlags & FLAG_TELEPORT) { crosses = true; break; }
+            }
+        }
+        if (crosses)
+        {
+            continue; // a flagged sample sits between st and this candidate; do not jump across it
+        }
+        out = s[i];
+        return true;
     }
 
     if (hi == 0)
@@ -1433,7 +1628,12 @@ bool SSCombatLog::sampleAt(const LLUUID& id, F64 t, Sample& out) const
     if (hi >= s.size())
     {
         if (st - s.back().mTime > 5.f) return false;
+        // Same forward dead reckoning as the interpolated case below: the most recent sample is the last
+        // update the renderer has, so it is still extrapolated by its own velocity rather than held dead.
         out = s.back();
+        out.mTime = st;
+        const F32 dt = llclamp(st - s.back().mTime, 0.f, 3.f);
+        out.mPos = s.back().mPos + s.back().mVel * dt;
         return true;
     }
 
@@ -1444,28 +1644,25 @@ bool SSCombatLog::sampleAt(const LLUUID& id, F64 t, Sample& out) const
     {
         return false; // the track went dark across this moment
     }
-    const F32 u = span > 0.0001f ? (st - a.mTime) / span : 0.f;
 
-    out = (u < 0.5f) ? a : b;
+    // Never interpolate across a teleport: hold the pre-jump position (or the just-landed one) steady rather
+    // than blend positions and velocities that belong to two different places.
+    if ((a.mFlags & FLAG_TELEPORT) || (b.mFlags & FLAG_TELEPORT))
+    {
+        out = a;
+        out.mVel.clear();
+        out.mTime = st;
+        return true;
+    }
+
+    // Dead reckoning from a alone: position and yaw hold from the last known sample and only position moves,
+    // by a's own velocity, capped the way LLViewerObject::sMaxUpdateInterpolationTime caps it live. b is only
+    // consulted above for the gap/teleport tests; using its position or velocity here would be blending in a
+    // sample the renderer could not have had yet at time st.
+    out = a;
     out.mTime = st;
-    out.mQuality = llmin(a.mQuality, b.mQuality);
-
-    const bool hermite = (st - a.mTime) <= 2.f && (b.mTime - st) <= 2.f
-                       && (a.mVel.lengthSquared() > 0.f || b.mVel.lengthSquared() > 0.f);
-    if (hermite)
-    {
-        const F32 h00 = 2.f * u * u * u - 3.f * u * u + 1.f;
-        const F32 h10 = u * u * u - 2.f * u * u + u;
-        const F32 h01 = -2.f * u * u * u + 3.f * u * u;
-        const F32 h11 = u * u * u - u * u;
-        out.mPos = a.mPos * h00 + a.mVel * (span * h10) + b.mPos * h01 + b.mVel * (span * h11);
-    }
-    else
-    {
-        out.mPos = a.mPos + (b.mPos - a.mPos) * u;
-    }
-    out.mVel = a.mVel + (b.mVel - a.mVel) * u;
-    out.mYaw = ss_lerp_angle(a.mYaw, b.mYaw, u);
+    const F32 dt = llclamp(st - a.mTime, 0.f, 3.f); // LLViewerObject::sMaxUpdateInterpolationTime
+    out.mPos = a.mPos + a.mVel * dt;
     return true;
 }
 
@@ -1998,11 +2195,19 @@ bool SSCombatLog::popNoun()
     return true;
 }
 
-// Selects a noun: pushes the View, records the noun, and optionally moves the cursor to its time.
+// Selects a noun: pushes the View, records the noun, and optionally moves the cursor to its time. Selecting a
+// combat event (DEATH or DAMAGE) always enters its reconstruction instead of the generic path below: the
+// owner's rework folded "selected" and "being reconstructed" into one state (ux 3.10, 2026-09-09), whichever
+// pane the click came from.
 void SSCombatLog::select(const NounRef& ref, bool moveCursor)
 {
     if (!ref.valid())
     {
+        return;
+    }
+    if (ref.mType == NOUN_DEATH || ref.mType == NOUN_DAMAGE)
+    {
+        enterReconstruction(ref.mIndex);
         return;
     }
     pushView();
@@ -2043,13 +2248,15 @@ void SSCombatLog::setLevel(S8 level)
     mViewChanged();
 }
 
-// Enters the ghosted replay of one death (ux 3.10).
-void SSCombatLog::enterReconstruction(U32 deathEvent)
+// Enters the ghosted replay of one combat event (DEATH or DAMAGE; ux 3.10). Selecting any event now routes
+// here via select() above, so this is the common entry point for the whole Combat Log, not just the
+// death-only Reconstruct button of before.
+void SSCombatLog::enterReconstruction(U32 eventId)
 {
-    const Event* ev = event(deathEvent);
+    const Event* ev = event(eventId);
     if (!ev)
     {
-        LL_WARNS("CombatLog") << "reconstruction asked for event " << deathEvent << " which is gone" << LL_ENDL;
+        LL_WARNS("CombatLog") << "reconstruction asked for event " << eventId << " which is gone" << LL_ENDL;
         return;
     }
     static LLCachedControl<F32> before(gSavedSettings, "SSCombatLogReconBefore", 6.f);
@@ -2058,32 +2265,43 @@ void SSCombatLog::enterReconstruction(U32 deathEvent)
     mView.mReconstruct = true;
     mView.mReconStart = ev->mTime - (F64)llmax(0.5f, (F32)before);
     mView.mReconEnd   = ev->mTime + (F64)llmax(0.f, (F32)after);
-    mView.mCursor = mView.mReconStart;
+    mView.mCursor = ev->mTime; // paused at the event's own instant, "0 s" on the transport (owner correction
+                               // 2026-09-09: selecting a different event used to start it playing from the
+                               // window start, which is not what picking a row is for)
     mView.mLive = false;
-    mView.mPlaying = true;
+    mView.mPlaying = false;
     mView.mLevel = LEVEL_MOMENT;
 
     NounRef ref;
-    ref.mType = NOUN_DEATH;
-    ref.mIndex = deathEvent;
+    ref.mType = (ev->mKind == EVENT_DAMAGE) ? NOUN_DAMAGE : NOUN_DEATH;
+    ref.mIndex = eventId;
     ref.mTime = ev->mTime;
-    ref.mId = ev->mTarget;
+    // mId is deliberately left null: eventRef() (sscombatfeedline.h), which the Events floater's row values
+    // are built from, never sets it either, and NounRef::address() prefers mId over mIndex when it is set --
+    // setting it to the victim here made this ref's address disagree with the row's, so the floater could
+    // never find the row to select (owner bug report 2026-09-09).
     mView.mSubject = ref;
     mView.mSelection = ref;
     pushNoun(ref);
     mViewChanged();
 }
 
-// Leaves reconstruction and stops the replay where it stands.
+// Leaves reconstruction and stops the replay where it stands; also clears the selection, since selecting an
+// event and reconstructing it are now the same state (ux rework 2026-09-09) -- whichever of Esc, a bare click,
+// a repeat click or the close button ends it, the event stops being "selected" too. Unconditional on both
+// fields (rather than early-returning when mReconstruct is already false) so a stale selection can never
+// survive a call meant to clear it.
 void SSCombatLog::leaveReconstruction()
 {
-    if (!mView.mReconstruct)
-    {
-        return;
-    }
+    const bool was_active = mView.mReconstruct;
+    const bool had_selection = mView.mSelection.valid();
     mView.mReconstruct = false;
     mView.mPlaying = false;
-    mViewChanged();
+    mView.mSelection = NounRef();
+    if (was_active || had_selection)
+    {
+        mViewChanged();
+    }
 }
 
 // ---------------------------------------------------------------------------

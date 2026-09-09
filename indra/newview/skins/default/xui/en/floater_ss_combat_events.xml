@@ -3,21 +3,23 @@
  name="ss_combat_events"
  title="Combat Log - Events"
  layout="topleft"
+ legacy_header_height="18"
  width="680"
- height="460"
+ height="478"
  min_width="620"
- min_height="360"
+ min_height="378"
  save_rect="true"
  single_instance="true"
  can_resize="true"
  can_minimize="true"
  can_close="true">
+	<!-- Filter row: fixed height, anchored to the top only. -->
 	<line_editor
 	 name="filter_edit"
 	 label="Filter by name or weapon"
 	 layout="topleft"
 	 left="10"
-	 top="8"
+	 top="26"
 	 width="200"
 	 height="22"
 	 follows="left|top"
@@ -27,7 +29,7 @@
 	 label="Mine only"
 	 layout="topleft"
 	 left_pad="10"
-	 top="10"
+	 top="28"
 	 width="90"
 	 height="20"
 	 follows="left|top" />
@@ -35,7 +37,7 @@
 	 name="kind_combo"
 	 layout="topleft"
 	 left_pad="10"
-	 top="8"
+	 top="26"
 	 width="110"
 	 height="22"
 	 initial_value="all"
@@ -58,41 +60,45 @@
 	 layout="topleft"
 	 left="440"
 	 right="-10"
-	 top="11"
+	 top="29"
 	 height="16"
 	 halign="right"
 	 follows="left|right|top">
 		0 events
 	</text>
+
+	<!-- Kill-feed pane: chat-style, no headers, stretches with the floater. Declared before every widget
+	     below it so none of them can draw over it or steal its clicks. -->
 	<scroll_list
 	 name="events_list"
 	 layout="topleft"
 	 left="10"
 	 right="-10"
-	 top="36"
-	 height="170"
-	 follows="left|right|top"
+	 top="54"
+	 bottom="-196"
+	 follows="all"
 	 draw_heading="false"
+	 heading_height="0"
 	 multi_select="false"
 	 can_sort="false"
 	 column_padding="2">
 		<scroll_list.columns
 		 name="icon"
-		 label=""
 		 width="20" />
 		<scroll_list.columns
 		 name="line"
-		 label=""
 		 relative_width="1.0" />
 	</scroll_list>
+
+	<!-- Lower pane: fixed height, anchored to the bottom so it never overlaps events_list above. -->
 	<text
 	 name="related_label"
 	 layout="topleft"
 	 left="10"
 	 right="-10"
-	 top="212"
+	 bottom="-172"
 	 height="16"
-	 follows="left|right|top">
+	 follows="left|right|bottom">
 		Select a row to see what led to it
 	</text>
 	<scroll_list
@@ -100,37 +106,23 @@
 	 layout="topleft"
 	 left="10"
 	 right="-10"
-	 top="230"
-	 bottom="44"
-	 follows="left|right|top|bottom"
+	 bottom="-40"
+	 height="130"
+	 follows="left|right|bottom"
 	 draw_heading="true"
 	 multi_select="false"
 	 can_sort="false" />
-	<button
-	 name="show_world_btn"
-	 label="Show in world"
-	 layout="topleft"
-	 left="10"
-	 bottom="8"
-	 width="120"
-	 height="24"
-	 follows="left|bottom" />
-	<button
-	 name="reconstruct_btn"
-	 label="Reconstruct"
-	 layout="topleft"
-	 left_pad="10"
-	 bottom="8"
-	 width="110"
-	 height="24"
-	 follows="left|bottom" />
+
+	<!-- Button strip: its own row strictly below both lists, never a panel that overlaps them. Show in world
+	     and Reconstruct are gone (owner request 2026-09-09): selecting any row already flies the camera and
+	     opens its reconstruction, so both buttons were dead weight. -->
 	<button
 	 name="load_mock_btn"
 	 label="Load mock raid"
 	 tool_tip="Stage 0 preview data"
 	 layout="topleft"
 	 right="-150"
-	 bottom="8"
+	 bottom="-8"
 	 width="110"
 	 height="24"
 	 follows="right|bottom" />
@@ -140,7 +132,7 @@
 	 tool_tip="Stage 0 preview data"
 	 layout="topleft"
 	 right="-10"
-	 bottom="8"
+	 bottom="-8"
 	 width="130"
 	 height="24"
 	 follows="right|bottom" />

@@ -21,9 +21,11 @@
 class SSCombatCamera
 {
 public:
-    // Flies to a vantage of the given event: frames attacker and target at the event's own time, prefers an
-    // elevated angle with a clear line of sight through static geometry to both, falls back to straight above,
-    // and as a last resort to an over-the-shoulder shot on the victim/target when nothing is clear (indoors).
+    // Flies to a vantage of the given event: frames attacker and target at the event's own time. Prefers an
+    // elevated slanted angle with a clear line of sight through static geometry to both; failing that (typically
+    // indoors), a composed low-angle shot that frames the victim about 80% down the screen and the attacker
+    // about 20% down; failing that, straight above; and as a last resort an over-the-shoulder shot on the
+    // victim/target (or the only party known) when nothing at all is clear.
     static void flyTo(U32 eventId);
 };
 

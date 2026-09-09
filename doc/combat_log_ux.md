@@ -120,7 +120,7 @@ Every one is an article with links and backlinks: **Session**, **Phase**, **Bout
 **Damage**, **Volley**, **Equipment** (Weapon / Projectile / HUD / Deployable / Vehicle / Mount),
 **Model** (an equipment family keyed across instances), **Object** (a non-agent damage target —
 turret, vehicle, deployable [05]), **Script** (a damage-adjustment script from `modifications`),
-**Zone** (a spawn safe-zone an officer marked by hand, below), **Verdict** (a stored LOS result with its sweep), **Signal**
+**Zone** (an owner-designed polygon zone, a future feature absent from v1, below), **Verdict** (a stored LOS result with its sweep), **Signal**
 (the documentation page for one behavioural signal [12]), **Claim** (an officer assertion),
 **Rule** (one entry of the region's rule catalogue [rules]), **Summary** (the session summary, a
 configurable export the officer assembles from the tool's own facts), **Case** (pins + notes),
@@ -129,8 +129,9 @@ configurable export the officer assembles from the tool's own facts), **Case** (
 Four are load-bearing and absent from the raw log. **Volley** — consecutive DAMAGE sharing
 `(owner, rezzer, target)` with gaps ≤ 2 s [01] — is the unit an officer means by "he shot him";
 attribution, equipment stats and every hostility edge speak in volleys, so a stray splash tick can
-never carry an execution's weight [08]. **Object** exists because an object has a health story the combat log never tells: LBA objects
-publish their HP in their description and hover text, which the viewer reads for anything in view, so
+never carry an execution's weight [08]. **Object** exists because an object has a health story the combat log never tells: LBA objects are
+confirmed by the `LBA.v.` prefix on their object description, and their HP is read from hover text
+whenever it carries a `#/#` pair, both of which the viewer reads for anything in view, so
 the Object page carries a health series with a coverage caveat and says **unknown** only where the
 object was out of sight [05][owner].
 
@@ -152,16 +153,17 @@ The tool ships no template. Its job is to *fill whatever shape the group defined
 and not to adopt somebody else's [owner][03]. Both are first-class pages with backlinks: a Rule's
 backlinks are its candidate hits, a Summary's are the evidence pinned into it.
 
-**Zone is almost nothing in v1, and that is a correction rather than a cut** [owner]. An earlier draft
+**Zone is nothing in v1, and that is a correction rather than a cut** [owner]. An earlier draft
 divided the region into 16 m cells, gave every cell a page and made clicking bare ground a navigation
 gesture. That was wrong about the medium: ground here is prims and mesh, parcels are region-wide, and
-nothing about a patch of terrain can be inferred by clicking it. So v1 has exactly one kind of Zone —
-a **spawn safe-zone the officer marks by hand**, a box or simple polygon, named, living for the
-session. Everything else spatial is either an **auto-detected hotspot**, unnamed and derived from the
-landings themselves ([analysis §5.7a](combat_log_analysis.md)), or it waits: the future shape is
-**region owners designing polygon zones**, mesh-based the way a navmesh is, shareable with the
-officers who fight there. Anything that wanted richer zones — objective time, Place and Hotspot
-naming — prints *requires owner-designed zones (future)* rather than being faked from a grid.
+nothing about a patch of terrain can be inferred by clicking it. A later draft had the officer mark a
+spawn safe-zone by hand; that was wrong too -- officers are never asked to draw or mark spawn geometry
+[owner]. So v1 has **zero kinds of Zone**. Spawn areas are entirely an **auto-detected hotspot**,
+unnamed and derived from the landings themselves ([analysis §5.7a](combat_log_analysis.md)); nothing
+spatial is drawn by hand. Zones wait for the future shape: **region owners designing polygon zones**,
+mesh-based the way a navmesh is, shareable with the officers who fight there. Anything that wanted
+richer zones -- objective time, Place and Hotspot naming, or a spawn safe-zone -- prints *requires
+owner-designed zones (future)* rather than being faked from a grid or a hand-drawn box.
 
 **Two words are fixed, and the rest wait for a glossary pass.** A **combatant** is an active
 participant on the battlefield; a **civilian** is the historical SLMC word for someone who is not one.
@@ -258,7 +260,7 @@ ParamSet, explicitly as comparison; adopting one there mutates the global set an
 redraws.
 
 When a term cannot be computed for this raid — no respawn signal, proximity budget exceeded, no
-single front, no marked spawn zone — the status line prints a chip (`no-respawn`, `prox-capped`,
+single front, no owner-designed zone — the status line prints a chip (`no-respawn`, `prox-capped`,
 `no-front`, `no-zones`) and every confidence that would have used it is marked [08]. The tool
 never silently loses a term.
 
@@ -689,8 +691,9 @@ believed, and the row links to the analysis that uses it: `restrict_combat_log` 
 script-written messages can exist at all; `damage_throttle` and `damage_limit` explain capped or
 dropped damage that would otherwise read as a weapon anomaly; `invulnerability_time` is a legitimate
 source of post-death immunity the adjustment analysis must exclude before calling anything suspect;
-`death_action` says whether a death implies a teleport at all, and `3` (no action) is the signature
-of a DOWNED-style system. `restore_health` and `health_regen_rate` do more than caption: with them
+`death_action` says whether a death implies a teleport at all, and `3` (no action) is the signal that
+a scripted combat system such as EBCS or FLECS is handling deaths in this region, not merely the
+signature of a DOWNED-style system [owner]. `restore_health` and `health_regen_rate` do more than caption: with them
 the tool estimates each combatant's **health over time** from the damage stream, a new derived
 quantity with its own uncertainty ([analysis §5.25](combat_log_analysis.md)) feeding the Life noun
 and the reconstruction (§3.10). Values the region did not report print `—`.
@@ -924,8 +927,8 @@ than in a chart beside it [01].
 ### 4.1 Layers
 
 1. **Permanent base layer** — the whole-session figure at ~25 % alpha: death crosses, deadliness
-   cells, auto-detected spawn hotspot rings, and the outline of any spawn zone the officer marked
-   [02]. An officer who alt-cams somewhere out of curiosity always has something drawn to click —
+   cells and auto-detected spawn hotspot rings [02] -- there is no hand-marked spawn zone to outline
+   [owner]. An officer who alt-cams somewhere out of curiosity always has something drawn to click —
    a cross, a ring, a trail — and exploration never requires having navigated first. What they cannot
    click is bare ground, because bare ground is prims and mesh and knows nothing about the fight.
 2. **Focus layer** — the current level's figure at full strength.
@@ -1426,7 +1429,7 @@ last: it is the cheapest stage and it validates every other one.
 
 **One reordering inside Phase 5, forced by the domain material.** The **Summary face** (§3.9) and the
 rule checks that need no geometry — armour cap, healing limits, area radii against the written
-kill/wound distances, fire into the spawn zone, restriction breaches — move to the *front* of Phase 5,
+kill/wound distances, restriction breaches — move to the *front* of Phase 5,
 ahead of the LOS work. Two reasons. They are what makes the tool get used at all: an officer writes
 something up after every single raid and investigates a wall kill perhaps weekly [reports], and the
 adjustments surface is invisible today, so anything it shows is new information [owner]. And they are
