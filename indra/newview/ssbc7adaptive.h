@@ -183,6 +183,10 @@ void ssBC7AdaptiveNoteEncode(SSBC7Quality quality, U32 texels, F64 seconds);
 // Worker threads. Brackets the time a worker spends inside an encode, so the overlay can say how many of the cores are actually busy rather than how many exist.
 void ssBC7AdaptiveNoteBusy(bool busy);
 
+// <SS:Nexii> Squeeze capacity-driven promotion - the INSTANT count of workers inside an encode, as against the moving average the overlay shows. The promotion engine sizes each pass from this: pool width minus this minus what it has already queued is the number of cores it may put to work right now, and an average would let it over-post on the way up and under-post on the way down.
+S32 ssBC7AdaptiveBusyWorkersNow();
+// </SS:Nexii>
+
 // Main thread, every frame, and a clock comparison on almost all of them. Feeds the ladder and logs every transition.
 void ssBC7AdaptiveTick();
 
