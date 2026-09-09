@@ -44,6 +44,7 @@
 #include "v3dmath.h"
 #include "v3math.h"
 
+#include <functional>
 #include <unordered_map>
 #include <vector>
 
@@ -106,17 +107,6 @@ public:
     bool wallProfile(const LLVector3& pos, F32 range_m, F32 out[8],
                      bool include_phantom = true);
 
-    // Stats
-    bool censusCurrent() const;
-    S32 recordCount() const { return (S32)mCensus.mRecords.size(); }
-    S32 triangleCount() const { return mTriCount; }
-    F32 lastBuildMS() const { return mLastBuildMS; }
-
-    // The census overlay: record boxes by layer and provenance - view 6 of
-    // SSWorldFieldDebugView.
-    void renderDebug();
-
-private:
     // One declared shape in world space. Analytic classes carry their frame;
     // TRI records carry a baked world-space triangle soup (3 verts per tri),
     // which is what mesh decompositions and physics-detail tessellations boil
@@ -142,6 +132,29 @@ private:
         bool mDynamic = false;          // root moved within the settle window: query-time only, never store-bound
     };
 
+    // Census read access for downstream rasters (the 3D tile lattice): every
+    // record whose AABB meets the world-space box, unfiltered - the caller
+    // owns layer and DYNAMIC policy. Linear scan; census-rebuild cadence.
+    typedef std::function<void(const Record&)> RecordFn;
+    void forEachRecord(const LLVector3& bmin, const LLVector3& bmax, const RecordFn& fn) const;
+
+    // The envelope the resident census was built around.
+    const LLVector3& censusAnchor() const { return mCensus.mAnchor; }
+
+    // The census build's stamp - downstream rasters key their schedules to it.
+    U64 censusStamp() const { return (U64)(mCensus.mBuildTime * 1000.0); }
+
+    // Stats
+    bool censusCurrent() const;
+    S32 recordCount() const { return (S32)mCensus.mRecords.size(); }
+    S32 triangleCount() const { return mTriCount; }
+    F32 lastBuildMS() const { return mLastBuildMS; }
+
+    // The census overlay: record boxes by layer and provenance - view 6 of
+    // SSWorldFieldDebugView.
+    void renderDebug();
+
+private:
     // The build-scoped snapshot: records plus the 64 m bucket grid over them.
     // One census resident at a time - the queries come from one listener.
     struct Census

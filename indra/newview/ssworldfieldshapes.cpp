@@ -1029,6 +1029,20 @@ bool SSWorldFieldShapes::censusCurrent() const
     return mCensus.mRegionHandle != 0 && (mNow - mCensus.mBuildTime) <= SS_SHAPES_MAX_AGE;
 }
 
+// Records overlapping a world-space box, unfiltered - the tiles raster and
+// any later downstream walk own their layer and DYNAMIC policy. Linear scan:
+// census-rebuild cadence, thousands of records at most.
+void SSWorldFieldShapes::forEachRecord(const LLVector3& bmin, const LLVector3& bmax, const RecordFn& fn) const
+{
+    for (const Record& rec : mCensus.mRecords)
+    {
+        if (rec.mBMax.mV[VX] < bmin.mV[VX] || rec.mBMin.mV[VX] > bmax.mV[VX]) continue;
+        if (rec.mBMax.mV[VY] < bmin.mV[VY] || rec.mBMin.mV[VY] > bmax.mV[VY]) continue;
+        if (rec.mBMax.mV[VZ] < bmin.mV[VZ] || rec.mBMin.mV[VZ] > bmax.mV[VZ]) continue;
+        fn(rec);
+    }
+}
+
 // The census overlay: record boxes by layer and provenance, distance-thinned
 // like the rest of the debug views.
 void SSWorldFieldShapes::renderDebug()

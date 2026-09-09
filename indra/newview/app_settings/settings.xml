@@ -27090,6 +27090,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>192.0</real>
     </map>
+    <key>SSWorldFieldTiles</key>
+      <map>
+      <key>Comment</key>
+      <string>Rasterize the declared-shape census into 32 m voxel tiles under the Recast scratch rule and publish per-column solid spans - the SHELTERED and INTERIOR structure source the flood and the WALKABLE bake will read, with the render sweep staying the outdoors authority. DYNAMIC objects are excluded from tiles by design</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>Boolean</string>
+      <key>Value</key>
+      <integer>0</integer>
+    </map>
     <key>SSWorldFieldAcoustics</key>
       <map>
       <key>Comment</key>

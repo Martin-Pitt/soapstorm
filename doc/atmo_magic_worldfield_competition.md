@@ -463,7 +463,9 @@ the existing exposure answer, so the tiers cannot fight over one cell.
 
 **Planning items this leaves (next round):** census rasterization in 3D tiles (32³ m voxel
 blocks, sparse-hashed) publishing beneath-surface spans and per-tile labels under the scratch
-rule; the DYNAMIC bit and hysteresis in the census (shipped in `ssworldfieldshapes`); the 3D
-tile adjacency graph for the flood; portal-transparent door handling in flood + `traceSolid`;
-the WALKABLE/door-portal bake over 3D tiles; the foliage tier in surface weather; the
-`buildSurfaceGrid` merge gate.
+rule (**shipped as `ssworldfieldtiles`, default off** — one reused 128³ voxel scratch,
+conservative shape rasterization, run-length per-column spans with the legacy slab rule and
+span budget, DYNAMIC excluded by design); the DYNAMIC bit and hysteresis in the census
+(shipped in `ssworldfieldshapes`); the 3D tile adjacency graph for the flood; portal-transparent
+door handling in flood + `traceSolid`; the WALKABLE/door-portal bake over 3D tiles; the foliage
+tier in surface weather; the `buildSurfaceGrid` merge gate.
