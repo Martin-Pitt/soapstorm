@@ -48,12 +48,6 @@
 // Palette. Reconstruction reuses the overlay's meanings and adds only the ones it alone needs.
 // ---------------------------------------------------------------------------------------------------------
 
-// A ghost that is neither the victim nor the killer: present, but not the subject.
-static const LLColor4 COL_GHOST(0.78f, 0.80f, 0.86f, 1.f);
-// The victim's ghost.
-static const LLColor4 COL_GHOST_VICTIM(1.00f, 0.42f, 0.36f, 1.f);
-// The killer's ghost.
-static const LLColor4 COL_GHOST_KILLER(1.00f, 0.72f, 0.30f, 1.f);
 // A geometric claim Stage 0 never tested; the killer's line wears this until a sweep has run.
 static const LLColor4 COL_UNTESTED(0.64f, 0.64f, 0.67f, 1.f);
 // Ghost labels.
@@ -283,33 +277,11 @@ static F32 estimate_health(const SSCombatLog& store, F64 at)
 // Drawing.
 // ---------------------------------------------------------------------------------------------------------
 
-// A translucent capsule: a cylinder of ten segments with both caps, no depth writes, standing on the feet.
-static void draw_capsule(const LLVector3& feet, F32 radius, F32 height, const LLColor4& color)
-{
-    const S32 segments = 10;
-    const LLVector3 top(feet.mV[VX], feet.mV[VY], feet.mV[VZ] + height);
-    LLVector3 prev_b(feet.mV[VX] + radius, feet.mV[VY], feet.mV[VZ]);
-    LLVector3 prev_t(prev_b.mV[VX], prev_b.mV[VY], top.mV[VZ]);
-    for (S32 i = 1; i <= segments; ++i)
-    {
-        const F32 angle = F_TWO_PI * (F32)i / (F32)segments;
-        const LLVector3 cur_b(feet.mV[VX] + radius * cosf(angle), feet.mV[VY] + radius * sinf(angle), feet.mV[VZ]);
-        const LLVector3 cur_t(cur_b.mV[VX], cur_b.mV[VY], top.mV[VZ]);
-        SSCombatDraw::tri(prev_b, cur_b, cur_t, color);
-        SSCombatDraw::tri(prev_b, cur_t, prev_t, color);
-        SSCombatDraw::tri(feet, cur_b, prev_b, color);
-        SSCombatDraw::tri(top, prev_t, cur_t, color);
-        prev_b = cur_b;
-        prev_t = cur_t;
-    }
-}
-
 // One ghost at the current instant: capsule (or a hollow ring across a track gap), yaw arrow, label, pick rect.
+// The solid branch is SSCombatDraw::ghostBody(), the shared body also used by the overlay's detective view.
 static void draw_ghost(const SSCombatLog& store, const Ghost& ghost, S32 index, F64 t)
 {
-    LLColor4 color = ghost.mVictim ? COL_GHOST_VICTIM : (ghost.mKiller ? COL_GHOST_KILLER : COL_GHOST);
-    // Victim and killer at 60 %, everyone else at 25 %; the region stays readable underneath either way.
-    color.mV[VALPHA] = (ghost.mVictim || ghost.mKiller) ? 0.60f : 0.25f;
+    const LLColor4 color = SSCombatDraw::ghostColor(ghost.mVictim, ghost.mKiller);
 
     if (index < 0 || index >= (S32)ghost.mValid.size())
     {
@@ -342,26 +314,13 @@ static void draw_ghost(const SSCombatLog& store, const Ghost& ghost, S32 index, 
     const SSCombat::Sample& sample = ghost.mFrames[(size_t)index];
     const LLVector3 feet = SSCombatDraw::agentFromRegion(sample.mPos);
 
-    draw_capsule(feet, 0.32f, 1.80f, color);
-
-    LLColor4 outline = color;
-    outline.mV[VALPHA] = llmin(1.f, color.mV[VALPHA] + 0.30f);
-    SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, feet, 0.42f, outline, SSCombatDraw::WIDTH_THIN);
-    SSCombatDraw::arrow(SSCombatDraw::LAYER_MARKER, feet + LLVector3(0.f, 0.f, 0.05f), sample.mYaw, 1.1f, outline, SSCombatDraw::WIDTH_MID);
-    if (sample.mFlags & SSCombat::FLAG_MOUSELOOK)
-    {
-        SSCombatDraw::eyeGlyph(feet + LLVector3(0.f, 0.f, 2.35f), 0.22f, outline);
-    }
-
-    SSCombatDraw::pushLabel(store.displayName(ghost.mId), feet + LLVector3(0.f, 0.f, 2.05f), COL_LABEL);
-
     // Ghosts push their rects like any other marker, so the pick stack resolves overlapping ghosts exactly
-    // as it resolves live ones (ux 3.10, 4.6).
+    // as it resolves live ones.
     SSCombat::NounRef ref;
     ref.mType = SSCombat::NOUN_COMBATANT;
     ref.mId = ghost.mId;
     ref.mTime = t;
-    SSCombatDraw::pushPick(feet + LLVector3(0.f, 0.f, 1.f), 12, ref);
+    SSCombatDraw::ghostBody(feet, sample.mYaw, sample.mFlags, color, store.displayName(ghost.mId), ref, true);
 }
 
 // The bullet flights whose measured span touches the window, animated along their own polylines at their own
@@ -749,14 +708,13 @@ static void on_loop(LLUICtrl* ctrl, const LLSD&)
     sLoop = ctrl->getValue().asBoolean();
 }
 
-// The one [article] escape from the replay: the death's own page.
+// The one escape from the replay: the victim's own Combatant page.
 static void on_page(LLUICtrl*, const LLSD&)
 {
-    SSCombat::NounRef ref;
-    ref.mType = SSCombat::NOUN_DEATH;
-    ref.mIndex = sDeath;
-    ref.mTime = sDeathTime;
-    LLFloaterReg::showInstance("ss_combat_events"); // the Details floater is not built yet; the log floater follows the selection
+    if (sVictim.notNull())
+    {
+        LLFloaterReg::showInstance("ss_combat_combatant", LLSD(sVictim.asString()));
+    }
 }
 
 // Close: leave the mode, exactly as Esc does.

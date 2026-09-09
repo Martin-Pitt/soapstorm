@@ -60,6 +60,11 @@ public:
         mClipRegion = region;
     }
 
+    // <SS:Nexii> The atlas UV rect (normalized 0..1), needed by callers that emit their own textured geometry
+    // (e.g. a world-space billboard) instead of going through draw()/draw3D(). [interaction: CombatLog]
+    LL_FORCE_INLINE const LLRectf& getClipRegion() const { return mClipRegion; }
+    // </SS:Nexii>
+
     LL_FORCE_INLINE void setScaleRegion(const LLRectf& region)
     {
         mScaleRegion = region;

@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<floater
+ name="ss_combat_events"
+ title="Combat Log - Events"
+ layout="topleft"
+ width="680"
+ height="460"
+ min_width="620"
+ min_height="360"
+ save_rect="true"
+ single_instance="true"
+ can_resize="true"
+ can_minimize="true"
+ can_close="true">
+	<line_editor
+	 name="filter_edit"
+	 label="Filter by name or weapon"
+	 layout="topleft"
+	 left="10"
+	 top="8"
+	 width="200"
+	 height="22"
+	 follows="left|top"
+	 max_length_chars="128" />
+	<check_box
+	 name="mine_only_check"
+	 label="Mine only"
+	 layout="topleft"
+	 left_pad="10"
+	 top="10"
+	 width="90"
+	 height="20"
+	 follows="left|top" />
+	<combo_box
+	 name="kind_combo"
+	 layout="topleft"
+	 left_pad="10"
+	 top="8"
+	 width="110"
+	 height="22"
+	 initial_value="all"
+	 follows="left|top">
+		<combo_box.item
+		 label="All"
+		 name="kind_all"
+		 value="all" />
+		<combo_box.item
+		 label="Deaths"
+		 name="kind_deaths"
+		 value="deaths" />
+		<combo_box.item
+		 label="Damage"
+		 name="kind_damage"
+		 value="damage" />
+	</combo_box>
+	<text
+	 name="count_text"
+	 layout="topleft"
+	 left="440"
+	 right="-10"
+	 top="11"
+	 height="16"
+	 halign="right"
+	 follows="left|right|top">
+		0 events
+	</text>
+	<scroll_list
+	 name="events_list"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top="36"
+	 height="170"
+	 follows="left|right|top"
+	 draw_heading="false"
+	 multi_select="false"
+	 can_sort="false"
+	 column_padding="2">
+		<scroll_list.columns
+		 name="icon"
+		 label=""
+		 width="20" />
+		<scroll_list.columns
+		 name="line"
+		 label=""
+		 relative_width="1.0" />
+	</scroll_list>
+	<text
+	 name="related_label"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top="212"
+	 height="16"
+	 follows="left|right|top">
+		Select a row to see what led to it
+	</text>
+	<scroll_list
+	 name="related_list"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top="230"
+	 bottom="44"
+	 follows="left|right|top|bottom"
+	 draw_heading="true"
+	 multi_select="false"
+	 can_sort="false" />
+	<button
+	 name="show_world_btn"
+	 label="Show in world"
+	 layout="topleft"
+	 left="10"
+	 bottom="8"
+	 width="120"
+	 height="24"
+	 follows="left|bottom" />
+	<button
+	 name="reconstruct_btn"
+	 label="Reconstruct"
+	 layout="topleft"
+	 left_pad="10"
+	 bottom="8"
+	 width="110"
+	 height="24"
+	 follows="left|bottom" />
+	<button
+	 name="load_mock_btn"
+	 label="Load mock raid"
+	 tool_tip="Stage 0 preview data"
+	 layout="topleft"
+	 right="-150"
+	 bottom="8"
+	 width="110"
+	 height="24"
+	 follows="right|bottom" />
+	<button
+	 name="replay_mock_btn"
+	 label="Replay mock live"
+	 tool_tip="Stage 0 preview data"
+	 layout="topleft"
+	 right="-10"
+	 bottom="8"
+	 width="130"
+	 height="24"
+	 follows="right|bottom" />
+</floater>

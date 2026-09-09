@@ -205,6 +205,7 @@ namespace SSCombat
         S8          mLevel = LEVEL_SESSION;
         NounRef     mSubject;               // what the current level is about
         NounRef     mSelection;             // what the officer last clicked
+        NounRef     mHover;                 // what the pointer is over right now (list row or world icon); transient, no signal
         bool        mReconstruct = false;   // reconstruction mode (ux 3.10)
         F64         mReconStart = 0.0, mReconEnd = 0.0;
         bool        mXray = false;          // overlay draws through walls
@@ -353,6 +354,9 @@ public:
     const std::vector<SSCombat::NounRef>& nounChain() const { return mNounChain; }
     // Select a noun (pushes View), optionally moving the cursor to its time.
     void select(const SSCombat::NounRef& ref, bool moveCursor);
+    // The event ids the Events floater currently shows in its viewport; the overlay draws exactly these (floater writes, overlay reads).
+    void setVisibleEvents(const std::vector<U32>& ids) { mVisibleEvents = ids; }
+    const std::vector<U32>& visibleEvents() const { return mVisibleEvents; }
     void setLevel(S8 level);
     // Enter/leave reconstruction of a DEATH event (ux 3.10).
     void enterReconstruction(U32 deathEvent);
@@ -402,6 +406,7 @@ private:
     SSCombat::View                                  mView;
     std::vector<SSCombat::View>                     mViewChain;
     std::vector<SSCombat::NounRef>                  mNounChain;
+    std::vector<U32>                                mVisibleEvents;
     signal_t                                        mDataChanged;
     signal_t                                        mViewChanged;
     class SSCombatAnalysis*                         mAnalysis = nullptr;

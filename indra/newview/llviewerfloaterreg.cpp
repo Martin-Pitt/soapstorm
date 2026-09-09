@@ -248,6 +248,7 @@
 #include "ssfloatersoundlist.h" // <SS:Nexii> Atmo Magic sound sequences
 #include "ssfloatertexturelist.h" // <SS:Nexii> Atmo Magic texture lists
 #include "ssfloatercombatevents.h" // <SS:Nexii> Combat Log
+#include "ssfloatercombatcombatant.h" // <SS:Nexii> Combat Log combatant details
 #include "ssfloaterassets.h" // <SS:Nexii> Atmo Magic global assets
 #include "ssfloaterpreset.h" // <SS:Nexii> Atmo Magic preset editor
 #include "ssfloateratmodebug.h" // <SS:Nexii> Atmo Magic debug views
@@ -715,6 +716,7 @@ void LLViewerFloaterReg::registerFloaters()
     LLFloaterReg::add("ss_texture_list", "floater_ss_texture_list.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterTextureList>);
     // <SS:Nexii> Combat Log
     LLFloaterReg::add("ss_combat_events", "floater_ss_combat_events.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterCombatEvents>);
+    LLFloaterReg::add("ss_combat_combatant", "floater_ss_combat_combatant.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<SSFloaterCombatCombatant>);
     LLFloaterReg::add("performance", "floater_fs_performance.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FSFloaterPerformance>);
 	// <FS:William_W:FixPhototoolsTypo> [PhotoTools] Corrected typo in Phototools floater registration - using string literal instead of PHOTOTOOLS_FLOATER constant (likely intended).
 	// LLFloaterReg::add(PHOTOTOOLS_FLOATER, "floater_phototools.xml", (LLFloaterBuildFunc)&LLFloaterReg::build<FloaterQuickPrefs>); // Original line with likely typo

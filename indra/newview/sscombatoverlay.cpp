@@ -1,8 +1,9 @@
 /**
  * @file sscombatoverlay.cpp
- * @brief Combat Log in-world overlay: the gate, the level-indexed world figure, and the pick model.
- *        Design and rationale: doc/combat_log_ux.md section 4. The caller (LLPipeline::renderDebug) binds
- *        gUIProgram and owns the shader; everything here only emits immediate-mode geometry in agent space.
+ * @brief Combat Log in-world overlay: the gate, the world figure, and the pick model.
+ *        The world mirrors the Events pane: one icon per event in SSCombatLog::visibleEvents(), plus whatever
+ *        is hovered or selected even when scrolled away. The caller (LLPipeline::renderDebug) binds gUIProgram
+ *        and owns the shader; everything here only emits immediate-mode geometry in agent space.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Soapstorm Viewer Source Code
@@ -17,6 +18,8 @@
 #include "sscombatoverlay.h"
 
 #include "fscombathitmarker.h"
+#include "sscombatcamera.h"
+#include "sscombaticons.h"
 #include "sscombatreconstruct.h"
 
 #include "indra_constants.h"
@@ -30,7 +33,11 @@
 #include "llhudrender.h"
 #include "llmenugl.h"
 #include "llrender.h"
+#include "llsd.h"
 #include "lluictrlfactory.h"
+#include "llui.h"
+#include "lluiimage.h"
+#include "lluuid.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewermenu.h"
@@ -40,35 +47,36 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <unordered_map>
 
 extern bool gSnapshot;
 extern bool gCubeSnapshot;
 
 // ---------------------------------------------------------------------------------------------------------
-// Palette. One named colour per meaning, per the storm-view convention: direction is carried by geometry
-// (arrowheads), never by hue, so every entry below names a *kind of thing* and never a direction.
+// Palette. One named colour per meaning: direction is carried by geometry (arrowheads), never by hue, so
+// every entry below names a *kind of thing* and never a direction.
 // ---------------------------------------------------------------------------------------------------------
 
-// A combatant the team solve has not placed yet; deliberately colourless so an unassigned avatar never reads as a side.
-static const LLColor4 COL_UNASSIGNED(0.72f, 0.72f, 0.76f, 1.f);
-// A death: the cross and the ring at target_pos. Measured, so it is drawn solid at full alpha (ux 4.5).
-static const LLColor4 COL_DEATH(1.00f, 0.24f, 0.20f, 1.f);
-// The killer line hanging off a death marker, from source_pos to target_pos.
-static const LLColor4 COL_KILLER_LINE(1.00f, 0.58f, 0.22f, 1.f);
-// Whatever the officer last clicked; the one colour that outranks team colour.
+// Whatever the officer last clicked; the one colour that outranks everything else.
 static const LLColor4 COL_SELECTION(1.00f, 0.95f, 0.38f, 1.f);
 // Whatever the pointer is over right now. Transient, so it is dimmer than selection.
 static const LLColor4 COL_HOVER(0.85f, 0.92f, 1.00f, 1.f);
 // 3D-anchored label text.
 static const LLColor4 COL_LABEL(0.93f, 0.93f, 0.96f, 1.f);
-// The faint per-engagement density ring drawn at the coarse levels.
-static const LLColor4 COL_ENGAGEMENT(0.45f, 0.62f, 0.78f, 1.f);
 // The eye glyph for FLAG_MOUSELOOK.
 static const LLColor4 COL_MOUSELOOK(0.96f, 0.86f, 0.36f, 1.f);
 // A damage type the palette below has no entry for.
 static const LLColor4 COL_DAMAGE_UNKNOWN(0.80f, 0.80f, 0.84f, 1.f);
 // A measured projectile flight from the ghost-projectile store: solid, because it was seen.
 static const LLColor4 COL_FLIGHT(0.96f, 0.92f, 0.72f, 1.f);
+// The killer/hit line in a detective-view freeze-frame.
+static const LLColor4 COL_KILLER_LINE(1.00f, 0.58f, 0.22f, 1.f);
+// The ghost that is the subject of the freeze-frame: a death's victim, or a damage event's target.
+static const LLColor4 COL_GHOST_VICTIM(1.00f, 0.42f, 0.36f, 1.f);
+// The ghost that is the source of the freeze-frame: a death's killer, or a damage event's attacker.
+static const LLColor4 COL_GHOST_KILLER(1.00f, 0.72f, 0.30f, 1.f);
+// A ghost that is neither subject nor source: present, but not the focus.
+static const LLColor4 COL_GHOST(0.78f, 0.80f, 0.86f, 1.f);
 
 // Damage-type hues, keyed by the display name FSCombatHitMarker already curates, so the overlay and the
 // hitmarker's symbol table can never drift apart on which number means which type.
@@ -129,6 +137,14 @@ LLColor4 SSCombatDraw::damageTypeColor(S16 type)
     return COL_DAMAGE_UNKNOWN;
 }
 
+// The shared ghost hue: subject (victim/target) or source (killer/attacker) or neither, alpha baked in.
+LLColor4 SSCombatDraw::ghostColor(bool subject, bool source)
+{
+    LLColor4 color = subject ? COL_GHOST_VICTIM : (source ? COL_GHOST_KILLER : COL_GHOST);
+    color.mV[VALPHA] = (subject || source) ? 0.60f : 0.25f;
+    return color;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // SSCombatDraw: the shared draw list.
 // ---------------------------------------------------------------------------------------------------------
@@ -157,11 +173,19 @@ namespace
         LLRect              mRect;
         SSCombat::NounRef   mRef;
     };
+    struct DrawIcon
+    {
+        LLPointer<LLUIImage> mImage;
+        LLVector3            mCentre;
+        F32                  mHalf = 0.f;
+        LLColor4             mColor;
+    };
 
     std::vector<DrawSeg>    sSegs[SSCombatDraw::LAYER_COUNT];
     std::vector<DrawTri>    sTris;
     std::vector<DrawLabel>  sLabels;
     std::vector<DrawPick>   sPicks;
+    std::vector<DrawIcon>   sIcons;
     U32                     sPickFrame = 0xFFFFFFFFu;
 
     const F32 LINE_WIDTHS[3] = { 1.f, 3.f, 6.f };
@@ -190,7 +214,7 @@ F32 SSCombatDraw::metresPerPixelAt(const LLVector3& pos_agent)
     return llmax(0.f, cameraDistance(pos_agent)) / ratio;
 }
 
-// Distance from the render camera to a point, the input to every LOD decision in ux 4.3.
+// Distance from the render camera to a point.
 F32 SSCombatDraw::cameraDistance(const LLVector3& pos_agent)
 {
     return (pos_agent - LLViewerCamera::getInstance()->getOrigin()).magVec();
@@ -218,6 +242,7 @@ void SSCombatDraw::clear()
     sSegs[LAYER_MARKER].clear();
     sTris.clear();
     sLabels.clear();
+    sIcons.clear();
 }
 
 // One line segment with its own end colours, so per-vertex alpha can carry age along a trail.
@@ -232,7 +257,7 @@ void SSCombatDraw::seg(ELayer layer, const LLVector3& a, const LLVector3& b, con
     sSegs[layer].push_back(s);
 }
 
-// A dashed run between two points; ux 4.5 draws reconstructed geometry dashed and measured geometry solid.
+// A dashed run between two points; used for the reconstructed (as opposed to measured) geometry.
 void SSCombatDraw::dashedSeg(ELayer layer, const LLVector3& a, const LLVector3& b, const LLColor4& ca, const LLColor4& cb, U8 width)
 {
     const S32 dashes = 7;
@@ -246,7 +271,7 @@ void SSCombatDraw::dashedSeg(ELayer layer, const LLVector3& a, const LLVector3& 
     }
 }
 
-// A horizontal ring on the ground plane, the feet marker and the uncertainty disc of ux 4.5.
+// A horizontal ring on the ground plane.
 void SSCombatDraw::ring(ELayer layer, const LLVector3& centre_agent, F32 radius, const LLColor4& color, U8 width)
 {
     const S32 segments = ringSegments(centre_agent, radius);
@@ -262,7 +287,24 @@ void SSCombatDraw::ring(ELayer layer, const LLVector3& centre_agent, F32 radius,
     }
 }
 
-// A three-axis cross; the death mark, and the terminal tick on anything that stopped where it stopped.
+// A camera-facing ring outline: the icon selection/hover halo, built with the same axes as disc().
+void SSCombatDraw::ringFacing(const LLVector3& centre_agent, F32 radius, const LLColor4& color, U8 width)
+{
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    LLVector3 right = camera->getLeftAxis() * -1.f;
+    LLVector3 up = camera->getUpAxis();
+    const S32 segments = llclamp(ringSegments(centre_agent, radius), 8, 32);
+    LLVector3 prev = centre_agent + right * radius;
+    for (S32 i = 1; i <= segments; ++i)
+    {
+        const F32 angle = F_TWO_PI * (F32)i / (F32)segments;
+        const LLVector3 cur = centre_agent + right * (radius * cosf(angle)) + up * (radius * sinf(angle));
+        seg(LAYER_MARKER, prev, cur, color, color, width);
+        prev = cur;
+    }
+}
+
+// A three-axis cross.
 void SSCombatDraw::cross(ELayer layer, const LLVector3& centre_agent, F32 size, const LLColor4& color, U8 width)
 {
     const LLVector3& c = centre_agent;
@@ -282,7 +324,7 @@ void SSCombatDraw::arrow(ELayer layer, const LLVector3& base_agent, F32 yaw, F32
     seg(layer, tip, tip - dir * (length * 0.32f) - side * (length * 0.20f), color, color, width);
 }
 
-// The mouselook eye: a lens outline with a pupil ring, floated above the head. Glyphs carry state (ux 4.4).
+// The mouselook eye: a lens outline with a pupil ring, floated above the head.
 void SSCombatDraw::eyeGlyph(const LLVector3& centre_agent, F32 size, const LLColor4& color)
 {
     LLVector3 up(0.f, 0.f, 1.f);
@@ -314,7 +356,7 @@ void SSCombatDraw::eyeGlyph(const LLVector3& centre_agent, F32 size, const LLCol
     }
 }
 
-// One filled triangle; the ghost capsules and hit discs are the only things that need fill.
+// One filled triangle; the ghost capsules are the only thing that needs fill.
 void SSCombatDraw::tri(const LLVector3& a, const LLVector3& b, const LLVector3& c, const LLColor4& color)
 {
     DrawTri t;
@@ -342,6 +384,65 @@ void SSCombatDraw::disc(const LLVector3& centre_agent, F32 radius, const LLColor
     }
 }
 
+// A translucent capsule standing on its feet: a cylinder of ten segments with both caps, no depth writes.
+void SSCombatDraw::capsule(const LLVector3& feet, F32 radius, F32 height, const LLColor4& color)
+{
+    const S32 segments = 10;
+    const LLVector3 top(feet.mV[VX], feet.mV[VY], feet.mV[VZ] + height);
+    LLVector3 prev_b(feet.mV[VX] + radius, feet.mV[VY], feet.mV[VZ]);
+    LLVector3 prev_t(prev_b.mV[VX], prev_b.mV[VY], top.mV[VZ]);
+    for (S32 i = 1; i <= segments; ++i)
+    {
+        const F32 angle = F_TWO_PI * (F32)i / (F32)segments;
+        const LLVector3 cur_b(feet.mV[VX] + radius * cosf(angle), feet.mV[VY] + radius * sinf(angle), feet.mV[VZ]);
+        const LLVector3 cur_t(cur_b.mV[VX], cur_b.mV[VY], top.mV[VZ]);
+        tri(prev_b, cur_b, cur_t, color);
+        tri(prev_b, cur_t, prev_t, color);
+        tri(feet, cur_b, prev_b, color);
+        tri(top, prev_t, cur_t, color);
+        prev_b = cur_b;
+        prev_t = cur_t;
+    }
+}
+
+// One ghost: capsule, outline ring, yaw arrow, mouselook eye, name label, and (when pickable) a pick rect.
+// The single body shared by the overlay's detective view and by Reconstruction's replay.
+void SSCombatDraw::ghostBody(const LLVector3& feet_agent, F32 yaw, U16 flags, const LLColor4& color,
+                             const std::string& label, const SSCombat::NounRef& pickRef, bool pickable)
+{
+    capsule(feet_agent, 0.32f, 1.80f, color);
+
+    LLColor4 outline = color;
+    outline.mV[VALPHA] = llmin(1.f, color.mV[VALPHA] + 0.30f);
+    ring(LAYER_MARKER, feet_agent, 0.42f, outline, WIDTH_THIN);
+    arrow(LAYER_MARKER, feet_agent + LLVector3(0.f, 0.f, 0.05f), yaw, 1.1f, outline, WIDTH_MID);
+    if (flags & SSCombat::FLAG_MOUSELOOK)
+    {
+        eyeGlyph(feet_agent + LLVector3(0.f, 0.f, 2.35f), 0.22f, COL_MOUSELOOK);
+    }
+    pushLabel(label, feet_agent + LLVector3(0.f, 0.f, 2.05f), COL_LABEL);
+    if (pickable)
+    {
+        pushPick(feet_agent + LLVector3(0.f, 0.f, 1.f), 12, pickRef);
+    }
+}
+
+// A camera-facing textured quad sampling the given UI atlas image; queued because each icon binds its own
+// texture and cannot share a batch with the untextured lists.
+void SSCombatDraw::icon(const LLVector3& centre_agent, LLPointer<LLUIImage> image, F32 half_size, const LLColor4& color)
+{
+    if (!image)
+    {
+        return;
+    }
+    DrawIcon i;
+    i.mImage = image;
+    i.mCentre = centre_agent;
+    i.mHalf = half_size;
+    i.mColor = color;
+    sIcons.push_back(i);
+}
+
 // Queues a 3D-anchored label; labels are emitted last because the font path rebinds textures and matrices.
 void SSCombatDraw::pushLabel(const std::string& text, const LLVector3& pos_agent, const LLColor4& color)
 {
@@ -356,7 +457,7 @@ void SSCombatDraw::pushLabel(const std::string& text, const LLVector3& pos_agent
     sLabels.push_back(l);
 }
 
-// Projects a marker anchor to a screen rect and files it for the pick model of ux 4.6.
+// Projects a marker anchor to a screen rect and files it for the pick model.
 void SSCombatDraw::pushPick(const LLVector3& pos_agent, S32 half_px, const SSCombat::NounRef& ref)
 {
     if (!ref.valid())
@@ -420,7 +521,7 @@ void SSCombatDraw::emitLines(ELayer layer, F32 alpha_scale)
     gGL.setLineWidth(1.f);
 }
 
-// Draws the filled list (capsules and discs) at a global alpha multiplier.
+// Draws the filled list (the ghost capsules) at a global alpha multiplier.
 void SSCombatDraw::emitTris(F32 alpha_scale)
 {
     if (sTris.empty())
@@ -436,6 +537,42 @@ void SSCombatDraw::emitTris(F32 alpha_scale)
         gGL.vertex3fv(t.mV[2].mV);
     }
     gGL.end();
+}
+
+// Draws the queued icons: one bind and one quad per icon, camera-facing, sampling gUIProgram's diffuse map.
+void SSCombatDraw::emitIcons(F32 alpha_scale)
+{
+    if (sIcons.empty())
+    {
+        return;
+    }
+    LLViewerCamera* camera = LLViewerCamera::getInstance();
+    const LLVector3 right = camera->getLeftAxis() * -1.f;
+    const LLVector3 up = camera->getUpAxis();
+    for (const DrawIcon& i : sIcons)
+    {
+        LLPointer<LLTexture> tex = i.mImage->getImage();
+        if (!tex)
+        {
+            continue;
+        }
+        gGL.getTexUnit(0)->bind(tex);
+        const LLRectf& uv = i.mImage->getClipRegion();
+        const LLVector3 tl = i.mCentre - right * i.mHalf + up * i.mHalf;
+        const LLVector3 tr = i.mCentre + right * i.mHalf + up * i.mHalf;
+        const LLVector3 bl = i.mCentre - right * i.mHalf - up * i.mHalf;
+        const LLVector3 br = i.mCentre + right * i.mHalf - up * i.mHalf;
+        gGL.color4f(i.mColor.mV[VRED], i.mColor.mV[VGREEN], i.mColor.mV[VBLUE], i.mColor.mV[VALPHA] * alpha_scale);
+        gGL.begin(LLRender::TRIANGLES);
+        gGL.texCoord2f(uv.mLeft, uv.mTop);      gGL.vertex3fv(tl.mV);
+        gGL.texCoord2f(uv.mLeft, uv.mBottom);   gGL.vertex3fv(bl.mV);
+        gGL.texCoord2f(uv.mRight, uv.mTop);     gGL.vertex3fv(tr.mV);
+        gGL.texCoord2f(uv.mRight, uv.mTop);     gGL.vertex3fv(tr.mV);
+        gGL.texCoord2f(uv.mLeft, uv.mBottom);   gGL.vertex3fv(bl.mV);
+        gGL.texCoord2f(uv.mRight, uv.mBottom);  gGL.vertex3fv(br.mV);
+        gGL.end();
+    }
+    gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 }
 
 // Draws the queued labels; hud_render_utf8text pushes its own matrices and must run outside a begin/end pair.
@@ -461,7 +598,7 @@ void SSCombatDraw::emitLabels()
 // True when nothing at all was queued this frame, so the caller can skip its state changes.
 bool SSCombatDraw::empty()
 {
-    return sSegs[LAYER_LINE].empty() && sSegs[LAYER_MARKER].empty() && sTris.empty() && sLabels.empty();
+    return sSegs[LAYER_LINE].empty() && sSegs[LAYER_MARKER].empty() && sTris.empty() && sLabels.empty() && sIcons.empty();
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -523,7 +660,8 @@ bool SSCombatOverlay::wantsDraw()
     {
         return false;
     }
-    if (!LLFloaterReg::instanceVisible("ss_combat_events"))
+    // Either pane is enough: the Events list and a Combatant page both want the world figure underneath them.
+    if (!LLFloaterReg::instanceVisible("ss_combat_events") && !LLFloaterReg::instanceVisible("ss_combat_combatant"))
     {
         return false;
     }
@@ -548,12 +686,12 @@ bool SSCombatOverlay::wantsDraw()
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Figure building.
+// Figure building: one icon per visible/selected/hovered event, plus the detective-view freeze-frame.
 // ---------------------------------------------------------------------------------------------------------
 
 namespace
 {
-    // The three distance bands of ux 4.3; the thresholds are hidden debug settings, not preferences.
+    // The three distance bands, used only to cap trail cost and reach in the detective view.
     enum EBand : U8 { BAND_NEAR = 0, BAND_MID = 1, BAND_FAR = 2 };
 
     // The pointer's current noun, refreshed on hover and consumed by the figure for its highlight.
@@ -565,10 +703,20 @@ namespace
     F64  sDownTime = 0.0;
     S32  sHoverX = 0, sHoverY = 0;
 
+    // Double-click state: the same icon clicked twice inside 400 ms opens Reconstruction.
+    SSCombat::NounRef sLastClickRef;
+    F64               sLastClickTime = 0.0;
+
+    // Camera-vantage bookkeeping: a selection this module itself just made never flies the camera.
+    SSCombat::NounRef sLastSeenSelection;
+    SSCombat::NounRef sLastWorldClickSelection;
+    LLFrameTimer      sSinceFly;
+    bool              sFlyTimerStarted = false;
+
     LLHandle<LLContextMenu> sPickStackHandle;
 }
 
-// Which LOD band a point falls in.
+// Which LOD band a point falls in; used only to cap the detective view's trail reach and cost.
 static EBand band_for(const LLVector3& pos_agent)
 {
     static LLCachedControl<F32> lod_near(gSavedSettings, "SSCombatLogLodNear", 40.f);
@@ -585,36 +733,7 @@ static EBand band_for(const LLVector3& pos_agent)
     return BAND_FAR;
 }
 
-// Labels are culled by distance before they are culled by count, so a far label never costs a near one.
-static bool label_allowed(const LLVector3& pos_agent, S32& budget)
-{
-    static LLCachedControl<F32> cull(gSavedSettings, "SSCombatLogLabelCullDistance", 256.f);
-    if (SSCombatDraw::cameraDistance(pos_agent) > llmax(8.f, (F32)cull))
-    {
-        return false;
-    }
-    if (budget <= 0)
-    {
-        return false;
-    }
-    --budget;
-    return true;
-}
-
-// Team colour for a combatant, falling back to the colourless "no verdict yet" grey.
-static LLColor4 combatant_color(const SSCombatLog& store, const LLUUID& id)
-{
-    const SSCombat::TeamAssignment assignment = store.team(id);
-    if (assignment.mTeam < 0)
-    {
-        return COL_UNASSIGNED;
-    }
-    LLColor4 color = store.teamColor(assignment.mTeam);
-    color.mV[VALPHA] = 1.f;
-    return color;
-}
-
-// Evidence quality to one of the {1,3,6} width buckets: bridge > viewer > coarse (ux 4.4).
+// Evidence quality to one of the {1,3,6} width buckets: bridge > viewer > coarse.
 static U8 width_for_sample(const SSCombat::Sample& sample)
 {
     if (sample.mSource == SSCombat::SAMPLE_BRIDGE)
@@ -628,79 +747,8 @@ static U8 width_for_sample(const SSCombat::Sample& sample)
     return SSCombatDraw::WIDTH_MID;
 }
 
-// The foot ring's radius: the coarse-location sigma when the sample is coarse, otherwise max(0.6 m, 8 px).
-static F32 foot_ring_radius(const SSCombat::Sample& sample, const LLVector3& pos_agent)
-{
-    if (sample.mSource == SSCombat::SAMPLE_COARSE)
-    {
-        return 4.f; // a coarse-located avatar visibly sits inside its own uncertainty (ux 4.5)
-    }
-    const F32 mpp = SSCombatDraw::metresPerPixelAt(pos_agent);
-    return llmax(0.6f, 8.f * mpp);
-}
-
-// Draws one combatant's head marker: ring (or seated square), yaw arrow, eye glyph, label, pick rect.
-static void draw_combatant_marker(const SSCombatLog& store, const LLUUID& id, const SSCombat::Sample& sample,
-                                  const LLColor4& team, F64 cursor, S32& label_budget)
-{
-    const LLVector3 feet = SSCombatDraw::agentFromRegion(sample.mPos);
-    const EBand band = band_for(feet);
-    if (band == BAND_FAR)
-    {
-        return; // > 120 m the body layer is not drawn at all; the ground tint is what carries that view
-    }
-
-    SSCombat::NounRef ref;
-    ref.mType = SSCombat::NOUN_COMBATANT;
-    ref.mId = id;
-    ref.mTime = cursor;
-
-    const bool selected = (store.view().mSelection == ref);
-    const bool hovered = (sHovered == ref);
-    LLColor4 color = selected ? COL_SELECTION : (hovered ? COL_HOVER : team);
-    const U8 width = selected ? SSCombatDraw::WIDTH_THICK : width_for_sample(sample);
-
-    if (band == BAND_MID)
-    {
-        // 40-120 m collapses the wedge ring to a small dominant-colour disc; the two-tone edge is the
-        // uncertainty cue, so a coarse sample keeps a second, wider ring around the dot.
-        const F32 dot = llmax(0.25f, 5.f * SSCombatDraw::metresPerPixelAt(feet));
-        SSCombatDraw::disc(feet + LLVector3(0.f, 0.f, 0.05f), dot, color);
-        if (sample.mSource == SSCombat::SAMPLE_COARSE)
-        {
-            LLColor4 faint = color;
-            faint.mV[VALPHA] = 0.35f;
-            SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, feet, 4.f, faint, SSCombatDraw::WIDTH_THIN);
-        }
-    }
-    else
-    {
-        SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, feet, foot_ring_radius(sample, feet), color, width);
-        SSCombatDraw::arrow(SSCombatDraw::LAYER_MARKER, feet + LLVector3(0.f, 0.f, 0.05f), sample.mYaw, 1.2f, color, width);
-        if (sample.mParent.notNull())
-        {
-            // Seated: the square glyph of ux 4.4, drawn where the vehicle marker would be.
-            const F32 s = 0.45f;
-            const LLVector3 c = feet + LLVector3(0.f, 0.f, 0.15f);
-            SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, c + LLVector3(-s, -s, 0.f), c + LLVector3(s, -s, 0.f), color, color, width);
-            SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, c + LLVector3(s, -s, 0.f), c + LLVector3(s, s, 0.f), color, color, width);
-            SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, c + LLVector3(s, s, 0.f), c + LLVector3(-s, s, 0.f), color, color, width);
-            SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, c + LLVector3(-s, s, 0.f), c + LLVector3(-s, -s, 0.f), color, color, width);
-        }
-        if (sample.mFlags & SSCombat::FLAG_MOUSELOOK)
-        {
-            SSCombatDraw::eyeGlyph(feet + LLVector3(0.f, 0.f, 2.35f), 0.22f, COL_MOUSELOOK);
-        }
-    }
-
-    if (label_allowed(feet, label_budget))
-    {
-        SSCombatDraw::pushLabel(store.displayName(id), feet + LLVector3(0.f, 0.f, 2.05f), selected ? COL_SELECTION : COL_LABEL);
-    }
-    SSCombatDraw::pushPick(feet + LLVector3(0.f, 0.f, 1.f), 12, ref);
-}
-
 // Draws one combatant's trail over the window, alpha ramped old to new and width bucketed by sample quality.
+// Shared by the DEATH detective view (victim/killer over the previous 6 s).
 static void draw_trail(const SSCombatLog& store, const LLUUID& id, const LLColor4& team, F64 from, F64 to)
 {
     if (to <= from)
@@ -715,7 +763,7 @@ static void draw_trail(const SSCombatLog& store, const LLUUID& id, const LLColor
     const EBand band = band_for(SSCombatDraw::agentFromRegion(probe.mPos));
     if (band == BAND_FAR)
     {
-        return; // trails are not drawn past the far threshold (ux 4.3)
+        return;
     }
     const S32 steps = (band == BAND_NEAR) ? 48 : 24;
 
@@ -744,170 +792,6 @@ static void draw_trail(const SSCombatLog& store, const LLUUID& id, const LLColor
     }
 }
 
-// The attacker's world position for a DAMAGE event; measured when the event carried one, reconstructed from
-// the owner's (or the rezzer's owner's) track otherwise. The caller draws the reconstructed case dashed.
-static bool damage_attacker_pos(const SSCombatLog& store, const SSCombat::Event& ev, LLVector3& out, bool& measured)
-{
-    if (ev.mHasPositions && !ev.mSourcePos.isExactlyZero())
-    {
-        out = ev.mSourcePos;
-        measured = true;
-        return true;
-    }
-    measured = false;
-    SSCombat::Sample sample;
-    if (ev.mOwner.notNull() && store.sampleAt(ev.mOwner, ev.mTime, sample))
-    {
-        out = sample.mPos;
-        return true;
-    }
-    const SSCombat::Equipment* rezzer = store.equipmentFor(ev.mRezzer);
-    if (rezzer && rezzer->mOwner.notNull() && store.sampleAt(rezzer->mOwner, ev.mTime, sample))
-    {
-        out = sample.mPos;
-        return true;
-    }
-    if (rezzer && rezzer->mHasLastPos)
-    {
-        out = rezzer->mLastPos;
-        return true;
-    }
-    return false;
-}
-
-// The target's world position for an event, measured when carried and reconstructed from its track otherwise.
-static bool event_target_pos(const SSCombatLog& store, const SSCombat::Event& ev, LLVector3& out, bool& measured)
-{
-    if (ev.mHasPositions && !ev.mTargetPos.isExactlyZero())
-    {
-        out = ev.mTargetPos;
-        measured = true;
-        return true;
-    }
-    measured = false;
-    SSCombat::Sample sample;
-    if (store.sampleAt(ev.mTarget, ev.mTime, sample))
-    {
-        out = sample.mPos;
-        return true;
-    }
-    return false;
-}
-
-// One damage line: attacker to target at the event's own time, coloured by type, brighter with damage, and
-// pulsing for a second after it landed so a fresh hit reads as fresh.
-static void draw_damage_line(const SSCombatLog& store, const SSCombat::Event& ev, F64 now)
-{
-    LLVector3 from_region, to_region;
-    bool from_measured = false, to_measured = false;
-    if (!damage_attacker_pos(store, ev, from_region, from_measured))
-    {
-        return; // no usable attacker position; ux 4.5 wants this in the unattributed tally, not smeared
-    }
-    if (!event_target_pos(store, ev, to_region, to_measured))
-    {
-        return;
-    }
-
-    const LLVector3 from = SSCombatDraw::agentFromRegion(from_region) + LLVector3(0.f, 0.f, 1.55f);
-    const LLVector3 to = SSCombatDraw::agentFromRegion(to_region) + LLVector3(0.f, 0.f, 1.15f);
-    if (band_for(to) == BAND_FAR)
-    {
-        return;
-    }
-
-    LLColor4 color = SSCombatDraw::damageTypeColor(ev.mType);
-    const F32 brightness = llclamp(0.35f + ev.mDamage / 60.f, 0.35f, 1.f);
-    const F64 age = now - ev.mTime;
-    const F32 pulse = (age >= 0.0 && age < 1.0) ? (1.f + 0.6f * (1.f - (F32)age)) : 1.f;
-    color.mV[VRED] = llclamp(color.mV[VRED] * brightness * pulse, 0.f, 1.f);
-    color.mV[VGREEN] = llclamp(color.mV[VGREEN] * brightness * pulse, 0.f, 1.f);
-    color.mV[VBLUE] = llclamp(color.mV[VBLUE] * brightness * pulse, 0.f, 1.f);
-
-    const bool reconstructed = !from_measured || !to_measured;
-    color.mV[VALPHA] = reconstructed ? 0.60f : 1.f;
-    const U8 width = (ev.mDamage >= 40.f) ? SSCombatDraw::WIDTH_THICK
-                                          : ((ev.mDamage >= 12.f) ? SSCombatDraw::WIDTH_MID : SSCombatDraw::WIDTH_THIN);
-
-    if (reconstructed)
-    {
-        SSCombatDraw::dashedSeg(SSCombatDraw::LAYER_LINE, from, to, color, color, width);
-    }
-    else
-    {
-        SSCombatDraw::seg(SSCombatDraw::LAYER_LINE, from, to, color, color, width);
-    }
-
-    // Sub-TRACK attacker positions draw hollow, never solid; here that is the small diamond at the origin.
-    if (!from_measured)
-    {
-        const F32 s = 0.18f;
-        SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, from + LLVector3(-s, 0.f, 0.f), from + LLVector3(0.f, 0.f, s), color, color, SSCombatDraw::WIDTH_THIN);
-        SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, from + LLVector3(0.f, 0.f, s), from + LLVector3(s, 0.f, 0.f), color, color, SSCombatDraw::WIDTH_THIN);
-        SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, from + LLVector3(s, 0.f, 0.f), from + LLVector3(0.f, 0.f, -s), color, color, SSCombatDraw::WIDTH_THIN);
-        SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, from + LLVector3(0.f, 0.f, -s), from + LLVector3(-s, 0.f, 0.f), color, color, SSCombatDraw::WIDTH_THIN);
-    }
-
-    LLColor4 hit = color;
-    hit.mV[VALPHA] = 1.f;
-    SSCombatDraw::cross(SSCombatDraw::LAYER_MARKER, to, 0.16f * pulse, hit, SSCombatDraw::WIDTH_THIN);
-
-    SSCombat::NounRef ref;
-    ref.mType = SSCombat::NOUN_DAMAGE;
-    ref.mIndex = ev.mId;
-    ref.mTime = ev.mTime;
-    SSCombatDraw::pushPick(to, 10, ref);
-}
-
-// One death marker: cross plus ring at target_pos, the killer line from source_pos, and the standing label.
-static void draw_death_marker(const SSCombatLog& store, const SSCombat::Event& ev, F32 alpha, S32& label_budget)
-{
-    if (!ev.mHasPositions && ev.mTargetPos.isExactlyZero())
-    {
-        return;
-    }
-    const LLVector3 target = SSCombatDraw::agentFromRegion(ev.mTargetPos);
-
-    SSCombat::NounRef ref;
-    ref.mType = SSCombat::NOUN_DEATH;
-    ref.mIndex = ev.mId;
-    ref.mTime = ev.mTime;
-    const bool selected = (store.view().mSelection == ref);
-    const bool hovered = (sHovered == ref);
-
-    LLColor4 cross_color = selected ? COL_SELECTION : (hovered ? COL_HOVER : COL_DEATH);
-    cross_color.mV[VALPHA] = alpha;
-    SSCombatDraw::cross(SSCombatDraw::LAYER_MARKER, target + LLVector3(0.f, 0.f, 0.9f), 0.55f, cross_color, SSCombatDraw::WIDTH_MID);
-    SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, target, 1.1f, cross_color, SSCombatDraw::WIDTH_MID);
-
-    if (!ev.mSourcePos.isExactlyZero())
-    {
-        LLColor4 killer = COL_KILLER_LINE;
-        killer.mV[VALPHA] = alpha;
-        SSCombatDraw::seg(SSCombatDraw::LAYER_LINE,
-                          SSCombatDraw::agentFromRegion(ev.mSourcePos) + LLVector3(0.f, 0.f, 1.55f),
-                          target + LLVector3(0.f, 0.f, 1.15f), killer, killer, SSCombatDraw::WIDTH_MID);
-    }
-
-    if (label_allowed(target, label_budget))
-    {
-        // "victim <- killer (family)": the killer is the weapon's owner, not the weapon.
-        std::string text = store.displayName(ev.mTarget) + " <- " + store.displayName(ev.mOwner);
-        const SSCombat::Equipment* equip = store.equipmentFor(ev.mSource);
-        if (equip && !equip->mFamily.empty())
-        {
-            text += " (" + equip->mFamily + ")";
-        }
-        LLColor4 label = COL_LABEL;
-        label.mV[VALPHA] = alpha;
-        SSCombatDraw::pushLabel(text, target + LLVector3(0.f, 0.f, 1.85f), label);
-    }
-
-    // Deaths stay pickable for the whole persistence window whatever their alpha; that is the promise of 4.1
-    // that an officer who alt-cams anywhere always has something to click.
-    SSCombatDraw::pushPick(target + LLVector3(0.f, 0.f, 0.9f), 12, ref);
-}
-
 // The measured polyline of one observed projectile flight, solid because it was seen, terminal tick and all.
 static void draw_flight(const SSCombat::Flight& flight)
 {
@@ -925,170 +809,352 @@ static void draw_flight(const SSCombat::Flight& flight)
     }
     if (flight.mHitGeometry)
     {
-        // A bullet that stopped in a wall keeps its terminal tick there; that is what "shot into an occluder"
-        // looks like in the world.
         SSCombatDraw::cross(SSCombatDraw::LAYER_MARKER, SSCombatDraw::agentFromRegion(flight.mPath.back().second),
                             0.2f, COL_FLIGHT, SSCombatDraw::WIDTH_THIN);
     }
 }
 
-// The coarse levels' figure: a faint ring per engagement, tinted by whichever team has the most combatants.
-static void draw_engagement_rings(const SSCombatLog& store, S32& label_budget)
+// The flight (if any) whose measured hit was this DAMAGE event.
+static const SSCombat::Flight* find_flight_for_damage(const SSCombatLog& store, U32 damageEventId)
 {
-    for (const SSCombat::Engagement& eng : store.engagements())
+    if (damageEventId == 0)
     {
-        const LLVector3 centre = SSCombatDraw::agentFromRegion(eng.mCentre);
-        LLColor4 color = COL_ENGAGEMENT;
-        color.mV[VALPHA] = 0.35f;
-        SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, centre, llmax(2.f, eng.mRadius), color, SSCombatDraw::WIDTH_THIN);
+        return NULL;
+    }
+    for (const SSCombat::Flight& flight : store.flights())
+    {
+        if (flight.mDamageEvent == damageEventId)
+        {
+            return &flight;
+        }
+    }
+    return NULL;
+}
 
-        // Density is carried by a second, tighter ring in the dominant team's colour rather than by hue on
-        // the first, so the outline always means "engagement" and never "side".
-        std::vector<S32> counts((size_t)llmax(1, store.teamCount()), 0);
-        for (const LLUUID& id : eng.mCombatants)
-        {
-            const SSCombat::TeamAssignment assignment = store.team(id);
-            if (assignment.mTeam >= 0 && (size_t)assignment.mTeam < counts.size())
-            {
-                ++counts[(size_t)assignment.mTeam];
-            }
-        }
-        S32 best = -1, best_count = 0;
-        for (size_t i = 0; i < counts.size(); ++i)
-        {
-            if (counts[i] > best_count)
-            {
-                best_count = counts[i];
-                best = (S32)i;
-            }
-        }
-        if (best >= 0)
-        {
-            LLColor4 team = store.teamColor((S8)best);
-            team.mV[VALPHA] = 0.30f;
-            SSCombatDraw::ring(SSCombatDraw::LAYER_MARKER, centre, llmax(1.5f, eng.mRadius * 0.85f), team, SSCombatDraw::WIDTH_THIN);
-        }
+// "12s ago" / "3m ago" / "1h 4m ago": the near-context relative-time label.
+static std::string format_relative_age(F64 seconds)
+{
+    const S64 s = (S64)(llmax(0.0, seconds) + 0.5);
+    if (s < 60)
+    {
+        return llformat("%llds ago", (long long)s);
+    }
+    if (s < 3600)
+    {
+        return llformat("%lldm ago", (long long)(s / 60));
+    }
+    return llformat("%lldh %lldm ago", (long long)(s / 3600), (long long)((s % 3600) / 60));
+}
 
-        SSCombat::NounRef ref;
-        ref.mType = SSCombat::NOUN_ENGAGEMENT;
-        ref.mIndex = eng.mId;
-        ref.mTime = eng.mStart;
-        if (label_allowed(centre, label_budget))
-        {
-            SSCombatDraw::pushLabel(eng.mLabel, centre + LLVector3(0.f, 0.f, 1.2f), COL_LABEL);
-        }
-        SSCombatDraw::pushPick(centre, 12, ref);
+// The UI atlas image for a name, cached: LLUI::getUIImage() is a lookup the icon figure would otherwise
+// repeat every event, every frame.
+static LLPointer<LLUIImage> icon_image(const std::string& name)
+{
+    static std::unordered_map<std::string, LLPointer<LLUIImage> > cache;
+    if (name.empty())
+    {
+        return NULL;
+    }
+    std::unordered_map<std::string, LLPointer<LLUIImage> >::iterator it = cache.find(name);
+    if (it != cache.end())
+    {
+        return it->second;
+    }
+    LLPointer<LLUIImage> image = LLUI::getUIImage(name);
+    cache[name] = image;
+    return image;
+}
+
+// The atlas icon name for one event: damage type for DAMAGE, the death glyphs otherwise. Mirrors the Events
+// list's own icon column so the world and the pane never disagree on which glyph means what.
+static std::string icon_name_for(const SSCombat::Event& ev)
+{
+    switch (ev.mKind)
+    {
+        case SSCombat::EVENT_DAMAGE:       return SSCombatIcons::forType(ev.mType);
+        case SSCombat::EVENT_DEATH:        return SSCombatIcons::forType(SSCombatIcons::ICON_DEATH);
+        case SSCombat::EVENT_OBJECT_DEATH: return SSCombatIcons::forType(SSCombatIcons::ICON_OBJECT_DEATH);
+        default:                           return std::string();
     }
 }
 
-// Builds this frame's figure into the draw list: base layer first, then the current level's focus layer.
-static void build_figure()
+// The event's world position: DEATH/object death at mTargetPos, DAMAGE at the target's (else the attacker's)
+// track position at mTime. False when none of those exist, in which case the event is skipped, not smeared.
+static bool event_icon_pos(const SSCombatLog& store, const SSCombat::Event& ev, LLVector3& out_region)
 {
-    const SSCombatLog& store = SSCombatLog::instance();
-    const SSCombat::View& view = store.view();
-
-    static LLCachedControl<F32> trail_seconds(gSavedSettings, "SSCombatLogTrailSeconds", 20.f);
-    static LLCachedControl<S32> max_labels(gSavedSettings, "SSCombatLogMaxLabels", 12);
-    static LLCachedControl<S32> max_damage_lines(gSavedSettings, "SSCombatLogMaxDamageLines", 40);
-
-    const F32 window = (view.mWindow > 0.f) ? view.mWindow : llmax(1.f, (F32)trail_seconds);
-    const F64 cursor = view.mCursor;
-    const F64 from = cursor - (F64)window;
-    S32 label_budget = llmax(1, (S32)max_labels);
-
-    const bool bodies = (view.mLevel <= SSCombat::LEVEL_ENGAGEMENT);
-
-    // Layer 1, the permanent base layer: every death in the session at ~25 %, minus the ones the focus layer
-    // is about to draw at full strength, so nothing is drawn (or picked) twice.
-    const F64 persist_from = cursor - 3.0 * (F64)window;
-    for (const SSCombat::Event& ev : store.events())
+    if (ev.mKind == SSCombat::EVENT_DEATH || ev.mKind == SSCombat::EVENT_OBJECT_DEATH)
     {
-        if (ev.mKind != SSCombat::EVENT_DEATH)
+        if (ev.mHasPositions && !ev.mTargetPos.isExactlyZero())
         {
-            continue;
+            out_region = ev.mTargetPos;
+            return true;
         }
-        if (ev.mTime >= persist_from && ev.mTime <= cursor)
-        {
-            continue; // the focus/persistence pass below owns this one
-        }
-        draw_death_marker(store, ev, 0.25f, label_budget);
+        return false;
     }
-
-    // Deaths inside the persistence window: full alpha inside the trail window, fading to a quarter over the
-    // remaining two windows, and pickable throughout.
-    for (const SSCombat::Event& ev : store.events())
+    if (ev.mKind == SSCombat::EVENT_DAMAGE)
     {
-        if (ev.mKind != SSCombat::EVENT_DEATH || ev.mTime < persist_from || ev.mTime > cursor)
+        SSCombat::Sample sample;
+        if (store.sampleAt(ev.mTarget, ev.mTime, sample))
         {
-            continue;
+            out_region = sample.mPos;
+            return true;
         }
-        const F64 age = cursor - ev.mTime;
-        F32 alpha = 1.f;
-        if (age > (F64)window)
+        if (ev.mOwner.notNull() && store.sampleAt(ev.mOwner, ev.mTime, sample))
         {
-            alpha = 1.f - 0.75f * (F32)((age - (F64)window) / (2.0 * (F64)window));
+            out_region = sample.mPos;
+            return true;
         }
-        draw_death_marker(store, ev, llclamp(alpha, 0.25f, 1.f), label_budget);
+        return false;
     }
+    return false;
+}
 
-    if (!bodies)
+// One event's icon: screen-constant size, always visible, lifted with a stem to the ground, tinted white,
+// ringed on selection/hover, plus the near-context label inside 24 m.
+static void draw_event_icon(const SSCombatLog& store, const SSCombat::Event& ev, S32& label_budget)
+{
+    LLVector3 ground_region;
+    if (!event_icon_pos(store, ev, ground_region))
     {
-        // Sweep, Comparison and Session: deaths and density only, so alt-camming stays useful up here.
-        draw_engagement_rings(store, label_budget);
+        return;
+    }
+    LLPointer<LLUIImage> image = icon_image(icon_name_for(ev));
+    if (!image)
+    {
         return;
     }
 
-    // Moment and Engagement: the body layer.
-    const std::vector<LLUUID> combatants = store.combatants();
-    for (const LLUUID& id : combatants)
+    const LLVector3 ground = SSCombatDraw::agentFromRegion(ground_region);
+    const LLVector3 centre = ground + LLVector3(0.f, 0.f, 0.3f);
+
+    SSCombat::NounRef ref;
+    ref.mType = (ev.mKind == SSCombat::EVENT_DAMAGE) ? SSCombat::NOUN_DAMAGE : SSCombat::NOUN_DEATH;
+    ref.mIndex = ev.mId;
+    ref.mTime = ev.mTime;
+    const SSCombat::View& view = store.view();
+    const bool selected = (view.mSelection == ref);
+    const bool hovered = (sHovered == ref);
+
+    const F32 mpp = SSCombatDraw::metresPerPixelAt(centre);
+    const F32 half = llmax(0.02f, 11.f * mpp); // ~22 px square, screen-constant
+
+    SSCombatDraw::seg(SSCombatDraw::LAYER_MARKER, ground, centre, COL_LABEL, COL_LABEL, SSCombatDraw::WIDTH_THIN);
+    SSCombatDraw::icon(centre, image, half, LLColor4(1.f, 1.f, 1.f, selected ? 1.f : 0.90f));
+    if (selected)
     {
-        const LLColor4 team = combatant_color(store, id);
-        draw_trail(store, id, team, from, cursor);
-        SSCombat::Sample head;
-        if (store.sampleAt(id, cursor, head))
+        SSCombatDraw::ringFacing(centre, half * 1.5f, COL_SELECTION, SSCombatDraw::WIDTH_MID);
+    }
+    else if (hovered)
+    {
+        SSCombatDraw::ringFacing(centre, half * 1.5f, COL_HOVER, SSCombatDraw::WIDTH_THIN);
+    }
+    SSCombatDraw::pushPick(centre, 13, ref);
+
+    if (label_budget > 0 && SSCombatDraw::cameraDistance(centre) <= 24.f)
+    {
+        --label_budget;
+        const F64 age = LLFrameTimer::getElapsedSeconds() - ev.mTime;
+        SSCombatDraw::pushLabel(format_relative_age(age), centre - LLVector3(0.f, 0.f, 0.35f), COL_LABEL);
+        if (ev.mKind == SSCombat::EVENT_DEATH || ev.mKind == SSCombat::EVENT_OBJECT_DEATH)
         {
-            draw_combatant_marker(store, id, head, team, cursor, label_budget);
+            const std::string line2 = store.displayName(ev.mTarget) + " <- " + store.displayName(ev.mOwner);
+            SSCombatDraw::pushLabel(line2, centre - LLVector3(0.f, 0.f, 0.62f), COL_LABEL);
         }
+    }
+}
+
+// The DEATH freeze-frame: victim and every attacker from attribution(), the kill line, the fatal blow's
+// flight if one was measured, and both parties' trails over the previous 6 s.
+static void draw_death_detective(const SSCombatLog& store, const SSCombat::Event& ev, bool pinned)
+{
+    SSCombat::Sample victim_sample;
+    const bool have_victim = store.sampleAt(ev.mTarget, ev.mTime, victim_sample);
+    if (have_victim)
+    {
+        SSCombat::NounRef ref;
+        ref.mType = SSCombat::NOUN_COMBATANT;
+        ref.mId = ev.mTarget;
+        ref.mTime = ev.mTime;
+        SSCombatDraw::ghostBody(SSCombatDraw::agentFromRegion(victim_sample.mPos), victim_sample.mYaw, victim_sample.mFlags,
+                                SSCombatDraw::ghostColor(true, false), store.displayName(ev.mTarget), ref, pinned);
     }
 
-    // Damage lines in the window. Past the near band the design keeps only the top N by damage, so the count
-    // is honest rather than the view silently dropping glyphs.
-    std::vector<const SSCombat::Event*> damage;
-    const size_t first = store.eventIndexAt(from);
-    const std::vector<SSCombat::Event>& events = store.events();
-    for (size_t i = first; i < events.size(); ++i)
+    std::vector<LLUUID> attackers;
+    if (ev.mOwner.notNull())
     {
-        const SSCombat::Event& ev = events[i];
-        if (ev.mTime > cursor)
+        attackers.push_back(ev.mOwner);
+    }
+    const SSCombat::Attribution attribution = store.attribution(ev.mId);
+    for (const SSCombat::VolleyShare& share : attribution.mShares)
+    {
+        if (share.mAttacker.notNull() && std::find(attackers.begin(), attackers.end(), share.mAttacker) == attackers.end())
         {
-            break;
-        }
-        if (ev.mKind == SSCombat::EVENT_DAMAGE)
-        {
-            damage.push_back(&ev);
+            attackers.push_back(share.mAttacker);
         }
     }
-    const S32 budget = llmax(1, (S32)max_damage_lines);
-    if ((S32)damage.size() > budget)
+    for (const LLUUID& attacker : attackers)
     {
-        std::partial_sort(damage.begin(), damage.begin() + budget, damage.end(),
-                          [](const SSCombat::Event* a, const SSCombat::Event* b) { return a->mDamage > b->mDamage; });
-        damage.resize((size_t)budget);
-    }
-    for (const SSCombat::Event* ev : damage)
-    {
-        draw_damage_line(store, *ev, cursor);
-    }
-
-    // Observed flights whose measured span overlaps the window.
-    for (const SSCombat::Flight& flight : store.flights())
-    {
-        if (flight.mEnd < from || flight.mStart > cursor)
+        SSCombat::Sample sample;
+        if (!store.sampleAt(attacker, ev.mTime, sample))
         {
             continue;
         }
-        draw_flight(flight);
+        SSCombat::NounRef ref;
+        ref.mType = SSCombat::NOUN_COMBATANT;
+        ref.mId = attacker;
+        ref.mTime = ev.mTime;
+        SSCombatDraw::ghostBody(SSCombatDraw::agentFromRegion(sample.mPos), sample.mYaw, sample.mFlags,
+                                SSCombatDraw::ghostColor(false, true), store.displayName(attacker), ref, pinned);
     }
+
+    if (have_victim && ev.mOwner.notNull())
+    {
+        SSCombat::Sample killer_sample;
+        if (store.sampleAt(ev.mOwner, ev.mTime, killer_sample))
+        {
+            SSCombatDraw::seg(SSCombatDraw::LAYER_LINE,
+                              SSCombatDraw::agentFromRegion(killer_sample.mPos) + LLVector3(0.f, 0.f, 1.6f),
+                              SSCombatDraw::agentFromRegion(victim_sample.mPos) + LLVector3(0.f, 0.f, 1.2f),
+                              COL_KILLER_LINE, COL_KILLER_LINE, SSCombatDraw::WIDTH_MID);
+        }
+    }
+
+    if (const SSCombat::Flight* flight = find_flight_for_damage(store, attribution.mBlow))
+    {
+        draw_flight(*flight);
+    }
+
+    const F64 trail_from = ev.mTime - 6.0;
+    draw_trail(store, ev.mTarget, SSCombatDraw::ghostColor(true, false), trail_from, ev.mTime);
+    if (ev.mOwner.notNull())
+    {
+        draw_trail(store, ev.mOwner, SSCombatDraw::ghostColor(false, true), trail_from, ev.mTime);
+    }
+}
+
+// The DAMAGE freeze-frame: attacker and target, the hit line tinted by damage type, and the matched flight.
+static void draw_damage_detective(const SSCombatLog& store, const SSCombat::Event& ev, bool pinned)
+{
+    SSCombat::Sample attacker_sample, target_sample;
+    const bool have_attacker = ev.mOwner.notNull() && store.sampleAt(ev.mOwner, ev.mTime, attacker_sample);
+    const bool have_target = store.sampleAt(ev.mTarget, ev.mTime, target_sample);
+
+    if (have_attacker)
+    {
+        SSCombat::NounRef ref;
+        ref.mType = SSCombat::NOUN_COMBATANT;
+        ref.mId = ev.mOwner;
+        ref.mTime = ev.mTime;
+        SSCombatDraw::ghostBody(SSCombatDraw::agentFromRegion(attacker_sample.mPos), attacker_sample.mYaw, attacker_sample.mFlags,
+                                SSCombatDraw::ghostColor(false, true), store.displayName(ev.mOwner), ref, pinned);
+    }
+    if (have_target)
+    {
+        SSCombat::NounRef ref;
+        ref.mType = SSCombat::NOUN_COMBATANT;
+        ref.mId = ev.mTarget;
+        ref.mTime = ev.mTime;
+        SSCombatDraw::ghostBody(SSCombatDraw::agentFromRegion(target_sample.mPos), target_sample.mYaw, target_sample.mFlags,
+                                SSCombatDraw::ghostColor(true, false), store.displayName(ev.mTarget), ref, pinned);
+    }
+    if (have_attacker && have_target)
+    {
+        const LLColor4 line = SSCombatDraw::damageTypeColor(ev.mType);
+        SSCombatDraw::seg(SSCombatDraw::LAYER_LINE,
+                          SSCombatDraw::agentFromRegion(attacker_sample.mPos) + LLVector3(0.f, 0.f, 1.6f),
+                          SSCombatDraw::agentFromRegion(target_sample.mPos) + LLVector3(0.f, 0.f, 1.2f),
+                          line, line, SSCombatDraw::WIDTH_MID);
+    }
+    if (const SSCombat::Flight* flight = find_flight_for_damage(store, ev.mId))
+    {
+        draw_flight(*flight);
+    }
+}
+
+// The detective view: hovered event first, else the pinned selection; nothing when neither is a DEATH/DAMAGE.
+static void draw_detective_view(const SSCombatLog& store)
+{
+    const SSCombat::View& view = store.view();
+    const SSCombat::NounRef& target = view.mHover.valid() ? view.mHover : view.mSelection;
+    if (target.mType != SSCombat::NOUN_DEATH && target.mType != SSCombat::NOUN_DAMAGE)
+    {
+        return;
+    }
+    const SSCombat::Event* ev = store.event(target.mIndex);
+    if (!ev)
+    {
+        return;
+    }
+    const bool pinned = !view.mHover.valid();
+    if (ev->mKind == SSCombat::EVENT_DEATH || ev->mKind == SSCombat::EVENT_OBJECT_DEATH)
+    {
+        draw_death_detective(store, *ev, pinned);
+    }
+    else if (ev->mKind == SSCombat::EVENT_DAMAGE)
+    {
+        draw_damage_detective(store, *ev, pinned);
+    }
+}
+
+// Flies the camera to a vantage of a newly selected event, but only when the officer picked it from a floater;
+// a world click already recorded its own selection above so it never re-triggers this.
+static void check_camera_vantage(const SSCombatLog& store)
+{
+    const SSCombat::NounRef& sel = store.view().mSelection;
+    if (sel == sLastSeenSelection)
+    {
+        return;
+    }
+    const bool from_world_click = (sel == sLastWorldClickSelection);
+    sLastSeenSelection = sel;
+    if (from_world_click || !sel.valid())
+    {
+        return;
+    }
+    if (sel.mType != SSCombat::NOUN_DEATH && sel.mType != SSCombat::NOUN_DAMAGE)
+    {
+        return;
+    }
+    if (sFlyTimerStarted && sSinceFly.getElapsedTimeF32() < 0.5f)
+    {
+        return;
+    }
+    SSCombatCamera::flyTo(sel.mIndex);
+    sSinceFly.start();
+    sFlyTimerStarted = true;
+}
+
+// Builds this frame's figure: one icon per visible/selected/hovered event, then the detective-view overlay.
+static void build_figure()
+{
+    SSCombatLog& store = SSCombatLog::instance();
+    const SSCombat::View& view = store.view();
+
+    static LLCachedControl<S32> max_labels(gSavedSettings, "SSCombatLogMaxLabels", 12);
+    S32 label_budget = llmax(1, (S32)max_labels);
+
+    std::vector<U32> ids = store.visibleEvents();
+    auto add_extra = [&ids](const SSCombat::NounRef& ref)
+    {
+        if ((ref.mType == SSCombat::NOUN_DEATH || ref.mType == SSCombat::NOUN_DAMAGE) &&
+            std::find(ids.begin(), ids.end(), ref.mIndex) == ids.end())
+        {
+            ids.push_back(ref.mIndex);
+        }
+    };
+    add_extra(view.mSelection);
+    add_extra(view.mHover);
+
+    for (U32 id : ids)
+    {
+        if (const SSCombat::Event* ev = store.event(id))
+        {
+            draw_event_icon(store, *ev, label_budget);
+        }
+    }
+
+    draw_detective_view(store);
+    check_camera_vantage(store);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -1113,7 +1179,7 @@ void SSCombatOverlay::render()
     LLGLEnable blend(GL_BLEND);
 
     // Connective geometry carries the through-wall cue: depth-tested at full alpha, then depth-off at 30 %,
-    // so a shot ghosted through its middle went through geometry and you can see the wall doing it (ux 4.5).
+    // so a line ghosted through its middle went through geometry and you can see the wall doing it.
     if (xray)
     {
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
@@ -1131,18 +1197,19 @@ void SSCombatOverlay::render()
         }
     }
 
-    // Markers and labels never hide: a marker you cannot see is a marker you cannot click.
+    // Markers, icons and labels never hide: a marker you cannot see is a marker you cannot click.
     {
         LLGLDepthTest depth(GL_FALSE, GL_FALSE);
         SSCombatDraw::emitTris(1.f);
         SSCombatDraw::emitLines(SSCombatDraw::LAYER_MARKER, 1.f);
+        SSCombatDraw::emitIcons(1.f);
         SSCombatDraw::emitLabels();
     }
     gGL.flush();
 }
 
 // ---------------------------------------------------------------------------------------------------------
-// Pick model (ux 4.6).
+// Pick model.
 // ---------------------------------------------------------------------------------------------------------
 
 namespace
@@ -1191,18 +1258,19 @@ namespace
     }
 }
 
-// Acts on one resolved noun: a death opens its reconstruction, everything else selects and navigates.
+// Acts on one resolved noun: a ghost opens the Combatant floater, everything else selects. Never moves the
+// camera on its own; SSCombatCamera::flyTo is reserved for a selection that came from a floater.
 static void resolve_pick(const SSCombat::NounRef& ref)
 {
-    SSCombatLog& store = SSCombatLog::instance();
-    if (ref.mType == SSCombat::NOUN_DEATH)
+    if (ref.mType == SSCombat::NOUN_COMBATANT)
     {
-        // In the world the replay is the article; the text is one button away on the reconstruction panel.
-        store.enterReconstruction(ref.mIndex);
-        SSCombatReconstruct::enter(ref.mIndex);
+        LLFloaterReg::showInstance("ss_combat_combatant", LLSD(ref.mId.asString()));
         return;
     }
+    SSCombatLog& store = SSCombatLog::instance();
     store.select(ref, true);
+    sLastWorldClickSelection = ref;
+    sLastSeenSelection = ref; // pre-empt check_camera_vantage: this click already knows where it came from
 }
 
 // Builds the pick-stack popup for overlapping candidates; nothing is selected until the officer chooses.
@@ -1287,14 +1355,14 @@ bool SSCombatOverlay::handleMouseUp(S32 x, S32 y, MASK mask)
     const std::vector<DrawPick> candidates = candidates_at(x, y);
     if (candidates.empty())
     {
-        // Bare ground clears the selection and does nothing else; it is prims and mesh and knows nothing.
+        // Bare ground clears the selection and does nothing else.
         if (armed || (!travelled && !slow))
         {
             SSCombatLog& store = SSCombatLog::instance();
             if (store.view().mSelection.valid())
             {
                 // Cleared in place rather than through select(), because clearing is not a navigation and
-                // must not push the View chain (ux 4.6: it does nothing else).
+                // must not push the View chain.
                 store.view().mSelection = SSCombat::NounRef();
                 store.notifyViewChanged();
             }
@@ -1311,7 +1379,22 @@ bool SSCombatOverlay::handleMouseUp(S32 x, S32 y, MASK mask)
         show_pick_stack(candidates, x, y);
         return true;
     }
-    resolve_pick(candidates.front().mRef);
+
+    // A second click on the same icon inside 400 ms opens Reconstruction instead of just selecting it.
+    const SSCombat::NounRef ref = candidates.front().mRef;
+    const F64 click_now = LLFrameTimer::getTotalSeconds();
+    const bool double_click = (ref == sLastClickRef) && ((click_now - sLastClickTime) <= 0.4);
+    sLastClickRef = ref;
+    sLastClickTime = click_now;
+    if (double_click && ref.mType == SSCombat::NOUN_DEATH)
+    {
+        SSCombatLog::instance().enterReconstruction(ref.mIndex);
+        SSCombatReconstruct::enter(ref.mIndex);
+    }
+    else
+    {
+        resolve_pick(ref);
+    }
     return true;
 }
 
@@ -1327,6 +1410,27 @@ void SSCombatOverlay::handleHover(S32 x, S32 y)
     }
     const std::vector<DrawPick> candidates = candidates_at(x, y);
     sHovered = candidates.empty() ? SSCombat::NounRef() : candidates.front().mRef;
+}
+
+// static
+bool SSCombatOverlay::handleKey(KEY key, MASK mask)
+{
+    if (key != KEY_ESCAPE || (mask & (MASK_CONTROL | MASK_ALT | MASK_SHIFT)))
+    {
+        return false;
+    }
+    if (!wantsDraw())
+    {
+        return false;
+    }
+    SSCombatLog& store = SSCombatLog::instance();
+    if (!store.view().mSelection.valid())
+    {
+        return false;
+    }
+    store.view().mSelection = SSCombat::NounRef();
+    store.notifyViewChanged();
+    return true;
 }
 
 // static

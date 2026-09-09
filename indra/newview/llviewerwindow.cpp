@@ -3410,6 +3410,11 @@ bool LLViewerWindow::handleKey(KEY key, MASK mask)
     {
         return true;
     }
+    // Esc clears a pinned Combat Log selection in the world when no reconstruction is running.
+    if (SSCombatOverlay::handleKey(key, mask))
+    {
+        return true;
+    }
     // </SS:Nexii>
 
     LLFocusableElement* keyboard_focus = gFocusMgr.getKeyboardFocus();

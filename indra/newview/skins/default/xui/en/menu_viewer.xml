@@ -1783,7 +1783,7 @@
          name="Combat Log"
          tear_off="true">
             <menu_item_check
-             label="Log"
+             label="Events"
              name="Combat Log Events">
                 <menu_item_check.on_check
                  function="Floater.Visible"

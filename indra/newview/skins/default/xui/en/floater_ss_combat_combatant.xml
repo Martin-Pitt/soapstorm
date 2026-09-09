@@ -1,0 +1,151 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<floater
+ name="ss_combat_combatant"
+ title="Combatant"
+ layout="topleft"
+ width="420"
+ height="360"
+ min_width="360"
+ min_height="300"
+ save_rect="true"
+ single_instance="false"
+ can_resize="true"
+ can_minimize="true"
+ can_close="true">
+	<text
+	 name="side_text"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top="8"
+	 height="16"
+	 follows="left|right|top">
+		Side: Unassigned
+	</text>
+	<text
+	 name="status_text"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top_pad="2"
+	 height="16"
+	 follows="left|right|top">
+		Status: alive - civilian
+	</text>
+	<text
+	 name="stats_text"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top_pad="2"
+	 height="16"
+	 follows="left|right|top">
+		Kills 0   Deaths 0   Damage dealt 0   Damage taken 0
+	</text>
+	<text
+	 name="reference_text"
+	 layout="topleft"
+	 left="10"
+	 top_pad="8"
+	 width="160"
+	 height="16"
+	 follows="left|top">
+		Around 00:00
+	</text>
+	<check_box
+	 name="whole_session_check"
+	 label="Whole session"
+	 layout="topleft"
+	 left_pad="10"
+	 top_delta="-2"
+	 width="140"
+	 height="20"
+	 follows="left|top" />
+	<text
+	 name="equipment_label"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top_pad="10"
+	 height="14"
+	 follows="left|right|top">
+		Equipment used
+	</text>
+	<scroll_list
+	 name="equipment_list"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top_pad="2"
+	 height="100"
+	 follows="left|right|top"
+	 draw_heading="true"
+	 multi_select="false"
+	 can_sort="false"
+	 column_padding="2">
+		<scroll_list.columns
+		 name="icon"
+		 label=""
+		 width="20" />
+		<scroll_list.columns
+		 name="family"
+		 label="Family"
+		 relative_width="1.0" />
+		<scroll_list.columns
+		 name="hits"
+		 label="Hits"
+		 width="45" />
+		<scroll_list.columns
+		 name="kills"
+		 label="Kills"
+		 width="45" />
+		<scroll_list.columns
+		 name="first"
+		 label="First"
+		 width="55" />
+		<scroll_list.columns
+		 name="last"
+		 label="Last"
+		 width="55" />
+	</scroll_list>
+	<text
+	 name="recent_label"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top_pad="10"
+	 height="14"
+	 follows="left|right|top">
+		Recent events
+	</text>
+	<scroll_list
+	 name="recent_events_list"
+	 layout="topleft"
+	 left="10"
+	 right="-10"
+	 top_pad="2"
+	 bottom="40"
+	 follows="left|right|top|bottom"
+	 draw_heading="false"
+	 multi_select="false"
+	 can_sort="false"
+	 column_padding="2">
+		<scroll_list.columns
+		 name="icon"
+		 label=""
+		 width="20" />
+		<scroll_list.columns
+		 name="line"
+		 label=""
+		 relative_width="1.0" />
+	</scroll_list>
+	<button
+	 name="reconstruct_btn"
+	 label="Reconstruct last death"
+	 layout="topleft"
+	 left="10"
+	 bottom="8"
+	 width="160"
+	 height="24"
+	 follows="left|bottom" />
+</floater>

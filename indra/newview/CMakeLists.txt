@@ -187,6 +187,7 @@ set(viewer_SOURCE_FILES
     ssbc7storeevict.cpp
     ssbc7storeio.cpp
     sscombatanalysis.cpp
+    sscombatcamera.cpp
     sscombatlog.cpp
     sscombatoverlay.cpp
     sscombatreconstruct.cpp
@@ -242,6 +243,7 @@ set(viewer_SOURCE_FILES
     ssfloatersoundanalysis.cpp
     ssfloatersoundlist.cpp
     ssfloatertexturelist.cpp
+    ssfloatercombatcombatant.cpp
     ssfloatercombatevents.cpp
     ssfloateratmoplanetary.cpp
     ssfloaterpreset.cpp
@@ -1131,6 +1133,8 @@ set(viewer_HEADER_FILES
     ssbc7serve.h
     ssbc7store.h
     sscombatanalysis.h
+    sscombatcamera.h
+    sscombatfeedline.h
     sscombaticons.h
     sscombatlog.h
     sscombatoverlay.h
@@ -1187,6 +1191,7 @@ set(viewer_HEADER_FILES
     ssfloatersoundanalysis.h
     ssfloatersoundlist.h
     ssfloatertexturelist.h
+    ssfloatercombatcombatant.h
     ssfloatercombatevents.h
     ssfloateratmoplanetary.h
     ssfloaterpreset.h
