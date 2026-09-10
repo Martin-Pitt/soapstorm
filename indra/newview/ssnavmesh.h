@@ -57,9 +57,10 @@ class SSNavMesh : public LLSingleton<SSNavMesh>
     ~SSNavMesh();
 
 public:
-    static constexpr F32 TILE_M = 32.f;         // column edge in metres
-    static constexpr S32 TILE_CELLS = 128;      // 0.25 m cells per column edge
-    static constexpr F32 CELL = 0.25f;
+    // <SS:Nexii> 0.125 m cells (owner decision 2026-09-10: doorways, stairs and thin ledges in user content need it) and 16 m columns, because DetourTileCache stores a layer's width in a byte, so a tile is at most 255 cells across. A power of two keeps every lattice line exact across neighbouring tiles.
+    static constexpr F32 TILE_M = 16.f;         // column edge in metres
+    static constexpr S32 TILE_CELLS = 128;      // cells per column edge
+    static constexpr F32 CELL = 0.125f;
     static constexpr S32 MAX_BANDS = 12;        // height bands per column; with 16 layers each the Detour layer index stays under 256
 
     // Per-frame maintenance: follow census rebuilds, schedule changed bands,

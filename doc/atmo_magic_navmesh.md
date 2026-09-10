@@ -405,3 +405,45 @@ shapes asked for in the last build.
   circles rather than a box.
 - **Phantom.** Phantom linksets leave the census entirely (previous section); trees seen in the
   overlay were from a build before that change.
+
+## 18. Cells: 0.125 m, 16 m columns (2026-09-10)
+
+Owner decision: 0.25 m cells were too coarse for user content (doorways, stairs, thin ledges;
+the agent radius alone does not fix it). Cells are now 0.125 m, and because DetourTileCache
+stores a layer's width in a byte (255 cells at most), columns shrink to 16 m so a tile stays at
+128 cells across. A power of two keeps every lattice line exact across neighbours. Region sizes
+are expressed in metres and converted per build (2 m minimum region, 5 m merge); the terrain
+window is 21×21; the tile budget is 32768; build throttles default to 4 per frame and 4 in
+flight. Border vertices are inserted every 16 cells, now 2 m.
+
+Measured in the harness on region 0 through the tile-cache path with bands, full content:
+
+| | 0.25 m / 32 m | 0.125 m / 16 m |
+|---|---|---|
+| columns, bands | 108, 1022 layers | 365, 3606 layers |
+| raster + compact + erode per column | 18.5 ms | 21.0 ms |
+| total build for the region | 2.0 s | 7.7 s |
+| polygons | 11.6k | 31.1k |
+| portal edges linked | 85.6% | 98.3% |
+| raw layer data (before zlib) | 48 MB | 169 MB |
+
+A 16 m column at 0.125 m has the same cell count as a 32 m column at 0.25 m, so the cost per
+build is unchanged and the total scales with the column count, about 3.4× here. Border linking
+improves markedly because half-cell height disagreements shrink with the cell. Memory is the
+thing to watch: the console's "MB of layers" line reports the zlib-compressed resident size, and
+`SSNavMeshRange` is the dial if a 512 m radius proves too much on dense mainland.
+
+## 19. Fewer rebuilds, navmesh into the void (2026-09-10)
+
+- **Persistent band slots.** Bands were keyed by their ordinal in the column, so a skybox
+  appearing or a mover settling renumbered every band above it and rebuilt them for nothing. A
+  new band now takes over the slot of the existing band its z-range overlaps most, and only an
+  unmatched band takes a free slot; the Detour layer index follows the slot. The only rebuilds
+  left are geometry changes in the band itself, a mover settling into it, a physics shape or
+  navmesh role arriving, or a land patch update.
+- **The void.** Sim surrounds and off-sim decor (a root inside the region, the build out past
+  the edge) are navmesh too. Eviction kept a band only within one tile of a loaded region, so
+  a void column inside the envelope was built and evicted every schedule. A band now lives
+  while it was scheduled this pass wherever it is, or while it sits within
+  `SSNavMeshVoidMargin` (256 m) of a loaded region; only a region leaving the world, or a band
+  inside the envelope that the schedule no longer produces, drops it.

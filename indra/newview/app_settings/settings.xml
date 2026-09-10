@@ -27104,7 +27104,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSNavMesh</key>
       <map>
       <key>Comment</key>
-      <string>Build the census navmesh: the declared-shape census emitted as triangles per 32 m column, split into height bands at air gaps, rasterized by Recast on a worker and published through DetourTileCache. Needs SSWorldFieldShapes. Movers ride the tile cache as obstacles. Off frees everything</string>
+      <string>Build the census navmesh: the declared-shape census emitted as triangles per 16 m column (0.125 m cells), split into height bands at air gaps, rasterized by Recast on a worker and published through DetourTileCache. Needs SSWorldFieldShapes. Movers ride the tile cache as obstacles. Off frees everything</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27132,7 +27132,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>2</integer>
+      <integer>4</integer>
     </map>
     <key>SSNavMeshMaxInFlight</key>
       <map>
@@ -27143,7 +27143,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>U32</string>
       <key>Value</key>
-      <integer>2</integer>
+      <integer>4</integer>
     </map>
     <key>SSNavMeshShow</key>
       <map>
@@ -27188,6 +27188,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <string>F32</string>
       <key>Value</key>
       <real>512.0</real>
+    </map>
+    <key>SSNavMeshVoidMargin</key>
+      <map>
+      <key>Comment</key>
+      <string>Metres beyond a loaded region's edge within which built navmesh columns are kept when the camera moves away - the void where sim surrounds and off-sim decor sit. Scheduling itself follows SSNavMeshRange</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>256.0</real>
     </map>
     <key>SSNavMeshShowLinks</key>
       <map>

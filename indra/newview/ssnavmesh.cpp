@@ -68,12 +68,12 @@ static LLTrace::BlockTimerStatHandle FTM_SS_NAVMESH_PUBLISH("SS NavMesh Publish"
 // parameters are settings; the rest is fixed until a second agent class exists.
 static constexpr F32 SS_NAV_MAX_EDGE_M = 12.f;
 static constexpr F32 SS_NAV_MAX_SIMPLIFICATION_ERROR = 1.3f;
-static constexpr S32 SS_NAV_MIN_REGION_CELLS = 8;
-static constexpr S32 SS_NAV_MERGE_REGION_CELLS = 20;
+static constexpr F32 SS_NAV_MIN_REGION_M = 2.f;        // region sizes in metres, converted to cells per build
+static constexpr F32 SS_NAV_MERGE_REGION_M = 5.f;
 static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 16;      // walkable layers a band may publish; a tall building has a floor per storey
-static constexpr S32 SS_NAV_TERRAIN_NODES = 37;     // 1 m grid over the bordered column: 32 m + 2 x 2 m margin, plus one
+static constexpr S32 SS_NAV_TERRAIN_NODES = 21;     // 1 m grid over the bordered column: 16 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
-static constexpr S32 SS_NAV_MAX_TILES = 16384;             // 64-bit poly refs (DT_POLYREF64): the tile budget is memory, not id bits
+static constexpr S32 SS_NAV_MAX_TILES = 32768;             // 64-bit poly refs (DT_POLYREF64): the tile budget is memory, not id bits; 16 m columns over 512 m need it
 static constexpr S32 SS_NAV_MAX_OBSTACLES = 512;
 static constexpr S32 SS_NAV_OBSTACLE_REQUESTS_PER_FRAME = 48;   // under dtTileCache's 64-request queue, drained once per update
 static constexpr S32 SS_NAV_QUERY_NODES = 4096;
@@ -392,8 +392,9 @@ namespace
         cfg.walkableRadius = (int)ceilf(in.mAgentRadius / cfg.cs);
         cfg.maxEdgeLen = (int)(SS_NAV_MAX_EDGE_M / cfg.cs);
         cfg.maxSimplificationError = SS_NAV_MAX_SIMPLIFICATION_ERROR;
-        cfg.minRegionArea = SS_NAV_MIN_REGION_CELLS * SS_NAV_MIN_REGION_CELLS;
-        cfg.mergeRegionArea = SS_NAV_MERGE_REGION_CELLS * SS_NAV_MERGE_REGION_CELLS;
+        const S32 min_region_cells = (S32)(SS_NAV_MIN_REGION_M / cfg.cs), merge_region_cells = (S32)(SS_NAV_MERGE_REGION_M / cfg.cs);
+        cfg.minRegionArea = min_region_cells * min_region_cells;
+        cfg.mergeRegionArea = merge_region_cells * merge_region_cells;
         cfg.maxVertsPerPoly = 6;
         cfg.tileSize = SSNavMesh::TILE_CELLS;
         cfg.borderSize = cfg.walkableRadius + 3;
@@ -616,8 +617,8 @@ void SSNavMesh::update()
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SSNavMesh", false);
     static LLCachedControl<bool> census_enabled(gSavedSettings, "SSWorldFieldShapes", false);
-    static LLCachedControl<U32> builds_per_frame(gSavedSettings, "SSNavMeshBuildsPerFrame", 2);
-    static LLCachedControl<U32> max_in_flight(gSavedSettings, "SSNavMeshMaxInFlight", 2);
+    static LLCachedControl<U32> builds_per_frame(gSavedSettings, "SSNavMeshBuildsPerFrame", 4);
+    static LLCachedControl<U32> max_in_flight(gSavedSettings, "SSNavMeshMaxInFlight", 4);
     if (!enabled || !census_enabled)
     {
         if (mNavMesh) teardown();
@@ -702,7 +703,7 @@ void SSNavMesh::schedule()
         F32 lo = FLT_MAX, hi = -FLT_MAX;
         U64 sig = 14695981039346656037ull;
         bool any = false;
-        for (S32 gy = 0; gy <= 4; ++gy) for (S32 gx = 0; gx <= 4; ++gx)
+        for (S32 gy = 0; gy <= 2; ++gy) for (S32 gx = 0; gx <= 2; ++gx)       // 0, 8, 16 m: every 16 m patch a column touches
         {
             const LLVector3 pos_agent = fromLocal(LLVector3((F32)x * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gx * 8.f,
                                                             (F32)y * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gy * 8.f, 0.f));
@@ -749,17 +750,54 @@ void SSNavMesh::schedule()
             }
         }
         new_columns[kv.first] = (S32)bands.size();
+        // <SS:Nexii> Band identity is a persistent slot, not the ordinal: a new band takes the slot of the existing band its z-range overlaps most, so a skybox appearing or a mover settling elsewhere in the column never renumbers its neighbours' layers and never rebuilds them. Unmatched bands take the lowest free slot. [interaction: Detour tile layer index]
+        bool slot_used[MAX_BANDS] = {};
+        std::vector<S32> slot_of(bands.size(), -1);
         for (size_t b = 0; b < bands.size(); ++b)
         {
-            const U64 key = bandKey(tx, ty, (S32)b);
+            const F32 lo = floorf((bands[b].mLo - 1.f) / CELL) * CELL, hi = ceilf((bands[b].mHi + 1.f) / CELL) * CELL;
+            F32 best = 0.f;
+            S32 best_slot = -1;
+            for (S32 slot = 0; slot < MAX_BANDS; ++slot)
+            {
+                if (slot_used[slot]) continue;
+                auto it = mBands.find(bandKey(tx, ty, slot));
+                if (it == mBands.end()) continue;
+                const F32 overlap = llmin(hi, it->second.mZMax) - llmax(lo, it->second.mZMin);
+                if (overlap > best) { best = overlap; best_slot = slot; }
+            }
+            if (best_slot >= 0) { slot_of[b] = best_slot; slot_used[best_slot] = true; }
+        }
+        for (size_t b = 0; b < bands.size(); ++b)
+        {
+            if (slot_of[b] >= 0) continue;
+            for (S32 slot = 0; slot < MAX_BANDS; ++slot)
+            {
+                if (slot_used[slot] || mBands.count(bandKey(tx, ty, slot))) continue;
+                slot_of[b] = slot; slot_used[slot] = true;
+                break;
+            }
+            if (slot_of[b] < 0)
+            {
+                // Every slot is held by a band this pass did not match: take the lowest slot not used this pass.
+                for (S32 slot = 0; slot < MAX_BANDS; ++slot) { if (!slot_used[slot]) { slot_of[b] = slot; slot_used[slot] = true; break; } }
+            }
+        }
+        for (size_t b = 0; b < bands.size(); ++b)
+        {
+            if (slot_of[b] < 0) continue;
+            const U64 key = bandKey(tx, ty, slot_of[b]);
             Band& band = mBands[key];
             band.mAlive = true;
+            // Band bounds snap to the global cell lattice: every tile then quantizes heights on the same grid, so a
+            // corner shared by four tiles lands at one elevation instead of four. [interaction: renderDebug seams]
+            const F32 zmin = floorf((bands[b].mLo - 1.f) / CELL) * CELL, zmax = ceilf((bands[b].mHi + 1.f) / CELL) * CELL;
             const U64 sig = fnvF(fnvF(bands[b].mSig, bands[b].mLo), bands[b].mHi);
+            if (band.mRefs.empty()) { band.mZMin = zmin; band.mZMax = zmax; }     // pending or new: the range the match will see
             if (band.mSig == sig && !band.mRefs.empty()) continue;
             Job job;
-            job.mTx = tx; job.mTy = ty; job.mBand = (S32)b;
-            // <SS:Nexii> Band bounds snap to the global 0.25 m lattice: every tile then quantizes heights on the same grid, so a corner shared by four tiles lands at one elevation instead of four (Recast's tiled demo gets this from a single world origin). [interaction: renderDebug seams]
-            job.mZMin = floorf((bands[b].mLo - 1.f) / CELL) * CELL; job.mZMax = ceilf((bands[b].mHi + 1.f) / CELL) * CELL;
+            job.mTx = tx; job.mTy = ty; job.mBand = slot_of[b];
+            job.mZMin = zmin; job.mZMax = zmax;
             job.mSig = sig;
             mWorklist.push_back(job);
         }
@@ -769,6 +807,9 @@ void SSNavMesh::schedule()
     // Loaded regions in the local frame: a band outside all of them has lost its world and goes; a band inside the
     // envelope that this schedule did not touch has genuinely vanished (bands merged, column emptied) and goes; a
     // band beyond the envelope but still inside a loaded region stays as built.
+    // <SS:Nexii> Off-sim builds (a root in the region, the decor out in the void) and sim surrounds are navmesh too, so a loaded region keeps bands out to SSNavMeshVoidMargin around it; the envelope decides what gets scheduled, this only decides what a column that left the envelope may keep. [interaction: census envelope]
+    static LLCachedControl<F32> void_margin_setting(gSavedSettings, "SSNavMeshVoidMargin", 256.f);
+    const F32 void_margin = llclamp((F32)void_margin_setting, TILE_M, 1024.f);
     struct RegionBox { F32 x0, y0, x1, y1; };
     std::vector<RegionBox> regions;
     for (LLViewerRegion* regionp : LLWorld::getInstance()->getRegionList())
@@ -776,7 +817,7 @@ void SSNavMesh::schedule()
         if (!regionp) continue;
         const LLVector3d d = regionp->getOriginGlobal() - mOriginGlobal;
         const F32 w = regionp->getWidth();
-        regions.push_back(RegionBox{(F32)d.mdV[VX] - TILE_M, (F32)d.mdV[VY] - TILE_M, (F32)d.mdV[VX] + w + TILE_M, (F32)d.mdV[VY] + w + TILE_M});
+        regions.push_back(RegionBox{(F32)d.mdV[VX] - void_margin, (F32)d.mdV[VY] - void_margin, (F32)d.mdV[VX] + w + void_margin, (F32)d.mdV[VY] + w + void_margin});
     }
     for (auto it = mBands.begin(); it != mBands.end();)
     {
@@ -789,7 +830,7 @@ void SSNavMesh::schedule()
         {
             if (x + TILE_M > r.x0 && x < r.x1 && y + TILE_M > r.y0 && y < r.y1) { in_world = true; break; }
         }
-        const bool keep = in_world && (it->second.mAlive || !in_envelope);
+        const bool keep = it->second.mAlive || (in_world && !in_envelope);
         if (keep) { ++it; continue; }
         removeBand(it->first, it->second);
         it = mBands.erase(it);
