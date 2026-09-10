@@ -62,7 +62,7 @@ public:
     LLUUID playStepCut(const LLUUID& sound, const LLVector3& pos_agent, F32 gain);
 
     // <SS:Nexii> Mirrors the avatar-side ankle detector into the step debug readout.
-    void noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2]);
+    void noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2], const bool held[2]);
 
     struct StepDebug
     {
@@ -87,6 +87,7 @@ public:
         F32 mFootLow[2] = { 0.f, 0.f };
         F32 mFootHigh[2] = { 0.f, 0.f };
         bool mFootArmed[2] = { false, false };
+        bool mFootHeld[2] = { false, false };   // sample rejected this frame: wall contact plane, or a spike outside the band
     };
     const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
 

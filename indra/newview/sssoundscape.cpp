@@ -1414,7 +1414,12 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
         StepLoop& loop = it->second;
         loop.mLastSeen = now;
 
-        if (loop.mStopAt <= 0.0)
+        // <SS:Nexii> STEP_JUMP is the avatar saying airborne: no cut-point wait, the loop was audibly running on into the jump.
+        if (locomotion == STEP_JUMP)
+        {
+            loop.mStopAt = now;
+        }
+        else if (loop.mStopAt <= 0.0)
         {
             F64 wait = 0.0;
             const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(loop.mSound);
@@ -1648,7 +1653,7 @@ void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_a
 }
 
 // Mirrors the avatar-side ankle detector into the debug readout: the band and armed state decide whether segmented steps fire at all.
-void SSSoundscape::noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2])
+void SSSoundscape::noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2], const bool held[2])
 {
     StepDebug& dbg = is_self ? mStepSelf : mStepOther;
     dbg.mLoco = loco;
@@ -1657,6 +1662,7 @@ void SSSoundscape::noteFootBand(bool is_self, S32 loco, const F32 low[2], const 
         dbg.mFootLow[f] = low[f];
         dbg.mFootHigh[f] = high[f];
         dbg.mFootArmed[f] = armed[f];
+        dbg.mFootHeld[f] = held[f];
     }
 }
 

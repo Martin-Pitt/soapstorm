@@ -1241,10 +1241,10 @@ void SSAtmoMagic::drawInfo()
                                     st.mStepGap > 0.01f ? 1.f / st.mStepGap : 0.f,
                                     st.mStepDropped));
             // <SS:Nexii> The per-foot envelope band the impact detector arms and fires from, and the classified locomotion - a band whose ceiling sits above the walking swing, or a loco that
-            // flaps to -1, is a detector that silently produces nothing.
-            audio_section.lines.push_back(llformat("  band     L %.2f-%.2f%s   R %.2f-%.2f%s   loco %d",
-                                    st.mFootLow[0], st.mFootHigh[0], st.mFootArmed[0] ? " *" : "",
-                                    st.mFootLow[1], st.mFootHigh[1], st.mFootArmed[1] ? " *" : "",
+            // flaps to -1, is a detector that silently produces nothing. '*' is armed; '!' is a held sample (wall contact plane, or a spike outside the band) the detector is refusing to learn from.
+            audio_section.lines.push_back(llformat("  band     L %.2f-%.2f%s%s   R %.2f-%.2f%s%s   loco %d",
+                                    st.mFootLow[0], st.mFootHigh[0], st.mFootArmed[0] ? " *" : "", st.mFootHeld[0] ? " !" : "",
+                                    st.mFootLow[1], st.mFootHigh[1], st.mFootArmed[1] ? " *" : "", st.mFootHeld[1] ? " !" : "",
                                     st.mLoco));
         }
     }

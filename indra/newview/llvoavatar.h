@@ -1356,6 +1356,11 @@ private:
     bool                mSSFootTracking = false;
     // <SS:Nexii> Per-foot re-fit after a jump/stand gap: the ceiling may only ride the foot's real height until the first fire, so a jump's foot tuck cannot hold the arm threshold out of the gait's reach.
     bool                mSSFootRefit[2] = { true, true };
+    // <SS:Nexii> Seconds each foot's sample has been held as not-ground (a wall contact plane, or a spike outside the band while the plane lags a platform change) - see updateFootstepSounds.
+    F32                 mSSFootHold[2]  = { 0.f, 0.f };
+    // <SS:Nexii> Own-avatar jump key: rising edge starts a short airborne hold that the sim's jump/fall anims take over from, so the round trip does not leak footsteps into the launch.
+    bool                mSSJumpKeyWas = false;
+    F32                 mSSJumpKeyHold = 0.f;
     bool                mWasOnGroundRight;
 
 /**                    Sounds
