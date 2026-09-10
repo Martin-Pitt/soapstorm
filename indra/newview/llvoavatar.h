@@ -1348,16 +1348,12 @@ private:
     // <SS:Nexii> Airborne last frame, for the touchdown edge that fires the Land one-shot - see updateFootstepSounds.
     bool                mSSWasInAir = false;
     bool                mSSWasRunning = false;   // hysteresis for the walk/run speed classifier - see updateFootstepSounds
-    // Per-foot touchdown detection state, [0]=left [1]=right. Envelope trackers rather than fixed thresholds because ankle elevation has an unknown DC offset (ankle-to-sole distance scales with
-    // avatar height, and hover/AO shift it further) and an unknown swing amplitude - see updateFootstepSounds.
-    F32                 mSSFootLow[2]   = { 0.f, 0.f };
-    F32                 mSSFootHigh[2]  = { 0.f, 0.f };
-    bool                mSSFootArmed[2] = { false, false };
+    // <SS:Nexii> Per-foot footfall detection state, [0]=left [1]=right: the ankle's body-frame offset projected onto the direction of travel, the running extreme since the last phase
+    // change, and which phase (swing = tracking the foremost point, stance = tracking the rearmost). Pure skeleton, no ground reference - see updateFootstepSounds.
+    F32                 mSSFootS[2]     = { 0.f, 0.f };
+    F32                 mSSFootPeak[2]  = { 0.f, 0.f };
+    bool                mSSFootSwing[2] = { false, false };
     bool                mSSFootTracking = false;
-    // <SS:Nexii> Per-foot re-fit after a jump/stand gap: the ceiling may only ride the foot's real height until the first fire, so a jump's foot tuck cannot hold the arm threshold out of the gait's reach.
-    bool                mSSFootRefit[2] = { true, true };
-    // <SS:Nexii> Seconds each foot's sample has been held as not-ground (a wall contact plane, or a spike outside the band while the plane lags a platform change) - see updateFootstepSounds.
-    F32                 mSSFootHold[2]  = { 0.f, 0.f };
     // <SS:Nexii> Own-avatar jump key: rising edge starts a short airborne hold that the sim's jump/fall anims take over from, so the round trip does not leak footsteps into the launch.
     bool                mSSJumpKeyWas = false;
     F32                 mSSJumpKeyHold = 0.f;

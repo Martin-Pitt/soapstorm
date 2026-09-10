@@ -1401,7 +1401,7 @@ void SSSoundscape::reapStepLoops(F64 now)
 
 // The per-avatar walking loop: surface pick, cadence from the analysed onsets, start and stop with movement.
 void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& pos_agent,
-                                      bool on_land, S32 locomotion, bool is_self)
+                                      bool on_land, S32 locomotion, F32 speed_gain, bool is_self)
 {
     if (!gAudiop) return;
 
@@ -1457,6 +1457,7 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
     StepLoop& loop = mStepLoops[avatar_id];
     loop.mLastSeen = now;
     loop.mStopAt = 0.0;
+    loop.mSpeedGain = llclamp(speed_gain, 0.f, 1.f);
     if (fresh)
     {
         // Per-walk, so the debug readout counts drops for the walk you are listening to rather than every walk this session.
@@ -1546,6 +1547,8 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
 
     if (source)
     {
+        static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
+        source->setGain(llclamp((F32)vol, 0.f, 1.f) * loop.mSpeedGain);
         source->setPositionGlobal(gAgent.getPosGlobalFromAgent(pos_agent));
     }
 }
@@ -1577,7 +1580,7 @@ void SSSoundscape::footstepImpact(const LLUUID& avatar_id, const LLVector3& foot
     static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
 
     fadeKill(it->second.mSegSourceID);
-    it->second.mSegSourceID = playStepCut(it->second.mSound, foot_pos_agent, llclamp((F32)vol, 0.f, 1.f));
+    it->second.mSegSourceID = playStepCut(it->second.mSound, foot_pos_agent, llclamp((F32)vol, 0.f, 1.f) * it->second.mSpeedGain);
 }
 
 // One discrete footfall window cut from a recording, at the foot; no step loop required.
@@ -1652,18 +1655,18 @@ void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_a
                                    llclamp((F32)vol, 0.f, 1.f), 0.f));
 }
 
-// Mirrors the avatar-side ankle detector into the debug readout: the band and armed state decide whether segmented steps fire at all.
-void SSSoundscape::noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2], const bool held[2])
+// Mirrors the avatar-side footfall detector into the debug readout: foot offsets along travel, swing/stance phase and the speed gain.
+void SSSoundscape::noteFootGait(bool is_self, S32 loco, const F32 s[2], const bool swing[2], F32 speed_gain)
 {
     StepDebug& dbg = is_self ? mStepSelf : mStepOther;
     dbg.mLoco = loco;
+    dbg.mSpeedGain = speed_gain;
     for (S32 f = 0; f < 2; ++f)
     {
-        dbg.mFootLow[f] = low[f];
-        dbg.mFootHigh[f] = high[f];
-        dbg.mFootArmed[f] = armed[f];
-        dbg.mFootHeld[f] = held[f];
+        dbg.mFootS[f] = s[f];
+        dbg.mFootSwing[f] = swing[f];
     }
+}
 }
 
 // Tags a source as a step sound for the reaper.

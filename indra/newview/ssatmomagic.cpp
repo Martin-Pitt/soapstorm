@@ -1240,12 +1240,12 @@ void SSAtmoMagic::drawInfo()
                                     st.mStepGap,
                                     st.mStepGap > 0.01f ? 1.f / st.mStepGap : 0.f,
                                     st.mStepDropped));
-            // <SS:Nexii> The per-foot envelope band the impact detector arms and fires from, and the classified locomotion - a band whose ceiling sits above the walking swing, or a loco that
-            // flaps to -1, is a detector that silently produces nothing. '*' is armed; '!' is a held sample (wall contact plane, or a spike outside the band) the detector is refusing to learn from.
-            audio_section.lines.push_back(llformat("  band     L %.2f-%.2f%s%s   R %.2f-%.2f%s%s   loco %d",
-                                    st.mFootLow[0], st.mFootHigh[0], st.mFootArmed[0] ? " *" : "", st.mFootHeld[0] ? " !" : "",
-                                    st.mFootLow[1], st.mFootHigh[1], st.mFootArmed[1] ? " *" : "", st.mFootHeld[1] ? " !" : "",
-                                    st.mLoco));
+            // <SS:Nexii> The footfall detector's inputs: each foot's body-frame offset along the direction of travel (metres, + is ahead), '^' while that foot is swinging forward, and the
+            // classified locomotion. A foot that never alternates between '^' and stance while walking is a detector that silently produces nothing. gain is the speed-scaled step level.
+            audio_section.lines.push_back(llformat("  gait     L %+.2f%s   R %+.2f%s   loco %d   gain %.2f",
+                                    st.mFootS[0], st.mFootSwing[0] ? " ^" : "  ",
+                                    st.mFootS[1], st.mFootSwing[1] ? " ^" : "  ",
+                                    st.mLoco, st.mSpeedGain));
         }
     }
 

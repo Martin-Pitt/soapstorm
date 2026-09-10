@@ -51,7 +51,7 @@ public:
                          bool on_land, S32 action, bool is_self);
 
     void updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& pos_agent,
-                            bool on_land, S32 locomotion, bool is_self);
+                            bool on_land, S32 locomotion, F32 speed_gain, bool is_self);
 
     void footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_agent,
                        bool on_land, S32 action, bool is_self);
@@ -62,7 +62,7 @@ public:
     LLUUID playStepCut(const LLUUID& sound, const LLVector3& pos_agent, F32 gain);
 
     // <SS:Nexii> Mirrors the avatar-side ankle detector into the step debug readout.
-    void noteFootBand(bool is_self, S32 loco, const F32 low[2], const F32 high[2], const bool armed[2], const bool held[2]);
+    void noteFootGait(bool is_self, S32 loco, const F32 s[2], const bool swing[2], F32 speed_gain);
 
     struct StepDebug
     {
@@ -82,12 +82,11 @@ public:
         const char* mWhyNot = "";
         F32 mStepGap = 0.f;     // seconds between the last two footfalls that actually played - compare against the gait to see whether steps are being missed
         S32 mStepDropped = 0;   // footfalls refused by the anti-spam gap since this avatar started moving
-        // <SS:Nexii> Mirrored ankle-detector state from the avatar (noteFootBand): the per-foot envelope band and armed flags decide whether segmented steps fire at all.
+        // <SS:Nexii> Mirrored footfall-detector state from the avatar (noteFootGait): each foot's body-frame offset along the travel direction, its phase, and the speed gain applied to steps.
         S32 mLoco = -2;         // classified locomotion last reported (-1 stopped)
-        F32 mFootLow[2] = { 0.f, 0.f };
-        F32 mFootHigh[2] = { 0.f, 0.f };
-        bool mFootArmed[2] = { false, false };
-        bool mFootHeld[2] = { false, false };   // sample rejected this frame: wall contact plane, or a spike outside the band
+        F32 mFootS[2] = { 0.f, 0.f };
+        bool mFootSwing[2] = { false, false };
+        F32 mSpeedGain = 1.f;
     };
     const StepDebug& lastStep(bool self) const { return self ? mStepSelf : mStepOther; }
 
@@ -229,6 +228,7 @@ private:
         F64 mLastImpactAt = 0.0;
         LLUUID mSegSourceID;
         F64 mStopAt = 0.0;
+        F32 mSpeedGain = 1.f;   // speed-scaled level from the avatar, applied to the loop source and to each cut step
     };
     std::map<LLUUID, StepLoop> mStepLoops;
     void releaseStepLoop(StepLoop& loop);
