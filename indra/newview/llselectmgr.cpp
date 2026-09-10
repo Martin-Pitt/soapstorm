@@ -146,6 +146,7 @@ LLUIColor LLSelectMgr::sHighlightInspectColor;
 LLUIColor LLSelectMgr::sHighlightParentColor;
 LLUIColor LLSelectMgr::sHighlightChildColor;
 LLUIColor LLSelectMgr::sContextSilhouetteColor;
+LLUIColor LLSelectMgr::sSSLocalContentSilhouetteColor; // <SS:Nexii> purple silhouette colour for client-side-only local landscape objects
 
 //~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 // struct LLDeRezInfo
@@ -249,6 +250,7 @@ LLSelectMgr::LLSelectMgr()
     sHighlightChildColor = LLUIColorTable::instance().getColor("HighlightChildColor");
     sHighlightInspectColor = LLUIColorTable::instance().getColor("HighlightInspectColor");
     sContextSilhouetteColor = LLUIColorTable::instance().getColor("ContextSilhouetteColor")*0.5f;
+    sSSLocalContentSilhouetteColor = LLUIColorTable::instance().getColor("SSLocalContentSilhouetteColor"); // <SS:Nexii> purple silhouette colour for client-side-only local landscape objects
 
     sRenderLightRadius = gSavedSettings.getBOOL("RenderLightRadius");
 
@@ -4459,17 +4461,23 @@ bool LLSelectMgr::confirmDelete(const LLSD& notification, const LLSD& response, 
             // derez - Delete removes the environment record instead. The DeRezObject send
             // below is funnel-gated anyway (no packet), but the record removal is the actual
             // deletion; the funnel gate alone would silently no-op.
+            // The ids are collected first: removing a record kills its objects, which edits this very selection list.
+            std::vector<LLUUID> local_records;
             for (LLObjectSelection::iterator iter = handle->begin(); iter != handle->end(); ++iter)
             {
                 LLViewerObject* obj = (*iter)->getObject();
                 if (obj && obj->ssIsLocalContent())
                 {
                     const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>(obj);
-                    if (landscape)
+                    if (landscape && std::find(local_records.begin(), local_records.end(), landscape->recordId()) == local_records.end())
                     {
-                        SSAtmoLandscapeWorld::getInstance()->removeByMesh(landscape->meshId());
+                        local_records.push_back(landscape->recordId());
                     }
                 }
+            }
+            for (const LLUUID& record_id : local_records)
+            {
+                SSAtmoLandscapeWorld::getInstance()->removeByRecord(record_id);
             }
             // </SS:Nexii>
 
@@ -5298,7 +5306,7 @@ void LLSelectMgr::selectionSetObjectName(const std::string& name)
     // to the record and let the capture baseline follow.
     LLObjectSelection::iterator first = mSelectedObjects->begin();
     if (first != mSelectedObjects->end()
-        && mSelectedObjects->getObjectCount() == 1
+        && mSelectedObjects->getRootObjectCount() == 1    // <SS:Nexii> one linkset: root and children share the record
         && (*first)->getObject()
         && (*first)->getObject()->ssIsLocalContent())
     {
@@ -5306,9 +5314,9 @@ void LLSelectMgr::selectionSetObjectName(const std::string& name)
         if (landscape)
         {
             // Keep the record's current desc - see the matching note in the description path.
-            const SSAtmoEnvLandscape* record = ss_landscape_record_for_mesh(landscape->meshId());
+            const SSAtmoEnvLandscape* record = ss_landscape_record_for(landscape->recordId());
             const std::string& current_desc = record ? record->mDesc : (*first)->mDescription;
-            ss_landscape_persist_name(landscape->meshId(), name_copy, current_desc);
+            ss_landscape_persist_name(landscape->recordId(), name_copy, current_desc);
             return;
         }
     }
@@ -5350,7 +5358,7 @@ void LLSelectMgr::selectionSetObjectDescription(const std::string& desc)
     // record - see selectionSetObjectName.
     LLObjectSelection::iterator first = mSelectedObjects->begin();
     if (first != mSelectedObjects->end()
-        && mSelectedObjects->getObjectCount() == 1
+        && mSelectedObjects->getRootObjectCount() == 1    // <SS:Nexii> one linkset: root and children share the record
         && (*first)->getObject()
         && (*first)->getObject()->ssIsLocalContent())
     {
@@ -5359,9 +5367,9 @@ void LLSelectMgr::selectionSetObjectDescription(const std::string& desc)
         {
             // Keep the record's current name - the node's is stale from seeding and a
             // desc edit must not revert a recent rename.
-            const SSAtmoEnvLandscape* record = ss_landscape_record_for_mesh(landscape->meshId());
+            const SSAtmoEnvLandscape* record = ss_landscape_record_for(landscape->recordId());
             const std::string& current_name = record ? record->mName : (*first)->mName;
-            ss_landscape_persist_name(landscape->meshId(), current_name, desc_copy);
+            ss_landscape_persist_name(landscape->recordId(), current_name, desc_copy);
             return;
         }
     }
@@ -7121,6 +7129,10 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
                     {
                         hlColor = sContextSilhouetteColor;
                     }
+                    else if (objectp->ssIsLocalContent()) // <SS:Nexii> local landscape objects are always client-side, so parent/child never applies - give them a distinct purple silhouette
+                    {
+                        hlColor = sSSLocalContentSilhouetteColor;
+                    }
                     renderMeshSelection_f(node, objectp, hlColor);
                 }
                 else
@@ -7143,6 +7155,10 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
                         LLSelectMgr::sRenderHiddenSelections = false;
                         node->renderOneSilhouette(sContextSilhouetteColor);
                         LLSelectMgr::sRenderHiddenSelections = oldHidden;
+                    }
+                    else if (objectp->ssIsLocalContent()) // <SS:Nexii> local landscape objects are always client-side, so parent/child never applies - give them a distinct purple silhouette
+                    {
+                        node->renderOneSilhouette(sSSLocalContentSilhouetteColor);
                     }
                     else if (objectp->isRootEdit())
                     {
@@ -7176,6 +7192,10 @@ void LLSelectMgr::renderSilhouettes(bool for_hud)
                 }
 
                 LLColor4 highlight_color = objectp->isRoot() ? sHighlightParentColor : sHighlightChildColor;
+                if (objectp->ssIsLocalContent()) // <SS:Nexii> keep the subtract-from-selection red below as-is (it signals an action, not object identity), but prefer the purple local-content colour over parent/child otherwise
+                {
+                    highlight_color = sSSLocalContentSilhouetteColor;
+                }
                 if (objectp->mDrawable
                     && objectp->mDrawable->getVOVolume()
                     && objectp->mDrawable->getVOVolume()->isMesh())

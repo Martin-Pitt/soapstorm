@@ -81,6 +81,9 @@ public:
     // closed - which joins its thread, and therefore waits out any step already running - while the singleton is still alive.
     void cleanupSingleton() override;
 
+    // GL teardown (SSAtmoMagic::shutdownGL): what cleanupSingleton does, run while the context still exists.
+    void shutdownGL();
+
 private:
     // <SS:Nexii> R16 THREADING. The drop simulation does not run on the main thread. It is a few hundred drops with an all-pairs
     // (grid-bucketed) merge step, which is cheap - the reference runs the same thing in JavaScript - but it is also pure arithmetic

@@ -756,6 +756,7 @@ dtStatus dtTileCache::buildNavMeshTile(const dtCompressedTileRef ref, dtNavMesh*
 	if (m_tmproc)
 	{
 		m_tmproc->process(&params, bc.lmesh->areas, bc.lmesh->flags);
+		m_tmproc->detail(bc.layer, &params);	// <SS:Nexii> ALTERED FROM UPSTREAM: height detail from the layer, see DetourTileCache.h
 	}
 	
 	unsigned char* navData = 0;

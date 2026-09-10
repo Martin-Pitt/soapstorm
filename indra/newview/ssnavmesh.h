@@ -128,6 +128,7 @@ public:
     S32 obstacleCount() const { return (S32)mObstacles.size(); }
     U32 buildCount() const { return mBuildCount; }
     F32 lastBuildMS() const { return mLastBuildMS; }
+    F32 lastPublishMS() const { return mLastPublishMS; }
     U32 polyCount() const;
     size_t layerBytes() const { return mLayerBytes; }
     U32 layersDropped() const { return mLayersDropped; }    // walkable layers currently without a tile, summed over live bands
@@ -179,7 +180,9 @@ private:
     static U64 bandKey(S32 tx, S32 ty, S32 band);
     static U64 columnKey(S32 tx, S32 ty);
 
-    std::unique_ptr<SSNavMeshImpl> mImpl;
+    // <SS:Nexii> Shared, not unique: a band build on the General queue uses the impl's compressor, so the job keeps the impl alive past the singleton if logout races a build. mAlive is the continuation's token - a mainloop callback that finds it expired never touches this. [interaction: launch, publish]
+    std::shared_ptr<SSNavMeshImpl> mImpl;
+    std::shared_ptr<bool> mAlive = std::make_shared<bool>(true);
     dtNavMesh* mNavMesh = nullptr;
     dtTileCache* mTileCache = nullptr;
     dtNavMeshQuery* mQuery = nullptr;
@@ -208,6 +211,7 @@ private:
     void feedWorldField(S32 tx, S32 ty, F32 zmin, F32 zmax, const SpanSheet* sheet);
     U32 mBuildCount = 0;
     F32 mLastBuildMS = 0.f;
+    F32 mLastPublishMS = 0.f;               // main-thread cost of the last publish: tile build with its detail mesh
     size_t mLayerBytes = 0;
     U32 mLayersDropped = 0;
     S32 mLastSeen = 0, mLastDynamic = 0, mLastPhantom = 0;

@@ -76,6 +76,9 @@ public:
 
     void clear();
 
+    // GL teardown: joins the GL worker (its shared context dies through the window, so before the window does), then releases every texture, target and scratch buffer unconditionally.
+    void shutdownGL();
+
     void rebuildAll();
 
     bool isValid() const;

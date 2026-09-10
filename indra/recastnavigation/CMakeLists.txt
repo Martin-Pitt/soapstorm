@@ -7,7 +7,9 @@
 # (tessellatePortalEdges) so neighbouring tiles share border vertices, keeps the lattice vertices where the border
 # bends through the poly mesh's border-vertex removal, and fixes two undersized stack buffers upstream (canRemoveVertex's
 # edge scratch, removeVertex's tverts) that overran once a border vertex was shared by many polygons.
-# ALTERED: DetourTileCache/Source/DetourTileCache.cpp raises the per-column tile list from 32 to 256 layers.
+# ALTERED: DetourTileCache/Source/DetourTileCache.cpp raises the per-column tile list from 32 to 256 layers, and with
+# DetourTileCache/Include/DetourTileCache.h adds dtTileCacheMeshProcess::detail, a hook that offers the decompressed layer
+# so the viewer can attach a height detail mesh before dtCreateNavMeshData.
 # Everything else is upstream verbatim.
 
 project(recastnavigation)

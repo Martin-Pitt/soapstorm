@@ -42,6 +42,10 @@
 #include "ssvortices.h"
 #include "ssworldfield.h"
 #include "ssnavmesh.h"
+#include "ssglreadback.h"
+#include "ssgpucull.h"
+#include "sspreciprenderer.h"
+#include "ssprecipvariants.h"
 
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
@@ -101,6 +105,30 @@ SSAtmoMagic::SSAtmoMagic()
 
 SSAtmoMagic::~SSAtmoMagic()
 {
+}
+
+// Release order: the shared-context workers first (they destroy their contexts through the window), then everything holding GL objects, then this singleton's own texture and the precipitation sim.
+void SSAtmoMagic::shutdownGL()
+{
+    if (SSGLReadback::instanceExists())      SSGLReadback::getInstance()->shutdown();
+    if (SSWindFlowMap::instanceExists())     SSWindFlowMap::getInstance()->shutdownGL();
+    if (SSRainShadowMap::instanceExists())   SSRainShadowMap::getInstance()->shutdownGL();
+    if (SSWorldField::instanceExists())      SSWorldField::getInstance()->shutdownGL();
+    if (SSSurfaceField::instanceExists())    SSSurfaceField::getInstance()->releaseGL();
+    if (SSHeightFog::instanceExists())       SSHeightFog::getInstance()->releaseGL();
+    if (SSGPUCull::instanceExists())         SSGPUCull::getInstance()->shutdownGL();
+    if (SSScreenFXPost::instanceExists())    SSScreenFXPost::getInstance()->shutdownGL();
+    if (SSVolCloud::instanceExists())        SSVolCloud::getInstance()->shutdownGL();
+    if (SSLightningRender::instanceExists()) SSLightningRender::getInstance()->shutdownGL();
+    if (SSPrecipRenderer::instanceExists())  SSPrecipRenderer::getInstance()->cleanupGL();
+    if (SSPrecipVariants::instanceExists())  SSPrecipVariants::getInstance()->clearCache();
+    if (SSAtmoEnvApplier::instanceExists())  SSAtmoEnvApplier::getInstance()->releaseDebugLabels();
+    if (instanceExists())
+    {
+        SSAtmoMagic* self = getInstance();
+        self->mSim.reset();
+        self->mRippleTexture = nullptr;
+    }
 }
 
 // The static seed all deterministic weather derives from.

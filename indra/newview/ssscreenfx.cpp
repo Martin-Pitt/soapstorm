@@ -146,6 +146,11 @@ public:
 // time this returns no task can still be holding `this`. Ordering matters more than tidiness here: a posted step captures the singleton.
 void SSScreenFXPost::cleanupSingleton()
 {
+    shutdownGL();
+}
+
+void SSScreenFXPost::shutdownGL()
+{
     if (mSimWorker)
     {
         mSimWorker->close();

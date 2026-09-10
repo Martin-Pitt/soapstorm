@@ -70,6 +70,9 @@ public:
 
     void clear();
 
+    // GL teardown: clear(), then every deck texture reference, the shadow texture and the depth copy.
+    void shutdownGL();
+
     // <SS:Nexii> The primary deck's geometry and coverage: the auto dome altitude derivation and every consumer that asks "how much cloud is overhead" mean the main field, not the under deck bolted on below a sky build.
     F32 cloudBaseZ() const { return mPrimary.mBaseZ; }
     F32 cloudTopZ() const { return mPrimary.mBaseZ + mPrimary.mThicknessM; }

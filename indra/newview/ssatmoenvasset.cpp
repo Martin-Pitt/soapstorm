@@ -1647,10 +1647,98 @@ bool SSAtmoEnvLandscapeFace::fromLLSD(const LLSD& sd)
     return true;
 }
 
+// The mesh behind a part is its sculpt entry when the sculpt type is mesh.
+LLUUID SSAtmoEnvLandscapePart::meshId() const
+{
+    return (mVolume.getSculptType() & LL_SCULPT_TYPE_MASK) == LL_SCULPT_TYPE_MESH ? mVolume.getSculptID() : LLUUID::null;
+}
+
+LLSD SSAtmoEnvLandscapePart::asLLSD() const
+{
+    LLSD sd = LLSD::emptyMap();
+    sd["volume"] = mVolume.asLLSD();
+    sd["offset"] = LLSD::emptyArray();
+    sd["offset"].append((LLSD::Real)mOffset.mV[VX]);
+    sd["offset"].append((LLSD::Real)mOffset.mV[VY]);
+    sd["offset"].append((LLSD::Real)mOffset.mV[VZ]);
+    sd["rotation"] = LLSD::emptyArray();
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VX]);
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VY]);
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VZ]);
+    sd["rotation"].append((LLSD::Real)mRotation.mQ[VW]);
+    sd["scale"] = LLSD::emptyArray();
+    sd["scale"].append((LLSD::Real)mScale.mV[VX]);
+    sd["scale"].append((LLSD::Real)mScale.mV[VY]);
+    sd["scale"].append((LLSD::Real)mScale.mV[VZ]);
+    if (!mFaces.empty())
+    {
+        LLSD faces = LLSD::emptyArray();
+        for (const SSAtmoEnvLandscapeFace& f : mFaces)
+        {
+            faces.append(f.asLLSD());
+        }
+        sd["faces"] = faces;
+    }
+    if (mLight.isMap()) sd["light"] = mLight;
+    if (mFlexi.isMap()) sd["flexi"] = mFlexi;
+    return sd;
+}
+
+bool SSAtmoEnvLandscapePart::fromLLSD(const LLSD& sd)
+{
+    if (!sd.isMap()) return false;
+    if (sd.has("volume") && sd["volume"].isMap())
+    {
+        LLSD copy = sd["volume"];
+        mVolume.fromLLSD(copy);
+    }
+    if (sd.has("offset") && sd["offset"].isArray())
+    {
+        const LLSD& o = sd["offset"];
+        for (S32 i = 0; i < 3 && i < (S32)o.size(); ++i) mOffset.mV[i] = (F32)o[i].asReal();
+    }
+    if (sd.has("rotation") && sd["rotation"].isArray() && sd["rotation"].size() == 4)
+    {
+        const LLSD& r = sd["rotation"];
+        mRotation.mQ[VX] = (F32)r[0].asReal();
+        mRotation.mQ[VY] = (F32)r[1].asReal();
+        mRotation.mQ[VZ] = (F32)r[2].asReal();
+        mRotation.mQ[VW] = (F32)r[3].asReal();
+    }
+    if (sd.has("scale") && sd["scale"].isArray())
+    {
+        const LLSD& s = sd["scale"];
+        for (S32 i = 0; i < 3 && i < (S32)s.size(); ++i) mScale.mV[i] = llmax(0.001f, (F32)s[i].asReal());
+    }
+    mFaces.clear();
+    if (sd.has("faces") && sd["faces"].isArray())
+    {
+        const LLSD& faces = sd["faces"];
+        for (U32 i = 0; i < faces.size(); ++i)
+        {
+            SSAtmoEnvLandscapeFace f;
+            if (f.fromLLSD(faces[i])) mFaces.push_back(f);
+        }
+    }
+    mLight = (sd.has("light") && sd["light"].isMap()) ? sd["light"] : LLSD();
+    mFlexi = (sd.has("flexi") && sd["flexi"].isMap()) ? sd["flexi"] : LLSD();
+    return true;
+}
+
+// A record always has a root part; a pre-linkset document gets one built from its legacy keys.
+void SSAtmoEnvLandscape::ensureRoot()
+{
+    if (mParts.empty()) mParts.push_back(SSAtmoEnvLandscapePart());
+    mParts[0].mOffset.clearVec();
+    mParts[0].mRotation.loadIdentity();
+}
+
 LLSD SSAtmoEnvLandscape::asLLSD() const
 {
     LLSD sd = LLSD::emptyMap();
-    sd["mesh_id"] = mMeshId;
+    sd["record_id"] = mRecordId;
+    // <SS:Nexii> Legacy keys for the root part stay alongside "parts" so a pre-linkset build still renders the root mesh (and its scale and faces) instead of rejecting the document; a prim root reads as a null mesh there and draws its proxy box, which is the graceful floor.
+    sd["mesh_id"] = rootMeshId();
     sd["name"] = mName;
     sd["desc"] = mDesc;
     if (!mCreator.isNull()) sd["creator"] = mCreator;
@@ -1671,20 +1759,28 @@ LLSD SSAtmoEnvLandscape::asLLSD() const
     sd["rotation"].append((LLSD::Real)mRotation.mQ[VY]);
     sd["rotation"].append((LLSD::Real)mRotation.mQ[VZ]);
     sd["rotation"].append((LLSD::Real)mRotation.mQ[VW]);
+    const LLVector3 root_scale = mParts.empty() ? LLVector3(1.f, 1.f, 1.f) : mParts[0].mScale;
     sd["scale"] = LLSD::emptyArray();
-    sd["scale"].append((LLSD::Real)mScale.mV[VX]);
-    sd["scale"].append((LLSD::Real)mScale.mV[VY]);
-    sd["scale"].append((LLSD::Real)mScale.mV[VZ]);
+    sd["scale"].append((LLSD::Real)root_scale.mV[VX]);
+    sd["scale"].append((LLSD::Real)root_scale.mV[VY]);
+    sd["scale"].append((LLSD::Real)root_scale.mV[VZ]);
 
-    if (!mFaces.empty())
+    if (!mParts.empty() && !mParts[0].mFaces.empty())
     {
         LLSD faces = LLSD::emptyArray();
-        for (const SSAtmoEnvLandscapeFace& f : mFaces)
+        for (const SSAtmoEnvLandscapeFace& f : mParts[0].mFaces)
         {
             faces.append(f.asLLSD());
         }
         sd["faces"] = faces;
     }
+
+    LLSD parts = LLSD::emptyArray();
+    for (const SSAtmoEnvLandscapePart& p : mParts)
+    {
+        parts.append(p.asLLSD());
+    }
+    sd["parts"] = parts;
     return sd;
 }
 
@@ -1692,7 +1788,8 @@ bool SSAtmoEnvLandscape::fromLLSD(const LLSD& sd)
 {
     if (!sd.isMap()) return false;
 
-    if (sd.has("mesh_id")) mMeshId = sd["mesh_id"].asUUID();
+    mRecordId = sd.has("record_id") ? sd["record_id"].asUUID() : LLUUID::null;
+    if (mRecordId.isNull()) mRecordId.generate();
     if (sd.has("name")) mName = sd["name"].asString();
     if (sd.has("desc")) mDesc = sd["desc"].asString();
     if (sd.has("creator")) mCreator = sd["creator"].asUUID();
@@ -1727,28 +1824,47 @@ bool SSAtmoEnvLandscape::fromLLSD(const LLSD& sd)
             mRotation.mQ[VW] = (F32)r[3].asReal();
         }
     }
-    if (sd.has("scale") && sd["scale"].isArray())
+    mParts.clear();
+    if (sd.has("parts") && sd["parts"].isArray())
     {
-        const LLSD& s = sd["scale"];
-        for (S32 i = 0; i < 3 && i < (S32)s.size(); ++i)
+        const LLSD& parts = sd["parts"];
+        for (U32 i = 0; i < parts.size(); ++i)
         {
-            mScale.mV[i] = (F32)s[i].asReal();
+            if ((S32)mParts.size() >= SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD)
+            {
+                LL_WARNS("AtmoMagicEnv") << "Atmo landscape record '" << mName << "' asks for more than "
+                                         << SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD << " parts; dropping the rest" << LL_ENDL;
+                break;
+            }
+            SSAtmoEnvLandscapePart p;
+            if (p.fromLLSD(parts[i])) mParts.push_back(p);
         }
     }
-
-    mFaces.clear();
-    if (sd.has("faces") && sd["faces"].isArray())
+    if (mParts.empty())
     {
-        const LLSD& faces = sd["faces"];
-        for (U32 i = 0; i < faces.size(); ++i)
+        // <SS:Nexii> Pre-linkset document: one mesh root from the legacy keys. The mesh id becomes the root part's sculpt entry on the ctor's default box params, which is exactly what the old applyMesh did.
+        SSAtmoEnvLandscapePart root;
+        if (sd.has("mesh_id") && sd["mesh_id"].asUUID().notNull())
         {
-            SSAtmoEnvLandscapeFace f;
-            if (f.fromLLSD(faces[i]))
+            root.mVolume.setSculptID(sd["mesh_id"].asUUID(), LL_SCULPT_TYPE_MESH);
+        }
+        if (sd.has("scale") && sd["scale"].isArray())
+        {
+            const LLSD& s = sd["scale"];
+            for (S32 i = 0; i < 3 && i < (S32)s.size(); ++i) root.mScale.mV[i] = llmax(0.001f, (F32)s[i].asReal());
+        }
+        if (sd.has("faces") && sd["faces"].isArray())
+        {
+            const LLSD& faces = sd["faces"];
+            for (U32 i = 0; i < faces.size(); ++i)
             {
-                mFaces.push_back(f);
+                SSAtmoEnvLandscapeFace f;
+                if (f.fromLLSD(faces[i])) root.mFaces.push_back(f);
             }
         }
+        mParts.push_back(root);
     }
+    ensureRoot();
     return true;
 }
 // </SS:Nexii>
@@ -2107,6 +2223,27 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
             t.mLandscapes.resize((size_t)room);
         }
         landscape_total += (S32)t.mLandscapes.size();
+    }
+    // <SS:Nexii> The prim budget, asset-wide: a record past the remaining room keeps its root and drops its later parts, so a card that overshoots still shows every record at least as its root.
+    S32 parts_total = 0;
+    bool parts_warned = false;
+    for (SSAtmoEnvTrack& t : parsed.mTracks)
+    {
+        for (SSAtmoEnvLandscape& l : t.mLandscapes)
+        {
+            const S32 room = llmax(1, SS_ATMOENV_MAX_LANDSCAPE_PARTS_TOTAL - parts_total);
+            if (l.partCount() > room)
+            {
+                if (!parts_warned)
+                {
+                    parts_warned = true;
+                    LL_WARNS("AtmoMagicEnv") << "Atmo v3 asset asks for more than " << SS_ATMOENV_MAX_LANDSCAPE_PARTS_TOTAL
+                                             << " landscape parts in total; truncating the later linksets" << LL_ENDL;
+                }
+                l.mParts.resize((size_t)room);
+            }
+            parts_total += l.partCount();
+        }
     }
 
     parsed.sortTracksByAltitude();

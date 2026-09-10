@@ -109,10 +109,10 @@ void SSFloaterNavMesh::refresh()
     }
     else
     {
-        mNavStatus->setText(llformat("%d columns, %d bands (%d to build, %d in flight)\n%u polygons, %.1f MB of layers\n%u builds, last %.1f ms\n%d mover obstacles",
+        mNavStatus->setText(llformat("%d columns, %d bands (%d to build, %d in flight)\n%u polygons, %.1f MB of layers\n%u builds, last %.1f ms worker + %.1f ms publish\n%d mover obstacles",
                                      nav->columnCount(), nav->bandCount(), nav->pendingCount(), nav->inFlightCount(),
                                      nav->polyCount(), nav->layerBytes() / 1048576.0,
-                                     nav->buildCount(), nav->lastBuildMS(), nav->obstacleCount()));
+                                     nav->buildCount(), nav->lastBuildMS(), nav->lastPublishMS(), nav->obstacleCount()));
     }
 
     if (!census_enabled)
@@ -172,7 +172,12 @@ void SSFloaterNavMesh::onMarkLocation()
     LLViewerObject* hit_obj = gPipeline.lineSegmentIntersectInWorld(start, end, false, false, true, false, &face, nullptr, nullptr, &hit4);
     LLVector3 hit;
     bool have = false;
-    if (hit_obj) { hit.set(hit4.getF32ptr()); have = true; }
+    if (hit_obj)
+    {
+        hit.set(hit4.getF32ptr());
+        have = true;
+        if (hit_obj->getPCode() == LLViewerObject::LL_VO_SURFACE_PATCH) hit_obj = nullptr;     // the land, hit as its patch object
+    }
     // The land, when it is nearer than any object: a half-metre march down the ray.
     const F32 limit = have ? (hit - origin).magVec() : 512.f;
     for (F32 t = 0.5f; t < limit; t += 0.5f)

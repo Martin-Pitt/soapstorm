@@ -96,6 +96,8 @@ struct dtTileCacheMeshProcess
 {
 	virtual ~dtTileCacheMeshProcess();
 	virtual void process(struct dtNavMeshCreateParams* params, unsigned char* polyAreas, unsigned short* polyFlags) = 0;
+	// <SS:Nexii> ALTERED FROM UPSTREAM: after process, the decompressed layer is offered so the user can add a height detail mesh to params (the tile cache path builds none, and its flat polygons cut through hills). Default does nothing.
+	virtual void detail(const struct dtTileCacheLayer* /*layer*/, struct dtNavMeshCreateParams* /*params*/) {}
 };
 
 class dtTileCache

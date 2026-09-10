@@ -68,6 +68,9 @@ class SSAtmoEnvApplier : public LLSingleton<SSAtmoEnvApplier>
 public:
     void apply();
 
+    // Kills the celestial debug HUD texts (also GL teardown, via SSAtmoMagic::shutdownGL).
+    void releaseDebugLabels();
+
     const SSAtmoEnvSkyModulation& lastModulation() const { return mLastModulation; }
 
     // <SS:Nexii> The ONE drift accumulator, integrated at the primary deck's BASE altitude (doc/atmo_magic_wind_profile.md section 4): the cell gate, the shadow bake and precipNoiseAt all read this frame unchanged. Wrapped on a lattice-aligned span (a multiple of the deck's cell and noise tile), never fmodf(1e6), so the wrap leaves every pattern where it was.
@@ -313,7 +316,6 @@ private:
     F32 mSunSlotRadius = 0.f;
 
     std::vector<LLPointer<class LLHUDText> > mDebugLabels;
-    void releaseDebugLabels();
 
     struct DebugMark
     {

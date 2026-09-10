@@ -107,6 +107,9 @@ public:
 
     void clear();
 
+    // GL teardown: the readback worker is already gone, so the in-flight gate is cleared and clear() runs unconditionally.
+    void shutdownGL();
+
     void update();
 
     // <SS:Nexii> The navmesh as the store's span source: while SSWorldFieldFromNavMesh is on and the navmesh runs, the depth-peel capture stops and every band the navmesh publishes hands its span sheet here (SSNavMesh::SpanSheet). The band's z-range is cut out of the tile's columns and the sheet's spans inserted; a span flagged terrain reaches the world floor as the capture's did. The geometry serial moves only once the navmesh has nothing queued for the region (navSettle), so the flood and the acoustic bake run over a whole region, not a half-fed one. The readers - coverage, air labels, enclosure, acoustics, traceSolid, the surface top - never learn which source filled the store. [interaction: SSNavMesh::publish]

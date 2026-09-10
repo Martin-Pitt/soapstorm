@@ -207,6 +207,18 @@ SSWindFlowMap::~SSWindFlowMap()
     mGLWorker = nullptr;
 }
 
+void SSWindFlowMap::shutdownGL()
+{
+    delete mGLWorker;               // closes the pool: joins the thread, which destroys the shared context
+    mGLWorker = nullptr;
+    mGLWorkerTried = true;          // nothing recreates it during teardown
+    mWorkerBusy = false;            // the join above guarantees it
+    mClearPending = false;
+    clear();                        // abandonBuild, tiles, releaseResources - no busy gate left to defer it
+    releaseScratch();
+    if (mProbeCapture.getWidth() > 0) mProbeCapture.release();
+}
+
 // Needs compute-capable GL (4.3).
 bool SSWindFlowMap::isSupported()
 {

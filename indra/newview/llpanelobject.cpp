@@ -679,6 +679,14 @@ void LLPanelObject::getState( )
     mCheckTemporary->set( mIsTemporary );
     mCheckTemporary->setEnabled( roots_selected>0 && editable && !is_permanent);
 
+    // <SS:Nexii> Physical and Temporary have no meaning for local content: there is no client-side physics simulation and no simulator to rez it back with, so both stay unchecked and disabled.
+    if (root_objectp->ssIsLocalContent())
+    {
+        mCheckPhysics->setEnabled(false);
+        mCheckTemporary->setEnabled(false);
+    }
+    // </SS:Nexii>
+
     mIsPhantom = root_objectp->flagPhantom();
     bool is_volume_detect = root_objectp->flagVolumeDetect();
     llassert(!is_character || !mIsPhantom); // should never have a character that is also a phantom
@@ -1645,6 +1653,9 @@ bool LLPanelObject::precommitValidate( const LLSD& data )
 
 void LLPanelObject::sendIsPhysical()
 {
+    // <SS:Nexii> Defensive: the checkbox is disabled for local content, but never send a physics update for it.
+    if (mRootObject.notNull() && mRootObject->ssIsLocalContent()) return;
+    // </SS:Nexii>
     bool value = mCheckPhysics->get();
     if( mIsPhysical != value )
     {
@@ -1661,6 +1672,9 @@ void LLPanelObject::sendIsPhysical()
 
 void LLPanelObject::sendIsTemporary()
 {
+    // <SS:Nexii> Defensive: the checkbox is disabled for local content, but never send a temporary-on-rez update for it.
+    if (mRootObject.notNull() && mRootObject->ssIsLocalContent()) return;
+    // </SS:Nexii>
     bool value = mCheckTemporary->get();
     if( mIsTemporary != value )
     {

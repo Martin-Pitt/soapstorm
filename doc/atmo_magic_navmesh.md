@@ -607,3 +607,55 @@ showing the verdict in the console:
 
 The dump mirrors addPart's decisions rather than sharing code with it; when a rule changes, change
 both.
+
+## 24. The missing buildings: inverted census boxes (2026-09-10)
+
+The first Dump selection run answered the "navmesh ignores a building" reports from sections 17
+and 20. Three rotated prims (two skyscraper foundations, one solid block) were filed by the census
+as box records whose world AABB had min above max on x, for example 177.9 to 144.1. The census
+buckets a record by its AABB and every query walks bucket ranges from min to max, so an inverted box
+lands in no bucket range any query visits: the navmesh, the segment casts and the wall profiles
+all behaved as if the prim did not exist, and the navmesh followed the land underneath.
+
+The cause was the AABB extent in `addOBB`, `addEllipsoid` and `addCylinder`: each summed the body's
+axis vectors multiplied component-wise by the half-size vector, a signed sum. For any rotation that
+flips an axis (a prim turned past 90 degrees about z) a world component of the sum goes negative and
+min and max swap. The extent is now, per world axis, the sum of |axis component| times that axis'
+half size (`ss_obb_extent`). Unrotated and lightly rotated prims were never affected, which is why
+the defect looked random. The part cache is in memory only, so a restart refiles everything under
+the fixed extent. The dump now prints "INVERTED AABB" on any record it finds in that state.
+
+## 25. Mark location, first run: floating polygons, spinner churn (2026-09-10)
+
+The owner marked a hillside where the navmesh floats over the land. The dump: the nearest navmesh
+point sat 1.3 m above the terrain span the world field holds for that column; the tile's world
+field serial had moved 63 times in nine minutes and its air serial was still 0; and the column's
+sky band (z 355 to 374, no walkable layer) had published seven seconds earlier. Three findings.
+
+- **Polygons are planes.** The tile cache path builds no detail mesh, so Detour reads a polygon's
+  height off its plane, and a hexagon merged across a crest cuts through the hill. Recast's classic
+  path fixes this with `rcBuildPolyMeshDetail` over the compact heightfield, which the tile cache
+  never has. The layer it does have still holds every cell's height, so `SSNavMeshProcess::detail`
+  dresses the decompressed layer as a one-span-per-cell compact heightfield and the tile's polygons
+  as an `rcPolyMesh` (regions marked multiple, so each polygon's height patch seeds from its own
+  centre), and runs Recast's own detail builder: samples every metre, a vertex wherever the surface
+  leaves the plane by more than 0.25 m. The vendored tile cache gained one hook for this,
+  `dtTileCacheMeshProcess::detail`, called between `process` and `dtCreateNavMeshData`. Detour's
+  nearest-point and height queries then follow the land, and the overlay draws the detail
+  triangles. It runs on the main thread inside the tile build; the console now shows the publish
+  cost beside the worker cost.
+- **Spinners churned everything.** The census took a part's rotation from its drawable, which
+  carries the client-side spin of `llTargetOmega`. The root never moves, so the rest ladder called
+  a spinning platform landscape, but its records' boxes changed every census, so its band's
+  signature changed every census and rebuilt, and every rebuild fed the world field, moved the
+  tile's serial and invalidated the flood in flight, forever. A part spinning under its own or an
+  ancestor's angular velocity is now a mover, filed at its unspun pose so its obstacle box is
+  stable.
+- **Land hits looked like objects.** The camera ray hits the land as its surface-patch object; the
+  mark now treats that as the land, and the dump names non-volume roots instead of judging them.
+
+**Agent radius 0 (owner decision, same day).** `SSNavMeshAgentRadius` defaults to 0 m and the erode
+pass is skipped at 0. The navmesh is the world field's replacement surface, not (yet) something an
+agent walks, so nothing is shaved off walls; downstream consumers rebuild themselves on the
+high-accuracy surface instead of the column store. A pathfinding consumer raises the radius when it
+arrives.

@@ -191,6 +191,9 @@ public:
 
     static void drawInfo();
 
+    // <SS:Nexii> GL teardown for every Atmo singleton, from LLViewerWindow::shutdownGL while the window, the context and the texture list still exist. LLSingletonBase::deleteAll runs after all of them are gone, so anything left holding textures, vertex buffers, render targets or a shared-context worker until then releases into a dead pipeline. [interaction: LLAppViewer::cleanup order]
+    static void shutdownGL();
+
     // <SS:Nexii> Click hit-test for the info overlay's orange headings: x/y in
     // scaled window coordinates (the space drawInfo lays out in). A hit toggles
     // that section's collapse and returns true so the click is consumed.

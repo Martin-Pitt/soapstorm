@@ -207,6 +207,13 @@ void SSWorldField::clear()
     mTarget.release();
 }
 
+void SSWorldField::shutdownGL()
+{
+    mReadbackPending = false;
+    mClearPending = false;
+    clear();
+}
+
 bool SSWorldField::tileValid(U64 region_handle) const
 {
     auto it = mTiles.find(region_handle);

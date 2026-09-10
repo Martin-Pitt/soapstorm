@@ -161,6 +161,19 @@ static bool ss_part_fully_hidden(LLVOVolume* vov)
 // World rotation of a part: the drawable's xform-maintained world frame - the
 // same one the physics debug renderer draws through (xform.cpp composes
 // world = local * parent, which a hand-rolled parent-first walk gets wrong).
+// The object's world rotation as the sim knows it, without the client-side spin llTargetOmega adds to the drawable.
+static LLQuaternion ss_world_rotation_unspun(const LLViewerObject* vobj)
+{
+    LLQuaternion rot = vobj->getRotation();
+    const LLViewerObject* cur = vobj;
+    while (cur->getParent())
+    {
+        cur = (LLViewerObject*)cur->getParent();
+        rot = rot * cur->getRotation();
+    }
+    return rot;
+}
+
 static LLQuaternion ss_world_rotation(const LLViewerObject* vobj)
 {
     if (vobj->mDrawable)
@@ -632,6 +645,18 @@ std::string SSWorldFieldShapes::dumpObject(const LLViewerObject* obj, std::vecto
     const LLViewerObject* rootp = obj;
     while (rootp->getParent()) rootp = (const LLViewerObject*)rootp->getParent();
     std::string verdict;
+    if (rootp->getPCode() != LL_PCODE_VOLUME)
+    {
+        out.push_back(llformat("=== %s local %u: not a volume prim (pcode 0x%02x: land patch, tree, grass or avatar) - the census never files these",
+                               rootp->getID().asString().c_str(), rootp->getLocalID(), rootp->getPCode()));
+        return "not a volume prim: the census never files these";
+    }
+    bool spinning = false;
+    for (const LLViewerObject* o = rootp; o; o = (const LLViewerObject*)o->getParent())
+    {
+        if (o->getAngularVelocity().magVecSquared() > 1e-6f) { spinning = true; break; }
+    }
+    if (spinning) out.push_back("root spins (llTargetOmega): filed as a mover at its unspun pose");
 
     const U32 root_flags = rootp->getFlags();
     const bool phantom = rootp->flagPhantom();
@@ -770,14 +795,16 @@ std::string SSWorldFieldShapes::dumpObject(const LLViewerObject* obj, std::vecto
         out.push_back(llformat("  part cache: %d records, %d tris, seen %.1f s ago, sig %016llx", (S32)pc.mRecords.size(), pc.mTris, mNow - pc.mSeen, (unsigned long long)pc.mSig));
         for (const Record& r : pc.mRecords)
         {
+            const bool inverted = r.mBMin.mV[VX] > r.mBMax.mV[VX] || r.mBMin.mV[VY] > r.mBMax.mV[VY] || r.mBMin.mV[VZ] > r.mBMax.mV[VZ];
             const bool convex = r.mClass != Record::CLASS_TRI || r.mProv == PROV_HULL || r.mProv == PROV_BBOX || r.mProv == PROV_UNFETCHED;
             const char* treatment = (r.mLayer == LAYER_DECLARED_PHANTOM && nav_role != NAV_ROLE_EXCLUSION_VOLUME) ? "navmesh skips (phantom layer)"
                                   : dynamic_now ? "navmesh carves a box obstacle (DYNAMIC)"
                                   : nav_role == NAV_ROLE_STATIC_OBSTACLE ? (convex ? "solid block, never floor" : "surface block, never floor")
                                   : convex ? "solid fill, walkable on up-facing tops within the slope" : "surface raster, walkable within the slope";
-            out.push_back(llformat("    record %s/%s/%s: %d tris, aabb (%.1f, %.1f, %.1f)-(%.1f, %.1f, %.1f) -> %s",
+            out.push_back(llformat("    record %s/%s/%s: %d tris, aabb (%.1f, %.1f, %.1f)-(%.1f, %.1f, %.1f) -> %s%s",
                                    CLASS_NAME[llclamp((S32)r.mClass, 0, 3)], PROV_NAME[llclamp((S32)r.mProv, 0, 6)], LAYER_NAME[llclamp((S32)r.mLayer, 0, 2)],
-                                   (S32)(r.tris().size() / 3), r.mBMin.mV[VX], r.mBMin.mV[VY], r.mBMin.mV[VZ], r.mBMax.mV[VX], r.mBMax.mV[VY], r.mBMax.mV[VZ], treatment));
+                                   (S32)(r.tris().size() / 3), r.mBMin.mV[VX], r.mBMin.mV[VY], r.mBMin.mV[VZ], r.mBMax.mV[VX], r.mBMax.mV[VY], r.mBMax.mV[VZ], treatment,
+                                   inverted ? "  ** INVERTED AABB: no query can match this record **" : ""));
             for (S32 c = 0; c < 3; ++c) { all_min.mV[c] = llmin(all_min.mV[c], r.mBMin.mV[c]); all_max.mV[c] = llmax(all_max.mV[c], r.mBMax.mV[c]); }
         }
     }
@@ -827,7 +854,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 
     const LLVolumeParams& params = vol->getParams();
     const LLVector3 pos = vov->getPositionAgent();
-    const LLQuaternion rot = ss_world_rotation(vov);
+    LLQuaternion rot = ss_world_rotation(vov);
     const LLVector3 scale = vov->getScale();
     LLViewerObject* rootp = vov;
     while (rootp->getParent()) rootp = (LLViewerObject*)rootp->getParent();
@@ -836,6 +863,13 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     // never store-bound, whatever their layer.
     bool dynamic = false;
     trackRest(rootp, dynamic);
+    // <SS:Nexii> A part spinning under llTargetOmega, or under a spinning ancestor, turns client-side: the drawable's world rotation changes every frame while the root never moves, so the rest ladder called it landscape and its records' boxes changed every census - which rebuilt its navmesh band every census, forever, and with it the world field's serial, so the flood never landed. It is a mover: filed at its unspun pose so its obstacle box is stable, never floor. [interaction: SSNavMesh band signature, syncObstacles]
+    bool spinning = false;
+    for (const LLViewerObject* o = vov; o; o = (const LLViewerObject*)o->getParent())
+    {
+        if (o->getAngularVelocity().magVecSquared() > 1e-6f) { spinning = true; break; }
+    }
+    if (spinning) { dynamic = true; rot = ss_world_rotation_unspun(vov); }
     mBuildDynamic = dynamic;
 
     const bool phantom = rootp->flagPhantom();
@@ -1060,6 +1094,20 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 
 // Analytic record builders - AABBs derived from the frame so the bucket grid
 // and the query pretests stay cheap.
+// <SS:Nexii> World AABB half-extent of an oriented box: per world axis, the sum over the body's axes of |axis component| times that axis' half size. The old form multiplied each axis vector component-wise by the half-size vector and summed the signed results, which for any rotation that flips an axis (a prim turned past 90 degrees) produced a box with min above max - a record no query could ever match, so whole rotated buildings went missing from the navmesh and every other census reader. [interaction: addRecord buckets, forEachRecord]
+static LLVector3 ss_obb_extent(const LLVector3* axes, const LLVector3& half)
+{
+    LLVector3 ext;
+    for (U32 i = 0; i < 3; ++i)
+    {
+        const F32 h = fabsf(half.mV[i]);
+        ext.mV[VX] += fabsf(axes[i].mV[VX]) * h;
+        ext.mV[VY] += fabsf(axes[i].mV[VY]) * h;
+        ext.mV[VZ] += fabsf(axes[i].mV[VZ]) * h;
+    }
+    return ext;
+}
+
 void SSWorldFieldShapes::addOBB(const LLVector3& center, const LLQuaternion& rot,
                                 const LLVector3& half, U8 layer, U8 prov)
 {
@@ -1070,11 +1118,7 @@ void SSWorldFieldShapes::addOBB(const LLVector3& center, const LLQuaternion& rot
     rec.mAxes[1] = LLVector3(0.f, 1.f, 0.f) * rot;
     rec.mAxes[2] = LLVector3(0.f, 0.f, 1.f) * rot;
     rec.mHalf = half;
-    LLVector3 ext;
-    for (U32 i = 0; i < 3; ++i)
-    {
-        ext += rec.mAxes[i].scaledVec(LLVector3(fabsf(half.mV[VX]), fabsf(half.mV[VY]), fabsf(half.mV[VZ])));
-    }
+    const LLVector3 ext = ss_obb_extent(rec.mAxes, half);
     rec.mBMin = center - ext;
     rec.mBMax = center + ext;
     rec.mLayer = layer;
@@ -1095,7 +1139,7 @@ void SSWorldFieldShapes::addEllipsoid(const LLVector3& center, const LLQuaternio
     LLVector3 ext;
     for (U32 i = 0; i < 3; ++i)
     {
-        ext += rec.mAxes[i].scaledVec(radii);
+        ext += LLVector3(fabsf(rec.mAxes[i].mV[VX]), fabsf(rec.mAxes[i].mV[VY]), fabsf(rec.mAxes[i].mV[VZ])) * fabsf(radii.mV[i]);
     }
     rec.mBMin = center - ext;
     rec.mBMax = center + ext;
@@ -1115,7 +1159,8 @@ void SSWorldFieldShapes::addCylinder(const LLVector3& center, const LLQuaternion
     rec.mAxes[2] = LLVector3(0.f, 0.f, 1.f) * rot;
     rec.mRadius = radius;
     rec.mHalfHeight = half_height;
-    const LLVector3 ext = rec.mAxisU * radius + rec.mAxisV * radius + rec.mAxes[2] * half_height;
+    const LLVector3 abs_axes[3] = {rec.mAxisU, rec.mAxisV, rec.mAxes[2]};
+    const LLVector3 ext = ss_obb_extent(abs_axes, LLVector3(radius, radius, half_height));
     rec.mBMin = center - ext;
     rec.mBMax = center + ext;
     rec.mLayer = layer;

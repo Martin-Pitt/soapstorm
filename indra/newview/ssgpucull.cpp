@@ -67,9 +67,15 @@ SSGPUCull::SSGPUCull()
 
 SSGPUCull::~SSGPUCull()
 {
+    shutdownGL();
+}
+
+void SSGPUCull::shutdownGL()
+{
     if (mBoxTex) glDeleteTextures(1, &mBoxTex);
     if (mVisTex) glDeleteTextures(1, &mVisTex);
     if (mHiZTex) glDeleteTextures(1, &mHiZTex);
+    mBoxTex = mVisTex = mHiZTex = 0;
 }
 
 bool SSGPUCull::supported()

@@ -188,6 +188,8 @@ bool SSFloaterAtmoEnv::postBuild()
         [this](LLUICtrl*, const LLSD&) { onClickLandscapeLock(); });
     getChild<LLButton>("landscape_select_button")->setClickedCallback(
         [this](LLUICtrl*, const LLSD&) { onClickLandscapeSelect(); });
+    getChild<LLButton>("landscape_convert_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onClickLandscapeConvert(); });
     // </SS:Nexii>
 
     for (S32 slot = 1; slot < SS_ATMOENV_MAX_TRACKS; ++slot)
@@ -767,33 +769,10 @@ bool SSFloaterAtmoEnv::handleDragAndDrop(S32 x, S32 y, MASK mask, bool drop,
         return true;
     }
 
-    // <SS:Nexii> A mesh drop is a landscape scenery add. The R1 fullperm gate: scenery rides
-    // inside the environment notecard and travels the estate, so only full-perm meshes may
-    // enter - same rule the settings drop already applies to EEP assets.
-    if (cargo_type == DAD_MESH)
-    {
-        *accept = ACCEPT_YES_SINGLE;
-        if (drop)
-        {
-            const LLInventoryItem* item = (const LLInventoryItem*)cargo_data;
-            if (!ss_landscape_item_fullperm(item))
-            {
-                LLNotificationsUtil::add("GenericAlert", LLSD().with(
-                    "MESSAGE", "That mesh isn't full permission - only full-perm meshes can become the Atmo landscape."));
-                return true;
-            }
-            std::string reason;
-            const S32 index = SSAtmoLandscapeWorld::getInstance()->addFromItem(item, reason);
-            if (index < 0)
-            {
-                LLNotificationsUtil::add("GenericAlert", LLSD().with(
-                    "MESSAGE", std::string("That mesh could not be added to the landscape: ") + reason));
-            }
-            refreshLandscape();
-        }
-        return true;
-    }
-    // </SS:Nexii>
+    // <SS:Nexii> There is deliberately no mesh/object drop branch here: an uploaded mesh is an
+    // AT_OBJECT inventory item whose asset uuid is the server-side prim blob, not a mesh asset id,
+    // so no drag could ever have produced a landscape record. Scenery comes from the Landscape
+    // tab's "Convert selection" button instead. doc/atmo_landscape/design_synthesis.md 15.
 
     if (cargo_type != DAD_NOTECARD)
     {
@@ -2392,7 +2371,8 @@ void SSFloaterAtmoEnv::refreshLandscape()
         {
             continue;
         }
-        sig += r->mMeshId.asString();
+        sig += r->mRecordId.asString();
+        sig += llformat(":%d", r->partCount());
         sig += r->mName;
         sig += r->mLocked ? 'L' : 'F';
         // The availability state rides the signature so a header arriving (or 404'ing) after
@@ -2425,7 +2405,11 @@ void SSFloaterAtmoEnv::refreshLandscape()
         row["columns"][0]["column"] = "name";
         row["columns"][0]["value"] = name;
         row["columns"][1]["column"] = "mesh";
-        row["columns"][1]["value"] = r->mMeshId.asString().substr(0, 8);
+        // <SS:Nexii> The root's mesh for a mesh root, the prim count for a prim build; a linkset shows both.
+        const LLUUID root_mesh = r->rootMeshId();
+        std::string what = root_mesh.isNull() ? "prim" : root_mesh.asString().substr(0, 8);
+        if (r->partCount() > 1) what += llformat(" x%d", r->partCount());
+        row["columns"][1]["value"] = what;
         row["columns"][2]["column"] = "mode";
         row["columns"][2]["value"] = r->mLocked ? "locked" : "free";
         list->addElement(row);
@@ -2484,8 +2468,32 @@ void SSFloaterAtmoEnv::onClickLandscapeSelect()
         return;
     }
     LLSelectMgr::getInstance()->deselectAll();
-    LLObjectSelectionHandle handle = LLSelectMgr::getInstance()->selectObjectOnly(objp);
+    LLObjectSelectionHandle handle = LLSelectMgr::getInstance()->selectObjectAndFamily(objp);    // <SS:Nexii> the whole linkset, as Edit would
     (void)handle;
+}
+
+// Convert selection: hands the in-world selection to the landscape world's conversion job.
+void SSFloaterAtmoEnv::onClickLandscapeConvert()
+{
+    // <SS:Nexii> Only the synchronous refusals come back here; the job's own later refusals (late permissions, a failing prim, a cap, the contents warning) alert themselves from the per-frame tick, because the button's click is long gone by then.
+    std::string reason;
+    if (!SSAtmoLandscapeWorld::getInstance()->beginConvertSelection(reason))
+    {
+        LLNotificationsUtil::add("GenericAlert", LLSD().with(
+            "MESSAGE", std::string("That selection cannot become landscape: ") + reason));
+    }
+}
+
+// The conversion job's list hook: the landscape world has no UI of its own, so it pokes the list here.
+void ss_landscape_notify_list_changed()
+{
+    SSFloaterAtmoEnv* floater = LLFloaterReg::findTypedInstance<SSFloaterAtmoEnv>("ss_atmo_env");
+    if (!floater)
+    {
+        return;
+    }
+    floater->mLandscapeListSignature.clear();
+    floater->refreshLandscape();
 }
 // </SS:Nexii>
 

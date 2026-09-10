@@ -44,6 +44,7 @@
 #include "workqueue.h"
 
 #include "Recast.h"
+#include "RecastAlloc.h"
 #include "DetourAlloc.h"
 #include "DetourCommon.h"
 #include "DetourNavMesh.h"
@@ -78,6 +79,8 @@ static constexpr S32 SS_NAV_MAX_OBSTACLES = 512;
 static constexpr S32 SS_NAV_OBSTACLE_REQUESTS_PER_FRAME = 48;   // under dtTileCache's 64-request queue, drained once per update
 static constexpr S32 SS_NAV_QUERY_NODES = 4096;
 static constexpr S32 SS_NAV_MAX_PATH = 512;
+static constexpr F32 SS_NAV_DETAIL_SAMPLE_M = 1.f;         // height detail: sample spacing over a polygon
+static constexpr F32 SS_NAV_DETAIL_ERROR_M = 0.25f;        // and the height error that earns a sample its vertex
 
 // ---------------------------------------------------------------------------- Recast-side helpers
 
@@ -104,11 +107,96 @@ namespace
     };
 
     // Every polygon walkable, one area: agent classes and door portals are later plumbing.
+    // <SS:Nexii> The height detail the tile cache path leaves out: Detour reads a polygon's height off its plane unless the tile carries a detail mesh, so a hexagon merged across a hill crest floated a metre over the land. The layer the tile is built from still holds every cell's height, so it is dressed as a one-span-per-cell compact heightfield and the polygons as an rcPolyMesh, and Recast's own rcBuildPolyMeshDetail samples each polygon and adds vertices where the surface leaves the plane by more than SS_NAV_DETAIL_ERROR_M. Runs on the main thread inside the tile build; the console's publish figure is what it costs. [interaction: dtTileCacheMeshProcess::detail, renderDebug]
     struct SSNavMeshProcess : public dtTileCacheMeshProcess
     {
+        rcContext mCtx{false};
+        rcPolyMeshDetail* mDetail = nullptr;
+        ~SSNavMeshProcess() override { rcFreePolyMeshDetail(mDetail); }
+
         void process(dtNavMeshCreateParams* params, unsigned char* polyAreas, unsigned short* polyFlags) override
         {
             for (int i = 0; i < params->polyCount; ++i) { polyAreas[i] = 0; polyFlags[i] = 1; }
+        }
+
+        void detail(const dtTileCacheLayer* layer, dtNavMeshCreateParams* params) override
+        {
+            if (!layer || !layer->header || params->polyCount == 0 || params->vertCount == 0) return;
+            const int w = layer->header->width, h = layer->header->height;
+
+            // The layer as a compact heightfield: one span per cell that carries this layer's surface.
+            rcCompactHeightfield* chf = rcAllocCompactHeightfield();
+            if (!chf) return;
+            chf->width = w; chf->height = h;
+            chf->cs = params->cs; chf->ch = params->ch;
+            chf->borderSize = 0;
+            chf->walkableHeight = (int)ceilf(params->walkableHeight / params->ch);
+            chf->walkableClimb = (int)floorf(params->walkableClimb / params->ch);
+            rcVcopy(chf->bmin, params->bmin); rcVcopy(chf->bmax, params->bmax);
+            chf->cells = (rcCompactCell*)rcAlloc(sizeof(rcCompactCell) * (size_t)w * h, RC_ALLOC_PERM);
+            if (!chf->cells) { rcFreeCompactHeightfield(chf); return; }
+            memset(chf->cells, 0, sizeof(rcCompactCell) * (size_t)w * h);
+            int n = 0;
+            for (int i = 0; i < w * h; ++i) if (layer->areas[i] != DT_TILECACHE_NULL_AREA) ++n;
+            if (n == 0) { rcFreeCompactHeightfield(chf); return; }
+            chf->spans = (rcCompactSpan*)rcAlloc(sizeof(rcCompactSpan) * n, RC_ALLOC_PERM);
+            chf->areas = (unsigned char*)rcAlloc(n, RC_ALLOC_PERM);
+            if (!chf->spans || !chf->areas) { rcFreeCompactHeightfield(chf); return; }
+            chf->spanCount = n;
+            int si = 0;
+            for (int z = 0; z < h; ++z) for (int x = 0; x < w; ++x)
+            {
+                const int idx = x + z * w;
+                rcCompactCell& c = chf->cells[idx];
+                if (layer->areas[idx] == DT_TILECACHE_NULL_AREA) { c.index = 0; c.count = 0; continue; }
+                c.index = (unsigned int)si; c.count = 1;
+                rcCompactSpan& sp = chf->spans[si];
+                sp.y = layer->heights[idx];
+                sp.reg = 0;
+                sp.con = 0;
+                sp.h = 255;
+                for (int dir = 0; dir < 4; ++dir)
+                {
+                    const int nx = x + rcGetDirOffsetX(dir), nz = z + rcGetDirOffsetY(dir);
+                    const bool linked = (layer->cons[idx] & (1 << dir)) && nx >= 0 && nz >= 0 && nx < w && nz < h && layer->areas[nx + nz * w] != DT_TILECACHE_NULL_AREA;
+                    rcSetCon(sp, dir, linked ? 0 : RC_NOT_CONNECTED);
+                }
+                chf->areas[si] = layer->areas[idx];
+                ++si;
+            }
+
+            // The polygons as Recast's struct: copied, because the struct frees what it points at.
+            rcPolyMesh* pm = rcAllocPolyMesh();
+            if (!pm) { rcFreeCompactHeightfield(chf); return; }
+            pm->nverts = params->vertCount; pm->npolys = params->polyCount; pm->maxpolys = params->polyCount; pm->nvp = params->nvp;
+            pm->verts = (unsigned short*)rcAlloc(sizeof(unsigned short) * 3 * pm->nverts, RC_ALLOC_PERM);
+            pm->polys = (unsigned short*)rcAlloc(sizeof(unsigned short) * pm->nvp * 2 * pm->npolys, RC_ALLOC_PERM);
+            pm->regs = (unsigned short*)rcAlloc(sizeof(unsigned short) * pm->npolys, RC_ALLOC_PERM);
+            pm->flags = (unsigned short*)rcAlloc(sizeof(unsigned short) * pm->npolys, RC_ALLOC_PERM);
+            pm->areas = (unsigned char*)rcAlloc(pm->npolys, RC_ALLOC_PERM);
+            if (!pm->verts || !pm->polys || !pm->regs || !pm->flags || !pm->areas) { rcFreePolyMesh(pm); rcFreeCompactHeightfield(chf); return; }
+            memcpy(pm->verts, params->verts, sizeof(unsigned short) * 3 * pm->nverts);
+            memcpy(pm->polys, params->polys, sizeof(unsigned short) * pm->nvp * 2 * pm->npolys);
+            memcpy(pm->flags, params->polyFlags, sizeof(unsigned short) * pm->npolys);
+            memcpy(pm->areas, params->polyAreas, pm->npolys);
+            for (int i = 0; i < pm->npolys; ++i) pm->regs[i] = RC_MULTIPLE_REGS;     // seed each polygon's height patch from its own centre
+            rcVcopy(pm->bmin, params->bmin); rcVcopy(pm->bmax, params->bmax);
+            pm->cs = params->cs; pm->ch = params->ch;
+            pm->borderSize = 0;
+            pm->maxEdgeError = 2.f;
+
+            rcFreePolyMeshDetail(mDetail);
+            mDetail = rcAllocPolyMeshDetail();
+            if (mDetail && rcBuildPolyMeshDetail(&mCtx, *pm, *chf, SS_NAV_DETAIL_SAMPLE_M, SS_NAV_DETAIL_ERROR_M, *mDetail) && mDetail->nmeshes == params->polyCount)
+            {
+                params->detailMeshes = mDetail->meshes;
+                params->detailVerts = mDetail->verts;
+                params->detailVertsCount = mDetail->nverts;
+                params->detailTris = mDetail->tris;
+                params->detailTriCount = mDetail->ntris;
+            }
+            rcFreePolyMesh(pm);
+            rcFreeCompactHeightfield(chf);
         }
     };
 
@@ -572,7 +660,7 @@ namespace
         const bool compact_ok = chf && rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, *hf, *chf);
         rcFreeHeightField(hf);
         if (!compact_ok) { rcFreeCompactHeightfield(chf); return; }
-        rcErodeWalkableArea(&ctx, cfg.walkableRadius, *chf);
+        if (cfg.walkableRadius > 0) rcErodeWalkableArea(&ctx, cfg.walkableRadius, *chf);     // <SS:Nexii> radius 0 by default: a world surface, not an agent's
         for (const SSNavExclusion& e : in.mExclusions)
         {
             rcMarkConvexPolyArea(&ctx, e.mVerts, e.mCount, e.mMinY, e.mMaxY, RC_NULL_AREA, *chf);
@@ -626,7 +714,7 @@ struct SSNavMeshImpl
 
 // ---------------------------------------------------------------------------- lifecycle
 
-SSNavMesh::SSNavMesh() : mImpl(new SSNavMeshImpl())
+SSNavMesh::SSNavMesh() : mImpl(std::make_shared<SSNavMeshImpl>())
 {
 }
 
@@ -686,7 +774,7 @@ bool SSNavMesh::ensureInit()
     mOriginGlobal = regionp->getOriginGlobal();
 
     static LLCachedControl<F32> agent_height(gSavedSettings, "SSNavMeshAgentHeight", 2.f);
-    static LLCachedControl<F32> agent_radius(gSavedSettings, "SSNavMeshAgentRadius", 0.5f);
+    static LLCachedControl<F32> agent_radius(gSavedSettings, "SSNavMeshAgentRadius", 0.f);
     static LLCachedControl<F32> agent_climb(gSavedSettings, "SSNavMeshAgentClimb", 0.75f);
 
     dtTileCacheParams tcp;
@@ -1161,7 +1249,7 @@ void SSNavMesh::launch(const Job& job)
     if (!main_queue || !general_queue) return;
 
     static LLCachedControl<F32> agent_height(gSavedSettings, "SSNavMeshAgentHeight", 2.f);
-    static LLCachedControl<F32> agent_radius(gSavedSettings, "SSNavMeshAgentRadius", 0.5f);
+    static LLCachedControl<F32> agent_radius(gSavedSettings, "SSNavMeshAgentRadius", 0.f);
     static LLCachedControl<F32> agent_climb(gSavedSettings, "SSNavMeshAgentClimb", 0.75f);
     static LLCachedControl<F32> agent_slope(gSavedSettings, "SSNavMeshAgentSlope", 45.f);
 
@@ -1205,25 +1293,27 @@ void SSNavMesh::launch(const Job& job)
     }
 
     const U32 generation = mGeneration;
-    SSNavCompressor* comp = &mImpl->mCompressor;
+    std::shared_ptr<SSNavMeshImpl> impl = mImpl;
+    std::weak_ptr<bool> alive = mAlive;
     ++mInFlight;
     mInFlightJobs.push_back(job);
     const bool posted = main_queue->postTo(
         general_queue,
-        [in, comp, job, generation]() -> std::shared_ptr<Result>
+        [in, impl, job, generation]() -> std::shared_ptr<Result>
         {
             std::shared_ptr<Result> r = std::make_shared<Result>();
             r->mJob = job;
             r->mGeneration = generation;
             LLTimer t;
             if (in->mWantSheet) r->mSheet = std::make_shared<SSNavMesh::SpanSheet>();
-            buildBand(*in, *comp, r->mLayers, r->mLayersDropped, r->mSheet.get());
+            buildBand(*in, impl->mCompressor, r->mLayers, r->mLayersDropped, r->mSheet.get());
             r->mMS = t.getElapsedTimeF32() * 1000.f;
             r->mOk = true;
             return r;
         },
-        [this](std::shared_ptr<Result> r)
+        [this, alive](std::shared_ptr<Result> r)
         {
+            if (alive.expired()) return;    // the singleton died with this build in flight
             publish(r);
         });
     if (!posted)
@@ -1271,7 +1361,9 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
         band.mRefs.push_back(ref);
         mLayerBytes += layer.size();
     }
+    LLTimer publish_timer;
     mTileCache->buildNavMeshTilesAt(job.mTx, -job.mTy - 1, mNavMesh);
+    mLastPublishMS = publish_timer.getElapsedTimeF32() * 1000.f;
     if (result->mSheet) feedWorldField(job.mTx, job.mTy, job.mZMin, job.mZMax, result->mSheet.get());
     band.mLayersDropped = result->mLayersDropped;
     mLayersDropped += (U32)result->mLayersDropped;
@@ -1605,15 +1697,33 @@ void SSNavMesh::renderDebug(bool force_navmesh)
                 if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || poly.vertCount < 3) continue;
                 if (pass == 0)
                 {
-                    // Detour polygons are convex: a fan from the first vertex tiles them exactly.
-                    const LLVector3 p0 = vert(&tile->verts[poly.verts[0] * 3], 0.04f);
-                    for (int v = 1; v + 1 < (int)poly.vertCount; ++v)
+                    // The detail triangles when the tile carries them (the surface as Detour will answer it), else a fan over the convex polygon.
+                    const dtPolyDetail* pd = tile->detailMeshes ? &tile->detailMeshes[p] : nullptr;
+                    if (pd && pd->triCount > 0)
                     {
-                        const LLVector3 p1 = vert(&tile->verts[poly.verts[v] * 3], 0.04f);
-                        const LLVector3 p2 = vert(&tile->verts[poly.verts[v + 1] * 3], 0.04f);
-                        gGL.vertex3fv(p0.mV);
-                        gGL.vertex3fv(p1.mV);
-                        gGL.vertex3fv(p2.mV);
+                        for (int j = 0; j < (int)pd->triCount; ++j)
+                        {
+                            const unsigned char* t = &tile->detailTris[(pd->triBase + j) * 4];
+                            for (int k = 0; k < 3; ++k)
+                            {
+                                const float* dv = t[k] < poly.vertCount ? &tile->verts[poly.verts[t[k]] * 3]
+                                                                         : &tile->detailVerts[(pd->vertBase + t[k] - poly.vertCount) * 3];
+                                const LLVector3 pv = vert(dv, 0.04f);
+                                gGL.vertex3fv(pv.mV);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        const LLVector3 p0 = vert(&tile->verts[poly.verts[0] * 3], 0.04f);
+                        for (int v = 1; v + 1 < (int)poly.vertCount; ++v)
+                        {
+                            const LLVector3 p1 = vert(&tile->verts[poly.verts[v] * 3], 0.04f);
+                            const LLVector3 p2 = vert(&tile->verts[poly.verts[v + 1] * 3], 0.04f);
+                            gGL.vertex3fv(p0.mV);
+                            gGL.vertex3fv(p1.mV);
+                            gGL.vertex3fv(p2.mV);
+                        }
                     }
                 }
                 else

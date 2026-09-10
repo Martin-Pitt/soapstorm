@@ -57,6 +57,9 @@ public:
     // GL 4.3 context and the compute programs created (false on Darwin, like the wind flowmap).
     bool supported();
 
+    // GL teardown: deletes the candidate, visibility and Hi-Z textures while the context still exists; the destructor calls it too.
+    void shutdownGL();
+
     // True when the setting is on, the platform supports it, and the current
     // pipeline state is the main world camera's opaque draw.
     bool active();

@@ -7128,6 +7128,8 @@ void LLViewerObject::parameterChanged(U16 param_type, bool local_origin)
 
 void LLViewerObject::parameterChanged(U16 param_type, LLNetworkData* data, bool in_use, bool local_origin)
 {
+    // <SS:Nexii> Local content (Atmo Magic landscape) has no simulator: the Features tab's light and flexi edits land in the entry and the landscape capture persists them, but the ObjectExtraParams send below would go to whatever region the object is anchored to. This is the one extra-params path that bypasses the LLSelectMgr funnel.
+    if (local_origin && ssIsLocalContent()) return;
     if (local_origin)
     {
         // *NOTE: Do not send the render material ID in this way as it will get

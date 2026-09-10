@@ -27280,13 +27280,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSNavMeshAgentRadius</key>
       <map>
       <key>Comment</key>
-      <string>Navmesh agent radius in metres (walkable area is eroded by it)</string>
+      <string>Agent radius the navmesh is eroded by, metres. 0 by default: the navmesh replaces the world field's column store as the world's surface and is not walked by any agent yet, so no surface is shaved off walls (owner decision 2026-09-10). Raise it when a pathfinding consumer arrives</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>0.5</real>
+      <real>0.0</real>
     </map>
     <key>SSNavMeshAgentClimb</key>
       <map>

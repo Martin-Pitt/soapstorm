@@ -62,6 +62,10 @@ public:
     void onClickLandscapeDelete();
     void onClickLandscapeLock();
     void onClickLandscapeSelect();
+    // <SS:Nexii> Rez a linkset with the stock tools, select it, press this: the landscape world
+    // captures it into a record and derezzes the original. Replaces the inventory drop, which
+    // could never work. doc/atmo_landscape/design_synthesis.md 15.
+    void onClickLandscapeConvert();
 
     // <SS:Nexii> The signature the landscape list was last built from - mesh ids, names and
     // lock states joined; a changed signature (or a call while it is stale) rebuilds.

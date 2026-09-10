@@ -358,6 +358,26 @@ void SSVolCloud::clear()
     mVirgaDebug = SSVirgaDebug();
 }
 
+void SSVolCloud::shutdownGL()
+{
+    clear();
+    for (Deck* deck : { &mPrimary, &mUnder })
+    {
+        deck->mTextureRef = nullptr;
+        deck->mDetailRef = nullptr;
+        deck->mTextureNextRef = nullptr;
+        deck->mDetailNextRef = nullptr;
+        deck->mNoiseRef = nullptr;
+        deck->mNoiseProcRaw = nullptr;
+        deck->mNoiseProcRef = nullptr;
+        deck->mProfileRef = nullptr;
+        deck->mProfileProcRef = nullptr;
+    }
+    mShadowRef = nullptr;
+    mShadowRaw = nullptr;
+    if (mDepthCopy.getWidth() > 0) mDepthCopy.release();
+}
+
 // Rebuilds the puff field for this frame from the resolved cloud state: deterministic placement, lighting, squash band, strike lights, depth sort.
 void SSVolCloud::update(F32 dt)
 {

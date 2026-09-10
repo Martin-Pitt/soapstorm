@@ -34,6 +34,7 @@
 #include "v3dmath.h"
 #include "v4color.h"
 #include "v4math.h"
+#include "llvolume.h"       // <SS:Nexii> a landscape part carries its LLVolumeParams: mesh and prim alike
 // </SS:Nexii>
 
 #include <cfloat>
@@ -79,12 +80,16 @@ const S32 SS_ATMOENV_PREVIEW_STEPS = 100;
 // as a friendly error, never a silent truncation. See doc/atmo_landscape/design_synthesis.md.
 const S32 SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK = 8;
 const S32 SS_ATMOENV_MAX_LANDSCAPE_TOTAL = 12;
+// <SS:Nexii> The prim budget, since a record is a linkset now: a part is ~1 KB of pretty XML (path, profile, sculpt, a few faces), so 48 in an asset stays under the notecard ceiling beside the skies. Parsed over budget clamps with a warning, exactly like the record caps. doc/atmo_landscape/design_synthesis.md 15.
+const S32 SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD = 32;
+const S32 SS_ATMOENV_MAX_LANDSCAPE_PARTS_TOTAL = 48;
 
-// <SS:Nexii> Atmo Magic landscape scenery: a client-side mesh object owned by the environment
-// asset instead of the region. The record is everything the runtime object needs to exist -
-// asset uuid, placement, per-face texture state - and everything the object captures back
-// when the author edits it. Faces are sparse: a face block is only present for a face that
-// differs from the default texture entry, keeping plain meshes tiny on disk.
+// <SS:Nexii> Atmo Magic landscape scenery: a client-side linkset owned by the environment
+// asset instead of the region. The record is everything the runtime objects need to exist -
+// placement, one part per prim (volume params, root-relative transform, sparse faces, light
+// and flexi extras) - and everything the objects capture back when the author edits them.
+// Faces are sparse: a face block is only present for a face that differs from the default
+// texture entry, keeping plain parts tiny on disk.
 struct SSAtmoEnvLandscapeFace
 {
     // <SS:Nexii> Set when this face is authored away from the TE default; a face may carry a
@@ -108,9 +113,32 @@ struct SSAtmoEnvLandscapeFace
     bool fromLLSD(const LLSD& sd);
 };
 
+// <SS:Nexii> One prim of the linkset. Part 0 is the root: its offset and rotation are ignored (the
+// record's placement is the root's), its scale is the root's. A mesh part is simply a part whose
+// sculpt entry is a mesh; there is no separate mesh record any more.
+struct SSAtmoEnvLandscapePart
+{
+    LLVolumeParams mVolume;
+    LLVector3 mOffset;                          // root-relative position, in the root's frame
+    LLQuaternion mRotation;                     // root-relative rotation
+    LLVector3 mScale{1.f, 1.f, 1.f};
+    std::vector<SSAtmoEnvLandscapeFace> mFaces; // sparse, indexed by face
+    LLSD mLight;                                // LLLightParams::asLLSD() when the part is a light, else undefined
+    LLSD mFlexi;                                // LLFlexibleObjectData::asLLSD() when flexible, else undefined
+
+    // The mesh asset behind the part, or null for a prim.
+    LLUUID meshId() const;
+
+    LLSD asLLSD() const;
+    bool fromLLSD(const LLSD& sd);
+};
+
 struct SSAtmoEnvLandscape
 {
-    LLUUID mMeshId;
+    // <SS:Nexii> The stable key every live object, menu path and floater row pairs on. Generated
+    // when the record is made and persisted; a document without one (pre-linkset) gets a fresh id
+    // on load, which is stable for the session and written back on the next save.
+    LLUUID mRecordId;
 
     std::string mName;
     std::string mDesc;
@@ -131,11 +159,16 @@ struct SSAtmoEnvLandscape
     LLVector3d mFreeGlobal;
 
     LLQuaternion mRotation;
-    LLVector3 mScale{1.f, 1.f, 1.f};
 
-    // <SS:Nexii> Sparse per-face texture state - index must be < the loaded mesh's face count;
-    // entries beyond it are ignored on apply and dropped on reconcile.
-    std::vector<SSAtmoEnvLandscapeFace> mFaces;
+    // <SS:Nexii> The linkset, root first. Never empty once loaded (ensureRoot); the root's own
+    // scale and faces live in mParts[0].
+    std::vector<SSAtmoEnvLandscapePart> mParts;
+
+    // Guarantees a root part exists.
+    void ensureRoot();
+    S32 partCount() const { return (S32)mParts.size(); }
+    // The root part's mesh, or null for a prim root: the floater's "Mesh" column and the availability check.
+    LLUUID rootMeshId() const { return mParts.empty() ? LLUUID::null : mParts[0].meshId(); }
 
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);

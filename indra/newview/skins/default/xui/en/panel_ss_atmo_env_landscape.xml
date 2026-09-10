@@ -10,14 +10,16 @@
  width="580"
  height="1180">
 
-    <!-- <SS:Nexii> Atmo Magic: Landscape tab - mesh scenery owned by the environment
-         instead of the region. Drag a full-perm mesh item from inventory onto this
-         floater to add it to the active track's scenery; the entries are positional
-         (reconcile keeps a live viewer object per record, matched by mesh uuid).
+    <!-- <SS:Nexii> Atmo Magic: Landscape tab - prim and mesh scenery owned by the
+         environment instead of the region. Scenery is made by CONVERSION: rez and
+         build a linkset in world with the stock tools, select it, and press Convert
+         selection - the viewer captures the whole linkset (volume params, per-part
+         transforms, faces, light and flexi) into the active track and sends the
+         original to your Trash.
 
-         The scenery itself is edited with the normal build tools: select-in-world,
+         The scenery itself is then edited with the normal build tools: select-in-world,
          then move/rotate/scale and drop textures on faces exactly like any object.
-         The list here manages membership: add (drop), delete, lock-to-region, and
+         The list here manages membership: convert, delete, lock-to-region, and
          jump-to-selection. The lock toggle re-anchors the scenery to the region
          origin on every region crossing (estate copies render identically) or pins
          it to one fixed global spot. -->

@@ -33,17 +33,23 @@
 
 #include "ssatmolandscapeobject.h"
 
-class LLInventoryItem;
-
-// <SS:Nexii> Atmo Magic landscape: mesh scenery owned by the environment asset instead of the
-// region. The SSWaterWorld of the landscape family - one manager, N live runtime objects.
+// <SS:Nexii> Atmo Magic landscape: scenery linksets owned by the environment asset instead of the
+// region. The SSWaterWorld of the landscape family - one manager, N live root objects, each
+// owning its child parts.
 //
 // Lifecycle: the working asset's active track owns the records; the live set mirrors the
 // active track's record list, keyed by asset uuid. Anything that changes the record set
-// (track crossing, environment load/revert, floater add/delete/reorder, agent region change)
+// (track crossing, environment load/revert, floater convert/delete/reorder, agent region change)
 // reshapes the live set; anything that changes a record's CONTENT (the author's edits) flows
 // through the reconcile funnel - capture writes object state into the working asset, and the
 // existing save path persists it.
+//
+// <SS:Nexii> Records come from CONVERSION, not from an inventory drop: the author rezzes and builds
+// a linkset with the stock tools, selects it, and the floater's "Convert selection" button hands it
+// to the conversion job below - it reads the live prims (volume params, root-relative transforms,
+// faces, light/flexi), appends one record, and derezzes the original to the trash. The old
+// drag-and-drop path could never work: an uploaded mesh is an AT_OBJECT inventory item whose asset
+// uuid is the server-side prim blob, not a mesh asset id. doc/atmo_landscape/design_synthesis.md 15.
 //
 // Everything is opt-in: the master SSAtmoEnabled switch plus this feature's own SSAtmoLandscape
 // gate, and the applier must be actively driving the sky. Nothing exists when any of those are
@@ -60,7 +66,7 @@ public:
     // Kills the live set (environment unload, master toggle, hard reset).
     void clearLandscapeObjects();
 
-    // Live set introspection for the floater's list.
+    // Live set introspection for the floater's list: the ROOTS, one per record.
     S32 objectCount() const { return (S32)mObjects.size(); }
     SSAtmoLandscapeObject* objectAt(S32 index)
     {
@@ -77,17 +83,44 @@ public:
     // re-applies. Returns the new mode (true = locked).
     bool toggleRecordLock(S32 index);
 
-    // The floater's add path: the R1 fullperm gate lives in the panel; this records the item
-    // (asset id, metadata, default placement) into the active track and hydrates now. Returns
-    // the record's index in the active track's list, or -1 with out_reason set.
-    S32 addFromItem(const LLInventoryItem* item, std::string& out_reason);
+    // <SS:Nexii> The conversion job's states, walked one per frame from update(). WAIT_PERMS and
+    // WAIT_CONTENTS are the two sim round trips (object properties per prim, task inventory per
+    // prim); CONFIRM is the user's answer to the contents warning; FINISH does the capture,
+    // the append, the derez and the re-select in one tick. Nothing ever blocks.
+    enum class ESSConvertState
+    {
+        IDLE,
+        WAIT_PERMS,
+        WAIT_CONTENTS,
+        CONFIRM,
+        FINISH
+    };
+
+    // The floater's "Convert selection" entry: validates what can be validated synchronously
+    // (one volume root, not an attachment/avatar/landscape, under the prim cap) and starts the
+    // job. false with out_reason for an immediate refusal; later refusals alert themselves.
+    bool beginConvertSelection(std::string& out_reason);
+    bool convertBusy() const { return mConvert.mState != ESSConvertState::IDLE; }
+
+    // The conversion's capture-and-append step: a vetted prim list (root first) becomes one
+    // record appended to the active track and hydrated now. Returns the record's index in the
+    // active track's list, or -1 with out_reason set (the caps produce a friendly reason).
+    S32 addFromSelection(const std::vector<LLPointer<LLViewerObject>>& prims, std::string& out_reason);
 
     // Removes the record at index in the active track and reshapes now.
     bool removeRecord(S32 index);
 
-    // Removes the active track's record whose mesh id matches (the pie-menu Delete path for
-    // local-content objects). Returns false when nothing matched.
-    bool removeByMesh(const LLUUID& mesh_id);
+    // Removes the active track's record with this id (the pie-menu Delete path for
+    // local-content objects; root and children share the id). Returns false when nothing matched.
+    bool removeByRecord(const LLUUID& record_id);
+
+    // <SS:Nexii> Build > Object > Duplicate for local content: a copy of the record with a fresh id,
+    // offset a little so the two do not sit inside each other, appended to the active track and
+    // hydrated now. Returns the new record's index, or -1 with out_reason set.
+    S32 duplicateRecord(const LLUUID& record_id, std::string& out_reason);
+
+    // The live root for a record id, or null.
+    SSAtmoLandscapeObject* rootForRecord(const LLUUID& record_id);
 
     // Force the live set to match the working asset next tick (floater reorder etc.).
     void invalidate() { mLastSignature.clear(); }
@@ -95,13 +128,50 @@ public:
 private:
     void reconcile(const SSAtmoEnvAsset& asset, S32 track_index, LLViewerRegion* regionp);
     SSAtmoLandscapeObject* createObject(LLViewerRegion* regionp, const SSAtmoEnvLandscape& record);
+    void killObject(SSAtmoLandscapeObject* rootp);
+    bool anySelected() const;
+    bool appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index);
     void applyFacesToAll();
     void captureAll(std::vector<SSAtmoEnvLandscape>& records);
 
+    // The feature's own gates as a reason string - the conversion refuses for exactly the
+    // reasons a record would not hydrate.
+    bool landscapeActive(std::string& out_reason) const;
+
+    // The conversion job: one state step per frame, then idle again.
+    void tickConvert();
+    void convertFail(const std::string& reason);
+    void convertFinish();
+
+    // <SS:Nexii> The job holds LLPointers to the SOURCE sim prims while it polls, so a prim that
+    // dies under it (derez, teleport, region teardown) is noticed instead of dereferenced; every
+    // exit - success, refusal, timeout, cancel - runs clear() and drops them.
+    struct SSConvertJob
+    {
+        ESSConvertState mState = ESSConvertState::IDLE;
+        std::vector<LLPointer<LLViewerObject>> mPrims; // root first, then its volume children
+        LLFrameTimer mTimer;
+        bool mNudged = false;          // the one ObjectSelect re-send while properties are late
+        bool mContentsUnknown = false; // a prim never answered about its inventory - warn, never block
+        S32 mContentItems = 0;
+        S32 mContentPrims = 0;
+
+        void clear()
+        {
+            mState = ESSConvertState::IDLE;
+            mPrims.clear();
+            mNudged = false;
+            mContentsUnknown = false;
+            mContentItems = 0;
+            mContentPrims = 0;
+        }
+    };
+    SSConvertJob mConvert;
+
     std::vector<LLPointer<SSAtmoLandscapeObject>> mObjects;
 
-    // The signature of the record set the live objects were shaped from - a mesh-id run.
-    // Any change reshapes; content edits inside a record do not.
+    // The signature of the record set the live objects were shaped from - a record-id and
+    // part-count run. Any change reshapes; content edits inside a record do not.
     std::string mLastSignature;
 
     // The region the live set is anchored to - changing it rebuilds so locked records
@@ -111,9 +181,10 @@ private:
     LLFrameTimer mCaptureTimer;
 };
 
-// The landscape floater's helpers: the fullperm drop gate and the live record lookup. The
-// gate is shared so the panel and any future drop path ask the same question.
-bool ss_landscape_item_fullperm(const LLInventoryItem* item);
+// <SS:Nexii> The conversion job's list hook: the world has no UI of its own, so a finished
+// conversion pokes the environment editor's landscape list through this. Defined in
+// ssfloateratmoenv.cpp; a no-op when the editor is not open.
+void ss_landscape_notify_list_changed();
 
 // <SS:Nexii> Selection-node seeding: when a local-content object is selected, the node is
 // seeded from its record (name, description, creator/last-owner, perms, creation date) so
@@ -123,8 +194,8 @@ class LLSelectNode;
 void ss_seed_local_select_node(LLSelectNode* nodep);
 
 // The record backing a live object in the ACTIVE track - used by seating and the floater
-// list. Null when the object's mesh is not in the active track at all.
-const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id);
+// list. Null when the record is not in the active track at all.
+const SSAtmoEnvLandscape* ss_landscape_record_for(const LLUUID& record_id);
 
 // Name/desc write-back from the stock General tab. Called from LLSelectMgr's
 // selectionSetObjectName/Description when the selection is a local-content landscape
@@ -132,7 +203,7 @@ const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id);
 // authoritative store - is updated here instead. Scans all tracks (a same-mesh record may
 // sit in another track); refreshes only the LIVE object's capture baseline, never the
 // placement.
-void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, const std::string& desc);
+void ss_landscape_persist_name(const LLUUID& record_id, const std::string& name, const std::string& desc);
 // </SS:Nexii>
 
 #endif // SS_ATMO_LANDSCAPE_H

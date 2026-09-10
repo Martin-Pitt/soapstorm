@@ -27,8 +27,8 @@
 
 #include "llagent.h"
 #include "llagentdata.h"
+#include "llnotificationsutil.h"
 #include "llviewercontrol.h"
-#include "llviewerinventory.h"
 #include "llviewerobjectlist.h"
 #include "llviewerregion.h"
 
@@ -46,9 +46,18 @@ namespace
     // The capture throttle: the reconcile funnel writes the working asset at a few Hz, so a
     // mid-drag object churns the notecard save only when the author actually rests.
     constexpr F32 SS_LANDSCAPE_CAPTURE_INTERVAL = 0.25f;
+
+    // <SS:Nexii> The conversion job's patience with the sim: object properties and task inventory
+    // are a round trip per prim, and a 32-prim linkset on a busy sim is not instant. Past this the
+    // job gives up (perms) or proceeds with a warning (contents).
+    constexpr F32 SS_LANDSCAPE_CONVERT_TIMEOUT = 10.f;
+
+    // One ObjectSelect re-send while the family's properties are still missing - a dropped select
+    // would otherwise burn the whole timeout waiting for a reply that will never come.
+    constexpr F32 SS_LANDSCAPE_CONVERT_NUDGE = 3.f;
 }
 
-void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, const std::string& desc)
+void ss_landscape_persist_name(const LLUUID& record_id, const std::string& name, const std::string& desc)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset())
@@ -57,9 +66,9 @@ void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, c
     }
     SSAtmoEnvAsset& asset = mgr->editable();
 
-    // The object is always bound to the ACTIVE track's record while live, but a same-mesh
-    // record may sit in another track (estate layout reuse); find whichever track holds
-    // this mesh so a rename is never silently dropped.
+    // The object is always bound to the ACTIVE track's record while live, but the record
+    // may sit in another track (estate layout reuse); find whichever track holds this id so
+    // a rename is never silently dropped.
     SSAtmoEnvLandscape* found = nullptr;
     S32 found_track = -1;
     S32 active = SSAtmoEnvApplier::getInstance()->primaryTrackIndex();
@@ -70,7 +79,7 @@ void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, c
         const S32 t = (first_scan + pass) % tracks;
         for (SSAtmoEnvLandscape& record : asset.mTracks[static_cast<size_t>(t)].mLandscapes)
         {
-            if (record.mMeshId == mesh_id)
+            if (record.mRecordId == record_id)
             {
                 found = &record;
                 found_track = t;
@@ -97,7 +106,7 @@ void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, c
     for (S32 i = 0; i < world->objectCount(); ++i)
     {
         SSAtmoLandscapeObject* objp = world->objectAt(i);
-        if (objp && objp->meshId() == mesh_id)
+        if (objp && objp->recordId() == record_id)
         {
             objp->syncAuthored(copy);
             break;
@@ -105,13 +114,7 @@ void ss_landscape_persist_name(const LLUUID& mesh_id, const std::string& name, c
     }
 }
 
-bool ss_landscape_item_fullperm(const LLInventoryItem* item)
-{
-    const LLViewerInventoryItem* viewer_item = dynamic_cast<const LLViewerInventoryItem*>(item);
-    return viewer_item && viewer_item->getIsFullPerm();
-}
-
-const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id)
+const SSAtmoEnvLandscape* ss_landscape_record_for(const LLUUID& record_id)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
@@ -128,7 +131,7 @@ const SSAtmoEnvLandscape* ss_landscape_record_for_mesh(const LLUUID& mesh_id)
     const std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
     for (const SSAtmoEnvLandscape& record : records)
     {
-        if (record.mMeshId == mesh_id)
+        if (record.mRecordId == record_id)
         {
             return &record;
         }
@@ -143,10 +146,10 @@ void ss_seed_local_select_node(LLSelectNode* nodep)
         return;
     }
 
-    // Records are keyed by mesh asset uuid; only landscape objects carry one.
+    // Records are keyed by record id; root and child parts all carry it.
     const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>(nodep->getObject());
     const SSAtmoEnvLandscape* record = landscape
-        ? ss_landscape_record_for_mesh(landscape->meshId()) : nullptr;
+        ? ss_landscape_record_for(landscape->recordId()) : nullptr;
     if (!record)
     {
         return;
@@ -169,10 +172,47 @@ void SSAtmoLandscapeWorld::clearLandscapeObjects()
     {
         if (objp.notNull())
         {
-            gObjectList.killObject(objp);
+            killObject(objp.get());
         }
     }
     mObjects.clear();
+}
+
+// Kill a root and its parts: markDead cascades to the children, the root's LLPointers are dropped after.
+void SSAtmoLandscapeWorld::killObject(SSAtmoLandscapeObject* rootp)
+{
+    if (!rootp) return;
+    if (!rootp->isDead())
+    {
+        gObjectList.killObject(rootp);
+    }
+    rootp->dropChildParts();
+}
+
+// Whether the author's hand is on any scenery part (root or child).
+bool SSAtmoLandscapeWorld::anySelected() const
+{
+    for (const LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    {
+        if (objp.isNull() || objp->isDead()) continue;
+        if (objp->isSelected()) return true;
+        for (S32 i = 0; i < objp->childPartCount(); ++i)
+        {
+            const SSAtmoLandscapeObject* child = const_cast<SSAtmoLandscapeObject*>(objp.get())->childPart(i);
+            if (child && !child->isDead() && child->isSelected()) return true;
+        }
+    }
+    return false;
+}
+
+// The live root for a record id.
+SSAtmoLandscapeObject* SSAtmoLandscapeWorld::rootForRecord(const LLUUID& record_id)
+{
+    for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
+    {
+        if (objp.notNull() && !objp->isDead() && objp->recordId() == record_id) return objp.get();
+    }
+    return nullptr;
 }
 
 void SSAtmoLandscapeWorld::update()
@@ -182,6 +222,9 @@ void SSAtmoLandscapeWorld::update()
 
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
+
+    // <SS:Nexii> The conversion job ticks BEFORE the active gate: it must still run the frame the feature is switched off, because that is when it has to fail out and drop its LLPointers to the source prims.
+    tickConvert();
 
     const bool want_active = enabled && landscape_enabled && mgr->hasAsset() && applier->isActive();
     if (!want_active)
@@ -205,15 +248,7 @@ void SSAtmoLandscapeWorld::update()
     // changes) until nothing is selected, so a mid-drag reconciliation cannot snap the
     // object back to the stale record. Capture continues - the drag is preserved at
     // capture cadence, and the deferred reshape then adopts the captured state.
-    bool editing = false;
-    for (const LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
-    {
-        if (objp.notNull() && objp->isSelected())
-        {
-            editing = true;
-            break;
-        }
-    }
+    const bool editing = anySelected();
 
     // Agent region change rebuilds the whole set: objects are anchored to a region origin
     // (locked records re-anchor by construction), and kill-and-recreate is the SSWaterWorld
@@ -234,15 +269,16 @@ void SSAtmoLandscapeWorld::update()
     }
     std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
 
-    // The signature is the active track's mesh-id run PLUS the track index itself: any reshape
-    // (track crossing, load, revert, floater add/delete/reorder) reshapes the live set;
-    // content edits inside a record (the reconcile's own capture writes) deliberately do not.
+    // The signature is the active track's record-id and part-count run PLUS the track index
+    // itself: any reshape (track crossing, load, revert, floater add/delete/reorder, a linkset
+    // gaining or losing parts) reshapes the live set; content edits inside a record (the
+    // reconcile's own capture writes) deliberately do not.
     std::string sig;
     sig += llformat("t%d;", track);
     for (const SSAtmoEnvLandscape& r : records)
     {
-        sig += r.mMeshId.asString();
-        sig += ';';
+        sig += r.mRecordId.asString();
+        sig += llformat(":%d;", r.partCount());
     }
     if (!editing && sig != mLastSignature)
     {
@@ -266,21 +302,32 @@ void SSAtmoLandscapeWorld::update()
     // "(missing)" suffix (the object still renders the stock proxy box). A header that is
     // present but resolves to no LOD is a genuine 404; a header that has not arrived yet
     // is just "unknown".
+    // <SS:Nexii> A linkset's marker is the aggregate over its mesh parts: unknown until every mesh part's header has answered, missing when any of them 404s; prim parts do not vote.
     for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
     {
-        if (objp.isNull())
+        if (objp.isNull() || objp->isDead())
         {
             continue;
         }
-        const LLUUID& id = objp->meshId();
-        const bool has_header = gMeshRepo.hasHeader(id);
-        bool available = !has_header;
-        if (has_header)
+        bool all_known = true, all_available = true;
+        for (S32 pi = -1; pi < objp->childPartCount(); ++pi)
         {
-            const LLVolumeParams params = objp->getVolume()->getParams();
-            available = gMeshRepo.getActualMeshLOD(params, 0) != -1;
+            SSAtmoLandscapeObject* partp = (pi < 0) ? objp.get() : objp->childPart(pi);
+            if (!partp || partp->isDead()) continue;
+            const LLUUID id = partp->partMeshId();
+            if (id.isNull()) continue;
+            const bool has_header = gMeshRepo.hasHeader(id);
+            bool available = !has_header;
+            if (has_header)
+            {
+                const LLVolumeParams params = partp->getVolume()->getParams();
+                available = gMeshRepo.getActualMeshLOD(params, 0) != -1;
+            }
+            partp->setMeshAvailable(available, has_header);
+            all_known = all_known && has_header;
+            all_available = all_available && available;
         }
-        objp->setMeshAvailable(available, has_header);
+        objp->setMeshAvailable(all_available, all_known);
     }
 
     // Capture only while the live set matches the record set. While an object is selected a
@@ -308,12 +355,15 @@ void SSAtmoLandscapeWorld::reconcile(const SSAtmoEnvAsset& asset, S32 track_inde
 
     for (const SSAtmoEnvLandscape& record : records)
     {
-        // UUID adoption: a live object with the same mesh keeps its instance and its loaded
-        // mesh, adopting the record's placement + face state - no re-download, no rebuild pop.
+        // Record-id adoption: a live linkset with the same id AND the same part count keeps its
+        // instances and their loaded meshes, adopting the record's placement + part state - no
+        // re-download, no rebuild pop. A linkset whose part count changed is rebuilt whole.
         SSAtmoLandscapeObject* match = nullptr;
         for (size_t oi = 0; oi < mObjects.size(); ++oi)
         {
-            if (!taken[oi] && mObjects[oi].notNull() && mObjects[oi]->meshId() == record.mMeshId)
+            if (!taken[oi] && mObjects[oi].notNull() && !mObjects[oi]->isDead()
+                && mObjects[oi]->recordId() == record.mRecordId
+                && mObjects[oi]->childPartCount() + 1 == record.partCount())
             {
                 match = mObjects[oi].get();
                 taken[oi] = true;
@@ -332,31 +382,56 @@ void SSAtmoLandscapeWorld::reconcile(const SSAtmoEnvAsset& asset, S32 track_inde
         next.push_back(match);
     }
 
-    // Kill whatever did not survive the pairing - including surplus duplicates of a mesh id.
+    // Kill whatever did not survive the pairing - including a reshaped linkset's old instances.
     for (size_t oi = 0; oi < mObjects.size(); ++oi)
     {
         if (!taken[oi] && mObjects[oi].notNull())
         {
-            gObjectList.killObject(mObjects[oi]);
+            killObject(mObjects[oi].get());
         }
     }
 
     mObjects = std::move(next);
 }
 
+// One root plus a real child object per further part, parented the way the sim's ObjectUpdate parents (addChild, then the drawable).
 SSAtmoLandscapeObject* SSAtmoLandscapeWorld::createObject(LLViewerRegion* regionp, const SSAtmoEnvLandscape& record)
 {
     LLUUID id;
     id.generate();
 
-    SSAtmoLandscapeObject* objp = new SSAtmoLandscapeObject(id, regionp, record);
-    if (!gObjectList.adoptViewerObject(objp))
+    SSAtmoLandscapeObject* rootp = new SSAtmoLandscapeObject(id, regionp, record, 0);
+    if (!gObjectList.adoptViewerObject(rootp))
     {
-        delete objp;
+        delete rootp;
         return nullptr;
     }
-    gPipeline.createObject(objp);
-    return objp;
+    gPipeline.createObject(rootp);
+
+    for (S32 pi = 1; pi < record.partCount(); ++pi)
+    {
+        LLUUID cid;
+        cid.generate();
+        SSAtmoLandscapeObject* childp = new SSAtmoLandscapeObject(cid, regionp, record, pi);
+        if (!gObjectList.adoptViewerObject(childp))
+        {
+            delete childp;
+            continue;
+        }
+        rootp->addChild(childp);
+        gPipeline.createObject(childp);
+        if (!childp->setDrawableParent(rootp->mDrawable))
+        {
+            LL_WARNS("AtmoMagicLandscape") << "Landscape part " << pi << " could not parent its drawable; dropping it" << LL_ENDL;
+            gObjectList.killObject(childp);
+            continue;
+        }
+        childp->setPosition(record.mParts[(size_t)pi].mOffset);
+        childp->setRotation(record.mParts[(size_t)pi].mRotation);
+        gPipeline.markMoved(childp->mDrawable, false);
+        rootp->adoptChild(childp);
+    }
+    return rootp;
 }
 
 void SSAtmoLandscapeWorld::applyFacesToAll()
@@ -396,7 +471,7 @@ void SSAtmoLandscapeWorld::captureAll(std::vector<SSAtmoEnvLandscape>& records)
         }
         for (SSAtmoEnvLandscape& record : records)
         {
-            if (record.mMeshId == objp->meshId())
+            if (record.mRecordId == objp->recordId())
             {
                 objp->captureToRecord(record);
                 break;
@@ -471,14 +546,7 @@ bool SSAtmoLandscapeWorld::toggleRecordLock(S32 index)
     }
     if (!objp)
     {
-        for (LLPointer<SSAtmoLandscapeObject>& o : mObjects)
-        {
-            if (o.notNull() && o->meshId() == record.mMeshId)
-            {
-                objp = o.get();
-                break;
-            }
-        }
+        objp = rootForRecord(record.mRecordId);
     }
 
     // <SS:Nexii> review_loop2_fresh m3: mLockedOffset is region-local to the region the OBJECT is anchored to, which is not always the agent's - update() defers the region-change rebuild while a scenery object is selected, which is exactly when the lock button gets pressed, so converting against gAgent.getRegion() re-anchored the record 256 m off after a border crossing. Convert against the object's own region and only fall back to the agent's when there is no live object to ask.
@@ -514,87 +582,438 @@ bool SSAtmoLandscapeWorld::toggleRecordLock(S32 index)
     return record.mLocked;
 }
 
-S32 SSAtmoLandscapeWorld::addFromItem(const LLInventoryItem* item, std::string& out_reason)
+// The feature's own gates, phrased for the user: the conversion refuses for the reasons a record would not hydrate.
+bool SSAtmoLandscapeWorld::landscapeActive(std::string& out_reason) const
+{
+    static LLCachedControl<bool> enabled(gSavedSettings, "SSAtmoEnabled", false);
+    static LLCachedControl<bool> landscape_enabled(gSavedSettings, "SSAtmoLandscape", false);
+    if (!enabled)
+    {
+        out_reason = "Atmo Magic is switched off";
+        return false;
+    }
+    if (!landscape_enabled)
+    {
+        out_reason = "Atmo Magic landscape is switched off (the SSAtmoLandscape setting)";
+        return false;
+    }
+    if (!SSAtmoEnvManager::getInstance()->hasAsset())
+    {
+        out_reason = "no Atmo Magic environment is loaded";
+        return false;
+    }
+    if (!SSAtmoEnvApplier::getInstance()->isActive())
+    {
+        out_reason = "the loaded environment is not driving the sky right now";
+        return false;
+    }
+    if (!gAgent.getRegion())
+    {
+        out_reason = "no region";
+        return false;
+    }
+    return true;
+}
+
+// The Convert selection entry: the synchronous gates, then the job starts and the per-frame tick takes over.
+bool SSAtmoLandscapeWorld::beginConvertSelection(std::string& out_reason)
 {
     out_reason.clear();
+    if (convertBusy())
+    {
+        out_reason = "a conversion is already running";
+        return false;
+    }
+    if (!landscapeActive(out_reason))
+    {
+        return false;
+    }
 
+    LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
+    if (selection.isNull() || selection->getRootObjectCount() != 1)
+    {
+        out_reason = "select exactly one object (one whole linkset) first";
+        return false;
+    }
+    LLViewerObject* rootp = selection->getFirstRootObject();
+    if (!rootp || rootp->isDead())
+    {
+        out_reason = "the selected object is gone";
+        return false;
+    }
+    if (rootp->isAvatar() || rootp->getPCode() != LL_PCODE_VOLUME || !dynamic_cast<LLVOVolume*>(rootp))
+    {
+        out_reason = "only prim and mesh objects can become landscape";
+        return false;
+    }
+    if (rootp->isAttachment())
+    {
+        out_reason = "an attachment cannot become landscape - rez it in world first";
+        return false;
+    }
+    if (rootp->ssIsLocalContent())
+    {
+        out_reason = "that object is already Atmo Magic landscape";
+        return false;
+    }
+
+    // <SS:Nexii> The whole LINKSET, not the selected nodes: Edit Linked Parts leaves one child selected and the record is the whole build. A seated avatar is a child of the root too, so non-volume children are skipped rather than captured as parts.
+    mConvert.clear();
+    mConvert.mPrims.push_back(rootp);
+    for (const LLPointer<LLViewerObject>& child : rootp->getChildren())
+    {
+        if (child.isNull() || child->isDead()) continue;
+        if (child->isAvatar() || child->getPCode() != LL_PCODE_VOLUME) continue;
+        mConvert.mPrims.push_back(child);
+    }
+
+    // The prim cap again up front: appendRecord enforces it too, but refusing now spares the
+    // author two sim round trips for an answer already known.
+    if ((S32)mConvert.mPrims.size() > SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD)
+    {
+        const S32 count = (S32)mConvert.mPrims.size();
+        mConvert.clear();
+        out_reason = llformat("that linkset has %d prims; a landscape record may have at most %d",
+                              count, SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD);
+        return false;
+    }
+
+    // <SS:Nexii> Only a real ObjectSelect makes the sim send ObjectProperties, and only ObjectProperties sets LLSelectNode::mValid - which is the permissions the conversion has to read. Select the whole family so every prim's reply is on its way; an already-complete family is left alone so the author's own selection is not disturbed.
+    bool family_selected = true;
+    for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+    {
+        if (!selection->contains(p.get()))
+        {
+            family_selected = false;
+            break;
+        }
+    }
+    if (!family_selected)
+    {
+        LLSelectMgr::getInstance()->selectObjectAndFamily(rootp);
+    }
+
+    mConvert.mState = ESSConvertState::WAIT_PERMS;
+    mConvert.mTimer.reset();
+    return true;
+}
+
+// Any refusal after the job started: alert, drop the source LLPointers, back to idle. Nothing is ever derezzed on this path.
+void SSAtmoLandscapeWorld::convertFail(const std::string& reason)
+{
+    mConvert.clear();
+    LLNotificationsUtil::add("GenericAlert", LLSD().with(
+        "MESSAGE", std::string("That selection could not become landscape: ") + reason));
+}
+
+// One state step per frame: the two sim waits, the user's answer, then the finish.
+void SSAtmoLandscapeWorld::tickConvert()
+{
+    if (mConvert.mState == ESSConvertState::IDLE)
+    {
+        return;
+    }
+
+    // A prim dying under the job (derez, teleport, region teardown) would make the record half a
+    // linkset - and the dialog may be up, so this runs in every state including CONFIRM.
+    for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+    {
+        if (p.isNull() || p->isDead())
+        {
+            convertFail("the object is no longer there");
+            return;
+        }
+    }
+    std::string reason;
+    if (!landscapeActive(reason))
+    {
+        convertFail(reason);
+        return;
+    }
+
+    LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
+    const S32 prims = (S32)mConvert.mPrims.size();
+
+    switch (mConvert.mState)
+    {
+    case ESSConvertState::WAIT_PERMS:
+    {
+        S32 valid = 0;
+        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        {
+            const LLSelectNode* node = selection.notNull() ? selection->findNode(p.get()) : nullptr;
+            if (node && node->mValid) ++valid;
+        }
+        if (valid < prims)
+        {
+            if (!mConvert.mNudged && mConvert.mTimer.getElapsedTimeF32() > SS_LANDSCAPE_CONVERT_NUDGE)
+            {
+                mConvert.mNudged = true;
+                LLSelectMgr::getInstance()->sendSelect();
+            }
+            if (mConvert.mTimer.getElapsedTimeF32() > SS_LANDSCAPE_CONVERT_TIMEOUT)
+            {
+                convertFail("could not read the object's permissions");
+            }
+            return;
+        }
+
+        // <SS:Nexii> Full permission on EVERY prim, from the OWNER mask: the environment notecard hands every reader a working copy of the whole linkset, so one no-transfer prim in a build would be handed out anyway. Owner verdict, doc/atmo_landscape/design_synthesis.md 15.
+        for (S32 i = 0; i < prims; ++i)
+        {
+            LLViewerObject* p = mConvert.mPrims[(size_t)i].get();
+            const LLSelectNode* node = selection.notNull() ? selection->findNode(p) : nullptr;
+            const LLPermissions* perms = node ? node->mPermissions : nullptr;
+            const U32 owner_mask = perms ? perms->getMaskOwner() : 0;
+            const bool full = (owner_mask & PERM_ITEM_UNRESTRICTED) == PERM_ITEM_UNRESTRICTED;
+            const bool mine = p->permYouOwner() && perms && perms->getOwner() == gAgentID;
+            if (!full || !mine)
+            {
+                const std::string which = (node && !node->mName.empty())
+                    ? node->mName : llformat("prim %d", i + 1);
+                convertFail(llformat("'%s' is not full permission and owned by you - every prim of a landscape"
+                                     " linkset must be copy, modify and transfer", which.c_str()));
+                return;
+            }
+        }
+
+        // Contents next: a local object has no simulator, so anything in a prim's inventory is
+        // lost. Ask every prim; the reply is polled, never waited on.
+        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        {
+            p->requestInventory();
+        }
+        mConvert.mState = ESSConvertState::WAIT_CONTENTS;
+        mConvert.mTimer.reset();
+        return;
+    }
+
+    case ESSConvertState::WAIT_CONTENTS:
+    {
+        // Arrival is a non-pending request with an inventory root: a prim with nothing in it
+        // still gets the mocked-up "Contents" folder, so a null root means "not yet".
+        S32 arrived = 0;
+        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        {
+            if (!p->isInventoryPending() && p->getInventoryRoot() != nullptr) ++arrived;
+        }
+        const bool timed_out = mConvert.mTimer.getElapsedTimeF32() > SS_LANDSCAPE_CONVERT_TIMEOUT;
+        if (arrived < prims && !timed_out)
+        {
+            return;
+        }
+        mConvert.mContentsUnknown = (arrived < prims);
+
+        mConvert.mContentItems = 0;
+        mConvert.mContentPrims = 0;
+        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        {
+            LLInventoryObject::object_list_t items;
+            p->getInventoryContents(items);
+            if (!items.empty())
+            {
+                mConvert.mContentItems += (S32)items.size();
+                ++mConvert.mContentPrims;
+            }
+        }
+
+        // <SS:Nexii> Contents WARN, never block (owner verdict): the conversion is the author's own build, and the original linkset goes to the trash with its contents intact, so nothing is actually destroyed - it just stops being part of the scenery.
+        if (mConvert.mContentItems > 0 || mConvert.mContentsUnknown)
+        {
+            mConvert.mState = ESSConvertState::CONFIRM;
+            LLSD args;
+            args["COUNT"] = mConvert.mContentItems;
+            args["PRIMS"] = mConvert.mContentPrims;
+            args["WARNING"] = mConvert.mContentsUnknown
+                ? std::string("Some prims never reported their contents, so there may be more.")
+                : std::string();
+            LLNotificationsUtil::add("SSAtmoLandscapeConvertContents", args, LLSD(),
+                [this](const LLSD& notification, const LLSD& response)
+                {
+                    // The job may have failed out from under the dialog (a prim died, the
+                    // environment went away); then the answer is not ours to act on.
+                    if (mConvert.mState != ESSConvertState::CONFIRM)
+                    {
+                        return;
+                    }
+                    if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
+                    {
+                        mConvert.mState = ESSConvertState::FINISH;
+                    }
+                    else
+                    {
+                        mConvert.clear();
+                    }
+                });
+            return;
+        }
+        mConvert.mState = ESSConvertState::FINISH;
+        return;
+    }
+
+    case ESSConvertState::CONFIRM:
+        // The user's answer drives the next move; the guards above still run each frame.
+        return;
+
+    case ESSConvertState::FINISH:
+        convertFinish();
+        return;
+
+    case ESSConvertState::IDLE:
+    default:
+        return;
+    }
+}
+
+// The payoff tick: capture and append, then derez the original and select what was made.
+void SSAtmoLandscapeWorld::convertFinish()
+{
+    // tickConvert's guards already ran this frame: every prim is alive and the world is active.
+    std::string reason;
+    const S32 index = addFromSelection(mConvert.mPrims, reason);
+    if (index < 0)
+    {
+        // Nothing is derezzed on a failed add - the author's build is left exactly as it was.
+        convertFail(reason);
+        return;
+    }
+    const SSAtmoEnvLandscape* record = recordAt(index);
+    const LLUUID record_id = record ? record->mRecordId : LLUUID::null;
+
+    // <SS:Nexii> The original goes to the trash the way the build tools' Delete does. selectDelete prompts only when something is locked, no-copy or not owned, and the job already proved the selection is none of those, so it takes its own forceResponse path and derezzes without a second dialog. The non-prompting senders (sendListToRegions/packDeRezHeader) are private to LLSelectMgr.
+    LLSelectMgr::getInstance()->selectDelete();
+
+    mConvert.clear();
+
+    // The purple silhouette answers "what did that make": select the new root's family.
+    LLSelectMgr::getInstance()->deselectAll();
+    if (SSAtmoLandscapeObject* rootp = rootForRecord(record_id))
+    {
+        LLSelectMgr::getInstance()->selectObjectAndFamily(rootp);
+    }
+
+    ss_landscape_notify_list_changed();
+}
+
+// The capture: a vetted prim list read with the same free functions the runtime object captures itself with.
+S32 SSAtmoLandscapeWorld::addFromSelection(const std::vector<LLPointer<LLViewerObject>>& prims, std::string& out_reason)
+{
+    out_reason.clear();
+    if (prims.empty() || prims[0].isNull() || prims[0]->isDead())
+    {
+        out_reason = "nothing to convert";
+        return -1;
+    }
+    LLViewerObject* rootp = prims[0].get();
+
+    LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
+    const LLSelectNode* root_node = selection.notNull() ? selection->findNode(rootp) : nullptr;
+
+    SSAtmoEnvLandscape record;
+    record.mRecordId.generate();
+    record.mName = root_node ? root_node->mName : std::string();
+    record.mDesc = root_node ? root_node->mDescription : std::string();
+    if (root_node && root_node->mPermissions)
+    {
+        record.mCreator = root_node->mPermissions->getCreator();
+        record.mLastOwner = root_node->mPermissions->getLastOwner();
+    }
+    record.mCreated = root_node ? (F64)root_node->mCreationDate : (F64)time_corrected();
+
+    // <SS:Nexii> Locked by default, and against the ROOT's own region rather than the agent's: a linkset can be selected across a border, and a record anchored to the wrong origin lands 256 m out.
+    record.mLocked = true;
+    record.mLockedOffset = rootp->getPositionRegion();
+    record.mFreeGlobal = rootp->getPositionGlobal();
+    record.mRotation = rootp->getRotationRegion();
+
+    record.mParts.clear();
+    for (S32 i = 0; i < (S32)prims.size(); ++i)
+    {
+        LLViewerObject* p = prims[(size_t)i].get();
+        if (!p || p->isDead()) continue;
+
+        SSAtmoEnvLandscapePart part;
+        if (p->getVolume())
+        {
+            part.mVolume = p->getVolume()->getParams();
+        }
+        part.mScale = p->getScale();
+        if (i > 0)
+        {
+            // A child's LLPrimitive position and rotation ARE parent-relative - the record's frame exactly.
+            part.mOffset = p->getPosition();
+            part.mRotation = p->getRotation();
+        }
+        ss_landscape_capture_faces(p, part.mFaces);
+        ss_landscape_capture_extras(p, part.mLight, part.mFlexi);
+        record.mParts.push_back(part);
+    }
+    record.ensureRoot();
+
+    S32 index = -1;
+    if (!appendRecord(record, out_reason, index)) return -1;
+    return index;
+}
+
+// The shared tail of every add path: caps, append to the active track, hydrate now (or defer mid-edit).
+bool SSAtmoLandscapeWorld::appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index)
+{
+    out_index = -1;
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
     if (!mgr->hasAsset() || !applier->isActive())
     {
         out_reason = "no active environment";
-        return -1;
+        return false;
     }
     if (!gAgent.getRegion())
     {
         out_reason = "no region";
-        return -1;
+        return false;
     }
-
     SSAtmoEnvAsset& asset = mgr->editable();
     S32 track = llmax(0, applier->primaryTrackIndex());
     if (track >= (S32)asset.mTracks.size())
     {
         out_reason = "no active track";
-        return -1;
+        return false;
     }
     std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
 
     if ((S32)records.size() >= SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK)
     {
         out_reason = "track landscape cap reached";
-        return -1;
+        return false;
     }
-    S32 total = 0;
+    S32 total = 0, parts_total = 0;
     for (SSAtmoEnvTrack& t : asset.mTracks)
     {
         total += (S32)t.mLandscapes.size();
+        for (const SSAtmoEnvLandscape& l : t.mLandscapes) parts_total += l.partCount();
     }
     if (total >= SS_ATMOENV_MAX_LANDSCAPE_TOTAL)
     {
         out_reason = "environment landscape cap reached";
-        return -1;
+        return false;
     }
-
-    // <SS:Nexii> The drop queue: this exact flow is the inventory-drop contract the floater
-    // panel uses. The full-perm gate is the panel's job (ss_landscape_item_fullperm) - this
-    // method records and hydrates only.
-    SSAtmoEnvLandscape record;
-    record.mMeshId = item->getAssetUUID();
-    record.mName = item->getName();
-    record.mDesc = item->getDescription();
-    record.mCreator = item->getCreatorUUID();
-    record.mLastOwner = item->getPermissions().getLastOwner();
-    record.mCreated = (F64)item->getCreationDate();
-    record.mLocked = true;
-    record.mRotation = LLQuaternion();
-
-    // Default placement: where the agent stands, so the mesh appears in front of the author
-    // and headline-first. The editor moves it from there like any object.
-    if (gAgent.getRegion())
+    if (record.partCount() > SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD)
     {
-        record.mLockedOffset = gAgent.getPositionAgent();
-        record.mLockedOffset.mV[VZ] += 8.f;
-        record.mFreeGlobal = gAgent.getPositionGlobal();
-        record.mFreeGlobal.mdV[VZ] += 8.0;
+        out_reason = llformat("a landscape linkset may have at most %d prims", SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD);
+        return false;
+    }
+    if (parts_total + record.partCount() > SS_ATMOENV_MAX_LANDSCAPE_PARTS_TOTAL)
+    {
+        out_reason = llformat("environment prim budget reached (%d of %d used)", parts_total, SS_ATMOENV_MAX_LANDSCAPE_PARTS_TOTAL);
+        return false;
     }
 
-    const S32 index = (S32)records.size();
+    out_index = (S32)records.size();
     records.push_back(record);
 
-    // Hydrate now: the floater wants the scenery visible this click, not next frame. But a
-    // drop lands mid-edit (another scenery object selected): defer like any reshape so an
-    // in-flight drag never snaps - the drop just waits out the drag.
-    bool editing = false;
-    for (const LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
-    {
-        if (objp.notNull() && objp->isSelected())
-        {
-            editing = true;
-            break;
-        }
-    }
-    if (editing)
+    // Hydrate now: the floater wants the scenery visible this click, not next frame. But an
+    // add lands mid-edit (another scenery object selected): defer like any reshape so an
+    // in-flight drag never snaps - the add just waits out the drag.
+    if (anySelected())
     {
         mLastSignature.clear();
     }
@@ -602,7 +1021,33 @@ S32 SSAtmoLandscapeWorld::addFromItem(const LLInventoryItem* item, std::string& 
     {
         reconcile(asset, track, gAgent.getRegion());
     }
+    return true;
+}
 
+// Build > Object > Duplicate: the record copied under a fresh id, nudged sideways by its root's width.
+S32 SSAtmoLandscapeWorld::duplicateRecord(const LLUUID& record_id, std::string& out_reason)
+{
+    out_reason.clear();
+    const SSAtmoEnvLandscape* source = ss_landscape_record_for(record_id);
+    if (!source)
+    {
+        out_reason = "no such landscape record in the active track";
+        return -1;
+    }
+    SSAtmoEnvLandscape copy = *source;
+    copy.mRecordId.generate();
+    copy.mCreated = (F64)time_corrected();
+    const F32 nudge = copy.mParts.empty() ? 1.f : llmax(1.f, copy.mParts[0].mScale.mV[VX]);
+    if (copy.mLocked)
+    {
+        copy.mLockedOffset.mV[VX] += nudge;
+    }
+    else
+    {
+        copy.mFreeGlobal.mdV[VX] += (F64)nudge;
+    }
+    S32 index = -1;
+    if (!appendRecord(copy, out_reason, index)) return -1;
     return index;
 }
 
@@ -631,7 +1076,7 @@ bool SSAtmoLandscapeWorld::removeRecord(S32 index)
     return true;
 }
 
-bool SSAtmoLandscapeWorld::removeByMesh(const LLUUID& mesh_id)
+bool SSAtmoLandscapeWorld::removeByRecord(const LLUUID& record_id)
 {
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
     if (!mgr->hasAsset())
@@ -647,9 +1092,8 @@ bool SSAtmoLandscapeWorld::removeByMesh(const LLUUID& mesh_id)
     const std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
     for (S32 i = 0; i < (S32)records.size(); ++i)
     {
-        if (records[static_cast<size_t>(i)].mMeshId == mesh_id)
+        if (records[static_cast<size_t>(i)].mRecordId == record_id)
         {
-            // Duplicate-mesh records delete one at a time, first match first.
             return removeRecord(i);
         }
     }
