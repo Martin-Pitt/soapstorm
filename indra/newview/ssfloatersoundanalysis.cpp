@@ -28,6 +28,7 @@
 #include "sssoundmeta.h"
 #include "ssatmomagic.h"
 #include "ssassetlist.h"
+#include "ssfloatersoundlist.h"
 
 #include "llagent.h"
 #include "llaudioengine.h"
@@ -39,6 +40,8 @@
 #include "llviewercontrol.h"
 #include "llviewercamera.h"
 #include "llwindow.h"
+
+#include <set>
 
 namespace
 {
@@ -130,10 +133,17 @@ private:
         LLUUID mSound;
         EMode mMode = PREVIEW_NONE;
         LLUUID mSourceID;
+        F32 mGain = 1.f;
+
+        // Ambience slots listing several sounds play as a sequence, exactly as the
+        // soundscape's applyLoop cycles them: one non-looped pass per asset, then the
+        // next in definition order, wrapping. Single-sound slots loop that one asset.
+        std::vector<LLUUID> mQueue;
+        S32 mQueueIdx = 0;
 
         F64 mStartedAt = 0.0;   // loop/oneshot wall-clock anchor
         U32 mStartMS = 0;       // loop resume offset
-        F64 mEndsAt = 0.0;      // oneshot natural end
+        F64 mEndsAt = 0.0;      // oneshot natural end / sequence advance deadline
 
         F64 mCutStartedAt = 0.0;    // the cut currently sounding
         F64 mCutStopAt = 0.0;
@@ -142,9 +152,10 @@ private:
         F64 mNextImpactAt = 0.0;    // the cadence clock's next footfall
     };
 
-    void togglePreview(const LLUUID& id, U32 purpose);
+    void togglePreview(const RowInfo& row);
     void fadeOutPreview();
     void startCut(F64 when, const SSSoundMeta::Meta& meta);
+    void startSequenceAsset(F64 now);
     void updatePreview(F64 now);
     LLUUID startSource(const LLUUID& sound, F32 gain, bool loop, U32 offset_ms);
     void fadeKill(const LLUUID& source_id, F64 now);
@@ -155,28 +166,37 @@ private:
     S32 mHoverRow = -1;
 };
 
-// Walks the rows exactly as draw renders them: grouped, sorted, bottom-up. Every entry state
-// appears - pending, analysing, failed - plus one pseudo row per configured slot that names
-// no sound at all, so unset context is visible instead of silently absent.
+// Walks the rows exactly as draw renders them: slots in definition order, each slot's
+// sounds in its sequence (CSV) order, empty slots in place, plus any stale entries no
+// longer in a slot appended after. Every entry state appears - pending, analysing,
+// failed - so nothing configured is silently absent.
 void SSSoundAnalysisView::buildRows(std::vector<RowInfo>& rows) const
 {
     rows.clear();
 
-    for (const auto& pair : SSSoundMeta::getInstance()->entriesForDebug())
-    {
-        RowInfo row;
-        row.mID = pair.first;
-        row.mState = pair.second.mState;
-        row.mMeta = (pair.second.mState == SSSoundMeta::READY) ? &pair.second.mMeta : nullptr;
-        row.mPurpose = pair.second.mPurpose;
-        row.mSource = pair.second.mSource;
-        row.mFailWhy = pair.second.mFailWhy;
-        rows.push_back(row);
-    }
+    const auto& entries = SSSoundMeta::getInstance()->entriesForDebug();
+    std::set<LLUUID> placed;
 
     for (const SSSoundMeta::SlotInfo& slot : SSSoundMeta::getInstance()->slotsForDebug())
     {
-        if (slot.mCount > 0) continue;
+        for (const LLUUID& id : slot.mSounds)
+        {
+            if (!placed.insert(id).second) continue;
+            const auto it = entries.find(id);
+            if (it == entries.end()) continue;
+
+            RowInfo row;
+            row.mID = it->first;
+            row.mState = it->second.mState;
+            row.mMeta = (it->second.mState == SSSoundMeta::READY) ? &it->second.mMeta : nullptr;
+            row.mPurpose = it->second.mPurpose;
+            row.mSource = slot.mSource;
+            row.mFailWhy = it->second.mFailWhy;
+            rows.push_back(row);
+        }
+
+        if (!slot.mSounds.empty()) continue;
+
         RowInfo row;
         row.mState = SSSoundMeta::EMPTY;
         row.mPurpose = slot.mPurpose;
@@ -184,8 +204,22 @@ void SSSoundAnalysisView::buildRows(std::vector<RowInfo>& rows) const
         rows.push_back(row);
     }
 
-    std::stable_sort(rows.begin(), rows.end(),
-                     [](const RowInfo& a, const RowInfo& b) { return a.mSource < b.mSource; });
+    std::vector<RowInfo> stale;
+    for (const auto& pair : entries)
+    {
+        if (placed.count(pair.first)) continue;
+        RowInfo row;
+        row.mID = pair.first;
+        row.mState = pair.second.mState;
+        row.mMeta = (pair.second.mState == SSSoundMeta::READY) ? &pair.second.mMeta : nullptr;
+        row.mPurpose = pair.second.mPurpose;
+        row.mSource = pair.second.mSource;
+        row.mFailWhy = pair.second.mFailWhy;
+        stale.push_back(row);
+    }
+    std::sort(stale.begin(), stale.end(),
+              [](const RowInfo& a, const RowInfo& b) { return a.mSource < b.mSource; });
+    rows.insert(rows.end(), stale.begin(), stale.end());
 
     S32 y = getRect().getHeight() - PAD;
     std::string last_group;
@@ -397,13 +431,17 @@ bool SSSoundAnalysisView::handleMouseDown(S32 x, S32 y, MASK mask)
 
     std::vector<RowInfo> rows;
     buildRows(rows);
-    togglePreview(rows[row].mID, rows[row].mPurpose);
+    togglePreview(rows[row]);
     return true;
 }
 
 // Starts or stops a preview of one sound, in the mode the soundscape actually plays it.
-void SSSoundAnalysisView::togglePreview(const LLUUID& id, U32 purpose)
+// Ambience rows of a multi-sound slot start the slot's sequence there and follow it
+// across the assets, wrapping, the way the live loops cycle.
+void SSSoundAnalysisView::togglePreview(const RowInfo& row)
 {
+    const LLUUID& id = row.mID;
+
     if (mPreview.mMode != PREVIEW_NONE && mPreview.mSound == id)
     {
         fadeOutPreview();
@@ -415,10 +453,12 @@ void SSSoundAnalysisView::togglePreview(const LLUUID& id, U32 purpose)
     const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(id);
     if (!meta || meta->mLengthMS == 0 || !gAudiop) return;
 
-    mPreview.mSound = id;
     const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+    mPreview.mSound = id;
+    mPreview.mQueue.assign(1, id);
+    mPreview.mQueueIdx = 0;
 
-    if (purpose & SSSoundMeta::PURPOSE_STEPS)
+    if (row.mPurpose & SSSoundMeta::PURPOSE_STEPS)
     {
         if (step_cut_capable(*meta))
         {
@@ -439,11 +479,12 @@ void SSSoundAnalysisView::togglePreview(const LLUUID& id, U32 purpose)
         mPreview.mMode = PREVIEW_LOOP;
         mPreview.mStartedAt = now;
         mPreview.mStartMS = offset;
-        mPreview.mSourceID = startSource(id, llclamp((F32)vol, 0.f, 1.f), true, offset);
+        mPreview.mGain = llclamp((F32)vol, 0.f, 1.f);
+        mPreview.mSourceID = startSource(id, mPreview.mGain, true, offset);
         return;
     }
 
-    if (purpose & SSSoundMeta::PURPOSE_TIMING)
+    if (row.mPurpose & SSSoundMeta::PURPOSE_TIMING)
     {
         // Thunder: a one-shot of the whole recording, levelled the way updateThunder levels it.
         static LLCachedControl<F32> thunder_vol(gSavedSettings, "SSAtmoVolumeThunder", 2.5f);
@@ -452,17 +493,44 @@ void SSSoundAnalysisView::togglePreview(const LLUUID& id, U32 purpose)
         mPreview.mMode = PREVIEW_ONESHOT;
         mPreview.mStartedAt = now;
         mPreview.mEndsAt = now + (F64)meta->mLengthMS / 1000.0;
-        mPreview.mSourceID = startSource(id, llclamp(gain, 0.f, 1.f), false, 0);
+        mPreview.mGain = llclamp(gain, 0.f, 1.f);
+        mPreview.mSourceID = startSource(id, mPreview.mGain, false, 0);
         return;
     }
 
-    // Ambience: a plain loop from the top at the ambient mix level.
+    // Ambience: loop the one asset, or follow the slot's defined sequence across its
+    // sounds starting at the clicked one, mirroring applyLoop's cycling.
     static LLCachedControl<F32> master(gSavedSettings, "SSAtmoVolumeMaster", 0.8f);
     static LLCachedControl<F32> ambient(gSavedSettings, "SSAtmoVolumeAmbient", 1.f);
+    mPreview.mGain = llclamp((F32)master * (F32)ambient, 0.f, 1.f);
+
+    for (const SSSoundMeta::SlotInfo& slot : SSSoundMeta::getInstance()->slotsForDebug())
+    {
+        if (slot.mSource != row.mSource || slot.mSounds.size() < 2) continue;
+
+        S32 start = 0;
+        for (S32 i = 0; i < (S32)slot.mSounds.size(); ++i)
+        {
+            if (slot.mSounds[i] == id) { start = i; break; }
+        }
+        mPreview.mQueue.clear();
+        for (S32 i = 0; i < (S32)slot.mSounds.size(); ++i)
+        {
+            mPreview.mQueue.push_back(slot.mSounds[(start + i) % (S32)slot.mSounds.size()]);
+        }
+        break;
+    }
+
     mPreview.mMode = PREVIEW_LOOP;
+    if (mPreview.mQueue.size() > 1)
+    {
+        startSequenceAsset(now);
+        return;
+    }
+
     mPreview.mStartedAt = now;
     mPreview.mStartMS = 0;
-    mPreview.mSourceID = startSource(id, llclamp((F32)master * (F32)ambient, 0.f, 1.f), true, 0);
+    mPreview.mSourceID = startSource(id, mPreview.mGain, true, 0);
 }
 
 // Fades the current preview out; the reaper cleans the voice up.
@@ -519,10 +587,39 @@ void SSSoundAnalysisView::startCut(F64 when, const SSSoundMeta::Meta& meta)
     mPreview.mNextImpactAt = when + 1.0 / (F64)meta.mImpactRate;
 }
 
+// Starts the sequence's current asset: one non-looped pass, ending when the recording
+// does - the advance deadline the cycle clock reads. Unanalysed assets still play,
+// with the engine's own length standing in for the deadline.
+void SSSoundAnalysisView::startSequenceAsset(F64 now)
+{
+    mPreview.mSound = mPreview.mQueue[mPreview.mQueueIdx];
+    const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(mPreview.mSound);
+    const F32 len = meta ? (meta->mLengthMS / 1000.f) : ss_sound_length(mPreview.mSound);
+    mPreview.mStartedAt = now;
+    mPreview.mStartMS = 0;
+    mPreview.mEndsAt = now + ((len > 0.f) ? (F64)len : 1.2);
+    mPreview.mSourceID = startSource(mPreview.mSound, mPreview.mGain, false, 0);
+}
+
 // Drives the preview clock: natural one-shot ends, cut window reaping and the next scheduled footfall.
 void SSSoundAnalysisView::updatePreview(F64 now)
 {
     if (mPreview.mMode == PREVIEW_NONE) return;
+
+    if (mPreview.mMode == PREVIEW_LOOP && mPreview.mQueue.size() > 1)
+    {
+        // The sequence cycle: when an asset's pass ends, move to the next in definition
+        // order and wrap - the same across-asset loop the live ambience loops run. The
+        // meta lookup is skipped: an unanalysed asset in the queue still plays its
+        // fallback-length pass, it just draws no playhead.
+        if (now >= mPreview.mEndsAt)
+        {
+            fadeKill(mPreview.mSourceID, now);
+            mPreview.mQueueIdx = (mPreview.mQueueIdx + 1) % (S32)mPreview.mQueue.size();
+            startSequenceAsset(now);
+        }
+        return;
+    }
 
     const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(mPreview.mSound);
     if (!meta)

@@ -456,9 +456,11 @@ void SSWorldFieldShapes::trackRest(const LLViewerObject* rootp, bool& out_dynami
     const LLQuaternion rot = rootp->getRotation();
     const LLVector3 scale = rootp->getScale();
 
-    if (!state.mSeen)
+    // <SS:Nexii> First sighting is "no history", never "not yet scanned this build": mSeen is reset before every scan for pruning, and testing it here re-marked every root DYNAMIC on every build, so nothing ever settled and the navmesh saw terrain only. [interaction: SSNavMesh bands, obstacles]
+    if (!state.mKnown)
     {
         // First sighting: unknown history - dynamic until the window proves still.
+        state.mKnown = true;
         state.mMovedAt = mNow;
         state.mDynamic = true;
     }

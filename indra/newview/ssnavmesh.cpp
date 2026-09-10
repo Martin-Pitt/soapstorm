@@ -604,6 +604,7 @@ void SSNavMesh::schedule()
         it = mBands.erase(it);
     }
 
+    mLastSeen = seen; mLastDynamic = dynamic; mLastPhantom = phantom;
     if (!mWorklist.empty())
     {
         LL_INFOS("SSNavMesh") << "schedule: census " << seen << " records (" << dynamic << " dynamic, " << phantom
@@ -825,6 +826,38 @@ void SSNavMesh::pumpObstacles()
     }
 }
 
+// The floater's Rebuild: everything goes, the next update re-initialises and schedules the whole envelope.
+void SSNavMesh::rebuildAll()
+{
+    teardown();
+}
+
+// Any overlay switch on means the pipeline calls renderDebug every frame.
+bool SSNavMesh::overlayEnabled()
+{
+    static LLCachedControl<bool> show(gSavedSettings, "SSNavMeshShow", false);
+    static LLCachedControl<bool> obstacles(gSavedSettings, "SSNavMeshShowObstacles", false);
+    static LLCachedControl<bool> census(gSavedSettings, "SSNavMeshShowCensus", false);
+    return show || obstacles || census;
+}
+
+// Detour between the chosen endpoints; the polyline stays for the overlay until cleared or re-run.
+bool SSNavMesh::runTestPath(std::string& out_status)
+{
+    mTestPath.clear();
+    mTestValid = false;
+    if (!mHasTestStart || !mHasTestEnd) return false;
+    bool partial = false;
+    if (!findPath(mTestStart, mTestEnd, mTestPath, partial)) return false;
+    mTestValid = true;
+    mTestPartial = partial;
+    F32 length = 0.f;
+    for (size_t i = 1; i < mTestPath.size(); ++i) length += (mTestPath[i] - mTestPath[i - 1]).magVec();
+    out_status = llformat("%s path: %d points, %.1f m%s", partial ? "Partial" : "Complete", (S32)mTestPath.size(), length,
+                          partial ? " - the end was not reachable, the path stops at the closest point" : "");
+    return true;
+}
+
 // ---------------------------------------------------------------------------- queries
 
 bool SSNavMesh::nearestPoint(const LLVector3& pos_agent, F32 reach, LLVector3& out_agent) const
@@ -895,8 +928,14 @@ U32 SSNavMesh::polyCount() const
 
 // ---------------------------------------------------------------------------- overlay
 
-void SSNavMesh::renderDebug()
+void SSNavMesh::renderDebug(bool force_navmesh)
 {
+    static LLCachedControl<bool> show(gSavedSettings, "SSNavMeshShow", false);
+    static LLCachedControl<bool> show_links(gSavedSettings, "SSNavMeshShowLinks", true);
+    static LLCachedControl<bool> show_flash(gSavedSettings, "SSNavMeshShowFlash", true);
+    static LLCachedControl<bool> show_obstacles(gSavedSettings, "SSNavMeshShowObstacles", false);
+    static LLCachedControl<bool> show_census(gSavedSettings, "SSNavMeshShowCensus", false);
+    if (show_census) SSWorldFieldShapes::getInstance()->renderDebug();
     if (!mNavMesh) return;
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const dtNavMesh* nm = mNavMesh;
@@ -907,6 +946,60 @@ void SSNavMesh::renderDebug()
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
 
+    // Mover obstacles: the boxes the tile cache carved out for objects the census still counts as moving.
+    if (show_obstacles && !mObstacles.empty())
+    {
+        gGL.begin(LLRender::LINES);
+        gGL.color4f(1.f, 0.55f, 0.15f, 0.8f);
+        for (const Obstacle& o : mObstacles)
+        {
+            const LLVector3 mn = fromLocal(LLVector3(o.mMin[0], -o.mMax[2], o.mMin[1]));
+            const LLVector3 mx = fromLocal(LLVector3(o.mMax[0], -o.mMin[2], o.mMax[1]));
+            if (((mn + mx) * 0.5f - cam).magVec() > 256.f) continue;
+            for (S32 e = 0; e < 12; ++e)
+            {
+                // The 12 edges of the box: pairs of corners differing in one axis.
+                static const S32 edges[12][2] = {{0,1},{2,3},{4,5},{6,7},{0,2},{1,3},{4,6},{5,7},{0,4},{1,5},{2,6},{3,7}};
+                LLVector3 p[2];
+                for (S32 k = 0; k < 2; ++k)
+                {
+                    const S32 cnr = edges[e][k];
+                    p[k].set((cnr & 1) ? mx.mV[VX] : mn.mV[VX], (cnr & 2) ? mx.mV[VY] : mn.mV[VY], (cnr & 4) ? mx.mV[VZ] : mn.mV[VZ]);
+                }
+                gGL.vertex3fv(p[0].mV);
+                gGL.vertex3fv(p[1].mV);
+            }
+        }
+        gGL.end();
+    }
+
+    // The test path: orange when complete, yellow when it stops short, with crosses at the chosen endpoints.
+    if (mHasTestStart || mHasTestEnd)
+    {
+        gGL.begin(LLRender::LINES);
+        auto cross = [&](const LLVector3& p, F32 r, F32 g, F32 b)
+        {
+            gGL.color4f(r, g, b, 0.95f);
+            gGL.vertex3f(p.mV[VX] - 0.5f, p.mV[VY], p.mV[VZ] + 0.1f); gGL.vertex3f(p.mV[VX] + 0.5f, p.mV[VY], p.mV[VZ] + 0.1f);
+            gGL.vertex3f(p.mV[VX], p.mV[VY] - 0.5f, p.mV[VZ] + 0.1f); gGL.vertex3f(p.mV[VX], p.mV[VY] + 0.5f, p.mV[VZ] + 0.1f);
+            gGL.vertex3f(p.mV[VX], p.mV[VY], p.mV[VZ]); gGL.vertex3f(p.mV[VX], p.mV[VY], p.mV[VZ] + 2.f);
+        };
+        if (mHasTestStart) cross(mTestStart, 0.3f, 1.f, 0.3f);
+        if (mHasTestEnd) cross(mTestEnd, 1.f, 0.3f, 0.3f);
+        if (mTestValid && mTestPath.size() >= 2)
+        {
+            if (mTestPartial) gGL.color4f(1.f, 0.9f, 0.2f, 0.95f); else gGL.color4f(1.f, 0.55f, 0.1f, 0.95f);
+            for (size_t i = 1; i < mTestPath.size(); ++i)
+            {
+                gGL.vertex3f(mTestPath[i - 1].mV[VX], mTestPath[i - 1].mV[VY], mTestPath[i - 1].mV[VZ] + 0.15f);
+                gGL.vertex3f(mTestPath[i].mV[VX], mTestPath[i].mV[VY], mTestPath[i].mV[VZ] + 0.15f);
+            }
+        }
+        gGL.end();
+    }
+
+    if (!show && !force_navmesh) return;
+
     // Two passes over the same polygons: translucent fills so the walkable surface reads as area, then the
     // edges on top so polygon and tile boundaries stay legible. Hue by band, as the world field's band view.
     auto vert = [&](const float* v, F32 lift) { return fromLocal(LLVector3(v[0], -v[2], v[1] + lift)); };
@@ -916,6 +1009,7 @@ void SSNavMesh::renderDebug()
     {
         auto it = mBands.find(bandKey(tile->header->x, -tile->header->y - 1, tile->header->layer / SS_NAV_MAX_LAYERS_PER_BAND));
         if (it == mBands.end()) return 0.f;
+        if (!show_flash) return 0.f;
         const F64 age = now - it->second.mPublishedAt;
         return (age >= 0.0 && age < 1.0) ? (F32)(1.0 - age) : 0.f;
     };
@@ -958,7 +1052,7 @@ void SSNavMesh::renderDebug()
                 {
                     for (int v = 0; v < (int)poly.vertCount; ++v)
                     {
-                        if (poly.neis[v] & DT_EXT_LINK)
+                        if (show_links && (poly.neis[v] & DT_EXT_LINK))
                         {
                             bool linked = false;
                             for (unsigned int l = poly.firstLink; l != DT_NULL_LINK; l = tile->links[l].next)

@@ -313,7 +313,7 @@ void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32
     {
         LLUUID id(tok);
         if (id.isNull()) continue;
-        ++slot.mCount;
+        slot.mSounds.push_back(id);
         auto it = mEntries.emplace(id, Entry()).first;
         if (it->second.mSource.empty()) it->second.mSource = source;
         it->second.mPurpose |= purpose;

@@ -246,6 +246,7 @@ set(viewer_SOURCE_FILES
     ssatmoinfoview.cpp
     ssatmosynconsole.cpp
     ssfloatersim.cpp
+    ssfloaternavmesh.cpp
     ssfloaterworldfield.cpp
     ssatmostore.cpp
     ssprecippreset.cpp

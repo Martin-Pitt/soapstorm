@@ -3474,7 +3474,7 @@ void SSWorldField::renderDebug()
     // <SS:Nexii> View 7: the census navmesh - Detour polygon edges by band (doc/atmo_magic_navmesh.md). It is its own store, so it draws whether or not this field holds tiles, and it must run before the tile gate below.
     if (which == 7)
     {
-        SSNavMesh::getInstance()->renderDebug();
+        SSNavMesh::getInstance()->renderDebug(true);
         return;
     }
     if (mTiles.empty()) return;

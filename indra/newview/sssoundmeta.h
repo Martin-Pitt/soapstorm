@@ -108,13 +108,14 @@ private:
 public:
     const std::map<LLUUID, Entry>& entriesForDebug() const { return mEntries; }
 
-    // <SS:Nexii> One record per configured slot from the last gather, so the debug view can
-    // show slots that name no sound at all - those produce no entry of their own.
+    // <SS:Nexii> One record per configured slot from the last gather, in definition order,
+    // so the debug view can keep sequence order visible and show slots that name no sound
+    // at all - those produce no entry of their own.
     struct SlotInfo
     {
         std::string mSource;
         U32 mPurpose = 0;
-        S32 mCount = 0;
+        std::vector<LLUUID> mSounds;    // the slot's sounds in definition (sequence) order
     };
     const std::vector<SlotInfo>& slotsForDebug() const { return mSlots; }
 

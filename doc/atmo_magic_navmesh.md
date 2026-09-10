@@ -267,3 +267,34 @@ time. Two changes in `ssworldfieldshapes.cpp`:
 The navmesh's own scheduling no longer samples the land at every metre of every column per
 census (268k lookups); it samples every 4 m to detect change and the band build still uses
 the full grid.
+
+## 13. Tile seams (2026-09-10)
+
+Two seam defects showed in the viewer overlay, both fixed and both measured in the harness through
+the tile-cache path the viewer uses (`recastbench --tilecache --bands 8`):
+
+- **Corners at four heights.** Each band rasterized into a heightfield whose floor was that
+  column's own `lo - 1`, so the 0.25 m height cells sat at a different offset per tile and a
+  shared corner rounded differently in each. Band z-ranges now snap outward to the global
+  0.25 m lattice (`ssnavmesh.cpp` schedule, mirrored in the bench).
+- **Mid-edge wedges.** The tile-cache contour builder places a border vertex only where the
+  tile's own regions change, so one tile follows the terrain with a mid-edge vertex while its
+  neighbour draws one straight edge, and the two diverge by the terrain's curvature over up to
+  32 m. Detour still links them within the climb tolerance, but the surface is misdrawn and
+  border height reads are off. The vendored `DetourTileCacheBuilder.cpp` is now ALTERED (marked
+  in the file and in the library's CMakeLists): `tessellatePortalEdges` splits every portal
+  segment at world-aligned 16-cell (4 m) intervals, taking each inserted vertex's height from
+  the region's own cells at that corner. Tiles are a whole number of intervals wide, so both
+  sides of a border carry vertices at identical positions with identical heights. Measured on
+  region 0, terrain only: 461 of 461 portal edges link (was 326 of 326 before, at coarser
+  granularity), ground connectivity 89.0%; with content 85.6% link, the rest being surfaces
+  that genuinely end on a border. Polygon count rises about 18%.
+
+A first attempt interpolated the inserted heights linearly along the edge; the builder only snaps a
+vertex to real cell heights when the guess is within the climb tolerance, so on curved terrain the
+guess survived and produced 4 m disagreements. The harness's `reportConnectivity` prints unlinked
+portal edges with their endpoints, which is what exposed it.
+
+Also in this round: terrain change detection for scheduling moved from height samples to the land
+patches (min/max height plus the sim's last update time per 16 m patch), which is exact and never
+churns; the overlay flashes a band white for a second when its layers land, so rebuilds are visible.

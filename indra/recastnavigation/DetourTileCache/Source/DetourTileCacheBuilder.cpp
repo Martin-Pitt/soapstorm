@@ -745,6 +745,84 @@ static unsigned char getCornerHeight(dtTileCacheLayer& layer,
 
 
 // TODO: move this somewhere else, once the layer meshing is done.
+// <SS:Nexii> ALTERED FROM UPSTREAM (zlib licence, see License.txt): portal segments - contour edges that run along a
+// tile border - are split at fixed intervals of DT_SS_PORTAL_TESS_CELLS cells measured from the tile origin. Upstream
+// only places a border vertex where the tile's own regions change, so a tile that inserted one and a neighbour that
+// kept one straight edge disagree in height by the terrain's curvature over the edge. Tiles are a whole number of
+// intervals wide, so both sides of every border now carry vertices at identical positions and, since they rasterize
+// the same cells on the same lattice, identical heights. Inserted heights are interpolated here and snapped by
+// getCornerHeight like every other vertex. Neighbour region bookkeeping is preserved: a segment's neighbour lives on
+// its end vertex, so every inserted vertex carries the portal it lies on.
+static const int DT_SS_PORTAL_TESS_CELLS = 16;
+
+// Height of a contour corner from the region's own cells around it (the highest of them, as getCornerHeight
+// prefers); -1 when no cell of the region touches the corner.
+static int portalCornerHeight(const dtTileCacheLayer& layer, const int x, const int z, const unsigned char reg)
+{
+	const int w = (int)layer.header->width;
+	const int h = (int)layer.header->height;
+	int best = -1;
+	for (int dz = -1; dz <= 0; ++dz)
+	{
+		for (int dx = -1; dx <= 0; ++dx)
+		{
+			const int px = x + dx, pz = z + dz;
+			if (px < 0 || pz < 0 || px >= w || pz >= h) continue;
+			const int idx = px + pz*w;
+			if (layer.regs[idx] != reg) continue;
+			const int lh = (int)layer.heights[idx];
+			if (lh > best) best = lh;
+		}
+	}
+	return best;
+}
+
+static void tessellatePortalEdges(const dtTileCacheLayer& layer, dtTempContour& cont, const unsigned char reg)
+{
+	if (cont.nverts < 2) return;
+	for (int j = 0; j < cont.nverts; ++j)
+	{
+		const int i = (j + 1) % cont.nverts;
+		const unsigned char* a = &cont.verts[j*4];
+		const unsigned char* b = &cont.verts[i*4];
+		const unsigned char nei = b[3];
+		if (nei == 0xff || nei < 0xf8) continue;			// not a portal segment
+		int axis;
+		if (a[0] == b[0] && a[2] != b[2]) axis = 2;
+		else if (a[2] == b[2] && a[0] != b[0]) axis = 0;
+		else continue;
+		const int va = (int)a[axis], vb = (int)b[axis];
+		const int step = va < vb ? DT_SS_PORTAL_TESS_CELLS : -DT_SS_PORTAL_TESS_CELLS;
+		// First lattice line strictly past a in the direction of b.
+		int first;
+		if (step > 0) first = (va / DT_SS_PORTAL_TESS_CELLS + 1) * DT_SS_PORTAL_TESS_CELLS;
+		else first = ((va - 1) / DT_SS_PORTAL_TESS_CELLS) * DT_SS_PORTAL_TESS_CELLS;
+		int n = 0;
+		for (int v = first; step > 0 ? v < vb : v > vb; v += step) ++n;
+		if (n == 0) continue;
+		if (cont.nverts + n > cont.cverts) return;			// out of scratch: leave the rest as upstream would
+		// Open a gap after j (a segment ending at vertex 0 appends at the tail, nothing to move).
+		const int tail = cont.nverts - (j + 1);
+		if (tail > 0) memmove(&cont.verts[(j + 1 + n)*4], &cont.verts[(j + 1)*4], sizeof(unsigned char)*4*tail);
+		const int other = axis == 0 ? 2 : 0;
+		const float span = (float)(vb - va);
+		int v = first;
+		for (int k = 0; k < n; ++k, v += step)
+		{
+			unsigned char* dst = &cont.verts[(j + 1 + k)*4];
+			const float t = span != 0.f ? (float)(v - va) / span : 0.f;
+			dst[axis] = (unsigned char)v;
+			dst[other] = a[other];
+			// The real height at this corner from the region's cells; the straight-line guess only when none touch it.
+			const int lh = portalCornerHeight(layer, (int)dst[0], (int)dst[2], reg);
+			dst[1] = lh >= 0 ? (unsigned char)lh : (unsigned char)((float)a[1] + ((float)b[1] - (float)a[1]) * t + 0.5f);
+			dst[3] = nei;
+		}
+		cont.nverts += n;
+		j += n;
+	}
+}
+
 dtStatus dtBuildTileCacheContours(dtTileCacheAlloc* alloc,
 								  dtTileCacheLayer& layer,
 								  const int walkableClimb, 	const float maxError,
@@ -800,6 +878,7 @@ dtStatus dtBuildTileCacheContours(dtTileCacheAlloc* alloc,
 			}
 			
 			simplifyContour(temp, maxError);
+			tessellatePortalEdges(layer, temp, ri);	// <SS:Nexii> world-aligned border vertices, see above
 			
 			// Store contour.
 			cont.nverts = temp.nverts;

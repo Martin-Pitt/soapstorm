@@ -1727,7 +1727,23 @@ void SSSoundscape::updateStepMarks(F64 now)
         if (mark.mText)
         {
             const LLVector3 pos = gAgent.getPosAgentFromGlobal(source->getPositionGlobal());
-            mark.mText->setPositionAgent(pos + LLVector3(0.f, 0.f, 0.3f));
+            const LLVector3 mark_pos = pos + LLVector3(0.f, 0.f, 0.3f);
+            mark.mText->setPositionAgent(mark_pos);
+
+            // <SS:Nexii> Only marks the camera could actually see: within 24m and with clear line of sight. The ray runs from the mark towards the camera through world geometry only -
+            // avatars are not in that partition set and alpha texels are not picked - so a crowd or a foliage wall never hides a step, but a floor or a solid wall does. Cheap enough per
+            // frame: there is one mark per live step source.
+            const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+            const F32 MARK_RANGE = 24.f;
+            bool visible = (cam - mark_pos).magVecSquared() < MARK_RANGE * MARK_RANGE;
+            if (visible)
+            {
+                LLVector4a start4, end4, hit;
+                start4.load3(mark_pos.mV);
+                end4.load3(cam.mV);
+                visible = !gPipeline.lineSegmentIntersectWorldGeometry(start4, end4, &hit, false, false);
+            }
+            mark.mText->setHidden(!visible);
 
             const bool fresh = now - mark.mStart < 0.25;
             mark.mText->setString(fresh ? std::string(">> STEP <<") : std::string("."));

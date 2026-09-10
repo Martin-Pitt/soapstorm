@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<!-- <SS:Nexii> The census navmesh's own console, laid out after the stock Pathfinding view / test floater:
+     status at the top, a View tab of overlay switches, a Test path tab that runs Detour between two points. -->
+<floater
+ positioning="cascading"
+ can_minimize="true"
+ can_resize="false"
+ height="560"
+ layout="topleft"
+ name="floater_ss_atmo_navmesh"
+ save_rect="true"
+ single_instance="true"
+ title="Navmesh view / test"
+ width="300">
+  <floater.string name="status_off">Navmesh is off (SSNavMesh). It needs the shape census (SSWorldFieldShapes).</floater.string>
+  <floater.string name="status_no_census">Waiting for the shape census.</floater.string>
+  <floater.string name="path_none">No path: an endpoint is not on the navmesh.</floater.string>
+  <floater.string name="path_choose">Choose a start and an end point.</floater.string>
+  <panel
+   name="navmesh_console_main"
+   border="false"
+   bevel_style="none"
+   follows="left|top"
+   layout="topleft"
+   left="12"
+   top_pad="10"
+   height="170"
+   width="276">
+    <text
+     name="navmesh_status_label"
+     height="13"
+     type="string"
+     text_color="LabelTextColor"
+     layout="topleft"
+     left="0"
+     top_pad="0"
+     width="276">
+      Navmesh status
+    </text>
+    <text
+     name="navmesh_status"
+     height="72"
+     word_wrap="true"
+     use_ellipses="false"
+     type="string"
+     text_color="PathfindingGoodColor"
+     follows="left|top"
+     layout="topleft"
+     left="0"
+     top_pad="6"
+     width="276">
+    </text>
+    <text
+     name="census_status_label"
+     height="13"
+     type="string"
+     text_color="LabelTextColor"
+     layout="topleft"
+     left="0"
+     top_pad="8"
+     width="276">
+      Census status
+    </text>
+    <text
+     name="census_status"
+     height="52"
+     word_wrap="true"
+     use_ellipses="false"
+     type="string"
+     text_color="PathfindingGoodColor"
+     follows="left|top"
+     layout="topleft"
+     left="0"
+     top_pad="6"
+     width="276">
+    </text>
+  </panel>
+  <tab_container
+   follows="left|top"
+   layout="topleft"
+   tab_position="top"
+   name="view_test_tab_container"
+   left="12"
+   top="196"
+   height="350"
+   width="276">
+    <panel
+     border="false"
+     bevel_style="none"
+     follows="left|top"
+     layout="topleft"
+     name="view_panel"
+     label="View">
+      <text
+       name="show_label"
+       height="13"
+       type="string"
+       text_color="LabelTextColor"
+       follows="left|top"
+       layout="topleft"
+       top_pad="20"
+       left="12"
+       width="240">
+        Show:
+      </text>
+      <check_box
+       height="19"
+       label="Navmesh"
+       layout="topleft"
+       left="12"
+       name="show_navmesh"
+       control_name="SSNavMeshShow"
+       tool_tip="The walkable Detour polygons as translucent fills with their edges, coloured by height band"
+       top_pad="4"
+       width="240" />
+      <check_box
+       height="19"
+       label="Tile links (cyan linked, red open)"
+       layout="topleft"
+       left="32"
+       name="show_links"
+       control_name="SSNavMeshShowLinks"
+       tool_tip="Colour polygon edges on tile borders by whether Detour linked them to a neighbour tile"
+       top_pad="4"
+       width="220" />
+      <check_box
+       height="19"
+       label="Flash rebuilt bands"
+       layout="topleft"
+       left="32"
+       name="show_flash"
+       control_name="SSNavMeshShowFlash"
+       tool_tip="Whiten a band for a second when its layers land, so rebuilds are visible"
+       top_pad="4"
+       width="220" />
+      <check_box
+       height="19"
+       label="Mover obstacles"
+       layout="topleft"
+       left="12"
+       name="show_obstacles"
+       control_name="SSNavMeshShowObstacles"
+       tool_tip="The box obstacles standing in for objects the census still counts as moving"
+       top_pad="7"
+       width="240" />
+      <check_box
+       height="19"
+       label="Shape census"
+       layout="topleft"
+       left="12"
+       name="show_census"
+       control_name="SSNavMeshShowCensus"
+       tool_tip="The declared physics shapes the navmesh is built from, by layer and provenance"
+       top_pad="4"
+       width="240" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="16"
+       height="23"
+       width="120"
+       name="rebuild_button"
+       label="Rebuild all"
+       tool_tip="Drop every band and build the navmesh again from the current census" />
+    </panel>
+    <panel
+     border="false"
+     bevel_style="none"
+     follows="left|top"
+     layout="topleft"
+     name="test_panel"
+     label="Test path">
+      <text
+       name="endpoints_label"
+       height="13"
+       type="string"
+       text_color="LabelTextColor"
+       follows="left|top"
+       layout="topleft"
+       top_pad="20"
+       left="12"
+       width="240">
+        Start point:
+      </text>
+      <button
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="4"
+       height="23"
+       width="120"
+       name="start_here_button"
+       label="My position" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left_pad="8"
+       top_delta="0"
+       height="23"
+       width="120"
+       name="start_camera_button"
+       label="Camera" />
+      <text
+       name="end_label"
+       height="13"
+       type="string"
+       text_color="LabelTextColor"
+       follows="left|top"
+       layout="topleft"
+       top_pad="10"
+       left="12"
+       width="240">
+        End point:
+      </text>
+      <button
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="4"
+       height="23"
+       width="120"
+       name="end_here_button"
+       label="My position" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left_pad="8"
+       top_delta="0"
+       height="23"
+       width="120"
+       name="end_camera_button"
+       label="Camera" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="16"
+       height="23"
+       width="120"
+       name="find_path_button"
+       label="Find path" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left_pad="8"
+       top_delta="0"
+       height="23"
+       width="120"
+       name="clear_path_button"
+       label="Clear" />
+      <text
+       name="path_status"
+       height="80"
+       word_wrap="true"
+       use_ellipses="false"
+       type="string"
+       text_color="PathfindingGoodColor"
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="12"
+       width="250">
+      </text>
+    </panel>
+  </tab_container>
+</floater>

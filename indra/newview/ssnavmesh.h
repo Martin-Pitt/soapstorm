@@ -42,6 +42,7 @@
 #include "v3math.h"
 
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -73,8 +74,27 @@ public:
     bool findPath(const LLVector3& from_agent, const LLVector3& to_agent, std::vector<LLVector3>& out_points, bool& out_partial) const;
     bool onNavMesh(const LLVector3& pos_agent, F32 reach = 1.f) const;
 
-    // The overlay: navmesh polygon edges by layer - view 7 of SSWorldFieldDebugView.
-    void renderDebug();
+    // The overlay: filled polygons and edges by band, tile links, mover obstacles, the census and the test path,
+    // each behind its SSNavMeshShow* switch (the floater's View tab). force_navmesh draws the polygons regardless -
+    // view 7 of SSWorldFieldDebugView.
+    void renderDebug(bool force_navmesh = false);
+    static bool overlayEnabled();
+
+    // Drop every band and build again from the current census (the floater's Rebuild button).
+    void rebuildAll();
+
+    // The floater's Test path tab: endpoints in agent space, Detour's answer drawn in the overlay.
+    void setTestStart(const LLVector3& pos_agent) { mTestStart = pos_agent; mHasTestStart = true; mTestValid = false; }
+    void setTestEnd(const LLVector3& pos_agent) { mTestEnd = pos_agent; mHasTestEnd = true; mTestValid = false; }
+    void clearTestPath() { mHasTestStart = mHasTestEnd = mTestValid = false; mTestPath.clear(); }
+    bool hasTestStart() const { return mHasTestStart; }
+    bool hasTestEnd() const { return mHasTestEnd; }
+    bool runTestPath(std::string& out_status);
+
+    // What the last schedule saw in the census.
+    S32 lastScheduleSeen() const { return mLastSeen; }
+    S32 lastScheduleDynamic() const { return mLastDynamic; }
+    S32 lastSchedulePhantom() const { return mLastPhantom; }
 
     // Stats
     bool active() const { return mNavMesh != nullptr; }
@@ -159,6 +179,12 @@ private:
     U32 mBuildCount = 0;
     F32 mLastBuildMS = 0.f;
     size_t mLayerBytes = 0;
+    S32 mLastSeen = 0, mLastDynamic = 0, mLastPhantom = 0;
+
+    // Test path state (agent space).
+    LLVector3 mTestStart, mTestEnd;
+    bool mHasTestStart = false, mHasTestEnd = false, mTestValid = false, mTestPartial = false;
+    std::vector<LLVector3> mTestPath;
 };
 
 #endif

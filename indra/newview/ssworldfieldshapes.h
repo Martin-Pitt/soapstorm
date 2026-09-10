@@ -209,7 +209,8 @@ private:
         LLVector3 mScale;
         F64 mMovedAt = 0.0;
         bool mDynamic = true;
-        bool mSeen = false;
+        bool mSeen = false;         // sighted by the scan in progress (pruning)
+        bool mKnown = false;        // has a history at all: the first-sighting test, never the pruning flag
     };
     std::unordered_map<LLUUID, RestState> mRest;
     bool mBuildDynamic = false;     // the part being filed rides its root's rest state

@@ -113,6 +113,7 @@
 #include "ssatmoenvapplier.h" // <SS:Nexii> celestial debug overlay
 #include "sssurfacefield.h" // <SS:Nexii> Atmo Magic surface field
 #include "ssworldfield.h"   // <SS:Nexii> Atmo Magic shared world field
+#include "ssnavmesh.h"      // <SS:Nexii> Atmo Magic census navmesh overlay
 #include "ssheightfog.h"    // <SS:Nexii> Atmo Magic height fog (replaces the whiteout)
 #include "ssgpucull.h"      // <SS:Nexii> GPU frustum + occlusion culling
 #include "ssscreenfx.h"     // <SS:Nexii> Atmo Magic heat shimmer / lens drops screen-space shell
@@ -5767,6 +5768,13 @@ void LLPipeline::renderDebug()
     if (!hud_only && (mRenderDebugMask & RENDER_DEBUG_WORLD_FIELD))
     {
         SSWorldField::getInstance()->renderDebug();
+    }
+
+    // <SS:Nexii> Atmo Magic census navmesh: its own overlay switches live in the navmesh floater's View tab,
+    // independent of the world field mask (doc/atmo_magic_navmesh.md).
+    if (!hud_only && SSNavMesh::overlayEnabled())
+    {
+        SSNavMesh::getInstance()->renderDebug();
     }
 
     // Atmo Magic volumetric cloud field: the puffs as geometry, their anvil and
