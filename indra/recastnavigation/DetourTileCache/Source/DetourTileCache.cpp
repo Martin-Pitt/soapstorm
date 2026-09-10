@@ -482,7 +482,7 @@ dtStatus dtTileCache::removeObstacle(const dtObstacleRef ref)
 dtStatus dtTileCache::queryTiles(const float* bmin, const float* bmax,
 								 dtCompressedTileRef* results, int* resultCount, const int maxResults) const 
 {
-	const int MAX_TILES = 32;
+	const int MAX_TILES = 256;	// <SS:Nexii> ALTERED FROM UPSTREAM: every layer a column can hold (tlayer is a byte); upstream touched only the first 32 of a column, silently.
 	dtCompressedTileRef tiles[MAX_TILES];
 	
 	int n = 0;
@@ -640,7 +640,7 @@ dtStatus dtTileCache::update(const float /*dt*/, dtNavMesh* navmesh,
 
 dtStatus dtTileCache::buildNavMeshTilesAt(const int tx, const int ty, dtNavMesh* navmesh)
 {
-	const int MAX_TILES = 32;
+	const int MAX_TILES = 256;	// <SS:Nexii> ALTERED FROM UPSTREAM: every layer a column can hold (tlayer is a byte); upstream touched only the first 32 of a column, silently.
 	dtCompressedTileRef tiles[MAX_TILES];
 	const int ntiles = getTilesAt(tx,ty,tiles,MAX_TILES);
 	

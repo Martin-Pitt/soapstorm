@@ -4,7 +4,11 @@
 # zlib licence (License.txt). Feeds the census navmesh in newview/ssnavmesh.cpp; doc/atmo_magic_navmesh.md section 10
 # records the benchmark that chose it over the homebrew tile raster.
 # ALTERED: DetourTileCache/Source/DetourTileCacheBuilder.cpp tessellates portal edges on a world-aligned lattice
-# (tessellatePortalEdges) so neighbouring tiles share border vertices; everything else is upstream verbatim.
+# (tessellatePortalEdges) so neighbouring tiles share border vertices, keeps the lattice vertices where the border
+# bends through the poly mesh's border-vertex removal, and fixes two undersized stack buffers upstream (canRemoveVertex's
+# edge scratch, removeVertex's tverts) that overran once a border vertex was shared by many polygons.
+# ALTERED: DetourTileCache/Source/DetourTileCache.cpp raises the per-column tile list from 32 to 256 layers.
+# Everything else is upstream verbatim.
 
 project(recastnavigation)
 

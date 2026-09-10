@@ -449,3 +449,68 @@ thing to watch: the console's "MB of layers" line reports the zlib-compressed re
   while it was scheduled this pass wherever it is, or while it sits within
   `SSNavMeshVoidMargin` (256 m) of a loaded region; only a region leaving the world, or a band
   inside the envelope that the schedule no longer produces, drops it.
+
+## 20. Crash in the tile-cache poly mesh, and the seam fix that was only half working (2026-09-10)
+
+The first 0.125 m build crashed on the main thread in `canRemoveVertex` inside
+`DetourTileCacheBuilder.cpp` with a stack-cookie failure. Two findings, both fixed in the vendored
+file (marked ALTERED in the source and in the library's CMakeLists):
+
+- **Upstream bug.** `canRemoveVertex` declares its edge scratch as `MAX_REM_EDGES` shorts but
+  writes three shorts per edge, as its sibling `removeVertex` correctly sizes it. Once a vertex
+  flagged for removal is shared by 16 polygons the writes run off the stack. That fan is exactly
+  what a tessellated border produces: a strip of collinear border vertices triangulated against one
+  interior vertex. The buffer is now `MAX_REM_EDGES*3` and the loop declines the removal when the
+  edge count would exceed it.
+- **The seam fix was being undone.** After triangulation the poly mesh removes every border vertex
+  that sits on a straight portal run inside one region (`getCornerHeight` sets the 0x80 flag when
+  the corner's cells share one portal direction and one region). That is precisely the vertex
+  `tessellatePortalEdges` inserts, so most of section 13's lattice vertices were stripped again
+  before the tile reached Detour. The height pass now keeps a flagged vertex whose along-border
+  coordinate is a multiple of the 16-cell lattice; the neighbour carries the same vertex, so it is
+  a shared vertex, not clutter. Everything else upstream removes is still removed.
+
+The harness now reports how many portal edges have both endpoints on the lattice
+(`reportConnectivity`, "on the 16-cell lattice"). Region 0 through the tile-cache path with content
+at 0.125 m cells, 16 m columns:
+
+| | before | after |
+|---|---|---|
+| portal edges | 22.4k | 63.7k |
+| linked | 98.3% | 99.0% |
+| both ends on the lattice | 42.4% | 75.3% |
+| polygons | 31.1k | 54.7k |
+| ground polys in the richest component | 20.6% | 25.1% |
+| navmesh from layer, per tile | 1.6 ms | 2.4 ms |
+
+The remaining quarter of portal edges have an endpoint at a genuine region change or a contour
+corner, which the neighbour also carries. Polygon count rises 76%: every kept border vertex splits
+a polygon, and the merge step cannot merge across them. Layer memory is unchanged (it is the
+compressed heightfield, not the polygons). If that cost matters more than 2 m seam fidelity,
+`DT_SS_PORTAL_TESS_CELLS` is the dial: 32 cells (4 m) halves the inserted vertices.
+
+**Bend test (same day).** Keeping every lattice vertex fanned each flat border into slivers: eight
+collinear vertices ear-clipped against one far vertex, visible on any platform. A flagged lattice
+vertex is now kept only where the region's own height there leaves the chord between its lattice
+neighbours by more than a cell (second difference over the lattice). Both tiles read that from
+adjacent cells, so they keep the same vertices; where they disagree at the threshold the wedge is
+under a cell. Region 0 with content: 37.9k polygons (upstream 31.1k, keep-all 54.7k), 98.5% of
+portal edges linked, 1.9 ms per tile from layer. Flat borders return to a single straight edge.
+
+What the lattice does and does not do: Detour links two tiles' portal edges by their overlap in the
+plane and a height tolerance of the walkable climb; shared vertices are not required, which is why
+the linked percentage barely moves across these variants. The lattice makes both tiles describe a
+curved border with the same polyline, so the drawn surface and border height reads agree and the
+wedge never exceeds the climb. On region 0 terrain the link count was 100% with or without it.
+
+**Heap corruption on Rebuild all (same day).** The next run died inside `operator new` under the
+terrain tangent builder with the heap reporting corruption: a victim, not a culprit. The culprit is
+the second half of the same upstream bug family. `removeVertex` declares `tverts` as three bytes per
+hole vertex and fills four, so a hole of more than 36 vertices overruns into `tpoly`; the garbage
+indices survive triangulation into the polygon list, and `buildMeshAdjacency` then indexes its
+heap arrays with them. Big holes are exactly what a border vertex shared by many polygons leaves
+when it is removed, so the tessellation made both bugs reachable. Fixed by sizing `tverts` at four
+per vertex (marked in the source). Also found on the way: `dtTileCache` lists at most 32 layers per
+column when building or touching tiles at a column, silently ignoring the rest; a column of 12
+bands can hold up to 192, so the list is now 256 (`DetourTileCache.cpp`, marked). The harness
+result is unchanged by both, as expected: 37.9k polygons, 98.5% linked.

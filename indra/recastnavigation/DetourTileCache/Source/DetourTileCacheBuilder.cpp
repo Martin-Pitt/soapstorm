@@ -906,7 +906,24 @@ dtStatus dtBuildTileCacheContours(dtTileCacheAlloc* alloc,
 					dst[3] = 0x0f;
 					if (nei != 0xff && nei >= 0xf8)
 						dst[3] = nei - 0xf8;
+					// <SS:Nexii> ALTERED FROM UPSTREAM: a border vertex on the portal lattice stays where the border bends. Upstream removes every vertex on a straight portal run inside one region, which is precisely what tessellatePortalEdges inserted. Keeping all of them fans every flat border into slivers, so a lattice vertex is kept only when the region's own height there leaves the chord between its lattice neighbours by more than a cell; both tiles read the same lattice from adjacent cells, so they keep the same vertices, and where they disagree the wedge is under a cell. [interaction: tessellatePortalEdges, removeVertex]
+					bool keepLattice = false;
 					if (shouldRemove)
+					{
+						const int T = DT_SS_PORTAL_TESS_CELLS;
+						const int vx = (int)v[0], vz = (int)v[2];
+						int axis = -1;
+						if ((vx == 0 || vx == w) && (vz % T) == 0) axis = 2;
+						else if ((vz == 0 || vz == h) && (vx % T) == 0) axis = 0;
+						if (axis >= 0)
+						{
+							const int h1 = portalCornerHeight(layer, vx, vz, ri);
+							const int h0 = axis == 0 ? portalCornerHeight(layer, vx - T, vz, ri) : portalCornerHeight(layer, vx, vz - T, ri);
+							const int h2 = axis == 0 ? portalCornerHeight(layer, vx + T, vz, ri) : portalCornerHeight(layer, vx, vz + T, ri);
+							keepLattice = h0 < 0 || h1 < 0 || h2 < 0 || dtAbs(2*h1 - h0 - h2) > 2;
+						}
+					}
+					if (shouldRemove && !keepLattice)
 						dst[3] |= 0x80;
 				}
 			}
@@ -1514,7 +1531,8 @@ static bool canRemoveVertex(dtTileCachePolyMesh& mesh, const unsigned short rem)
 		return false;
 	
 	// Find edges which share the removed vertex.
-	unsigned short edges[MAX_REM_EDGES];
+	// <SS:Nexii> ALTERED FROM UPSTREAM: three shorts per edge, as removeVertex sizes it; upstream declared MAX_REM_EDGES shorts and overran the stack once a vertex was shared by 16 polygons (a fan at a tessellated border).
+	unsigned short edges[MAX_REM_EDGES*3];
 	int nedges = 0;
 	
 	for (int i = 0; i < mesh.npolys; ++i)
@@ -1547,6 +1565,8 @@ static bool canRemoveVertex(dtTileCachePolyMesh& mesh, const unsigned short rem)
 				// Add new edge.
 				if (!exists)
 				{
+					if (nedges >= MAX_REM_EDGES)		// <SS:Nexii> more edges than the buffer holds: keep the vertex
+						return false;
 					unsigned short* e = &edges[nedges*3];
 					e[0] = (unsigned short)a;
 					e[1] = (unsigned short)b;
@@ -1691,7 +1711,7 @@ static dtStatus removeVertex(dtTileCachePolyMesh& mesh, const unsigned short rem
 	
 	
 	unsigned short tris[MAX_REM_EDGES*3];
-	unsigned char tverts[MAX_REM_EDGES*3];
+	unsigned char tverts[MAX_REM_EDGES*4];	// <SS:Nexii> ALTERED FROM UPSTREAM: four bytes per hole vertex, as the fill below writes; upstream sized three, so a hole past 36 vertices overran into tpoly and the garbage indices then wrote outside the heap arrays in buildMeshAdjacency.
 	unsigned short tpoly[MAX_REM_EDGES*3];
 	
 	// Generate temp vertex array for triangulation.
