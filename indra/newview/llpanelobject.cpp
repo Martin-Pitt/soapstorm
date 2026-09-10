@@ -68,6 +68,7 @@
 // [RLVa:KB] - Checked: 2011-05-22 (RLVa-1.3.1a)
 #include "rlvhandler.h"
 #include "llvoavatarself.h"
+#include "sslocalcontentlimits.h"   // <SS:Nexii> local landscape objects get the wide scale and position ranges
 // [/RLVa:KB]
 
 //
@@ -2210,9 +2211,10 @@ void LLPanelObject::sendScale(bool btn_down)
 //  LLVector3 newscale(llclamp(mCtrlScaleX->get(), MIN_PRIM_SCALE, llpanelobject_max_prim_scale()),
 //                     llclamp(mCtrlScaleY->get(), MIN_PRIM_SCALE, llpanelobject_max_prim_scale()),
 //                     llclamp(mCtrlScaleZ->get(), MIN_PRIM_SCALE, llpanelobject_max_prim_scale()));
-    LLVector3 newscale(llclamp(mCtrlScaleX->get(), mMinScale, llpanelobject_max_prim_scale()),
-                       llclamp(mCtrlScaleY->get(), mMinScale, llpanelobject_max_prim_scale()),
-                       llclamp(mCtrlScaleZ->get(), mMinScale, llpanelobject_max_prim_scale()));
+    const F32 max_prim_scale = ssMaxPrimScale(mObject, llpanelobject_max_prim_scale());    // <SS:Nexii> local content: SS_LOCAL_CONTENT_MAX_SCALE_M
+    LLVector3 newscale(llclamp(mCtrlScaleX->get(), mMinScale, max_prim_scale),
+                       llclamp(mCtrlScaleY->get(), mMinScale, max_prim_scale),
+                       llclamp(mCtrlScaleZ->get(), mMinScale, max_prim_scale));
 // </AW: opensim-limits>
 
     LLVector3 delta = newscale - mObject->getScale();
@@ -2289,6 +2291,13 @@ void LLPanelObject::sendPosition(bool btn_down)
         if (mObject->getPCode() == LL_PCODE_LEGACY_GRASS)
         {
             mCtrlPosZ->set(LLWorld::getInstance()->resolveLandHeightAgent(newpos) + 1.f);
+        }
+        // <SS:Nexii> Local content never reaches the simulator; keep it inside the placement area around its own region instead of inside the region.
+        if (mObject->ssIsLocalContent())
+        {
+            newpos = ssClampLocalContentRegionPos(regionp, newpos);
+            mCtrlPosX->set(newpos.mV[VX]);
+            mCtrlPosY->set(newpos.mV[VY]);
         }
         // Make sure new position is in a valid region, so the object
         // won't get dumped by the simulator.
@@ -2459,7 +2468,7 @@ void LLPanelObject::refresh()
         mRootObject = NULL;
     }
 
-    F32 max_scale = get_default_max_prim_scale(LLPickInfo::isFlora(mObject));
+    F32 max_scale = ssMaxPrimScale(mObject, get_default_max_prim_scale(LLPickInfo::isFlora(mObject)));    // <SS:Nexii> local content: SS_LOCAL_CONTENT_MAX_SCALE_M
 
     // <FS:Ansariel> Performance improvement
     //getChild<LLSpinCtrl>("Scale X")->setMaxValue(max_scale);
@@ -2469,6 +2478,17 @@ void LLPanelObject::refresh()
     mCtrlScaleY->setMaxValue(max_scale);
     mCtrlScaleZ->setMaxValue(max_scale);
     // </FS:Ansariel>
+
+    // <SS:Nexii> Position spinners for local content span the 2048 m placement area centred on the object's own region; getState() already restored the stock region range through updateLimits() before this, so a stock object never inherits the wide range.
+    if (mObject.notNull() && mObject->ssIsLocalContent() && !mObject->isAttachment())
+    {
+        F32 lo, hi;
+        ssLocalContentRegionBounds(mObject->getRegion(), lo, hi);
+        mCtrlPosX->setMinValue(lo);
+        mCtrlPosX->setMaxValue(hi);
+        mCtrlPosY->setMinValue(lo);
+        mCtrlPosY->setMaxValue(hi);
+    }
 }
 
 

@@ -348,3 +348,43 @@ New files: `ssatmolandscape.{h,cpp}` (manager + reconcile + diff),
   reordering; recovers next reconcile.
 - The 8× LOD stretch is a starting curve; `DebugObjectLODs` works on the
   objects for tuning.
+
+## 15. Addendum (2026-09-10): the drop never worked, and what replaces it
+
+**Finding.** The inventory drop path in `SSFloaterAtmoEnv::handleDragAndDrop` accepts `DAD_MESH`
+only, and nothing a user can drag is `DAD_MESH`: a mesh upload is re-tagged `AT_OBJECT` on
+completion (`llmeshrepository.cpp`, "requested mesh asset type isn't actually the type of the
+resultant object"), so it arrives as `DAD_OBJECT` and is rejected. Accepting `DAD_OBJECT` would not
+help: an object item's asset UUID is the server-side prim blob, not a mesh asset id, so
+`setSculptID(..., LL_SCULPT_TYPE_MESH)` could never resolve it. Every design and review in this
+folder verified the `AT_MESH -> DAD_MESH` table entry without tracing what an upload produces.
+
+**Direction (owner verdicts).** Design 3's capture is the path: rez the object, read what the
+rezzed volume exposes, then derez. Verdicts recorded the same day:
+
+- Whole prim linksets convert, not just mesh. The record becomes a root placement plus a parts
+  array, each part carrying its volume params (mesh is the sculpt-id case, prims the
+  path/profile case), root-relative transform and its own sparse face list. The object caps
+  become a prim budget, and per-part records must stay compact for the notecard size limit.
+- Full permissions are required on every prim in the linkset, from the owner mask (copy, modify,
+  transfer), because the notecard hands every reader a working copy. The check is asynchronous:
+  it waits for the whole linkset's object properties. Texture and material ids are already
+  public in the object update, so they are not a new leak; mesh ids are the real exposure.
+- Any prim with object contents (scripts, notecards, anything in its inventory) makes the
+  conversion warn the user: a local object has no simulator and cannot run or hold contents.
+  Client-side SLua (https://github.com/secondlife/slua/) is a possible future option, not a
+  plan; for now object inventory items are invalid for local objects.
+- Landscape objects draw a distinct selection silhouette (purple), hooked ahead of the
+  parent/child colour branch in `LLSelectMgr::renderSilhouettes`, with one colour for root and
+  children (nothing client-side can be unlinked) and the colour in the skin colour table beside
+  the stock silhouette colours.
+
+**Shipped today: limits for local content only.** `sslocalcontentlimits.h` gives objects flagged
+`ssIsLocalContent()` a 2048 m scale ceiling and a 2048 m square placement area centred on the
+object's own region (region-local X/Y in [centre-1024, centre+1024]); Z keeps the stock height
+clamps. Applied in `llmanipscale.cpp` (per-object ceiling in the drag paths, selection-wide
+ceiling in the drag-distance limits, local only when every selected object is local),
+`llmaniptranslate.cpp` (the visible-region clip is replaced by the area clamp for local roots) and
+`llpanelobject.cpp` (scale ceiling on refresh and send, position spinner range on refresh, area
+clamp on send). Stock objects keep every stock clamp; `getState()` restores the stock spinner range
+through `updateLimits()` on every refresh before the local override is applied.

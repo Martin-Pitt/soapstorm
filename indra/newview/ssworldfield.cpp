@@ -292,6 +292,228 @@ SSWorldField::Tile* SSWorldField::tileFor(LLViewerRegion* regionp, bool allow_cr
     return &tile;
 }
 
+void SSWorldField::dumpColumn(const LLVector3& pos_agent, std::vector<std::string>& out) const
+{
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+    const Tile* tile = tileAt(pos_agent);
+    if (!regionp || !tile) { out.push_back("world field: no tile under the point"); return; }
+    out.push_back(llformat("world field tile: %s, source %s, res %d (%.2f m cells), geometry serial %u, air serial %u, acoustic serial %u, nav dirty %d",
+                           tile->mValid ? "valid" : "NOT VALID", tile->mNavSourced ? "navmesh spans" : "depth capture", tile->mRes, tile->mCell,
+                           tile->mGeomSerial, tile->mAirSerial, tile->mAcoustic.mSerial, (S32)tile->mNavDirty));
+    const LLVector3 rp = regionp->getPosRegionFromAgent(pos_agent);
+    const S32 x = llclamp((S32)(rp.mV[VX] / tile->mCell), 0, tile->mRes - 1), y = llclamp((S32)(rp.mV[VY] / tile->mCell), 0, tile->mRes - 1);
+    const size_t col = (size_t)y * tile->mRes + x, layer = (size_t)tile->mRes * tile->mRes;
+    static const char* AIR_NAME[] = {"solid", "outdoors", "sheltered", "interior", "unknown"};
+    S32 n = 0;
+    for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+    {
+        const size_t si = (size_t)k * layer + col;
+        if (tile->mSpanTop[si] <= NO_SURFACE * 0.5f) break;
+        const U8 gl = tile->mGapLabel[col * (SS_WF_MAX_SPANS + 1) + k];
+        out.push_back(llformat("  gap %d below: %s depth %u; span %d: z %.2f..%.2f flags 0x%02x%s%s", k, AIR_NAME[llclamp((S32)gl, 0, 4)],
+                               (U32)tile->mGapDepth[col * (SS_WF_MAX_SPANS + 1) + k], k, tile->mSpanBottom[si], tile->mSpanTop[si], tile->mSpanFlags[si],
+                               (tile->mSpanFlags[si] & SSRainShadowMap::SURF_FALLBACK) ? " terrain" : "", (tile->mSpanFlags[si] & SSRainShadowMap::SURF_WATER) ? " water" : ""));
+        ++n;
+    }
+    const U8 top_gl = tile->mGapLabel[col * (SS_WF_MAX_SPANS + 1) + n];
+    out.push_back(llformat("  gap %d above: %s depth %u (column %d,%d, %d spans)", n, AIR_NAME[llclamp((S32)top_gl, 0, 4)], (U32)tile->mGapDepth[col * (SS_WF_MAX_SPANS + 1) + n], x, y, n));
+    out.push_back(llformat("  at the point: air %s, enclosure %.2f", AIR_NAME[llclamp((S32)airLabelAt(pos_agent), 0, 4)], enclosureAt(pos_agent)));
+}
+
+bool SSWorldField::navSpansWanted()
+{
+    static LLCachedControl<bool> from_nav(gSavedSettings, "SSWorldFieldFromNavMesh", true);
+    return from_nav && SSNavMesh::instanceExists() && SSNavMesh::getInstance()->active();
+}
+
+bool SSWorldField::navSourced(U64 region_handle) const
+{
+    auto it = mTiles.find(region_handle);
+    return it != mTiles.end() && it->second.mNavSourced;
+}
+
+// The same reach pickBuildTarget serves: the camera's region and any region within NEIGHBOR_REACH of the camera.
+bool SSWorldField::regionNear(const LLViewerRegion* regionp, const LLVector3& cam) const
+{
+    const LLVector3 origin = regionp->getOriginAgent();
+    const F32 width = regionp->getWidth();
+    const F32 dx = llmax(origin.mV[VX] - cam.mV[VX], cam.mV[VX] - (origin.mV[VX] + width), 0.f);
+    const F32 dy = llmax(origin.mV[VY] - cam.mV[VY], cam.mV[VY] - (origin.mV[VY] + width), 0.f);
+    return dx * dx + dy * dy <= NEIGHBOR_REACH * NEIGHBOR_REACH;
+}
+
+// <SS:Nexii> One band's sheet into the tile: the band's z-range is cut out of every column it covers (a span straddling the range keeps its parts outside it), the sheet's spans go in through spanInsert, and a span flagged terrain then reaches the world floor, swallowing whatever was below - the capture's "a wall on unmeasured ground stays solid to it". Sheet columns are 0.25 m; a coarser tile unions every sheet column its cell covers. A region without a tile gets one only within reach, and the navmesh is asked to feed the whole region so bands published before the tile existed arrive too. [interaction: finalizeSpans]
+void SSWorldField::navSpans(U64 region_handle, F32 x0_m, F32 y0_m, F32 extent_m, F32 zmin, F32 zmax, const SSNavMesh::SpanSheet* sheet)
+{
+    static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldField", true);
+    if (!enabled || !SSAtmoMagic::getInstance()->isEnabled()) return;
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp) return;
+    Tile* tile = tileFor(regionp, false);
+    if (!tile)
+    {
+        if (!sheet) return;
+        const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+        if (!regionNear(regionp, cam)) return;
+        if (mTiles.size() >= MAX_TILES)
+        {
+            // Make room with a tile out of reach; none out of reach means this region waits its turn.
+            auto victim = mTiles.end();
+            for (auto it = mTiles.begin(); it != mTiles.end(); ++it)
+            {
+                LLViewerRegion* r = LLWorld::getInstance()->getRegionFromHandle(it->first);
+                if (!r || !regionNear(r, cam)) { victim = it; break; }
+            }
+            if (victim == mTiles.end()) return;
+            sDrainDebug.erase(victim->first);
+            mTiles.erase(victim);
+            ++mFloodGeneration;
+        }
+        tile = tileFor(regionp, true);
+    }
+    if (!tile->mNavSourced)
+    {
+        // Taking over from the capture (or brand new): start from an empty store and have every band land again.
+        std::fill(tile->mSpanBottom.begin(), tile->mSpanBottom.end(), NO_SURFACE);
+        std::fill(tile->mSpanTop.begin(), tile->mSpanTop.end(), NO_SURFACE);
+        std::fill(tile->mSpanFlags.begin(), tile->mSpanFlags.end(), (U8)0);
+        tile->mNavSourced = true;
+        tile->mValid = false;
+        tile->mDirty = false;
+        tile->mBandTarget = 0;
+        SSNavMesh::getInstance()->refeedRegion(region_handle);
+    }
+    tile->mLastTouched = mNow;
+    tile->mNavLastFed = mNow;
+    tile->mNavDirty = true;
+    ++mNavBlocksFed;
+
+    const S32 res = tile->mRes;
+    const F32 cell = tile->mCell;
+    const size_t layer = (size_t)res * res;
+    const S32 cx0 = llclamp((S32)floorf(x0_m / cell + 0.5f), 0, res), cx1 = llclamp((S32)floorf((x0_m + extent_m) / cell + 0.5f), 0, res);
+    const S32 cy0 = llclamp((S32)floorf(y0_m / cell + 0.5f), 0, res), cy1 = llclamp((S32)floorf((y0_m + extent_m) / cell + 0.5f), 0, res);
+    const S32 R = SSNavMesh::SpanSheet::RES, K = SSNavMesh::SpanSheet::SPANS;
+    const F32 sheet_cell = extent_m / (F32)R;
+
+    F32 bottoms[SS_WF_MAX_SPANS], tops[SS_WF_MAX_SPANS];
+    U8 flags[SS_WF_MAX_SPANS];
+    for (S32 y = cy0; y < cy1; ++y)
+    {
+        for (S32 x = cx0; x < cx1; ++x)
+        {
+            const size_t col = (size_t)y * res + x;
+
+            // 1. Cut the band's range out of the column.
+            S32 n = 0;
+            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+            {
+                const size_t si = (size_t)k * layer + col;
+                const F32 top = tile->mSpanTop[si];
+                if (top <= NO_SURFACE * 0.5f) break;
+                const F32 bot = tile->mSpanBottom[si];
+                const U8 fl = tile->mSpanFlags[si];
+                if (top <= zmin || bot >= zmax) { if (n < SS_WF_MAX_SPANS) { bottoms[n] = bot; tops[n] = top; flags[n] = fl; ++n; } continue; }
+                if (bot < zmin && n < SS_WF_MAX_SPANS) { bottoms[n] = bot; tops[n] = zmin; flags[n] = fl; ++n; }
+                if (top > zmax && n < SS_WF_MAX_SPANS) { bottoms[n] = zmax; tops[n] = top; flags[n] = fl; ++n; }
+            }
+            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+            {
+                const size_t si = (size_t)k * layer + col;
+                tile->mSpanBottom[si] = k < n ? bottoms[k] : NO_SURFACE;
+                tile->mSpanTop[si] = k < n ? tops[k] : NO_SURFACE;
+                tile->mSpanFlags[si] = k < n ? flags[k] : (U8)0;
+            }
+            if (!sheet) continue;
+
+            // 2. Insert the sheet's spans for every sheet column this cell covers.
+            const S32 sx0 = llclamp((S32)floorf(((F32)x * cell - x0_m) / sheet_cell), 0, R - 1);
+            const S32 sx1 = llclamp((S32)ceilf(((F32)(x + 1) * cell - x0_m) / sheet_cell), sx0 + 1, R);
+            const S32 sy0 = llclamp((S32)floorf(((F32)y * cell - y0_m) / sheet_cell), 0, R - 1);
+            const S32 sy1 = llclamp((S32)ceilf(((F32)(y + 1) * cell - y0_m) / sheet_cell), sy0 + 1, R);
+            bool terrain = false;
+            for (S32 sy = sy0; sy < sy1; ++sy) for (S32 sx = sx0; sx < sx1; ++sx)
+            {
+                const size_t sc = (size_t)sy * R + sx;
+                for (S32 k = 0; k < (S32)sheet->mCount[sc] && k < K; ++k)
+                {
+                    const U8 fl = sheet->mFlags[sc * K + k];
+                    if (fl & SSRainShadowMap::SURF_FALLBACK) terrain = true;
+                    spanInsert(*tile, col, sheet->mBottom[sc * K + k], sheet->mTop[sc * K + k], fl);
+                }
+            }
+            if (!terrain) continue;
+
+            // 3. The land reaches the world floor: everything below the terrain span folds into it.
+            n = 0;
+            S32 land = -1;
+            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+            {
+                const size_t si = (size_t)k * layer + col;
+                if (tile->mSpanTop[si] <= NO_SURFACE * 0.5f) break;
+                bottoms[n] = tile->mSpanBottom[si]; tops[n] = tile->mSpanTop[si]; flags[n] = tile->mSpanFlags[si];
+                if (land < 0 && (flags[n] & SSRainShadowMap::SURF_FALLBACK)) land = n;
+                ++n;
+            }
+            if (land < 0) continue;
+            bottoms[land] = 0.f;
+            const S32 kept = n - land;
+            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+            {
+                const size_t si = (size_t)k * layer + col;
+                tile->mSpanBottom[si] = k < kept ? bottoms[land + k] : NO_SURFACE;
+                tile->mSpanTop[si] = k < kept ? tops[land + k] : NO_SURFACE;
+                tile->mSpanFlags[si] = k < kept ? flags[land + k] : (U8)0;
+            }
+        }
+    }
+}
+
+// <SS:Nexii> Regions in reach get a tile and a refeed as they come into reach (the same reach the capture served, and the tile cap decides how many); a tile whose region the navmesh has finished with - nothing queued, nothing building, no schedule pending - moves its geometry serial, which is what sends the flood and the acoustic bake over it. A rebuild trickling in after an edit moves it again once quiet. [interaction: scheduleFlood]
+void SSWorldField::navSettle()
+{
+    SSNavMesh* nav = SSNavMesh::getInstance();
+    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    for (LLViewerRegion* regionp : LLWorld::getInstance()->getRegionList())
+    {
+        if (!regionp || !regionNear(regionp, cam)) continue;
+        auto it = mTiles.find(regionp->getHandle());
+        if (it != mTiles.end()) { it->second.mLastTouched = mNow; continue; }
+        if (mTiles.size() >= MAX_TILES)
+        {
+            auto victim = mTiles.end();
+            for (auto vt = mTiles.begin(); vt != mTiles.end(); ++vt)
+            {
+                LLViewerRegion* r = LLWorld::getInstance()->getRegionFromHandle(vt->first);
+                if (!r || !regionNear(r, cam)) { victim = vt; break; }
+            }
+            if (victim == mTiles.end()) continue;
+            sDrainDebug.erase(victim->first);
+            mTiles.erase(victim);
+            ++mFloodGeneration;
+        }
+        Tile* tile = tileFor(regionp, true);
+        tile->mNavSourced = true;
+        tile->mValid = false;
+        tile->mLastTouched = mNow;
+        nav->refeedRegion(regionp->getHandle());
+    }
+    for (auto& entry : mTiles)
+    {
+        Tile& tile = entry.second;
+        if (!tile.mNavSourced || !tile.mNavDirty) continue;
+        if (mNow - tile.mNavLastFed < 0.5) continue;                 // sheets still landing
+        if (!nav->regionSettled(tile.mRegionHandle)) continue;
+        tile.mGeomSerial = (tile.mGeomSerial == 0xFFFFFFFFu) ? 1 : tile.mGeomSerial + 1;
+        tile.mValid = true;
+        tile.mNavDirty = false;
+        tile.mDirty = false;
+        tile.mBandTarget = 0;
+        tile.mCaptureTime = mNow;
+        ++mNavSettles;
+    }
+}
+
 // Whether a tile is worth (re)building: never built, edited, stale, or
 // captured under a cell/band setting that has since changed.
 bool SSWorldField::needsBuild(const Tile& tile) const
@@ -370,6 +592,9 @@ void SSWorldField::update()
 
     evict();
 
+    const bool nav_source = navSpansWanted();
+    if (nav_source) navSettle();
+
 // Catch-up for the connectivity labels: a tile that committed while a flood
     // was in flight was skipped rather than queued; this is where it gets its
     // turn - one tile per call. Oldest-first is unnecessary at this scale
@@ -379,7 +604,7 @@ void SSWorldField::update()
         for (auto& entry : mTiles)
         {
             Tile& tile = entry.second;
-            if (tile.mValid && tile.mAirSerial != tile.mGeomSerial && !tile.mDirty)
+            if (tile.mValid && tile.mAirSerial != tile.mGeomSerial && (!tile.mDirty || tile.mNavSourced))
             {
                 scheduleFlood(tile);
                 break;
@@ -398,7 +623,7 @@ void SSWorldField::update()
         return;
     }
 
-    Tile* target = pickBuildTarget();
+    Tile* target = nav_source ? nullptr : pickBuildTarget();     // the navmesh feeds the store; no capture
     if (!target) return;
 
 // Begin a build. A dirty tile re-peels only its dirty rectangle's frustum,
@@ -407,6 +632,7 @@ void SSWorldField::update()
     // the edit is not safe.
     mBuild.mActive = true;
     mBuild.mRegionHandle = target->mRegionHandle;
+    target->mNavSourced = false;                                  // the capture owns the store again
     mBuild.mPass = 0;
     mBuild.mEmptyRun = 0;
     mBuild.mChanged = false;

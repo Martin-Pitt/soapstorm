@@ -41,6 +41,7 @@
 #include "sswindflow.h"
 #include "ssvortices.h"
 #include "ssworldfield.h"
+#include "ssnavmesh.h"
 
 #include "llviewerobject.h"
 #include "llviewerobjectlist.h"
@@ -1092,6 +1093,17 @@ void SSAtmoMagic::drawInfo()
         {
             field_section.lines.push_back(llformat("flood      %.0f%% of cells labelled",
                                      field->airCoverage(cam_region->getHandle()) * 100.f));
+            field_section.lines.push_back(llformat("source     %s, %u sheets fed, %u settles",
+                                     field->navSourced(cam_region->getHandle()) ? "navmesh spans" : "depth capture",
+                                     field->navBlocksFed(), field->navSettles()));
+        }
+        // <SS:Nexii> The navmesh's one stat line: what it holds and what it still owes.
+        if (SSNavMesh::instanceExists() && SSNavMesh::getInstance()->active())
+        {
+            SSNavMesh* nav = SSNavMesh::getInstance();
+            field_section.lines.push_back(llformat("navmesh    %d columns, %d bands, %d to build, %u polys, %.1f MB",
+                                     nav->columnCount(), nav->bandCount(), nav->pendingCount() + nav->inFlightCount(),
+                                     nav->polyCount(), nav->layerBytes() / 1048576.0));
         }
     }
 

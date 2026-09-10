@@ -5,7 +5,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="560"
+ height="620"
  layout="topleft"
  name="floater_ss_atmo_navmesh"
  save_rect="true"
@@ -18,6 +18,8 @@
   <floater.string name="path_no_navmesh">The navmesh is not built yet.</floater.string>
   <floater.string name="path_choose">Choose a start and an end point.</floater.string>
    <floater.string name="census_off">Census is off (SSWorldFieldShapes).</floater.string>
+  <floater.string name="dump_none">Select an object first.</floater.string>
+  <floater.string name="mark_none">Nothing under the camera centre within 512 m.</floater.string>
   <panel
    name="navmesh_console_main"
    border="false"
@@ -84,7 +86,7 @@
    name="view_test_tab_container"
    left="12"
    top="224"
-   height="322"
+   height="382"
    width="276">
     <panel
      border="false"
@@ -185,6 +187,39 @@
        name="rebuild_button"
        label="Rebuild all"
        tool_tip="Drop every band and build the navmesh again from the current census" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left_pad="8"
+       top_delta="0"
+       height="23"
+       width="120"
+       name="dump_button"
+       label="Dump selection"
+       tool_tip="Log everything the census and the navmesh know about the selected linkset (log tag SSNavMeshDump), with the verdict below" />
+      <button
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="8"
+       height="23"
+       width="248"
+       name="mark_button"
+       label="Mark location under the camera centre"
+       tool_tip="Cast from the camera centre, mark the hit, and log the object, census records, world field column, navmesh bands and portal edges there (log tag SSNavMeshDump)" />
+      <text
+       name="dump_status"
+       height="52"
+       word_wrap="true"
+       use_ellipses="false"
+       type="string"
+       text_color="PathfindingGoodColor"
+       follows="left|top"
+       layout="topleft"
+       left="12"
+       top_pad="8"
+       width="252">
+      </text>
     </panel>
     <panel
      border="false"

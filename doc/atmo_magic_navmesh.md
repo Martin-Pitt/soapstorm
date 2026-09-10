@@ -541,3 +541,69 @@ Three findings from a review pass over the pipeline, all in `ssnavmesh.cpp`:
   `SS_NAV_MAX_LAYERS_PER_BAND` (16) walkable layers when floors stack within the 8 m band gap. The
   build now reports the overflow, `publish` warns with the band's column and count, and
   `SSNavMesh::layersDropped()` accumulates it for the console.
+
+## 22. The world field's spans come from the navmesh (2026-09-10)
+
+The queue's "flood/coverage span read off the heightfield", done as a source switch rather than a
+reader migration. The world field's store (`ssworldfield.h`, one tile per region, 0.25 m columns,
+up to six solid `[bottom, top]` spans each) is what every consumer reads: the air flood and its
+labels, `coverageDetail`, `enclosureAt`, the acoustic probe bake, `traceSolid`, the surface top.
+None of them care where the spans came from, and the flood's only input is that per-column list.
+So the navmesh now fills it and the depth-peel capture stops.
+
+- **Sheet on the worker** (`extractSpanSheet`, `ssnavmesh.cpp`). After rasterization and the
+  Recast filters, before the compact heightfield, every raster span of the column's 16 m interior
+  is read off the `rcHeightfield`: two cells by two into the field's 0.25 m columns, gaps under the
+  field's slab (0.25 m) closed, the list clipped to six by folding its thinnest gaps, which is the
+  field's own rule. The span the land sits in is flagged terrain (`SURF_FALLBACK`, the capture's
+  own meaning for it) and raised to the water surface with `SURF_WATER` where the land is under
+  water; schedule extends the terrain interval to the water level so that surface is inside the
+  band. The sheet rides the `Result` beside the layers and costs the worker under a millisecond.
+- **Into the tile** (`SSWorldField::navSpans`). Publish resolves the column to its region and hands
+  the sheet over with the band's z-range. The range is cut out of every column it covers (a span
+  straddling it keeps its parts outside), the sheet's spans go in through `spanInsert`, and a span
+  flagged terrain reaches the world floor, swallowing whatever was below. An evicted band hands over
+  an empty sheet, which is the cut alone. Bands never share a z-range within a column, so each one
+  owns its slice of the store and rebuilds replace exactly what they built.
+- **Tiles and reach.** A region gets a tile when it comes within the same reach the capture served
+  (its own region plus 64 m), the cap of four tiles evicting a region out of reach. A new tile asks
+  the navmesh to feed the whole region again (`refeedRegion` zeroes the signatures of its published
+  bands, so the next schedule rebuilds them); the sheets are transient, so this is the only way a
+  tile created after the navmesh built the region gets filled. Taking over a capture-built tile
+  wipes it first for the same reason.
+- **Serial and flood** (`navSettle`). The tile's geometry serial, which is what sends the flood and
+  the acoustic bake, moves only once the navmesh has nothing queued or building for the region and
+  no schedule pending, and at least half a second after the last sheet landed. The initial fill
+  therefore floods once, at the end, and an edit floods once its rebuilt bands are in. Until the
+  first settle the tile is invalid and the readers keep their raycasts, as before a first capture.
+- **Switch.** `SSWorldFieldFromNavMesh` (on) and the navmesh running. With the navmesh off, the
+  capture builds as before. The HUD's world field section names the source and counts sheets and
+  settles, and carries the navmesh's one stat line.
+
+What this does not do yet: retire the capture code, which stays as the fallback source; move any
+reader to Detour; and the acoustic tier-B mip and drainage keep reading the same store unchanged.
+Not measured in the viewer: the owner's build is the first run.
+
+## 23. Diagnostics: Dump selection and Mark location (2026-09-10)
+
+Two buttons on the navmesh console's View tab, both logging under the tag `SSNavMeshDump` and
+showing the verdict in the console:
+
+- **Dump selection** (`SSWorldFieldShapes::dumpObject`). For every selected linkset: the root's
+  flags as the census reads them, the navmesh role and whether it was fetched, the rest ladder rung
+  and the tracked rest state, the envelope distance; then every part's physics type, hidden test,
+  mesh physics state (decomposition, hulls, physics mesh, header), the part cache entry with each
+  record's class, provenance, layer, triangle count and box, and how the navmesh treats that record
+  (solid fill, surface raster, block, obstacle, skipped). It re-evaluates addPart's skip rules
+  read-only and names the one that fired. Then `SSNavMesh::dumpAt` over the records' box: which
+  columns, whether scheduled, what is queued or building, every band slot with z-range, tiles and
+  age, and a nearest-point probe over the box top.
+- **Mark location under the camera centre** (`SSFloaterNavMesh::onMarkLocation`). A ray from the
+  camera centre finds the first object or the land. The hit is dumped from every side: the object's
+  own dump, the census records meeting a 3 m box (`dumpRecordsAt`), the world field column
+  (`SSWorldField::dumpColumn`: tile state and source, spans with flags, gap labels, the point's air
+  verdict), the navmesh bands, and every portal edge within 4 m with its link state and endpoints
+  (`dumpLinksAt`), which is what a red line needs. The overlay draws a magenta post at the mark.
+
+The dump mirrors addPart's decisions rather than sharing code with it; when a rule changes, change
+both.

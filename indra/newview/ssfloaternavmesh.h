@@ -45,10 +45,13 @@ private:
     // Rewrites the status texts from the live navmesh and census, a few times a second.
     void refresh();
     void onFindPath();
+    void onDumpSelection();
+    void onMarkLocation();
 
     LLTextBox* mNavStatus = nullptr;
     LLTextBox* mCensusStatus = nullptr;
     LLTextBox* mPathStatus = nullptr;
+    LLTextBox* mDumpStatus = nullptr;
     F32 mLastRefresh = 0.f;
 };
 

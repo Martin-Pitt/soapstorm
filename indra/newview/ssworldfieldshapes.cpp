@@ -22,6 +22,7 @@
  */
 
 #include "ssworldfieldshapes.h"
+#include "ssnavmesh.h"
 
 #include "indra_constants.h"
 #include "llfasttimer.h"
@@ -624,6 +625,201 @@ void SSWorldFieldShapes::trackRest(const LLViewerObject* rootp, bool& out_dynami
 // One volume part in: classify its declared shape exactly the way the physics
 // debug renderer does (LLPhysicsShapeBuilderUtil + get_physics_detail), collect
 // local-space triangles where the class needs them, and file the record.
+// The dump mirrors addPart's decisions read-only; keep the two in step when a rule changes.
+std::string SSWorldFieldShapes::dumpObject(const LLViewerObject* obj, std::vector<std::string>& out) const
+{
+    if (!obj) return "no object";
+    const LLViewerObject* rootp = obj;
+    while (rootp->getParent()) rootp = (const LLViewerObject*)rootp->getParent();
+    std::string verdict;
+
+    const U32 root_flags = rootp->getFlags();
+    const bool phantom = rootp->flagPhantom();
+    out.push_back(llformat("=== linkset root %s local %u at (%.1f, %.1f, %.1f) region %s, %d children",
+                           rootp->getID().asString().c_str(), rootp->getLocalID(),
+                           rootp->getPositionAgent().mV[VX], rootp->getPositionAgent().mV[VY], rootp->getPositionAgent().mV[VZ],
+                           rootp->getRegion() ? rootp->getRegion()->getName().c_str() : "none", (S32)rootp->getChildren().size()));
+    out.push_back(llformat("root flags 0x%08x: phantom %d, use_physics %d, character %d, affects_navmesh %d, volume_detect %d, temp_on_rez %d",
+                           root_flags, (S32)phantom, (S32)rootp->flagUsePhysics(), (S32)rootp->flagCharacter(),
+                           (S32)((root_flags & FLAGS_AFFECTS_NAVMESH) != 0), (S32)((root_flags & FLAGS_VOLUME_DETECT) != 0),
+                           (S32)((root_flags & FLAGS_TEMPORARY_ON_REZ) != 0)));
+
+    // Navmesh role, as addPart resolves it.
+    U8 nav_role = NAV_ROLE_UNKNOWN;
+    static const char* ROLE_NAME[] = {"unknown", "walkable", "static obstacle", "dynamic obstacle", "material volume", "exclusion volume", "dynamic phantom"};
+    if (root_flags & FLAGS_AFFECTS_NAVMESH)
+    {
+        auto role_it = mNavRoles.find(rootp->getID());
+        if (role_it != mNavRoles.end()) nav_role = role_it->second.mRole;
+        out.push_back(llformat("navmesh role: %s%s", ROLE_NAME[llclamp((S32)nav_role, 0, 6)],
+                               role_it != mNavRoles.end() ? "" : (mRolesInFlight ? " (flag set, role not fetched yet - request in flight)" : " (flag set, role not fetched yet - request not in flight)")));
+    }
+    else
+    {
+        out.push_back("navmesh role: none (default 'movable obstacle' - the rest ladder decides)");
+    }
+
+    // Rest ladder, as trackRest ranks it.
+    std::string rest;
+    if (rootp->flagCharacter() || rootp->flagUsePhysics()) rest = "MOVER by sim flag (character/physical)";
+    else if (root_flags & FLAGS_AFFECTS_NAVMESH) rest = "STATIC by sim flag (navmesh role set)";
+    else
+    {
+        bool is_static = false;
+        if (SSROCLedger::instanceExists() && rootp->getRegion()
+            && SSROCLedger::getInstance()->restVerdict(rootp->getRegion()->getHandle(), rootp->getID(), is_static))
+        {
+            rest = is_static ? "STATIC by ROC ledger" : "MOVER by ROC ledger";
+        }
+        else
+        {
+            rest = "watching (no flag, ledger silent)";
+        }
+    }
+    auto rest_it = mRest.find(rootp->getID());
+    if (rest_it != mRest.end())
+    {
+        out.push_back(llformat("rest ladder: %s; tracked state: %s, known %d, last moved %.1f s ago (settle window %.0f s)",
+                               rest.c_str(), rest_it->second.mDynamic ? "DYNAMIC (obstacle only, no navmesh floor)" : "static",
+                               (S32)rest_it->second.mKnown, mNow - rest_it->second.mMovedAt, (F32)SS_SHAPES_SETTLE_SECONDS));
+    }
+    else
+    {
+        out.push_back(llformat("rest ladder: %s; never tracked (the census has not scanned this root)", rest.c_str()));
+    }
+    const bool dynamic_now = rest_it != mRest.end() ? rest_it->second.mDynamic : true;
+
+    // Envelope.
+    const F32 env = envelopeRange();
+    const F32 dist = (rootp->getPositionAgent() - mCensus.mAnchor).magVec();
+    out.push_back(llformat("census envelope: root %.0f m from the anchor, range %.0f m, census %s (%d records), part cache %d entries",
+                           dist, env, censusCurrent() ? "current" : "stale", recordCount(), cachedPartCount()));
+
+    // Linkset-level skips.
+    if (root_flags & (FLAGS_VOLUME_DETECT | FLAGS_TEMPORARY_ON_REZ)) verdict = "SKIPPED by census: volume-detect or temporary-on-rez linkset";
+    else if (phantom && nav_role != NAV_ROLE_EXCLUSION_VOLUME) verdict = "SKIPPED by census: phantom linkset (only exclusion volumes pass)";
+    else if (nav_role == NAV_ROLE_EXCLUSION_VOLUME) verdict = "filed as an exclusion volume: cuts walkable area, no geometry";
+    else if (dynamic_now) verdict = "filed but DYNAMIC: navmesh carves it as a mover obstacle, never floor";
+    else if (nav_role == NAV_ROLE_STATIC_OBSTACLE) verdict = "filed as a static obstacle: blocks and shadows, never floor";
+
+    // Every part.
+    std::vector<const LLViewerObject*> parts;
+    parts.push_back(rootp);
+    for (const LLPointer<LLViewerObject>& child : rootp->getChildren()) parts.push_back(child.get());
+    static const char* PTYPE_NAME[] = {"prim", "none", "convex hull"};
+    static const char* CLASS_NAME[] = {"box", "sphere", "cylinder", "tri"};
+    static const char* PROV_NAME[] = {"exact", "hull", "tessellated", "bbox", "unfetched", "render", "terrain"};
+    static const char* LAYER_NAME[] = {"declared", "phantom", "invisible solid"};
+    LLVector3 all_min(FLT_MAX, FLT_MAX, FLT_MAX), all_max(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+    for (const LLViewerObject* part : parts)
+    {
+        if (!part || part->getPCode() != LL_PCODE_VOLUME) { out.push_back(llformat("part %s: not a volume (pcode %u)", part ? part->getID().asString().c_str() : "?", part ? part->getPCode() : 0)); continue; }
+        LLVOVolume* vov = (LLVOVolume*)const_cast<LLViewerObject*>(part);
+        LLVolume* vol = vov->getVolume();
+        const LLVector3 pos = vov->getPositionAgent();
+        const LLVector3 scale = vov->getScale();
+        std::string line = llformat("part %s local %u: pos (%.1f, %.1f, %.1f) scale (%.2f, %.2f, %.2f)%s%s%s",
+                                    part->getID().asString().c_str(), part->getLocalID(),
+                                    pos.mV[VX], pos.mV[VY], pos.mV[VZ], scale.mV[VX], scale.mV[VY], scale.mV[VZ],
+                                    vov->isMesh() ? " MESH" : (vov->isSculpted() ? " SCULPT" : " PRIM"),
+                                    vov->isFlexible() ? " FLEXIBLE(skipped)" : "", vov->isRiggedMesh() ? " RIGGED(skipped)" : "");
+        out.push_back(line);
+        if (!vol) { out.push_back("  no volume yet: the scan skips it"); continue; }
+        const LLVolumeParams& params = vol->getParams();
+        const bool shape_known = !vov->getPhysicsShapeUnknown();
+        const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
+        const bool hidden = ss_part_fully_hidden(vov);
+        const bool geometry_only = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE) || !shape_known;
+        out.push_back(llformat("  physics type: %s%s, fully hidden %d, path 0x%02x profile 0x%02x, sculpt/mesh id %s",
+                               shape_known ? PTYPE_NAME[llclamp(ptype, 0, 2)] : "UNKNOWN (not fetched)",
+                               geometry_only ? " -> render geometry (provenance RENDER)" : "",
+                               (S32)hidden, params.getPathParams().getCurveType(), params.getProfileParams().getCurveType(),
+                               params.getSculptID().asString().c_str()));
+        if (vov->isMesh())
+        {
+            const LLUUID mesh_id = params.getSculptID();
+            LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(mesh_id);
+            if (decomp)
+            {
+                S32 hull_tris = 0;
+                for (size_t h = 0; h < decomp->mMesh.size(); ++h) hull_tris += (S32)(decomp->mMesh[h].mPositions.size() / 3);
+                out.push_back(llformat("  mesh physics: decomposition present, %d hulls (%d built tris), physics mesh %s, base hull %s, header says physics shape %d",
+                                       (S32)decomp->mHull.size(), hull_tris,
+                                       decomp->mPhysicsShapeMesh.empty() ? "absent" : llformat("%d tris", (S32)(decomp->mPhysicsShapeMesh.mPositions.size() / 3)).c_str(),
+                                       decomp->mBaseHullMesh.empty() ? "absent" : llformat("%d tris", (S32)(decomp->mBaseHullMesh.mPositions.size() / 3)).c_str(),
+                                       (S32)gMeshRepo.hasPhysicsShapeInHeader(mesh_id)));
+            }
+            else
+            {
+                out.push_back(llformat("  mesh physics: no decomposition yet (header physics shape %d) -> bounding box, provenance UNFETCHED", (S32)gMeshRepo.hasPhysicsShapeInHeader(mesh_id)));
+            }
+        }
+        if (hidden && (phantom || ptype == LLViewerObject::PHYSICS_SHAPE_NONE) && nav_role != NAV_ROLE_EXCLUSION_VOLUME)
+        {
+            out.push_back("  SKIPPED by census: fully hidden and phantom or physics NONE");
+            if (verdict.empty() && parts.size() == 1) verdict = "SKIPPED by census: fully hidden and phantom or physics NONE";
+            continue;
+        }
+        auto cache_it = mParts.find(part->getID());
+        if (cache_it == mParts.end())
+        {
+            out.push_back("  part cache: NO ENTRY - the scan never filed it (flexible/rigged, outside the envelope, skipped above, or not scanned since it appeared)");
+            continue;
+        }
+        const PartCache& pc = cache_it->second;
+        out.push_back(llformat("  part cache: %d records, %d tris, seen %.1f s ago, sig %016llx", (S32)pc.mRecords.size(), pc.mTris, mNow - pc.mSeen, (unsigned long long)pc.mSig));
+        for (const Record& r : pc.mRecords)
+        {
+            const bool convex = r.mClass != Record::CLASS_TRI || r.mProv == PROV_HULL || r.mProv == PROV_BBOX || r.mProv == PROV_UNFETCHED;
+            const char* treatment = (r.mLayer == LAYER_DECLARED_PHANTOM && nav_role != NAV_ROLE_EXCLUSION_VOLUME) ? "navmesh skips (phantom layer)"
+                                  : dynamic_now ? "navmesh carves a box obstacle (DYNAMIC)"
+                                  : nav_role == NAV_ROLE_STATIC_OBSTACLE ? (convex ? "solid block, never floor" : "surface block, never floor")
+                                  : convex ? "solid fill, walkable on up-facing tops within the slope" : "surface raster, walkable within the slope";
+            out.push_back(llformat("    record %s/%s/%s: %d tris, aabb (%.1f, %.1f, %.1f)-(%.1f, %.1f, %.1f) -> %s",
+                                   CLASS_NAME[llclamp((S32)r.mClass, 0, 3)], PROV_NAME[llclamp((S32)r.mProv, 0, 6)], LAYER_NAME[llclamp((S32)r.mLayer, 0, 2)],
+                                   (S32)(r.tris().size() / 3), r.mBMin.mV[VX], r.mBMin.mV[VY], r.mBMin.mV[VZ], r.mBMax.mV[VX], r.mBMax.mV[VY], r.mBMax.mV[VZ], treatment));
+            for (S32 c = 0; c < 3; ++c) { all_min.mV[c] = llmin(all_min.mV[c], r.mBMin.mV[c]); all_max.mV[c] = llmax(all_max.mV[c], r.mBMax.mV[c]); }
+        }
+    }
+    if (verdict.empty()) verdict = all_min.mV[VX] < all_max.mV[VX] ? "filed as static geometry: see the navmesh columns below" : "no records on file for this linkset";
+    if (all_min.mV[VX] < all_max.mV[VX] && SSNavMesh::instanceExists())
+    {
+        SSNavMesh::getInstance()->dumpAt(all_min, all_max, out);
+    }
+    else
+    {
+        // No records: still say what the navmesh has under the root.
+        const LLVector3 c = rootp->getPositionAgent();
+        if (SSNavMesh::instanceExists()) SSNavMesh::getInstance()->dumpAt(c - LLVector3(1.f, 1.f, 1.f), c + LLVector3(1.f, 1.f, 1.f), out);
+    }
+    out.push_back("verdict: " + verdict);
+    return verdict;
+}
+
+void SSWorldFieldShapes::dumpRecordsAt(const LLVector3& bmin, const LLVector3& bmax, std::vector<std::string>& out) const
+{
+    static const char* CLASS_NAME[] = {"box", "sphere", "cylinder", "tri"};
+    static const char* PROV_NAME[] = {"exact", "hull", "tessellated", "bbox", "unfetched", "render", "terrain"};
+    static const char* LAYER_NAME[] = {"declared", "phantom", "invisible solid"};
+    static const char* ROLE_NAME[] = {"none", "walkable", "static obstacle", "dynamic obstacle", "material volume", "exclusion volume", "dynamic phantom"};
+    S32 n = 0, shown = 0;
+    forEachRecord(bmin, bmax, [&](const Record& r)
+    {
+        ++n;
+        if (shown >= 40) return;
+        ++shown;
+        const bool convex = r.mClass != Record::CLASS_TRI || r.mProv == PROV_HULL || r.mProv == PROV_BBOX || r.mProv == PROV_UNFETCHED;
+        out.push_back(llformat("  record %s/%s/%s role %s%s: %d tris, aabb (%.1f, %.1f, %.1f)-(%.1f, %.1f, %.1f), %s",
+                               CLASS_NAME[llclamp((S32)r.mClass, 0, 3)], PROV_NAME[llclamp((S32)r.mProv, 0, 6)], LAYER_NAME[llclamp((S32)r.mLayer, 0, 2)],
+                               ROLE_NAME[llclamp((S32)r.mNavRole, 0, 6)], r.mDynamic ? " DYNAMIC" : "",
+                               (S32)(r.tris().size() / 3), r.mBMin.mV[VX], r.mBMin.mV[VY], r.mBMin.mV[VZ], r.mBMax.mV[VX], r.mBMax.mV[VY], r.mBMax.mV[VZ],
+                               r.mDynamic ? "box obstacle" : (r.mLayer == LAYER_DECLARED_PHANTOM && r.mNavRole != NAV_ROLE_EXCLUSION_VOLUME) ? "skipped (phantom)"
+                               : r.mNavRole == NAV_ROLE_EXCLUSION_VOLUME ? "exclusion cut" : r.mNavRole == NAV_ROLE_STATIC_OBSTACLE ? "block, never floor"
+                               : convex ? "solid fill" : "surface raster"));
+    });
+    out.push_back(llformat("  census records meeting the box: %d%s", n, n > shown ? " (first 40 listed)" : ""));
+}
+
 void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 {
     LLVolume* vol = vov->getVolume();

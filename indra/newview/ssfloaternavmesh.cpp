@@ -30,6 +30,12 @@
 
 #include "llagent.h"
 #include "llbutton.h"
+#include "llselectmgr.h"
+#include "llviewerobject.h"
+#include "llvector4a.h"
+#include "llworld.h"
+#include "pipeline.h"
+#include "ssworldfield.h"
 #include "llframetimer.h"
 #include "lltextbox.h"
 #include "llviewercamera.h"
@@ -46,6 +52,11 @@ bool SSFloaterNavMesh::postBuild()
     mNavStatus = getChild<LLTextBox>("navmesh_status");
     mCensusStatus = getChild<LLTextBox>("census_status");
     mPathStatus = getChild<LLTextBox>("path_status");
+    mDumpStatus = getChild<LLTextBox>("dump_status");
+    getChild<LLButton>("dump_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onDumpSelection(); });
+    getChild<LLButton>("mark_button")->setClickedCallback(
+        [this](LLUICtrl*, const LLSD&) { onMarkLocation(); });
 
     getChild<LLButton>("rebuild_button")->setClickedCallback(
         [](LLUICtrl*, const LLSD&) { SSNavMesh::getInstance()->rebuildAll(); });
@@ -117,6 +128,83 @@ void SSFloaterNavMesh::refresh()
                                         shapes->navRoleCount(), shapes->navRolesInFlight() ? " (asking)" : "", shapes->physicsRequested(),
                                         nav->lastScheduleSeen(), nav->lastScheduleDynamic(), nav->lastSchedulePhantom()));
     }
+}
+
+// <SS:Nexii> "Why is this ignored": every selected linkset dumped to the log under SSNavMeshDump - the census's inputs and skip rules, its records, the navmesh columns and bands under it - with the root's verdict shown here. [interaction: SSWorldFieldShapes::dumpObject]
+void SSFloaterNavMesh::onDumpSelection()
+{
+    LLObjectSelectionHandle sel = LLSelectMgr::getInstance()->getSelection();
+    std::vector<std::string> lines;
+    std::string verdict;
+    S32 roots = 0;
+    for (LLObjectSelection::root_iterator it = sel->root_begin(); it != sel->root_end(); ++it)
+    {
+        LLViewerObject* obj = (*it)->getObject();
+        if (!obj) continue;
+        ++roots;
+        const std::string v = SSWorldFieldShapes::getInstance()->dumpObject(obj, lines);
+        if (verdict.empty()) verdict = v;
+    }
+    if (roots == 0)
+    {
+        LLViewerObject* obj = sel->getFirstObject();
+        if (obj) { ++roots; verdict = SSWorldFieldShapes::getInstance()->dumpObject(obj, lines); }
+    }
+    if (roots == 0)
+    {
+        mDumpStatus->setText(getString("dump_none"));
+        return;
+    }
+    for (const std::string& line : lines) LL_INFOS("SSNavMeshDump") << line << LL_ENDL;
+    mDumpStatus->setText(llformat("%d linkset(s), %d lines in the log under SSNavMeshDump.\n%s", roots, (S32)lines.size(), verdict.c_str()));
+}
+
+// <SS:Nexii> "What is wrong here": a ray from the camera centre finds the first object or the land, and the hit is dumped from every side - the object's own census dump, the records meeting a 3 m box, the world field column, the navmesh columns and bands, and every portal edge within 4 m with its link state. The overlay draws a magenta post at the mark. [interaction: SSNavMesh::dumpLinksAt]
+void SSFloaterNavMesh::onMarkLocation()
+{
+    const LLVector3 origin = LLViewerCamera::getInstance()->getOrigin();
+    const LLVector3 dir = LLViewerCamera::getInstance()->getAtAxis();
+    const LLVector3 far = origin + dir * 512.f;
+    LLVector4a start, end, hit4;
+    start.load3(origin.mV);
+    end.load3(far.mV);
+    S32 face = -1;
+    LLViewerObject* hit_obj = gPipeline.lineSegmentIntersectInWorld(start, end, false, false, true, false, &face, nullptr, nullptr, &hit4);
+    LLVector3 hit;
+    bool have = false;
+    if (hit_obj) { hit.set(hit4.getF32ptr()); have = true; }
+    // The land, when it is nearer than any object: a half-metre march down the ray.
+    const F32 limit = have ? (hit - origin).magVec() : 512.f;
+    for (F32 t = 0.5f; t < limit; t += 0.5f)
+    {
+        const LLVector3 p = origin + dir * t;
+        if (LLWorld::getInstance()->getRegionFromPosAgent(p) && p.mV[VZ] <= LLWorld::getInstance()->resolveLandHeightAgent(p))
+        {
+            hit = p; have = true; hit_obj = nullptr;
+            break;
+        }
+    }
+    if (!have)
+    {
+        mDumpStatus->setText(getString("mark_none"));
+        return;
+    }
+    std::vector<std::string> lines;
+    lines.push_back(llformat("=== mark at (%.2f, %.2f, %.2f) from the camera at (%.1f, %.1f, %.1f): %s", hit.mV[VX], hit.mV[VY], hit.mV[VZ],
+                             origin.mV[VX], origin.mV[VY], origin.mV[VZ],
+                             hit_obj ? llformat("object %s face %d", hit_obj->getID().asString().c_str(), face).c_str() : "the land"));
+    std::string verdict = "the land";
+    if (hit_obj) verdict = SSWorldFieldShapes::getInstance()->dumpObject(hit_obj, lines);
+    lines.push_back("--- census records within 3 m");
+    SSWorldFieldShapes::getInstance()->dumpRecordsAt(hit - LLVector3(3.f, 3.f, 3.f), hit + LLVector3(3.f, 3.f, 3.f), lines);
+    lines.push_back("--- world field column");
+    if (SSWorldField::instanceExists()) SSWorldField::getInstance()->dumpColumn(hit, lines);
+    lines.push_back("--- navmesh");
+    SSNavMesh::getInstance()->dumpAt(hit - LLVector3(2.f, 2.f, 2.f), hit + LLVector3(2.f, 2.f, 2.f), lines);
+    SSNavMesh::getInstance()->dumpLinksAt(hit, 4.f, lines);
+    SSNavMesh::getInstance()->setMark(hit);
+    for (const std::string& line : lines) LL_INFOS("SSNavMeshDump") << line << LL_ENDL;
+    mDumpStatus->setText(llformat("Marked (%.1f, %.1f, %.1f): %d lines in the log under SSNavMeshDump.\n%s", hit.mV[VX], hit.mV[VY], hit.mV[VZ], (S32)lines.size(), verdict.c_str()));
 }
 
 void SSFloaterNavMesh::onFindPath()

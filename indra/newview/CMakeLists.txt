@@ -1243,6 +1243,7 @@ set(viewer_HEADER_FILES
     sswater.h
     ssatmolandscape.h
     ssatmolandscapeobject.h
+    sslocalcontentlimits.h
     sswindflow.h
     sswindprofilecore.h
     ssworldfield.h

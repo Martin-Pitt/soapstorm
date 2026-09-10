@@ -51,6 +51,7 @@
 #include "llsingleton.h"
 #include "ssacousticcore.h"
 #include "ssrainshadow.h"
+#include "ssnavmesh.h"
 #include "v3math.h"
 #include "v3dmath.h"
 
@@ -107,6 +108,15 @@ public:
     void clear();
 
     void update();
+
+    // <SS:Nexii> The navmesh as the store's span source: while SSWorldFieldFromNavMesh is on and the navmesh runs, the depth-peel capture stops and every band the navmesh publishes hands its span sheet here (SSNavMesh::SpanSheet). The band's z-range is cut out of the tile's columns and the sheet's spans inserted; a span flagged terrain reaches the world floor as the capture's did. The geometry serial moves only once the navmesh has nothing queued for the region (navSettle), so the flood and the acoustic bake run over a whole region, not a half-fed one. The readers - coverage, air labels, enclosure, acoustics, traceSolid, the surface top - never learn which source filled the store. [interaction: SSNavMesh::publish]
+    static bool navSpansWanted();
+    void navSpans(U64 region_handle, F32 x0_m, F32 y0_m, F32 extent_m, F32 zmin, F32 zmax, const SSNavMesh::SpanSheet* sheet);
+    bool navSourced(U64 region_handle) const;
+    U32 navBlocksFed() const { return mNavBlocksFed; }
+    U32 navSettles() const { return mNavSettles; }
+    // The store's column under a point: tile state and source, every span, the gap labels, and the point's own air verdict. [interaction: SSFloaterNavMesh mark]
+    void dumpColumn(const LLVector3& pos_agent, std::vector<std::string>& out) const;
 
     // The landing-surface view - SSRainShadowMap::buildSurfaceGrid's exact
     // contract (region-anchored n x n grid, first thing a falling drop meets,
@@ -427,6 +437,10 @@ private:
         F64 mLastTouched = 0.0;
         bool mDirty = false;
         bool mValid = false;
+
+        bool mNavSourced = false;   // spans come from the navmesh's sheets, not the capture
+        bool mNavDirty = false;     // sheets landed since the serial last moved
+        F64 mNavLastFed = 0.0;
     };
 
     // <SS:Nexii> One capture node on the build worklist: an XY rect of grid
@@ -548,6 +562,13 @@ private:
     S32 listenerProbeSet(const Tile& tile, const LLVector3& pos_agent, S32* out, S32 max_out) const;
 
     void evict();
+
+    // Nav-sourced tiles: create one for every region in reach (and ask the navmesh to feed it), then bump the
+    // serial of any tile whose region the navmesh has finished with.
+    void navSettle();
+    bool regionNear(const LLViewerRegion* regionp, const LLVector3& cam) const;
+    U32 mNavBlocksFed = 0;
+    U32 mNavSettles = 0;
 
     std::map<U64, Tile> mTiles;
     Build mBuild;

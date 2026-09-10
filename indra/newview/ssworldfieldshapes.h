@@ -184,6 +184,11 @@ public:
     // SSWorldFieldDebugView.
     void renderDebug();
 
+    // <SS:Nexii> The "why is this object ignored" dump: walks a linkset and, for every part, logs the inputs the census decides on (flags, physics type, mesh physics state, hidden test, rest ladder rung, navmesh role, envelope) and re-evaluates addPart's own skip rules without touching any state, then what the part cache holds for it and how the navmesh treats those records. Returns a one-line verdict for the root; the detail goes to out. [interaction: addPart, SSNavMesh::dumpAt]
+    std::string dumpObject(const class LLViewerObject* rootp, std::vector<std::string>& out) const;
+    // Every census record whose box meets the given box, with how the navmesh treats it (records carry no object id; pair with dumpObject for that).
+    void dumpRecordsAt(const LLVector3& bmin, const LLVector3& bmax, std::vector<std::string>& out) const;
+
 private:
     // The build-scoped snapshot: records plus the 64 m bucket grid over them.
     // One census resident at a time - the queries come from one listener.

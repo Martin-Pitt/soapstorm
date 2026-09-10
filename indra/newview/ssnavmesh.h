@@ -84,6 +84,28 @@ public:
     // Drop every band and build again from the current census (the floater's Rebuild button).
     void rebuildAll();
 
+    // <SS:Nexii> The world field's span read off the heightfield: one band's solid spans over the column's 16 m interior at the field's 0.25 m columns, unioned from the raster's cells and clipped to the field's span budget. The worker fills it beside the layers and publish hands it to SSWorldField::navSpans, so the flood, coverage and acoustic readers keep their store and lose the depth-peel capture. [interaction: SSWorldField]
+    struct SpanSheet
+    {
+        static constexpr S32 RES = 64;          // 16 m at 0.25 m
+        static constexpr S32 SPANS = 6;         // the field's SS_WF_MAX_SPANS
+        std::vector<U8> mCount;                 // [row * RES + col] spans in the column
+        std::vector<F32> mBottom, mTop;         // [(row * RES + col) * SPANS + k], local z metres
+        std::vector<U8> mFlags;                 // SSRainShadowMap::SURF_* per span
+    };
+    // No band of a column inside the region is queued or building, and no schedule is pending: the field may bump its serial.
+    bool regionSettled(U64 region_handle) const;
+    // Every published band whose column lies in the region rebuilds and feeds the field again (a tile it just created).
+    void refeedRegion(U64 region_handle);
+    U32 sheetsFed() const { return mSheetsFed; }
+    // The dump's navmesh half: every column the agent-space box touches, its band slots (z-range, alive, tiles, age), what is queued or building for it, whether it sits in the envelope, and a nearest-point probe over the box's top. [interaction: SSWorldFieldShapes::dumpObject]
+    void dumpAt(const LLVector3& bmin_agent, const LLVector3& bmax_agent, std::vector<std::string>& out) const;
+    // Every tile-border (portal) edge within the radius, linked or not, with its endpoints in agent space. [interaction: renderDebug links]
+    void dumpLinksAt(const LLVector3& pos_agent, F32 radius, std::vector<std::string>& out) const;
+    // A marked spot (the console's Mark location): drawn by the overlay so a dump and the view line up.
+    void setMark(const LLVector3& pos_agent) { mMark = pos_agent; mHasMark = true; }
+    void clearMark() { mHasMark = false; }
+
     // The floater's Test path tab: endpoints in agent space, Detour's answer drawn in the overlay.
     void setTestStart(const LLVector3& pos_agent) { mTestStart = pos_agent; mHasTestStart = true; mTestValid = false; }
     void setTestEnd(const LLVector3& pos_agent) { mTestEnd = pos_agent; mHasTestEnd = true; mTestValid = false; }
@@ -138,6 +160,7 @@ private:
         U32 mGeneration = 0;
         std::vector<std::vector<U8> > mLayers;
         S32 mLayersDropped = 0;             // walkable layers past SS_NAV_MAX_LAYERS_PER_BAND that got no tile
+        std::shared_ptr<SpanSheet> mSheet;  // the world field's span read, when it wants one
         F32 mMS = 0.f;
         bool mOk = false;
     };
@@ -180,11 +203,17 @@ private:
     std::vector<Obstacle> mObstacleAdds;
     std::vector<U32> mObstacleRemovals;
     S32 mInFlight = 0;
+    std::vector<Job> mInFlightJobs;         // what the workers hold, for regionSettled
+    U32 mSheetsFed = 0;
+    void feedWorldField(S32 tx, S32 ty, F32 zmin, F32 zmax, const SpanSheet* sheet);
     U32 mBuildCount = 0;
     F32 mLastBuildMS = 0.f;
     size_t mLayerBytes = 0;
     U32 mLayersDropped = 0;
     S32 mLastSeen = 0, mLastDynamic = 0, mLastPhantom = 0;
+
+    LLVector3 mMark;
+    bool mHasMark = false;
 
     // Test path state (agent space).
     LLVector3 mTestStart, mTestEnd;

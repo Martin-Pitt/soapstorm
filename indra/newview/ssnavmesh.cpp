@@ -26,6 +26,8 @@
 #include "ssnavmesh.h"
 
 #include "ssworldfieldshapes.h"
+#include "ssworldfield.h"
+#include "ssrainshadow.h"
 
 #include "llagent.h"
 #include "llfasttimer.h"
@@ -150,7 +152,105 @@ namespace
         F32 mMax[3] = {0, 0, 0};
         F32 mAgentHeight = 2.f, mAgentRadius = 0.5f, mAgentClimb = 0.75f, mAgentSlope = 45.f;
         S32 mTx = 0, mTyDetour = 0, mBand = 0;
+        std::vector<F32> mTerrain;          // SS_NAV_TERRAIN_NODES^2 heights over the bordered column, below -900 where there is no land
+        F32 mTerrainX0 = 0.f, mTerrainY0 = 0.f;
+        F32 mWaterZ = -1e30f;               // the region's water surface, local z; below everything when unknown
+        bool mWantSheet = false;            // the world field takes its spans from this build
     };
+
+    // Land height at a local xy from the build's own terrain nodes; false off the grid or in the void.
+    bool sheetTerrainAt(const SSNavBuildInput& in, F32 x, F32 y, F32& z)
+    {
+        if (in.mTerrain.empty()) return false;
+        const S32 n = SS_NAV_TERRAIN_NODES;
+        const F32 gx = x - in.mTerrainX0, gy = y - in.mTerrainY0;
+        const S32 ix = (S32)floorf(gx), iy = (S32)floorf(gy);
+        if (ix < 0 || iy < 0 || ix + 1 >= n || iy + 1 >= n) return false;
+        const F32 h00 = in.mTerrain[iy * n + ix], h10 = in.mTerrain[iy * n + ix + 1];
+        const F32 h01 = in.mTerrain[(iy + 1) * n + ix], h11 = in.mTerrain[(iy + 1) * n + ix + 1];
+        if (h00 < -900.f || h10 < -900.f || h01 < -900.f || h11 < -900.f) return false;
+        const F32 fx = gx - (F32)ix, fy = gy - (F32)iy;
+        z = (h00 * (1.f - fx) + h10 * fx) * (1.f - fy) + (h01 * (1.f - fx) + h11 * fx) * fy;
+        return true;
+    }
+
+    // <SS:Nexii> The span sheet: every raster span of the column's interior, unioned two cells by two into the field's 0.25 m columns, air gaps under the field's slab closed, the list clipped to the field's budget by folding its thinnest gaps, and the span the land sits in flagged as terrain (the field extends it to the world floor) and raised to the water surface where the land is under water, as the depth capture used to record it. Recast z runs along -local y, so sheet rows count from the far end of the raster. [interaction: SSWorldField::navSpans]
+    void extractSpanSheet(const rcHeightfield& hf, const rcConfig& cfg, const SSNavBuildInput& in, SSNavMesh::SpanSheet& out)
+    {
+        const S32 R = SSNavMesh::SpanSheet::RES, K = SSNavMesh::SpanSheet::SPANS;
+        const F32 sheet_cell = SSNavMesh::TILE_M / (F32)R;
+        const S32 per = SSNavMesh::TILE_CELLS / R;
+        const S32 b = cfg.borderSize;
+        out.mCount.assign((size_t)R * R, 0);
+        out.mBottom.assign((size_t)R * R * K, 0.f);
+        out.mTop.assign((size_t)R * R * K, 0.f);
+        out.mFlags.assign((size_t)R * R * K, 0);
+        struct Iv { F32 lo, hi; U8 fl; };
+        std::vector<Iv> ivs, merged;
+        for (S32 sy = 0; sy < R; ++sy) for (S32 sx = 0; sx < R; ++sx)
+        {
+            ivs.clear(); merged.clear();
+            for (S32 dy = 0; dy < per; ++dy) for (S32 dx = 0; dx < per; ++dx)
+            {
+                const S32 hx = b + sx * per + dx;
+                const S32 hz = b + SSNavMesh::TILE_CELLS - 1 - (sy * per + dy);
+                if (hx < 0 || hz < 0 || hx >= hf.width || hz >= hf.height) continue;
+                for (const rcSpan* sp = hf.spans[hx + hz * hf.width]; sp; sp = sp->next)
+                {
+                    ivs.push_back(Iv{cfg.bmin[1] + (F32)sp->smin * cfg.ch, cfg.bmin[1] + (F32)sp->smax * cfg.ch, (U8)SSRainShadowMap::SURF_MAPPED});
+                }
+            }
+            if (ivs.empty()) continue;
+            std::sort(ivs.begin(), ivs.end(), [](const Iv& a, const Iv& c) { return a.lo < c.lo; });
+            for (const Iv& iv : ivs)
+            {
+                if (!merged.empty() && iv.lo - merged.back().hi < 0.25f) merged.back().hi = llmax(merged.back().hi, iv.hi);
+                else merged.push_back(iv);
+            }
+            while ((S32)merged.size() > K)
+            {
+                size_t thinnest = 0;
+                F32 best = FLT_MAX;
+                for (size_t j = 0; j + 1 < merged.size(); ++j)
+                {
+                    const F32 gap = merged[j + 1].lo - merged[j].hi;
+                    if (gap < best) { best = gap; thinnest = j; }
+                }
+                merged[thinnest].hi = merged[thinnest + 1].hi;
+                merged.erase(merged.begin() + (thinnest + 1));
+            }
+            F32 tz;
+            const F32 cx = in.mMin[0] + ((F32)sx + 0.5f) * sheet_cell, cy = in.mMin[1] + ((F32)sy + 0.5f) * sheet_cell;
+            if (sheetTerrainAt(in, cx, cy, tz) && tz >= in.mMin[2] - 1.f && tz <= in.mMax[2] + 1.f)
+            {
+                for (size_t k = 0; k < merged.size(); ++k)
+                {
+                    if (merged[k].lo > tz + 0.3f) break;                 // everything from here up floats above the land
+                    if (merged[k].hi < tz - 0.3f) continue;              // a body wholly under the land
+                    merged[k].fl |= SSRainShadowMap::SURF_FALLBACK;
+                    if (in.mWaterZ > merged[k].hi)
+                    {
+                        merged[k].hi = in.mWaterZ;
+                        merged[k].fl |= SSRainShadowMap::SURF_WATER;
+                        while (k + 1 < merged.size() && merged[k + 1].lo - merged[k].hi < 0.25f)
+                        {
+                            merged[k].hi = llmax(merged[k].hi, merged[k + 1].hi);
+                            merged.erase(merged.begin() + (k + 1));
+                        }
+                    }
+                    break;
+                }
+            }
+            const size_t col = (size_t)sy * R + sx;
+            out.mCount[col] = (U8)merged.size();
+            for (size_t k = 0; k < merged.size(); ++k)
+            {
+                out.mBottom[col * K + k] = merged[k].lo;
+                out.mTop[col * K + k] = merged[k].hi;
+                out.mFlags[col * K + k] = merged[k].fl;
+            }
+        }
+    }
 
     void emitBox(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavSoup& out)
     {
@@ -416,7 +516,7 @@ namespace
     }
 
     // The worker: one band through Recast to compressed tile cache layers; out_dropped counts layers past the per-band cap.
-    void buildBand(const SSNavBuildInput& in, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped)
+    void buildBand(const SSNavBuildInput& in, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped, SSNavMesh::SpanSheet* out_sheet)
     {
         out_dropped = 0;
         rcContext ctx(false);
@@ -466,6 +566,7 @@ namespace
         rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *hf);
         rcFilterLedgeSpans(&ctx, cfg.walkableHeight, cfg.walkableClimb, *hf);
         rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *hf);
+        if (out_sheet) extractSpanSheet(*hf, cfg, in, *out_sheet);
 
         rcCompactHeightfield* chf = rcAllocCompactHeightfield();
         const bool compact_ok = chf && rcBuildCompactHeightfield(&ctx, cfg.walkableHeight, cfg.walkableClimb, *hf, *chf);
@@ -758,6 +859,9 @@ void SSNavMesh::schedule()
             lo = llmin(lo, patch->getMinZ()); hi = llmax(hi, patch->getMaxZ());
             sig = fnv(sig, patch->getLastUpdateTime());
             sig = fnv(sig, regionp->getHandle());
+            // <SS:Nexii> Land under water carries the water surface in its band, so the span sheet can record the surface the way the depth capture did; the level joins the signature. [interaction: extractSpanSheet]
+            const F32 water = regionp->getWaterHeight();
+            if (water > patch->getMinZ()) { hi = llmax(hi, water); sig = fnvF(sig, water); }
         }
         if (any) columns[columnKey(x, y)].push_back(Interval{lo, hi, sig});
     }
@@ -872,6 +976,7 @@ void SSNavMesh::schedule()
         }
         const bool keep = it->second.mAlive || (in_world && !in_envelope);
         if (keep) { ++it; continue; }
+        if (!it->second.mRefs.empty()) feedWorldField(tx, ty, it->second.mZMin, it->second.mZMax, nullptr);   // the field drops the band's spans with it
         removeBand(it->first, it->second);
         it = mBands.erase(it);
     }
@@ -895,6 +1000,140 @@ void SSNavMesh::schedule()
 }
 
 // Evict a band's published layers from both the tile cache and the navmesh.
+// The band's column in agent space resolves to a region; the sheet (or nothing, to clear) lands in that region's tile.
+void SSNavMesh::feedWorldField(S32 tx, S32 ty, F32 zmin, F32 zmax, const SpanSheet* sheet)
+{
+    if (!SSWorldField::instanceExists()) return;
+    const LLVector3 origin_agent = fromLocal(LLVector3((F32)tx * TILE_M, (F32)ty * TILE_M, 0.f));
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(origin_agent + LLVector3(0.5f * TILE_M, 0.5f * TILE_M, 0.f));
+    if (!regionp) return;
+    const LLVector3 o = origin_agent - regionp->getOriginAgent();
+    SSWorldField::getInstance()->navSpans(regionp->getHandle(), o.mV[VX], o.mV[VY], TILE_M, zmin, zmax, sheet);
+    if (sheet) ++mSheetsFed;
+}
+
+void SSNavMesh::dumpAt(const LLVector3& bmin_agent, const LLVector3& bmax_agent, std::vector<std::string>& out) const
+{
+    if (!mNavMesh) { out.push_back("navmesh: not running (SSNavMesh off or no region yet)"); return; }
+    static LLCachedControl<F32> range_setting(gSavedSettings, "SSNavMeshRange", 512.f);
+    const LLVector3 lo = toLocal(bmin_agent), hi = toLocal(bmax_agent);
+    const LLVector3 anchor = toLocal(SSWorldFieldShapes::getInstance()->censusAnchor());
+    const S32 x0 = (S32)floorf(lo.mV[VX] / TILE_M), x1 = (S32)floorf(hi.mV[VX] / TILE_M);
+    const S32 y0 = (S32)floorf(lo.mV[VY] / TILE_M), y1 = (S32)floorf(hi.mV[VY] / TILE_M);
+    out.push_back(llformat("navmesh: box z %.1f..%.1f covers columns x %d..%d y %d..%d (16 m each); %d columns, %d bands, %d queued, %d building, census stamp %s",
+                           lo.mV[VZ], hi.mV[VZ], x0, x1, y0, y1, columnCount(), bandCount(), pendingCount(), inFlightCount(),
+                           mCensusStamp == 0 ? "reset (schedule pending)" : "set"));
+    S32 shown = 0;
+    for (S32 ty = y0; ty <= y1 && shown < 16; ++ty) for (S32 tx = x0; tx <= x1 && shown < 16; ++tx, ++shown)
+    {
+        const F32 cx = ((F32)tx + 0.5f) * TILE_M, cy = ((F32)ty + 0.5f) * TILE_M;
+        const F32 d = llmax(fabsf(cx - anchor.mV[VX]), fabsf(cy - anchor.mV[VY]));
+        auto cit = mColumns.find(columnKey(tx, ty));
+        S32 queued = 0, building = 0;
+        for (const Job& j : mWorklist) if (j.mTx == tx && j.mTy == ty) ++queued;
+        for (const Job& j : mInFlightJobs) if (j.mTx == tx && j.mTy == ty) ++building;
+        out.push_back(llformat("  column (%d, %d): %s, %.0f m from the anchor (range %.0f), %d queued, %d building",
+                               tx, ty, cit == mColumns.end() ? "NOT SCHEDULED (outside the envelope or nothing there)" : llformat("%d bands scheduled", cit->second).c_str(),
+                               d, (F32)range_setting, queued, building));
+        for (S32 slot = 0; slot < MAX_BANDS; ++slot)
+        {
+            auto bit = mBands.find(bandKey(tx, ty, slot));
+            if (bit == mBands.end()) continue;
+            const Band& b = bit->second;
+            const bool overlaps = hi.mV[VZ] >= b.mZMin && lo.mV[VZ] <= b.mZMax;
+            out.push_back(llformat("    band slot %d: z %.1f..%.1f%s, %s, %d tiles, published %.1f s ago, %d layers dropped",
+                                   slot, b.mZMin, b.mZMax, overlaps ? " (covers the box)" : "", b.mAlive ? "alive" : "stale",
+                                   (S32)b.mRefs.size(), LLFrameTimer::getTotalSeconds() - b.mPublishedAt, b.mLayersDropped));
+        }
+    }
+    const LLVector3 top((bmin_agent.mV[VX] + bmax_agent.mV[VX]) * 0.5f, (bmin_agent.mV[VY] + bmax_agent.mV[VY]) * 0.5f, bmax_agent.mV[VZ] + 0.2f);
+    LLVector3 near;
+    if (nearestPoint(top, 2.f, near))
+    {
+        out.push_back(llformat("  probe: nearest navmesh point to the box top (%.1f, %.1f, %.1f) is (%.1f, %.1f, %.1f), %.2f m away",
+                               top.mV[VX], top.mV[VY], top.mV[VZ], near.mV[VX], near.mV[VY], near.mV[VZ], (near - top).magVec()));
+    }
+    else
+    {
+        out.push_back(llformat("  probe: no navmesh within 2 m of the box top (%.1f, %.1f, %.1f)", top.mV[VX], top.mV[VY], top.mV[VZ]));
+    }
+}
+
+void SSNavMesh::dumpLinksAt(const LLVector3& pos_agent, F32 radius, std::vector<std::string>& out) const
+{
+    if (!mNavMesh) return;
+    const dtNavMesh* nm = mNavMesh;
+    S32 shown = 0, portal = 0, unlinked = 0;
+    for (int i = 0; i < nm->getMaxTiles(); ++i)
+    {
+        const dtMeshTile* tile = nm->getTile(i);
+        if (!tile || !tile->header) continue;
+        for (int p = 0; p < tile->header->polyCount; ++p)
+        {
+            const dtPoly& poly = tile->polys[p];
+            if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || poly.vertCount < 3) continue;
+            for (int v = 0; v < (int)poly.vertCount; ++v)
+            {
+                if (!(poly.neis[v] & DT_EXT_LINK)) continue;
+                const float* a = &tile->verts[poly.verts[v] * 3];
+                const float* b = &tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3];
+                const LLVector3 pa = fromLocal(LLVector3(a[0], -a[2], a[1])), pb = fromLocal(LLVector3(b[0], -b[2], b[1]));
+                const LLVector3 mid = (pa + pb) * 0.5f;
+                if ((mid - pos_agent).magVec() > radius) continue;
+                bool linked = false;
+                for (unsigned int l = poly.firstLink; l != DT_NULL_LINK; l = tile->links[l].next)
+                {
+                    if (tile->links[l].edge == v && tile->links[l].side != 0xff) { linked = true; break; }
+                }
+                ++portal;
+                if (!linked) ++unlinked;
+                if (shown < 40)
+                {
+                    ++shown;
+                    out.push_back(llformat("  portal edge tile (%d, %d) band %d layer %d poly %d edge %d: %s, (%.2f, %.2f, %.2f)-(%.2f, %.2f, %.2f)",
+                                           tile->header->x, -tile->header->y - 1, tile->header->layer / SS_NAV_MAX_LAYERS_PER_BAND, tile->header->layer % SS_NAV_MAX_LAYERS_PER_BAND,
+                                           p, v, linked ? "linked" : "UNLINKED (red)",
+                                           pa.mV[VX], pa.mV[VY], pa.mV[VZ], pb.mV[VX], pb.mV[VY], pb.mV[VZ]));
+                }
+            }
+        }
+    }
+    out.push_back(llformat("  portal edges within %.0f m: %d, unlinked %d%s", radius, portal, unlinked, portal > shown ? " (first 40 listed)" : ""));
+}
+
+bool SSNavMesh::regionSettled(U64 region_handle) const
+{
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp || !mNavMesh || mCensusStamp == 0) return false;      // a schedule is still to run
+    const LLVector3 o = toLocal(regionp->getOriginAgent());
+    const F32 w = regionp->getWidth();
+    auto inside = [&](S32 tx, S32 ty)
+    {
+        const F32 x = ((F32)tx + 0.5f) * TILE_M - o.mV[VX], y = ((F32)ty + 0.5f) * TILE_M - o.mV[VY];
+        return x >= 0.f && x < w && y >= 0.f && y < w;
+    };
+    for (const Job& j : mWorklist) if (inside(j.mTx, j.mTy)) return false;
+    for (const Job& j : mInFlightJobs) if (inside(j.mTx, j.mTy)) return false;
+    return true;
+}
+
+void SSNavMesh::refeedRegion(U64 region_handle)
+{
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp || !mNavMesh) return;
+    const LLVector3 o = toLocal(regionp->getOriginAgent());
+    const F32 w = regionp->getWidth();
+    for (auto& kv : mBands)
+    {
+        if (kv.second.mRefs.empty()) continue;                          // pending anyway
+        const S32 tx = (S32)((kv.first >> 42) & 0x1FFFFF) - (1 << 20);
+        const S32 ty = (S32)((kv.first >> 21) & 0x1FFFFF) - (1 << 20);
+        const F32 x = ((F32)tx + 0.5f) * TILE_M - o.mV[VX], y = ((F32)ty + 0.5f) * TILE_M - o.mV[VY];
+        if (x >= 0.f && x < w && y >= 0.f && y < w) kv.second.mSig = 0;
+    }
+    mCensusStamp = 0;                                                   // the next update reschedules, and the zeroed signatures rebuild
+}
+
 void SSNavMesh::removeBand(U64 key, Band& band)
 {
     (void)key;
@@ -946,21 +1185,29 @@ void SSNavMesh::launch(const Job& job)
     });
 
     // Terrain heights for the bordered column, void marked below -900 so the worker skips those cells.
-    std::vector<F32> heights((size_t)SS_NAV_TERRAIN_NODES * SS_NAV_TERRAIN_NODES, -1000.f);
+    in->mTerrain.assign((size_t)SS_NAV_TERRAIN_NODES * SS_NAV_TERRAIN_NODES, -1000.f);
     const F32 tx0 = in->mMin[0] - SS_NAV_TERRAIN_MARGIN_M, ty0 = in->mMin[1] - SS_NAV_TERRAIN_MARGIN_M;
+    in->mTerrainX0 = tx0; in->mTerrainY0 = ty0;
     bool terrain_in_band = false;
     for (S32 gy = 0; gy < SS_NAV_TERRAIN_NODES; ++gy) for (S32 gx = 0; gx < SS_NAV_TERRAIN_NODES; ++gx)
     {
         F32 z;
         if (!terrainZLocal(tx0 + (F32)gx, ty0 + (F32)gy, z)) continue;
-        heights[gy * SS_NAV_TERRAIN_NODES + gx] = z;
+        in->mTerrain[gy * SS_NAV_TERRAIN_NODES + gx] = z;
         if (z >= in->mMin[2] - 1.f && z <= in->mMax[2] + 1.f) terrain_in_band = true;
     }
-    if (terrain_in_band) emitTerrain(heights.data(), tx0, ty0, in->mSoup);
+    if (terrain_in_band) emitTerrain(in->mTerrain.data(), tx0, ty0, in->mSoup);
+    in->mWantSheet = SSWorldField::navSpansWanted();
+    if (in->mWantSheet)
+    {
+        LLViewerRegion* column_region = LLWorld::getInstance()->getRegionFromPosAgent(fromLocal(LLVector3(in->mMin[0] + 0.5f * TILE_M, in->mMin[1] + 0.5f * TILE_M, 0.f)));
+        in->mWaterZ = column_region ? column_region->getWaterHeight() : -1e30f;     // local z is agent z
+    }
 
     const U32 generation = mGeneration;
     SSNavCompressor* comp = &mImpl->mCompressor;
     ++mInFlight;
+    mInFlightJobs.push_back(job);
     const bool posted = main_queue->postTo(
         general_queue,
         [in, comp, job, generation]() -> std::shared_ptr<Result>
@@ -969,7 +1216,8 @@ void SSNavMesh::launch(const Job& job)
             r->mJob = job;
             r->mGeneration = generation;
             LLTimer t;
-            buildBand(*in, *comp, r->mLayers, r->mLayersDropped);
+            if (in->mWantSheet) r->mSheet = std::make_shared<SSNavMesh::SpanSheet>();
+            buildBand(*in, *comp, r->mLayers, r->mLayersDropped, r->mSheet.get());
             r->mMS = t.getElapsedTimeF32() * 1000.f;
             r->mOk = true;
             return r;
@@ -981,6 +1229,7 @@ void SSNavMesh::launch(const Job& job)
     if (!posted)
     {
         --mInFlight;
+        mInFlightJobs.pop_back();
         LL_WARNS("SSNavMesh") << "General work queue refused a band build; navmesh will not fill" << LL_ENDL;
     }
 }
@@ -989,6 +1238,14 @@ void SSNavMesh::launch(const Job& job)
 void SSNavMesh::publish(const std::shared_ptr<Result>& result)
 {
     --mInFlight;
+    if (result)
+    {
+        for (size_t i = 0; i < mInFlightJobs.size(); ++i)
+        {
+            const Job& j = mInFlightJobs[i];
+            if (j.mTx == result->mJob.mTx && j.mTy == result->mJob.mTy && j.mBand == result->mJob.mBand) { mInFlightJobs.erase(mInFlightJobs.begin() + i); break; }
+        }
+    }
     if (!result || result->mGeneration != mGeneration || !mTileCache || !mNavMesh) return;
     LL_RECORD_BLOCK_TIME(FTM_SS_NAVMESH_PUBLISH);
     const Job& job = result->mJob;
@@ -1015,6 +1272,7 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
         mLayerBytes += layer.size();
     }
     mTileCache->buildNavMeshTilesAt(job.mTx, -job.mTy - 1, mNavMesh);
+    if (result->mSheet) feedWorldField(job.mTx, job.mTy, job.mZMin, job.mZMax, result->mSheet.get());
     band.mLayersDropped = result->mLayersDropped;
     mLayersDropped += (U32)result->mLayersDropped;
     if (result->mLayersDropped > 0 && result->mLayersDropped != dropped_before)    // a stairwell rebuilds often; say it when the count changes, not per publish
@@ -1239,6 +1497,20 @@ void SSNavMesh::renderDebug(bool force_navmesh)
     LLGLDisable cull(GL_CULL_FACE);
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
+
+    // The marked spot: a magenta post with a cross at the mark, so a dump and the view line up.
+    if (mHasMark)
+    {
+        gGL.begin(LLRender::LINES);
+        gGL.color4f(1.f, 0.2f, 1.f, 0.9f);
+        gGL.vertex3f(mMark.mV[VX], mMark.mV[VY], mMark.mV[VZ] - 5.f);
+        gGL.vertex3f(mMark.mV[VX], mMark.mV[VY], mMark.mV[VZ] + 5.f);
+        gGL.vertex3f(mMark.mV[VX] - 1.f, mMark.mV[VY], mMark.mV[VZ]);
+        gGL.vertex3f(mMark.mV[VX] + 1.f, mMark.mV[VY], mMark.mV[VZ]);
+        gGL.vertex3f(mMark.mV[VX], mMark.mV[VY] - 1.f, mMark.mV[VZ]);
+        gGL.vertex3f(mMark.mV[VX], mMark.mV[VY] + 1.f, mMark.mV[VZ]);
+        gGL.end();
+    }
 
     // Mover obstacles: the boxes the tile cache carved out for objects the census still counts as moving.
     if (show_obstacles && !mObstacles.empty())
