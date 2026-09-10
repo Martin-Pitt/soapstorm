@@ -32,6 +32,7 @@
 
 #include "llagent.h"
 #include "lldate.h"
+#include "llvolumemessage.h"    // <SS:Nexii> constrainVolumeParams: a parcel notecard is untrusted input
 #include "llsettingssky.h"
 #include "llsettingswater.h"
 #include "llviewerregion.h"
@@ -1691,6 +1692,11 @@ bool SSAtmoEnvLandscapePart::fromLLSD(const LLSD& sd)
     {
         LLSD copy = sd["volume"];
         mVolume.fromLLSD(copy);
+        // <SS:Nexii> Every wire path into LLVolumeParams runs this validator; a raw notecard is the one path that did not, and LLProfile::generate LL_ERRS on an unknown profile curve - a parcel-supplied card could abort the viewer. Clamp in place, as the sim's own objects are.
+        if (!LLVolumeMessage::constrainVolumeParams(mVolume))
+        {
+            LL_WARNS("AtmoMagicEnv") << "Atmo landscape part carried out-of-range volume params; clamped" << LL_ENDL;
+        }
     }
     if (sd.has("offset") && sd["offset"].isArray())
     {
@@ -1933,7 +1939,7 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
         const LLSD& ls = sd["landscape"];
         for (U32 i = 0; i < ls.size(); ++i)
         {
-            // <SS:Nexii> SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK was enforced only in the floater's drop path (SSAtmoLandscapeWorld::addFromItem), never on the parse, so a parcel-supplied notecard could spawn as many client-side mesh objects as it liked. Clamp here rather than reject: an over-budget card still loads, it just stops at the budget - the break makes the warning fire once.
+            // <SS:Nexii> SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK used to be enforced only at add time (SSAtmoLandscapeWorld::appendRecord), never on the parse, so a parcel-supplied notecard could spawn as many client-side mesh objects as it liked. Clamp here rather than reject: an over-budget card still loads, it just stops at the budget - the break makes the warning fire once.
             if ((S32)mLandscapes.size() >= SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK)
             {
                 LL_WARNS("AtmoMagicEnv") << "Atmo v3 track '" << mName << "' asks for more than "
@@ -2206,7 +2212,7 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
         return false;
     }
 
-    // <SS:Nexii> The landscape caps used to live only in SSAtmoLandscapeWorld::addFromItem (the floater's drop path), so a parcel notecard - untrusted, and applied without the author ever seeing it - could ask for unlimited client-side mesh objects. The per-track cap is enforced in SSAtmoEnvTrack::fromLLSD; this is the asset-wide one. Clamp, never fail: a card that overshoots still loads, it just stops at the budget.
+    // <SS:Nexii> The landscape caps used to live only at add time (SSAtmoLandscapeWorld::appendRecord), so a parcel notecard - untrusted, and applied without the author ever seeing it - could ask for unlimited client-side mesh objects. The per-track cap is enforced in SSAtmoEnvTrack::fromLLSD; this is the asset-wide one. Clamp, never fail: a card that overshoots still loads, it just stops at the budget.
     S32 landscape_total = 0;
     bool landscape_warned = false;
     for (SSAtmoEnvTrack& t : parsed.mTracks)

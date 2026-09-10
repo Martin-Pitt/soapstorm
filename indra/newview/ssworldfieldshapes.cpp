@@ -161,19 +161,6 @@ static bool ss_part_fully_hidden(LLVOVolume* vov)
 // World rotation of a part: the drawable's xform-maintained world frame - the
 // same one the physics debug renderer draws through (xform.cpp composes
 // world = local * parent, which a hand-rolled parent-first walk gets wrong).
-// The object's world rotation as the sim knows it, without the client-side spin llTargetOmega adds to the drawable.
-static LLQuaternion ss_world_rotation_unspun(const LLViewerObject* vobj)
-{
-    LLQuaternion rot = vobj->getRotation();
-    const LLViewerObject* cur = vobj;
-    while (cur->getParent())
-    {
-        cur = (LLViewerObject*)cur->getParent();
-        rot = rot * cur->getRotation();
-    }
-    return rot;
-}
-
 static LLQuaternion ss_world_rotation(const LLViewerObject* vobj)
 {
     if (vobj->mDrawable)
@@ -186,6 +173,19 @@ static LLQuaternion ss_world_rotation(const LLViewerObject* vobj)
     {
         cur = (LLViewerObject*)cur->getParent();
         rot = rot * cur->getRotation();
+    }
+    return rot;
+}
+
+// <SS:Nexii> The object's world rotation as the sim knows it, without the client-side spin llTargetOmega adds: the viewer keeps getRotation() = sim rotation * mAngularVelocityRot (llviewerobject.cpp, processUpdateMessage and applyAngularVelocity both compose that way), so the spin divides back out per link. Composed parent-first like ss_world_rotation's fallback. [interaction: addPart spinners]
+static LLQuaternion ss_world_rotation_unspun(const LLViewerObject* vobj)
+{
+    LLQuaternion rot = vobj->getRotation() * ~vobj->ssAngularVelocityRot();
+    const LLViewerObject* cur = vobj;
+    while (cur->getParent())
+    {
+        cur = (LLViewerObject*)cur->getParent();
+        rot = rot * (cur->getRotation() * ~cur->ssAngularVelocityRot());
     }
     return rot;
 }

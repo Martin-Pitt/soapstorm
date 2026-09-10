@@ -130,7 +130,7 @@ private:
     SSAtmoLandscapeObject* createObject(LLViewerRegion* regionp, const SSAtmoEnvLandscape& record);
     void killObject(SSAtmoLandscapeObject* rootp);
     bool anySelected() const;
-    bool appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index);
+    bool appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index, bool force_hydrate = false);
     void applyFacesToAll();
     void captureAll(std::vector<SSAtmoEnvLandscape>& records);
 
@@ -156,6 +156,16 @@ private:
         S32 mContentItems = 0;
         S32 mContentPrims = 0;
 
+        // <SS:Nexii> The root's metadata, snapshotted the moment every node is proven valid (end of WAIT_PERMS): the selection can drift during the contents wait or the dialog, and the record must not come out unnamed and creator-less because of it.
+        std::string mName;
+        std::string mDesc;
+        LLUUID mCreator;
+        LLUUID mLastOwner;
+        F64 mCreated = 0.0;
+
+        // Bumped per job and carried in the contents dialog's payload, so a stale dialog cannot answer for a later job. Deliberately not reset by clear().
+        U32 mGeneration = 0;
+
         void clear()
         {
             mState = ESSConvertState::IDLE;
@@ -164,6 +174,11 @@ private:
             mContentsUnknown = false;
             mContentItems = 0;
             mContentPrims = 0;
+            mName.clear();
+            mDesc.clear();
+            mCreator.setNull();
+            mLastOwner.setNull();
+            mCreated = 0.0;
         }
     };
     SSConvertJob mConvert;

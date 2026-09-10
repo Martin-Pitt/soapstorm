@@ -779,6 +779,22 @@ static int portalCornerHeight(const dtTileCacheLayer& layer, const int x, const 
 	return best;
 }
 
+// Whether the border bends at lattice line (x, z): the region's own height there against the chord between its lattice
+// neighbours along the border axis. A neighbour the region does not reach counts as level (the segment ends within a
+// lattice step of it, so the chord there is short). Shared by insertion and removal so both agree, and both tiles
+// compute it from adjacent cells of the same lattice, so they agree with each other.
+static bool portalBendsAt(const dtTileCacheLayer& layer, const int x, const int z, const int axis, const unsigned char reg)
+{
+	const int T = DT_SS_PORTAL_TESS_CELLS;
+	const int h1 = portalCornerHeight(layer, x, z, reg);
+	if (h1 < 0) return true;
+	int h0 = axis == 0 ? portalCornerHeight(layer, x - T, z, reg) : portalCornerHeight(layer, x, z - T, reg);
+	int h2 = axis == 0 ? portalCornerHeight(layer, x + T, z, reg) : portalCornerHeight(layer, x, z + T, reg);
+	if (h0 < 0) h0 = h1;
+	if (h2 < 0) h2 = h1;
+	return dtAbs(2*h1 - h0 - h2) > 2;
+}
+
 static void tessellatePortalEdges(const dtTileCacheLayer& layer, dtTempContour& cont, const unsigned char reg)
 {
 	if (cont.nverts < 2) return;
@@ -793,31 +809,41 @@ static void tessellatePortalEdges(const dtTileCacheLayer& layer, dtTempContour& 
 		if (a[0] == b[0] && a[2] != b[2]) axis = 2;
 		else if (a[2] == b[2] && a[0] != b[0]) axis = 0;
 		else continue;
+		const int other = axis == 0 ? 2 : 0;
+		// Everything read from a and b, before the gap below moves b.
 		const int va = (int)a[axis], vb = (int)b[axis];
+		const int a_other = (int)a[other], ay = (int)a[1], by = (int)b[1];
 		const int step = va < vb ? DT_SS_PORTAL_TESS_CELLS : -DT_SS_PORTAL_TESS_CELLS;
 		// First lattice line strictly past a in the direction of b.
 		int first;
 		if (step > 0) first = (va / DT_SS_PORTAL_TESS_CELLS + 1) * DT_SS_PORTAL_TESS_CELLS;
 		else first = ((va - 1) / DT_SS_PORTAL_TESS_CELLS) * DT_SS_PORTAL_TESS_CELLS;
+		// Only the lattice lines where the border bends get a vertex. A flat run gets none: the poly mesh could not take
+		// them out again afterwards - a collinear vertex between two fan triangles is exactly what removeVertex declines
+		// and what mergePolys will not merge across - and every flat tile came out as a fan of slivers.
+		int cand[32];
 		int n = 0;
-		for (int v = first; step > 0 ? v < vb : v > vb; v += step) ++n;
+		for (int v = first; (step > 0 ? v < vb : v > vb) && n < 32; v += step)
+		{
+			const int x = axis == 0 ? v : a_other, z = axis == 0 ? a_other : v;
+			if (portalBendsAt(layer, x, z, axis, reg)) cand[n++] = v;
+		}
 		if (n == 0) continue;
 		if (cont.nverts + n > cont.cverts) return;			// out of scratch: leave the rest as upstream would
 		// Open a gap after j (a segment ending at vertex 0 appends at the tail, nothing to move).
 		const int tail = cont.nverts - (j + 1);
 		if (tail > 0) memmove(&cont.verts[(j + 1 + n)*4], &cont.verts[(j + 1)*4], sizeof(unsigned char)*4*tail);
-		const int other = axis == 0 ? 2 : 0;
 		const float span = (float)(vb - va);
-		int v = first;
-		for (int k = 0; k < n; ++k, v += step)
+		for (int k = 0; k < n; ++k)
 		{
+			const int v = cand[k];
 			unsigned char* dst = &cont.verts[(j + 1 + k)*4];
 			const float t = span != 0.f ? (float)(v - va) / span : 0.f;
 			dst[axis] = (unsigned char)v;
-			dst[other] = a[other];
+			dst[other] = (unsigned char)a_other;
 			// The real height at this corner from the region's cells; the straight-line guess only when none touch it.
 			const int lh = portalCornerHeight(layer, (int)dst[0], (int)dst[2], reg);
-			dst[1] = lh >= 0 ? (unsigned char)lh : (unsigned char)((float)a[1] + ((float)b[1] - (float)a[1]) * t + 0.5f);
+			dst[1] = lh >= 0 ? (unsigned char)lh : (unsigned char)((float)ay + ((float)by - (float)ay) * t + 0.5f);
 			dst[3] = nei;
 		}
 		cont.nverts += n;
@@ -912,18 +938,9 @@ dtStatus dtBuildTileCacheContours(dtTileCacheAlloc* alloc,
 					bool keepLattice = false;
 					if (shouldRemove)
 					{
-						const int T = DT_SS_PORTAL_TESS_CELLS;
 						const int vx = (int)v[0], vz = (int)v[2];
-						int axis = -1;
-						if ((vx == 0 || vx == w) && (vz % T) == 0) axis = 2;
-						else if ((vz == 0 || vz == h) && (vx % T) == 0) axis = 0;
-						if (axis >= 0)
-						{
-							const int h1 = portalCornerHeight(layer, vx, vz, ri);
-							const int h0 = axis == 0 ? portalCornerHeight(layer, vx - T, vz, ri) : portalCornerHeight(layer, vx, vz - T, ri);
-							const int h2 = axis == 0 ? portalCornerHeight(layer, vx + T, vz, ri) : portalCornerHeight(layer, vx, vz + T, ri);
-							keepLattice = h0 < 0 || h1 < 0 || h2 < 0 || dtAbs(2*h1 - h0 - h2) > 2;
-						}
+						if ((vx == 0 || vx == w) && (vz % DT_SS_PORTAL_TESS_CELLS) == 0) keepLattice = portalBendsAt(layer, vx, vz, 2, ri);
+						else if ((vz == 0 || vz == h) && (vx % DT_SS_PORTAL_TESS_CELLS) == 0) keepLattice = portalBendsAt(layer, vx, vz, 0, ri);
 					}
 					if (shouldRemove && !keepLattice)
 						dst[3] |= 0x80;

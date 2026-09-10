@@ -5297,6 +5297,23 @@ void LLSelectMgr::deselectAllIfTooFar()
 }
 
 
+// <SS:Nexii> The one landscape linkset a selection holds, or null: every selected object must be local content sharing one record id (a root, its children, or a single part under Edit Linked Parts). [interaction: ss_landscape_persist_name]
+static const SSAtmoLandscapeObject* ss_single_local_record(const LLObjectSelectionHandle& selection)
+{
+    if (selection.isNull()) return nullptr;
+    const SSAtmoLandscapeObject* found = nullptr;
+    for (LLObjectSelection::iterator it = selection->begin(); it != selection->end(); ++it)
+    {
+        LLViewerObject* obj = (*it)->getObject();
+        if (!obj) continue;
+        const SSAtmoLandscapeObject* landscape = obj->ssIsLocalContent() ? dynamic_cast<const SSAtmoLandscapeObject*>(obj) : nullptr;
+        if (!landscape) return nullptr;
+        if (found && found->recordId() != landscape->recordId()) return nullptr;
+        if (!found) found = landscape;
+    }
+    return found;
+}
+
 void LLSelectMgr::selectionSetObjectName(const std::string& name)
 {
     std::string name_copy(name);
@@ -5305,12 +5322,9 @@ void LLSelectMgr::selectionSetObjectName(const std::string& name)
     // store - the sim funnel is a no-op for it. The panel already wrote the node; persist
     // to the record and let the capture baseline follow.
     LLObjectSelection::iterator first = mSelectedObjects->begin();
-    if (first != mSelectedObjects->end()
-        && mSelectedObjects->getRootObjectCount() == 1    // <SS:Nexii> one linkset: root and children share the record
-        && (*first)->getObject()
-        && (*first)->getObject()->ssIsLocalContent())
+    const SSAtmoLandscapeObject* landscape = ss_single_local_record(mSelectedObjects);    // <SS:Nexii> one landscape linkset however it was selected - Edit Linked Parts makes getRootObjectCount() read 0
+    if (first != mSelectedObjects->end() && landscape)
     {
-        const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>((*first)->getObject());
         if (landscape)
         {
             // Keep the record's current desc - see the matching note in the description path.
@@ -5357,12 +5371,9 @@ void LLSelectMgr::selectionSetObjectDescription(const std::string& desc)
     // <SS:Nexii> A local-content (Atmo Magic landscape) single selection: persist to the
     // record - see selectionSetObjectName.
     LLObjectSelection::iterator first = mSelectedObjects->begin();
-    if (first != mSelectedObjects->end()
-        && mSelectedObjects->getRootObjectCount() == 1    // <SS:Nexii> one linkset: root and children share the record
-        && (*first)->getObject()
-        && (*first)->getObject()->ssIsLocalContent())
+    const SSAtmoLandscapeObject* landscape = ss_single_local_record(mSelectedObjects);    // <SS:Nexii> one landscape linkset however it was selected - Edit Linked Parts makes getRootObjectCount() read 0
+    if (first != mSelectedObjects->end() && landscape)
     {
-        const SSAtmoLandscapeObject* landscape = dynamic_cast<const SSAtmoLandscapeObject*>((*first)->getObject());
         if (landscape)
         {
             // Keep the record's current name - the node's is stale from seeding and a

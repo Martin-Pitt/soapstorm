@@ -409,3 +409,27 @@ enable logic, with local content as a third case beside object and attachment.
   script item and the Content tab (local objects hold no inventory); Link and Unlink and the
   parent/child silhouette split; the General tab permissions block and Copy keys; Physical and
   Temporary; the Create tool (rezzes a sim object by definition).
+
+**Shipped, same day (2026-09-10, later).** All five items from the verdicts above are implemented:
+
+- Schema: `SSAtmoEnvLandscape` is a linkset record keyed by `mRecordId`, with `mParts[]`
+  (`SSAtmoEnvLandscapePart`: volume params, root-relative offset and rotation, scale, sparse
+  faces, light and flexi as LLSD). Part 0 is the root. Legacy one-mesh documents load as a
+  one-part record and the legacy root keys are still written beside `parts`, so an older build
+  renders the root mesh instead of rejecting the card. Prim budget:
+  `SS_ATMOENV_MAX_LANDSCAPE_PARTS_PER_RECORD` (32) and `_TOTAL` (48), clamped on parse and
+  refused on add.
+- Runtime: one `SSAtmoLandscapeObject` per part; children are real `LLViewerObject` children
+  (`addChild` + `setDrawableParent`), the root owns them by `LLPointer`, reconcile pairs by
+  record id plus part count, capture writes each part back. Light and flexi apply as local
+  parameter entries; `LLViewerObject::parameterChanged` no longer sends for local content.
+- Convert selection: a state machine in `SSAtmoLandscapeWorld` (permissions on every prim of
+  the family, contents check with a confirm dialog, capture, append, derez via
+  `LLSelectMgr::selectDelete`, select the new root). The inventory drop is gone.
+- Purple silhouette (`SSLocalContentSilhouetteColor`), and the build-tool and menu gating per
+  the kept/hidden lists; Build > Object > Duplicate copies the record.
+
+Known gaps carried forward: the derez goes through the prompting delete entry (it does not
+prompt for an owned copy-able object, but RLVa can veto it silently, leaving both the record and
+the original); face capture still omits glow, bump/shiny/fullbright, media and per-face GLTF
+overrides; a seated avatar or non-volume child is skipped at conversion.

@@ -503,7 +503,12 @@ bool SSAtmoLandscapeObject::captureToRecord(SSAtmoEnvLandscape& record)
     }
 
     // <SS:Nexii> Shape edits (the Object tab's path/profile/sculpt controls call setVolume on the object, and the send funnel drops the ObjectShape) come back through the live volume params, so a prim reshaped in the editor persists.
-    const LLVolumeParams& live = getVolume()->getParams();
+    LLVolumeParams live = getVolume()->getParams();
+    // <SS:Nexii> LLVOVolume::setVolume strips the sculpt entry when the mesh repo reports no LOD (404, purged) and draws the proxy box; capturing that would write box params into the record and lose the mesh id for good on a transient asset failure. The authored sculpt entry is kept until a real reshape replaces it.
+    if ((authored.mVolume.getSculptType() & LL_SCULPT_TYPE_MASK) == LL_SCULPT_TYPE_MESH && live.getSculptID().isNull())
+    {
+        live.setSculptID(authored.mVolume.getSculptID(), authored.mVolume.getSculptType());
+    }
     if (!(live == authored.mVolume))
     {
         out.mVolume = live;

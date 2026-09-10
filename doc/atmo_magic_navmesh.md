@@ -659,3 +659,41 @@ pass is skipped at 0. The navmesh is the world field's replacement surface, not 
 agent walks, so nothing is shaved off walls; downstream consumers rebuild themselves on the
 high-accuracy surface instead of the column store. A pathfinding consumer raises the radius when it
 arrives.
+
+**Detail mesh measured** (`V:\Scratch\navmesh\src\recastprobe_detail.cpp`, the viewer's shim verbatim
+on a synthetic 8 m hill 1.5 m tall, one polygon, 400 height queries through Detour):
+
+| | flat polygons | with detail |
+|---|---|---|
+| mean height error | 0.68 m | 0.10 m |
+| worst | 1.50 m | 0.29 m |
+
+The worst case sits just past the 0.25 m tolerance between two samples; the cell is 0.125 m.
+Keep the probe and the viewer's `SSNavMeshProcess::detail` in step.
+
+**Unspun pose, corrected after review.** `getRotation()` on a spinning object already includes the
+accumulated client-side spin (the viewer composes sim rotation times `mAngularVelocityRot` on every
+update and every tick), so reading it back was not unspun at all. The helper now divides the
+accumulator out per link, which is exact, and the box of a spinner is stable across censuses.
+
+## 26. Flat tiles as fans: the bend test moves to insertion (2026-09-10)
+
+Flat, unobstructed tiles came out as fans of slivers along two of their four sides. Section 20's
+bend test ran in the height pass, after every lattice vertex had been inserted, and relied on the
+poly mesh's vertex removal to take the flat ones out. Removal declines exactly these: ear clipping
+fans a straight run of collinear border vertices against one far vertex, `mergePolys` will not merge
+across a collinear vertex (its convexity test wants a strict turn), and `removeVertex` refuses a
+vertex whose polygons would leave two or fewer edges, which is a vertex between two fan triangles.
+Which sides fanned depended on the ear order, hence two sides of every tile.
+
+The test now runs at insertion (`portalBendsAt`, shared by `tessellatePortalEdges` and the height
+pass): a lattice line gets a vertex only where the region's own height there leaves the chord
+between its lattice neighbours by more than a cell, a neighbour the region does not reach counting
+as level. A flat run gets no vertices at all, so the removal question never arises; a bent run gets
+the same vertices on both sides of the border, as before. Also fixed on the way: the tessellation
+read its segment's end vertex after moving it to open the gap.
+
+Region 0 through the tile-cache path, 0.125 m cells: 25.0k polygons (upstream 31.1k, keep-all 54.7k,
+height-pass bend test 37.9k), 98.2% of portal edges linked, 1.2 ms per tile from layer. Fewer
+polygons than upstream because a flat border now carries no vertex at all, where upstream's own
+removal still left the odd fan.

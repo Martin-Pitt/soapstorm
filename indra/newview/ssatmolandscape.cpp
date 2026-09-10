@@ -35,6 +35,8 @@
 #include "llmeshrepository.h"
 #include "llpermissionsflags.h"
 #include "llselectmgr.h"
+#include "rlvhandler.h"     // <SS:Nexii> the convert refuses up front when RLV would veto the derez
+#include "rlvcommon.h"
 
 #include "pipeline.h"
 
@@ -168,6 +170,7 @@ void ss_seed_local_select_node(LLSelectNode* nodep)
 
 void SSAtmoLandscapeWorld::clearLandscapeObjects()
 {
+    mConvert.clear();    // <SS:Nexii> a parked conversion holds LLPointers to sim prims; they go with the objects, before gObjectList.destroy (LLWorld::resetClass)
     for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
     {
         if (objp.notNull())
@@ -413,18 +416,21 @@ SSAtmoLandscapeObject* SSAtmoLandscapeWorld::createObject(LLViewerRegion* region
         LLUUID cid;
         cid.generate();
         SSAtmoLandscapeObject* childp = new SSAtmoLandscapeObject(cid, regionp, record, pi);
+        // <SS:Nexii> A part that cannot be built abandons the whole linkset: reconcile pairs on childPartCount() + 1 == partCount(), so a linkset short of one part would never be re-adopted and would be torn down and rebuilt on every signature change.
         if (!gObjectList.adoptViewerObject(childp))
         {
             delete childp;
-            continue;
+            LL_WARNS("AtmoMagicLandscape") << "Landscape part " << pi << " could not be adopted; dropping the linkset" << LL_ENDL;
+            killObject(rootp);
+            return nullptr;
         }
         rootp->addChild(childp);
         gPipeline.createObject(childp);
         if (!childp->setDrawableParent(rootp->mDrawable))
         {
-            LL_WARNS("AtmoMagicLandscape") << "Landscape part " << pi << " could not parent its drawable; dropping it" << LL_ENDL;
-            gObjectList.killObject(childp);
-            continue;
+            LL_WARNS("AtmoMagicLandscape") << "Landscape part " << pi << " could not parent its drawable; dropping the linkset" << LL_ENDL;
+            killObject(rootp);
+            return nullptr;
         }
         childp->setPosition(record.mParts[(size_t)pi].mOffset);
         childp->setRotation(record.mParts[(size_t)pi].mRotation);
@@ -438,7 +444,7 @@ void SSAtmoLandscapeWorld::applyFacesToAll()
 {
     for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
     {
-        if (objp.notNull())
+        if (objp.notNull() && !objp->isDead())
         {
             objp->applyFaces();
         }
@@ -628,17 +634,35 @@ bool SSAtmoLandscapeWorld::beginConvertSelection(std::string& out_reason)
     {
         return false;
     }
-
-    LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
-    if (selection.isNull() || selection->getRootObjectCount() != 1)
+    // <SS:Nexii> The derez at the end goes through selectDelete, which RLV can veto silently; refusing here keeps "record added, original still in world" from ever happening.
+    if (rlv_handler_t::isEnabled() && !rlvCanDeleteOrReturn())
     {
-        out_reason = "select exactly one object (one whole linkset) first";
+        out_reason = "RLV is blocking object deletion, so the original could not be removed afterwards";
         return false;
     }
-    LLViewerObject* rootp = selection->getFirstRootObject();
+
+    // <SS:Nexii> The root is derived from whatever is selected, not from getRootObjectCount(): with Edit Linked Parts on, a selected child is an individual selection and the root count reads 0, yet the record is the whole build.
+    LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
+    LLViewerObject* rootp = nullptr;
+    if (selection.notNull())
+    {
+        for (LLObjectSelection::iterator it = selection->begin(); it != selection->end(); ++it)
+        {
+            LLViewerObject* obj = (*it)->getObject();
+            if (!obj || obj->isDead()) continue;
+            LLViewerObject* r = obj->getRootEdit();
+            if (!r) r = obj;
+            if (rootp && r != rootp)
+            {
+                out_reason = "select exactly one object (one whole linkset) first";
+                return false;
+            }
+            rootp = r;
+        }
+    }
     if (!rootp || rootp->isDead())
     {
-        out_reason = "the selected object is gone";
+        out_reason = "select exactly one object (one whole linkset) first";
         return false;
     }
     if (rootp->isAvatar() || rootp->getPCode() != LL_PCODE_VOLUME || !dynamic_cast<LLVOVolume*>(rootp))
@@ -659,6 +683,7 @@ bool SSAtmoLandscapeWorld::beginConvertSelection(std::string& out_reason)
 
     // <SS:Nexii> The whole LINKSET, not the selected nodes: Edit Linked Parts leaves one child selected and the record is the whole build. A seated avatar is a child of the root too, so non-volume children are skipped rather than captured as parts.
     mConvert.clear();
+    ++mConvert.mGeneration;
     mConvert.mPrims.push_back(rootp);
     for (const LLPointer<LLViewerObject>& child : rootp->getChildren())
     {
@@ -767,19 +792,38 @@ void SSAtmoLandscapeWorld::tickConvert()
             const U32 owner_mask = perms ? perms->getMaskOwner() : 0;
             const bool full = (owner_mask & PERM_ITEM_UNRESTRICTED) == PERM_ITEM_UNRESTRICTED;
             const bool mine = p->permYouOwner() && perms && perms->getOwner() == gAgentID;
+            const std::string which = (node && !node->mName.empty())
+                ? node->mName : llformat("prim %d", i + 1);
             if (!full || !mine)
             {
-                const std::string which = (node && !node->mName.empty())
-                    ? node->mName : llformat("prim %d", i + 1);
                 convertFail(llformat("'%s' is not full permission and owned by you - every prim of a landscape"
                                      " linkset must be copy, modify and transfer", which.c_str()));
                 return;
             }
+            // <SS:Nexii> Locked prims fail permMove(), and selectDelete answers that with an asynchronous ConfirmObjectDeleteLock instead of its forceResponse path - the job would then have added the record and moved on while the dialog still pointed at the live selection, which by then is the NEW landscape. Refuse up front.
+            if (!p->permMove())
+            {
+                convertFail(llformat("'%s' is locked - unlock every prim before converting", which.c_str()));
+                return;
+            }
+        }
+
+        // The root's metadata, taken now while every node is proven valid.
+        if (const LLSelectNode* root_node = selection.notNull() ? selection->findNode(mConvert.mPrims[0].get()) : nullptr)
+        {
+            mConvert.mName = root_node->mName;
+            mConvert.mDesc = root_node->mDescription;
+            if (root_node->mPermissions)
+            {
+                mConvert.mCreator = root_node->mPermissions->getCreator();
+                mConvert.mLastOwner = root_node->mPermissions->getLastOwner();
+            }
+            mConvert.mCreated = (F64)root_node->mCreationDate;
         }
 
         // Contents next: a local object has no simulator, so anything in a prim's inventory is
         // lost. Ask every prim; the reply is polled, never waited on.
-        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        for (LLPointer<LLViewerObject>& p : mConvert.mPrims)
         {
             p->requestInventory();
         }
@@ -793,7 +837,7 @@ void SSAtmoLandscapeWorld::tickConvert()
         // Arrival is a non-pending request with an inventory root: a prim with nothing in it
         // still gets the mocked-up "Contents" folder, so a null root means "not yet".
         S32 arrived = 0;
-        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        for (LLPointer<LLViewerObject>& p : mConvert.mPrims)
         {
             if (!p->isInventoryPending() && p->getInventoryRoot() != nullptr) ++arrived;
         }
@@ -806,7 +850,7 @@ void SSAtmoLandscapeWorld::tickConvert()
 
         mConvert.mContentItems = 0;
         mConvert.mContentPrims = 0;
-        for (const LLPointer<LLViewerObject>& p : mConvert.mPrims)
+        for (LLPointer<LLViewerObject>& p : mConvert.mPrims)
         {
             LLInventoryObject::object_list_t items;
             p->getInventoryContents(items);
@@ -827,22 +871,29 @@ void SSAtmoLandscapeWorld::tickConvert()
             args["WARNING"] = mConvert.mContentsUnknown
                 ? std::string("Some prims never reported their contents, so there may be more.")
                 : std::string();
-            LLNotificationsUtil::add("SSAtmoLandscapeConvertContents", args, LLSD(),
-                [this](const LLSD& notification, const LLSD& response)
+            // <SS:Nexii> The response functor outlives the click and can fire during logout, so it resolves the singleton instead of capturing this, and it re-checks the state: the job may have failed out from under the dialog (a prim died, the environment went away), and then the answer is not ours to act on.
+            LLSD payload;
+            payload["generation"] = (LLSD::Integer)mConvert.mGeneration;
+            LLNotificationsUtil::add("SSAtmoLandscapeConvertContents", args, payload,
+                [](const LLSD& notification, const LLSD& response)
                 {
-                    // The job may have failed out from under the dialog (a prim died, the
-                    // environment went away); then the answer is not ours to act on.
-                    if (mConvert.mState != ESSConvertState::CONFIRM)
+                    if (!SSAtmoLandscapeWorld::instanceExists())
                     {
                         return;
                     }
+                    SSAtmoLandscapeWorld* world = SSAtmoLandscapeWorld::getInstance();
+                    if (world->mConvert.mState != ESSConvertState::CONFIRM
+                        || (U32)notification["payload"]["generation"].asInteger() != world->mConvert.mGeneration)
+                    {
+                        return;    // a stale dialog from an earlier job, or the job moved on
+                    }
                     if (LLNotificationsUtil::getSelectedOption(notification, response) == 0)
                     {
-                        mConvert.mState = ESSConvertState::FINISH;
+                        world->mConvert.mState = ESSConvertState::FINISH;
                     }
                     else
                     {
-                        mConvert.clear();
+                        world->mConvert.clear();
                     }
                 });
             return;
@@ -880,6 +931,11 @@ void SSAtmoLandscapeWorld::convertFinish()
     const SSAtmoEnvLandscape* record = recordAt(index);
     const LLUUID record_id = record ? record->mRecordId : LLUUID::null;
 
+    // <SS:Nexii> The selection may have drifted while the job polled (the author clicked something else, or answered the contents dialog with a different object selected), and the derez below takes the WHOLE selection - so the source family is re-selected first and is then provably the only thing in it. The record's metadata came from the job's snapshot, taken at the end of WAIT_PERMS, so drift cannot blank it.
+    LLViewerObject* sourcep = mConvert.mPrims[0].get();
+    LLSelectMgr::getInstance()->deselectAll();
+    LLSelectMgr::getInstance()->selectObjectAndFamily(sourcep);
+
     // <SS:Nexii> The original goes to the trash the way the build tools' Delete does. selectDelete prompts only when something is locked, no-copy or not owned, and the job already proved the selection is none of those, so it takes its own forceResponse path and derezzes without a second dialog. The non-prompting senders (sendListToRegions/packDeRezHeader) are private to LLSelectMgr.
     LLSelectMgr::getInstance()->selectDelete();
 
@@ -906,19 +962,13 @@ S32 SSAtmoLandscapeWorld::addFromSelection(const std::vector<LLPointer<LLViewerO
     }
     LLViewerObject* rootp = prims[0].get();
 
-    LLObjectSelectionHandle selection = LLSelectMgr::getInstance()->getSelection();
-    const LLSelectNode* root_node = selection.notNull() ? selection->findNode(rootp) : nullptr;
-
     SSAtmoEnvLandscape record;
     record.mRecordId.generate();
-    record.mName = root_node ? root_node->mName : std::string();
-    record.mDesc = root_node ? root_node->mDescription : std::string();
-    if (root_node && root_node->mPermissions)
-    {
-        record.mCreator = root_node->mPermissions->getCreator();
-        record.mLastOwner = root_node->mPermissions->getLastOwner();
-    }
-    record.mCreated = root_node ? (F64)root_node->mCreationDate : (F64)time_corrected();
+    record.mName = mConvert.mName;
+    record.mDesc = mConvert.mDesc;
+    record.mCreator = mConvert.mCreator;
+    record.mLastOwner = mConvert.mLastOwner;
+    record.mCreated = mConvert.mCreated > 0.0 ? mConvert.mCreated : (F64)time_corrected();
 
     // <SS:Nexii> Locked by default, and against the ROOT's own region rather than the agent's: a linkset can be selected across a border, and a record anchored to the wrong origin lands 256 m out.
     record.mLocked = true;
@@ -956,7 +1006,7 @@ S32 SSAtmoLandscapeWorld::addFromSelection(const std::vector<LLPointer<LLViewerO
 }
 
 // The shared tail of every add path: caps, append to the active track, hydrate now (or defer mid-edit).
-bool SSAtmoLandscapeWorld::appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index)
+bool SSAtmoLandscapeWorld::appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index, bool force_hydrate)
 {
     out_index = -1;
     SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
@@ -1013,7 +1063,8 @@ bool SSAtmoLandscapeWorld::appendRecord(const SSAtmoEnvLandscape& record, std::s
     // Hydrate now: the floater wants the scenery visible this click, not next frame. But an
     // add lands mid-edit (another scenery object selected): defer like any reshape so an
     // in-flight drag never snaps - the add just waits out the drag.
-    if (anySelected())
+    // <SS:Nexii> Duplicate is invoked with the original selected by definition, so it forces the hydrate: reconcile adopts the selected root by record id and part count and re-applies only its own unchanged record, so nothing snaps - the deferral guards record-SET changes, and an append is not one.
+    if (!force_hydrate && anySelected())
     {
         mLastSignature.clear();
     }
@@ -1047,7 +1098,7 @@ S32 SSAtmoLandscapeWorld::duplicateRecord(const LLUUID& record_id, std::string& 
         copy.mFreeGlobal.mdV[VX] += (F64)nudge;
     }
     S32 index = -1;
-    if (!appendRecord(copy, out_reason, index)) return -1;
+    if (!appendRecord(copy, out_reason, index, true)) return -1;
     return index;
 }
 

@@ -82,16 +82,29 @@
      top="1040"
      width="90" />
 
+    <button
+     follows="bottom|left"
+     height="24"
+     label="Convert selection"
+     layout="topleft"
+     left="390"
+     name="landscape_convert_button"
+     tool_tip="Turn the linkset you have selected in world into this track's scenery - every prim must be full permission and owned by you; the original goes to your Trash"
+     top="1040"
+     width="130" />
+
     <text
      follows="bottom|left"
-     height="16"
+     height="48"
      layout="topleft"
      left="10"
      name="landscape_hint"
-     top="1075"
-     width="560">
-        Drop a full-perm mesh here to add it to this track's scenery. Transactions:
-        the scenery renders only while Atmo Magic is active and its own gate is on
-        (the SSAtmoLandscape debug setting, layered under SSAtmoEnabled).
+     top="1070"
+     width="560"
+     word_wrap="true">
+        Build a linkset in world, select it, then press Convert selection: every prim must be
+        full permission (copy, modify, transfer) and owned by you, and any object contents are
+        dropped - a local landscape object has no simulator. The scenery renders only while Atmo
+        Magic is active and its own gate is on (the SSAtmoLandscape debug setting, under SSAtmoEnabled).
     </text>
 </panel>
