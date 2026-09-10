@@ -298,3 +298,29 @@ portal edges with their endpoints, which is what exposed it.
 Also in this round: terrain change detection for scheduling moved from height samples to the land
 patches (min/max height plus the sim's last update time per 16 m patch), which is exact and never
 churns; the overlay flashes a band white for a second when its layers land, so rebuilds are visible.
+
+## 14. Terrain-only navmesh: the settle bug, and the console (2026-09-10)
+
+The viewer's navmesh mapped terrain and nothing else. Recast was reading the census; the census was
+handing it nothing: `SSWorldFieldShapes::trackRest` tested `!state.mSeen` as "first sighting", but
+`mSeen` is the pruning flag every build resets to false before its scan, so every build re-marked
+every root DYNAMIC. Nothing ever settled, every object was excluded from the bands and carved out
+as a box obstacle instead. A `mKnown` flag now carries "has a history"; `mSeen` stays the pruning
+flag. The bug predates the navmesh; the old tile raster excluded everything the same way and
+nobody could tell because it drew nothing anyway.
+
+Also from this round: convex hull soups (mesh decompositions, prim physics hulls) are oriented
+outward per hull at census time, since Recast only marks up-facing triangles walkable and hull
+winding is whatever the decomposition produced.
+
+**Console.** `ssfloaternavmesh.h/.cpp` + `floater_ss_atmo_navmesh.xml`, opened from the Atmo
+floater's Navmesh button, laid out after the stock Pathfinding view / test floater. Status:
+columns, bands, pending and in-flight builds, polygons, layer memory, builds and last build time,
+obstacles; census records, triangles, cached parts, current/rebuilding/stale, and what the last
+schedule saw (records, dynamic, phantom). View tab: `SSNavMeshShow` (fills + edges),
+`SSNavMeshShowLinks` (cyan linked / red open border edges), `SSNavMeshShowFlash` (rebuilt bands
+whiten for a second), `SSNavMeshShowObstacles` (mover boxes), `SSNavMeshShowCensus` (the shapes),
+and Rebuild all. The overlay draws from the pipeline whenever any switch is on, independent of the
+world-field mask; world-field view 7 still forces the polygons. Test path tab: start and end from
+the avatar or the camera, Find path, Clear; the polyline draws orange when complete and yellow
+when Detour stopped at the closest reachable point.

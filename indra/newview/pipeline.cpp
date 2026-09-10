@@ -5774,7 +5774,10 @@ void LLPipeline::renderDebug()
     // independent of the world field mask (doc/atmo_magic_navmesh.md).
     if (!hud_only && SSNavMesh::overlayEnabled())
     {
-        SSNavMesh::getInstance()->renderDebug();
+        // World-field view 7 already drew it this frame; do not blend it twice.
+        static LLCachedControl<U32> field_view(gSavedSettings, "SSWorldFieldDebugView", 1);
+        const bool via_field = (mRenderDebugMask & RENDER_DEBUG_WORLD_FIELD) && field_view == 7;
+        if (!via_field) SSNavMesh::getInstance()->renderDebug();
     }
 
     // Atmo Magic volumetric cloud field: the puffs as geometry, their anvil and

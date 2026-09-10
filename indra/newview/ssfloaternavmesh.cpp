@@ -125,6 +125,11 @@ void SSFloaterNavMesh::onFindPath()
         mPathStatus->setText(getString("path_choose"));
         return;
     }
+    if (!nav->active())
+    {
+        mPathStatus->setText(getString("path_no_navmesh"));
+        return;
+    }
     std::string status;
     if (!nav->runTestPath(status))
     {

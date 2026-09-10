@@ -1202,6 +1202,7 @@ set(viewer_HEADER_FILES
     ssatmoenvweatherstate.h
     ssatmoenvweathergen.h
     ssfloateratmo.h
+    ssfloaternavmesh.h
     ssfloateratmoenv.h
     ssfloateratmoinfluence.h
     ssfloateratmoskyimport.h

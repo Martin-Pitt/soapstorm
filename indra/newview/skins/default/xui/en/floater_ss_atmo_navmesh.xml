@@ -15,6 +15,7 @@
   <floater.string name="status_off">Navmesh is off (SSNavMesh). It needs the shape census (SSWorldFieldShapes).</floater.string>
   <floater.string name="status_no_census">Waiting for the shape census.</floater.string>
   <floater.string name="path_none">No path: an endpoint is not on the navmesh.</floater.string>
+  <floater.string name="path_no_navmesh">The navmesh is not built yet.</floater.string>
   <floater.string name="path_choose">Choose a start and an end point.</floater.string>
   <panel
    name="navmesh_console_main"
