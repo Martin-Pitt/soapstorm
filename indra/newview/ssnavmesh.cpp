@@ -1047,11 +1047,11 @@ void SSNavMesh::dumpAt(const LLVector3& bmin_agent, const LLVector3& bmax_agent,
         }
     }
     const LLVector3 top((bmin_agent.mV[VX] + bmax_agent.mV[VX]) * 0.5f, (bmin_agent.mV[VY] + bmax_agent.mV[VY]) * 0.5f, bmax_agent.mV[VZ] + 0.2f);
-    LLVector3 near;
-    if (nearestPoint(top, 2.f, near))
+    LLVector3 nearest;
+    if (nearestPoint(top, 2.f, nearest))
     {
         out.push_back(llformat("  probe: nearest navmesh point to the box top (%.1f, %.1f, %.1f) is (%.1f, %.1f, %.1f), %.2f m away",
-                               top.mV[VX], top.mV[VY], top.mV[VZ], near.mV[VX], near.mV[VY], near.mV[VZ], (near - top).magVec()));
+                               top.mV[VX], top.mV[VY], top.mV[VZ], nearest.mV[VX], nearest.mV[VY], nearest.mV[VZ], (nearest - top).magVec()));
     }
     else
     {

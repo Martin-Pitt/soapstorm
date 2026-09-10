@@ -631,7 +631,7 @@ public:
     inline bool     flagCameraDecoupled() const     { return ((mFlags & FLAGS_CAMERA_DECOUPLED) != 0); }
 
     // <FS:Techwolf Lupindo> prim export
-    U32 getFlags() { return mFlags; }
+    U32 getFlags() const { return mFlags; }    // <SS:Nexii> const so read-only inspectors can use it
     // <FS:Techwolf Lupindo>
 
     U8       getPhysicsShapeType() const;

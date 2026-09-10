@@ -347,6 +347,10 @@ void SSWorldField::navSpans(U64 region_handle, F32 x0_m, F32 y0_m, F32 extent_m,
 {
     static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldField", true);
     if (!enabled || !SSAtmoMagic::getInstance()->isEnabled()) return;
+    // <SS:Nexii> buildBand allocates the sheet before its no-geometry and heightfield-failure early-outs, so an unfilled sheet arrives with empty vectors; indexing it below reads the null page. Unfilled means no sheet. [interaction: SSNavMesh::buildBand, extractSpanSheet]
+    if (sheet && (sheet->mCount.size() != (size_t)SSNavMesh::SpanSheet::RES * SSNavMesh::SpanSheet::RES
+                  || sheet->mBottom.size() != sheet->mCount.size() * SSNavMesh::SpanSheet::SPANS
+                  || sheet->mTop.size() != sheet->mBottom.size() || sheet->mFlags.size() != sheet->mBottom.size())) sheet = nullptr;
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
     if (!regionp) return;
     Tile* tile = tileFor(regionp, false);

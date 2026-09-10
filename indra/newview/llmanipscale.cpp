@@ -98,8 +98,9 @@ static F32 ss_max_prim_scale_for(LLViewerObject* obj)
 // <SS:Nexii> The selection-wide ceiling the drag-distance limits use: the local ceiling only when every selected object is local content.
 static F32 ss_selection_max_prim_scale(const LLSafeHandle<LLObjectSelection>& selection)
 {
-    if (selection.isNull() || selection->getObjectCount() == 0) return get_default_max_prim_scale();
-    for (LLObjectSelection::iterator it = selection->begin(); it != selection->end(); ++it)
+    LLObjectSelection* sel = selection.get();    // the const handle only hands out a const pointer, and the selection walkers are non-const
+    if (!sel || sel->getObjectCount() == 0) return get_default_max_prim_scale();
+    for (LLObjectSelection::iterator it = sel->begin(); it != sel->end(); ++it)
     {
         LLViewerObject* obj = (*it)->getObject();
         if (!obj || !obj->ssIsLocalContent()) return get_default_max_prim_scale();

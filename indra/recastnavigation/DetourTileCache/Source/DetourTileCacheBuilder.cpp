@@ -153,6 +153,8 @@ static void addUniqueLast(unsigned char* a, unsigned char& an, unsigned char v)
 {
 	const int n = (int)an;
 	if (n > 0 && a[n-1] == v) return;
+	// <SS:Nexii> Upstream never bounds this against DT_LAYER_MAX_NEIS: the 17th alternating neighbour overwrote nneis itself and every later add scribbled hundreds of bytes past the regs block. Dropping the extra neighbour only costs merge quality. [interaction: dtBuildTileCacheRegions]
+	if (n >= DT_LAYER_MAX_NEIS) return;
 	a[an] = v;
 	an++;
 }

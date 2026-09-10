@@ -164,10 +164,10 @@ void SSFloaterNavMesh::onMarkLocation()
 {
     const LLVector3 origin = LLViewerCamera::getInstance()->getOrigin();
     const LLVector3 dir = LLViewerCamera::getInstance()->getAtAxis();
-    const LLVector3 far = origin + dir * 512.f;
+    const LLVector3 far_end = origin + dir * 512.f;
     LLVector4a start, end, hit4;
     start.load3(origin.mV);
-    end.load3(far.mV);
+    end.load3(far_end.mV);
     S32 face = -1;
     LLViewerObject* hit_obj = gPipeline.lineSegmentIntersectInWorld(start, end, false, false, true, false, &face, nullptr, nullptr, &hit4);
     LLVector3 hit;
