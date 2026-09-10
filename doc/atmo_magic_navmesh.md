@@ -324,3 +324,84 @@ and Rebuild all. The overlay draws from the pipeline whenever any switch is on, 
 world-field mask; world-field view 7 still forces the polygons. Test path tab: start and end from
 the avatar or the camera, Find path, Clear; the polyline draws orange when complete and yellow
 when Detour stopped at the closest reachable point.
+
+## 15. Rest classification: pathfinding role, ROC ledger, watching (2026-09-10)
+
+`SSWorldFieldShapes::trackRest` now decides "landscape or mover" on a three-rung ladder, and the
+console's census line reports how many roots each rung decided:
+
+1. **The sim's pathfinding role**, from flags every object update carries. A pathfinding
+   character or a physical root is a mover whatever it is doing right now. A linkset with
+   `FLAGS_AFFECTS_NAVMESH` was explicitly set to a static role (Walkable, Static obstacle,
+   Material or Exclusion volume) and is landscape from its first sighting. Legacy linksets nobody
+   touched read as Movable obstacle and carry neither, which is the common case: builders rarely
+   set pathfinding roles, so this rung is right when present and usually absent.
+2. **The Region Object Cache ledger** (`SSROCLedger::restVerdict`), the same evidence promotion
+   weighs: a hard-disqualified record (physical, character once) or one re-sighted elsewhere is a
+   mover; a promoted record, or one confirmed still on two or more region entries, is landscape
+   now rather than after a settle window. No record, or a single entry, is no opinion.
+3. **Watching**: the existing settle window (4 s at rest across rebuilds), which is all a
+   first-visit region has. Anything a higher rung called landscape that then moves still falls
+   to DYNAMIC through this rung on the next rebuild.
+
+The practical effect: on a return visit to a region the ROC knows, the navmesh has its objects
+from the first census instead of the second.
+
+**Next: cache the navmesh in the ROC.** The band layers are already compressed, keyed by column
+and band, and guarded by a geometry signature, so a `SSROC_SECTION_NAVMESH` in the region file
+could carry them and let a return visit publish bands straight from disk, rasterizing only what
+the fresh schedule's signature disagrees with. Two things must change first: the band signature
+must be stable across sessions, which means replacing the terrain patch update time (session
+frame time) with a hash of the patch heights and pinning the local frame to the region origin
+rather than the origin captured at init; and the section needs the ROC's usual per-section CRC,
+size bound and skip-if-unknown handling so an older build ignores it. Owner call on the disk
+budget: a fully built envelope is a few MB per region of zlib layers.
+
+## 16. What the census asks the sim for (2026-09-10)
+
+Owner decisions this round, reversing the census's original "never request anything" stance:
+
+- **Physics shapes.** A part whose shape type is unknown is asked for, through the same batched
+  `GetObjectPhysicsData` capability the physics-shape overlay uses (calling `getPhysicsShapeType`
+  files the id; the object list sends one request per region per frame for every stale id). The
+  arrival changes the part's signature, so the next census re-tessellates it off its OBB.
+- **Navmesh roles.** A linkset carrying `FLAGS_AFFECTS_NAVMESH` was explicitly given a static
+  role, which is a strong signal; the exact role (Walkable, Static obstacle, Material volume,
+  Exclusion volume) comes from one `ObjectNavMeshProperties` request per region, issued when a
+  flagged root turns up without a known role and no sooner than a minute after the last. The
+  reply fills a root-keyed table, marks the census for rebuild, and every record of the linkset
+  carries the role. The navmesh honours it: static obstacles rasterize with no walkable area
+  (solid, never floor), exclusion volumes become convex cuts applied to the compact heightfield
+  after erosion, walkable and material volumes contribute as ordinary geometry.
+- **Not census at all.** Volume-detect and temporary-on-rez linksets, and phantom ones: they
+  are not physics shapes. The one phantom that stays is an exclusion volume, which carries no
+  geometry but must reach the navmesh; the phantom layer therefore holds exclusion volumes only,
+  and the census's own segment casts skip them.
+
+The console's census line reports roles known (and whether a request is in flight) and physics
+shapes asked for in the last build.
+
+## 17. Whole-region coverage, solid fill, overlay controls (2026-09-10)
+
+- **Range.** The navmesh was scheduled inside the census envelope (192 m around the camera) and
+  evicted outside it, so it vanished as you moved: wrong for a surface the weather reads, where
+  snow and puddles would come and go with the camera. Now `SSNavMeshRange` (512 m) sets the
+  scheduling radius, the census widens its envelope to match while the navmesh is on
+  (`SSWorldFieldShapes::envelopeRange`, triangle budget raised to 6M), columns are scheduled only
+  when they lie wholly inside the envelope so every band sees all its records, and a built
+  column beyond the envelope keeps its bands until its region leaves the world. The vendored
+  library builds with `DT_POLYREF64` (28 tile bits, 20 poly bits), the tile budget is 16384, and
+  the overlay draws every published tile with no distance cull.
+- **Solid fill.** Recast rasterizes surfaces, so a solid body on the ground kept a walkable
+  island inside it: the terrain span merged with the body's bottom face and read as floor with
+  the body's height as headroom. Every convex record (analytic prims, mesh bounding boxes,
+  decomposition hulls, one record per hull now) is filled solid per column with `rcAddSpan`,
+  from its lowest clipped face to its highest, walkable only when the topmost face faces up
+  within the slope limit. Tessellated soups, which may be hollow by design, stay surfaces. This
+  is the homebrew core's convex fill, back where it earns its keep.
+- **Overlay.** World toggle (off wipes the frame as the stock console does), X-ray vision
+  (the occluded navmesh drawn shaded and fainter with a greater-than depth test), interior
+  edges much fainter than border links, and ellipsoid census records drawn as three great
+  circles rather than a box.
+- **Phantom.** Phantom linksets leave the census entirely (previous section); trees seen in the
+  overlay were from a build before that change.

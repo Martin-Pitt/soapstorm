@@ -13,9 +13,12 @@
  *        The census is build-scoped (doc/atmo_magic_worldfield_competition.md
  *        7.1): a snapshot taken on the main thread inside a query envelope,
  *        rasterized lazily per query, never a persistent mirror. Terrain is
- *        answered analytically off the heightfield at query time. Nothing here
- *        fires an ObjectPhysicsProperties request - shape type is read only
- *        when known, unknowns land on conservative OBBs until the data arrives.
+ *        answered analytically off the heightfield at query time. Unknown shape
+ *        types of solid, non-temporary roots are requested through the same
+ *        batched GetObjectPhysicsData path the physics overlay uses (owner
+ *        decision 2026-09-10); until the answer lands they sit on conservative
+ *        OBBs. Linksets flagged with a static navmesh role get their exact role
+ *        from one ObjectNavMeshProperties request per region.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -66,6 +69,18 @@ public:
         LAYER_DECLARED_PHANTOM,     // phantom - visible, declared, non-colliding
         LAYER_INVISIBLE_SOLID,      // invisible non-phantom: the builder's collision proxy, solid for every consumer
         LAYER_COUNT
+    };
+
+    // <SS:Nexii> The sim's navmesh role for a linkset (ObjectNavMeshProperties), mirrored on every record of the linkset so the navmesh can honour it: static obstacles rasterize unwalkable, exclusion volumes cut walkable area, everything else contributes as geometry. Only linksets carrying FLAGS_AFFECTS_NAVMESH are asked; legacy linksets read NAV_ROLE_UNKNOWN.
+    enum ENavRole : U8
+    {
+        NAV_ROLE_UNKNOWN = 0,
+        NAV_ROLE_WALKABLE,
+        NAV_ROLE_STATIC_OBSTACLE,
+        NAV_ROLE_DYNAMIC_OBSTACLE,
+        NAV_ROLE_MATERIAL_VOLUME,
+        NAV_ROLE_EXCLUSION_VOLUME,
+        NAV_ROLE_DYNAMIC_PHANTOM
     };
 
     enum EProvenance : U8
@@ -133,6 +148,7 @@ public:
         U8 mProv = PROV_EXACT;
         U32 mVisit = 0;                 // per-query dedupe stamp
         bool mDynamic = false;          // root moved within the settle window: query-time only, never store-bound
+        U8 mNavRole = NAV_ROLE_UNKNOWN; // the linkset's sim navmesh role, when it carries one
     };
 
     // Census read access for downstream rasters (the 3D tile lattice): every
@@ -143,6 +159,8 @@ public:
 
     // The envelope the resident census was built around.
     const LLVector3& censusAnchor() const { return mCensus.mAnchor; }
+    // <SS:Nexii> The envelope radius: the query consumers' SSWorldFieldShapesRange, widened to SSNavMeshRange while the navmesh is on - the navmesh is a stable surface the weather reads, not a bubble around the camera, so it needs the census to reach every column it keeps. [interaction: SSNavMesh schedule]
+    static F32 envelopeRange();
 
     // The census build's stamp - downstream rasters key their schedules to it.
     U64 censusStamp() const { return (U64)(mCensus.mBuildTime * 1000.0); }
@@ -151,6 +169,13 @@ public:
     bool censusCurrent() const;
     bool building() const { return mBuilding; }
     S32 cachedPartCount() const { return (S32)mParts.size(); }
+    // How the last build decided rest: the sim's pathfinding role, the ROC ledger, or watching the object settle.
+    S32 restByFlag() const { return mRestByFlag; }
+    S32 restByLedger() const { return mRestByLedger; }
+    S32 restByWatching() const { return mRestByWatching; }
+    S32 navRoleCount() const { return (S32)mNavRoles.size(); }
+    S32 physicsRequested() const { return mPhysicsRequested; }
+    bool navRolesInFlight() const { return mRolesInFlight; }
     S32 recordCount() const { return (S32)mCensus.mRecords.size(); }
     S32 triangleCount() const { return mTriCount; }
     F32 lastBuildMS() const { return mLastBuildMS; }
@@ -187,6 +212,8 @@ private:
     bool addTriangles(const LLVector3& pos, const LLQuaternion& rot, const LLVector3& scale,
                       const std::vector<LLVector3>& local_soup, U8 layer, U8 prov);
     void addRecord(Record& rec);
+    void requestNavRoles();
+    static void onNavRoles(U32 request_id, S32 status, const std::shared_ptr<class LLPathfindingObjectList>& list);
     bool castRecord(const Record& rec, const LLVector3& a, const LLVector3& dirn,
                     F32 t_min, F32 t_max, F32& out_t, LLVector3& out_n) const;
     bool castTerrain(const LLVector3& a, const LLVector3& b,
@@ -214,6 +241,17 @@ private:
     };
     std::unordered_map<LLUUID, RestState> mRest;
     bool mBuildDynamic = false;     // the part being filed rides its root's rest state
+    U8 mBuildNavRole = 0;           // and its root's navmesh role
+
+    // Navmesh roles per linkset root, from ObjectNavMeshProperties; requested once per region when a flagged root
+    // turns up without one, re-requested no sooner than a minute later.
+    std::unordered_map<LLUUID, U8> mNavRoles;
+    bool mRolesWanted = false;
+    bool mRolesInFlight = false;
+    bool mRolesChanged = false;
+    F64 mRolesRequestedAt = -1000.0;
+    U64 mRolesRegion = 0;
+    S32 mPhysicsRequested = 0, mPendPhysicsRequested = 0;
 
     // <SS:Nexii> The part cache and the time-sliced build. A rebuild used to re-tessellate every part in the envelope on one frame (700 ms spikes on dense builds); now every part's baked records live here under a signature of everything that shaped them (transform, volume params, physics type, phantom, hidden, mesh decomposition state), a rebuild reuses any part whose signature holds, and the scan itself fills mPending over frames under SSWorldFieldShapesBudgetMS and swaps in whole - consumers read the previous census meanwhile. [interaction: navmesh schedule keys off censusStamp, which only moves at the swap]
     struct PartCache
@@ -230,6 +268,8 @@ private:
     S32 mScanIndex = 0;
     S32 mPendingTris = 0;
     F32 mBuildMS = 0.f;
+    S32 mRestByFlag = 0, mRestByLedger = 0, mRestByWatching = 0;         // the build in progress
+    S32 mPendRestByFlag = 0, mPendRestByLedger = 0, mPendRestByWatching = 0;
 
     F64 mNow = 0.0;
     F32 mLastBuildMS = 0.f;

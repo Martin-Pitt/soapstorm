@@ -106,14 +106,16 @@ void SSFloaterNavMesh::refresh()
 
     if (!census_enabled)
     {
-        mCensusStatus->setText("Census is off (SSWorldFieldShapes).");
+        mCensusStatus->setText(getString("census_off"));
     }
     else
     {
-        mCensusStatus->setText(llformat("%d records, %d triangles, %d parts cached\n%s, last build %.1f ms\nlast schedule saw %d records: %d dynamic, %d phantom",
+        mCensusStatus->setText(llformat("%d records, %d triangles, %d parts cached\n%s, last build %.1f ms\nrest by: pathfinding role %d, ROC ledger %d, watching %d\nnavmesh roles known %d%s, physics shapes asked %d\nlast schedule saw %d records: %d dynamic, %d phantom",
                                         shapes->recordCount(), shapes->triangleCount(), shapes->cachedPartCount(),
                                         shapes->building() ? "rebuilding" : (shapes->censusCurrent() ? "current" : "stale"),
-                                        shapes->lastBuildMS(), nav->lastScheduleSeen(), nav->lastScheduleDynamic(), nav->lastSchedulePhantom()));
+                                        shapes->lastBuildMS(), shapes->restByFlag(), shapes->restByLedger(), shapes->restByWatching(),
+                                        shapes->navRoleCount(), shapes->navRolesInFlight() ? " (asking)" : "", shapes->physicsRequested(),
+                                        nav->lastScheduleSeen(), nav->lastScheduleDynamic(), nav->lastSchedulePhantom()));
     }
 }
 

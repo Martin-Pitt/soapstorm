@@ -17,6 +17,7 @@
   <floater.string name="path_none">No path: an endpoint is not on the navmesh.</floater.string>
   <floater.string name="path_no_navmesh">The navmesh is not built yet.</floater.string>
   <floater.string name="path_choose">Choose a start and an end point.</floater.string>
+   <floater.string name="census_off">Census is off (SSWorldFieldShapes).</floater.string>
   <panel
    name="navmesh_console_main"
    border="false"
@@ -25,7 +26,7 @@
    layout="topleft"
    left="12"
    top_pad="10"
-   height="170"
+   height="198"
    width="276">
     <text
      name="navmesh_status_label"
@@ -64,7 +65,7 @@
     </text>
     <text
      name="census_status"
-     height="52"
+     height="80"
      word_wrap="true"
      use_ellipses="false"
      type="string"
@@ -82,8 +83,8 @@
    tab_position="top"
    name="view_test_tab_container"
    left="12"
-   top="196"
-   height="350"
+   top="224"
+   height="322"
    width="276">
     <panel
      border="false"
@@ -106,6 +107,16 @@
       </text>
       <check_box
        height="19"
+       label="World"
+       layout="topleft"
+       left="12"
+       name="show_world"
+       control_name="SSNavMeshShowWorld"
+       tool_tip="Off wipes the frame so only the navmesh remains"
+       top_pad="4"
+       width="240" />
+      <check_box
+       height="19"
        label="Navmesh"
        layout="topleft"
        left="12"
@@ -122,6 +133,16 @@
        name="show_links"
        control_name="SSNavMeshShowLinks"
        tool_tip="Colour polygon edges on tile borders by whether Detour linked them to a neighbour tile"
+       top_pad="4"
+       width="220" />
+      <check_box
+       height="19"
+       label="With X-ray vision"
+       layout="topleft"
+       left="32"
+       name="show_xray"
+       control_name="SSNavMeshXRay"
+       tool_tip="Also draw the navmesh where geometry hides it, shaded darker"
        top_pad="4"
        width="220" />
       <check_box

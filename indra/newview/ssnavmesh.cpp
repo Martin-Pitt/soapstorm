@@ -70,10 +70,10 @@ static constexpr F32 SS_NAV_MAX_EDGE_M = 12.f;
 static constexpr F32 SS_NAV_MAX_SIMPLIFICATION_ERROR = 1.3f;
 static constexpr S32 SS_NAV_MIN_REGION_CELLS = 8;
 static constexpr S32 SS_NAV_MERGE_REGION_CELLS = 20;
-static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 8;
+static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 16;      // walkable layers a band may publish; a tall building has a floor per storey
 static constexpr S32 SS_NAV_TERRAIN_NODES = 37;     // 1 m grid over the bordered column: 32 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
-static constexpr S32 SS_NAV_MAX_TILES = 4096;
+static constexpr S32 SS_NAV_MAX_TILES = 16384;             // 64-bit poly refs (DT_POLYREF64): the tile budget is memory, not id bits
 static constexpr S32 SS_NAV_MAX_OBSTACLES = 512;
 static constexpr S32 SS_NAV_OBSTACLE_REQUESTS_PER_FRAME = 48;   // under dtTileCache's 64-request queue, drained once per update
 static constexpr S32 SS_NAV_QUERY_NODES = 4096;
@@ -126,10 +126,28 @@ namespace
         S32 triCount() const { return (S32)(mVerts.size() / 9); }
     };
 
+    // A convex xz footprint with a height range: the cut an exclusion volume makes in the walkable area.
+    struct SSNavExclusion
+    {
+        float mVerts[8 * 3];
+        int mCount = 0;
+        float mMinY = 0.f, mMaxY = 0.f;
+    };
+
+    // A convex body's faces, to be filled solid column by column rather than rasterized as surfaces.
+    struct SSNavConvex
+    {
+        SSNavSoup mFaces;
+        bool mBlock = false;        // a static obstacle: filled, never walkable on top
+    };
+
     // The main-thread snapshot a worker build consumes: geometry, terrain heights, config.
     struct SSNavBuildInput
     {
-        SSNavSoup mSoup;
+        SSNavSoup mSoup;            // geometry that may carry walkable surface
+        SSNavSoup mBlockSoup;       // static obstacles: solid, never walkable
+        std::vector<SSNavConvex> mConvex;
+        std::vector<SSNavExclusion> mExclusions;
         F32 mMin[3] = {0, 0, 0};            // local-space column bounds (x, y, band zmin)
         F32 mMax[3] = {0, 0, 0};
         F32 mAgentHeight = 2.f, mAgentRadius = 0.5f, mAgentClimb = 0.75f, mAgentSlope = 45.f;
@@ -191,7 +209,41 @@ namespace
         }
     }
 
-    void emitRecord(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavSoup& out)
+    // Convex hull (xz) of the record's AABB corners in Recast space, with its y range - the exclusion cut.
+    void emitExclusion(const SSWorldFieldShapes::Record& r, const LLVector3& off, std::vector<SSNavExclusion>& out)
+    {
+        SSNavExclusion e;
+        const LLVector3 lo = r.mBMin + off, hi = r.mBMax + off;
+        const float xs[4] = {lo.mV[VX], hi.mV[VX], hi.mV[VX], lo.mV[VX]};
+        const float zs[4] = {-lo.mV[VY], -lo.mV[VY], -hi.mV[VY], -hi.mV[VY]};
+        // Counter-clockwise in xz as rcMarkConvexPolyArea expects.
+        const int order[4] = {0, 3, 2, 1};
+        for (int i = 0; i < 4; ++i) { e.mVerts[i * 3] = xs[order[i]]; e.mVerts[i * 3 + 1] = 0.f; e.mVerts[i * 3 + 2] = zs[order[i]]; }
+        e.mCount = 4;
+        e.mMinY = lo.mV[VZ]; e.mMaxY = hi.mV[VZ];
+        out.push_back(e);
+    }
+
+    void emitShapeFaces(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavSoup& out);
+
+    void emitRecord(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavBuildInput& in)
+    {
+        if (r.mNavRole == SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) { emitExclusion(r, off, in.mExclusions); return; }
+        const bool block = (r.mNavRole == SSWorldFieldShapes::NAV_ROLE_STATIC_OBSTACLE);
+        // <SS:Nexii> Recast rasterizes surfaces, so a solid body on the ground would keep a walkable island inside it (the terrain span merges with the bottom face). Every convex record - analytic prims, mesh bounding boxes, decomposition hulls - is therefore filled solid per column instead; only tessellated soups, which may be hollow by design, stay surfaces. [interaction: rasterizeConvex]
+        const bool convex = r.mClass != SSWorldFieldShapes::Record::CLASS_TRI || r.mProv == SSWorldFieldShapes::PROV_HULL || r.mProv == SSWorldFieldShapes::PROV_BBOX || r.mProv == SSWorldFieldShapes::PROV_UNFETCHED;
+        if (convex)
+        {
+            in.mConvex.emplace_back();
+            in.mConvex.back().mBlock = block;
+            emitShapeFaces(r, off, in.mConvex.back().mFaces);
+            return;
+        }
+        SSNavSoup& out = block ? in.mBlockSoup : in.mSoup;
+        emitShapeFaces(r, off, out);
+    }
+
+    void emitShapeFaces(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavSoup& out)
     {
         switch (r.mClass)
         {
@@ -218,6 +270,108 @@ namespace
             if (h00 < -900.f || h10 < -900.f || h11 < -900.f || h01 < -900.f) continue;     // void between regions
             const F32 x = x0 + (F32)gx, y = y0 + (F32)gy;
             out.quad(LLVector3(x, y, h00), LLVector3(x + 1.f, y, h10), LLVector3(x + 1.f, y + 1.f, h11), LLVector3(x, y + 1.f, h01));
+        }
+    }
+
+    // Sutherland-Hodgman against one axis plane in xz; keeps (v[axis] - value) * sign <= 0.
+    int clipPolyAxis(const float* in, int nin, float* out, int axis, float value, float sign)
+    {
+        int nout = 0;
+        for (int i = 0, j = nin - 1; i < nin; j = i++)
+        {
+            const float* a = in + j * 3;
+            const float* b = in + i * 3;
+            const float da = (a[axis] - value) * sign, db = (b[axis] - value) * sign;
+            const bool ina = da <= 0.f, inb = db <= 0.f;
+            if (ina != inb)
+            {
+                const float t = da / (da - db);
+                out[nout * 3] = a[0] + (b[0] - a[0]) * t; out[nout * 3 + 1] = a[1] + (b[1] - a[1]) * t; out[nout * 3 + 2] = a[2] + (b[2] - a[2]) * t;
+                ++nout;
+            }
+            if (inb) { out[nout * 3] = b[0]; out[nout * 3 + 1] = b[1]; out[nout * 3 + 2] = b[2]; ++nout; }
+        }
+        return nout;
+    }
+
+    // Solid fill of one convex body: every column it covers gets a single span from its lowest face to its highest,
+    // walkable when the face on top faces up within the slope limit. Exact for convex bodies, and it is what keeps
+    // the inside of a solid from ever becoming floor.
+    void rasterizeConvex(rcContext& ctx, rcHeightfield& hf, const rcConfig& cfg, const SSNavConvex& cv, float walkable_thr)
+    {
+        const float* v = cv.mFaces.mVerts.data();
+        const int ntris = cv.mFaces.triCount();
+        if (ntris == 0) return;
+        float bmin[3] = {v[0], v[1], v[2]}, bmax[3] = {v[0], v[1], v[2]};
+        for (int i = 1; i < ntris * 3; ++i) for (int c = 0; c < 3; ++c) { bmin[c] = llmin(bmin[c], v[i * 3 + c]); bmax[c] = llmax(bmax[c], v[i * 3 + c]); }
+        const float ics = 1.f / cfg.cs;
+        const int x0 = llmax(0, (int)floorf((bmin[0] - cfg.bmin[0]) * ics)), x1 = llmin(hf.width - 1, (int)floorf((bmax[0] - cfg.bmin[0]) * ics));
+        const int z0 = llmax(0, (int)floorf((bmin[2] - cfg.bmin[2]) * ics)), z1 = llmin(hf.height - 1, (int)floorf((bmax[2] - cfg.bmin[2]) * ics));
+        if (x1 < x0 || z1 < z0) return;
+        if (bmax[1] < cfg.bmin[1] || bmin[1] > cfg.bmax[1]) return;
+        const int w = x1 - x0 + 1, h = z1 - z0 + 1;
+        std::vector<float> lo((size_t)w * h, 1e30f), hi((size_t)w * h, -1e30f), top_ny((size_t)w * h, 0.f);
+
+        float bufA[16 * 3], bufB[16 * 3], rowBuf[16 * 3], cellBuf[16 * 3], colA[16 * 3], colB[16 * 3];
+        for (int t = 0; t < ntris; ++t)
+        {
+            const float* tv = v + t * 9;
+            // Face normal's up component decides walkability of whatever this face tops.
+            const float e1[3] = {tv[3] - tv[0], tv[4] - tv[1], tv[5] - tv[2]}, e2[3] = {tv[6] - tv[0], tv[7] - tv[1], tv[8] - tv[2]};
+            const float nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+            const float nlen = sqrtf(nx * nx + ny * ny + nz * nz);
+            const float up = nlen > 0.f ? ny / nlen : 0.f;
+            // Pre-clip to the tile so the sweeps below stay bounded by the tile, not the face.
+            float* cur = bufA; float* nxt = bufB;
+            memcpy(cur, tv, 36);
+            int n = 3;
+            n = clipPolyAxis(cur, n, nxt, 0, cfg.bmin[0] + x0 * cfg.cs, -1.f); std::swap(cur, nxt);
+            n = clipPolyAxis(cur, n, nxt, 0, cfg.bmin[0] + (x1 + 1) * cfg.cs, 1.f); std::swap(cur, nxt);
+            n = clipPolyAxis(cur, n, nxt, 2, cfg.bmin[2] + z0 * cfg.cs, -1.f); std::swap(cur, nxt);
+            n = clipPolyAxis(cur, n, nxt, 2, cfg.bmin[2] + (z1 + 1) * cfg.cs, 1.f); std::swap(cur, nxt);
+            if (n < 3) continue;
+            float tzmin = cur[2], tzmax = cur[2];
+            for (int i = 1; i < n; ++i) { tzmin = llmin(tzmin, cur[i * 3 + 2]); tzmax = llmax(tzmax, cur[i * 3 + 2]); }
+            const int rz0 = llmax(z0, (int)floorf((tzmin - cfg.bmin[2]) * ics)), rz1 = llmin(z1, (int)floorf((tzmax - cfg.bmin[2]) * ics));
+            for (int z = rz0; z <= rz1 && n >= 3; ++z)
+            {
+                const float row_top = cfg.bmin[2] + (float)(z + 1) * cfg.cs;
+                const int nrow = clipPolyAxis(cur, n, rowBuf, 2, row_top, 1.f);
+                const int nrest = clipPolyAxis(cur, n, nxt, 2, row_top, -1.f);
+                std::swap(cur, nxt); n = nrest;
+                if (nrow < 3) continue;
+                float rxmin = rowBuf[0], rxmax = rowBuf[0];
+                for (int i = 1; i < nrow; ++i) { rxmin = llmin(rxmin, rowBuf[i * 3]); rxmax = llmax(rxmax, rowBuf[i * 3]); }
+                const int cx0 = llmax(x0, (int)floorf((rxmin - cfg.bmin[0]) * ics)), cx1 = llmin(x1, (int)floorf((rxmax - cfg.bmin[0]) * ics));
+                float* q = colA; float* qn = colB;
+                memcpy(q, rowBuf, (size_t)nrow * 12);
+                int nq = nrow;
+                for (int x = cx0; x <= cx1 && nq >= 3; ++x)
+                {
+                    const float col_right = cfg.bmin[0] + (float)(x + 1) * cfg.cs;
+                    const int ncell = clipPolyAxis(q, nq, cellBuf, 0, col_right, 1.f);
+                    const int nrest2 = clipPolyAxis(q, nq, qn, 0, col_right, -1.f);
+                    std::swap(q, qn); nq = nrest2;
+                    if (ncell < 3) continue;
+                    float ylo = cellBuf[1], yhi = cellBuf[1];
+                    for (int i = 1; i < ncell; ++i) { ylo = llmin(ylo, cellBuf[i * 3 + 1]); yhi = llmax(yhi, cellBuf[i * 3 + 1]); }
+                    const size_t idx = (size_t)(z - z0) * w + (x - x0);
+                    lo[idx] = llmin(lo[idx], ylo);
+                    if (yhi > hi[idx]) { hi[idx] = yhi; top_ny[idx] = up; }
+                }
+            }
+        }
+        const float ich = 1.f / cfg.ch;
+        for (int z = z0; z <= z1; ++z) for (int x = x0; x <= x1; ++x)
+        {
+            const size_t idx = (size_t)(z - z0) * w + (x - x0);
+            if (lo[idx] > hi[idx]) continue;
+            if (hi[idx] < cfg.bmin[1] || lo[idx] > cfg.bmax[1]) continue;
+            int smin = (int)floorf((lo[idx] - cfg.bmin[1]) * ich), smax = (int)ceilf((hi[idx] - cfg.bmin[1]) * ich);
+            smin = llclamp(smin, 0, RC_SPAN_MAX_HEIGHT - 1);
+            smax = llclamp(smax, smin + 1, RC_SPAN_MAX_HEIGHT);
+            const unsigned char area = (!cv.mBlock && top_ny[idx] >= walkable_thr) ? RC_WALKABLE_AREA : RC_NULL_AREA;
+            rcAddSpan(&ctx, hf, x, z, (unsigned short)smin, (unsigned short)smax, area, cfg.walkableClimb);
         }
     }
 
@@ -251,15 +405,27 @@ namespace
         cfg.bmin[2] = -in.mMax[1] - border; cfg.bmax[2] = -in.mMin[1] + border;
 
         const S32 ntris = in.mSoup.triCount();
-        if (ntris == 0) return;
-        std::vector<int> idx((size_t)ntris * 3);
-        for (S32 i = 0; i < ntris * 3; ++i) idx[i] = i;
-        std::vector<unsigned char> areas((size_t)ntris, 0);
+        const S32 nblock = in.mBlockSoup.triCount();
+        if (ntris == 0 && nblock == 0 && in.mConvex.empty()) return;
+        std::vector<int> idx((size_t)llmax(ntris, nblock) * 3);
+        for (S32 i = 0; i < (S32)idx.size(); ++i) idx[i] = i;
+        std::vector<unsigned char> areas((size_t)llmax(ntris, nblock), 0);
 
         rcHeightfield* hf = rcAllocHeightfield();
         if (!hf || !rcCreateHeightfield(&ctx, *hf, cfg.width, cfg.height, cfg.bmin, cfg.bmax, cfg.cs, cfg.ch)) { rcFreeHeightField(hf); return; }
-        rcMarkWalkableTriangles(&ctx, cfg.walkableSlopeAngle, in.mSoup.mVerts.data(), ntris * 3, idx.data(), ntris, areas.data());
-        rcRasterizeTriangles(&ctx, in.mSoup.mVerts.data(), ntris * 3, idx.data(), areas.data(), ntris, *hf, cfg.walkableClimb);
+        if (ntris > 0)
+        {
+            rcMarkWalkableTriangles(&ctx, cfg.walkableSlopeAngle, in.mSoup.mVerts.data(), ntris * 3, idx.data(), ntris, areas.data());
+            rcRasterizeTriangles(&ctx, in.mSoup.mVerts.data(), ntris * 3, idx.data(), areas.data(), ntris, *hf, cfg.walkableClimb);
+        }
+        if (nblock > 0)
+        {
+            // Static obstacles: rasterized with no area, so they block and shadow but never become floor.
+            std::fill(areas.begin(), areas.end(), (unsigned char)RC_NULL_AREA);
+            rcRasterizeTriangles(&ctx, in.mBlockSoup.mVerts.data(), nblock * 3, idx.data(), areas.data(), nblock, *hf, cfg.walkableClimb);
+        }
+        const float walkable_thr = cosf(cfg.walkableSlopeAngle * (F32)(3.14159265 / 180.0));
+        for (const SSNavConvex& cv : in.mConvex) rasterizeConvex(ctx, *hf, cfg, cv, walkable_thr);
         rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *hf);
         rcFilterLedgeSpans(&ctx, cfg.walkableHeight, cfg.walkableClimb, *hf);
         rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *hf);
@@ -269,6 +435,10 @@ namespace
         rcFreeHeightField(hf);
         if (!compact_ok) { rcFreeCompactHeightfield(chf); return; }
         rcErodeWalkableArea(&ctx, cfg.walkableRadius, *chf);
+        for (const SSNavExclusion& e : in.mExclusions)
+        {
+            rcMarkConvexPolyArea(&ctx, e.mVerts, e.mCount, e.mMinY, e.mMaxY, RC_NULL_AREA, *chf);
+        }
 
         rcHeightfieldLayerSet* lset = rcAllocHeightfieldLayerSet();
         if (lset && rcBuildHeightfieldLayers(&ctx, *chf, cfg.borderSize, cfg.walkableHeight, *lset))
@@ -402,10 +572,8 @@ bool SSNavMesh::ensureInit()
     memset(&np, 0, sizeof(np));
     np.tileWidth = TILE_M;
     np.tileHeight = TILE_M;
-    S32 tile_bits = 0;
-    while ((1 << tile_bits) < SS_NAV_MAX_TILES) ++tile_bits;
     np.maxTiles = SS_NAV_MAX_TILES;
-    np.maxPolys = 1 << (22 - tile_bits);
+    np.maxPolys = 1 << 16;      // per tile; DT_POLYREF64 gives 28 tile bits and 20 poly bits, so neither is squeezed
     mNavMesh = dtAllocNavMesh();
     if (!mNavMesh || dtStatusFailed(mNavMesh->init(&np)))
     {
@@ -490,9 +658,10 @@ void SSNavMesh::update()
 // changed since it was published becomes a job. Columns and bands that vanished are evicted.
 void SSNavMesh::schedule()
 {
-    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
+    static LLCachedControl<F32> nav_range(gSavedSettings, "SSNavMeshRange", 512.f);
     static LLCachedControl<F32> band_gap(gSavedSettings, "SSNavMeshBandGap", 8.f);
-    const F32 env = llclamp((F32)range, 32.f, 1024.f);
+    // <SS:Nexii> The navmesh is a stable surface, not a bubble: columns are scheduled only while they lie wholly inside the census envelope (so every band sees all of its records), and a column that drifts out of it keeps its bands until its region leaves the world. The census reaches SSNavMeshRange while the navmesh is on. [interaction: SSWorldFieldShapes::envelopeRange]
+    const F32 env = llmin(llclamp((F32)nav_range, 32.f, 1024.f), SSWorldFieldShapes::envelopeRange());
     const F32 gap = llmax((F32)band_gap, 2.f);
     SSWorldFieldShapes* shapes = SSWorldFieldShapes::getInstance();
     const LLVector3 anchor = toLocal(shapes->censusAnchor());
@@ -503,15 +672,15 @@ void SSNavMesh::schedule()
     struct Interval { F32 mLo, mHi; U64 mSig; };
     std::map<U64, std::vector<Interval> > columns;
     const F32 inv = 1.f / TILE_M;
-    const S32 cx0 = (S32)floorf((anchor.mV[VX] - env) * inv), cx1 = (S32)floorf((anchor.mV[VX] + env) * inv);
-    const S32 cy0 = (S32)floorf((anchor.mV[VY] - env) * inv), cy1 = (S32)floorf((anchor.mV[VY] + env) * inv);
+    const S32 cx0 = (S32)ceilf((anchor.mV[VX] - env) * inv), cx1 = (S32)floorf((anchor.mV[VX] + env) * inv) - 1;
+    const S32 cy0 = (S32)ceilf((anchor.mV[VY] - env) * inv), cy1 = (S32)floorf((anchor.mV[VY] + env) * inv) - 1;
 
     S32 seen = 0, dynamic = 0, phantom = 0, tris = 0;
     shapes->forEachRecord(bmin, bmax, [&](const SSWorldFieldShapes::Record& rec)
     {
         ++seen;
         if (rec.mDynamic) { ++dynamic; return; }
-        if (rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM) { ++phantom; return; }
+        if (rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM && rec.mNavRole != SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) { ++phantom; return; }
         tris += (S32)(rec.tris().size() / 3);
         const LLVector3 lo = rec.mBMin + off, hi = rec.mBMax + off;
         const S32 x0 = llmax(cx0, (S32)floorf(lo.mV[VX] * inv)), x1 = llmin(cx1, (S32)floorf(hi.mV[VX] * inv));
@@ -520,7 +689,7 @@ void SSNavMesh::schedule()
         if ((S64)(x1 - x0 + 1) * (y1 - y0 + 1) > 256) return;    // a kilometre-scale surround is not navigable structure
         U64 sig = 1469598103934665603ull;
         for (U32 c = 0; c < 3; ++c) { sig = fnvF(sig, lo.mV[c]); sig = fnvF(sig, hi.mV[c]); }
-        sig = fnv(sig, (U64)rec.mClass | ((U64)rec.mProv << 8) | ((U64)rec.tris().size() << 16));
+        sig = fnv(sig, (U64)rec.mClass | ((U64)rec.mProv << 8) | ((U64)rec.mNavRole << 12) | ((U64)rec.tris().size() << 16));
         for (S32 y = y0; y <= y1; ++y) for (S32 x = x0; x <= x1; ++x)
         {
             columns[columnKey(x, y)].push_back(Interval{lo.mV[VZ], hi.mV[VZ], sig});
@@ -597,9 +766,31 @@ void SSNavMesh::schedule()
     }
     mColumns.swap(new_columns);
 
+    // Loaded regions in the local frame: a band outside all of them has lost its world and goes; a band inside the
+    // envelope that this schedule did not touch has genuinely vanished (bands merged, column emptied) and goes; a
+    // band beyond the envelope but still inside a loaded region stays as built.
+    struct RegionBox { F32 x0, y0, x1, y1; };
+    std::vector<RegionBox> regions;
+    for (LLViewerRegion* regionp : LLWorld::getInstance()->getRegionList())
+    {
+        if (!regionp) continue;
+        const LLVector3d d = regionp->getOriginGlobal() - mOriginGlobal;
+        const F32 w = regionp->getWidth();
+        regions.push_back(RegionBox{(F32)d.mdV[VX] - TILE_M, (F32)d.mdV[VY] - TILE_M, (F32)d.mdV[VX] + w + TILE_M, (F32)d.mdV[VY] + w + TILE_M});
+    }
     for (auto it = mBands.begin(); it != mBands.end();)
     {
-        if (it->second.mAlive) { ++it; continue; }
+        const S32 tx = (S32)((it->first >> 42) & 0x1FFFFF) - (1 << 20);
+        const S32 ty = (S32)((it->first >> 21) & 0x1FFFFF) - (1 << 20);
+        const bool in_envelope = tx >= cx0 && tx <= cx1 && ty >= cy0 && ty <= cy1;
+        bool in_world = false;
+        const F32 x = (F32)tx * TILE_M, y = (F32)ty * TILE_M;
+        for (const RegionBox& r : regions)
+        {
+            if (x + TILE_M > r.x0 && x < r.x1 && y + TILE_M > r.y0 && y < r.y1) { in_world = true; break; }
+        }
+        const bool keep = in_world && (it->second.mAlive || !in_envelope);
+        if (keep) { ++it; continue; }
         removeBand(it->first, it->second);
         it = mBands.erase(it);
     }
@@ -666,8 +857,9 @@ void SSNavMesh::launch(const Job& job)
     const LLVector3 gmax_agent = LLVector3(in->mMax[0] + border, in->mMax[1] + border, in->mMax[2]) - off;
     SSWorldFieldShapes::getInstance()->forEachRecord(gmin_agent, gmax_agent, [&](const SSWorldFieldShapes::Record& rec)
     {
-        if (rec.mDynamic || rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM) return;
-        emitRecord(rec, off, in->mSoup);
+        if (rec.mDynamic) return;
+        if (rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM && rec.mNavRole != SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) return;
+        emitRecord(rec, off, *in);
     });
 
     // Terrain heights for the bordered column, void marked below -900 so the worker skips those cells.
@@ -750,8 +942,7 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
 void SSNavMesh::syncObstacles()
 {
     if (!mTileCache) return;
-    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
-    const F32 env = llclamp((F32)range, 32.f, 1024.f);
+    const F32 env = SSWorldFieldShapes::envelopeRange();
     SSWorldFieldShapes* shapes = SSWorldFieldShapes::getInstance();
     const LLVector3 bmin = shapes->censusAnchor() - LLVector3(env, env, env);
     const LLVector3 bmax = shapes->censusAnchor() + LLVector3(env, env, env);
@@ -935,8 +1126,20 @@ void SSNavMesh::renderDebug(bool force_navmesh)
     static LLCachedControl<bool> show_flash(gSavedSettings, "SSNavMeshShowFlash", true);
     static LLCachedControl<bool> show_obstacles(gSavedSettings, "SSNavMeshShowObstacles", false);
     static LLCachedControl<bool> show_census(gSavedSettings, "SSNavMeshShowCensus", false);
-    if (show_census) SSWorldFieldShapes::getInstance()->renderDebug();
+    static LLCachedControl<bool> show_world(gSavedSettings, "SSNavMeshShowWorld", true);
+    static LLCachedControl<bool> xray(gSavedSettings, "SSNavMeshXRay", false);
     if (!mNavMesh) return;
+    const bool draw_mesh = show || force_navmesh;
+    if (draw_mesh && !show_world)
+    {
+        // As the stock pathfinding console does: wipe the frame so only the navmesh remains.
+        const LLColor4 clear = gSavedSettings.getColor4("PathfindingNavMeshClear");
+        gGL.setColorMask(true, true);
+        glClearColor(clear.mV[0], clear.mV[1], clear.mV[2], 0.f);
+        glClear(GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT);
+        gGL.setColorMask(true, false);
+    }
+    if (show_census) SSWorldFieldShapes::getInstance()->renderDebug();
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const dtNavMesh* nm = mNavMesh;
 
@@ -998,7 +1201,7 @@ void SSNavMesh::renderDebug(bool force_navmesh)
         gGL.end();
     }
 
-    if (!show && !force_navmesh) return;
+    if (!draw_mesh) return;
 
     // Two passes over the same polygons: translucent fills so the walkable surface reads as area, then the
     // edges on top so polygon and tile boundaries stay legible. Hue by band, as the world field's band view.
@@ -1013,13 +1216,18 @@ void SSNavMesh::renderDebug(bool force_navmesh)
         const F64 age = now - it->second.mPublishedAt;
         return (age >= 0.0 && age < 1.0) ? (F32)(1.0 - age) : 0.f;
     };
+    // shade < 1 darkens (the x-ray pass, seen through geometry); alpha scales every colour of a pass.
+    F32 shade = 1.f, alpha_scale = 1.f;
     auto bandColour = [&](const dtMeshTile* tile, F32 alpha)
     {
         const F32 hue = (F32)((tile->header->layer / SS_NAV_MAX_LAYERS_PER_BAND) % 8) / 8.f;
         const F32 f = flashOf(tile);
         const F32 r = 0.3f + 0.7f * hue, g = 0.9f - 0.6f * hue, b = 0.4f + 0.4f * (1.f - hue);
-        gGL.color4f(r + (1.f - r) * f, g + (1.f - g) * f, b + (1.f - b) * f, alpha + 0.5f * f);
+        gGL.color4f((r + (1.f - r) * f) * shade, (g + (1.f - g) * f) * shade, (b + (1.f - b) * f) * shade, (alpha + 0.5f * f) * alpha_scale);
     };
+    // Every published tile draws: the navmesh is a whole-region surface and the overlay should read as one.
+    auto drawMesh = [&]()
+    {
     for (S32 pass = 0; pass < 2; ++pass)
     {
         gGL.begin(pass == 0 ? LLRender::TRIANGLES : LLRender::LINES);
@@ -1027,10 +1235,7 @@ void SSNavMesh::renderDebug(bool force_navmesh)
         {
             const dtMeshTile* tile = nm->getTile(i);
             if (!tile || !tile->header) continue;
-            const LLVector3 tmin = fromLocal(LLVector3(tile->header->bmin[0], -tile->header->bmax[2], tile->header->bmin[1]));
-            const LLVector3 tmax = fromLocal(LLVector3(tile->header->bmax[0], -tile->header->bmin[2], tile->header->bmax[1]));
-            if (((tmin + tmax) * 0.5f - cam).magVec() > 256.f) continue;
-            bandColour(tile, pass == 0 ? 0.28f : 0.75f);
+            bandColour(tile, pass == 0 ? 0.28f : 0.18f);
             for (int p = 0; p < tile->header->polyCount; ++p)
             {
                 const dtPoly& poly = tile->polys[p];
@@ -1059,11 +1264,13 @@ void SSNavMesh::renderDebug(bool force_navmesh)
                             {
                                 if (tile->links[l].edge == v && tile->links[l].side != 0xff) { linked = true; break; }
                             }
-                            if (linked) gGL.color4f(0.2f, 0.95f, 1.f, 0.9f); else gGL.color4f(1.f, 0.25f, 0.2f, 0.9f);
+                            if (linked) gGL.color4f(0.2f * shade, 0.95f * shade, 1.f * shade, 0.9f * alpha_scale);
+                            else gGL.color4f(1.f * shade, 0.25f * shade, 0.2f * shade, 0.9f * alpha_scale);
                         }
                         else
                         {
-                            bandColour(tile, 0.75f);
+                            // Interior edges stay faint: the fills carry the surface, the edges only hint at the polygons.
+                            bandColour(tile, 0.18f);
                         }
                         const LLVector3 pa = vert(&tile->verts[poly.verts[v] * 3], 0.06f);
                         const LLVector3 pb = vert(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3], 0.06f);
@@ -1074,5 +1281,15 @@ void SSNavMesh::renderDebug(bool force_navmesh)
             }
         }
         gGL.end();
+    }
+    };
+    drawMesh();
+    if (xray)
+    {
+        // The parts of the navmesh behind geometry, shaded darker and fainter so they read as "through the wall".
+        LLGLDepthTest depth_behind(GL_TRUE, GL_FALSE, GL_GREATER);
+        shade = 0.55f;
+        alpha_scale = 0.5f;
+        drawMesh();
     }
 }

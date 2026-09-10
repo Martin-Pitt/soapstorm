@@ -1409,6 +1409,23 @@ bool SSROCLedger::onRegionRemoved(LLViewerRegion* regionp, SSROCRegionFile& file
     return true;
 }
 
+// Landscape or mover, from the ledger's history: the same evidence promotion weighs, read without scoring.
+bool SSROCLedger::restVerdict(U64 handle, const LLUUID& full_id, bool& out_static) const
+{
+    auto rit = mRegions.find(handle);
+    if (rit == mRegions.end()) return false;
+    const RegionState& rs = rit->second;
+    auto it = rs.mByFullID.find(full_id);
+    if (it == rs.mByFullID.end() || it->second >= rs.mRecords.size()) return false;
+    const SSROCRecord& rec = rs.mRecords[it->second];
+    if (rec.mRecordFlags & SSROC_REC_DISQUALIFIED) { out_static = false; return true; }
+    // A move on record is not a verdict: a building the owner shifted once would otherwise stay a mover for ever.
+    // It only withholds the landscape credit, so the census watches it settle instead.
+    if (rec.mMoveCount > 0) return false;
+    if (rec.isPromoted() || rec.mEntryCount >= 2) { out_static = true; return true; }
+    return false;
+}
+
 std::string SSROCLedger::metricsString() const
 {
     return llformat("ROC ledger: regions %u (sandbox %u) | sightings %u, records %u, blobless %u | promoted %u | owner lookups %u",

@@ -47,6 +47,11 @@
 #include "llvovolume.h"
 #include "llworld.h"
 #include "lltextureentry.h"
+#include "object_flags.h"
+#include "ssrocledger.h"
+#include "llpathfindinglinkset.h"
+#include "llpathfindingmanager.h"
+#include "llpathfindingobjectlist.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -65,7 +70,7 @@ static constexpr F32 SS_SHAPES_REBUILD_MOVE = 48.f;
 static constexpr F64 SS_SHAPES_DIRTY_DEBOUNCE = 2.0;
 static constexpr S32 SS_SHAPES_PART_TRIS = 8192;
 static constexpr S32 SS_SHAPES_PART_TRIS_LARGE = 65536;
-static constexpr S32 SS_SHAPES_TOTAL_TRIS = 2000000;
+static constexpr S32 SS_SHAPES_TOTAL_TRIS = 6000000;    // baked world-space soups; the navmesh envelope reaches whole regions now
 static constexpr F32 SS_SHAPES_LARGE_PART_M = 16.f;
 static constexpr F32 SS_SHAPES_TERRAIN_STEP_M = 4.f;
 static constexpr S32 SS_SHAPES_TERRAIN_SAMPLES = 96;
@@ -281,10 +286,10 @@ void SSWorldFieldShapes::markDirty(const LLVector3& pos_agent, F32 radius)
 bool SSWorldFieldShapes::needsRebuild(LLViewerRegion* regionp) const
 {
     if (!regionp) return false;
-    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
-    const F32 env = llclamp((F32)range, 32.f, 1024.f);
+    const F32 env = envelopeRange();
     const LLVector3 anchor = LLViewerCamera::getInstance()->getOrigin();
     if (mCensus.mRegionHandle != regionp->getHandle()) return true;
+    if (mRolesChanged) return true;
     if ((anchor - mCensus.mAnchor).magVec() > SS_SHAPES_REBUILD_MOVE) return true;
     if (mNow - mCensus.mBuildTime > SS_SHAPES_REBUILD_AGE) return true;
     if (mDirty && (mNow - mDirtyAt >= SS_SHAPES_DIRTY_DEBOUNCE))
@@ -292,6 +297,17 @@ bool SSWorldFieldShapes::needsRebuild(LLViewerRegion* regionp) const
         if ((mDirtyCenter - mCensus.mAnchor).magVec() - mDirtyRadius < env) return true;
     }
     return false;
+}
+
+// The envelope radius, widened to the navmesh's while it runs.
+F32 SSWorldFieldShapes::envelopeRange()
+{
+    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
+    static LLCachedControl<bool> nav_enabled(gSavedSettings, "SSNavMesh", false);
+    static LLCachedControl<F32> nav_range(gSavedSettings, "SSNavMeshRange", 512.f);
+    F32 env = (F32)range;
+    if (nav_enabled) env = llmax(env, (F32)nav_range);
+    return llclamp(env, 32.f, 1024.f);
 }
 
 // The census scan, time-sliced: beginBuild opens the pending snapshot, continueBuild
@@ -308,6 +324,10 @@ void SSWorldFieldShapes::beginBuild(LLViewerRegion* regionp)
     mPendingTris = 0;
     mScanIndex = 0;
     mBuildMS = 0.f;
+    mPendRestByFlag = mPendRestByLedger = mPendRestByWatching = 0;
+    mPendPhysicsRequested = 0;
+    mRolesChanged = false;
+    if (mRolesRegion != mPending.mRegionHandle) mRolesInFlight = false;
     mCurrentPart = nullptr;
     mDirty = false;
     mBuilding = true;
@@ -333,9 +353,8 @@ void SSWorldFieldShapes::continueBuild(LLViewerRegion* regionp)
         prunePartCache();    // an abort must not leave the cache growing across region hops
         return;
     }
-    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
     static LLCachedControl<F32> budget_ms(gSavedSettings, "SSWorldFieldShapesBudgetMS", 3.f);
-    const F32 env = llclamp((F32)range, 32.f, 1024.f);
+    const F32 env = envelopeRange();
     const F32 budget = llclamp((F32)budget_ms, 0.5f, 50.f) * 0.001f;
     LLTimer slice;
 
@@ -394,7 +413,60 @@ void SSWorldFieldShapes::finishBuild()
     mPending = Census();
     mTriCount = mPendingTris;
     mLastBuildMS = mBuildMS;
+    mRestByFlag = mPendRestByFlag; mRestByLedger = mPendRestByLedger; mRestByWatching = mPendRestByWatching;
+    mPhysicsRequested = mPendPhysicsRequested;
     mBuilding = false;
+    if (mRolesWanted) requestNavRoles();
+}
+
+// One ObjectNavMeshProperties request for the region answers every flagged linkset at once; a minute between
+// requests so a region full of unanswerable roots (no capability) costs one call a minute, not one per rebuild.
+void SSWorldFieldShapes::requestNavRoles()
+{
+    mRolesWanted = false;
+    // The pathfinding manager drops a deferred request silently when the region changes before its capabilities
+    // arrive, so an in-flight flag older than 30 s is a dead request, not a pending one.
+    if (mRolesInFlight && mNow - mRolesRequestedAt < 30.0) return;
+    if (mNow - mRolesRequestedAt < 60.0 && mRolesRegion == mCensus.mRegionHandle) return;
+    if (!LLPathfindingManager::instanceExists()) return;
+    LLPathfindingManager* mgr = LLPathfindingManager::getInstance();
+    if (!mgr->isPathfindingEnabledForCurrentRegion()) return;
+    mRolesRequestedAt = mNow;
+    mRolesRegion = mCensus.mRegionHandle;
+    mRolesInFlight = true;
+    static U32 request_id = 0x53530000u;
+    mgr->requestGetLinksets(++request_id, [](U32 id, LLPathfindingManager::ERequestStatus status, LLPathfindingObjectListPtr list)
+    {
+        SSWorldFieldShapes::onNavRoles(id, (S32)status, list);
+    });
+}
+
+// The reply: every linkset's role filed by root id; a changed table forces the next rebuild so the records carry it.
+void SSWorldFieldShapes::onNavRoles(U32, S32 status, const std::shared_ptr<LLPathfindingObjectList>& list)
+{
+    if (status == (S32)LLPathfindingManager::kRequestStarted) return;
+    if (!SSWorldFieldShapes::instanceExists()) return;
+    SSWorldFieldShapes* self = SSWorldFieldShapes::getInstance();
+    self->mRolesInFlight = false;
+    if (status != (S32)LLPathfindingManager::kRequestCompleted || !list) return;
+    for (LLPathfindingObjectList::const_iterator it = list->begin(); it != list->end(); ++it)
+    {
+        const LLPathfindingLinkset* linkset = dynamic_cast<const LLPathfindingLinkset*>(it->second.get());
+        if (!linkset || linkset->isTerrain()) continue;
+        U8 role = NAV_ROLE_UNKNOWN;
+        switch (linkset->getLinksetUse())
+        {
+            case LLPathfindingLinkset::kWalkable: role = NAV_ROLE_WALKABLE; break;
+            case LLPathfindingLinkset::kStaticObstacle: role = NAV_ROLE_STATIC_OBSTACLE; break;
+            case LLPathfindingLinkset::kDynamicObstacle: role = NAV_ROLE_DYNAMIC_OBSTACLE; break;
+            case LLPathfindingLinkset::kMaterialVolume: role = NAV_ROLE_MATERIAL_VOLUME; break;
+            case LLPathfindingLinkset::kExclusionVolume: role = NAV_ROLE_EXCLUSION_VOLUME; break;
+            case LLPathfindingLinkset::kDynamicPhantom: role = NAV_ROLE_DYNAMIC_PHANTOM; break;
+            default: break;
+        }
+        U8& slot = self->mNavRoles[linkset->getUUID()];
+        if (slot != role) { slot = role; self->mRolesChanged = true; }
+    }
 }
 
 // Drop cached parts nothing has sighted within the TTL.
@@ -429,7 +501,7 @@ U64 SSWorldFieldShapes::partSignature(LLVOVolume* vov, const LLVector3& pos, con
     const LLUUID& sculpt = params.getSculptID();
     for (U32 i = 0; i < 4; ++i) h = fnv(h, ((const U32*)sculpt.mData)[i]);
     h = fnv(h, params.getSculptType());
-    h = fnv(h, (U64)(ptype + 2) | ((U64)shape_known << 8) | ((U64)phantom << 9) | ((U64)hidden << 10) | ((U64)vov->isMesh() << 11));
+    h = fnv(h, (U64)(ptype + 2) | ((U64)shape_known << 8) | ((U64)phantom << 9) | ((U64)hidden << 10) | ((U64)vov->isMesh() << 11) | ((U64)mBuildNavRole << 12));
     if (vov->isMesh())
     {
         // The decomposition state decides hull vs tessellation vs placeholder box; its arrival must miss the cache.
@@ -452,6 +524,50 @@ U64 SSWorldFieldShapes::partSignature(LLVOVolume* vov, const LLVector3& pos, con
 void SSWorldFieldShapes::trackRest(const LLViewerObject* rootp, bool& out_dynamic)
 {
     RestState& state = mRest[rootp->getID()];
+    state.mSeen = true;
+
+    // <SS:Nexii> The sim's own word first: a pathfinding character or a physical root is a mover whatever it is doing right now, and a linkset set to a static navmesh role (Walkable, Static obstacle, a material or exclusion volume - the FLAGS_AFFECTS_NAVMESH bit) is landscape from its first sighting. Only the default role (Movable obstacle, no bit) is undecided. [interaction: SSNavMesh obstacles]
+    LLViewerObject* mutable_root = const_cast<LLViewerObject*>(rootp);
+    if (rootp->flagCharacter() || rootp->flagUsePhysics())
+    {
+        state.mKnown = true;
+        state.mDynamic = true;
+        state.mMovedAt = mNow;
+        out_dynamic = true;
+        ++mPendRestByFlag;
+        return;
+    }
+    if (mutable_root->getFlags() & FLAGS_AFFECTS_NAVMESH)
+    {
+        state.mKnown = true;
+        state.mDynamic = false;
+        state.mMovedAt = mNow;
+        state.mPos = LLVector3d(rootp->getPositionAgent());
+        state.mRot = rootp->getRotation();
+        state.mScale = rootp->getScale();
+        out_dynamic = false;
+        ++mPendRestByFlag;
+        return;
+    }
+
+    // <SS:Nexii> Then the Region Object Cache ledger: a root it has watched sit still across visits, or promoted, is landscape now rather than after a settle window; one it has seen move, or disqualified, stays a mover. Silence falls through to watching. [interaction: ssrocledger restVerdict]
+    if (!state.mKnown && SSROCLedger::instanceExists() && rootp->getRegion())
+    {
+        bool is_static = false;
+        if (SSROCLedger::getInstance()->restVerdict(rootp->getRegion()->getHandle(), rootp->getID(), is_static))
+        {
+            state.mKnown = true;
+            state.mDynamic = !is_static;
+            state.mMovedAt = mNow;
+            state.mPos = LLVector3d(rootp->getPositionAgent());
+            state.mRot = rootp->getRotation();
+            state.mScale = rootp->getScale();
+            out_dynamic = state.mDynamic;
+            ++mPendRestByLedger;
+            return;
+        }
+    }
+    ++mPendRestByWatching;
     const LLVector3d pos(rootp->getPositionAgent());
     const LLQuaternion rot = rootp->getRotation();
     const LLVector3 scale = rootp->getScale();
@@ -505,7 +621,35 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     mBuildDynamic = dynamic;
 
     const bool phantom = rootp->flagPhantom();
+    const U32 root_flags = rootp->getFlags();
+
+    // The linkset's navmesh role: known from the table, wanted when the flag says there is one to fetch.
+    mBuildNavRole = NAV_ROLE_UNKNOWN;
+    if (root_flags & FLAGS_AFFECTS_NAVMESH)
+    {
+        auto role_it = mNavRoles.find(rootp->getID());
+        if (role_it != mNavRoles.end()) mBuildNavRole = role_it->second; else mRolesWanted = true;
+    }
+
+    // <SS:Nexii> Not physics shapes, so not census (owner decision 2026-09-10): volume-detect and temporary-on-rez linksets, and phantom ones - except an exclusion volume, the one phantom the navmesh must see, which carries no geometry but cuts walkable area. The phantom LAYER therefore holds exclusion volumes only. [interaction: SSNavMesh exclusions]
+    if (root_flags & (FLAGS_VOLUME_DETECT | FLAGS_TEMPORARY_ON_REZ)) return;
+    if (phantom && mBuildNavRole != NAV_ROLE_EXCLUSION_VOLUME) return;
+
+    if (mBuildNavRole == NAV_ROLE_EXCLUSION_VOLUME)
+    {
+        // The navmesh reads only its bounds (a convex cut over the walkable area); nothing else reads it at all.
+        mCurrentPart = nullptr;
+        addOBB(pos, rot, scale * 0.5f, (U8)LAYER_DECLARED_PHANTOM, PROV_BBOX);
+        return;
+    }
+
     const bool shape_known = !vov->getPhysicsShapeUnknown();
+    // <SS:Nexii> Ask for an unknown part's shape type: getPhysicsShapeType() files the request itself, the object list batches every stale id into one GetObjectPhysicsData call, and the arrival changes the part's signature so the next build re-tessellates it. [interaction: part cache]
+    if (!shape_known)
+    {
+        vov->getPhysicsShapeType();
+        ++mPendPhysicsRequested;
+    }
     const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
 
     // Hidden parts: phantom (no collision declared) or shape-NONE (collision
@@ -515,7 +659,8 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     // reads them, the layer only marks them for the overlay. An unknown type
     // stays a proxy until its data arrives saying NONE.
     const bool hidden = ss_part_fully_hidden(vov);
-    if (hidden && (phantom || ptype == LLViewerObject::PHYSICS_SHAPE_NONE)) return;
+    // An exclusion volume is normally an invisible phantom: it carries no geometry but it must reach the navmesh.
+    if (hidden && (phantom || ptype == LLViewerObject::PHYSICS_SHAPE_NONE) && mBuildNavRole != NAV_ROLE_EXCLUSION_VOLUME) return;
 
     // The part cache: reuse the baked records when nothing that shaped them changed.
     mCurrentPart = nullptr;
@@ -543,8 +688,8 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
         part.mTris = 0;
         mCurrentPart = &part;
     }
-    const U8 layer = hidden ? (U8)LAYER_INVISIBLE_SOLID
-                            : (phantom ? (U8)LAYER_DECLARED_PHANTOM : (U8)LAYER_DECLARED);
+    const U8 layer = phantom ? (U8)LAYER_DECLARED_PHANTOM
+                             : (hidden ? (U8)LAYER_INVISIBLE_SOLID : (U8)LAYER_DECLARED);
 
     // No declared shape, or a shape type nobody ever queried: the prim's own
     // volume is the geometry, provenance RENDER - the same math the server
@@ -572,17 +717,19 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
             if (!decomp->mHull.empty())
             {
                 gMeshRepo.buildPhysicsMesh(*decomp);
-                std::vector<LLVector3> soup;
-                for (size_t h = 0; h < decomp->mMesh.size() && (S32)(soup.size() / 3) < tri_cap; ++h)
+                // <SS:Nexii> One record per hull: each hull is convex, and the navmesh fills convex records solid so a building's interior never reads as a room. Concatenating hulls into one soup would lose that. [interaction: SSNavMesh convex fill]
+                S32 total_tris = 0;
+                for (size_t h = 0; h < decomp->mMesh.size(); ++h) total_tris += (S32)(decomp->mMesh[h].mPositions.size() / 3);
+                if (total_tris > 0 && total_tris <= tri_cap && mPendingTris + total_tris <= SS_SHAPES_TOTAL_TRIS)
                 {
-                    const std::vector<LLVector3>& hull = decomp->mMesh[h].mPositions;
-                    const size_t begin = soup.size();
-                    soup.insert(soup.end(), hull.begin(), hull.end());
-                    ss_orient_outward(soup, begin);
-                }
-                if (!soup.empty() && (S32)(soup.size() / 3) <= tri_cap
-                    && addTriangles(pos, rot, scale, soup, layer, geometry_only ? (U8)PROV_RENDER : (U8)PROV_HULL))
-                {
+                    // All or nothing: a partial set of hulls plus a box would double-file the building.
+                    std::vector<LLVector3> soup;
+                    for (size_t h = 0; h < decomp->mMesh.size(); ++h)
+                    {
+                        soup = decomp->mMesh[h].mPositions;
+                        ss_orient_outward(soup, 0);
+                        addTriangles(pos, rot, scale, soup, layer, geometry_only ? (U8)PROV_RENDER : (U8)PROV_HULL);
+                    }
                     return;
                 }
                 addOBB(pos, rot, scale * 0.5f, layer, PROV_BBOX);
@@ -809,6 +956,7 @@ void SSWorldFieldShapes::addRecord(Record& rec)
 
     const U32 index = (U32)mPending.mRecords.size();
     rec.mDynamic = mBuildDynamic;
+    rec.mNavRole = mBuildNavRole;
     if (mCurrentPart) mCurrentPart->mRecords.push_back(rec);
     mPending.mRecords.push_back(rec);
     for (S32 z = z0; z <= z1; ++z)
@@ -845,8 +993,7 @@ bool SSWorldFieldShapes::segmentCast(const LLVector3& a, const LLVector3& b, Seg
     if (!mBuilding && needsRebuild(regionp)) beginBuild(regionp);
     if (mCensus.mRegionHandle != regionp->getHandle())
     {
-        static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
-        const F32 env = llclamp((F32)range, 32.f, 1024.f);
+        const F32 env = envelopeRange();
         if ((a - mCensus.mAnchor).magVec() > env) return false;
     }
 
@@ -898,6 +1045,7 @@ bool SSWorldFieldShapes::segmentCast(const LLVector3& a, const LLVector3& b, Seg
                 Record& rec = mCensus.mRecords[idx];
                 if (rec.mVisit == epoch) continue;
                 rec.mVisit = epoch;
+                if (rec.mNavRole == NAV_ROLE_EXCLUSION_VOLUME) continue;    // a navmesh cut, never a surface to hit
                 if (!include_phantom && rec.mLayer == LAYER_DECLARED_PHANTOM) continue;
 
                 F32 t0 = 0.f, t1 = best_t;
@@ -1311,9 +1459,26 @@ void SSWorldFieldShapes::renderDebug()
                 ss_debug_aabb(mn, mx);
             }
         }
+        else if (rec.mClass == Record::CLASS_SPHERE)
+        {
+            // Three great circles in the record's own frame: an ellipsoid reads as one, not as its box.
+            static const S32 SEGS = 24;
+            for (S32 ring = 0; ring < 3; ++ring)
+            {
+                const S32 ia = (ring + 1) % 3, ib = (ring + 2) % 3;
+                LLVector3 prev = rec.mCenter + rec.mAxes[ia] * rec.mRadii.mV[ia];
+                for (S32 k = 1; k <= SEGS; ++k)
+                {
+                    const F32 a = F_TWO_PI * (F32)k / (F32)SEGS;
+                    const LLVector3 p = rec.mCenter + rec.mAxes[ia] * (cosf(a) * rec.mRadii.mV[ia]) + rec.mAxes[ib] * (sinf(a) * rec.mRadii.mV[ib]);
+                    gGL.vertex3fv(prev.mV);
+                    gGL.vertex3fv(p.mV);
+                    prev = p;
+                }
+            }
+        }
         else
         {
-            // Spheres stay on their AABB bounds.
             ss_debug_aabb(mn, mx);
         }
     }
