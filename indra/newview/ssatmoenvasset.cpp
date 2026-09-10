@@ -610,17 +610,36 @@ bool SSAtmoEnvPlanetary::removeBody(S32 index)
         remap[i] = doomed[i] ? -1 : next++;
     }
 
+    // <SS:Nexii> Bodies are edited in memory too (the floater's Space tab), not just parsed from a card, so an index that drifted out of range is treated as "no link" below rather than trusted into remap[] - the parse-time sanitiser in fromLLSD covers the notecard door, this covers every other one.
+    const S32 count = (S32)mBodies.size();
+
     std::vector<SSAtmoEnvCelestialBody> kept;
     kept.reserve((size_t)next);
     for (size_t i = 0; i < mBodies.size(); ++i)
     {
         if (doomed[i]) continue;
         SSAtmoEnvCelestialBody body = mBodies[i];
-        body.mParentIndex = (body.mParentIndex >= 0) ? remap[body.mParentIndex] : -1;
-        body.mBoundPartnerIndex = (body.mBoundPartnerIndex >= 0) ? remap[body.mBoundPartnerIndex] : -1;
+        body.mParentIndex = (body.mParentIndex >= 0 && body.mParentIndex < count) ? remap[body.mParentIndex] : -1;
+        body.mBoundPartnerIndex = (body.mBoundPartnerIndex >= 0 && body.mBoundPartnerIndex < count) ? remap[body.mBoundPartnerIndex] : -1;
         kept.push_back(body);
     }
     mBodies.swap(kept);
+
+    // <SS:Nexii> Removing the body the observer stands on used to leave homeBodyIndex() == -1 for the whole system (nothing else repairs it - normalizeSunTopology only touches sun links, autoNameBodies only names), which is the same "exactly one home" invariant fromLLSD enforces on load; adopt the biggest surviving planet instead, else any surviving non-emitter, via setHomeBody so the home-is-never-a-light-emitter rule comes along; if every survivor is an emitter the system stays homeless rather than losing its only light, which homeBodyIndex() < 0 consumers already handle.
+    if (!mBodies.empty() && homeBodyIndex() < 0)
+    {
+        S32 adopt = -1;
+        for (S32 i = 0; i < (S32)mBodies.size(); ++i)
+        {
+            if (mBodies[(size_t)i].mKind != SSAtmoEnvCelestialBody::PLANET) continue;
+            if (adopt < 0 || mBodies[(size_t)i].mDiameterM > mBodies[(size_t)adopt].mDiameterM) adopt = i;
+        }
+        for (S32 i = 0; adopt < 0 && i < (S32)mBodies.size(); ++i)
+        {
+            if (!mBodies[(size_t)i].mIsLightEmitter) adopt = i;
+        }
+        if (adopt >= 0) setHomeBody(adopt);
+    }
 
     normalizeSunTopology();
     autoNameBodies();
@@ -953,6 +972,15 @@ bool SSAtmoEnvPlanetary::fromLLSD(const LLSD& sd)
             body.fromLLSD(entry);
             mBodies.push_back(body);
         }
+    }
+
+    // <SS:Nexii> A notecard is untrusted input and mParentIndex/mBoundPartnerIndex come out of it raw; removeBody() indexes remap[] with both, so an out-of-range or self-referential link from a hand-edited or corrupt card would read off the end of that vector. Sanitise once, here, right after the array lands: anything outside [0, size) or pointing at itself becomes "no link".
+    const S32 body_count = (S32)mBodies.size();
+    for (S32 i = 0; i < body_count; ++i)
+    {
+        SSAtmoEnvCelestialBody& body = mBodies[(size_t)i];
+        if (body.mParentIndex < 0 || body.mParentIndex >= body_count || body.mParentIndex == i) body.mParentIndex = -1;
+        if (body.mBoundPartnerIndex < 0 || body.mBoundPartnerIndex >= body_count || body.mBoundPartnerIndex == i) body.mBoundPartnerIndex = -1;
     }
 
     bool have_home = false;
@@ -1789,6 +1817,14 @@ bool SSAtmoEnvTrack::fromLLSD(const LLSD& sd)
         const LLSD& ls = sd["landscape"];
         for (U32 i = 0; i < ls.size(); ++i)
         {
+            // <SS:Nexii> SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK was enforced only in the floater's drop path (SSAtmoLandscapeWorld::addFromItem), never on the parse, so a parcel-supplied notecard could spawn as many client-side mesh objects as it liked. Clamp here rather than reject: an over-budget card still loads, it just stops at the budget - the break makes the warning fire once.
+            if ((S32)mLandscapes.size() >= SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK)
+            {
+                LL_WARNS("AtmoMagicEnv") << "Atmo v3 track '" << mName << "' asks for more than "
+                                         << SS_ATMOENV_MAX_LANDSCAPE_PER_TRACK
+                                         << " landscape objects; dropping the rest" << LL_ENDL;
+                break;
+            }
             SSAtmoEnvLandscape l;
             if (l.fromLLSD(ls[i]))
             {
@@ -2038,7 +2074,12 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
     for (S32 i = 0; i < count; ++i)
     {
         SSAtmoEnvTrack track;
-        track.fromLLSD(tracks_sd[i]);
+        // <SS:Nexii> The return used to be discarded and the track pushed regardless, so a malformed element (anything that is not a map - a null, a string, or the undefined LLSD the clamp to SS_ATMOENV_MIN_TRACKS can read past the end of a short array) became a phantom default track sitting in the altitude stack. Skip it instead; the existing "no tracks survived parsing" check below is the failure door if nothing is left.
+        if (!track.fromLLSD(tracks_sd[i]))
+        {
+            LL_WARNS("AtmoMagicEnv") << "Atmo v3 track " << i << " is malformed; skipping it" << LL_ENDL;
+            continue;
+        }
         parsed.mTracks.push_back(track);
     }
 
@@ -2047,6 +2088,25 @@ bool SSAtmoEnvAsset::fromLLSD(const LLSD& sd, std::string& out_error)
         out_error = "no tracks survived parsing";
         *this = makeDefault();
         return false;
+    }
+
+    // <SS:Nexii> The landscape caps used to live only in SSAtmoLandscapeWorld::addFromItem (the floater's drop path), so a parcel notecard - untrusted, and applied without the author ever seeing it - could ask for unlimited client-side mesh objects. The per-track cap is enforced in SSAtmoEnvTrack::fromLLSD; this is the asset-wide one. Clamp, never fail: a card that overshoots still loads, it just stops at the budget.
+    S32 landscape_total = 0;
+    bool landscape_warned = false;
+    for (SSAtmoEnvTrack& t : parsed.mTracks)
+    {
+        const S32 room = llmax(0, SS_ATMOENV_MAX_LANDSCAPE_TOTAL - landscape_total);
+        if ((S32)t.mLandscapes.size() > room)
+        {
+            if (!landscape_warned)
+            {
+                landscape_warned = true;
+                LL_WARNS("AtmoMagicEnv") << "Atmo v3 asset asks for more than " << SS_ATMOENV_MAX_LANDSCAPE_TOTAL
+                                         << " landscape objects in total; truncating the later tracks" << LL_ENDL;
+            }
+            t.mLandscapes.resize((size_t)room);
+        }
+        landscape_total += (S32)t.mLandscapes.size();
     }
 
     parsed.sortTracksByAltitude();

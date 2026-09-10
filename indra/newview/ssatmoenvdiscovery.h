@@ -71,12 +71,24 @@ public:
 private:
     void requestFetch(const LLUUID& asset_id, bool force = false);
 
-    void onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force);
+    void onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force, U32 serial);
+
+    // A fetch that went out and came back non-2xx (the Bridge script answers 404 when a cold notecard read times out), or never came back at all: unlatches mPendingAssetId and parks a capped retry, because changed() early-returns on the pending id and a latched one holds the parcel's environment off for the whole session.
+    void onFetchFailure(const LLUUID& asset_id, bool force, U32 serial);
 
     bool applyText(const LLUUID& asset_id, const std::string& text, bool force);
 
     LLUUID mAppliedAssetId;
     LLUUID mPendingAssetId;
+
+    // The force flag and the send time of the in-flight fetch: idle() expires a request that never returns at all (stale Bridge URL across a region crossing, a dropped coroutine) so the pending latch cannot wedge discovery forever.
+    bool mPendingForce = false;
+    LLFrameTimer mPendingTimer;
+    U32 mPendingSerial = 0;                 // bumped per requestFetch; a reply carrying an older serial belongs to a fetch idle() already expired
+
+    // Consecutive failures for one asset id, so a card that 404s forever stops asking; reset by a fetch that applies, or by the parcel advertising a different id.
+    LLUUID mFailedAssetId;
+    S32 mFailedAttempts = 0;
 
     // A fetch that could not go out because the LSL Bridge was not available yet (the login case: the parcel arrives seconds before the Bridge attaches); idle() retries it until the parcel stops advertising it.
     LLUUID mDeferredAssetId;

@@ -202,6 +202,7 @@ private:
     void continueBuild(LLViewerRegion* regionp);
     void finishBuild();
     void prunePartCache();
+    void pruneNavRoles();
     U64 partSignature(class LLVOVolume* vov, const LLVector3& pos, const LLQuaternion& rot, const LLVector3& scale,
                       S32 ptype, bool shape_known, bool phantom, bool hidden) const;
     void addPart(class LLVOVolume* vov);
@@ -213,7 +214,7 @@ private:
                       const std::vector<LLVector3>& local_soup, U8 layer, U8 prov);
     void addRecord(Record& rec);
     void requestNavRoles();
-    static void onNavRoles(U32 request_id, S32 status, const std::shared_ptr<class LLPathfindingObjectList>& list);
+    static void onNavRoles(U32 request_id, S32 status, const std::shared_ptr<class LLPathfindingObjectList>& list, U64 region_handle);
     bool castRecord(const Record& rec, const LLVector3& a, const LLVector3& dirn,
                     F32 t_min, F32 t_max, F32& out_t, LLVector3& out_n) const;
     bool castTerrain(const LLVector3& a, const LLVector3& b,
@@ -245,7 +246,13 @@ private:
 
     // Navmesh roles per linkset root, from ObjectNavMeshProperties; requested once per region when a flagged root
     // turns up without one, re-requested no sooner than a minute later.
-    std::unordered_map<LLUUID, U8> mNavRoles;
+    // <SS:Nexii> Each role remembers the region it was fetched for, because the reply is region-wide - far more linksets than the census ever sights - so pruning it to the census would drop roles the next envelope still needs and buy a re-request; pruning by region instead bounds the table across region hops and keeps every role LLWorld still holds a region for. [interaction: SSNavMesh roles]
+    struct NavRole
+    {
+        U8 mRole = 0;
+        U64 mRegion = 0;
+    };
+    std::unordered_map<LLUUID, NavRole> mNavRoles;
     bool mRolesWanted = false;
     bool mRolesInFlight = false;
     bool mRolesChanged = false;

@@ -1418,7 +1418,13 @@ bool SSROCLedger::restVerdict(U64 handle, const LLUUID& full_id, bool& out_stati
     auto it = rs.mByFullID.find(full_id);
     if (it == rs.mByFullID.end() || it->second >= rs.mRecords.size()) return false;
     const SSROCRecord& rec = rs.mRecords[it->second];
-    if (rec.mRecordFlags & SSROC_REC_DISQUALIFIED) { out_static = false; return true; }
+    // <SS:Nexii> The bit is shared by motion evidence and the blob-size cap (ssROCIsDisqualified), and only motion is a mover verdict: an oversized record never keeps a blob, so a blobless disqualified record falls through to watching instead of excluding a large static building from the census for ever. A physical mover salvaged across a format bump (ssroccache.cpp salvage clears mDP and keeps the bit) lands here too and is watched rather than condemned: salvage also zeroed its flags and score, so there is no motion evidence left to condemn it with. [interaction: SSWorldFieldShapes::trackRest]
+    if (rec.mRecordFlags & SSROC_REC_DISQUALIFIED)
+    {
+        if (rec.mDP.empty()) return false;
+        out_static = false;
+        return true;
+    }
     // A move on record is not a verdict: a building the owner shifted once would otherwise stay a mover for ever.
     // It only withholds the landscape credit, so the census watches it settle instead.
     if (rec.mMoveCount > 0) return false;

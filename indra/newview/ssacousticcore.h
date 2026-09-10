@@ -1132,7 +1132,7 @@ namespace SSAcoustic
                             const size_t si = (size_t)k * src_layer + col;
                             iv_lo.push_back(s.mBottom[si]);
                             iv_hi.push_back(s.mTop[si]);
-                            iv_fl.push_back(s.mFlags[si]);
+                            iv_fl.push_back(s.mFlags ? s.mFlags[si] : (U8)0);   // <SS:Nexii> A snapshot without a flags plane is a valid input (the flood's acoustic path builds one), so the mip carries plain untyped solids rather than dereferencing null.
                         }
                     }
                 }
@@ -1169,6 +1169,14 @@ namespace SSAcoustic
                             top[pi] = iv_hi[i];
                             flags[pi] = (U8)(flags[pi] | iv_fl[i]);
                         }
+                        continue;
+                    }
+                    // <SS:Nexii> Out of slots. A mip column gathers up to BUNDLE_MIP*BUNDLE_MIP * mMaxSpans intervals and every one of them can be disjoint, but the buffers only hold max_spans per column - unbounded n walked off the end of the layer and into the next column's rows (heap corruption). The intervals are sorted bottom-up, so folding the overflow into the top slot stretches that span over everything above it: solid where the mip should have had air, which is the conservative direction for a trace target - dropping the interval instead would open a hole to shoot through.
+                    if (n >= max_spans)
+                    {
+                        const size_t pi = (size_t)(max_spans - 1) * layer + mcol;
+                        if (iv_hi[i] > top[pi]) top[pi] = iv_hi[i];
+                        flags[pi] = (U8)(flags[pi] | iv_fl[i]);
                         continue;
                     }
                     const size_t ni = (size_t)n * layer + mcol;

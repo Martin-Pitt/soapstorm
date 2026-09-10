@@ -108,6 +108,7 @@ public:
     F32 lastBuildMS() const { return mLastBuildMS; }
     U32 polyCount() const;
     size_t layerBytes() const { return mLayerBytes; }
+    U32 layersDropped() const { return mLayersDropped; }    // walkable layers currently without a tile, summed over live bands
 
 private:
     // One band of one column: its geometry signature and the compressed tiles it published.
@@ -119,6 +120,7 @@ private:
         std::vector<U32> mRefs;             // dtCompressedTileRef per layer
         bool mAlive = false;                // touched by the latest schedule
         F64 mPublishedAt = -100.0;          // when its layers last landed, for the overlay's rebuild flash
+        S32 mLayersDropped = 0;             // walkable layers this band produced past SS_NAV_MAX_LAYERS_PER_BAND
     };
 
     // A band waiting for a worker build.
@@ -135,6 +137,7 @@ private:
         Job mJob;
         U32 mGeneration = 0;
         std::vector<std::vector<U8> > mLayers;
+        S32 mLayersDropped = 0;             // walkable layers past SS_NAV_MAX_LAYERS_PER_BAND that got no tile
         F32 mMS = 0.f;
         bool mOk = false;
     };
@@ -180,6 +183,7 @@ private:
     U32 mBuildCount = 0;
     F32 mLastBuildMS = 0.f;
     size_t mLayerBytes = 0;
+    U32 mLayersDropped = 0;
     S32 mLastSeen = 0, mLastDynamic = 0, mLastPhantom = 0;
 
     // Test path state (agent space).

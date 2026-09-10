@@ -407,6 +407,7 @@ void SSWorldFieldShapes::finishBuild()
         if (it->second.mSeen) { ++it; } else { it = mRest.erase(it); }
     }
     prunePartCache();
+    pruneNavRoles();
     mCurrentPart = nullptr;
     mPending.mBuildTime = mNow;
     mCensus = std::move(mPending);
@@ -435,14 +436,15 @@ void SSWorldFieldShapes::requestNavRoles()
     mRolesRegion = mCensus.mRegionHandle;
     mRolesInFlight = true;
     static U32 request_id = 0x53530000u;
-    mgr->requestGetLinksets(++request_id, [](U32 id, LLPathfindingManager::ERequestStatus status, LLPathfindingObjectListPtr list)
+    const U64 region_handle = mRolesRegion;     // travels with the request: a second request can overwrite mRolesRegion before a slow reply lands
+    mgr->requestGetLinksets(++request_id, [region_handle](U32 id, LLPathfindingManager::ERequestStatus status, LLPathfindingObjectListPtr list)
     {
-        SSWorldFieldShapes::onNavRoles(id, (S32)status, list);
+        SSWorldFieldShapes::onNavRoles(id, (S32)status, list, region_handle);
     });
 }
 
 // The reply: every linkset's role filed by root id; a changed table forces the next rebuild so the records carry it.
-void SSWorldFieldShapes::onNavRoles(U32, S32 status, const std::shared_ptr<LLPathfindingObjectList>& list)
+void SSWorldFieldShapes::onNavRoles(U32, S32 status, const std::shared_ptr<LLPathfindingObjectList>& list, U64 region_handle)
 {
     if (status == (S32)LLPathfindingManager::kRequestStarted) return;
     if (!SSWorldFieldShapes::instanceExists()) return;
@@ -464,8 +466,28 @@ void SSWorldFieldShapes::onNavRoles(U32, S32 status, const std::shared_ptr<LLPat
             case LLPathfindingLinkset::kDynamicPhantom: role = NAV_ROLE_DYNAMIC_PHANTOM; break;
             default: break;
         }
-        U8& slot = self->mNavRoles[linkset->getUUID()];
-        if (slot != role) { slot = role; self->mRolesChanged = true; }
+        NavRole& slot = self->mNavRoles[linkset->getUUID()];
+        slot.mRegion = region_handle;           // the region this reply answered for - what pruneNavRoles ages the entry against
+        if (slot.mRole != role) { slot.mRole = role; self->mRolesChanged = true; }
+    }
+}
+
+// Drop roles whose region LLWorld no longer holds: the reply is region-wide, so hopping regions would otherwise
+// stack a whole sim's table per hop; neighbours stay resident, and with them every role the census can still ask for.
+void SSWorldFieldShapes::pruneNavRoles()
+{
+    if (mNavRoles.empty() || !LLWorld::instanceExists()) return;
+    LLWorld* worldp = LLWorld::getInstance();
+    for (auto it = mNavRoles.begin(); it != mNavRoles.end();)
+    {
+        if (it->second.mRegion && !worldp->getRegionFromHandle(it->second.mRegion))
+        {
+            it = mNavRoles.erase(it);
+        }
+        else
+        {
+            ++it;
+        }
     }
 }
 
@@ -628,7 +650,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     if (root_flags & FLAGS_AFFECTS_NAVMESH)
     {
         auto role_it = mNavRoles.find(rootp->getID());
-        if (role_it != mNavRoles.end()) mBuildNavRole = role_it->second; else mRolesWanted = true;
+        if (role_it != mNavRoles.end()) mBuildNavRole = role_it->second.mRole; else mRolesWanted = true;
     }
 
     // <SS:Nexii> Not physics shapes, so not census (owner decision 2026-09-10): volume-detect and temporary-on-rez linksets, and phantom ones - except an exclusion volume, the one phantom the navmesh must see, which carries no geometry but cuts walkable area. The phantom LAYER therefore holds exclusion volumes only. [interaction: SSNavMesh exclusions]
@@ -1213,15 +1235,26 @@ bool SSWorldFieldShapes::castRecord(const Record& rec, const LLVector3& a, const
         {
             const std::vector<LLVector3>& tri = rec.tris();
             const size_t nt = tri.size() / 3;
+            // <SS:Nexii> The nearest triangle, never the first one met: ss_ray_tri is two-sided, so a hull's far exit face can sit ahead of its near entry face in the soup and returning early handed the caller a wall behind the one it was standing at. Each call is capped at the best t so far - the same shrinking window segmentCast runs its records under - and ss_ray_tri writes out_t/out_n only when it accepts a hit, so the locals survive every rejected triangle.
+            F32 tri_t = t_max;
+            LLVector3 tri_n;
+            bool tri_hit = false;
             for (size_t k = 0; k < nt; ++k)
             {
+                F32 t = 0.f;
+                LLVector3 n;
                 if (ss_ray_tri(tri[k * 3], tri[k * 3 + 1], tri[k * 3 + 2],
-                               a, dirn, t_min, t_max, out_t, out_n))
+                               a, dirn, t_min, tri_t, t, n))
                 {
-                    return true;
+                    tri_t = t;
+                    tri_n = n;
+                    tri_hit = true;
                 }
             }
-            return false;
+            if (!tri_hit) return false;
+            out_t = tri_t;
+            out_n = tri_n;
+            return true;
         }
     }
     return false;

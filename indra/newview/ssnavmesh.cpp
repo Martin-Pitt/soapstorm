@@ -66,10 +66,8 @@ static LLTrace::BlockTimerStatHandle FTM_SS_NAVMESH_PUBLISH("SS NavMesh Publish"
 
 // Build-side constants: the Recast config the benchmark ran with (doc/atmo_magic_navmesh.md 10). The agent
 // parameters are settings; the rest is fixed until a second agent class exists.
-static constexpr F32 SS_NAV_MAX_EDGE_M = 12.f;
 static constexpr F32 SS_NAV_MAX_SIMPLIFICATION_ERROR = 1.3f;
-static constexpr F32 SS_NAV_MIN_REGION_M = 2.f;        // region sizes in metres, converted to cells per build
-static constexpr F32 SS_NAV_MERGE_REGION_M = 5.f;
+static constexpr F32 SS_NAV_MIN_ISLAND_M = 2.f;        // <SS:Nexii> walkable islands smaller than this square are culled per layer before compression. The tile-cache path never reads rcConfig's minRegionArea/mergeRegionArea/maxEdgeLen (dtBuildTileCacheRegions does its own monotone partition and largest-neighbour merge, dtBuildTileCacheContours takes only maxError), so the sliver cull Recast's classic path gives for free is done here on the rcHeightfieldLayer instead. Islands touching the layer's edge or a layer portal are kept: the neighbour tile, or another layer of this one, may carry the rest of that surface, and culling one side would open a seam. [interaction: seams]
 static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 16;      // walkable layers a band may publish; a tall building has a floor per storey
 static constexpr S32 SS_NAV_TERRAIN_NODES = 21;     // 1 m grid over the bordered column: 16 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
@@ -378,9 +376,49 @@ namespace
     U64 fnv(U64 h, U64 v) { h ^= v; h *= 1099511628211ull; return h; }
     U64 fnvF(U64 h, F32 f) { return fnv(h, (U64)(S64)llround(f * 100.f)); }
 
-    // The worker: one band through Recast to compressed tile cache layers.
-    void buildBand(const SSNavBuildInput& in, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers)
+    // Flood the layer's walkable cells over their same-layer connections; components under min_area that touch neither the layer edge nor a layer portal are nulled.
+    void cullLayerIslands(rcHeightfieldLayer& layer, const S32 min_area, std::vector<S32>& stack)
     {
+        const S32 w = layer.width, h = layer.height, n = w * h;
+        if (min_area <= 1 || n <= 0) return;
+        std::vector<U8> seen((size_t)n, 0);
+        std::vector<S32> comp;
+        static const S32 DX[4] = {-1, 0, 1, 0}, DY[4] = {0, 1, 0, -1};    // rcGetDirOffsetX/Y order: dir 0 = -x, 1 = +y(z), 2 = +x, 3 = -y(z)
+        for (S32 start = 0; start < n; ++start)
+        {
+            if (seen[start] || layer.areas[start] == RC_NULL_AREA) continue;
+            comp.clear();
+            stack.clear();
+            stack.push_back(start);
+            seen[start] = 1;
+            bool keep = false;
+            while (!stack.empty())
+            {
+                const S32 idx = stack.back(); stack.pop_back();
+                comp.push_back(idx);
+                const U8 con = layer.cons[idx];
+                const S32 x = idx % w, y = idx / w;
+                if ((con & 0xf0) || x == 0 || y == 0 || x == w - 1 || y == h - 1) keep = true;    // rcBuildHeightfieldLayers' high nibble is the inter-layer portal mask; tile borders carry no bit, the edge cell is the tell
+                for (S32 dir = 0; dir < 4; ++dir)
+                {
+                    if (!(con & (1 << dir))) continue;
+                    const S32 nx = x + DX[dir], ny = y + DY[dir];
+                    if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                    const S32 nidx = nx + ny * w;
+                    if (seen[nidx] || layer.areas[nidx] == RC_NULL_AREA) continue;
+                    seen[nidx] = 1;
+                    stack.push_back(nidx);
+                }
+            }
+            if (keep || (S32)comp.size() >= min_area) continue;
+            for (S32 idx : comp) layer.areas[idx] = RC_NULL_AREA;
+        }
+    }
+
+    // The worker: one band through Recast to compressed tile cache layers; out_dropped counts layers past the per-band cap.
+    void buildBand(const SSNavBuildInput& in, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped)
+    {
+        out_dropped = 0;
         rcContext ctx(false);
         rcConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
@@ -390,11 +428,9 @@ namespace
         cfg.walkableHeight = (int)ceilf(in.mAgentHeight / cfg.ch);
         cfg.walkableClimb = (int)floorf(in.mAgentClimb / cfg.ch);
         cfg.walkableRadius = (int)ceilf(in.mAgentRadius / cfg.cs);
-        cfg.maxEdgeLen = (int)(SS_NAV_MAX_EDGE_M / cfg.cs);
-        cfg.maxSimplificationError = SS_NAV_MAX_SIMPLIFICATION_ERROR;
-        const S32 min_region_cells = (S32)(SS_NAV_MIN_REGION_M / cfg.cs), merge_region_cells = (S32)(SS_NAV_MERGE_REGION_M / cfg.cs);
-        cfg.minRegionArea = min_region_cells * min_region_cells;
-        cfg.mergeRegionArea = merge_region_cells * merge_region_cells;
+        cfg.maxSimplificationError = SS_NAV_MAX_SIMPLIFICATION_ERROR;    // informational here; the tile cache applies its own copy (tcp.maxSimplificationError)
+        const S32 min_island_cells = (S32)(SS_NAV_MIN_ISLAND_M / cfg.cs);
+        const S32 min_island_area = min_island_cells * min_island_cells;
         cfg.maxVertsPerPoly = 6;
         cfg.tileSize = SSNavMesh::TILE_CELLS;
         cfg.borderSize = cfg.walkableRadius + 3;
@@ -444,9 +480,12 @@ namespace
         rcHeightfieldLayerSet* lset = rcAllocHeightfieldLayerSet();
         if (lset && rcBuildHeightfieldLayers(&ctx, *chf, cfg.borderSize, cfg.walkableHeight, *lset))
         {
+            if (lset->nlayers > SS_NAV_MAX_LAYERS_PER_BAND) out_dropped = lset->nlayers - SS_NAV_MAX_LAYERS_PER_BAND;
+            std::vector<S32> flood_stack;
             for (int i = 0; i < lset->nlayers && i < SS_NAV_MAX_LAYERS_PER_BAND; ++i)
             {
-                const rcHeightfieldLayer* layer = &lset->layers[i];
+                rcHeightfieldLayer* layer = &lset->layers[i];
+                cullLayerIslands(*layer, min_island_area, flood_stack);
                 dtTileCacheLayerHeader header;
                 header.magic = DT_TILECACHE_MAGIC;
                 header.version = DT_TILECACHE_VERSION;
@@ -703,10 +742,11 @@ void SSNavMesh::schedule()
         F32 lo = FLT_MAX, hi = -FLT_MAX;
         U64 sig = 14695981039346656037ull;
         bool any = false;
-        for (S32 gy = 0; gy <= 2; ++gy) for (S32 gx = 0; gx <= 2; ++gx)       // 0, 8, 16 m: every 16 m patch a column touches
+        const F32 sig_step = (TILE_M + 2.f * SS_NAV_TERRAIN_MARGIN_M) * 0.5f;    // <SS:Nexii> -2, +8, +18 m: the whole window emitTerrain rasterizes, so the +x/+y margin's patch is signed too; 8 m steps stopped at +14 and left that strip's edits unseen.
+        for (S32 gy = 0; gy <= 2; ++gy) for (S32 gx = 0; gx <= 2; ++gx)       // every 16 m patch the bordered column touches
         {
-            const LLVector3 pos_agent = fromLocal(LLVector3((F32)x * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gx * 8.f,
-                                                            (F32)y * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gy * 8.f, 0.f));
+            const LLVector3 pos_agent = fromLocal(LLVector3((F32)x * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gx * sig_step,
+                                                            (F32)y * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gy * sig_step, 0.f));
             LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
             if (!regionp) continue;
             LLVector3 region_pos = regionp->getPosRegionFromAgent(pos_agent);
@@ -858,6 +898,8 @@ void SSNavMesh::schedule()
 void SSNavMesh::removeBand(U64 key, Band& band)
 {
     (void)key;
+    mLayersDropped -= (U32)band.mLayersDropped;
+    band.mLayersDropped = 0;
     if (!mTileCache || !mNavMesh) { band.mRefs.clear(); return; }
     for (U32 ref : band.mRefs)
     {
@@ -927,7 +969,7 @@ void SSNavMesh::launch(const Job& job)
             r->mJob = job;
             r->mGeneration = generation;
             LLTimer t;
-            buildBand(*in, *comp, r->mLayers);
+            buildBand(*in, *comp, r->mLayers, r->mLayersDropped);
             r->mMS = t.getElapsedTimeF32() * 1000.f;
             r->mOk = true;
             return r;
@@ -953,6 +995,7 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
     auto it = mBands.find(bandKey(job.mTx, job.mTy, job.mBand));
     if (it == mBands.end()) return;                     // evicted while building
     Band& band = it->second;
+    const S32 dropped_before = band.mLayersDropped;
     removeBand(it->first, band);
     band.mSig = job.mSig;
     band.mZMin = job.mZMin;
@@ -972,6 +1015,13 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
         mLayerBytes += layer.size();
     }
     mTileCache->buildNavMeshTilesAt(job.mTx, -job.mTy - 1, mNavMesh);
+    band.mLayersDropped = result->mLayersDropped;
+    mLayersDropped += (U32)result->mLayersDropped;
+    if (result->mLayersDropped > 0 && result->mLayersDropped != dropped_before)    // a stairwell rebuilds often; say it when the count changes, not per publish
+    {
+        LL_WARNS("SSNavMesh") << "Band " << job.mTx << "," << job.mTy << " b" << job.mBand << " produced " << (SS_NAV_MAX_LAYERS_PER_BAND + result->mLayersDropped)
+                              << " walkable layers; " << result->mLayersDropped << " past the per-band cap of " << SS_NAV_MAX_LAYERS_PER_BAND << " have no navmesh" << LL_ENDL;
+    }
     band.mPublishedAt = LLFrameTimer::getTotalSeconds();
     mLastBuildMS = result->mMS;
     ++mBuildCount;

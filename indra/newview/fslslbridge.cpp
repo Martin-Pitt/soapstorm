@@ -595,7 +595,7 @@ bool FSLSLBridge::canUseBridge()
     return (isBridgeValid() && sUseLSLBridge && !mCurrentURL.empty());
 }
 
-bool FSLSLBridge::viewerToLSL(std::string_view message, Callback_t aCallback)
+bool FSLSLBridge::viewerToLSL(std::string_view message, Callback_t aCallback, Callback_t aFailureCallback)
 {
     LL_DEBUGS("FSLSLBridge") << message << LL_ENDL;
 
@@ -610,8 +610,15 @@ bool FSLSLBridge::viewerToLSL(std::string_view message, Callback_t aCallback)
         pCallback = FSLSLBridgeRequest_Success;
     }
 
+    // <SS:Nexii> Without a supplied failure callback this stays byte-for-byte the old behaviour (log only); with one, the failure is still logged exactly as FSLSLBridgeRequest_Failure does and then handed on, so a caller that latched per-request state can unlatch it instead of wedging for the session. </SS:Nexii>
+    Callback_t pFailureCallback = FSLSLBridgeRequest_Failure;
+    if (aFailureCallback)
+    {
+        pFailureCallback = [aFailureCallback](const LLSD& aData) { FSLSLBridgeRequest_Failure(aData); aFailureCallback(aData); };
+    }
+
     // Calling data() should be fine here since message is a view on a null-terminated string
-    LLCoreHttpUtil::HttpCoroutineAdapter::callbackHttpPost(mCurrentURL, LLSD(message.data()), pCallback, FSLSLBridgeRequest_Failure);
+    LLCoreHttpUtil::HttpCoroutineAdapter::callbackHttpPost(mCurrentURL, LLSD(message.data()), pCallback, pFailureCallback);
 
     return true;
 }

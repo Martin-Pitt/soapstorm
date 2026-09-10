@@ -514,3 +514,30 @@ per vertex (marked in the source). Also found on the way: `dtTileCache` lists at
 column when building or touching tiles at a column, silently ignoring the rest; a column of 12
 bands can hold up to 192, so the list is now 256 (`DetourTileCache.cpp`, marked). The harness
 result is unchanged by both, as expected: 37.9k polygons, 98.5% linked.
+
+## 21. Bug sweep: dead region knobs, island cull, terrain signature, layer cap (2026-09-10)
+
+Three findings from a review pass over the pipeline, all in `ssnavmesh.cpp`:
+
+- **`minRegionArea`, `mergeRegionArea` and `maxEdgeLen` never did anything.** They are `rcConfig`
+  fields for the classic path (`rcBuildRegions`, `rcBuildContours`), and this pipeline goes
+  `rcBuildHeightfieldLayers` then `dtBuildTileCacheRegions` / `dtBuildTileCacheContours`, which take
+  neither. The tile-cache region builder does its own monotone partition and merges each region into
+  its largest same-area neighbour where that leaves no hole, so merging is not missing; what is
+  missing is the classic path's cull of small isolated regions. Region merging is per tile in both
+  paths and never crosses a border, so this was not behind the section 13 or 20 seam defects. The
+  three fields are gone. In their place `cullLayerIslands` floods each `rcHeightfieldLayer` over its
+  same-layer connections before compression and nulls any component under `SS_NAV_MIN_ISLAND_M`
+  squared (2 m, 256 cells at 0.125 m) that touches neither the layer's edge nor a layer portal. Both
+  exceptions matter: an island at the edge may be the sliver of a surface the neighbour tile carries,
+  and one with a portal bit continues on another layer of the same tile. Culling either would open
+  a seam of exactly the kind section 13 closed.
+- **Terrain change signature stopped 4 m short.** The window `emitTerrain` rasterizes spans -2 m to
+  +18 m around a 16 m column; the signature sampled the land patches at -2, +6, +14 m, so a terraform
+  confined to the +16..+18 m strip (the next patch over) baked into the tiles but never changed the
+  signature, and the band stayed stale until something else touched the column. Samples are now at
+  -2, +8, +18.
+- **Layers past the per-band cap were dropped in silence.** A band can produce more than
+  `SS_NAV_MAX_LAYERS_PER_BAND` (16) walkable layers when floors stack within the 8 m band gap. The
+  build now reports the overflow, `publish` warns with the band's column and count, and
+  `SSNavMesh::layersDropped()` accumulates it for the console.

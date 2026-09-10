@@ -44,6 +44,12 @@ namespace
     const char* FETCH_COMMAND = "FetchNotecard|";
     const F32 BRIDGE_RETRY_SECONDS = 5.f;
 
+    // <SS:Nexii> A fetch that goes out and never comes back (stale Bridge URL after a region crossing, coroutine dropped) leaves no callback to unlatch mPendingAssetId, so idle() expires it after this long and lets the normal retry path have another go.
+    const F32 FETCH_TIMEOUT_SECONDS = 30.f;
+
+    // <SS:Nexii> The Bridge answers 404 on a cold-notecard read timeout, which usually succeeds on the next try; a card that is genuinely gone would otherwise re-ask every BRIDGE_RETRY_SECONDS for the whole session, so give up after this many consecutive failures for the same id.
+    const S32 FETCH_MAX_ATTEMPTS = 3;
+
     // Wraps fetched text in notecard format and caches it under the asset id, so later visits skip the Bridge.
     void cacheNotecardBody(const LLUUID& asset_id, const std::string& plain_body)
     {
@@ -99,7 +105,7 @@ SSAtmoEnvDiscoveryManager::~SSAtmoEnvDiscoveryManager()
     }
 }
 
-// First frame: check the parcel that arrived during login, before this singleton existed; afterwards retry a fetch the missing LSL Bridge deferred.
+// First frame: check the parcel that arrived during login, before this singleton existed; afterwards expire a fetch that never came back and retry a fetch the missing LSL Bridge deferred.
 void SSAtmoEnvDiscoveryManager::idle()
 {
     if (!mInitialCheckDone)
@@ -107,6 +113,15 @@ void SSAtmoEnvDiscoveryManager::idle()
         mInitialCheckDone = true;
         changed();
         return;
+    }
+
+    // <SS:Nexii> Belt and braces for the request that produces no callback at all: without this the pending latch is permanent and changed()'s `asset_id == mPendingAssetId` early-return holds this parcel's environment off for the session.
+    if (mPendingAssetId.notNull() && mPendingTimer.getElapsedTimeF32() > FETCH_TIMEOUT_SECONDS)
+    {
+        const LLUUID stalled = mPendingAssetId;
+        LL_WARNS("AtmoMagicEnv") << "Atmo v3 fetch for " << stalled << " never returned within "
+                                 << (S32)FETCH_TIMEOUT_SECONDS << "s; treating it as failed" << LL_ENDL;
+        onFetchFailure(stalled, mPendingForce, mPendingSerial);
     }
 
     if (mDeferredAssetId.notNull() && mRetryTimer.getElapsedTimeF32() > BRIDGE_RETRY_SECONDS)
@@ -279,17 +294,58 @@ void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id, bool force)
 
     mDeferredAssetId.setNull();
     mPendingAssetId = asset_id;
+    mPendingForce = force;
+    mPendingTimer.reset();
+    const U32 serial = ++mPendingSerial;
 
+    // <SS:Nexii> Both callbacks run out of an HTTP coroutine that can outlive this singleton at shutdown, so neither captures `this` - they re-look the singleton up behind instanceExists(), the same guard the destructor uses for the parcel manager. The failure callback is the fix for the wedge: without one, any non-2xx (the Bridge's 404 on a cold-notecard read timeout) left mPendingAssetId latched and changed() refused to ever ask again.
     FSLSLBridge::instance().viewerToLSL(
         std::string(FETCH_COMMAND) + asset_id.asString(),
-        [this, asset_id, force](const LLSD& data) { onFetchResult(asset_id, data, force); });
+        [asset_id, force, serial](const LLSD& data)
+        {
+            if (SSAtmoEnvDiscoveryManager::instanceExists()) SSAtmoEnvDiscoveryManager::getInstance()->onFetchResult(asset_id, data, force, serial);
+        },
+        [asset_id, force, serial](const LLSD&)
+        {
+            if (SSAtmoEnvDiscoveryManager::instanceExists()) SSAtmoEnvDiscoveryManager::getInstance()->onFetchFailure(asset_id, force, serial);
+        });
+}
+
+// A fetch that failed or stalled: unlatch the pending id so changed() can ask again, then park a retry on the same deferred/timer mechanism the Bridge-not-up case uses - capped, so a card that 404s forever stops asking.
+void SSAtmoEnvDiscoveryManager::onFetchFailure(const LLUUID& asset_id, bool force, U32 serial)
+{
+    if (asset_id != mPendingAssetId || serial != mPendingSerial) return;    // an expired fetch answering late must not unlatch, or count against, the retry that replaced it
+    mPendingAssetId.setNull();
+    mPendingForce = false;
+
+    if (mFailedAssetId != asset_id)
+    {
+        mFailedAssetId = asset_id;
+        mFailedAttempts = 0;
+    }
+    ++mFailedAttempts;
+
+    if (mFailedAttempts >= FETCH_MAX_ATTEMPTS)
+    {
+        LL_WARNS("AtmoMagicEnv") << "Atmo v3 fetch for " << asset_id << " failed " << mFailedAttempts
+                                 << " times; giving up until the parcel changes" << LL_ENDL;
+        return;
+    }
+
+    LL_WARNS("AtmoMagicEnv") << "Atmo v3 fetch for " << asset_id << " failed (attempt " << mFailedAttempts
+                             << " of " << FETCH_MAX_ATTEMPTS << "); retrying in "
+                             << (S32)BRIDGE_RETRY_SECONDS << "s" << LL_ENDL;
+    mDeferredAssetId = asset_id;
+    mDeferredForce = force;
+    mRetryTimer.reset();
 }
 
 // Bridge reply: apply the fetched notecard text and cache it only once it applied; ignores stale replies.
-void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force)
+void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force, U32 serial)
 {
-    if (asset_id != mPendingAssetId) return;
+    if (asset_id != mPendingAssetId || serial != mPendingSerial) return;
     mPendingAssetId.setNull();
+    mPendingForce = false;
 
     if (!data.has(LLCoreHttpUtil::HttpCoroutineAdapter::HTTP_RESULTS_CONTENT))
     {
@@ -315,6 +371,12 @@ void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD
     if (applyText(asset_id, text, force))
     {
         cacheNotecardBody(asset_id, text);
+        // <SS:Nexii> A fetch that landed clears the failure budget, so a later transient 404 for this same id gets a fresh set of retries.
+        if (mFailedAssetId == asset_id)
+        {
+            mFailedAssetId.setNull();
+            mFailedAttempts = 0;
+        }
     }
 }
 

@@ -25750,6 +25750,28 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>1</integer>
     </map>
+    <key>SSSqueezeNetworkPromoteKBPerSec</key>
+    <map>
+      <key>Comment</key>
+      <string>Fastest this background finishing is ever allowed to download, in kilobytes per second. It is a ceiling on a job nobody is waiting for, so a small number is the point: at 128 an hour of play spends well under half a gigabyte even if the viewer never stops finding work. 0 switches the background downloading off entirely.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>128</integer>
+    </map>
+    <key>SSSqueezeNetworkPromoteMaxMB</key>
+    <map>
+      <key>Comment</key>
+      <string>Total this background finishing may download in one session, in megabytes. The rate above says "never faster than this"; this says "never more than this, at all", which is the limit that matters on a metered connection. Once it is reached nothing more is fetched until the viewer is restarted. 0 means no limit.</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>U32</string>
+      <key>Value</key>
+      <integer>512</integer>
+    </map>
 <key>SSSqueezeEncodeThreads</key>
     <map>
       <key>Comment</key>
@@ -28443,17 +28465,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>6.0</real>
     </map>
-    <key>SSAtmoVolumeStepTrigger</key>
-  <map>
-    <key>Comment</key>
-    <string>Atmo Magic: gain of the legacy per-step trigger path (stock animation-driven steps and their fallback sounds), separate from SSAtmoVolumeFootsteps which drives the attached loop/segment path. Stock hardcoded 0.1, which is near-inaudible against the ambient loops.</string>
-    <key>Persist</key>
-    <integer>1</integer>
-    <key>Type</key>
-    <string>F32</string>
-    <key>Value</key>
-    <real>0.3</real>
-  </map>
   <key>SSAtmoVolumeThunder</key>
   <map>
     <key>Comment</key>

@@ -37,6 +37,8 @@
 #include "llagent.h"
 #include "llfasttimer.h"
 #include "llaudioengine.h"
+#include "llmutelist.h"
+#include "llviewerparcelmgr.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
 #include "llviewerobject.h"
@@ -1424,6 +1426,14 @@ void SSSoundscape::reapStepLoops(F64 now)
     }
 }
 
+// Whether this avatar's steps may sound at all: parcel sound setting, then the per-avatar object-sound mute.
+bool SSSoundscape::stepsAudible(const LLUUID& avatar_id, const LLVector3& pos_agent)
+{
+    // <SS:Nexii> The two gates stock applied to its own trigger-style footsteps, kept for the Atmo paths after the trigger function they lived in was left callerless by the loop rework - muting an avatar silenced its chat and its attachments but not its boots, and a no-sound parcel was ignored outright. The mute is keyed on the WALKER, not the listener, and the parcel is the one under the walker's feet, so a muted neighbour two parcels over stays silent while your own steps follow your own ground. [interaction] called from footstepEvent, updateFootstepLoop and footstepImpact - every live step path there is.
+    return LLViewerParcelMgr::getInstance()->canHearSound(gAgent.getPosGlobalFromAgent(pos_agent))
+        && !LLMuteList::getInstance()->isMuted(avatar_id, LLMute::flagObjectSounds);
+}
+
 // The per-avatar walking loop: surface pick, cadence from the analysed onsets, start and stop with movement.
 void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& pos_agent,
                                       bool on_land, S32 locomotion, F32 speed_gain, bool is_self)
@@ -1431,6 +1441,9 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
     if (!gAudiop) return;
 
     const F64 now = SSAtmoMagic::getInstance()->sharedTime();
+
+    // <SS:Nexii> Going inaudible mid-stride has to STOP the loop, not merely refuse to start it - a mute or a parcel crossing while walking would otherwise leave the running source playing forever. Reporting it as airborne reuses the existing teardown and skips the cadence-gap wait, which is the right cut here: this is not a halt to round off, it is a sound that should not be playing.
+    if (!stepsAudible(avatar_id, pos_agent)) locomotion = STEP_JUMP;
 
     if (locomotion != STEP_WALK && STEP_RUN != locomotion)
     {
@@ -1581,6 +1594,9 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
 // One discrete footstep from a live segmented loop: gate, then cut at the foot.
 void SSSoundscape::footstepImpact(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self)
 {
+    // <SS:Nexii> Gated on its own rather than trusting the loop's gate: the cut fires at the FOOT, which can be across a parcel line from the body the loop was positioned at, and the call comes straight from the avatar's detector.
+    if (!stepsAudible(avatar_id, foot_pos_agent)) return;
+
     auto it = mStepLoops.find(avatar_id);
     if (it == mStepLoops.end() || !it->second.mSegmented || it->second.mSound.isNull() || !gAudiop) return;
 
@@ -1654,6 +1670,9 @@ void SSSoundscape::updateSegmentStops(F64 now)
 void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_agent,
                                  bool on_land, S32 action, bool is_self)
 {
+    // <SS:Nexii> The jump and land one-shots gate here, before the surface roll: nothing below this line makes a sound a muted avatar or a no-sound parcel is allowed to make.
+    if (!stepsAudible(avatar_id, pos_agent)) return;
+
     const LLUUID sound = footstepSound(avatar_id, pos_agent, on_land, action, is_self);
     if (sound.isNull())
     {
@@ -1667,8 +1686,12 @@ void SSSoundscape::footstepEvent(const LLUUID& avatar_id, const LLVector3& pos_a
             if (mStepLoops.find(avatar_id) == mStepLoops.end())
             {
                 static LLCachedControl<F32> vol(gSavedSettings, "SSAtmoVolumeFootsteps", 0.5f);
-                playStepCut(footstepSound(avatar_id, pos_agent, on_land, STEP_WALK, is_self),
-                            pos_agent, llclamp((F32)vol, 0.f, 1.f));
+                // <SS:Nexii> footstepSound wipes the debug record on entry, so asking it for the walk sound here overwrote the landing it was just asked about and the readout showed every touchdown as a walk step. The land record is the one worth keeping - the walk lookup is a fallback for a UUID, not an event - so it is saved across the query and put back.
+                StepDebug& dbg = is_self ? mStepSelf : mStepOther;
+                const StepDebug land_dbg = dbg;
+                const LLUUID fallback = footstepSound(avatar_id, pos_agent, on_land, STEP_WALK, is_self);
+                dbg = land_dbg;
+                playStepCut(fallback, pos_agent, llclamp((F32)vol, 0.f, 1.f));
             }
         }
         return;

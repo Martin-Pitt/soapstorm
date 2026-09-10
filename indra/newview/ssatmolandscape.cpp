@@ -462,25 +462,8 @@ bool SSAtmoLandscapeWorld::toggleRecordLock(S32 index)
     }
     SSAtmoEnvLandscape& record = records[static_cast<size_t>(index)];
 
-    if (record.mLocked)
-    {
-        // Locked -> free: the global position is what the object is currently at.
-        record.mFreeGlobal = gAgent.getRegion()
-            ? gAgent.getRegion()->getPosGlobalFromRegion(record.mLockedOffset)
-            : LLVector3d(record.mLockedOffset.mV[0], record.mLockedOffset.mV[1], record.mLockedOffset.mV[2]);
-    }
-    else
-    {
-        // Free -> locked: the region-local offset is where the object currently is.
-        record.mLockedOffset = gAgent.getRegion()
-            ? gAgent.getRegion()->getPosRegionFromGlobal(record.mFreeGlobal)
-            : LLVector3((F32)record.mFreeGlobal.mdV[VX], (F32)record.mFreeGlobal.mdV[VY], (F32)record.mFreeGlobal.mdV[VZ]);
-    }
-    record.mLocked = !record.mLocked;
-
-    // Re-apply so the object follows the new mode this frame - content edits do not trip the
-    // reconcile signature, so this must apply directly. Index-paired like capture; the
-    // size-guarded fallback covers a transient mismatch.
+    // The paired object is resolved BEFORE the conversion because the conversion needs its
+    // region. Index-paired like capture; the size-guarded fallback covers a transient mismatch.
     SSAtmoLandscapeObject* objp = nullptr;
     if (index >= 0 && index < (S32)mObjects.size())
     {
@@ -497,6 +480,32 @@ bool SSAtmoLandscapeWorld::toggleRecordLock(S32 index)
             }
         }
     }
+
+    // <SS:Nexii> review_loop2_fresh m3: mLockedOffset is region-local to the region the OBJECT is anchored to, which is not always the agent's - update() defers the region-change rebuild while a scenery object is selected, which is exactly when the lock button gets pressed, so converting against gAgent.getRegion() re-anchored the record 256 m off after a border crossing. Convert against the object's own region and only fall back to the agent's when there is no live object to ask.
+    LLViewerRegion* anchor = objp ? objp->getRegion() : nullptr;
+    if (!anchor)
+    {
+        anchor = gAgent.getRegion();
+    }
+
+    if (record.mLocked)
+    {
+        // Locked -> free: the global position is what the object is currently at.
+        record.mFreeGlobal = anchor
+            ? anchor->getPosGlobalFromRegion(record.mLockedOffset)
+            : LLVector3d(record.mLockedOffset.mV[0], record.mLockedOffset.mV[1], record.mLockedOffset.mV[2]);
+    }
+    else
+    {
+        // Free -> locked: the region-local offset is where the object currently is.
+        record.mLockedOffset = anchor
+            ? anchor->getPosRegionFromGlobal(record.mFreeGlobal)
+            : LLVector3((F32)record.mFreeGlobal.mdV[VX], (F32)record.mFreeGlobal.mdV[VY], (F32)record.mFreeGlobal.mdV[VZ]);
+    }
+    record.mLocked = !record.mLocked;
+
+    // Re-apply so the object follows the new mode this frame - content edits do not trip the
+    // reconcile signature, so this must apply directly.
     if (objp)
     {
         objp->applyRecord(record);

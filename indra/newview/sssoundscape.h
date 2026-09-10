@@ -215,6 +215,9 @@ private:
 
     bool onObject(const LLUUID& avatar_id, const LLVector3& foot_pos_agent, bool is_self);
 
+    // <SS:Nexii> Whether this avatar's steps may sound where it is standing: the parcel's own sound setting plus the viewer's per-avatar object-sound mute, checked at every footstep entry point.
+    bool stepsAudible(const LLUUID& avatar_id, const LLVector3& pos_agent);
+
     struct StepLoop
     {
         LLUUID mSourceID;

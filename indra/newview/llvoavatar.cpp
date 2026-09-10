@@ -5387,48 +5387,57 @@ void LLVOAvatar::updateFootstepSounds()
         if (locomotion == STEP_WALK || locomotion == STEP_RUN)
         {
             const F32 HYSTERESIS = 0.04f;
-            const LLQuaternion inv_rot = ~mRoot->getWorldRotation();
             const LLVector3 root_pos = mRoot->getWorldPosition();
-            LLVector3 travel = vel_xy * inv_rot;
-            travel.mV[VZ] = 0.f;
-            travel.normVec();
 
-            const LLVector3* ankle[2] = { &ankle_left_pos_agent, &ankle_right_pos_agent };
-            for (S32 f = 0; f < 2; ++f)
+            // <SS:Nexii> The body frame is the root's YAW ONLY, never its full rotation. Rotating the horizontal velocity through pitch and roll and then flattening it to XY collapses the vector whenever the root is tilted - a prone or crawling AO pitches it 90 degrees, the XY part goes to zero, normVec hands back a zero vector and every projection reads 0.0 forever, so the swing/stance hysteresis never trips and the steps go silent. Flattening the root's forward axis first and rebuilding a Z-only rotation from it keeps the frame upright whatever the AO does to the spine, and BOTH sides - travel direction and the ankle offsets - are projected through that same frame so the scalar stays a distance along the ground.
+            LLVector3 heading = LLVector3::x_axis * mRoot->getWorldRotation();
+            heading.mV[VZ] = 0.f;
+
+            // <SS:Nexii> Degenerate heading (the root pointing dead up or down, nothing left to flatten): hold this frame rather than emit zeros, which would read as one huge swing and fire a phantom step. Peaks and phases stay as they were, so the detector resumes mid-stride on the next upright frame. [interaction] mSSFootTracking is deliberately NOT reset - that would re-seed into stance and swallow the next real footfall.
+            if (heading.magVec() > 1e-3f)
             {
-                const LLVector3 local = (*ankle[f] - root_pos) * inv_rot;
-                const F32 s = local.mV[VX] * travel.mV[VX] + local.mV[VY] * travel.mV[VY];
-                mSSFootS[f] = s;
+                const LLQuaternion inv_rot = ~LLQuaternion(atan2f(heading.mV[VY], heading.mV[VX]), LLVector3::z_axis);
+                LLVector3 travel = vel_xy * inv_rot;
+                travel.mV[VZ] = 0.f;
+                travel.normVec();
 
-                if (!mSSFootTracking)
+                const LLVector3* ankle[2] = { &ankle_left_pos_agent, &ankle_right_pos_agent };
+                for (S32 f = 0; f < 2; ++f)
                 {
-                    // Start in stance so the first fire needs a real swing forward and back, never the first sample.
-                    mSSFootPeak[f] = s;
-                    mSSFootSwing[f] = false;
-                    continue;
-                }
+                    const LLVector3 local = (*ankle[f] - root_pos) * inv_rot;
+                    const F32 s = local.mV[VX] * travel.mV[VX] + local.mV[VY] * travel.mV[VY];
+                    mSSFootS[f] = s;
 
-                if (mSSFootSwing[f])
-                {
-                    mSSFootPeak[f] = llmax(mSSFootPeak[f], s);
-                    if (s < mSSFootPeak[f] - HYSTERESIS)
+                    if (!mSSFootTracking)
                     {
+                        // Start in stance so the first fire needs a real swing forward and back, never the first sample.
+                        mSSFootPeak[f] = s;
                         mSSFootSwing[f] = false;
-                        mSSFootPeak[f] = s;
-                        SSSoundscape::getInstance()->footstepImpact(getID(), *ankle[f], isSelf());
+                        continue;
                     }
-                }
-                else
-                {
-                    mSSFootPeak[f] = llmin(mSSFootPeak[f], s);
-                    if (s > mSSFootPeak[f] + HYSTERESIS)
+
+                    if (mSSFootSwing[f])
                     {
-                        mSSFootSwing[f] = true;
-                        mSSFootPeak[f] = s;
+                        mSSFootPeak[f] = llmax(mSSFootPeak[f], s);
+                        if (s < mSSFootPeak[f] - HYSTERESIS)
+                        {
+                            mSSFootSwing[f] = false;
+                            mSSFootPeak[f] = s;
+                            SSSoundscape::getInstance()->footstepImpact(getID(), *ankle[f], isSelf());
+                        }
+                    }
+                    else
+                    {
+                        mSSFootPeak[f] = llmin(mSSFootPeak[f], s);
+                        if (s > mSSFootPeak[f] + HYSTERESIS)
+                        {
+                            mSSFootSwing[f] = true;
+                            mSSFootPeak[f] = s;
+                        }
                     }
                 }
+                mSSFootTracking = true;
             }
-            mSSFootTracking = true;
         }
         else
         {
@@ -5447,30 +5456,6 @@ void LLVOAvatar::updateFootstepSounds()
         mSSWasInAir = airborne;
     }
 }
-
-// <SS:Nexii> Atmo Magic surface-aware footstep sounds ----------------------------------------------------------------------------- playFootstepSound() Volume/mute/parcel gating factored out of updateFootstepSounds() so the jump trigger and the walk/run/land trigger can share it. -----------------------------------------------------------------------------
-void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
-{
-    // Was a hardcoded 0.1 (stock's own figure), which is near-inaudible against the Atmo ambiences; debug-tweakable so the trigger path can be balanced by ear against the loop/segment path's SSAtmoVolumeFootsteps.
-    static LLCachedControl<F32> step_volume(gSavedSettings, "SSAtmoVolumeStepTrigger", 0.3f);
-    const F32 STEP_VOLUME = llclamp((F32)step_volume, 0.f, 1.f);
-
-    LLUUID step_sound_id = SSSoundscape::getInstance()->footstepSound(
-        getID(), foot_pos_agent, mStepOnLand, action, isSelf());
-    if (step_sound_id.isNull())
-    {
-        step_sound_id = getStepSound();
-    }
-
-    LLVector3d foot_pos_global = gAgent.getPosGlobalFromAgent(foot_pos_agent);
-
-    if (LLViewerParcelMgr::getInstance()->canHearSound(foot_pos_global)
-        && !LLMuteList::getInstance()->isMuted(getID(), LLMute::flagObjectSounds))
-    {
-        gAudiop->triggerSound(step_sound_id, getID(), STEP_VOLUME, LLAudioEngine::AUDIO_TYPE_AMBIENT, foot_pos_global);
-    }
-}
-
 
 //------------------------------------------------------------------------
 // computeUpdatePeriod()

@@ -2244,6 +2244,12 @@ bool SSWorldField::propagationQuery(const LLVector3& source, const LLVector3& li
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile->mRegionHandle);
     if (!regionp) return false;
 
+    // <SS:Nexii> Both ends have to stand in the tile's own region: the tile comes from the midpoint, and listenerProbeSet clamps a position's lattice and column indices into whatever tile it is handed, so an end across a region line used to snap silently onto the border probe and answer with a path it never walked. A false return is the caller's cue to fall back on its own heuristic, which is the honest answer here. [interaction: sssoundscape propagation]
+    LLViewerRegion* src_regionp = LLWorld::getInstance()->getRegionFromPosAgent(source);
+    LLViewerRegion* lis_regionp = LLWorld::getInstance()->getRegionFromPosAgent(listener);
+    if (!src_regionp || src_regionp->getHandle() != tile->mRegionHandle) return false;
+    if (!lis_regionp || lis_regionp->getHandle() != tile->mRegionHandle) return false;
+
     const Tile::Acoustic& ac = tile->mAcoustic;
     if (ac.mProbes.empty()
         || ac.mAdjStart.size() != ac.mProbes.size() + 1
