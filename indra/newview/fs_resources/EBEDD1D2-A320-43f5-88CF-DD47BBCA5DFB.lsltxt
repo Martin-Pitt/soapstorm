@@ -682,9 +682,10 @@ default
                 llGetNotecardLine(notecardUUID, 0); // Queue sim to download it
                 string notecard;
                 integer line = 0;
+                string result = NAK;
                 do
                 {
-                    string result = llGetNotecardLineSync(notecardUUID, line);
+                    result = llGetNotecardLineSync(notecardUUID, line);
                     if(result == NAK)
                     {
                         llSleep(4/45.); // Wait for notecard to load
@@ -708,8 +709,6 @@ default
                         {
                             llHTTPResponse(httpReqID, 200, "<llsd><string>" + notecard + "</string></llsd>");
                         }
-                        
-                        return; // <SS:Nexii> reply sent - leave at once, never fall out of the loop unresponded
                     }
 
                     else
@@ -718,7 +717,9 @@ default
                         ++line;
                     }
                 }
-                while(TRUE); // <SS:Nexii> a leading NAK (cold asset) left notecard empty, so while(notecard) exited silently with no reply at all
+                while(result != EOF); // <SS:Nexii> a leading NAK (cold asset) left notecard empty, so while(notecard) exited silently with no reply at all
+                
+                return;
             }
 
             else if (cmd == "RelockMoveLockAfterMovement")
