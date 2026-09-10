@@ -116,7 +116,6 @@
 #include "ssbc7encoder.h" // <SS:Nexii>
 #include "ssbc7store.h" // <SS:Nexii>
 #include "sssqueezedebug.h" // <SS:Nexii>
-#include "ssfasttimerexport.h" // <SS:Nexii> offline fast timer capture
 #include "lldiskcache.h"
 #include "ssstrata.h"   // <SS:Nexii/> Strata asset volumes
 #include "ssstratabudget.h"   // <SS:Nexii/> the budget arbiter - CacheSize divided N ways instead of three tiers each deciding for themselves
@@ -1671,9 +1670,6 @@ bool LLAppViewer::doFrame()
 
             LLTrace::get_frame_recording().nextPeriod();
             LLTrace::BlockTimer::logStats();
-            // <SS:Nexii> offline fast timer capture: the period just closed is complete here
-            SSFastTimerExport::recordFrame();
-            // </SS:Nexii>
         }
 
         LLTrace::get_thread_recorder()->pullFromChildren();
@@ -2526,9 +2522,6 @@ bool LLAppViewer::cleanup()
     sImageDecodeThread = NULL;
     delete mFastTimerLogThread;
     mFastTimerLogThread = NULL;
-    // <SS:Nexii> close out any open fast timer export stream
-    SSFastTimerExport::flush();
-    // </SS:Nexii>
     delete sPurgeDiskCacheThread;
     sPurgeDiskCacheThread = NULL;
     delete mGeneralThreadPool;

@@ -213,7 +213,6 @@ set(viewer_SOURCE_FILES
     fsregioncross.cpp
     fsrezqueue.cpp
     ssatmomagic.cpp
-    ssfasttimerexport.cpp
     ssstormcells.cpp
     ssvortices.cpp
     ssvortexrender.cpp
@@ -1162,7 +1161,6 @@ set(viewer_HEADER_FILES
     fsregioncross.h
     fsrezqueue.h
     ssatmomagic.h
-    ssfasttimerexport.h
     ssdeckboilcore.h
     ssdeckcellsoftcore.h
     ssdeckflowcore.h

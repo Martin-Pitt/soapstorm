@@ -118,7 +118,6 @@
 #include "lltextureview.h"
 #include "ssstatsview.h" // <SS:Nexii>
 #include "ssatmosynconsole.h" // <SS:Nexii> Atmo Magic V7 sync console
-#include "ssfasttimerexport.h" // <SS:Nexii> offline fast timer capture
 #include "lltoolbarview.h"
 #include "lltoolcomp.h"
 #include "lltoolmgr.h"
@@ -887,26 +886,6 @@ class LLAdvancedCheckConsole : public view_listener_t
         return new_value;
     }
 };
-
-// <SS:Nexii> Offline fast timer capture for lag spike analysis
-class LLSSFastTimerExportRecent : public view_listener_t
-{
-    bool handleEvent(const LLSD& userdata)
-    {
-        SSFastTimerExport::exportRecent();
-        return true;
-    }
-};
-
-class LLSSFastTimerMark : public view_listener_t
-{
-    bool handleEvent(const LLSD& userdata)
-    {
-        SSFastTimerExport::mark(userdata.asString());
-        return true;
-    }
-};
-// </SS:Nexii>
 
 
 //////////////////////////
@@ -13161,10 +13140,6 @@ void initialize_menus()
     view_listener_t::addMenu(new LLAdvancedToggleConsole(), "Advanced.ToggleConsole");
     view_listener_t::addMenu(new LLAdvancedCheckConsole(), "Advanced.CheckConsole");
     view_listener_t::addMenu(new LLAdvancedDumpInfoToConsole(), "Advanced.DumpInfoToConsole");
-    // <SS:Nexii> offline fast timer capture
-    view_listener_t::addMenu(new LLSSFastTimerExportRecent(), "Ss.FastTimerExportRecent");
-    view_listener_t::addMenu(new LLSSFastTimerMark(), "Ss.FastTimerMark");
-    // </SS:Nexii>
 
     // Advanced > HUD Info
     view_listener_t::addMenu(new LLAdvancedToggleHUDInfo(), "Advanced.ToggleHUDInfo");
