@@ -97,6 +97,7 @@ private:
         F32 mZMax = 0.f;
         std::vector<U32> mRefs;             // dtCompressedTileRef per layer
         bool mAlive = false;                // touched by the latest schedule
+        F64 mPublishedAt = -100.0;          // when its layers last landed, for the overlay's rebuild flash
     };
 
     // A band waiting for a worker build.
@@ -140,7 +141,6 @@ private:
     LLVector3d mOriginGlobal;
     U64 mCensusStamp = 0;
     U32 mGeneration = 0;                        // bumped on teardown so late worker results are dropped
-    U32 mScheduleCount = 0;                     // phases the coarse terrain sample across censuses
     std::unordered_map<U64, Band> mBands;
     std::unordered_map<U64, S32> mColumns;      // column key -> band count
     std::vector<Job> mWorklist;

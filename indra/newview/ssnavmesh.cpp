@@ -29,9 +29,11 @@
 
 #include "llagent.h"
 #include "llfasttimer.h"
+#include "llframetimer.h"
 #include "llgl.h"
 #include "llrender.h"
 #include "llsurface.h"
+#include "llsurfacepatch.h"
 #include "lltimer.h"
 #include "llviewercamera.h"
 #include "llviewercontrol.h"
@@ -71,7 +73,6 @@ static constexpr S32 SS_NAV_MERGE_REGION_CELLS = 20;
 static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 8;
 static constexpr S32 SS_NAV_TERRAIN_NODES = 37;     // 1 m grid over the bordered column: 32 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
-static constexpr S32 SS_NAV_TERRAIN_SCHEDULE_STEP = 4;  // metres between scheduling samples of the land
 static constexpr S32 SS_NAV_MAX_TILES = 4096;
 static constexpr S32 SS_NAV_MAX_OBSTACLES = 512;
 static constexpr S32 SS_NAV_OBSTACLE_REQUESTS_PER_FRAME = 48;   // under dtTileCache's 64-request queue, drained once per update
@@ -505,9 +506,13 @@ void SSNavMesh::schedule()
     const S32 cx0 = (S32)floorf((anchor.mV[VX] - env) * inv), cx1 = (S32)floorf((anchor.mV[VX] + env) * inv);
     const S32 cy0 = (S32)floorf((anchor.mV[VY] - env) * inv), cy1 = (S32)floorf((anchor.mV[VY] + env) * inv);
 
+    S32 seen = 0, dynamic = 0, phantom = 0, tris = 0;
     shapes->forEachRecord(bmin, bmax, [&](const SSWorldFieldShapes::Record& rec)
     {
-        if (rec.mDynamic || rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM) return;
+        ++seen;
+        if (rec.mDynamic) { ++dynamic; return; }
+        if (rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM) { ++phantom; return; }
+        tris += (S32)(rec.tris().size() / 3);
         const LLVector3 lo = rec.mBMin + off, hi = rec.mBMax + off;
         const S32 x0 = llmax(cx0, (S32)floorf(lo.mV[VX] * inv)), x1 = llmin(cx1, (S32)floorf(hi.mV[VX] * inv));
         const S32 y0 = llmax(cy0, (S32)floorf(lo.mV[VY] * inv)), y1 = llmin(cy1, (S32)floorf(hi.mV[VY] * inv));
@@ -522,28 +527,31 @@ void SSNavMesh::schedule()
         }
     });
 
-    // Terrain: every column in the envelope carries its land interval, hashed from a coarse sample (the build
-    // samples the full metre grid; scheduling only needs to notice change, and 268k land lookups per census did not).
+    // <SS:Nexii> Terrain: every column in the envelope carries its land interval and a signature taken from the 16 m surface patches it touches - each patch's min/max height and the time the sim last updated it. That changes exactly when the land changes and never otherwise; sampling heights here churned every band each census once the sample grid moved. [interaction: part cache]
     for (S32 y = cy0; y <= cy1; ++y) for (S32 x = cx0; x <= cx1; ++x)
     {
         F32 lo = FLT_MAX, hi = -FLT_MAX;
         U64 sig = 14695981039346656037ull;
         bool any = false;
-        // The coarse grid shifts by a metre per schedule, so every land node is sampled within four censuses and a
-        // small edit between samples cannot stay invisible.
-        const S32 phase = (S32)(mScheduleCount % (U32)SS_NAV_TERRAIN_SCHEDULE_STEP);
-        for (S32 gy = phase; gy < SS_NAV_TERRAIN_NODES; gy += SS_NAV_TERRAIN_SCHEDULE_STEP) for (S32 gx = phase; gx < SS_NAV_TERRAIN_NODES; gx += SS_NAV_TERRAIN_SCHEDULE_STEP)
+        for (S32 gy = 0; gy <= 4; ++gy) for (S32 gx = 0; gx <= 4; ++gx)
         {
-            F32 z;
-            if (!terrainZLocal((F32)x * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gx, (F32)y * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gy, z)) continue;
+            const LLVector3 pos_agent = fromLocal(LLVector3((F32)x * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gx * 8.f,
+                                                            (F32)y * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gy * 8.f, 0.f));
+            LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
+            if (!regionp) continue;
+            LLVector3 region_pos = regionp->getPosRegionFromAgent(pos_agent);
+            region_pos.mV[VX] = llclamp(region_pos.mV[VX], 0.f, 255.9f);
+            region_pos.mV[VY] = llclamp(region_pos.mV[VY], 0.f, 255.9f);
+            const LLSurfacePatch* patch = regionp->getLand().resolvePatchRegion(region_pos);
+            if (!patch) continue;
             any = true;
-            lo = llmin(lo, z); hi = llmax(hi, z);
-            sig = fnvF(sig, z);
+            lo = llmin(lo, patch->getMinZ()); hi = llmax(hi, patch->getMaxZ());
+            sig = fnv(sig, patch->getLastUpdateTime());
+            sig = fnv(sig, regionp->getHandle());
         }
         if (any) columns[columnKey(x, y)].push_back(Interval{lo, hi, sig});
     }
 
-    ++mScheduleCount;
     for (auto& kv : mBands) kv.second.mAlive = false;
     mWorklist.clear();
     std::unordered_map<U64, S32> new_columns;
@@ -581,7 +589,8 @@ void SSNavMesh::schedule()
             if (band.mSig == sig && !band.mRefs.empty()) continue;
             Job job;
             job.mTx = tx; job.mTy = ty; job.mBand = (S32)b;
-            job.mZMin = bands[b].mLo - 1.f; job.mZMax = bands[b].mHi + 1.f;
+            // <SS:Nexii> Band bounds snap to the global 0.25 m lattice: every tile then quantizes heights on the same grid, so a corner shared by four tiles lands at one elevation instead of four (Recast's tiled demo gets this from a single world origin). [interaction: renderDebug seams]
+            job.mZMin = floorf((bands[b].mLo - 1.f) / CELL) * CELL; job.mZMax = ceilf((bands[b].mHi + 1.f) / CELL) * CELL;
             job.mSig = sig;
             mWorklist.push_back(job);
         }
@@ -597,8 +606,9 @@ void SSNavMesh::schedule()
 
     if (!mWorklist.empty())
     {
-        LL_INFOS("SSNavMesh") << "schedule: " << mColumns.size() << " columns, " << mBands.size() << " bands, "
-                              << mWorklist.size() << " to build, " << polyCount() << " polys published, "
+        LL_INFOS("SSNavMesh") << "schedule: census " << seen << " records (" << dynamic << " dynamic, " << phantom
+                              << " phantom skipped, " << tris << " soup tris), " << mColumns.size() << " columns, " << mBands.size()
+                              << " bands, " << mWorklist.size() << " to build, " << polyCount() << " polys published, "
                               << (mLayerBytes / 1024) << " KB of layers" << LL_ENDL;
     }
 
@@ -728,6 +738,7 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
         mLayerBytes += layer.size();
     }
     mTileCache->buildNavMeshTilesAt(job.mTx, -job.mTy - 1, mNavMesh);
+    band.mPublishedAt = LLFrameTimer::getTotalSeconds();
     mLastBuildMS = result->mMS;
     ++mBuildCount;
 }
@@ -892,33 +903,82 @@ void SSNavMesh::renderDebug()
 
     LLGLEnable blend(GL_BLEND);
     LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    LLGLDisable cull(GL_CULL_FACE);
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
-    gGL.begin(LLRender::LINES);
-    for (int i = 0; i < nm->getMaxTiles(); ++i)
+
+    // Two passes over the same polygons: translucent fills so the walkable surface reads as area, then the
+    // edges on top so polygon and tile boundaries stay legible. Hue by band, as the world field's band view.
+    auto vert = [&](const float* v, F32 lift) { return fromLocal(LLVector3(v[0], -v[2], v[1] + lift)); };
+    // A band that published within the last second flashes towards white, so a rebuild is visible as it lands.
+    const F64 now = LLFrameTimer::getTotalSeconds();
+    auto flashOf = [&](const dtMeshTile* tile) -> F32
     {
-        const dtMeshTile* tile = nm->getTile(i);
-        if (!tile || !tile->header) continue;
-        const LLVector3 tmin = fromLocal(LLVector3(tile->header->bmin[0], -tile->header->bmax[2], tile->header->bmin[1]));
-        const LLVector3 tmax = fromLocal(LLVector3(tile->header->bmax[0], -tile->header->bmin[2], tile->header->bmax[1]));
-        if (((tmin + tmax) * 0.5f - cam).magVec() > 256.f) continue;
-        // Hue by layer so stacked bands read separately, the same convention as the world field's band view.
-        const F32 hue = (F32)(tile->header->layer % 8) / 8.f;
-        gGL.color4f(0.3f + 0.7f * hue, 0.9f - 0.6f * hue, 0.4f, 0.6f);
-        for (int p = 0; p < tile->header->polyCount; ++p)
+        auto it = mBands.find(bandKey(tile->header->x, -tile->header->y - 1, tile->header->layer / SS_NAV_MAX_LAYERS_PER_BAND));
+        if (it == mBands.end()) return 0.f;
+        const F64 age = now - it->second.mPublishedAt;
+        return (age >= 0.0 && age < 1.0) ? (F32)(1.0 - age) : 0.f;
+    };
+    auto bandColour = [&](const dtMeshTile* tile, F32 alpha)
+    {
+        const F32 hue = (F32)((tile->header->layer / SS_NAV_MAX_LAYERS_PER_BAND) % 8) / 8.f;
+        const F32 f = flashOf(tile);
+        const F32 r = 0.3f + 0.7f * hue, g = 0.9f - 0.6f * hue, b = 0.4f + 0.4f * (1.f - hue);
+        gGL.color4f(r + (1.f - r) * f, g + (1.f - g) * f, b + (1.f - b) * f, alpha + 0.5f * f);
+    };
+    for (S32 pass = 0; pass < 2; ++pass)
+    {
+        gGL.begin(pass == 0 ? LLRender::TRIANGLES : LLRender::LINES);
+        for (int i = 0; i < nm->getMaxTiles(); ++i)
         {
-            const dtPoly& poly = tile->polys[p];
-            if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION) continue;
-            for (int v = 0; v < (int)poly.vertCount; ++v)
+            const dtMeshTile* tile = nm->getTile(i);
+            if (!tile || !tile->header) continue;
+            const LLVector3 tmin = fromLocal(LLVector3(tile->header->bmin[0], -tile->header->bmax[2], tile->header->bmin[1]));
+            const LLVector3 tmax = fromLocal(LLVector3(tile->header->bmax[0], -tile->header->bmin[2], tile->header->bmax[1]));
+            if (((tmin + tmax) * 0.5f - cam).magVec() > 256.f) continue;
+            bandColour(tile, pass == 0 ? 0.28f : 0.75f);
+            for (int p = 0; p < tile->header->polyCount; ++p)
             {
-                const float* a = &tile->verts[poly.verts[v] * 3];
-                const float* b = &tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3];
-                const LLVector3 pa = fromLocal(LLVector3(a[0], -a[2], a[1] + 0.05f));
-                const LLVector3 pb = fromLocal(LLVector3(b[0], -b[2], b[1] + 0.05f));
-                gGL.vertex3fv(pa.mV);
-                gGL.vertex3fv(pb.mV);
+                const dtPoly& poly = tile->polys[p];
+                if (poly.getType() == DT_POLYTYPE_OFFMESH_CONNECTION || poly.vertCount < 3) continue;
+                if (pass == 0)
+                {
+                    // Detour polygons are convex: a fan from the first vertex tiles them exactly.
+                    const LLVector3 p0 = vert(&tile->verts[poly.verts[0] * 3], 0.04f);
+                    for (int v = 1; v + 1 < (int)poly.vertCount; ++v)
+                    {
+                        const LLVector3 p1 = vert(&tile->verts[poly.verts[v] * 3], 0.04f);
+                        const LLVector3 p2 = vert(&tile->verts[poly.verts[v + 1] * 3], 0.04f);
+                        gGL.vertex3fv(p0.mV);
+                        gGL.vertex3fv(p1.mV);
+                        gGL.vertex3fv(p2.mV);
+                    }
+                }
+                else
+                {
+                    for (int v = 0; v < (int)poly.vertCount; ++v)
+                    {
+                        if (poly.neis[v] & DT_EXT_LINK)
+                        {
+                            bool linked = false;
+                            for (unsigned int l = poly.firstLink; l != DT_NULL_LINK; l = tile->links[l].next)
+                            {
+                                if (tile->links[l].edge == v && tile->links[l].side != 0xff) { linked = true; break; }
+                            }
+                            if (linked) gGL.color4f(0.2f, 0.95f, 1.f, 0.9f); else gGL.color4f(1.f, 0.25f, 0.2f, 0.9f);
+                        }
+                        else
+                        {
+                            bandColour(tile, 0.75f);
+                        }
+                        const LLVector3 pa = vert(&tile->verts[poly.verts[v] * 3], 0.06f);
+                        const LLVector3 pb = vert(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3], 0.06f);
+                        gGL.vertex3fv(pa.mV);
+                        gGL.vertex3fv(pb.mV);
+                    }
+                }
             }
         }
+        gGL.end();
     }
-    gGL.end();
 }

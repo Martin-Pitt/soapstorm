@@ -48,6 +48,7 @@
 #include "llworld.h"
 #include "lltextureentry.h"
 
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 
@@ -106,6 +107,22 @@ static bool ss_terrain_z(const LLVector3& pos_agent, F32& out_z)
     region_pos.mV[VY] = llclamp(region_pos.mV[VY], 0.f, 255.9f);
     out_z = regionp->getLand().resolveHeightRegion(region_pos.mV[VX], region_pos.mV[VY]);
     return true;
+}
+
+// <SS:Nexii> Convex hull soups arrive with whatever winding the decomposition produced, and Recast marks a triangle walkable only when its normal faces up - a hull roof wound clockwise is a roof the navmesh never sees. A convex hull has one outside, so every triangle is flipped to face away from the hull's own centroid. Tessellated volumes and authored physics meshes keep their winding. [interaction: SSNavMesh emitRecord]
+static void ss_orient_outward(std::vector<LLVector3>& soup, size_t begin)
+{
+    const size_t end = soup.size() - (soup.size() - begin) % 3;
+    if (end <= begin) return;
+    LLVector3 centroid;
+    for (size_t i = begin; i < end; ++i) centroid += soup[i];
+    centroid *= 1.f / (F32)(end - begin);
+    for (size_t i = begin; i + 2 < end; i += 3)
+    {
+        const LLVector3 n = (soup[i + 1] - soup[i]) % (soup[i + 2] - soup[i]);
+        const LLVector3 c = (soup[i] + soup[i + 1] + soup[i + 2]) * (1.f / 3.f);
+        if (n * (c - centroid) < 0.f) std::swap(soup[i + 1], soup[i + 2]);
+    }
 }
 
 // Volume-space vertex to a plain vector.
@@ -557,7 +574,9 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
                 for (size_t h = 0; h < decomp->mMesh.size() && (S32)(soup.size() / 3) < tri_cap; ++h)
                 {
                     const std::vector<LLVector3>& hull = decomp->mMesh[h].mPositions;
+                    const size_t begin = soup.size();
                     soup.insert(soup.end(), hull.begin(), hull.end());
+                    ss_orient_outward(soup, begin);
                 }
                 if (!soup.empty() && (S32)(soup.size() / 3) <= tri_cap
                     && addTriangles(pos, rot, scale, soup, layer, geometry_only ? (U8)PROV_RENDER : (U8)PROV_HULL))
@@ -639,6 +658,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
                 soup.push_back(ss_vert(phys_vol->mHullPoints[phys_vol->mHullIndices[k + 1]]));
                 soup.push_back(ss_vert(phys_vol->mHullPoints[phys_vol->mHullIndices[k + 2]]));
             }
+            ss_orient_outward(soup, 0);
         }
         if (soup.empty())
         {
