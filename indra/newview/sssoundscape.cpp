@@ -129,6 +129,18 @@ void SSSoundscape::stopAll()
     {
         releaseLoop(loop);
     }
+    // <SS:Nexii> The auto-sort ladder's voices live outside mLoops: without this drain a bed voice active when the gate hit keeps its looping source alive on a parcel with no environment.
+    if (gAudiop)
+    {
+        for (auto& pair : mBedVoices)
+        {
+            if (LLAudioSource* source = gAudiop->findAudioSource(pair.second.mSourceID))
+            {
+                gAudiop->cleanupAudioSource(source);
+            }
+        }
+    }
+    mBedVoices.clear();
     mImpactRate = 0.f;
 }
 
@@ -690,9 +702,35 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
 
+    static LLCachedControl<F32> master_setting(gSavedSettings, "SSAtmoVolumeMaster", 0.8f);
+    static LLCachedControl<F32> ambient_setting(gSavedSettings, "SSAtmoVolumeAmbient", 1.f);
+    static LLCachedControl<F32> wind_setting(gSavedSettings, "SSAtmoVolumeWind", 1.f);
+    const F32 master = llclamp((F32)master_setting, 0.f, 1.f);
+    const F32 ambient_vol = llclamp((F32)ambient_setting, 0.f, 1.f);
+    const F32 wind_vol = llclamp((F32)wind_setting, 0.f, 1.f);
+
+    const F32 category[LOOP_COUNT] = {
+        ambient_vol, ambient_vol, ambient_vol,
+        ambient_vol, ambient_vol, ambient_vol, ambient_vol,
+        wind_vol, wind_vol,
+    };
+
     mCoverSmooth = lerp(mCoverSmooth, mCovered ? 1.f : 0.f, llclamp(COVER_BLEND_RATE * dt, 0.f, 1.f));
     mEnclosureSmooth = lerp(mEnclosureSmooth, mEnclosure, llclamp(COVER_BLEND_RATE * dt, 0.f, 1.f));
     mBuriedSmooth = lerp(mBuriedSmooth, mBuriedDepth, llclamp(BURIAL_BLEND_RATE * dt, 0.f, 1.f));
+
+    // <SS:Nexii> The environment is the soundscape's source: with none resolved, stand down on the loops' own crossfade. Gating on mEnabled alone rode the weather blend's ~10 s fade-out, where no-env precipitation/turbulence defaults and the stale preset kept wet and wind targets sounding on a parcel with no environment; isSwitchedOn is the same immediate gate footsteps use.
+    if (!atmo->isSwitchedOn())
+    {
+        mLadderTargets.clear();
+        for (S32 i = 0; i < LOOP_COUNT; ++i)
+        {
+            mLoops[i].mTarget = 0.f;
+            applyLoop(mLoops[i], mLoops[i].mConfigured, master * category[i], dt);
+        }
+        updateBedVoices(now, dt, master * ambient_vol);
+        return;
+    }
 
     const F32 env = llclamp(atmo->gustEnvelopeAt(now), 0.f, 2.5f);
     const SSPrecipPreset& preset = atmo->preset();
@@ -814,19 +852,6 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
         for (S32 i = 0; i < LOOP_COUNT; ++i) targets[i] = 0.f;
         mLadderTargets.clear();
     }
-
-    static LLCachedControl<F32> master_setting(gSavedSettings, "SSAtmoVolumeMaster", 0.8f);
-    static LLCachedControl<F32> ambient_setting(gSavedSettings, "SSAtmoVolumeAmbient", 1.f);
-    static LLCachedControl<F32> wind_setting(gSavedSettings, "SSAtmoVolumeWind", 1.f);
-    const F32 master = llclamp((F32)master_setting, 0.f, 1.f);
-    const F32 ambient_vol = llclamp((F32)ambient_setting, 0.f, 1.f);
-    const F32 wind_vol = llclamp((F32)wind_setting, 0.f, 1.f);
-
-    const F32 category[LOOP_COUNT] = {
-        ambient_vol, ambient_vol, ambient_vol,
-        ambient_vol, ambient_vol, ambient_vol, ambient_vol,
-        wind_vol, wind_vol,
-    };
 
     const std::string sources[LOOP_COUNT] = {
         preset.mSounds.mAmbientLight,
@@ -1666,7 +1691,6 @@ void SSSoundscape::noteFootGait(bool is_self, S32 loco, const F32 s[2], const bo
         dbg.mFootS[f] = s[f];
         dbg.mFootSwing[f] = swing[f];
     }
-}
 }
 
 // Tags a source as a step sound for the reaper.
