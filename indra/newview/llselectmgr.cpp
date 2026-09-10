@@ -5298,7 +5298,7 @@ void LLSelectMgr::deselectAllIfTooFar()
 
 
 // <SS:Nexii> The one landscape linkset a selection holds, or null: every selected object must be local content sharing one record id (a root, its children, or a single part under Edit Linked Parts). [interaction: ss_landscape_persist_name]
-static const SSAtmoLandscapeObject* ss_single_local_record(const LLObjectSelectionHandle& selection)
+static const SSAtmoLandscapeObject* ss_single_local_record(LLObjectSelectionHandle selection)    // by value: the handle's const operator-> hands out a const selection, whose begin()/end() are not const
 {
     if (selection.isNull()) return nullptr;
     const SSAtmoLandscapeObject* found = nullptr;
