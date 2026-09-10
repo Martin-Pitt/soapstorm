@@ -320,7 +320,7 @@ void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32
     }
 }
 
-// Walks every configured sound source - thunder, global footsteps, the active preset's beds and steps - into the entry table.
+// Walks every configured sound source - thunder, global footsteps, the active preset's ambiences and steps - into the entry table.
 void SSSoundMeta::gather()
 {
     mSlots.clear();
@@ -344,14 +344,14 @@ void SSSoundMeta::gather()
     }
 
     const SSPrecipPreset& preset = SSPrecipPresetManager::instance().active();
-    const char* bed_names[] = { "ambient_light", "ambient_medium", "ambient_heavy", "roof_open", "roof_small", "roof_medium", "roof_big" };
-    const std::string* beds[] = { &preset.mSounds.mAmbientLight, &preset.mSounds.mAmbientMedium,
-                                  &preset.mSounds.mAmbientHeavy, &preset.mSounds.mRoofOpen,
-                                  &preset.mSounds.mRoofSmall, &preset.mSounds.mRoofMedium,
-                                  &preset.mSounds.mRoofBig };
+    const char* ambience_names[] = { "ambient_light", "ambient_medium", "ambient_heavy", "roof_open", "roof_small", "roof_medium", "roof_big" };
+    const std::string* ambiences[] = { &preset.mSounds.mAmbientLight, &preset.mSounds.mAmbientMedium,
+                                       &preset.mSounds.mAmbientHeavy, &preset.mSounds.mRoofOpen,
+                                       &preset.mSounds.mRoofSmall, &preset.mSounds.mRoofMedium,
+                                       &preset.mSounds.mRoofBig };
     for (S32 b = 0; b < 7; ++b)
     {
-        addList(*beds[b], "preset:" + preset.mName + "/" + bed_names[b], PURPOSE_DENSITY);
+        addList(*ambiences[b], "preset:" + preset.mName + "/" + ambience_names[b], PURPOSE_DENSITY);
     }
     for (S32 sf = 0; sf < STEP_SURFACE_COUNT; ++sf)
     {

@@ -420,6 +420,7 @@ bool SSNavMesh::ensureInit()
         return false;
     }
     mCensusStamp = 0;
+    LL_INFOS("SSNavMesh") << "navmesh up: origin " << mOriginGlobal << ", " << SS_NAV_MAX_TILES << " tile slots" << LL_ENDL;
     return true;
 }
 
@@ -594,6 +595,13 @@ void SSNavMesh::schedule()
         it = mBands.erase(it);
     }
 
+    if (!mWorklist.empty())
+    {
+        LL_INFOS("SSNavMesh") << "schedule: " << mColumns.size() << " columns, " << mBands.size() << " bands, "
+                              << mWorklist.size() << " to build, " << polyCount() << " polys published, "
+                              << (mLayerBytes / 1024) << " KB of layers" << LL_ENDL;
+    }
+
     // Ground-up, nearest-first: the bands the agent stands in publish first.
     std::sort(mWorklist.begin(), mWorklist.end(), [&](const Job& a, const Job& b)
     {
@@ -684,7 +692,11 @@ void SSNavMesh::launch(const Job& job)
         {
             publish(r);
         });
-    if (!posted) --mInFlight;
+    if (!posted)
+    {
+        --mInFlight;
+        LL_WARNS("SSNavMesh") << "General work queue refused a band build; navmesh will not fill" << LL_ENDL;
+    }
 }
 
 // Main thread: swap the band's layers into the tile cache and rebuild its navmesh tiles from them.

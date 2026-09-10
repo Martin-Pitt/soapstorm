@@ -3012,7 +3012,7 @@ static void ss_wf_flood(S32 res, S32 max_spans, F32 ceiling,
 // the tier A statistic bake per probe - the 8-direction wall profile at the probe's
 // REAL z (the 4 side-raycasts' answer), sky openness, the bounded room flood's
 // volume and area at lattice resolution, Sabine's RT60, the space/size classes the
-// loop beds already read, and the flood's own travel-to-outdoors. The probe graph
+// ambient loops already read, and the flood's own travel-to-outdoors. The probe graph
 // rides the same walk: vertical links by construction, horizontal links between
 // probes whose gaps overlap by at least the crouch figure, each validated by a
 // span-store ray (at 8 m spacing a wall thinner than a lattice cell is invisible to
@@ -3470,7 +3470,13 @@ static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
 void SSWorldField::renderDebug()
 {
     static LLCachedControl<U32> view(gSavedSettings, "SSWorldFieldDebugView", 1);
-    const S32 which = llclamp((S32)view, 1, 6);
+    const S32 which = llclamp((S32)view, 1, 7);
+    // <SS:Nexii> View 7: the census navmesh - Detour polygon edges by band (doc/atmo_magic_navmesh.md). It is its own store, so it draws whether or not this field holds tiles, and it must run before the tile gate below.
+    if (which == 7)
+    {
+        SSNavMesh::getInstance()->renderDebug();
+        return;
+    }
     if (mTiles.empty()) return;
 
     static LLCachedControl<F32> range_setting(gSavedSettings, "SSAtmoWindFlowDebugRange", 24.f);
@@ -3756,12 +3762,6 @@ void SSWorldField::renderDebug()
     if (which == 6)
     {
         SSWorldFieldShapes::getInstance()->renderDebug();
-    }
-
-    // <SS:Nexii> View 7: the census navmesh - Detour polygon edges by band (doc/atmo_magic_navmesh.md).
-    if (which == 7)
-    {
-        SSNavMesh::getInstance()->renderDebug();
     }
 
     // Drop debug views for regions the field no longer holds.

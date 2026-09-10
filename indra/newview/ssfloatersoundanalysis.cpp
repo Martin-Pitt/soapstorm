@@ -58,7 +58,6 @@ namespace
     }
 
     // The bare playback context a purpose names, for rows with no analysis to refine it yet.
-    // "ambience" rather than the internal "bed" - the codebase term reads as furniture here.
     std::string rowContextWord(U32 purpose)
     {
         if (purpose & SSSoundMeta::PURPOSE_STEPS)   return "steps";
@@ -251,7 +250,7 @@ void SSSoundAnalysisView::draw()
 
         // The playback context this sound was interpreted as - same derivation the preview and
         // the live soundscape use: step recordings split by the segmentability gate, thunder
-        // by its timing purpose, beds by density. Unanalysed rows show the bare context.
+        // by its timing purpose, ambience by density. Unanalysed rows show the bare context.
         const std::string context = ready ? rowModeLabel(row.mPurpose, meta)
                                           : rowContextWord(row.mPurpose);
 
@@ -457,7 +456,7 @@ void SSSoundAnalysisView::togglePreview(const LLUUID& id, U32 purpose)
         return;
     }
 
-    // Beds: a plain loop from the top at the ambient mix level.
+    // Ambience: a plain loop from the top at the ambient mix level.
     static LLCachedControl<F32> master(gSavedSettings, "SSAtmoVolumeMaster", 0.8f);
     static LLCachedControl<F32> ambient(gSavedSettings, "SSAtmoVolumeAmbient", 1.f);
     mPreview.mMode = PREVIEW_LOOP;

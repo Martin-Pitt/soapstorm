@@ -147,7 +147,7 @@ public:
     ESpace space() const { return mSpace; }
     // <SS:Nexii> The world field's enclosure spectrum at the listener, eased:
     // 0 outdoors, 1 sealed interior, ramped on the flood's air-graph depth
-    // back to open sky. The bed blend and the through-wall occlusion read it
+    // back to open sky. The ambient blend and the through-wall occlusion read it
     // while the field answers; the probe verdict's own rungs stand in when it
     // does not, so the raycast fallback mix is unchanged. -1 when the field
     // has no current verdict.
@@ -245,7 +245,7 @@ private:
 
     F32 mWetSlow = 0.f;
 
-    struct BedVoice
+    struct AmbientVoice
     {
         LLUUID mSourceID;
         F64 mStartedAt = 0.0;
@@ -253,8 +253,8 @@ private:
         F32 mGain = 0.f;
         F32 mTarget = 0.f;
     };
-    std::map<LLUUID, BedVoice> mBedVoices;
-    std::map<LLUUID, U32> mBedResume;
+    std::map<LLUUID, AmbientVoice> mAmbientVoices;
+    std::map<LLUUID, U32> mAmbientResume;
 
     struct StepMark
     {
@@ -273,7 +273,7 @@ private:
     void fadeKill(const LLUUID& source_id);
     void updateDying(F64 now);
     std::vector<std::pair<LLUUID, F32>> mLadderTargets;
-    void updateBedVoices(F64 now, F32 dt, F32 master_mul);
+    void updateAmbientVoices(F64 now, F32 dt, F32 master_mul);
     void registerFollower(const LLUUID& source_id, const LLVector3& dir_world, F64 now);
     void updateFollowers(F64 now, F32 dt);
     void updateThunder(F64 now);

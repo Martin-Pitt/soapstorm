@@ -88,7 +88,7 @@ private:
     // Agent parcel arrivals (login, teleport, walking across a border) fire gAgent's parcel-changed signal, never the LLParcelObserver list - that one is selection-driven (About Land etc.), so both hooks are needed.
     boost::signals2::connection mAgentParcelChangedConnection;
 
-    // The parcel environment the user unloaded by hand while the parcel still advertises it. Holds the unload down until the tag disappears or the parcel advertises a different environment - otherwise the next parcel property update re-applies the cached notecard and the weather, wind and rain beds come straight back mid-session.
+    // The parcel environment the user unloaded by hand while the parcel still advertises it. Holds the unload down until the tag disappears or the parcel advertises a different environment - otherwise the next parcel property update re-applies the cached notecard and the weather, wind and rain ambiences come straight back mid-session.
     LLUUID mDeclinedAssetId;
 };
 

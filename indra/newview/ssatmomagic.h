@@ -129,7 +129,7 @@ public:
     ERegime regime() const { return mRegime; }
     static const char* regimeName(ERegime r);
 
-    // Bounded by design: soundscape bed crossfade, floater stats, whiteout ramp. A second event type gets promoted to a real pump consciously, never by accretion.
+    // Bounded by design: soundscape ambience crossfade, floater stats, whiteout ramp. A second event type gets promoted to a real pump consciously, never by accretion.
     typedef boost::signals2::signal<void(ERegime, ERegime)> RegimeSignal;
     RegimeSignal& regimeSignal() { return mRegimeSignal; }
 

@@ -5451,7 +5451,7 @@ void LLVOAvatar::updateFootstepSounds()
 // <SS:Nexii> Atmo Magic surface-aware footstep sounds ----------------------------------------------------------------------------- playFootstepSound() Volume/mute/parcel gating factored out of updateFootstepSounds() so the jump trigger and the walk/run/land trigger can share it. -----------------------------------------------------------------------------
 void LLVOAvatar::playFootstepSound(const LLVector3& foot_pos_agent, S32 action)
 {
-    // Was a hardcoded 0.1 (stock's own figure), which is near-inaudible against the Atmo beds; debug-tweakable so the trigger path can be balanced by ear against the loop/segment path's SSAtmoVolumeFootsteps.
+    // Was a hardcoded 0.1 (stock's own figure), which is near-inaudible against the Atmo ambiences; debug-tweakable so the trigger path can be balanced by ear against the loop/segment path's SSAtmoVolumeFootsteps.
     static LLCachedControl<F32> step_volume(gSavedSettings, "SSAtmoVolumeStepTrigger", 0.3f);
     const F32 STEP_VOLUME = llclamp((F32)step_volume, 0.f, 1.f);
 

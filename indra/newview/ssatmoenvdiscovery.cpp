@@ -220,7 +220,7 @@ void SSAtmoEnvDiscoveryManager::changed()
     // The parcel still advertises the environment that was applied from it, but
     // none is live anymore: it was unloaded by hand (the environment floater).
     // Record the decline instead of falling through to a refetch - the cached
-    // notecard would re-apply it silently, and the wind and rain beds the user
+    // notecard would re-apply it silently, and the wind and rain ambiences the user
     // just unloaded would come straight back.
     if (asset_id == mAppliedAssetId && !mgr->hasAsset())
     {

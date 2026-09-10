@@ -129,10 +129,10 @@ void SSSoundscape::stopAll()
     {
         releaseLoop(loop);
     }
-    // <SS:Nexii> The auto-sort ladder's voices live outside mLoops: without this drain a bed voice active when the gate hit keeps its looping source alive on a parcel with no environment.
+    // <SS:Nexii> The auto-sort ladder's voices live outside mLoops: without this drain an ambient voice active when the gate hit keeps its looping source alive on a parcel with no environment.
     if (gAudiop)
     {
-        for (auto& pair : mBedVoices)
+        for (auto& pair : mAmbientVoices)
         {
             if (LLAudioSource* source = gAudiop->findAudioSource(pair.second.mSourceID))
             {
@@ -140,11 +140,11 @@ void SSSoundscape::stopAll()
             }
         }
     }
-    mBedVoices.clear();
+    mAmbientVoices.clear();
     mImpactRate = 0.f;
 }
 
-// Feeds an impact into the rate estimate that drives the ambient beds.
+// Feeds an impact into the rate estimate that drives the ambient mix.
 void SSSoundscape::notifyImpact(F32 strength)
 {
     mImpactRate += strength;
@@ -245,7 +245,7 @@ void SSSoundscape::updateProbes(F64 now)
 
     // The enclosure spectrum's validity resets only with a cycle that
     // re-answers it - unlike the interior flag it is read every frame by the
-    // bed blend, so clearing it above the gates would flip the mix to the
+    // ambient blend, so clearing it above the gates would flip the mix to the
     // fallback and back between a standing listener's cycles. Between cycles
     // the last verdict holds, eased.
     mEnclosureValid = false;
@@ -697,7 +697,7 @@ void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 mast
         LLViewerCamera::getInstance()->getOrigin() + loop.mOffset));
 }
 
-// Mixes the whole ambient bed set - rain beds by impact rate, wind by speed, roof beds by cover - and applies each loop.
+// Mixes the whole ambient set - rain ambiences by impact rate, wind by speed, roof ambiences by cover - and applies each loop.
 void SSSoundscape::updateLoops(F64 now, F32 dt)
 {
     SSAtmoMagic* atmo = SSAtmoMagic::getInstance();
@@ -728,7 +728,7 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
             mLoops[i].mTarget = 0.f;
             applyLoop(mLoops[i], mLoops[i].mConfigured, master * category[i], dt);
         }
-        updateBedVoices(now, dt, master * ambient_vol);
+        updateAmbientVoices(now, dt, master * ambient_vol);
         return;
     }
 
@@ -751,7 +751,7 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 
     const bool sheltered = (mSpace == SPACE_SHELTERED);
 
-    // The enclosure spectrum drives the bed blend where the field answered:
+    // The enclosure spectrum drives the ambient blend where the field answered:
     // the old sheltered/room duck pair became the two ends of a continuous
     // ramp, so a cave mouth, an arcade and a warehouse interior each sit
     // between them at their own measured depth. Without the field, the probe
@@ -777,8 +777,8 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
 
     mLadderTargets.clear();
     {
-        static LLCachedControl<bool> auto_beds(gSavedSettings, "SSAtmoAmbientAutoSort", true);
-        if (auto_beds)
+        static LLCachedControl<bool> auto_sort(gSavedSettings, "SSAtmoAmbientAutoSort", true);
+        if (auto_sort)
         {
             std::vector<std::pair<F32, LLUUID>> rungs;
             for (const std::string* csv : { &preset.mSounds.mAmbientLight, &preset.mSounds.mAmbientMedium, &preset.mSounds.mAmbientHeavy })
@@ -818,15 +818,15 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
     }
 
     const F32 roof = mCoverSmooth * wet * (1.f - BURIAL_MAX_DUCK * buried);
-    // The roof bed's open-cover share: an eave or canopy sits at the outdoors
+    // The roof ambience's open-cover share: an eave or canopy sits at the outdoors
     // end of the spectrum and takes the open recording, the room-character
-    // beds take what it leaves. Without the field, the probe verdict's own
+    // ambiences take what it leaves. Without the field, the probe verdict's own
     // sheltered rung stands in - the exact discrete split this generalises.
     const F32 open_w = mEnclosureValid ? llclamp(1.f - enc / 0.4f, 0.f, 1.f)
                                        : (sheltered ? 1.f : 0.f);
     targets[LOOP_ROOF_OPEN] = roof * open_w;
-    // A sheltered space reads its own wall-distance size for the room beds,
-    // so a deep tunnel lands on the big-hall bed instead of dropping out.
+    // A sheltered space reads its own wall-distance size for the room ambiences,
+    // so a deep tunnel lands on the big-hall ambience instead of dropping out.
     const bool small_room  = (mSpace == SPACE_SMALL)
                           || (mSpace == SPACE_SHELTERED && mOutdoorSize == SIZE_SMALL);
     const bool medium_room = (mSpace == SPACE_MEDIUM)
@@ -880,25 +880,25 @@ void SSSoundscape::updateLoops(F64 now, F32 dt)
         applyLoop(mLoops[i], sources[i], master * category[i], dt);
     }
 
-    updateBedVoices(now, dt, master * ambient_vol);
+    updateAmbientVoices(now, dt, master * ambient_vol);
 }
 
-// Per-bed voice management: which recording each bed plays and at what level, levelled by the analysed metadata.
-void SSSoundscape::updateBedVoices(F64 now, F32 dt, F32 master_mul)
+// Per-ambience voice management: which recording each ambience plays and at what level, levelled by the analysed metadata.
+void SSSoundscape::updateAmbientVoices(F64 now, F32 dt, F32 master_mul)
 {
     if (!gAudiop) return;
 
-    for (auto& pair : mBedVoices) pair.second.mTarget = 0.f;
+    for (auto& pair : mAmbientVoices) pair.second.mTarget = 0.f;
     for (const auto& want : mLadderTargets)
     {
-        mBedVoices[want.first].mTarget = llclamp(want.second, 0.f, 1.f);
+        mAmbientVoices[want.first].mTarget = llclamp(want.second, 0.f, 1.f);
     }
 
     const F32 fade = llclamp(dt * 1.5f, 0.f, 1.f);
 
-    for (auto it = mBedVoices.begin(); it != mBedVoices.end(); )
+    for (auto it = mAmbientVoices.begin(); it != mAmbientVoices.end(); )
     {
-        BedVoice& voice = it->second;
+        AmbientVoice& voice = it->second;
         voice.mGain = lerp(voice.mGain, voice.mTarget, fade);
 
         LLAudioSource* source = voice.mSourceID.notNull() ? gAudiop->findAudioSource(voice.mSourceID) : nullptr;
@@ -911,11 +911,11 @@ void SSSoundscape::updateBedVoices(F64 now, F32 dt, F32 master_mul)
                 if (const SSSoundMeta::Meta* meta = SSSoundMeta::getInstance()->get(it->first)) len = meta->mLengthMS;
                 if (len > 0)
                 {
-                    mBedResume[it->first] = (U32)((voice.mOffsetMS + (U64)((now - voice.mStartedAt) * 1000.0)) % len);
+                    mAmbientResume[it->first] = (U32)((voice.mOffsetMS + (U64)((now - voice.mStartedAt) * 1000.0)) % len);
                 }
                 gAudiop->cleanupAudioSource(source);
             }
-            it = mBedVoices.erase(it);
+            it = mAmbientVoices.erase(it);
             continue;
         }
 
@@ -923,8 +923,8 @@ void SSSoundscape::updateBedVoices(F64 now, F32 dt, F32 master_mul)
         {
             voice.mSourceID.generate();
             voice.mStartedAt = now;
-            auto resume = mBedResume.find(it->first);
-            voice.mOffsetMS = (resume != mBedResume.end()) ? resume->second : 0;
+            auto resume = mAmbientResume.find(it->first);
+            voice.mOffsetMS = (resume != mAmbientResume.end()) ? resume->second : 0;
 
             source = new LLAudioSource(voice.mSourceID, gAgent.getID(), 0.f, LLAudioEngine::AUDIO_TYPE_AMBIENT);
             source->setStartOffsetMS(voice.mOffsetMS);

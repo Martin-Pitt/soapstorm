@@ -166,7 +166,7 @@ public:
     // verdict. Returns -1 whenever there is no current answer - no labels
     // yet, stale after an edit, off-tile, or sub-band-solid - and the caller
     // keeps its own probe answer for that. This is the scalar the soundscape
-    // blends its beds on.
+    // blends its ambiences on.
     F32 enclosureAt(const LLVector3& pos_agent) const;
 
     // The bulk form for callers that walk one region's cells (the surface

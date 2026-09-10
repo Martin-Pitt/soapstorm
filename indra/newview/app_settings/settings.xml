@@ -27401,7 +27401,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoVolumeAmbient</key>
       <map>
       <key>Comment</key>
-      <string>Volume of the precipitation ambient beds, indoor and out</string>
+      <string>Volume of the precipitation ambient loops, indoor and out</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -28358,7 +28358,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSAtmoVolumeStepTrigger</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: gain of the legacy per-step trigger path (stock animation-driven steps and their fallback sounds), separate from SSAtmoVolumeFootsteps which drives the attached loop/segment path. Stock hardcoded 0.1, which is near-inaudible against the ambient beds.</string>
+    <string>Atmo Magic: gain of the legacy per-step trigger path (stock animation-driven steps and their fallback sounds), separate from SSAtmoVolumeFootsteps which drives the attached loop/segment path. Stock hardcoded 0.1, which is near-inaudible against the ambient loops.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>
@@ -28391,7 +28391,7 @@ Change of this parameter will affect the layout of buttons in notification toast
   <key>SSAtmoAmbientAutoSort</key>
   <map>
     <key>Comment</key>
-    <string>Atmo Magic: pool the preset's light/medium/heavy rain beds into one ladder sorted by each recording's measured impacts-per-second, and crossfade along it to match the rain actually falling. Falls back to the authored three-bucket blend when fewer than three sounds are analysed or their rates barely differ.</string>
+    <string>Atmo Magic: pool the preset's light/medium/heavy rain loops into one ladder sorted by each recording's measured impacts-per-second, and crossfade along it to match the rain actually falling. Falls back to the authored three-bucket blend when fewer than three sounds are analysed or their rates barely differ.</string>
     <key>Persist</key>
     <integer>1</integer>
     <key>Type</key>

@@ -374,7 +374,7 @@ namespace SSAcoustic
     // at roof - 0.4 m when the gap is roofed and tall enough that the two are
     // distinct, intermediates every ~4 m between, or a single midpoint probe for short
     // gaps. The sky-open top gap gets the ear probe only (outdoors air needs no
-    // vertical stack - its reverb is the outdoor bed - but the ear probe must exist so
+    // vertical stack - its reverb is the outdoor ambience - but the ear probe must exist so
     // outdoor sources and listeners have a graph entry point). Returns the count
     // written, 0 when the gap is too short to hold even a midpoint probe.
     inline S32 placeGapProbes(F32 g0, F32 g1, bool sky_open, ProbeDef* out, S32 max_out)
@@ -520,7 +520,7 @@ namespace SSAcoustic
 
     // The space/size classes a probe's bake stores, from its wall profile and air
     // state - the same rungs the soundscape's raycast classification uses, so a
-    // probe's verdict lands on the enum the loop beds already read.
+    // probe's verdict lands on the enum the ambient loops already read.
     // LOCKSTEP sssoundscape.cpp updateProbes (SMALL_SPACE_AVG 10, MEDIUM_SPACE_AVG 30,
     // SIDE_RAY_LENGTH 50) and SSSoundscape::ESpace/ESize's own order.
     // label mirrors SSWorldField::EAirLabel (0 solid, 1 outdoors, 2 sheltered,
