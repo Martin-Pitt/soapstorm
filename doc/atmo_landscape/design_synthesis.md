@@ -388,3 +388,24 @@ ceiling in the drag-distance limits, local only when every selected object is lo
 `llpanelobject.cpp` (scale ceiling on refresh and send, position spinner range on refresh, area
 clamp on send). Stock objects keep every stock clamp; `getState()` restores the stock spinner range
 through `updateLimits()` on every refresh before the local override is applied.
+
+**Build-tool verdicts (owner, 2026-09-10).** The possible list is the short one; the mechanism is
+the menu builder filter that already hides Take for local content plus the build floater's per-tab
+enable logic, with local content as a third case beside object and attachment.
+
+- Works, and is wired to the record: position, rotation, scale and their copy/paste; the whole
+  Texture tab including PBR; every shape parameter on the Object tab; name and description; Edit
+  Linked Parts including moving a single part (writes its root-relative transform; the viewer
+  enforces no link distance, only the sim does, so nothing needs unlocking for 2 km scenery).
+- Keep, with a client-side meaning: Locked (guards the landscape against accidental edits);
+  pathfinding attributes, Phantom and physics shape type (the census and the navmesh read them,
+  and weather responds to them); Flexi and Light (schema additions); Build > Object > Duplicate
+  (duplicates the record client-side); LOD show.
+- Roadmap: Build > Object > Edit Particles and attached sound loops editable on local objects;
+  Linden-style terrain in the void as a future landscaping option (land tools cannot act on a
+  selected object today, so nothing to hide there).
+- Hidden: every server action (Take variants, Buy, Pay, Return, Open, Touch, Sit, Wear, Attach,
+  Put on, Add, Profile, Report Abuse, Block, Show in Region Objects/characters, Save as); every
+  script item and the Content tab (local objects hold no inventory); Link and Unlink and the
+  parent/child silhouette split; the General tab permissions block and Copy keys; Physical and
+  Temporary; the Create tool (rezzes a sim object by definition).
