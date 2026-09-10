@@ -56,6 +56,27 @@ namespace
             && meta.mCadenceCV < 0.4f
             && meta.mImpactRate > 0.8f && meta.mImpactRate < 4.5f;
     }
+
+    // The bare playback context a purpose names, for rows with no analysis to refine it yet.
+    // "ambience" rather than the internal "bed" - the codebase term reads as furniture here.
+    std::string rowContextWord(U32 purpose)
+    {
+        if (purpose & SSSoundMeta::PURPOSE_STEPS)   return "steps";
+        if (purpose & SSSoundMeta::PURPOSE_TIMING)  return "thunder";
+        if (purpose & SSSoundMeta::PURPOSE_DENSITY) return "ambience";
+        return std::string();
+    }
+
+    // The full playback mode once the analysis is in: the same derivation the preview and
+    // the live soundscape use, so the label and the button behaviour cannot disagree.
+    std::string rowModeLabel(U32 purpose, const SSSoundMeta::Meta* meta)
+    {
+        if (purpose & SSSoundMeta::PURPOSE_STEPS)
+        {
+            return (meta && step_cut_capable(*meta)) ? "steps/cut" : "steps/loop";
+        }
+        return rowContextWord(purpose);
+    }
 }
 
 class SSSoundAnalysisView : public LLView
@@ -63,17 +84,16 @@ class SSSoundAnalysisView : public LLView
 public:
     SSSoundAnalysisView(const LLView::Params& p) : LLView(p) {}
 
-    // Content height for the scroll container: a group header per source plus a fixed row per analysed sound.
+    // Content height for the scroll container, via the same layout draw uses - the entry map's
+    // UUID order scatters same-source entries, so counting groups off the raw map overcounts
+    // and desyncs the scrollbar from the drawn rows.
     S32 neededHeight() const
     {
-        S32 rows = 0, groups = 0;
-        std::string last_group;
-        for (const auto& pair : SSSoundMeta::getInstance()->entriesForDebug())
-        {
-            if (pair.second.mSource != last_group) { ++groups; last_group = pair.second.mSource; }
-            ++rows;
-        }
-        return groups * GROUP_H + rows * ROW_H + PAD * 2;
+        std::vector<RowInfo> rows;
+        buildRows(rows);
+        S32 groups = 0;
+        for (const RowInfo& row : rows) { if (row.mGroupStart) ++groups; }
+        return groups * GROUP_H + (S32)rows.size() * ROW_H + PAD * 2;
     }
 
     // Renders every READY sound as a stat line, its envelope with markers, a preview button and a live playhead.
@@ -90,10 +110,12 @@ private:
     // One laid-out row; shared by the renderer and the hit tests so they can never disagree.
     struct RowInfo
     {
-        LLUUID mID;
+        LLUUID mID;                             // null for a configured-but-empty slot
         const SSSoundMeta::Meta* mMeta = nullptr;
+        SSSoundMeta::EState mState = SSSoundMeta::PENDING;
         U32 mPurpose = 0;
         std::string mSource;
+        std::string mFailWhy;
         bool mGroupStart = false;
         S32 mY = 0;
     };
@@ -134,36 +156,46 @@ private:
     S32 mHoverRow = -1;
 };
 
-// Walks the rows exactly as draw renders them: grouped, sorted, bottom-up.
+// Walks the rows exactly as draw renders them: grouped, sorted, bottom-up. Every entry state
+// appears - pending, analysing, failed - plus one pseudo row per configured slot that names
+// no sound at all, so unset context is visible instead of silently absent.
 void SSSoundAnalysisView::buildRows(std::vector<RowInfo>& rows) const
 {
     rows.clear();
 
-    std::vector<std::pair<std::string, LLUUID>> keys;
     for (const auto& pair : SSSoundMeta::getInstance()->entriesForDebug())
     {
-        if (pair.second.mState != SSSoundMeta::READY) continue;
-        keys.emplace_back(pair.second.mSource, pair.first);
+        RowInfo row;
+        row.mID = pair.first;
+        row.mState = pair.second.mState;
+        row.mMeta = (pair.second.mState == SSSoundMeta::READY) ? &pair.second.mMeta : nullptr;
+        row.mPurpose = pair.second.mPurpose;
+        row.mSource = pair.second.mSource;
+        row.mFailWhy = pair.second.mFailWhy;
+        rows.push_back(row);
     }
-    std::sort(keys.begin(), keys.end());
+
+    for (const SSSoundMeta::SlotInfo& slot : SSSoundMeta::getInstance()->slotsForDebug())
+    {
+        if (slot.mCount > 0) continue;
+        RowInfo row;
+        row.mState = SSSoundMeta::EMPTY;
+        row.mPurpose = slot.mPurpose;
+        row.mSource = slot.mSource;
+        rows.push_back(row);
+    }
+
+    std::stable_sort(rows.begin(), rows.end(),
+                     [](const RowInfo& a, const RowInfo& b) { return a.mSource < b.mSource; });
 
     S32 y = getRect().getHeight() - PAD;
     std::string last_group;
-    for (const auto& key : keys)
+    for (RowInfo& row : rows)
     {
-        const auto& entry = SSSoundMeta::getInstance()->entriesForDebug().at(key.second);
-        const bool group_start = (key.first != last_group);
-        if (group_start) { last_group = key.first; y -= GROUP_H; }
+        row.mGroupStart = (row.mSource != last_group);
+        if (row.mGroupStart) { last_group = row.mSource; y -= GROUP_H; }
         y -= ROW_H;
-
-        RowInfo row;
-        row.mID = key.second;
-        row.mMeta = &entry.mMeta;
-        row.mPurpose = entry.mPurpose;
-        row.mSource = key.first;
-        row.mGroupStart = group_start;
         row.mY = y;
-        rows.push_back(row);
     }
 }
 
@@ -173,13 +205,14 @@ LLRect SSSoundAnalysisView::playRect(const RowInfo& row) const
     return LLRect(PAD, row.mY + ROW_H - 4, PAD + PLAY_BTN, row.mY + ROW_H - 4 - PLAY_BTN);
 }
 
-// The row whose preview button holds the point, -1 when none.
+// The row whose preview button holds the point, -1 when none. Only analysed sounds have a button.
 S32 SSSoundAnalysisView::playRowAt(S32 x, S32 y)
 {
     std::vector<RowInfo> rows;
     buildRows(rows);
     for (S32 i = 0; i < (S32)rows.size(); ++i)
     {
+        if (!rows[i].mMeta) continue;
         if (playRect(rows[i]).pointInRect(x, y)) return i;
     }
     return -1;
@@ -201,7 +234,8 @@ void SSSoundAnalysisView::draw()
     for (S32 i = 0; i < (S32)rows.size(); ++i)
     {
         const RowInfo& row = rows[i];
-        const SSSoundMeta::Meta& meta = *row.mMeta;
+        const SSSoundMeta::Meta* meta = row.mMeta;
+        const bool ready = (meta != nullptr);
 
         if (row.mGroupStart)
         {
@@ -210,43 +244,91 @@ void SSSoundAnalysisView::draw()
                              LLFontGL::LEFT, LLFontGL::BASELINE);
         }
 
-        const std::string name = ss_asset_name(row.mID);
-        const std::string title = name.empty() ? row.mID.asString().substr(0, 12) : name;
-        font->renderUTF8(llformat("%s   len %.1fs  onset %.2fs  tail %.1fs  level %.2f  imp/s %.1f  dens %.2f  gap %.2f  cv %.2f  fix %d  crack %.2f",
-                                  title.c_str(), meta.mLengthMS / 1000.f, meta.mOnsetMS / 1000.f,
-                                  meta.mTailMS / 1000.f, meta.mPeakLevel, meta.mImpactRate, meta.mDensity, meta.mGapFloor, meta.mCadenceCV, (S32)meta.mRepaired, meta.mCrackiness),
-                         0, PAD + PLAY_BTN + 6, row.mY + ROW_H - 12, LLColor4(0.9f, 0.9f, 0.9f, 1.f),
-                         LLFontGL::LEFT, LLFontGL::BASELINE);
+        const std::string name = row.mID.notNull() ? ss_asset_name(row.mID) : std::string();
+        const std::string title = row.mID.notNull()
+            ? (name.empty() ? row.mID.asString().substr(0, 12) : name)
+            : std::string("(unset)");
+
+        // The playback context this sound was interpreted as - same derivation the preview and
+        // the live soundscape use: step recordings split by the segmentability gate, thunder
+        // by its timing purpose, beds by density. Unanalysed rows show the bare context.
+        const std::string context = ready ? rowModeLabel(row.mPurpose, meta)
+                                          : rowContextWord(row.mPurpose);
+
+        S32 text_x = PAD + PLAY_BTN + 6;
+        if (!context.empty())
+        {
+            font->renderUTF8(context, 0, text_x, row.mY + ROW_H - 12,
+                             ready ? LLColor4(0.5f, 0.8f, 1.f, 0.9f) : LLColor4(0.45f, 0.6f, 0.75f, 0.7f),
+                             LLFontGL::LEFT, LLFontGL::BASELINE);
+            text_x += font->getWidth(context) + 10;
+        }
+
+        if (ready)
+        {
+            font->renderUTF8(llformat("%s   len %.1fs  onset %.2fs  tail %.1fs  level %.2f  imp/s %.1f  dens %.2f  gap %.2f  cv %.2f  fix %d  crack %.2f",
+                                      title.c_str(), meta->mLengthMS / 1000.f, meta->mOnsetMS / 1000.f,
+                                      meta->mTailMS / 1000.f, meta->mPeakLevel, meta->mImpactRate, meta->mDensity, meta->mGapFloor, meta->mCadenceCV, (S32)meta->mRepaired, meta->mCrackiness),
+                             0, text_x, row.mY + ROW_H - 12, LLColor4(0.9f, 0.9f, 0.9f, 1.f),
+                             LLFontGL::LEFT, LLFontGL::BASELINE);
+        }
+        else
+        {
+            std::string status;
+            LLColor4 col;
+            switch (row.mState)
+            {
+                case SSSoundMeta::EMPTY:
+                    status = "unset - nothing configured in this slot";
+                    col = LLColor4(0.42f, 0.42f, 0.46f, 0.85f);
+                    break;
+                case SSSoundMeta::FAILED:
+                    status = row.mFailWhy.empty() ? "analysis failed" : llformat("failed - %s", row.mFailWhy.c_str());
+                    col = LLColor4(1.f, 0.45f, 0.4f, 0.9f);
+                    break;
+                case SSSoundMeta::ANALYZING:
+                    status = "analysing...";
+                    col = LLColor4(0.55f, 0.55f, 0.6f, 0.85f);
+                    break;
+                default:
+                    status = "pending - waiting for decode";
+                    col = LLColor4(0.55f, 0.55f, 0.6f, 0.85f);
+                    break;
+            }
+            font->renderUTF8(llformat("%s   %s", title.c_str(), status.c_str()),
+                             0, text_x, row.mY + ROW_H - 12, col,
+                             LLFontGL::LEFT, LLFontGL::BASELINE);
+        }
 
         const S32 wave_top = row.mY + WAVE_H + 6;
         const S32 wave_bottom = row.mY + 6;
         const S32 wave_w = width - PAD * 2;
         gl_rect_2d(PAD, wave_top, PAD + wave_w, wave_bottom, LLColor4(0.07f, 0.07f, 0.09f, 1.f));
 
-        if (!meta.mEnvelope.empty() && meta.mLengthMS > 0)
+        if (ready && !meta->mEnvelope.empty() && meta->mLengthMS > 0)
         {
-            const S32 n = (S32)meta.mEnvelope.size();
+            const S32 n = (S32)meta->mEnvelope.size();
             for (S32 e = 0; e < n; ++e)
             {
                 const S32 x0 = PAD + e * wave_w / n;
                 const S32 x1 = PAD + (e + 1) * wave_w / n;
-                const S32 h = (S32)(meta.mEnvelope[(size_t)e] * (WAVE_H - 2));
+                const S32 h = (S32)(meta->mEnvelope[(size_t)e] * (WAVE_H - 2));
                 gl_rect_2d(x0, wave_bottom + 1 + h, x1, wave_bottom + 1, LLColor4(0.35f, 0.55f, 0.75f, 1.f));
             }
 
-            auto ms_to_x = [&](U32 ms) { return PAD + (S32)((U64)ms * wave_w / meta.mLengthMS); };
+            auto ms_to_x = [&](U32 ms) { return PAD + (S32)((U64)ms * wave_w / meta->mLengthMS); };
 
-            for (U32 ms : meta.mOnsets)
+            for (U32 ms : meta->mOnsets)
             {
                 const S32 x = ms_to_x(ms);
                 gl_rect_2d(x, wave_bottom + 8, x + 1, wave_bottom + 1, LLColor4(1.f, 1.f, 1.f, 0.7f));
             }
 
-            const S32 px = ms_to_x(meta.mPeakMS);
+            const S32 px = ms_to_x(meta->mPeakMS);
             gl_rect_2d(px - 1, wave_top, px + 1, wave_bottom, LLColor4(1.f, 0.7f, 0.15f, 0.55f));
-            const S32 tx = ms_to_x(meta.mTailMS);
+            const S32 tx = ms_to_x(meta->mTailMS);
             gl_rect_2d(tx, wave_top, tx + 1, wave_bottom, LLColor4(1.f, 0.25f, 0.2f, 0.9f));
-            const S32 ox = ms_to_x(meta.mOnsetMS);
+            const S32 ox = ms_to_x(meta->mOnsetMS);
             gl_rect_2d(ox, wave_top, ox + 1, wave_bottom, LLColor4(0.2f, 1.f, 0.35f, 0.95f));
 
             if (row.mID == mPreview.mSound && mPreview.mMode != PREVIEW_NONE)
@@ -254,11 +336,11 @@ void SSSoundAnalysisView::draw()
                 F32 pos_ms = -1.f;
                 if (mPreview.mMode == PREVIEW_ONESHOT)
                 {
-                    pos_ms = (F32)llclamp((now - mPreview.mStartedAt) * 1000.0, 0.0, (F64)meta.mLengthMS);
+                    pos_ms = (F32)llclamp((now - mPreview.mStartedAt) * 1000.0, 0.0, (F64)meta->mLengthMS);
                 }
                 else if (mPreview.mMode == PREVIEW_LOOP)
                 {
-                    pos_ms = (F32)fmod((F64)mPreview.mStartMS + (now - mPreview.mStartedAt) * 1000.0, (F64)meta.mLengthMS);
+                    pos_ms = (F32)fmod((F64)mPreview.mStartMS + (now - mPreview.mStartedAt) * 1000.0, (F64)meta->mLengthMS);
                 }
                 else if (mPreview.mSourceID.notNull() && now >= mPreview.mCutStartedAt && now <= mPreview.mCutStopAt)
                 {
@@ -278,14 +360,17 @@ void SSSoundAnalysisView::draw()
             }
         }
 
-        const LLRect play = playRect(row);
-        const bool playing_this = (row.mID == mPreview.mSound && mPreview.mMode != PREVIEW_NONE);
-        gl_rect_2d(play, (i == mHoverRow) ? LLColor4(0.30f, 0.34f, 0.42f, 1.f)
-                                          : LLColor4(0.18f, 0.19f, 0.24f, 1.f), true);
-        LLUIImagePtr icon = LLUI::getUIImage(playing_this ? "Pause_Off" : "Audio_Off");
-        if (icon.notNull())
+        if (ready)
         {
-            icon->draw(play.mLeft + 1, play.mBottom + (play.getHeight() - 14) / 2, 14, 14);
+            const LLRect play = playRect(row);
+            const bool playing_this = (row.mID == mPreview.mSound && mPreview.mMode != PREVIEW_NONE);
+            gl_rect_2d(play, (i == mHoverRow) ? LLColor4(0.30f, 0.34f, 0.42f, 1.f)
+                                              : LLColor4(0.18f, 0.19f, 0.24f, 1.f), true);
+            LLUIImagePtr icon = LLUI::getUIImage(playing_this ? "Pause_Off" : "Audio_Off");
+            if (icon.notNull())
+            {
+                icon->draw(play.mLeft + 1, play.mBottom + (play.getHeight() - 14) / 2, 14, 14);
+            }
         }
     }
 

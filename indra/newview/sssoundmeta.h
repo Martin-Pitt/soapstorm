@@ -85,7 +85,7 @@ private:
     static Meta analyze(const std::vector<S16>& pcm, S32 channels, F32 rate, U32 purpose);
 
 public:
-    enum EState { PENDING, ANALYZING, READY, FAILED };
+    enum EState { EMPTY, PENDING, ANALYZING, READY, FAILED };
 private:
     struct Entry
     {
@@ -94,10 +94,21 @@ private:
         std::string mSource;
         U32 mPurpose = 0;
         Meta mMeta;
+        std::string mFailWhy;
     };
 
 public:
     const std::map<LLUUID, Entry>& entriesForDebug() const { return mEntries; }
+
+    // <SS:Nexii> One record per configured slot from the last gather, so the debug view can
+    // show slots that name no sound at all - those produce no entry of their own.
+    struct SlotInfo
+    {
+        std::string mSource;
+        U32 mPurpose = 0;
+        S32 mCount = 0;
+    };
+    const std::vector<SlotInfo>& slotsForDebug() const { return mSlots; }
 
 private:
 
@@ -112,6 +123,7 @@ private:
     };
 
     std::map<LLUUID, Entry> mEntries;
+    std::vector<SlotInfo> mSlots;
     F64 mLastGather = -1.0;
 
     std::vector<std::thread> mWorkers;

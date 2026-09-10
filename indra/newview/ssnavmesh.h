@@ -140,6 +140,7 @@ private:
     LLVector3d mOriginGlobal;
     U64 mCensusStamp = 0;
     U32 mGeneration = 0;                        // bumped on teardown so late worker results are dropped
+    U32 mScheduleCount = 0;                     // phases the coarse terrain sample across censuses
     std::unordered_map<U64, Band> mBands;
     std::unordered_map<U64, S32> mColumns;      // column key -> band count
     std::vector<Job> mWorklist;

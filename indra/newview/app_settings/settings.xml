@@ -27079,6 +27079,17 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <integer>0</integer>
     </map>
+    <key>SSWorldFieldShapesBudgetMS</key>
+      <map>
+      <key>Comment</key>
+      <string>Main-thread milliseconds per frame the declared-shape census scan may spend; a rebuild spreads over as many frames as it needs and swaps in whole. Parts whose geometry did not change are reused from the part cache, so steady-state rebuilds cost a few frames</string>
+      <key>Persist</key>
+      <integer>1</integer>
+      <key>Type</key>
+      <string>F32</string>
+      <key>Value</key>
+      <real>3.0</real>
+    </map>
     <key>SSWorldFieldShapesRange</key>
       <map>
       <key>Comment</key>

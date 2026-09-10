@@ -296,9 +296,14 @@ S32 SSSoundMeta::pendingCount()
 }
 
 // Registers a CSV of sound ids for analysis, unioning purposes and remembering who configured them.
+// Every call records a slot for the debug view, including ones that name no valid sound.
 void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32 purpose)
 {
     if (purpose == 0) return;
+
+    SlotInfo& slot = mSlots.emplace_back();
+    slot.mSource = source;
+    slot.mPurpose = purpose;
 
     std::vector<std::string> tokens;
     LLStringUtil::getTokens(csv, tokens, ",+");
@@ -306,6 +311,7 @@ void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32
     {
         LLUUID id(tok);
         if (id.isNull()) continue;
+        ++slot.mCount;
         auto it = mEntries.emplace(id, Entry()).first;
         if (it->second.mSource.empty()) it->second.mSource = source;
         it->second.mPurpose |= purpose;
@@ -315,6 +321,8 @@ void SSSoundMeta::addList(const std::string& csv, const std::string& source, U32
 // Walks every configured sound source - thunder, global footsteps, the active preset's beds and steps - into the entry table.
 void SSSoundMeta::gather()
 {
+    mSlots.clear();
+
     for (const std::string& key : { SSAtmoStoreKey::THUNDER_CRACK, SSAtmoStoreKey::THUNDER_RUMBLE })
     {
         addList(SSAtmoStore::getString(key), key,
@@ -371,7 +379,12 @@ void SSSoundMeta::pump()
         if (in_flight >= 3) break;
 
         LLAudioData* data = gAudiop->getAudioData(pair.first);
-        if (!data) { pair.second.mState = FAILED; continue; }
+        if (!data)
+        {
+            pair.second.mState = FAILED;
+            pair.second.mFailWhy = "no audio data";
+            continue;
+        }
 
         const F64 now = SSAtmoMagic::getInstance()->sharedTime();
         if (pair.second.mFirstTried < 0.0) pair.second.mFirstTried = now;
@@ -379,6 +392,7 @@ void SSSoundMeta::pump()
         if (now - pair.second.mFirstTried > 30.0)
         {
             pair.second.mState = FAILED;
+            pair.second.mFailWhy = "never decoded in 30s";
             LL_WARNS("SSSoundMeta") << "sound never decoded: " << pair.first
                 << "  configured in [" << pair.second.mSource << "]" << LL_ENDL;
             continue;
@@ -406,6 +420,7 @@ void SSSoundMeta::pump()
         if (!buffer->getPCMCopy(job.mPCM, job.mChannels, job.mRate))
         {
             pair.second.mState = FAILED;
+            pair.second.mFailWhy = "no PCM copy";
             continue;
         }
 

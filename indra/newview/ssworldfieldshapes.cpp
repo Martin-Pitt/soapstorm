@@ -57,6 +57,9 @@
 // megaprim a handful of cells, not per-column work.
 static constexpr F32 SS_SHAPES_BUCKET_M = 64.f;
 static constexpr F64 SS_SHAPES_MAX_AGE = 10.0;
+static constexpr F64 SS_SHAPES_REBUILD_AGE = 8.0;       // start the periodic rebuild before the census expires: it now spans frames
+static constexpr F64 SS_SHAPES_PART_CACHE_TTL = 60.0;   // seconds a part's baked records outlive its last sighting
+static constexpr S32 SS_SHAPES_SCAN_CHUNK = 32;         // objects between budget checks
 static constexpr F32 SS_SHAPES_REBUILD_MOVE = 48.f;
 static constexpr F64 SS_SHAPES_DIRTY_DEBOUNCE = 2.0;
 static constexpr S32 SS_SHAPES_PART_TRIS = 8192;
@@ -221,18 +224,27 @@ void SSWorldFieldShapes::update()
     mNow = LLFrameTimer::getTotalSeconds();
     if (!enabled)
     {
-        if (!mCensus.mRecords.empty())
+        if (!mCensus.mRecords.empty() || mBuilding || !mParts.empty())
         {
             mCensus = Census();
+            mPending = Census();
+            mParts.clear();
+            mCurrentPart = nullptr;
+            mBuilding = false;
             mTriCount = 0;
         }
         return;
     }
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(LLViewerCamera::getInstance()->getOrigin());
-    if (needsRebuild(regionp))
+    if (mBuilding)
     {
-        buildCensus(regionp);
+        continueBuild(regionp);
+    }
+    else if (needsRebuild(regionp))
+    {
+        beginBuild(regionp);
+        continueBuild(regionp);
     }
 }
 
@@ -257,7 +269,7 @@ bool SSWorldFieldShapes::needsRebuild(LLViewerRegion* regionp) const
     const LLVector3 anchor = LLViewerCamera::getInstance()->getOrigin();
     if (mCensus.mRegionHandle != regionp->getHandle()) return true;
     if ((anchor - mCensus.mAnchor).magVec() > SS_SHAPES_REBUILD_MOVE) return true;
-    if (mNow - mCensus.mBuildTime > SS_SHAPES_MAX_AGE) return true;
+    if (mNow - mCensus.mBuildTime > SS_SHAPES_REBUILD_AGE) return true;
     if (mDirty && (mNow - mDirtyAt >= SS_SHAPES_DIRTY_DEBOUNCE))
     {
         if ((mDirtyCenter - mCensus.mAnchor).magVec() - mDirtyRadius < env) return true;
@@ -265,66 +277,155 @@ bool SSWorldFieldShapes::needsRebuild(LLViewerRegion* regionp) const
     return false;
 }
 
-// The census scan: every volume part of the region inside the envelope becomes
-// one declared-shape record. Object-list order - same snapshot, same records,
-// every time; tie-breaks downstream are deterministic by construction.
-void SSWorldFieldShapes::buildCensus(LLViewerRegion* regionp)
+// The census scan, time-sliced: beginBuild opens the pending snapshot, continueBuild
+// walks the object list under the frame budget, finishBuild swaps it in. Records land
+// in object-list order as of each slice; a completed census is internally consistent
+// and downstream tie-breaks are deterministic per census, not across rebuilds.
+void SSWorldFieldShapes::beginBuild(LLViewerRegion* regionp)
 {
     if (!regionp) return;
-    LL_RECORD_BLOCK_TIME(FTM_SS_SHAPES_CENSUS);
-    LLTimer build_timer;
-
-    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
-    const F32 env = llclamp((F32)range, 32.f, 1024.f);
-
-    mCensus = Census();
-    mCensus.mRegionHandle = regionp->getHandle();
-    mCensus.mAnchor = LLViewerCamera::getInstance()->getOrigin();
-    mCensus.mBuildTime = mNow;
-    mTriCount = 0;
+    mPending = Census();
+    mPending.mRegionHandle = regionp->getHandle();
+    mPending.mAnchor = LLViewerCamera::getInstance()->getOrigin();
+    mPending.mBuildTime = mNow;
+    mPendingTris = 0;
+    mScanIndex = 0;
+    mBuildMS = 0.f;
+    mCurrentPart = nullptr;
     mDirty = false;
+    mBuilding = true;
 
     // Rest-state seen flags: false going in, set by trackRest during the scan,
-    // and whatever stayed unseen left the envelope or the region - pruned.
+    // and whatever stayed unseen left the envelope or the region - pruned at the swap.
     for (auto& rest : mRest)
     {
         rest.second.mSeen = false;
     }
+}
 
-    const S32 n = gObjectList.getNumObjects();
-    for (S32 i = 0; i < n; ++i)
+// One budgeted slice of the scan. A region switch mid-scan would mix two agent
+// frames, so it abandons the pending snapshot and lets needsRebuild restart.
+void SSWorldFieldShapes::continueBuild(LLViewerRegion* regionp)
+{
+    LL_RECORD_BLOCK_TIME(FTM_SS_SHAPES_CENSUS);
+    if (!regionp || regionp->getHandle() != mPending.mRegionHandle)
     {
-        LLViewerObject* vobj = gObjectList.getObject(i);
-        if (!vobj || vobj->isDead() || vobj->isOrphaned()) continue;
-        // No region filter: the envelope is world-space and owns the census.
-        // Neighbor-region parts and border-straddling geometry belong here -
-        // sim surrounds and landscape assets are exactly the structure the
-        // region-anchored sweep can never see.
-        if (vobj->isAvatar() || vobj->isAttachment()) continue;
-        const U32 pcode = vobj->getPCode();
-        if (pcode == LLViewerObject::LL_VO_WATER || pcode == LLViewerObject::LL_VO_VOID_WATER) continue;
-        if (pcode != LL_PCODE_VOLUME) continue;
-
-        LLVOVolume* vov = (LLVOVolume*)vobj;
-        if (vov->isFlexible() || vov->isRiggedMesh()) continue;
-        if (!vov->getVolume()) continue;
-
-        const LLVector3 pos = vov->getPositionAgent();
-        const LLVector3 scale = vov->getScale();
-        // Half-diagonal reach: a rotated or huge part (a 1 km surround mesh
-        // centred well outside the envelope) must still test against it.
-        const F32 approx = 0.5f * scale.magVec() + 1.f;
-        if ((pos - mCensus.mAnchor).magVec() - approx > env) continue;
-
-        addPart(vov);
+        mPending = Census();
+        mCurrentPart = nullptr;
+        mBuilding = false;
+        prunePartCache();    // an abort must not leave the cache growing across region hops
+        return;
     }
+    static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
+    static LLCachedControl<F32> budget_ms(gSavedSettings, "SSWorldFieldShapesBudgetMS", 3.f);
+    const F32 env = llclamp((F32)range, 32.f, 1024.f);
+    const F32 budget = llclamp((F32)budget_ms, 0.5f, 50.f) * 0.001f;
+    LLTimer slice;
 
+    S32 n = gObjectList.getNumObjects();
+    while (mScanIndex < n)
+    {
+        for (S32 k = 0; k < SS_SHAPES_SCAN_CHUNK && mScanIndex < n; ++k, ++mScanIndex)
+        {
+            LLViewerObject* vobj = gObjectList.getObject(mScanIndex);
+            if (!vobj || vobj->isDead() || vobj->isOrphaned()) continue;
+            // No region filter: the envelope is world-space and owns the census.
+            // Neighbor-region parts and border-straddling geometry belong here -
+            // sim surrounds and landscape assets are exactly the structure the
+            // region-anchored sweep can never see.
+            if (vobj->isAvatar() || vobj->isAttachment()) continue;
+            const U32 pcode = vobj->getPCode();
+            if (pcode == LLViewerObject::LL_VO_WATER || pcode == LLViewerObject::LL_VO_VOID_WATER) continue;
+            if (pcode != LL_PCODE_VOLUME) continue;
+
+            LLVOVolume* vov = (LLVOVolume*)vobj;
+            if (vov->isFlexible() || vov->isRiggedMesh()) continue;
+            if (!vov->getVolume()) continue;
+
+            const LLVector3 pos = vov->getPositionAgent();
+            const LLVector3 scale = vov->getScale();
+            // Half-diagonal reach: a rotated or huge part (a 1 km surround mesh
+            // centred well outside the envelope) must still test against it.
+            const F32 approx = 0.5f * scale.magVec() + 1.f;
+            if ((pos - mPending.mAnchor).magVec() - approx > env) continue;
+
+            addPart(vov);
+        }
+        if (slice.getElapsedTimeF32() >= budget)
+        {
+            mBuildMS += slice.getElapsedTimeF32() * 1000.f;
+            return;
+        }
+        n = gObjectList.getNumObjects();
+    }
+    mBuildMS += slice.getElapsedTimeF32() * 1000.f;
+    finishBuild();
+}
+
+// The swap: prune the rest states and cache entries nothing sighted, publish the
+// pending snapshot as the census - its stamp moves here and only here.
+void SSWorldFieldShapes::finishBuild()
+{
     for (auto it = mRest.begin(); it != mRest.end();)
     {
         if (it->second.mSeen) { ++it; } else { it = mRest.erase(it); }
     }
+    prunePartCache();
+    mCurrentPart = nullptr;
+    mPending.mBuildTime = mNow;
+    mCensus = std::move(mPending);
+    mPending = Census();
+    mTriCount = mPendingTris;
+    mLastBuildMS = mBuildMS;
+    mBuilding = false;
+}
 
-    mLastBuildMS = build_timer.getElapsedTimeF32() * 1000.f;
+// Drop cached parts nothing has sighted within the TTL.
+void SSWorldFieldShapes::prunePartCache()
+{
+    for (auto it = mParts.begin(); it != mParts.end();)
+    {
+        if (mNow - it->second.mSeen > SS_SHAPES_PART_CACHE_TTL) { it = mParts.erase(it); } else { ++it; }
+    }
+}
+
+// Everything that shapes a part's records, hashed: a cache hit means the baked
+// records are still exactly what addPart would produce.
+U64 SSWorldFieldShapes::partSignature(LLVOVolume* vov, const LLVector3& pos, const LLQuaternion& rot, const LLVector3& scale,
+                                      S32 ptype, bool shape_known, bool phantom, bool hidden) const
+{
+    auto fnv = [](U64 h, U64 v) { h ^= v; h *= 1099511628211ull; return h; };
+    auto fnvf = [&](U64 h, F32 f) { return fnv(h, (U64)(S64)llround(f * 1000.f)); };
+    U64 h = 14695981039346656037ull;
+    for (U32 c = 0; c < 3; ++c) { h = fnvf(h, pos.mV[c]); h = fnvf(h, scale.mV[c]); }
+    for (U32 c = 0; c < 4; ++c) h = fnvf(h, rot.mQ[c] * 10.f);
+    const LLVolumeParams& params = vov->getVolume()->getParams();
+    const LLPathParams& path = params.getPathParams();
+    const LLProfileParams& prof = params.getProfileParams();
+    h = fnv(h, path.getCurveType()); h = fnvf(h, path.getBegin()); h = fnvf(h, path.getEnd());
+    h = fnvf(h, path.getScale().mV[0]); h = fnvf(h, path.getScale().mV[1]);
+    h = fnvf(h, path.getShear().mV[0]); h = fnvf(h, path.getShear().mV[1]);
+    h = fnvf(h, path.getTwist()); h = fnvf(h, path.getTwistBegin()); h = fnvf(h, path.getRadiusOffset());
+    h = fnvf(h, path.getTaper().mV[0]); h = fnvf(h, path.getTaper().mV[1]);
+    h = fnvf(h, path.getRevolutions()); h = fnvf(h, path.getSkew());
+    h = fnv(h, prof.getCurveType()); h = fnvf(h, prof.getBegin()); h = fnvf(h, prof.getEnd()); h = fnvf(h, prof.getHollow());
+    const LLUUID& sculpt = params.getSculptID();
+    for (U32 i = 0; i < 4; ++i) h = fnv(h, ((const U32*)sculpt.mData)[i]);
+    h = fnv(h, params.getSculptType());
+    h = fnv(h, (U64)(ptype + 2) | ((U64)shape_known << 8) | ((U64)phantom << 9) | ((U64)hidden << 10) | ((U64)vov->isMesh() << 11));
+    if (vov->isMesh())
+    {
+        // The decomposition state decides hull vs tessellation vs placeholder box; its arrival must miss the cache.
+        LLModel::Decomposition* decomp = gMeshRepo.getDecomposition(sculpt);
+        if (decomp)
+        {
+            h = fnv(h, 1 + (U64)decomp->mHull.size());
+            h = fnv(h, (U64)decomp->mMesh.size());
+            h = fnv(h, (U64)decomp->mPhysicsShapeMesh.mPositions.size());
+            h = fnv(h, (U64)decomp->mBaseHullMesh.mPositions.size());
+        }
+    }
+    return h;
 }
 
 // The DYNAMIC classifier: an object at rest across the settle window reads
@@ -396,6 +497,33 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     // stays a proxy until its data arrives saying NONE.
     const bool hidden = ss_part_fully_hidden(vov);
     if (hidden && (phantom || ptype == LLViewerObject::PHYSICS_SHAPE_NONE)) return;
+
+    // The part cache: reuse the baked records when nothing that shaped them changed.
+    mCurrentPart = nullptr;
+    const U64 sig = partSignature(vov, pos, rot, scale, ptype, shape_known, phantom, hidden);
+    PartCache& part = mParts[vov->getID()];
+    part.mSeen = mNow;
+    if (part.mSig == sig && !part.mRecords.empty())
+    {
+        if (mPendingTris + part.mTris <= SS_SHAPES_TOTAL_TRIS)
+        {
+            for (const Record& cached : part.mRecords)
+            {
+                Record rec = cached;
+                addRecord(rec);
+            }
+            mPendingTris += part.mTris;
+            return;
+        }
+        // Over the triangle budget this pass: build the fallback below without disturbing the valid entry.
+    }
+    else
+    {
+        part.mSig = sig;
+        part.mRecords.clear();
+        part.mTris = 0;
+        mCurrentPart = &part;
+    }
     const U8 layer = hidden ? (U8)LAYER_INVISIBLE_SOLID
                             : (phantom ? (U8)LAYER_DECLARED_PHANTOM : (U8)LAYER_DECLARED);
 
@@ -617,26 +745,28 @@ bool SSWorldFieldShapes::addTriangles(const LLVector3& pos, const LLQuaternion& 
 {
     const size_t verts = local_soup.size() - local_soup.size() % 3;
     if (verts < 3) return false;
-    if (mTriCount + (S32)(verts / 3) > SS_SHAPES_TOTAL_TRIS) return false;
+    if (mPendingTris + (S32)(verts / 3) > SS_SHAPES_TOTAL_TRIS) return false;
 
     Record rec;
     rec.mClass = Record::CLASS_TRI;
-    rec.mTri.resize(verts);
+    std::shared_ptr<std::vector<LLVector3> > soup = std::make_shared<std::vector<LLVector3> >(verts);
     rec.mBMin.setVec(FLT_MAX, FLT_MAX, FLT_MAX);
     rec.mBMax.setVec(-FLT_MAX, -FLT_MAX, -FLT_MAX);
     for (size_t i = 0; i < verts; ++i)
     {
         const LLVector3 w = pos + (local_soup[i].scaledVec(scale) * rot);
-        rec.mTri[i] = w;
+        (*soup)[i] = w;
         for (U32 c = 0; c < 3; ++c)
         {
             rec.mBMin.mV[c] = llmin(rec.mBMin.mV[c], w.mV[c]);
             rec.mBMax.mV[c] = llmax(rec.mBMax.mV[c], w.mV[c]);
         }
     }
+    rec.mTri = soup;
     rec.mLayer = layer;
     rec.mProv = prov;
-    mTriCount += (S32)(verts / 3);
+    mPendingTris += (S32)(verts / 3);
+    if (mCurrentPart) mCurrentPart->mTris += (S32)(verts / 3);
     addRecord(rec);
     return true;
 }
@@ -655,16 +785,17 @@ void SSWorldFieldShapes::addRecord(Record& rec)
     if (y1 - y0 > 512) y1 = y0 + 512;
     if (z1 - z0 > 512) z1 = z0 + 512;
 
-    const U32 index = (U32)mCensus.mRecords.size();
+    const U32 index = (U32)mPending.mRecords.size();
     rec.mDynamic = mBuildDynamic;
-    mCensus.mRecords.push_back(rec);
+    if (mCurrentPart) mCurrentPart->mRecords.push_back(rec);
+    mPending.mRecords.push_back(rec);
     for (S32 z = z0; z <= z1; ++z)
     {
         for (S32 y = y0; y <= y1; ++y)
         {
             for (S32 x = x0; x <= x1; ++x)
             {
-                mCensus.mBuckets[ss_bucket_key(x, y, z)].push_back(index);
+                mPending.mBuckets[ss_bucket_key(x, y, z)].push_back(index);
             }
         }
     }
@@ -688,7 +819,8 @@ bool SSWorldFieldShapes::segmentCast(const LLVector3& a, const LLVector3& b, Seg
         regionp = LLWorld::getInstance()->getRegionFromHandle(mCensus.mRegionHandle);
     }
     if (!regionp) return false;
-    if (needsRebuild(regionp)) buildCensus(regionp);
+    // <SS:Nexii> A stale census never rebuilds inside a query any more (that was a 700 ms stall on a soundscape probe): it only opens the sliced build, and the cast answers from the resident snapshot. [interaction: SSWorldFieldShapesBudgetMS]
+    if (!mBuilding && needsRebuild(regionp)) beginBuild(regionp);
     if (mCensus.mRegionHandle != regionp->getHandle())
     {
         static LLCachedControl<F32> range(gSavedSettings, "SSWorldFieldShapesRange", 192.f);
@@ -909,10 +1041,11 @@ bool SSWorldFieldShapes::castRecord(const Record& rec, const LLVector3& a, const
         }
         case Record::CLASS_TRI:
         {
-            const size_t nt = rec.mTri.size() / 3;
+            const std::vector<LLVector3>& tri = rec.tris();
+            const size_t nt = tri.size() / 3;
             for (size_t k = 0; k < nt; ++k)
             {
-                if (ss_ray_tri(rec.mTri[k * 3], rec.mTri[k * 3 + 1], rec.mTri[k * 3 + 2],
+                if (ss_ray_tri(tri[k * 3], tri[k * 3 + 1], tri[k * 3 + 2],
                                a, dirn, t_min, t_max, out_t, out_n))
                 {
                     return true;
@@ -1026,7 +1159,8 @@ bool SSWorldFieldShapes::wallProfile(const LLVector3& pos, F32 range_m, F32 out[
 
 bool SSWorldFieldShapes::censusCurrent() const
 {
-    return mCensus.mRegionHandle != 0 && (mNow - mCensus.mBuildTime) <= SS_SHAPES_MAX_AGE;
+    // A census being refreshed stays current for a bounded grace: the pending one replaces it whole within a few frames.
+    return mCensus.mRegionHandle != 0 && (mNow - mCensus.mBuildTime) <= SS_SHAPES_MAX_AGE + (mBuilding ? SS_SHAPES_MAX_AGE : 0.0);
 }
 
 // Records overlapping a world-space box, unfiltered - the tiles raster and
@@ -1139,14 +1273,15 @@ void SSWorldFieldShapes::renderDebug()
         {
             // The actual physics-detail soup - an AABB would hide tapered
             // edges behind a box. Overlay-capped so dense soups stay cheap.
-            const size_t nt = rec.mTri.size() / 3;
+            const std::vector<LLVector3>& tri = rec.tris();
+            const size_t nt = tri.size() / 3;
             if (nt <= SS_SHAPES_DEBUG_TRIS)
             {
                 for (size_t k = 0; k < nt; ++k)
                 {
-                    gGL.vertex3fv(rec.mTri[k * 3].mV);     gGL.vertex3fv(rec.mTri[k * 3 + 1].mV);
-                    gGL.vertex3fv(rec.mTri[k * 3 + 1].mV); gGL.vertex3fv(rec.mTri[k * 3 + 2].mV);
-                    gGL.vertex3fv(rec.mTri[k * 3 + 2].mV); gGL.vertex3fv(rec.mTri[k * 3].mV);
+                    gGL.vertex3fv(tri[k * 3].mV);     gGL.vertex3fv(tri[k * 3 + 1].mV);
+                    gGL.vertex3fv(tri[k * 3 + 1].mV); gGL.vertex3fv(tri[k * 3 + 2].mV);
+                    gGL.vertex3fv(tri[k * 3 + 2].mV); gGL.vertex3fv(tri[k * 3].mV);
                 }
             }
             else

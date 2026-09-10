@@ -45,6 +45,7 @@
 #include "v3math.h"
 
 #include <functional>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -123,7 +124,9 @@ public:
         F32 mRadius = 0.f;          // CYLINDER
         F32 mHalfHeight = 0.f;      // CYLINDER
 
-        std::vector<LLVector3> mTri;    // CLASS_TRI: world-space soup
+        // <SS:Nexii> CLASS_TRI: world-space soup, shared with the part cache so a rebuild that reuses a part copies a pointer, not two million vertices. Read through tris().
+        std::shared_ptr<const std::vector<LLVector3> > mTri;
+        const std::vector<LLVector3>& tris() const { static const std::vector<LLVector3> empty; return mTri ? *mTri : empty; }
 
         LLVector3 mBMin, mBMax;         // world AABB
         U8 mLayer = LAYER_DECLARED;
@@ -146,6 +149,8 @@ public:
 
     // Stats
     bool censusCurrent() const;
+    bool building() const { return mBuilding; }
+    S32 cachedPartCount() const { return (S32)mParts.size(); }
     S32 recordCount() const { return (S32)mCensus.mRecords.size(); }
     S32 triangleCount() const { return mTriCount; }
     F32 lastBuildMS() const { return mLastBuildMS; }
@@ -168,7 +173,12 @@ private:
     };
 
     bool needsRebuild(LLViewerRegion* regionp) const;
-    void buildCensus(LLViewerRegion* regionp);
+    void beginBuild(LLViewerRegion* regionp);
+    void continueBuild(LLViewerRegion* regionp);
+    void finishBuild();
+    void prunePartCache();
+    U64 partSignature(class LLVOVolume* vov, const LLVector3& pos, const LLQuaternion& rot, const LLVector3& scale,
+                      S32 ptype, bool shape_known, bool phantom, bool hidden) const;
     void addPart(class LLVOVolume* vov);
     void trackRest(const class LLViewerObject* rootp, bool& out_dynamic);
     void addOBB(const LLVector3& center, const LLQuaternion& rot, const LLVector3& half, U8 layer, U8 prov);
@@ -203,6 +213,22 @@ private:
     };
     std::unordered_map<LLUUID, RestState> mRest;
     bool mBuildDynamic = false;     // the part being filed rides its root's rest state
+
+    // <SS:Nexii> The part cache and the time-sliced build. A rebuild used to re-tessellate every part in the envelope on one frame (700 ms spikes on dense builds); now every part's baked records live here under a signature of everything that shaped them (transform, volume params, physics type, phantom, hidden, mesh decomposition state), a rebuild reuses any part whose signature holds, and the scan itself fills mPending over frames under SSWorldFieldShapesBudgetMS and swaps in whole - consumers read the previous census meanwhile. [interaction: navmesh schedule keys off censusStamp, which only moves at the swap]
+    struct PartCache
+    {
+        U64 mSig = 0;
+        std::vector<Record> mRecords;
+        S32 mTris = 0;
+        F64 mSeen = 0.0;
+    };
+    std::unordered_map<LLUUID, PartCache> mParts;
+    PartCache* mCurrentPart = nullptr;
+    Census mPending;
+    bool mBuilding = false;
+    S32 mScanIndex = 0;
+    S32 mPendingTris = 0;
+    F32 mBuildMS = 0.f;
 
     F64 mNow = 0.0;
     F32 mLastBuildMS = 0.f;

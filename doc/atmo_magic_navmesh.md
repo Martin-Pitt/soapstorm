@@ -245,3 +245,25 @@ Not yet done, in order: the first build (owner), a floater/info-view stat line, 
 flood/coverage span read off the heightfield (the SHELTERED/INTERIOR consumer), agent
 classes and door portals (§8), and retiring the column+spans store once its soundscape
 readers have navmesh-side replacements.
+
+## 12. Census cost (2026-09-10)
+
+First build in the viewer showed `FTM_SS_SHAPES_CENSUS` spiking to 700 ms: the census rebuilt
+whole on one frame every 8 to 10 s (age trigger, 48 m anchor drift, dirty sphere) and again
+lazily inside any query that found it stale, re-tessellating and re-baking every part each
+time. Two changes in `ssworldfieldshapes.cpp`:
+
+- **Part cache.** Every part's baked records are kept under a signature of everything that
+  shaped them (transform, volume parameters, physics type, phantom, hidden, mesh
+  decomposition state). A rebuild reuses any part whose signature holds and only
+  re-tessellates what changed. Triangle soups are shared pointers, so reuse copies a pointer.
+  Entries expire 60 s after their last sighting.
+- **Time-sliced build.** The scan fills a pending census under `SSWorldFieldShapesBudgetMS`
+  (3 ms) per frame and swaps it in whole; readers use the previous snapshot meanwhile and
+  the census stamp moves only at the swap, so the navmesh schedules once per completed
+  build. A region switch mid-scan abandons the pending snapshot. Queries no longer rebuild
+  inline; a stale census only opens the sliced build.
+
+The navmesh's own scheduling no longer samples the land at every metre of every column per
+census (268k lookups); it samples every 4 m to detect change and the band build still uses
+the full grid.

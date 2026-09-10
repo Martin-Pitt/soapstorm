@@ -71,6 +71,7 @@ static constexpr S32 SS_NAV_MERGE_REGION_CELLS = 20;
 static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 8;
 static constexpr S32 SS_NAV_TERRAIN_NODES = 37;     // 1 m grid over the bordered column: 32 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
+static constexpr S32 SS_NAV_TERRAIN_SCHEDULE_STEP = 4;  // metres between scheduling samples of the land
 static constexpr S32 SS_NAV_MAX_TILES = 4096;
 static constexpr S32 SS_NAV_MAX_OBSTACLES = 512;
 static constexpr S32 SS_NAV_OBSTACLE_REQUESTS_PER_FRAME = 48;   // under dtTileCache's 64-request queue, drained once per update
@@ -198,8 +199,9 @@ namespace
             case SSWorldFieldShapes::Record::CLASS_SPHERE: emitEllipsoid(r, off, out); break;
             case SSWorldFieldShapes::Record::CLASS_TRI:
             {
-                const size_t nt = r.mTri.size() / 3;
-                for (size_t k = 0; k < nt; ++k) out.tri(r.mTri[k * 3] + off, r.mTri[k * 3 + 1] + off, r.mTri[k * 3 + 2] + off);
+                const std::vector<LLVector3>& tri = r.tris();
+                const size_t nt = tri.size() / 3;
+                for (size_t k = 0; k < nt; ++k) out.tri(tri[k * 3] + off, tri[k * 3 + 1] + off, tri[k * 3 + 2] + off);
                 break;
             }
         }
@@ -512,21 +514,24 @@ void SSNavMesh::schedule()
         if ((S64)(x1 - x0 + 1) * (y1 - y0 + 1) > 256) return;    // a kilometre-scale surround is not navigable structure
         U64 sig = 1469598103934665603ull;
         for (U32 c = 0; c < 3; ++c) { sig = fnvF(sig, lo.mV[c]); sig = fnvF(sig, hi.mV[c]); }
-        sig = fnv(sig, (U64)rec.mClass | ((U64)rec.mProv << 8) | ((U64)rec.mTri.size() << 16));
+        sig = fnv(sig, (U64)rec.mClass | ((U64)rec.mProv << 8) | ((U64)rec.tris().size() << 16));
         for (S32 y = y0; y <= y1; ++y) for (S32 x = x0; x <= x1; ++x)
         {
             columns[columnKey(x, y)].push_back(Interval{lo.mV[VZ], hi.mV[VZ], sig});
         }
     });
 
-    // Terrain: every column in the envelope carries its land interval, hashed from the sampled heights.
-    std::vector<F32> heights((size_t)SS_NAV_TERRAIN_NODES * SS_NAV_TERRAIN_NODES);
+    // Terrain: every column in the envelope carries its land interval, hashed from a coarse sample (the build
+    // samples the full metre grid; scheduling only needs to notice change, and 268k land lookups per census did not).
     for (S32 y = cy0; y <= cy1; ++y) for (S32 x = cx0; x <= cx1; ++x)
     {
         F32 lo = FLT_MAX, hi = -FLT_MAX;
         U64 sig = 14695981039346656037ull;
         bool any = false;
-        for (S32 gy = 0; gy < SS_NAV_TERRAIN_NODES; ++gy) for (S32 gx = 0; gx < SS_NAV_TERRAIN_NODES; ++gx)
+        // The coarse grid shifts by a metre per schedule, so every land node is sampled within four censuses and a
+        // small edit between samples cannot stay invisible.
+        const S32 phase = (S32)(mScheduleCount % (U32)SS_NAV_TERRAIN_SCHEDULE_STEP);
+        for (S32 gy = phase; gy < SS_NAV_TERRAIN_NODES; gy += SS_NAV_TERRAIN_SCHEDULE_STEP) for (S32 gx = phase; gx < SS_NAV_TERRAIN_NODES; gx += SS_NAV_TERRAIN_SCHEDULE_STEP)
         {
             F32 z;
             if (!terrainZLocal((F32)x * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gx, (F32)y * TILE_M - SS_NAV_TERRAIN_MARGIN_M + (F32)gy, z)) continue;
@@ -537,6 +542,7 @@ void SSNavMesh::schedule()
         if (any) columns[columnKey(x, y)].push_back(Interval{lo, hi, sig});
     }
 
+    ++mScheduleCount;
     for (auto& kv : mBands) kv.second.mAlive = false;
     mWorklist.clear();
     std::unordered_map<U64, S32> new_columns;

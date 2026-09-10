@@ -679,6 +679,7 @@ default
                 // <SS:Nexii> Fetch notecard contents. This is a synchronous operation, so it will block the script until the notecard is fully loaded or a timeout occurs.
                 llResetTime();
                 string notecardUUID = llList2String(commandList, 1);
+                llGetNotecardLine(notecardUUID, 0); // Queue sim to download it
                 string notecard;
                 integer line = 0;
                 do
