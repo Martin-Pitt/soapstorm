@@ -7,7 +7,7 @@
 //
 
 // Bridge platform
-string BRIDGE_VERSION = "2.34"; // This should match fslslbridge.cpp
+string BRIDGE_VERSION = "2.35"; // This should match fslslbridge.cpp
 string gLatestURL;
 integer gViewerIsFirestorm;
 integer gTryHandshakeOnce = TRUE;
@@ -709,7 +709,7 @@ default
                             llHTTPResponse(httpReqID, 200, "<llsd><string>" + notecard + "</string></llsd>");
                         }
                         
-                        notecard = "";
+                        return; // <SS:Nexii> reply sent - leave at once, never fall out of the loop unresponded
                     }
 
                     else
@@ -718,9 +718,7 @@ default
                         ++line;
                     }
                 }
-                while(notecard);
-                
-                return;
+                while(TRUE); // <SS:Nexii> a leading NAK (cold asset) left notecard empty, so while(notecard) exited silently with no reply at all
             }
 
             else if (cmd == "RelockMoveLockAfterMovement")

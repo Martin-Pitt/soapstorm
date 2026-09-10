@@ -252,8 +252,15 @@ void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id, bool force)
     if (!cached.empty())
     {
         mDeferredAssetId.setNull();
-        applyText(asset_id, cached, force);
-        return;
+        // <SS:Nexii> An editor-open refusal stops here; a REJECTED cached body is poison (e.g. an old
+        // Bridge's "ok" ack cached before validation) - drop it and fetch afresh so it can self-heal.
+        if ((!force && editorIsOpen()) || applyText(asset_id, cached, force))
+        {
+            return;
+        }
+        LL_WARNS("AtmoMagicEnv") << "Cached Atmo v3 body for " << asset_id
+                                 << " is invalid; discarding it and re-fetching" << LL_ENDL;
+        LLFileSystem::removeFile(asset_id, LLAssetType::AT_NOTECARD);
     }
 
     if (!FSLSLBridge::instanceExists() || !FSLSLBridge::instance().canUseBridge())
@@ -278,7 +285,7 @@ void SSAtmoEnvDiscoveryManager::requestFetch(const LLUUID& asset_id, bool force)
         [this, asset_id, force](const LLSD& data) { onFetchResult(asset_id, data, force); });
 }
 
-// Bridge reply: cache and apply the fetched notecard text, ignoring stale replies.
+// Bridge reply: apply the fetched notecard text and cache it only once it applied; ignores stale replies.
 void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD& data, bool force)
 {
     if (asset_id != mPendingAssetId) return;
@@ -304,9 +311,11 @@ void SSAtmoEnvDiscoveryManager::onFetchResult(const LLUUID& asset_id, const LLSD
         text = content.asString();
     }
 
-    cacheNotecardBody(asset_id, text);
-
-    applyText(asset_id, text, force);
+    // <SS:Nexii> Cache only what actually applied - a Bridge ack or error reply must never poison the fetch cache.
+    if (applyText(asset_id, text, force))
+    {
+        cacheNotecardBody(asset_id, text);
+    }
 }
 
 // The editor owns the environment while visible - discovery must not stomp an edit in progress.
