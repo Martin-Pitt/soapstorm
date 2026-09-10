@@ -740,7 +740,8 @@ static bool buildPolyDetail(rcContext* ctx, const float* in, const int nin,
 				pos[0] = vj[0] + dx*u;
 				pos[1] = vj[1] + dy*u;
 				pos[2] = vj[2] + dz*u;
-				pos[1] = getHeight(pos[0],pos[1],pos[2], cs, ics, chf.ch, heightSearchRadius, hp)*chf.ch;
+				const unsigned short eh = getHeight(pos[0],pos[1],pos[2], cs, ics, chf.ch, heightSearchRadius, hp);
+				if (eh != RC_UNSET_HEIGHT) pos[1] = eh*chf.ch;	// <SS:Nexii> ALTERED FROM UPSTREAM: an unreachable sample keeps the interpolated edge height; upstream stored 0xffff cells, a vertex 8 km up that drew as a wall to the sky. [interaction: SSNavMeshProcess::detail]
 			}
 			// Simplify samples.
 			int idx[MAX_VERTS_PER_EDGE] = {0,nn};
@@ -848,8 +849,10 @@ static bool buildPolyDetail(rcContext* ctx, const float* in, const int nin,
 				pt[2] = z*sampleDist;
 				// Make sure the samples are not too close to the edges.
 				if (distToPoly(nin,in,pt) > -sampleDist/2) continue;
+				const unsigned short sh = getHeight(pt[0], pt[1], pt[2], cs, ics, chf.ch, heightSearchRadius, hp);
+				if (sh == RC_UNSET_HEIGHT) continue;	// <SS:Nexii> ALTERED FROM UPSTREAM: no height under this sample, so it adds no vertex; upstream pushed 0xffff cells
 				samples.push_back(x);
-				samples.push_back(getHeight(pt[0], pt[1], pt[2], cs, ics, chf.ch, heightSearchRadius, hp));
+				samples.push_back(sh);
 				samples.push_back(z);
 				samples.push_back(0); // Not added
 			}

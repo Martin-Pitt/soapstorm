@@ -71,7 +71,7 @@ static LLTrace::BlockTimerStatHandle FTM_SS_NAVMESH_PUBLISH("SS NavMesh Publish"
 // parameters are settings; the rest is fixed until a second agent class exists.
 static constexpr F32 SS_NAV_MAX_SIMPLIFICATION_ERROR = 1.3f;
 static constexpr F32 SS_NAV_MIN_ISLAND_M = 2.f;        // <SS:Nexii> walkable islands smaller than this square are culled per layer before compression. The tile-cache path never reads rcConfig's minRegionArea/mergeRegionArea/maxEdgeLen (dtBuildTileCacheRegions does its own monotone partition and largest-neighbour merge, dtBuildTileCacheContours takes only maxError), so the sliver cull Recast's classic path gives for free is done here on the rcHeightfieldLayer instead. Islands touching the layer's edge or a layer portal are kept: the neighbour tile, or another layer of this one, may carry the rest of that surface, and culling one side would open a seam. [interaction: seams]
-static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 16;      // walkable layers a band may publish; a tall building has a floor per storey
+static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 21;      // walkable layers a band may publish; 12 bands x 21 keeps the tile cache's byte-sized layer index under 256, and the largest surfaces win when a band has more
 static constexpr S32 SS_NAV_TERRAIN_NODES = 21;     // 1 m grid over the bordered column: 16 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
 static constexpr S32 SS_NAV_MAX_TILES = 32768;             // 64-bit poly refs (DT_POLYREF64): the tile budget is memory, not id bits; 16 m columns over 512 m need it
@@ -106,11 +106,24 @@ namespace
         }
     };
 
+    // <SS:Nexii> Recast's own errors and warnings, collected per build: a band whose rcBuildHeightfieldLayers overflowed used to come back as a silent "0 tiles". publish prints the worker's log with the band's coordinates; the detail pass prints its own. [interaction: publish]
+    struct SSNavContext : public rcContext
+    {
+        std::string mLog;
+        SSNavContext() : rcContext(true) {}
+        void doLog(const rcLogCategory category, const char* msg, const int len) override
+        {
+            if (category == RC_LOG_PROGRESS || mLog.size() > 512) return;
+            if (!mLog.empty()) mLog += " | ";
+            mLog.append(msg, (size_t)llmax(len, 0));
+        }
+    };
+
     // Every polygon walkable, one area: agent classes and door portals are later plumbing.
     // <SS:Nexii> The height detail the tile cache path leaves out: Detour reads a polygon's height off its plane unless the tile carries a detail mesh, so a hexagon merged across a hill crest floated a metre over the land. The layer the tile is built from still holds every cell's height, so it is dressed as a one-span-per-cell compact heightfield and the polygons as an rcPolyMesh, and Recast's own rcBuildPolyMeshDetail samples each polygon and adds vertices where the surface leaves the plane by more than SS_NAV_DETAIL_ERROR_M. Runs on the main thread inside the tile build; the console's publish figure is what it costs. [interaction: dtTileCacheMeshProcess::detail, renderDebug]
     struct SSNavMeshProcess : public dtTileCacheMeshProcess
     {
-        rcContext mCtx{false};
+        SSNavContext mCtx;
         rcPolyMeshDetail* mDetail = nullptr;
         ~SSNavMeshProcess() override { rcFreePolyMeshDetail(mDetail); }
 
@@ -195,6 +208,7 @@ namespace
                 params->detailTris = mDetail->tris;
                 params->detailTriCount = mDetail->ntris;
             }
+            if (!mCtx.mLog.empty()) { LL_WARNS("SSNavMesh") << "detail mesh: " << mCtx.mLog << LL_ENDL; mCtx.mLog.clear(); }
             rcFreePolyMesh(pm);
             rcFreeCompactHeightfield(chf);
         }
@@ -604,10 +618,9 @@ namespace
     }
 
     // The worker: one band through Recast to compressed tile cache layers; out_dropped counts layers past the per-band cap.
-    void buildBand(const SSNavBuildInput& in, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped, SSNavMesh::SpanSheet* out_sheet)
+    void buildBand(const SSNavBuildInput& in, SSNavContext& ctx, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped, SSNavMesh::SpanSheet* out_sheet)
     {
         out_dropped = 0;
-        rcContext ctx(false);
         rcConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.cs = SSNavMesh::CELL;
@@ -671,16 +684,28 @@ namespace
         {
             if (lset->nlayers > SS_NAV_MAX_LAYERS_PER_BAND) out_dropped = lset->nlayers - SS_NAV_MAX_LAYERS_PER_BAND;
             std::vector<S32> flood_stack;
-            for (int i = 0; i < lset->nlayers && i < SS_NAV_MAX_LAYERS_PER_BAND; ++i)
+            // <SS:Nexii> Over the cap, the layers with the most walkable cells publish: rcBuildHeightfieldLayers numbers layers in sweep order, so taking the first N dropped whole floors while keeping ledges. [interaction: SS_NAV_MAX_LAYERS_PER_BAND]
+            std::vector<std::pair<S32, S32> > order;      // (-walkable cells, layer index)
+            for (int i = 0; i < lset->nlayers; ++i)
             {
                 rcHeightfieldLayer* layer = &lset->layers[i];
                 cullLayerIslands(*layer, min_island_area, flood_stack);
+                S32 cells = 0;
+                for (S32 c = 0; c < layer->width * layer->height; ++c) if (layer->areas[c] != RC_NULL_AREA) ++cells;
+                order.emplace_back(-cells, i);
+            }
+            std::sort(order.begin(), order.end());
+            for (int k = 0; k < lset->nlayers && k < SS_NAV_MAX_LAYERS_PER_BAND; ++k)
+            {
+                if (order[k].first == 0) continue;               // every cell culled: nothing to publish
+                const int i = order[k].second;
+                rcHeightfieldLayer* layer = &lset->layers[i];
                 dtTileCacheLayerHeader header;
                 header.magic = DT_TILECACHE_MAGIC;
                 header.version = DT_TILECACHE_VERSION;
                 header.tx = in.mTx;
                 header.ty = in.mTyDetour;
-                header.tlayer = in.mBand * SS_NAV_MAX_LAYERS_PER_BAND + i;
+                header.tlayer = in.mBand * SS_NAV_MAX_LAYERS_PER_BAND + k;
                 dtVcopy(header.bmin, layer->bmin);
                 dtVcopy(header.bmax, layer->bmax);
                 header.width = (unsigned char)layer->width;
@@ -1306,7 +1331,9 @@ void SSNavMesh::launch(const Job& job)
             r->mGeneration = generation;
             LLTimer t;
             if (in->mWantSheet) r->mSheet = std::make_shared<SSNavMesh::SpanSheet>();
-            buildBand(*in, impl->mCompressor, r->mLayers, r->mLayersDropped, r->mSheet.get());
+            SSNavContext ctx;
+            buildBand(*in, ctx, impl->mCompressor, r->mLayers, r->mLayersDropped, r->mSheet.get());
+            r->mLog = ctx.mLog;
             r->mMS = t.getElapsedTimeF32() * 1000.f;
             r->mOk = true;
             return r;
@@ -1365,6 +1392,10 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
     mTileCache->buildNavMeshTilesAt(job.mTx, -job.mTy - 1, mNavMesh);
     mLastPublishMS = publish_timer.getElapsedTimeF32() * 1000.f;
     if (result->mSheet) feedWorldField(job.mTx, job.mTy, job.mZMin, job.mZMax, result->mSheet.get());
+    if (!result->mLog.empty())
+    {
+        LL_WARNS("SSNavMesh") << "Band " << job.mTx << "," << job.mTy << " b" << job.mBand << " (z " << job.mZMin << ".." << job.mZMax << ") Recast: " << result->mLog << LL_ENDL;
+    }
     band.mLayersDropped = result->mLayersDropped;
     mLayersDropped += (U32)result->mLayersDropped;
     if (result->mLayersDropped > 0 && result->mLayersDropped != dropped_before)    // a stairwell rebuilds often; say it when the count changes, not per publish

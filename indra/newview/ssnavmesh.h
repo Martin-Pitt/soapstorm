@@ -61,7 +61,7 @@ public:
     static constexpr F32 TILE_M = 16.f;         // column edge in metres
     static constexpr S32 TILE_CELLS = 128;      // cells per column edge
     static constexpr F32 CELL = 0.125f;
-    static constexpr S32 MAX_BANDS = 12;        // height bands per column; with 16 layers each the Detour layer index stays under 256
+    static constexpr S32 MAX_BANDS = 12;        // height bands per column; with 21 layers each the Detour layer index stays under 256 (12 x 21 = 252)
 
     // Per-frame maintenance: follow census rebuilds, schedule changed bands,
     // launch worker builds under the frame budget, publish finished layers,
@@ -164,6 +164,7 @@ private:
         std::shared_ptr<SpanSheet> mSheet;  // the world field's span read, when it wants one
         F32 mMS = 0.f;
         bool mOk = false;
+        std::string mLog;                   // Recast errors and warnings from the build; empty when clean
     };
 
     bool ensureInit();
