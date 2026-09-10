@@ -327,6 +327,12 @@ bool FSLSLBridge::lslToViewer(std::string_view message, const LLUUID& fromID, co
     //<FS:TS> FIRE-962: Script controls for built-in AO
     if (fromID != mBridgeUUID || !bridgeIsEnabled)
     {
+        // <SS:Nexii> a stale duplicate bridge (login re-attach race) keeps gKillFeedOn and forwards events; swallow bridge-shaped replies from non-bridge senders so they never leak into chat
+        if (tag.substr(0, 7) == "<bridge" || tag == "<clientAO ")
+        {
+            LL_WARNS("FSLSLBridge") << "Ignoring bridge message from " << fromID << ", current bridge is " << mBridgeUUID << LL_ENDL;
+            return true;
+        }
         return false;       // ignore if not from the bridge, or bridge is disabled
     }
     if (tag == "<clientAO ")
