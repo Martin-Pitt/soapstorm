@@ -221,7 +221,9 @@ builds run on the worker queue.
 needs `SSWorldFieldShapes`):
 
 - Vendored `indra/recastnavigation` (Recast, Detour, DetourTileCache; zlib licence; upstream
-  9f4ce644, 2026-02-27) as a static library target linked by newview.
+  9f4ce644, 2026-02-27) as a static library target linked by newview. The licence notice is in
+  `indra/newview/licenses-{win32,mac,linux}.txt` (Help > About > Licenses) and the one altered file
+  is marked in the source, as the zlib licence requires.
 - Ticks after the census in `llviewerdisplay.cpp`. On every census stamp change it schedules:
   records nominate columns and z-intervals, terrain adds a sampled 37×37 interval per column,
   bands are merged, and a band is rebuilt only when its geometry signature (hashed AABBs,
