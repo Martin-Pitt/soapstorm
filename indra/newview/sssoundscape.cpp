@@ -676,7 +676,7 @@ void SSSoundscape::applyLoop(Loop& loop, const std::string& configured, F32 mast
 
         if (sequence)
         {
-            gAudiop->preloadSound(loop.mSounds[(loop.mIndex + 1) % (U32)loop.mSounds.size()]);
+            SSSoundMeta::getInstance()->fetch(loop.mSounds[(loop.mIndex + 1) % (U32)loop.mSounds.size()]);
         }
     }
 
@@ -1193,7 +1193,7 @@ void SSSoundscape::queueThunder(const LLUUID& sound, const LLVector3& pos_agent,
 {
     if (sound.isNull() || gain <= 0.f) return;
 
-    gAudiop->preloadSound(sound);
+    SSSoundMeta::getInstance()->fetch(sound);
 
     PendingThunder pending;
     pending.mPos = pos_agent;
@@ -1535,7 +1535,7 @@ void SSSoundscape::updateFootstepLoop(const LLUUID& avatar_id, const LLVector3& 
         source->setOcclusion(0.f);
         gAudiop->addAudioSource(source);
         source->play(sound);
-        gAudiop->preloadSound(sound);
+        SSSoundMeta::getInstance()->fetch(sound);
         markStepSource(loop.mSourceID);
     }
 

@@ -26,11 +26,14 @@
 
 #include "llsingleton.h"
 #include "lluuid.h"
+#include "llassettype.h"
+#include "llextendedstatus.h"
 
 #include <condition_variable>
 #include <deque>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 #include <vector>
 
@@ -72,6 +75,9 @@ public:
 
     void idle();
 
+    // <SS:Nexii> Fetches a sound from the asset server when the cache lacks it, then queues the decode. Stock preloadSound only decodes what is already on disk - the engine fetches solely for live audio sources - so Atmo's own ambience config would otherwise sit unready until something played it.
+    void fetch(const LLUUID& id);
+
     S32 readyCount();
     S32 pendingCount();
 
@@ -82,6 +88,7 @@ private:
     void addList(const std::string& csv, const std::string& source, U32 purpose);
     void pump();
     void startWorkers();
+    static void onAssetFetched(const LLUUID& id, LLAssetType::EType type, void* user_data, S32 status, LLExtStat ext_status);
     static Meta analyze(const std::vector<S16>& pcm, S32 channels, F32 rate, U32 purpose);
 
 public:
@@ -91,6 +98,7 @@ private:
     {
         EState mState = PENDING;
         F64 mFirstTried = -1.0;
+        bool mFetchIssued = false;
         std::string mSource;
         U32 mPurpose = 0;
         Meta mMeta;
@@ -124,6 +132,7 @@ private:
 
     std::map<LLUUID, Entry> mEntries;
     std::vector<SlotInfo> mSlots;
+    std::set<LLUUID> mFetching;
     F64 mLastGather = -1.0;
 
     std::vector<std::thread> mWorkers;

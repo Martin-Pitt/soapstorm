@@ -573,7 +573,7 @@ LLUUID SSSoundAnalysisView::startSource(const LLUUID& sound, F32 gain, bool loop
     source->setPositionGlobal(gAgent.getPosGlobalFromAgent(LLViewerCamera::getInstance()->getOrigin()));
     gAudiop->addAudioSource(source);
     source->play(sound);
-    gAudiop->preloadSound(sound);
+    SSSoundMeta::getInstance()->fetch(sound);
     return id;
 }
 
