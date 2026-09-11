@@ -38,6 +38,17 @@
 > rather than 4, `SSNavMesh`/`SSWorldFieldShapes` default on, and the classification's
 > scratch is down from 130 MB to a measured 24.7 MB with the walk 183 ms to 150 ms.
 >
+> **Second review round, same day.** The re-review confirmed those landed and found
+> three defects the fix round itself introduced, all now fixed. The survey mask made an
+> unsurveyed neighbour block the reachability walk, which is right, but then labelled
+> what it sealed off INTERIOR, which is the original bug with its sign flipped - a
+> doubt flood now marks those pockets UNKNOWN and the field claims INTERIOR only where
+> it has seen the walls. The budget was carried in decimetres, and `toDm(0.25)` is 3,
+> so the shipping cell spent 0.3 m per 0.25 m of travel: reach was 17% short and
+> distances 20% long. It is counted in whole cell steps now. And the acoustic bake
+> never received the mask, so the anchor spiral could land on unsurveyed void and
+> fabricate a probe with saturated walls and a long RT60.
+>
 > This document supersedes the capture-service design of 2026-09-01, which is kept
 > below under **Archive** because two of its verdicts (Design F, physics-sweep
 > capture; Design H, analytic edge refinement) are still live decisions, and the
@@ -146,10 +157,27 @@ confident, it is wrong, and it suppresses every consumer's raycast fallback for
 geometry nobody has ever looked at.
 
 So `buildGrid` also returns a **survey mask**, one byte per cell, set where any sheet
-covered it. `classify` labels every gap of an unsurveyed cell `AIR_UNKNOWN`, and such
-a cell neither seeds the flood nor blocks it. `surfaceTop` and `coverageDetail` return
-false there; `buildSurfaceGrid` drops through to its heightmap fallback; `traceSolid`
-returns false when the DDA crossed one (`SSAcoustic::Trace::mUnsurveyed`).
+covered it. `classify` labels every gap of an unsurveyed cell `AIR_UNKNOWN`.
+`surfaceTop` and `coverageDetail` return false there; `buildSurfaceGrid` drops through
+to its heightmap fallback; `traceSolid` returns false when the DDA crossed one
+(`SSAcoustic::Trace::mUnsurveyed`); the acoustic bake refuses to anchor a probe on one
+and its wall rays stop at the boundary rather than running to the 64 m reach cap over
+geometry nobody has seen.
+
+An unsurveyed cell also **blocks** the walk — walking through it would be walking
+through geometry nobody has looked at. That has a consequence which is easy to get
+wrong, and which the first attempt did get wrong: **what the blocking seals off is not
+proven interior, only unproven.** A porch or an awning whose only route to open air
+crosses the survey boundary is never reached by the flood, and calling that INTERIOR is
+the original bug with its sign flipped — a confident wrong answer, taken by every
+consumer, that reads as sealed-room ambience, `enclosureAt` of 1, and a killed sky
+veil, on the fringe of every partially surveyed region.
+
+So step 4 runs a **doubt flood**: every unreached gap in a column that borders an
+unsurveyed one is UNKNOWN, and the doubt floods through the rest of that unreached
+pocket. A pocket that touches no unsurveyed column is sealed by *real geometry* and
+stays INTERIOR. `gap_label` doubles as the visited mark, so this costs no extra plane.
+The rule in one line: **the field says INTERIOR only when it has seen the walls.**
 
 This is not a corner case. Three routes reach it in ordinary use:
 
@@ -198,6 +226,17 @@ budget(next)   = min(budget(cur), capacity(next) * SHELTER_MULT) - cell_m
 the same geometry as `theta` and the two should not be tunable apart. It shipped at 4
 for a day; the owner's verdict on 2026-09-11 was that 4 made a 20 m-ceilinged
 warehouse read about 80 m sheltered, which is most of a region.
+
+The budget is counted in **whole cell steps**, not in metres or decimetres. That is not
+a detail: the first implementation stored it in decimetres, and `toDm(0.25)` is 3 — so
+at the shipping 0.25 m cell the walk spent 0.3 m of budget per 0.25 m of travel and
+recorded distances 20% long. The reach came out at 83% of what the geometry said, which
+combined with `SHELTER_MULT` going 4 to 2 gave about 42% of the pre-round build where
+the owner had asked for 50%. A step is now exactly one step, the arithmetic is
+integral, and sub-cell precision would be false precision anyway — one cell is the
+grid's whole resolution. The covered distance likewise carries the BFS *level* and is
+turned into metres once, at the end, as `level * cell_m`; the residual error is then
+the half-decimetre of the U16 storage and does not accumulate.
 
 The `min()` is the whole point, and it is where this differs from every earlier
 version. The budget is re-evaluated against the **local** gap height at every step,
@@ -495,7 +534,14 @@ metres and no longer moves with the cell size. `Probe::mGapDepth` is decimetres.
   sheets arrived in. (This was not true until 2026-09-11: a body merging into the span
   below could widen it clean past the span above. A pillar standing on a floor slab
   and passing through a ceiling slab reproduced it.)
-- A cell the field has not surveyed answers UNKNOWN, never OUTDOORS.
+- A cell the field has not surveyed answers UNKNOWN, never OUTDOORS - and never
+  INTERIOR either, directly or by sealing a pocket off behind it. **The field reports
+  INTERIOR only where real geometry closed the space.**
+- The covered distance is exact to the storage granularity (half a decimetre) at every
+  cell size, and does not accumulate per-step rounding. The budget is integral in cell
+  steps.
+- No acoustic probe is ever anchored on an unsurveyed column, and no wall ray runs
+  through one.
 - A query never returns data from a different serial than it reports.
 - Cells are region-anchored and stable across region crossings (the navmesh's own
   frame is pinned at init; the field re-bases through region origins).
@@ -506,11 +552,16 @@ metres and no longer moves with the cell size. `Probe::mGapDepth` is decimetres.
 
 **Best-effort**
 
-- **The navmesh is the only geometry source.** `SSNavMesh` needs
-  `SSWorldFieldShapes`; both now ship `1` (owner verdict, 2026-09-11 — the field
-  should work out of the box). With the navmesh not running the field answers nothing
-  at all and every consumer sits on its fallback; `update()` warns once under
-  `SSWorldField` when that is the case.
+- **The navmesh is the only geometry source, and its defaults were deliberately
+  flipped.** `SSNavMesh` needs `SSWorldFieldShapes`; both shipped `0` and both now
+  ship `1`. This is an **owner decision of 2026-09-11**, taken knowingly and weighed
+  against the alternatives, not an incidental edit: `SSWorldField` itself defaults on,
+  the depth-peel fallback that used to cover a fresh profile is gone, and a field with
+  no geometry source is inert — so leaving those two off would have shipped a system
+  that silently does nothing for everyone who has not gone looking in Debug Settings.
+  The cost is the census scan and the Recast band builds running by default. With the
+  navmesh not running the field answers nothing and every consumer sits on its
+  fallback; `update()` warns once under `SSWorldField` when that is the case.
 - **Coverage follows the census envelope.** `SSWorldFieldShapesRange` and
   `SSNavMeshRange` bound what the navmesh knows. Outside them there are no sheets —
   and since 2026-09-11 those cells answer **UNKNOWN**, not "outdoors". A sky platform

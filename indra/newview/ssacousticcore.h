@@ -360,6 +360,12 @@ namespace SSAcoustic
                 return max_m;   // off-tile: open, not a nearby wall
             }
             const size_t col = (size_t)(py / s.mCell) * (size_t)s.mRes + (size_t)(px / s.mCell);
+            // <SS:Nexii> A column nobody surveyed has no spans, so airAt calls it open
+            // and the ray would run to the reach cap over geometry the field has never
+            // seen - which is what inflates a probe's room volume and its Sabine RT60.
+            // Stop there instead: "we do not know" is far closer to a wall than to
+            // 64 m of clear air. [interaction: SSWorldField's survey mask]
+            if (s.mSurveyed && !s.mSurveyed[col]) return (F32)i * s.mCell;
             if (!airAt(s, col, z)) return (F32)i * s.mCell;
         }
         return max_m;
@@ -435,6 +441,10 @@ namespace SSAcoustic
     // a pillar's answer.
     inline bool columnHasEarAir(const Snap& s, size_t col)
     {
+        // An unsurveyed column has an empty span list, which would otherwise read as
+        // one clear gap from the floor to the ceiling and look like the best anchor in
+        // the neighbourhood.
+        if (s.mSurveyed && !s.mSurveyed[col]) return false;
         const size_t layer = (size_t)s.mRes * (size_t)s.mRes;
         F32 prev = 0.f;
         for (S32 k = 0; k < s.mMaxSpans; ++k)

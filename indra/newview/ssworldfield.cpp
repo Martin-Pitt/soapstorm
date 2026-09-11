@@ -190,7 +190,7 @@ S32 SSWorldField::resolution() const
 {
     for (const auto& entry : mTiles)
     {
-        if (entry.second.mValid) return entry.second.mRes;
+        if (entry.second.hasGrid()) return entry.second.mRes;
     }
     return 0;
 }
@@ -203,7 +203,7 @@ F32 SSWorldField::cellSize() const
 F32 SSWorldField::ceilingAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
-    return (tile && tile->mValid) ? tile->mCeiling : 0.f;
+    return (tile && tile->hasGrid()) ? tile->mCeiling : 0.f;
 }
 
 S32 SSWorldField::sheetsAt(const LLVector3& pos_agent) const
@@ -215,7 +215,7 @@ S32 SSWorldField::sheetsAt(const LLVector3& pos_agent) const
 F64 SSWorldField::tileAge(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
-    if (!tile || !tile->mValid) return -1.0;
+    if (!tile || !tile->hasGrid()) return -1.0;
     return mNow - tile->mBuiltAt;
 }
 
@@ -375,7 +375,7 @@ void SSWorldField::navSettle()
         // <SS:Nexii> No sheets is NO ANSWER, never an empty world. The census envelope has not reached this region yet (or has left it), and classifying nothing would publish a grid of pure sky that told every consumer "outdoors" with full confidence - exactly the wrong direction, and it would retire the raycast fallbacks the readers keep for this case. Drop whatever was published and go back to having no grid. [interaction: airLabelAt returning AIR_UNKNOWN]
         if (sheets.empty())
         {
-            if (tile.mValid || tile.mGeomSerial != 0)
+            if (tile.mValid || tile.mGeomSerial != 0)      // mValid, not hasGrid: reset even a half-published one
             {
                 tile = Tile();
                 tile.mRegionHandle = regionp->getHandle();
@@ -635,7 +635,7 @@ void SSWorldField::validTiles(std::vector<std::pair<U64, U32> >& out) const
     out.reserve(mTiles.size());
     for (const auto& entry : mTiles)
     {
-        if (entry.second.mValid)
+        if (entry.second.hasGrid())
         {
             out.emplace_back(entry.first, entry.second.mGridSerial);
         }
@@ -883,7 +883,7 @@ F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& t
 bool SSWorldField::acousticAt(const LLVector3& pos_agent, F32 wall[4]) const
 {
     const Tile* tile = tileAt(pos_agent);
-    if (!tile || !tile->mValid) return false;
+    if (!tile || !tile->hasGrid()) return false;
 
     const Tile::Acoustic& ac = tile->mAcoustic;
     if (ac.mLatRes < 1 || !current(*tile)
@@ -1127,7 +1127,7 @@ bool SSWorldField::probesAt(const LLVector3& pos_agent, ProbeSample out[4], S32&
 {
     count = 0;
     const Tile* tile = tileAt(pos_agent);
-    if (!tile || !tile->mValid) return false;
+    if (!tile || !tile->hasGrid()) return false;
     if (!current(*tile)) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
@@ -1198,7 +1198,7 @@ bool SSWorldField::propagationQuery(const LLVector3& source, const LLVector3& li
 
     const LLVector3 mid = (source + listener) * 0.5f;
     const Tile* tile = tileAt(mid);
-    if (!tile || !tile->mValid) return false;
+    if (!tile || !tile->hasGrid()) return false;
     if (!current(*tile)) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile->mRegionHandle);
@@ -1357,7 +1357,7 @@ bool SSWorldField::acousticDebug(U64 region_handle, const LLVector3& centre_agen
     out.mListenerProbes.clear();
 
     auto it = mTiles.find(region_handle);
-    if (it == mTiles.end() || !it->second.mValid) return false;
+    if (it == mTiles.end() || !it->second.hasGrid()) return false;
 
     const Tile& tile = it->second;
     const Tile::Acoustic& ac = tile.mAcoustic;
@@ -1722,6 +1722,7 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
 static void ss_wf_acoustic_build(S32 res, S32 max_spans, F32 cell_m, F32 ceiling, S32 lat_res,
                                  const std::vector<F32>& span_top, const std::vector<F32>& span_bottom,
                                  const std::vector<U8>& gap_label, const std::vector<U16>& gap_depth,
+                                 const std::vector<U8>& surveyed,
                                  std::vector<SSAcoustic::Probe>& out_probes,
                                  std::vector<S32>& out_cell_start,
                                  std::vector<SSAcoustic::Link>& out_links,
@@ -1742,6 +1743,15 @@ static void ss_wf_acoustic_build(S32 res, S32 max_spans, F32 cell_m, F32 ceiling
     snap.mBottom = span_bottom.data();
     snap.mGapLabel = gap_label.data();
     snap.mGapDepth = gap_depth.data();
+    // <SS:Nexii> The bake needs the survey mask as much as traceSolid does. An
+    // unsurveyed column has no spans, so columnHasEarAir answers true on its
+    // ceiling-minus-floor gap and the anchor spiral happily lands on the void: the
+    // probe that comes back has AIR_UNKNOWN, travel -1, every wall at the 64 m
+    // saturation cap, and therefore a huge room volume and a long Sabine RT60 - which
+    // SSAcoustic::classify, having no case for label 4, calls SPACE_SHELTERED and size
+    // class open. probesAt and acousticAt would then serve that fabrication as an
+    // answer. [interaction: the anchor spiral below, SSAcoustic::columnHasEarAir]
+    snap.mSurveyed = surveyed.size() == (size_t)res * (size_t)res ? surveyed.data() : nullptr;
     snap.mRes = res;
     snap.mCell = cell_m;
     snap.mCeiling = ceiling;
@@ -1780,6 +1790,11 @@ static void ss_wf_acoustic_build(S32 res, S32 max_spans, F32 cell_m, F32 ceiling
                 const S32 nx = llclamp(cx + spiral_dx[i], 0, res - 1);
                 const S32 ny = llclamp(cy + spiral_dy[i], 0, res - 1);
                 const size_t col = (size_t)ny * (size_t)res + (size_t)nx;
+                // <SS:Nexii> Never anchor on a column nobody surveyed. The spiral starts
+                // at the lattice cell's own centre, so one unsurveyed centre column in
+                // an otherwise surveyed 8 m cell would anchor on the void and never look
+                // at the real geometry two cells away.
+                if (snap.mSurveyed && !snap.mSurveyed[col]) continue;
                 if (SSAcoustic::columnHasEarAir(snap, col))
                 {
                     anchor = col;
@@ -2056,7 +2071,7 @@ void SSWorldField::scheduleGrid(Tile& tile)
             if (do_acoustic)
             {
                 ss_wf_acoustic_build(res, max_spans, cell, ceiling, lat_res,
-                                     *span_top, *span_bottom, *gap_labels, *gap_depths,
+                                     *span_top, *span_bottom, *gap_labels, *gap_depths, *surveyed,
                                      *probes, *cell_start, *links, *adj_start, *adj_node, *adj_cost);
                 if (tier_b && !probes->empty())
                 {
@@ -2171,7 +2186,7 @@ void SSWorldField::scheduleGrid(Tile& tile)
                             {
                                 if (generation != mGridGeneration) return;
                                 auto cit = mTiles.find(region);
-                                if (cit == mTiles.end() || !cit->second.mValid) return;
+                                if (cit == mTiles.end() || !cit->second.hasGrid()) return;
                                 if (cit->second.mGridSerial != serial) return;
                                 if (cit->second.mAcoustic.mProbes.size() < (size_t)end) return;
 

@@ -140,6 +140,12 @@ namespace SSWorldFieldCore
         inline void foldThinnest(F32* span_bottom, F32* span_top, U8* span_flags,
                                  size_t layer, size_t col, S32 n)
         {
+            // With fewer than two spans there is no gap between any pair to fold, and
+            // the search below would leave `thinnest` at 0 and then read span 1 - off
+            // the end of a buffer sized for one. Unreachable from the viewer (the
+            // budget is 6, static_asserted against the sheet's) but the core is
+            // documented as generic and the harness calls it directly.
+            if (n < 2) return;
             S32 thinnest = 0;
             F32 best = 3.4e38f;
             for (S32 j = 0; j + 1 < n; ++j)
@@ -424,18 +430,25 @@ namespace SSWorldFieldCore
     //    narrow door that is also reachable from a wide door 30 m away would record
     //    30 m, and that figure feeds the enclosure ramp, airDepthAt and the acoustic
     //    bake's travel-to-outdoors. Every step costs the same cell width, so plain BFS
-    //    order is already shortest and this costs one queue pass.
+    //    order is already shortest and this costs one queue pass. The walk carries the
+    //    LEVEL - the step count - and step 4 turns it into metres once, because
+    //    accumulating a rounded per-step distance is what made 0.25 m cells record 20%
+    //    long.
     //
     // 4. THE LABEL. Covered air within ONE unmultiplied capacity of its nearest opening
     //    still has the sky overhead at theta or better, so it reads OUTDOORS. Past that
-    //    but still in budget, SHELTERED. Out of budget, or never reached, INTERIOR.
+    //    but still in budget, SHELTERED. Out of budget, INTERIOR - and never reached is
+    //    INTERIOR only when REAL GEOMETRY sealed it; a pocket sealed by the SURVEY
+    //    BOUNDARY is UNKNOWN, because the field has not earned a verdict there.
     //
-    // unsurveyed, when given, is the inverse of buildGrid's out_sheeted: a cell no
-    // sheet covered has no geometry, NOT empty sky, and every gap of it is labelled
-    // AIR_UNKNOWN and never seeds, never propagates and never blocks. A partially
-    // surveyed region therefore answers honestly where it has looked and says so where
-    // it has not. open_k is cot(theta); cell_m is the grid's cell size in metres;
-    // ceiling is where a cell's top gap ends.
+    // surveyed, when given, is buildGrid's out_sheeted: a cell no sheet covered has no
+    // geometry, NOT empty sky. Every gap of it is labelled AIR_UNKNOWN, it never seeds,
+    // and it BLOCKS - walking through it would be walking through geometry nobody has
+    // looked at. Because it blocks, whatever it seals off is unproven rather than proven
+    // interior, and step 4's doubt flood labels that UNKNOWN too. A partially surveyed
+    // region therefore answers honestly where it has looked and says so, in BOTH
+    // directions, where it has not. open_k is cot(theta); cell_m is the grid's cell size
+    // in metres; ceiling is where a cell's top gap ends.
     inline void classify(S32 res, S32 max_spans, F32 cell_m, F32 ceiling, F32 open_k,
                          const F32* span_top, const F32* span_bottom,
                          std::vector<U8>& gap_label, std::vector<U16>& gap_depth,
@@ -491,7 +504,15 @@ namespace SSWorldFieldCore
                 if (nx < 0 || ny < 0 || nx >= res || ny >= res) continue;
 
                 const size_t ncol = (size_t)ny * (size_t)res + (size_t)nx;
-                if (!known(ncol)) continue;     // unsurveyed air neither carries nor blocks
+                // <SS:Nexii> An unsurveyed column BLOCKS the walk - it has no spans, so
+                // walking through it would be walking through geometry nobody has
+                // looked at. What that blocking seals off is therefore not proven
+                // interior, only unproven, and step 4 labels it AIR_UNKNOWN rather than
+                // AIR_INTERIOR. Getting that verdict wrong is the same bug the survey
+                // mask exists to fix, with the sign flipped: a porch whose only way out
+                // crosses the survey boundary would read sealed, and every consumer
+                // would take it. [interaction: the doubt flood in step 4]
+                if (!known(ncol)) continue;
                 const S32 nn = (S32)span_n[ncol];
                 for (S32 kj = 0; kj <= nn; ++kj)
                 {
@@ -548,15 +569,14 @@ namespace SSWorldFieldCore
         }
 
         // ---- 2. the reach budget ----
-        // Decimetres in a U16 rather than metres in an F32: half the plane, and the
-        // "a stronger seed already passed" test becomes an exact integer compare.
-        constexpr U16 BUDGET_MAX = 65534u;
-        auto toDm = [](F32 m) -> U16
-        {
-            if (m <= 0.f) return 0;
-            const F32 dm = m * 10.f + 0.5f;
-            return (dm >= (F32)BUDGET_MAX) ? BUDGET_MAX : (U16)dm;
-        };
+        // <SS:Nexii> Counted in whole CELL STEPS, not in decimetres. The decimetre form
+        // rounded the step itself - toDm(0.25) is 3, so the shipping 0.25 m cell spent
+        // 0.3 m of budget per 0.25 m of travel and recorded distances 20% long. A step
+        // is exactly one step, so the arithmetic is integral and exact; sub-cell
+        // precision would be false precision anyway, since one cell is the grid's whole
+        // resolution. remaining[] holds 1 + the steps still affordable, so 0 still means
+        // "never reached". [interaction: V:\Scratch\atmo\tests\worldfield_review2.cpp]
+        constexpr U32 STEPS_MAX = 65533u;
         std::vector<U16> remaining(nodes, 0);
         std::priority_queue<std::pair<U16, S32> > heap;
         auto capacity = [&](size_t node)
@@ -564,6 +584,13 @@ namespace SSWorldFieldCore
             const size_t col = node / per_col;
             const S32 k = (S32)(node % per_col);
             return (hi(col, k) - lo(col, k)) * open_k;
+        };
+        // How many cell steps this gap's own local capacity would allow, floored.
+        auto capSteps = [&](size_t node) -> U32
+        {
+            const F32 steps = capacity(node) * SHELTER_MULT / step_m;
+            if (steps <= 0.f) return 0u;
+            return (steps >= (F32)STEPS_MAX) ? STEPS_MAX : (U32)steps;
         };
 
         for (size_t node = 0; node < nodes; ++node)
@@ -578,28 +605,29 @@ namespace SSWorldFieldCore
             });
             if (!porch) continue;
 
-            const U16 r = toDm(capacity(node) * SHELTER_MULT - step_m);
-            if (r == 0 || r <= remaining[node]) continue;
+            const U32 c = capSteps(node);
+            if (c < 1u) continue;                       // cannot even afford the step in
+            const U16 r = (U16)c;                       // 1 + (c - 1) steps left
+            if (r <= remaining[node]) continue;
             remaining[node] = r;
             heap.emplace(r, (S32)node);
         }
 
-        const U16 step_dm = toDm(step_m);
         while (!heap.empty())
         {
             const U16 b = heap.top().first;
             const size_t node = (size_t)heap.top().second;
             heap.pop();
             if (b != remaining[node]) continue;     // a stronger seed already passed
-            if (b <= step_dm) continue;             // nothing left to hand inward
+            if (b <= 1u) continue;                  // arrived with nothing left to hand on
 
+            const U32 left = (U32)b - 1u;           // steps still affordable from here
             touches(node, [&](size_t nnode)
             {
                 if (!getBit(covered, nnode)) return;
-                const U16 cap = toDm(capacity(nnode) * SHELTER_MULT);
-                const U16 carry = llmin(b, cap);
-                if (carry <= step_dm) return;
-                const U16 r = (U16)(carry - step_dm);
+                const U32 carry = llmin(left, capSteps(nnode));
+                if (carry < 1u) return;
+                const U16 r = (U16)carry;
                 if (r <= remaining[nnode]) return;
                 remaining[nnode] = r;
                 heap.emplace(r, (S32)nnode);
@@ -607,8 +635,11 @@ namespace SSWorldFieldCore
         }
 
         // ---- 3. the covered distance: shortest path, not the widest one ----
-        // gap_depth doubles as the BFS distance array, which is also what retires the
-        // separate 29 MB float plane the walk above used to keep.
+        // <SS:Nexii> gap_depth carries the BFS LEVEL while the walk runs - the number of
+        // cell steps from the opening - and step 4 converts it to decimetres once, as
+        // level * cell_m. Accumulating decimetres per step is what rounded 0.25 m to
+        // 0.30; one multiply at the end cannot. This also retires the separate float
+        // travel plane the walk used to keep.
         queue.clear();
         for (size_t node = 0; node < nodes; ++node)
         {
@@ -619,42 +650,99 @@ namespace SSWorldFieldCore
                 if (!getBit(covered, nnode) && getBit(reached, nnode)) porch = true;
             });
             if (!porch) continue;
-            gap_depth[node] = step_dm;
+            gap_depth[node] = 1;                    // one step in from the opening
             queue.push_back((S32)node);
         }
         for (size_t head = 0; head < queue.size(); ++head)
         {
             const size_t cur = (size_t)queue[head];
-            const U32 next_d = (U32)gap_depth[cur] + (U32)step_dm;
-            if (next_d >= (U32)DEPTH_UNREACHED) continue;
+            const U32 next_level = (U32)gap_depth[cur] + 1u;
+            if (next_level >= (U32)DEPTH_UNREACHED) continue;
             touches(cur, [&](size_t nnode)
             {
                 if (!remaining[nnode]) return;
                 if (gap_depth[nnode] != DEPTH_UNREACHED) return;    // BFS: first visit is shortest
-                gap_depth[nnode] = (U16)next_d;
+                gap_depth[nnode] = (U16)next_level;
                 queue.push_back((S32)nnode);
             });
         }
 
-        // ---- 4. the labels ----
+        // ---- 4a. unsurveyed cells, and what their blocking sealed off ----
+        // Every gap of an unsurveyed cell is UNKNOWN, including the one that would
+        // otherwise run 0..ceiling and read as open sky.
         for (size_t col = 0; col < layer; ++col)
         {
+            if (known(col)) continue;
+            for (S32 k = 0; k <= max_spans; ++k)
+            {
+                const size_t node = col * per_col + (size_t)k;
+                gap_label[node] = AIR_UNKNOWN;
+                gap_depth[node] = DEPTH_UNREACHED;
+            }
+        }
+
+        // <SS:Nexii> The doubt flood. An unsurveyed column blocks the reachability walk,
+        // so a covered space whose only route to open air crosses the survey boundary is
+        // never reached - and calling that INTERIOR is a confident answer the field has
+        // not earned. It is not proven sealed, only unproven, so the whole unreached
+        // pocket that touches the boundary reads UNKNOWN and every consumer keeps its
+        // fallback. A pocket that touches no unsurveyed column IS proven sealed by real
+        // geometry and stays INTERIOR. gap_label doubles as the visited mark, so this
+        // costs no extra plane. [interaction: worldfield_review2.cpp]
+        if (surveyed)
+        {
+            auto columnBordersUnsurveyed = [&](size_t col)
+            {
+                const S32 x = (S32)(col % (size_t)res);
+                const S32 y = (S32)(col / (size_t)res);
+                for (S32 d = 0; d < 4; ++d)
+                {
+                    const S32 nx = x + DX[d], ny = y + DY[d];
+                    if (nx < 0 || ny < 0 || nx >= res || ny >= res) continue;
+                    if (!surveyed[(size_t)ny * (size_t)res + (size_t)nx]) return true;
+                }
+                return false;
+            };
+
+            queue.clear();
+            for (size_t col = 0; col < layer; ++col)
+            {
+                if (!known(col) || !columnBordersUnsurveyed(col)) continue;
+                const S32 n = (S32)span_n[col];
+                for (S32 k = 0; k <= n; ++k)
+                {
+                    const size_t node = col * per_col + (size_t)k;
+                    if (getBit(reached, node) || !exists(col, k)) continue;
+                    if (gap_label[node] == AIR_UNKNOWN) continue;
+                    gap_label[node] = AIR_UNKNOWN;
+                    queue.push_back((S32)node);
+                }
+            }
+            for (size_t head = 0; head < queue.size(); ++head)
+            {
+                touches((size_t)queue[head], [&](size_t nnode)
+                {
+                    if (getBit(reached, nnode)) return;              // the walk got there honestly
+                    if (gap_label[nnode] == AIR_UNKNOWN) return;     // already doubted
+                    gap_label[nnode] = AIR_UNKNOWN;
+                    queue.push_back((S32)nnode);
+                });
+            }
+        }
+
+        // ---- 4b. the labels ----
+        for (size_t col = 0; col < layer; ++col)
+        {
+            if (!known(col)) continue;
             const S32 n = (S32)span_n[col];
             for (S32 k = 0; k <= max_spans; ++k)
             {
                 const size_t node = col * per_col + (size_t)k;
-                if (!known(col))
-                {
-                    // Not surveyed: every gap of the cell is UNKNOWN, including the
-                    // one that would otherwise run 0..ceiling and read as open sky.
-                    gap_label[node] = AIR_UNKNOWN;
-                    gap_depth[node] = DEPTH_UNREACHED;
-                    continue;
-                }
                 if (k > n || !exists(col, k)) continue;             // no such gap
+                if (gap_label[node] == AIR_UNKNOWN) continue;       // the doubt flood got here first
                 if (!getBit(reached, node))
                 {
-                    gap_label[node] = AIR_INTERIOR;
+                    gap_label[node] = AIR_INTERIOR;                 // sealed by real geometry
                     continue;
                 }
                 if (!getBit(covered, node))
@@ -670,7 +758,10 @@ namespace SSWorldFieldCore
                     continue;
                 }
 
-                const F32 d = (F32)gap_depth[node] * 0.1f;
+                // The BFS level becomes a real distance here, once: level * cell_m.
+                const F32 d = (F32)gap_depth[node] * step_m;
+                const U32 dm = (U32)(d * 10.f + 0.5f);
+                gap_depth[node] = (U16)llmin(dm, (U32)DEPTH_UNREACHED - 1u);
                 // Within one unmultiplied open_k of the LOCAL gap height the sky is
                 // still up there: that is outdoors, however much roof stands over it.
                 gap_label[node] = (d <= capacity(node)) ? AIR_OUTDOORS : AIR_SHELTERED;

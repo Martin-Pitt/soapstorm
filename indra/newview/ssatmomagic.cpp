@@ -1118,7 +1118,7 @@ void SSAtmoMagic::drawInfo()
                                      ? "not reached from outdoors" : llformat("%u m covered from the opening", air_depth).c_str()));
         if (cam_region)
         {
-            field_section.lines.push_back(llformat("classify   %.0f%% of cells labelled%s",
+            field_section.lines.push_back(llformat("surveyed   %.0f%% of cells covered by a band sheet%s",
                                      field->airCoverage(cam_region->getHandle()) * 100.f,
                                      field->gridStale(cam_region->getHandle()) ? ", REBUILD PENDING" : ""));
         }

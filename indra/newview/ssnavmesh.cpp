@@ -1176,7 +1176,13 @@ S32 SSNavMesh::resheet()
     for (auto& kv : mBands)
     {
         if (kv.second.mSheet) continue;         // already has one
-        if (kv.second.mRefs.empty()) continue;  // never published, so it is pending anyway
+        // <SS:Nexii> NOT gated on mRefs: a band that published and produced zero
+        // walkable layers has an empty mRefs and no sheet, and skipping it would leave
+        // it in exactly the permanent no-sheet state this exists to break. mSig is the
+        // honest test for "has published at all" - schedule() sets it on publish and it
+        // is 0 until then, so a band still queued is skipped and will build under the
+        // current answer anyway.
+        if (kv.second.mSig == 0) continue;
         kv.second.mSig = 0;
         ++queued;
     }
