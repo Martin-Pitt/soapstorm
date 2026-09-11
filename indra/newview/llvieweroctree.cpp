@@ -1233,6 +1233,10 @@ void LLOcclusionCullingGroup::doOcclusion(LLCamera* camera, const LLVector4a* sh
         {
             if (!isOcclusionState(QUERY_PENDING) || isOcclusionState(DISCARD_QUERY))
             {
+                // <SS:Nexii> A GL state broken elsewhere can refuse the begin; drawing into a query that
+                // never started measures nothing, and reading nothing marks the group OCCLUDED.
+                bool query_failed = false;
+
                 { //no query pending, or previous query to be discarded
                     LL_PROFILE_ZONE_NAMED_CATEGORY_OCTREE("doOcclusion - render");
 
@@ -1255,10 +1259,6 @@ void LLOcclusionCullingGroup::doOcclusion(LLCamera* camera, const LLVector4a* sh
                     sPendingQueries.insert(mOcclusionQuery[LLViewerCamera::sCurCameraID]);
 #endif
                     add(sOcclusionQueries, 1);
-
-                    // <SS:Nexii> A GL state broken elsewhere can refuse the begin; drawing into a query that
-                    // never started measures nothing, and reading nothing marks the group OCCLUDED.
-                    bool query_failed = false;
 
                     {
                         LL_PROFILE_ZONE_NAMED_CATEGORY_OCTREE("doOcclusion - push");
