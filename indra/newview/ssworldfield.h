@@ -2,28 +2,34 @@
  * @file ssworldfield.h
  * @brief Atmo Magic: the shared world field.
  *
- *        One region-anchored capture of the world's solid structure, shared by
- *        every system that currently captures its own. A tile is captured as a
- *        stack of horizontal Z bands; each band is one top-down ortho depth
- *        pass whose frustum clips everything above the band, so per column and
- *        per band it yields the highest surface inside that band - the
- *        band-sliced form of a depth peel, produced with the exact machinery
- *        the rain shadow and wind captures already use.
+ *        The world field has no capture and no store of its own. The census
+ *        navmesh (SSNavMesh) already rasterises every region it covers into
+ *        16 m columns split into height bands, and every band build already
+ *        reads its rcHeightfield out as a SpanSheet - a 64 x 64 grid of
+ *        0.25 m cells, each holding that band's solid spans. Those sheets stay
+ *        on the navmesh's bands. The world field is the classification over
+ *        them: per region it snapshots the band sheets (shared_ptr copies, no
+ *        geometry copied), and one worker job materialises the region's cell
+ *        grid, walks the air, and bakes the acoustic probes. The finished grid
+ *        is swapped in whole, under a serial gate, and is immutable from then
+ *        until the next one replaces it.
  *
- *        The store is spans-shaped: per column, per band, a surface altitude
- *        and surface flags. Everything downstream is a materialised view over
- *        it. The first view is SURFACE_TOP - the landing-surface grid the
- *        surface field, runoff and snow read - produced with the same shape
- *        and serial semantics as SSRainShadowMap::SurfaceGrid so consumers
- *        migrate by swapping their source. COVERAGE (indoor vs outdoor,
- *        burial depth) reads the band stack directly.
+ *        What a cell answers: the solid spans it holds (ray occlusion - see
+ *        traceSolid), and per air gap between them an outdoors/sheltered/
+ *        interior label with the covered distance behind it. A query point
+ *        with no air cell at its own height - inside a body, or clipped into
+ *        geometry - walks DOWN to the first air gap within
+ *        SSWorldFieldGroundReach metres; nothing within reach is open air.
  *
- *        Captures are staged across frames like the wind flowmap's build, one
- *        band per step, and a prim edit re-peels only the dirty rectangle.
- *        Tiles are built only where a channel is claimed; nothing runs for a
- *        region nobody asked about.
+ *        The outdoors rule is geometric rather than topological: an opening
+ *        hands its covered neighbours a reach budget scaled by the gap height
+ *        at the opening (gap_height * cot(SSWorldFieldOpenAngle)),
+ *        re-evaluated from the LOCAL gap height at every step, so a gap that
+ *        pinches under a low beam stops carrying outdoors while ground under a
+ *        sky platform far overhead keeps it for as far as the platform runs.
  *
- *        See doc/atmo_magic_worldfield.md.
+ *        See doc/atmo_magic_worldfield.md - the handoff section there is the
+ *        contract the wind flow and acoustics workstreams build against.
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -47,7 +53,6 @@
 #ifndef SS_WORLDFIELD_H
 #define SS_WORLDFIELD_H
 
-#include "llrendertarget.h"
 #include "llsingleton.h"
 #include "ssacousticcore.h"
 #include "ssrainshadow.h"
@@ -68,9 +73,9 @@ class SSWorldField : public LLSingleton<SSWorldField>
     LLSINGLETON_EMPTY_CTOR(SSWorldField);
 
 public:
-    // What a consumer wants out of the store. The capture's band depth and
-    // later its probe passes are the union of every currently claimed
-    // channel's needs; today that is SURFACE_TOP alone.
+    // What a consumer wants out of the field. Grids are classified for every
+    // region in reach regardless; a claim is what turns the optional tiers on
+    // (today: ACOUSTIC gates the stochastic reverb bake).
     enum class EChannel
     {
         SURFACE_TOP = 0,
@@ -101,24 +106,17 @@ public:
 
     Interest claim(U64 region_handle, EChannel channel);
 
-    // The one edit fan-out. Settled prim edits land here; the field marks the
-    // tile's dirty rectangle and the re-peel is scissored to it.
+    // <SS:Nexii> The edit fan-out, now only a pass-through to the census: the field itself has nothing to dirty, because its geometry is the navmesh's sheets and the navmesh rebuilds the bands an edit touched on its own schedule. The field notices through the sheet-set stamp on its next settle. [interaction: SSWorldFieldShapes::markDirty, SSNavMesh::collectSheets]
     static void markDirty(const LLVector3& pos_agent, F32 radius);
 
     void clear();
 
-    // GL teardown: the readback worker is already gone, so the in-flight gate is cleared and clear() runs unconditionally.
+    // Teardown hook kept for the display shutdown path; the field holds no GL resources any more, so this is clear().
     void shutdownGL();
 
     void update();
 
-    // <SS:Nexii> The navmesh as the store's span source: while SSWorldFieldFromNavMesh is on and the navmesh runs, the depth-peel capture stops and every band the navmesh publishes hands its span sheet here (SSNavMesh::SpanSheet). The band's z-range is cut out of the tile's columns and the sheet's spans inserted; a span flagged terrain reaches the world floor as the capture's did. The geometry serial moves only once the navmesh has nothing queued for the region (navSettle), so the flood and the acoustic bake run over a whole region, not a half-fed one. The readers - coverage, air labels, enclosure, acoustics, traceSolid, the surface top - never learn which source filled the store. [interaction: SSNavMesh::publish]
-    static bool navSpansWanted();
-    void navSpans(U64 region_handle, F32 x0_m, F32 y0_m, F32 extent_m, F32 zmin, F32 zmax, const SSNavMesh::SpanSheet* sheet);
-    bool navSourced(U64 region_handle) const;
-    U32 navBlocksFed() const { return mNavBlocksFed; }
-    U32 navSettles() const { return mNavSettles; }
-    // The store's column under a point: tile state and source, every span, the gap labels, and the point's own air verdict. [interaction: SSFloaterNavMesh mark]
+    // The store's cell under a point: grid state, every span, the gap labels, and the point's own air verdict. [interaction: SSFloaterNavMesh mark]
     void dumpColumn(const LLVector3& pos_agent, std::vector<std::string>& out) const;
 
     // The landing-surface view - SSRainShadowMap::buildSurfaceGrid's exact
@@ -129,8 +127,8 @@ public:
 
     void validTiles(std::vector<std::pair<U64, U32> >& out) const;
 
-    // The topmost surface at a point, absolute Z. False if the column is
-    // unmapped (tile absent, not yet built, or fully sky).
+    // The topmost surface at a point, absolute Z. False if the cell is
+    // unmapped (no grid for the region, or the column is fully sky).
     bool surfaceTop(const LLVector3& pos_agent, F32& z, U8& flags) const;
 
     // Whether the point has structure above it (sheltered), and if so how far
@@ -140,77 +138,57 @@ public:
 
     // The richer form the soundscape's probe cycle wants: whether anything
     // stands over the point at all, the nearest such surface's altitude (the
-    // space's ceiling, to band precision), and the column's sky-open top.
-    // Burial (the build stacked between ceiling and sky) is their difference,
-    // floor-count aware where the single column-top subtraction never was.
-    // False when no valid tile covers the point; the caller keeps its
-    // raycasts for that.
+    // space's ceiling), and the column's sky-open top. Burial (the build
+    // stacked between ceiling and sky) is their difference, floor-count aware
+    // where the single column-top subtraction never was. False when no grid
+    // covers the point; the caller keeps its raycasts for that.
     bool coverageDetail(const LLVector3& pos_agent, bool& covered,
                         F32& ceiling_z, F32& column_top_z) const;
 
-    // <SS:Nexii> Air connectivity, the flood-fill pass of the worldfield design, run over the store's air spans: each band-cell holds up to two air spans - the lower under the band's topmost body, the upper above its top - and every span is labelled by whether it can actually be reached from the sky or the tile's horizontal borders, then by how enclosed it is. The touching classification splits the reachable spans three ways - OUTDOORS where the column is open to the sky above, SHELTERED where cover stands over it but an opening still connects it to outdoors air, INTERIOR once every opening's reach is spent. The reach is a budget handed across each touching between outdoors and sheltered spans: the opening's porch (the outdoors spans touching it, clustered so one opening is one aperture) seeds sqrt(aperture spans) - the opening's linear width, not its area - and every span step inward spends one. A cave mouth hands its interior tens of spans of shelter while a window's budget dies a span or two past the glass; a sealed room was never reached and is interior by construction. Solved on the general worker queue from a snapshot of the band stack, so a build committing on the main thread never races the walk; stored against the tile's geometry serial so a stale answer is never served after an edit. The same job carries the occlusion depth: each outdoors- or sheltered-connected span's graph distance to the nearest OUTDOORS span, for the "how enclosed is this point" consumers (the sparse-air-solve and acoustic occlusion figures).
+    // <SS:Nexii> Air connectivity over the cell grid: per cell, the air gaps between its solid spans, each labelled by whether outdoors air can reach it and how far that reach had to carry. The classification is three-way - OUTDOORS where the cell is open to the sky above OR sits within one gap-height cot(theta) reach of air that is, SHELTERED where an opening still carries to it but further than that, INTERIOR once the reach budget is spent or the walk never got in. The budget an opening hands inward is gap_height * cot(SSWorldFieldOpenAngle) * SS_WF_SHELTER_MULT, re-evaluated from the LOCAL gap height at every cell step and spent one cell width per step: ground under a 200 m sky platform keeps a 200 m budget and reads outdoors across the whole footprint, while a 2.4 m room's door hands about 2.4 m of outdoors and roughly 10 m of shelter past that. Run on the General work queue over a snapshot of the navmesh's band sheets, published whole against the grid serial so a stale answer is never served and a half-built grid is never visible.
     enum EAirLabel : U8
     {
-        AIR_SOLID = 0,      // no air span here - inside a body, or the band-cell is body to its top
-        AIR_OUTDOORS,       // open to the sky above - the elements land here
-        AIR_SHELTERED,      // covered, but an opening still reaches it
+        AIR_SOLID = 0,      // no air here - the point is inside a body
+        AIR_OUTDOORS,       // open to the sky, or within one gap-height reach of air that is
+        AIR_SHELTERED,      // covered, but an opening's budget still carries to it
         AIR_INTERIOR,       // beyond every opening's reach, or sealed
-        AIR_UNKNOWN         // no tile, no labels yet, or stale
+        AIR_UNKNOWN         // no grid for the region, or the grid is stale
     };
     U8 airLabelAt(const LLVector3& pos_agent) const;
 
-    // The occlusion depth behind airLabelAt: graph distance in cells from the
-    // point's air band-cell to the nearest AIR_OUTDOORS cell (0 when the point
-    // itself is outdoors air), or AIR_DEPTH_UNREACHED when the cell
-    // is interior, off-tile, or the labels are not current. Band and
-    // horizontal steps count one cell each, so the figure is a graph hop
-    // count over the store's own grid, not metres.
+    // <SS:Nexii> The covered distance behind airLabelAt: METRES of covered travel from the opening whose budget reached the point (0 when the point is open to the sky in its own column), or AIR_DEPTH_UNREACHED when the cell is interior, off-grid, or the grid is stale. Metres, not graph hops: the pre-navmesh store counted cell steps and the figure moved whenever SSWorldFieldCell did. [interaction: SSAcoustic::Probe::mTravelM]
     static constexpr U32 AIR_DEPTH_UNREACHED = 0xFFFFu;
     U32 airDepthAt(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The enclosure spectrum behind the touching classification:
-    // 0 outdoors, rising through sheltered air on the occlusion depth - the
-    // air-graph distance back to open sky, in metres, saturated on a fixed
-    // tau - and 1 interior, where every opening budget is spent or the walk
-    // never got in. The camera's own band-cell usually reads SOLID (the
-    // ground or a roof shares it), so the lookup resolves sub-band air: a
-    // point above its band's stored surface inherits the nearest air label
-    // above it in the column; a point inside the implied solid body has no
-    // verdict. Returns -1 whenever there is no current answer - no labels
-    // yet, stale after an edit, off-tile, or sub-band-solid - and the caller
-    // keeps its own probe answer for that. This is the scalar the soundscape
-    // blends its ambiences on.
+    // <SS:Nexii> The enclosure spectrum: 0 outdoors, 1 interior, and between
+    // them d / (d + tau) on the covered distance d, where tau is the LOCAL gap
+    // height's own cot(theta) reach (floored at SS_WF_ENCLOSURE_TAU_M). The
+    // same geometry that sets the reach budget sets the saturation length, so
+    // a low ceiling encloses within a couple of metres while a hall or a sky
+    // platform's underside stays near 0 for as far as it runs. Returns -1
+    // whenever there is no current answer - no grid, stale after a rebuild, or
+    // off-grid - and the caller keeps its own probe answer for that. This is
+    // the scalar the soundscape blends its ambiences on.
     F32 enclosureAt(const LLVector3& pos_agent) const;
 
     // The bulk form for callers that walk one region's cells (the surface
-    // field's window stitch): region and tile resolved once, the same answer
+    // field's window stitch): region and grid resolved once, the same answer
     // per point.
     F32 enclosureAtRegion(U64 region_handle, const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The ACOUSTIC channel's first slice: a coarse probe lattice
-    // over the tile's air, built by the same worker job as the flood - one
-    // precomputed wall distance per cardinal per (band, lattice cell), the
-    // room-size and occlusion questions the soundscape otherwise spends four
-    // live raycasts on per probe cycle. Copies the side-probe contract:
-    // metres from the probe to the nearest solid walking horizontally in the
-    // point's band, saturated at the reach cap so an open direction reads as
-    // "no wall". False when the tile or lattice is not current - stale after
-    // an edit until the next flood - and the caller keeps its raycasts.
-    //
-    // Since the gap-anchored probe set (doc/atmo_magic_acoustics.md Part 1)
-    // this answers from the NEAREST probe of the listener's lattice cell - the
-    // probes' own 8-direction profiles taken at their real, ear-height z - so
-    // a wall distance again describes air somebody stands in, not whatever
-    // altitude a fixed 4 m ring landed on. probesAt is the richer, connectivity-
-    // aware form the listener blend wants.
+    // <SS:Nexii> The ACOUSTIC channel's wall profile: the nearest probe of the
+    // listener's lattice cell (its 8 neighbours back it up when the cell is
+    // probe-less), its 8-direction profile's four cardinals out in the
+    // side-probe contract (metres, saturated at the reach cap). False when the
+    // grid or lattice is not current and the caller keeps its raycasts.
     bool acousticAt(const LLVector3& pos_agent, F32 wall[4]) const;
 
     // <SS:Nexii> The occlusion trace (the doc's Part 3, the brief's realtime ask):
-    // a 2D DDA over the columns the segment a->b crosses; per column, the segment's
-    // z-interval is intersected against the column's span intervals; solid metres
-    // and body crossings accumulate. Exact against the store, no scene raycast,
-    // main thread, ~4 columns per metre at the 0.25 m cell. False when no current
-    // tile covers the segment (either endpoint off-tile counts - a partial count
+    // a 2D DDA over the cells the segment a->b crosses; per cell, the segment's
+    // z-interval is intersected against the cell's span intervals; solid metres
+    // and body crossings accumulate. Exact against the grid, no scene raycast,
+    // main thread, ~4 cells per metre at the 0.25 m cell. False when no current
+    // grid covers the segment (either endpoint off-grid counts - a partial count
     // would read as confidently open air, the optimistic direction for audio);
     // the caller keeps its heuristic for that.
     bool traceSolid(const LLVector3& a, const LLVector3& b, F32& solid_m, S32& crossings) const;
@@ -219,7 +197,7 @@ public:
     // the listener's own gap in its lattice cell plus graph-adjacent probes,
     // inverse-distance weighted, at most four. NEVER a raw trilinear tap over the
     // lattice - the nearest probe through a wall is exactly the one that must not
-    // contribute. False when the tile's probes are stale (edit pending flood) or the
+    // contribute. False when the grid's probes are stale (rebuild pending) or the
     // cell carries no probes; the caller keeps its raycast classification.
     struct ProbeSample
     {
@@ -240,7 +218,7 @@ public:
     // listener to their gaps' probes in their lattice cells, run Dijkstra over the
     // baked probe graph (edge cost = length / aperture + the fixed portal loss), and
     // read the figures back. Reads only the immutable baked graph, so it is safe on
-    // the main thread between floods; the serial gate keeps a stale graph from ever
+    // the main thread between rebuilds; the serial gate keeps a stale graph from ever
     // answering. Thunder's travel time, muffle and arrival direction come from here;
     // occlusionGain's diffracted floor does too.
     struct Propagation
@@ -258,7 +236,7 @@ public:
     };
     bool propagationQuery(const LLVector3& source, const LLVector3& listener, Propagation& out) const;
 
-    // <SS:Nexii> The debug export the V10 info view reads: the tile's probes and
+    // <SS:Nexii> The debug export the V10 info view reads: the grid's probes and
     // links within range of a centre point, portal flags resolved per probe, and the
     // listener's own blend set. Read-only over the baked channel.
     struct AcousticDebug
@@ -285,7 +263,7 @@ public:
         bool mValid = false;
         S32 mLatRes = 0;
         F32 mLatCell = 0.f;
-        S32 mProbeCount = 0;        // the tile's full probe count, drawn set aside
+        S32 mProbeCount = 0;        // the grid's full probe count, drawn set aside
         S32 mBundleCount = 0;
         S32 mLinkCount = 0;
         S32 mPortalCount = 0;
@@ -296,11 +274,11 @@ public:
     bool acousticDebug(U64 region_handle, const LLVector3& centre_agent, F32 range_m,
                        AcousticDebug& out) const;
 
-    // The share of a tile's air cells the flood actually labelled - 1.0 once
-    // the labels are current, less before the first flood or after an edit.
+    // The share of a region's air cells the classification actually labelled -
+    // 1.0 once a grid is published and current, 0 before the first one.
     F32 airCoverage(U64 region_handle) const;
 
-    // <SS:Nexii> Drainage topology over one landing-surface grid - the DRAINAGE_NETWORK channel core, materialised synchronously over whatever SurfaceGrid the caller already holds (the surface field's geometry, at its own n). A Barnes priority flood fills every depression to its spill elevation; a cell below that level is a pool member (standing water, the figure that retires the surface field's local dips check); flow directions are D8 down the *filled* surface, so a pool's water drains toward its spill outlet rather than into its own floor - except across an eave, the capture discontinuity a raw drop steeper than a roof pitch and at least 0.75 m tall marks: water arriving there leaves into the air, so the drop is not a descent and the cell ends the surface. Accumulation then routes contributing area in square metres down the D8 in descending spill order; a cell whose outlet chain ends keeps its catchment, which is the figure the runoff shed reads at the lips. Nothing is cached here: the grid carries the geometry serial and the caller already gates retraces on it. Per-span levels wait on the multi-peel store; this is the landing-surface level the design ships first.
+    // <SS:Nexii> Drainage topology over one landing-surface grid - the DRAINAGE_NETWORK channel core, materialised synchronously over whatever SurfaceGrid the caller already holds (the surface field's geometry, at its own n). A Barnes priority flood fills every depression to its spill elevation; a cell below that level is a pool member (standing water, the figure that retires the surface field's local dips check); flow directions are D8 down the *filled* surface, so a pool's water drains toward its spill outlet rather than into its own floor - except across an eave, the discontinuity a raw drop steeper than a roof pitch and at least 0.75 m tall marks: water arriving there leaves into the air, so the drop is not a descent and the cell ends the surface. Accumulation then routes contributing area in square metres down the D8 in descending spill order; a cell whose outlet chain ends keeps its catchment, which is the figure the runoff shed reads at the lips. Nothing is cached here: the grid carries the geometry serial and the caller already gates retraces on it.
     struct Drainage
     {
         std::vector<F32> mSpill;      // fill elevation per cell, NODATA where unmapped
@@ -314,111 +292,77 @@ public:
 
     bool tileValid(U64 region_handle) const;
     U32 geometrySerial(U64 region_handle) const;
+    // A rebuild is pending: the navmesh's sheet set moved since the published grid was classified.
+    bool gridStale(U64 region_handle) const;
 
     // Stats
     S32 tileCount() const { return (S32)mTiles.size(); }
-    U32 captureCount() const { return mCaptureCount; }
-    U32 dirtyCaptureCount() const { return mDirtyCaptures; }
-    F32 lastCaptureMS() const { return mLastCaptureMS; }
-    F32 bandHeight() const;
-    S32 bandCount() const;
+    U32 gridBuilds() const { return mGridBuilds; }
+    F32 lastBuildMS() const { return mLastBuildMS; }
     S32 resolution() const;
+    F32 cellSize() const;
+    F32 ceilingAt(const LLVector3& pos_agent) const;
+    S32 sheetsAt(const LLVector3& pos_agent) const;
     F64 tileAge(const LLVector3& pos_agent) const;
-    S32 effectiveBands(const LLVector3& pos_agent) const;
 
-    // <SS:Nexii> The world field's own overlay: what the capture saw, what the air flood decided, and what the drainage pass reads - view picked by SSWorldFieldDebugView, distance-thinned like the wind flowmap's overlay.
+    // <SS:Nexii> The world field's own overlay: what the cell grid holds, what the air classification decided, and what the drainage pass reads - view picked by SSWorldFieldDebugView, distance-thinned like the wind flowmap's overlay.
     void renderDebug();
 
 private:
-    static constexpr S32 MAX_BANDS = 24;
     static constexpr U32 MAX_TILES = 4;
-    static constexpr F64 DIRTY_MIN_INTERVAL = 2.0;
-    static constexpr F64 BAND_MIN_INTERVAL = 0.05;
-    // This many consecutive empty bands end a full build: bands are swept
-    // bottom-up, so empty runs only occur above all content the ceiling
-    // setting covers. Skyboxes above the resulting ceiling are invisible to
-    // the field until SSWorldFieldCeiling is raised - the same practical
-    // shape as the wind map's band.
-    static constexpr S32 EMPTY_BANDS_TO_STOP = 3;
+    // <SS:Nexii> How long a region's sheet set must hold still before it is
+    // reclassified. A region under edit republishes bands in a trickle and
+    // SSNavMesh::regionSettled goes true between them; without this the field
+    // would run a region-wide walk for every one of them.
+    static constexpr F64 SETTLE_DEBOUNCE = 0.5;
 
+    // <SS:Nexii> One region's published cell grid. Every array below is written
+    // once by a worker job and swapped in whole on the main thread - nothing
+    // mutates a live grid in place, which is what lets traceSolid and the
+    // acoustic queries read it on the main thread with no lock and no torn
+    // state. The geometry is the navmesh's band sheets flattened into one
+    // region-anchored grid of mRes x mRes cells at mCell metres; every cell
+    // holds up to SS_WF_MAX_SPANS solid spans, and the gaps between, below and
+    // above them are the air the classification labels.
     struct Tile
     {
         U64 mRegionHandle = 0;
 
         S32 mRes = 0;
         F32 mCell = 0.f;
+        F32 mCeiling = 0.f;         // the grid's top: above it a column is open sky
+        S32 mSheets = 0;            // band sheets the published grid was built from
 
-        S32 mBandCount = 0;        // effective bands; bands [0, mBandCount) are live
-        F32 mBandHeight = 4.f;
-
-        // <SS:Nexii> The capture scratch: per band, per column, the two
-        // boundaries the two ortho passes resolved - mBandTop (front faces,
-        // the highest up-facing surface in the band) and mBandUnder (the
-        // upward shot keeping the farthest front face, the topmost body's
-        // underside). This is the capture's working data, not the store:
-        // computeSpans folds it into the column span store at commit.
-        // NO_SURFACE where a pass found nothing. Flat
-        // [band][y * res + x], allocated lazily to mAllocBands bands by
-        // ensureBands as a build sweeps upward and released at commit (the
-        // store is the spans; only the next build needs the scratch back).
-        // A dense 0.25m column tile pinning all MAX_BANDS layers up front
-        // would hold ~126MB per tile
-        // before capturing anything, and real builds usually stop a few
-        // bands up.
-        std::vector<F32> mBandTop;
-        std::vector<F32> mBandUnder;
-        std::vector<U8> mBandFlags;
-        S32 mAllocBands = 0;
-
-        // <SS:Nexii> The store: per column, up to SS_WF_MAX_SPANS
-        // (ssworldfield.cpp) solid spans as [bottom, top] pairs, col-major
-        // (col * SS_WF_MAX_SPANS + slot), NO_SURFACE top where the slot is
-        // empty. Air is everything between spans, plus the gap below the
-        // lowest span and above the highest one; the conversion guarantees
-        // every stored gap is at least the slab threshold tall (shorter gaps
-        // merge into the surrounding body), so a wall standing on a floor
-        // never reads as a hollow shell and a room is one air interval
-        // whatever band its floor and ceiling landed in.
+        // The cell grid, col-major by span slot ([k * res * res + col]) so a
+        // slot is one contiguous plane - the layout SSAcoustic::Snap walks.
         std::vector<F32> mSpanBottom;
         std::vector<F32> mSpanTop;
         std::vector<U8> mSpanFlags;
 
-        // Dirty rectangle in cells; empty = whole tile. The re-peel renders
-        // only this sub-frustum and splices only these columns.
-        S32 mDirtyX0 = 0, mDirtyY0 = 0, mDirtyX1 = 0, mDirtyY1 = 0;
-
-        // <SS:Nexii> The flood's output, one label/depth per air gap: gap k of
-        // a column with n spans sits beneath span k (gap 0 below everything,
-        // gap n above the highest span), col-major
-        // (col * (SS_WF_MAX_SPANS + 1) + k) so a column's gaps are contiguous.
-        // AIR_SOLID marks "no such gap". Valid only while mAirSerial matches
-        // mGeomSerial - an edit invalidates them until the flood re-runs on
-        // the next commit.
+        // <SS:Nexii> The classification, one label/distance per air gap: gap k
+        // of a cell with n spans sits beneath span k (gap 0 below everything,
+        // gap n above the highest), col-major
+        // (col * (SS_WF_MAX_SPANS + 1) + k) so a cell's gaps are contiguous.
+        // AIR_SOLID marks "no such gap". mGapDepth is DECIMETRES of covered
+        // travel from the opening that reached the gap, AIR_DEPTH_UNREACHED
+        // where nothing did; airDepthAt rounds it to metres.
         std::vector<U8> mGapLabel;
         std::vector<U16> mGapDepth;
-        U32 mAirSerial = 0;
 
-        // <SS:Nexii> The base sweep's band count for this tile - scratch
-        // slots at or above this index belong to Z bisection, and a rect
-        // re-peel clears their columns before re-capturing so stale sub-band
-        // bodies never survive an edit.
-        S32 mBaseBands = 0;
-
-        // <SS:Nexii> The ACOUSTIC channel's bake, built by the flood's worker job from
-        // the span snapshot (doc/atmo_magic_acoustics.md Parts 1-4). Gap-anchored
+        // <SS:Nexii> The ACOUSTIC channel's bake, built by the same worker job from
+        // the same sheet snapshot (doc/atmo_magic_acoustics.md Parts 1-4). Gap-anchored
         // probes (ear at floor + 1.2 m, ceiling under a roof, intermediates every 4 m
         // for tall gaps), the probe graph (vertical links by construction, horizontal
-        // links validated by span-store rays, aperture factors, portal flags), and the
+        // links validated by cell-grid rays, aperture factors, portal flags), and the
         // tier A statistic bake per probe (8-direction wall profile, sky openness,
         // room volume/area, Sabine RT60, space/size classes, travel-to-outdoors).
         // Tier B's stochastic bundles fill the bundle fields in later batch jobs,
-        // each store-back serial-gated individually. Valid while mSerial matches
-        // mGeomSerial - the same staleness gate the labels ride.
+        // each store-back serial-gated individually.
         struct Acoustic
         {
             S32 mLatRes = 0;            // lattice cells per axis
             F32 mLatCell = 0.f;         // lattice cell size, metres
-            F32 mCeiling = 0.f;         // the capture ceiling the probes span
+            F32 mCeiling = 0.f;         // the grid ceiling the probes span
 
             std::vector<SSAcoustic::Probe> mProbes;      // CSR per lattice cell:
             std::vector<S32> mCellStart;                 // [cell] first probe index,
@@ -427,136 +371,53 @@ private:
             std::vector<S32> mAdjStart;                  // CSR: [probe] first adjacency
             std::vector<S32> mAdjNode;                   // neighbour probe per slot
             std::vector<F32> mAdjCost;                   // Dijkstra cost per slot
-
-            U32 mSerial = 0;
         };
         Acoustic mAcoustic;
 
-        U32 mGeomSerial = 1;
+        // <SS:Nexii> One stamp and two serials, which is the whole staleness
+        // story. mWantStamp is the sheet-set signature the navmesh last
+        // reported for a settled region; when it moves, mGeomSerial moves with
+        // it and the region owes a classification. mGridSerial is the serial
+        // the published grid carries, so mGridSerial != mGeomSerial means
+        // exactly "a rebuild is owed" - that is what current() tests. A worker
+        // result is only stored when its serial still matches AND the
+        // generation counter has not moved (clear/evict both move it, so a
+        // walk in flight for a dropped region can never land on a grid the
+        // same region handle re-created and restarted at serial 0).
+        U64 mWantStamp = 0;
+        U32 mGeomSerial = 0;
+        U32 mGridSerial = 0;
 
-        S32 mBandTarget = 0;       // bands the next/active build runs
-
-        F64 mCaptureTime = 0.0;
+        F64 mBuiltAt = 0.0;
         F64 mLastTouched = 0.0;
-        bool mDirty = false;
-        bool mValid = false;
-
-        bool mNavSourced = false;   // spans come from the navmesh's sheets, not the capture
-        bool mNavDirty = false;     // sheets landed since the serial last moved
-        F64 mNavLastFed = 0.0;
+        F64 mSettledAt = 0.0;       // when mWantStamp last moved: the rebuild debounce
+        bool mValid = false;        // a grid is published and safe to read
     };
 
-    // <SS:Nexii> One capture node on the build worklist: an XY rect of grid
-    // columns, a Z interval, and the square capture resolution for that rect.
-    // The base sweep's nodes cover the whole tile (or the build rect) at the
-    // tile resolution with uniform Z bands; Z bisection enqueues finer
-    // intervals beneath captured bodies; the XY quadtree enqueues quadrant
-    // nodes so the fine work only covers the quads that need it. A column's
-    // bodies are vertically disjoint, so topmost-in-interval queries
-    // partition them - every body down to the minimum interval is found
-    // without any peeling.
-    struct CaptureNode
-    {
-        S32 mSlot = 0;       // scratch slot the results splice into (base
-                             // nodes; refine nodes write the span store)
-        S32 mX0 = 0, mY0 = 0, mX1 = 0, mY1 = 0;   // XY rect, grid cells
-        S32 mRes = 0;        // square capture resolution for the rect
-        F32 mZ0 = 0.f;       // interval floor
-        F32 mZ1 = 0.f;       // interval ceiling
-        bool mBisect = false;// a Z-bisection child (never triggers the empty-run stop)
-        bool mRefine = false;// a quad node: bodies insert straight into the span store
-        bool mHung = false;  // set by the apply: unexplored space beneath the body
-    };
-
-    enum EBuildPhase
-    {
-        PHASE_BASE = 0,   // uniform band sweep, folded into the store at the end
-        PHASE_REFINE = 1, // quad nodes inserting sub-band bodies directly
-    };
-
-    struct Build
-    {
-        bool mActive = false;
-        U64 mRegionHandle = 0;
-        // <SS:Nexii> The capture worklist: nodes to capture, in order. The
-        // base phase enumerates the uniform band sweep; the refine phase
-        // appends quad nodes beneath captured bodies (breadth-first, so each
-        // level finishes before the next starts).
-        std::vector<CaptureNode> mWorklist;
-        size_t mCursor = 0;        // next worklist entry
-        S32 mPhase = 0;            // EBuildPhase
-        S32 mPass = 0;             // capture pass within the node: 0 down, 1 up
-        bool mRectOnly = false;    // re-peeling the dirty rectangle only
-        S32 mRectX0 = 0, mRectY0 = 0, mRectX1 = 0, mRectY1 = 0;   // the build's XY rect (grid cells)
-        S32 mRectRes = 0;          // square capture resolution for the rect
-        std::vector<F32> mDepth[2];// the node's two depth readbacks (down, up)
-        bool mNodeHung = false;    // set by the apply: the node's body hangs - unexplored space beneath
-        S32 mEmptyRun = 0;         // consecutive empty base nodes seen by the live build
-        bool mChanged = false;     // any spliced column differed from what was stored
-        bool mJustCaptured = false;// a pass was rendered and its readback landed; apply it next step
-        // <SS:Nexii> Per column, the highest scratch slot a real capture hit
-        // this build (base slots only). The rect re-peel's carry-forward
-        // rides spans above it: they were never re-resolved, so they ride
-        // along rather than being folded away from empty scratch.
-        std::vector<S32> mSeenBand;
-        S32 mNextSlot = 0;         // the next free scratch slot (bisection/quad allocation)
-    };
-
-    Tile* tileFor(LLViewerRegion* regionp, bool allow_create);
     const Tile* tileAt(const LLVector3& pos_agent) const;
 
-    bool needsBuild(const Tile& tile) const;
-    Tile* pickBuildTarget();
+    // Whether a grid's labels, depths and acoustic bake describe the current
+    // sheet set. Span reads (surfaceTop, coverage, traceSolid) are served from
+    // a stale-but-consistent grid; label reads are not.
+    static bool current(const Tile& tile) { return tile.mValid && tile.mGridSerial == tile.mGeomSerial; }
 
-    bool advanceBuild();
-
-    bool capturePass(Tile& tile, const CaptureNode& node, S32 pass);
-    void applyBand(Tile& tile, const CaptureNode& node);
-    void applyRefine(Tile& tile, const CaptureNode& node);
-    void commitBuild(Tile& tile);
-
-    // Grow the tile's flat band arrays to cover at least `bands` layers,
-    // filling the new region with open-sky (NO_SURFACE) cells. Readers index
-    // below mBandCount, which only grows after applyBand ensured the band it
-    // spliced; the flood snapshots mBandCount bands, so the invariant covers
-    // it too.
-    void ensureBands(Tile& tile, S32 bands);
-
-    // Fold the capture scratch into the column span store for a rectangle of
-    // columns: per column, the per-band bodies sort bottom-up and union
-    // (band-plane continuations, parent/child duplicates), the gap beneath
-    // the first span extends to the world floor when thinner than the slab.
-    // Runs when the base sweep's worklist exhausts, before the refine phase.
-    void foldSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
-
-    // Finalize the column span store for a rectangle of columns: merge any
-    // gaps the refine phase's insertions left thinner than the slab, and
-    // extend a first span whose below-gap is thinner to the world floor.
-    // Runs at commit, after the refine phase's worklist exhausts.
-    void finalizeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1);
-
-    // Insert one solid body into a column's span list: sorted position, union
-    // with touching or overlapping neighbours, and over the span budget a
-    // collapse of the thinnest air gap (the two spans around it merge - the
-    // gap becomes solid). The list stays sorted and every gap in it at least
-    // the slab threshold tall. A member, not a file static, because it
-    // reshapes the private Tile's store.
-    static void spanInsert(Tile& tile, size_t col, F32 bottom, F32 top, U8 flags);
-
-    // Which air gap of a column contains z: 0 none (inside a body), otherwise
-    // 1 + the gap index (gap 0 below the lowest span, gap n above the
-    // highest). Bounds of the air found come back for callers that want them.
+    // Which air gap of a cell contains z: 0 below the lowest span, n above the
+    // highest, or -1 when z falls inside a body. Bounds of the air found come
+    // back for callers that want them.
     S32 gapAt(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) const;
 
-    // The enclosure spectrum's shared body - label lookup, sub-band
-    // resolution and the depth ramp - against a caller-resolved region/tile.
+    // <SS:Nexii> The point query of decision 2: the gap a 3D point belongs to, or
+    // - for a point with no air at its own height, which is only ever a point
+    // inside a body - the first gap found walking DOWN within
+    // SSWorldFieldGroundReach metres. Nothing within reach is open air, which
+    // the caller reads as outdoors. Returns -1 only when the walk found
+    // nothing inside the grid at all. [interaction: airLabelAt, enclosureInRegion]
+    S32 resolveGap(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) const;
+
+    // The enclosure spectrum's shared body - gap resolution, label lookup and
+    // the gap-height-scaled depth ramp - against a caller-resolved region/grid.
     F32 enclosureInRegion(const LLViewerRegion* regionp, const Tile& tile,
                           const LLVector3& pos_agent) const;
-
-    // Post the connectivity flood for a committed tile to the general worker
-    // queue. Snapshot in, labels out; the completion stores them only if the
-    // tile's geometry serial has not moved underneath the walk.
-    void scheduleFlood(Tile& tile);
 
     // The listener blend's probe set (own-gap probes of the lattice cell plus their
     // graph-adjacent probes, deduped) as node indices - the shared body of probesAt
@@ -564,17 +425,19 @@ private:
     // current answer for the cell.
     S32 listenerProbeSet(const Tile& tile, const LLVector3& pos_agent, S32* out, S32 max_out) const;
 
-    void evict();
-
-    // Nav-sourced tiles: create one for every region in reach (and ask the navmesh to feed it), then bump the
-    // serial of any tile whose region the navmesh has finished with.
+    // Follow the navmesh: create a grid slot for every region in reach, drop
+    // the ones that left, and move a region's geometry serial once the navmesh
+    // has nothing queued for it and its sheet set actually changed.
     void navSettle();
     bool regionNear(const LLViewerRegion* regionp, const LLVector3& cam) const;
-    U32 mNavBlocksFed = 0;
-    U32 mNavSettles = 0;
 
-    std::map<U64, Tile> mTiles;
-    Build mBuild;
+    // Post one region's classification to the General work queue: snapshot the
+    // navmesh's band sheets (shared_ptr copies), materialise the cell grid,
+    // walk the air, bake the acoustics, swap the result in under the serial
+    // and generation gates.
+    void scheduleGrid(Tile& tile);
+
+    void evict();
 
     // Registered when the surface-field source switch is on; the field reads
     // the setting rather than holding a handle, so the switch is one settings
@@ -583,25 +446,19 @@ private:
     // the process's life regardless of singleton teardown order.
     bool surfaceTopDemanded() const;
 
-    LLRenderTarget mTarget;
+    std::map<U64, Tile> mTiles;
 
-    // <SS:Nexii> One band readback in flight, served by SSGLReadback. mTarget must not be re-rendered (or torn down) until the outstanding read lands: advanceBuild()/capture gate on mReadbackPending, and a clear requested mid-read defers to the read's completion.
-    bool mReadbackPending = false;
-    bool mClearPending = false;
-
-    // One flood in flight at a time; a tile committing while one runs simply
-    // schedules again on its own commit. A generation counter, not a pointer,
-    // decides whether a finished walk still applies - clear() and eviction
-    // both move it.
-    bool mFloodBusy = false;
-    bool mGateWasOff = false;          // Atmo resolved no environment last frame: tiles kept, builds paused, refeed on the way back
-    U32 mFloodGeneration = 0;
+    // One classification in flight at a time; a region that settles while one
+    // runs simply gets its turn on a later update. A generation counter, not a
+    // pointer, decides whether a finished job still applies - clear() and
+    // eviction both move it.
+    bool mBuildBusy = false;
+    bool mGateWasOff = false;          // Atmo resolved no environment last frame: grids kept, rebuilds paused
+    U32 mGridGeneration = 0;
 
     F64 mNow = 0.0;
-    F64 mLastBandAt = 0.0;
-    F32 mLastCaptureMS = 0.f;
-    U32 mCaptureCount = 0;
-    U32 mDirtyCaptures = 0;
+    F32 mLastBuildMS = 0.f;
+    U32 mGridBuilds = 0;
 };
 
 #endif

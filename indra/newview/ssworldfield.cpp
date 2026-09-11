@@ -24,8 +24,8 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "ssworldfield.h"
+#include "ssworldfieldcore.h"
 #include "ssatmomagic.h"
-#include "ssglreadback.h"
 #include "ssworldfieldshapes.h"
 #include "ssnavmesh.h"
 
@@ -38,9 +38,7 @@
 #include "llviewerobject.h"
 #include "llviewerregion.h"
 #include "llworld.h"
-#include "pipeline.h"
-
-#include <glm/gtc/matrix_transform.hpp>
+#include "pipeline.h"        // the overlay's LLGLEnable/LLGLDepthTest
 
 #include <algorithm>
 #include <cfloat>
@@ -50,44 +48,37 @@
 #include <queue>
 
 static const F32 NEIGHBOR_REACH   = 64.f;
-static const F32 DEPTH_MISS       = 0.9999f;
-// The upward pass clears depth to zero and keeps the farthest front-facing
-// fragment, so its miss sentinel is zero rather than one.
-static const F32 DEPTH_MISS_UP    = 0.0001f;
-static const F32 BOUNDARY_EPSILON = 0.05f;
 static const F32 NO_SURFACE       = -FLT_MAX;
 
-// <SS:Nexii> The enclosure spectrum's saturation constant: metres of
-// air-graph distance back to open sky at which the ramp reads half enclosed.
-// Small structures - eaves, canopies, a doorway's threshold - sit a metre or
-// two from the outdoors and stay near 0; rooms and caves whose openings are
-// tens of metres of graph away climb toward 1.
+// <SS:Nexii> The enclosure spectrum's floor constant: the shortest saturation
+// length the ramp ever uses. The real one is the local gap's own cot(theta)
+// reach (see SS_WF_OPEN_K), so a hall or the underside of a sky platform
+// saturates over tens of metres while a crawlspace saturates over one; this is
+// what stops a gap thinner than a person from saturating instantly.
 static const F32 SS_WF_ENCLOSURE_TAU_M = 4.f;
 
-// <SS:Nexii> How many solid spans a column may hold. Real content runs two
-// to five; a column that resolves past the cap merges its smallest air gap
-// rather than dropping a body. The span store's arrays are sized from this.
+// <SS:Nexii> How many solid spans a cell may hold. Real content runs two to
+// five; a cell that resolves past the cap merges its smallest air gap rather
+// than dropping a body. Must match the navmesh sheet's own budget - the sheets
+// are the geometry, and a mismatch would silently truncate them.
 static constexpr S32 SS_WF_MAX_SPANS = 6;
+static_assert(SS_WF_MAX_SPANS == SSNavMesh::SpanSheet::SPANS,
+              "the cell grid's span budget is the navmesh sheet's span budget");
+// <SS:Nexii> The core mirrors these as plain constants so it never includes this
+// header; this is the lockstep check. [interaction: SSWorldFieldCore]
+static_assert((U8)SSWorldField::AIR_SOLID     == SSWorldFieldCore::AIR_SOLID
+           && (U8)SSWorldField::AIR_OUTDOORS  == SSWorldFieldCore::AIR_OUTDOORS
+           && (U8)SSWorldField::AIR_SHELTERED == SSWorldFieldCore::AIR_SHELTERED
+           && (U8)SSWorldField::AIR_INTERIOR  == SSWorldFieldCore::AIR_INTERIOR
+           && (U8)SSWorldField::AIR_UNKNOWN   == SSWorldFieldCore::AIR_UNKNOWN,
+              "SSWorldFieldCore's air labels are SSWorldField::EAirLabel");
+static_assert((U16)SSWorldField::AIR_DEPTH_UNREACHED == SSWorldFieldCore::DEPTH_UNREACHED,
+              "SSWorldFieldCore's unreached sentinel is SSWorldField's");
 
-// <SS:Nexii> The Z-bisection granularity: an interval is bisected only while
-// its halves stay at or above this height, and a body hanging less than this
-// far above its interval's floor leaves no unexplored space worth probing.
-// Bodies closer together vertically than this merge into one span.
-static constexpr F32 SS_WF_MIN_BAND_M = 1.f;
-
-// <SS:Nexii> The scratch slot cap: the base sweep's uniform bands plus the
-// Z-bisection children. Transient per build - commitBuild releases the
-// scratch after foldSpans folds it into the span store.
-static constexpr S32 SS_WF_MAX_SLOTS = 48;
-
-// <SS:Nexii> The assumed minimum slab: air under a body's captured underside
-// is trimmed by this much before it becomes a lower span, so a wall standing
-// on a floor - whose underside and the floor's top face coincide - never
-// reads as a hollow shell. The trim is also the body thickness the store
-// assumes between a lower span's top and the body's captured top face; the
-// real slab is usually thinner, and the error is sub-cell at the shipping
-// resolutions.
-static const F32 SS_WF_SPAN_SLAB_M = 0.25f;
+// <SS:Nexii> Headroom above the highest band the navmesh published: the grid's
+// ceiling. It only sets where a column's top gap ends, and that gap is open
+// sky by construction, so the value is a bound rather than a measurement.
+static const F32 SS_WF_CEILING_HEADROOM_M = 8.f;
 
 static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD("Atmo Magic World Field");
 static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD_GRID("Atmo Magic World Field Grid");
@@ -97,7 +88,7 @@ static LLTrace::BlockTimerStatHandle FTM_SS_WORLDFIELD_GRID("Atmo Magic World Fi
 // order - a destroyed handle must always release its count.
 static std::map<std::pair<U64, S32>, S32> sInterests;
 
-// <SS:Nexii> The debug overlay's materialised drainage view, cached per region and rebuilt only when the tile's geometry serial moves - the same drop-on-serial-change discipline the real channels will follow, so the overlay never pays a per-frame priority flood just to draw. Declared with the other file statics because evict() drops it alongside the tiles it belongs to.
+// <SS:Nexii> The debug overlay's materialised drainage view, cached per region and rebuilt only when the grid's geometry serial moves - the same drop-on-serial-change discipline the real channels follow, so the overlay never pays a per-frame priority flood just to draw. Declared with the other file statics because evict() drops it alongside the grids it belongs to.
 struct SS_WF_DrainDebug
 {
     SSRainShadowMap::SurfaceGrid mGrid;
@@ -112,13 +103,30 @@ static S32 ss_wf_interest_count(U64 region_handle, S32 channel)
     return (it != sInterests.end()) ? it->second : 0;
 }
 
-static bool ss_wf_region_claimed(U64 region_handle)
+// The grid's cell size in metres: 0.25 is the navmesh sheet's own cell, so it
+// costs no resampling and keeps door- and window-scale openings resolved for
+// the reach walk. Coarser unions whole sheet cells together.
+static F32 ss_wf_cell_setting()
 {
-    for (S32 ch = 0; ch <= (S32)SSWorldField::EChannel::ACOUSTIC; ++ch)
-    {
-        if (ss_wf_interest_count(region_handle, ch) > 0) return true;
-    }
-    return false;
+    static LLCachedControl<F32> cell(gSavedSettings, "SSWorldFieldCell", 0.25f);
+    return llclamp((F32)cell, 0.25f, 8.f);
+}
+
+// cot(theta) for the outdoors reach: how many metres of covered space one
+// metre of gap height hands inward before the sky stops being overhead.
+static F32 ss_wf_open_k()
+{
+    static LLCachedControl<F32> angle(gSavedSettings, "SSWorldFieldOpenAngle", 45.f);
+    const F32 t = llclamp((F32)angle, 5.f, 85.f) * DEG_TO_RAD;
+    return llclamp(cosf(t) / llmax(sinf(t), 0.01f), 0.1f, 12.f);
+}
+
+// How far a query point with no air at its own height may walk DOWN looking
+// for one before the field calls it open air.
+static F32 ss_wf_ground_reach()
+{
+    static LLCachedControl<F32> reach(gSavedSettings, "SSWorldFieldGroundReach", 64.f);
+    return llclamp((F32)reach, 1.f, 4096.f);
 }
 
 SSWorldField::Interest SSWorldField::claim(U64 region_handle, EChannel channel)
@@ -137,80 +145,29 @@ SSWorldField::Interest SSWorldField::claim(U64 region_handle, EChannel channel)
 }
 
 // The wet field's source switch - while on, SURFACE_TOP counts as claimed
-// for the camera region and its neighbours, the same reach the rain shadow
-// capture serves today.
+// for the camera region and its neighbours.
 bool SSWorldField::surfaceTopDemanded() const
 {
     static LLCachedControl<bool> demanded(gSavedSettings, "SSWorldFieldSurfaceTop", false);
     return demanded;
 }
 
-// One edit fan-out. Settled prim edits land here; the tile's dirty rectangle
-// grows to cover the edit, and the re-peel is scissored to it.
+// <SS:Nexii> The edit fan-out is a pass-through now. The field's geometry is the navmesh's band sheets and the navmesh already rebuilds the bands an edit's census change touches; there is no capture here to scissor and no store here to splice, so marking a rectangle dirty would only duplicate work the census does better. The field learns about the edit when the region settles again with a different sheet-set stamp. [interaction: SSWorldFieldShapes::markDirty, SSNavMesh::collectSheets]
 void SSWorldField::markDirty(const LLVector3& pos_agent, F32 radius)
 {
-    SSWorldField* self = getInstance();
-    if (!self) return;
-
-    // <SS:Nexii> The declared-shape census rides the same fan-out, debounced on its side.
     SSWorldFieldShapes::markDirty(pos_agent, radius);
-
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
-    if (!regionp) return;
-
-    auto it = self->mTiles.find(regionp->getHandle());
-    if (it == self->mTiles.end() || !it->second.mValid) return;
-
-    Tile& tile = it->second;
-    tile.mLastTouched = self->mNow;
-
-    const F32 x = pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX];
-    const F32 y = pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY];
-    const F32 r = llmax(radius, tile.mCell);
-
-    const S32 x0 = llclamp((S32)floorf((x - r) / tile.mCell), 0, tile.mRes - 1);
-    const S32 y0 = llclamp((S32)floorf((y - r) / tile.mCell), 0, tile.mRes - 1);
-    const S32 x1 = llclamp((S32)ceilf((x + r) / tile.mCell), x0 + 1, tile.mRes);
-    const S32 y1 = llclamp((S32)ceilf((y + r) / tile.mCell), y0 + 1, tile.mRes);
-
-    if (tile.mDirty)
-    {
-        tile.mDirtyX0 = llmin(tile.mDirtyX0, x0);
-        tile.mDirtyY0 = llmin(tile.mDirtyY0, y0);
-        tile.mDirtyX1 = llmax(tile.mDirtyX1, x1);
-        tile.mDirtyY1 = llmax(tile.mDirtyY1, y1);
-    }
-    else
-    {
-        tile.mDirtyX0 = x0;
-        tile.mDirtyY0 = y0;
-        tile.mDirtyX1 = x1;
-        tile.mDirtyY1 = y1;
-        tile.mDirty = true;
-    }
-
-// Bands the edit's own altitude could touch. A removed roof drops its whole
-    // column, so a rect re-peel sweeps from the band floor up to just past the
-    // edit, not only the bands the edit's box overlaps.
-    const S32 band = llclamp((S32)((pos_agent.mV[VZ] + r) / tile.mBandHeight), 0, SSWorldField::MAX_BANDS - 1);
-    tile.mBandTarget = llmax(tile.mBandTarget, band + 1);
 }
 
 void SSWorldField::clear()
 {
-    // A read in flight still references mTarget's depth texture - let it land
-    // first, then tear the target down from the read's completion.
-    if (mReadbackPending) { mClearPending = true; return; }
     mTiles.clear();
-    mBuild.mActive = false;
-    ++mFloodGeneration;     // a flood in flight lands into nothing
-    mTarget.release();
+    sDrainDebug.clear();
+    ++mGridGeneration;      // a classification in flight lands into nothing
 }
 
+// The field holds no GL resources; the display teardown path still calls this, so it is clear().
 void SSWorldField::shutdownGL()
 {
-    mReadbackPending = false;
-    mClearPending = false;
     clear();
 }
 
@@ -223,20 +180,14 @@ bool SSWorldField::tileValid(U64 region_handle) const
 U32 SSWorldField::geometrySerial(U64 region_handle) const
 {
     auto it = mTiles.find(region_handle);
-    return (it != mTiles.end()) ? it->second.mGeomSerial : 0;
+    return (it != mTiles.end()) ? it->second.mGridSerial : 0;
 }
 
-F32 SSWorldField::bandHeight() const
+// A rebuild is owed: the navmesh's sheet set moved since the published grid was classified.
+bool SSWorldField::gridStale(U64 region_handle) const
 {
-    static LLCachedControl<F32> band(gSavedSettings, "SSWorldFieldBand", 16.f);
-    return llclamp((F32)band, 4.f, 64.f);
-}
-
-S32 SSWorldField::bandCount() const
-{
-    static LLCachedControl<F32> ceiling(gSavedSettings, "SSWorldFieldCeiling", 256.f);
-    const S32 count = (S32)ceilf(llmax((F32)ceiling, bandHeight()) / bandHeight());
-    return llclamp(count, 1, MAX_BANDS);
+    auto it = mTiles.find(region_handle);
+    return (it != mTiles.end()) && !current(it->second);
 }
 
 S32 SSWorldField::resolution() const
@@ -248,17 +199,28 @@ S32 SSWorldField::resolution() const
     return 0;
 }
 
+F32 SSWorldField::cellSize() const
+{
+    return ss_wf_cell_setting();
+}
+
+F32 SSWorldField::ceilingAt(const LLVector3& pos_agent) const
+{
+    const Tile* tile = tileAt(pos_agent);
+    return (tile && tile->mValid) ? tile->mCeiling : 0.f;
+}
+
+S32 SSWorldField::sheetsAt(const LLVector3& pos_agent) const
+{
+    const Tile* tile = tileAt(pos_agent);
+    return tile ? tile->mSheets : 0;
+}
+
 F64 SSWorldField::tileAge(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
     if (!tile || !tile->mValid) return -1.0;
-    return mNow - tile->mCaptureTime;
-}
-
-S32 SSWorldField::effectiveBands(const LLVector3& pos_agent) const
-{
-    const Tile* tile = tileAt(pos_agent);
-    return tile ? tile->mBandCount : 0;
+    return mNow - tile->mBuiltAt;
 }
 
 const SSWorldField::Tile* SSWorldField::tileAt(const LLVector3& pos_agent) const
@@ -271,75 +233,38 @@ const SSWorldField::Tile* SSWorldField::tileAt(const LLVector3& pos_agent) const
     return &it->second;
 }
 
-SSWorldField::Tile* SSWorldField::tileFor(LLViewerRegion* regionp, bool allow_create)
-{
-    auto it = mTiles.find(regionp->getHandle());
-    if (it != mTiles.end()) return &it->second;
-    if (!allow_create) return nullptr;
-
-    static LLCachedControl<F32> cell_setting(gSavedSettings, "SSWorldFieldCell", 0.25f);
-    const F32 cell = llclamp((F32)cell_setting, 0.25f, 8.f);
-    const F32 width = regionp->getWidth();
-    const S32 res = llclamp((S32)llround(width / cell), 32, 1024);
-
-    Tile& tile = mTiles[regionp->getHandle()];
-    tile.mRegionHandle = regionp->getHandle();
-    tile.mRes = res;
-    tile.mCell = width / (F32)res;
-    tile.mBandHeight = bandHeight();
-    tile.mAllocBands = 0;
-
-    // The column span store and its flood output are fixed-size per tile.
-    const size_t layer = (size_t)res * res;
-    tile.mSpanBottom.assign((size_t)SS_WF_MAX_SPANS * layer, NO_SURFACE);
-    tile.mSpanTop.assign((size_t)SS_WF_MAX_SPANS * layer, NO_SURFACE);
-    tile.mSpanFlags.assign((size_t)SS_WF_MAX_SPANS * layer, 0);
-    tile.mGapLabel.assign((size_t)(SS_WF_MAX_SPANS + 1) * layer, (U8)AIR_SOLID);
-    tile.mGapDepth.assign((size_t)(SS_WF_MAX_SPANS + 1) * layer, (U16)AIR_DEPTH_UNREACHED);
-    return &tile;
-}
-
 void SSWorldField::dumpColumn(const LLVector3& pos_agent, std::vector<std::string>& out) const
 {
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     const Tile* tile = tileAt(pos_agent);
-    if (!regionp || !tile) { out.push_back("world field: no tile under the point"); return; }
-    out.push_back(llformat("world field tile: %s, source %s, res %d (%.2f m cells), geometry serial %u, air serial %u, acoustic serial %u, nav dirty %d",
-                           tile->mValid ? "valid" : "NOT VALID", tile->mNavSourced ? "navmesh spans" : "depth capture", tile->mRes, tile->mCell,
-                           tile->mGeomSerial, tile->mAirSerial, tile->mAcoustic.mSerial, (S32)tile->mNavDirty));
+    if (!regionp || !tile) { out.push_back("world field: no grid under the point"); return; }
+    out.push_back(llformat("world field grid: %s, %d cells/axis (%.2f m), ceiling %.1f m, %d band sheets, geometry serial %u, grid serial %u%s",
+                           tile->mValid ? "published" : "NOT BUILT YET", tile->mRes, tile->mCell, tile->mCeiling, tile->mSheets,
+                           tile->mGeomSerial, tile->mGridSerial, current(*tile) ? "" : " (REBUILD PENDING)"));
+    if (!tile->mValid) return;
     const LLVector3 rp = regionp->getPosRegionFromAgent(pos_agent);
     const S32 x = llclamp((S32)(rp.mV[VX] / tile->mCell), 0, tile->mRes - 1), y = llclamp((S32)(rp.mV[VY] / tile->mCell), 0, tile->mRes - 1);
     const size_t col = (size_t)y * tile->mRes + x, layer = (size_t)tile->mRes * tile->mRes;
     static const char* AIR_NAME[] = {"solid", "outdoors", "sheltered", "interior", "unknown"};
+    auto depth_str = [&](U16 d) { return (d == (U16)AIR_DEPTH_UNREACHED) ? std::string("unreached") : llformat("%.1f m covered", (F32)d * 0.1f); };
     S32 n = 0;
     for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
     {
         const size_t si = (size_t)k * layer + col;
         if (tile->mSpanTop[si] <= NO_SURFACE * 0.5f) break;
         const U8 gl = tile->mGapLabel[col * (SS_WF_MAX_SPANS + 1) + k];
-        out.push_back(llformat("  gap %d below: %s depth %u; span %d: z %.2f..%.2f flags 0x%02x%s%s", k, AIR_NAME[llclamp((S32)gl, 0, 4)],
-                               (U32)tile->mGapDepth[col * (SS_WF_MAX_SPANS + 1) + k], k, tile->mSpanBottom[si], tile->mSpanTop[si], tile->mSpanFlags[si],
+        out.push_back(llformat("  gap %d below: %s, %s; span %d: z %.2f..%.2f flags 0x%02x%s%s", k, AIR_NAME[llclamp((S32)gl, 0, 4)],
+                               depth_str(tile->mGapDepth[col * (SS_WF_MAX_SPANS + 1) + k]).c_str(), k, tile->mSpanBottom[si], tile->mSpanTop[si], tile->mSpanFlags[si],
                                (tile->mSpanFlags[si] & SSRainShadowMap::SURF_FALLBACK) ? " terrain" : "", (tile->mSpanFlags[si] & SSRainShadowMap::SURF_WATER) ? " water" : ""));
         ++n;
     }
     const U8 top_gl = tile->mGapLabel[col * (SS_WF_MAX_SPANS + 1) + n];
-    out.push_back(llformat("  gap %d above: %s depth %u (column %d,%d, %d spans)", n, AIR_NAME[llclamp((S32)top_gl, 0, 4)], (U32)tile->mGapDepth[col * (SS_WF_MAX_SPANS + 1) + n], x, y, n));
+    out.push_back(llformat("  gap %d above: %s, %s (cell %d,%d, %d spans)", n, AIR_NAME[llclamp((S32)top_gl, 0, 4)],
+                           depth_str(tile->mGapDepth[col * (SS_WF_MAX_SPANS + 1) + n]).c_str(), x, y, n));
     out.push_back(llformat("  at the point: air %s, enclosure %.2f", AIR_NAME[llclamp((S32)airLabelAt(pos_agent), 0, 4)], enclosureAt(pos_agent)));
 }
 
-bool SSWorldField::navSpansWanted()
-{
-    static LLCachedControl<bool> from_nav(gSavedSettings, "SSWorldFieldFromNavMesh", true);
-    return from_nav && SSNavMesh::instanceExists() && SSNavMesh::getInstance()->active();
-}
-
-bool SSWorldField::navSourced(U64 region_handle) const
-{
-    auto it = mTiles.find(region_handle);
-    return it != mTiles.end() && it->second.mNavSourced;
-}
-
-// The same reach pickBuildTarget serves: the camera's region and any region within NEIGHBOR_REACH of the camera.
+// The camera's region and any region within NEIGHBOR_REACH of the camera - the reach the field keeps grids for.
 bool SSWorldField::regionNear(const LLViewerRegion* regionp, const LLVector3& cam) const
 {
     const LLVector3 origin = regionp->getOriginAgent();
@@ -349,245 +274,165 @@ bool SSWorldField::regionNear(const LLViewerRegion* regionp, const LLVector3& ca
     return dx * dx + dy * dy <= NEIGHBOR_REACH * NEIGHBOR_REACH;
 }
 
-// <SS:Nexii> One band's sheet into the tile: the band's z-range is cut out of every column it covers (a span straddling the range keeps its parts outside it), the sheet's spans go in through spanInsert, and a span flagged terrain then reaches the world floor, swallowing whatever was below - the capture's "a wall on unmeasured ground stays solid to it". Sheet columns are 0.25 m; a coarser tile unions every sheet column its cell covers. A region without a tile gets one only within reach, and the navmesh is asked to feed the whole region so bands published before the tile existed arrive too. [interaction: finalizeSpans]
-void SSWorldField::navSpans(U64 region_handle, F32 x0_m, F32 y0_m, F32 extent_m, F32 zmin, F32 zmax, const SSNavMesh::SpanSheet* sheet)
+// ---------------------------------------------------------------------------- the cell grid
+
+// <SS:Nexii> The region's cell grid, materialised on a worker from the navmesh's
+// band sheets. One pass per sheet: the sheet's 64 x 64 cells over its 16 m column
+// are mapped into the region-anchored grid (a coarser grid unions every sheet cell
+// its own cell covers) and every span inserted. Bands are separated by real air
+// gaps by construction, so two bands of the same column never contest a z range and
+// insertion order does not matter. Then one pass per cell: a span the census marked
+// terrain reaches the world floor, swallowing whatever the raster put beneath the
+// land - the same rule the depth capture applied, and what keeps a wall standing on
+// unmeasured ground from reading as a hollow shell. [interaction: SSNavMesh::extractSpanSheet]
+static void ss_wf_build_grid(S32 res, F32 cell, const LLVector3& region_origin,
+                             const std::vector<SSNavMesh::BandSheet>& sheets,
+                             std::vector<F32>& span_bottom, std::vector<F32>& span_top,
+                             std::vector<U8>& span_flags)
 {
-    static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldField", true);
-    if (!enabled || !SSAtmoMagic::getInstance()->isEnabled()) return;
-    // <SS:Nexii> buildBand allocates the sheet before its no-geometry and heightfield-failure early-outs, so an unfilled sheet arrives with empty vectors; indexing it below reads the null page. Unfilled means no sheet. [interaction: SSNavMesh::buildBand, extractSpanSheet]
-    if (sheet && (sheet->mCount.size() != (size_t)SSNavMesh::SpanSheet::RES * SSNavMesh::SpanSheet::RES
-                  || sheet->mBottom.size() != sheet->mCount.size() * SSNavMesh::SpanSheet::SPANS
-                  || sheet->mTop.size() != sheet->mBottom.size() || sheet->mFlags.size() != sheet->mBottom.size())) sheet = nullptr;
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
-    if (!regionp) return;
-    Tile* tile = tileFor(regionp, false);
-    if (!tile)
-    {
-        if (!sheet) return;
-        const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-        if (!regionNear(regionp, cam)) return;
-        if (mTiles.size() >= MAX_TILES)
-        {
-            // Make room with a tile out of reach; none out of reach means this region waits its turn.
-            auto victim = mTiles.end();
-            for (auto it = mTiles.begin(); it != mTiles.end(); ++it)
-            {
-                LLViewerRegion* r = LLWorld::getInstance()->getRegionFromHandle(it->first);
-                if (!r || !regionNear(r, cam)) { victim = it; break; }
-            }
-            if (victim == mTiles.end()) return;
-            sDrainDebug.erase(victim->first);
-            mTiles.erase(victim);
-            ++mFloodGeneration;
-        }
-        tile = tileFor(regionp, true);
-    }
-    if (!tile->mNavSourced)
-    {
-        // Taking over from the capture (or brand new): start from an empty store and have every band land again.
-        std::fill(tile->mSpanBottom.begin(), tile->mSpanBottom.end(), NO_SURFACE);
-        std::fill(tile->mSpanTop.begin(), tile->mSpanTop.end(), NO_SURFACE);
-        std::fill(tile->mSpanFlags.begin(), tile->mSpanFlags.end(), (U8)0);
-        tile->mNavSourced = true;
-        tile->mValid = false;
-        tile->mDirty = false;
-        tile->mBandTarget = 0;
-        SSNavMesh::getInstance()->refeedRegion(region_handle);
-    }
-    tile->mLastTouched = mNow;
-    tile->mNavLastFed = mNow;
-    tile->mNavDirty = true;
-    ++mNavBlocksFed;
-
-    const S32 res = tile->mRes;
-    const F32 cell = tile->mCell;
     const size_t layer = (size_t)res * res;
-    const S32 cx0 = llclamp((S32)floorf(x0_m / cell + 0.5f), 0, res), cx1 = llclamp((S32)floorf((x0_m + extent_m) / cell + 0.5f), 0, res);
-    const S32 cy0 = llclamp((S32)floorf(y0_m / cell + 0.5f), 0, res), cy1 = llclamp((S32)floorf((y0_m + extent_m) / cell + 0.5f), 0, res);
+    span_bottom.assign((size_t)SS_WF_MAX_SPANS * layer, NO_SURFACE);
+    span_top.assign((size_t)SS_WF_MAX_SPANS * layer, NO_SURFACE);
+    span_flags.assign((size_t)SS_WF_MAX_SPANS * layer, (U8)0);
+
     const S32 R = SSNavMesh::SpanSheet::RES, K = SSNavMesh::SpanSheet::SPANS;
-    const F32 sheet_cell = extent_m / (F32)R;
+    const F32 extent = SSNavMesh::TILE_M;
+    const F32 sheet_cell = extent / (F32)R;
 
-    F32 bottoms[SS_WF_MAX_SPANS], tops[SS_WF_MAX_SPANS];
-    U8 flags[SS_WF_MAX_SPANS];
-    for (S32 y = cy0; y < cy1; ++y)
+    for (const SSNavMesh::BandSheet& bs : sheets)
     {
-        for (S32 x = cx0; x < cx1; ++x)
+        const SSNavMesh::SpanSheet* sheet = bs.mSheet.get();
+        if (!sheet) continue;
+        if (sheet->mCount.size() != (size_t)R * R || sheet->mBottom.size() != sheet->mCount.size() * K
+            || sheet->mTop.size() != sheet->mBottom.size() || sheet->mFlags.size() != sheet->mBottom.size())
         {
-            const size_t col = (size_t)y * res + x;
+            continue;   // a build that bailed out before filling its sheet leaves the vectors empty
+        }
 
-            // 1. Cut the band's range out of the column.
-            S32 n = 0;
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                const F32 top = tile->mSpanTop[si];
-                if (top <= NO_SURFACE * 0.5f) break;
-                const F32 bot = tile->mSpanBottom[si];
-                const U8 fl = tile->mSpanFlags[si];
-                if (top <= zmin || bot >= zmax) { if (n < SS_WF_MAX_SPANS) { bottoms[n] = bot; tops[n] = top; flags[n] = fl; ++n; } continue; }
-                if (bot < zmin && n < SS_WF_MAX_SPANS) { bottoms[n] = bot; tops[n] = zmin; flags[n] = fl; ++n; }
-                if (top > zmax && n < SS_WF_MAX_SPANS) { bottoms[n] = zmax; tops[n] = top; flags[n] = fl; ++n; }
-            }
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                tile->mSpanBottom[si] = k < n ? bottoms[k] : NO_SURFACE;
-                tile->mSpanTop[si] = k < n ? tops[k] : NO_SURFACE;
-                tile->mSpanFlags[si] = k < n ? flags[k] : (U8)0;
-            }
-            if (!sheet) continue;
+        const F32 x0_m = bs.mOriginAgent.mV[VX] - region_origin.mV[VX];
+        const F32 y0_m = bs.mOriginAgent.mV[VY] - region_origin.mV[VY];
+        const S32 cx0 = llclamp((S32)floorf(x0_m / cell + 0.5f), 0, res), cx1 = llclamp((S32)floorf((x0_m + extent) / cell + 0.5f), 0, res);
+        const S32 cy0 = llclamp((S32)floorf(y0_m / cell + 0.5f), 0, res), cy1 = llclamp((S32)floorf((y0_m + extent) / cell + 0.5f), 0, res);
 
-            // 2. Insert the sheet's spans for every sheet column this cell covers.
-            const S32 sx0 = llclamp((S32)floorf(((F32)x * cell - x0_m) / sheet_cell), 0, R - 1);
-            const S32 sx1 = llclamp((S32)ceilf(((F32)(x + 1) * cell - x0_m) / sheet_cell), sx0 + 1, R);
-            const S32 sy0 = llclamp((S32)floorf(((F32)y * cell - y0_m) / sheet_cell), 0, R - 1);
-            const S32 sy1 = llclamp((S32)ceilf(((F32)(y + 1) * cell - y0_m) / sheet_cell), sy0 + 1, R);
-            bool terrain = false;
-            for (S32 sy = sy0; sy < sy1; ++sy) for (S32 sx = sx0; sx < sx1; ++sx)
+        for (S32 y = cy0; y < cy1; ++y)
+        {
+            for (S32 x = cx0; x < cx1; ++x)
             {
-                const size_t sc = (size_t)sy * R + sx;
-                for (S32 k = 0; k < (S32)sheet->mCount[sc] && k < K; ++k)
+                const size_t col = (size_t)y * res + x;
+                const S32 sx0 = llclamp((S32)floorf(((F32)x * cell - x0_m) / sheet_cell), 0, R - 1);
+                const S32 sx1 = llclamp((S32)ceilf(((F32)(x + 1) * cell - x0_m) / sheet_cell), sx0 + 1, R);
+                const S32 sy0 = llclamp((S32)floorf(((F32)y * cell - y0_m) / sheet_cell), 0, R - 1);
+                const S32 sy1 = llclamp((S32)ceilf(((F32)(y + 1) * cell - y0_m) / sheet_cell), sy0 + 1, R);
+                for (S32 sy = sy0; sy < sy1; ++sy) for (S32 sx = sx0; sx < sx1; ++sx)
                 {
-                    const U8 fl = sheet->mFlags[sc * K + k];
-                    if (fl & SSRainShadowMap::SURF_FALLBACK) terrain = true;
-                    spanInsert(*tile, col, sheet->mBottom[sc * K + k], sheet->mTop[sc * K + k], fl);
+                    const size_t sc = (size_t)sy * R + sx;
+                    for (S32 k = 0; k < (S32)sheet->mCount[sc] && k < K; ++k)
+                    {
+                        SSWorldFieldCore::spanInsert(span_bottom.data(), span_top.data(), span_flags.data(),
+                                                     SS_WF_MAX_SPANS, layer, col, sheet->mBottom[sc * K + k],
+                                                     sheet->mTop[sc * K + k], sheet->mFlags[sc * K + k]);
+                    }
                 }
             }
-            if (!terrain) continue;
+        }
+    }
 
-            // 3. The land reaches the world floor: everything below the terrain span folds into it.
-            n = 0;
-            S32 land = -1;
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                if (tile->mSpanTop[si] <= NO_SURFACE * 0.5f) break;
-                bottoms[n] = tile->mSpanBottom[si]; tops[n] = tile->mSpanTop[si]; flags[n] = tile->mSpanFlags[si];
-                if (land < 0 && (flags[n] & SSRainShadowMap::SURF_FALLBACK)) land = n;
-                ++n;
-            }
-            if (land < 0) continue;
-            bottoms[land] = 0.f;
-            const S32 kept = n - land;
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                tile->mSpanBottom[si] = k < kept ? bottoms[land + k] : NO_SURFACE;
-                tile->mSpanTop[si] = k < kept ? tops[land + k] : NO_SURFACE;
-                tile->mSpanFlags[si] = k < kept ? flags[land + k] : (U8)0;
-            }
+    // The land reaches the world floor: everything below the lowest terrain span folds into it.
+    F32 bottoms[SS_WF_MAX_SPANS], tops[SS_WF_MAX_SPANS];
+    U8 flags[SS_WF_MAX_SPANS];
+    for (size_t col = 0; col < layer; ++col)
+    {
+        S32 n = 0, land = -1;
+        for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+        {
+            const size_t si = (size_t)k * layer + col;
+            if (span_top[si] <= NO_SURFACE * 0.5f) break;
+            bottoms[n] = span_bottom[si]; tops[n] = span_top[si]; flags[n] = span_flags[si];
+            if (land < 0 && (flags[n] & SSRainShadowMap::SURF_FALLBACK)) land = n;
+            ++n;
+        }
+        if (land < 0) continue;
+        bottoms[land] = 0.f;
+        const S32 kept = n - land;
+        for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
+        {
+            const size_t si = (size_t)k * layer + col;
+            span_bottom[si] = k < kept ? bottoms[land + k] : NO_SURFACE;
+            span_top[si] = k < kept ? tops[land + k] : NO_SURFACE;
+            span_flags[si] = k < kept ? flags[land + k] : (U8)0;
         }
     }
 }
 
-// <SS:Nexii> Regions in reach get a tile and a refeed as they come into reach (the same reach the capture served, and the tile cap decides how many); a tile whose region the navmesh has finished with - nothing queued, nothing building, no schedule pending - moves its geometry serial, which is what sends the flood and the acoustic bake over it. A rebuild trickling in after an edit moves it again once quiet. [interaction: scheduleFlood]
+// ---------------------------------------------------------------------------- per frame
+
+// <SS:Nexii> Follow the navmesh: a grid slot for every region in reach (the tile cap decides how many), and a region the navmesh has finished with - nothing queued, nothing building, no schedule pending - whose sheet-set stamp differs from the published grid's gets its geometry serial moved, which is what sends the classification job over it. An unchanged stamp is a no-op: a settle that rebuilt nothing must not re-run a region-wide walk. [interaction: SSNavMesh::regionSettled, scheduleGrid]
 void SSWorldField::navSettle()
 {
     SSNavMesh* nav = SSNavMesh::getInstance();
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
+    const F32 cell = ss_wf_cell_setting();
+
     for (LLViewerRegion* regionp : LLWorld::getInstance()->getRegionList())
     {
         if (!regionp || !regionNear(regionp, cam)) continue;
         auto it = mTiles.find(regionp->getHandle());
-        if (it != mTiles.end()) { it->second.mLastTouched = mNow; continue; }
-        if (mTiles.size() >= MAX_TILES)
+        if (it == mTiles.end())
         {
-            auto victim = mTiles.end();
-            for (auto vt = mTiles.begin(); vt != mTiles.end(); ++vt)
+            if (mTiles.size() >= MAX_TILES)
             {
-                LLViewerRegion* r = LLWorld::getInstance()->getRegionFromHandle(vt->first);
-                if (!r || !regionNear(r, cam)) { victim = vt; break; }
+                // Make room with a grid out of reach; none out of reach means
+                // this region waits its turn.
+                auto victim = mTiles.end();
+                for (auto vt = mTiles.begin(); vt != mTiles.end(); ++vt)
+                {
+                    LLViewerRegion* r = LLWorld::getInstance()->getRegionFromHandle(vt->first);
+                    if (!r || !regionNear(r, cam)) { victim = vt; break; }
+                }
+                if (victim == mTiles.end()) continue;
+                sDrainDebug.erase(victim->first);
+                mTiles.erase(victim);
+                ++mGridGeneration;
             }
-            if (victim == mTiles.end()) continue;
-            sDrainDebug.erase(victim->first);
-            mTiles.erase(victim);
-            ++mFloodGeneration;
+            Tile& fresh = mTiles[regionp->getHandle()];
+            fresh.mRegionHandle = regionp->getHandle();
+            it = mTiles.find(regionp->getHandle());
         }
-        Tile* tile = tileFor(regionp, true);
-        tile->mNavSourced = true;
-        tile->mValid = false;
-        tile->mLastTouched = mNow;
-        nav->refeedRegion(regionp->getHandle());
-    }
-    for (auto& entry : mTiles)
-    {
-        Tile& tile = entry.second;
-        if (!tile.mNavSourced || !tile.mNavDirty) continue;
-        if (mNow - tile.mNavLastFed < 0.5) continue;                 // sheets still landing
+        Tile& tile = it->second;
+        tile.mLastTouched = mNow;
+
         if (!nav->regionSettled(tile.mRegionHandle)) continue;
+
+        std::vector<SSNavMesh::BandSheet> sheets;
+        U64 stamp = 0;
+        if (!nav->collectSheets(tile.mRegionHandle, sheets, stamp)) continue;
+
+        // <SS:Nexii> No sheets is NO ANSWER, never an empty world. The census envelope has not reached this region yet (or has left it), and classifying nothing would publish a grid of pure sky that told every consumer "outdoors" with full confidence - exactly the wrong direction, and it would retire the raycast fallbacks the readers keep for this case. Drop whatever was published and go back to having no grid. [interaction: airLabelAt returning AIR_UNKNOWN]
+        if (sheets.empty())
+        {
+            if (tile.mValid || tile.mGeomSerial != 0)
+            {
+                tile = Tile();
+                tile.mRegionHandle = regionp->getHandle();
+                tile.mLastTouched = mNow;
+                ++mGridGeneration;      // a classification in flight for this region lands into nothing
+                sDrainDebug.erase(tile.mRegionHandle);
+            }
+            continue;
+        }
+
+        // <SS:Nexii> The cell setting joins the stamp: a grid built at 0.25 m does not describe the world at 1 m, and nothing else would notice the change.
+        stamp ^= (U64)llround(cell * 1024.f) * 0x100000001B3ull;
+        if (stamp == tile.mWantStamp) continue;
+
+        tile.mWantStamp = stamp;
+        tile.mSettledAt = mNow;
         tile.mGeomSerial = (tile.mGeomSerial == 0xFFFFFFFFu) ? 1 : tile.mGeomSerial + 1;
-        tile.mValid = true;
-        tile.mBandCount = bandCount();      // <SS:Nexii> The flood gate and the acoustic snapshot ceiling: a navmesh-fed store is full height, and nothing on this path set the capture-side band statistic, so it stayed 0 and scheduleFlood declined every tile silently (air serial 0 in every dump). [interaction: scheduleFlood]
-        tile.mNavDirty = false;
-        tile.mDirty = false;
-        tile.mBandTarget = 0;
-        tile.mCaptureTime = mNow;
-        ++mNavSettles;
     }
 }
 
-// Whether a tile is worth (re)building: never built, edited, stale, or
-// captured under a cell/band setting that has since changed.
-bool SSWorldField::needsBuild(const Tile& tile) const
-{
-    if (!tile.mValid) return true;
-
-    static LLCachedControl<F32> max_age(gSavedSettings, "SSWorldFieldMaxAge", 120.f);
-    if (mNow - tile.mCaptureTime > (F64)llmax(5.f, (F32)max_age)) return true;
-
-    if (tile.mDirty && mNow - tile.mCaptureTime > DIRTY_MIN_INTERVAL) return true;
-
-    static LLCachedControl<F32> cell_setting(gSavedSettings, "SSWorldFieldCell", 0.25f);
-    const F32 cell = llclamp((F32)cell_setting, 0.25f, 8.f);
-
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp) return false;
-    const S32 res = llclamp((S32)llround(regionp->getWidth() / cell), 32, 1024);
-    if (res != tile.mRes) return true;
-
-    if (fabsf(tile.mBandHeight - bandHeight()) > 0.01f) return true;
-
-    return false;
-}
-
-// Most deserving tile first: the camera's region, then any region within
-// neighbour reach that has a claimed channel or serves the demanded surface
-// top. Nothing builds while nothing demands anything.
-SSWorldField::Tile* SSWorldField::pickBuildTarget()
-{
-    if (!surfaceTopDemanded() && sInterests.empty()) return nullptr;
-
-    const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
-
-    LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
-    if (cam_region)
-    {
-        Tile* tile = tileFor(cam_region, true);
-        tile->mLastTouched = mNow;
-        if (needsBuild(*tile)) return tile;
-    }
-
-    for (LLViewerRegion* regionp : LLWorld::getInstance()->getRegionList())
-    {
-        if (!regionp || regionp == cam_region) continue;
-        if (!ss_wf_region_claimed(regionp->getHandle()) && !surfaceTopDemanded()) continue;
-
-        const LLVector3 origin = regionp->getOriginAgent();
-        const F32 width = regionp->getWidth();
-        const F32 dx = llmax(origin.mV[VX] - cam.mV[VX], cam.mV[VX] - (origin.mV[VX] + width), 0.f);
-        const F32 dy = llmax(origin.mV[VY] - cam.mV[VY], cam.mV[VY] - (origin.mV[VY] + width), 0.f);
-        if (dx * dx + dy * dy > NEIGHBOR_REACH * NEIGHBOR_REACH) continue;
-
-        Tile* tile = tileFor(regionp, true);
-        tile->mLastTouched = mNow;
-        if (needsBuild(*tile)) return tile;
-    }
-
-    return nullptr;
-}
-
-// Per-frame drive: evict departed regions, keep stepping the live build one
-// band at a time, and begin a new build when a tile deserves one.
+// Per-frame drive: drop grids for regions that left, follow the navmesh's
+// settles, and hand the one region that owes a classification to the worker.
 void SSWorldField::update()
 {
     LL_RECORD_BLOCK_TIME(FTM_SS_WORLDFIELD);
@@ -595,165 +440,51 @@ void SSWorldField::update()
     mNow = SSAtmoMagic::getInstance()->sharedTime();
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldField", true);
-    // <SS:Nexii> Master switch, not hasWeather(): the wind flow map and soundscape consume the field in calm weather too, and pickBuildTarget's interest check already keeps unclaimed regions from building.
-    // <SS:Nexii> The Atmo gate flickers: a death teleport or an altitude with no track resolves no environment for a while, and clearing the store on every dip threw away every tile and every consumer's overlay with it, then left the navmesh-fed tiles stale on the way back (their nav-dirty flag was down, so nothing refed them). The setting still clears; the Atmo gate only pauses, and the return edge invalidates every navmesh-fed tile and asks the navmesh for its region again. Both edges log. [interaction: navSettle, SSNavMesh::refeedRegion]
+    // <SS:Nexii> Master switch, not hasWeather(): the soundscape and the fog consume the field in calm weather too.
     if (!enabled)
     {
-        if (!mTiles.empty() || mBuild.mActive) clear();
+        if (!mTiles.empty()) clear();
         return;
     }
+    // <SS:Nexii> The Atmo gate flickers: a death teleport or an altitude with no track resolves no environment for a while, and clearing the store on every dip threw away every grid and every consumer's overlay with it. The setting still clears; the Atmo gate only pauses. Both edges log.
     const bool gate_on = SSAtmoMagic::getInstance()->isEnabled();
     if (!gate_on)
     {
-        if (!mGateWasOff) LL_INFOS("SSWorldField") << "world field paused: Atmo Magic resolved no environment (" << mTiles.size() << " tiles kept)" << LL_ENDL;
+        if (!mGateWasOff) LL_INFOS("SSWorldField") << "world field paused: Atmo Magic resolved no environment (" << mTiles.size() << " grids kept)" << LL_ENDL;
         mGateWasOff = true;
-        mBuild.mActive = false;
         return;
     }
     if (mGateWasOff)
     {
         mGateWasOff = false;
-        LL_INFOS("SSWorldField") << "world field resumed: Atmo Magic environment back, refeeding " << mTiles.size() << " tiles" << LL_ENDL;
-        for (auto& entry : mTiles)
-        {
-            if (!entry.second.mNavSourced) continue;
-            entry.second.mValid = false;
-            entry.second.mNavDirty = true;
-            entry.second.mNavLastFed = mNow;
-            SSNavMesh::getInstance()->refeedRegion(entry.first);
-        }
+        LL_INFOS("SSWorldField") << "world field resumed: Atmo Magic environment back, " << mTiles.size() << " grids held" << LL_ENDL;
     }
 
     evict();
 
-    const bool nav_source = navSpansWanted();
-    if (nav_source) navSettle();
+    if (!SSNavMesh::instanceExists() || !SSNavMesh::getInstance()->active()) return;
+    navSettle();
 
-// Catch-up for the connectivity labels: a tile that committed while a flood
-    // was in flight was skipped rather than queued; this is where it gets its
-    // turn - one tile per call. Oldest-first is unnecessary at this scale
-    // (four tiles).
-    if (!mFloodBusy)
+    // One classification at a time. A region that settled while one ran simply
+    // gets its turn here - oldest settle first is unnecessary at this scale
+    // (four grids), so the first that owes one wins.
+    if (mBuildBusy) return;
+    for (auto& entry : mTiles)
     {
-        for (auto& entry : mTiles)
-        {
-            Tile& tile = entry.second;
-            if (tile.mValid && tile.mAirSerial != tile.mGeomSerial && (!tile.mDirty || tile.mNavSourced))
-            {
-                scheduleFlood(tile);
-                break;
-            }
-        }
+        Tile& tile = entry.second;
+        if (tile.mGeomSerial == 0) continue;                        // the navmesh has never settled this region
+        if (tile.mGridSerial == tile.mGeomSerial) continue;         // the grid is current
+        if (mNow - tile.mSettledAt < SETTLE_DEBOUNCE) continue;     // bands still trickling in
+        scheduleGrid(tile);
+        break;
     }
-
-    if (mBuild.mActive)
-    {
-        if (mNow - mLastBandAt < BAND_MIN_INTERVAL) return;
-        mLastBandAt = mNow;
-
-        LLTimer band_timer;
-        advanceBuild();
-        mLastCaptureMS = band_timer.getElapsedTimeF32() * 1000.f;
-        return;
-    }
-
-    Tile* target = nav_source ? nullptr : pickBuildTarget();     // the navmesh feeds the store; no capture
-    if (!target) return;
-
-// Begin a build. A dirty tile re-peels only its dirty rectangle's frustum,
-    // but still sweeps every band from the floor to the highest band the edits
-    // could touch - a removed roof drops its whole column, so band scoping below
-    // the edit is not safe.
-    mBuild.mActive = true;
-    mBuild.mRegionHandle = target->mRegionHandle;
-    target->mNavSourced = false;                                  // the capture owns the store again
-    mBuild.mPass = 0;
-    mBuild.mEmptyRun = 0;
-    mBuild.mChanged = false;
-    mBuild.mRectOnly = target->mDirty;
-
-    if (mBuild.mRectOnly)
-    {
-        mBuild.mRectX0 = target->mDirtyX0;
-        mBuild.mRectY0 = target->mDirtyY0;
-        mBuild.mRectX1 = target->mDirtyX1;
-        mBuild.mRectY1 = target->mDirtyY1;
-
-// Rect capture resources: a square frustum covering the rect's wider axis,
-        // with the short side's extra texels spilling outside the rect and skipped
-        // at splice time.
-        const S32 rw = mBuild.mRectX1 - mBuild.mRectX0;
-        const S32 rh = mBuild.mRectY1 - mBuild.mRectY0;
-        mBuild.mRectRes = llclamp(llmax(rw, rh), 4, target->mRes);
-
-        // <SS:Nexii> The rect's columns in Z-bisection slots hold sub-band
-        // bodies from the previous build. The base re-sweep overwrites the
-        // base bands, but these slots would silently fold stale bodies back
-        // into the store - an edited-away room would keep its floor. Clear
-        // them; this build's bisection re-discovers what is still there.
-        // Only slots the arrays actually cover can hold stale bodies: the
-        // commit released the scratch (mAllocBands = 0) and applyBand ensures
-        // before it writes, so the bound is mAllocBands, not MAX_SLOTS -
-        // indexing past the allocation here crashed on the released arrays.
-        const size_t layer = (size_t)target->mRes * target->mRes;
-        for (S32 k = target->mBaseBands; k < target->mAllocBands; ++k)
-        {
-            for (S32 y = mBuild.mRectY0; y < mBuild.mRectY1; ++y)
-            {
-                for (S32 x = mBuild.mRectX0; x < mBuild.mRectX1; ++x)
-                {
-                    const size_t si = (size_t)k * layer + (size_t)y * target->mRes + x;
-                    target->mBandTop[si] = NO_SURFACE;
-                    target->mBandUnder[si] = NO_SURFACE;
-                    target->mBandFlags[si] = 0;
-                }
-            }
-        }
-    }
-    else
-    {
-        target->mBandTarget = bandCount();
-        target->mBaseBands = target->mBandTarget;
-        mBuild.mRectX0 = 0;
-        mBuild.mRectY0 = 0;
-        mBuild.mRectX1 = target->mRes;
-        mBuild.mRectY1 = target->mRes;
-        mBuild.mRectRes = target->mRes;
-    }
-
-    target->mBandTarget = llmax(llmax(target->mBandTarget, target->mBandCount), 1);
-    mBuild.mEmptyRun = 0;
-    mBuild.mChanged = false;
-    mBuild.mSeenBand.assign((size_t)target->mRes * (size_t)target->mRes, -1);
-
-    // The capture worklist: the band slots this build sweeps, bottom-up.
-    // Stage 1 enumerated them uniformly; the bisection phase appends finer
-    // nodes beneath captured bodies as the sweep exposes them.
-    mBuild.mWorklist.clear();
-    for (S32 b = 0; b < target->mBandTarget; ++b)
-    {
-        CaptureNode node;
-        node.mSlot = b;
-        node.mX0 = mBuild.mRectX0;
-        node.mY0 = mBuild.mRectY0;
-        node.mX1 = mBuild.mRectX1;
-        node.mY1 = mBuild.mRectY1;
-        node.mRes = llclamp(llmax(mBuild.mRectX1 - mBuild.mRectX0, mBuild.mRectY1 - mBuild.mRectY0), 4, target->mRes);
-        node.mZ0 = (F32)b * target->mBandHeight;
-        node.mZ1 = node.mZ0 + target->mBandHeight;
-        node.mBisect = false;
-        mBuild.mWorklist.push_back(node);
-    }
-    mBuild.mCursor = 0;
-    mBuild.mNextSlot = target->mBandTarget;
-    mLastBandAt = mNow;
 }
 
-// Drops tiles for departed regions, then the least recently used beyond the
-// cache cap. Erasing a tile also moves the flood generation - a walk in
-// flight for the departed tile must not land on a fresh tile the same region
-// handle re-created (restarted at geometry serial 1, so the serial gate alone
-// would not stop it) - and drops its cached debug views.
+// Drops grids for departed regions, then the least recently used beyond the
+// cache cap. Erasing a grid also moves the generation - a classification in
+// flight for the departed region must not land on a fresh grid the same region
+// handle re-created (restarted at serial 0, so the serial gate alone would not
+// stop it) - and drops its cached debug views.
 void SSWorldField::evict()
 {
     bool erased = false;
@@ -770,7 +501,7 @@ void SSWorldField::evict()
             ++it;
         }
     }
-    while ((S32)mTiles.size() > MAX_TILES)
+    while ((S32)mTiles.size() > (S32)MAX_TILES)
     {
         auto oldest = mTiles.begin();
         for (auto it = mTiles.begin(); it != mTiles.end(); ++it)
@@ -781,1096 +512,12 @@ void SSWorldField::evict()
         mTiles.erase(oldest);
         erased = true;
     }
-    if (erased) ++mFloodGeneration;
-}
-
-// One worklist step: capture the next node's two passes, apply, advance
-// through the phases, and commit. Each node is captured in TWO ortho passes
-// - pass 0 looks down and reads the highest up-facing surface in the node's
-// interval, pass 1 looks up with a reversed depth test and reads the
-// topmost body's underside - and the depth readback is async (SSGLReadback):
-// the passes render and submit one at a time, and the apply runs once both
-// have landed. Base nodes splice into the capture scratch and fold when the
-// sweep exhausts; the refine phase's quad nodes write their bodies straight
-// into the span store, so the fine work only pays for the quads that need
-// it.
-bool SSWorldField::advanceBuild()
-{
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(mBuild.mRegionHandle);
-    Tile* tile = regionp ? tileFor(regionp, false) : nullptr;
-    if (!tile)
-    {
-        mBuild.mActive = false;
-        return false;
-    }
-
-    // A readback is still in flight: neither apply it (the texels are not
-    // here yet) nor render the shared capture target into again.
-    if (mReadbackPending) return true;
-
-    // The current pass's readback landed; advance to the node's second pass
-    // or apply the pair.
-    if (mBuild.mJustCaptured)
-    {
-        mBuild.mJustCaptured = false;
-        ++mBuild.mPass;
-
-        if (mBuild.mPass < 2)
-        {
-            if (!capturePass(*tile, mBuild.mWorklist[mBuild.mCursor], mBuild.mPass))
-            {
-                // GL trouble - abandon rather than spin. The tile keeps its
-                // previous contents and stays dirty, so the next update tries
-                // again.
-                mBuild.mActive = false;
-                return false;
-            }
-            mBuild.mJustCaptured = true;
-            return true;
-        }
-
-        const CaptureNode node = mBuild.mWorklist[mBuild.mCursor];
-        if (node.mRefine)
-        {
-            applyRefine(*tile, node);
-        }
-        else
-        {
-            applyBand(*tile, node);
-        }
-        ++mBuild.mCursor;
-        mBuild.mPass = 0;
-
-// Full builds stop early once the sky has been genuinely empty for a few
-        // consecutive base nodes; rect builds run their whole worklist so the
-        // spliced columns stay consistent with their neighbours. Refine nodes
-        // never feed the empty-run: they are targeted probes, and their
-        // misses are the recursion terminating, not sky.
-        if (!node.mRefine)
-        {
-            if (node.mHung) mBuild.mEmptyRun = 0;
-            else ++mBuild.mEmptyRun;
-
-            if (!mBuild.mRectOnly && mBuild.mEmptyRun >= EMPTY_BANDS_TO_STOP)
-            {
-                mBuild.mCursor = mBuild.mWorklist.size();   // the sky above is empty; jump to the phase end
-            }
-        }
-        else if (node.mHung)
-        {
-            // The quad's body hangs: Z-bisect the quad itself. The children
-            // run at the quad's own (quarter-cost) resolution and prune
-            // independently - an open half stops immediately.
-            if ((node.mZ1 - node.mZ0) >= SS_WF_MIN_BAND_M * 2.f)
-            {
-                const F32 mid = (node.mZ0 + node.mZ1) * 0.5f;
-
-                for (S32 h = 0; h < 2; ++h)
-                {
-                    CaptureNode child = node;
-                    child.mZ0 = (h == 0) ? node.mZ0 : mid;
-                    child.mZ1 = (h == 0) ? mid : node.mZ1;
-                    child.mBisect = true;
-                    mBuild.mWorklist.push_back(child);
-                }
-            }
-        }
-
-        if (mBuild.mCursor >= mBuild.mWorklist.size())
-        {
-            // The worklist ran dry. The base phase folds its scratch into
-            // the store and enqueues the refine phase's quad nodes; the
-            // refine phase finalizes the store and commits.
-            if (mBuild.mPhase == PHASE_BASE)
-            {
-                if (mBuild.mRectOnly)
-                {
-                    foldSpans(*tile, mBuild.mRectX0, mBuild.mRectY0, mBuild.mRectX1, mBuild.mRectY1);
-                }
-                else
-                {
-                    foldSpans(*tile, 0, 0, tile->mRes, tile->mRes);
-                }
-
-                // A base node whose body hangs at least the minimum interval
-                // above its floor leaves unexplored space beneath it: that
-                // quad gets refine nodes capturing the band's full interval
-                // at the quadrant's own (quarter-cost) resolution. Their Z
-                // bisection children peel the deeper bodies per quadrant and
-                // prune independently - open quads stop immediately.
-                for (S32 k = 0; k < (S32)mBuild.mCursor; ++k)
-                {
-                    const CaptureNode base = mBuild.mWorklist[(size_t)k];
-                    if (!base.mHung) continue;
-
-                    const S32 w = base.mX1 - base.mX0;
-                    const S32 hgt = base.mY1 - base.mY0;
-                    const S32 quad_res = llmax(w / 2, 4);
-                    for (S32 q = 0; q < 4; ++q)
-                    {
-                        CaptureNode quad;
-                        quad.mX0 = base.mX0 + ((q & 1) ? w / 2 : 0);
-                        quad.mX1 = base.mX0 + ((q & 1) ? w : w / 2);
-                        quad.mY0 = base.mY0 + ((q & 2) ? hgt / 2 : 0);
-                        quad.mY1 = base.mY0 + ((q & 2) ? hgt : hgt / 2);
-                        quad.mRes = quad_res;
-                        quad.mZ0 = base.mZ0;
-                        quad.mZ1 = base.mZ1;
-                        quad.mRefine = true;
-                        mBuild.mWorklist.push_back(quad);
-                    }
-                }
-
-                // Consume the captured base prefix; the refine nodes are all
-                // that remains.
-                mBuild.mWorklist.erase(
-                    mBuild.mWorklist.begin(),
-                    mBuild.mWorklist.begin() + mBuild.mCursor);
-                mBuild.mCursor = 0;
-                mBuild.mPhase = PHASE_REFINE;
-                return true;
-            }
-
-            finalizeSpans(*tile, mBuild.mRectX0, mBuild.mRectY0, mBuild.mRectX1, mBuild.mRectY1);
-            commitBuild(*tile);
-            return false;
-        }
-
-        return true;
-    }
-
-    if (mBuild.mCursor >= mBuild.mWorklist.size())
-    {
-        // The worklist was exhausted before any node applied (an empty
-        // enqueue): fold or finalize and commit so the tile reaches a valid
-        // state.
-        if (mBuild.mPhase == PHASE_BASE)
-        {
-            if (mBuild.mRectOnly)
-            {
-                foldSpans(*tile, mBuild.mRectX0, mBuild.mRectY0, mBuild.mRectX1, mBuild.mRectY1);
-            }
-            else
-            {
-                foldSpans(*tile, 0, 0, tile->mRes, tile->mRes);
-            }
-            commitBuild(*tile);
-        }
-        else
-        {
-            finalizeSpans(*tile, mBuild.mRectX0, mBuild.mRectY0, mBuild.mRectX1, mBuild.mRectY1);
-            commitBuild(*tile);
-        }
-        return false;
-    }
-
-    if (!capturePass(*tile, mBuild.mWorklist[mBuild.mCursor], mBuild.mPass))
-    {
-        // GL trouble - abandon rather than spin. The tile keeps its previous
-        // contents and stays dirty, so the next update tries again.
-        mBuild.mActive = false;
-        return false;
-    }
-
-    mBuild.mJustCaptured = true;
-    return true;
-}
-// One band pass: an ortho depth render covering exactly the band. Pass 0
-// looks down with standard culling and reads the highest up-facing surface
-// (the body's top). Pass 1 looks UP from the band's floor with standard
-// culling - the ceiling's underside is a front face for that camera - and
-// flips the depth comparison so the buffer keeps the FARTHEST front-facing
-// hit: the topmost body's underside, the boundary the air beneath it lives
-// under. A plain nearest-hit shot from below would return the floor slab's
-// underside instead and lose the room. The frustum's far plane sits at the
-// band's top exactly and depth clamping is off for the upward pass - a
-// surface outside the band must never record into it, or every band would
-// steal surfaces from its neighbours and eat the air between them.
-bool SSWorldField::capturePass(Tile& tile, const CaptureNode& node, S32 pass)
-{
-    LL_PROFILE_GPU_ZONE("atmo world field band");
-
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp) return false;
-
-    const F32 band_top = node.mZ1;
-    const F32 band_bottom = node.mZ0;
-    const F32 range = node.mZ1 - node.mZ0;
-
-    // The node's own XY frustum: full tile for base nodes, the quad's rect
-    // at proportional resolution for refine nodes.
-    const S32 res = node.mRes;
-    const F32 half = 0.5f * (F32)res * tile.mCell;
-    const F32 centre_x = regionp->getOriginAgent().mV[VX] + 0.5f * (F32)(node.mX0 + node.mX1) * tile.mCell;
-    const F32 centre_y = regionp->getOriginAgent().mV[VY] + 0.5f * (F32)(node.mY0 + node.mY1) * tile.mCell;
-
-    // Pass 0 anchors at the band's ceiling looking down; pass 1 at the band's
-    // floor looking up.
-    const F32 eye_z = (pass == 0) ? band_top : band_bottom;
-    const F32 look = (pass == 0) ? -1.f : 1.f;
-
-    const LLVector3 eye(centre_x, centre_y, eye_z);
-
-    const glm::mat4 saved_view = get_current_modelview();
-    const glm::mat4 saved_proj = get_current_projection();
-    const LLViewerCamera::eCameraID saved_camera = LLViewerCamera::sCurCameraID;
-
-    const glm::mat4 view = glm::lookAt(
-        glm::vec3(eye.mV[VX], eye.mV[VY], eye.mV[VZ]),
-        glm::vec3(eye.mV[VX], eye.mV[VY], eye.mV[VZ] + look),
-        glm::vec3(0.f, 1.f, 0.f));
-    const glm::mat4 proj = glm::ortho(-half, half, -half, half, 0.f, range);
-
-    set_current_modelview(view);
-    set_current_projection(proj);
-    LLViewerCamera::sCurCameraID = LLViewerCamera::CAMERA_SUN_SHADOW3;
-
-    LLCamera cam = *LLViewerCamera::getInstance();
-    cam.setOrigin(eye);
-    cam.setFar(range);
-
-    LLVector3 frust[8];
-    frust[0] = eye + LLVector3(-half, -half, 0.f);
-    frust[1] = eye + LLVector3(half, -half, 0.f);
-    frust[2] = eye + LLVector3(half, half, 0.f);
-    frust[3] = eye + LLVector3(-half, half, 0.f);
-    for (U32 i = 0; i < 4; i++)
-    {
-        frust[i + 4] = frust[i] + LLVector3(0.f, 0.f, look * range);
-    }
-    cam.calcAgentFrustumPlanes(frust);
-    cam.mFrustumCornerDist = 0.f;
-
-    bool ok = true;
-    if (mTarget.getWidth() != (U32)res)
-    {
-        mTarget.release();
-        ok = mTarget.allocate(res, res, 0, true);
-    }
-    else
-    {
-        ok = true;
-    }
-
-    if (ok)
-    {
-        mTarget.bindTarget();
-        mTarget.getViewport(gGLViewport);
-
-        // The upward pass clears depth to zero and keeps the farthest
-        // front-facing fragment, so its miss sentinel is 0 rather than 1.
-        const bool upward = (pass == 1);
-        if (upward) glClearDepth(0.f);
-        mTarget.clear();
-        if (upward) glClearDepth(1.f);
-
-        {
-            static LLCullResult cull_result;
-
-            gPipeline.pushRenderTypeMask();
-            gPipeline.clearRenderTypeMask(LLPipeline::RENDER_TYPE_AVATAR,
-                                          LLPipeline::RENDER_TYPE_CONTROL_AV,
-                                          LLPipeline::END_RENDER_TYPES);
-            gPipeline.renderShadow(view, proj, cam, cull_result, !upward,
-                                   upward ? GL_GREATER : GL_LESS);
-            gPipeline.popRenderTypeMask();
-        }
-
-        mTarget.flush();
-
-        // <SS:Nexii> The band's depth lands via the shared SSGLReadback worker: the synchronous glReadPixels that used to block becomes a glGetTexImage on a dedicated GL thread, and applyBand() runs once both passes have landed (see mJustCaptured). The worker writes only its own buffer; mDone copies into the pass's slot on the main thread, so the Build never sees a partial read.
-        mBuild.mDepth[pass].assign((size_t)res * res, upward ? 0.f : 1.f);
-        mReadbackPending = true;
-        const U32 tres = (U32)res;
-        const S32 pass_copy = pass;
-
-        SSGLReadback::Job job;
-        job.mTexture = mTarget.getDepth();
-        job.mTarget = GL_TEXTURE_2D;
-        job.mWidth = tres;
-        job.mHeight = tres;
-        job.mFormat = GL_DEPTH_COMPONENT;
-        job.mType = GL_FLOAT;
-        job.mDone = [this, tres, pass_copy](const U8* data, size_t bytes)
-        {
-            mReadbackPending = false;
-            if (mClearPending)
-            {
-                mClearPending = false;
-                clear();
-                return;
-            }
-            const size_t n = (size_t)tres * tres;
-            if (bytes >= n * sizeof(F32) && mBuild.mDepth[pass_copy].size() >= n)
-            {
-                memcpy(mBuild.mDepth[pass_copy].data(), data, n * sizeof(F32));
-            }
-        };
-        if (!SSGLReadback::getInstance()->submit(job))
-        {
-            // Could not even stage the read - GL trouble. Abandon rather than
-            // leave mReadbackPending stuck and the build spinning.
-            mReadbackPending = false;
-            mBuild.mJustCaptured = false;
-            ok = false;
-        }
-    }
-
-    set_current_modelview(saved_view);
-    set_current_projection(saved_proj);
-    LLViewerCamera::sCurCameraID = saved_camera;
-
-    return ok;
-}
-
-// Grow the tile's flat band arrays one doubling at a time; the new region is
-// open sky until a capture splices over it. Everything that indexes the arrays
-// does so below mBandCount, which only grows after the band it names was
-// ensured here.
-void SSWorldField::ensureBands(Tile& tile, S32 bands)
-{
-    if (bands <= tile.mAllocBands) return;
-
-    const S32 next = llclamp(llmax(bands, tile.mAllocBands * 2), 1, SS_WF_MAX_SLOTS);
-    const size_t layer = (size_t)tile.mRes * (size_t)tile.mRes;
-    const size_t old_cells = (size_t)tile.mAllocBands * layer;
-    const size_t new_cells = (size_t)next * layer;
-
-    tile.mBandTop.resize(new_cells);
-    std::fill(tile.mBandTop.begin() + old_cells, tile.mBandTop.end(), NO_SURFACE);
-    tile.mBandUnder.resize(new_cells);
-    std::fill(tile.mBandUnder.begin() + old_cells, tile.mBandUnder.end(), NO_SURFACE);
-    tile.mBandFlags.resize(new_cells);
-    std::fill(tile.mBandFlags.begin() + old_cells, tile.mBandFlags.end(), 0);
-    tile.mAllocBands = next;
-}
-
-// Splices the captured node into the scratch: pass zero's depth is the highest
-// up-facing surface (with the water and ground fallbacks), pass one's is the
-// topmost body's underside. Full builds write every column; rect builds only
-// the dirty rectangle's columns. Also flags the node as hanging when any
-// column's body leaves at least the minimum interval of unexplored space
-// beneath its underside - the signal Z bisection uses to enqueue children.
-void SSWorldField::applyBand(Tile& tile, const CaptureNode& node)
-{
-    LL_RECORD_BLOCK_TIME(FTM_SS_WORLDFIELD_GRID);
-
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp || mBuild.mDepth[0].empty() || mBuild.mDepth[1].empty()) return;
-
-    const S32 band = node.mSlot;
-    ensureBands(tile, band + 1);
-
-    const F32 band_top = node.mZ1;
-    const F32 band_bottom = node.mZ0;
-    const F32 range = node.mZ1 - node.mZ0;
-    const F32 hi = band_top - BOUNDARY_EPSILON;
-
-    const S32 x0 = node.mX0;
-    const S32 y0 = node.mY0;
-    const S32 x1 = node.mX1;
-    const S32 y1 = node.mY1;
-    const S32 cap_res = node.mRes;
-    const F32 half = 0.5f * (F32)node.mRes * tile.mCell;
-    const F32 centre_x = regionp->getOriginAgent().mV[VX] + 0.5f * (F32)(node.mX0 + node.mX1) * tile.mCell;
-    const F32 centre_y = regionp->getOriginAgent().mV[VY] + 0.5f * (F32)(node.mY0 + node.mY1) * tile.mCell;
-
-    const F32 texel = (2.f * half) / (F32)cap_res;
-    const F32 frust_min_x = centre_x - half;
-    const F32 frust_min_y = centre_y - half;
-
-    const F32 water_z = regionp->getWaterHeight();
-    const bool sky = SSAtmoMagic::getInstance()->isSkyTrack();
-    const F32 sky_floor = SSAtmoMagic::getInstance()->groundZero();
-
-    const S32 stride = tile.mRes;
-    F32* top_z = &tile.mBandTop[(size_t)band * (size_t)tile.mRes * (size_t)tile.mRes];
-    F32* under_z = &tile.mBandUnder[(size_t)band * (size_t)tile.mRes * (size_t)tile.mRes];
-    U8* top_flags = &tile.mBandFlags[(size_t)band * tile.mRes * tile.mRes];
-
-    U32 hits = 0;
-
-    mBuild.mNodeHung = false;
-
-    for (S32 cy = y0; cy < y1; ++cy)
-    {
-        for (S32 cx = x0; cx < x1; ++cx)
-        {
-            const F32 wx = regionp->getOriginAgent().mV[VX] + ((F32)cx + 0.5f) * tile.mCell;
-            const F32 wy = regionp->getOriginAgent().mV[VY] + ((F32)cy + 0.5f) * tile.mCell;
-
-            const size_t idx = (size_t)cy * stride + cx;
-
-            F32 z = NO_SURFACE;
-            F32 under = NO_SURFACE;
-            U8 flags = 0;
-
-            const F32 u = (wx - frust_min_x) / (2.f * half);
-            const F32 v = (wy - frust_min_y) / (2.f * half);
-            if (u >= 0.f && u < 1.f && v >= 0.f && v < 1.f)
-            {
-                const S32 tx = llmin((S32)(u * (F32)cap_res), cap_res - 1);
-                const S32 ty = llmin((S32)(v * (F32)cap_res), cap_res - 1);
-
-                // Pass zero: the highest up-facing surface. Clamped into the
-                // band at its top (structure reaching the band's ceiling
-                // belongs here and to the band above).
-                const F32 d0 = mBuild.mDepth[0][(size_t)ty * cap_res + tx];
-                if (d0 < DEPTH_MISS)
-                {
-                    z = band_top - d0 * range;
-                    if (z > hi) z = hi;
-                    flags = SSRainShadowMap::SURF_MAPPED;
-                }
-
-                // Pass one: the topmost body's underside - the farthest
-                // front-facing hit from below, so its miss sentinel is zero
-                // and its distance maps up from the band's floor. No
-                // fallbacks - a miss means no body hangs over this column
-                // inside the band.
-                const F32 d1 = mBuild.mDepth[1][(size_t)ty * cap_res + tx];
-                if (d1 > DEPTH_MISS_UP)
-                {
-                    under = band_bottom + d1 * range;
-                    if (under > hi) under = hi;
-                }
-            }
-
-            if (z > NO_SURFACE + 1.f)
-            {
-                // Water is the one surface the depth pass does not draw, so a
-                // hit under the waterline is the seabed and the cell belongs
-                // to the water above it - the rain shadow rule, at every band.
-                if (!sky && z < water_z)
-                {
-                    z = water_z;
-                    flags = SSRainShadowMap::SURF_MAPPED | SSRainShadowMap::SURF_WATER;
-                }
-            }
-            else if (node.mZ0 <= 0.01f)
-            {
-                // The ground band falls back to the heightmap, exactly as the
-                // rain shadow capture does for what it missed. Higher bands
-                // leave unmapped cells open instead.
-                if (sky)
-                {
-                    z = sky_floor;
-                    flags = 0;
-                }
-                else
-                {
-                    const LLVector3 probe(wx, wy, water_z);
-                    const F32 land = LLWorld::getInstance()->resolveLandHeightAgent(probe);
-                    z = llmax(land, water_z);
-                    flags = SSRainShadowMap::SURF_FALLBACK
-                            | ((water_z > land) ? SSRainShadowMap::SURF_WATER : 0);
-                }
-            }
-            else
-            {
-                z = NO_SURFACE;
-                flags = 0;
-            }
-
-            // The Z-bisection signal: a body hanging at least the minimum
-            // interval above this node's floor leaves unexplored space beneath
-            // it - one probe settles it, the rest of the loop rides on the
-            // flag.
-            if (!mBuild.mNodeHung && under > NO_SURFACE + 1.f && under > band_bottom + SS_WF_MIN_BAND_M)
-            {
-                mBuild.mNodeHung = true;
-            }
-
-            // Splice, and notice when the column actually changed so a
-            // no-op edit does not bump the geometry serial.
-            if (fabsf(top_z[idx] - z) > 0.01f || top_flags[idx] != flags
-                || fabsf(under_z[idx] - under) > 0.01f)
-            {
-                mBuild.mChanged = true;
-            }
-            top_z[idx] = z;
-            under_z[idx] = under;
-            top_flags[idx] = flags;
-
-            // A real capture hit - mapped surface or captured underside -
-            // marks the column resolved up to this band. Fallbacks and misses
-            // never count: the fold may only trust bands the capture saw.
-            // Base slots only: bisection slot indices do not map to altitudes,
-            // and letting them move the seen ceiling would corrupt the rect
-            // re-peel's carry-forward of spans above the swept range.
-            if ((flags & SSRainShadowMap::SURF_MAPPED) || under > NO_SURFACE + 1.f)
-            {
-                if (band < tile.mBaseBands)
-                {
-                    S32& seen = mBuild.mSeenBand[idx];
-                    if (band > seen) seen = band;
-                }
-            }
-
-            if (z > NO_SURFACE + 1.f || under > NO_SURFACE + 1.f) ++hits;
-        }
-    }
-
-    // Bands with content extend the tile's live band stack; a run of
-    // genuinely empty base bands ends the base sweep early. Bisection nodes
-    // never feed the empty-run: they are targeted probes, and their misses
-    // are the recursion terminating, not sky.
-    if (hits > 0)
-    {
-        if (band + 1 > tile.mBandCount) tile.mBandCount = band + 1;
-        if (!node.mBisect) mBuild.mEmptyRun = 0;
-    }
-    else if (!node.mBisect)
-    {
-        ++mBuild.mEmptyRun;
-    }
-}
-
-// <SS:Nexii> Inserts one solid body into a column's span list: sorted
-// position, union with touching or overlapping neighbours, and over the span
-// budget a collapse of the thinnest air gap (the two spans around it merge -
-// the gap becomes solid). The list stays sorted and every gap in it at least
-// the slab threshold tall. A member, not a file static, because it reshapes
-// the private Tile's store.
-void SSWorldField::spanInsert(Tile& tile, size_t col, F32 bot, F32 tp, U8 fl)
-{
-    const size_t layer = (size_t)tile.mRes * tile.mRes;
-
-    S32 n = 0;
-    while (n < SS_WF_MAX_SPANS && tile.mSpanTop[(size_t)n * layer + col] > NO_SURFACE * 0.5f) ++n;
-
-    S32 at = n;
-    while (at > 0 && tile.mSpanBottom[(size_t)(at - 1) * layer + col] > bot) --at;
-
-    if (at > 0 && bot - tile.mSpanTop[(size_t)(at - 1) * layer + col] < SS_WF_SPAN_SLAB_M)
-    {
-        const size_t pi = (size_t)(at - 1) * layer + col;
-        const bool higher = tp > tile.mSpanTop[pi];
-        tile.mSpanBottom[pi] = llmin(tile.mSpanBottom[pi], bot);
-        tile.mSpanTop[pi] = llmax(tile.mSpanTop[pi], tp);
-        if (higher) tile.mSpanFlags[pi] = fl;
-        return;
-    }
-    if (at < n && tp > tile.mSpanBottom[(size_t)at * layer + col] - SS_WF_SPAN_SLAB_M)
-    {
-        const size_t ni = (size_t)at * layer + col;
-        const bool higher = bot < tile.mSpanBottom[ni];
-        tile.mSpanBottom[ni] = llmin(tile.mSpanBottom[ni], bot);
-        tile.mSpanTop[ni] = llmax(tile.mSpanTop[ni], tp);
-        if (!higher) tile.mSpanFlags[ni] = fl;
-        return;
-    }
-    if (n == SS_WF_MAX_SPANS)
-    {
-        S32 thinnest = 0;
-        F32 best = FLT_MAX;
-        for (S32 j = 0; j + 1 < n; ++j)
-        {
-            const F32 gap = tile.mSpanBottom[(size_t)(j + 1) * layer + col]
-                          - tile.mSpanTop[(size_t)j * layer + col];
-            if (gap < best) { best = gap; thinnest = j; }
-        }
-        tile.mSpanTop[(size_t)thinnest * layer + col] =
-            tile.mSpanTop[(size_t)(thinnest + 1) * layer + col];
-        for (S32 j = thinnest + 1; j + 1 < n; ++j)
-        {
-            tile.mSpanBottom[(size_t)j * layer + col] = tile.mSpanBottom[(size_t)(j + 1) * layer + col];
-            tile.mSpanTop[(size_t)j * layer + col] = tile.mSpanTop[(size_t)(j + 1) * layer + col];
-            tile.mSpanFlags[(size_t)j * layer + col] = tile.mSpanFlags[(size_t)(j + 1) * layer + col];
-        }
-        --n;
-        at = n;
-        while (at > 0 && tile.mSpanBottom[(size_t)(at - 1) * layer + col] > bot) --at;
-    }
-
-    for (S32 j = n; j > at; --j)
-    {
-        tile.mSpanBottom[(size_t)j * layer + col] = tile.mSpanBottom[(size_t)(j - 1) * layer + col];
-        tile.mSpanTop[(size_t)j * layer + col] = tile.mSpanTop[(size_t)(j - 1) * layer + col];
-        tile.mSpanFlags[(size_t)j * layer + col] = tile.mSpanFlags[(size_t)(j - 1) * layer + col];
-    }
-    tile.mSpanBottom[(size_t)at * layer + col] = bot;
-    tile.mSpanTop[(size_t)at * layer + col] = tp;
-    tile.mSpanFlags[(size_t)at * layer + col] = fl;
-}
-
-// <SS:Nexii> Applies a quad node: its two passes' per-column bodies insert
-// straight into the span store - the topmost body of the quad's interval per
-// column, at the quad's own capture resolution. A top without an underside
-// reaches the quad's floor; an underside without a top crosses the quad's
-// ceiling; neither is air. The node's hang flag (set when a body leaves at
-// least the minimum interval of unexplored space beneath it) drives its
-// Z-bisection children.
-void SSWorldField::applyRefine(Tile& tile, const CaptureNode& node)
-{
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
-    if (!regionp || mBuild.mDepth[0].empty() || mBuild.mDepth[1].empty()) return;
-
-    const F32 z0 = node.mZ0;
-    const F32 z1 = node.mZ1;
-    const F32 range = z1 - z0;
-
-    const S32 x0 = node.mX0;
-    const S32 y0 = node.mY0;
-    const S32 x1 = node.mX1;
-    const S32 y1 = node.mY1;
-    const S32 cap_res = node.mRes;
-    const F32 half = 0.5f * (F32)node.mRes * tile.mCell;
-    const F32 centre_x = regionp->getOriginAgent().mV[VX] + 0.5f * (F32)(node.mX0 + node.mX1) * tile.mCell;
-    const F32 centre_y = regionp->getOriginAgent().mV[VY] + 0.5f * (F32)(node.mY0 + node.mY1) * tile.mCell;
-
-    const F32 frust_min_x = centre_x - half;
-    const F32 frust_min_y = centre_y - half;
-
-    const F32 water_z = regionp->getWaterHeight();
-    const bool sky = SSAtmoMagic::getInstance()->isSkyTrack();
-
-    mBuild.mNodeHung = false;
-
-    for (S32 cy = y0; cy < y1; ++cy)
-    {
-        for (S32 cx = x0; cx < x1; ++cx)
-        {
-            const size_t col = (size_t)cy * tile.mRes + cx;
-
-            const F32 wx = regionp->getOriginAgent().mV[VX] + ((F32)cx + 0.5f) * tile.mCell;
-            const F32 wy = regionp->getOriginAgent().mV[VY] + ((F32)cy + 0.5f) * tile.mCell;
-
-            const F32 u_norm = (wx - frust_min_x) / (2.f * half);
-            const F32 v_norm = (wy - frust_min_y) / (2.f * half);
-            if (u_norm < 0.f || u_norm >= 1.f || v_norm < 0.f || v_norm >= 1.f) continue;
-
-            const S32 tx = llmin((S32)(u_norm * (F32)cap_res), cap_res - 1);
-            const S32 ty = llmin((S32)(v_norm * (F32)cap_res), cap_res - 1);
-
-            // Pass zero: the highest up-facing surface in the quad's
-            // interval. Clamped at the interval's ceiling (structure
-            // reaching it belongs here and to the capture above).
-            F32 t = NO_SURFACE;
-            const F32 d0 = mBuild.mDepth[0][(size_t)ty * cap_res + tx];
-            if (d0 < DEPTH_MISS)
-            {
-                t = z1 - d0 * range;
-                if (t > z1 - BOUNDARY_EPSILON) t = z1 - BOUNDARY_EPSILON;
-            }
-
-            // Pass one: the topmost body's underside - the farthest
-            // front-facing hit from below.
-            F32 u = NO_SURFACE;
-            const F32 d1 = mBuild.mDepth[1][(size_t)ty * cap_res + tx];
-            if (d1 > DEPTH_MISS_UP)
-            {
-                u = z0 + d1 * range;
-                if (u > z1 - BOUNDARY_EPSILON) u = z1 - BOUNDARY_EPSILON;
-            }
-
-            // Decode the body and insert it. Both hits bound it, a top
-            // without an underside reaches the quad's floor, an underside
-            // without a top crosses the quad's ceiling. A mapped top under
-            // the waterline is the seabed and belongs to the water above it
-            // - the rain shadow rule.
-            const bool hasT = t > NO_SURFACE + 1.f;
-            const bool hasU = u > NO_SURFACE + 1.f;
-            if (!hasT && !hasU) continue;
-
-            const F32 bot = hasU ? u : z0;
-            F32 tp = hasT ? t : z1;
-            if (hasT && !sky && tp < water_z)
-            {
-                tp = water_z;
-            }
-            spanInsert(tile, col, bot, tp, SSRainShadowMap::SURF_MAPPED);
-
-            // The hang: unexplored space between the quad's floor and the
-            // body's underside.
-            if (hasU && u > z0 + SS_WF_MIN_BAND_M)
-            {
-                mBuild.mNodeHung = true;
-            }
-        }
-    }
-}
-
-// <SS:Nexii> Folds the capture scratch into the column span store: per
-// column, the per-band bodies ([underside, top], or the band's own floor and
-// ceiling where a body crosses it) sort bottom-up, merge across band planes
-// and any gap thinner than the assumed slab, and the first span extends to
-// the world floor when the gap beneath it is thinner still. The result is the
-// store the proposal described: a column is a short list of [bottom, top]
-// solid spans, air between them, every stored gap at least the slab threshold
-// tall - a wall standing on unmeasured ground stays solid to the floor, and a
-// room is one air interval whatever band its floor and ceiling landed in.
-void SSWorldField::foldSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
-{
-    const S32 res = tile.mRes;
-    const size_t layer = (size_t)res * res;
-
-    x0 = llmax(x0, 0); y0 = llmax(y0, 0);
-    x1 = llmin(x1, res); y1 = llmin(y1, res);
-
-    for (S32 y = y0; y < y1; ++y)
-    {
-        for (S32 x = x0; x < x1; ++x)
-        {
-            const size_t col = (size_t)y * res + x;
-
-            F32 bottoms[SS_WF_MAX_SPANS];
-            F32 tops[SS_WF_MAX_SPANS];
-            U8 flags[SS_WF_MAX_SPANS];
-            S32 n = 0;
-
-            // The scratch release at commit leaves mBandCount standing as the
-            // tile's persistent band statistic while the arrays it names are
-            // gone; a build re-grows only the bands it re-splices. Fold what
-            // this build actually has, not what a previous capture saw.
-            const S32 band_limit = llmin(tile.mBandCount, tile.mAllocBands);
-            for (S32 b = 0; b < band_limit; ++b)
-            {
-                const size_t bi = (size_t)b * layer + col;
-                const F32 top = tile.mBandTop[bi];
-                const F32 under = tile.mBandUnder[bi];
-                const bool hasT = top > NO_SURFACE * 0.5f;
-                const bool hasU = under > NO_SURFACE * 0.5f;
-                if (!hasT && !hasU) continue;
-
-                const F32 b0 = (F32)b * tile.mBandHeight;
-                const F32 b1 = b0 + tile.mBandHeight;
-                const F32 bot = hasU ? under : b0;
-                const F32 tp = hasT ? top : b1;
-                const U8 fl = hasT ? tile.mBandFlags[bi] : 0;
-
-                // Z bisection's children occupy scratch slots beyond the
-                // base sweep and land out of altitude order, so each body
-                // inserts at its sorted position rather than appending.
-                // Insertion unions it with either neighbour when they touch
-                // or overlap - the parent/child duplicate, the band-plane
-                // continuation - and over the span budget collapses the
-                // thinnest air gap (the two spans around it merge into one;
-                // the gap becomes solid) to free a slot.
-                S32 at = n;
-                while (at > 0 && bottoms[at - 1] > bot) --at;
-
-                if (at > 0 && bot - tops[at - 1] < SS_WF_SPAN_SLAB_M)
-                {
-                    bottoms[at - 1] = llmin(bottoms[at - 1], bot);
-                    tops[at - 1] = llmax(tops[at - 1], tp);
-                    continue;
-                }
-                if (at < n && tp > bottoms[at] - SS_WF_SPAN_SLAB_M)
-                {
-                    bottoms[at] = llmin(bottoms[at], bot);
-                    tops[at] = llmax(tops[at], tp);
-                    continue;
-                }
-                if (n == SS_WF_MAX_SPANS)
-                {
-                    S32 thinnest = 0;
-                    F32 best = FLT_MAX;
-                    for (S32 j = 0; j + 1 < n; ++j)
-                    {
-                        const F32 gap = bottoms[j + 1] - tops[j];
-                        if (gap < best) { best = gap; thinnest = j; }
-                    }
-                    tops[thinnest] = tops[thinnest + 1];
-                    flags[thinnest] = flags[thinnest + 1];
-                    for (S32 j = thinnest + 1; j + 1 < n; ++j)
-                    {
-                        bottoms[j] = bottoms[j + 1];
-                        tops[j] = tops[j + 1];
-                        flags[j] = flags[j + 1];
-                    }
-                    --n;
-                    at = n;
-                    while (at > 0 && bottoms[at - 1] > bot) --at;
-                }
-
-                for (S32 j = n; j > at; --j)
-                {
-                    bottoms[j] = bottoms[j - 1];
-                    tops[j] = tops[j - 1];
-                    flags[j] = flags[j - 1];
-                }
-                bottoms[at] = bot;
-                tops[at] = tp;
-                flags[at] = fl;
-                ++n;
-            }
-
-            // Heal residuals: an insertion unions a body with its immediate
-            // neighbours, but the union can grow a span into the next one's
-            // slab zone. One pass; the spans stay sorted, and the span with
-            // the higher top keeps its flags (its face is the landing
-            // surface).
-            for (S32 k = 0; k + 1 < n; )
-            {
-                if (bottoms[k + 1] - tops[k] < SS_WF_SPAN_SLAB_M)
-                {
-                    const bool higher = tops[k + 1] > tops[k];
-                    flags[k] = higher ? flags[k + 1] : flags[k];
-                    tops[k] = llmax(tops[k], tops[k + 1]);
-                    bottoms[k] = llmin(bottoms[k], bottoms[k + 1]);
-                    for (S32 j = k + 1; j + 1 < n; ++j)
-                    {
-                        bottoms[j] = bottoms[j + 1];
-                        tops[j] = tops[j + 1];
-                        flags[j] = flags[j + 1];
-                    }
-                    --n;
-                }
-                else
-                {
-                    ++k;
-                }
-            }
-
-            // Rect re-peels carry forward what the capture could not re-see:
-            // old spans resting entirely above the highest band this build
-            // actually hit are unrebutted (their altitude was never resolved -
-            // churned-out geometry, LOD cull), so they ride along instead of
-            // being folded away from empty scratch. Spans whose base sits
-            // below the seen ceiling were swept through and drop.
-            if (mBuild.mRectOnly && col < mBuild.mSeenBand.size())
-            {
-                const S32 seen = mBuild.mSeenBand[col];
-                const F32 seen_top = (F32)(seen + 1) * tile.mBandHeight;
-                for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-                {
-                    const size_t si = (size_t)k * layer + col;
-                    const F32 old_top = tile.mSpanTop[si];
-                    if (old_top <= NO_SURFACE * 0.5f) break;
-                    const F32 old_bot = tile.mSpanBottom[si];
-                    if (old_bot < seen_top - 0.01f) continue;
-
-                    if (n > 0 && old_bot - tops[n - 1] < SS_WF_SPAN_SLAB_M)
-                    {
-                        tops[n - 1] = old_top;  // continues the carried stack
-                        continue;
-                    }
-
-                    if (n == SS_WF_MAX_SPANS)
-                    {
-                        // Over budget: collapse the thinnest air gap, the
-                        // same rule the band scan folds by.
-                        S32 thinnest = 0;
-                        F32 best = FLT_MAX;
-                        for (S32 j = 0; j + 1 < n; ++j)
-                        {
-                            const F32 gap = bottoms[j + 1] - tops[j];
-                            if (gap < best) { best = gap; thinnest = j; }
-                        }
-                        tops[thinnest] = tops[thinnest + 1];
-                        flags[thinnest] = flags[thinnest + 1];
-                        for (S32 j = thinnest + 1; j + 1 < n; ++j)
-                        {
-                            bottoms[j] = bottoms[j + 1];
-                            tops[j] = tops[j + 1];
-                            flags[j] = flags[j + 1];
-                        }
-                        --n;
-                    }
-
-                    bottoms[n] = old_bot;
-                    tops[n] = old_top;
-                    flags[n] = tile.mSpanFlags[si];
-                    ++n;
-                }
-            }
-
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                if (k < n)
-                {
-                    tile.mSpanBottom[si] = bottoms[k];
-                    tile.mSpanTop[si] = tops[k];
-                    tile.mSpanFlags[si] = flags[k];
-                }
-                else
-                {
-                    tile.mSpanBottom[si] = NO_SURFACE;
-                    tile.mSpanTop[si] = NO_SURFACE;
-                    tile.mSpanFlags[si] = 0;
-                }
-            }
-        }
-    }
-}
-
-// <SS:Nexii> Finalizes the column span store over a rectangle: merges gaps
-// the refine phase's insertions left thinner than the slab threshold, and
-// extends a first span whose below-gap is thinner to the world floor - a
-// wall standing on unmeasured ground stays solid to it. Runs at commit, after
-// every capture node has had its say.
-void SSWorldField::finalizeSpans(Tile& tile, S32 x0, S32 y0, S32 x1, S32 y1)
-{
-    const S32 res = tile.mRes;
-    const size_t layer = (size_t)res * res;
-
-    x0 = llmax(x0, 0); y0 = llmax(y0, 0);
-    x1 = llmin(x1, res); y1 = llmin(y1, res);
-
-    for (S32 y = y0; y < y1; ++y)
-    {
-        for (S32 x = x0; x < x1; ++x)
-        {
-            const size_t col = (size_t)y * res + x;
-
-            F32 bottoms[SS_WF_MAX_SPANS];
-            F32 tops[SS_WF_MAX_SPANS];
-            U8 flags[SS_WF_MAX_SPANS];
-            S32 n = 0;
-
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                const F32 top = tile.mSpanTop[si];
-                if (top <= NO_SURFACE * 0.5f) break;
-                bottoms[n] = tile.mSpanBottom[si];
-                tops[n] = top;
-                flags[n] = tile.mSpanFlags[si];
-                ++n;
-            }
-
-            // The gap beneath the first span is air only when it is at least
-            // a slab tall.
-            if (n > 0 && bottoms[0] < SS_WF_SPAN_SLAB_M) bottoms[0] = 0.f;
-
-            // The refine phase's insertions union with their immediate
-            // neighbours, but a union can grow a span into the next one's
-            // slab zone. One pass; the spans stay sorted, and the span with
-            // the higher top keeps its flags (its face is the landing
-            // surface).
-            for (S32 k = 0; k + 1 < n; )
-            {
-                if (bottoms[k + 1] - tops[k] < SS_WF_SPAN_SLAB_M)
-                {
-                    const bool higher = tops[k + 1] > tops[k];
-                    flags[k] = higher ? flags[k + 1] : flags[k];
-                    tops[k] = llmax(tops[k], tops[k + 1]);
-                    bottoms[k] = llmin(bottoms[k], bottoms[k + 1]);
-                    for (S32 j = k + 1; j + 1 < n; ++j)
-                    {
-                        bottoms[j] = bottoms[j + 1];
-                        tops[j] = tops[j + 1];
-                        flags[j] = flags[j + 1];
-                    }
-                    --n;
-                }
-                else
-                {
-                    ++k;
-                }
-            }
-
-            for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
-            {
-                const size_t si = (size_t)k * layer + col;
-                if (k < n)
-                {
-                    tile.mSpanBottom[si] = bottoms[k];
-                    tile.mSpanTop[si] = tops[k];
-                    tile.mSpanFlags[si] = flags[k];
-                }
-                else
-                {
-                    tile.mSpanBottom[si] = NO_SURFACE;
-                    tile.mSpanTop[si] = NO_SURFACE;
-                    tile.mSpanFlags[si] = 0;
-                }
-            }
-        }
-    }
-}
-
-void SSWorldField::commitBuild(Tile& tile)
-{
-    if (mBuild.mChanged)
-    {
-        if (tile.mGeomSerial == 0xFFFFFFFFu)
-        {
-            tile.mGeomSerial = 1;
-        }
-        else
-        {
-            ++tile.mGeomSerial;
-        }
-    }
-
-    if (!mBuild.mRectOnly)
-    {
-        ++mCaptureCount;
-        tile.mValid = true;
-    }
-    else
-    {
-        ++mDirtyCaptures;
-    }
-
-    // The capture scratch folds into the column span store here - full builds
-    // convert every column, rect re-peels only the rectangle the build
-    // actually captured - so the store is current whenever the geometry serial
-    // moves, and the flood reads spans, never bands.
-    if (mBuild.mRectOnly)
-    {
-        // Fold the captured rect, never the live dirty rect: marks merged
-        // mid-build name columns this build never spliced, and folding them
-        // would read the regrown (all NO_SURFACE) scratch and erase spans
-        // across everything that streamed in while the build ran.
-        finalizeSpans(tile, mBuild.mRectX0, mBuild.mRectY0, mBuild.mRectX1, mBuild.mRectY1);
-
-        // Consume the dirty flag only when nothing merged mid-build; the
-        // grown rect stays dirty and re-peels on the next build.
-        if (tile.mDirty
-            && tile.mDirtyX0 == mBuild.mRectX0 && tile.mDirtyY0 == mBuild.mRectY0
-            && tile.mDirtyX1 == mBuild.mRectX1 && tile.mDirtyY1 == mBuild.mRectY1)
-        {
-            tile.mDirtyX0 = tile.mDirtyY0 = 0;
-            tile.mDirtyX1 = tile.mDirtyY1 = 0;
-            tile.mDirty = false;
-        }
-    }
-    else
-    {
-        finalizeSpans(tile, 0, 0, tile.mRes, tile.mRes);
-    }
-    // The band scope resets only with no marks pending: marks that merged
-    // mid-build raised it to their own altitude, and the follow-up re-peel
-    // must still sweep past them.
-    if (!tile.mDirty) tile.mBandTarget = 0;
-    tile.mCaptureTime = mNow;
-    tile.mLastTouched = mNow;
-    mBuild.mPass = 0;
-    mBuild.mActive = false;
-
-    // <SS:Nexii> The capture scratch folds into the span store above; release it.
-    // At the default 0.25m cell a 1024-res tile holds ~9MB per band of band arrays
-    // (~226MB at the 24-band cap) that nothing but the NEXT build reads - keeping
-    // them across commits held up to ~1.2GB live at MAX_TILES and was starving the
-    // heap (crash inside malloc from the cloud deck's next allocation). The
-    // rect re-peel's change detection reads NO_SURFACE after this, so a no-op edit
-    // now costs one extra async flood instead of ~226MB per tile of dead weight.
-    // ensureBands regrows lazily on the next build's first applyBand.
-    tile.mBandTop.clear();
-    tile.mBandTop.shrink_to_fit();
-    tile.mBandUnder.clear();
-    tile.mBandUnder.shrink_to_fit();
-    tile.mBandFlags.clear();
-    tile.mBandFlags.shrink_to_fit();
-    tile.mAllocBands = 0;
-
-    // The connectivity labels follow every commit, not only the ones that changed
-    // something: they also serve their first fill, and a commit that changed
-    // nothing left mAirSerial already matching, so scheduleFlood's serial check
-    // makes the walk a no-op store.
-    if (tile.mAirSerial != tile.mGeomSerial)
-    {
-        scheduleFlood(tile);
-    }
+    if (erased) ++mGridGeneration;
 }
 
 // Resolves the landing-surface grid for a region - SSRainShadowMap's exact
-// contract, sourced from the band stack, not a private capture. The first
-// thing a falling drop meets is the column's highest surface, so bands are
+// contract, sourced from the cell grid, not a private capture. The first thing
+// a falling drop meets is the cell's highest solid span, so the span list is
 // scanned top-down and the first hit wins.
 bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::SurfaceGrid& out)
 {
@@ -1889,7 +536,7 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
     out.mRegionHandle = region_handle;
     out.mN = n;
     out.mCell = width / (F32)n;
-    out.mGeomSerial = tile.mGeomSerial;
+    out.mGeomSerial = tile.mGridSerial;
     out.mZ.assign((size_t)n * n, -FLT_MAX);
     out.mFlags.assign((size_t)n * n, 0);
     out.mAbove.assign((size_t)n * n, 0.f);
@@ -1912,7 +559,7 @@ bool SSWorldField::buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::S
             F32 z = -FLT_MAX;
             U8 flags = 0;
 
-            // The column's landing surface: the highest solid span's top.
+            // The cell's landing surface: the highest solid span's top.
             for (S32 k = SS_WF_MAX_SPANS - 1; k >= 0; --k)
             {
                 const size_t si = (size_t)k * (size_t)tile.mRes * (size_t)tile.mRes + col;
@@ -1984,7 +631,7 @@ void SSWorldField::validTiles(std::vector<std::pair<U64, U32> >& out) const
     {
         if (entry.second.mValid)
         {
-            out.emplace_back(entry.first, entry.second.mGeomSerial);
+            out.emplace_back(entry.first, entry.second.mGridSerial);
         }
     }
 }
@@ -2053,13 +700,15 @@ bool SSWorldField::coverageDetail(const LLVector3& pos_agent, bool& covered,
     const size_t col = (size_t)cy * tile->mRes + cx;
 
     // The half metre of grace keeps the surface being stood on from reading
-    // as its own ceiling - a capture texel of the floor under the camera can
-    // land a hair above the camera's own feet.
+    // as its own ceiling - the cell's floor under the camera can land a hair
+    // above the camera's own feet.
     const F32 over = pos_agent.mV[VZ] + 0.5f;
 
-    // The column's spans, lowest first: the first span whose top clears the
-    // camera is the ceiling of the space the camera stands in, and the
-    // highest span's top is the column top.
+    // <SS:Nexii> The cell's spans, lowest first: the lowest span whose BOTTOM
+    // clears the camera is the ceiling of the space the camera stands in, and
+    // the highest span's top is the column top. The underside, not the top
+    // face: the sheets carry both faces of every span, where the depth-peel
+    // capture only ever resolved tops and so read a roof's slab as headroom.
     const size_t layer = (size_t)tile->mRes * tile->mRes;
     bool any = false;
     for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
@@ -2067,30 +716,29 @@ bool SSWorldField::coverageDetail(const LLVector3& pos_agent, bool& covered,
         const size_t si = (size_t)k * layer + col;
         const F32 top = tile->mSpanTop[si];
         if (top <= -FLT_MAX * 0.5f) break;
+        const F32 bottom = tile->mSpanBottom[si];
 
         any = true;
         column_top_z = llmax(column_top_z, top);
-        if (top > over && (!covered || top < ceiling_z))
+        if (bottom > over && (!covered || bottom < ceiling_z))
         {
             covered = true;
-            ceiling_z = top;
+            ceiling_z = bottom;
         }
     }
 
     return any;
 }
 
-// <SS:Nexii> Which air gap of a column contains z: the gaps are the intervals
-// between, beneath and above the column's solid spans, every stored one at
-// least the slab threshold tall. Returns the gap index (0 below the lowest
-// span, n above the highest), or -1 when z falls inside a body - the store
-// has no verdict for the inside of solid things.
+// <SS:Nexii> Which air gap of a cell contains z: the gaps are the intervals
+// between, beneath and above the cell's solid spans, every stored one at least
+// the slab threshold tall. Returns the gap index (0 below the lowest span, n
+// above the highest), or -1 when z falls inside a body - the grid has no
+// verdict for the inside of solid things.
 S32 SSWorldField::gapAt(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) const
 {
     const size_t layer = (size_t)tile.mRes * tile.mRes;
-    // The capture ceiling, not the scratch slot high-water: bisected slots
-    // inflate mBandCount, but the top gap must end where the capture ends.
-    const F32 ceiling = (F32)bandCount() * tile.mBandHeight;
+    const F32 ceiling = tile.mCeiling;
 
     F32 prev = 0.f;
     for (S32 k = 0; k < SS_WF_MAX_SPANS; ++k)
@@ -2099,7 +747,7 @@ S32 SSWorldField::gapAt(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) c
         const F32 stop = tile.mSpanTop[si];
         if (stop <= NO_SURFACE * 0.5f)
         {
-            g0 = prev; g1 = ceiling;
+            g0 = prev; g1 = llmax(ceiling, z + 1.f);
             return k;                                   // open above the last span
         }
         const F32 bottom = tile.mSpanBottom[si];
@@ -2111,19 +759,51 @@ S32 SSWorldField::gapAt(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) c
         if (z <= stop + 0.01f) return -1;               // inside the body
         prev = stop;
     }
-    g0 = prev; g1 = ceiling;
+    g0 = prev; g1 = llmax(ceiling, z + 1.f);
     return SS_WF_MAX_SPANS;                             // above the last span
 }
 
-// <SS:Nexii> Air connectivity lookup: the air gap of the column that contains
-// the point, read from the labels the flood stored, or AIR_UNKNOWN when
-// nothing is current - after an edit, before the first flood, or off-tile. A
-// point inside a body reads AIR_SOLID.
+// <SS:Nexii> The point query of decision 2. A 3D point usually lands in a gap of
+// its own cell - a flying avatar, rain at 200 m and a listener on a sky platform
+// all sit in their column's top gap, which the grid extends past its ceiling
+// precisely so those answers exist. The one case with no air at its own height is
+// a point INSIDE a body (a camera pushed into a wall, an ear inside a floor slab),
+// and for that the query walks DOWN from z to the first gap within
+// SSWorldFieldGroundReach metres and answers with that gap's verdict. Nothing
+// within reach is open air, which the callers read as outdoors. [interaction: airLabelAt, enclosureInRegion]
+S32 SSWorldField::resolveGap(const Tile& tile, size_t col, F32 z, F32& g0, F32& g1) const
+{
+    S32 gap = gapAt(tile, col, z, g0, g1);
+    if (gap >= 0) return gap;
+
+    const size_t layer = (size_t)tile.mRes * tile.mRes;
+    const F32 floor_z = z - ss_wf_ground_reach();
+    // Walking down from inside a body, the first air met is the gap beneath the
+    // body the point sits in - the highest span whose bottom is below the point.
+    for (S32 k = SS_WF_MAX_SPANS - 1; k >= 0; --k)
+    {
+        const size_t si = (size_t)k * layer + col;
+        if (tile.mSpanTop[si] <= NO_SURFACE * 0.5f) continue;
+        const F32 bottom = tile.mSpanBottom[si];
+        if (bottom > z) continue;                       // that span is above the point
+        if (bottom < floor_z) break;                    // further down than the reach allows
+        gap = gapAt(tile, col, bottom - 0.02f, g0, g1);
+        if (gap >= 0) return gap;
+        break;                                          // the gap below is itself body: nothing to find
+    }
+    return -1;
+}
+
+// <SS:Nexii> Air connectivity lookup: the gap of the cell that contains the
+// point (or the first one below it within reach), read from the labels the
+// classification stored, or AIR_UNKNOWN when nothing is current - no grid for
+// the region, or a rebuild owed since the navmesh moved. A point with no air
+// within the ground reach reads AIR_OUTDOORS: the field ran out of structure
+// to stand under, not out of confidence.
 U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
-    if (!tile || !tile->mValid) return AIR_UNKNOWN;
-    if (tile->mGapLabel.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_UNKNOWN;
+    if (!tile || !current(*tile) || tile->mGapLabel.empty()) return AIR_UNKNOWN;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return AIR_UNKNOWN;
@@ -2133,19 +813,18 @@ U8 SSWorldField::airLabelAt(const LLVector3& pos_agent) const
     const size_t col = (size_t)cy * tile->mRes + cx;
 
     F32 g0, g1;
-    const S32 gap = gapAt(*tile, col, pos_agent.mV[VZ], g0, g1);
-    if (gap < 0) return AIR_SOLID;
+    const S32 gap = resolveGap(*tile, col, pos_agent.mV[VZ], g0, g1);
+    if (gap < 0) return AIR_OUTDOORS;
     const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)gap;
     return (gi < tile->mGapLabel.size()) ? tile->mGapLabel[gi] : (U8)AIR_UNKNOWN;
 }
 
-// Occlusion depth behind airLabelAt: the flood's distance walk per air gap,
-// gated by the same serial check so a stale walk is never served.
+// The covered distance behind airLabelAt, rounded to metres: how far the
+// opening's reach had to carry to get here. Same gate, same walk-down.
 U32 SSWorldField::airDepthAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
-    if (!tile || !tile->mValid) return AIR_DEPTH_UNREACHED;
-    if (tile->mGapDepth.empty() || tile->mAirSerial != tile->mGeomSerial) return AIR_DEPTH_UNREACHED;
+    if (!tile || !current(*tile) || tile->mGapDepth.empty()) return AIR_DEPTH_UNREACHED;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return AIR_DEPTH_UNREACHED;
@@ -2155,19 +834,21 @@ U32 SSWorldField::airDepthAt(const LLVector3& pos_agent) const
     const size_t col = (size_t)cy * tile->mRes + cx;
 
     F32 g0, g1;
-    const S32 gap = gapAt(*tile, col, pos_agent.mV[VZ], g0, g1);
-    if (gap < 0) return AIR_DEPTH_UNREACHED;
+    const S32 gap = resolveGap(*tile, col, pos_agent.mV[VZ], g0, g1);
+    if (gap < 0) return 0;                              // nothing overhead within reach: open air
     const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)gap;
-    return (gi < tile->mGapDepth.size()) ? (U32)tile->mGapDepth[gi] : AIR_DEPTH_UNREACHED;
+    if (gi >= tile->mGapDepth.size()) return AIR_DEPTH_UNREACHED;
+    const U16 dm = tile->mGapDepth[gi];
+    return (dm == (U16)AIR_DEPTH_UNREACHED) ? AIR_DEPTH_UNREACHED : (U32)llround((F32)dm * 0.1f);
 }
 
-// <SS:Nexii> The enclosure spectrum at a point: the air gap containing the
-// point answers with its own label and occlusion depth. A point inside a body
-// has no verdict (-1) - the caller keeps its own probe answer for that.
+// <SS:Nexii> The enclosure spectrum at a point: the gap the point resolves to
+// answers with its own label and covered distance. Returns -1 whenever there is
+// no current answer and the caller keeps its own probe answer for that.
 F32 SSWorldField::enclosureAt(const LLVector3& pos_agent) const
 {
     const Tile* tile = tileAt(pos_agent);
-    if (!tile || !tile->mValid) return -1.f;
+    if (!tile || !current(*tile)) return -1.f;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return -1.f;
@@ -2176,12 +857,12 @@ F32 SSWorldField::enclosureAt(const LLVector3& pos_agent) const
 }
 
 // The bulk form for callers that walk one region's cells (the surface field's
-// window stitch): same answer, region and tile resolved once instead of per
+// window stitch): same answer, region and grid resolved once instead of per
 // point.
 F32 SSWorldField::enclosureAtRegion(U64 region_handle, const LLVector3& pos_agent) const
 {
     auto it = mTiles.find(region_handle);
-    if (it == mTiles.end() || !it->second.mValid) return -1.f;
+    if (it == mTiles.end() || !current(it->second)) return -1.f;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
     if (!regionp) return -1.f;
@@ -2189,10 +870,15 @@ F32 SSWorldField::enclosureAtRegion(U64 region_handle, const LLVector3& pos_agen
     return enclosureInRegion(regionp, it->second, pos_agent);
 }
 
+// <SS:Nexii> The ramp: d / (d + tau) on the covered distance d, with tau the LOCAL
+// gap's own cot(theta) reach floored at SS_WF_ENCLOSURE_TAU_M. The same geometry
+// that decides how far an opening carries outdoors decides how fast the ramp
+// saturates, so one setting governs both and a tall space never reads as enclosed
+// as a low one at the same distance from its opening.
 F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& tile,
                                     const LLVector3& pos_agent) const
 {
-    if (tile.mGapLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return -1.f;
+    if (tile.mGapLabel.empty() || !current(tile)) return -1.f;
 
     const S32 cx = llclamp((S32)((pos_agent.mV[VX] - regionp->getOriginAgent().mV[VX]) / tile.mCell), 0, tile.mRes - 1);
     const S32 cy = llclamp((S32)((pos_agent.mV[VY] - regionp->getOriginAgent().mV[VY]) / tile.mCell), 0, tile.mRes - 1);
@@ -2201,8 +887,8 @@ F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& t
     if ((size_t)(SS_WF_MAX_SPANS + 1) * layer > tile.mGapLabel.size()) return -1.f;
 
     F32 g0, g1;
-    const S32 gap = gapAt(tile, col, pos_agent.mV[VZ], g0, g1);
-    if (gap < 0) return -1.f;   // inside a body: the store has no verdict
+    const S32 gap = resolveGap(tile, col, pos_agent.mV[VZ], g0, g1);
+    if (gap < 0) return 0.f;    // no air within the ground reach: open sky by the decision-2 rule
 
     const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)gap;
     switch (tile.mGapLabel[gi])
@@ -2211,10 +897,11 @@ F32 SSWorldField::enclosureInRegion(const LLViewerRegion* regionp, const Tile& t
         case AIR_INTERIOR: return 1.f;
         case AIR_SHELTERED:
         {
-            const U16 d = tile.mGapDepth[gi];
-            if (d == AIR_DEPTH_UNREACHED) return 1.f;
-            const F32 metres = (F32)d * tile.mCell;
-            return metres / (metres + SS_WF_ENCLOSURE_TAU_M);
+            const U16 dm = tile.mGapDepth[gi];
+            if (dm == (U16)AIR_DEPTH_UNREACHED) return 1.f;
+            const F32 metres = (F32)dm * 0.1f;
+            const F32 tau = llmax(SS_WF_ENCLOSURE_TAU_M, (g1 - g0) * ss_wf_open_k());
+            return metres / (metres + tau);
         }
         default: return -1.f;
     }
@@ -2233,7 +920,7 @@ bool SSWorldField::acousticAt(const LLVector3& pos_agent, F32 wall[4]) const
     if (!tile || !tile->mValid) return false;
 
     const Tile::Acoustic& ac = tile->mAcoustic;
-    if (ac.mLatRes < 1 || ac.mSerial != tile->mGeomSerial
+    if (ac.mLatRes < 1 || !current(*tile)
         || ac.mProbes.empty() || ac.mCellStart.size() != (size_t)ac.mLatRes * (size_t)ac.mLatRes + 1)
     {
         return false;
@@ -2284,9 +971,9 @@ bool SSWorldField::acousticAt(const LLVector3& pos_agent, F32 wall[4]) const
     return true;
 }
 
-// <SS:Nexii> The occlusion trace over the span store - the doc's Part 3, the brief's
-// realtime ask. Resolves one region's tile (both endpoints must live in it; the
-// store has no verdict past its border) and hands the segment to the core's DDA.
+// <SS:Nexii> The occlusion trace over the cell grid - the doc's Part 3, the brief's
+// realtime ask. Resolves one region's grid (both endpoints must live in it; the
+// grid has no verdict past its border) and hands the segment to the core's DDA.
 bool SSWorldField::traceSolid(const LLVector3& a, const LLVector3& b,
                               F32& solid_m, S32& crossings) const
 {
@@ -2309,7 +996,7 @@ bool SSWorldField::traceSolid(const LLVector3& a, const LLVector3& b,
     snap.mFlags = tile.mSpanFlags.data();
     snap.mRes = tile.mRes;
     snap.mCell = tile.mCell;
-    snap.mCeiling = (F32)tile.mBandCount * tile.mBandHeight;
+    snap.mCeiling = tile.mCeiling;
     snap.mMaxSpans = SS_WF_MAX_SPANS;
 
     const LLVector3& origin = regionp->getOriginAgent();
@@ -2428,7 +1115,7 @@ bool SSWorldField::probesAt(const LLVector3& pos_agent, ProbeSample out[4], S32&
     count = 0;
     const Tile* tile = tileAt(pos_agent);
     if (!tile || !tile->mValid) return false;
-    if (tile->mAcoustic.mSerial != tile->mGeomSerial) return false;
+    if (!current(*tile)) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(pos_agent);
     if (!regionp) return false;
@@ -2499,7 +1186,7 @@ bool SSWorldField::propagationQuery(const LLVector3& source, const LLVector3& li
     const LLVector3 mid = (source + listener) * 0.5f;
     const Tile* tile = tileAt(mid);
     if (!tile || !tile->mValid) return false;
-    if (tile->mAcoustic.mSerial != tile->mGeomSerial) return false;
+    if (!current(*tile)) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile->mRegionHandle);
     if (!regionp) return false;
@@ -2661,7 +1348,7 @@ bool SSWorldField::acousticDebug(U64 region_handle, const LLVector3& centre_agen
 
     const Tile& tile = it->second;
     const Tile::Acoustic& ac = tile.mAcoustic;
-    if (ac.mLatRes < 1 || ac.mSerial != tile.mGeomSerial || ac.mProbes.empty()) return false;
+    if (ac.mLatRes < 1 || !current(tile) || ac.mProbes.empty()) return false;
 
     LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
     if (!regionp) return false;
@@ -2740,8 +1427,8 @@ bool SSWorldField::acousticDebug(U64 region_handle, const LLVector3& centre_agen
     return true;
 }
 
-// Share of a tile's air gaps carrying a current label - 1.0 once the first
-// flood has landed and nothing has edited since. The overlay reads this to
+// Share of a grid's air gaps carrying a current label - 1.0 once a grid is
+// published and the navmesh has not moved since. The overlay reads this to
 // tell a settled field from one still catching up.
 F32 SSWorldField::airCoverage(U64 region_handle) const
 {
@@ -2749,7 +1436,7 @@ F32 SSWorldField::airCoverage(U64 region_handle) const
     if (it == mTiles.end() || !it->second.mValid) return 0.f;
 
     const Tile& tile = it->second;
-    if (tile.mGapLabel.empty() || tile.mAirSerial != tile.mGeomSerial) return 0.f;
+    if (tile.mGapLabel.empty() || !current(tile)) return 0.f;
     if (tile.mRes < 1) return 0.f;
 
     const size_t layer = (size_t)tile.mRes * tile.mRes;
@@ -3013,260 +1700,6 @@ bool SSWorldField::buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drain
     return true;
 }
 
-// The flood, over the store's air gaps. A column is a short list of solid
-// [bottom, top] spans; the air is the gaps between and around them, and the
-// flood's nodes are exactly those gaps - a room is ONE node whatever band its
-// floor and ceiling landed in, the interior the wind solve wants to skip and
-// the soundscape wants to know it is standing in. Adjacency is horizontal
-// only, and strict: two columns' gaps connect when their intervals overlap by
-// more than a sliver - a corner touch where a wall meets a ceiling is not a
-// door. Vertical movement is free inside a node, because a gap already spans
-// its full height. Evidence-only in the same spirit as the probe carve: a
-// passage narrower than the store's slab threshold never becomes a gap at
-// all. The touching classification then splits the reachable gaps three ways
-// - OUTDOORS where nothing stands above them (the gap above every column's
-// highest span starts OUTDOORS by definition), SHELTERED while an opening's
-// aperture budget lasts, INTERIOR once every budget is spent - and the second
-// walk measures each gap's graph distance to the nearest OUTDOORS gap, the
-// "how enclosed is this air" figure the acoustic channel's travel times and
-// sparse air solve both read.
-static void ss_wf_flood(S32 res, S32 max_spans, F32 ceiling,
-                        const std::vector<F32>& span_top,
-                        const std::vector<F32>& span_bottom,
-                        std::vector<U8>& gap_label, std::vector<U16>& gap_depth)
-{
-    const size_t layer = (size_t)res * res;
-    const size_t per_col = (size_t)max_spans + 1;
-    const size_t nodes = layer * per_col;
-    gap_label.assign(nodes, SSWorldField::AIR_SOLID);
-    gap_depth.assign(nodes, (U16)SSWorldField::AIR_DEPTH_UNREACHED);
-
-    static const S32 DX[4] = { 1, -1, 0, 0 };
-    static const S32 DY[4] = { 0, 0, 1, -1 };
-    const F32 EPS = 0.05f;
-
-    // Gap bounds per node, precomputed once: gap k of a column with n spans
-    // runs from the span below (or the world floor) to the span above (or the
-    // capture ceiling). Slots past a column's span count are empty.
-    std::vector<F32> gb0(nodes, 0.f);
-    std::vector<F32> gb1(nodes, 0.f);
-    std::vector<S32> span_count(layer, 0);
-    for (size_t col = 0; col < layer; ++col)
-    {
-        S32 n = 0;
-        while (n < max_spans && span_top[(size_t)n * layer + col] > NO_SURFACE * 0.5f) ++n;
-        span_count[col] = n;
-
-        for (S32 k = 0; k <= max_spans; ++k)
-        {
-            const size_t node = col * per_col + (size_t)k;
-            if (k > n) continue;
-            gb0[node] = (k == 0) ? 0.f : span_top[(size_t)(k - 1) * layer + col];
-            gb1[node] = (k == n) ? ceiling : span_bottom[(size_t)k * layer + col];
-        }
-    }
-    auto nodeExists = [&](size_t node) { return gb1[node] > gb0[node] + EPS; };
-
-    // Adjacency is strict overlap: a corner touch where one column's gap ends
-    // exactly where the neighbour's begins is a wall junction, not a door.
-    auto touches = [&](size_t node, auto&& fn)
-    {
-        const size_t col = node / per_col;
-        const S32 x = (S32)(col % (size_t)res);
-        const S32 y = (S32)(col / (size_t)res);
-        for (S32 d = 0; d < 4; ++d)
-        {
-            const S32 nx = x + DX[d], ny = y + DY[d];
-            if (nx < 0 || ny < 0 || nx >= res || ny >= res) continue;
-
-            const size_t ncol = (size_t)ny * res + nx;
-            for (S32 kj = 0; kj <= max_spans; ++kj)
-            {
-                const size_t nnode = ncol * per_col + (size_t)kj;
-                if (gb1[nnode] <= gb0[nnode] + EPS) continue;
-                if (!(gb0[node] < gb1[nnode] - EPS && gb0[nnode] < gb1[node] - EPS)) continue;
-                fn(nnode);
-            }
-        }
-    };
-
-    // Every column's top gap is open sky; every gap of a border column can
-    // walk out sideways. The flood labels the rest from there.
-    std::vector<S32> queue;
-    queue.reserve(nodes / 8);
-    for (size_t col = 0; col < layer; ++col)
-    {
-        const S32 x = (S32)(col % (size_t)res);
-        const S32 y = (S32)(col / (size_t)res);
-        const bool border = x == 0 || y == 0 || x == res - 1 || y == res - 1;
-        const S32 n = span_count[col];
-
-        for (S32 k = 0; k <= max_spans; ++k)
-        {
-            const size_t node = col * per_col + (size_t)k;
-            if (gb1[node] <= gb0[node] + EPS) continue;
-            if (k != n && !border) continue;
-            gap_label[node] = SSWorldField::AIR_OUTDOORS;
-            queue.push_back((S32)node);
-        }
-    }
-
-    for (size_t head = 0; head < queue.size(); ++head)
-    {
-        touches((size_t)queue[head], [&](size_t nnode)
-        {
-            U8& lab = gap_label[nnode];
-            if (lab != SSWorldField::AIR_INTERIOR) return;
-            lab = SSWorldField::AIR_OUTDOORS;
-            queue.push_back((S32)nnode);
-        });
-    }
-
-    // ---- the touching classification: outdoors / sheltered / indoors ----
-    // Covered gaps: outside-connected but with structure standing over them.
-    // A gap below a column's top span always has that structure; the top gap
-    // never does.
-    std::vector<U8> covered(nodes, 0);
-    for (size_t col = 0; col < layer; ++col)
-    {
-        const S32 n = span_count[col];
-        for (S32 k = 0; k <= max_spans; ++k)
-        {
-            const size_t node = col * per_col + (size_t)k;
-            if (gb1[node] <= gb0[node] + EPS) continue;
-            if (gap_label[node] != SSWorldField::AIR_OUTDOORS) continue;
-            if (k < n) covered[node] = 1;
-        }
-    }
-    auto touchesCovered = [&](size_t node)
-    {
-        bool touch = false;
-        touches(node, [&](size_t nnode) { if (covered[nnode]) touch = true; });
-        return touch;
-    };
-
-    // Porch: the outdoors gaps touching covered air, clustered so one opening
-    // is one aperture. Two windows in one wall stay separate clusters (the
-    // porch gaps are wall-face neighbours only within the opening), while a
-    // door and its adjacent window merge into the one opening they physically
-    // are. Stored as the cluster's budget - sqrt(gaps), the opening's linear
-    // width - so a metre-scale window hands the same shelter in gaps whatever
-    // the column density is.
-    std::vector<U16> porch(nodes, 0);
-    std::vector<S32> cluster;
-    for (size_t node = 0; node < nodes; ++node)
-    {
-        if (porch[node] || covered[node]) continue;
-        if (gap_label[node] != SSWorldField::AIR_OUTDOORS) continue;
-        if (!touchesCovered(node)) continue;
-
-        cluster.clear();
-        cluster.push_back((S32)node);
-        porch[node] = 1;   // visited mark; the real budget lands after the walk
-        for (size_t head = 0; head < cluster.size(); ++head)
-        {
-            touches((size_t)cluster[head], [&](size_t nnode)
-            {
-                if (porch[nnode] || covered[nnode]) return;
-                if (gap_label[nnode] != SSWorldField::AIR_OUTDOORS) return;
-                if (!touchesCovered(nnode)) return;
-
-                porch[nnode] = 1;
-                cluster.push_back((S32)nnode);
-            });
-        }
-
-        // sqrt(aperture) fits a U16 by construction: a cluster cannot hold
-        // more gaps than the tile carries, whose root is far under 65535.
-        const U16 budget = (U16)(sqrtf((F32)cluster.size()) + 0.5f);
-        for (const S32 j : cluster)
-        {
-            porch[j] = budget;
-        }
-    }
-
-    // Budget propagation over covered gaps, widest path first: each gap's
-    // remaining budget is the best (seed budget - steps) over every inward
-    // path, so the strongest opening decides how deep the shelter reaches.
-    // First pop is final (later entries only ever carry smaller budgets);
-    // spent gaps fall back to INTERIOR.
-    std::vector<U16> reach(nodes, 0);
-    std::priority_queue<std::pair<U16, S32> > heap;
-    for (size_t node = 0; node < nodes; ++node)
-    {
-        if (!covered[node]) continue;
-
-        U16 best = 0;
-        touches(node, [&](size_t nnode)
-        {
-            if (covered[nnode]) return;
-            best = llmax(best, porch[nnode]);
-        });
-        if (best > 0)
-        {
-            reach[node] = best;
-            heap.emplace(best, (S32)node);
-        }
-    }
-
-    while (!heap.empty())
-    {
-        const U16 b = heap.top().first;
-        const size_t node = (size_t)heap.top().second;
-        heap.pop();
-        if (b != reach[node]) continue;    // a stronger seed already passed
-        if (b <= 1) continue;              // nothing left to hand inward
-
-        touches(node, [&](size_t nnode)
-        {
-            if (!covered[nnode] || reach[nnode] >= b - 1) return;
-
-            reach[nnode] = b - 1;
-            heap.emplace((U16)(b - 1), (S32)nnode);
-        });
-    }
-
-    for (size_t node = 0; node < nodes; ++node)
-    {
-        if (!covered[node]) continue;
-        gap_label[node] = reach[node] > 0 ? (U8)SSWorldField::AIR_SHELTERED
-                                          : (U8)SSWorldField::AIR_INTERIOR;
-    }
-
-    // Occlusion depth, one BFS from the whole outdoors set over outdoors and
-    // sheltered gaps. Interior gaps are unreachable and stay marked.
-    // Distances saturate at AIR_DEPTH_UNREACHED - 1: the sentinel must stay
-    // exclusive to "unvisited", or a gap whose true distance hit 0xFFFF would
-    // read as never visited and the walk would loop on it forever.
-    {
-        std::vector<S32> depth_q;
-        depth_q.reserve(queue.size());
-        for (size_t node = 0; node < nodes; ++node)
-        {
-            if (gap_label[node] == SSWorldField::AIR_OUTDOORS)
-            {
-                gap_depth[node] = 0;
-                depth_q.push_back((S32)node);
-            }
-        }
-
-        for (size_t head = 0; head < depth_q.size(); ++head)
-        {
-            const S32 cur = depth_q[head];
-            touches((size_t)cur, [&](size_t nnode)
-            {
-                const U8 lab = gap_label[nnode];
-                if (lab != SSWorldField::AIR_OUTDOORS && lab != SSWorldField::AIR_SHELTERED) return;
-                U16& d = gap_depth[nnode];
-                if (d != SSWorldField::AIR_DEPTH_UNREACHED) return;
-
-                d = (U16)llmin((U32)gap_depth[(size_t)cur] + 1u,
-                               SSWorldField::AIR_DEPTH_UNREACHED - 1u);
-                depth_q.push_back((S32)nnode);
-            });
-        }
-    }
-}
 // <SS:Nexii> The ACOUSTIC channel's bake (doc/atmo_magic_acoustics.md Parts 1-4),
 // over the snapshot the flood just walked. Replaces the shipped ring lattice whole:
 // fixed rings sampled altitudes nothing stands at - a ring inside a floor slab
@@ -3384,7 +1817,7 @@ static void ss_wf_acoustic_build(S32 res, S32 max_spans, F32 cell_m, F32 ceiling
                     p.mRoofed = defs[i].mRoofed ? 1 : 0;
                     const U16 dep = gap_depth[anchor * per + (size_t)k];
                     p.mGapDepth = dep;
-                    p.mTravelM = (dep != 0xFFFF) ? (F32)dep * cell_m : -1.f;
+                    p.mTravelM = (dep != 0xFFFF) ? (F32)dep * 0.1f : -1.f;
 
                     // Tier A, all of it bake-time: the profile at the probe's real z,
                     // the column stack above, the bounded room flood, Sabine over it,
@@ -3524,44 +1957,68 @@ static void ss_wf_acoustic_build(S32 res, S32 max_spans, F32 cell_m, F32 ceiling
     }
 }
 
-void SSWorldField::scheduleFlood(Tile& tile)
+// <SS:Nexii> One region's classification, start to finish, as a single worker
+// job. The main thread does three things and no more: snapshot the navmesh's
+// band sheets (shared_ptr copies - the sheets are immutable once published, so
+// nothing is copied and nothing can be rewritten under the walk), read every
+// setting the job needs, and remember the serial and generation the job was
+// started at. The worker then materialises the cell grid from the sheets, runs
+// the air classification over it and bakes the acoustic probes; the completion
+// swaps the finished arrays in whole, and only if BOTH gates still hold - the
+// generation (clear() and eviction move it, so a job for a dropped region can
+// never land on a grid the same region handle re-created) and the geometry
+// serial (the navmesh settled again mid-walk, so the answer describes a world
+// that has moved). Nothing here mutates a published grid: a reader on the main
+// thread always sees either the previous grid entire or the new one entire.
+void SSWorldField::scheduleGrid(Tile& tile)
 {
-    if (mFloodBusy) return;                     // this commit's successor will reschedule
-    if (tile.mBandCount < 1 || tile.mRes < 1) return;
+    if (mBuildBusy) return;                     // the next update gives this region its turn
+    if (!SSNavMesh::instanceExists()) return;
 
-    // Snapshot: the walk must never read the live span store while the next
-    // build's conversion rewrites it on the main thread. Checked BEFORE the
-    // busy flag - an undersized store bailing out must not wedge mFloodBusy
-    // true and silently retire the flood for the rest of the session.
-    const S32 res = tile.mRes;
-    const size_t live = (size_t)SS_WF_MAX_SPANS * (size_t)res * res;
-    if (tile.mSpanTop.size() < live || tile.mSpanBottom.size() < live) return;
+    std::vector<SSNavMesh::BandSheet> sheets;
+    U64 stamp = 0;
+    if (!SSNavMesh::getInstance()->collectSheets(tile.mRegionHandle, sheets, stamp)) return;
+    if (sheets.empty()) return;     // no geometry is no answer, not an empty world; navSettle drops the grid for it
 
-    // <SS:Nexii> The acoustic bake rides the flood (same job, same snapshot, gates
-    // and all); tier B is opt-in quality AND a claimed ACOUSTIC channel - nobody
-    // pays for analysed reverb nobody asked for. Read on the main thread here, so
-    // the worker job and the batch fan-out below never touch a setting.
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(tile.mRegionHandle);
+    if (!regionp) return;
+
+    const F32 cell = ss_wf_cell_setting();
+    const S32 res = llclamp((S32)llround(regionp->getWidth() / cell), 32, 1024);
+    const LLVector3 region_origin = regionp->getOriginAgent();
+
+    // The grid's ceiling: above the highest band anything the navmesh knows
+    // about, plus headroom, so every cell's top gap is genuinely open sky.
+    F32 ceiling = 32.f;
+    for (const SSNavMesh::BandSheet& bs : sheets) ceiling = llmax(ceiling, bs.mZMax);
+    ceiling += SS_WF_CEILING_HEADROOM_M;
+
+    // <SS:Nexii> The acoustic bake rides the same job (same snapshot, same gates);
+    // tier B is opt-in quality AND a claimed ACOUSTIC channel - nobody pays for
+    // analysed reverb nobody asked for. Every setting is read here on the main
+    // thread, so the worker job and the batch fan-out below never touch one.
     static LLCachedControl<bool> acoustics(gSavedSettings, "SSWorldFieldAcoustics", true);
     static LLCachedControl<U32> acoustic_quality(gSavedSettings, "SSWorldFieldAcousticsQuality", 0);
     const bool do_acoustic = (bool)acoustics;
     const bool tier_b = do_acoustic && llmin((U32)acoustic_quality, 1u) >= 1
                      && ss_wf_interest_count(tile.mRegionHandle, (S32)EChannel::ACOUSTIC) > 0;
+    const F32 open_k = ss_wf_open_k();
 
     LL::WorkQueue::ptr_t general = LL::WorkQueue::getInstance("General");
     LL::WorkQueue::ptr_t main = LL::WorkQueue::getInstance("mainloop");
     if (!general || !main) return;              // no worker: labels stay AIR_UNKNOWN, consumers cope
 
-    mFloodBusy = true;
-    const U32 generation = mFloodGeneration;
+    mBuildBusy = true;
+    const U32 generation = mGridGeneration;
     const U64 region = tile.mRegionHandle;
     const U32 serial = tile.mGeomSerial;
-    const F32 ceiling = (F32)bandCount() * tile.mBandHeight;
-    auto snapshot_top = std::make_shared<std::vector<F32> >(
-        tile.mSpanTop.begin(),
-        tile.mSpanTop.begin() + live);
-    auto snapshot_bottom = std::make_shared<std::vector<F32> >(
-        tile.mSpanBottom.begin(),
-        tile.mSpanBottom.begin() + live);
+    const S32 sheet_count = (S32)sheets.size();
+    (void)stamp;
+
+    auto sheet_set = std::make_shared<std::vector<SSNavMesh::BandSheet> >(std::move(sheets));
+    auto span_bottom = std::make_shared<std::vector<F32> >();
+    auto span_top = std::make_shared<std::vector<F32> >();
+    auto span_flags = std::make_shared<std::vector<U8> >();
     auto gap_labels = std::make_shared<std::vector<U8> >();
     auto gap_depths = std::make_shared<std::vector<U16> >();
     auto probes = std::make_shared<std::vector<SSAcoustic::Probe> >();
@@ -3573,65 +2030,77 @@ void SSWorldField::scheduleFlood(Tile& tile)
     auto mip_top = std::make_shared<std::vector<F32> >();
     auto mip_bottom = std::make_shared<std::vector<F32> >();
     auto mip_flags = std::make_shared<std::vector<U8> >();
+    auto worker_ms = std::make_shared<F32>(0.f);
 
-    // The acoustic lattice runs at a coarse multiple of the capture grid -
-    // near 8m per probe, never finer than the capture itself.
-    const S32 lat_res = llmin(llclamp((S32)llround((F32)res * tile.mCell / 8.f), 8, 64), res);
-    const F32 cell_m = tile.mCell;
+    // The acoustic lattice runs at a coarse multiple of the cell grid - near
+    // 8 m per probe, never finer than the grid itself.
+    const S32 lat_res = llmin(llclamp((S32)llround((F32)res * cell / 8.f), 8, 64), res);
 
     main->postTo(
         general,
-        [res, max_spans = SS_WF_MAX_SPANS, ceiling, lat_res, cell_m, do_acoustic, tier_b,
-         snapshot_top, snapshot_bottom, gap_labels, gap_depths,
-         probes, cell_start, links, adj_start, adj_node, adj_cost,
-         mip_top, mip_bottom, mip_flags]()
+        [res, cell, region_origin, ceiling, open_k, lat_res, do_acoustic, tier_b,
+         max_spans = SS_WF_MAX_SPANS, sheet_set, span_bottom, span_top, span_flags,
+         gap_labels, gap_depths, probes, cell_start, links, adj_start, adj_node, adj_cost,
+         mip_top, mip_bottom, mip_flags, worker_ms]()
         {
-            ss_wf_flood(res, max_spans, ceiling, *snapshot_top, *snapshot_bottom,
-                        *gap_labels, *gap_depths);
+            LLTimer t;
+            ss_wf_build_grid(res, cell, region_origin, *sheet_set, *span_bottom, *span_top, *span_flags);
+            sheet_set->clear();     // the sheets have been read; drop the references before the long walks
+            SSWorldFieldCore::classify(res, max_spans, cell, ceiling, open_k,
+                                       span_top->data(), span_bottom->data(),
+                                       *gap_labels, *gap_depths);
             if (do_acoustic)
             {
-                ss_wf_acoustic_build(res, max_spans, cell_m, ceiling, lat_res,
-                                     *snapshot_top, *snapshot_bottom, *gap_labels, *gap_depths,
+                ss_wf_acoustic_build(res, max_spans, cell, ceiling, lat_res,
+                                     *span_top, *span_bottom, *gap_labels, *gap_depths,
                                      *probes, *cell_start, *links, *adj_start, *adj_node, *adj_cost);
                 if (tier_b && !probes->empty())
                 {
                     // The 4x-coarsened span mip tier B traces against (reverb
                     // statistics do not need 0.25 m walls) - built here while the
-                    // snapshot is hot, handed to the batches through the shared
+                    // grid is hot, handed to the batches through the shared
                     // buffers below.
                     SSAcoustic::Snap snap;
-                    snap.mTop = snapshot_top->data();
-                    snap.mBottom = snapshot_bottom->data();
+                    snap.mTop = span_top->data();
+                    snap.mBottom = span_bottom->data();
                     snap.mRes = res;
-                    snap.mCell = cell_m;
+                    snap.mCell = cell;
                     snap.mCeiling = ceiling;
                     snap.mMaxSpans = max_spans;
                     SSAcoustic::Snap mip = SSAcoustic::buildMip(snap, *mip_top, *mip_bottom, *mip_flags);
                     (void)mip;
                 }
             }
+            *worker_ms = t.getElapsedTimeF32() * 1000.f;
             return true;
         },
-        [this, generation, region, serial, ceiling, lat_res, cell_m, tier_b, res,
+        [this, generation, region, serial, res, cell, ceiling, lat_res, sheet_count, tier_b,
          main, general,
-         gap_labels, gap_depths,
+         span_bottom, span_top, span_flags, gap_labels, gap_depths,
          probes, cell_start, links, adj_start, adj_node, adj_cost,
-         mip_top, mip_bottom, mip_flags](bool)
+         mip_top, mip_bottom, mip_flags, worker_ms](bool)
         {
-            mFloodBusy = false;
-            if (generation != mFloodGeneration) return;
+            mBuildBusy = false;
+            if (generation != mGridGeneration) return;
 
             auto it = mTiles.find(region);
-            if (it == mTiles.end() || !it->second.mValid) return;
-            if (it->second.mGeomSerial != serial) return;   // edited mid-walk; the next commit refloods
+            if (it == mTiles.end()) return;
+            if (it->second.mGeomSerial != serial) return;   // the navmesh settled again mid-walk; the next update rebuilds
 
-            it->second.mGapLabel = std::move(*gap_labels);
-            it->second.mGapDepth = std::move(*gap_depths);
-            it->second.mAirSerial = serial;
+            Tile& t = it->second;
+            t.mRes = res;
+            t.mCell = cell;
+            t.mCeiling = ceiling;
+            t.mSheets = sheet_count;
+            t.mSpanBottom = std::move(*span_bottom);
+            t.mSpanTop = std::move(*span_top);
+            t.mSpanFlags = std::move(*span_flags);
+            t.mGapLabel = std::move(*gap_labels);
+            t.mGapDepth = std::move(*gap_depths);
 
-            Tile::Acoustic& ac = it->second.mAcoustic;
+            Tile::Acoustic& ac = t.mAcoustic;
             ac.mLatRes = lat_res;
-            ac.mLatCell = (lat_res > 0) ? (F32)it->second.mRes * it->second.mCell / (F32)lat_res : 0.f;
+            ac.mLatCell = (lat_res > 0) ? (F32)res * cell / (F32)lat_res : 0.f;
             ac.mCeiling = ceiling;
             ac.mProbes = std::move(*probes);
             ac.mCellStart = std::move(*cell_start);
@@ -3639,22 +2108,27 @@ void SSWorldField::scheduleFlood(Tile& tile)
             ac.mAdjStart = std::move(*adj_start);
             ac.mAdjNode = std::move(*adj_node);
             ac.mAdjCost = std::move(*adj_cost);
-            ac.mSerial = serial;
 
-            // <SS:Nexii> Tier B behind the flood: every probe's bundle is
+            t.mGridSerial = serial;
+            t.mBuiltAt = mNow;
+            t.mValid = true;
+            mLastBuildMS = *worker_ms;
+            ++mGridBuilds;
+
+            // <SS:Nexii> Tier B behind the classification: every probe's bundle is
             // independent, so the bake fans probe BATCHES across the general queue
-            // as separate jobs - the flood stays the one-at-a-time job it is, tier B
-            // is many small ones behind it, each store-back serial-gated
-            // individually (an edit-heavy region's re-bake drops the stale batch
-            // and the next flood re-runs the whole walk). The mip the batches
-            // trace against was built in the worker above; its dimensions follow
-            // from buildMip's own formula, so nothing is plumbed back.
+            // as separate jobs - the classification stays the one-at-a-time job it
+            // is, tier B is many small ones behind it, each store-back serial-gated
+            // individually (a churning region drops the stale batch and the next
+            // classification re-runs the whole walk). The mip the batches trace
+            // against was built in the worker above; its dimensions follow from
+            // buildMip's own formula, so nothing is plumbed back.
             if (tier_b && !ac.mProbes.empty() && !mip_top->empty()
                 && mip_top->size() == mip_bottom->size())
             {
                 const S32 mip_res = res / SSAcoustic::BUNDLE_MIP;
                 const S32 mip_spans = SS_WF_MAX_SPANS + 2;
-                const F32 mip_cell = cell_m * (F32)SSAcoustic::BUNDLE_MIP;
+                const F32 mip_cell = cell * (F32)SSAcoustic::BUNDLE_MIP;
                 if (mip_res >= 1 && mip_top->size() == (size_t)mip_spans * (size_t)mip_res * (size_t)mip_res)
                 {
                     auto probe_snap = std::make_shared<std::vector<SSAcoustic::Probe> >(ac.mProbes);
@@ -3688,11 +2162,10 @@ void SSWorldField::scheduleFlood(Tile& tile)
                             },
                             [this, generation, region, serial, start, end, bundles](bool)
                             {
-                                if (generation != mFloodGeneration) return;
+                                if (generation != mGridGeneration) return;
                                 auto cit = mTiles.find(region);
                                 if (cit == mTiles.end() || !cit->second.mValid) return;
-                                if (cit->second.mGeomSerial != serial) return;
-                                if (cit->second.mAcoustic.mSerial != serial) return;
+                                if (cit->second.mGridSerial != serial) return;
                                 if (cit->second.mAcoustic.mProbes.size() < (size_t)end) return;
 
                                 for (S32 i = start; i < end; ++i)
@@ -3714,9 +2187,8 @@ void SSWorldField::scheduleFlood(Tile& tile)
         });
 }
 
-// A band's surface hue for the overlay: the store's vertical resolution
-// reads as colour - blue at the floor through green to ember red at the
-// ceiling.
+// A span's hue for the overlay: altitude reads as colour - blue at the floor
+// through green to ember red at the grid's ceiling.
 static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
 {
     t = llclamp(t, 0.f, 1.f);
@@ -3730,9 +2202,10 @@ static LLColor4 ss_wf_band_hue(F32 t, F32 alpha)
                     lerp(lo[2], hi[2], u), alpha);
 }
 
-// The world field's own overlay: what the capture resolved, what the air flood
-// decided with its occlusion depth, and what the drainage pass reads - view
-// picked by SSWorldFieldDebugView, distance-thinned like the wind flowmap's.
+// The world field's own overlay: what the cell grid holds, what the air
+// classification decided with its covered distance, and what the drainage pass
+// reads - view picked by SSWorldFieldDebugView, distance-thinned like the wind
+// flowmap's.
 void SSWorldField::renderDebug()
 {
     static LLCachedControl<U32> view(gSavedSettings, "SSWorldFieldDebugView", 1);
@@ -3811,16 +2284,15 @@ void SSWorldField::renderDebug()
 
         const LLVector3 origin = regionp->getOriginAgent();
         const F32 cell = tile.mCell;
-        const F32 h = tile.mBandHeight;
         const size_t layer = (size_t)tile.mRes * tile.mRes;
 
-        // The tile's stack footprint, so a region nobody has captured yet reads
-        // as an empty box rather than as nothing at all.
+        // The grid's footprint, so a region the navmesh has not reached yet
+        // reads as an empty box rather than as nothing at all.
         {
             const F32 x1 = origin.mV[VX] + (F32)tile.mRes * cell;
             const F32 y1 = origin.mV[VY] + (F32)tile.mRes * cell;
             const F32 z0 = 0.f;
-            const F32 z1 = (F32)(bandCount() * tile.mBandHeight);
+            const F32 z1 = tile.mCeiling;
             gGL.color4f(0.5f, 0.55f, 0.7f, 0.35f);
             const F32 bx[4] = { origin.mV[VX], x1, x1, origin.mV[VX] };
             const F32 by[4] = { origin.mV[VY], origin.mV[VY], y1, y1 };
@@ -3835,11 +2307,11 @@ void SSWorldField::renderDebug()
 
         if (which == 1)
         {
-// Every solid span the store holds, standing at the altitude the store
-            // holds it at, hue by altitude so stacked storeys read separately instead
-            // of fusing into one roof.
-            const F32 ceiling = llmax((F32)(bandCount() * tile.mBandHeight), 1.f);
-            const bool labelled = !tile.mGapLabel.empty() && tile.mAirSerial == tile.mGeomSerial
+// Every solid span the grid holds, standing at the altitude it holds
+            // it at, hue by altitude so stacked storeys read separately instead of
+            // fusing into one roof.
+            const F32 ceiling = llmax(tile.mCeiling, 1.f);
+            const bool labelled = !tile.mGapLabel.empty() && current(tile)
                                   && tile.mGapLabel.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer;
             for (S32 y = 0; y < tile.mRes; ++y)
             {
@@ -3876,10 +2348,10 @@ void SSWorldField::renderDebug()
             // highest. Current means the labels cover every live gap: a
             // no-op re-peel can shift the spans without moving the serial,
             // and the flood refills them later.
-            const bool current = !tile.mGapLabel.empty() && tile.mAirSerial == tile.mGeomSerial
+            const bool have = !tile.mGapLabel.empty() && SSWorldField::current(tile)
                                  && tile.mGapLabel.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer
                                  && tile.mGapDepth.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer;
-            if (!current) continue;
+            if (!have) continue;
 
             for (S32 y = 0; y < tile.mRes; ++y)
             {
@@ -3895,8 +2367,8 @@ void SSWorldField::renderDebug()
                     for (S32 k = 0; k <= SS_WF_MAX_SPANS; ++k)
                     {
                         const F32 stop = (k < SS_WF_MAX_SPANS) ? tile.mSpanTop[(size_t)k * layer + col]
-                                                               : (F32)(bandCount() * tile.mBandHeight);
-                        const F32 g1 = (stop > -FLT_MAX * 0.5f) ? stop : (F32)(bandCount() * tile.mBandHeight);
+                                                               : tile.mCeiling;
+                        const F32 g1 = (stop > -FLT_MAX * 0.5f) ? stop : tile.mCeiling;
                         if (g1 - g0 > 0.05f)
                         {
                             const size_t gi = col * (SS_WF_MAX_SPANS + 1) + (size_t)k;
@@ -3932,11 +2404,11 @@ void SSWorldField::renderDebug()
             // so the walk and the spacing follow the grid's own answers, not
             // the tile's.
             auto& cached = sDrainDebug[tile.mRegionHandle];
-            if (cached.mSerial != tile.mGeomSerial)
+            if (cached.mSerial != tile.mGridSerial)
             {
                 cached.mGrid = SSRainShadowMap::SurfaceGrid();
                 cached.mDrain = Drainage();
-                cached.mSerial = tile.mGeomSerial;
+                cached.mSerial = tile.mGridSerial;
                 if (!buildSurfaceGrid(tile.mRegionHandle, tile.mRes, cached.mGrid)
                     || !buildDrainage(cached.mGrid, cached.mDrain))
                 {
@@ -3991,10 +2463,10 @@ void SSWorldField::renderDebug()
             // ladder of state-coloured plates on one spine; the air gaps
             // between spans stay empty, which is exactly where the flood
             // walks.
-            const bool current = !tile.mGapLabel.empty() && tile.mAirSerial == tile.mGeomSerial
+            const bool have = !tile.mGapLabel.empty() && SSWorldField::current(tile)
                                  && tile.mGapLabel.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer
                                  && tile.mGapDepth.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer;
-            const F32 ceiling = llmax((F32)(bandCount() * tile.mBandHeight), 1.f);
+            const F32 ceiling = llmax(tile.mCeiling, 1.f);
 
             for (S32 y = 0; y < tile.mRes; ++y)
             {
@@ -4036,7 +2508,7 @@ void SSWorldField::renderDebug()
                         // The state of the air the body holds up: the gap
                         // above it in the column.
                         U8 st = AIR_UNKNOWN;
-                        if (current)
+                        if (have)
                         {
                             st = tile.mGapLabel[col * (SS_WF_MAX_SPANS + 1) + (size_t)(k + 1)];
                         }

@@ -84,7 +84,7 @@ public:
     // Drop every band and build again from the current census (the floater's Rebuild button).
     void rebuildAll();
 
-    // <SS:Nexii> The world field's span read off the heightfield: one band's solid spans over the column's 16 m interior at the field's 0.25 m columns, unioned from the raster's cells and clipped to the field's span budget. The worker fills it beside the layers and publish hands it to SSWorldField::navSpans, so the flood, coverage and acoustic readers keep their store and lose the depth-peel capture. [interaction: SSWorldField]
+    // <SS:Nexii> The per-cell sheet: one band's solid spans over the column's 16 m interior at 0.25 m cells, unioned from the raster's cells and clipped to the sheet's span budget. The worker fills it beside the layers and publish KEEPS it on the band, so the navmesh's own spatial structure carries the world field's per-cell data - the sheet set of a region is the field's only geometry source. Immutable once published: a rebuilt band swaps in a whole new sheet, so a reader holding a shared_ptr is never rewritten under it, on any thread. [interaction: SSWorldField::scheduleGrid]
     struct SpanSheet
     {
         static constexpr S32 RES = 64;          // 16 m at 0.25 m
@@ -93,11 +93,22 @@ public:
         std::vector<F32> mBottom, mTop;         // [(row * RES + col) * SPANS + k], local z metres
         std::vector<U8> mFlags;                 // SSRainShadowMap::SURF_* per span
     };
+
+    // <SS:Nexii> One published band's sheet with the frame it lives in: the column's south-west corner in AGENT space and the band's z range (local z is agent z, the census frame only re-bases XY). This is what SSWorldField snapshots - a vector of these, shared_ptr copies only, no geometry copied - before posting its classification job. [interaction: SSWorldField::scheduleGrid]
+    struct BandSheet
+    {
+        S32 mTx = 0, mTy = 0;
+        F32 mZMin = 0.f, mZMax = 0.f;
+        LLVector3 mOriginAgent;                 // the column's (x0, y0, 0) corner, agent space
+        std::shared_ptr<const SpanSheet> mSheet;
+    };
+    // Whether the band builds should keep a sheet at all - the world field's master switch, read once per launch.
+    static bool sheetsWanted();
     // No band of a column inside the region is queued or building, and no schedule is pending: the field may bump its serial.
     bool regionSettled(U64 region_handle) const;
-    // Every published band whose column lies in the region rebuilds and feeds the field again (a tile it just created).
-    void refeedRegion(U64 region_handle);
-    U32 sheetsFed() const { return mSheetsFed; }
+    // <SS:Nexii> Every published band whose column centre falls inside the region, newest sheet per band, plus a stamp over the band keys and their geometry signatures: an unchanged stamp means an unchanged sheet set, which is how the field decides a rebuild is a no-op. Main thread only (it walks the live band map); the sheets themselves are immutable and safe to read from a worker afterwards. [interaction: SSWorldField::navSettle]
+    bool collectSheets(U64 region_handle, std::vector<BandSheet>& out, U64& out_stamp) const;
+    U32 sheetsHeld() const { return mSheetsHeld; }
     // The dump's navmesh half: every column the agent-space box touches, its band slots (z-range, alive, tiles, age), what is queued or building for it, whether it sits in the envelope, and a nearest-point probe over the box's top. [interaction: SSWorldFieldShapes::dumpObject]
     void dumpAt(const LLVector3& bmin_agent, const LLVector3& bmax_agent, std::vector<std::string>& out) const;
     // Every tile-border (portal) edge within the radius, linked or not, with its endpoints in agent space. [interaction: renderDebug links]
@@ -145,6 +156,7 @@ private:
         F64 mPublishedAt = -100.0;          // when its layers last landed, for the overlay's rebuild flash
         S32 mLayersDropped = 0;             // walkable layers this band produced past SS_NAV_MAX_LAYERS_PER_BAND
         S32 mUnderTerrain = 0;              // walkable spans under the land last publish, so the warning only fires on change
+        std::shared_ptr<const SpanSheet> mSheet;    // the world field's per-cell read of this band, kept for the life of the band
     };
 
     // A band waiting for a worker build.
@@ -210,8 +222,7 @@ private:
     std::vector<U32> mObstacleRemovals;
     S32 mInFlight = 0;
     std::vector<Job> mInFlightJobs;         // what the workers hold, for regionSettled
-    U32 mSheetsFed = 0;
-    void feedWorldField(S32 tx, S32 ty, F32 zmin, F32 zmax, const SpanSheet* sheet);
+    U32 mSheetsHeld = 0;                    // live bands carrying a world-field sheet
     U32 mBuildCount = 0;
     F32 mLastBuildMS = 0.f;
     F32 mLastPublishMS = 0.f;               // main-thread cost of the last publish: tile build with its detail mesh

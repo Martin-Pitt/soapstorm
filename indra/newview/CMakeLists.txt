@@ -1247,6 +1247,7 @@ set(viewer_HEADER_FILES
     sswindflow.h
     sswindprofilecore.h
     ssworldfield.h
+    ssworldfieldcore.h
     ssworldfieldshapes.h
     ssnavmesh.h
     fsscriptlibrary.h
