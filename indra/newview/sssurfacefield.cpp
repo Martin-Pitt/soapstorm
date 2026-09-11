@@ -2197,6 +2197,19 @@ void SSSurfaceField::renderWetPass()
                               << "m" << LL_ENDL;
     }
 
+    // <SS:Nexii> Probe BEFORE the draw: an error already pending here was raised somewhere earlier in the
+    // frame, and pinning that boundary is what narrows the hunt for the raiser (observed 2026-09-11: a
+    // per-frame GL_INVALID_OPERATION began the second an Atmo environment unloaded and the world fell
+    // back to stock EEP).
+    {
+        const GLenum pending = glGetError();
+        if (pending != GL_NO_ERROR)
+        {
+            LL_WARNS_ONCE("AtmoMagic") << "GL error 0x" << std::hex << (U32)pending << std::dec
+                                       << " already pending BEFORE the wetness draw" << LL_ENDL;
+        }
+    }
+
     LL_PROFILE_GPU_ZONE("atmo surface wetness");
 
     mScratch.bindTarget();
@@ -2340,11 +2353,22 @@ void SSSurfaceField::renderWetPass()
     gPipeline.unbindDeferredShader(gSSSurfaceWetProgram);
 
     {
-        const GLenum err = glGetError();
-        if (err != GL_NO_ERROR)
+        // <SS:Nexii> Drain the whole queue rather than popping one: several errors can stack within a frame,
+        // and a strand left behind reads as "already pending" to every later checker (the wind flow's
+        // contextLooksHealthy saw exactly that).
+        U32 drained = 0;
+        GLenum first = GL_NO_ERROR;
+        GLenum err;
+        while ((err = glGetError()) != GL_NO_ERROR)
         {
-            LL_WARNS("AtmoMagic") << "GL error 0x" << std::hex << (U32)err << std::dec
-                                  << " after the wetness draw" << LL_ENDL;
+            if (!drained) first = err;
+            ++drained;
+        }
+        if (drained)
+        {
+            LL_WARNS("AtmoMagic") << "GL error 0x" << std::hex << (U32)first << std::dec
+                                  << " after the wetness draw (" << drained
+                                  << (drained == 1 ? " error" : " errors") << " this frame)" << LL_ENDL;
         }
     }
 
