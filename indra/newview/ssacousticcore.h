@@ -127,7 +127,9 @@ namespace SSAcoustic
         const F32*  mBottom = nullptr;     // span bottoms
         const U8*   mFlags = nullptr;      // SSRainShadowMap::SURF_* per span
         const U8*   mGapLabel = nullptr;   // SSWorldField::EAirLabel per gap node
-        const U16*  mGapDepth = nullptr;   // graph depth to open sky per gap node
+        const U16*  mGapDepth = nullptr;   // decimetres of covered travel from the opening, per gap node
+        // <SS:Nexii> Optional survey mask, one byte per COLUMN: 0 means no band sheet ever covered that cell, so its empty span list is "not looked at", not "empty sky". Null means the whole grid is surveyed. [interaction: SSWorldField::traceSolid]
+        const U8*   mSurveyed = nullptr;
         S32   mRes = 0;
         F32   mCell = 1.f;                 // capture cell size, metres
         F32   mCeiling = 0.f;              // capture ceiling, metres
@@ -198,6 +200,7 @@ namespace SSAcoustic
     {
         F32 mSolidM = 0.f;    // metres of the segment's 3D length inside solid spans
         S32 mCrossings = 0;   // bodies entered
+        bool mUnsurveyed = false;   // the walk crossed a column no sheet covered: the count is a floor, not an answer
     };
 
     // 2D DDA over the columns the segment a->b crosses; per column, the segment's
@@ -211,6 +214,7 @@ namespace SSAcoustic
     {
         out.mSolidM = 0.f;
         out.mCrossings = 0;
+        out.mUnsurveyed = false;
         if (s.mRes < 1 || s.mCell <= 0.f) return false;
 
         const F32 width = (F32)s.mRes * s.mCell;
@@ -235,6 +239,7 @@ namespace SSAcoustic
         if (len_xy < 1.0e-5f)
         {
             const size_t col = (size_t)cy0 * (size_t)s.mRes + (size_t)cx0;
+            if (s.mSurveyed && !s.mSurveyed[col]) out.mUnsurveyed = true;
             const F32 zlo = llmin(a[2], b[2]);
             const F32 zhi = llmax(a[2], b[2]);
             const S32 n = spanCount(s, col);
@@ -273,6 +278,7 @@ namespace SSAcoustic
             F32 t_exit = llmin(t_max_x, t_max_y, 1.f);
 
             const size_t col = (size_t)cy * (size_t)s.mRes + (size_t)cx;
+            if (s.mSurveyed && !s.mSurveyed[col]) out.mUnsurveyed = true;
             // The segment's z-interval while inside this column. A horizontal
             // segment's interval is a POINT - and a point inside a body means the
             // body holds the whole horizontal run, which a naive z-overlap test
@@ -354,6 +360,12 @@ namespace SSAcoustic
                 return max_m;   // off-tile: open, not a nearby wall
             }
             const size_t col = (size_t)(py / s.mCell) * (size_t)s.mRes + (size_t)(px / s.mCell);
+            // <SS:Nexii> A column nobody surveyed has no spans, so airAt calls it open
+            // and the ray would run to the reach cap over geometry the field has never
+            // seen - which is what inflates a probe's room volume and its Sabine RT60.
+            // Stop there instead: "we do not know" is far closer to a wall than to
+            // 64 m of clear air. [interaction: SSWorldField's survey mask]
+            if (s.mSurveyed && !s.mSurveyed[col]) return (F32)i * s.mCell;
             if (!airAt(s, col, z)) return (F32)i * s.mCell;
         }
         return max_m;
@@ -429,6 +441,10 @@ namespace SSAcoustic
     // a pillar's answer.
     inline bool columnHasEarAir(const Snap& s, size_t col)
     {
+        // An unsurveyed column has an empty span list, which would otherwise read as
+        // one clear gap from the floor to the ceiling and look like the best anchor in
+        // the neighbourhood.
+        if (s.mSurveyed && !s.mSurveyed[col]) return false;
         const size_t layer = (size_t)s.mRes * (size_t)s.mRes;
         F32 prev = 0.f;
         for (S32 k = 0; k < s.mMaxSpans; ++k)
@@ -569,7 +585,7 @@ namespace SSAcoustic
         S32 mGap = 0;
         U8  mLabel = 4;                       // AIR_UNKNOWN
         U8  mRoofed = 0;
-        U16 mGapDepth = 0xFFFF;               // flood's graph depth to open sky, cells
+        U16 mGapDepth = 0xFFFF;               // the classification's covered distance from the opening, DECIMETRES (0xFFFF = never reached)
 
         // Tier A.
         F32 mWall[8];
@@ -1193,6 +1209,7 @@ namespace SSAcoustic
         m.mFlags = flags.data();
         m.mGapLabel = nullptr;
         m.mGapDepth = nullptr;
+        m.mSurveyed = nullptr;      // the mip is a different resolution; the caller's mask does not index it
         m.mRes = res;
         m.mCell = s.mCell * (F32)BUNDLE_MIP;
         m.mCeiling = s.mCeiling;

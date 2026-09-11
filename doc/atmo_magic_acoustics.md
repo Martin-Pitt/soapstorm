@@ -99,7 +99,7 @@ probes, because a listener teleporting into it still deserves its reverb.
 Labels ride along as data, not as placement gates.
 
 Per probe, stored: position (lattice cell + z), gap index, air label,
-travel-to-outdoors (metres, from the flood's gap depth × cell size), and the
+travel-to-outdoors (metres, from the classification's covered distance (DECIMETRES since 2026-09-11, so metres = depth x 0.1 - it used to be graph hops x cell size and so moved with SSWorldFieldCell)), and the
 analysis block of Part 4. Order-of-magnitude count: 32² lattice cells × ~2
 gaps × ~2 probes ≈ **4k probes per region**, ~64 B each ≈ 256 KB.
 

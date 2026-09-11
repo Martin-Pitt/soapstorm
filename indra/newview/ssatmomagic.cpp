@@ -1096,34 +1096,31 @@ void SSAtmoMagic::drawInfo()
         SSWorldField* field = SSWorldField::getInstance();
         const LLViewerRegion* cam_region = LLWorld::getInstance()->getRegionFromPosAgent(cam);
 
-        field_section.lines.push_back(llformat("capture    %d tiles, %d cells/axis, %.0fm bands, %d cap",
+        field_section.lines.push_back(llformat("grids      %d regions, %d cells/axis (%.2f m), ceiling %.0f m",
                                  field->tileCount(), field->resolution(),
-                                 (F32)field->bandHeight(), field->bandCount()));
-        field_section.lines.push_back(llformat("builds     %u total, %u dirty rects, last %.1f ms",
-                                 field->captureCount(), field->dirtyCaptureCount(),
-                                 field->lastCaptureMS()));
+                                 field->cellSize(), field->ceilingAt(cam)));
+        field_section.lines.push_back(llformat("builds     %u total, last %.1f ms on the worker",
+                                 field->gridBuilds(), field->lastBuildMS()));
 
         const F64 age = field->tileAge(cam);
         if (age >= 0.0)
         {
-            field_section.lines.push_back(llformat("tile       %.0fs old, %d bands live",
-                                     age, field->effectiveBands(cam)));
+            field_section.lines.push_back(llformat("grid       %.0fs old, %d band sheets",
+                                     age, field->sheetsAt(cam)));
         }
 
         const U8 air = field->airLabelAt(cam);
         static const char* AIR_NAME[] = { "solid", "outdoors", "sheltered", "interior", "unknown" };
         const U32 air_depth = field->airDepthAt(cam);
-        field_section.lines.push_back(llformat("air        %s, depth %s",
+        field_section.lines.push_back(llformat("air        %s, %s",
                                  AIR_NAME[llclamp((S32)air, 0, 4)],
                                  air_depth == SSWorldField::AIR_DEPTH_UNREACHED
-                                     ? "n/a" : llformat("%u cells", air_depth).c_str()));
+                                     ? "not reached from outdoors" : llformat("%u m covered from the opening", air_depth).c_str()));
         if (cam_region)
         {
-            field_section.lines.push_back(llformat("flood      %.0f%% of cells labelled",
-                                     field->airCoverage(cam_region->getHandle()) * 100.f));
-            field_section.lines.push_back(llformat("source     %s, %u sheets fed, %u settles",
-                                     field->navSourced(cam_region->getHandle()) ? "navmesh spans" : "depth capture",
-                                     field->navBlocksFed(), field->navSettles()));
+            field_section.lines.push_back(llformat("surveyed   %.0f%% of cells covered by a band sheet%s",
+                                     field->airCoverage(cam_region->getHandle()) * 100.f,
+                                     field->gridStale(cam_region->getHandle()) ? ", REBUILD PENDING" : ""));
         }
         // <SS:Nexii> The navmesh's one stat line: what it holds and what it still owes.
         if (SSNavMesh::instanceExists() && SSNavMesh::getInstance()->active())

@@ -27060,7 +27060,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldField</key>
       <map>
       <key>Comment</key>
-      <string>Master toggle for the shared world field: one region-anchored band-sliced capture of the world's solid structure that surface, coverage and future channels read instead of each capturing its own. Builds nothing until a channel is demanded</string>
+      <string>Master toggle for the shared world field: the per-cell classification of the census navmesh's own rasterization - solid spans, outdoors/sheltered/interior air and the acoustic probe bake - that surface, coverage, fog and audio read instead of each capturing or raycasting its own. Off also stops the navmesh keeping its span sheets. REQUIRES SSNavMesh (which requires SSWorldFieldShapes) - the navmesh is the only geometry source; with it off this answers nothing and every consumer falls back to its own raycasts</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27072,17 +27072,6 @@ Change of this parameter will affect the layout of buttons in notification toast
       <map>
       <key>Comment</key>
       <string>Serve the surface field's landing grid (wet/snow/puddle, runoff) from the shared world field's SURFACE_TOP channel instead of the rain shadow capture</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>Boolean</string>
-      <key>Value</key>
-      <integer>1</integer>
-    </map>
-    <key>SSWorldFieldFromNavMesh</key>
-      <map>
-      <key>Comment</key>
-      <string>While the census navmesh runs, the world field takes its column spans from the navmesh's rasterization instead of the depth-peel capture: every published band hands the field a span sheet, and the flood, coverage and acoustic bakes run over those. Off keeps the capture</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27110,7 +27099,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>0</integer>
+      <integer>1</integer>
     </map>
     <key>SSWorldFieldShapesBudgetMS</key>
       <map>
@@ -27143,7 +27132,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>0</integer>
+      <integer>1</integer>
     </map>
     <key>SSNavMeshBandGap</key>
       <map>
@@ -27324,7 +27313,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldAcoustics</key>
       <map>
       <key>Comment</key>
-      <string>Build the ACOUSTIC channel's gap-anchored probe set and propagation graph with the air flood, and serve the soundscape's wall profile, room classification, occlusion trace and thunder propagation from them. Off degrades every question to the raycasts and heuristics it used before</string>
+      <string>Build the ACOUSTIC channel's gap-anchored probe set and propagation graph with the air classification, and serve the soundscape's wall profile, room classification, occlusion trace and thunder propagation from them. Off degrades every question to the raycasts and heuristics it used before</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27335,7 +27324,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldAcousticsQuality</key>
       <map>
       <key>Comment</key>
-      <string>Acoustic bake quality: 0 the statistic tier (wall profiles, Sabine RT60 from a bounded room flood) that rides the flood job; 1 adds the stochastic tier - per-probe ray bundles (128 rays, 8 bounces) against a 4x-coarsened span mip, fanned across the worker pool as batches. Opt-in: seconds of a core per region commit</string>
+      <string>Acoustic bake quality: 0 the statistic tier (wall profiles, Sabine RT60 from a bounded room flood) that rides the classification job; 1 adds the stochastic tier - per-probe ray bundles (128 rays, 8 bounces) against a 4x-coarsened span mip, fanned across the worker pool as batches. Opt-in: seconds of a core per region rebuild</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27346,7 +27335,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldCell</key>
       <map>
       <key>Comment</key>
-      <string>World field column size in metres. 0.25 matches the rain shadow capture's texel at its default 1024 resolution - a 1024x1024 column grid over a 256m region - so window- and door-scale openings resolve for the air flood's shelter reach; memory and capture cost scale with bands x columns</string>
+      <string>World field cell size in metres. 0.25 is the census navmesh's own span sheet cell, so the grid costs no resampling and window- and door-scale openings resolve for the air classification's reach walk - a 1024x1024 cell grid over a 256m region. Coarser unions whole sheet cells together and cuts memory and classification cost quadratically, at the price of leaking through thin walls</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
@@ -27354,43 +27343,32 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Value</key>
       <real>0.25</real>
     </map>
-    <key>SSWorldFieldBand</key>
+    <key>SSWorldFieldOpenAngle</key>
       <map>
       <key>Comment</key>
-      <string>Height of one capture band in metres. One ortho depth pass per band, stacked bottom-up, so the field is a multi-span column store. 4m resolves room-scale air between floors, which the air flood's enclosure spectrum and acoustic lattice need to answer at eye level; the stack caps at 24 bands, so 4m tops the capture at 96m. Finer bands cost more depth passes</string>
+      <string>The world field's outdoors rule, in degrees of sky elevation. An opening hands the covered air behind it a reach budget of gap_height / tan(this angle), re-evaluated from the LOCAL gap height at every cell step: ground under a sky platform 200m up keeps a 200m budget and reads outdoors across the whole footprint, while a 2.4m room's door hands about 2.4m of outdoors and roughly four times that of shelter before the air goes interior. The same length sets how fast the enclosure spectrum saturates. Smaller carries outdoors further; larger encloses sooner</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>4.0</real>
+      <real>45.0</real>
     </map>
-    <key>SSWorldFieldCeiling</key>
+    <key>SSWorldFieldGroundReach</key>
       <map>
       <key>Comment</key>
-      <string>Altitude in metres above which the world field stops capturing. A full build also stops early once the sky has been empty for a few consecutive bands</string>
+      <string>How far in metres a query point with no air cell at its own height - a camera pushed inside a wall, an ear inside a floor slab - may walk DOWN looking for one before the world field answers open air. Points in real air (flying, above a sky platform, rain aloft) never use this: their own column's top gap already answers. Keep it short: it is a clipping-recovery distance, not a search, and a camera clipped into terrain with a large value here adopts the label of whatever basement it finds</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>256.0</real>
-    </map>
-    <key>SSWorldFieldMaxAge</key>
-      <map>
-      <key>Comment</key>
-      <string>Seconds before a cached world field tile is recaptured even without prim updates - the LOD and asset-timing recovery path</string>
-      <key>Persist</key>
-      <integer>1</integer>
-      <key>Type</key>
-      <string>F32</string>
-      <key>Value</key>
-      <real>120.0</real>
+      <real>6.0</real>
     </map>
     <key>SSWorldFieldDebugView</key>
       <map>
       <key>Comment</key>
-      <string>What the world field overlay draws: 1 every band surface the capture resolved (hue by band so stacked storeys read separately), 2 the air flood's touching classification - outdoors air green, sheltered air amber fading with occlusion depth, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the column spans themselves - each solid span a flat rect at its floor and its ceiling, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), joined by a dim line through the span's solid body, 7 the census navmesh - Detour polygon edges coloured by height band. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
+      <string>What the world field overlay draws: 1 every solid span top the cell grid holds (hue by altitude so stacked storeys read separately), 2 the air classification per gap - outdoors air green, sheltered air amber fading with the covered distance, interior air red, 3 the drainage topology over the landing surface - standing water blue and each cell's D8 outlet on the filled surface, 5 the cell spans themselves - each solid span a flat rect at its floor and its ceiling, coloured by the air state standing on it (outdoors green, sheltered amber, indoors red), joined by a dim line through the span's solid body, 7 the census navmesh - Detour polygon edges coloured by height band. Drawing itself is gated by the field overlay toggle, so there is no off value here</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

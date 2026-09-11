@@ -361,11 +361,11 @@
      control_name="SSWorldField"
      follows="left|top"
      height="16"
-     label="Build the shared solid-structure field"
+     label="Classify the shared solid-structure field"
      layout="topleft"
      left="10"
      name="worldfield_enabled_prefs"
-     tool_tip="One region-anchored capture of the build's solid structure that the surface, coverage and future channels read instead of each capturing its own. Builds nothing until a channel needs it."
+     tool_tip="The per-cell classification of the census navmesh's own rasterization - solid spans, outdoors/sheltered/interior air, acoustic probes - that the surface, coverage, fog and audio channels read instead of each capturing or raycasting its own. Needs the census navmesh."
      top_pad="6"
      width="500" />
 

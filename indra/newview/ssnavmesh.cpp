@@ -26,7 +26,6 @@
 #include "ssnavmesh.h"
 
 #include "ssworldfieldshapes.h"
-#include "ssworldfield.h"
 #include "ssrainshadow.h"
 
 #include "llagent.h"
@@ -281,7 +280,7 @@ namespace
         return true;
     }
 
-    // <SS:Nexii> The span sheet: every raster span of the column's interior, unioned two cells by two into the field's 0.25 m columns, air gaps under the field's slab closed, the list clipped to the field's budget by folding its thinnest gaps, and the span the land sits in flagged as terrain (the field extends it to the world floor) and raised to the water surface where the land is under water, as the depth capture used to record it. Recast z runs along -local y, so sheet rows count from the far end of the raster. [interaction: SSWorldField::navSpans]
+    // <SS:Nexii> The span sheet: every raster span of the column's interior, unioned two cells by two into the field's 0.25 m cells, air gaps under the field's slab closed, the list clipped to the field's budget by folding its thinnest gaps, and the span the land sits in flagged as terrain (the field extends it to the world floor) and raised to the water surface where the land is under water. The band keeps this sheet for its whole life: it IS the world field's geometry, which is why nothing here is handed away or rewritten in place. Recast z runs along -local y, so sheet rows count from the far end of the raster. [interaction: SSWorldField::collectSheets]
     void extractSpanSheet(const rcHeightfield& hf, const rcConfig& cfg, const SSNavBuildInput& in, SSNavMesh::SpanSheet& out)
     {
         const S32 R = SSNavMesh::SpanSheet::RES, K = SSNavMesh::SpanSheet::SPANS;
@@ -902,6 +901,7 @@ void SSNavMesh::teardown()
     if (mTileCache) { dtFreeTileCache(mTileCache); mTileCache = nullptr; }
     if (mNavMesh) { dtFreeNavMesh(mNavMesh); mNavMesh = nullptr; }
     mBands.clear();
+    mSheetsHeld = 0;            // every band's sheet went with it; the field's next settle finds an empty stamp and drops its grid
     mColumns.clear();
     mWorklist.clear();
     mObstacles.clear();
@@ -1136,8 +1136,7 @@ void SSNavMesh::schedule()
         }
         const bool keep = it->second.mAlive || (in_world && !in_envelope);
         if (keep) { ++it; continue; }
-        if (!it->second.mRefs.empty()) feedWorldField(tx, ty, it->second.mZMin, it->second.mZMax, nullptr);   // the field drops the band's spans with it
-        removeBand(it->first, it->second);
+        removeBand(it->first, it->second);   // <SS:Nexii> the band's sheet dies with it; the field notices through the stamp on its next settle [interaction: SSWorldField::scheduleGrid]
         it = mBands.erase(it);
     }
 
@@ -1159,17 +1158,76 @@ void SSNavMesh::schedule()
     });
 }
 
-// Evict a band's published layers from both the tile cache and the navmesh.
-// The band's column in agent space resolves to a region; the sheet (or nothing, to clear) lands in that region's tile.
-void SSNavMesh::feedWorldField(S32 tx, S32 ty, F32 zmin, F32 zmax, const SpanSheet* sheet)
+// <SS:Nexii> Whether band builds keep a world-field sheet: the field's master switch alone, so a sheet is either kept by every band or by none. An LLCachedControl, so it follows a live change - but only for builds launched after it; resheet() is what recovers the bands built under the old answer. [interaction: SSWorldField::update]
+bool SSNavMesh::sheetsWanted()
 {
-    if (!SSWorldField::instanceExists()) return;
-    const LLVector3 origin_agent = fromLocal(LLVector3((F32)tx * TILE_M, (F32)ty * TILE_M, 0.f));
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromPosAgent(origin_agent + LLVector3(0.5f * TILE_M, 0.5f * TILE_M, 0.f));
-    if (!regionp) return;
-    const LLVector3 o = origin_agent - regionp->getOriginAgent();
-    SSWorldField::getInstance()->navSpans(regionp->getHandle(), o.mV[VX], o.mV[VY], TILE_M, zmin, zmax, sheet);
-    if (sheet) ++mSheetsFed;
+    static LLCachedControl<bool> field(gSavedSettings, "SSWorldField", true);
+    return field;
+}
+
+// <SS:Nexii> The off->on recovery. Zeroing the signature is what makes schedule()
+// see the band as changed; mCensusStamp = 0 is what makes the next update() schedule
+// at all. Bands still in flight or queued are skipped - they will build under the
+// current answer anyway.
+S32 SSNavMesh::resheet()
+{
+    if (!mNavMesh) return 0;
+    S32 queued = 0;
+    for (auto& kv : mBands)
+    {
+        if (kv.second.mSheet) continue;         // already has one
+        // <SS:Nexii> NOT gated on mRefs: a band that published and produced zero
+        // walkable layers has an empty mRefs and no sheet, and skipping it would leave
+        // it in exactly the permanent no-sheet state this exists to break. mSig is the
+        // honest test for "has published at all" - schedule() sets it on publish and it
+        // is 0 until then, so a band still queued is skipped and will build under the
+        // current answer anyway.
+        if (kv.second.mSig == 0) continue;
+        kv.second.mSig = 0;
+        ++queued;
+    }
+    if (queued) mCensusStamp = 0;
+    return queued;
+}
+
+// <SS:Nexii> The region's published sheet set, shared_ptr copies only: every live band whose column centre falls inside the region, with the agent-space corner the field needs to place its cells, plus a stamp mixing each band's key and geometry signature. The stamp is the field's change detector - an identical stamp after a settle means nothing was rebuilt and the published grid still describes the world. Main thread only. [interaction: SSWorldField::scheduleGrid]
+bool SSNavMesh::collectSheets(U64 region_handle, std::vector<BandSheet>& out, U64& out_stamp) const
+{
+    out.clear();
+    out_stamp = 0;
+    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
+    if (!regionp || !mNavMesh) return false;
+
+    const LLVector3 o = toLocal(regionp->getOriginAgent());
+    const F32 w = regionp->getWidth();
+    for (const auto& kv : mBands)
+    {
+        if (!kv.second.mSheet) continue;
+        const S32 tx = (S32)((kv.first >> 42) & 0x1FFFFF) - (1 << 20);
+        const S32 ty = (S32)((kv.first >> 21) & 0x1FFFFF) - (1 << 20);
+        const F32 x = ((F32)tx + 0.5f) * TILE_M - o.mV[VX], y = ((F32)ty + 0.5f) * TILE_M - o.mV[VY];
+        if (x < 0.f || x >= w || y < 0.f || y >= w) continue;
+
+        BandSheet bs;
+        bs.mTx = tx;
+        bs.mTy = ty;
+        bs.mZMin = kv.second.mZMin;
+        bs.mZMax = kv.second.mZMax;
+        bs.mOriginAgent = fromLocal(LLVector3((F32)tx * TILE_M, (F32)ty * TILE_M, 0.f));
+        bs.mSheet = kv.second.mSheet;
+        out.push_back(bs);
+
+        // <SS:Nexii> Per-band terms are SUMMED, never folded in sequence: mBands is an unordered_map and a rehash reorders it, so any order-dependent mix would move the stamp without a single band having changed and cost the world field a whole region walk. Each term is already avalanched, so the sum is a sound combiner. [interaction: SSWorldField::navSettle]
+        U64 term = kv.first * 0x9E3779B97F4A7C15ull ^ kv.second.mSig * 0xC2B2AE3D27D4EB4Full;
+        term ^= term >> 29;
+        term *= 0xBF58476D1CE4E5B9ull;
+        term ^= term >> 32;
+        out_stamp += term;
+    }
+    // The band count joins it, so an empty set and a set whose terms happen to
+    // sum to zero are not the same stamp.
+    out_stamp = out_stamp * 0x9E3779B97F4A7C15ull + (U64)out.size() + 1u;
+    return true;
 }
 
 void SSNavMesh::dumpAt(const LLVector3& bmin_agent, const LLVector3& bmax_agent, std::vector<std::string>& out) const
@@ -1288,28 +1346,12 @@ bool SSNavMesh::regionSettled(U64 region_handle) const
     return true;
 }
 
-void SSNavMesh::refeedRegion(U64 region_handle)
-{
-    LLViewerRegion* regionp = LLWorld::getInstance()->getRegionFromHandle(region_handle);
-    if (!regionp || !mNavMesh) return;
-    const LLVector3 o = toLocal(regionp->getOriginAgent());
-    const F32 w = regionp->getWidth();
-    for (auto& kv : mBands)
-    {
-        if (kv.second.mRefs.empty()) continue;                          // pending anyway
-        const S32 tx = (S32)((kv.first >> 42) & 0x1FFFFF) - (1 << 20);
-        const S32 ty = (S32)((kv.first >> 21) & 0x1FFFFF) - (1 << 20);
-        const F32 x = ((F32)tx + 0.5f) * TILE_M - o.mV[VX], y = ((F32)ty + 0.5f) * TILE_M - o.mV[VY];
-        if (x >= 0.f && x < w && y >= 0.f && y < w) kv.second.mSig = 0;
-    }
-    mCensusStamp = 0;                                                   // the next update reschedules, and the zeroed signatures rebuild
-}
-
 void SSNavMesh::removeBand(U64 key, Band& band)
 {
     (void)key;
     mLayersDropped -= (U32)band.mLayersDropped;
     band.mLayersDropped = 0;
+    if (band.mSheet) { if (mSheetsHeld) --mSheetsHeld; band.mSheet.reset(); }
     if (!mTileCache || !mNavMesh) { band.mRefs.clear(); return; }
     for (U32 ref : band.mRefs)
     {
@@ -1368,7 +1410,7 @@ void SSNavMesh::launch(const Job& job)
         if (z >= in->mMin[2] - 1.f && z <= in->mMax[2] + 1.f) terrain_in_band = true;
     }
     if (terrain_in_band) emitTerrain(in->mTerrain.data(), tx0, ty0, in->mSoup);
-    in->mWantSheet = SSWorldField::navSpansWanted();
+    in->mWantSheet = sheetsWanted();
     if (in->mWantSheet)
     {
         LLViewerRegion* column_region = LLWorld::getInstance()->getRegionFromPosAgent(fromLocal(LLVector3(in->mMin[0] + 0.5f * TILE_M, in->mMin[1] + 0.5f * TILE_M, 0.f)));
@@ -1450,7 +1492,8 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
     LLTimer publish_timer;
     mTileCache->buildNavMeshTilesAt(job.mTx, -job.mTy - 1, mNavMesh);
     mLastPublishMS = publish_timer.getElapsedTimeF32() * 1000.f;
-    if (result->mSheet) feedWorldField(job.mTx, job.mTy, job.mZMin, job.mZMax, result->mSheet.get());
+    band.mSheet = result->mSheet;       // <SS:Nexii> the band keeps its per-cell sheet: the world field's geometry lives here, not in a store of its own [interaction: SSWorldField::collectSheets]
+    if (band.mSheet) ++mSheetsHeld;
     if (!result->mLog.empty())
     {
         LL_WARNS("SSNavMesh") << "Band " << job.mTx << "," << job.mTy << " b" << job.mBand << " (z " << job.mZMin << ".." << job.mZMax << ") Recast: " << result->mLog << LL_ENDL;

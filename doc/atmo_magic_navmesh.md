@@ -542,47 +542,45 @@ Three findings from a review pass over the pipeline, all in `ssnavmesh.cpp`:
   build now reports the overflow, `publish` warns with the band's column and count, and
   `SSNavMesh::layersDropped()` accumulates it for the console.
 
-## 22. The world field's spans come from the navmesh (2026-09-10)
+## 22. The world field's cells come from the navmesh (2026-09-10, rewritten 2026-09-11)
 
-The queue's "flood/coverage span read off the heightfield", done as a source switch rather than a
-reader migration. The world field's store (`ssworldfield.h`, one tile per region, 0.25 m columns,
-up to six solid `[bottom, top]` spans each) is what every consumer reads: the air flood and its
-labels, `coverageDetail`, `enclosureAt`, the acoustic probe bake, `traceSolid`, the surface top.
-None of them care where the spans came from, and the flood's only input is that per-column list.
-So the navmesh now fills it and the depth-peel capture stops.
+The queue's "flood/coverage span read off the heightfield". It landed on 2026-09-10 as a source
+switch — the navmesh pushed each published band's sheet at the world field, which spliced it into a
+store of its own — and was finished on 2026-09-11 by deleting that store. The navmesh's bands now
+**own** the world field's geometry, and the field pulls rather than being pushed to. Full design:
+`doc/atmo_magic_worldfield.md`.
 
 - **Sheet on the worker** (`extractSpanSheet`, `ssnavmesh.cpp`). After rasterization and the
   Recast filters, before the compact heightfield, every raster span of the column's 16 m interior
-  is read off the `rcHeightfield`: two cells by two into the field's 0.25 m columns, gaps under the
-  field's slab (0.25 m) closed, the list clipped to six by folding its thinnest gaps, which is the
-  field's own rule. The span the land sits in is flagged terrain (`SURF_FALLBACK`, the capture's
-  own meaning for it) and raised to the water surface with `SURF_WATER` where the land is under
-  water; schedule extends the terrain interval to the water level so that surface is inside the
-  band. The sheet rides the `Result` beside the layers and costs the worker under a millisecond.
-- **Into the tile** (`SSWorldField::navSpans`). Publish resolves the column to its region and hands
-  the sheet over with the band's z-range. The range is cut out of every column it covers (a span
-  straddling it keeps its parts outside), the sheet's spans go in through `spanInsert`, and a span
-  flagged terrain reaches the world floor, swallowing whatever was below. An evicted band hands over
-  an empty sheet, which is the cut alone. Bands never share a z-range within a column, so each one
-  owns its slice of the store and rebuilds replace exactly what they built.
-- **Tiles and reach.** A region gets a tile when it comes within the same reach the capture served
-  (its own region plus 64 m), the cap of four tiles evicting a region out of reach. A new tile asks
-  the navmesh to feed the whole region again (`refeedRegion` zeroes the signatures of its published
-  bands, so the next schedule rebuilds them); the sheets are transient, so this is the only way a
-  tile created after the navmesh built the region gets filled. Taking over a capture-built tile
-  wipes it first for the same reason.
-- **Serial and flood** (`navSettle`). The tile's geometry serial, which is what sends the flood and
-  the acoustic bake, moves only once the navmesh has nothing queued or building for the region and
-  no schedule pending, and at least half a second after the last sheet landed. The initial fill
-  therefore floods once, at the end, and an edit floods once its rebuilt bands are in. Until the
-  first settle the tile is invalid and the readers keep their raycasts, as before a first capture.
-- **Switch.** `SSWorldFieldFromNavMesh` (on) and the navmesh running. With the navmesh off, the
-  capture builds as before. The HUD's world field section names the source and counts sheets and
-  settles, and carries the navmesh's one stat line.
+  is read off the `rcHeightfield`: two cells by two into 0.25 m cells, gaps under the field's slab
+  (0.25 m) closed, the list clipped to six by folding its thinnest gaps. The span the land sits in
+  is flagged terrain (`SURF_FALLBACK`) and raised to the water surface with `SURF_WATER` where the
+  land is under water; schedule extends the terrain interval to the water level so that surface is
+  inside the band. The sheet rides the `Result` beside the layers and costs the worker under a
+  millisecond.
+- **The band keeps it** (`Band::mSheet`, a `shared_ptr<const SpanSheet>`). This is the change of
+  2026-09-11. A sheet is written once and never edited; a rebuilt band swaps in a whole new one.
+  That immutability is what lets a reader hold a `shared_ptr` and read the sheet from any thread
+  for as long as it holds it — which is the whole reason the world field no longer needs a store or
+  a deep copy. `removeBand` drops the sheet with the band; `sheetsHeld()` counts them.
+- **The field pulls** (`SSNavMesh::collectSheets`). Main thread, one call per region: every live
+  band whose column centre falls inside the region, with the agent-space corner the field needs to
+  place its cells, plus a stamp mixing each band's key and geometry signature. `shared_ptr` copies
+  only — no geometry is copied. The stamp is the field's change detector: an identical stamp after
+  a settle means nothing was rebuilt and the published classification still describes the world.
+  `SSWorldField::navSpans`, `feedWorldField` and `refeedRegion` are gone with the push model, and
+  with them the "a tile created after the navmesh built the region never gets filled" problem they
+  existed to work around.
+- **Settle** (`SSNavMesh::regionSettled`, unchanged). No band of a column inside the region queued
+  or building and no schedule pending. The field adds its own 0.5 s debounce on top, because a
+  region under edit republishes bands in a trickle and `regionSettled` goes true between them.
+- **Switch.** `SSNavMesh::sheetsWanted()` — the world field's master setting (`SSWorldField`)
+  alone. Off, bands keep no sheet and the field classifies nothing. `SSWorldFieldFromNavMesh` is
+  gone: there is no other source to switch to.
 
-What this does not do yet: retire the capture code, which stays as the fallback source; move any
-reader to Detour; and the acoustic tier-B mip and drainage keep reading the same store unchanged.
-Not measured in the viewer: the owner's build is the first run.
+What this does not do: move any reader to Detour, or let the world field see `DYNAMIC` movers
+(they ride the tile cache as obstacles and never enter a layer or a sheet, so they do not occlude,
+shelter or enclose). Phantom and no-physics prims are invisible to both, by `navIgnores`.
 
 ## 23. Diagnostics: Dump selection and Mark location (2026-09-10)
 
@@ -714,7 +712,7 @@ than `SS_NAV_TERRAIN_SLOP_M` (0.5 m). The ceiling comes from the build's own ter
 at the raster cell's four corners and maxed, so the terrain's own spans — rasterized at or above
 that ceiling by construction — always survive; the slop only absorbs the grid's bilinear reading
 against the soup's triangle chords and the 0.25 m cell quantization. Spans are left in place, only
-their area nulled: the span sheet the world field reads ignores areas, and a span flagged terrain
+their area nulled: the span sheet the world field classifies ignores areas, and a span flagged terrain
 reaches the world floor and swallows what is below it there anyway. Land under water keeps its
 lakebed floor — that is at the land, not under it. Publish warns once per band when the nulled count
 changes (`SSNavMesh` tag), so a buried foundation announces itself instead of vanishing silently.
