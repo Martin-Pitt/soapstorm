@@ -410,6 +410,21 @@ void LLPanelObject::updateLimits(bool attachment)
     mCtrlScaleZ->setMinValue(mMinScale);
     mCtrlScaleZ->setMaxValue(mMaxScale);
 
+    // <SS:Nexii> Local content: the 2048 m placement area around the object's own region and the 2048 m scale ceiling, applied HERE so it holds no matter who calls updateLimits (getState every refresh, the floater when region limits arrive) and in what order.
+    if (!attachment && mObject.notNull() && mObject->ssIsLocalContent())
+    {
+        F32 lo, hi;
+        ssLocalContentRegionBounds(mObject->getRegion(), lo, hi);
+        mCtrlPosX->setMinValue(lo);
+        mCtrlPosX->setMaxValue(hi);
+        mCtrlPosY->setMinValue(lo);
+        mCtrlPosY->setMaxValue(hi);
+        mMaxScale = SS_LOCAL_CONTENT_MAX_SCALE_M;
+        mCtrlScaleX->setMaxValue(mMaxScale);
+        mCtrlScaleY->setMaxValue(mMaxScale);
+        mCtrlScaleZ->setMaxValue(mMaxScale);
+    }
+
     mMaxHollowSize = LLWorld::getInstance()->getRegionMaxHollowSize();
     mSpinHollow->setMaxValue(mMaxHollowSize);
 
@@ -2376,7 +2391,7 @@ void LLPanelObject::sendPosition(bool btn_down)
 
         LLSelectMgr::getInstance()->updateSelectionCenter();
     }
-    else if (LLWorld::getInstance()->positionRegionValidGlobal(new_pos_global) )
+    else if (mObject->ssIsLocalContent() || LLWorld::getInstance()->positionRegionValidGlobal(new_pos_global) )    // <SS:Nexii> local content lives in the void by design; the area clamp above already bounded it
     // </FS:Zi> Building spin controls for attachments
     {
         // send only if the position is changed, that is, the delta vector is not zero

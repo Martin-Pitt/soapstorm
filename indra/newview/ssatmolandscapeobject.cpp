@@ -27,6 +27,7 @@
 
 #include "llviewerregion.h"
 
+#include "llgltfmaterial.h"
 #include "llmath.h"
 #include "llmaterial.h"
 #include "llprimitive.h"
@@ -68,7 +69,8 @@ namespace
             && llabs(a.mRepeats.mV[VW] - b.mRepeats.mV[VW]) < 1e-4f
             && llabs(a.mRotation - b.mRotation) < 1e-4f
             && near_v3(LLVector3(a.mColor.mV[VRED], a.mColor.mV[VGREEN], a.mColor.mV[VBLUE]), LLVector3(b.mColor.mV[VRED], b.mColor.mV[VGREEN], b.mColor.mV[VBLUE]))
-            && llabs(a.mColor.mV[VALPHA] - b.mColor.mV[VALPHA]) < 1e-4f;
+            && llabs(a.mColor.mV[VALPHA] - b.mColor.mV[VALPHA]) < 1e-4f
+            && llsd_equals(a.mOverride, b.mOverride);
     }
 }
 
@@ -114,6 +116,16 @@ bool ss_landscape_capture_faces(const LLViewerObject* objp, std::vector<SSAtmoEn
         f.mColor = te.getColor();
         f.mAlphaMode = alpha;
         f.mMaterial = mat;
+        // <SS:Nexii> The override is read off the live entry, not the copy: it is the per-face edit on top of the base material, and the sim's own objects carry it in the region cache rather than the TE proper.
+        if (tep && mat.notNull())
+        {
+            if (const LLGLTFMaterial* ov = tep->getGLTFMaterialOverride())
+            {
+                LLSD od;
+                LLGLTFMaterial::sDefault.getOverrideLLSD(*ov, od);
+                if (od.isMap() && od.size() > 0) f.mOverride = od;
+            }
+        }
         out_faces.push_back(f);
     }
     return true;
@@ -222,6 +234,18 @@ void SSAtmoLandscapeObject::applyRecord(const SSAtmoEnvLandscape& record)
 void SSAtmoLandscapeObject::applyVolume(const SSAtmoEnvLandscapePart& part, bool force)
 {
     if (!force) return;
+    // <SS:Nexii> LLVOVolume::isSculpted()/isMesh() read the PARAMS_SCULPT extra-parameter block, NOT the volume params, and setVolume only asks the mesh repo to fetch when isSculpted() is true. Without this block a mesh part rendered only while the source's loaded volume still sat in the shared LOD group; once that was evicted (relog, cache churn) the same record came back as the sculpt placeholder sphere. The block mirrors the sculpt entry the sim would have sent.
+    if (part.mVolume.isSculpt())
+    {
+        LLSculptParams sculpt;
+        sculpt.setSculptTexture(part.mVolume.getSculptID(), part.mVolume.getSculptType());
+        setParameterEntry(LLNetworkData::PARAMS_SCULPT, sculpt, false);
+        setParameterEntryInUse(LLNetworkData::PARAMS_SCULPT, true, false);
+    }
+    else if (getSculptParams())
+    {
+        setParameterEntryInUse(LLNetworkData::PARAMS_SCULPT, false, false);
+    }
     // <SS:Nexii> setVolume drives the whole stock pipeline - for a mesh part the sculpt entry's asset is the geometry (gMeshRepo.loadMesh through the volume-coupled delivery), for a prim part the path and profile are. No sim, so no ObjectShape send: the record is the store.
     setVolume(part.mVolume, 0);
 }
@@ -297,11 +321,12 @@ void SSAtmoLandscapeObject::applyFaces()
     {
         return;
     }
+    const SSAtmoEnvLandscapePart* p = part();
     if (num == mAppliedFaces)
     {
+        if (mOverridesPending && p) applyOverrides(*p);
         return;
     }
-    const SSAtmoEnvLandscapePart* p = part();
     if (!p)
     {
         mAppliedFaces = num;
@@ -384,6 +409,27 @@ void SSAtmoLandscapeObject::applyFaces()
     }
 
     mAppliedFaces = num;
+    applyOverrides(*p);
+}
+
+// The faces' material overrides onto the texture entries; a base material still fetching declines, so the pass is retried by applyFaces until every override has landed.
+void SSAtmoLandscapeObject::applyOverrides(const SSAtmoEnvLandscapePart& p)
+{
+    mOverridesPending = false;
+    const S32 num = getNumFaces();
+    for (S32 i = 0; i < (S32)p.mFaces.size(); ++i)
+    {
+        const SSAtmoEnvLandscapeFace& f = p.mFaces[(size_t)i];
+        const S32 face_index = f.mIndex >= 0 ? f.mIndex : i;
+        if (face_index < 0 || face_index >= num || face_index >= (S32)getNumTEs()) continue;
+        if (f.mMaterial.isNull() || !f.mOverride.isMap()) continue;
+        LLPointer<LLGLTFMaterial> mat = new LLGLTFMaterial();
+        mat->applyOverrideLLSD(f.mOverride);
+        if (setTEGLTFMaterialOverride((U8)face_index, mat) == TEM_CHANGE_NONE)
+        {
+            mOverridesPending = true;
+        }
+    }
 }
 
 // Refresh the diff baseline without touching placement; forwarded to the children.

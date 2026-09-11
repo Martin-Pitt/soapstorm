@@ -109,6 +109,9 @@ struct SSAtmoEnvLandscapeFace
     // the face is legacy lit.
     LLUUID mMaterial;
 
+    // <SS:Nexii> The face's material override (LLGLTFMaterial::getOverrideLLSD: only the fields edited away from the base material), undefined when there is none. The sim keeps this per face for its own objects; a local object's record is where it lives instead.
+    LLSD mOverride;
+
     LLSD asLLSD() const;
     bool fromLLSD(const LLSD& sd);
 };

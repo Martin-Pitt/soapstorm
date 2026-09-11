@@ -29,6 +29,7 @@
 
 #include "llviewerobject.h"
 #include "llviewerregion.h"
+#include "llworld.h"
 
 // <SS:Nexii> A local landscape object never reaches a simulator, so the sim's prim limits (64 m, inside the region) are not its limits: scenery is mountains and coastlines, drawn in the void around the region. These apply ONLY to objects flagged ssIsLocalContent(); every stock object keeps the stock clamps. The area is 2048 m square centred on the object's own region, so a locked record re-anchors to the same spot relative to whichever region it lands in. doc/atmo_landscape/design_synthesis.md.
 constexpr F32 SS_LOCAL_CONTENT_MAX_SCALE_M = 2048.f;
@@ -56,6 +57,18 @@ inline LLVector3 ssClampLocalContentRegionPos(const LLViewerRegion* regionp, LLV
     pos_region.mV[VX] = llclamp(pos_region.mV[VX], lo, hi);
     pos_region.mV[VY] = llclamp(pos_region.mV[VY], lo, hi);
     return pos_region;
+}
+
+// The move clip every manipulator applies to a root: local content is clamped into its placement area, everything else is clipped to the visible regions as stock does.
+inline LLVector3d ssClipLocalContentMove(const LLViewerObject* obj, const LLVector3d& start_global, const LLVector3d& end_global)
+{
+    if (obj && obj->ssIsLocalContent())
+    {
+        const LLViewerRegion* home = obj->getRegion();
+        if (!home) return end_global;
+        return home->getPosGlobalFromRegion(ssClampLocalContentRegionPos(home, home->getPosRegionFromGlobal(end_global)));
+    }
+    return LLWorld::getInstance()->clipToVisibleRegions(start_global, end_global);
 }
 
 #endif // SS_LOCALCONTENTLIMITS_H

@@ -775,15 +775,7 @@ bool LLManipTranslate::handleHover(S32 x, S32 y, MASK mask)
                     if (object->isRootEdit())
                     {
                         // <SS:Nexii> Local content has no simulator to dump it, so it is not clipped to the visible regions: it may go anywhere in the 2048 m area centred on its own region, which is what scenery in the void is for. Stock objects keep the stock clip.
-                        if (object->ssIsLocalContent() && object->getRegion())
-                        {
-                            const LLViewerRegion* home = object->getRegion();
-                            new_position_global = home->getPosGlobalFromRegion(ssClampLocalContentRegionPos(home, home->getPosRegionFromGlobal(new_position_global)));
-                        }
-                        else
-                        {
-                            new_position_global = LLWorld::getInstance()->clipToVisibleRegions(object->getPositionGlobal(), new_position_global);
-                        }
+                        new_position_global = ssClipLocalContentMove(object, object->getPositionGlobal(), new_position_global);
                     }
 
                     // PR: Only update if changed

@@ -5483,6 +5483,7 @@ void LLViewerObject::sendMaterialUpdate() const
 {
     LLViewerRegion* regionp = getRegion();
     if(!regionp) return;
+    if (ssIsLocalContent()) return;    // <SS:Nexii> no simulator owns this object; the landscape record is the store
     gMessageSystem->newMessageFast(_PREHASH_ObjectMaterial);
     gMessageSystem->nextBlockFast(_PREHASH_AgentData);
     gMessageSystem->addUUIDFast(_PREHASH_AgentID, gAgent.getID() );
@@ -5501,6 +5502,7 @@ void LLViewerObject::sendShapeUpdate()
     LLViewerRegion *regionp = getRegion();
     if (!regionp) return;
     // </FS:Ansariel>
+    if (ssIsLocalContent()) return;    // <SS:Nexii> no simulator owns this object; the landscape record is the store
 
     gMessageSystem->newMessageFast(_PREHASH_ObjectShape);
     gMessageSystem->nextBlockFast(_PREHASH_AgentData);
@@ -5522,6 +5524,7 @@ void LLViewerObject::sendTEUpdate() const
     LLViewerRegion *regionp = getRegion();
     if (!regionp) return;
     // </FS:Ansariel>
+    if (ssIsLocalContent()) return;    // <SS:Nexii> no simulator owns this object; the landscape record is the store
 
     LLMessageSystem* msg = gMessageSystem;
     msg->newMessageFast(_PREHASH_ObjectImage);
@@ -7531,6 +7534,7 @@ void LLViewerObject::updateFlags(bool physics_changed)
 {
     LLViewerRegion* regionp = getRegion();
     if(!regionp) return;
+    if (ssIsLocalContent()) return;    // <SS:Nexii> no simulator owns this object; the landscape record is the store
     gMessageSystem->newMessage("ObjectFlagUpdate");
     gMessageSystem->nextBlockFast(_PREHASH_AgentData);
     gMessageSystem->addUUIDFast(_PREHASH_AgentID, gAgent.getID() );
@@ -8143,9 +8147,14 @@ void LLViewerObject::setRenderMaterialID(S32 te_in, const LLUUID& id, bool updat
         {
             param_block->setMaterial(te, id);
         }
+        // <SS:Nexii> The block is only ever flagged in use when the sim echoes the change back through an ObjectUpdate; local content (Atmo Magic landscape) has no sim, so without this getRenderMaterialID() read null while the material rendered - the texture panel showed no material and the landscape capture wrote the null into the record, stripping every PBR material within a second of applying it. local_origin = true keeps parameterChanged from sending.
+        if (ssIsLocalContent())
+        {
+            setParameterEntryInUse(LLNetworkData::PARAMS_RENDER_MATERIAL, true, true);
+        }
     }
 
-    if (update_server)
+    if (update_server && !ssIsLocalContent())    // <SS:Nexii> nothing to echo for local content; the local state above is the whole story
     {
         // update via ModifyMaterialParams cap (server will echo back changes)
         for (S32 te = start_idx; te < end_idx; ++te)

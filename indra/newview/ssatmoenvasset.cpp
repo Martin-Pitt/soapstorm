@@ -1615,6 +1615,10 @@ LLSD SSAtmoEnvLandscapeFace::asLLSD() const
     {
         sd["alpha_mode"] = (LLSD::Integer)mAlphaMode;
     }
+    if (mOverride.isMap() && mOverride.size() > 0)
+    {
+        sd["override"] = mOverride;
+    }
     return sd;
 }
 
@@ -1626,6 +1630,7 @@ bool SSAtmoEnvLandscapeFace::fromLLSD(const LLSD& sd)
     mTexture = sd.has("texture") ? sd["texture"].asUUID() : LLUUID::null;
     mMaterial = sd.has("material") ? sd["material"].asUUID() : LLUUID::null;
     mAlphaMode = sd.has("alpha_mode") ? (S32)sd["alpha_mode"].asInteger() : 0;
+    mOverride = (sd.has("override") && sd["override"].isMap()) ? sd["override"] : LLSD();
     if (sd.has("repeats") && sd["repeats"].isArray())
     {
         const LLSD& r = sd["repeats"];

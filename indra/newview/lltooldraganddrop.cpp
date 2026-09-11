@@ -954,6 +954,12 @@ bool LLToolDragAndDrop::handleDropMaterialProtections(LLViewerObject* hit_obj,
 {
     if (!item) return false;
 
+    // <SS:Nexii> Local content (Atmo Magic landscape) has no task inventory and no sim: the copy-into-contents dance below would send UpdateTaskInventory for an object the region has never heard of. The full-perm rule that matters (copy + transfer, so the notecard may hand it out) is the picker's drag filter; a no-copy material is still refused below.
+    if (hit_obj && hit_obj->ssIsLocalContent())
+    {
+        return item->getPermissions().allowOperationBy(PERM_COPY, gAgent.getID());
+    }
+
     // Always succeed if....
     // material is from the library
     // or already in the contents of the object

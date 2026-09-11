@@ -127,6 +127,7 @@ private:
     void applyPlacement(const SSAtmoEnvLandscape& record);
     void applyPartTransform(const SSAtmoEnvLandscapePart& part);
     void applyExtras(const SSAtmoEnvLandscapePart& part);
+    void applyOverrides(const SSAtmoEnvLandscapePart& part);
     bool captureFaces(SSAtmoEnvLandscapePart& part, const SSAtmoEnvLandscapePart& authored);
     bool captureExtras(SSAtmoEnvLandscapePart& part, const SSAtmoEnvLandscapePart& authored);
 
@@ -146,6 +147,9 @@ private:
     // renders as the stock box proxy), known = the repo reported one way or the other.
     bool mMeshAvailable = true;
     bool mMeshKnown = false;
+
+    // <SS:Nexii> Overrides can only land once the base material has fetched (setTEGLTFMaterialOverride declines while it is fetching), so applyFaces retries them on later frames without redoing the texture entries.
+    bool mOverridesPending = false;
 };
 
 #endif // SS_ATMO_LANDSCAPE_OBJECT_H

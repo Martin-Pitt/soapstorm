@@ -24,6 +24,7 @@
 #include "llviewerprecompiledheaders.h"
 
 #include "ssatmoenvmanager.h"
+#include "ssatmolandscape.h"    // <SS:Nexii> captureNow ahead of a save
 
 #include "ssdiscpad.h" // <SS:Nexii> auto-derive the adopted disc faces' padding
 
@@ -1754,6 +1755,7 @@ void SSAtmoEnvManager::adoptCreated(const LLUUID& item_id, const LLUUID& asset_i
 void SSAtmoEnvManager::saveNotecard(const std::string& name)
 {
     if (!mHasAsset) return;
+    SSAtmoLandscapeWorld::getInstance()->captureNow();    // <SS:Nexii> the scenery's latest edits, before the asset is serialised
 
     std::string save_name = name;
     LLStringUtil::trim(save_name);

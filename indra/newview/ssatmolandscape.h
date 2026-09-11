@@ -125,6 +125,9 @@ public:
     // Force the live set to match the working asset next tick (floater reorder etc.).
     void invalidate() { mLastSignature.clear(); }
 
+    // <SS:Nexii> Write every live object's state into the working asset right now, ahead of a save, so the notecard never misses an edit made since the last capture tick.
+    void captureNow();
+
 private:
     void reconcile(const SSAtmoEnvAsset& asset, S32 track_index, LLViewerRegion* regionp);
     SSAtmoLandscapeObject* createObject(LLViewerRegion* regionp, const SSAtmoEnvLandscape& record);
@@ -133,6 +136,8 @@ private:
     bool appendRecord(const SSAtmoEnvLandscape& record, std::string& out_reason, S32& out_index, bool force_hydrate = false);
     void applyFacesToAll();
     void captureAll(std::vector<SSAtmoEnvLandscape>& records);
+    // Record-id paired capture only: safe against any record list, so a reshape or region rebuild can flush the objects' last edits into their own records before it tears them down.
+    void captureByRecordId(std::vector<SSAtmoEnvLandscape>& records);
 
     // The feature's own gates as a reason string - the conversion refuses for exactly the
     // reasons a record would not hydrate.

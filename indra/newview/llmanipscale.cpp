@@ -1002,7 +1002,7 @@ void LLManipScale::dragCorner( S32 x, S32 y )
             LLVector3d new_pos_global = drag_global + (selectNode->mSavedPositionGlobal - drag_global) * scale_factor;
             if (!cur->isAttachment())
             {
-                new_pos_global = LLWorld::getInstance()->clipToVisibleRegions(selectNode->mSavedPositionGlobal, new_pos_global);
+                new_pos_global = ssClipLocalContentMove(cur, selectNode->mSavedPositionGlobal, new_pos_global);    // <SS:Nexii> local content stays inside its 2048 m area, not the region
             }
             cur->setPositionAbsoluteGlobal( new_pos_global );
             rebuild(cur);
@@ -1288,7 +1288,7 @@ void LLManipScale::stretchFace( const LLVector3& drag_start_agent, const LLVecto
 
                 if (cur->isRootEdit() && !cur->isAttachment())
                 {
-                    LLVector3d new_pos_global = LLWorld::getInstance()->clipToVisibleRegions(selectNode->mSavedPositionGlobal, selectNode->mSavedPositionGlobal + delta_pos_global);
+                    LLVector3d new_pos_global = ssClipLocalContentMove(cur, selectNode->mSavedPositionGlobal, selectNode->mSavedPositionGlobal + delta_pos_global);    // <SS:Nexii> local content stays inside its 2048 m area, not the region
                     cur->setPositionGlobal( new_pos_global );
                 }
                 else

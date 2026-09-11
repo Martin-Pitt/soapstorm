@@ -253,17 +253,6 @@ void SSAtmoLandscapeWorld::update()
     // capture cadence, and the deferred reshape then adopts the captured state.
     const bool editing = anySelected();
 
-    // Agent region change rebuilds the whole set: objects are anchored to a region origin
-    // (locked records re-anchor by construction), and kill-and-recreate is the SSWaterWorld
-    // idiom - the mesh repo's cache makes recreation cheap and pop-free.
-    const U64 handle = region->getHandle();
-    if (!editing && handle != mAgentRegionHandle)
-    {
-        mAgentRegionHandle = handle;
-        clearLandscapeObjects();
-        mLastSignature.clear();
-    }
-
     SSAtmoEnvAsset& asset = mgr->editable();
     S32 track = llmax(0, applier->primaryTrackIndex());
     if (track >= (S32)asset.mTracks.size())
@@ -271,6 +260,19 @@ void SSAtmoLandscapeWorld::update()
         track = 0;
     }
     std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
+
+    // Agent region change rebuilds the whole set: objects are anchored to a region origin
+    // (locked records re-anchor by construction), and kill-and-recreate is the SSWaterWorld
+    // idiom - the mesh repo's cache makes recreation cheap and pop-free.
+    // <SS:Nexii> The objects' latest edits are flushed into their own records first (record-id paired, so a simultaneous track change cannot cross-write), otherwise the rebuild resurrects them from a record up to a capture tick stale and the scenery visibly snaps back - the "rubberband" after a move or rescale that ended right before a border crossing.
+    const U64 handle = region->getHandle();
+    if (!editing && handle != mAgentRegionHandle)
+    {
+        mAgentRegionHandle = handle;
+        captureByRecordId(records);
+        clearLandscapeObjects();
+        mLastSignature.clear();
+    }
 
     // The signature is the active track's record-id and part-count run PLUS the track index
     // itself: any reshape (track crossing, load, revert, floater add/delete/reorder, a linkset
@@ -285,6 +287,8 @@ void SSAtmoLandscapeWorld::update()
     }
     if (!editing && sig != mLastSignature)
     {
+        // <SS:Nexii> Same flush before a reshape: reconcile re-applies each surviving record to its object, and a record that missed the last capture tick would drag the object back to where it was before the edit.
+        captureByRecordId(records);
         mLastSignature = sig;
         reconcile(asset, track, region);
     }
@@ -337,7 +341,9 @@ void SSAtmoLandscapeWorld::update()
     // reshape is deferred by design, and writing the OLD objects' state into the NEW track's
     // records would be cross-track contamination - so the capture skips that window and
     // resumes once the deferred reshape has adopted the new records.
-    if (!editing && mCaptureTimer.getElapsedTimeF32() > SS_LANDSCAPE_CAPTURE_INTERVAL)
+    // <SS:Nexii> "Matches" is the signature test, not the selection: an edit made while the object is selected used to sit uncaptured until deselect, so the floater showed no unsaved changes and a save taken mid-edit missed the work. The reshape window is exactly the frames where sig != mLastSignature, and that is all the capture has to skip.
+    const bool in_sync = (sig == mLastSignature);
+    if (in_sync && mCaptureTimer.getElapsedTimeF32() > SS_LANDSCAPE_CAPTURE_INTERVAL)
     {
         mCaptureTimer.reset();
         captureAll(records);
@@ -469,9 +475,15 @@ void SSAtmoLandscapeWorld::captureAll(std::vector<SSAtmoEnvLandscape>& records)
         return;
     }
 
+    captureByRecordId(records);
+}
+
+// Each live root writes into the record carrying its id, if that record is in the list at all.
+void SSAtmoLandscapeWorld::captureByRecordId(std::vector<SSAtmoEnvLandscape>& records)
+{
     for (LLPointer<SSAtmoLandscapeObject>& objp : mObjects)
     {
-        if (objp.isNull())
+        if (objp.isNull() || objp->isDead())
         {
             continue;
         }
@@ -484,6 +496,28 @@ void SSAtmoLandscapeWorld::captureAll(std::vector<SSAtmoEnvLandscape>& records)
             }
         }
     }
+}
+
+// The save path's flush: capture immediately when the live set is in sync with the active track's records.
+void SSAtmoLandscapeWorld::captureNow()
+{
+    SSAtmoEnvManager* mgr = SSAtmoEnvManager::getInstance();
+    SSAtmoEnvApplier* applier = SSAtmoEnvApplier::getInstance();
+    if (mObjects.empty() || !mgr->hasAsset() || !applier->isActive()) return;
+    SSAtmoEnvAsset& asset = mgr->editable();
+    S32 track = llmax(0, applier->primaryTrackIndex());
+    if (track >= (S32)asset.mTracks.size()) return;
+    std::vector<SSAtmoEnvLandscape>& records = asset.mTracks[static_cast<size_t>(track)].mLandscapes;
+    std::string sig;
+    sig += llformat("t%d;", track);
+    for (const SSAtmoEnvLandscape& r : records)
+    {
+        sig += r.mRecordId.asString();
+        sig += llformat(":%d;", r.partCount());
+    }
+    if (sig != mLastSignature) return;    // a reshape is pending; capturing now would write the old objects into the new records
+    mCaptureTimer.reset();
+    captureAll(records);
 }
 
 S32 SSAtmoLandscapeWorld::recordCount() const
@@ -1121,6 +1155,7 @@ bool SSAtmoLandscapeWorld::removeRecord(S32 index)
         return false;
     }
 
+    captureByRecordId(records);    // <SS:Nexii> the survivors' latest edits, before the rebuild resurrects them from their records
     records.erase(records.begin() + index);
     clearLandscapeObjects();
     mLastSignature.clear();
