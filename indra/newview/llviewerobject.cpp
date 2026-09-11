@@ -149,6 +149,7 @@ const F32 SS_TIMING_PERP_GATE_M = 0.25f;     // cross-track residual allowed on 
 const F32 SS_TIMING_SPEED_GATE_MPS = 5.f;    // below this, correction snaps are imperceptible
 const F64 SS_TIMING_PRIOR_BOUND_SECS = 0.25; // absolute bound on the back-dated state age
 const F64 SS_TIMING_TAU_CENTER_ALPHA = 0.2;  // EWMA weight tracking the protocol timing offset
+const F32 SS_TIMING_DEBUG_SPEED_MPS = 150.f; // diagnostics threshold for SSTimingDebug logging
 
 std::map<std::string, U32> LLViewerObject::sObjectDataMap;
 std::unordered_map<LLUUID, std::vector<LLViewerObject*>> LLViewerObject::sPendingUpdatesByOwner;
@@ -2524,16 +2525,23 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
     // now by the solved age instead of hard-snapping.
     LLVector3 ss_apply_pos = new_pos_parent;
     static LLCachedControl<bool> ss_timing_inversion(gSavedSettings, "SSTimingInversion", true);
+    static LLCachedControl<bool> ss_timing_debug(gSavedSettings, "SSTimingDebug", true);
     if (ss_timing_inversion && sVelocityInterpolate
         && mesgsys != NULL && update_type == OUT_TERSE_IMPROVED
         && !mParent && !isAvatar() && !isAttachment() && !mOrphaned && !mStatic
         && !isSelected() && mRegionp)
     {
+        // <SS:Nexii> rolling acceptance stats; ss_dt_upd == 0 is a same-packet bundle member, not a gate
+        static U32 ss_stat_total = 0, ss_stat_accepted = 0, ss_stat_window = 0, ss_stat_perp = 0, ss_stat_dv = 0, ss_stat_gate = 0;
+        static F64 ss_stat_dev_sum = 0.0, ss_stat_perp_sum = 0.0, ss_stat_snap_sum = 0.0, ss_stat_applied_sum = 0.0;
+        static F64Seconds ss_stat_next_summary(0.0);
+        ++ss_stat_total;
+        const char *ss_verdict = "gate";
         LLCircuitData *ss_cdp = gMessageSystem->mCircuitInfo.findCircuit(mesgsys->getSender());
         const F32 ss_speed = getVelocity().magVec();
         const F64Seconds ss_dt_upd = F64Seconds(LLFrameTimer::getElapsedSeconds()) - ss_prev_msg_time;
         if (ss_cdp && ss_speed >= SS_TIMING_SPEED_GATE_MPS
-            && ss_prev_msg_time > 0.0 && ss_dt_upd > 0.0 && ss_dt_upd < F64Seconds(1.0))
+            && ss_prev_msg_time > 0.0 && ss_dt_upd >= 0.0 && ss_dt_upd < F64Seconds(1.0))
         {
             const F32 ss_dilation = mRegionp->getTimeDilation();
             const F64 ss_l0 = 0.5 * ss_dilation * (F64)((F32)ss_cdp->getPingDelay().value()) * 0.001;
@@ -2551,14 +2559,66 @@ U32 LLViewerObject::processUpdateMessage(LLMessageSystem *mesgsys,
                 : (SS_TIMING_TAU_CENTER_ALPHA * ss_tau + (1.0 - SS_TIMING_TAU_CENTER_ALPHA) * mSSTimingTauCenterSecs);
             const F32 ss_dv = (getVelocity() - ss_prev_vel).magVec();
             const bool ss_real_change = ss_dv > llmax(1.0f, 3.f * getAcceleration().magVec() * (F32)ss_dt_upd.value());
-            if (fabs(ss_tau - ss_center) <= SS_TIMING_WINDOW_SECS
+            const F64 ss_dev = fabs(ss_tau - ss_center);
+            if (ss_dev <= SS_TIMING_WINDOW_SECS
                 && ss_perp < SS_TIMING_PERP_GATE_M
                 && !ss_real_change)
             {
+                ++ss_stat_accepted;
+                ss_verdict = "accept";
                 const F64 ss_l_hat = llclamp(ss_l0 - ss_tau, ss_l0 - SS_TIMING_PRIOR_BOUND_SECS, ss_l0 + SS_TIMING_PRIOR_BOUND_SECS);
                 ss_apply_pos = new_pos_parent + getVelocity() * (F32)ss_l_hat + getAcceleration() * (F32)(0.5 * ss_l_hat * ss_l_hat);
             }
+            else
+            {
+                if (ss_dev > SS_TIMING_WINDOW_SECS) { ++ss_stat_window; ss_verdict = "window"; }
+                else if (ss_perp >= SS_TIMING_PERP_GATE_M) { ++ss_stat_perp; ss_verdict = "perp"; }
+                else { ++ss_stat_dv; ss_verdict = "dv"; }
+            }
+            ss_stat_dev_sum += ss_dev;
+            ss_stat_perp_sum += ss_perp;
+            ss_stat_snap_sum += (new_pos_parent - getPositionRegion()).magVec();
+            ss_stat_applied_sum += (ss_apply_pos - getPositionRegion()).magVec();
             mSSTimingTauCenterSecs = SS_TIMING_TAU_CENTER_ALPHA * ss_tau + (1.0 - SS_TIMING_TAU_CENTER_ALPHA) * ss_center;
+            if (ss_timing_debug && ss_speed >= SS_TIMING_DEBUG_SPEED_MPS)
+            {
+                LL_INFOS("SSTiming") << "obj " << getLocalID() << " spd " << ss_speed
+                                     << " dtUpd " << ss_dt_upd.value() * 1000.0
+                                     << " age " << ss_state_age * 1000.0
+                                     << " l0 " << ss_l0 * 1000.0
+                                     << " tau " << ss_tau * 1000.0
+                                     << " dev " << ss_dev * 1000.0
+                                     << " perp " << ss_perp
+                                     << " dv " << ss_dv
+                                     << " " << ss_verdict
+                                     << " snap " << (new_pos_parent - getPositionRegion()).magVec()
+                                     << " -> " << (ss_apply_pos - getPositionRegion()).magVec()
+                                     << LL_ENDL;
+            }
+        }
+        else
+        {
+            ++ss_stat_gate;
+        }
+        const F64Seconds ss_now(LLFrameTimer::getElapsedSeconds());
+        if (ss_timing_debug && ss_now >= ss_stat_next_summary)
+        {
+            if (ss_stat_next_summary > 0.0)
+            {
+                const U32 ss_stat_inner = ss_stat_total - ss_stat_gate;
+                LL_INFOS("SSTiming") << "stats: total " << ss_stat_total
+                                     << " accept " << ss_stat_accepted
+                                     << " rej window " << ss_stat_window
+                                     << " perp " << ss_stat_perp
+                                     << " dv " << ss_stat_dv
+                                     << " gate " << ss_stat_gate
+                                     << " | mean dev " << (ss_stat_inner ? ss_stat_dev_sum / ss_stat_inner * 1000.0 : 0.0)
+                                     << " ms mean perp " << (ss_stat_inner ? ss_stat_perp_sum / ss_stat_inner : 0.0)
+                                     << " m mean snap " << (ss_stat_inner ? ss_stat_snap_sum / ss_stat_inner : 0.0)
+                                     << " -> " << (ss_stat_inner ? ss_stat_applied_sum / ss_stat_inner : 0.0)
+                                     << " m" << LL_ENDL;
+            }
+            ss_stat_next_summary = ss_now + F64Seconds(10.0);
         }
     }
 
