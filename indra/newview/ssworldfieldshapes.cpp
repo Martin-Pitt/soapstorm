@@ -798,6 +798,7 @@ std::string SSWorldFieldShapes::dumpObject(const LLViewerObject* obj, std::vecto
             const bool inverted = r.mBMin.mV[VX] > r.mBMax.mV[VX] || r.mBMin.mV[VY] > r.mBMax.mV[VY] || r.mBMin.mV[VZ] > r.mBMax.mV[VZ];
             const bool convex = r.mClass != Record::CLASS_TRI || r.mProv == PROV_HULL || r.mProv == PROV_BBOX || r.mProv == PROV_UNFETCHED;
             const char* treatment = (r.mLayer == LAYER_DECLARED_PHANTOM && nav_role != NAV_ROLE_EXCLUSION_VOLUME) ? "navmesh skips (phantom layer)"
+                                  : (r.mNoPhysics && nav_role != NAV_ROLE_EXCLUSION_VOLUME) ? "navmesh skips (physics NONE: render geometry is for rain and cover only)"
                                   : dynamic_now ? "navmesh carves a box obstacle (DYNAMIC)"
                                   : nav_role == NAV_ROLE_STATIC_OBSTACLE ? (convex ? "solid block, never floor" : "surface block, never floor")
                                   : convex ? "solid fill, walkable on up-facing tops within the slope" : "surface raster, walkable within the slope";
@@ -840,7 +841,9 @@ void SSWorldFieldShapes::dumpRecordsAt(const LLVector3& bmin, const LLVector3& b
                                CLASS_NAME[llclamp((S32)r.mClass, 0, 3)], PROV_NAME[llclamp((S32)r.mProv, 0, 6)], LAYER_NAME[llclamp((S32)r.mLayer, 0, 2)],
                                ROLE_NAME[llclamp((S32)r.mNavRole, 0, 6)], r.mDynamic ? " DYNAMIC" : "",
                                (S32)(r.tris().size() / 3), r.mBMin.mV[VX], r.mBMin.mV[VY], r.mBMin.mV[VZ], r.mBMax.mV[VX], r.mBMax.mV[VY], r.mBMax.mV[VZ],
-                               r.mDynamic ? "box obstacle" : (r.mLayer == LAYER_DECLARED_PHANTOM && r.mNavRole != NAV_ROLE_EXCLUSION_VOLUME) ? "skipped (phantom)"
+                               (r.mLayer == LAYER_DECLARED_PHANTOM && r.mNavRole != NAV_ROLE_EXCLUSION_VOLUME) ? "skipped (phantom)"
+                               : (r.mNoPhysics && r.mNavRole != NAV_ROLE_EXCLUSION_VOLUME) ? "skipped (physics NONE)"
+                               : r.mDynamic ? "box obstacle"
                                : r.mNavRole == NAV_ROLE_EXCLUSION_VOLUME ? "exclusion cut" : r.mNavRole == NAV_ROLE_STATIC_OBSTACLE ? "block, never floor"
                                : convex ? "solid fill" : "surface raster"));
     });
@@ -877,6 +880,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
 
     // The linkset's navmesh role: known from the table, wanted when the flag says there is one to fetch.
     mBuildNavRole = NAV_ROLE_UNKNOWN;
+    mBuildNoPhysics = false;
     if (root_flags & FLAGS_AFFECTS_NAVMESH)
     {
         auto role_it = mNavRoles.find(rootp->getID());
@@ -950,6 +954,7 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     // still needs its asset, so those keep the fetch-then-box path below.
     // Never fired an ObjectPhysicsProperties request here.
     const bool geometry_only = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE) || !shape_known;
+    mBuildNoPhysics = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE);
 
     const S32 tri_cap = (llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) > SS_SHAPES_LARGE_PART_M)
                             ? SS_SHAPES_PART_TRIS_LARGE : SS_SHAPES_PART_TRIS;
@@ -1220,6 +1225,7 @@ void SSWorldFieldShapes::addRecord(Record& rec)
     const U32 index = (U32)mPending.mRecords.size();
     rec.mDynamic = mBuildDynamic;
     rec.mNavRole = mBuildNavRole;
+    rec.mNoPhysics = mBuildNoPhysics;
     if (mCurrentPart) mCurrentPart->mRecords.push_back(rec);
     mPending.mRecords.push_back(rec);
     for (S32 z = z0; z <= z1; ++z)

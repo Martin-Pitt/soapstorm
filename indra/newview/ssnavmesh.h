@@ -61,7 +61,7 @@ public:
     static constexpr F32 TILE_M = 16.f;         // column edge in metres
     static constexpr S32 TILE_CELLS = 128;      // cells per column edge
     static constexpr F32 CELL = 0.125f;
-    static constexpr S32 MAX_BANDS = 12;        // height bands per column; with 21 layers each the Detour layer index stays under 256 (12 x 21 = 252)
+    static constexpr S32 MAX_BANDS = 12;        // height bands per column; 12 x SS_NAV_MAX_LAYERS_PER_BAND layers must fit the tile cache's 512-per-column buffer
 
     // Per-frame maintenance: follow census rebuilds, schedule changed bands,
     // launch worker builds under the frame budget, publish finished layers,
@@ -144,6 +144,7 @@ private:
         bool mAlive = false;                // touched by the latest schedule
         F64 mPublishedAt = -100.0;          // when its layers last landed, for the overlay's rebuild flash
         S32 mLayersDropped = 0;             // walkable layers this band produced past SS_NAV_MAX_LAYERS_PER_BAND
+        S32 mUnderTerrain = 0;              // walkable spans under the land last publish, so the warning only fires on change
     };
 
     // A band waiting for a worker build.
@@ -161,6 +162,7 @@ private:
         U32 mGeneration = 0;
         std::vector<std::vector<U8> > mLayers;
         S32 mLayersDropped = 0;             // walkable layers past SS_NAV_MAX_LAYERS_PER_BAND that got no tile
+        S32 mUnderTerrain = 0;              // walkable spans nulled under the land; zero when the build kept everything
         std::shared_ptr<SpanSheet> mSheet;  // the world field's span read, when it wants one
         F32 mMS = 0.f;
         bool mOk = false;
@@ -224,6 +226,7 @@ private:
     LLVector3 mTestStart, mTestEnd;
     bool mHasTestStart = false, mHasTestEnd = false, mTestValid = false, mTestPartial = false;
     std::vector<LLVector3> mTestPath;
+
 };
 
 #endif

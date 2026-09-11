@@ -149,6 +149,7 @@ public:
         U32 mVisit = 0;                 // per-query dedupe stamp
         bool mDynamic = false;          // root moved within the settle window: query-time only, never store-bound
         U8 mNavRole = NAV_ROLE_UNKNOWN; // the linkset's sim navmesh role, when it carries one
+        bool mNoPhysics = false;        // <SS:Nexii> physics shape type NONE: render geometry for rain and cover, nothing for the navmesh. Distinct from an unanswered shape type, which stays walkable as its volume. [interaction: SSNavMesh navIgnores]
     };
 
     // Census read access for downstream rasters (the 3D tile lattice): every
@@ -248,6 +249,7 @@ private:
     std::unordered_map<LLUUID, RestState> mRest;
     bool mBuildDynamic = false;     // the part being filed rides its root's rest state
     U8 mBuildNavRole = 0;           // and its root's navmesh role
+    bool mBuildNoPhysics = false;   // the part being baked has physics shape type NONE
 
     // Navmesh roles per linkset root, from ObjectNavMeshProperties; requested once per region when a flagged root
     // turns up without one, re-requested no sooner than a minute later.

@@ -5,7 +5,7 @@
  positioning="cascading"
  can_minimize="true"
  can_resize="false"
- height="620"
+ height="674"
  layout="topleft"
  name="floater_ss_atmo_navmesh"
  save_rect="true"
@@ -86,7 +86,7 @@
    name="view_test_tab_container"
    left="12"
    top="224"
-   height="382"
+   height="436"
    width="276">
     <panel
      border="false"
@@ -177,6 +177,27 @@
        tool_tip="The declared physics shapes the navmesh is built from, by layer and provenance"
        top_pad="4"
        width="240" />
+      <check_box
+       height="19"
+       label="Draw the world field"
+       layout="topleft"
+       left="12"
+       name="field_overlay_check"
+       tool_tip="The world field overlay, one consumer's view at a time, picked below. The same switch as the Atmo debug panel's"
+       top_pad="7"
+       width="240" />
+      <combo_box
+       control_name="SSWorldFieldDebugView" name="C_field_view"
+       follows="left|top" layout="topleft"
+       left="32" top_pad="4" height="20" width="220"
+       tool_tip="Band surfaces: every surface the capture resolved, hue by band. Air labels: the flood's touching classification, outdoors green, sheltered amber fading with occlusion depth, interior red. Drainage: standing water and D8 outlets over the filled surface. Column spans: each solid span at its floor and ceiling, coloured by the air state on it. Shape census: the declared physics shapes by layer and provenance. Navmesh: the Detour polygons by height band">
+        <combo_box.item label="Band surfaces" value="1" name="field_view_bands" />
+        <combo_box.item label="Air labels" value="2" name="field_view_air" />
+        <combo_box.item label="Drainage" value="3" name="field_view_drain" />
+        <combo_box.item label="Column spans" value="5" name="field_view_spans" />
+        <combo_box.item label="Shape census" value="6" name="field_view_shapes" />
+        <combo_box.item label="Navmesh" value="7" name="field_view_navmesh" />
+      </combo_box>
       <button
        follows="left|top"
        layout="topleft"

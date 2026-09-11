@@ -49,10 +49,11 @@ struct rcLayerRegion
 	unsigned short layers[RC_MAX_LAYERS];	// <SS:Nexii> ALTERED FROM UPSTREAM: region ids are 16-bit throughout rcBuildHeightfieldLayers; a dense 16 m column of clutter passed 255 sweep regions and the whole tile failed with "Region ID overflow". Layer ids stay bytes.
 	unsigned short neis[RC_MAX_NEIS];
 	unsigned short ymin, ymax;
-	unsigned char layerId;		// Layer ID
+	unsigned short layerId;		// Layer ID
 	unsigned char nlayers;		// Layer count
 	unsigned char nneis;		// Neighbour count
 	unsigned char base;		// Flag indicating if the region is the base of merged regions.
+	unsigned char isolated;	// <SS:Nexii> ALTERED FROM UPSTREAM: overlap list overflowed; keeps its own layer and never merges, where upstream failed the whole tile
 };
 
 
@@ -219,7 +220,7 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 					ctx->log(RC_LOG_ERROR, "rcBuildHeightfieldLayers: Region ID overflow.");
 					return false;
 				}
-				sweeps[i].id = regId++;
+				sweeps[i].id = (unsigned short)regId++;
 			}
 		}
 		
@@ -246,7 +247,7 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 	memset(regs, 0, sizeof(rcLayerRegion)*nregs);
 	for (int i = 0; i < nregs; ++i)
 	{
-		regs[i].layerId = 0xff;
+		regs[i].layerId = 0xffff;
 		regs[i].ymin = 0xffff;
 		regs[i].ymax = 0;
 	}
@@ -273,6 +274,8 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 				// Collect all region layers.
 				if (nlregs < RC_MAX_LAYERS)
 					lregs[nlregs++] = ri;
+				else
+					regs[ri].isolated = 1;	// <SS:Nexii> ALTERED FROM UPSTREAM: not cross-listed, so it never merges
 				
 				// Update neighbours
 				for (int dir = 0; dir < 4; ++dir)
@@ -305,12 +308,9 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 						rcLayerRegion& ri = regs[lregs[i]];
 						rcLayerRegion& rj = regs[lregs[j]];
 
-						if (!addUnique(ri.layers, ri.nlayers, RC_MAX_LAYERS, lregs[j]) ||
-							!addUnique(rj.layers, rj.nlayers, RC_MAX_LAYERS, lregs[i]))
-						{
-							ctx->log(RC_LOG_ERROR, "rcBuildHeightfieldLayers: layer overflow (too many overlapping walkable platforms). Try increasing RC_MAX_LAYERS.");
-							return false;
-						}
+						// <SS:Nexii> ALTERED FROM UPSTREAM: a full overlap list isolates the region (own layer, no merges) instead of failing the tile.
+						if (!addUnique(ri.layers, ri.nlayers, RC_MAX_LAYERS, lregs[j])) ri.isolated = 1;
+						if (!addUnique(rj.layers, rj.nlayers, RC_MAX_LAYERS, lregs[i])) rj.isolated = 1;
 					}
 				}
 			}
@@ -319,7 +319,7 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 	}
 	
 	// Create 2D layers from regions.
-	unsigned char layerId = 0;
+	int layerId = 0;	// <SS:Nexii> ALTERED FROM UPSTREAM: ints through the merges; clamped to 255 byte ids below
 	
 	static const int MAX_STACK = 64;
 	unsigned short stack[MAX_STACK];
@@ -329,11 +329,11 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 	{
 		rcLayerRegion& root = regs[i];
 		// Skip already visited.
-		if (root.layerId != 0xff)
+		if (root.layerId != 0xffff)
 			continue;
 
 		// Start search.
-		root.layerId = layerId;
+		root.layerId = (unsigned short)layerId;
 		root.base = 1;
 		
 		nstack = 0;
@@ -353,7 +353,9 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 				const unsigned short nei = reg.neis[j];
 				rcLayerRegion& regn = regs[nei];
 				// Skip already visited.
-				if (regn.layerId != 0xff)
+				if (regn.layerId != 0xffff)
+					continue;
+				if (root.isolated || regn.isolated)
 					continue;
 				// Skip if the neighbour is overlapping root region.
 				if (contains(root.layers, root.nlayers, nei))
@@ -370,15 +372,18 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 					stack[nstack++] = (unsigned short)nei;
 					
 					// Mark layer id
-					regn.layerId = layerId;
+					regn.layerId = (unsigned short)layerId;
 					// Merge current layers to root.
-					for (int k = 0; k < regn.nlayers; ++k)
+					bool merged = true;
+					for (int k = 0; k < regn.nlayers && merged; ++k)
+						merged = addUnique(root.layers, root.nlayers, RC_MAX_LAYERS, regn.layers[k]);
+					if (!merged)
 					{
-						if (!addUnique(root.layers, root.nlayers, RC_MAX_LAYERS, regn.layers[k]))
-						{
-							ctx->log(RC_LOG_ERROR, "rcBuildHeightfieldLayers: layer overflow (too many overlapping walkable platforms). Try increasing RC_MAX_LAYERS.");
-							return false;
-						}
+						// <SS:Nexii> ALTERED FROM UPSTREAM: root's overlap list is full, so the neighbour is unpushed and isolated to its own layer instead of failing the tile; what did land in root only over-reports overlap, which is safe.
+						nstack--;
+						regn.layerId = 0xffff;
+						regn.isolated = 1;
+						continue;
 					}
 					root.ymin = rcMin(root.ymin, regn.ymin);
 					root.ymax = rcMax(root.ymax, regn.ymax);
@@ -396,18 +401,20 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 	{
 		rcLayerRegion& ri = regs[i];
 		if (!ri.base) continue;
+		if (ri.isolated) continue;
 		
-		unsigned char newId = ri.layerId;
+		unsigned short newId = ri.layerId;
 		
 		for (;;)
 		{
-			unsigned char oldId = 0xff;
+			unsigned short oldId = 0xffff;
 			
 			for (int j = 0; j < nregs; ++j)
 			{
 				if (i == j) continue;
 				rcLayerRegion& rj = regs[j];
 				if (!rj.base) continue;
+				if (rj.isolated) continue;
 				
 				// Skip if the regions are not close to each other.
 				if (!overlapRange(ri.ymin,ri.ymax+mergeHeight, rj.ymin,rj.ymax+mergeHeight))
@@ -437,13 +444,23 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 				if (overlap)
 					continue;
 				
+				// <SS:Nexii> ALTERED FROM UPSTREAM: the merged overlap list has to fit, else this candidate is skipped instead of failing the tile.
+				int needed = 0;
+				for (int k = 0; k < nregs; ++k)
+				{
+					if (regs[k].layerId != rj.layerId) continue;
+					for (int m = 0; m < regs[k].nlayers; ++m)
+						if (!contains(ri.layers, ri.nlayers, regs[k].layers[m])) needed++;
+				}
+				if (ri.nlayers + needed > RC_MAX_LAYERS)
+					continue;
 				// Can merge i and j.
 				oldId = rj.layerId;
 				break;
 			}
 			
 			// Could not find anything to merge with, stop.
-			if (oldId == 0xff)
+			if (oldId == 0xffff)
 				break;
 			
 			// Merge
@@ -473,24 +490,41 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 		}
 	}
 	
-	// Compact layerIds
-	unsigned char remap[256];
-	memset(remap, 0, 256);
-
-	// Find number of unique layers.
-	layerId = 0;
-	for (int i = 0; i < nregs; ++i)
-		remap[regs[i].layerId] = 1;
-	for (int i = 0; i < 256; ++i)
+	// <SS:Nexii> ALTERED FROM UPSTREAM: ids ran as ints through the merges (regions are 16-bit, so more than 255 roots is possible); the survivors are ranked by cell count and the 255 largest keep a byte id, the rest are dropped with a warning instead of wrapping.
+	const int nids = layerId;
+	rcScopedDelete<int> cellCount((int*)rcAlloc(sizeof(int)*(nids+1)*2, RC_ALLOC_TEMP));
+	if (!cellCount)
 	{
-		if (remap[i])
-			remap[i] = layerId++;
-		else
-			remap[i] = 0xff;
+		ctx->log(RC_LOG_ERROR, "rcBuildHeightfieldLayers: Out of memory 'cellCount' (%d).", nids);
+		return false;
 	}
-	// Remap ids.
+	int* remap = (int*)cellCount + (nids+1);
+	memset(cellCount, 0, sizeof(int)*(nids+1));
+	for (int i = 0; i < chf.spanCount; ++i)
+	{
+		if (srcReg[i] == 0xffff) continue;
+		const int lid = (int)regs[srcReg[i]].layerId;
+		if (lid < nids) cellCount[lid]++;
+	}
+	for (int i = 0; i < nids; ++i) remap[i] = -1;
+	layerId = 0;
+	for (;;)
+	{
+		int best = -1;
+		for (int i = 0; i < nids; ++i)
+			if (remap[i] < 0 && cellCount[i] > 0 && (best < 0 || cellCount[i] > cellCount[best])) best = i;
+		if (best < 0 || layerId == 255) break;
+		remap[best] = layerId++;
+	}
+	int dropped = 0;
+	for (int i = 0; i < nids; ++i) if (remap[i] < 0 && cellCount[i] > 0) dropped++;
+	if (dropped > 0)
+		ctx->log(RC_LOG_WARNING, "rcBuildHeightfieldLayers: %d layers past the 255 cap dropped (smallest first).", dropped);
 	for (int i = 0; i < nregs; ++i)
-		regs[i].layerId = remap[regs[i].layerId];
+	{
+		const int lid = (int)regs[i].layerId;
+		regs[i].layerId = (lid < nids && remap[lid] >= 0) ? (unsigned short)remap[lid] : 0xffff;
+	}
 	
 	// No layers, return empty.
 	if (layerId == 0)
@@ -525,7 +559,7 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 	// Store layers.
 	for (int i = 0; i < lset.nlayers; ++i)
 	{
-		unsigned char curId = (unsigned char)i;
+		const unsigned short curId = (unsigned short)i;
 
 		rcHeightfieldLayer* layer = &lset.layers[i];
 
@@ -600,7 +634,7 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 					if (srcReg[j] == 0xffff)
 						continue;
 					// Skip of does nto belong to current layer.
-					unsigned char lid = regs[srcReg[j]].layerId;
+					const unsigned short lid = regs[srcReg[j]].layerId;
 					if (lid != curId)
 						continue;
 					
@@ -625,7 +659,7 @@ bool rcBuildHeightfieldLayers(rcContext* ctx, const rcCompactHeightfield& chf,
 							const int ax = cx + rcGetDirOffsetX(dir);
 							const int ay = cy + rcGetDirOffsetY(dir);
 							const int ai = (int)chf.cells[ax+ay*w].index + rcGetCon(s, dir);
-							unsigned char alid = srcReg[ai] != 0xffff ? regs[srcReg[ai]].layerId : 0xff;
+							const unsigned short alid = srcReg[ai] != 0xffff ? regs[srcReg[ai]].layerId : 0xffff;
 							// Portal mask
 							if (chf.areas[ai] != RC_NULL_AREA && lid != alid)
 							{

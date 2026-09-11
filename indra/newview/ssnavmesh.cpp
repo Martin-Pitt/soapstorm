@@ -71,9 +71,11 @@ static LLTrace::BlockTimerStatHandle FTM_SS_NAVMESH_PUBLISH("SS NavMesh Publish"
 // parameters are settings; the rest is fixed until a second agent class exists.
 static constexpr F32 SS_NAV_MAX_SIMPLIFICATION_ERROR = 1.3f;
 static constexpr F32 SS_NAV_MIN_ISLAND_M = 2.f;        // <SS:Nexii> walkable islands smaller than this square are culled per layer before compression. The tile-cache path never reads rcConfig's minRegionArea/mergeRegionArea/maxEdgeLen (dtBuildTileCacheRegions does its own monotone partition and largest-neighbour merge, dtBuildTileCacheContours takes only maxError), so the sliver cull Recast's classic path gives for free is done here on the rcHeightfieldLayer instead. Islands touching the layer's edge or a layer portal are kept: the neighbour tile, or another layer of this one, may carry the rest of that surface, and culling one side would open a seam. [interaction: seams]
-static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 21;      // walkable layers a band may publish; 12 bands x 21 keeps the tile cache's byte-sized layer index under 256, and the largest surfaces win when a band has more
+static constexpr F32 SS_NAV_LAYER_MERGE_M = 2.f;         // <SS:Nexii> rcBuildHeightfieldLayers merges non-overlapping regions within 4 x this into one layer; it used to ride the agent height, and the 0.5 m crawl agent quartered the merge distance to 2 m, so every ledge became its own layer (57 in one band). Kept at the 2 m walker figure so layering does not follow the agent class. [interaction: SS_NAV_MAX_LAYERS_PER_BAND]
+static constexpr S32 SS_NAV_MAX_LAYERS_PER_BAND = 32;      // walkable layers a band may publish, largest by walkable cells first; the tile-cache layer index is an int, the only ceiling is dtTileCache::buildNavMeshTilesAt's 512-per-column buffer (12 bands x 32 = 384)
 static constexpr S32 SS_NAV_TERRAIN_NODES = 21;     // 1 m grid over the bordered column: 16 m + 2 x 2 m margin, plus one
 static constexpr F32 SS_NAV_TERRAIN_MARGIN_M = 2.f;
+static constexpr F32 SS_NAV_TERRAIN_SLOP_M = 0.5f;  // raster-vs-grid slack; walkable surface more than this under the land is buried
 static constexpr S32 SS_NAV_MAX_TILES = 32768;             // 64-bit poly refs (DT_POLYREF64): the tile budget is memory, not id bits; 16 m columns over 512 m need it
 static constexpr S32 SS_NAV_MAX_OBSTACLES = 512;
 static constexpr S32 SS_NAV_OBSTACLE_REQUESTS_PER_FRAME = 48;   // under dtTileCache's 64-request queue, drained once per update
@@ -110,10 +112,12 @@ namespace
     struct SSNavContext : public rcContext
     {
         std::string mLog;
+        bool mErrorsOnly = false;           // the main-thread detail pass: its "walk to centre failed" warnings are routine since the unset-height fix
         SSNavContext() : rcContext(true) {}
         void doLog(const rcLogCategory category, const char* msg, const int len) override
         {
             if (category == RC_LOG_PROGRESS || mLog.size() > 512) return;
+            if (mErrorsOnly && category != RC_LOG_ERROR) return;
             if (!mLog.empty()) mLog += " | ";
             mLog.append(msg, (size_t)llmax(len, 0));
         }
@@ -125,6 +129,7 @@ namespace
     {
         SSNavContext mCtx;
         rcPolyMeshDetail* mDetail = nullptr;
+        SSNavMeshProcess() { mCtx.mErrorsOnly = true; }
         ~SSNavMeshProcess() override { rcFreePolyMeshDetail(mDetail); }
 
         void process(dtNavMeshCreateParams* params, unsigned char* polyAreas, unsigned short* polyFlags) override
@@ -426,6 +431,13 @@ namespace
 
     void emitShapeFaces(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavSoup& out);
 
+    // <SS:Nexii> What the navmesh never sees: the phantom layer, and a part whose physics shape type is NONE, which the census keeps as render geometry for rain and cover. An avatar walks through both, so they are neither floor nor wall here; a mesh tree with no physics on a floating island grew a canopy of navmesh before this. A shape type the sim has not answered is NOT skipped: until the per-region fetch fix a neighbouring region never answered, and its render volume is the best floor available meanwhile. Exclusion volumes keep their cut whatever their physics. [interaction: SSWorldFieldShapes::bakePart, syncObstacles, LLViewerObjectList::fetchPhysicsFlags]
+    bool navIgnores(const SSWorldFieldShapes::Record& rec)
+    {
+        if (rec.mNavRole == SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) return false;
+        return rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM || rec.mNoPhysics;
+    }
+
     void emitRecord(const SSWorldFieldShapes::Record& r, const LLVector3& off, SSNavBuildInput& in)
     {
         if (r.mNavRole == SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) { emitExclusion(r, off, in.mExclusions); return; }
@@ -617,10 +629,44 @@ namespace
         }
     }
 
+    // <SS:Nexii> The land is the floor of the world: a walkable span may not top out under it. Runs after Recast's filters so
+    // nothing re-promotes what this nulls; geometry buried in the land (foundations, mesh undersides, a band edge through a
+    // hill) loses its floor and the terrain above stays the only walkable read. [interaction: rasterizeConvex]
+    void nullUnderTerrain(rcHeightfield& hf, const rcConfig& cfg, const SSNavBuildInput& in, S32& out_nulled)
+    {
+        out_nulled = 0;
+        for (int z = 0; z < hf.height; ++z) for (int x = 0; x < hf.width; ++x)
+        {
+            // Land ceiling over the cell: the terrain grid is piecewise linear between nodes, so the max over the cell's
+            // corners bounds the surface the soup rasterizes; terrain spans sit at or above it by construction.
+            F32 ceiling = 0.f;
+            bool any = false;
+            const F32 xlo = cfg.bmin[0] + (F32)x * cfg.cs;
+            const F32 ylo = -(cfg.bmin[2] + (F32)(z + 1) * cfg.cs);     // raster z runs along -local y
+            for (int c = 0; c < 4; ++c)
+            {
+                F32 tz;
+                if (sheetTerrainAt(in, xlo + ((c & 1) ? cfg.cs : 0.f), ylo + ((c & 2) ? cfg.cs : 0.f), tz))
+                {
+                    ceiling = any ? llmax(ceiling, tz) : tz;
+                    any = true;
+                }
+            }
+            if (!any) continue;                     // no land over the cell: nothing to enforce
+            ceiling -= SS_NAV_TERRAIN_SLOP_M;
+            for (rcSpan* sp = hf.spans[x + z * hf.width]; sp; sp = sp->next)
+            {
+                if (sp->area == RC_NULL_AREA) continue;
+                if (cfg.bmin[1] + (F32)sp->smax * cfg.ch < ceiling) { sp->area = RC_NULL_AREA; ++out_nulled; }
+            }
+        }
+    }
+
     // The worker: one band through Recast to compressed tile cache layers; out_dropped counts layers past the per-band cap.
-    void buildBand(const SSNavBuildInput& in, SSNavContext& ctx, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped, SSNavMesh::SpanSheet* out_sheet)
+    void buildBand(const SSNavBuildInput& in, SSNavContext& ctx, SSNavCompressor& comp, std::vector<std::vector<U8> >& out_layers, S32& out_dropped, S32& out_under, SSNavMesh::SpanSheet* out_sheet)
     {
         out_dropped = 0;
+        out_under = 0;
         rcConfig cfg;
         memset(&cfg, 0, sizeof(cfg));
         cfg.cs = SSNavMesh::CELL;
@@ -667,6 +713,7 @@ namespace
         rcFilterLowHangingWalkableObstacles(&ctx, cfg.walkableClimb, *hf);
         rcFilterLedgeSpans(&ctx, cfg.walkableHeight, cfg.walkableClimb, *hf);
         rcFilterWalkableLowHeightSpans(&ctx, cfg.walkableHeight, *hf);
+        nullUnderTerrain(*hf, cfg, in, out_under);
         if (out_sheet) extractSpanSheet(*hf, cfg, in, *out_sheet);
 
         rcCompactHeightfield* chf = rcAllocCompactHeightfield();
@@ -680,7 +727,7 @@ namespace
         }
 
         rcHeightfieldLayerSet* lset = rcAllocHeightfieldLayerSet();
-        if (lset && rcBuildHeightfieldLayers(&ctx, *chf, cfg.borderSize, cfg.walkableHeight, *lset))
+        if (lset && rcBuildHeightfieldLayers(&ctx, *chf, cfg.borderSize, (int)ceilf(SS_NAV_LAYER_MERGE_M / cfg.ch), *lset))
         {
             if (lset->nlayers > SS_NAV_MAX_LAYERS_PER_BAND) out_dropped = lset->nlayers - SS_NAV_MAX_LAYERS_PER_BAND;
             std::vector<S32> flood_stack;
@@ -798,7 +845,7 @@ bool SSNavMesh::ensureInit()
     if (!regionp) return false;
     mOriginGlobal = regionp->getOriginGlobal();
 
-    static LLCachedControl<F32> agent_height(gSavedSettings, "SSNavMeshAgentHeight", 2.f);
+    static LLCachedControl<F32> agent_height(gSavedSettings, "SSNavMeshAgentHeight", 0.5f);
     static LLCachedControl<F32> agent_radius(gSavedSettings, "SSNavMeshAgentRadius", 0.f);
     static LLCachedControl<F32> agent_climb(gSavedSettings, "SSNavMeshAgentClimb", 0.75f);
 
@@ -934,7 +981,7 @@ void SSNavMesh::schedule()
     {
         ++seen;
         if (rec.mDynamic) { ++dynamic; return; }
-        if (rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM && rec.mNavRole != SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) { ++phantom; return; }
+        if (navIgnores(rec)) { ++phantom; return; }
         tris += (S32)(rec.tris().size() / 3);
         const LLVector3 lo = rec.mBMin + off, hi = rec.mBMax + off;
         const S32 x0 = llmax(cx0, (S32)floorf(lo.mV[VX] * inv)), x1 = llmin(cx1, (S32)floorf(hi.mV[VX] * inv));
@@ -1098,7 +1145,7 @@ void SSNavMesh::schedule()
     if (!mWorklist.empty())
     {
         LL_INFOS("SSNavMesh") << "schedule: census " << seen << " records (" << dynamic << " dynamic, " << phantom
-                              << " phantom skipped, " << tris << " soup tris), " << mColumns.size() << " columns, " << mBands.size()
+                              << " phantom/no-physics skipped, " << tris << " soup tris), " << mColumns.size() << " columns, " << mBands.size()
                               << " bands, " << mWorklist.size() << " to build, " << polyCount() << " polys published, "
                               << (mLayerBytes / 1024) << " KB of layers" << LL_ENDL;
     }
@@ -1154,10 +1201,21 @@ void SSNavMesh::dumpAt(const LLVector3& bmin_agent, const LLVector3& bmax_agent,
             if (bit == mBands.end()) continue;
             const Band& b = bit->second;
             const bool overlaps = hi.mV[VZ] >= b.mZMin && lo.mV[VZ] <= b.mZMax;
-            out.push_back(llformat("    band slot %d: z %.1f..%.1f%s, %s, %d tiles, published %.1f s ago, %d layers dropped",
+            out.push_back(llformat("    band slot %d: z %.1f..%.1f%s, %s, %d tiles, published %.1f s ago, %d layers dropped, %d spans nulled under the land",
                                    slot, b.mZMin, b.mZMax, overlaps ? " (covers the box)" : "", b.mAlive ? "alive" : "stale",
-                                   (S32)b.mRefs.size(), LLFrameTimer::getTotalSeconds() - b.mPublishedAt, b.mLayersDropped));
+                                   (S32)b.mRefs.size(), LLFrameTimer::getTotalSeconds() - b.mPublishedAt, b.mLayersDropped, b.mUnderTerrain));
         }
+    }
+    // The land under the box centre as the build reads it, and the ceiling nullUnderTerrain enforces from the raster cell's four corners: a floor whose top sits under that ceiling has no navmesh by design.
+    {
+        const LLVector3 cl = toLocal(LLVector3((bmin_agent.mV[VX] + bmax_agent.mV[VX]) * 0.5f, (bmin_agent.mV[VY] + bmax_agent.mV[VY]) * 0.5f, 0.f));
+        const F32 x0 = floorf(cl.mV[VX] / CELL) * CELL, y0 = floorf(cl.mV[VY] / CELL) * CELL;
+        F32 zc = 0.f, zmax = -FLT_MAX;
+        const bool has_c = terrainZLocal(cl.mV[VX], cl.mV[VY], zc);
+        S32 corners = 0;
+        for (S32 c = 0; c < 4; ++c) { F32 z; if (terrainZLocal(x0 + ((c & 1) ? CELL : 0.f), y0 + ((c & 2) ? CELL : 0.f), z)) { zmax = llmax(zmax, z); ++corners; } }
+        if (has_c) out.push_back(llformat("  land at the box centre: z %.2f; nullUnderTerrain ceiling over its raster cell %.2f (max of %d corners minus the %.2f m slop): floor tops under that have no navmesh by design", zc, corners ? zmax - SS_NAV_TERRAIN_SLOP_M : -1.f, corners, SS_NAV_TERRAIN_SLOP_M));
+        else out.push_back("  land at the box centre: none (void or no region)");
     }
     const LLVector3 top((bmin_agent.mV[VX] + bmax_agent.mV[VX]) * 0.5f, (bmin_agent.mV[VY] + bmax_agent.mV[VY]) * 0.5f, bmax_agent.mV[VZ] + 0.2f);
     LLVector3 nearest;
@@ -1273,7 +1331,7 @@ void SSNavMesh::launch(const Job& job)
     LL::WorkQueue::ptr_t general_queue = LL::WorkQueue::getInstance("General");
     if (!main_queue || !general_queue) return;
 
-    static LLCachedControl<F32> agent_height(gSavedSettings, "SSNavMeshAgentHeight", 2.f);
+    static LLCachedControl<F32> agent_height(gSavedSettings, "SSNavMeshAgentHeight", 0.5f);
     static LLCachedControl<F32> agent_radius(gSavedSettings, "SSNavMeshAgentRadius", 0.f);
     static LLCachedControl<F32> agent_climb(gSavedSettings, "SSNavMeshAgentClimb", 0.75f);
     static LLCachedControl<F32> agent_slope(gSavedSettings, "SSNavMeshAgentSlope", 45.f);
@@ -1293,7 +1351,7 @@ void SSNavMesh::launch(const Job& job)
     SSWorldFieldShapes::getInstance()->forEachRecord(gmin_agent, gmax_agent, [&](const SSWorldFieldShapes::Record& rec)
     {
         if (rec.mDynamic) return;
-        if (rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM && rec.mNavRole != SSWorldFieldShapes::NAV_ROLE_EXCLUSION_VOLUME) return;
+        if (navIgnores(rec)) return;
         emitRecord(rec, off, *in);
     });
 
@@ -1332,7 +1390,7 @@ void SSNavMesh::launch(const Job& job)
             LLTimer t;
             if (in->mWantSheet) r->mSheet = std::make_shared<SSNavMesh::SpanSheet>();
             SSNavContext ctx;
-            buildBand(*in, ctx, impl->mCompressor, r->mLayers, r->mLayersDropped, r->mSheet.get());
+            buildBand(*in, ctx, impl->mCompressor, r->mLayers, r->mLayersDropped, r->mUnderTerrain, r->mSheet.get());
             r->mLog = ctx.mLog;
             r->mMS = t.getElapsedTimeF32() * 1000.f;
             r->mOk = true;
@@ -1370,6 +1428,7 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
     if (it == mBands.end()) return;                     // evicted while building
     Band& band = it->second;
     const S32 dropped_before = band.mLayersDropped;
+    const S32 under_before = band.mUnderTerrain;
     removeBand(it->first, band);
     band.mSig = job.mSig;
     band.mZMin = job.mZMin;
@@ -1403,6 +1462,12 @@ void SSNavMesh::publish(const std::shared_ptr<Result>& result)
         LL_WARNS("SSNavMesh") << "Band " << job.mTx << "," << job.mTy << " b" << job.mBand << " produced " << (SS_NAV_MAX_LAYERS_PER_BAND + result->mLayersDropped)
                               << " walkable layers; " << result->mLayersDropped << " past the per-band cap of " << SS_NAV_MAX_LAYERS_PER_BAND << " have no navmesh" << LL_ENDL;
     }
+    band.mUnderTerrain = result->mUnderTerrain;
+    if (result->mUnderTerrain > 0 && result->mUnderTerrain != under_before)        // a buried foundation rebuilds rarely; say it when the count changes, not per publish
+    {
+        LL_WARNS("SSNavMesh") << "Band " << job.mTx << "," << job.mTy << " b" << job.mBand << " had " << result->mUnderTerrain
+                              << " walkable spans under the land; nulled" << LL_ENDL;
+    }
     band.mPublishedAt = LLFrameTimer::getTotalSeconds();
     mLastBuildMS = result->mMS;
     ++mBuildCount;
@@ -1423,7 +1488,7 @@ void SSNavMesh::syncObstacles()
     std::vector<Obstacle> desired;
     shapes->forEachRecord(bmin, bmax, [&](const SSWorldFieldShapes::Record& rec)
     {
-        if (!rec.mDynamic || rec.mLayer == SSWorldFieldShapes::LAYER_DECLARED_PHANTOM) return;
+        if (!rec.mDynamic || navIgnores(rec)) return;
         if ((S32)desired.size() >= SS_NAV_MAX_OBSTACLES) return;
         const LLVector3 lo = rec.mBMin + off, hi = rec.mBMax + off;
         Obstacle o;

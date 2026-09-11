@@ -30,6 +30,7 @@
 
 #include "llagent.h"
 #include "llbutton.h"
+#include "llcheckboxctrl.h"
 #include "llselectmgr.h"
 #include "llviewerobject.h"
 #include "llvector4a.h"
@@ -49,6 +50,10 @@ SSFloaterNavMesh::SSFloaterNavMesh(const LLSD& key) :
 // Wires the buttons; the View tab's switches bind straight to their settings in the XML.
 bool SSFloaterNavMesh::postBuild()
 {
+    // <SS:Nexii> The world field's consumers from here as well: the draw toggle is the pipeline's world-field mask (the Atmo debug panel's switch), the view chooser binds to SSWorldFieldDebugView in the XML. draw() re-reads the mask so a toggle from the other panel shows here. [interaction: SSFloaterAtmoDebug::bindOverlayToggle]
+    LLCheckBoxCtrl* field_check = getChild<LLCheckBoxCtrl>("field_overlay_check");
+    field_check->setCommitCallback([](LLUICtrl*, const LLSD&) { LLPipeline::toggleRenderDebug(LLPipeline::RENDER_DEBUG_WORLD_FIELD); });
+    field_check->set(gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WORLD_FIELD));
     mNavStatus = getChild<LLTextBox>("navmesh_status");
     mCensusStatus = getChild<LLTextBox>("census_status");
     mPathStatus = getChild<LLTextBox>("path_status");
@@ -83,6 +88,7 @@ bool SSFloaterNavMesh::postBuild()
 // Status texts follow the live state; a quarter-second cadence is plenty for a console.
 void SSFloaterNavMesh::draw()
 {
+    getChild<LLCheckBoxCtrl>("field_overlay_check")->set(gPipeline.hasRenderDebugMask(LLPipeline::RENDER_DEBUG_WORLD_FIELD));
     const F32 now = (F32)LLFrameTimer::getTotalSeconds();
     if (now - mLastRefresh > 0.25f)
     {

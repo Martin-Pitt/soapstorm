@@ -517,6 +517,7 @@ void SSWorldField::navSettle()
         if (!nav->regionSettled(tile.mRegionHandle)) continue;
         tile.mGeomSerial = (tile.mGeomSerial == 0xFFFFFFFFu) ? 1 : tile.mGeomSerial + 1;
         tile.mValid = true;
+        tile.mBandCount = bandCount();      // <SS:Nexii> The flood gate and the acoustic snapshot ceiling: a navmesh-fed store is full height, and nothing on this path set the capture-side band statistic, so it stayed 0 and scheduleFlood declined every tile silently (air serial 0 in every dump). [interaction: scheduleFlood]
         tile.mNavDirty = false;
         tile.mDirty = false;
         tile.mBandTarget = 0;

@@ -697,3 +697,24 @@ Region 0 through the tile-cache path, 0.125 m cells: 25.0k polygons (upstream 31
 height-pass bend test 37.9k), 98.2% of portal edges linked, 1.2 ms per tile from layer. Fewer
 polygons than upstream because a flat border now carries no vertex at all, where upstream's own
 removal still left the odd fan.
+
+## 27. No floor under the land (2026-09-10)
+
+The overlay caught walkable polygons inside a grassy hill: the sheet cut through the slope while its
+flanks rode the surface. Nothing in the pipeline ever put a floor under the land on purpose, but
+nothing forbade it either, and three paths could make one. A convex record buried in the land
+(a foundation, a pond liner) is filled solid per column, and its top face below the surface read as
+floor. A tessellated soup rasterizes every triangle, undersides included. And a band whose z-range
+ends mid-hill clipped the terrain raster at the band top, leaving a walkable shelf inside the hill.
+
+The guarantee now lives where every span has already been built and no filter can resurrect it:
+`nullUnderTerrain` (worker, after `rcFilterWalkableLowHeightSpans`, before the span sheet) walks the
+heightfield and nulls the area of any walkable span whose top sits under the land by more
+than `SS_NAV_TERRAIN_SLOP_M` (0.5 m). The ceiling comes from the build's own terrain nodes, sampled
+at the raster cell's four corners and maxed, so the terrain's own spans — rasterized at or above
+that ceiling by construction — always survive; the slop only absorbs the grid's bilinear reading
+against the soup's triangle chords and the 0.25 m cell quantization. Spans are left in place, only
+their area nulled: the span sheet the world field reads ignores areas, and a span flagged terrain
+reaches the world floor and swallows what is below it there anyway. Land under water keeps its
+lakebed floor — that is at the land, not under it. Publish warns once per band when the nulled count
+changes (`SSNavMesh` tag), so a buried foundation announces itself instead of vanishing silently.
