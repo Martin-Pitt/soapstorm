@@ -177,7 +177,13 @@ So step 4 runs a **doubt flood**: every unreached gap in a column that borders a
 unsurveyed one is UNKNOWN, and the doubt floods through the rest of that unreached
 pocket. A pocket that touches no unsurveyed column is sealed by *real geometry* and
 stays INTERIOR. `gap_label` doubles as the visited mark, so this costs no extra plane.
-The rule in one line: **the field says INTERIOR only when it has seen the walls.**
+The rule in one line: **a pocket sealed by the survey boundary is UNKNOWN, not INTERIOR.**
+Note the limit of that claim. The doubt flood covers air the walk never *reached*. Air it did
+reach, and merely ran out of budget in, stays INTERIOR even in the last surveyed column - a long
+low corridor running out to the boundary ends INTERIOR, and that is intended. The budget is a
+statement about surveyed geometry along a surveyed path, so the only error mode there is an unseen
+*second* opening; extending doubt to budget-exhausted boundary air would put every warehouse whose
+wall happens to sit at a moving flycam's survey edge into UNKNOWN.
 
 This is not a corner case. Three routes reach it in ordinary use:
 
@@ -535,8 +541,10 @@ metres and no longer moves with the cell size. `Probe::mGapDepth` is decimetres.
   below could widen it clean past the span above. A pillar standing on a floor slab
   and passing through a ceiling slab reproduced it.)
 - A cell the field has not surveyed answers UNKNOWN, never OUTDOORS - and never
-  INTERIOR either, directly or by sealing a pocket off behind it. **The field reports
-  INTERIOR only where real geometry closed the space.**
+  INTERIOR either, directly or by sealing a pocket off behind it. **An unreached pocket
+  touching unsurveyed ground is UNKNOWN.** Air the walk reached and merely exhausted its
+  budget in stays INTERIOR even against the boundary; that verdict rests on surveyed
+  geometry along a surveyed path.
 - The covered distance is exact to the storage granularity (half a decimetre) at every
   cell size, and does not accumulate per-step rounding. The budget is integral in cell
   steps.
