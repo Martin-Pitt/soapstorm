@@ -5134,6 +5134,16 @@
                  function="ToggleControl"
                  parameter="PingInterpolate" />
             </menu_item_check>
+            <menu_item_check
+             label="Timing Inversion (Object Updates)"
+             name="Timing Inversion (Object Updates)">
+                <menu_item_check.on_check
+                 function="CheckControl"
+                 parameter="SSTimingInversion" />
+                <menu_item_check.on_click
+                 function="ToggleControl"
+                 parameter="SSTimingInversion" />
+            </menu_item_check>
 
             <menu_item_separator/>
 

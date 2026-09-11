@@ -961,6 +961,8 @@ protected:
 
     F64Seconds      mLastInterpUpdateSecs;          // Last update for purposes of interpolation
     F64Seconds      mLastMessageUpdateSecs;         // Last update from a message from the simulator
+    // <SS:Nexii> SS timing inversion: running center of the implied update-age offset
+    F64             mSSTimingTauCenterSecs;
     TPACKETID       mLatestRecvPacketID;            // Latest time stamp on message from simulator
     F64SecondsImplicit mRegionCrossExpire;      // frame time we detected region crossing in + wait time
 
