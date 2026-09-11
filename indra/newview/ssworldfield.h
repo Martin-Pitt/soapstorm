@@ -454,6 +454,7 @@ private:
     // eviction both move it.
     bool mBuildBusy = false;
     bool mGateWasOff = false;          // Atmo resolved no environment last frame: grids kept, rebuilds paused
+    bool mWarnedNoNavMesh = false;     // the "on, but no geometry source" warning is said once per edge
     U32 mGridGeneration = 0;
 
     F64 mNow = 0.0;

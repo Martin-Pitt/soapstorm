@@ -27049,7 +27049,7 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldField</key>
       <map>
       <key>Comment</key>
-      <string>Master toggle for the shared world field: the per-cell classification of the census navmesh's own rasterization - solid spans, outdoors/sheltered/interior air and the acoustic probe bake - that surface, coverage, fog and audio read instead of each capturing or raycasting its own. Off also stops the navmesh keeping its span sheets. Needs SSNavMesh</string>
+      <string>Master toggle for the shared world field: the per-cell classification of the census navmesh's own rasterization - solid spans, outdoors/sheltered/interior air and the acoustic probe bake - that surface, coverage, fog and audio read instead of each capturing or raycasting its own. Off also stops the navmesh keeping its span sheets. REQUIRES SSNavMesh (which requires SSWorldFieldShapes) - the navmesh is the only geometry source; with it off this answers nothing and every consumer falls back to its own raycasts</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>

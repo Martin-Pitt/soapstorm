@@ -390,6 +390,13 @@ metres and no longer moves with the cell size. `Probe::mGapDepth` is decimetres.
 
 **Best-effort**
 
+- **The navmesh is the only geometry source, and it is off by default.** `SSNavMesh`
+  needs `SSWorldFieldShapes`, and both ship `0`. With the navmesh not running the
+  field answers nothing at all and every consumer sits on its fallback; `update()`
+  warns once under `SSWorldField` when that is the case. Before this round the field
+  would have fallen back to its own depth-peel capture. **This is an owner decision
+  that has not been made:** either those two defaults flip, or the world field is
+  understood to be opt-in.
 - **Coverage follows the census envelope.** `SSWorldFieldShapesRange` (45 m) and
   `SSNavMeshRange` bound what the navmesh knows. Outside them there are no sheets, so
   a column reads as open sky. A sky platform 200 m above a ground-level camera is

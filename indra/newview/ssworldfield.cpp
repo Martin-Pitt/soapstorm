@@ -462,7 +462,19 @@ void SSWorldField::update()
 
     evict();
 
-    if (!SSNavMesh::instanceExists() || !SSNavMesh::getInstance()->active()) return;
+    // <SS:Nexii> The navmesh is the field's only geometry source now, and both it and the census it needs default OFF. A field switched on over a navmesh that is not running would otherwise do nothing, for ever, in silence - and every consumer would quietly sit on its raycast fallback wondering why. Say it once. [interaction: SSNavMesh, SSWorldFieldShapes]
+    if (!SSNavMesh::instanceExists() || !SSNavMesh::getInstance()->active())
+    {
+        if (!mWarnedNoNavMesh)
+        {
+            mWarnedNoNavMesh = true;
+            LL_WARNS("SSWorldField") << "world field is on but the census navmesh is not running: it has no geometry source and will answer nothing. "
+                                     << "Needs SSNavMesh, which needs SSWorldFieldShapes." << LL_ENDL;
+        }
+        if (!mTiles.empty()) clear();
+        return;
+    }
+    mWarnedNoNavMesh = false;
     navSettle();
 
     // One classification at a time. A region that settled while one ran simply
