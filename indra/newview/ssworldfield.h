@@ -21,12 +21,20 @@
  *        geometry - walks DOWN to the first air gap within
  *        SSWorldFieldGroundReach metres; nothing within reach is open air.
  *
+ *        A cell NO sheet covered is a fifth answer: AIR_UNKNOWN. Its empty span
+ *        list is "not looked at", not "empty sky", and the survey mask is what
+ *        stops a partially fed region from telling every consumer it is outdoors
+ *        and suppressing the raycast fallbacks they keep for exactly this case.
+ *
  *        The outdoors rule is geometric rather than topological: an opening
  *        hands its covered neighbours a reach budget scaled by the gap height
  *        at the opening (gap_height * cot(SSWorldFieldOpenAngle)),
  *        re-evaluated from the LOCAL gap height at every step, so a gap that
  *        pinches under a low beam stops carrying outdoors while ground under a
  *        sky platform far overhead keeps it for as far as the platform runs.
+ *        The distance recorded per gap is a separate SHORTEST-path walk, not
+ *        the widest path's own length: the label's reach test and the enclosure
+ *        ramp both want the nearest opening, not the strongest one.
  *
  *        See doc/atmo_magic_worldfield.md - the handoff section there is the
  *        contract the wind flow and acoustics workstreams build against.
@@ -130,11 +138,6 @@ public:
     // The topmost surface at a point, absolute Z. False if the cell is
     // unmapped (no grid for the region, or the column is fully sky).
     bool surfaceTop(const LLVector3& pos_agent, F32& z, U8& flags) const;
-
-    // Whether the point has structure above it (sheltered), and if so how far
-    // up to the column's sky-open top - the burial measure the soundscape
-    // currently derives from the wind tile's column top.
-    bool coverageAt(const LLVector3& pos_agent, bool& outdoor, F32& buried_depth) const;
 
     // The richer form the soundscape's probe cycle wants: whether anything
     // stands over the point at all, the nearest such surface's altitude (the
@@ -274,9 +277,51 @@ public:
     bool acousticDebug(U64 region_handle, const LLVector3& centre_agent, F32 range_m,
                        AcousticDebug& out) const;
 
-    // The share of a region's air cells the classification actually labelled -
-    // 1.0 once a grid is published and current, 0 before the first one.
+    // <SS:Nexii> The share of the region's cells a band sheet actually covered, 0..1 -
+    // the build-progress figure, since it rises as the census envelope reaches more of
+    // the region. 0 when there is no grid. It used to be the share of gaps carrying a
+    // label, which was 0 or 1 and nothing else, and cost a million-cell walk on the
+    // main thread every frame the info view was open; the count is taken once by the
+    // classification worker now.
     F32 airCoverage(U64 region_handle) const;
+
+    // <SS:Nexii> The bulk read, and the ONLY supported way to get world-field geometry
+    // off the main thread. A published grid is immutable for its whole life - the
+    // classification builds a whole new set of arrays and the completion swaps them in -
+    // so handing out shared_ptrs to them is safe on any thread for as long as the
+    // holder keeps them, even across an eviction or a reclassification. Take this on
+    // the main thread, capture it by value into a worker job, and gate your result on
+    // mSerial the way scheduleGrid does. Everything a consumer needs to index the grid
+    // itself is here, so nobody has to reimplement the sheet-to-grid mapping (use
+    // SSWorldFieldCore::buildGrid if you want your own resolution instead).
+    // [interaction: SSWindFlowMap, SSSoundscape]
+    struct GridView
+    {
+        // Spans, col-major by slot: [k * mRes * mRes + (y * mRes + x)], mMaxSpans slots,
+        // NO_SURFACE top where the slot is empty.
+        std::shared_ptr<const std::vector<F32> > mSpanBottom;
+        std::shared_ptr<const std::vector<F32> > mSpanTop;
+        std::shared_ptr<const std::vector<U8> > mSpanFlags;
+        // Per gap node, [(y * mRes + x) * (mMaxSpans + 1) + k]: the air label and the
+        // covered distance in DECIMETRES (AIR_DEPTH_UNREACHED where nothing reached it).
+        std::shared_ptr<const std::vector<U8> > mGapLabel;
+        std::shared_ptr<const std::vector<U16> > mGapDepth;
+        // One byte per cell: 0 means NO band sheet covered it. Such a cell has no
+        // geometry, which is not the same as empty sky - its gaps are AIR_UNKNOWN and a
+        // consumer must not read its empty span list as open air.
+        std::shared_ptr<const std::vector<U8> > mSurveyed;
+
+        LLVector3 mOriginAgent;     // the grid's (0,0) cell corner in agent space
+        S32 mRes = 0;               // cells per axis
+        F32 mCell = 0.f;            // metres per cell
+        F32 mCeiling = 0.f;         // where a cell's top gap ends; above it is open sky
+        S32 mMaxSpans = 0;
+        U32 mSerial = 0;            // the published grid's serial; gate results on it
+        bool mStale = false;        // a reclassification is owed for this region
+
+        explicit operator bool() const { return mRes > 0 && mSpanTop != nullptr; }
+    };
+    bool snapshotGrid(U64 region_handle, GridView& out) const;
 
     // <SS:Nexii> Drainage topology over one landing-surface grid - the DRAINAGE_NETWORK channel core, materialised synchronously over whatever SurfaceGrid the caller already holds (the surface field's geometry, at its own n). A Barnes priority flood fills every depression to its spill elevation; a cell below that level is a pool member (standing water, the figure that retires the surface field's local dips check); flow directions are D8 down the *filled* surface, so a pool's water drains toward its spill outlet rather than into its own floor - except across an eave, the discontinuity a raw drop steeper than a roof pitch and at least 0.75 m tall marks: water arriving there leaves into the air, so the drop is not a descent and the cell ends the surface. Accumulation then routes contributing area in square metres down the D8 in descending spill order; a cell whose outlet chain ends keeps its catchment, which is the figure the runoff shed reads at the lips. Nothing is cached here: the grid carries the geometry serial and the caller already gates retraces on it.
     struct Drainage
@@ -290,9 +335,12 @@ public:
     };
     static bool buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out);
 
-    bool tileValid(U64 region_handle) const;
-    U32 geometrySerial(U64 region_handle) const;
-    // A rebuild is pending: the navmesh's sheet set moved since the published grid was classified.
+    // <SS:Nexii> The serial of the PUBLISHED grid - the spans and labels a query is
+    // about to read, not the one the navmesh has already moved. Consumers gate their
+    // retraces on it; 0 means no grid. gridStale is true while a reclassification is
+    // owed, which is the build-progress signal a consumer needs and airCoverage is
+    // not. [interaction: SSRainShadowMap::SurfaceGrid::mGeomSerial]
+    U32 gridSerial(U64 region_handle) const;
     bool gridStale(U64 region_handle) const;
 
     // Stats
@@ -317,10 +365,15 @@ private:
     static constexpr F64 SETTLE_DEBOUNCE = 0.5;
 
     // <SS:Nexii> One region's published cell grid. Every array below is written
-    // once by a worker job and swapped in whole on the main thread - nothing
-    // mutates a live grid in place, which is what lets traceSolid and the
-    // acoustic queries read it on the main thread with no lock and no torn
-    // state. The geometry is the navmesh's band sheets flattened into one
+    // once by a worker job and swapped in whole on the main thread. The precise
+    // invariant, because someone will move a reader off-thread on the strength of
+    // it: THE ARRAYS ARE NEVER REALLOCATED OR REORDERED IN PLACE, and they are only
+    // ever written from the MAIN THREAD. The one in-place write is tier B's
+    // store-back, which fills per-probe statistic fields inside mAcoustic.mProbes
+    // from its own main-thread completion; a reader sees either the tier A value or
+    // the tier B one, never a torn probe, and mHaveBundle says which. Everything
+    // else is swap-only, which is why a worker may hold the shared_ptrs handed out
+    // by snapshotGrid indefinitely. The geometry is the navmesh's band sheets flattened into one
     // region-anchored grid of mRes x mRes cells at mCell metres; every cell
     // holds up to SS_WF_MAX_SPANS solid spans, and the gaps between, below and
     // above them are the air the classification labels.
@@ -335,9 +388,21 @@ private:
 
         // The cell grid, col-major by span slot ([k * res * res + col]) so a
         // slot is one contiguous plane - the layout SSAcoustic::Snap walks.
-        std::vector<F32> mSpanBottom;
-        std::vector<F32> mSpanTop;
-        std::vector<U8> mSpanFlags;
+        // shared_ptr, not plain vectors, so snapshotGrid can hand a worker a
+        // reference that survives the next classification and this grid's eviction.
+        std::shared_ptr<std::vector<F32> > mSpanBottom;
+        std::shared_ptr<std::vector<F32> > mSpanTop;
+        std::shared_ptr<std::vector<U8> > mSpanFlags;
+
+        // <SS:Nexii> One byte per cell: was this cell covered by any band sheet? The
+        // census envelope is an agent-centred square while grids are kept for regions
+        // within 64 m of the CAMERA, so a flycam routinely leaves part of a region
+        // unsurveyed - and an unsurveyed cell has an empty span list, whose single
+        // 0..ceiling gap would otherwise read as confidently OUTDOORS and suppress
+        // every consumer's raycast fallback for geometry nobody has looked at.
+        // [interaction: SSWorldFieldCore::classify's surveyed argument]
+        std::shared_ptr<std::vector<U8> > mSurveyed;
+        S32 mUnsurveyed = 0;        // cells with no sheet, for the dump and the HUD
 
         // <SS:Nexii> The classification, one label/distance per air gap: gap k
         // of a cell with n spans sits beneath span k (gap 0 below everything,
@@ -346,8 +411,8 @@ private:
         // AIR_SOLID marks "no such gap". mGapDepth is DECIMETRES of covered
         // travel from the opening that reached the gap, AIR_DEPTH_UNREACHED
         // where nothing did; airDepthAt rounds it to metres.
-        std::vector<U8> mGapLabel;
-        std::vector<U16> mGapDepth;
+        std::shared_ptr<std::vector<U8> > mGapLabel;
+        std::shared_ptr<std::vector<U16> > mGapDepth;
 
         // <SS:Nexii> The ACOUSTIC channel's bake, built by the same worker job from
         // the same sheet snapshot (doc/atmo_magic_acoustics.md Parts 1-4). Gap-anchored
@@ -392,6 +457,14 @@ private:
         F64 mLastTouched = 0.0;
         F64 mSettledAt = 0.0;       // when mWantStamp last moved: the rebuild debounce
         bool mValid = false;        // a grid is published and safe to read
+
+        // Every array of a published grid is non-null together; nothing publishes a
+        // partial one. Span reads gate on this, label reads gate on current().
+        bool hasGrid() const
+        {
+            return mValid && mSpanTop && mSpanBottom && mSpanFlags
+                && mGapLabel && mGapDepth && mSurveyed;
+        }
     };
 
     const Tile* tileAt(const LLVector3& pos_agent) const;
@@ -399,7 +472,7 @@ private:
     // Whether a grid's labels, depths and acoustic bake describe the current
     // sheet set. Span reads (surfaceTop, coverage, traceSolid) are served from
     // a stale-but-consistent grid; label reads are not.
-    static bool current(const Tile& tile) { return tile.mValid && tile.mGridSerial == tile.mGeomSerial; }
+    static bool current(const Tile& tile) { return tile.hasGrid() && tile.mGridSerial == tile.mGeomSerial; }
 
     // Which air gap of a cell contains z: 0 below the lowest span, n above the
     // highest, or -1 when z falls inside a body. Bounds of the air found come
@@ -424,6 +497,15 @@ private:
     // and acousticDebug. Returns the count written, 0 when the channel has no
     // current answer for the cell.
     S32 listenerProbeSet(const Tile& tile, const LLVector3& pos_agent, S32* out, S32 max_out) const;
+
+    // <SS:Nexii> listenerProbeSet's dedupe marks, kept across calls instead of being
+    // allocated and zeroed per call: it ran a fresh allocate-and-memset of the full
+    // probe count on every probesAt, on the main thread, at the soundscape's 50 ms
+    // cycle - including on the paths that then answered false. Stamped with a
+    // monotonic counter so it never needs clearing. Mutable because the query is
+    // const; main thread only, like every query.
+    mutable std::vector<U32> mProbeMark;
+    mutable U32 mProbeStamp = 0;
 
     // Follow the navmesh: create a grid slot for every region in reach, drop
     // the ones that left, and move a region's geometry serial once the navmesh
@@ -452,8 +534,17 @@ private:
     // runs simply gets its turn on a later update. A generation counter, not a
     // pointer, decides whether a finished job still applies - clear() and
     // eviction both move it.
+    // <SS:Nexii> One classification in flight. mBuildStartedAt is the watchdog: if the
+    // mainloop queue ever drops the completion - a shutdown race, a queue closing - the
+    // flag would otherwise stay true and retire the field for the process's life. After
+    // BUILD_WATCHDOG_S with nothing landing, the generation moves (so a late completion
+    // is refused rather than landing on a grid that has moved on) and the field tries
+    // again.
+    static constexpr F64 BUILD_WATCHDOG_S = 60.0;
     bool mBuildBusy = false;
+    F64 mBuildStartedAt = 0.0;
     bool mGateWasOff = false;          // Atmo resolved no environment last frame: grids kept, rebuilds paused
+    bool mWasEnabled = false;          // the off->on edge that has to ask the navmesh for sheets again
     bool mWarnedNoNavMesh = false;     // the "on, but no geometry source" warning is said once per edge
     U32 mGridGeneration = 0;
 

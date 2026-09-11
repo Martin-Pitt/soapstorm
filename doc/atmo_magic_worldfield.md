@@ -19,9 +19,24 @@
 > (`SSWorldFieldFromNavMesh`, `SSWorldFieldBand`, `SSWorldFieldCeiling`,
 > `SSWorldFieldMaxAge`). About 1,700 lines net.
 >
-> **Added:** `ssworldfieldcore.h` (the pure core: `spanInsert`, `classify`), the
-> geometric outdoors rule, the walk-down point query, `SSWorldFieldOpenAngle` and
-> `SSWorldFieldGroundReach`. Pinned by `V:\Scratch\atmo\tests\worldfieldcore.cpp`.
+> **Added:** `ssworldfieldcore.h` (the pure core: `spanInsert`, `buildGrid`,
+> `gapIndexAt`, `classify`), the geometric outdoors rule, the walk-down point query,
+> the survey mask, `snapshotGrid` for worker consumers, `SSWorldFieldOpenAngle` and
+> `SSWorldFieldGroundReach`. Pinned by 24 cases across
+> `V:\Scratch\atmo\tests\worldfieldcore{,_adv,_cost}.cpp`.
+>
+> **Review round, 2026-09-11.** Two reviews; the blocking findings are fixed here.
+> A partial sheet set published a confidently-OUTDOORS region (now the survey mask); a
+> band that built while the field was off held no sheet for ever (now
+> `SSNavMesh::resheet` on the off-to-on edge); `spanInsert` could leave the span list
+> overlapping and unsorted for a pillar through a ceiling (now cascading merges, and
+> the pre-existing shipping bug it was copied from is fixed with it); the threading
+> invariant as written was false (now stated as written-only-from-the-main-thread);
+> and the wind flow workstream had no legal way to read the grid off-thread (now
+> `snapshotGrid` plus a public `SSWorldFieldCore::buildGrid`). The covered distance is
+> now a shortest-path walk rather than the widest path's length, `SHELTER_MULT` is 2
+> rather than 4, `SSNavMesh`/`SSWorldFieldShapes` default on, and the classification's
+> scratch is down from 130 MB to a measured 24.7 MB with the walk 183 ms to 150 ms.
 >
 > This document supersedes the capture-service design of 2026-09-01, which is kept
 > below under **Archive** because two of its verdicts (Design F, physics-sweep
@@ -121,6 +136,36 @@ the grid's ceiling and is open sky. Every stored gap is at least `SPAN_SLAB_M`
 air gap nothing fits through, which is what stops a wall standing on a floor from
 reading as a hollow shell.
 
+### Surveyed, and why an empty cell is not empty sky
+
+A cell that no band sheet covered has an empty span list, and an empty span list has
+exactly one air gap running 0..ceiling with nothing above it — which the
+classification would read as uncovered, reachable and therefore **OUTDOORS**, with
+`current()` true. That is the single most dangerous answer this system can give: it is
+confident, it is wrong, and it suppresses every consumer's raycast fallback for
+geometry nobody has ever looked at.
+
+So `buildGrid` also returns a **survey mask**, one byte per cell, set where any sheet
+covered it. `classify` labels every gap of an unsurveyed cell `AIR_UNKNOWN`, and such
+a cell neither seeds the flood nor blocks it. `surfaceTop` and `coverageDetail` return
+false there; `buildSurfaceGrid` drops through to its heightmap fallback; `traceSolid`
+returns false when the DDA crossed one (`SSAcoustic::Trace::mUnsurveyed`).
+
+This is not a corner case. Three routes reach it in ordinary use:
+
+- The census envelope (`SSWorldFieldShapesRange`) is an agent-centred square, while
+  the field keeps grids for regions within 64 m of the **camera**. A flycam routinely
+  leaves part of a region unsheeted.
+- A band that built while `SSWorldField` was off holds no sheet, and `schedule()` only
+  re-enqueues a band whose geometry signature moved — so it would hold none for ever.
+  `SSNavMesh::resheet()`, called on the field's off→on edge, invalidates exactly those
+  signatures.
+- A band build that bailed out before filling its sheet leaves the vectors empty, and
+  the adapter skips it.
+
+`airCoverage(region)` is the surveyed fraction, counted once by the worker — which is
+also what it takes to be a real build-progress signal rather than a constant 1.
+
 **The dense grid is a materialised view, not a store.** It is built from the sheets
 in the worker, published as a unit, never edited in place, and thrown away whole
 when the next one replaces it. The sheets are the archive; the grid is the answer.
@@ -149,9 +194,10 @@ capacity(gap)  = gap_height * cot(theta)          theta = SSWorldFieldOpenAngle 
 budget(next)   = min(budget(cur), capacity(next) * SHELTER_MULT) - cell_m
 ```
 
-`SHELTER_MULT` is 4 — about 14 degrees of grazing sky — and is a constant rather than
-a second setting because it is the same geometry as `theta` and the two should not be
-tunable apart.
+`SHELTER_MULT` is **2** and is a constant rather than a second setting, because it is
+the same geometry as `theta` and the two should not be tunable apart. It shipped at 4
+for a day; the owner's verdict on 2026-09-11 was that 4 made a 20 m-ceilinged
+warehouse read about 80 m sheltered, which is most of a region.
 
 The `min()` is the whole point, and it is where this differs from every earlier
 version. The budget is re-evaluated against the **local** gap height at every step,
@@ -159,11 +205,18 @@ so it is capped by the tightest place the path has been through. A gap that pinc
 under a low beam cuts whatever the tall part was carrying; a gap that stays tall
 keeps it.
 
-**3. The labels.** Covered air within ONE unmultiplied `capacity` of its opening
-still has the sky overhead at `theta` or better, so it reads OUTDOORS. Past that but
-still in budget, SHELTERED. Out of budget, or never reached, INTERIOR. The covered
-distance travelled is stored per gap in decimetres — the occlusion-depth figure the
-enclosure ramp uses and the acoustic bake reads as travel-to-outdoors.
+**3. The covered distance**, as a SEPARATE shortest-path walk over the air step 2
+reached. It must not be the widest path's own length: a cell one step inside a narrow
+door that is also reachable from a wide door 30 m away would record 30 m, and that
+figure feeds the enclosure ramp, `airDepthAt` and the acoustic bake's
+travel-to-outdoors. Every step costs the same cell width, so plain BFS order is
+already shortest and this costs one queue pass. Stored per gap in **decimetres**, in
+the output array, which is also what retired the separate float plane the budget walk
+used to keep.
+
+**4. The labels.** Covered air within ONE unmultiplied `capacity` of its **nearest**
+opening still has the sky overhead at `theta` or better, so it reads OUTDOORS. Past
+that but still in budget, SHELTERED. Out of budget, or never reached, INTERIOR.
 
 Widest-path first (a max-heap on remaining budget), because the strongest opening
 must be the one that decides how deep the shelter reaches. First pop is final: every
@@ -173,11 +226,12 @@ later entry carries a smaller budget.
 
 | Scene | Gap height | Outdoors reach | Shelter reach | Reads |
 |---|---|---|---|---|
-| Ground under a 200 m sky platform | ~199 m | 199 m | 796 m | OUTDOORS across any plausible footprint |
-| Mid-air under that platform's deck | ~199 m | 199 m | 796 m | OUTDOORS (the symmetric case) |
-| Under a 3 m eave | 3 m | 3 m | 12 m | OUTDOORS at the lip, SHELTERED a few metres in |
-| A 2.4 m room, open door | 2.4 m | 2.4 m | 9.6 m | OUTDOORS 2.4 m in, SHELTERED to ~10 m, INTERIOR beyond |
-| Past a 0.6 m beam in a 20 m hall | 0.6 m at the beam | 0.6 m | 2.4 m | the beam cuts the hall's budget to its own |
+| Ground under a 200 m sky platform | ~199 m | 199 m | 398 m | OUTDOORS across any plausible footprint |
+| Mid-air under that platform's deck | ~199 m | 199 m | 398 m | OUTDOORS (the symmetric case) |
+| Under a 3 m eave | 3 m | 3 m | 6 m | OUTDOORS at the lip, SHELTERED a few metres in |
+| A 2.4 m room, open door | 2.4 m | 2.4 m | 4.8 m | OUTDOORS ~2 m in, SHELTERED to ~5 m, INTERIOR beyond |
+| A 20 m warehouse, open door | 20 m | 20 m | 40 m | OUTDOORS 20 m in, SHELTERED to 40 m, INTERIOR beyond |
+| Past a 0.6 m beam in a 20 m hall | 0.6 m at the beam | 0.6 m | 1.2 m | the beam cuts the hall's budget to its own |
 | Sealed box | — | — | — | INTERIOR, never reached |
 
 The first two rows are the owner's rule and the reason the fixed `sqrt(aperture)`
@@ -293,24 +347,76 @@ invariants rather than as a narrative.
 | the region cell grid + labels | `SSWorldField::Tile` (private) | until the next classification replaces it |
 | the acoustic probe graph | `SSWorldField::Tile::mAcoustic` | same |
 
-You do not get a pointer to the grid. Every query below copies out or answers a
-scalar. If you need bulk access, ask — do not reach into `Tile`.
+You do not get a raw pointer into a `Tile`. You get **`snapshotGrid`**, below, which
+hands out `shared_ptr`s to the published arrays — and those are safe to hold and read
+from a worker for as long as you keep them.
 
 ### Threading rules
 
-1. **Every `SSWorldField` query below is main-thread only.** They resolve a region
-   through `LLWorld`, which is not thread-safe.
-2. **If you want grid data on a worker, take it the way the field does:**
-   `SSNavMesh::collectSheets(region, sheets, stamp)` on the main thread, then read
-   the sheets on the worker. Sheets are immutable and `shared_ptr`-owned; holding one
-   keeps it alive past the band's eviction. This is the *only* supported way to get
-   world-field geometry off the main thread.
-3. **Snapshot on the main thread, never reference.** Capture by value or by
-   `shared_ptr`. Never capture a `Tile*`, a raw span pointer, or `LLViewerRegion*`.
-4. **Read settings on the main thread** and capture them.
-5. **Gate your result on a generation and a serial**, the way `scheduleGrid` does.
-   `geometrySerial(region)` is the serial of the currently published grid;
-   `gridStale(region)` is true while a rebuild is owed.
+1. **Every `SSWorldField` query is main-thread only**, including `snapshotGrid`
+   itself. They resolve a region through `LLWorld`, which is not thread-safe.
+2. **The data a snapshot points at is not.** A published grid is built whole by a
+   worker and swapped in by one completion; the arrays are never reallocated,
+   reordered or rewritten in place, and a reclassification builds a *new* set rather
+   than editing the live one. So a `GridView` taken on the main thread is valid on a
+   worker indefinitely, across a reclassification and across the region's eviction.
+   This is the supported way to get world-field geometry off the main thread.
+3. **The one exception to "never written in place"** is tier B's acoustic store-back,
+   which fills per-probe statistic fields inside `mAcoustic.mProbes` from its own
+   main-thread completion. `GridView` does not expose the probes, so it is not your
+   problem; if you read probes, read them on the main thread and treat
+   `mHaveBundle` as the "tier B has landed for this probe" flag.
+4. **Snapshot, never reference.** Capture by value or by `shared_ptr`. Never capture a
+   `Tile*`, a raw span pointer, or an `LLViewerRegion*`.
+5. **Read settings on the main thread** and capture them.
+6. **Gate your result on a generation and a serial**, the way `scheduleGrid` does.
+   `GridView::mSerial` is the serial of the grid you snapshotted;
+   `gridSerial(region)` and `gridStale(region)` are the main-thread forms.
+
+### The bulk read
+
+```cpp
+struct GridView
+{
+    std::shared_ptr<const std::vector<F32> > mSpanBottom, mSpanTop;   // [k*res*res + col]
+    std::shared_ptr<const std::vector<U8>  > mSpanFlags;              // SSRainShadowMap::SURF_*
+    std::shared_ptr<const std::vector<U8>  > mGapLabel;               // [col*(maxSpans+1) + k]
+    std::shared_ptr<const std::vector<U16> > mGapDepth;               // DECIMETRES covered
+    std::shared_ptr<const std::vector<U8>  > mSurveyed;               // [col], 0 = never looked at
+    LLVector3 mOriginAgent;   // the (0,0) cell corner in agent space
+    S32 mRes; F32 mCell; F32 mCeiling; S32 mMaxSpans;
+    U32 mSerial; bool mStale;
+};
+bool snapshotGrid(U64 region_handle, GridView& out) const;
+```
+
+`col = y * mRes + x`. Cell `(x, y)` covers agent XY
+`[mOriginAgent + (x, y) * mCell, + mCell)`. Z is **absolute agent Z** — the navmesh's
+frame re-bases XY only, never Z, so a span's `[bottom, top]` is directly comparable
+with an avatar's `mV[VZ]`. Above `mCeiling` there is nothing; a cell's top gap is
+reported as extending past it so a query aloft still resolves.
+
+`SSWorldFieldCore::buildGrid` is public and pure if you want to materialise at your
+**own** resolution instead — take `SSNavMesh::collectSheets` on the main thread, turn
+the `BandSheet`s into `SheetRef`s, and call it on your worker. Do that rather than
+writing a second sheet-to-grid mapping: the lattice phase below is easy to get half a
+cell wrong and nothing would tell you.
+
+### The coordinate frame, exactly
+
+The navmesh's 16 m column lattice is pinned to `mOriginGlobal`, the agent's region
+origin at init, and region origins are multiples of 256 — so a column corner always
+lands on an exact multiple of 16 m in any region's local frame, and 16 divides evenly
+by every `SSWorldFieldCell` value that matters. `buildGrid` still rounds with
+`floorf(x / cell + 0.5f)`: that is a **guard against float drift in the division**, not
+a half-cell offset. If you build your own grid, use the same expression. If your cell
+size does not divide 16, your cells straddle sheet boundaries and you will union
+across them — which is legal but lossy at exactly the openings the classification
+cares about.
+
+`mCeiling` is `max(band zMax over the region's sheets) + 8 m`, floored at 32 m. It is
+where "open sky" starts, so a consumer that needs to agree with the field about what
+is outdoors must use the field's value, not its own.
 
 ### Queries — geometry (served even when stale)
 
@@ -318,11 +424,11 @@ scalar. If you need bulk access, ask — do not reach into `Tile`.
 bool surfaceTop(const LLVector3& pos_agent, F32& z, U8& flags) const;
 ```
 The highest solid span top in the point's cell, absolute Z, with
-`SSRainShadowMap::SURF_*` flags. False when no grid covers the point or the column is
-fully sky. *Guaranteed:* if it returns true, `z` is a real surface the census saw.
+`SSRainShadowMap::SURF_*` flags. False when no grid covers the point, when the cell is
+**unsurveyed**, or when the column is fully sky. *Guaranteed:* if it returns true, `z`
+is a real surface the census saw.
 
 ```cpp
-bool coverageAt(const LLVector3& pos, bool& outdoor, F32& buried_depth) const;
 bool coverageDetail(const LLVector3& pos, bool& covered, F32& ceiling_z, F32& column_top_z) const;
 ```
 `ceiling_z` is **the underside of the lowest span above the point** — a real ceiling.
@@ -345,6 +451,10 @@ bool buildSurfaceGrid(U64 region_handle, S32 n, SSRainShadowMap::SurfaceGrid& ou
 static bool buildDrainage(const SSRainShadowMap::SurfaceGrid& grid, Drainage& out);
 ```
 Unchanged contracts. `buildDrainage` is `static` and pure — safe on a worker.
+
+(`coverageAt`, `tileValid` and `geometrySerial` were deleted on 2026-09-11: no caller
+outside the field, and `geometrySerial` returned the *grid* serial despite its name,
+which is a trap. Use `gridSerial`.)
 
 ### Queries — classification (require `current()`)
 
@@ -378,8 +488,14 @@ metres and no longer moves with the cell size. `Probe::mGapDepth` is decimetres.
 
 **Guaranteed**
 
-- A published grid is internally consistent: spans, labels, depths and the probe
-  graph all describe the same snapshot.
+- A published grid is internally consistent: spans, labels, depths, the survey mask
+  and the probe graph all describe the same snapshot.
+- The span list of a cell is **sorted and disjoint**, with every air gap at least
+  `SPAN_SLAB_M` (0.25 m) tall, however the bands interleave and whatever order the
+  sheets arrived in. (This was not true until 2026-09-11: a body merging into the span
+  below could widen it clean past the span above. A pillar standing on a floor slab
+  and passing through a ceiling slab reproduced it.)
+- A cell the field has not surveyed answers UNKNOWN, never OUTDOORS.
 - A query never returns data from a different serial than it reports.
 - Cells are region-anchored and stable across region crossings (the navmesh's own
   frame is pinned at init; the field re-bases through region origins).
@@ -390,26 +506,65 @@ metres and no longer moves with the cell size. `Probe::mGapDepth` is decimetres.
 
 **Best-effort**
 
-- **The navmesh is the only geometry source, and it is off by default.** `SSNavMesh`
-  needs `SSWorldFieldShapes`, and both ship `0`. With the navmesh not running the
-  field answers nothing at all and every consumer sits on its fallback; `update()`
-  warns once under `SSWorldField` when that is the case. Before this round the field
-  would have fallen back to its own depth-peel capture. **This is an owner decision
-  that has not been made:** either those two defaults flip, or the world field is
-  understood to be opt-in.
-- **Coverage follows the census envelope.** `SSWorldFieldShapesRange` (45 m) and
-  `SSNavMeshRange` bound what the navmesh knows. Outside them there are no sheets, so
-  a column reads as open sky. A sky platform 200 m above a ground-level camera is
-  usually *not* in the census — which is fine, because it degrades to "outdoors",
-  the same answer the reach rule would have given.
-- **Latency.** A prim edit costs a census rebuild, a band rebuild, a settle, the
-  0.5 s debounce and one region classification. Seconds, not frames.
+- **The navmesh is the only geometry source.** `SSNavMesh` needs
+  `SSWorldFieldShapes`; both now ship `1` (owner verdict, 2026-09-11 — the field
+  should work out of the box). With the navmesh not running the field answers nothing
+  at all and every consumer sits on its fallback; `update()` warns once under
+  `SSWorldField` when that is the case.
+- **Coverage follows the census envelope.** `SSWorldFieldShapesRange` and
+  `SSNavMeshRange` bound what the navmesh knows. Outside them there are no sheets —
+  and since 2026-09-11 those cells answer **UNKNOWN**, not "outdoors". A sky platform
+  200 m above a ground-level camera is usually not in the census, so the reach rule
+  never gets to see it; the ground below reads outdoors because its own column is
+  sky-open, which is the same answer for a different reason.
+- **Latency.** A prim edit costs a census rebuild, band rebuilds, a settle, a 0.5 s
+  debounce and a **150 ms** region classification. One to three seconds end to end,
+  dominated by the census and Recast rather than by anything here.
 - **`DYNAMIC` records are invisible.** Movers ride the tile cache as obstacles and
   never enter a layer or a sheet. A moving vehicle does not occlude, shelter or
   enclose.
 - **Phantom and no-physics prims are invisible**, by `navIgnores`.
 - **One region at a time.** `traceSolid` and the propagation graph stop at a region
   border.
+
+### Query costs, so nobody puts one in a loop
+
+| Query | Cost | Notes |
+|---|---|---|
+| `surfaceTop`, `coverageAt`-shaped reads, `airLabelAt`, `airDepthAt`, `enclosureAt` | O(spans), a handful of loads | region resolve dominates; use `enclosureAtRegion` in a loop |
+| `traceSolid` | O(cells crossed), ~4 per metre at 0.25 m | a 100 m segment is ~400 cells x spans |
+| `acousticAt` | nearest probe in a lattice cell + its 8 neighbours | cheap |
+| `probesAt` | `listenerProbeSet` + up to 4 weights | cheap since the dedupe marks became a kept plane |
+| `propagationQuery` | **an unbounded Dijkstra over the region's probe graph, on the main thread** | the soundscape calls it per event, not per frame. Do not call it per source per frame |
+| `airCoverage` | O(1) | a counter the worker stored |
+| `buildSurfaceGrid` | O(n²) over the requested grid | the caller caches on the serial |
+| `snapshotGrid` | six `shared_ptr` copies | free; take it as often as you like |
+
+### Build progress and staleness, for a consumer that has to wait
+
+- `gridSerial(region)` — 0 means no grid at all. Any other value is the serial of the
+  published one; it changes exactly when a new grid lands.
+- `gridStale(region)` — a reclassification is owed. Span reads still answer (from a
+  consistent, slightly old grid); label reads return UNKNOWN / -1.
+- `airCoverage(region)` — the **surveyed fraction**, 0..1. This is the progress bar:
+  it rises as the census envelope reaches more of the region. It is not 1 just because
+  a grid exists.
+- There is no "tier B finished" event. Read `SSAcoustic::Probe::mHaveBundle` per probe.
+
+### Which parts of the acoustic bake are the acoustics workstream's
+
+`ss_wf_acoustic_build` lives in `ssworldfield.cpp` and rides `scheduleGrid`'s job, its
+snapshot and its gates. That placement is the field's, and it should stay: probe
+placement needs the whole region's gap structure at once and the field is the only
+thing that has it.
+
+**Yours to redesign:** everything inside `ssacousticcore.h` — probe placement rules,
+the link/aperture model, the statistic bake, the Dijkstra cost function, the tier B
+bundle — and the shape of `Probe`, `Link`, `ProbeSample`, `Propagation`.
+**The field's, do not change without saying so:** that the bake runs inside the
+classification job from the same snapshot, the serial/generation gates, the two-tier
+split with tier B fanned out behind it, and the `Snap` layout (it is the published
+grid's own layout, which is why it costs nothing).
 
 ### If you need something that is not here
 
@@ -448,33 +603,66 @@ the navmesh was a *view over* the world field. It is now the world field's *sour
 
 ## Costs
 
-Per region at 0.25 m over 256 m (1024 x 1024 cells):
+Measured, not estimated: `V:\Scratch\atmo\tests\worldfieldcore_cost.cpp` builds a
+whole 256 m region at the default 0.25 m cell (1024 x 1024 cells, 7.34 M gap nodes) —
+terrain everywhere, a 32 m roofed building every 32 m, and a 100 m sky platform — and
+measures the classification's peak allocation through a global allocator hook.
 
-| Item | Estimate | Notes |
+| Item | Measured | Notes |
 |---|---|---|
-| Band sheets on the navmesh | ~50 KB per band | 64² cells x 6 spans x 9 B, sparse in practice; only bands the census reached exist |
-| The published cell grid | ~54 MB | 6 slots x 1 M cells x (4 + 4 + 1) B |
-| Labels and depths | ~21 MB | 7 gaps x 1 M cells x (1 + 2) B |
-| Peak during a rebuild | grid x 2 | the old one is live until the completion swaps |
-| Grids held | up to 4 (`MAX_TILES`) | LRU, near-region displacement |
+| Band sheets on the navmesh | ~50 KB per band | 64² cells x 6 spans x 9 B; only bands the census reached exist |
+| Published span arrays | **54.0 MB** | 6 slots x 1 M cells x (4 + 4 + 1) B |
+| Published labels and depths | **21.0 MB** | 7 gaps x 1 M cells x (1 + 2) B |
+| Published survey mask | 1.0 MB | one byte per cell |
+| `classify` peak allocation | **45.7 MB** | of which 21.0 MB is the output it returns |
+| `classify` scratch above output | **24.7 MB** | was 130 MB before the 2026-09-11 rework |
+| `classify` wall time | **150 ms** | one core, one region, once per settle |
+| Peak during a rebuild | grid x 2 + scratch | the old grid stays live until the completion swaps |
+| Grids held | up to 4 (`MAX_TILES`) | LRU, with near-region displacement |
 | Acoustic probes | ~10 KB | 8 m lattice |
 
-This is not cheaper than the old store — it is the *same* dense cost, minus the
-48 MB deep copy the flood used to take per run, minus the band scratch the capture
-held (which was the genuinely expensive part: a dense 0.25 m tile pinning all 24
-bands was ~126 MB before it captured anything). The memory dial is
-`SSWorldFieldCell`; every step up quarters the grid.
+The scratch was the part the first round got wrong: the classification kept two F32
+planes of gap bounds (58.7 MB), a float budget plane and a float travel plane
+(58.7 MB), and byte planes for reached/covered (14.7 MB). Now the gap bounds are
+recomputed from the spans (two array reads, and they were always going to be in cache
+behind the span walk), the travel plane folded into the `gap_depth` output the walk
+produces anyway, the budget plane is U16 decimetres, and reached/covered are bitsets.
+The wall time went **down** as well as the memory, from 183 ms to 150 ms, because the
+recomputation is cheaper than the cache traffic the two extra planes cost.
+
+Steady state is therefore about **300 MB** of published grids for four regions plus a
+transient **~125 MB** while one of them reclassifies. The dial is `SSWorldFieldCell`;
+every step up quarters the grid.
+
+### Latency
+
+A prim edit costs: a census rebuild, the navmesh's band rebuilds, `regionSettled`, the
+field's 0.5 s debounce, and one **150 ms** region classification on a worker. Call it
+one to three seconds end to end, dominated by the census and the Recast builds rather
+than by anything here.
+
+The owner has accepted that as shipping behaviour, and column-scoped re-seeding is
+explicitly **not** to be built. It is worth recording why it would not have helped: the
+reach budget propagates from openings that may be tens of metres away and across band
+boundaries, so a rectangle around an edit is not a closed problem — removing one wall
+panel can change the label of every cell in a building. A dirty-rect reclassification
+could not have produced correct labels under this rule. That is a design consequence
+of the outdoors rule, not a regression against the depth-peel capture's re-peel path,
+which only ever patched *geometry* and always re-ran the flood whole anyway.
 
 ## Open questions
 
-- **Does 0.25 m survive a dense SLMC-scale region?** 54 MB per region x 4 is real
-  money. The honest answer is to measure `SSWorldFieldCell` at 0.5 m against the
-  false-shelter rate on real builds before deciding, not to guess.
+- **Does 0.25 m survive a dense SLMC-scale region?** ~76 MB per region x 4 published
+  is real money, even with the scratch down to 24.7 MB. The owner's verdict on
+  2026-09-11 was to keep 0.25 m and treat the scratch as the bug, which is done; the
+  remaining question is whether `SSWorldFieldCell` at 0.5 m costs enough false
+  shelter on real builds to matter. Measure, do not guess.
 - **Six spans per cell.** Unchanged from the old store and still unmeasured against
   stacked flats. `extractSpanSheet` already folds thinnest-gap-first at the sheet, so
   the overflow policy is applied twice; whether that compounds badly is unknown.
-- **`SHELTER_MULT` = 4.** Chosen as "about 14 degrees", not measured. If the owner
-  wants a second dial this is where it goes.
+- **`SHELTER_MULT` = 2.** Set by the owner against the warehouse case, not measured
+  across content. If a second dial is ever wanted this is where it goes — but it is
+  deliberately not one today, because it is the same geometry as the angle.
 - **OUTDOORS a gap-height inside a doorway.** At a 2.4 m ceiling the rule calls the
   first 2.4 m past the door outdoors. That is what a 45-degree sky cone genuinely
   says, and it is why `SSWorldFieldOpenAngle` is a setting — but it may want to be

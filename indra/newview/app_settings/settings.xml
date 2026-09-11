@@ -27088,7 +27088,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>0</integer>
+      <integer>1</integer>
     </map>
     <key>SSWorldFieldShapesBudgetMS</key>
       <map>
@@ -27121,7 +27121,7 @@ Change of this parameter will affect the layout of buttons in notification toast
       <key>Type</key>
       <string>Boolean</string>
       <key>Value</key>
-      <integer>0</integer>
+      <integer>1</integer>
     </map>
     <key>SSNavMeshBandGap</key>
       <map>
@@ -27346,13 +27346,13 @@ Change of this parameter will affect the layout of buttons in notification toast
     <key>SSWorldFieldGroundReach</key>
       <map>
       <key>Comment</key>
-      <string>How far in metres a query point with no air cell at its own height - a camera pushed inside a wall, an ear inside a floor slab - may walk DOWN looking for one before the world field answers open air. Points in real air (flying, above a sky platform, rain aloft) never use this: their own column's top gap already answers</string>
+      <string>How far in metres a query point with no air cell at its own height - a camera pushed inside a wall, an ear inside a floor slab - may walk DOWN looking for one before the world field answers open air. Points in real air (flying, above a sky platform, rain aloft) never use this: their own column's top gap already answers. Keep it short: it is a clipping-recovery distance, not a search, and a camera clipped into terrain with a large value here adopts the label of whatever basement it finds</string>
       <key>Persist</key>
       <integer>1</integer>
       <key>Type</key>
       <string>F32</string>
       <key>Value</key>
-      <real>64.0</real>
+      <real>6.0</real>
     </map>
     <key>SSWorldFieldDebugView</key>
       <map>

@@ -1158,11 +1158,30 @@ void SSNavMesh::schedule()
     });
 }
 
-// Whether band builds keep a world-field sheet: the field's master switch alone, so a sheet is either kept by every band or by none.
+// <SS:Nexii> Whether band builds keep a world-field sheet: the field's master switch alone, so a sheet is either kept by every band or by none. An LLCachedControl, so it follows a live change - but only for builds launched after it; resheet() is what recovers the bands built under the old answer. [interaction: SSWorldField::update]
 bool SSNavMesh::sheetsWanted()
 {
     static LLCachedControl<bool> field(gSavedSettings, "SSWorldField", true);
     return field;
+}
+
+// <SS:Nexii> The off->on recovery. Zeroing the signature is what makes schedule()
+// see the band as changed; mCensusStamp = 0 is what makes the next update() schedule
+// at all. Bands still in flight or queued are skipped - they will build under the
+// current answer anyway.
+S32 SSNavMesh::resheet()
+{
+    if (!mNavMesh) return 0;
+    S32 queued = 0;
+    for (auto& kv : mBands)
+    {
+        if (kv.second.mSheet) continue;         // already has one
+        if (kv.second.mRefs.empty()) continue;  // never published, so it is pending anyway
+        kv.second.mSig = 0;
+        ++queued;
+    }
+    if (queued) mCensusStamp = 0;
+    return queued;
 }
 
 // <SS:Nexii> The region's published sheet set, shared_ptr copies only: every live band whose column centre falls inside the region, with the agent-space corner the field needs to place its cells, plus a stamp mixing each band's key and geometry signature. The stamp is the field's change detector - an identical stamp after a settle means nothing was rebuilt and the published grid still describes the world. Main thread only. [interaction: SSWorldField::scheduleGrid]

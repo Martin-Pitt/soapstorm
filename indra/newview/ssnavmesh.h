@@ -102,8 +102,17 @@ public:
         LLVector3 mOriginAgent;                 // the column's (x0, y0, 0) corner, agent space
         std::shared_ptr<const SpanSheet> mSheet;
     };
-    // Whether the band builds should keep a sheet at all - the world field's master switch, read once per launch.
+    // <SS:Nexii> Whether band builds keep a world-field sheet - the field's master
+    // switch, read per launch (an LLCachedControl, so it follows a live change; the
+    // bands already built under the old answer are what resheet() exists for).
     static bool sheetsWanted();
+    // <SS:Nexii> Invalidate the signature of every published band holding no sheet, so
+    // schedule() rebuilds it. schedule() only enqueues a band whose signature moved,
+    // and launch() decides sheets once per build, so a band that built while the field
+    // was off would otherwise hold no sheet FOR EVER - and its cells would read as
+    // unsurveyed, permanently, with no way back short of a teleport. Called on the
+    // off->on edge. Returns how many it queued. [interaction: SSWorldField::update]
+    S32 resheet();
     // No band of a column inside the region is queued or building, and no schedule is pending: the field may bump its serial.
     bool regionSettled(U64 region_handle) const;
     // <SS:Nexii> Every published band whose column centre falls inside the region, newest sheet per band, plus a stamp over the band keys and their geometry signatures: an unchanged stamp means an unchanged sheet set, which is how the field decides a rebuild is a no-op. Main thread only (it walks the live band map); the sheets themselves are immutable and safe to read from a worker afterwards. [interaction: SSWorldField::navSettle]

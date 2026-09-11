@@ -1,7 +1,8 @@
 /**
  * @file ssworldfieldcore.h
- * @brief Atmo Magic world field: the cell grid's pure core - span insertion and the
- *        air classification (reachability, the geometric reach budget, the labels).
+ * @brief Atmo Magic world field: the cell grid's pure core - span insertion, the
+ *        sheet-to-grid materialisation, the gap lookup, and the air classification
+ *        (reachability, the geometric reach budget, the labels).
  *
  * $LicenseInfo:firstyear=2026&license=viewerlgpl$
  * Phoenix Firestorm Viewer Source Code
@@ -23,11 +24,13 @@
  */
 
 // <SS:Nexii> A CORE header (lldefs.h + <cmath>/<cstdint> + POD containers only; NO
-// llmath.h), the same split every other Atmo core follows: the two algorithms that
-// decide what the world field says live here as pure functions of the cell grid, and
-// ssworldfield.cpp owns the navmesh snapshot, the scheduling and the storage.
-// Nothing here reads a setting, the camera or a system, so the scratch harness at
-// V:\Scratch\atmo\worldfield pins the exact code the viewer runs.
+// llmath.h), the same split every other Atmo core follows: everything that decides
+// what the world field SAYS lives here as pure functions, and ssworldfield.cpp owns
+// the navmesh snapshot, the scheduling and the storage. Nothing here reads a setting,
+// the camera or a system, so the scratch harness at V:\Scratch\atmo (worldfieldcore,
+// worldfieldcore_adv, worldfieldcore_cost) pins the exact code the viewer runs -
+// including the sheet-to-grid coordinate mapping, where a half-cell shift would
+// silently poison every downstream answer.
 // Coordinates: cells are region-anchored and indexed col = y * res + x; spans are
 // [k * res * res + col] so a slot is one contiguous plane (the layout
 // SSAcoustic::Snap walks); z is the absolute altitude, metres.
@@ -68,49 +71,74 @@ namespace SSWorldFieldCore
 
     // <SS:Nexii> How much further than the outdoors reach an opening's budget still
     // carries as SHELTER. One cot(theta) of gap height is the distance the sky is
-    // still overhead at theta; four of them is the distance a covered space still
-    // feels like it has a way out - about 14 degrees of grazing sky. Past it the space
-    // is interior. A multiple rather than a second angle, because the two are the same
-    // geometry and should not be tunable apart.
-    constexpr F32 SHELTER_MULT = 4.f;
+    // still overhead at theta; this multiple of it is the distance a covered space
+    // still feels like it has a way out. A multiple rather than a second angle,
+    // because the two are the same geometry and should not be tunable apart.
+    // Owner verdict 2026-09-11: 2, not 4 - at 4 a 20 m-ceilinged warehouse read about
+    // 80 m sheltered, which is most of a region.
+    constexpr F32 SHELTER_MULT = 2.f;
 
     // Two gaps are adjacent only when their z-intervals STRICTLY overlap by this much.
     // A corner touch where one gap ends exactly where the neighbour's begins is a wall
     // junction, not a door.
     constexpr F32 TOUCH_EPS = 0.05f;
 
-    // <SS:Nexii> Inserts one solid body into a cell's span list: sorted position, union
-    // with touching or overlapping neighbours, and over the span budget a collapse of
-    // the thinnest air gap (the two spans around it merge - the gap becomes solid). The
-    // list stays sorted and every gap in it at least the slab threshold tall.
-    inline void spanInsert(F32* span_bottom, F32* span_top, U8* span_flags,
-                           S32 max_spans, size_t layer, size_t col, F32 bot, F32 tp, U8 fl)
+    // ---------------------------------------------------------------- the span list
+
+    // How many spans a cell holds. The list is dense from slot 0 and terminated by
+    // the first empty top.
+    inline S32 spanCount(const F32* span_top, S32 max_spans, size_t layer, size_t col)
     {
         S32 n = 0;
         while (n < max_spans && span_top[(size_t)n * layer + col] > NO_SURFACE * 0.5f) ++n;
+        return n;
+    }
 
-        S32 at = n;
-        while (at > 0 && span_bottom[(size_t)(at - 1) * layer + col] > bot) --at;
+    namespace detail
+    {
+        // <SS:Nexii> Absorb every following span that widening span `i` has brought
+        // within the slab of it. Without this, a body inserted just above a floor slab
+        // merges DOWN into the floor and the merged top can reach clean past the
+        // ceiling span above it, leaving the list overlapping and out of order - a
+        // pillar standing on a floor and passing through a ceiling, which is ordinary
+        // content. Downstream that misreports the landing surface, double-counts solid
+        // metres in traceSolid, and inflates the gap height the whole reach rule is
+        // computed from. Returns the new span count.
+        // [interaction: V:\Scratch\atmo\tests\worldfieldcore_adv.cpp]
+        inline S32 cascade(F32* span_bottom, F32* span_top, U8* span_flags,
+                           size_t layer, size_t col, S32 i, S32 n)
+        {
+            while (i + 1 < n)
+            {
+                const size_t here = (size_t)i * layer + col;
+                const size_t next = (size_t)(i + 1) * layer + col;
+                if (span_bottom[next] - span_top[here] >= SPAN_SLAB_M) break;
 
-        if (at > 0 && bot - span_top[(size_t)(at - 1) * layer + col] < SPAN_SLAB_M)
-        {
-            const size_t pi = (size_t)(at - 1) * layer + col;
-            const bool higher = tp > span_top[pi];
-            span_bottom[pi] = llmin(span_bottom[pi], bot);
-            span_top[pi] = llmax(span_top[pi], tp);
-            if (higher) span_flags[pi] = fl;
-            return;
+                if (span_top[next] > span_top[here])
+                {
+                    span_top[here] = span_top[next];
+                    span_flags[here] = span_flags[next];
+                }
+                for (S32 j = i + 1; j + 1 < n; ++j)
+                {
+                    span_bottom[(size_t)j * layer + col] = span_bottom[(size_t)(j + 1) * layer + col];
+                    span_top[(size_t)j * layer + col] = span_top[(size_t)(j + 1) * layer + col];
+                    span_flags[(size_t)j * layer + col] = span_flags[(size_t)(j + 1) * layer + col];
+                }
+                const size_t last = (size_t)(n - 1) * layer + col;
+                span_bottom[last] = NO_SURFACE;
+                span_top[last] = NO_SURFACE;
+                span_flags[last] = 0;
+                --n;
+            }
+            return n;
         }
-        if (at < n && tp > span_bottom[(size_t)at * layer + col] - SPAN_SLAB_M)
-        {
-            const size_t ni = (size_t)at * layer + col;
-            const bool higher = bot < span_bottom[ni];
-            span_bottom[ni] = llmin(span_bottom[ni], bot);
-            span_top[ni] = llmax(span_top[ni], tp);
-            if (!higher) span_flags[ni] = fl;
-            return;
-        }
-        if (n == max_spans)
+
+        // Merge the thinnest air gap away: the two spans around it become one. The
+        // list stays sorted and every gap in it at least the slab tall, and no body is
+        // ever dropped - the gap becomes solid instead.
+        inline void foldThinnest(F32* span_bottom, F32* span_top, U8* span_flags,
+                                 size_t layer, size_t col, S32 n)
         {
             S32 thinnest = 0;
             F32 best = 3.4e38f;
@@ -120,67 +148,298 @@ namespace SSWorldFieldCore
                 if (gap < best) { best = gap; thinnest = j; }
             }
             span_top[(size_t)thinnest * layer + col] = span_top[(size_t)(thinnest + 1) * layer + col];
+            span_flags[(size_t)thinnest * layer + col] = span_flags[(size_t)(thinnest + 1) * layer + col];
             for (S32 j = thinnest + 1; j + 1 < n; ++j)
             {
                 span_bottom[(size_t)j * layer + col] = span_bottom[(size_t)(j + 1) * layer + col];
                 span_top[(size_t)j * layer + col] = span_top[(size_t)(j + 1) * layer + col];
                 span_flags[(size_t)j * layer + col] = span_flags[(size_t)(j + 1) * layer + col];
             }
-            --n;
-            at = n;
-            while (at > 0 && span_bottom[(size_t)(at - 1) * layer + col] > bot) --at;
+            const size_t last = (size_t)(n - 1) * layer + col;
+            span_bottom[last] = NO_SURFACE;
+            span_top[last] = NO_SURFACE;
+            span_flags[last] = 0;
         }
-
-        for (S32 j = n; j > at; --j)
-        {
-            span_bottom[(size_t)j * layer + col] = span_bottom[(size_t)(j - 1) * layer + col];
-            span_top[(size_t)j * layer + col] = span_top[(size_t)(j - 1) * layer + col];
-            span_flags[(size_t)j * layer + col] = span_flags[(size_t)(j - 1) * layer + col];
-        }
-        span_bottom[(size_t)at * layer + col] = bot;
-        span_top[(size_t)at * layer + col] = tp;
-        span_flags[(size_t)at * layer + col] = fl;
     }
 
+    // <SS:Nexii> Inserts one solid body into a cell's span list, preserving the
+    // invariant the whole field rests on: SORTED and DISJOINT, with every air gap at
+    // least the slab threshold tall. Three outcomes - merge into the span below, merge
+    // into the span above, or a fresh slot - and each merge cascades forward, because
+    // widening a span can bring it within the slab of the next one. Over the span
+    // budget the thinnest air gap folds away first and the insert is then retried
+    // against the folded list, which is why this is a two-pass loop rather than a
+    // straight line: folding changes both the insert position and which merges apply.
+    inline void spanInsert(F32* span_bottom, F32* span_top, U8* span_flags,
+                           S32 max_spans, size_t layer, size_t col, F32 bot, F32 tp, U8 fl)
+    {
+        if (max_spans < 1 || tp < bot) return;
+
+        for (S32 pass = 0; pass < 2; ++pass)
+        {
+            S32 n = spanCount(span_top, max_spans, layer, col);
+
+            S32 at = n;
+            while (at > 0 && span_bottom[(size_t)(at - 1) * layer + col] > bot) --at;
+
+            if (at > 0 && bot - span_top[(size_t)(at - 1) * layer + col] < SPAN_SLAB_M)
+            {
+                const size_t pi = (size_t)(at - 1) * layer + col;
+                const bool higher = tp > span_top[pi];
+                span_bottom[pi] = llmin(span_bottom[pi], bot);
+                span_top[pi] = llmax(span_top[pi], tp);
+                if (higher) span_flags[pi] = fl;
+                detail::cascade(span_bottom, span_top, span_flags, layer, col, at - 1, n);
+                return;
+            }
+            if (at < n && tp > span_bottom[(size_t)at * layer + col] - SPAN_SLAB_M)
+            {
+                const size_t ni = (size_t)at * layer + col;
+                const bool higher = bot < span_bottom[ni];
+                span_bottom[ni] = llmin(span_bottom[ni], bot);
+                span_top[ni] = llmax(span_top[ni], tp);
+                if (!higher) span_flags[ni] = fl;
+                detail::cascade(span_bottom, span_top, span_flags, layer, col, at, n);
+                return;
+            }
+            if (n < max_spans)
+            {
+                // Neither merge applied, so the new span touches nothing: no cascade.
+                for (S32 j = n; j > at; --j)
+                {
+                    span_bottom[(size_t)j * layer + col] = span_bottom[(size_t)(j - 1) * layer + col];
+                    span_top[(size_t)j * layer + col] = span_top[(size_t)(j - 1) * layer + col];
+                    span_flags[(size_t)j * layer + col] = span_flags[(size_t)(j - 1) * layer + col];
+                }
+                span_bottom[(size_t)at * layer + col] = bot;
+                span_top[(size_t)at * layer + col] = tp;
+                span_flags[(size_t)at * layer + col] = fl;
+                return;
+            }
+
+            // Full and nothing merged: fold the thinnest gap and try once more. The
+            // second pass always finds room, so the loop terminates.
+            detail::foldThinnest(span_bottom, span_top, span_flags, layer, col, n);
+        }
+    }
+
+    // ---------------------------------------------------------------- the gap lookup
+
+    // The air gaps of a cell are the intervals between, beneath and above its solid
+    // spans. Gap k of a cell with n spans runs from the span below (or the world
+    // floor) to the span above (or the grid ceiling).
+    inline F32 gapLo(const F32* span_top, size_t layer, size_t col, S32 k)
+    {
+        return (k == 0) ? 0.f : span_top[(size_t)(k - 1) * layer + col];
+    }
+    inline F32 gapHi(const F32* span_bottom, size_t layer, size_t col, S32 k, S32 n, F32 ceiling)
+    {
+        return (k == n) ? ceiling : span_bottom[(size_t)k * layer + col];
+    }
+
+    // <SS:Nexii> Which air gap of a cell contains z: the gap index (0 below the lowest
+    // span, n above the highest), or -1 when z falls inside a body - the grid has no
+    // verdict for the inside of solid things. The top gap is reported as reaching at
+    // least z itself, so a point above the grid's ceiling (a flying avatar, rain
+    // aloft) still resolves rather than falling off the end of the data.
+    // THE one place gap indexing is defined; classify derives its bounds from the same
+    // gapLo/gapHi, so a query and the classification can never disagree about which
+    // gap a point is in. [interaction: SSWorldField::gapAt]
+    inline S32 gapIndexAt(const F32* span_top, const F32* span_bottom, S32 max_spans,
+                          size_t layer, size_t col, F32 z, F32 ceiling, F32& g0, F32& g1)
+    {
+        F32 prev = 0.f;
+        for (S32 k = 0; k < max_spans; ++k)
+        {
+            const size_t si = (size_t)k * layer + col;
+            const F32 stop = span_top[si];
+            if (stop <= NO_SURFACE * 0.5f)
+            {
+                g0 = prev; g1 = llmax(ceiling, z + 1.f);
+                return k;                                   // open above the last span
+            }
+            const F32 bottom = span_bottom[si];
+            if (z < bottom - 0.01f)
+            {
+                g0 = prev; g1 = bottom;
+                return k;                                   // the gap beneath this span
+            }
+            if (z <= stop + 0.01f) return -1;               // inside the body
+            prev = stop;
+        }
+        g0 = prev; g1 = llmax(ceiling, z + 1.f);
+        return max_spans;                                   // above the last span
+    }
+
+    // ------------------------------------------------------------ sheets into a grid
+
+    // <SS:Nexii> One published navmesh band sheet, as the core sees it: a square of
+    // mRes x mRes cells over mExtent metres whose south-west corner is at (mX0, mY0)
+    // in REGION-LOCAL metres, each cell holding up to mSpans solid spans at absolute
+    // z. Deliberately raw pointers and floats rather than the viewer's BandSheet, so
+    // the mapping below is a pure function the harness can pin.
+    struct SheetRef
+    {
+        F32 mX0 = 0.f, mY0 = 0.f;
+        F32 mExtent = 16.f;
+        S32 mRes = 64;
+        S32 mSpans = 6;
+        const U8* mCount = nullptr;
+        const F32* mBottom = nullptr;
+        const F32* mTop = nullptr;
+        const U8* mFlags = nullptr;
+    };
+
+    // <SS:Nexii> The region's cell grid, materialised from a set of band sheets. One
+    // pass per sheet: every grid cell the sheet covers takes the spans of every sheet
+    // cell IT covers (a grid coarser than the sheet unions them; at the default they
+    // are the same 0.25 m cell and the mapping is one-to-one), through spanInsert so
+    // the sorted-and-disjoint invariant holds however the bands interleave. Bands are
+    // separated by real air gaps by construction, so two bands of one column never
+    // contest a z range and insertion order does not matter.
+    //
+    // Then one pass per cell: a span the census marked terrain (terrain_flag) reaches
+    // the world floor, swallowing whatever the raster put beneath the land - what
+    // keeps a wall standing on unmeasured ground from reading as a hollow shell.
+    //
+    // out_sheeted, when given, is set to 1 for every grid cell at least one sheet
+    // actually covered. A cell left 0 is not empty sky - it is NOT SURVEYED, and the
+    // caller must label it AIR_UNKNOWN rather than let its 0..ceiling gap read as
+    // outdoors. [interaction: SSWorldField::scheduleGrid, classify's unsurveyed mask]
+    inline void buildGrid(S32 res, F32 cell, S32 max_spans,
+                          const SheetRef* sheets, S32 sheet_count, U8 terrain_flag,
+                          F32* span_bottom, F32* span_top, U8* span_flags,
+                          U8* out_sheeted)
+    {
+        if (res < 1 || cell <= 0.f || max_spans < 1) return;
+        const size_t layer = (size_t)res * (size_t)res;
+
+        for (size_t i = 0; i < (size_t)max_spans * layer; ++i)
+        {
+            span_bottom[i] = NO_SURFACE;
+            span_top[i] = NO_SURFACE;
+            span_flags[i] = 0;
+        }
+        if (out_sheeted) for (size_t i = 0; i < layer; ++i) out_sheeted[i] = 0;
+
+        for (S32 s = 0; s < sheet_count; ++s)
+        {
+            const SheetRef& sh = sheets[s];
+            if (!sh.mCount || !sh.mBottom || !sh.mTop || !sh.mFlags) continue;
+            if (sh.mRes < 1 || sh.mSpans < 1 || sh.mExtent <= 0.f) continue;
+
+            const S32 R = sh.mRes, K = sh.mSpans;
+            const F32 sheet_cell = sh.mExtent / (F32)R;
+
+            // <SS:Nexii> The grid cells this sheet covers. The navmesh's 16 m lattice
+            // is pinned at init and region origins are multiples of 256, so the corner
+            // lands exactly on a grid line at any cell size that divides 16 - the
+            // +0.5f is a rounding guard against float drift in that division, not a
+            // half-cell offset. A consumer materialising its own grid must use the
+            // same convention or its cells will sit half a cell off this one's.
+            const S32 cx0 = llclamp((S32)floorf(sh.mX0 / cell + 0.5f), 0, res);
+            const S32 cx1 = llclamp((S32)floorf((sh.mX0 + sh.mExtent) / cell + 0.5f), 0, res);
+            const S32 cy0 = llclamp((S32)floorf(sh.mY0 / cell + 0.5f), 0, res);
+            const S32 cy1 = llclamp((S32)floorf((sh.mY0 + sh.mExtent) / cell + 0.5f), 0, res);
+
+            for (S32 y = cy0; y < cy1; ++y)
+            {
+                for (S32 x = cx0; x < cx1; ++x)
+                {
+                    const size_t col = (size_t)y * (size_t)res + (size_t)x;
+                    if (out_sheeted) out_sheeted[col] = 1;
+
+                    const S32 sx0 = llclamp((S32)floorf(((F32)x * cell - sh.mX0) / sheet_cell), 0, R - 1);
+                    const S32 sx1 = llclamp((S32)ceilf(((F32)(x + 1) * cell - sh.mX0) / sheet_cell), sx0 + 1, R);
+                    const S32 sy0 = llclamp((S32)floorf(((F32)y * cell - sh.mY0) / sheet_cell), 0, R - 1);
+                    const S32 sy1 = llclamp((S32)ceilf(((F32)(y + 1) * cell - sh.mY0) / sheet_cell), sy0 + 1, R);
+                    for (S32 sy = sy0; sy < sy1; ++sy) for (S32 sx = sx0; sx < sx1; ++sx)
+                    {
+                        const size_t sc = (size_t)sy * (size_t)R + (size_t)sx;
+                        const S32 have = llmin((S32)sh.mCount[sc], K);
+                        for (S32 k = 0; k < have; ++k)
+                        {
+                            spanInsert(span_bottom, span_top, span_flags, max_spans, layer, col,
+                                       sh.mBottom[sc * (size_t)K + (size_t)k],
+                                       sh.mTop[sc * (size_t)K + (size_t)k],
+                                       sh.mFlags[sc * (size_t)K + (size_t)k]);
+                        }
+                    }
+                }
+            }
+        }
+
+        // The land reaches the world floor: everything below the lowest terrain span
+        // folds into it.
+        for (size_t col = 0; col < layer; ++col)
+        {
+            const S32 n = spanCount(span_top, max_spans, layer, col);
+            S32 land = -1;
+            for (S32 k = 0; k < n; ++k)
+            {
+                if (span_flags[(size_t)k * layer + col] & terrain_flag) { land = k; break; }
+            }
+            if (land < 0) continue;
+
+            span_bottom[(size_t)land * layer + col] = 0.f;
+            if (land == 0) continue;
+            const S32 kept = n - land;
+            for (S32 k = 0; k < kept; ++k)
+            {
+                span_bottom[(size_t)k * layer + col] = span_bottom[(size_t)(k + land) * layer + col];
+                span_top[(size_t)k * layer + col] = span_top[(size_t)(k + land) * layer + col];
+                span_flags[(size_t)k * layer + col] = span_flags[(size_t)(k + land) * layer + col];
+            }
+            for (S32 k = kept; k < max_spans; ++k)
+            {
+                span_bottom[(size_t)k * layer + col] = NO_SURFACE;
+                span_top[(size_t)k * layer + col] = NO_SURFACE;
+                span_flags[(size_t)k * layer + col] = 0;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------- the classification
+
     // <SS:Nexii> The air classification over the cell grid - the pass the whole field
-    // exists to produce. Per cell, the intervals between, below and above its solid
-    // spans are its air gaps; two gaps of neighbouring cells are adjacent when their
-    // z-intervals strictly overlap. Three steps over that graph:
+    // exists to produce. Two gaps of neighbouring cells are adjacent when their
+    // z-intervals strictly overlap. Four walks:
     //
     // 1. REACHABILITY. Every cell's top gap is open sky and every gap of a border cell
     //    can walk out sideways; a flood from those marks the air connected to outside
-    //    at all. What the flood never touched is sealed, and is interior by
+    //    at all. What the flood never touched is sealed, and is INTERIOR by
     //    construction.
     //
-    // 2. THE REACH BUDGET (the owner's outdoors rule). A gap under something is
+    // 2. THE REACH BUDGET (the owner's outdoors rule). A gap with structure over it is
     //    COVERED. An opening - a reachable uncovered gap touching covered air - hands
     //    its covered neighbours a budget in METRES, and every cell step spends one cell
-    //    width of it. The budget is capped at every step by the LOCAL gap's own
-    //    capacity, gap_height * open_k * SHELTER_MULT, so a gap that pinches under a
-    //    low beam cuts whatever it was carrying while a gap that stays tall keeps it.
-    //    That single rule is what makes ground under a sky platform 200 m up behave
-    //    like ground: its gap is 200 m tall, so outdoors carries clear across the
-    //    footprint - while a 2.4 m room's door hands about 2.4 m of outdoors and
-    //    roughly 10 m of shelter past that, and a sealed room gets nothing. It replaces
-    //    the sqrt(aperture) seed, which measured the opening's pixel count and so moved
-    //    whenever the cell size did.
+    //    width. The budget is capped at every step by the LOCAL gap's own capacity,
+    //    gap_height * open_k * SHELTER_MULT, so a gap that pinches under a low beam
+    //    cuts whatever it was carrying while a gap that stays tall keeps it. Widest
+    //    path first, because the strongest opening must decide how deep shelter
+    //    reaches; first pop is final, since every later entry carries a smaller budget.
     //
-    // 3. THE LABEL. Covered air within ONE unmultiplied open_k reach of its opening
+    // 3. THE COVERED DISTANCE, as a SEPARATE shortest-path walk over the air step 2
+    //    reached. It must not be the widest path's own length: a cell one step inside a
+    //    narrow door that is also reachable from a wide door 30 m away would record
+    //    30 m, and that figure feeds the enclosure ramp, airDepthAt and the acoustic
+    //    bake's travel-to-outdoors. Every step costs the same cell width, so plain BFS
+    //    order is already shortest and this costs one queue pass.
+    //
+    // 4. THE LABEL. Covered air within ONE unmultiplied capacity of its nearest opening
     //    still has the sky overhead at theta or better, so it reads OUTDOORS. Past that
-    //    but still in budget it is SHELTERED. Out of budget, or never reached,
-    //    INTERIOR. The covered distance travelled is stored per gap in DECIMETRES - the
-    //    figure the enclosure ramp uses and the acoustic bake reads as
-    //    travel-to-outdoors.
+    //    but still in budget, SHELTERED. Out of budget, or never reached, INTERIOR.
     //
-    // Widest-path first (a max-heap on remaining budget) rather than plain BFS, because
-    // the strongest opening must decide how deep the shelter reaches: the first pop of
-    // a gap is final, since every later entry carries a smaller budget.
-    //
-    // open_k is cot(theta). cell_m is the grid's cell size in metres. ceiling is where
-    // a cell's top gap ends.
+    // unsurveyed, when given, is the inverse of buildGrid's out_sheeted: a cell no
+    // sheet covered has no geometry, NOT empty sky, and every gap of it is labelled
+    // AIR_UNKNOWN and never seeds, never propagates and never blocks. A partially
+    // surveyed region therefore answers honestly where it has looked and says so where
+    // it has not. open_k is cot(theta); cell_m is the grid's cell size in metres;
+    // ceiling is where a cell's top gap ends.
     inline void classify(S32 res, S32 max_spans, F32 cell_m, F32 ceiling, F32 open_k,
                          const F32* span_top, const F32* span_bottom,
-                         std::vector<U8>& gap_label, std::vector<U16>& gap_depth)
+                         std::vector<U8>& gap_label, std::vector<U16>& gap_depth,
+                         const U8* surveyed = nullptr)
     {
         const size_t layer = (size_t)res * (size_t)res;
         const size_t per_col = (size_t)max_spans + 1;
@@ -193,65 +452,74 @@ namespace SSWorldFieldCore
         static const S32 DY[4] = { 0, 0, 1, -1 };
         const F32 step_m = llmax(cell_m, 0.01f);
 
-        // Gap bounds per node, precomputed once: gap k of a cell with n spans runs from
-        // the span below (or the world floor) to the span above (or the ceiling). Slots
-        // past a cell's span count are empty.
-        std::vector<F32> gb0(nodes, 0.f);
-        std::vector<F32> gb1(nodes, 0.f);
-        std::vector<S32> span_count(layer, 0);
+        // <SS:Nexii> Span counts are the only per-cell scratch kept. The gap bounds
+        // used to be two F32 planes over every node - 58.7 MB at the default cell -
+        // and they are two array reads away from the spans, so they are recomputed
+        // instead. The remaining scratch is a U16 budget plane and two bitsets.
+        // [interaction: doc/atmo_magic_worldfield.md Costs]
+        std::vector<U8> span_n(layer, 0);
         for (size_t col = 0; col < layer; ++col)
         {
-            S32 n = 0;
-            while (n < max_spans && span_top[(size_t)n * layer + col] > NO_SURFACE * 0.5f) ++n;
-            span_count[col] = n;
-
-            for (S32 k = 0; k <= max_spans; ++k)
-            {
-                const size_t node = col * per_col + (size_t)k;
-                if (k > n) continue;
-                gb0[node] = (k == 0) ? 0.f : span_top[(size_t)(k - 1) * layer + col];
-                gb1[node] = (k == n) ? ceiling : span_bottom[(size_t)k * layer + col];
-            }
+            span_n[col] = (U8)spanCount(span_top, max_spans, layer, col);
         }
+
+        auto lo = [&](size_t col, S32 k) { return gapLo(span_top, layer, col, k); };
+        auto hi = [&](size_t col, S32 k) { return gapHi(span_bottom, layer, col, k, (S32)span_n[col], ceiling); };
+        auto exists = [&](size_t col, S32 k)
+        {
+            if (k > (S32)span_n[col]) return false;
+            return hi(col, k) > lo(col, k) + TOUCH_EPS;
+        };
+        auto known = [&](size_t col) { return !surveyed || surveyed[col] != 0; };
+
+        // Bitsets rather than byte planes: 918 KB each instead of 7.34 MB.
+        std::vector<U64> reached((nodes + 63) / 64, 0);
+        std::vector<U64> covered((nodes + 63) / 64, 0);
+        auto getBit = [](const std::vector<U64>& b, size_t i) { return (b[i >> 6] >> (i & 63)) & 1ull; };
+        auto setBit = [](std::vector<U64>& b, size_t i) { b[i >> 6] |= 1ull << (i & 63); };
 
         auto touches = [&](size_t node, auto&& fn)
         {
             const size_t col = node / per_col;
+            const S32 k = (S32)(node % per_col);
             const S32 x = (S32)(col % (size_t)res);
             const S32 y = (S32)(col / (size_t)res);
+            const F32 a0 = lo(col, k), a1 = hi(col, k);
             for (S32 d = 0; d < 4; ++d)
             {
                 const S32 nx = x + DX[d], ny = y + DY[d];
                 if (nx < 0 || ny < 0 || nx >= res || ny >= res) continue;
 
                 const size_t ncol = (size_t)ny * (size_t)res + (size_t)nx;
-                for (S32 kj = 0; kj <= max_spans; ++kj)
+                if (!known(ncol)) continue;     // unsurveyed air neither carries nor blocks
+                const S32 nn = (S32)span_n[ncol];
+                for (S32 kj = 0; kj <= nn; ++kj)
                 {
-                    const size_t nnode = ncol * per_col + (size_t)kj;
-                    if (gb1[nnode] <= gb0[nnode] + TOUCH_EPS) continue;
-                    if (!(gb0[node] < gb1[nnode] - TOUCH_EPS && gb0[nnode] < gb1[node] - TOUCH_EPS)) continue;
-                    fn(nnode);
+                    const F32 b0 = lo(ncol, kj), b1 = hi(ncol, kj);
+                    if (b1 <= b0 + TOUCH_EPS) continue;
+                    if (!(a0 < b1 - TOUCH_EPS && b0 < a1 - TOUCH_EPS)) continue;
+                    fn(ncol * per_col + (size_t)kj);
                 }
             }
         };
 
         // ---- 1. reachability ----
-        std::vector<U8> reached(nodes, 0);
         std::vector<S32> queue;
         queue.reserve(nodes / 8 + 1);
         for (size_t col = 0; col < layer; ++col)
         {
+            if (!known(col)) continue;
             const S32 x = (S32)(col % (size_t)res);
             const S32 y = (S32)(col / (size_t)res);
             const bool border = x == 0 || y == 0 || x == res - 1 || y == res - 1;
-            const S32 n = span_count[col];
+            const S32 n = (S32)span_n[col];
 
-            for (S32 k = 0; k <= max_spans; ++k)
+            for (S32 k = 0; k <= n; ++k)
             {
-                const size_t node = col * per_col + (size_t)k;
-                if (gb1[node] <= gb0[node] + TOUCH_EPS) continue;
+                if (!exists(col, k)) continue;
                 if (k != n && !border) continue;
-                reached[node] = 1;
+                const size_t node = col * per_col + (size_t)k;
+                setBit(reached, node);
                 queue.push_back((S32)node);
             }
         }
@@ -260,100 +528,153 @@ namespace SSWorldFieldCore
         {
             touches((size_t)queue[head], [&](size_t nnode)
             {
-                if (reached[nnode]) return;
-                reached[nnode] = 1;
+                if (getBit(reached, nnode)) return;
+                setBit(reached, nnode);
                 queue.push_back((S32)nnode);
             });
         }
 
         // Covered: reachable air with structure standing over it. A gap below a cell's
         // top span always has that structure; the top gap never does.
-        std::vector<U8> covered(nodes, 0);
         for (size_t col = 0; col < layer; ++col)
         {
-            const S32 n = span_count[col];
+            if (!known(col)) continue;
+            const S32 n = (S32)span_n[col];
             for (S32 k = 0; k < n; ++k)
             {
                 const size_t node = col * per_col + (size_t)k;
-                if (gb1[node] <= gb0[node] + TOUCH_EPS) continue;
-                if (reached[node]) covered[node] = 1;
+                if (getBit(reached, node) && exists(col, k)) setBit(covered, node);
             }
         }
 
         // ---- 2. the reach budget ----
-        std::vector<F32> remaining(nodes, -1.f);
-        std::vector<F32> travelled(nodes, 0.f);
-        std::priority_queue<std::pair<F32, S32> > heap;
-        auto capacity = [&](size_t node) { return (gb1[node] - gb0[node]) * open_k; };
+        // Decimetres in a U16 rather than metres in an F32: half the plane, and the
+        // "a stronger seed already passed" test becomes an exact integer compare.
+        constexpr U16 BUDGET_MAX = 65534u;
+        auto toDm = [](F32 m) -> U16
+        {
+            if (m <= 0.f) return 0;
+            const F32 dm = m * 10.f + 0.5f;
+            return (dm >= (F32)BUDGET_MAX) ? BUDGET_MAX : (U16)dm;
+        };
+        std::vector<U16> remaining(nodes, 0);
+        std::priority_queue<std::pair<U16, S32> > heap;
+        auto capacity = [&](size_t node)
+        {
+            const size_t col = node / per_col;
+            const S32 k = (S32)(node % per_col);
+            return (hi(col, k) - lo(col, k)) * open_k;
+        };
 
         for (size_t node = 0; node < nodes; ++node)
         {
-            if (!covered[node]) continue;
+            if (!getBit(covered, node)) continue;
 
             // Seeded by any uncovered reachable neighbour: that is an opening.
             bool porch = false;
             touches(node, [&](size_t nnode)
             {
-                if (!covered[nnode] && reached[nnode]) porch = true;
+                if (!getBit(covered, nnode) && getBit(reached, nnode)) porch = true;
             });
             if (!porch) continue;
 
-            const F32 r = capacity(node) * SHELTER_MULT - step_m;
-            if (r <= remaining[node]) continue;
+            const U16 r = toDm(capacity(node) * SHELTER_MULT - step_m);
+            if (r == 0 || r <= remaining[node]) continue;
             remaining[node] = r;
-            travelled[node] = step_m;
             heap.emplace(r, (S32)node);
         }
 
+        const U16 step_dm = toDm(step_m);
         while (!heap.empty())
         {
-            const F32 b = heap.top().first;
+            const U16 b = heap.top().first;
             const size_t node = (size_t)heap.top().second;
             heap.pop();
             if (b != remaining[node]) continue;     // a stronger seed already passed
-            if (b <= 0.f) continue;                 // nothing left to hand inward
+            if (b <= step_dm) continue;             // nothing left to hand inward
 
-            const F32 here = travelled[node];
             touches(node, [&](size_t nnode)
             {
-                if (!covered[nnode]) return;
-                const F32 r = llmin(b, capacity(nnode) * SHELTER_MULT) - step_m;
-                if (r <= 0.f || r <= remaining[nnode]) return;
+                if (!getBit(covered, nnode)) return;
+                const U16 cap = toDm(capacity(nnode) * SHELTER_MULT);
+                const U16 carry = llmin(b, cap);
+                if (carry <= step_dm) return;
+                const U16 r = (U16)(carry - step_dm);
+                if (r <= remaining[nnode]) return;
                 remaining[nnode] = r;
-                travelled[nnode] = here + step_m;
                 heap.emplace(r, (S32)nnode);
             });
         }
 
-        // ---- 3. the labels and the covered distance ----
+        // ---- 3. the covered distance: shortest path, not the widest one ----
+        // gap_depth doubles as the BFS distance array, which is also what retires the
+        // separate 29 MB float plane the walk above used to keep.
+        queue.clear();
         for (size_t node = 0; node < nodes; ++node)
         {
-            if (gb1[node] <= gb0[node] + TOUCH_EPS) continue;    // no such gap
-            if (!reached[node])
+            if (!remaining[node]) continue;
+            bool porch = false;
+            touches(node, [&](size_t nnode)
             {
-                gap_label[node] = AIR_INTERIOR;
-                continue;
-            }
-            if (!covered[node])
+                if (!getBit(covered, nnode) && getBit(reached, nnode)) porch = true;
+            });
+            if (!porch) continue;
+            gap_depth[node] = step_dm;
+            queue.push_back((S32)node);
+        }
+        for (size_t head = 0; head < queue.size(); ++head)
+        {
+            const size_t cur = (size_t)queue[head];
+            const U32 next_d = (U32)gap_depth[cur] + (U32)step_dm;
+            if (next_d >= (U32)DEPTH_UNREACHED) continue;
+            touches(cur, [&](size_t nnode)
             {
-                gap_label[node] = AIR_OUTDOORS;
-                gap_depth[node] = 0;
-                continue;
-            }
-            if (remaining[node] <= 0.f)
-            {
-                gap_label[node] = AIR_INTERIOR;
-                continue;
-            }
+                if (!remaining[nnode]) return;
+                if (gap_depth[nnode] != DEPTH_UNREACHED) return;    // BFS: first visit is shortest
+                gap_depth[nnode] = (U16)next_d;
+                queue.push_back((S32)nnode);
+            });
+        }
 
-            const F32 d = travelled[node];
-            // Within one unmultiplied open_k of the LOCAL gap height the sky is still
-            // up there: that is outdoors, however much roof stands over it.
-            gap_label[node] = (d <= capacity(node)) ? AIR_OUTDOORS : AIR_SHELTERED;
-            // Decimetres, saturating one short of the sentinel so a genuinely 6553 m
-            // walk can never read as "never visited".
-            const U32 dm = (U32)(d * 10.f + 0.5f);
-            gap_depth[node] = (U16)llmin(dm, (U32)DEPTH_UNREACHED - 1u);
+        // ---- 4. the labels ----
+        for (size_t col = 0; col < layer; ++col)
+        {
+            const S32 n = (S32)span_n[col];
+            for (S32 k = 0; k <= max_spans; ++k)
+            {
+                const size_t node = col * per_col + (size_t)k;
+                if (!known(col))
+                {
+                    // Not surveyed: every gap of the cell is UNKNOWN, including the
+                    // one that would otherwise run 0..ceiling and read as open sky.
+                    gap_label[node] = AIR_UNKNOWN;
+                    gap_depth[node] = DEPTH_UNREACHED;
+                    continue;
+                }
+                if (k > n || !exists(col, k)) continue;             // no such gap
+                if (!getBit(reached, node))
+                {
+                    gap_label[node] = AIR_INTERIOR;
+                    continue;
+                }
+                if (!getBit(covered, node))
+                {
+                    gap_label[node] = AIR_OUTDOORS;
+                    gap_depth[node] = 0;
+                    continue;
+                }
+                if (!remaining[node] || gap_depth[node] == DEPTH_UNREACHED)
+                {
+                    gap_label[node] = AIR_INTERIOR;
+                    gap_depth[node] = DEPTH_UNREACHED;
+                    continue;
+                }
+
+                const F32 d = (F32)gap_depth[node] * 0.1f;
+                // Within one unmultiplied open_k of the LOCAL gap height the sky is
+                // still up there: that is outdoors, however much roof stands over it.
+                gap_label[node] = (d <= capacity(node)) ? AIR_OUTDOORS : AIR_SHELTERED;
+            }
         }
     }
 }
