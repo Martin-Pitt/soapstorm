@@ -907,6 +907,8 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
         ++mPendPhysicsRequested;
     }
     const S32 ptype = shape_known ? vov->getPhysicsShapeType() : -1;
+    // <SS:Nexii> Set before the part-cache reuse below, not after: addRecord stamps every record - reused ones too - from this, and stamping it later left the flag on the cached copy only. The store's records read false, the navmesh saw no-physics trees as floor, and the schedule log counted 0 skipped while the dump (which reads the cache) said 'navmesh skips'. [interaction: addRecord, navIgnores]
+    mBuildNoPhysics = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE);
 
     // Hidden parts: phantom (no collision declared) or shape-NONE (collision
     // explicitly declined) with no visible face anywhere affect nothing at all
@@ -954,7 +956,6 @@ void SSWorldFieldShapes::addPart(LLVOVolume* vov)
     // still needs its asset, so those keep the fetch-then-box path below.
     // Never fired an ObjectPhysicsProperties request here.
     const bool geometry_only = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE) || !shape_known;
-    mBuildNoPhysics = (ptype == LLViewerObject::PHYSICS_SHAPE_NONE);
 
     const S32 tri_cap = (llmax(scale.mV[VX], llmax(scale.mV[VY], scale.mV[VZ])) > SS_SHAPES_LARGE_PART_M)
                             ? SS_SHAPES_PART_TRIS_LARGE : SS_SHAPES_PART_TRIS;

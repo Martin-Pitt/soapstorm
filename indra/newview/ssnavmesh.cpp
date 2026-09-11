@@ -1680,8 +1680,10 @@ void SSNavMesh::renderDebug(bool force_navmesh)
     const LLVector3 cam = LLViewerCamera::getInstance()->getOrigin();
     const dtNavMesh* nm = mNavMesh;
 
+    // <SS:Nexii> With the world wiped there is nothing to see through, so the mesh draws opaque and writes depth: stacked storeys then sort by depth instead of by tile order, and the fills read as solid floor. [interaction: SSNavMeshShowWorld]
+    const bool opaque = draw_mesh && !show_world;
     LLGLEnable blend(GL_BLEND);
-    LLGLDepthTest depth(GL_TRUE, GL_FALSE);
+    LLGLDepthTest depth(GL_TRUE, opaque ? GL_TRUE : GL_FALSE);
     LLGLDisable cull(GL_CULL_FACE);
     gGL.setSceneBlendType(LLRender::BT_ALPHA);
     gGL.getTexUnit(0)->unbind(LLTexUnit::TT_TEXTURE);
@@ -1786,7 +1788,7 @@ void SSNavMesh::renderDebug(bool force_navmesh)
         {
             const dtMeshTile* tile = nm->getTile(i);
             if (!tile || !tile->header) continue;
-            bandColour(tile, pass == 0 ? 0.28f : 0.18f);
+            bandColour(tile, opaque ? 1.f : (pass == 0 ? 0.28f : 0.18f));
             for (int p = 0; p < tile->header->polyCount; ++p)
             {
                 const dtPoly& poly = tile->polys[p];
@@ -1839,7 +1841,7 @@ void SSNavMesh::renderDebug(bool force_navmesh)
                         else
                         {
                             // Interior edges stay faint: the fills carry the surface, the edges only hint at the polygons.
-                            bandColour(tile, 0.18f);
+                            bandColour(tile, opaque ? 1.f : 0.18f);
                         }
                         const LLVector3 pa = vert(&tile->verts[poly.verts[v] * 3], 0.06f);
                         const LLVector3 pb = vert(&tile->verts[poly.verts[(v + 1) % poly.vertCount] * 3], 0.06f);
@@ -1853,7 +1855,7 @@ void SSNavMesh::renderDebug(bool force_navmesh)
     }
     };
     drawMesh();
-    if (xray)
+    if (xray && !opaque)
     {
         // The parts of the navmesh behind geometry, shaded darker and fainter so they read as "through the wall".
         LLGLDepthTest depth_behind(GL_TRUE, GL_FALSE, GL_GREATER);

@@ -194,7 +194,7 @@
         <combo_box.item label="Band surfaces" value="1" name="field_view_bands" />
         <combo_box.item label="Air labels" value="2" name="field_view_air" />
         <combo_box.item label="Drainage" value="3" name="field_view_drain" />
-        <combo_box.item label="Column spans" value="5" name="field_view_spans" />
+        <combo_box.item label="Span store (navmesh-fed)" value="5" name="field_view_spans" />
         <combo_box.item label="Shape census" value="6" name="field_view_shapes" />
         <combo_box.item label="Navmesh" value="7" name="field_view_navmesh" />
       </combo_box>

@@ -596,10 +596,32 @@ void SSWorldField::update()
 
     static LLCachedControl<bool> enabled(gSavedSettings, "SSWorldField", true);
     // <SS:Nexii> Master switch, not hasWeather(): the wind flow map and soundscape consume the field in calm weather too, and pickBuildTarget's interest check already keeps unclaimed regions from building.
-    if (!enabled || !SSAtmoMagic::getInstance()->isEnabled())
+    // <SS:Nexii> The Atmo gate flickers: a death teleport or an altitude with no track resolves no environment for a while, and clearing the store on every dip threw away every tile and every consumer's overlay with it, then left the navmesh-fed tiles stale on the way back (their nav-dirty flag was down, so nothing refed them). The setting still clears; the Atmo gate only pauses, and the return edge invalidates every navmesh-fed tile and asks the navmesh for its region again. Both edges log. [interaction: navSettle, SSNavMesh::refeedRegion]
+    if (!enabled)
     {
         if (!mTiles.empty() || mBuild.mActive) clear();
         return;
+    }
+    const bool gate_on = SSAtmoMagic::getInstance()->isEnabled();
+    if (!gate_on)
+    {
+        if (!mGateWasOff) LL_INFOS("SSWorldField") << "world field paused: Atmo Magic resolved no environment (" << mTiles.size() << " tiles kept)" << LL_ENDL;
+        mGateWasOff = true;
+        mBuild.mActive = false;
+        return;
+    }
+    if (mGateWasOff)
+    {
+        mGateWasOff = false;
+        LL_INFOS("SSWorldField") << "world field resumed: Atmo Magic environment back, refeeding " << mTiles.size() << " tiles" << LL_ENDL;
+        for (auto& entry : mTiles)
+        {
+            if (!entry.second.mNavSourced) continue;
+            entry.second.mValid = false;
+            entry.second.mNavDirty = true;
+            entry.second.mNavLastFed = mNow;
+            SSNavMesh::getInstance()->refeedRegion(entry.first);
+        }
     }
 
     evict();
@@ -3742,6 +3764,35 @@ void SSWorldField::renderDebug()
         gGL.vertex3f(p.mV[VX], p.mV[VY] + size, p.mV[VZ]);
     };
 
+    // <SS:Nexii> Glyphs for the band-surfaces view: the shape says what the air above the surface is - a circle for outdoors, a triangle for sheltered, a square for interior, the plain cross where the flood has no label yet - so a stack of storeys reads by outline, not by hue alone. All line segments, drawn inside the LINES batch. [interaction: view 1]
+    auto circle = [&](const LLVector3& p, const LLColor4& c, F32 r)
+    {
+        gGL.color4fv(c.mV);
+        for (S32 i = 0; i < 8; ++i)
+        {
+            const F32 a0 = F_TWO_PI * (F32)i / 8.f, a1 = F_TWO_PI * (F32)(i + 1) / 8.f;
+            gGL.vertex3f(p.mV[VX] + cosf(a0) * r, p.mV[VY] + sinf(a0) * r, p.mV[VZ]);
+            gGL.vertex3f(p.mV[VX] + cosf(a1) * r, p.mV[VY] + sinf(a1) * r, p.mV[VZ]);
+        }
+    };
+    auto triangle = [&](const LLVector3& p, const LLColor4& c, F32 r)
+    {
+        gGL.color4fv(c.mV);
+        const LLVector3 a(p.mV[VX], p.mV[VY] + r, p.mV[VZ]), b(p.mV[VX] - r * 0.866f, p.mV[VY] - r * 0.5f, p.mV[VZ]), d(p.mV[VX] + r * 0.866f, p.mV[VY] - r * 0.5f, p.mV[VZ]);
+        gGL.vertex3fv(a.mV); gGL.vertex3fv(b.mV);
+        gGL.vertex3fv(b.mV); gGL.vertex3fv(d.mV);
+        gGL.vertex3fv(d.mV); gGL.vertex3fv(a.mV);
+    };
+    auto square = [&](const LLVector3& p, const LLColor4& c, F32 r)
+    {
+        gGL.color4fv(c.mV);
+        const F32 x0 = p.mV[VX] - r, x1 = p.mV[VX] + r, y0 = p.mV[VY] - r, y1 = p.mV[VY] + r;
+        gGL.vertex3f(x0, y0, p.mV[VZ]); gGL.vertex3f(x1, y0, p.mV[VZ]);
+        gGL.vertex3f(x1, y0, p.mV[VZ]); gGL.vertex3f(x1, y1, p.mV[VZ]);
+        gGL.vertex3f(x1, y1, p.mV[VZ]); gGL.vertex3f(x0, y1, p.mV[VZ]);
+        gGL.vertex3f(x0, y1, p.mV[VZ]); gGL.vertex3f(x0, y0, p.mV[VZ]);
+    };
+
     auto strideFor = [&](F32 wx, F32 wy) -> S32
     {
         const F32 away = llmax(fabsf(wx - cam.mV[VX]), fabsf(wy - cam.mV[VY]));
@@ -3788,6 +3839,8 @@ void SSWorldField::renderDebug()
             // holds it at, hue by altitude so stacked storeys read separately instead
             // of fusing into one roof.
             const F32 ceiling = llmax((F32)(bandCount() * tile.mBandHeight), 1.f);
+            const bool labelled = !tile.mGapLabel.empty() && tile.mAirSerial == tile.mGeomSerial
+                                  && tile.mGapLabel.size() >= (size_t)(SS_WF_MAX_SPANS + 1) * layer;
             for (S32 y = 0; y < tile.mRes; ++y)
             {
                 const F32 wy = origin.mV[VY] + ((F32)y + 0.5f) * cell;
@@ -3803,8 +3856,13 @@ void SSWorldField::renderDebug()
                         const F32 z = tile.mSpanTop[(size_t)k * layer + col];
                         if (z <= -FLT_MAX * 0.5f) break;
 
-                        mark(LLVector3(wx, wy, z),
-                             ss_wf_band_hue(z / ceiling, 0.85f), cell * 0.4f);
+                        const LLVector3 p(wx, wy, z);
+                        const LLColor4 c = ss_wf_band_hue(z / ceiling, 0.85f);
+                        const U8 lab = labelled ? tile.mGapLabel[col * (SS_WF_MAX_SPANS + 1) + (size_t)k + 1] : (U8)AIR_UNKNOWN;   // the gap above span k
+                        if (lab == AIR_OUTDOORS) circle(p, c, cell * 0.4f);
+                        else if (lab == AIR_SHELTERED) triangle(p, c, cell * 0.45f);
+                        else if (lab == AIR_INTERIOR) square(p, c, cell * 0.35f);
+                        else mark(p, c, cell * 0.4f);
                     }
                 }
             }

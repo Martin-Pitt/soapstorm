@@ -594,6 +594,7 @@ private:
     // decides whether a finished walk still applies - clear() and eviction
     // both move it.
     bool mFloodBusy = false;
+    bool mGateWasOff = false;          // Atmo resolved no environment last frame: tiles kept, builds paused, refeed on the way back
     U32 mFloodGeneration = 0;
 
     F64 mNow = 0.0;

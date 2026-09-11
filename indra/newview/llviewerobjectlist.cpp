@@ -1500,6 +1500,7 @@ void LLViewerObjectList::fetchPhysicsFlags()
         LLViewerObject* objectp = findObject(id);
         LLViewerRegion* regionp = (objectp && objectp->getRegion()) ? objectp->getRegion() : gAgent.getRegion();
         if (!regionp) { mStalePhysicsFlags.erase(it++); continue; }
+        if (!regionp->capabilitiesReceived()) { ++it; continue; }     // a neighbour still handshaking: keep the id stale and ask on a later call, or it is never asked again
         LLSD& list = batches[regionp];
         if (list.size() >= (S32)MAX_CONCURRENT_PHYSICS_REQUESTS) { ++it; continue; }
         if (mPendingPhysicsFlags.find(id) == mPendingPhysicsFlags.end())
@@ -1575,6 +1576,7 @@ void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url, LLSD idList)
 
     // Success, grab the resource cost and linked set costs
     // for an object if one was returned
+    S32 answered = 0, missing = 0;     // <SS:Nexii> per-batch tally, logged below: a region that never answers for its objects shows here
     for (LLSD::array_iterator it = idList.beginArray(); it != idList.endArray(); ++it)
     {
         LLUUID objectId = it->asUUID();
@@ -1587,6 +1589,7 @@ void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url, LLSD idList)
             S32 shapeType = data["PhysicsShapeType"].asInteger();
 
             gObjectList.updatePhysicsShapeType(objectId, shapeType);
+            ++answered;
 
             if (data.has("Density"))
             {
@@ -1603,8 +1606,10 @@ void LLViewerObjectList::fetchPhisicsFlagsCoro(std::string url, LLSD idList)
         {
             // TODO*: Give user feedback about the missing data?
             gObjectList.onPhysicsFlagsFetchFailure(objectId);
+            ++missing;
         }
     }
+    LL_INFOS("SSPhysFetch") << "physics shapes: " << answered << " answered, " << missing << " missing of " << idList.size() << " from " << url << LL_ENDL;
 }
 
 void LLViewerObjectList::clearDebugText()
